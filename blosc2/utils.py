@@ -3,10 +3,7 @@ import sys
 from . import blosc2_ext
 import blosc2
 
-try:
-    import cPickle as pickle
-except ImportError:
-    import pickle
+import pickle
 
 
 def _check_typesize(typesize):
