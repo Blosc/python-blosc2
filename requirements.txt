@@ -3,3 +3,4 @@ numpy~=1.20.1
 scikit-build>=0.11.1
 cython>=0.29
 cmake>=3.14.0
+ninja>=1.10.2

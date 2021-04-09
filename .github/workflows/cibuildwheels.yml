@@ -7,8 +7,6 @@ jobs:
       matrix:
         python-version: [3.7, 3.8]
     steps:
-      - name: Install Ninja
-        uses: seanmiddleditch/gha-setup-ninja@master
     - uses: actions/checkout@v2
       with:
         submodules: 'recursive'
