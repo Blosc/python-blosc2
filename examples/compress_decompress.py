@@ -9,4 +9,6 @@ assert len(c_bytesobj) < len(a_bytesobj)
 a_bytesobj2 = blosc2.decompress(c_bytesobj)
 assert a_bytesobj == a_bytesobj2
 
+dest = blosc2.compress(b"", 1)
+assert(b""==blosc2.decompress(dest))
 assert(type(blosc2.decompress(blosc2.compress(b"1"*7, 8),as_bytearray=True)) is bytearray)

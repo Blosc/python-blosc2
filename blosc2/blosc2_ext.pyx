@@ -74,7 +74,7 @@ cdef extern from "blosc2.h":
 
     void blosc_set_threads_callback(blosc_threads_callback callback, void *callback_data)
 
-    int blosc_get_nthreads()
+    int blosc_get_nthreads()nogil
 
     int blosc_set_nthreads(int nthreads)
 
@@ -130,6 +130,14 @@ cdef extern from "blosc2.h":
 
     ctypedef int(*blosc2_prefilter_fn)(blosc2_prefilter_params* params)
 
+    ctypedef struct blosc2_btune:
+        void(*btune_init)(void *config, blosc2_context*cctx, blosc2_context*dctx)
+        void (*btune_next_blocksize)(blosc2_context *context)
+        void(*btune_next_cparams)(blosc2_context *context)
+        void(*btune_update)(blosc2_context *context, double ctime)
+        void (*btune_free)(blosc2_context *context)
+        void * btune_config
+
     ctypedef struct blosc2_cparams:
         uint8_t compcode
         uint8_t clevel
@@ -141,7 +149,10 @@ cdef extern from "blosc2.h":
         uint8_t filters[BLOSC2_MAX_FILTERS]
         uint8_t filters_meta[BLOSC2_MAX_FILTERS]
         blosc2_prefilter_fn prefilter
-        blosc2_prefilter_params* pparams
+        blosc2_prefilter_params* preparams
+        blosc2_btune *udbtune
+
+    cdef blosc2_cparams BLOSC2_CPARAMS_DEFAULTS
 
     ctypedef struct blosc2_dparams:
         int nthreads
@@ -149,7 +160,7 @@ cdef extern from "blosc2.h":
 
     cdef const blosc2_dparams BLOSC2_DPARAMS_DEFAULTS = {1, NULL}
 
-    blosc2_context* blosc2_create_cctx(blosc2_cparams cparams)
+    blosc2_context* blosc2_create_cctx(blosc2_cparams cparams) nogil
 
     blosc2_context* blosc2_create_dctx(blosc2_dparams dparams)
 
@@ -166,7 +177,7 @@ cdef extern from "blosc2.h":
 
     int blosc2_compress_ctx(
             blosc2_context* context, const void* src, int32_t srcsize, void* dest,
-            int32_t destsize)
+            int32_t destsize) nogil
 
     int blosc2_decompress_ctx(blosc2_context* context, const void* src,
                               int32_t srcsize, void* dest, int32_t destsize)
@@ -207,7 +218,7 @@ cdef extern from "blosc2.h":
         blosc2_frame* frame
         blosc2_context* ctx
         blosc2_context* cctx
-        blosc2_context*dctx
+        blosc2_context* dctx
         int16_t nmetalayers
         int16_t nvlmetalayers
 
@@ -274,10 +285,29 @@ BITSHUFFLE = BLOSC_BITSHUFFLE
 DELTA = BLOSC_DELTA
 TRUNC_PREC = BLOSC_TRUNC_PREC
 
-def compress(src, size_t typesize=8, int clevel=9, int shuffle=SHUFFLE, cname='blosclz'):
+cpdef compress(src, size_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE, cname='blosclz'):
     set_compressor(cname)
-    dest = bytes(len(src) + BLOSC_MAX_OVERHEAD)
-    size = blosc2_compress(clevel, shuffle, typesize, <void*> <char *> src, len(src), <void*> <char *> dest, len(dest))
+    cdef int len_src = len(src)
+    dest = bytes(len_src + BLOSC_MAX_OVERHEAD)
+    cdef int len_dest = len(dest)
+    cdef int size
+
+    cdef blosc2_cparams cparams
+    cdef blosc2_context *cctx
+    if RELEASEGIL:
+        _dest = <void*> <char *> dest
+        _src = <void*> <char *> src
+        cparams = BLOSC2_CPARAMS_DEFAULTS
+        cparams.compcode = blosc_compname_to_compcode(cname)
+        with nogil:
+            cparams.nthreads = blosc_get_nthreads()
+            cparams.typesize = typesize
+            cparams.clevel = clevel
+
+            cctx = blosc2_create_cctx(cparams)
+            size = blosc2_compress_ctx(cctx, _src, len_src, _dest, len_dest)
+    else:
+        size = blosc2_compress(clevel, shuffle, typesize, <void*> <char *> src, len_src, <void*> <char *> dest, len_dest)
     if size > 0:
         return dest[:size]
     else:
@@ -291,7 +321,7 @@ def decompress(src, as_bytearray=False):
     blosc_cbuffer_sizes(<void*> <char *> src, &nbytes, &cbytes, &blocksize)
     dest = bytes(nbytes)
     size = blosc_decompress(<void*> <char *> src, <void*> <char *> dest, len(dest))
-    if size > 0:
+    if size >= 0:
         if as_bytearray:
             return bytearray(dest)
         else:
