@@ -40,7 +40,7 @@ def compress(src, typesize=8, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosc
 
     Parameters
     ----------
-    src : bytes-like object
+    src : bytes-like object (supporting the buffer interface)
         The data to be compressed.
     typesize : int (optional) from 1 to 255
         The data type size.
@@ -114,6 +114,8 @@ def decompress(src, as_bytearray=False):
     ------
     RuntimeError
         The compressed data is corrupted or the output buffer is not large enough
+    TypeError
+        If bytes_like does not support Buffer Protocol
 
     Examples
     --------
@@ -405,7 +407,7 @@ def set_nthreads(nthreads):
 
     Notes
     -----
-    The number of threads for Blosc is :math:`2^31`. In some
+    The maximum number of threads for Blosc is :math:`2^31 - 1`. In some
     cases Blosc gets better results if you set the number of threads
     to a value slightly below than your number of cores
     (via `detect_number_of_cores`).

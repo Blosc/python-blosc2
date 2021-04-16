@@ -1,5 +1,10 @@
 from libcpp cimport bool
+from libc.stdlib cimport malloc, free
 
+from cpython cimport (
+    PyObject_GetBuffer, PyBuffer_Release,
+    PyBUF_SIMPLE, Py_buffer,
+)
 
 cdef extern from "<stdint.h>":
     ctypedef   signed char  int8_t
@@ -288,10 +293,11 @@ TRUNC_PREC = BLOSC_TRUNC_PREC
 cpdef compress(src, size_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE, cname='blosclz'):
     set_compressor(cname)
     cdef int len_src = len(src)
-    dest = bytes(len_src + BLOSC_MAX_OVERHEAD)
+    cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+    PyObject_GetBuffer(src, buf, PyBUF_SIMPLE)
+    dest = bytes(buf.len + BLOSC_MAX_OVERHEAD)
     cdef int len_dest = len(dest)
     cdef int size
-
     cdef blosc2_cparams cparams
     cdef blosc2_context *cctx
     if RELEASEGIL:
@@ -307,7 +313,9 @@ cpdef compress(src, size_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE, 
             cctx = blosc2_create_cctx(cparams)
             size = blosc2_compress_ctx(cctx, _src, len_src, _dest, len_dest)
     else:
-        size = blosc2_compress(clevel, shuffle, typesize, <void*> <char *> src, len_src, <void*> <char *> dest, len_dest)
+        size = blosc2_compress(clevel, shuffle, typesize, buf.buf, buf.len, <void*> <char *> dest, len_dest)
+    PyBuffer_Release(buf)
+    free(buf)
     if size > 0:
         return dest[:size]
     else:
@@ -318,9 +326,13 @@ def decompress(src, as_bytearray=False):
     cdef size_t nbytes
     cdef size_t cbytes
     cdef size_t blocksize
-    blosc_cbuffer_sizes(<void*> <char *> src, &nbytes, &cbytes, &blocksize)
+    cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+    PyObject_GetBuffer(src, buf, PyBUF_SIMPLE)
+    blosc_cbuffer_sizes(buf.buf, &nbytes, &cbytes, &blocksize)
     dest = bytes(nbytes)
-    size = blosc_decompress(<void*> <char *> src, <void*> <char *> dest, len(dest))
+    size = blosc_decompress(buf.buf, <void*> <char *> dest, len(dest))
+    PyBuffer_Release(buf)
+    free(buf)
     if size >= 0:
         if as_bytearray:
             return bytearray(dest)
@@ -342,9 +354,9 @@ def free_resources():
     if rc < 0:
         raise ValueError("Could not free the resources")
 
-def set_nthreads(int nthreads):
+def set_nthreads(nthreads):
     if nthreads > INT_MAX:
-        raise ValueError("nthreads must be less or equal than 2^31.")
+        raise ValueError("nthreads must be less or equal than 2^31 - 1.")
     rc = blosc_set_nthreads(nthreads)
     if rc < 0:
         raise ValueError("nthreads must be a positive integer.")
