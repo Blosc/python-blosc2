@@ -5,3 +5,4 @@ cython>=0.29
 cmake>=3.14.0
 sphinx
 pydata-sphinx-theme
+numpydoc
