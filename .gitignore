@@ -132,4 +132,8 @@ dmypy.json
 .idea/
 
 # skbuild
-._skbuild/
+_skbuild/
+
+# sphinx
+doc/_build/
+

@@ -244,7 +244,7 @@ def unpack(packed_object, **kwargs):
 
 
 def pack_array(arr, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosclz'):
-    """Pack (compress) a NumPy array.
+    """Pack (compress) a NumPy array. It is equivalent to the pack function.
 
     Parameters
     ----------
@@ -280,7 +280,7 @@ def pack_array(arr, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosclz'):
 
     See also
     --------
-    This function is equivalent to `blosc2.pack(array)`
+    func: `pack(object)`
 
     Examples
     --------
@@ -407,7 +407,7 @@ def set_nthreads(nthreads):
 
     Notes
     -----
-    The maximum number of threads for Blosc is :math:`2^31 - 1`. In some
+    The maximum number of threads for Blosc is :math:`2^{31} - 1`. In some
     cases Blosc gets better results if you set the number of threads
     to a value slightly below than your number of cores
     (via `detect_number_of_cores`).
@@ -431,7 +431,9 @@ def compressor_list():
     out : list
         The list of names.
     """
-    return blosc2_ext.compressor_list().split(b",")
+    cnames = blosc2_ext.compressor_list().split(b',')
+    cnames = [cname.decode() for cname in cnames]
+    return cnames
 
 
 def set_blocksize(blocksize=0):
@@ -485,6 +487,13 @@ def get_clib(bytesobj):
 
 
 def get_compressor():
+    """ Get the current compressor that is used for compression.
+
+    Returns
+    -------
+    out : str
+        The name of the compressor.
+    """
     return blosc2_ext.get_compressor()
 
 
@@ -548,7 +557,6 @@ _cnames2codecs = {
 }
 # Dictionaries for the maps between compressor names and libs
 cnames = compressor_list()
-cnames = [cname.decode() for cname in cnames]
 # Map for compression libraries and versions
 clib_versions = {}
 for cname in cnames:
@@ -600,3 +608,13 @@ def print_versions():
     print("Detected cores: %s" % ncores)
     print("Number of threads to use by default: %s" % ncores)
     print("-=" * 38)
+
+def get_blocksize():
+    """ Get the internal blocksize to be used during compression.
+
+    Returns
+    -------
+    out : int
+        The size in bytes of the internal block size.
+    """
+    return blosc2_ext.get_blocksize()

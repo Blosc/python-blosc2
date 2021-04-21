@@ -329,15 +329,15 @@ def decompress(src, as_bytearray=False):
     cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
     PyObject_GetBuffer(src, buf, PyBUF_SIMPLE)
     blosc_cbuffer_sizes(buf.buf, &nbytes, &cbytes, &blocksize)
-    dest = bytes(nbytes)
+    if as_bytearray:
+        dest = bytearray(nbytes)
+    else:
+        dest = bytes(nbytes)
     size = blosc_decompress(buf.buf, <void*> <char *> dest, len(dest))
     PyBuffer_Release(buf)
     free(buf)
     if size >= 0:
-        if as_bytearray:
-            return bytearray(dest)
-        else:
-            return dest
+        return dest
     else:
         raise RuntimeError("Cannot decompress")
 
@@ -399,4 +399,11 @@ def set_releasegil(bool gilstate):
     return oldstate
 
 def get_blocksize():
+    """ Get the internal blocksize to be used during compression.
+
+    Returns
+    -------
+    out : int
+        The size in bytes of the internal block size.
+    """
     return blosc_get_blocksize()
