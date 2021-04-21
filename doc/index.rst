@@ -11,12 +11,3 @@ Welcome to blosc2's documentation!
    :caption: Contents:
 
    reference/index
-
-
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
