@@ -6,6 +6,15 @@ from .blosc2_ext import BLOSCLZ, LZ4, LZ4HC, ZLIB, ZSTD
 # Filters
 from .blosc2_ext import NOFILTER, SHUFFLE, BITSHUFFLE, DELTA, TRUNC_PREC
 
+# Filter names
+filter_names = {
+    NOFILTER: "nofilter",
+    SHUFFLE: "shuffle",
+    BITSHUFFLE: "bitshuffle",
+    DELTA: "delta",
+    TRUNC_PREC: "trun_prec",
+}
+
 # Public API for container module
 from .utils import (compress, decompress, set_compressor, free_resources, set_nthreads,
                     clib_info, get_clib, compressor_list, set_blocksize, pack, unpack,

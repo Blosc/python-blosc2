@@ -91,7 +91,7 @@ def compress(src, typesize=8, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosc
     return blosc2_ext.compress(src, typesize, clevel, shuffle, cname)
 
 
-def decompress(src, as_bytearray=False):
+def decompress(src, dst=None, as_bytearray=False):
     """Decompresses a bytes-like compressed object.
 
     Parameters
@@ -135,7 +135,7 @@ def decompress(src, as_bytearray=False):
     ...                                      as_bytearray=True)) is bytearray
     True
     """
-    return blosc2_ext.decompress(src, as_bytearray)
+    return blosc2_ext.decompress(src, dst, as_bytearray)
 
 
 def pack(obj, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosclz'):
@@ -235,7 +235,7 @@ def unpack(packed_object, **kwargs):
     >>> numpy.alltrue(a == a2)
     True
     """
-    pickled_object = decompress(packed_object, False)
+    pickled_object = decompress(packed_object)
     if kwargs:
         obj = pickle.loads(pickled_object, **kwargs)
     else:
@@ -331,7 +331,7 @@ def unpack_array(packed_array, **kwargs):
     >>> numpy.alltrue(a == a2)
     True
     """
-    pickled_array = decompress(packed_array, False)
+    pickled_array = decompress(packed_array)
     if kwargs:
         arr = pickle.loads(pickled_array, **kwargs)
         if all(isinstance(x, bytes) for x in arr.tolist()):
