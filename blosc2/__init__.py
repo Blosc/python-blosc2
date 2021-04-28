@@ -21,9 +21,3 @@ nthreads = ncores = detect_number_of_cores()
 if nthreads > 8:
     nthreads = 8
 set_nthreads(nthreads)
-# Translation of filters to strings
-filters = {NOFILTER: "nofilter",
-           SHUFFLE: "shuffle",
-           BITSHUFFLE: "bitshuffle",
-           DELTA: "delta",
-           TRUNC_PREC: "trunc_prec"}

@@ -14,7 +14,9 @@ import pytest
                          [
                             blosc2.BITSHUFFLE,
                             blosc2.SHUFFLE,
-                            blosc2.NOFILTER
+                            blosc2.NOFILTER,
+                            blosc2.DELTA,
+                            blosc2.TRUNC_PREC
                          ]
                          )
 def test_compressors(typesize, clevel, filt, cname):

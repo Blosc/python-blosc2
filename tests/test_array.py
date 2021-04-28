@@ -13,7 +13,4 @@ def test_array(size, dtype):
     assert len(parray) < nparray.size * nparray.itemsize
 
     a2 = blosc2.unpack_array(parray)
-    assert np.alltrue(nparray == a2)
-
-
-
+    assert np.array_equal(nparray, a2)

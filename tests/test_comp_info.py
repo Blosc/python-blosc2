@@ -14,5 +14,5 @@ def test_comp_info(cname):
     blosc2.compressor_list()
     blosc2.clib_info(cname)
     blosc2.set_compressor(cname)
-    assert cname.encode("utf-8") == blosc2.get_compressor()
+    assert cname == blosc2.get_compressor()
     blosc2.print_versions()

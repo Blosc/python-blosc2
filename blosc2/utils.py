@@ -24,9 +24,10 @@ def _check_input_length(input_name, input_len):
 
 
 def _check_shuffle(shuffle):
-    if shuffle not in [blosc2_ext.NOFILTER, blosc2_ext.SHUFFLE, blosc2_ext.BITSHUFFLE]:
-        raise ValueError("shuffle can only be one of NOSHUFFLE, SHUFFLE"
-                         " and BITSHUFFLE.")
+    if shuffle not in [blosc2_ext.NOFILTER, blosc2_ext.SHUFFLE, blosc2_ext.BITSHUFFLE,
+                       blosc2_ext.DELTA, blosc2_ext.TRUNC_PREC]:
+        raise ValueError("shuffle can only be one of NOSHUFFLE, SHUFFLE, BITSHUFFLE"
+                         " DELTA, and TRUNC_PREC.")
 
 
 def _check_cname(cname):
@@ -494,7 +495,7 @@ def get_compressor():
     out : str
         The name of the compressor.
     """
-    return blosc2_ext.get_compressor()
+    return blosc2_ext.get_compressor().decode()
 
 
 def set_releasegil(gilstate):
