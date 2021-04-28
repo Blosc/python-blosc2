@@ -12,7 +12,8 @@ from .utils import (compress, decompress, set_compressor, free_resources, set_nt
                     pack_array, unpack_array, get_compressor, set_releasegil, detect_number_of_cores,
                     print_versions, get_blocksize)
 
-from .blosc2_ext import MAX_TYPESIZE, MAX_BUFFERSIZE
+from .blosc2_ext import MAX_TYPESIZE, MAX_BUFFERSIZE, VERSION_STRING, VERSION_DATE
+blosclib_version = "%s (%s)" % (VERSION_STRING, VERSION_DATE)
 
 # Internal Blosc threading
 nthreads = ncores = detect_number_of_cores()
@@ -20,7 +21,9 @@ nthreads = ncores = detect_number_of_cores()
 if nthreads > 8:
     nthreads = 8
 set_nthreads(nthreads)
-
+# Translation of filters to strings
 filters = {NOFILTER: "nofilter",
            SHUFFLE: "shuffle",
-           BITSHUFFLE: "bitshuffle"}
+           BITSHUFFLE: "bitshuffle",
+           DELTA: "delta",
+           TRUNC_PREC: "trunc_prec"}

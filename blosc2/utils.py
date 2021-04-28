@@ -588,8 +588,7 @@ def print_versions():
     import platform
     print("-=" * 38)
     print("python-blosc2 version: %s" % blosc2.__version__)
-    blosclib_version = "%s (%s)" % (blosc2_ext.VERSION_STRING, blosc2_ext.VERSION_DATE)
-    print("Blosc version: %s" % blosclib_version)
+    print("Blosc version: %s" % blosc2.blosclib_version)
     print("Compressors available: %s" % cnames)
     print("Compressor library versions:")
     for clib in sorted(clib_versions.keys()):
@@ -608,6 +607,7 @@ def print_versions():
     print("Detected cores: %s" % ncores)
     print("Number of threads to use by default: %s" % ncores)
     print("-=" * 38)
+
 
 def get_blocksize():
     """ Get the internal blocksize to be used during compression.

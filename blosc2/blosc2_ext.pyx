@@ -272,8 +272,8 @@ cdef extern from "blosc2.h":
 
 MAX_TYPESIZE = BLOSC_MAX_TYPESIZE
 MAX_BUFFERSIZE = BLOSC_MAX_BUFFERSIZE
-VERSION_STRING = BLOSC_VERSION_STRING
-VERSION_DATE = BLOSC_VERSION_DATE
+VERSION_STRING = (<char*>BLOSC_VERSION_STRING).decode()
+VERSION_DATE = (<char*>BLOSC_VERSION_DATE).decode()
 
 
 # Codecs
@@ -326,16 +326,16 @@ def decompress(src, as_bytearray=False):
     cdef size_t nbytes
     cdef size_t cbytes
     cdef size_t blocksize
-    cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-    PyObject_GetBuffer(src, buf, PyBUF_SIMPLE)
-    blosc_cbuffer_sizes(buf.buf, &nbytes, &cbytes, &blocksize)
+
+    mem_view = memoryview(src)
+    cdef const uint8_t[:]typed_view = mem_view.cast('B')
+    blosc_cbuffer_sizes(&typed_view[0], &nbytes, &cbytes, &blocksize)
     if as_bytearray:
         dest = bytearray(nbytes)
     else:
         dest = bytes(nbytes)
-    size = blosc_decompress(buf.buf, <void*> <char *> dest, len(dest))
-    PyBuffer_Release(buf)
-    free(buf)
+    size = blosc_decompress(&typed_view[0], <void*> <char *> dest, len(dest))
+
     if size >= 0:
         return dest
     else:
