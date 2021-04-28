@@ -26,8 +26,8 @@ in_ = arrays[0][0]
 out_ = np.full(in_.size, fill_value=0, dtype=in_.dtype)
 t0 = time.time()
 # out_ = np.copy(in_)
-out_ = ctypes.memmove(out_.__array_interface__['data'][0],
-                      in_.__array_interface__['data'][0], N*8)
+ctypes.memmove(out_.__array_interface__['data'][0],
+               in_.__array_interface__['data'][0], N*8)
 tcpy = time.time() - t0
 print("  *** ctypes.memmove() *** Time for memcpy():\t%.3f s\t(%.2f GB/s)" % (
     tcpy, (N*8 / tcpy) / 2**30))
@@ -39,12 +39,13 @@ for (in_, label) in arrays:
     for cname in blosc2.compressor_list():
         for filter in [blosc2.NOFILTER, blosc2.SHUFFLE, blosc2.BITSHUFFLE]:
             t0 = time.time()
-            c = blosc2.pack(in_, clevel=clevel, shuffle=filter, cname=cname)
+            c = blosc2.compress(in_, in_.itemsize, clevel=clevel, shuffle=filter, cname=cname)
             tc = time.time() - t0
+            out = np.full(in_.size, fill_value=0, dtype=in_.dtype)
             t0 = time.time()
-            out = blosc2.unpack(c)
+            out = blosc2.decompress(c, dst=out)
             td = time.time() - t0
-            assert (np.array_equal(in_, out))
+            assert np.array_equal(in_, out)
             filter_name = blosc2.filter_names[filter]
             print("  *** %-8s, %-10s *** %6.3f s (%.2f GB/s) / %5.3f s (%.2f GB/s)" % (
                 cname, filter_name, tc, ((N*8 / tc) / 2**30), td, ((N*8 / td) / 2**30)), end='')

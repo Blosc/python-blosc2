@@ -309,7 +309,6 @@ cpdef compress(src, size_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE, 
             cparams.nthreads = blosc_get_nthreads()
             cparams.typesize = typesize
             cparams.clevel = clevel
-
             cctx = blosc2_create_cctx(cparams)
             size = blosc2_compress_ctx(cctx, _src, len_src, _dest, len_dest)
     else:
@@ -322,22 +321,29 @@ cpdef compress(src, size_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE, 
         raise ValueError("Cannot compress")
 
 
-def decompress(src, as_bytearray=False):
+def decompress(src, dst=None, as_bytearray=False):
     cdef size_t nbytes
     cdef size_t cbytes
     cdef size_t blocksize
+    cdef const uint8_t[:] typed_view_src
+    cdef uint8_t[:] typed_view_dst
 
-    mem_view = memoryview(src)
-    cdef const uint8_t[:]typed_view = mem_view.cast('B')
-    blosc_cbuffer_sizes(&typed_view[0], &nbytes, &cbytes, &blocksize)
-    if as_bytearray:
-        dest = bytearray(nbytes)
+    mem_view_src = memoryview(src)
+    typed_view_src = mem_view_src.cast('B')
+    blosc_cbuffer_sizes(&typed_view_src[0], &nbytes, &cbytes, &blocksize)
+    if dst is not None:
+        mem_view_dst = memoryview(dst)
+        typed_view_dst = mem_view_dst.cast('B')
+        size = blosc_decompress(&typed_view_src[0], &typed_view_dst[0], len(typed_view_dst))
     else:
-        dest = bytes(nbytes)
-    size = blosc_decompress(&typed_view[0], <void*> <char *> dest, len(dest))
+        if as_bytearray:
+            dst = bytearray(nbytes)
+        else:
+            dst = bytes(nbytes)
+        size = blosc_decompress(&typed_view_src[0], <void*> <char *> dst, len(dst))
 
     if size >= 0:
-        return dest
+        return dst
     else:
         raise RuntimeError("Cannot decompress")
 
