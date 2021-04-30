@@ -62,9 +62,9 @@ def compress(src, typesize=8, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosc
         default is blosc2.SHUFFLE.
     cname : string (optional)
         The name of the compressor used internally in Blosc. It can be
-        any of the supported by Blosc ('blosclz', 'lz4', 'lz4hc',
-        'zlib', 'zstd' and maybe others too). The default is
-        'blosclz'.
+        any of the supported by Blosc (`blosclz`, `lz4`, `lz4hc`,
+        `zlib`, `zstd` and maybe others too). The default is
+        `blosclz`.
 
     Returns
     -------
