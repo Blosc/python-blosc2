@@ -1,3 +1,11 @@
+########################################################################
+#
+#       Created: April 30, 2021
+#       Author:  The Blosc development team - blosc@blosc.org
+#
+########################################################################
+
+
 # A simple example using the pack and unpack functions
 import blosc2
 import numpy as np

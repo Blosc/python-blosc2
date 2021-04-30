@@ -1,3 +1,11 @@
+########################################################################
+#
+#       Created: April 30, 2021
+#       Author:  The Blosc development team - blosc@blosc.org
+#
+########################################################################
+
+
 # Compress and decompress different arrays
 import blosc2
 import array

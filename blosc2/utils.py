@@ -1,3 +1,11 @@
+########################################################################
+#
+#       Created: April 30, 2021
+#       Author:  The Blosc development team - blosc@blosc.org
+#
+########################################################################
+
+
 import os
 import sys
 from . import blosc2_ext

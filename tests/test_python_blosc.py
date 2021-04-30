@@ -1,3 +1,11 @@
+########################################################################
+#
+#       Created: April 30, 2021
+#       Author:  The Blosc development team - blosc@blosc.org
+#
+########################################################################
+
+
 # Test the python-blosc API
 # -*- coding: utf-8 -*-
 from __future__ import division

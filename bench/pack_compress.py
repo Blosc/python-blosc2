@@ -1,3 +1,11 @@
+########################################################################
+#
+#       Created: April 30, 2021
+#       Author:  The Blosc development team - blosc@blosc.org
+#
+########################################################################
+
+
 """
 Small benchmark that compares a plain NumPy array copy against
 compression through different compressors in blosc2.

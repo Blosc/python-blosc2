@@ -31,7 +31,7 @@ VERSION = open('VERSION').read().strip()
 open('blosc2/version.py', 'w').write('__version__ = "%s"\n' % VERSION)
 
 
-setup(name="python-blosc2",
+setup(name="blosc2",
       setup_requires=[
           'cython>=0.29',
           'scikit-build',
