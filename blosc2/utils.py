@@ -167,8 +167,8 @@ def pack(obj, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosclz'):
         default is blosc2.SHUFFLE.
     cname : string (optional)
         The name of the compressor used internally in Blosc. It can be
-        any of the supported by Blosc ('blosclz', 'lz4', 'lz4hc',
-        'zlib', 'zstd' and maybe others too). The default is
+        any of the supported by Blosc (`blosclz`, `lz4`, `lz4hc`,
+        `zlib`, `zstd` and maybe others too). The default is
         'blosclz'.
 
     Returns
