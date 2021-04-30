@@ -62,9 +62,9 @@ def compress(src, typesize=8, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosc
         default is blosc2.SHUFFLE.
     cname : string (optional)
         The name of the compressor used internally in Blosc. It can be
-        any of the supported by Blosc (`blosclz`, `lz4`, `lz4hc`,
-        `zlib`, `zstd` and maybe others too). The default is
-        `blosclz`.
+        any of the supported by Blosc ( `blosclz` , `lz4` , `lz4hc` ,
+        `zlib` , `zstd` and maybe others too). The default is
+         `blosclz` .
 
     Returns
     -------
@@ -156,7 +156,7 @@ def pack(obj, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosclz'):
 
     Parameters
     ----------
-    obj : Python object with 'itemsize' attribute
+    obj : Python object with `itemsize` attribute
         The Python object to be packed.
     clevel : int (optional)
         The compression level from 0 (no compression) to 9
@@ -167,9 +167,9 @@ def pack(obj, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosclz'):
         default is blosc2.SHUFFLE.
     cname : string (optional)
         The name of the compressor used internally in Blosc. It can be
-        any of the supported by Blosc (`blosclz`, `lz4`, `lz4hc`,
-        `zlib`, `zstd` and maybe others too). The default is
-        `blosclz`.
+        any of the supported by Blosc ( `blosclz` , `lz4` , `lz4hc` ,
+        `zlib` , `zstd` and maybe others too). The default is
+        `blosclz` .
 
     Returns
     -------
@@ -273,9 +273,9 @@ def pack_array(arr, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosclz'):
         default is blosc.SHUFFLE.
     cname : string (optional)
         The name of the compressor used internally in Blosc. It can be
-        any of the supported by Blosc (`blosclz`, `lz4`, `lz4hc`,
-        `zlib`, `zstd` and maybe others too). The default is
-        `blosclz`.
+        any of the supported by Blosc ( `blosclz` , `lz4` , `lz4hc` ,
+        `zlib` , `zstd` and maybe others too). The default is
+        `blosclz` .
 
     Returns
     -------
@@ -357,8 +357,8 @@ def unpack_array(packed_array, **kwargs):
 
 
 def set_compressor(compname):
-    """Set the compressor to be used. The supported ones are `blosclz`,
-    `lz4`, `lz4hc`, `zlib` and `ztsd`. If this function is not
+    """Set the compressor to be used. The supported ones are `blosclz` ,
+    `lz4` , `lz4hc` , `zlib` and `ztsd`. If this function is not
     called, then `blosclz` will be used.
 
     Parameters
