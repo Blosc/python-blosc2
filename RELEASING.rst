@@ -3,10 +3,18 @@ python-blosc2 release procedure
 
 Preliminaries
 -------------
+* Make sure that the c-blosc2 submodule is updated to the latest version (or a specific version that
+will be documented in the `RELEASE_NOTES.md`)::
 
-* Make sure that the current master branch is passing the tests on Microsoft Azure.
+    cd blosc2/c-blosc2
+    git switch <desired branch or tag>
+    cd -
+    git commit -m "Update c-blosc2 sources" blosc2/c-blosc2
+    git push
 
-* Make sure that `RELEASE_NOTES.rst` and `ANNOUNCE.rst` are up to date with the latest news
+* Make sure that the current master branch is passing the tests in continuous integration.
+
+* Make sure that `RELEASE_NOTES.md` and `ANNOUNCE.rst` are up to date with the latest news
   in the release.
 
 * Check that `VERSION` file contains the correct number.
@@ -43,7 +51,7 @@ Packaging
   re-clone and re-build::
 
     cd /tmp
-    git clone --recursive git@github.com:Blosc/python-blosc2.git
+    git clone --recursive https://github.com/Blosc/python-blosc2.git
     cd python-blosc2
     python setup.py build_ext
 
@@ -52,7 +60,7 @@ Packaging
 * Make the tarball with the command::
 
     python setup.py sdist
-    pip install dist/*
+    pip install dist/blosc2-X.Y.Z.tar.gz
 
 Do a quick check that the tarball is sane.
 
@@ -88,7 +96,7 @@ Post-release actions
     cd $HOME/blosc/python-blosc2
 
 
-* Create new headers for adding new features in ``RELEASE_NOTES.rst``
+* Create new headers for adding new features in ``RELEASE_NOTES.md``
   add this place-holder:
 
   XXX version-specific blurb XXX
