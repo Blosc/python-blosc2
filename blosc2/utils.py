@@ -169,7 +169,7 @@ def pack(obj, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosclz'):
         The name of the compressor used internally in Blosc. It can be
         any of the supported by Blosc (`blosclz`, `lz4`, `lz4hc`,
         `zlib`, `zstd` and maybe others too). The default is
-        'blosclz'.
+        `blosclz`.
 
     Returns
     -------
@@ -179,8 +179,8 @@ def pack(obj, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosclz'):
     Raises
     ------
     AttributeError
-        If the object does not have an 'itemsize' attribute.
-        If the object does not have an 'size' attribute.
+        If the object does not have an `itemsize` attribute.
+        If the object does not have an `size` attribute.
     ValueError
         If obj.itemsize * obj.size is larger than the maximum allowed buffer size.
         If typesize is not within the allowed range.
@@ -273,9 +273,9 @@ def pack_array(arr, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosclz'):
         default is blosc.SHUFFLE.
     cname : string (optional)
         The name of the compressor used internally in Blosc. It can be
-        any of the supported by Blosc ('blosclz', 'lz4', 'lz4hc',
-        'zlib', 'zstd' and maybe others too). The default is
-        'blosclz'.
+        any of the supported by Blosc (`blosclz`, `lz4`, `lz4hc`,
+        `zlib`, `zstd` and maybe others too). The default is
+        `blosclz`.
 
     Returns
     -------
@@ -285,7 +285,7 @@ def pack_array(arr, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosclz'):
     Raises
     ------
     AttributeError
-        If the object does not have an 'itemsize' attribute.
+        If the object does not have an `itemsize` attribute.
     ValueError
         If array.itemsize * array.size is larger than the maximum allowed buffer size.
         If typesize is not within the allowed range.
@@ -357,9 +357,9 @@ def unpack_array(packed_array, **kwargs):
 
 
 def set_compressor(compname):
-    """Set the compressor to be used. The supported ones are "blosclz",
-    "lz4", "lz4hc", "zlib" and "ztsd". If this function is not
-    called, then "blosclz" will be used.
+    """Set the compressor to be used. The supported ones are `blosclz`,
+    `lz4`, `lz4hc`, `zlib` and `ztsd`. If this function is not
+    called, then `blosclz` will be used.
 
     Parameters
     ----------
