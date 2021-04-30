@@ -8,7 +8,8 @@ will be documented in the `RELEASE_NOTES.md`)::
 
     cd blosc2/c-blosc2
     git switch <desired branch or tag>
-    cd -
+    git pull
+    cd ../..
     git commit -m "Update c-blosc2 sources" blosc2/c-blosc2
     git push
 
