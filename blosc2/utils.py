@@ -64,7 +64,7 @@ def compress(src, typesize=8, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosc
         The name of the compressor used internally in Blosc. It can be
         any of the supported by Blosc ( `blosclz` , `lz4` , `lz4hc` ,
         `zlib` , `zstd` and maybe others too). The default is
-         `blosclz` .
+        `blosclz` .
 
     Returns
     -------
@@ -240,12 +240,12 @@ def unpack(packed_object, **kwargs):
     >>> len(parray) < a.size*a.itemsize
     True
     >>> a2 = blosc2.unpack(parray)
-    >>> numpy.alltrue(a == a2)
+    >>> numpy.array_equal(a, a2)
     True
     >>> a = numpy.array(['å', 'ç', 'ø'])
     >>> parray = blosc2.pack(a)
     >>> a2 = blosc2.unpack(parray)
-    >>> numpy.alltrue(a == a2)
+    >>> numpy.array_equal(a, a2)
     True
     """
     pickled_object = decompress(packed_object)
@@ -336,12 +336,12 @@ def unpack_array(packed_array, **kwargs):
     >>> len(parray) < a.size*a.itemsize
     True
     >>> a2 = blosc2.unpack_array(parray)
-    >>> numpy.alltrue(a == a2)
+    >>> numpy.array_equal(a, a2)
     True
     >>> a = numpy.array(['å', 'ç', 'ø'])
     >>> parray = blosc2.pack_array(a)
     >>> a2 = blosc2.unpack_array(parray)
-    >>> numpy.alltrue(a == a2)
+    >>> numpy.array_equal(a, a2)
     True
     """
     pickled_array = decompress(packed_array)

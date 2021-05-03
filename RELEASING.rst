@@ -3,8 +3,7 @@ python-blosc2 release procedure
 
 Preliminaries
 -------------
-* Make sure that the c-blosc2 submodule is updated to the latest version (or a specific version that
-will be documented in the `RELEASE_NOTES.md`)::
+* Make sure that the c-blosc2 submodule is updated to the latest version (or a specific version that will be documented in the `RELEASE_NOTES.md`)::
 
     cd blosc2/c-blosc2
     git switch <desired branch or tag>

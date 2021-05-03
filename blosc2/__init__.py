@@ -14,14 +14,6 @@ from .blosc2_ext import BLOSCLZ, LZ4, LZ4HC, ZLIB, ZSTD
 # Filters
 from .blosc2_ext import NOFILTER, SHUFFLE, BITSHUFFLE, DELTA, TRUNC_PREC
 
-# Filter names
-filter_names = {
-    NOFILTER: "nofilter",
-    SHUFFLE: "shuffle",
-    BITSHUFFLE: "bitshuffle",
-    DELTA: "delta",
-    TRUNC_PREC: "trun_prec",
-}
 
 # Public API for container module
 from .utils import (compress, decompress, set_compressor, free_resources, set_nthreads,
@@ -31,6 +23,15 @@ from .utils import (compress, decompress, set_compressor, free_resources, set_nt
 
 from .blosc2_ext import MAX_TYPESIZE, MAX_BUFFERSIZE, VERSION_STRING, VERSION_DATE
 blosclib_version = "%s (%s)" % (VERSION_STRING, VERSION_DATE)
+
+# Filter names
+filter_names = {
+    NOFILTER: "nofilter",
+    SHUFFLE: "shuffle",
+    BITSHUFFLE: "bitshuffle",
+    DELTA: "delta",
+    TRUNC_PREC: "trun_prec",
+}
 
 # Internal Blosc threading
 nthreads = ncores = detect_number_of_cores()
