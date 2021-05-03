@@ -1,6 +1,5 @@
 scikit-build>=0.11.1
 cython>=0.29
-breathe
 sphinx
 pydata-sphinx-theme
 numpydoc

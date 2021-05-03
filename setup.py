@@ -73,7 +73,7 @@ setup(
         '-DDEACTIVATE_ZLIB:BOOL=%s' % cmake_bool(not int(os.environ.get('INCLUDE_ZLIB', '1'))),
         '-DDEACTIVATE_ZSTD:BOOL=%s' % cmake_bool(not int(os.environ.get('INCLUDE_ZSTD', '1'))),
     ],
-    tests_require=['numpy', 'psutil'],
+    tests_require=['numpy', 'psutil', 'pytest', 'doctest'],
     packages=['blosc2'],
     package_dir={'blosc2': 'blosc2'},
 )
