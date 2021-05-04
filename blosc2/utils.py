@@ -632,17 +632,3 @@ def get_blocksize():
         The size in bytes of the internal block size.
     """
     return blosc2_ext.get_blocksize()
-
-
-def load_tests(tests):
-    import doctest
-    tests.addTests(doctest.DocTestSuite())
-    return tests
-
-if __name__ == '__main__':
-    # test myself
-    import doctest
-    print_versions()
-    nfail, ntests = doctest.testmod()
-    if nfail == 0:
-        print("All %d tests passed successfully!" % ntests)
