@@ -12,11 +12,11 @@ import pytest
 
 @pytest.mark.parametrize("cname",
                          [
-                             ('lz4'),
-                             ('blosclz'),
-                             ('lz4hc'),
-                             ('zlib'),
-                             ('zstd')
+                             'lz4',
+                             'blosclz',
+                             'lz4hc',
+                             'zlib',
+                             'zstd'
                          ])
 def test_comp_info(cname):
     blosc2.compressor_list()

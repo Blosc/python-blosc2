@@ -108,8 +108,8 @@ def decompress(src, dst=None, as_bytearray=False):
         The data to be decompressed.  Must be a bytes-like object
         that supports the Python Buffer Protocol, like bytes, bytearray,
         memoryview, or numpy.ndarray.
-    dst : NumPy object
-        The destination NumPy object to fill.  The user must make sure
+    dst : NumPy object or bytearray
+        The destination NumPy object or bytearray to fill.  The user must make sure
         that it has enough capacity for hosting the decompressed data.
         Default is None, meaning that a new `bytes` or `bytearray` object
         is created, filled and returned.
