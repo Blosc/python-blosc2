@@ -47,4 +47,5 @@ __all__ = [__version__,
            clib_info, get_clib, compressor_list, set_blocksize, pack, unpack,
            pack_array, unpack_array, get_compressor, set_releasegil, detect_number_of_cores,
            print_versions, get_blocksize,
-           MAX_TYPESIZE, MAX_BUFFERSIZE, VERSION_STRING, VERSION_DATE]
+           MAX_TYPESIZE, MAX_BUFFERSIZE, VERSION_STRING, VERSION_DATE,
+           filter_names]

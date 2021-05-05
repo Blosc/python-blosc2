@@ -10,11 +10,11 @@ import blosc2
 import pytest
 import numpy as np
 
+
 @pytest.mark.parametrize("size, dtype",
                          [
                              (1e6, None)
                          ])
-
 def test_array(size, dtype):
     nparray = np.arange(size, dtype=dtype)
     parray = blosc2.pack_array(nparray)

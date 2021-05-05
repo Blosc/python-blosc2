@@ -20,7 +20,7 @@ def cmake_bool(cond):
 try:
     import cpuinfo
     cpu_info = cpuinfo.get_cpu_info()
-except:
+except Exception:
     # newer cpuinfo versions fail to import on unsupported architectures
     cpu_info = None
 

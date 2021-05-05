@@ -15,7 +15,6 @@ import sys
 sys.path.insert(0, os.path.abspath('..'))
 
 
-
 # -- Project information -----------------------------------------------------
 
 project = 'python-blosc2'
@@ -52,7 +51,6 @@ html_theme = "pydata_sphinx_theme"
 html_logo = "_static/blosc-logo_128.png"
 html_favicon = "_static/blosc-logo_128.png"
 html_show_sourcelink = False
-
 
 
 # Add any paths that contain custom static files (such as style sheets) here,
