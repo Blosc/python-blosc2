@@ -195,7 +195,7 @@ blosc@googlegroups.com
 
 http://groups.google.es/group/blosc
 
-Tweeter fee
+Twitter fee
 ===========
 
 Please follow @Blosc2 to get informed about the latest developments.
