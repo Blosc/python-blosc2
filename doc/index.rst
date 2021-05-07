@@ -6,8 +6,10 @@
 Welcome to python-blosc2's documentation!
 =========================================
 
+.. include:: ../README.rst
+
 .. toctree::
    :maxdepth: 2
    :caption: Contents:
 
-   reference/index
+   API Reference <reference/index>
