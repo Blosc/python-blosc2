@@ -1,4 +1,4 @@
-Announcing python-blosc2 2.0.0
+Announcing python-blosc2 0.1.0
 ==============================
 
 Changes from python-blosc to python-blosc2
@@ -8,6 +8,7 @@ Changes from python-blosc to python-blosc2
 * The function `pack_array` is equivalent to `pack`, which accepts any object with attributes `itemsize` and `size`.
 * On the other hand, the function `unpack` doesn't return a numpy array whereas the `unpack_array` builds that array.
 * The `blosc.NOSHUFFLE` is replaced by the `blosc2.NOFILTER`
+* A bytearray or NumPy object can be passed to the `blosc2.decompress` function to store the decompressed data.
 
 
 
