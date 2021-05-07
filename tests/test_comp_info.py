@@ -6,18 +6,12 @@
 ########################################################################
 
 
-import blosc2
 import pytest
 
+import blosc2
 
-@pytest.mark.parametrize("cname",
-                         [
-                             'lz4',
-                             'blosclz',
-                             'lz4hc',
-                             'zlib',
-                             'zstd'
-                         ])
+
+@pytest.mark.parametrize("cname", ["lz4", "blosclz", "lz4hc", "zlib", "zstd"])
 def test_comp_info(cname):
     blosc2.compressor_list()
     blosc2.clib_info(cname)

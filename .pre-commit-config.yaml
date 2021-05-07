@@ -1,0 +1,14 @@
+repos:
+-   repo: https://github.com/pycqa/isort
+    rev: ''
+    hooks:
+    - id: isort
+-   repo: https://github.com/ambv/black
+    rev: stable
+    hooks:
+    - id: black
+      language_version: python3
+-   repo: https://gitlab.com/pycqa/flake8
+    rev: ''
+    hooks:
+    - id: flake8

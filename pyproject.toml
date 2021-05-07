@@ -1,0 +1,6 @@
+[tool.black]
+line-length = 109
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
