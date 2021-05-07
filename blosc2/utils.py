@@ -7,17 +7,16 @@
 
 
 import os
+import pickle
 import sys
+
 import blosc2
 from blosc2 import blosc2_ext
-
-import pickle
 
 
 def _check_typesize(typesize):
     if not 1 <= typesize <= blosc2_ext.MAX_TYPESIZE:
-        raise ValueError("typesize can only be in the 1-%d range." %
-                         blosc2_ext.MAX_TYPESIZE)
+        raise ValueError("typesize can only be in the 1-%d range." % blosc2_ext.MAX_TYPESIZE)
 
 
 def _check_clevel(clevel):
@@ -27,24 +26,28 @@ def _check_clevel(clevel):
 
 def _check_input_length(input_name, input_len):
     if input_len > blosc2_ext.MAX_BUFFERSIZE:
-        raise ValueError("%s cannot be larger than %d bytes" %
-                         (input_name, blosc2_ext.MAX_BUFFERSIZE))
+        raise ValueError("%s cannot be larger than %d bytes" % (input_name, blosc2_ext.MAX_BUFFERSIZE))
 
 
 def _check_shuffle(shuffle):
-    if shuffle not in [blosc2_ext.NOFILTER, blosc2_ext.SHUFFLE, blosc2_ext.BITSHUFFLE,
-                       blosc2_ext.DELTA, blosc2_ext.TRUNC_PREC]:
-        raise ValueError("shuffle can only be one of NOSHUFFLE, SHUFFLE, BITSHUFFLE"
-                         " DELTA, and TRUNC_PREC.")
+    if shuffle not in [
+        blosc2_ext.NOFILTER,
+        blosc2_ext.SHUFFLE,
+        blosc2_ext.BITSHUFFLE,
+        blosc2_ext.DELTA,
+        blosc2_ext.TRUNC_PREC,
+    ]:
+        raise ValueError(
+            "shuffle can only be one of NOSHUFFLE, SHUFFLE, BITSHUFFLE" " DELTA, and TRUNC_PREC."
+        )
 
 
 def _check_cname(cname):
     if cname not in cnames:
-        raise ValueError("cname can only be one of: %s, not '%s'" %
-                         (cnames, cname))
+        raise ValueError("cname can only be one of: %s, not '%s'" % (cnames, cname))
 
 
-def compress(src, typesize=8, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosclz'):
+def compress(src, typesize=8, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname="blosclz"):
     """Compress src, with a given type size.
 
     Parameters
@@ -91,7 +94,7 @@ def compress(src, typesize=8, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosc
     True
     """
     len_src = len(src)
-    _check_input_length('src', len_src)
+    _check_input_length("src", len_src)
     _check_clevel(clevel)
     _check_typesize(typesize)
     _check_shuffle(shuffle)
@@ -167,7 +170,7 @@ def decompress(src, dst=None, as_bytearray=False):
     return blosc2_ext.decompress(src, dst, as_bytearray)
 
 
-def pack(obj, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosclz'):
+def pack(obj, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname="blosclz"):
     """Pack (compress) a Python object.
 
     Parameters
@@ -211,13 +214,13 @@ def pack(obj, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosclz'):
     >>> len(parray) < a.size*a.itemsize
     True
     """
-    if not hasattr(obj, 'itemsize'):
+    if not hasattr(obj, "itemsize"):
         raise AttributeError("The object must have an itemsize attribute.")
-    if not hasattr(obj, 'size'):
+    if not hasattr(obj, "size"):
         raise AttributeError("The object must have an size attribute.")
     else:
         itemsize = obj.itemsize
-        _check_input_length('object size', obj.size * itemsize)
+        _check_input_length("object size", obj.size * itemsize)
         _check_clevel(clevel)
         _check_cname(cname)
         _check_typesize(itemsize)
@@ -273,7 +276,7 @@ def unpack(packed_object, **kwargs):
     return obj
 
 
-def pack_array(arr, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname='blosclz'):
+def pack_array(arr, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname="blosclz"):
     """Pack (compress) a NumPy array. It is equivalent to the pack function.
 
     Parameters
@@ -365,7 +368,8 @@ def unpack_array(packed_array, **kwargs):
         arr = pickle.loads(pickled_array, **kwargs)
         if all(isinstance(x, bytes) for x in arr.tolist()):
             import numpy
-            arr = numpy.array([x.decode('utf-8') for x in arr.tolist()])
+
+            arr = numpy.array([x.decode("utf-8") for x in arr.tolist()])
     else:
         arr = pickle.loads(pickled_array)
 
@@ -461,7 +465,7 @@ def compressor_list():
     out : list
         The list of names.
     """
-    cnames = blosc2_ext.compressor_list().split(b',')
+    cnames = blosc2_ext.compressor_list().split(b",")
     cnames = [cname.decode() for cname in cnames]
     return cnames
 
@@ -517,7 +521,7 @@ def get_clib(bytesobj):
 
 
 def get_compressor():
-    """ Get the current compressor that is used for compression.
+    """Get the current compressor that is used for compression.
 
     Returns
     -------
@@ -598,13 +602,13 @@ ncores = detect_number_of_cores()
 
 
 def os_release_pretty_name():
-    for p in ('/etc/os-release', '/usr/lib/os-release'):
+    for p in ("/etc/os-release", "/usr/lib/os-release"):
         try:
-            f = open(p, 'rt')
+            f = open(p, "rt")
             for line in f:
-                name, _, value = line.rstrip().partition('=')
-                if name == 'PRETTY_NAME':
-                    if len(value) >= 2 and value[0] in '"\'' and value[0] == value[-1]:
+                name, _, value = line.rstrip().partition("=")
+                if name == "PRETTY_NAME":
+                    if len(value) >= 2 and value[0] in "\"'" and value[0] == value[-1]:
                         value = value[1:-1]
                     return value
         except IOError:
@@ -616,6 +620,7 @@ def os_release_pretty_name():
 def print_versions():
     """Print all the versions of software that python-blosc relies on."""
     import platform
+
     print("-=" * 38)
     print("python-blosc2 version: %s" % blosc2.__version__)
     print("Blosc version: %s" % blosc2.blosclib_version)
@@ -640,7 +645,7 @@ def print_versions():
 
 
 def get_blocksize():
-    """ Get the internal blocksize to be used during compression.
+    """Get the internal blocksize to be used during compression.
 
     Returns
     -------

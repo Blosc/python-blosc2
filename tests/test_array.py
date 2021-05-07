@@ -6,15 +6,13 @@
 ########################################################################
 
 
-import blosc2
-import pytest
 import numpy as np
+import pytest
 
-@pytest.mark.parametrize("size, dtype",
-                         [
-                             (1e6, None)
-                         ])
+import blosc2
 
+
+@pytest.mark.parametrize("size, dtype", [(1e6, None)])
 def test_array(size, dtype):
     nparray = np.arange(size, dtype=dtype)
     parray = blosc2.pack_array(nparray)

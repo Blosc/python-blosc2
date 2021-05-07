@@ -6,13 +6,17 @@
 ########################################################################
 
 
-from libcpp cimport bool
-from libc.stdlib cimport malloc, free
-
 from cpython cimport (
-    PyObject_GetBuffer, PyBuffer_Release, PyBytes_FromStringAndSize,
-    PyBUF_SIMPLE, Py_buffer, PyBytes_AsString
+    Py_buffer,
+    PyBUF_SIMPLE,
+    PyBuffer_Release,
+    PyBytes_AsString,
+    PyBytes_FromStringAndSize,
+    PyObject_GetBuffer,
 )
+from libc.stdlib cimport free, malloc
+from libcpp cimport bool
+
 
 cdef extern from "<stdint.h>":
     ctypedef   signed char  int8_t

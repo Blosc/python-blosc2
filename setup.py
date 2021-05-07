@@ -10,15 +10,17 @@ from __future__ import print_function
 
 import os
 from textwrap import dedent
+
 from skbuild import setup
 
 
 def cmake_bool(cond):
-    return 'ON' if cond else 'OFF'
+    return "ON" if cond else "OFF"
 
 
 try:
     import cpuinfo
+
     cpu_info = cpuinfo.get_cpu_info()
 except:
     # newer cpuinfo versions fail to import on unsupported architectures
@@ -26,11 +28,12 @@ except:
 
 
 # Blosc version
-VERSION = open('VERSION').read().strip()
+VERSION = open("VERSION").read().strip()
 # Create the version.py file
-open('blosc2/version.py', 'w').write('__version__ = "%s"\n' % VERSION)
+open("blosc2/version.py", "w").write('__version__ = "%s"\n' % VERSION)
 
-classifiers = dedent("""\
+classifiers = dedent(
+    """\
     Development Status :: 3 - Alpha
     Intended Audience :: Developers
     Intended Audience :: Information Technology
@@ -44,36 +47,37 @@ classifiers = dedent("""\
     Programming Language :: Python :: 3.6
     Programming Language :: Python :: 3.7
     Programming Language :: Python :: 3.8
-    """)
+    """
+)
 
 setup(
     name="blosc2",
     version=VERSION,
-    description='Python wrapper for the C-Blosc2 library.',
+    description="Python wrapper for the C-Blosc2 library.",
     long_description=None,
     classifiers=[c for c in classifiers.split("\n") if c],
-    author='Blosc Development Team',
-    author_email='blosc@blosc.org',
-    maintainer='Blosc Development Team',
-    maintainer_email='blosc@blosc.org',
-    url='https://github.com/Blosc/cat4py',
-    license='https://opensource.org/licenses/BSD-3-Clause',
-    platforms=['any'],
-    setup_requires=[
-        'cython>=0.29',
-        'scikit-build',
-        'py-cpuinfo'
-    ],
+    author="Blosc Development Team",
+    author_email="blosc@blosc.org",
+    maintainer="Blosc Development Team",
+    maintainer_email="blosc@blosc.org",
+    url="https://github.com/Blosc/cat4py",
+    license="https://opensource.org/licenses/BSD-3-Clause",
+    platforms=["any"],
+    setup_requires=["cython>=0.29", "scikit-build", "py-cpuinfo"],
     cmake_args=[
-        '-DDEACTIVATE_SSE2:BOOL=%s' % cmake_bool(
-          ('DISABLE_BLOSC_SSE2' in os.environ) or (cpu_info is None) or ('sse2' not in cpu_info['flags'])),
-        '-DDEACTIVATE_AVX2:BOOL=%s' % cmake_bool(
-          ('DISABLE_BLOSC_AVX2' in os.environ) or (cpu_info is None) or ('avx2' not in cpu_info['flags'])),
-        '-DDEACTIVATE_LZ4:BOOL=%s' % cmake_bool(not int(os.environ.get('INCLUDE_LZ4', '1'))),
-        '-DDEACTIVATE_ZLIB:BOOL=%s' % cmake_bool(not int(os.environ.get('INCLUDE_ZLIB', '1'))),
-        '-DDEACTIVATE_ZSTD:BOOL=%s' % cmake_bool(not int(os.environ.get('INCLUDE_ZSTD', '1'))),
+        "-DDEACTIVATE_SSE2:BOOL=%s"
+        % cmake_bool(
+            ("DISABLE_BLOSC_SSE2" in os.environ) or (cpu_info is None) or ("sse2" not in cpu_info["flags"])
+        ),
+        "-DDEACTIVATE_AVX2:BOOL=%s"
+        % cmake_bool(
+            ("DISABLE_BLOSC_AVX2" in os.environ) or (cpu_info is None) or ("avx2" not in cpu_info["flags"])
+        ),
+        "-DDEACTIVATE_LZ4:BOOL=%s" % cmake_bool(not int(os.environ.get("INCLUDE_LZ4", "1"))),
+        "-DDEACTIVATE_ZLIB:BOOL=%s" % cmake_bool(not int(os.environ.get("INCLUDE_ZLIB", "1"))),
+        "-DDEACTIVATE_ZSTD:BOOL=%s" % cmake_bool(not int(os.environ.get("INCLUDE_ZSTD", "1"))),
     ],
-    tests_require=['numpy', 'psutil'],
-    packages=['blosc2'],
-    package_dir={'blosc2': 'blosc2'},
+    tests_require=["numpy", "psutil"],
+    packages=["blosc2"],
+    package_dir={"blosc2": "blosc2"},
 )
