@@ -6,7 +6,6 @@ python-blosc2: a Python wrapper for the extremely fast Blosc2 compression librar
 :Github: https://github.com/Blosc/python-blosc2
 :URL: http://python-blosc2.blosc.org
 :PyPi: |version|
-:Anaconda: |anaconda|
 :Gitter: |gitter|
 :Code of Conduct: |Contributor Covenant|
 
@@ -32,7 +31,7 @@ Blosc works well for compressing numerical arrays that contains data
 with relatively low entropy, like sparse data, time series, grids with
 regular-spaced values, etc.
 
-python-blosc2 a Python package that wraps C-Blosc2, the newest version of
+python-blosc2 is a Python package that wraps C-Blosc2, the newest version of
 the Blosc compressor.  python-blosc2 supports Python 3.7 or higher versions.
 
 Installing
@@ -102,7 +101,7 @@ your Blosc build:
 Just to whet your appetite, here are the results for an Apple M1
 with 8 GB of RAM but YMMV (and will vary!)::
 
-    > env PYTHONPATH=. python bench/compress_numpy.py                                                                   (base)
+    $ PYTHONPATH=. python bench/compress_numpy.py                                                                   (base)
     -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
     python-blosc2 version: 0.1.0
     Blosc version: 2.0.0.rc.1 ($Date:: 2020-05-06 #$)
@@ -184,7 +183,7 @@ License
 =======
 
 The software is licenses under a 3-Clause BSD licsense. A copy of the
-python-blosc2 license can be found in `LICENSE.txt <LICENSE.txt>`_. A copy of all licenses can be
+python-blosc2 license can be found in `LICENSE <LICENSE>`_. A copy of all licenses can be
 found in `LICENSES/ <LICENSES/>`_.
 
 Mailing list
@@ -196,7 +195,8 @@ blosc@googlegroups.com
 
 http://groups.google.es/group/blosc
 
-## Tweeter feed
+Tweeter fee
+===========
 
 Please follow @Blosc2 to get informed about the latest developments.
 
