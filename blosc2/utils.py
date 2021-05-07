@@ -109,7 +109,8 @@ def decompress(src, dst=None, as_bytearray=False):
         that supports the Python Buffer Protocol, like bytes, bytearray,
         memoryview, or numpy.ndarray.
     dst : NumPy object or bytearray
-        The destination NumPy object or bytearray to fill.  The user must make sure
+        The destination NumPy object or bytearray to fill wich length must be greater than 0.
+        The user must make sure
         that it has enough capacity for hosting the decompressed data.
         Default is None, meaning that a new `bytes` or `bytearray` object
         is created, filled and returned.
@@ -119,17 +120,25 @@ def decompress(src, dst=None, as_bytearray=False):
 
     Returns
     -------
+    If `dst=None`
     out : str / bytes or bytearray
         The decompressed data in form of a Python str / bytes object.
         If as_bytearray is True then this will be a bytearray object, otherwise
         this will be a str/ bytes object.
+    If `dst!=None`
+    out : None
+        As the result will already be in `dst`.
 
     Raises
     ------
     RuntimeError
         The compressed data is corrupted or the output buffer is not large enough
+        Could not get a bytes object
     TypeError
         If bytes_like does not support Buffer Protocol
+    ValueError
+        If the length of the src is smaller than the minimum
+        If dst is not None and its length is 0
 
     Examples
     --------
@@ -146,6 +155,13 @@ def decompress(src, dst=None, as_bytearray=False):
     True
     >>> type(blosc2.decompress(blosc2.compress(b"1"*7, 8),
     ...                                      as_bytearray=True)) is bytearray
+    True
+    >>> import numpy
+    >>> arr = numpy.arange(10)
+    >>> comp_arr = blosc2.compress(arr)
+    >>> dest = numpy.empty(arr.shape, arr.dtype)
+    >>> blosc2.decompress(comp_arr, dst=dest)
+    >>> numpy.array_equal(arr, dest)
     True
     """
     return blosc2_ext.decompress(src, dst, as_bytearray)

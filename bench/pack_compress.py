@@ -57,7 +57,6 @@ print("  Time for copying array with np.copyto and full_like:      %.3f s" % (to
 
 out_ = np.full_like(in_, fill_value=0)
 tic = time.time()
-tic = time.time()
 out_[...] = in_
 toc = time.time()
 print("  Time for copying array with numpy assignment:             %.3f s" % (toc-tic,))
@@ -80,10 +79,11 @@ for cname in blosc2.compressor_list():
     ctic = time.time()
     c = blosc2.compress(in_, clevel=clevel, shuffle=True, cname=cname)
     ctoc = time.time()
+    out = np.empty(in_.shape, in_.dtype)
     dtic = time.time()
-    out = blosc2.decompress(c, as_bytearray=True)
+    blosc2.decompress(c, dst=out)
     dtoc = time.time()
-    out = np.frombuffer(out, dtype=in_.dtype)
+
     assert(np.array_equal(in_, out))
     print("  Time for compress/decompress:         %.3f/%.3f s." %
           (ctoc-ctic, dtoc-dtic), end='')

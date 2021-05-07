@@ -10,8 +10,8 @@ from libcpp cimport bool
 from libc.stdlib cimport malloc, free
 
 from cpython cimport (
-    PyObject_GetBuffer, PyBuffer_Release,
-    PyBUF_SIMPLE, Py_buffer,
+    PyObject_GetBuffer, PyBuffer_Release, PyBytes_FromStringAndSize,
+    PyBUF_SIMPLE, Py_buffer, PyBytes_AsString
 )
 
 cdef extern from "<stdint.h>":
@@ -282,6 +282,8 @@ MAX_TYPESIZE = BLOSC_MAX_TYPESIZE
 MAX_BUFFERSIZE = BLOSC_MAX_BUFFERSIZE
 VERSION_STRING = (<char*>BLOSC_VERSION_STRING).decode()
 VERSION_DATE = (<char*>BLOSC_VERSION_DATE).decode()
+MIN_HEADER_LENGTH = BLOSC_MIN_HEADER_LENGTH
+EXTENDED_HEADER_LENGTH = BLOSC_EXTENDED_HEADER_LENGTH
 
 
 # Codecs
@@ -297,6 +299,8 @@ SHUFFLE = BLOSC_SHUFFLE
 BITSHUFFLE = BLOSC_BITSHUFFLE
 DELTA = BLOSC_DELTA
 TRUNC_PREC = BLOSC_TRUNC_PREC
+
+
 
 cpdef compress(src, size_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE, cname='blosclz'):
     set_compressor(cname)
@@ -338,21 +342,25 @@ def decompress(src, dst=None, as_bytearray=False):
 
     mem_view_src = memoryview(src)
     typed_view_src = mem_view_src.cast('B')
+    if len(typed_view_src) < BLOSC_MIN_HEADER_LENGTH:
+        raise ValueError("The src length must be at least %d" % BLOSC_MIN_HEADER_LENGTH)
     blosc_cbuffer_sizes(&typed_view_src[0], &nbytes, &cbytes, &blocksize)
     if dst is not None:
         mem_view_dst = memoryview(dst)
         typed_view_dst = mem_view_dst.cast('B')
+        if len(typed_view_dst) == 0:
+            raise ValueError("The dst length must be greater than 0")
         size = blosc_decompress(&typed_view_src[0], &typed_view_dst[0], len(typed_view_dst))
     else:
-        if as_bytearray:
-            dst = bytearray(nbytes)
-        else:
-            dst = bytes(nbytes)
+        dst = PyBytes_FromStringAndSize(NULL, nbytes)
+        if dst == None:
+            raise RuntimeError("Could not get a bytes object")
         size = blosc_decompress(&typed_view_src[0], <void*> <char *> dst, len(dst))
-
-    if size >= 0:
-        return dst
-    else:
+        if as_bytearray:
+            dst = bytearray(dst)
+        if size >= 0:
+            return dst
+    if size < 0:
         raise RuntimeError("Cannot decompress")
 
 

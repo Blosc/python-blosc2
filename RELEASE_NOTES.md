@@ -16,3 +16,8 @@ builds that array.
   
 * The `blosc.NOSHUFFLE` is replaced 
   by the `blosc2.NOFILTER`
+  
+* A bytearray or NumPy object can be passed to
+the `blosc2.decompress` function to store the 
+  decompressed data.
+  

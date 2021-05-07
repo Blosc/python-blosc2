@@ -21,7 +21,7 @@ from .utils import (compress, decompress, set_compressor, free_resources, set_nt
                     pack_array, unpack_array, get_compressor, set_releasegil, detect_number_of_cores,
                     print_versions, get_blocksize)
 
-from .blosc2_ext import MAX_TYPESIZE, MAX_BUFFERSIZE, VERSION_STRING, VERSION_DATE
+from .blosc2_ext import MAX_TYPESIZE, MAX_BUFFERSIZE, VERSION_STRING, VERSION_DATE, MIN_HEADER_LENGTH, EXTENDED_HEADER_LENGTH
 blosclib_version = "%s (%s)" % (VERSION_STRING, VERSION_DATE)
 
 # Filter names
