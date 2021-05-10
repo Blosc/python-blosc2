@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from python-blosc2 0.1.1 to python-blosc2 0.1.2
+
+XXX version-specific blurb XXX
+
+
 ## Changes from python-blosc to python-blosc2
 
 * The functions `compress_ptr` and `decompress_ptr`

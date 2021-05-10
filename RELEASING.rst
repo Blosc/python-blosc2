@@ -64,26 +64,19 @@ Packaging
 
 Do a quick check that the tarball is sane.
 
+* Check that the package has been uploaded in PyPI:
+  https://pypi.org/project/blosc2/
 
-Uploading
----------
-
-* Register and upload it also in the PyPi repository::
-
-    twine upload dist/*
-
-
-It takes about 15 minutes for it to be installed using::
-
-    pip install blosc2
-
+* Do an actual release in github by visiting:
+  https://github.com/Blosc/python-blosc2/releases/new
+  Add the notes specific for this release.
 
 
 Announcing
 ----------
 
 * Send an announcement to the Blosc list.  Use the ``ANNOUNCE.rst`` file as skeleton
-  (or possibly as the definitive version).
+  (or possibly as the definitive version). Start the subject with ANN:.
 
 * Announce in Twitter via @Blosc2 account and rejoice.
 
