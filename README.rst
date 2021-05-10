@@ -20,7 +20,7 @@ python-blosc2: a Python wrapper for the extremely fast Blosc2 compression librar
 
 
 What it is
-==========
+----------
 
 Blosc (http://blosc.org) is a high performance compressor optimized for
 binary data.  It has been designed to transmit data to the processor
@@ -35,7 +35,7 @@ python-blosc2 is a Python package that wraps C-Blosc2, the newest version of
 the Blosc compressor.  python-blosc2 supports Python 3.7 or higher versions.
 
 Installing
-==========
+----------
 
 Blosc is now offering Python wheels for the main OS (Win, Mac and Linux) and platforms. You can install binary packages from PyPi using ``pip``:
 
@@ -44,7 +44,7 @@ Blosc is now offering Python wheels for the main OS (Win, Mac and Linux) and pla
     $ pip install blosc2
 
 Documentation
-=============
+-------------
 
 The documentation is here:
 
@@ -61,7 +61,7 @@ and the `slides
 "Compress me stupid" at the EuroPython 2014.
 
 Building
-========
+--------
 
 `python-blosc2` comes with the Blosc sources with it and can be built with:
 
@@ -76,7 +76,7 @@ Building
 That's all. You can proceed with testing section now.
 
 Testing
-=======
+-------
 
 After compiling, you can quickly check that the package is sane by
 running the doctests in ``blosc/test.py``:
@@ -88,7 +88,7 @@ running the doctests in ``blosc/test.py``:
     $ pytest  (add -v for verbose mode)
 
 Benchmarking
-============
+------------
 
 If curious, you may want to run a small benchmark that compares a plain
 NumPy array copy against compression through different compressors in
@@ -180,14 +180,14 @@ In case you find your own results interesting, please report them back
 to the authors!
 
 License
-=======
+-------
 
 The software is licenses under a 3-Clause BSD licsense. A copy of the
 python-blosc2 license can be found in `LICENSE <LICENSE>`_. A copy of all licenses can be
 found in `LICENSES/ <LICENSES/>`_.
 
 Mailing list
-============
+------------
 
 Discussion about this module is welcome in the Blosc list:
 
@@ -196,7 +196,7 @@ blosc@googlegroups.com
 http://groups.google.es/group/blosc
 
 Twitter fee
-===========
+-----------
 
 Please follow @Blosc2 to get informed about the latest developments.
 
