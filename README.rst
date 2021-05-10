@@ -32,12 +32,25 @@ with relatively low entropy, like sparse data, time series, grids with
 regular-spaced values, etc.
 
 python-blosc2 is a Python package that wraps C-Blosc2, the newest version of
-the Blosc compressor.  python-blosc2 supports Python 3.7 or higher versions.
+the Blosc compressor.  Currently python-blosc2 already reproduces the API of
+python-blosc, so the former can be used as a drop-in replacement for the later.
+However, there are a few exceptions for the complete compatibility that are listed
+here:
+https://github.com/Blosc/python-blosc2/blob/main/RELEASE_NOTES.md#changes-from-python-blosc-to-python-blosc2
+
+In addition, python-blosc2 aims to leverage the new C-Blosc2 API so as to support
+super-chunks, serialization and all the features introduced in C-Blosc2.
+This is work in process and will be done incrementally in future releases.
+
+**Note:** python-blosc2 is meant to be backward compatible with python-blosc data.
+That means that it can read data generated with python-blosc, but the opposite
+is not true (i.e. there is no *forward* compatibility).
 
 Installing
 ----------
 
-Blosc is now offering Python wheels for the main OS (Win, Mac and Linux) and platforms. You can install binary packages from PyPi using ``pip``:
+Blosc is now offering Python wheels for the main OS (Win, Mac and Linux) and platforms.
+You can install binary packages from PyPi using ``pip``:
 
 .. code-block:: console
 
