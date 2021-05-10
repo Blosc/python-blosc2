@@ -19,6 +19,7 @@ from .blosc2_ext import (
     MAX_TYPESIZE,
     MIN_HEADER_LENGTH,
     NOFILTER,
+    NOSHUFFLE,
     SHUFFLE,
     TRUNC_PREC,
     VERSION_DATE,
@@ -55,6 +56,7 @@ blosclib_version = "%s (%s)" % (VERSION_STRING, VERSION_DATE)
 # Filter names
 filter_names = {
     NOFILTER: "nofilter",
+    NOSHUFFLE: "noshuffle",
     SHUFFLE: "shuffle",
     BITSHUFFLE: "bitshuffle",
     DELTA: "delta",

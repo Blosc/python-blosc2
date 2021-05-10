@@ -32,6 +32,7 @@ cdef extern from "<stdint.h>":
 cdef extern from "blosc2.h":
     ctypedef enum:
         BLOSC_NOFILTER
+        BLOSC_NOSHUFFLE
         BLOSC_SHUFFLE
         BLOSC_BITSHUFFLE
         BLOSC_DELTA
@@ -299,6 +300,7 @@ ZSTD = BLOSC_ZSTD
 
 # Filters
 NOFILTER = BLOSC_NOFILTER
+NOSHUFFLE = BLOSC_NOSHUFFLE
 SHUFFLE = BLOSC_SHUFFLE
 BITSHUFFLE = BLOSC_BITSHUFFLE
 DELTA = BLOSC_DELTA

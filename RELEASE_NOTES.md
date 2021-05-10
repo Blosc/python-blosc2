@@ -15,7 +15,8 @@ return a numpy array whereas the `unpack_array`
 builds that array.
   
 * The `blosc.NOSHUFFLE` is replaced 
-  by the `blosc2.NOFILTER`
+  by the `blosc2.NOFILTER`, but for backward 
+  compatibility `blosc2.NOSHUFFLE` still exists.
   
 * A bytearray or NumPy object can be passed to
 the `blosc2.decompress` function to store the 
