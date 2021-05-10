@@ -62,3 +62,11 @@ html_static_path = ["_static"]
 html_css_files = [
     "css/custom.css",
 ]
+
+html_theme_options = {
+    "external_links": [
+        {"name": "C Library", "url": "https://c-blosc2.readthedocs.io"},
+    ],
+    "github_url": "https://github.com/Blosc/python-blosc2",
+    "twitter_url": "https://twitter.com/Blosc2",
+}
