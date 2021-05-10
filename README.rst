@@ -183,8 +183,8 @@ License
 -------
 
 The software is licenses under a 3-Clause BSD licsense. A copy of the
-python-blosc2 license can be found in `LICENSE <LICENSE>`_. A copy of all licenses can be
-found in `LICENSES/ <LICENSES/>`_.
+python-blosc2 license can be found in `LICENSE <https://github.com/Blosc/python-blosc2/tree/main/LICENSE>`_. A copy of all licenses can be
+found in `LICENSES/ <https://github.com/Blosc/python-blosc2/blob/main/LICENSES>`_.
 
 Mailing list
 ------------
