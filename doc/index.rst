@@ -12,3 +12,4 @@
    :hidden:
 
    API Reference <reference/index>
+   Release Notes <release_notes/index>
