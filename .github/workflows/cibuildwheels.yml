@@ -133,18 +133,18 @@ jobs:
 
 
 
-#
-#  upload_pypi:
-#    needs: [ build_wheels, build_sdist ]  # last but not least
-#    runs-on: ubuntu-latest
-#    if: startsWith(github.event.ref, 'refs/tags')
-#    steps:
-#      - uses: actions/download-artifact@v2
-#        with:
-#          name: artifact
-#          path: dist
-#
-#      - uses: pypa/gh-action-pypi-publish@master
-#        with:
-#          user: __token__
-#          password: ${{ secrets.blosc_pypi_secret }}
+
+  upload_pypi:
+    needs: [ build_sdist ]  # last but not least
+    runs-on: ubuntu-latest
+    if: startsWith(github.event.ref, 'refs/tags')
+    steps:
+      - uses: actions/download-artifact@v2
+        with:
+          name: artifact
+          path: dist
+
+      - uses: pypa/gh-action-pypi-publish@master
+        with:
+          user: __token__
+          password: ${{ secrets.blosc_pypi_secret }}
