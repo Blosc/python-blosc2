@@ -136,7 +136,7 @@ jobs:
 
 
   upload_pypi:
-    needs: [ build_sdist ]  # last but not least
+    needs: [ build_wheels, build_sdist ]  # last but not least
     runs-on: ubuntu-latest
     if: startsWith(github.event.ref, 'refs/tags')
     steps:
