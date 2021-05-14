@@ -1,6 +1,6 @@
 # Release notes
 
-## Changes from python-blosc2 0.1.1 to python-blosc2 0.1.4
+## Changes from python-blosc2 0.1.1 to python-blosc2 0.1.5
 
 * Fix some issues with packaging.  See:
   https://github.com/Blosc/python-blosc2/issues/9
