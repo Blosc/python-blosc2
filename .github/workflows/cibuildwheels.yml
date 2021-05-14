@@ -52,7 +52,7 @@ jobs:
           CIBW_BUILD: 'cp37-win32 cp38-win32 cp39-win32'
           CIBW_BEFORE_BUILD: python -m pip install -r requirements.txt
           CIBW_BEFORE_TEST: python -m pip install pytest numpy
-          CIBW_TEST_COMMAND: python -m pytest
+          CIBW_TEST_COMMAND: python -m pytest {project}/tests
           CIBW_BUILD_VERBOSITY: 1
 
       - name: Install MSVC amd64
@@ -69,7 +69,7 @@ jobs:
           CIBW_BUILD: 'cp37-win_amd64 cp38-win_amd64 cp39-win_amd64'
           CIBW_BEFORE_BUILD: python -m pip install -r requirements.txt
           CIBW_BEFORE_TEST: python -m pip install pytest numpy
-          CIBW_TEST_COMMAND: python -m pytest
+          CIBW_TEST_COMMAND: python -m pytest {project}/tests
           CIBW_BUILD_VERBOSITY: 1
 
       - name: Build wheels (Linux / macOS)
@@ -83,7 +83,7 @@ jobs:
           CIBW_BEFORE_TEST: |
             pip install pytest
             pip install -r requirements.txt
-          CIBW_TEST_COMMAND: python -m pytest
+          CIBW_TEST_COMMAND: python -m pytest {project}/tests
           CIBW_BUILD_VERBOSITY: 1
 
       - name: Upload wheels
@@ -129,7 +129,7 @@ jobs:
       - name: Test with pytest
         run: |
           cd ./dist/blosc2-*/
-          python -m pytest
+          python -m pytest {project}/tests
 
 
 
