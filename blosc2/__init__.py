@@ -28,6 +28,8 @@ from .blosc2_ext import (
     ZSTD,
     compress_ctx,
     cparams_dflts,
+    decompress_ctx,
+    dparams_dflts,
 )
 
 # Public API for container module
@@ -109,4 +111,8 @@ __all__ = [
     MIN_HEADER_LENGTH,
     EXTENDED_HEADER_LENGTH,
     filter_names,
+    compress_ctx,
+    cparams_dflts,
+    decompress_ctx,
+    dparams_dflts,
 ]

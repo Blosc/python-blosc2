@@ -181,15 +181,29 @@ cdef extern from "blosc2.h":
         blosc2_prefilter_params* preparams
         blosc2_btune *udbtune
 
-    cdef blosc2_cparams BLOSC2_CPARAMS_DEFAULTS
+    cdef const blosc2_cparams BLOSC2_CPARAMS_DEFAULTS
+
+    ctypedef struct blosc2_postfilter_params:
+        void *user_data
+        const uint8_t * input
+        uint8_t *out
+        int32_t size
+        int32_t typesize
+        int32_t offset
+        int32_t tid
+        uint8_t * ttmp
+        size_t ttmp_nbytes
+        blosc2_context *ctx
+
+    ctypedef int(*blosc2_postfilter_fn)(blosc2_postfilter_params *params)
 
     ctypedef struct blosc2_dparams:
         int nthreads
         void* schunk
-        #blosc2_postfilter_fn postfilter
-        #blosc2_postfilter_params *postparams
+        blosc2_postfilter_fn postfilter
+        blosc2_postfilter_params *postparams
 
-    cdef const blosc2_dparams BLOSC2_DPARAMS_DEFAULTS = {1, NULL}
+    cdef const blosc2_dparams BLOSC2_DPARAMS_DEFAULTS
 
     blosc2_context* blosc2_create_cctx(blosc2_cparams cparams) nogil
 
@@ -320,6 +334,9 @@ BITSHUFFLE = BLOSC_BITSHUFFLE
 DELTA = BLOSC_DELTA
 TRUNC_PREC = BLOSC_TRUNC_PREC
 
+def _check_comp_length(comp_name, comp_len):
+    if comp_len < BLOSC_MIN_HEADER_LENGTH:
+        raise ValueError("%s cannot be less than %d bytes" % (comp_name, BLOSC_MIN_HEADER_LENGTH))
 
 
 cpdef compress(src, size_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE, cname='blosclz'):
@@ -362,8 +379,7 @@ def decompress(src, dst=None, as_bytearray=False):
 
     mem_view_src = memoryview(src)
     typed_view_src = mem_view_src.cast('B')
-    if len(typed_view_src) < BLOSC_MIN_HEADER_LENGTH:
-        raise ValueError("The src length must be at least %d" % BLOSC_MIN_HEADER_LENGTH)
+    _check_comp_length('src', len(typed_view_src))
     blosc_cbuffer_sizes(&typed_view_src[0], &nbytes, &cbytes, &blocksize)
     if dst is not None:
         mem_view_dst = memoryview(dst)
@@ -465,7 +481,9 @@ cparams_dflts = {
 # Defaults for decompression params
 dparams_dflts = {
     'nthreads': 1,
-    'schunk': None
+    'schunk': None,
+    'postfilter': None,
+    'postparams': None
 }
 
 cdef _create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
@@ -519,15 +537,46 @@ def compress_ctx(src, **kwargs):
     cdef blosc2_context *cctx = blosc2_create_cctx(cparams)
     len_src = len(src)
     dest = bytes(len_src + BLOSC_MAX_OVERHEAD)
-    print("bytes")
-    rc = blosc2_compress_ctx(cctx, <void*> <char *> src, len_src, <void*> <char *>dest, len(dest))
+    size = blosc2_compress_ctx(cctx, <void*> <char *> src, len_src, <void*> <char *>dest, len(dest))
 
-    if rc < 0:
+    if size < 0:
         raise RuntimeError("Could not compress the data")
-    elif rc == 0:
+    elif size == 0:
         del dest
         raise RuntimeError("The result could not fit ")
     return dest
+
+cdef _create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs):
+    dparams.nthreads = kwargs.get('nthreads', dparams_dflts['nthreads'])
+    dparams.schunk = NULL
+    dparams.postfilter = NULL
+    dparams.postparams = NULL
+    #dparams.schunk = kwargs.get('schunk', dparams_dflts['schunk'])
+    #dparams.postfilter = kwargs.get('postfilter', dparams_dflts['postfilter'])
+    #dparams.postparams = kwargs.get('postparams', dparams_dflts['postparams'])
+
+def decompress_ctx(src, **kwargs):
+    cdef blosc2_dparams dparams
+    if kwargs:
+        _create_dparams_from_kwargs(&dparams, kwargs)
+    else:
+        dparams = BLOSC2_DPARAMS_DEFAULTS
+
+    cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
+    cdef const uint8_t[:] typed_view_src
+    mem_view_src = memoryview(src)
+    typed_view_src = mem_view_src.cast('B')
+    _check_comp_length('src', typed_view_src.nbytes)
+    cdef size_t cbytes
+    cdef size_t blocksize
+    cdef size_t nbytes
+    blosc_cbuffer_sizes(&typed_view_src[0], &nbytes, &cbytes, &blocksize)
+    dest = bytes(nbytes)
+    size = blosc2_decompress_ctx(dctx, <void*> <char *> src, len(src), <void*> <char *>dest, nbytes)
+    if size > 0:
+        return dest
+    else:
+        raise ValueError("Error while decompressing, check the src data and/or the dparams")
 
 
 
@@ -538,14 +587,9 @@ cdef create_storage(blosc2_storage *storage, kwargs):
     
 
     cdef blosc2_dparams *dparams
-    dparam = kwargs.get('dparams', None)
-    dparams.nthreads = dparam.get('nthreads', dparams_dflts['nthreads'])
-    schunk_d = dparam.get('schunk', dparams_dflts['schunk'])
-    dparams.schunk = <void*> schunk_d
-    #dparams.postfilter = dparam.get('postfilter', dparams_dflts['postfilter'])
-    #dparams.postparams = dparam.get('postparams', dparams_dflts['postparams'])
+    
 
-    cdef blosc2_io *io = kwargs.get('io', None)
+    cdef blosc2_io *io = NULL
 
     storage.contiguous = contiguous
     storage.urlpath = urlpath
