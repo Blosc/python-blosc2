@@ -135,8 +135,6 @@ jobs:
           python -m pytest
 
 
-
-
   upload_pypi:
     needs: [ build_sdist ]  # last but not least
     runs-on: ubuntu-latest
