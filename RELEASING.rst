@@ -49,18 +49,19 @@ Tagging
     git push
     git push --tags
 
-After the tag would be up, update the release notes in: https://github.com/Blosc/python-blosc2/releases
 
-Packaging
----------
+Checking packaging
+------------------
 
-* Check that the package (and wheels!) have been uploaded to PyPI:
+* Check that the package (and wheels!) have been uploaded to PyPI
+  (they should have been created when GHA would finish the tag trigger):
   https://pypi.org/project/blosc2/
 
 * Check that the packages and wheels are sane::
 
     python install blosc2 -U
-    python -c"import blosc; blosc2.print_versions()"
+    cd tests
+    python -c"import blosc2; blosc2.print_versions()"
     pytest
 
 * Do an actual release in github by visiting:
@@ -83,7 +84,6 @@ Post-release actions
 * Change back to the actual python-blosc2 repo::
 
     cd $HOME/blosc/python-blosc2
-
 
 * Create new headers for adding new features in ``RELEASE_NOTES.md``
   add this place-holder:

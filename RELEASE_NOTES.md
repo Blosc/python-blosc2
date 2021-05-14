@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from python-blosc2 0.1.5 to python-blosc2 0.1.6
+
+XXX version-specific blurb XXX
+
+
 ## Changes from python-blosc2 0.1.1 to python-blosc2 0.1.5
 
 * Fix some issues with packaging.  See:
