@@ -44,9 +44,9 @@ classifiers = dedent(
     Operating System :: Microsoft :: Windows
     Operating System :: Unix
     Programming Language :: Python :: 3
-    Programming Language :: Python :: 3.6
     Programming Language :: Python :: 3.7
     Programming Language :: Python :: 3.8
+    Programming Language :: Python :: 3.9
     """
 )
 
@@ -60,7 +60,7 @@ setup(
     author_email="blosc@blosc.org",
     maintainer="Blosc Development Team",
     maintainer_email="blosc@blosc.org",
-    url="https://github.com/Blosc/cat4py",
+    url="https://github.com/Blosc/python-blosc2",
     license="https://opensource.org/licenses/BSD-3-Clause",
     platforms=["any"],
     setup_requires=["cython>=0.29", "scikit-build", "py-cpuinfo"],
