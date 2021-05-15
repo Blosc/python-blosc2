@@ -18,15 +18,6 @@ def cmake_bool(cond):
     return "ON" if cond else "OFF"
 
 
-try:
-    import cpuinfo
-
-    cpu_info = cpuinfo.get_cpu_info()
-except ImportError:
-    # newer cpuinfo versions fail to import on unsupported architectures
-    cpu_info = None
-
-
 # Blosc version
 VERSION = open("VERSION").read().strip()
 # Create the version.py file
@@ -63,7 +54,7 @@ setup(
     url="https://github.com/Blosc/python-blosc2",
     license="https://opensource.org/licenses/BSD-3-Clause",
     platforms=["any"],
-    setup_requires=["cython>=0.29", "scikit-build", "py-cpuinfo"],
+    setup_requires=["cython>=0.29", "scikit-build"],
     cmake_args=[
         "-DDEACTIVATE_SSE2:BOOL=%s"
         % cmake_bool(

@@ -52,7 +52,7 @@ for (in_, label) in arrays:
             t0 = time.time()
             c = blosc2.compress(in_, in_.itemsize, clevel=clevel, shuffle=filter, cname=cname)
             tc = time.time() - t0
-            out = np.empty(in_.size, dtype=in_.dtype)
+            out = np.zeros(in_.size, dtype=in_.dtype)
             t0 = time.time()
             blosc2.decompress(c, dst=out)
             td = time.time() - t0
