@@ -54,7 +54,7 @@ setup(
     url="https://github.com/Blosc/python-blosc2",
     license="https://opensource.org/licenses/BSD-3-Clause",
     platforms=["any"],
-    setup_requires=["cython>=0.29", "scikit-build"],
+    setup_requires=["cython>=0.29", "scikit-build", "cmake>=3.14.0"],
     cmake_args=[
         "-DDEACTIVATE_SSE2:BOOL=%s"
         % cmake_bool(
