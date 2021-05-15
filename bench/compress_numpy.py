@@ -52,9 +52,9 @@ for (in_, label) in arrays:
             t0 = time.time()
             c = blosc2.compress(in_, in_.itemsize, clevel=clevel, shuffle=filter, cname=cname)
             tc = time.time() - t0
-            out = np.full(in_.size, fill_value=0, dtype=in_.dtype)
+            out = np.empty(in_.size, dtype=in_.dtype)
             t0 = time.time()
-            out = blosc2.decompress(c, dst=out)
+            blosc2.decompress(c, dst=out)
             td = time.time() - t0
             assert np.array_equal(in_, out)
             filter_name = blosc2.filter_names[filter]
