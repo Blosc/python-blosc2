@@ -215,7 +215,7 @@ cdef extern from "blosc2.h":
 
     int blosc2_compress(int clevel, int doshuffle, int32_t typesize,
                         const void* src, int32_t srcsize, void* dest,
-                        int32_t destsize)
+                        int32_t destsize) nogil
 
     int blosc2_decompress(const void* src, int32_t srcsize,
                           void* dest, int32_t destsize)
@@ -347,19 +347,10 @@ cpdef compress(src, size_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE, 
     dest = bytes(buf.len + BLOSC_MAX_OVERHEAD)
     cdef int len_dest = len(dest)
     cdef int size
-    cdef blosc2_cparams cparams
-    cdef blosc2_context *cctx
     if RELEASEGIL:
         _dest = <void*> <char *> dest
-        _src = <void*> <char *> src
-        cparams = BLOSC2_CPARAMS_DEFAULTS
-        cparams.compcode = blosc_compname_to_compcode(cname)
         with nogil:
-            cparams.nthreads = blosc_get_nthreads()
-            cparams.typesize = typesize
-            cparams.clevel = clevel
-            cctx = blosc2_create_cctx(cparams)
-            size = blosc2_compress_ctx(cctx, _src, len_src, _dest, len_dest)
+            size = blosc2_compress(clevel, shuffle, typesize, buf.buf, buf.len, _dest, len_dest)
     else:
         size = blosc2_compress(clevel, shuffle, typesize, buf.buf, buf.len, <void*> <char *> dest, len_dest)
     PyBuffer_Release(buf)
@@ -486,7 +477,7 @@ dparams_dflts = {
     'postparams': None
 }
 
-cdef _create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
+cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     cparams.compcode = kwargs.get('compcode', cparams_dflts['compcode'])
     cparams.compcode_meta = kwargs.get('compcode_meta', cparams_dflts['compcode_meta'])
     cparams.clevel = kwargs.get('clevel', cparams_dflts['clevel'])
@@ -495,6 +486,7 @@ cdef _create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     cparams.nthreads = kwargs.get('nthreads', cparams_dflts['nthreads'])
     cparams.blocksize = kwargs.get('blocksize', cparams_dflts['blocksize'])
     cparams.splitmode = kwargs.get('splitmode', cparams_dflts['splitmode'])
+    # TODO: support the commented ones in the future
     #schunk_c = kwargs.get('schunk', cparams_dflts['schunk'])
     #cparams.schunk = <void *> schunk_c
     cparams.schunk = NULL
@@ -522,45 +514,49 @@ cdef _create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     #cparams.udbtune = kwargs.get('udbtune', cparams_dflts['udbtune'])
 
 
-def compress_ctx(src, **kwargs):
+def compress2(src, **kwargs):
     """Compress the src
     :param src: bytes
     :param kwargs: dict
     :return:
     """
     cdef blosc2_cparams cparams
-    if kwargs:
-        _create_cparams_from_kwargs(&cparams, kwargs)
-    else:
-        cparams = BLOSC2_CPARAMS_DEFAULTS
+    create_cparams_from_kwargs(&cparams, kwargs)
 
-    cdef blosc2_context *cctx = blosc2_create_cctx(cparams)
-    len_src = len(src)
-    dest = bytes(len_src + BLOSC_MAX_OVERHEAD)
-    size = blosc2_compress_ctx(cctx, <void*> <char *> src, len_src, <void*> <char *>dest, len(dest))
+    cdef blosc2_context *cctx
+    cdef int len_src = len(src)
+    cdef int len_dest = len_src + BLOSC_MAX_OVERHEAD
+    dest = bytes(len_dest)
+    if RELEASEGIL:
+        _src = <void*> <char *> src
+        _dest = <void*> <char *> dest
+        with nogil:
+            cctx = blosc2_create_cctx(cparams)
+            size = blosc2_compress_ctx(cctx, _src, len_src, _dest, len_dest)
+    else:
+        cctx = blosc2_create_cctx(cparams)
+        size = blosc2_compress_ctx(cctx, <void*> <char *> src, len_src, <void*> <char *>dest, len(dest))
 
     if size < 0:
         raise RuntimeError("Could not compress the data")
     elif size == 0:
         del dest
         raise RuntimeError("The result could not fit ")
-    return dest
+    return dest[:size]
 
-cdef _create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs):
+cdef create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs):
     dparams.nthreads = kwargs.get('nthreads', dparams_dflts['nthreads'])
     dparams.schunk = NULL
     dparams.postfilter = NULL
     dparams.postparams = NULL
+    # TODO: support the next ones in the future
     #dparams.schunk = kwargs.get('schunk', dparams_dflts['schunk'])
     #dparams.postfilter = kwargs.get('postfilter', dparams_dflts['postfilter'])
     #dparams.postparams = kwargs.get('postparams', dparams_dflts['postparams'])
 
-def decompress_ctx(src, **kwargs):
+def decompress2(src, **kwargs):
     cdef blosc2_dparams dparams
-    if kwargs:
-        _create_dparams_from_kwargs(&dparams, kwargs)
-    else:
-        dparams = BLOSC2_DPARAMS_DEFAULTS
+    create_dparams_from_kwargs(&dparams, kwargs)
 
     cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
     cdef const uint8_t[:] typed_view_src
@@ -583,11 +579,9 @@ def decompress_ctx(src, **kwargs):
 """
 cdef create_storage(blosc2_storage *storage, kwargs):
     contiguous = kwargs.get('contiguous', False)
-    urlpath = kwargs.get('urlpath', None)
-    
+    urlpath = kwargs.get('urlpath', None) 
 
     cdef blosc2_dparams *dparams
-    
 
     cdef blosc2_io *io = NULL
 

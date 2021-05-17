@@ -26,9 +26,9 @@ from .blosc2_ext import (
     VERSION_STRING,
     ZLIB,
     ZSTD,
-    compress_ctx,
+    compress2,
     cparams_dflts,
-    decompress_ctx,
+    decompress2,
     dparams_dflts,
 )
 
@@ -111,8 +111,8 @@ __all__ = [
     MIN_HEADER_LENGTH,
     EXTENDED_HEADER_LENGTH,
     filter_names,
-    compress_ctx,
+    compress2,
     cparams_dflts,
-    decompress_ctx,
+    decompress2,
     dparams_dflts,
 ]
