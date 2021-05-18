@@ -96,9 +96,8 @@ running the doctests in ``blosc/test.py``:
 
 .. code-block:: console
 
-    $ PYTHONPATH=.   (or "set PYTHONPATH=." on Win)
-    $ export PYTHONPATH=.  (not needed on Win)
-    $ pytest  (add -v for verbose mode)
+    $ python -m pip install -r requirements-tests.txt
+    $ python -m pytest  (add -v for verbose mode)
 
 Benchmarking
 ------------
