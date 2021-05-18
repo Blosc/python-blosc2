@@ -597,10 +597,6 @@ for cname in cnames:
     clib_versions[cname] = clib_info(cname)[1].decode()
 
 
-# Internal Blosc threading
-ncores = detect_number_of_cores()
-
-
 def os_release_pretty_name():
     for p in ("/etc/os-release", "/usr/lib/os-release"):
         try:
@@ -639,8 +635,9 @@ def print_versions():
         processor = "not recognized"
     print("Processor: %s" % processor)
     print("Byte-ordering: %s" % sys.byteorder)
-    print("Detected cores: %s" % ncores)
-    print("Number of threads to use by default: %s" % ncores)
+    # Internal Blosc threading
+    print("Detected cores: %s" % blosc2.ncores)
+    print("Number of threads to use by default: %s" % blosc2.nthreads)
     print("-=" * 38)
 
 
