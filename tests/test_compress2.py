@@ -32,9 +32,22 @@ import blosc2
 def test_compress2_numpy(obj, cparams, dparams, gilstate):
     blosc2.set_releasegil(gilstate)
     bytes_obj = obj.tobytes()
-    c = blosc2.compress2(bytes_obj, **cparams)
-    d = blosc2.decompress2(c, **dparams)
-    assert bytes_obj == d
+    c = blosc2.compress2(obj, **cparams)
+
+    dest = bytearray(obj)
+    blosc2.decompress2(c, dst=dest, **dparams)
+    assert dest == bytes_obj
+
+    dest2 = numpy.empty(obj.shape, obj.dtype)
+    blosc2.decompress2(c, dst=dest2, **dparams)
+    assert numpy.array_equal(dest2, obj)
+
+    dest3 = blosc2.decompress2(c, **dparams)
+    assert dest3 == bytes_obj
+
+    dest4 = numpy.empty(obj.shape, obj.dtype)
+    blosc2.decompress2(c, dst=memoryview(dest4), **dparams)
+    assert numpy.array_equal(dest4, obj)
 
 
 @pytest.mark.parametrize(
@@ -57,5 +70,14 @@ def test_compress2(nbytes, cparams, dparams, gilstate):
     blosc2.set_releasegil(gilstate)
     bytes_obj = b" " * nbytes
     c = blosc2.compress2(bytes_obj, **cparams)
-    d = blosc2.decompress2(c, **dparams)
-    assert bytes_obj == d
+
+    dest = bytearray(bytes_obj)
+    blosc2.decompress2(c, dst=dest, **dparams)
+    assert dest == bytes_obj
+
+    dest2 = blosc2.decompress2(c, **dparams)
+    assert dest2 == bytes_obj
+
+    dest3 = bytearray(bytes_obj)
+    blosc2.decompress2(numpy.array([c]), dst=dest3, **dparams)
+    assert dest3 == bytes_obj

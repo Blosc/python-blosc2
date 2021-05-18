@@ -524,19 +524,21 @@ def compress2(src, **kwargs):
     create_cparams_from_kwargs(&cparams, kwargs)
 
     cdef blosc2_context *cctx
-    cdef int len_src = len(src)
-    cdef int len_dest = len_src + BLOSC_MAX_OVERHEAD
+    cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+    PyObject_GetBuffer(src, buf, PyBUF_SIMPLE)
+    cdef int size
+    cdef int len_dest = buf.len + BLOSC_MAX_OVERHEAD
     dest = bytes(len_dest)
     if RELEASEGIL:
-        _src = <void*> <char *> src
         _dest = <void*> <char *> dest
         with nogil:
             cctx = blosc2_create_cctx(cparams)
-            size = blosc2_compress_ctx(cctx, _src, len_src, _dest, len_dest)
+            size = blosc2_compress_ctx(cctx, buf.buf, buf.len, _dest, len_dest)
     else:
         cctx = blosc2_create_cctx(cparams)
-        size = blosc2_compress_ctx(cctx, <void*> <char *> src, len_src, <void*> <char *>dest, len(dest))
-
+        size = blosc2_compress_ctx(cctx, buf.buf, buf.len, <void*> <char *>dest, len_dest)
+    PyBuffer_Release(buf)
+    free(buf)
     if size < 0:
         raise RuntimeError("Could not compress the data")
     elif size == 0:
