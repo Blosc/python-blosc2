@@ -54,8 +54,6 @@ setup(
     url="https://github.com/Blosc/python-blosc2",
     license="https://opensource.org/licenses/BSD-3-Clause",
     platforms=["any"],
-    setup_requires=["cython>=0.29", "scikit-build", "cmake>=3.14.0"],
-    tests_require=["numpy", "psutil"],
     packages=["blosc2"],
     package_dir={"blosc2": "blosc2"},
 )
