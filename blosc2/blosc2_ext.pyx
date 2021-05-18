@@ -554,7 +554,7 @@ cdef create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs):
     #dparams.postfilter = kwargs.get('postfilter', dparams_dflts['postfilter'])
     #dparams.postparams = kwargs.get('postparams', dparams_dflts['postparams'])
 
-def decompress2(src, **kwargs):
+def decompress2(src, dst=None, **kwargs):
     cdef blosc2_dparams dparams
     create_dparams_from_kwargs(&dparams, kwargs)
 
@@ -567,11 +567,22 @@ def decompress2(src, **kwargs):
     cdef size_t blocksize
     cdef size_t nbytes
     blosc_cbuffer_sizes(&typed_view_src[0], &nbytes, &cbytes, &blocksize)
-    dest = bytes(nbytes)
-    size = blosc2_decompress_ctx(dctx, <void*> <char *> src, len(src), <void*> <char *>dest, nbytes)
-    if size > 0:
-        return dest
+    cdef uint8_t[:] typed_view_dst
+    if dst is not None:
+        mem_view_dst = memoryview(dst)
+        typed_view_dst = mem_view_dst.cast('B')
+        if len(typed_view_dst) == 0:
+            raise ValueError("The dst length must be greater than 0")
+        size = blosc2_decompress_ctx(dctx, &typed_view_src[0], typed_view_src.nbytes,
+                                     &typed_view_dst[0], typed_view_dst.nbytes)
     else:
+        dst = PyBytes_FromStringAndSize(NULL, nbytes)
+        if dst is None:
+            raise RuntimeError("Could not get a bytes object")
+        size = blosc2_decompress_ctx(dctx, &typed_view_src[0], typed_view_src.nbytes, <void*> <char *> dst, nbytes)
+        if size >= 0:
+            return dst
+    if size < 0:
         raise ValueError("Error while decompressing, check the src data and/or the dparams")
 
 
