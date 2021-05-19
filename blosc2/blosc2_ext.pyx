@@ -238,6 +238,8 @@ cdef extern from "blosc2.h":
         blosc2_dparams* dparams
         blosc2_io *io
 
+    cdef const blosc2_storage BLOSC2_STORAGE_DEFAULTS
+
     ctypedef struct blosc2_frame:
         pass
 
@@ -529,14 +531,11 @@ def compress2(src, **kwargs):
     cdef int size
     cdef int len_dest = buf.len + BLOSC_MAX_OVERHEAD
     dest = bytes(len_dest)
-    if RELEASEGIL:
-        _dest = <void*> <char *> dest
-        with nogil:
-            cctx = blosc2_create_cctx(cparams)
-            size = blosc2_compress_ctx(cctx, buf.buf, buf.len, _dest, len_dest)
-    else:
+    _dest = <void*> <char *> dest
+
+    with nogil:
         cctx = blosc2_create_cctx(cparams)
-        size = blosc2_compress_ctx(cctx, buf.buf, buf.len, <void*> <char *>dest, len_dest)
+        size = blosc2_compress_ctx(cctx, buf.buf, buf.len, _dest, len_dest)
     PyBuffer_Release(buf)
     free(buf)
     if size < 0:
@@ -588,23 +587,34 @@ def decompress2(src, dst=None, **kwargs):
         raise ValueError("Error while decompressing, check the src data and/or the dparams")
 
 
+# Default for #blosc2_storage
+storage_dflts = {
+    'contiguous': False,
+    'urlpath': None,
+    'cparams': None,
+    'dparams': None,
+    'io': None
+}
 
-"""
-cdef create_storage(blosc2_storage *storage, kwargs):
-    contiguous = kwargs.get('contiguous', False)
-    urlpath = kwargs.get('urlpath', None) 
 
-    cdef blosc2_dparams *dparams
+def create_storage(blosc2_storage *storage, **kwargs):
+    contiguous = kwargs.get('contiguous', storage_dflts['contiguous'])
+    urlpath = kwargs.get('urlpath', storage_dflts['urlpath'])
 
-    cdef blosc2_io *io = NULL
+    cdef blosc2_cparams cparams
+    create_cparams_from_kwargs(&cparams, kwargs.get('cparams', None))
+    cdef blosc2_dparams dparams
+    create_dparams_from_kwargs(&dparams, kwargs.get('dparams', None))
 
     storage.contiguous = contiguous
     storage.urlpath = urlpath
-    storage.cparams = cparams
-    storage.dparams = dparams
-"""
+    storage.cparams = &cparams
+    storage.dparams = &dparams
+    storage.io = NULL
+    # TODO: support the next ones in the future
+    #storage.io = kwargs.get('io', storage_dflts['io'])
 
-"""
+
 cdef class SChunk:
     cdef blosc2_context *ctx
     cdef blosc2_storage *storage
@@ -620,5 +630,3 @@ cdef class SChunk:
         rc = blosc2_schunk_append_buffer(self.schunk, &typed_view[0], typed_view.nbytes)
         if rc < 0:
             raise RuntimeError("Could not append the buffer")
-
-"""

@@ -30,6 +30,7 @@ from .blosc2_ext import (
     cparams_dflts,
     decompress2,
     dparams_dflts,
+    storage_dflts,
 )
 
 # Public API for container module
@@ -115,4 +116,5 @@ __all__ = [
     cparams_dflts,
     decompress2,
     dparams_dflts,
+    storage_dflts,
 ]

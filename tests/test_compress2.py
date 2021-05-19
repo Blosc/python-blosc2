@@ -22,15 +22,7 @@ import blosc2
         (numpy.arange(50, dtype=numpy.int64), blosc2.cparams_dflts, blosc2.dparams_dflts),
     ],
 )
-@pytest.mark.parametrize(
-    "gilstate",
-    [
-        True,
-        False,
-    ]
-)
-def test_compress2_numpy(obj, cparams, dparams, gilstate):
-    blosc2.set_releasegil(gilstate)
+def test_compress2_numpy(obj, cparams, dparams):
     bytes_obj = obj.tobytes()
     c = blosc2.compress2(obj, **cparams)
 
@@ -59,15 +51,7 @@ def test_compress2_numpy(obj, cparams, dparams, gilstate):
         (1231, blosc2.cparams_dflts, blosc2.dparams_dflts),
     ],
 )
-@pytest.mark.parametrize(
-    "gilstate",
-    [
-        True,
-        False,
-    ]
-)
-def test_compress2(nbytes, cparams, dparams, gilstate):
-    blosc2.set_releasegil(gilstate)
+def test_compress2(nbytes, cparams, dparams):
     bytes_obj = b" " * nbytes
     c = blosc2.compress2(bytes_obj, **cparams)
 
