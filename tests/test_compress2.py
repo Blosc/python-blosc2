@@ -17,7 +17,11 @@ import blosc2
     [
         (numpy.random.randint(0, 10, 10), {"compcode": blosc2.LZ4, "clevel": 6}, {}),
         (numpy.arange(10), {}, {"nthreads": 4}),
-        (numpy.random.randint(0, 1000 + 1, 1000), {"nthreads": 5}, {"schunk": None}),
+        (
+            numpy.random.randint(0, 1000 + 1, 1000),
+            {"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 5},
+            {"schunk": None},
+        ),
         (numpy.arange(45, dtype=numpy.float64), {"compcode": blosc2.LZ4HC, "typesize": 9}, {}),
         (numpy.arange(50, dtype=numpy.int64), blosc2.cparams_dflts, blosc2.dparams_dflts),
     ],
@@ -65,3 +69,28 @@ def test_compress2(nbytes, cparams, dparams):
     dest3 = bytearray(bytes_obj)
     blosc2.decompress2(numpy.array([c]), dst=dest3, **dparams)
     assert dest3 == bytes_obj
+
+
+@pytest.mark.parametrize(
+    "object, cparams, dparams",
+    [(numpy.arange(0), {"compcode": blosc2.LZ4, "clevel": 6}, {}), (b"", {}, {"nthreads": 3})],
+)
+def test_raise_error(object, cparams, dparams):
+    c = blosc2.compress2(object, **cparams, **dparams)
+
+    dest = bytearray(object)
+    with pytest.raises(ValueError):
+        blosc2.decompress2(c, dst=dest)
+
+    dest3 = blosc2.decompress2(c)
+    if type(object) is bytes:
+        assert dest3 == object
+    else:
+        assert dest3 == object.tobytes()
+
+    dest5 = bytearray(object)
+    with pytest.raises(ValueError):
+        blosc2.decompress2(numpy.array([c]), dst=dest5)
+
+    with pytest.raises(ValueError):
+        blosc2.decompress2(b"")

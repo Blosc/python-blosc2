@@ -452,7 +452,11 @@ def set_releasegil(bool gilstate):
 def get_blocksize():
     return blosc_get_blocksize()
 
-
+# Split modes
+ALWAYS_SPLIT = BLOSC_ALWAYS_SPLIT
+NEVER_SPLIT = BLOSC_NEVER_SPLIT
+AUTO_SPLIT = BLOSC_AUTO_SPLIT
+FORWARD_COMPAT_SPLIT = BLOSC_FORWARD_COMPAT_SPLIT
 # Defaults for compression params
 cparams_dflts = {
         'compcode': BLOSC_BLOSCLZ,

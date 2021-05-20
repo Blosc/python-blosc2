@@ -7,6 +7,10 @@ API Reference
 
 .. autofunction:: decompress
 
+.. autofunction:: compress2
+
+.. autofunction:: decompress2
+
 .. autofunction:: pack_array
 
 .. autofunction:: pack

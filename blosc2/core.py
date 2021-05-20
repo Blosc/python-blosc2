@@ -663,40 +663,47 @@ def compress2(src, **kwargs):
     ----------------
     kwargs: dict, optional
         Keyword arguments supported:
-        compcode: int
-        The compressor code. It can be `blosc2.BLOSCLZ` (the default one),
-        `blosc2.LZ4`, `blosc2.LZ4HC`, `blosc2.ZLIB`, `blosc2.ZSTD` and maybe other too.
-        compcode_meta: int
-        The metadata for the compressor code, 0 by default.
-        clevel: int
-        The compression level from 0 (no compression) to 9
-        (maximum compression). By default: 5.
-        use_dict: bool
-        Use dicts or not when compressing (only for ZSTD). By default `False`.
-        typesize: int from 1 to 255
-        The data type size. By default: 8.
-        nthreads: int
-        The number of threads to use internally (1 by default).
-        blocksize: int
-        The requested size of the compressed blocks. If 0 (the default)
-        blosc2 chooses it automatically.
-        splitmode: int
-        The splitmode for the blocks. It can be `blosc2.ALWAYS_SPLIT`,
-        `blosc2.NEVER_SPLIT`, `blosc2.AUTO_SPLIT` and `blosc2.FORWARD_COMPAT_SPLIT`.
-        The default value is `blosc2.FORWARD_COMPAT_SPLIT`.
-        schunk:
-        filters: list
-        The sequence of filters. By default: `{0, 0, 0, 0, 0, blosc2.BLOSC_SHUFFLE}`.
-        filters_meta: list
-        The metadata for filters. By default: `{0, 0, 0, 0, 0, 0}`.
-        prefilter:
-        pparams:
-        udbtune:
+
+            compcode: int
+                The compressor code. It can be `blosc2.BLOSCLZ` (the default one),
+                `blosc2.LZ4`, `blosc2.LZ4HC`, `blosc2.ZLIB`, `blosc2.ZSTD` and maybe other too.
+            compcode_meta: int
+                The metadata for the compressor code, 0 by default.
+            clevel: int
+                The compression level from 0 (no compression) to 9
+                (maximum compression). By default: 5.
+            use_dict: bool
+                Use dicts or not when compressing (only for ZSTD). By default `False`.
+            typesize: int from 1 to 255
+                The data type size. By default: 8.
+            nthreads: int
+                The number of threads to use internally (1 by default).
+            blocksize: int
+                The requested size of the compressed blocks. If 0 (the default)
+                blosc2 chooses it automatically.
+            splitmode: int
+                The splitmode for the blocks. It can be `blosc2.ALWAYS_SPLIT`,
+                `blosc2.NEVER_SPLIT`, `blosc2.AUTO_SPLIT` and `blosc2.FORWARD_COMPAT_SPLIT`.
+                The default value is `blosc2.FORWARD_COMPAT_SPLIT`.
+
+            schunk: -
+
+            filters: list
+                The sequence of filters. By default: `{0, 0, 0, 0, 0, blosc2.BLOSC_SHUFFLE}`.
+
+            filters_meta: list
+                The metadata for filters. By default: `{0, 0, 0, 0, 0, 0}`.
+
+            prefilter: -
+
+            pparams: -
+
+            udbtune: -
 
     Returns
     -------
     out: str/bytes
-    The compressed data in form of a Python str / bytes object.
+        The compressed data in form of a Python str / bytes object.
 
     Raises
     ------
@@ -714,15 +721,15 @@ def decompress2(src, dst=None, **kwargs):
     Parameters
     ----------
     src: bytes-like object
-    The data to be decompressed. Must be a bytes-like object
-    that supports the Python Buffer Protocol, like bytes,
-    bytearray, memoryview, or numpy.ndarray.
+        The data to be decompressed. Must be a bytes-like object
+        that supports the Python Buffer Protocol, like bytes,
+        bytearray, memoryview, or numpy.ndarray.
     dst: NumPy object or bytearray
-    The destination NumPy object or bytearray to fill wich
-    length must be greater than 0. The user must make sure
-    that it has enough capacity for hosting the decompressed
-    data. Default is None, meaning that a new bytes object
-    is created, filled and returned.
+        The destination NumPy object or bytearray to fill wich
+        length must be greater than 0. The user must make sure
+        that it has enough capacity for hosting the decompressed
+        data. Default is None, meaning that a new bytes object
+        is created, filled and returned.
 
     Other Parameters
     ----------------
@@ -737,9 +744,9 @@ def decompress2(src, dst=None, **kwargs):
     Returns
     -------
     out: str/bytes
-    The decompressed data in form of a Python str / bytes object if
-    `dst` is `None`. Otherwise, it will return `None` because the result
-    will already be in `dst`.
+        The decompressed data in form of a Python str / bytes object if
+        `dst` is `None`. Otherwise, it will return `None` because the result
+        will already be in `dst`.
 
     Raises
     ------
