@@ -26,19 +26,19 @@ from .blosc2_ext import (
     VERSION_STRING,
     ZLIB,
     ZSTD,
-    compress2,
     cparams_dflts,
-    decompress2,
     dparams_dflts,
     storage_dflts,
 )
 
 # Public API for container module
-from .utils import (
+from .core import (
     clib_info,
     compress,
+    compress2,
     compressor_list,
     decompress,
+    decompress2,
     detect_number_of_cores,
     free_resources,
     get_blocksize,

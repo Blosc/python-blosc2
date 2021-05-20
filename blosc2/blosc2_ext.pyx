@@ -517,11 +517,6 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
 
 
 def compress2(src, **kwargs):
-    """Compress the src
-    :param src: bytes
-    :param kwargs: dict
-    :return:
-    """
     cdef blosc2_cparams cparams
     create_cparams_from_kwargs(&cparams, kwargs)
 
@@ -597,7 +592,7 @@ storage_dflts = {
 }
 
 
-def create_storage(blosc2_storage *storage, **kwargs):
+cdef create_storage(blosc2_storage *storage, kwargs):
     contiguous = kwargs.get('contiguous', storage_dflts['contiguous'])
     urlpath = kwargs.get('urlpath', storage_dflts['urlpath'])
 
@@ -614,7 +609,7 @@ def create_storage(blosc2_storage *storage, **kwargs):
     # TODO: support the next ones in the future
     #storage.io = kwargs.get('io', storage_dflts['io'])
 
-
+"""
 cdef class SChunk:
     cdef blosc2_context *ctx
     cdef blosc2_storage *storage
@@ -630,3 +625,4 @@ cdef class SChunk:
         rc = blosc2_schunk_append_buffer(self.schunk, &typed_view[0], typed_view.nbytes)
         if rc < 0:
             raise RuntimeError("Could not append the buffer")
+"""
