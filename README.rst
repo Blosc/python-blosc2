@@ -203,8 +203,7 @@ with 32 GB of RAM::
       Time for compress/decompress:         0.708/0.121 s (1.05/6.17 GB/s)).	Compr ratio: 47.39
 
 Using compression becomes more sexy when using newer processors indeed.
-In case you find your own results interesting, please report them back
-to the authors!
+In case you find your own results interesting, go ahead and share them!
 
 License
 -------
