@@ -108,12 +108,11 @@ your Blosc build:
 
 .. code-block:: console
 
-  $ PYTHONPATH=. python bench/compress_numpy.py
+     $ PYTHONPATH=. python bench/pack_compress.py
 
-Just to whet your appetite, here are the results for an Apple M1
+Just to whet your appetite, here are the results for an Apple M1 (2021)
 with 8 GB of RAM but YMMV (and will vary!)::
 
-    $ PYTHONPATH=. python bench/compress_numpy.py
     -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
     python-blosc2 version: 0.1.6.dev0
     Blosc version: 2.0.0.rc.2.dev ($Date:: 2021-05-06 #$)
@@ -132,69 +131,85 @@ with 8 GB of RAM but YMMV (and will vary!)::
     Detected cores: 8
     Number of threads to use by default: 8
     -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-    Creating NumPy arrays with 10**8 int64/float64 elements:
-      *** ctypes.memmove() *** Time for memcpy():	0.032 s	(23.07 GB/s)
+    Creating a large NumPy array with 10**8 int64 elements:
+      [0.00000000e+00 1.00000001e-04 2.00000002e-04 ... 9.99999980e+03
+     9.99999990e+03 1.00000000e+04]
+      Time for copying array with np.copy:	        		0.167 s (4.46 GB/s))
+      Time for copying array with np.copyto and empty_like:	0.038 s (19.77 GB/s))
+      Time for copying array with np.copyto and zeros:  	0.039 s (19.16 GB/s))
+      Time for copying array with np.copyto and full_like:	0.032 s (23.40 GB/s))
+      Time for copying array with numpy assignment:		    0.032 s (23.08 GB/s))
 
-    Times for compressing/decompressing with clevel=5 and 8 threads
+    Using *** blosclz *** compressor:
+      Time for pack_array/unpack_array:     0.157/0.244 s (4.75/3.05 GB/s)).	Compr ratio: 27.02
+      Time for compress/decompress:         0.080/0.028 s (9.28/26.82 GB/s)).	Compr ratio: 27.02
+    Using *** lz4 *** compressor:
+      Time for pack_array/unpack_array:     0.107/0.186 s (6.95/4.00 GB/s)).	Compr ratio: 33.93
+      Time for compress/decompress:         0.036/0.025 s (20.43/30.27 GB/s)).	Compr ratio: 33.95
+    Using *** lz4hc *** compressor:
+      Time for pack_array/unpack_array:     0.328/0.149 s (2.27/5.01 GB/s)).	Compr ratio: 26.94
+      Time for compress/decompress:         0.270/0.027 s (2.76/27.28 GB/s)).	Compr ratio: 26.94
+    Using *** zlib *** compressor:
+      Time for pack_array/unpack_array:     0.572/0.250 s (1.30/2.98 GB/s)).	Compr ratio: 28.17
+      Time for compress/decompress:         0.497/0.089 s (1.50/8.34 GB/s)).	Compr ratio: 28.17
+    Using *** zstd *** compressor:
+      Time for pack_array/unpack_array:     0.530/0.187 s (1.41/3.99 GB/s)).	Compr ratio: 48.57
+      Time for compress/decompress:         0.437/0.046 s (1.70/16.10 GB/s)).	Compr ratio: 47.39
 
-    *** the arange linear distribution ***
-      *** blosclz , noshuffle  ***  0.290 s (2.57 GB/s) / 0.122 s (6.09 GB/s)	Compr. ratio:   1.6x
-      *** blosclz , shuffle    ***  0.032 s (23.35 GB/s) / 0.039 s (19.28 GB/s)	Compr. ratio: 331.3x
-      *** blosclz , bitshuffle ***  0.097 s (7.69 GB/s) / 0.131 s (5.67 GB/s)	Compr. ratio: 454.7x
-      *** lz4     , noshuffle  ***  0.316 s (2.36 GB/s) / 0.079 s (9.41 GB/s)	Compr. ratio:   2.0x
-      *** lz4     , shuffle    ***  0.026 s (29.63 GB/s) / 0.042 s (17.85 GB/s)	Compr. ratio: 268.0x
-      *** lz4     , bitshuffle ***  0.099 s (7.51 GB/s) / 0.140 s (5.34 GB/s)	Compr. ratio:  87.2x
-      *** lz4hc   , noshuffle  ***  1.082 s (0.69 GB/s) / 0.082 s (9.06 GB/s)	Compr. ratio:   2.0x
-      *** lz4hc   , shuffle    ***  0.103 s (7.20 GB/s) / 0.057 s (13.11 GB/s)	Compr. ratio: 143.7x
-      *** lz4hc   , bitshuffle ***  0.294 s (2.53 GB/s) / 0.143 s (5.22 GB/s)	Compr. ratio: 228.7x
-      *** zlib    , noshuffle  ***  1.530 s (0.49 GB/s) / 0.261 s (2.85 GB/s)	Compr. ratio:   5.3x
-      *** zlib    , shuffle    ***  0.172 s (4.33 GB/s) / 0.086 s (8.68 GB/s)	Compr. ratio: 232.3x
-      *** zlib    , bitshuffle ***  0.239 s (3.12 GB/s) / 0.174 s (4.28 GB/s)	Compr. ratio: 375.4x
-      *** zstd    , noshuffle  ***  2.513 s (0.30 GB/s) / 0.148 s (5.05 GB/s)	Compr. ratio:   7.9x
-      *** zstd    , shuffle    ***  0.205 s (3.63 GB/s) / 0.044 s (16.76 GB/s)	Compr. ratio: 468.9x
-      *** zstd    , bitshuffle ***  0.321 s (2.32 GB/s) / 0.134 s (5.57 GB/s)	Compr. ratio: 1005.5x
+For matter of comparison, here it is the output for an Apple Mac Mini (2018) 3,2 GHz 6-Core i7
+with 32 GB of RAM::
 
-    *** the linspace linear distribution ***
-      *** blosclz , noshuffle  ***  0.165 s (4.52 GB/s) / 0.038 s (19.55 GB/s)	Compr. ratio:   1.0x
-      *** blosclz , shuffle    ***  0.062 s (11.93 GB/s) / 0.045 s (16.63 GB/s)	Compr. ratio:  27.0x
-      *** blosclz , bitshuffle ***  0.123 s (6.03 GB/s) / 0.150 s (4.98 GB/s)	Compr. ratio:  38.2x
-      *** lz4     , noshuffle  ***  0.111 s (6.69 GB/s) / 0.047 s (16.02 GB/s)	Compr. ratio:   1.0x
-      *** lz4     , shuffle    ***  0.048 s (15.62 GB/s) / 0.045 s (16.38 GB/s)	Compr. ratio:  30.6x
-      *** lz4     , bitshuffle ***  0.108 s (6.91 GB/s) / 0.145 s (5.15 GB/s)	Compr. ratio:  40.1x
-      *** lz4hc   , noshuffle  ***  2.297 s (0.32 GB/s) / 0.081 s (9.21 GB/s)	Compr. ratio:   1.1x
-      *** lz4hc   , shuffle    ***  0.257 s (2.90 GB/s) / 0.046 s (16.04 GB/s)	Compr. ratio:  23.8x
-      *** lz4hc   , bitshuffle ***  0.586 s (1.27 GB/s) / 0.125 s (5.94 GB/s)	Compr. ratio:  31.8x
-      *** zlib    , noshuffle  ***  2.263 s (0.33 GB/s) / 0.432 s (1.73 GB/s)	Compr. ratio:   1.6x
-      *** zlib    , shuffle    ***  0.335 s (2.23 GB/s) / 0.102 s (7.28 GB/s)	Compr. ratio:  25.4x
-      *** zlib    , bitshuffle ***  0.444 s (1.68 GB/s) / 0.200 s (3.73 GB/s)	Compr. ratio:  37.3x
-      *** zstd    , noshuffle  ***  2.494 s (0.30 GB/s) / 0.168 s (4.43 GB/s)	Compr. ratio:   1.9x
-      *** zstd    , shuffle    ***  0.448 s (1.66 GB/s) / 0.085 s (8.79 GB/s)	Compr. ratio:  34.2x
-      *** zstd    , bitshuffle ***  0.525 s (1.42 GB/s) / 0.170 s (4.39 GB/s)	Compr. ratio:  48.7x
+    -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+    python-blosc2 version: 0.1.6.dev0
+    Blosc version: 2.0.0.rc.2.dev ($Date:: 2021-05-06 #$)
+    Compressors available: ['blosclz', 'lz4', 'lz4hc', 'zlib', 'zstd']
+    Compressor library versions:
+      blosclz: 2.3.0
+      lz4: 1.9.3
+      lz4hc: 1.9.3
+      zlib: 1.2.11.zlib-ng
+      zstd: 1.5.0
+    Python version: 3.9.4 | packaged by conda-forge | (default, May 10 2021, 22:13:15)
+    [Clang 11.1.0 ]
+    Platform: Darwin-20.4.0-x86_64 (Darwin Kernel Version 20.4.0: Thu Apr 22 21:46:47 PDT 2021; root:xnu-7195.101.2~1/RELEASE_X86_64)
+    Processor: i386
+    Byte-ordering: little
+    Detected cores: 12
+    Number of threads to use by default: 8
+    -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+    Creating a large NumPy array with 10**8 int64 elements:
+      [0.00000000e+00 1.00000001e-04 2.00000002e-04 ... 9.99999980e+03
+     9.99999990e+03 1.00000000e+04]
+      Time for copying array with np.copy:			        0.326 s (2.29 GB/s))
+      Time for copying array with np.copyto and empty_like:	0.133 s (5.61 GB/s))
+      Time for copying array with np.copyto and zeros:	    0.129 s (5.77 GB/s))
+      Time for copying array with np.copyto and full_like:	0.076 s (9.75 GB/s))
+      Time for copying array with numpy assignment:		    0.073 s (10.27 GB/s))
 
-    *** the random distribution ***
-      *** blosclz , noshuffle  ***  0.542 s (1.38 GB/s) / 0.118 s (6.29 GB/s)	Compr. ratio:   2.6x
-      *** blosclz , shuffle    ***  0.166 s (4.48 GB/s) / 0.050 s (14.82 GB/s)	Compr. ratio:   4.0x
-      *** blosclz , bitshuffle ***  0.136 s (5.49 GB/s) / 0.135 s (5.51 GB/s)	Compr. ratio:   4.0x
-      *** lz4     , noshuffle  ***  0.265 s (2.81 GB/s) / 0.071 s (10.55 GB/s)	Compr. ratio:   2.5x
-      *** lz4     , shuffle    ***  0.081 s (9.15 GB/s) / 0.046 s (16.06 GB/s)	Compr. ratio:   5.1x
-      *** lz4     , bitshuffle ***  0.117 s (6.36 GB/s) / 0.140 s (5.31 GB/s)	Compr. ratio:   6.4x
-      *** lz4hc   , noshuffle  ***  2.312 s (0.32 GB/s) / 0.055 s (13.63 GB/s)	Compr. ratio:   3.8x
-      *** lz4hc   , shuffle    ***  0.731 s (1.02 GB/s) / 0.067 s (11.12 GB/s)	Compr. ratio:   5.2x
-      *** lz4hc   , bitshuffle ***  0.350 s (2.13 GB/s) / 0.172 s (4.33 GB/s)	Compr. ratio:   6.2x
-      *** zlib    , noshuffle  ***  1.323 s (0.56 GB/s) / 0.250 s (2.98 GB/s)	Compr. ratio:   4.2x
-      *** zlib    , shuffle    ***  0.832 s (0.90 GB/s) / 0.117 s (6.34 GB/s)	Compr. ratio:   6.0x
-      *** zlib    , bitshuffle ***  0.554 s (1.35 GB/s) / 0.205 s (3.64 GB/s)	Compr. ratio:   6.3x
-      *** zstd    , noshuffle  ***  4.192 s (0.18 GB/s) / 0.214 s (3.49 GB/s)	Compr. ratio:   4.2x
-      *** zstd    , shuffle    ***  1.291 s (0.58 GB/s) / 0.066 s (11.29 GB/s)	Compr. ratio:   6.0x
-      *** zstd    , bitshuffle ***  0.373 s (2.00 GB/s) / 0.131 s (5.68 GB/s)	Compr. ratio:   6.4x
+    Using *** blosclz *** compressor:
+      Time for pack_array/unpack_array:     0.478/0.507 s (1.56/1.47 GB/s)).	Compr ratio: 27.02
+      Time for compress/decompress:         0.143/0.094 s (5.22/7.94 GB/s)).	Compr ratio: 27.02
+    Using *** lz4 *** compressor:
+      Time for pack_array/unpack_array:     0.480/0.520 s (1.55/1.43 GB/s)).	Compr ratio: 33.93
+      Time for compress/decompress:         0.136/0.091 s (5.49/8.15 GB/s)).	Compr ratio: 33.95
+    Using *** lz4hc *** compressor:
+      Time for pack_array/unpack_array:     0.691/0.514 s (1.08/1.45 GB/s)).	Compr ratio: 26.94
+      Time for compress/decompress:         0.359/0.091 s (2.08/8.15 GB/s)).	Compr ratio: 26.94
+    Using *** zlib *** compressor:
+      Time for pack_array/unpack_array:     0.801/0.584 s (0.93/1.27 GB/s)).	Compr ratio: 28.17
+      Time for compress/decompress:         0.470/0.165 s (1.59/4.50 GB/s)).	Compr ratio: 28.17
+    Using *** zstd *** compressor:
+      Time for pack_array/unpack_array:     1.078/0.543 s (0.69/1.37 GB/s)).	Compr ratio: 48.57
+      Time for compress/decompress:         0.708/0.121 s (1.05/6.17 GB/s)).	Compr ratio: 47.39
 
+Using compression becomes more sexy when using newer processors indeed.
 In case you find your own results interesting, please report them back
 to the authors!
 
 License
 -------
 
-The software is licenses under a 3-Clause BSD licsense. A copy of the
+The software is licenses under a 3-Clause BSD license. A copy of the
 python-blosc2 license can be found in `LICENSE <https://github.com/Blosc/python-blosc2/tree/main/LICENSE>`_. A copy of all licenses can be
 found in `LICENSES/ <https://github.com/Blosc/python-blosc2/blob/main/LICENSES>`_.
 
