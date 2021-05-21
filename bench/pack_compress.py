@@ -19,27 +19,31 @@ import numpy as np
 
 import blosc2
 
-N = 1e8
+N = int(1e8)
 clevel = 5
 Nexp = np.log10(N)
 
 blosc2.print_versions()
 print("Creating a large NumPy array with 10**%d int64 elements:" % Nexp)
-in_ = np.arange(N, dtype=np.int64)  # the trivial linear distribution
-# in_ = np.linspace(0, 100, N)  # another linear distribution
-# in_ = np.random.random_integers(0, 100, N)  # random distribution
+# in_ = np.arange(N, dtype=np.int64)  # the trivial linear distribution
+# in_ = np.linspace(0, 1000, N)  # another linear distribution
+in_ = np.random.randint(0, 10_000, N)  # random distribution
 print(" ", in_)
 
 tic = time.time()
 out_ = np.copy(in_)
 toc = time.time()
-print("  Time for copying array with np.copy():                    %.3f s" % (toc - tic,))
+tcpy = toc - tic
+print("  Time for copying array with np.copy:\t\t\t%.3f s (%.2f GB/s))" %
+      (tcpy, ((N * 8 / tcpy) / 2 ** 30)))
 
 out_ = np.empty_like(in_)
 tic = time.time()
 np.copyto(out_, in_)
 toc = time.time()
-print("  Time for copying array with np.copyto and empty_like:     %.3f s" % (toc - tic,))
+tcpy = toc - tic
+print("  Time for copying array with np.copyto and empty_like:\t%.3f s (%.2f GB/s))" %
+      (tcpy, ((N * 8 / tcpy) / 2 ** 30)))
 
 # Unlike numpy.zeros, numpy.zeros_like doens't use calloc, but instead uses
 # empty_like and explicitely assigns zeros, which is basically like calling
@@ -49,20 +53,26 @@ out_ = np.zeros(in_.shape, dtype=in_.dtype)
 tic = time.time()
 np.copyto(out_, in_)
 toc = time.time()
-print("  Time for copying array with np.copyto and zeros     :     %.3f s" % (toc - tic,))
+tcpy = toc - tic
+print("  Time for copying array with np.copyto and zeros:\t%.3f s (%.2f GB/s))" %
+      (tcpy, ((N * 8 / tcpy) / 2 ** 30)))
 
-# Cause a page faults before the benchmark
+# Cause a page fault before the benchmark
 out_ = np.full_like(in_, fill_value=0)
 tic = time.time()
 np.copyto(out_, in_)
 toc = time.time()
-print("  Time for copying array with np.copyto and full_like:      %.3f s" % (toc - tic,))
+tcpy = toc - tic
+print("  Time for copying array with np.copyto and full_like:\t%.3f s (%.2f GB/s))" %
+      (tcpy, ((N * 8 / tcpy) / 2 ** 30)))
 
 out_ = np.full_like(in_, fill_value=0)
 tic = time.time()
 out_[...] = in_
 toc = time.time()
-print("  Time for copying array with numpy assignment:             %.3f s" % (toc - tic,))
+tcpy = toc - tic
+print("  Time for copying array with numpy assignment:\t\t%.3f s (%.2f GB/s))" %
+      (tcpy, ((N * 8 / tcpy) / 2 ** 30)))
 print()
 
 for cname in blosc2.compressor_list():
@@ -75,17 +85,23 @@ for cname in blosc2.compressor_list():
     dtoc = time.time()
 
     assert np.array_equal(in_, out)
-    print("  Time for pack_array/unpack_array:     %.3f/%.3f s." % (ctoc - ctic, dtoc - dtic), end="")
+    tc = ctoc - ctic
+    td = dtoc - dtic
+    print("  Time for pack_array/unpack_array:     %.3f/%.3f s (%.2f/%.2f GB/s))." %
+          (tc, td, ((N * 8 / tc) / 2 ** 30), ((N * 8 / td) / 2 ** 30)), end="")
     print("\tCompr ratio: %.2f" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
 
     ctic = time.time()
     c = blosc2.compress(in_, clevel=clevel, shuffle=True, cname=cname)
     ctoc = time.time()
-    out = np.empty(in_.shape, in_.dtype)
+    out = np.full_like(in_, fill_value=0)
     dtic = time.time()
     blosc2.decompress(c, dst=out)
     dtoc = time.time()
 
     assert np.array_equal(in_, out)
-    print("  Time for compress/decompress:         %.3f/%.3f s." % (ctoc - ctic, dtoc - dtic), end="")
+    tc = ctoc - ctic
+    td = dtoc - dtic
+    print("  Time for compress/decompress:         %.3f/%.3f s (%.2f/%.2f GB/s))." %
+          (tc, td, ((N * 8 / tc) / 2 ** 30), ((N * 8 / td) / 2 ** 30)), end="")
     print("\tCompr ratio: %.2f" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
