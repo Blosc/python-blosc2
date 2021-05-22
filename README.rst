@@ -134,27 +134,27 @@ with 8 GB of RAM but YMMV (and will vary!)::
     Creating a large NumPy array with 10**8 int64 elements:
       [0.00000000e+00 1.00000001e-04 2.00000002e-04 ... 9.99999980e+03
      9.99999990e+03 1.00000000e+04]
-      Time for copying array with np.copy:                  0.168 s (4.45 GB/s))
-      Time for copying array with np.copyto and empty_like: 0.038 s (19.35 GB/s))
-      Time for copying array with np.copyto and zeros:      0.037 s (19.93 GB/s))
-      Time for copying array with np.copyto and full_like:  0.030 s (24.75 GB/s))
-      Time for copying array with numpy assignment:         0.030 s (24.90 GB/s))
+      Time for copying array with np.copy:                  0.067 s (11.08 GB/s))
+      Time for copying array with np.copyto and empty_like: 0.038 s (19.42 GB/s))
+      Time for copying array with np.copyto and zeros:      0.037 s (20.18 GB/s))
+      Time for copying array with np.copyto and full_like:  0.030 s (25.11 GB/s))
+      Time for copying array with numpy assignment:         0.029 s (25.98 GB/s))
 
     Using *** blosclz *** compressor:
-      Time for pack_array/unpack_array:     0.165/0.262 s (4.51/2.85 GB/s)).	Compr ratio: 27.02
-      Time for compress/decompress:         0.078/0.028 s (9.50/27.03 GB/s)).	Compr ratio: 27.02
+      Time for pack_array/unpack_array:     0.119/0.171 s (6.27/4.35 GB/s)).	Compr ratio: 27.02
+      Time for compress/decompress:         0.051/0.027 s (14.56/27.45 GB/s)).	Compr ratio: 27.02
     Using *** lz4 *** compressor:
-      Time for pack_array/unpack_array:     0.106/0.242 s (7.00/3.08 GB/s)).	Compr ratio: 33.93
-      Time for compress/decompress:         0.036/0.025 s (20.93/29.49 GB/s)).	Compr ratio: 33.95
+      Time for pack_array/unpack_array:     0.105/0.147 s (7.07/5.05 GB/s)).	Compr ratio: 33.93
+      Time for compress/decompress:         0.035/0.031 s (21.16/24.22 GB/s)).	Compr ratio: 33.95
     Using *** lz4hc *** compressor:
-      Time for pack_array/unpack_array:     0.328/0.190 s (2.27/3.92 GB/s)).	Compr ratio: 26.94
-      Time for compress/decompress:         0.263/0.022 s (2.83/33.15 GB/s)).	Compr ratio: 26.94
+      Time for pack_array/unpack_array:     0.317/0.168 s (2.35/4.42 GB/s)).	Compr ratio: 26.94
+      Time for compress/decompress:         0.244/0.033 s (3.06/22.65 GB/s)).	Compr ratio: 26.94
     Using *** zlib *** compressor:
-      Time for pack_array/unpack_array:     0.568/0.205 s (1.31/3.64 GB/s)).	Compr ratio: 28.17
-      Time for compress/decompress:         0.492/0.088 s (1.51/8.51 GB/s)).	Compr ratio: 28.17
+      Time for pack_array/unpack_array:     0.407/0.214 s (1.83/3.47 GB/s)).	Compr ratio: 28.17
+      Time for compress/decompress:         0.332/0.088 s (2.24/8.49 GB/s)).	Compr ratio: 28.17
     Using *** zstd *** compressor:
-      Time for pack_array/unpack_array:     0.532/0.165 s (1.40/4.52 GB/s)).	Compr ratio: 48.57
-      Time for compress/decompress:         0.430/0.045 s (1.73/16.38 GB/s)).	Compr ratio: 47.39
+      Time for pack_array/unpack_array:     0.516/0.185 s (1.44/4.03 GB/s)).	Compr ratio: 48.57
+      Time for compress/decompress:         0.414/0.048 s (1.80/15.42 GB/s)).	Compr ratio: 47.39
 
 For matter of comparison, here it is the output for an Apple Mac Mini (2018) 3,2 GHz 6-Core i7
 with 32 GB of RAM::
