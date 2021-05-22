@@ -1,5 +1,3 @@
-include_directories(${NumPy_INCLUDE_DIRS})
-
 set(STATIC_LIB ON CACHE BOOL "Build a static version of the blosc library.")
 set(SHARED_LIB ON CACHE BOOL "Build a shared library version of the blosc
     library.")
