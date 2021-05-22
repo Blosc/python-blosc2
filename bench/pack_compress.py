@@ -36,7 +36,7 @@ for i in range(NREP):
     out_ = np.copy(in_)
 toc = time.time()
 tcpy = (toc - tic) / NREP
-print("  Time for copying array with np.copy:\t\t\t%.3f s (%.2f GB/s))" %
+print("  Time for copying array with np.copy:                  %.3f s (%.2f GB/s))" %
       (tcpy, ((N * 8 / tcpy) / 2 ** 30)))
 
 out_ = np.empty_like(in_)
@@ -45,7 +45,7 @@ for i in range(NREP):
     np.copyto(out_, in_)
 toc = time.time()
 tcpy = (toc - tic) / NREP
-print("  Time for copying array with np.copyto and empty_like:\t%.3f s (%.2f GB/s))" %
+print("  Time for copying array with np.copyto and empty_like: %.3f s (%.2f GB/s))" %
       (tcpy, ((N * 8 / tcpy) / 2 ** 30)))
 
 # Unlike numpy.zeros, numpy.zeros_like doens't use calloc, but instead uses
@@ -58,7 +58,7 @@ for i in range(NREP):
     np.copyto(out_, in_)
 toc = time.time()
 tcpy = (toc - tic) / NREP
-print("  Time for copying array with np.copyto and zeros:\t%.3f s (%.2f GB/s))" %
+print("  Time for copying array with np.copyto and zeros:      %.3f s (%.2f GB/s))" %
       (tcpy, ((N * 8 / tcpy) / 2 ** 30)))
 
 # Cause a page fault before the benchmark
@@ -68,7 +68,7 @@ for i in range(NREP):
     np.copyto(out_, in_)
 toc = time.time()
 tcpy = (toc - tic) / NREP
-print("  Time for copying array with np.copyto and full_like:\t%.3f s (%.2f GB/s))" %
+print("  Time for copying array with np.copyto and full_like:  %.3f s (%.2f GB/s))" %
       (tcpy, ((N * 8 / tcpy) / 2 ** 30)))
 
 out_ = np.full_like(in_, fill_value=0)
@@ -77,7 +77,7 @@ for i in range(NREP):
     out_[...] = in_
 toc = time.time()
 tcpy = (toc - tic) / NREP
-print("  Time for copying array with numpy assignment:\t\t%.3f s (%.2f GB/s))" %
+print("  Time for copying array with numpy assignment:         %.3f s (%.2f GB/s))" %
       (tcpy, ((N * 8 / tcpy) / 2 ** 30)))
 print()
 
