@@ -26,6 +26,8 @@ from .blosc2_ext import (
     VERSION_STRING,
     ZLIB,
     ZSTD,
+    compress_ctx,
+    cparams_dflts,
 )
 
 # Public API for container module
