@@ -108,17 +108,17 @@ your Blosc build:
 
 .. code-block:: console
 
-     $ PYTHONPATH=. python bench/pack_compress.py
+     $ PYTHONPATH=. python bench/compress_numpy.py
 
 Just to whet your appetite, here are the results for an Apple M1 (2021)
 with 8 GB of RAM but YMMV (and will vary!)::
 
     -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
     python-blosc2 version: 0.1.6.dev0
-    Blosc version: 2.0.0.rc.2.dev ($Date:: 2021-05-06 #$)
+    Blosc version: 2.0.0.rc2 ($Date:: 2021-05-26 #$)
     Compressors available: ['blosclz', 'lz4', 'lz4hc', 'zlib', 'zstd']
     Compressor library versions:
-      blosclz: 2.3.0
+      blosclz: 2.4.0
       lz4: 1.9.3
       lz4hc: 1.9.3
       zlib: 1.2.11.zlib-ng
@@ -131,79 +131,65 @@ with 8 GB of RAM but YMMV (and will vary!)::
     Detected cores: 8
     Number of threads to use by default: 8
     -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-    Creating a large NumPy array with 10**8 int64 elements:
-      [0.00000000e+00 1.00000001e-04 2.00000002e-04 ... 9.99999980e+03
-     9.99999990e+03 1.00000000e+04]
-      Time for copying array with np.copy:                  0.067 s (11.08 GB/s))
-      Time for copying array with np.copyto and empty_like: 0.038 s (19.42 GB/s))
-      Time for copying array with np.copyto and zeros:      0.037 s (20.18 GB/s))
-      Time for copying array with np.copyto and full_like:  0.030 s (25.11 GB/s))
-      Time for copying array with numpy assignment:         0.029 s (25.98 GB/s))
+    Creating NumPy arrays with 10**8 int64/float64 elements:
+      *** np.copyto() *** Time for memcpy():	0.030 s	(25.13 GB/s)
 
-    Using *** blosclz *** compressor:
-      Time for pack_array/unpack_array:     0.119/0.171 s (6.27/4.35 GB/s)).	Compr ratio: 27.02
-      Time for compress/decompress:         0.051/0.027 s (14.56/27.45 GB/s)).	Compr ratio: 27.02
-    Using *** lz4 *** compressor:
-      Time for pack_array/unpack_array:     0.105/0.147 s (7.07/5.05 GB/s)).	Compr ratio: 33.93
-      Time for compress/decompress:         0.035/0.031 s (21.16/24.22 GB/s)).	Compr ratio: 33.95
-    Using *** lz4hc *** compressor:
-      Time for pack_array/unpack_array:     0.317/0.168 s (2.35/4.42 GB/s)).	Compr ratio: 26.94
-      Time for compress/decompress:         0.244/0.033 s (3.06/22.65 GB/s)).	Compr ratio: 26.94
-    Using *** zlib *** compressor:
-      Time for pack_array/unpack_array:     0.407/0.214 s (1.83/3.47 GB/s)).	Compr ratio: 28.17
-      Time for compress/decompress:         0.332/0.088 s (2.24/8.49 GB/s)).	Compr ratio: 28.17
-    Using *** zstd *** compressor:
-      Time for pack_array/unpack_array:     0.516/0.185 s (1.44/4.03 GB/s)).	Compr ratio: 48.57
-      Time for compress/decompress:         0.414/0.048 s (1.80/15.42 GB/s)).	Compr ratio: 47.39
+    Times for compressing/decompressing:
 
-For matter of comparison, here it is the output for an Apple Mac Mini (2018) 3,2 GHz 6-Core i7
-with 32 GB of RAM::
+    *** the arange linear distribution ***
+      *** blosclz , noshuffle  ***  0.275 s (2.71 GB/s) / 0.099 s (7.56 GB/s)	Compr. ratio:   2.0x
+      *** blosclz , shuffle    ***  0.037 s (20.13 GB/s) / 0.024 s (30.92 GB/s)	Compr. ratio: 469.7x
+      *** blosclz , bitshuffle ***  0.111 s (6.68 GB/s) / 0.237 s (3.15 GB/s)	Compr. ratio: 488.2x
+      *** lz4     , noshuffle  ***  0.321 s (2.32 GB/s) / 0.069 s (10.88 GB/s)	Compr. ratio:   2.0x
+      *** lz4     , shuffle    ***  0.034 s (21.89 GB/s) / 0.028 s (26.21 GB/s)	Compr. ratio: 279.2x
+      *** lz4     , bitshuffle ***  0.121 s (6.18 GB/s) / 0.237 s (3.15 GB/s)	Compr. ratio:  87.7x
+      *** lz4hc   , noshuffle  ***  2.250 s (0.33 GB/s) / 0.075 s (9.98 GB/s)	Compr. ratio:   2.0x
+      *** lz4hc   , shuffle    ***  0.138 s (5.40 GB/s) / 0.047 s (15.87 GB/s)	Compr. ratio: 155.9x
+      *** lz4hc   , bitshuffle ***  0.557 s (1.34 GB/s) / 0.167 s (4.46 GB/s)	Compr. ratio: 239.5x
+      *** zlib    , noshuffle  ***  4.800 s (0.16 GB/s) / 0.275 s (2.71 GB/s)	Compr. ratio:   5.3x
+      *** zlib    , shuffle    ***  0.219 s (3.41 GB/s) / 0.086 s (8.65 GB/s)	Compr. ratio: 273.8x
+      *** zlib    , bitshuffle ***  0.336 s (2.22 GB/s) / 0.205 s (3.64 GB/s)	Compr. ratio: 457.9x
+      *** zstd    , noshuffle  ***  2.887 s (0.26 GB/s) / 0.165 s (4.52 GB/s)	Compr. ratio:   7.9x
+      *** zstd    , shuffle    ***  0.263 s (2.84 GB/s) / 0.032 s (23.08 GB/s)	Compr. ratio: 644.9x
+      *** zstd    , bitshuffle ***  0.385 s (1.93 GB/s) / 0.156 s (4.77 GB/s)	Compr. ratio: 985.6x
 
-    -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-    python-blosc2 version: 0.1.6.dev0
-    Blosc version: 2.0.0.rc.2.dev ($Date:: 2021-05-06 #$)
-    Compressors available: ['blosclz', 'lz4', 'lz4hc', 'zlib', 'zstd']
-    Compressor library versions:
-      blosclz: 2.3.0
-      lz4: 1.9.3
-      lz4hc: 1.9.3
-      zlib: 1.2.11.zlib-ng
-      zstd: 1.5.0
-    Python version: 3.9.4 | packaged by conda-forge | (default, May 10 2021, 22:13:15)
-    [Clang 11.1.0 ]
-    Platform: Darwin-20.4.0-x86_64 (Darwin Kernel Version 20.4.0: Thu Apr 22 21:46:47 PDT 2021; root:xnu-7195.101.2~1/RELEASE_X86_64)
-    Processor: i386
-    Byte-ordering: little
-    Detected cores: 12
-    Number of threads to use by default: 8
-    -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-    Creating a large NumPy array with 10**8 int64 elements:
-      [0.00000000e+00 1.00000001e-04 2.00000002e-04 ... 9.99999980e+03
-     9.99999990e+03 1.00000000e+04]
-      Time for copying array with np.copy:			        0.326 s (2.29 GB/s))
-      Time for copying array with np.copyto and empty_like:	0.133 s (5.61 GB/s))
-      Time for copying array with np.copyto and zeros:	    0.129 s (5.77 GB/s))
-      Time for copying array with np.copyto and full_like:	0.076 s (9.75 GB/s))
-      Time for copying array with numpy assignment:		    0.073 s (10.27 GB/s))
+    *** the linspace linear distribution ***
+      *** blosclz , noshuffle  ***  0.376 s (1.98 GB/s) / 0.032 s (23.44 GB/s)	Compr. ratio:   1.0x
+      *** blosclz , shuffle    ***  0.061 s (12.29 GB/s) / 0.035 s (21.47 GB/s)	Compr. ratio:  33.5x
+      *** blosclz , bitshuffle ***  0.148 s (5.02 GB/s) / 0.241 s (3.09 GB/s)	Compr. ratio:  55.4x
+      *** lz4     , noshuffle  ***  0.109 s (6.86 GB/s) / 0.038 s (19.86 GB/s)	Compr. ratio:   1.0x
+      *** lz4     , shuffle    ***  0.051 s (14.56 GB/s) / 0.037 s (19.90 GB/s)	Compr. ratio:  40.5x
+      *** lz4     , bitshuffle ***  0.136 s (5.49 GB/s) / 0.250 s (2.98 GB/s)	Compr. ratio:  59.5x
+      *** lz4hc   , noshuffle  ***  3.611 s (0.21 GB/s) / 0.070 s (10.70 GB/s)	Compr. ratio:   1.1x
+      *** lz4hc   , shuffle    ***  0.364 s (2.05 GB/s) / 0.036 s (20.61 GB/s)	Compr. ratio:  44.7x
+      *** lz4hc   , bitshuffle ***  0.752 s (0.99 GB/s) / 0.158 s (4.70 GB/s)	Compr. ratio:  58.0x
+      *** zlib    , noshuffle  ***  3.188 s (0.23 GB/s) / 0.489 s (1.52 GB/s)	Compr. ratio:   1.6x
+      *** zlib    , shuffle    ***  0.393 s (1.90 GB/s) / 0.100 s (7.45 GB/s)	Compr. ratio:  44.6x
+      *** zlib    , bitshuffle ***  0.519 s (1.44 GB/s) / 0.228 s (3.27 GB/s)	Compr. ratio:  66.9x
+      *** zstd    , noshuffle  ***  3.567 s (0.21 GB/s) / 0.182 s (4.08 GB/s)	Compr. ratio:   1.2x
+      *** zstd    , shuffle    ***  0.511 s (1.46 GB/s) / 0.056 s (13.36 GB/s)	Compr. ratio:  70.5x
+      *** zstd    , bitshuffle ***  0.636 s (1.17 GB/s) / 0.202 s (3.68 GB/s)	Compr. ratio:  51.2x
 
-    Using *** blosclz *** compressor:
-      Time for pack_array/unpack_array:     0.478/0.507 s (1.56/1.47 GB/s)).	Compr ratio: 27.02
-      Time for compress/decompress:         0.143/0.094 s (5.22/7.94 GB/s)).	Compr ratio: 27.02
-    Using *** lz4 *** compressor:
-      Time for pack_array/unpack_array:     0.480/0.520 s (1.55/1.43 GB/s)).	Compr ratio: 33.93
-      Time for compress/decompress:         0.136/0.091 s (5.49/8.15 GB/s)).	Compr ratio: 33.95
-    Using *** lz4hc *** compressor:
-      Time for pack_array/unpack_array:     0.691/0.514 s (1.08/1.45 GB/s)).	Compr ratio: 26.94
-      Time for compress/decompress:         0.359/0.091 s (2.08/8.15 GB/s)).	Compr ratio: 26.94
-    Using *** zlib *** compressor:
-      Time for pack_array/unpack_array:     0.801/0.584 s (0.93/1.27 GB/s)).	Compr ratio: 28.17
-      Time for compress/decompress:         0.470/0.165 s (1.59/4.50 GB/s)).	Compr ratio: 28.17
-    Using *** zstd *** compressor:
-      Time for pack_array/unpack_array:     1.078/0.543 s (0.69/1.37 GB/s)).	Compr ratio: 48.57
-      Time for compress/decompress:         0.708/0.121 s (1.05/6.17 GB/s)).	Compr ratio: 47.39
+    *** the random distribution ***
+      *** blosclz , noshuffle  ***  0.373 s (2.00 GB/s) / 0.131 s (5.68 GB/s)	Compr. ratio:   2.1x
+      *** blosclz , shuffle    ***  0.083 s (9.03 GB/s) / 0.029 s (25.30 GB/s)	Compr. ratio:   4.0x
+      *** blosclz , bitshuffle ***  0.164 s (4.54 GB/s) / 0.238 s (3.13 GB/s)	Compr. ratio:   4.0x
+      *** lz4     , noshuffle  ***  0.365 s (2.04 GB/s) / 0.060 s (12.46 GB/s)	Compr. ratio:   2.1x
+      *** lz4     , shuffle    ***  0.076 s (9.74 GB/s) / 0.029 s (25.35 GB/s)	Compr. ratio:   4.0x
+      *** lz4     , bitshuffle ***  0.154 s (4.83 GB/s) / 0.238 s (3.13 GB/s)	Compr. ratio:   4.6x
+      *** lz4hc   , noshuffle  ***  2.039 s (0.37 GB/s) / 0.047 s (15.94 GB/s)	Compr. ratio:   2.8x
+      *** lz4hc   , shuffle    ***  0.794 s (0.94 GB/s) / 0.051 s (14.65 GB/s)	Compr. ratio:   4.0x
+      *** lz4hc   , bitshuffle ***  0.788 s (0.95 GB/s) / 0.172 s (4.33 GB/s)	Compr. ratio:   4.5x
+      *** zlib    , noshuffle  ***  6.059 s (0.12 GB/s) / 0.423 s (1.76 GB/s)	Compr. ratio:   3.2x
+      *** zlib    , shuffle    ***  0.977 s (0.76 GB/s) / 0.150 s (4.97 GB/s)	Compr. ratio:   4.7x
+      *** zlib    , bitshuffle ***  0.955 s (0.78 GB/s) / 0.281 s (2.65 GB/s)	Compr. ratio:   4.6x
+      *** zstd    , noshuffle  ***  4.085 s (0.18 GB/s) / 0.226 s (3.30 GB/s)	Compr. ratio:   4.0x
+      *** zstd    , shuffle    ***  0.987 s (0.75 GB/s) / 0.061 s (12.15 GB/s)	Compr. ratio:   4.4x
+      *** zstd    , bitshuffle ***  0.918 s (0.81 GB/s) / 0.150 s (4.96 GB/s)	Compr. ratio:   4.6x
 
-Using compression becomes more sexy when using newer processors indeed.
-In case you find your own results interesting, go ahead and share them!
+As can be seen, in some situations it is perfectly possible to go faster than a plain memcpy().
+Start using compression in your data workflows and feel the experience of doing more with less.
+
 
 License
 -------
