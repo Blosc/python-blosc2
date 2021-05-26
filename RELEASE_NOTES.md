@@ -1,6 +1,6 @@
 # Release notes
 
-## Changes from python-blosc2 0.1.5 to python-blosc2 0.1.6
+## Changes from python-blosc2 0.1.5 to python-blosc2 0.1.7
 
 * Headers and binaries for the C-Blosc2 library are starting
   to being distributed inside wheels.

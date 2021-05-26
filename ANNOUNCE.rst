@@ -1,4 +1,4 @@
-Announcing python-blosc2 0.1.6
+Announcing python-blosc2 0.1.7
 ==============================
 
 Changes from python-blosc to python-blosc2
