@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from python-blosc2 0.1.7 to python-blosc2 0.1.8
+
+XXX version-specific blurb XXX
+
 ## Changes from python-blosc2 0.1.5 to python-blosc2 0.1.7
 
 * Headers and binaries for the C-Blosc2 library are starting
