@@ -63,8 +63,8 @@ for (in_, label) in arrays:
             assert np.array_equal(in_, out)
             filter_name = blosc2.filter_names[filter]
             print(
-                "  *** %-8s, %-10s *** %6.3f s (%.2f GB/s) / %5.3f s (%.2f GB/s)"
+                "  *** %-7s, %-10s *** %6.3f s (%.2f GB/s) / %5.3f s (%.2f GB/s)"
                 % (cname, filter_name, tc, ((N * 8 / tc) / 2 ** 30), td, ((N * 8 / td) / 2 ** 30)),
                 end="",
             )
-            print("\tCompr. ratio: %5.1fx" % (N * 8.0 / len(c)))
+            print("\tcr: %5.1fx" % (N * 8.0 / len(c)))

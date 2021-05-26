@@ -101,9 +101,9 @@ for (in_, label) in arrays:
         assert np.array_equal(in_, out)
         tc = (ctoc - ctic) / NREP
         td = (dtoc - dtic) / NREP
-        print("  Time for pack_array/unpack_array:     %.3f/%.3f s (%.2f/%.2f GB/s))." %
+        print("  Time for pack_array/unpack_array:     %.3f/%.3f s (%.2f/%.2f GB/s)) " %
               (tc, td, ((N * 8 / tc) / 2 ** 30), ((N * 8 / td) / 2 ** 30)), end="")
-        print("\tCompr ratio: %.2f" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
+        print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
 
         ctic = time.time()
         for i in range(NREP):
@@ -118,6 +118,6 @@ for (in_, label) in arrays:
         assert np.array_equal(in_, out)
         tc = (ctoc - ctic) / NREP
         td = (dtoc - dtic) / NREP
-        print("  Time for compress/decompress:         %.3f/%.3f s (%.2f/%.2f GB/s))." %
+        print("  Time for compress/decompress:         %.3f/%.3f s (%.2f/%.2f GB/s)) " %
               (tc, td, ((N * 8 / tc) / 2 ** 30), ((N * 8 / td) / 2 ** 30)), end="")
-        print("\tCompr ratio: %.2f" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
+        print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
