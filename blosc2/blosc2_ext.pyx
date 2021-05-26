@@ -4,8 +4,6 @@
 #       Author:  The Blosc development team - blosc@blosc.org
 #
 ########################################################################
-
-
 from cpython cimport (
     Py_buffer,
     PyBUF_SIMPLE,
@@ -119,9 +117,6 @@ cdef extern from "blosc2.h":
                                char** version)
 
     int blosc_free_resources()
-
-    void blosc_cbuffer_sizes(const void* cbuffer, size_t* nbytes,
-                             size_t* cbytes, size_t* blocksize)
 
     int blosc2_cbuffer_sizes(const void* cbuffer, int32_t* nbytes,
                              int32_t* cbytes, int32_t* blocksize)
@@ -292,6 +287,7 @@ cdef extern from "blosc2.h":
     int blosc2_schunk_get_cparams(blosc2_schunk *schunk, blosc2_cparams ** cparams)
     int blosc2_schunk_get_dparams(blosc2_schunk *schunk, blosc2_dparams ** dparams)
     int blosc2_schunk_reorder_offsets(blosc2_schunk *schunk, int *offsets_order)
+    int blosc2_schunk_delete_chunk(blosc2_schunk *schunk, int nchunk)
     int64_t blosc2_schunk_frame_len(blosc2_schunk*schunk)
     int blosc2_meta_exists(blosc2_schunk *schunk, const char *name)
     int blosc2_meta_add(blosc2_schunk *schunk, const char *name, uint8_t *content,
@@ -364,16 +360,16 @@ cpdef compress(src, size_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE, 
 
 
 def decompress(src, dst=None, as_bytearray=False):
-    cdef size_t nbytes
-    cdef size_t cbytes
-    cdef size_t blocksize
+    cdef int32_t nbytes
+    cdef int32_t cbytes
+    cdef int32_t blocksize
     cdef const uint8_t[:] typed_view_src
     cdef uint8_t[:] typed_view_dst
 
     mem_view_src = memoryview(src)
     typed_view_src = mem_view_src.cast('B')
     _check_comp_length('src', len(typed_view_src))
-    blosc_cbuffer_sizes(&typed_view_src[0], &nbytes, &cbytes, &blocksize)
+    blosc2_cbuffer_sizes(&typed_view_src[0], &nbytes, &cbytes, &blocksize)
     if dst is not None:
         mem_view_dst = memoryview(dst)
         typed_view_dst = mem_view_dst.cast('B')
@@ -563,10 +559,10 @@ def decompress2(src, dst=None, **kwargs):
     mem_view_src = memoryview(src)
     typed_view_src = mem_view_src.cast('B')
     _check_comp_length('src', typed_view_src.nbytes)
-    cdef size_t cbytes
-    cdef size_t blocksize
-    cdef size_t nbytes
-    blosc_cbuffer_sizes(&typed_view_src[0], &nbytes, &cbytes, &blocksize)
+    cdef int32_t nbytes
+    cdef int32_t cbytes
+    cdef int32_t blocksize
+    blosc2_cbuffer_sizes(&typed_view_src[0], &nbytes, &cbytes, &blocksize)
     cdef uint8_t[:] typed_view_dst
     if dst is not None:
         mem_view_dst = memoryview(dst)
@@ -599,34 +595,84 @@ storage_dflts = {
 cdef create_storage(blosc2_storage *storage, kwargs):
     contiguous = kwargs.get('contiguous', storage_dflts['contiguous'])
     urlpath = kwargs.get('urlpath', storage_dflts['urlpath'])
+    urlpath = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
 
-    cdef blosc2_cparams cparams
-    create_cparams_from_kwargs(&cparams, kwargs.get('cparams', None))
-    cdef blosc2_dparams dparams
-    create_dparams_from_kwargs(&dparams, kwargs.get('dparams', None))
+    create_cparams_from_kwargs(storage.cparams, kwargs.get('cparams', None))
+    create_dparams_from_kwargs(storage.dparams, kwargs.get('dparams', None))
 
     storage.contiguous = contiguous
-    storage.urlpath = urlpath
-    storage.cparams = &cparams
-    storage.dparams = &dparams
+    if urlpath is None:
+        storage.urlpath = NULL
+    else:
+        storage.urlpath = <char*> urlpath
+
     storage.io = NULL
     # TODO: support the next ones in the future
     #storage.io = kwargs.get('io', storage_dflts['io'])
 
-"""
+
 cdef class SChunk:
-    cdef blosc2_context *ctx
-    cdef blosc2_storage *storage
     cdef blosc2_schunk *schunk
 
     def __init__(self, **kwargs):
-        create_storage(self.storage, kwargs)
-        self.schunk = blosc2_schunk_new(self.storage)
+        cdef blosc2_storage storage
+        # Create space for cparams and dparams in the stack
+        cdef blosc2_cparams cparams
+        cdef blosc2_dparams dparams
+        storage.cparams = &cparams
+        storage.dparams = &dparams
 
-    def append(self, data):
+        create_storage(&storage, kwargs)
+        self.schunk = blosc2_schunk_new(&storage)
+
+    def append_buffer(self, data):
         mem_view = memoryview(data)
         cdef uint8_t[:] typed_view = mem_view.cast('B')
         rc = blosc2_schunk_append_buffer(self.schunk, &typed_view[0], typed_view.nbytes)
         if rc < 0:
             raise RuntimeError("Could not append the buffer")
+
+    def decompress_chunk(self, int nchunk, dst=None):
+        cdef uint8_t[:] typed_view_dst
+        cdef uint8_t *chunk
+        cdef bool needs_free
+        rc = blosc2_schunk_get_chunk(self.schunk, nchunk, &chunk, &needs_free)
+
+        if rc < 0:
+            raise RuntimeError("Error while getting the chunk")
+
+        cdef int32_t nbytes
+        cdef int32_t cbytes
+        cdef int32_t blocksize
+        blosc2_cbuffer_sizes(chunk, &nbytes, &cbytes, &blocksize)
+        if needs_free:
+            free(chunk)
+
+        if dst is not None:
+            mem_view_dst = memoryview(dst)
+            typed_view_dst = mem_view_dst.cast('B')
+            if len(typed_view_dst) == 0:
+                raise ValueError("The dst length must be greater than 0")
+            size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, &typed_view_dst[0], typed_view_dst.nbytes)
+
+        else:
+            dst = PyBytes_FromStringAndSize(NULL, nbytes)
+            if dst is None:
+                raise RuntimeError("Could not get a bytes object")
+            size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, <void*><char *>dst, nbytes)
+            if size >= 0:
+                return dst
+
+        if size < 0:
+            raise RuntimeError("Error while decompressing the specified chunk")
+
+    def __dealloc__(self):
+        blosc2_schunk_free(self.schunk)
+
+
+"""
+    def delete_chunk(self, nchunk):
+        rc = blosc2_schunk_delete_chunk(self.schunk, nchunk)
+        if rc < 0:
+            raise RuntimeError("Could not delete the desired chunk")
 """

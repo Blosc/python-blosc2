@@ -30,6 +30,7 @@ from .blosc2_ext import (
     VERSION_STRING,
     ZLIB,
     ZSTD,
+    SChunk,
     cparams_dflts,
     dparams_dflts,
     storage_dflts,
@@ -125,4 +126,5 @@ __all__ = [
     decompress2,
     dparams_dflts,
     storage_dflts,
+    SChunk,
 ]
