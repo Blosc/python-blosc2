@@ -2,7 +2,13 @@
 
 ## Changes from python-blosc2 0.1.5 to python-blosc2 0.1.6
 
-XXX version-specific blurb XXX
+* Headers and binaries for the C-Blosc2 library are starting
+  to being distributed inside wheels.
+
+* Internal C-Blosc2 submodule updated to 2.0.0-rc2.
+
+* Repeating measurements 4 times in benchs so as to get more
+  consistent figures.
 
 
 ## Changes from python-blosc2 0.1.1 to python-blosc2 0.1.5

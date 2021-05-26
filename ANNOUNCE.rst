@@ -1,4 +1,4 @@
-Announcing python-blosc2 0.1.1
+Announcing python-blosc2 0.1.6
 ==============================
 
 Changes from python-blosc to python-blosc2
@@ -15,8 +15,9 @@ Changes from python-blosc to python-blosc2
 * A bytearray or NumPy object can be passed to the `blosc2.decompress` function to store the
   decompressed data.
 
-In this release the package is compiled using the scikit-build tool
-for a better integration with the C dependencies.
+In this release the wheels come with headers and binaries for the C-Blosc2 library.
+This is a convenient way to get access to the C-Blosc2 development files without
+waiting for your favorite distribution system to get the latest version of it.
 
 For more info, you can have a look at the release notes in:
 
