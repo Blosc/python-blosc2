@@ -626,11 +626,14 @@ cdef class SChunk:
         self.schunk = blosc2_schunk_new(&storage)
 
     def append_buffer(self, data):
-        mem_view = memoryview(data)
-        cdef uint8_t[:] typed_view = mem_view.cast('B')
-        rc = blosc2_schunk_append_buffer(self.schunk, &typed_view[0], typed_view.nbytes)
+        cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+        PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
+        rc = blosc2_schunk_append_buffer(self.schunk, buf.buf, buf.len)
+        PyBuffer_Release(buf)
+        free(buf)
         if rc < 0:
             raise RuntimeError("Could not append the buffer")
+        return rc
 
     def decompress_chunk(self, int nchunk, dst=None):
         cdef uint8_t[:] typed_view_dst
@@ -654,7 +657,6 @@ cdef class SChunk:
             if len(typed_view_dst) == 0:
                 raise ValueError("The dst length must be greater than 0")
             size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, &typed_view_dst[0], typed_view_dst.nbytes)
-
         else:
             dst = PyBytes_FromStringAndSize(NULL, nbytes)
             if dst is None:
@@ -665,6 +667,15 @@ cdef class SChunk:
 
         if size < 0:
             raise RuntimeError("Error while decompressing the specified chunk")
+
+    def get_chunk(self, int nchunk):
+        cdef uint8_t[:] typed_view_dst
+        cdef uint8_t *chunk
+        cdef bool needs_free
+        rc = blosc2_schunk_get_chunk(self.schunk, nchunk, &chunk, &needs_free)
+        if rc < 0:
+           raise RuntimeError("Error while getting the chunk")
+        return chunk
 
     def __dealloc__(self):
         blosc2_schunk_free(self.schunk)
