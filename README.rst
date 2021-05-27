@@ -9,7 +9,7 @@ python-blosc2: a Python wrapper for the extremely fast Blosc2 compression librar
 :Gitter: |gitter|
 :Code of Conduct: |Contributor Covenant|
 
-.. |version| image:: https://img.shields.io/pypi/v/blosc.png
+.. |version| image:: https://img.shields.io/pypi/v/blosc2.png
         :target: https://pypi.python.org/pypi/blosc
 .. |anaconda| image:: https://anaconda.org/conda-forge/python-blosc2/badges/version.svg
         :target: https://anaconda.org/conda-forge/python-blosc2
@@ -265,7 +265,8 @@ And here for an Intel box (i9-10940X @ 3.30GHz) with 64 GB RAM running Clear Lin
       *** zstd   , bitshuffle ***  0.858 s (0.87 GB/s) / 0.054 s (13.71 GB/s)	cr:   4.6x
 
 As can be seen, in some situations it is perfectly possible to go faster than a plain memcpy().
-Start using compression in your data workflows and feel the experience of doing more with less.
+
+Start using compression in your data workflows and feel the experience of doing more with less!
 
 
 License
