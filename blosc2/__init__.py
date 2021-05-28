@@ -9,15 +9,19 @@
 # Filters
 # Codecs
 from .blosc2_ext import (
+    ALWAYS_SPLIT,
+    AUTO_SPLIT,
     BITSHUFFLE,
     BLOSCLZ,
     DELTA,
     EXTENDED_HEADER_LENGTH,
+    FORWARD_COMPAT_SPLIT,
     LZ4,
     LZ4HC,
     MAX_BUFFERSIZE,
     MAX_TYPESIZE,
     MIN_HEADER_LENGTH,
+    NEVER_SPLIT,
     NOFILTER,
     NOSHUFFLE,
     SHUFFLE,
@@ -26,14 +30,20 @@ from .blosc2_ext import (
     VERSION_STRING,
     ZLIB,
     ZSTD,
+    SChunk,
+    cparams_dflts,
+    dparams_dflts,
+    storage_dflts,
 )
 
 # Public API for container module
-from .utils import (
+from .core import (
     clib_info,
     compress,
+    compress2,
     compressor_list,
     decompress,
+    decompress2,
     detect_number_of_cores,
     free_resources,
     get_blocksize,
@@ -107,4 +117,14 @@ __all__ = [
     MIN_HEADER_LENGTH,
     EXTENDED_HEADER_LENGTH,
     filter_names,
+    ALWAYS_SPLIT,
+    AUTO_SPLIT,
+    NEVER_SPLIT,
+    FORWARD_COMPAT_SPLIT,
+    compress2,
+    cparams_dflts,
+    decompress2,
+    dparams_dflts,
+    storage_dflts,
+    SChunk,
 ]

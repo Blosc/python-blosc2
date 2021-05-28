@@ -4,8 +4,6 @@
 #       Author:  The Blosc development team - blosc@blosc.org
 #
 ########################################################################
-
-
 from cpython cimport (
     Py_buffer,
     PyBUF_SIMPLE,
@@ -59,6 +57,11 @@ cdef extern from "blosc2.h":
         BLOSC_VERSION_REVISION
         BLOSC_VERSION_DATE
 
+    ctypedef enum:
+        BLOSC_ALWAYS_SPLIT
+        BLOSC_NEVER_SPLIT
+        BLOSC_AUTO_SPLIT
+        BLOSC_FORWARD_COMPAT_SPLIT
 
     cdef int INT_MAX
 
@@ -115,9 +118,6 @@ cdef extern from "blosc2.h":
 
     int blosc_free_resources()
 
-    void blosc_cbuffer_sizes(const void* cbuffer, size_t* nbytes,
-                             size_t* cbytes, size_t* blocksize)
-
     int blosc2_cbuffer_sizes(const void* cbuffer, int32_t* nbytes,
                              int32_t* cbytes, int32_t* blocksize)
 
@@ -156,13 +156,19 @@ cdef extern from "blosc2.h":
         void (*btune_free)(blosc2_context *context)
         void * btune_config
 
+    ctypedef struct blosc2_io:
+        uint8_t id
+        void* params
+
     ctypedef struct blosc2_cparams:
         uint8_t compcode
+        uint8_t compcode_meta
         uint8_t clevel
         int use_dict
         int32_t typesize
         int16_t nthreads
         int32_t blocksize
+        int32_t splitmode
         void* schunk
         uint8_t filters[BLOSC2_MAX_FILTERS]
         uint8_t filters_meta[BLOSC2_MAX_FILTERS]
@@ -170,13 +176,29 @@ cdef extern from "blosc2.h":
         blosc2_prefilter_params* preparams
         blosc2_btune *udbtune
 
-    cdef blosc2_cparams BLOSC2_CPARAMS_DEFAULTS
+    cdef const blosc2_cparams BLOSC2_CPARAMS_DEFAULTS
+
+    ctypedef struct blosc2_postfilter_params:
+        void *user_data
+        const uint8_t * input
+        uint8_t *out
+        int32_t size
+        int32_t typesize
+        int32_t offset
+        int32_t tid
+        uint8_t * ttmp
+        size_t ttmp_nbytes
+        blosc2_context *ctx
+
+    ctypedef int(*blosc2_postfilter_fn)(blosc2_postfilter_params *params)
 
     ctypedef struct blosc2_dparams:
         int nthreads
         void* schunk
+        blosc2_postfilter_fn postfilter
+        blosc2_postfilter_params *postparams
 
-    cdef const blosc2_dparams BLOSC2_DPARAMS_DEFAULTS = {1, NULL}
+    cdef const blosc2_dparams BLOSC2_DPARAMS_DEFAULTS
 
     blosc2_context* blosc2_create_cctx(blosc2_cparams cparams) nogil
 
@@ -188,7 +210,7 @@ cdef extern from "blosc2.h":
 
     int blosc2_compress(int clevel, int doshuffle, int32_t typesize,
                         const void* src, int32_t srcsize, void* dest,
-                        int32_t destsize)
+                        int32_t destsize) nogil
 
     int blosc2_decompress(const void* src, int32_t srcsize,
                           void* dest, int32_t destsize)
@@ -209,6 +231,9 @@ cdef extern from "blosc2.h":
         char* urlpath
         blosc2_cparams* cparams
         blosc2_dparams* dparams
+        blosc2_io *io
+
+    cdef const blosc2_storage BLOSC2_STORAGE_DEFAULTS
 
     ctypedef struct blosc2_frame:
         pass
@@ -262,6 +287,7 @@ cdef extern from "blosc2.h":
     int blosc2_schunk_get_cparams(blosc2_schunk *schunk, blosc2_cparams ** cparams)
     int blosc2_schunk_get_dparams(blosc2_schunk *schunk, blosc2_dparams ** dparams)
     int blosc2_schunk_reorder_offsets(blosc2_schunk *schunk, int *offsets_order)
+    int blosc2_schunk_delete_chunk(blosc2_schunk *schunk, int nchunk)
     int64_t blosc2_schunk_frame_len(blosc2_schunk*schunk)
     int blosc2_meta_exists(blosc2_schunk *schunk, const char *name)
     int blosc2_meta_add(blosc2_schunk *schunk, const char *name, uint8_t *content,
@@ -306,6 +332,9 @@ BITSHUFFLE = BLOSC_BITSHUFFLE
 DELTA = BLOSC_DELTA
 TRUNC_PREC = BLOSC_TRUNC_PREC
 
+def _check_comp_length(comp_name, comp_len):
+    if comp_len < BLOSC_MIN_HEADER_LENGTH:
+        raise ValueError("%s cannot be less than %d bytes" % (comp_name, BLOSC_MIN_HEADER_LENGTH))
 
 
 cpdef compress(src, size_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE, cname='blosclz'):
@@ -316,19 +345,10 @@ cpdef compress(src, size_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE, 
     dest = bytes(buf.len + BLOSC_MAX_OVERHEAD)
     cdef int len_dest = len(dest)
     cdef int size
-    cdef blosc2_cparams cparams
-    cdef blosc2_context *cctx
     if RELEASEGIL:
         _dest = <void*> <char *> dest
-        _src = <void*> <char *> src
-        cparams = BLOSC2_CPARAMS_DEFAULTS
-        cparams.compcode = blosc_compname_to_compcode(cname)
         with nogil:
-            cparams.nthreads = blosc_get_nthreads()
-            cparams.typesize = typesize
-            cparams.clevel = clevel
-            cctx = blosc2_create_cctx(cparams)
-            size = blosc2_compress_ctx(cctx, _src, len_src, _dest, len_dest)
+            size = blosc2_compress(clevel, shuffle, typesize, buf.buf, buf.len, _dest, len_dest)
     else:
         size = blosc2_compress(clevel, shuffle, typesize, buf.buf, buf.len, <void*> <char *> dest, len_dest)
     PyBuffer_Release(buf)
@@ -340,17 +360,16 @@ cpdef compress(src, size_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE, 
 
 
 def decompress(src, dst=None, as_bytearray=False):
-    cdef size_t nbytes
-    cdef size_t cbytes
-    cdef size_t blocksize
+    cdef int32_t nbytes
+    cdef int32_t cbytes
+    cdef int32_t blocksize
     cdef const uint8_t[:] typed_view_src
     cdef uint8_t[:] typed_view_dst
 
     mem_view_src = memoryview(src)
     typed_view_src = mem_view_src.cast('B')
-    if len(typed_view_src) < BLOSC_MIN_HEADER_LENGTH:
-        raise ValueError("The src length must be at least %d" % BLOSC_MIN_HEADER_LENGTH)
-    blosc_cbuffer_sizes(&typed_view_src[0], &nbytes, &cbytes, &blocksize)
+    _check_comp_length('src', len(typed_view_src))
+    blosc2_cbuffer_sizes(&typed_view_src[0], &nbytes, &cbytes, &blocksize)
     if dst is not None:
         mem_view_dst = memoryview(dst)
         typed_view_dst = mem_view_dst.cast('B')
@@ -359,7 +378,7 @@ def decompress(src, dst=None, as_bytearray=False):
         size = blosc_decompress(&typed_view_src[0], &typed_view_dst[0], len(typed_view_dst))
     else:
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
-        if dst == None:
+        if dst is None:
             raise RuntimeError("Could not get a bytes object")
         size = blosc_decompress(&typed_view_src[0], <void*> <char *> dst, len(dst))
         if as_bytearray:
@@ -427,11 +446,247 @@ def set_releasegil(bool gilstate):
     return oldstate
 
 def get_blocksize():
-    """ Get the internal blocksize to be used during compression.
-
-    Returns
-    -------
-    out : int
-        The size in bytes of the internal block size.
-    """
     return blosc_get_blocksize()
+
+# Split modes
+ALWAYS_SPLIT = BLOSC_ALWAYS_SPLIT
+NEVER_SPLIT = BLOSC_NEVER_SPLIT
+AUTO_SPLIT = BLOSC_AUTO_SPLIT
+FORWARD_COMPAT_SPLIT = BLOSC_FORWARD_COMPAT_SPLIT
+# Defaults for compression params
+cparams_dflts = {
+        'compcode': BLOSC_BLOSCLZ,
+        'compcode_meta': 0,
+        'clevel': 5,
+        'use_dict': False,
+        'typesize': 8,
+        'nthreads': 1,
+        'blocksize': 0,
+        'splitmode': BLOSC_FORWARD_COMPAT_SPLIT,
+        'schunk': None,
+        'filters': {0, 0, 0, 0, 0, BLOSC_SHUFFLE},
+        'filters_meta': {0, 0, 0, 0, 0, 0},
+        'prefilter': None,
+        'preparams': None,
+        'udbtune': None
+}
+
+# Defaults for decompression params
+dparams_dflts = {
+    'nthreads': 1,
+    'schunk': None,
+    'postfilter': None,
+    'postparams': None
+}
+
+cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
+    cparams.compcode = kwargs.get('compcode', cparams_dflts['compcode'])
+    cparams.compcode_meta = kwargs.get('compcode_meta', cparams_dflts['compcode_meta'])
+    cparams.clevel = kwargs.get('clevel', cparams_dflts['clevel'])
+    cparams.use_dict = kwargs.get('use_dict', cparams_dflts['use_dict'])
+    cparams.typesize = kwargs.get('typesize', cparams_dflts['typesize'])
+    cparams.nthreads = kwargs.get('nthreads', cparams_dflts['nthreads'])
+    cparams.blocksize = kwargs.get('blocksize', cparams_dflts['blocksize'])
+    cparams.splitmode = kwargs.get('splitmode', cparams_dflts['splitmode'])
+    # TODO: support the commented ones in the future
+    #schunk_c = kwargs.get('schunk', cparams_dflts['schunk'])
+    #cparams.schunk = <void *> schunk_c
+    cparams.schunk = NULL
+    for i in range(BLOSC2_MAX_FILTERS):
+        cparams.filters[i] = 0
+        cparams.filters_meta[i] = 0
+
+    filters = kwargs.get('filters', cparams_dflts['filters'])
+    j = 0
+    for i in filters:
+        cparams.filters[j] = i
+        j+=1
+
+    filters_meta = kwargs.get('filters_meta', cparams_dflts['filters_meta'])
+    j = 0
+    for i in filters_meta:
+        cparams.filters_meta[j] = i
+        j+=1
+
+    cparams.prefilter = NULL
+    cparams.preparams = NULL
+    cparams.udbtune = NULL
+    #cparams.prefilter = kwargs.get('prefilter', cparams_dflts['prefilter'])
+    #cparams.preparams = kwargs.get('preparams', cparams_dflts['preparams'])
+    #cparams.udbtune = kwargs.get('udbtune', cparams_dflts['udbtune'])
+
+
+def compress2(src, **kwargs):
+    cdef blosc2_cparams cparams
+    create_cparams_from_kwargs(&cparams, kwargs)
+
+    cdef blosc2_context *cctx
+    cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+    PyObject_GetBuffer(src, buf, PyBUF_SIMPLE)
+    cdef int size
+    cdef int len_dest = buf.len + BLOSC_MAX_OVERHEAD
+    dest = bytes(len_dest)
+    _dest = <void*> <char *> dest
+
+    with nogil:
+        cctx = blosc2_create_cctx(cparams)
+        size = blosc2_compress_ctx(cctx, buf.buf, buf.len, _dest, len_dest)
+    PyBuffer_Release(buf)
+    free(buf)
+    if size < 0:
+        raise RuntimeError("Could not compress the data")
+    elif size == 0:
+        del dest
+        raise RuntimeError("The result could not fit ")
+    return dest[:size]
+
+cdef create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs):
+    dparams.nthreads = kwargs.get('nthreads', dparams_dflts['nthreads'])
+    dparams.schunk = NULL
+    dparams.postfilter = NULL
+    dparams.postparams = NULL
+    # TODO: support the next ones in the future
+    #dparams.schunk = kwargs.get('schunk', dparams_dflts['schunk'])
+    #dparams.postfilter = kwargs.get('postfilter', dparams_dflts['postfilter'])
+    #dparams.postparams = kwargs.get('postparams', dparams_dflts['postparams'])
+
+def decompress2(src, dst=None, **kwargs):
+    cdef blosc2_dparams dparams
+    create_dparams_from_kwargs(&dparams, kwargs)
+
+    cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
+    cdef const uint8_t[:] typed_view_src
+    mem_view_src = memoryview(src)
+    typed_view_src = mem_view_src.cast('B')
+    _check_comp_length('src', typed_view_src.nbytes)
+    cdef int32_t nbytes
+    cdef int32_t cbytes
+    cdef int32_t blocksize
+    blosc2_cbuffer_sizes(&typed_view_src[0], &nbytes, &cbytes, &blocksize)
+    cdef uint8_t[:] typed_view_dst
+    if dst is not None:
+        mem_view_dst = memoryview(dst)
+        typed_view_dst = mem_view_dst.cast('B')
+        if len(typed_view_dst) == 0:
+            raise ValueError("The dst length must be greater than 0")
+        size = blosc2_decompress_ctx(dctx, &typed_view_src[0], typed_view_src.nbytes,
+                                     &typed_view_dst[0], typed_view_dst.nbytes)
+    else:
+        dst = PyBytes_FromStringAndSize(NULL, nbytes)
+        if dst is None:
+            raise RuntimeError("Could not get a bytes object")
+        size = blosc2_decompress_ctx(dctx, &typed_view_src[0], typed_view_src.nbytes, <void*> <char *> dst, nbytes)
+        if size >= 0:
+            return dst
+    if size < 0:
+        raise ValueError("Error while decompressing, check the src data and/or the dparams")
+
+
+# Default for #blosc2_storage
+storage_dflts = {
+    'contiguous': False,
+    'urlpath': None,
+    'cparams': None,
+    'dparams': None,
+    'io': None
+}
+
+
+cdef create_storage(blosc2_storage *storage, kwargs):
+    contiguous = kwargs.get('contiguous', storage_dflts['contiguous'])
+    urlpath = kwargs.get('urlpath', storage_dflts['urlpath'])
+    urlpath = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
+
+    create_cparams_from_kwargs(storage.cparams, kwargs.get('cparams', None))
+    create_dparams_from_kwargs(storage.dparams, kwargs.get('dparams', None))
+
+    storage.contiguous = contiguous
+    if urlpath is None:
+        storage.urlpath = NULL
+    else:
+        storage.urlpath = <char*> urlpath
+
+    storage.io = NULL
+    # TODO: support the next ones in the future
+    #storage.io = kwargs.get('io', storage_dflts['io'])
+
+
+cdef class SChunk:
+    cdef blosc2_schunk *schunk
+
+    def __init__(self, **kwargs):
+        cdef blosc2_storage storage
+        # Create space for cparams and dparams in the stack
+        cdef blosc2_cparams cparams
+        cdef blosc2_dparams dparams
+        storage.cparams = &cparams
+        storage.dparams = &dparams
+
+        create_storage(&storage, kwargs)
+        self.schunk = blosc2_schunk_new(&storage)
+
+    def append_buffer(self, data):
+        cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+        PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
+        rc = blosc2_schunk_append_buffer(self.schunk, buf.buf, buf.len)
+        PyBuffer_Release(buf)
+        free(buf)
+        if rc < 0:
+            raise RuntimeError("Could not append the buffer")
+        return rc
+
+    def decompress_chunk(self, int nchunk, dst=None):
+        cdef uint8_t[:] typed_view_dst
+        cdef uint8_t *chunk
+        cdef bool needs_free
+        rc = blosc2_schunk_get_chunk(self.schunk, nchunk, &chunk, &needs_free)
+
+        if rc < 0:
+            raise RuntimeError("Error while getting the chunk")
+
+        cdef int32_t nbytes
+        cdef int32_t cbytes
+        cdef int32_t blocksize
+        blosc2_cbuffer_sizes(chunk, &nbytes, &cbytes, &blocksize)
+        if needs_free:
+            free(chunk)
+
+        if dst is not None:
+            mem_view_dst = memoryview(dst)
+            typed_view_dst = mem_view_dst.cast('B')
+            if len(typed_view_dst) == 0:
+                raise ValueError("The dst length must be greater than 0")
+            size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, &typed_view_dst[0], typed_view_dst.nbytes)
+        else:
+            dst = PyBytes_FromStringAndSize(NULL, nbytes)
+            if dst is None:
+                raise RuntimeError("Could not get a bytes object")
+            size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, <void*><char *>dst, nbytes)
+            if size >= 0:
+                return dst
+
+        if size < 0:
+            raise RuntimeError("Error while decompressing the specified chunk")
+
+    def get_chunk(self, int nchunk):
+        cdef uint8_t[:] typed_view_dst
+        cdef uint8_t *chunk
+        cdef bool needs_free
+        cbytes = blosc2_schunk_get_chunk(self.schunk, nchunk, &chunk, &needs_free)
+        if cbytes < 0:
+           raise RuntimeError("Error while getting the chunk")
+        ret_chunk = PyBytes_FromStringAndSize(<char*>chunk, cbytes)
+        if needs_free:
+            free(chunk)
+        return ret_chunk
+
+    def __dealloc__(self):
+        blosc2_schunk_free(self.schunk)
+
+
+"""
+    def delete_chunk(self, nchunk):
+        rc = blosc2_schunk_delete_chunk(self.schunk, nchunk)
+        if rc < 0:
+            raise RuntimeError("Could not delete the desired chunk")
+"""

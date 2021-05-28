@@ -240,7 +240,7 @@ class TestCodec(unittest.TestCase):
 
 
 def run(verbosity=2):
-    import blosc2.utils
+    import blosc2.core
 
     blosc2.print_versions()
     suite = unittest.TestLoader().loadTestsFromTestCase(TestCodec)
@@ -248,7 +248,7 @@ def run(verbosity=2):
     # might be interesting
 
     # suite = unittest.TestLoader().discover(start_dir='.', pattern='test*.py')
-    suite.addTests(unittest.TestLoader().loadTestsFromModule(blosc2.utils))
+    suite.addTests(unittest.TestLoader().loadTestsFromModule(blosc2.core))
     assert unittest.TextTestRunner(verbosity=verbosity).run(suite).wasSuccessful()
 
 
