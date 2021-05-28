@@ -40,9 +40,7 @@ t0 = time.time()
 for i in range(NREP):
     np.copyto(out_, in_)
 tcpy = (time.time() - t0) / NREP
-print(
-    "  *** np.copyto() *** Time for memcpy():\t%.3f s\t(%.2f GB/s)" % (tcpy, (N * 8 / tcpy) / 2 ** 30)
-)
+print("  *** np.copyto() *** Time for memcpy():\t%.3f s\t(%.2f GB/s)" % (tcpy, (N * 8 / tcpy) / 2 ** 30))
 
 print("\nTimes for compressing/decompressing:")
 for (in_, label) in arrays:

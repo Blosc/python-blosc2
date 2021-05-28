@@ -681,13 +681,11 @@ cdef class SChunk:
             free(chunk)
         return ret_chunk
 
-    def __dealloc__(self):
-        blosc2_schunk_free(self.schunk)
-
-
-"""
     def delete_chunk(self, nchunk):
         rc = blosc2_schunk_delete_chunk(self.schunk, nchunk)
         if rc < 0:
             raise RuntimeError("Could not delete the desired chunk")
-"""
+        return rc
+
+    def __dealloc__(self):
+        blosc2_schunk_free(self.schunk)
