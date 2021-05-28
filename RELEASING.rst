@@ -19,7 +19,7 @@ Preliminaries
 
 * Build the package and make sure that::
 
-  python -c "import blosc2; blosc2.print_versions()"
+  PYTHONPATH=. python -c "import blosc2; blosc2.print_versions()"
 
 is printing the correct versions.
 
@@ -59,7 +59,7 @@ Checking packaging
 
 * Check that the packages and wheels are sane::
 
-    python install blosc2 -U
+    python -m pip install blosc2 -U
     cd tests
     python -c"import blosc2; blosc2.print_versions()"
     pytest
