@@ -21,7 +21,7 @@ import blosc2
             {"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 5},
             {"schunk": None}, 5
         ),
-        ({"compcode": blosc2.LZ4HC, "typesize": 9}, {}, 10),
+        ({"compcode": blosc2.LZ4HC, "typesize": 4}, {}, 10),
     ],
 )
 def test_schunk_numpy(cparams, dparams, nchunks):
@@ -29,10 +29,12 @@ def test_schunk_numpy(cparams, dparams, nchunks):
 
     schunk = blosc2.SChunk(**storage)
     for i in range(nchunks):
-        buffer = numpy.random.randint(0, 1000 + 1, 200 * 1000)
+        buffer = i * numpy.arange(200 * 1000)
         nchunks_ = schunk.append_buffer(buffer)
         assert nchunks_ == (i + 1)
 
+    for i in range(nchunks):
+        buffer = i * numpy.arange(200 * 1000)
         bytes_obj = buffer.tobytes()
         res = schunk.decompress_chunk(i)
         assert res == bytes_obj
@@ -47,7 +49,6 @@ def test_schunk_numpy(cparams, dparams, nchunks):
         dest = bytearray(buffer)
         schunk.decompress_chunk(i, dest)
         assert dest == bytes_obj
-
 
     for i in range(nchunks):
         schunk.get_chunk(i)
@@ -68,10 +69,12 @@ def test_schunk(nbytes, cparams, dparams, nchunks):
 
     schunk = blosc2.SChunk(**storage)
     for i in range(nchunks):
-        bytes_obj = b" " * nbytes
+        bytes_obj = b"i " * nbytes
         nchunks_ = schunk.append_buffer(bytes_obj)
         assert nchunks_ == (i + 1)
 
+    for i in range(nchunks):
+        bytes_obj = b"i " * nbytes
         res = schunk.decompress_chunk(i)
         assert res == bytes_obj
 
