@@ -332,6 +332,12 @@ BITSHUFFLE = BLOSC_BITSHUFFLE
 DELTA = BLOSC_DELTA
 TRUNC_PREC = BLOSC_TRUNC_PREC
 
+# Split modes
+ALWAYS_SPLIT = BLOSC_ALWAYS_SPLIT
+NEVER_SPLIT = BLOSC_NEVER_SPLIT
+AUTO_SPLIT = BLOSC_AUTO_SPLIT
+FORWARD_COMPAT_SPLIT = BLOSC_FORWARD_COMPAT_SPLIT
+
 def _check_comp_length(comp_name, comp_len):
     if comp_len < BLOSC_MIN_HEADER_LENGTH:
         raise ValueError("%s cannot be less than %d bytes" % (comp_name, BLOSC_MIN_HEADER_LENGTH))
@@ -448,11 +454,6 @@ def set_releasegil(bool gilstate):
 def get_blocksize():
     return blosc_get_blocksize()
 
-# Split modes
-ALWAYS_SPLIT = BLOSC_ALWAYS_SPLIT
-NEVER_SPLIT = BLOSC_NEVER_SPLIT
-AUTO_SPLIT = BLOSC_AUTO_SPLIT
-FORWARD_COMPAT_SPLIT = BLOSC_FORWARD_COMPAT_SPLIT
 # Defaults for compression params
 cparams_dflts = {
         'compcode': BLOSC_BLOSCLZ,
