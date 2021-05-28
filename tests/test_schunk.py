@@ -11,21 +11,25 @@ import pytest
 
 import blosc2
 
+@pytest.mark.parametrize(
+    "contiguous",
+    [
+        True,
+        False
+    ]
+)
 
 @pytest.mark.parametrize(
     "cparams, dparams, nchunks",
     [
         ({"compcode": blosc2.LZ4, "clevel": 6}, {}, 0),
         ({}, {"nthreads": 4}, 1),
-        (
-            {"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 5},
-            {"schunk": None}, 5
-        ),
+        ({"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 5}, {"schunk": None}, 5),
         ({"compcode": blosc2.LZ4HC, "typesize": 4}, {}, 10),
     ],
 )
-def test_schunk_numpy(cparams, dparams, nchunks):
-    storage = {"cparams": cparams, "dparams": dparams}
+def test_schunk_numpy(contiguous, cparams, dparams, nchunks):
+    storage = {"contiguous": contiguous, "cparams": cparams, "dparams": dparams}
 
     schunk = blosc2.SChunk(**storage)
     for i in range(nchunks):
@@ -53,8 +57,17 @@ def test_schunk_numpy(cparams, dparams, nchunks):
     for i in range(nchunks):
         schunk.get_chunk(i)
 
+    for i in range(nchunks-1, -1, -1):
+        assert schunk.delete_chunk(i) == i
 
 
+@pytest.mark.parametrize(
+    "contiguous",
+    [
+        True,
+        False
+    ]
+)
 @pytest.mark.parametrize(
     "nbytes, cparams, dparams, nchunks",
     [
@@ -64,8 +77,8 @@ def test_schunk_numpy(cparams, dparams, nchunks):
         (1231, blosc2.cparams_dflts, blosc2.dparams_dflts, 10),
     ],
 )
-def test_schunk(nbytes, cparams, dparams, nchunks):
-    storage = {"cparams": cparams, "dparams": dparams}
+def test_schunk(contiguous, nbytes, cparams, dparams, nchunks):
+    storage = {"contiguous": contiguous, "cparams": cparams, "dparams": dparams}
 
     schunk = blosc2.SChunk(**storage)
     for i in range(nchunks):
@@ -84,3 +97,6 @@ def test_schunk(nbytes, cparams, dparams, nchunks):
 
     for i in range(nchunks):
         schunk.get_chunk(i)
+
+    for i in range(nchunks-1, -1, -1):
+        assert schunk.delete_chunk(i) == i

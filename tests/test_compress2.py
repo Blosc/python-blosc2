@@ -22,7 +22,7 @@ import blosc2
             {"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 5},
             {"schunk": None},
         ),
-        (numpy.arange(45, dtype=numpy.float64), {"compcode": blosc2.LZ4HC, "typesize": 9}, {}),
+        (numpy.arange(45, dtype=numpy.float64), {"compcode": blosc2.LZ4HC}, {}),
         (numpy.arange(50, dtype=numpy.int64), blosc2.cparams_dflts, blosc2.dparams_dflts),
     ],
 )

@@ -37,8 +37,10 @@ for i in range(NREP):
     out_ = np.copy(in_)
 toc = time.time()
 tcpy = (toc - tic) / NREP
-print("  Time for copying array with np.copy:                  %.3f s (%.2f GB/s))" %
-      (tcpy, ((N * 8 / tcpy) / 2 ** 30)))
+print(
+    "  Time for copying array with np.copy:                  %.3f s (%.2f GB/s))"
+    % (tcpy, ((N * 8 / tcpy) / 2 ** 30))
+)
 
 out_ = np.empty_like(in_)
 tic = time.time()
@@ -46,8 +48,10 @@ for i in range(NREP):
     np.copyto(out_, in_)
 toc = time.time()
 tcpy = (toc - tic) / NREP
-print("  Time for copying array with np.copyto and empty_like: %.3f s (%.2f GB/s))" %
-      (tcpy, ((N * 8 / tcpy) / 2 ** 30)))
+print(
+    "  Time for copying array with np.copyto and empty_like: %.3f s (%.2f GB/s))"
+    % (tcpy, ((N * 8 / tcpy) / 2 ** 30))
+)
 
 # Unlike numpy.zeros, numpy.zeros_like doens't use calloc, but instead uses
 # empty_like and explicitely assigns zeros, which is basically like calling
@@ -59,8 +63,10 @@ for i in range(NREP):
     np.copyto(out_, in_)
 toc = time.time()
 tcpy = (toc - tic) / NREP
-print("  Time for copying array with np.copyto and zeros:      %.3f s (%.2f GB/s))" %
-      (tcpy, ((N * 8 / tcpy) / 2 ** 30)))
+print(
+    "  Time for copying array with np.copyto and zeros:      %.3f s (%.2f GB/s))"
+    % (tcpy, ((N * 8 / tcpy) / 2 ** 30))
+)
 
 # Cause a page fault before the benchmark
 out_ = np.full_like(in_, fill_value=0)
@@ -69,8 +75,10 @@ for i in range(NREP):
     np.copyto(out_, in_)
 toc = time.time()
 tcpy = (toc - tic) / NREP
-print("  Time for copying array with np.copyto and full_like:  %.3f s (%.2f GB/s))" %
-      (tcpy, ((N * 8 / tcpy) / 2 ** 30)))
+print(
+    "  Time for copying array with np.copyto and full_like:  %.3f s (%.2f GB/s))"
+    % (tcpy, ((N * 8 / tcpy) / 2 ** 30))
+)
 
 out_ = np.full_like(in_, fill_value=0)
 tic = time.time()
@@ -78,8 +86,10 @@ for i in range(NREP):
     out_[...] = in_
 toc = time.time()
 tcpy = (toc - tic) / NREP
-print("  Time for copying array with numpy assignment:         %.3f s (%.2f GB/s))" %
-      (tcpy, ((N * 8 / tcpy) / 2 ** 30)))
+print(
+    "  Time for copying array with numpy assignment:         %.3f s (%.2f GB/s))"
+    % (tcpy, ((N * 8 / tcpy) / 2 ** 30))
+)
 print()
 
 for (in_, label) in arrays:
@@ -101,8 +111,11 @@ for (in_, label) in arrays:
         assert np.array_equal(in_, out)
         tc = (ctoc - ctic) / NREP
         td = (dtoc - dtic) / NREP
-        print("  Time for pack_array/unpack_array:     %.3f/%.3f s (%.2f/%.2f GB/s)) " %
-              (tc, td, ((N * 8 / tc) / 2 ** 30), ((N * 8 / td) / 2 ** 30)), end="")
+        print(
+            "  Time for pack_array/unpack_array:     %.3f/%.3f s (%.2f/%.2f GB/s)) "
+            % (tc, td, ((N * 8 / tc) / 2 ** 30), ((N * 8 / td) / 2 ** 30)),
+            end="",
+        )
         print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
 
         ctic = time.time()
@@ -118,6 +131,9 @@ for (in_, label) in arrays:
         assert np.array_equal(in_, out)
         tc = (ctoc - ctic) / NREP
         td = (dtoc - dtic) / NREP
-        print("  Time for compress/decompress:         %.3f/%.3f s (%.2f/%.2f GB/s)) " %
-              (tc, td, ((N * 8 / tc) / 2 ** 30), ((N * 8 / td) / 2 ** 30)), end="")
+        print(
+            "  Time for compress/decompress:         %.3f/%.3f s (%.2f/%.2f GB/s)) "
+            % (tc, td, ((N * 8 / tc) / 2 ** 30), ((N * 8 / td) / 2 ** 30)),
+            end="",
+        )
         print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
