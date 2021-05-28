@@ -672,10 +672,13 @@ cdef class SChunk:
         cdef uint8_t[:] typed_view_dst
         cdef uint8_t *chunk
         cdef bool needs_free
-        rc = blosc2_schunk_get_chunk(self.schunk, nchunk, &chunk, &needs_free)
-        if rc < 0:
+        cbytes = blosc2_schunk_get_chunk(self.schunk, nchunk, &chunk, &needs_free)
+        if cbytes < 0:
            raise RuntimeError("Error while getting the chunk")
-        return chunk
+        ret_chunk = PyBytes_FromStringAndSize(<char*>chunk, cbytes)
+        if needs_free:
+            free(chunk)
+        return ret_chunk
 
     def __dealloc__(self):
         blosc2_schunk_free(self.schunk)
