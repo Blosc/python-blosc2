@@ -54,7 +54,7 @@ You can install binary packages from PyPi using ``pip``:
 
 .. code-block:: console
 
-    $ pip install blosc2
+    pip install blosc2
 
 Documentation
 -------------
@@ -63,15 +63,10 @@ The documentation is here:
 
 https://python-blosc2.readthedocs.io/en/latest/
 
-Also, some examples are available on python-blosc2 wiki page:
+Also, some examples are available on:
 
 https://github.com/Blosc/python-blosc2/tree/main/examples
 
-Lastly, here is the `recording
-<https://www.youtube.com/watch?v=rilU44j_wUU&list=PLNkWzv63CorW83NY3U93gUar645jTXpJF&index=15>`_
-and the `slides
-<http://www.blosc.org/docs/haenel-ep14-compress-me-stupid.pdf>`_ from the talk
-"Compress me stupid" at the EuroPython 2014.
 
 Building
 --------
@@ -80,11 +75,11 @@ Building
 
 .. code-block:: console
 
-    $ git clone https://github.com/Blosc/python-blosc2/
-    $ cd python-blosc2
-    $ git submodule update --init --recursive
-    $ python -m pip install -r requirements.txt
-    $ python setup.py build_ext --inplace
+    git clone https://github.com/Blosc/python-blosc2/
+    cd python-blosc2
+    git submodule update --init --recursive
+    python -m pip install -r requirements.txt
+    python setup.py build_ext --inplace
 
 That's all. You can proceed with testing section now.
 
@@ -96,8 +91,8 @@ running the doctests in ``blosc/test.py``:
 
 .. code-block:: console
 
-    $ python -m pip install -r requirements-tests.txt
-    $ python -m pytest  (add -v for verbose mode)
+    python -m pip install -r requirements-tests.txt
+    python -m pytest  (add -v for verbose mode)
 
 Benchmarking
 ------------
@@ -108,86 +103,10 @@ your Blosc build:
 
 .. code-block:: console
 
-     $ PYTHONPATH=. python bench/compress_numpy.py
+     PYTHONPATH=. python bench/compress_numpy.py
 
-Just to whet your appetite, here are the results for an Apple M1 (2021)
-with 8 GB of RAM but YMMV (and will vary!)::
-
-    -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-    python-blosc2 version: 0.1.6.dev0
-    Blosc version: 2.0.0.rc2 ($Date:: 2021-05-26 #$)
-    Compressors available: ['blosclz', 'lz4', 'lz4hc', 'zlib', 'zstd']
-    Compressor library versions:
-      blosclz: 2.4.0
-      lz4: 1.9.3
-      lz4hc: 1.9.3
-      zlib: 1.2.11.zlib-ng
-      zstd: 1.5.0
-    Python version: 3.9.5 (default, May  3 2021, 19:12:05)
-    [Clang 12.0.5 (clang-1205.0.22.9)]
-    Platform: Darwin-20.4.0-arm64 (Darwin Kernel Version 20.4.0: Fri Mar  5 01:14:02 PST 2021; root:xnu-7195.101.1~3/RELEASE_ARM64_T8101)
-    Processor: arm
-    Byte-ordering: little
-    Detected cores: 8
-    Number of threads to use by default: 8
-    -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-    Creating NumPy arrays with 10**8 int64/float64 elements:
-      *** np.copyto() *** Time for memcpy():	0.030 s	(25.04 GB/s)
-
-    Times for compressing/decompressing:
-
-    *** the arange linear distribution ***
-      *** blosclz, noshuffle  ***  0.253 s (2.95 GB/s) / 0.109 s (6.83 GB/s)	cr:   2.0x
-      *** blosclz, shuffle    ***  0.036 s (20.44 GB/s) / 0.024 s (31.08 GB/s)	cr: 469.7x
-      *** blosclz, bitshuffle ***  0.123 s (6.04 GB/s) / 0.238 s (3.13 GB/s)	cr: 488.2x
-      *** lz4    , noshuffle  ***  0.332 s (2.24 GB/s) / 0.072 s (10.39 GB/s)	cr:   2.0x
-      *** lz4    , shuffle    ***  0.035 s (21.18 GB/s) / 0.030 s (24.93 GB/s)	cr: 279.2x
-      *** lz4    , bitshuffle ***  0.126 s (5.91 GB/s) / 0.239 s (3.12 GB/s)	cr:  87.7x
-      *** lz4hc  , noshuffle  ***  2.365 s (0.32 GB/s) / 0.080 s (9.35 GB/s)	cr:   2.0x
-      *** lz4hc  , shuffle    ***  0.136 s (5.48 GB/s) / 0.047 s (15.89 GB/s)	cr: 155.9x
-      *** lz4hc  , bitshuffle ***  0.545 s (1.37 GB/s) / 0.168 s (4.42 GB/s)	cr: 239.5x
-      *** zlib   , noshuffle  ***  4.875 s (0.15 GB/s) / 0.279 s (2.67 GB/s)	cr:   5.3x
-      *** zlib   , shuffle    ***  0.213 s (3.50 GB/s) / 0.091 s (8.20 GB/s)	cr: 273.8x
-      *** zlib   , bitshuffle ***  0.344 s (2.16 GB/s) / 0.213 s (3.50 GB/s)	cr: 457.9x
-      *** zstd   , noshuffle  ***  2.961 s (0.25 GB/s) / 0.168 s (4.44 GB/s)	cr:   7.9x
-      *** zstd   , shuffle    ***  0.265 s (2.82 GB/s) / 0.035 s (21.46 GB/s)	cr: 644.9x
-      *** zstd   , bitshuffle ***  0.392 s (1.90 GB/s) / 0.158 s (4.73 GB/s)	cr: 985.6x
-
-    *** the linspace linear distribution ***
-      *** blosclz, noshuffle  ***  0.372 s (2.00 GB/s) / 0.029 s (25.42 GB/s)	cr:   1.0x
-      *** blosclz, shuffle    ***  0.065 s (11.46 GB/s) / 0.035 s (21.13 GB/s)	cr:  33.5x
-      *** blosclz, bitshuffle ***  0.148 s (5.03 GB/s) / 0.250 s (2.98 GB/s)	cr:  55.4x
-      *** lz4    , noshuffle  ***  0.109 s (6.84 GB/s) / 0.037 s (19.89 GB/s)	cr:   1.0x
-      *** lz4    , shuffle    ***  0.052 s (14.27 GB/s) / 0.038 s (19.65 GB/s)	cr:  40.5x
-      *** lz4    , bitshuffle ***  0.138 s (5.42 GB/s) / 0.250 s (2.99 GB/s)	cr:  59.5x
-      *** lz4hc  , noshuffle  ***  3.962 s (0.19 GB/s) / 0.070 s (10.61 GB/s)	cr:   1.1x
-      *** lz4hc  , shuffle    ***  0.366 s (2.04 GB/s) / 0.037 s (19.99 GB/s)	cr:  44.7x
-      *** lz4hc  , bitshuffle ***  0.764 s (0.97 GB/s) / 0.159 s (4.69 GB/s)	cr:  58.0x
-      *** zlib   , noshuffle  ***  3.290 s (0.23 GB/s) / 0.502 s (1.49 GB/s)	cr:   1.6x
-      *** zlib   , shuffle    ***  0.403 s (1.85 GB/s) / 0.103 s (7.23 GB/s)	cr:  44.6x
-      *** zlib   , bitshuffle ***  0.533 s (1.40 GB/s) / 0.228 s (3.27 GB/s)	cr:  66.9x
-      *** zstd   , noshuffle  ***  3.747 s (0.20 GB/s) / 0.192 s (3.89 GB/s)	cr:   1.2x
-      *** zstd   , shuffle    ***  0.483 s (1.54 GB/s) / 0.057 s (13.17 GB/s)	cr:  70.5x
-      *** zstd   , bitshuffle ***  0.634 s (1.17 GB/s) / 0.204 s (3.65 GB/s)	cr:  51.2x
-
-    *** the random distribution ***
-      *** blosclz, noshuffle  ***  0.410 s (1.82 GB/s) / 0.135 s (5.50 GB/s)	cr:   2.1x
-      *** blosclz, shuffle    ***  0.087 s (8.53 GB/s) / 0.029 s (25.29 GB/s)	cr:   4.0x
-      *** blosclz, bitshuffle ***  0.169 s (4.40 GB/s) / 0.236 s (3.15 GB/s)	cr:   4.0x
-      *** lz4    , noshuffle  ***  0.359 s (2.08 GB/s) / 0.060 s (12.50 GB/s)	cr:   2.1x
-      *** lz4    , shuffle    ***  0.075 s (9.88 GB/s) / 0.029 s (25.40 GB/s)	cr:   4.0x
-      *** lz4    , bitshuffle ***  0.155 s (4.81 GB/s) / 0.239 s (3.12 GB/s)	cr:   4.6x
-      *** lz4hc  , noshuffle  ***  2.053 s (0.36 GB/s) / 0.045 s (16.71 GB/s)	cr:   2.8x
-      *** lz4hc  , shuffle    ***  0.797 s (0.93 GB/s) / 0.051 s (14.63 GB/s)	cr:   4.0x
-      *** lz4hc  , bitshuffle ***  0.795 s (0.94 GB/s) / 0.177 s (4.21 GB/s)	cr:   4.5x
-      *** zlib   , noshuffle  ***  5.562 s (0.13 GB/s) / 0.367 s (2.03 GB/s)	cr:   3.2x
-      *** zlib   , shuffle    ***  0.934 s (0.80 GB/s) / 0.148 s (5.03 GB/s)	cr:   4.7x
-      *** zlib   , bitshuffle ***  0.959 s (0.78 GB/s) / 0.262 s (2.85 GB/s)	cr:   4.6x
-      *** zstd   , noshuffle  ***  3.841 s (0.19 GB/s) / 0.228 s (3.27 GB/s)	cr:   4.0x
-      *** zstd   , shuffle    ***  1.078 s (0.69 GB/s) / 0.069 s (10.76 GB/s)	cr:   4.4x
-      *** zstd   , bitshuffle ***  1.044 s (0.71 GB/s) / 0.201 s (3.71 GB/s)	cr:   4.6x
-
-And here for an Intel box (i9-10940X @ 3.30GHz) with 64 GB RAM running Clear Linux::
+Just to whet your appetite, here are some speed figures for an Intel box (i9-10940X @ 3.30GHz)
+with 64 GB RAM running Clear Linux::
 
     -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
     python-blosc2 version: 0.1.7
@@ -264,7 +183,86 @@ And here for an Intel box (i9-10940X @ 3.30GHz) with 64 GB RAM running Clear Lin
       *** zstd   , shuffle    ***  0.874 s (0.85 GB/s) / 0.039 s (19.01 GB/s)	cr:   4.4x
       *** zstd   , bitshuffle ***  0.858 s (0.87 GB/s) / 0.054 s (13.71 GB/s)	cr:   4.6x
 
-As can be seen, in some situations it is perfectly possible to go faster than a plain memcpy().
+
+For the matter of comparision, here are the results for an ARM box; an Apple MacBook Air M1 (2021)
+with 8 GB of RAM::
+
+    -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+    python-blosc2 version: 0.1.6.dev0
+    Blosc version: 2.0.0.rc2 ($Date:: 2021-05-26 #$)
+    Compressors available: ['blosclz', 'lz4', 'lz4hc', 'zlib', 'zstd']
+    Compressor library versions:
+      blosclz: 2.4.0
+      lz4: 1.9.3
+      lz4hc: 1.9.3
+      zlib: 1.2.11.zlib-ng
+      zstd: 1.5.0
+    Python version: 3.9.5 (default, May  3 2021, 19:12:05)
+    [Clang 12.0.5 (clang-1205.0.22.9)]
+    Platform: Darwin-20.4.0-arm64 (Darwin Kernel Version 20.4.0: Fri Mar  5 01:14:02 PST 2021; root:xnu-7195.101.1~3/RELEASE_ARM64_T8101)
+    Processor: arm
+    Byte-ordering: little
+    Detected cores: 8
+    Number of threads to use by default: 8
+    -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+    Creating NumPy arrays with 10**8 int64/float64 elements:
+      *** np.copyto() *** Time for memcpy():	0.030 s	(25.04 GB/s)
+
+    Times for compressing/decompressing:
+
+    *** the arange linear distribution ***
+      *** blosclz, noshuffle  ***  0.253 s (2.95 GB/s) / 0.109 s (6.83 GB/s)	cr:   2.0x
+      *** blosclz, shuffle    ***  0.036 s (20.44 GB/s) / 0.024 s (31.08 GB/s)	cr: 469.7x
+      *** blosclz, bitshuffle ***  0.123 s (6.04 GB/s) / 0.238 s (3.13 GB/s)	cr: 488.2x
+      *** lz4    , noshuffle  ***  0.332 s (2.24 GB/s) / 0.072 s (10.39 GB/s)	cr:   2.0x
+      *** lz4    , shuffle    ***  0.035 s (21.18 GB/s) / 0.030 s (24.93 GB/s)	cr: 279.2x
+      *** lz4    , bitshuffle ***  0.126 s (5.91 GB/s) / 0.239 s (3.12 GB/s)	cr:  87.7x
+      *** lz4hc  , noshuffle  ***  2.365 s (0.32 GB/s) / 0.080 s (9.35 GB/s)	cr:   2.0x
+      *** lz4hc  , shuffle    ***  0.136 s (5.48 GB/s) / 0.047 s (15.89 GB/s)	cr: 155.9x
+      *** lz4hc  , bitshuffle ***  0.545 s (1.37 GB/s) / 0.168 s (4.42 GB/s)	cr: 239.5x
+      *** zlib   , noshuffle  ***  4.875 s (0.15 GB/s) / 0.279 s (2.67 GB/s)	cr:   5.3x
+      *** zlib   , shuffle    ***  0.213 s (3.50 GB/s) / 0.091 s (8.20 GB/s)	cr: 273.8x
+      *** zlib   , bitshuffle ***  0.344 s (2.16 GB/s) / 0.213 s (3.50 GB/s)	cr: 457.9x
+      *** zstd   , noshuffle  ***  2.961 s (0.25 GB/s) / 0.168 s (4.44 GB/s)	cr:   7.9x
+      *** zstd   , shuffle    ***  0.265 s (2.82 GB/s) / 0.035 s (21.46 GB/s)	cr: 644.9x
+      *** zstd   , bitshuffle ***  0.392 s (1.90 GB/s) / 0.158 s (4.73 GB/s)	cr: 985.6x
+
+    *** the linspace linear distribution ***
+      *** blosclz, noshuffle  ***  0.372 s (2.00 GB/s) / 0.029 s (25.42 GB/s)	cr:   1.0x
+      *** blosclz, shuffle    ***  0.065 s (11.46 GB/s) / 0.035 s (21.13 GB/s)	cr:  33.5x
+      *** blosclz, bitshuffle ***  0.148 s (5.03 GB/s) / 0.250 s (2.98 GB/s)	cr:  55.4x
+      *** lz4    , noshuffle  ***  0.109 s (6.84 GB/s) / 0.037 s (19.89 GB/s)	cr:   1.0x
+      *** lz4    , shuffle    ***  0.052 s (14.27 GB/s) / 0.038 s (19.65 GB/s)	cr:  40.5x
+      *** lz4    , bitshuffle ***  0.138 s (5.42 GB/s) / 0.250 s (2.99 GB/s)	cr:  59.5x
+      *** lz4hc  , noshuffle  ***  3.962 s (0.19 GB/s) / 0.070 s (10.61 GB/s)	cr:   1.1x
+      *** lz4hc  , shuffle    ***  0.366 s (2.04 GB/s) / 0.037 s (19.99 GB/s)	cr:  44.7x
+      *** lz4hc  , bitshuffle ***  0.764 s (0.97 GB/s) / 0.159 s (4.69 GB/s)	cr:  58.0x
+      *** zlib   , noshuffle  ***  3.290 s (0.23 GB/s) / 0.502 s (1.49 GB/s)	cr:   1.6x
+      *** zlib   , shuffle    ***  0.403 s (1.85 GB/s) / 0.103 s (7.23 GB/s)	cr:  44.6x
+      *** zlib   , bitshuffle ***  0.533 s (1.40 GB/s) / 0.228 s (3.27 GB/s)	cr:  66.9x
+      *** zstd   , noshuffle  ***  3.747 s (0.20 GB/s) / 0.192 s (3.89 GB/s)	cr:   1.2x
+      *** zstd   , shuffle    ***  0.483 s (1.54 GB/s) / 0.057 s (13.17 GB/s)	cr:  70.5x
+      *** zstd   , bitshuffle ***  0.634 s (1.17 GB/s) / 0.204 s (3.65 GB/s)	cr:  51.2x
+
+    *** the random distribution ***
+      *** blosclz, noshuffle  ***  0.410 s (1.82 GB/s) / 0.135 s (5.50 GB/s)	cr:   2.1x
+      *** blosclz, shuffle    ***  0.087 s (8.53 GB/s) / 0.029 s (25.29 GB/s)	cr:   4.0x
+      *** blosclz, bitshuffle ***  0.169 s (4.40 GB/s) / 0.236 s (3.15 GB/s)	cr:   4.0x
+      *** lz4    , noshuffle  ***  0.359 s (2.08 GB/s) / 0.060 s (12.50 GB/s)	cr:   2.1x
+      *** lz4    , shuffle    ***  0.075 s (9.88 GB/s) / 0.029 s (25.40 GB/s)	cr:   4.0x
+      *** lz4    , bitshuffle ***  0.155 s (4.81 GB/s) / 0.239 s (3.12 GB/s)	cr:   4.6x
+      *** lz4hc  , noshuffle  ***  2.053 s (0.36 GB/s) / 0.045 s (16.71 GB/s)	cr:   2.8x
+      *** lz4hc  , shuffle    ***  0.797 s (0.93 GB/s) / 0.051 s (14.63 GB/s)	cr:   4.0x
+      *** lz4hc  , bitshuffle ***  0.795 s (0.94 GB/s) / 0.177 s (4.21 GB/s)	cr:   4.5x
+      *** zlib   , noshuffle  ***  5.562 s (0.13 GB/s) / 0.367 s (2.03 GB/s)	cr:   3.2x
+      *** zlib   , shuffle    ***  0.934 s (0.80 GB/s) / 0.148 s (5.03 GB/s)	cr:   4.7x
+      *** zlib   , bitshuffle ***  0.959 s (0.78 GB/s) / 0.262 s (2.85 GB/s)	cr:   4.6x
+      *** zstd   , noshuffle  ***  3.841 s (0.19 GB/s) / 0.228 s (3.27 GB/s)	cr:   4.0x
+      *** zstd   , shuffle    ***  1.078 s (0.69 GB/s) / 0.069 s (10.76 GB/s)	cr:   4.4x
+      *** zstd   , bitshuffle ***  1.044 s (0.71 GB/s) / 0.201 s (3.71 GB/s)	cr:   4.6x
+
+
+As can be seen, is perfectly possible for python-blosc2 to go faster than a plain memcpy().
 
 Start using compression in your data workflows and feel the experience of doing more with less!
 
