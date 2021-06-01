@@ -283,8 +283,8 @@ blosc@googlegroups.com
 
 http://groups.google.es/group/blosc
 
-Twitter fee
------------
+Twitter
+-------
 
 Please follow @Blosc2 to get informed about the latest developments.
 
