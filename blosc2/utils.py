@@ -453,6 +453,7 @@ def set_nthreads(nthreads):
     >>> blosc2.set_nthreads(1)
     2
     """
+    blosc2.nthreads = nthreads
     return blosc2_ext.set_nthreads(nthreads)
 
 
