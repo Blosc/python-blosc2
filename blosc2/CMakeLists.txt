@@ -6,6 +6,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(BLOSC_INSTALL ON)
 add_subdirectory(c-blosc2)
 include_directories("${CMAKE_CURRENT_SOURCE_DIR}/c-blosc2/blosc")
+include_directories("${CMAKE_CURRENT_SOURCE_DIR}/c-blosc2/include")
 
 
 add_cython_target(blosc2_ext blosc2_ext.pyx)
