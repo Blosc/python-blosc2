@@ -15,13 +15,46 @@ on:
 jobs:
 
   build_wheels:
-    name: Build wheels on ${{ matrix.os }}
+    name: Build wheels on ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     # Only build wheels when tagging (typically a release)
 #    if: startsWith(github.event.ref, 'refs/tags')
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+   #     os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - name: Ubuntu
+            os: ubuntu-latest
+
+          - name: Ubuntu + Plugins
+            os: ubuntu-latest
+            cmake-args: -DBUILD_PLUGINS=ON
+
+          - name: Ubuntu Lite
+            os: ubuntu-latest
+            cmake-args: -DBUILD_LITE=ON
+
+          - name: Windows
+            os: windows-latest
+
+          - name: Windows + Plugins
+            os: windows-latest
+            cmake-args: -DBUILD_PLUGINS=ON
+
+          - name: Windows Lite
+            os: windows-latest
+            cmake-args: -DBUILD_LITE=ON
+
+          - name: macos
+            os: macos-latest
+
+          - name: macos + Plugins
+            os: macos-latest
+            cmake-args: -DBUILD_PLUGINS=ON
+
+          - name: macos Lite
+            os: macos-latest
+            cmake-args: -DBUILD_LITE=ON
 
     steps:
       - name: Checkout repo
