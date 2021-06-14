@@ -11,7 +11,13 @@ include_directories("${CMAKE_CURRENT_SOURCE_DIR}/c-blosc2/include")
 add_cython_target(blosc2_ext blosc2_ext.pyx)
 add_library(blosc2_ext MODULE ${blosc2_ext})
 
-target_link_libraries(blosc2_ext blosc2_plugins_static)
+if(BUILD_PLUGINS)
+    target_link_libraries(blosc2_ext blosc2_plugins_static)
+elseif(BUILD_LITE)
+    target_link_libraries(blosc2_ext blosc2_lite_static)
+else()
+    target_link_libraries(blosc2_ext blosc2_static)
+endif()
 
 python_extension_module(blosc2_ext)
 
