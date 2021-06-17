@@ -763,3 +763,9 @@ def decompress2(src, dst=None, **kwargs):
         If dst is not None and its length is 0
     """
     return blosc2_ext.decompress2(src, dst, **kwargs)
+
+
+# Directory utilities
+def remove_dir(path):
+    path = path.encode("utf-8") if isinstance(path, str) else path
+    return blosc2_ext.remove_dir(path)
