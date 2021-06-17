@@ -11,14 +11,8 @@ import pytest
 
 import blosc2
 
-@pytest.mark.parametrize(
-    "contiguous",
-    [
-        True,
-        False
-    ]
-)
 
+@pytest.mark.parametrize("contiguous", [True, False])
 @pytest.mark.parametrize(
     "cparams, dparams, nchunks",
     [
@@ -57,17 +51,11 @@ def test_schunk_numpy(contiguous, cparams, dparams, nchunks):
     for i in range(nchunks):
         schunk.get_chunk(i)
 
-    for i in range(nchunks-1, -1, -1):
+    for i in range(nchunks - 1, -1, -1):
         assert schunk.delete_chunk(i) == i
 
 
-@pytest.mark.parametrize(
-    "contiguous",
-    [
-        True,
-        False
-    ]
-)
+@pytest.mark.parametrize("contiguous", [True, False])
 @pytest.mark.parametrize(
     "nbytes, cparams, dparams, nchunks",
     [
@@ -98,5 +86,5 @@ def test_schunk(contiguous, nbytes, cparams, dparams, nchunks):
     for i in range(nchunks):
         schunk.get_chunk(i)
 
-    for i in range(nchunks-1, -1, -1):
+    for i in range(nchunks - 1, -1, -1):
         assert schunk.delete_chunk(i) == i

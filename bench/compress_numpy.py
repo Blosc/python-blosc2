@@ -13,7 +13,6 @@ compression through different compressors in blosc2.
 
 from __future__ import print_function
 
-import ctypes
 import time
 
 import numpy as np

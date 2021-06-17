@@ -4,6 +4,8 @@
 #       Author:  The Blosc development team - blosc@blosc.org
 #
 ########################################################################
+
+
 from cpython cimport (
     Py_buffer,
     PyBUF_SIMPLE,
@@ -13,8 +15,11 @@ from cpython cimport (
     PyObject_GetBuffer,
 )
 from libc.stdlib cimport free, malloc
+from libc.string cimport strcpy
 from libcpp cimport bool
 
+
+cdef extern int blosc2_remove_dir(const char* dir_path)
 
 cdef extern from "<stdint.h>":
     ctypedef   signed char  int8_t
@@ -117,6 +122,9 @@ cdef extern from "blosc2.h":
                                char** version)
 
     int blosc_free_resources()
+
+    void blosc_cbuffer_sizes(const void* cbuffer, size_t* nbytes,
+                             size_t* cbytes, size_t* blocksize)
 
     int blosc2_cbuffer_sizes(const void* cbuffer, int32_t* nbytes,
                              int32_t* cbytes, int32_t* blocksize)
@@ -342,7 +350,6 @@ def _check_comp_length(comp_name, comp_len):
     if comp_len < BLOSC_MIN_HEADER_LENGTH:
         raise ValueError("%s cannot be less than %d bytes" % (comp_name, BLOSC_MIN_HEADER_LENGTH))
 
-
 cpdef compress(src, size_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE, cname='blosclz'):
     set_compressor(cname)
     cdef int len_src = len(src)
@@ -452,6 +459,13 @@ def set_releasegil(bool gilstate):
     return oldstate
 
 def get_blocksize():
+    """ Get the internal blocksize to be used during compression.
+
+    Returns
+    -------
+    out : int
+        The size in bytes of the internal block size.
+    """
     return blosc_get_blocksize()
 
 # Defaults for compression params
@@ -594,18 +608,13 @@ storage_dflts = {
 
 
 cdef create_storage(blosc2_storage *storage, kwargs):
+    #The urlpath is not initialized here, it has to be initialized elsewhere
     contiguous = kwargs.get('contiguous', storage_dflts['contiguous'])
-    urlpath = kwargs.get('urlpath', storage_dflts['urlpath'])
-    urlpath = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
 
     create_cparams_from_kwargs(storage.cparams, kwargs.get('cparams', None))
     create_dparams_from_kwargs(storage.dparams, kwargs.get('dparams', None))
 
     storage.contiguous = contiguous
-    if urlpath is None:
-        storage.urlpath = NULL
-    else:
-        storage.urlpath = <char*> urlpath
 
     storage.io = NULL
     # TODO: support the next ones in the future
@@ -623,8 +632,20 @@ cdef class SChunk:
         storage.cparams = &cparams
         storage.dparams = &dparams
 
+        urlpath = kwargs.get('urlpath', storage_dflts['urlpath'])
+        urlpath = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
+        if urlpath is None:
+            storage.urlpath = NULL
+        else:
+            storage.urlpath = <char *> malloc(sizeof(urlpath) + 1)
+            strcpy(storage.urlpath, urlpath)
+            print(storage.urlpath)
+
         create_storage(&storage, kwargs)
         self.schunk = blosc2_schunk_new(&storage)
+        if self.schunk == NULL:
+            raise RuntimeError("Could not create the Schunk")
+        free(storage.urlpath)
 
     def append_buffer(self, data):
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
@@ -689,3 +710,7 @@ cdef class SChunk:
 
     def __dealloc__(self):
         blosc2_schunk_free(self.schunk)
+
+
+def remove_dir(path):
+    return blosc2_remove_dir(path)
