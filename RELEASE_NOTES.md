@@ -1,8 +1,13 @@
 # Release notes
 
-## Changes from python-blosc2 0.1.7 to python-blosc2 0.1.8
+## Changes from python-blosc2 0.1.8 to python-blosc2 0.1.9
 
 XXX version-specific blurb XXX
+
+## Changes from python-blosc2 0.1.7 to python-blosc2 0.1.8
+
+* New versions of Blosc2 library added: plugins and lite.
+
 
 ## Changes from python-blosc2 0.1.5 to python-blosc2 0.1.7
 
