@@ -15,7 +15,6 @@ from cpython cimport (
     PyObject_GetBuffer,
 )
 from libc.stdlib cimport free, malloc
-from libc.string cimport strcpy
 from libcpp cimport bool
 
 
@@ -637,15 +636,12 @@ cdef class SChunk:
         if urlpath is None:
             storage.urlpath = NULL
         else:
-            storage.urlpath = <char *> malloc(sizeof(urlpath) + 1)
-            strcpy(storage.urlpath, urlpath)
-            print(storage.urlpath)
+            storage.urlpath = <char *> urlpath
 
         create_storage(&storage, kwargs)
         self.schunk = blosc2_schunk_new(&storage)
         if self.schunk == NULL:
             raise RuntimeError("Could not create the Schunk")
-        free(storage.urlpath)
 
     def append_buffer(self, data):
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
@@ -707,6 +703,15 @@ cdef class SChunk:
         if rc < 0:
             raise RuntimeError("Could not delete the desired chunk")
         return rc
+
+    def insert_chunk(self, nchunk, chunk):
+        cdef const uint8_t[:] typed_view_chunk
+        mem_view_chunk = memoryview(chunk)
+        typed_view_chunk = mem_view_chunk.cast('B')
+        _check_comp_length('chunk', len(typed_view_chunk))
+        rc = blosc2_schunk_insert_chunk(self.schunk, nchunk, &typed_view_chunk[0], True)
+        if rc < 0:
+            raise RuntimeError("Could not insert the desired chunk")
 
     def __dealloc__(self):
         blosc2_schunk_free(self.schunk)
