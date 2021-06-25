@@ -4,13 +4,13 @@
 #       Author:  The Blosc development team - blosc@blosc.org
 #
 ########################################################################
-import os
 import random
 
 import numpy
 import pytest
 
 import blosc2
+from tests import utilities
 
 
 @pytest.mark.parametrize("contiguous", [True, False])
@@ -25,12 +25,13 @@ import blosc2
     ],
 )
 def test_schunk_delete_numpy(contiguous, urlpath, nchunks, ndeletes):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": {"nthreads": 2}, "dparams": {"nthreads": 2}}
-    if urlpath is not None:
-        if not contiguous:
-            blosc2.remove_dir(storage["urlpath"])
-        elif os.path.exists(storage["urlpath"]):
-            os.remove(storage["urlpath"])
+    storage = {
+        "contiguous": contiguous,
+        "urlpath": urlpath,
+        "cparams": {"nthreads": 2},
+        "dparams": {"nthreads": 2},
+    }
+    utilities.remove_schunk(contiguous, urlpath)
 
     schunk = blosc2.SChunk(**storage)
     for i in range(nchunks):
@@ -41,7 +42,7 @@ def test_schunk_delete_numpy(contiguous, urlpath, nchunks, ndeletes):
     for i in range(ndeletes):
         pos = random.randint(0, nchunks - 1)
         if pos != (nchunks - 1):
-            buff = schunk.decompress_chunk(pos+1)
+            buff = schunk.decompress_chunk(pos + 1)
         nchunks_ = schunk.delete_chunk(pos)
         assert nchunks_ == (nchunks - 1)
         if pos != (nchunks - 1):
@@ -52,12 +53,7 @@ def test_schunk_delete_numpy(contiguous, urlpath, nchunks, ndeletes):
     for i in range(nchunks):
         schunk.decompress_chunk(i)
 
-
-    if urlpath is not None:
-        if not contiguous:
-            blosc2.remove_dir(storage["urlpath"])
-        elif os.path.exists(storage["urlpath"]):
-            os.remove(storage["urlpath"])
+    utilities.remove_schunk(contiguous, urlpath)
 
 
 @pytest.mark.parametrize("contiguous", [True, False])
@@ -73,12 +69,7 @@ def test_schunk_delete_numpy(contiguous, urlpath, nchunks, ndeletes):
 )
 def test_schunk_delete(contiguous, urlpath, nchunks, ndeletes):
     storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": {}, "dparams": {}}
-
-    if urlpath is not None:
-        if not contiguous:
-            blosc2.remove_dir(storage["urlpath"])
-        elif os.path.exists(storage["urlpath"]):
-            os.remove(storage["urlpath"])
+    utilities.remove_schunk(contiguous, urlpath)
 
     schunk = blosc2.SChunk(**storage)
     nbytes = 23401
@@ -101,8 +92,4 @@ def test_schunk_delete(contiguous, urlpath, nchunks, ndeletes):
     for i in range(nchunks):
         schunk.decompress_chunk(i)
 
-    if urlpath is not None:
-        if not contiguous:
-            blosc2.remove_dir(storage["urlpath"])
-        elif os.path.exists(storage["urlpath"]):
-            os.remove(storage["urlpath"])
+    utilities.remove_schunk(contiguous, urlpath)
