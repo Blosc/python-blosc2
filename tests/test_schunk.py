@@ -4,12 +4,12 @@
 #       Author:  The Blosc development team - blosc@blosc.org
 #
 ########################################################################
-import os
 
 import numpy
 import pytest
 
 import blosc2
+from tests import utilities
 
 
 @pytest.mark.parametrize("contiguous", [True, False])
@@ -25,11 +25,8 @@ import blosc2
 )
 def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
     storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
-    if urlpath is not None:
-        if not contiguous:
-            blosc2.remove_dir(storage["urlpath"])
-        elif os.path.exists(storage["urlpath"]):
-            os.remove(storage["urlpath"])
+    utilities.remove_schunk(contiguous, urlpath)
+
     schunk = blosc2.SChunk(**storage)
     for i in range(nchunks):
         buffer = i * numpy.arange(200 * 1000)
@@ -56,11 +53,7 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
     for i in range(nchunks):
         schunk.get_chunk(i)
 
-    if urlpath is not None:
-        if not contiguous:
-            blosc2.remove_dir(storage["urlpath"])
-        elif os.path.exists(storage["urlpath"]):
-            os.remove(storage["urlpath"])
+    utilities.remove_schunk(contiguous, urlpath)
 
 
 @pytest.mark.parametrize("contiguous", [True, False])
@@ -77,11 +70,7 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
 def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):
     storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
 
-    if urlpath is not None:
-        if not contiguous:
-            blosc2.remove_dir(storage["urlpath"])
-        elif os.path.exists(storage["urlpath"]):
-            os.remove(storage["urlpath"])
+    utilities.remove_schunk(contiguous, urlpath)
 
     schunk = blosc2.SChunk(**storage)
     for i in range(nchunks):
@@ -101,8 +90,4 @@ def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):
     for i in range(nchunks):
         schunk.get_chunk(i)
 
-    if urlpath is not None:
-        if not contiguous:
-            blosc2.remove_dir(storage["urlpath"])
-        elif os.path.exists(storage["urlpath"]):
-            os.remove(storage["urlpath"])
+    utilities.remove_schunk(contiguous, urlpath)

@@ -10,11 +10,11 @@ from cpython cimport (
     Py_buffer,
     PyBUF_SIMPLE,
     PyBuffer_Release,
-    PyBytes_AsString,
     PyBytes_FromStringAndSize,
     PyObject_GetBuffer,
 )
-from libc.stdlib cimport free, malloc
+from libc.stdlib cimport free, malloc, realloc
+from libc.string cimport memcpy
 from libcpp cimport bool
 
 
@@ -710,6 +710,32 @@ cdef class SChunk:
         typed_view_chunk = mem_view_chunk.cast('B')
         _check_comp_length('chunk', len(typed_view_chunk))
         rc = blosc2_schunk_insert_chunk(self.schunk, nchunk, &typed_view_chunk[0], True)
+        if rc < 0:
+            raise RuntimeError("Could not insert the desired chunk")
+
+    def insert_buffer(self, nchunk, buffer, copy):
+        cdef blosc2_context *cctx
+        cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+        PyObject_GetBuffer(buffer, buf, PyBUF_SIMPLE)
+        cdef int size
+        cdef int len_chunk = buf.len + BLOSC_MAX_OVERHEAD
+        cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)
+        with nogil:
+            cctx = blosc2_create_cctx(self.schunk.storage.cparams[0])
+            size = blosc2_compress_ctx(cctx, buf.buf, buf.len, chunk, len_chunk)
+        PyBuffer_Release(buf)
+        free(buf)
+        if size < 0:
+            raise RuntimeError("Could not compress the data")
+        elif size == 0:
+            free(chunk)
+            raise RuntimeError("The result could not fit ")
+
+        chunk = <uint8_t*> realloc(chunk, size)
+        _check_comp_length('chunk', size)
+        rc = blosc2_schunk_insert_chunk(self.schunk, nchunk, chunk, copy)
+        if copy:
+            free(chunk)
         if rc < 0:
             raise RuntimeError("Could not insert the desired chunk")
 

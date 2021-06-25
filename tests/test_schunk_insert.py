@@ -4,13 +4,13 @@
 #       Author:  The Blosc development team - blosc@blosc.org
 #
 ########################################################################
-import os
 import random
 
 import numpy
 import pytest
 
 import blosc2
+from tests import utilities
 
 
 @pytest.mark.parametrize("contiguous", [True, False])
@@ -25,13 +25,16 @@ import blosc2
     ],
 )
 @pytest.mark.parametrize("ninserts", [0, 1, 17])
-def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": {}, "dparams": {}}
-    if urlpath is not None:
-        if not contiguous:
-            blosc2.remove_dir(storage["urlpath"])
-        elif os.path.exists(storage["urlpath"]):
-            os.remove(storage["urlpath"])
+@pytest.mark.parametrize("copy", [True, False])
+@pytest.mark.parametrize("create_chunk", [True, False])
+def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts, copy, create_chunk):
+    storage = {
+        "contiguous": contiguous,
+        "urlpath": urlpath,
+        "cparams": {"nthreads": 2},
+        "dparams": {"nthreads": 2},
+    }
+    utilities.remove_schunk(contiguous, urlpath)
 
     schunk = blosc2.SChunk(**storage)
     for i in range(nchunks):
@@ -42,9 +45,11 @@ def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts):
     for i in range(ninserts):
         pos = random.randint(0, nchunks + i)
         buffer = pos * numpy.arange(200 * 1000)
-        chunk = blosc2.compress2(buffer)
-        schunk.insert_chunk(pos, chunk)
-
+        if create_chunk:
+            chunk = blosc2.compress2(buffer)
+            schunk.insert_chunk(pos, chunk)
+        else:
+            schunk.insert_buffer(pos, buffer, copy)
         chunk_ = schunk.decompress_chunk(pos)
         bytes_obj = buffer.tobytes()
         assert chunk_ == bytes_obj
@@ -53,21 +58,10 @@ def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts):
         schunk.decompress_chunk(pos, dest)
         assert numpy.array_equal(buffer, dest)
 
-        schunk.decompress_chunk(pos, memoryview(dest))
-        assert numpy.array_equal(buffer, dest)
-
-        dest = bytearray(buffer)
-        schunk.decompress_chunk(pos, dest)
-        assert dest == bytes_obj
-
     for i in range(nchunks + ninserts):
         schunk.decompress_chunk(i)
 
-    if urlpath is not None:
-        if not contiguous:
-            blosc2.remove_dir(storage["urlpath"])
-        elif os.path.exists(storage["urlpath"]):
-            os.remove(storage["urlpath"])
+    utilities.remove_schunk(contiguous, urlpath)
 
 
 @pytest.mark.parametrize("contiguous", [True, False])
@@ -82,14 +76,17 @@ def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts):
     ],
 )
 @pytest.mark.parametrize("ninserts", [0, 1, 17])
-def test_insert_operations(contiguous, urlpath, nchunks, ninserts):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": {}, "dparams": {}}
+@pytest.mark.parametrize("copy", [True, False])
+@pytest.mark.parametrize("create_chunk", [True, False])
+def test_insert(contiguous, urlpath, nchunks, ninserts, copy, create_chunk):
+    storage = {
+        "contiguous": contiguous,
+        "urlpath": urlpath,
+        "cparams": {"nthreads": 2},
+        "dparams": {"nthreads": 2},
+    }
 
-    if urlpath is not None:
-        if not contiguous:
-            blosc2.remove_dir(storage["urlpath"])
-        elif os.path.exists(storage["urlpath"]):
-            os.remove(storage["urlpath"])
+    utilities.remove_schunk(contiguous, urlpath)
 
     schunk = blosc2.SChunk(**storage)
     nbytes = 23401
@@ -101,21 +98,15 @@ def test_insert_operations(contiguous, urlpath, nchunks, ninserts):
     for i in range(ninserts):
         pos = random.randint(0, nchunks + i)
         bytes_obj = b"i " * nbytes
-        chunk = blosc2.compress2(bytes_obj)
-        schunk.insert_chunk(pos, chunk)
-
+        if create_chunk:
+            chunk = blosc2.compress2(bytes_obj)
+            schunk.insert_chunk(pos, chunk)
+        else:
+            schunk.insert_buffer(pos, bytes_obj, copy)
         res = schunk.decompress_chunk(pos)
         assert res == bytes_obj
-
-        dest = bytearray(bytes_obj)
-        schunk.decompress_chunk(pos, dst=dest)
-        assert dest == bytes_obj
 
     for i in range(nchunks + ninserts):
         schunk.decompress_chunk(i)
 
-    if urlpath is not None:
-        if not contiguous:
-            blosc2.remove_dir(storage["urlpath"])
-        elif os.path.exists(storage["urlpath"]):
-            os.remove(storage["urlpath"])
+    utilities.remove_schunk(contiguous, urlpath)
