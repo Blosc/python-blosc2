@@ -607,9 +607,13 @@ storage_dflts = {
 
 
 cdef create_storage(blosc2_storage *storage, kwargs):
-    #The urlpath is not initialized here, it has to be initialized elsewhere
     contiguous = kwargs.get('contiguous', storage_dflts['contiguous'])
-
+    urlpath = kwargs.get('urlpath', storage_dflts['urlpath'])
+    urlpath = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
+    if urlpath is None:
+        storage.urlpath = NULL
+    else:
+        storage.urlpath = <char *> urlpath
     create_cparams_from_kwargs(storage.cparams, kwargs.get('cparams', None))
     create_dparams_from_kwargs(storage.dparams, kwargs.get('dparams', None))
 
@@ -630,13 +634,6 @@ cdef class SChunk:
         cdef blosc2_dparams dparams
         storage.cparams = &cparams
         storage.dparams = &dparams
-
-        urlpath = kwargs.get('urlpath', storage_dflts['urlpath'])
-        urlpath = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
-        if urlpath is None:
-            storage.urlpath = NULL
-        else:
-            storage.urlpath = <char *> urlpath
 
         create_storage(&storage, kwargs)
         self.schunk = blosc2_schunk_new(&storage)
@@ -738,6 +735,41 @@ cdef class SChunk:
             free(chunk)
         if rc < 0:
             raise RuntimeError("Could not insert the desired chunk")
+
+    def update_chunk(self, nchunk, chunk):
+        cdef const uint8_t[:] typed_view_chunk
+        mem_view_chunk = memoryview(chunk)
+        typed_view_chunk = mem_view_chunk.cast('B')
+        _check_comp_length('chunk', len(typed_view_chunk))
+        rc = blosc2_schunk_update_chunk(self.schunk, nchunk, &typed_view_chunk[0], True)
+        if rc < 0:
+            raise RuntimeError("Could not update the desired chunk")
+
+    def update_buffer(self, nchunk, buffer, copy):
+        cdef blosc2_context *cctx
+        cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+        PyObject_GetBuffer(buffer, buf, PyBUF_SIMPLE)
+        cdef int size
+        cdef int len_chunk = buf.len + BLOSC_MAX_OVERHEAD
+        cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)
+        with nogil:
+            cctx = blosc2_create_cctx(self.schunk.storage.cparams[0])
+            size = blosc2_compress_ctx(cctx, buf.buf, buf.len, chunk, len_chunk)
+        PyBuffer_Release(buf)
+        free(buf)
+        if size < 0:
+            raise RuntimeError("Could not compress the data")
+        elif size == 0:
+            free(chunk)
+            raise RuntimeError("The result could not fit ")
+
+        chunk = <uint8_t*> realloc(chunk, size)
+        _check_comp_length('chunk', size)
+        rc = blosc2_schunk_update_chunk(self.schunk, nchunk, chunk, copy)
+        if copy:
+            free(chunk)
+        if rc < 0:
+            raise RuntimeError("Could not update the desired chunk")
 
     def __dealloc__(self):
         blosc2_schunk_free(self.schunk)
