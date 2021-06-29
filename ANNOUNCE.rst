@@ -1,5 +1,9 @@
-Announcing python-blosc2 0.1.8
+Announcing python-blosc2 0.1.9
 ==============================
+
+This is a maintenance release to use and distribute the latest
+C-Blosc2 2.0.1 library.
+
 
 Changes from python-blosc to python-blosc2
 ------------------------------------------
