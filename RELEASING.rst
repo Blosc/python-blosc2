@@ -32,7 +32,6 @@ is printing the correct versions.
 * Commit the changes::
 
     git commit -a -m "Getting ready for release X.Y.Z"
-    git push
 
 * Check that the documentation is correctly created in https://python-blosc2.rtfd.io.
 

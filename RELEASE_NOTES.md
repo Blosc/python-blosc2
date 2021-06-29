@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from python-blosc2 0.1.9 to python-blosc2 0.1.10
+
+XXX version-specific blurb XXX
+
+
 ## Changes from python-blosc2 0.1.8 to python-blosc2 0.1.9
 
 * Release with C-Blosc 2.0.1 sources and binaries.
