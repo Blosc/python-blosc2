@@ -766,6 +766,19 @@ def decompress2(src, dst=None, **kwargs):
 
 
 # Directory utilities
-def remove_dir(path):
-    path = path.encode("utf-8") if isinstance(path, str) else path
-    return blosc2_ext.remove_dir(path)
+def remove_urlpath(path):
+    """Permanently remove the file or the directory given by `path`. This function is used during
+    the tests of a persistent SChunk (sframe) to remove it.
+
+    Parameters
+    ----------
+    path: String
+    The path of the directory
+
+    Returns
+    -------
+    None
+    """
+    if path is not None:
+        path = path.encode("utf-8") if isinstance(path, str) else path
+        blosc2_ext.remove_urlpath(path)

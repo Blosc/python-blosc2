@@ -38,3 +38,9 @@ API Reference
 .. autofunction:: get_compressor
 
 .. autofunction:: get_blocksize
+
+.. autofunction:: compress2
+
+.. autofunction:: decompress2
+
+.. autofunction:: remove_urlpath

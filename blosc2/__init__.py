@@ -52,7 +52,7 @@ from .core import (
     pack,
     pack_array,
     print_versions,
-    remove_dir,
+    remove_urlpath,
     set_blocksize,
     set_compressor,
     set_nthreads,
