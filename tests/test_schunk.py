@@ -9,7 +9,6 @@ import numpy
 import pytest
 
 import blosc2
-from tests import utilities
 
 
 @pytest.mark.parametrize("contiguous", [True, False])
@@ -25,7 +24,7 @@ from tests import utilities
 )
 def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
     storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
-    utilities.remove_schunk(contiguous, urlpath)
+    blosc2.remove_urlpath(urlpath)
 
     schunk = blosc2.SChunk(**storage)
     for i in range(nchunks):
@@ -53,7 +52,7 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
     for i in range(nchunks):
         schunk.get_chunk(i)
 
-    utilities.remove_schunk(contiguous, urlpath)
+    blosc2.remove_urlpath(urlpath)
 
 
 @pytest.mark.parametrize("contiguous", [True, False])
@@ -70,7 +69,7 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
 def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):
     storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
 
-    utilities.remove_schunk(contiguous, urlpath)
+    blosc2.remove_urlpath(urlpath)
 
     schunk = blosc2.SChunk(**storage)
     for i in range(nchunks):
@@ -90,4 +89,4 @@ def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):
     for i in range(nchunks):
         schunk.get_chunk(i)
 
-    utilities.remove_schunk(contiguous, urlpath)
+    blosc2.remove_urlpath(urlpath)

@@ -18,7 +18,7 @@ from libc.string cimport memcpy
 from libcpp cimport bool
 
 
-cdef extern int blosc2_remove_dir(const char* dir_path)
+cdef extern int blosc2_remove_urlpath(const char *path)
 
 cdef extern from "<stdint.h>":
     ctypedef   signed char  int8_t
@@ -66,6 +66,40 @@ cdef extern from "blosc2.h":
         BLOSC_NEVER_SPLIT
         BLOSC_AUTO_SPLIT
         BLOSC_FORWARD_COMPAT_SPLIT
+
+    ctypedef enum:
+        BLOSC2_ERROR_SUCCESS
+        BLOSC2_ERROR_FAILURE
+        BLOSC2_ERROR_STREAM
+        BLOSC2_ERROR_DATA
+        BLOSC2_ERROR_MEMORY_ALLOC
+        BLOSC2_ERROR_READ_BUFFER
+        BLOSC2_ERROR_WRITE_BUFFER
+        BLOSC2_ERROR_CODEC_SUPPORT
+        BLOSC2_ERROR_CODEC_PARAM
+        BLOSC2_ERROR_CODEC_DICT
+        BLOSC2_ERROR_VERSION_SUPPORT
+        BLOSC2_ERROR_INVALID_HEADER
+        BLOSC2_ERROR_INVALID_PARAM
+        BLOSC2_ERROR_FILE_READ
+        BLOSC2_ERROR_FILE_WRITE
+        BLOSC2_ERROR_FILE_OPEN
+        BLOSC2_ERROR_NOT_FOUND
+        BLOSC2_ERROR_RUN_LENGTH
+        BLOSC2_ERROR_FILTER_PIPELINE
+        BLOSC2_ERROR_CHUNK_INSERT
+        BLOSC2_ERROR_CHUNK_APPEND
+        BLOSC2_ERROR_CHUNK_UPDATE
+        BLOSC2_ERROR_2GB_LIMIT
+        BLOSC2_ERROR_SCHUNK_COPY
+        BLOSC2_ERROR_FRAME_TYPE
+        BLOSC2_ERROR_FILE_TRUNCATE
+        BLOSC2_ERROR_THREAD_CREATE
+        BLOSC2_ERROR_POSTFILTER
+        BLOSC2_ERROR_FRAME_SPECIAL
+        BLOSC2_ERROR_SCHUNK_SPECIAL
+        BLOSC2_ERROR_PLUGIN_IO
+        BLOSC2_ERROR_FILE_REMOVE
 
     cdef int INT_MAX
 
@@ -775,5 +809,5 @@ cdef class SChunk:
         blosc2_schunk_free(self.schunk)
 
 
-def remove_dir(path):
-    return blosc2_remove_dir(path)
+def remove_urlpath(path):
+    blosc2_remove_urlpath(path)

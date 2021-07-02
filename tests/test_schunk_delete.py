@@ -10,7 +10,6 @@ import numpy
 import pytest
 
 import blosc2
-from tests import utilities
 
 
 @pytest.mark.parametrize("contiguous", [True, False])
@@ -31,7 +30,7 @@ def test_schunk_delete_numpy(contiguous, urlpath, nchunks, ndeletes):
         "cparams": {"nthreads": 2},
         "dparams": {"nthreads": 2},
     }
-    utilities.remove_schunk(contiguous, urlpath)
+    blosc2.remove_urlpath(urlpath)
 
     schunk = blosc2.SChunk(**storage)
     for i in range(nchunks):
@@ -53,7 +52,7 @@ def test_schunk_delete_numpy(contiguous, urlpath, nchunks, ndeletes):
     for i in range(nchunks):
         schunk.decompress_chunk(i)
 
-    utilities.remove_schunk(contiguous, urlpath)
+    blosc2.remove_urlpath(urlpath)
 
 
 @pytest.mark.parametrize("contiguous", [True, False])
@@ -74,7 +73,7 @@ def test_schunk_delete(contiguous, urlpath, nchunks, ndeletes):
         "cparams": {"nthreads": 2},
         "dparams": {"nthreads": 2},
     }
-    utilities.remove_schunk(contiguous, urlpath)
+    blosc2.remove_urlpath(urlpath)
 
     schunk = blosc2.SChunk(**storage)
     nbytes = 23401
@@ -97,4 +96,4 @@ def test_schunk_delete(contiguous, urlpath, nchunks, ndeletes):
     for i in range(nchunks):
         schunk.decompress_chunk(i)
 
-    utilities.remove_schunk(contiguous, urlpath)
+    blosc2.remove_urlpath(urlpath)
