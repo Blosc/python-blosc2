@@ -30,7 +30,6 @@ from .blosc2_ext import (
     VERSION_STRING,
     ZLIB,
     ZSTD,
-    SChunk,
     cparams_dflts,
     dparams_dflts,
     storage_dflts,
@@ -59,6 +58,10 @@ from .core import (
     set_releasegil,
     unpack,
     unpack_array,
+)
+
+from .SChunk import (
+SChunk
 )
 from .version import __version__
 

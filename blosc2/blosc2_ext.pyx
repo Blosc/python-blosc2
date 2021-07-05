@@ -14,7 +14,6 @@ from cpython cimport (
     PyObject_GetBuffer,
 )
 from libc.stdlib cimport free, malloc, realloc
-from libc.string cimport memcpy
 from libcpp cimport bool
 
 
@@ -743,6 +742,7 @@ cdef class SChunk:
         rc = blosc2_schunk_insert_chunk(self.schunk, nchunk, &typed_view_chunk[0], True)
         if rc < 0:
             raise RuntimeError("Could not insert the desired chunk")
+        return rc
 
     def insert_buffer(self, nchunk, buffer, copy):
         cdef blosc2_context *cctx
@@ -769,6 +769,7 @@ cdef class SChunk:
             free(chunk)
         if rc < 0:
             raise RuntimeError("Could not insert the desired chunk")
+        return rc
 
     def update_chunk(self, nchunk, chunk):
         cdef const uint8_t[:] typed_view_chunk
@@ -778,6 +779,7 @@ cdef class SChunk:
         rc = blosc2_schunk_update_chunk(self.schunk, nchunk, &typed_view_chunk[0], True)
         if rc < 0:
             raise RuntimeError("Could not update the desired chunk")
+        return rc
 
     def update_buffer(self, nchunk, buffer, copy):
         cdef blosc2_context *cctx
@@ -804,6 +806,7 @@ cdef class SChunk:
             free(chunk)
         if rc < 0:
             raise RuntimeError("Could not update the desired chunk")
+        return rc
 
     def __dealloc__(self):
         blosc2_schunk_free(self.schunk)
