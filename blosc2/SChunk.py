@@ -1,4 +1,6 @@
+import blosc2
 from blosc2 import blosc2_ext
+
 
 class SChunk(blosc2_ext.SChunk):
     def __init__(self, **kwargs):
@@ -21,8 +23,55 @@ class SChunk(blosc2_ext.SChunk):
                 dparams: dict
                     A dictionary with the decompression parameters, which are the same that can be
                     used in the :func:`~blosc2.decompress2` function.
+
+        Examples
+        --------
+        >>> storage = {"contiguous": True, "cparams": {}, "dparams": {}}
+        >>> schunk = blosc2.SChunk(**storage)
         """
         super(SChunk, self).__init__(**kwargs)
+
+    def lazy_init(data, chunksize, **storage):
+        """Create a SChunk and fill it with the given data.
+
+        Parameters
+        ----------
+        data: bytes
+            The buffer of data to compress and add as a set of chunks.
+        chunksize: int
+            The chunksize to be used during the creation of the chunks.
+        storage: dict, optional
+            The storage parameters, whichc are the same that can be used in
+            :func:`~blosc2.SChunk()`
+
+        Returns
+        -------
+        out: SChunk
+            A SChunk with chunks filled with the given data.
+
+        Raises
+        ------
+        RunTimeError
+            If some problem was detected.
+
+        Examples
+        --------
+        >>> buffer = b"12412"*1231
+        >>> schunk = blosc2.SChunk.lazy_init(data=buffer, chunksize=100)
+        """
+        schunk = blosc2.SChunk(**storage)
+        len_data = len(data)
+        nchunks = len_data // chunksize + 1 if len_data % chunksize != 0 else len_data // chunksize
+
+        for i in range(nchunks):
+            if i != (nchunks - 1):
+                buffer = data[i * chunksize: (i + 1) * chunksize - 1]
+            else:
+                buffer = data[i * chunksize:]
+            nchunks_ = schunk.append_buffer(buffer)
+            if nchunks_ != (i + 1):
+                raise RuntimeError("An error occured")
+        return schunk
 
     def append_buffer(self, data):
         """Append a data buffer to the SChunk.
@@ -40,6 +89,14 @@ class SChunk(blosc2_ext.SChunk):
         ------
         RunTimeError
             If the data could not be appended.
+
+        Examples
+        --------
+        >>> import numpy
+        >>> schunk = blosc2.SChunk()
+        >>> buffer =  numpy.arange(200 * 1000)
+        >>> schunk.append_buffer(buffer)
+        1
         """
         return super(SChunk, self).append_buffer(data)
 
@@ -56,16 +113,31 @@ class SChunk(blosc2_ext.SChunk):
             that it has enough capacity for hosting the decompressed
             chunk. Default is None, meaning that a new bytes object
             is created, filled and returned.
+
         Returns
         -------
         out: str/bytes
             The decompressed chunk in form of a Python str / bytes object if
             `dst` is `None`. Otherwise, it will return `None` because the result
             will already be in `dst`.
+
         Raises
         ------
         RunTimeError
             If some problem was detected.
+
+        Examples
+        --------
+        >>> schunk = blosc2.SChunk()
+        >>> buffer = b"wermqeoir23"
+        >>> schunk.append_buffer(buffer)
+        1
+        >>> schunk.decompress_chunk(0)
+        b'wermqeoir23'
+        >>> bytes_obj = bytearray(len(buffer))
+        >>> schunk.decompress_chunk(0, dst=bytes_obj)
+        >>> bytes_obj == buffer
+        True
         """
         return super(SChunk, self).decompress_chunk(nchunk, dst)
 
@@ -95,7 +167,7 @@ class SChunk(blosc2_ext.SChunk):
         Parameters
         ----------
         nchunk: int
-            The chunk index that will be removed.
+            The index of the chunk that will be removed.
 
         Returns
         -------
@@ -203,5 +275,3 @@ class SChunk(blosc2_ext.SChunk):
 
     def __dealloc__(self):
         super(SChunk, self).__dealloc__()
-
-

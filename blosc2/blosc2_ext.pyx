@@ -647,9 +647,15 @@ cdef create_storage(blosc2_storage *storage, kwargs):
         storage.urlpath = NULL
     else:
         storage.urlpath = <char *> urlpath
-    create_cparams_from_kwargs(storage.cparams, kwargs.get('cparams', None))
-    create_dparams_from_kwargs(storage.dparams, kwargs.get('dparams', None))
+    if kwargs.get('cparams', None) is None:
+        storage.cparams = &BLOSC2_CPARAMS_DEFAULTS
+    else:
+        create_cparams_from_kwargs(storage.cparams, kwargs.get('cparams'))
 
+    if kwargs.get('dparams', None) is None:
+        storage.dparams = &BLOSC2_DPARAMS_DEFAULTS
+    else:
+        create_dparams_from_kwargs(storage.dparams, kwargs.get('dparams'))
     storage.contiguous = contiguous
 
     storage.io = NULL
@@ -667,8 +673,10 @@ cdef class SChunk:
         cdef blosc2_dparams dparams
         storage.cparams = &cparams
         storage.dparams = &dparams
-
-        create_storage(&storage, kwargs)
+        if kwargs is None:
+            storage = BLOSC2_STORAGE_DEFAULTS
+        else:
+            create_storage(&storage, kwargs)
         self.schunk = blosc2_schunk_new(&storage)
         if self.schunk == NULL:
             raise RuntimeError("Could not create the Schunk")

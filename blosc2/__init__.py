@@ -59,10 +59,7 @@ from .core import (
     unpack,
     unpack_array,
 )
-
-from .SChunk import (
-SChunk
-)
+from .SChunk import SChunk
 from .version import __version__
 
 blosclib_version = "%s (%s)" % (VERSION_STRING, VERSION_DATE)
