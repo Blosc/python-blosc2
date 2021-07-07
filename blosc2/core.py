@@ -768,12 +768,12 @@ def decompress2(src, dst=None, **kwargs):
 # Directory utilities
 def remove_urlpath(path):
     """Permanently remove the file or the directory given by `path`. This function is used during
-    the tests of a persistent SChunk (sframe) to remove it.
+    the tests of a persistent SChunk to remove it.
 
     Parameters
     ----------
     path: String
-    The path of the directory
+        The path of the directory or file.
 
     Returns
     -------
