@@ -13,9 +13,9 @@ on:
       - main
 
 jobs:
-  setup:
-    name: Set up
-    runs-on: macos-10.15
+  build_wheels_macos:
+    name: Build wheels on macos-latest
+    runs-on: macos-latest
     steps:
       - name: Checkout repo
         uses: actions/checkout@v2
@@ -30,10 +30,10 @@ jobs:
       - name: Install Ninja
         uses: seanmiddleditch/gha-setup-ninja@master
 
-      - name: Install MSVC x86
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x86
+#      - name: Install MSVC x86
+#        uses: ilammy/msvc-dev-cmd@v1
+#        with:
+#          arch: x86
 
       - name: Install dependencies
         run: |
@@ -41,11 +41,6 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install -r requirements-tests.txt
 
-  build_wheels_macos:
-    name: Build wheels on macos-10.15
-    runs-on: macos-10.15
-    steps:
-      - uses: actions/checkout@v2
       - name: Build wheels
         uses: pypa/cibuildwheel@v1.12.0
         env:
