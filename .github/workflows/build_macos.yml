@@ -22,17 +22,13 @@ jobs:
         with:
           submodules: 'recursive'
 
-      - name: Set up Python
-        uses: actions/setup-python@v2
-        with:
-          python-version: '3.9'
-
       - name: Install Ninja
         uses: seanmiddleditch/gha-setup-ninja@master
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v1.12.0
         env:
+          CIBW_BUILD: 'cp39-*'
           CIBW_ARCHS_MACOS: x86_64 universal2
           CIBW_BEFORE_BUILD: python -m pip install -r requirements.txt
           CIBW_BEFORE_TEST: python -m pip install -r requirements-tests.txt
