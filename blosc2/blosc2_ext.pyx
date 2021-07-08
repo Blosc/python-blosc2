@@ -382,20 +382,20 @@ def _check_comp_length(comp_name, comp_len):
     if comp_len < BLOSC_MIN_HEADER_LENGTH:
         raise ValueError("%s cannot be less than %d bytes" % (comp_name, BLOSC_MIN_HEADER_LENGTH))
 
-cpdef compress(src, size_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE, cname='blosclz'):
+cpdef compress(src, int32_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE, cname='blosclz'):
     set_compressor(cname)
-    cdef int len_src = len(src)
+    cdef int32_t len_src = <int32_t> len(src)
     cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
     PyObject_GetBuffer(src, buf, PyBUF_SIMPLE)
     dest = bytes(buf.len + BLOSC_MAX_OVERHEAD)
-    cdef int len_dest = len(dest)
+    cdef int32_t len_dest =  <int32_t> len(dest)
     cdef int size
     if RELEASEGIL:
         _dest = <void*> <char *> dest
         with nogil:
-            size = blosc2_compress(clevel, shuffle, typesize, buf.buf, buf.len, _dest, len_dest)
+            size = blosc2_compress(clevel, shuffle, <int32_t> typesize, buf.buf, <int32_t> buf.len, _dest, len_dest)
     else:
-        size = blosc2_compress(clevel, shuffle, typesize, buf.buf, buf.len, <void*> <char *> dest, len_dest)
+        size = blosc2_compress(clevel, shuffle, <int32_t> typesize, buf.buf, <int32_t> buf.len, <void*> <char *> dest, len_dest)
     PyBuffer_Release(buf)
     free(buf)
     if size > 0:
@@ -571,13 +571,13 @@ def compress2(src, **kwargs):
     cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
     PyObject_GetBuffer(src, buf, PyBUF_SIMPLE)
     cdef int size
-    cdef int len_dest = buf.len + BLOSC_MAX_OVERHEAD
+    cdef int32_t len_dest = <int32_t> (buf.len + BLOSC_MAX_OVERHEAD)
     dest = bytes(len_dest)
     _dest = <void*> <char *> dest
 
     with nogil:
         cctx = blosc2_create_cctx(cparams)
-        size = blosc2_compress_ctx(cctx, buf.buf, buf.len, _dest, len_dest)
+        size = blosc2_compress_ctx(cctx, buf.buf, <int32_t> buf.len, _dest, len_dest)
     PyBuffer_Release(buf)
     free(buf)
     if size < 0:
@@ -647,14 +647,10 @@ cdef create_storage(blosc2_storage *storage, kwargs):
         storage.urlpath = NULL
     else:
         storage.urlpath = <char *> urlpath
-    if kwargs.get('cparams', None) is None:
-        storage.cparams = &BLOSC2_CPARAMS_DEFAULTS
-    else:
+    if kwargs.get('cparams', None) is not None:
         create_cparams_from_kwargs(storage.cparams, kwargs.get('cparams'))
 
-    if kwargs.get('dparams', None) is None:
-        storage.dparams = &BLOSC2_DPARAMS_DEFAULTS
-    else:
+    if kwargs.get('dparams', None) is not None:
         create_dparams_from_kwargs(storage.dparams, kwargs.get('dparams'))
     storage.contiguous = contiguous
 
@@ -669,8 +665,8 @@ cdef class SChunk:
     def __init__(self, **kwargs):
         cdef blosc2_storage storage
         # Create space for cparams and dparams in the stack
-        cdef blosc2_cparams cparams
-        cdef blosc2_dparams dparams
+        cdef blosc2_cparams cparams = BLOSC2_CPARAMS_DEFAULTS
+        cdef blosc2_dparams dparams = BLOSC2_DPARAMS_DEFAULTS
         storage.cparams = &cparams
         storage.dparams = &dparams
         if kwargs is None:
@@ -684,7 +680,7 @@ cdef class SChunk:
     def append_buffer(self, data):
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
-        rc = blosc2_schunk_append_buffer(self.schunk, buf.buf, buf.len)
+        rc = blosc2_schunk_append_buffer(self.schunk, buf.buf, <int32_t> buf.len)
         PyBuffer_Release(buf)
         free(buf)
         if rc < 0:
@@ -757,11 +753,11 @@ cdef class SChunk:
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(buffer, buf, PyBUF_SIMPLE)
         cdef int size
-        cdef int len_chunk = buf.len + BLOSC_MAX_OVERHEAD
+        cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC_MAX_OVERHEAD)
         cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)
         with nogil:
             cctx = blosc2_create_cctx(self.schunk.storage.cparams[0])
-            size = blosc2_compress_ctx(cctx, buf.buf, buf.len, chunk, len_chunk)
+            size = blosc2_compress_ctx(cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
         PyBuffer_Release(buf)
         free(buf)
         if size < 0:
@@ -794,11 +790,11 @@ cdef class SChunk:
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(buffer, buf, PyBUF_SIMPLE)
         cdef int size
-        cdef int len_chunk = buf.len + BLOSC_MAX_OVERHEAD
+        cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC_MAX_OVERHEAD)
         cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)
         with nogil:
             cctx = blosc2_create_cctx(self.schunk.storage.cparams[0])
-            size = blosc2_compress_ctx(cctx, buf.buf, buf.len, chunk, len_chunk)
+            size = blosc2_compress_ctx(cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
         PyBuffer_Release(buf)
         free(buf)
         if size < 0:
