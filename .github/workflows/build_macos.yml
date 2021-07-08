@@ -25,41 +25,19 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v2
         with:
-          python-version: '3.7'
+          python-version: '3.9'
 
       - name: Install Ninja
         uses: seanmiddleditch/gha-setup-ninja@master
-
-#      - name: Install MSVC x86
-#        uses: ilammy/msvc-dev-cmd@v1
-#        with:
-#          arch: x86
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install -r requirements-tests.txt
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v1.12.0
         env:
           CIBW_ARCHS_MACOS: x86_64 universal2
+          CIBW_BEFORE_BUILD: python -m pip install -r requirements.txt
+          CIBW_BEFORE_TEST: python -m pip install -r requirements-tests.txt
+          CIBW_TEST_COMMAND: python -m pytest {project}/tests
+          CIBW_BUILD_VERBOSITY: 1
       - uses: actions/upload-artifact@v2
         with:
           path: ./wheelhouse/*.whl
-
-#  upload_pypi:
-#    needs: [ build_wheels, build_sdist ]  # last but not least
-#    runs-on: ubuntu-latest
-#    if: startsWith(github.event.ref, 'refs/tags')
-#    steps:
-#      - uses: actions/download-artifact@v2
-#        with:
-#          name: artifact
-#          path: dist
-#
-#      - uses: pypa/gh-action-pypi-publish@master
-#        with:
-#          user: __token__
-#          password: ${{ secrets.blosc_pypi_secret }}
