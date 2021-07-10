@@ -19,7 +19,7 @@ Preliminaries
 
 * Build the package and make sure that::
 
-  PYTHONPATH=. python -c "import blosc2; blosc2.print_versions()"
+    PYTHONPATH=. python -c "import blosc2; blosc2.print_versions()"
 
 is printing the correct versions.
 
