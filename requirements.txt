@@ -1,2 +1,3 @@
+git+https://github.com/scikit-build/scikit-build.git@master
 cython>=0.29
 cmake>=3.14.0

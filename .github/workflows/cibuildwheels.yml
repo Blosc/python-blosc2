@@ -88,10 +88,7 @@ jobs:
           CIBW_BUILD: 'cp37-* cp38-* cp39-*'
           CIBW_SKIP: '*-manylinux*_i686'
           CIBW_ARCHS_MACOS: x86_64 arm64
-          CIBW_BEFORE_BUILD: |
-            python -m pip install -r requirements.txt
-            git clone https://github.com/scikit-build/scikit-build
-            pip install .
+          CIBW_BEFORE_BUILD: python -m pip install -r requirements.txt
           CIBW_BEFORE_TEST: python -m pip install -r requirements-tests.txt
           CIBW_TEST_COMMAND: python -m pytest {project}/tests
           CIBW_TEST_SKIP: '*_arm64'
