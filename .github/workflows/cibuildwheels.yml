@@ -90,8 +90,7 @@ jobs:
           CIBW_ARCHS_MACOS: x86_64 arm64
           CIBW_BEFORE_BUILD: |
             python -m pip install -r requirements.txt
-            ls -l
-            pwd
+            git clone https://github.com/scikit-build/scikit-build
             pip install .
           CIBW_BEFORE_TEST: python -m pip install -r requirements-tests.txt
           CIBW_TEST_COMMAND: python -m pytest {project}/tests
