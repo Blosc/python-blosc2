@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "wheel", "cython", "cmake", "ninja"]
+requires = ["setuptools", "wheel", "scikit-build @ git+https://github.com/scikit-build/scikit-build.git@master", "cython", "cmake", "ninja"]
 
 [tool.black]
 line-length = 109
