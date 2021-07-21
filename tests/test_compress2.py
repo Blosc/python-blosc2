@@ -16,7 +16,11 @@ import blosc2
     "obj, cparams, dparams",
     [
         (numpy.random.randint(0, 10, 10), {"compcode": blosc2.LZ4, "clevel": 6}, {}),
-        (numpy.arange(10), {}, {"nthreads": 4}),
+        (
+            numpy.arange(10, dtype="float32"),
+            {"filters": [blosc2.TRUNC_PREC, blosc2.BITSHUFFLE]},
+            {"nthreads": 4},
+        ),
         (
             numpy.random.randint(0, 1000 + 1, 1000),
             {"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 5},

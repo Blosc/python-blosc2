@@ -305,6 +305,24 @@ cdef extern from "blosc2.h":
         int16_t nmetalayers
         int16_t nvlmetalayers
 
+    ctypedef void* (*blosc2_open_cb)(const char *urlpath, const char *mode, void *params)
+    ctypedef int(*blosc2_close_cb)(void *stream)
+    ctypedef int64_t(*blosc2_tell_cb)(void *stream)
+    ctypedef int(*blosc2_seek_cb)(void *stream, int64_t offset, int whence)
+    ctypedef int64_t(*blosc2_write_cb)(const void *ptr, int64_t size, int64_t nitems, void *stream)
+    ctypedef int64_t(*blosc2_read_cb)(void *ptr, int64_t size, int64_t nitems, void *stream)
+    ctypedef int64_t(*blosc2_truncate_cb)(void *stream, int64_t size)
+
+    ctypedef struct blosc2_io_cb:
+        uint8_t id
+        blosc2_open_cb open
+        blosc2_close_cb close
+        blosc2_tell_cb tell
+        blosc2_seek_cb seek
+        blosc2_write_cb write
+        blosc2_read_cb read
+        blosc2_truncate_cb truncate
+
     blosc2_schunk *blosc2_schunk_new(blosc2_storage *storage)
     blosc2_schunk *blosc2_schunk_empty(int nchunks, blosc2_storage *storage)
     blosc2_schunk *blosc2_schunk_copy(blosc2_schunk *schunk, blosc2_storage *storage)
@@ -662,7 +680,7 @@ cdef create_storage(blosc2_storage *storage, kwargs):
 cdef class SChunk:
     cdef blosc2_schunk *schunk
 
-    def __init__(self, **kwargs):
+    def __init__(self, chunksize=8*10**6, buffer=None, **kwargs):
         cdef blosc2_storage storage
         # Create space for cparams and dparams in the stack
         cdef blosc2_cparams cparams = BLOSC2_CPARAMS_DEFAULTS
@@ -676,10 +694,24 @@ cdef class SChunk:
         self.schunk = blosc2_schunk_new(&storage)
         if self.schunk == NULL:
             raise RuntimeError("Could not create the Schunk")
+        self.schunk.chunksize = chunksize
+        cdef const uint8_t[:] typed_view
+        if buffer is not None:
+            mem_view = memoryview(buffer)
+            typed_view = mem_view.cast('B')
+            len_data = typed_view.nbytes
+            nchunks = len_data // chunksize + 1 if len_data % chunksize != 0 else len_data // chunksize
+            len_chunk = chunksize
+            for i in range(nchunks):
+                if i == (nchunks - 1):
+                    len_chunk = len_data - i*chunksize
+                nchunks_ = blosc2_schunk_append_buffer(self.schunk, &typed_view[i*chunksize] , len_chunk)
+                if nchunks_ != (i + 1):
+                    raise RuntimeError("An error occured while appending the chunks")
 
-    def append_buffer(self, data):
+    def append_buffer(self, buffer):
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-        PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
+        PyObject_GetBuffer(buffer, buf, PyBUF_SIMPLE)
         rc = blosc2_schunk_append_buffer(self.schunk, buf.buf, <int32_t> buf.len)
         PyBuffer_Release(buf)
         free(buf)

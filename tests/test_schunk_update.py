@@ -33,9 +33,9 @@ def test_schunk_update_numpy(contiguous, urlpath, nchunks, nupdates, copy, creat
     }
     blosc2.remove_urlpath(urlpath)
 
-    schunk = blosc2.SChunk(**storage)
+    schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, **storage)
     for i in range(nchunks):
-        buffer = i * numpy.arange(200 * 1000)
+        buffer = i * numpy.arange(200 * 1000, dtype="int32")
         nchunks_ = schunk.append_buffer(buffer)
         assert nchunks_ == (i + 1)
 
@@ -82,9 +82,9 @@ def test_update(contiguous, urlpath, nchunks, nupdates, copy, create_chunk):
     }
 
     blosc2.remove_urlpath(urlpath)
-
-    schunk = blosc2.SChunk(**storage)
     nbytes = 23401
+
+    schunk = blosc2.SChunk(chunksize=nbytes * 2, **storage)
     for i in range(nchunks):
         bytes_obj = b"i " * nbytes
         nchunks_ = schunk.append_buffer(bytes_obj)

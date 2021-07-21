@@ -3,12 +3,24 @@ from blosc2 import blosc2_ext
 
 
 class SChunk(blosc2_ext.SChunk):
-    def __init__(self, **kwargs):
-        """Create a new SuperChunk
+    def __init__(self, chunksize=8 * 10 ** 6, buffer=None, **kwargs):
+        """Create a new super-chunk.
+
+        If `buffer` is diferent than `None`, the `buffer` is split into
+        chunks of size `chunksize` and these chunks are appended into the created SChunk.
+
+        Parameters
+        ----------
+        chunksize: int
+            The size, in bytes, of the chunks from the super-chunk. If the chunksize is not provided
+            it is set to 8MB.
+
+        buffer: bytes-like object, optional
+            The buffer to be splitted into different chunks of size `chunksize`.
 
         Other parameters
         ----------------
-        kwargs: dict
+        kwargs: dict, optional
             Keyword arguments supported:
 
                 contiguous: bool
@@ -29,56 +41,18 @@ class SChunk(blosc2_ext.SChunk):
         >>> storage = {"contiguous": True, "cparams": {}, "dparams": {}}
         >>> schunk = blosc2.SChunk(**storage)
         """
-        super(SChunk, self).__init__(**kwargs)
+        super(SChunk, self).__init__(chunksize, buffer, **kwargs)
 
-    def lazy_init(data, chunksize, **storage):
-        """Create a SChunk and fill it with the given data.
-
-        Parameters
-        ----------
-        data: bytes
-            The buffer of data to compress and add as a set of chunks.
-        chunksize: int
-            The chunksize to be used during the creation of the chunks.
-        storage: dict, optional
-            The storage parameters, whichc are the same that can be used in
-            :func:`~blosc2.SChunk()`
-
-        Returns
-        -------
-        out: SChunk
-            A SChunk with chunks filled with the given data.
-
-        Raises
-        ------
-        RunTimeError
-            If some problem was detected.
-
-        Examples
-        --------
-        >>> buffer = b"12412"*1231
-        >>> schunk = blosc2.SChunk.lazy_init(data=buffer, chunksize=100)
-        """
-        schunk = blosc2.SChunk(**storage)
-        len_data = len(data)
-        nchunks = len_data // chunksize + 1 if len_data % chunksize != 0 else len_data // chunksize
-
-        for i in range(nchunks):
-            if i != (nchunks - 1):
-                buffer = data[i * chunksize: (i + 1) * chunksize - 1]
-            else:
-                buffer = data[i * chunksize:]
-            nchunks_ = schunk.append_buffer(buffer)
-            if nchunks_ != (i + 1):
-                raise RuntimeError("An error occured")
-        return schunk
-
-    def append_buffer(self, data):
+    def append_buffer(self, buffer):
         """Append a data buffer to the SChunk.
 
+        Tha data buffer must be of size `chunksize` specified in
+        :func:`~blosc2.SChunk.__init__` .
+
         Parameters
         ----------
-        data: The buffer of data to compress and add as a chunk.
+        buffer: bytes-like object
+            The buffer of data to be compressed and added as a chunk.
 
         Returns
         -------
@@ -93,15 +67,15 @@ class SChunk(blosc2_ext.SChunk):
         Examples
         --------
         >>> import numpy
-        >>> schunk = blosc2.SChunk()
-        >>> buffer =  numpy.arange(200 * 1000)
+        >>> schunk = blosc2.SChunk(chunksize=200*1000*4)
+        >>> buffer =  numpy.arange(200 * 1000, dtype='int32')
         >>> schunk.append_buffer(buffer)
         1
         """
-        return super(SChunk, self).append_buffer(data)
+        return super(SChunk, self).append_buffer(buffer)
 
     def decompress_chunk(self, nchunk, dst=None):
-        """Decompress the chunk given by the its index `nchunk`.
+        """Decompress the chunk given by its index `nchunk`.
 
         Parameters
         ----------
@@ -128,7 +102,9 @@ class SChunk(blosc2_ext.SChunk):
 
         Examples
         --------
-        >>> schunk = blosc2.SChunk()
+        >>> cparams = {'typesize': 1}
+        >>> storage = {'cparams': cparams}
+        >>> schunk = blosc2.SChunk(chunksize=11, **storage)
         >>> buffer = b"wermqeoir23"
         >>> schunk.append_buffer(buffer)
         1
