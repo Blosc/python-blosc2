@@ -27,9 +27,9 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, chunksize):
     blosc2.remove_urlpath(urlpath)
     num_elem = 20 * 1000
     nchunks = num_elem * 4 // chunksize + 1 if num_elem * 4 % chunksize != 0 else num_elem * 4 // chunksize
-    buffer = numpy.arange(num_elem, dtype="int32")
-    bytes_obj = buffer.tobytes()
-    schunk = blosc2.SChunk(chunksize=chunksize, buffer=buffer, **storage)
+    data = numpy.arange(num_elem, dtype="int32")
+    bytes_obj = data.tobytes()
+    schunk = blosc2.SChunk(chunksize=chunksize, data=data, **storage)
 
     for i in range(nchunks):
         start = i * chunksize
@@ -42,14 +42,14 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, chunksize):
         res = schunk.decompress_chunk(i)
         assert res == bytes_obj[start:end]
 
-        dest = numpy.empty(np_end - np_start, dtype=buffer.dtype)
+        dest = numpy.empty(np_end - np_start, dtype=data.dtype)
         schunk.decompress_chunk(i, dest)
-        assert numpy.array_equal(buffer[np_start:np_end], dest)
+        assert numpy.array_equal(data[np_start:np_end], dest)
 
         schunk.decompress_chunk(i, memoryview(dest))
-        assert numpy.array_equal(buffer[np_start:np_end], dest)
+        assert numpy.array_equal(data[np_start:np_end], dest)
 
-        dest = bytearray(buffer)
+        dest = bytearray(data)
         schunk.decompress_chunk(i, dest[start:end])
         assert dest[start:end] == bytes_obj[start:end]
 
@@ -78,7 +78,7 @@ def test_schunk(contiguous, urlpath, cparams, dparams, chunksize):
     nchunks = 5 * nrep // chunksize + 1 if nrep * 5 % chunksize != 0 else 5 * nrep // chunksize
 
     buffer = b"1234 " * nrep
-    schunk = blosc2.SChunk(chunksize=chunksize, buffer=buffer, **storage)
+    schunk = blosc2.SChunk(chunksize=chunksize, data=buffer, **storage)
 
     for i in range(nchunks):
         start = i * chunksize

@@ -3,10 +3,10 @@ from blosc2 import blosc2_ext
 
 
 class SChunk(blosc2_ext.SChunk):
-    def __init__(self, chunksize=8 * 10 ** 6, buffer=None, **kwargs):
+    def __init__(self, chunksize=8 * 10 ** 6, data=None, **kwargs):
         """Create a new super-chunk.
 
-        If `buffer` is diferent than `None`, the `buffer` is split into
+        If `data` is diferent than `None`, the `data` is split into
         chunks of size `chunksize` and these chunks are appended into the created SChunk.
 
         Parameters
@@ -15,8 +15,8 @@ class SChunk(blosc2_ext.SChunk):
             The size, in bytes, of the chunks from the super-chunk. If the chunksize is not provided
             it is set to 8MB.
 
-        buffer: bytes-like object, optional
-            The buffer to be splitted into different chunks of size `chunksize`.
+        data: bytes-like object, optional
+            The data to be splitted into different chunks of size `chunksize`.
 
         Other parameters
         ----------------
@@ -41,18 +41,18 @@ class SChunk(blosc2_ext.SChunk):
         >>> storage = {"contiguous": True, "cparams": {}, "dparams": {}}
         >>> schunk = blosc2.SChunk(**storage)
         """
-        super(SChunk, self).__init__(chunksize, buffer, **kwargs)
+        super(SChunk, self).__init__(chunksize, data, **kwargs)
 
-    def append_buffer(self, buffer):
-        """Append a data buffer to the SChunk.
+    def append_data(self, data):
+        """Append a data data to the SChunk.
 
         Tha data buffer must be of size `chunksize` specified in
         :func:`~blosc2.SChunk.__init__` .
 
         Parameters
         ----------
-        buffer: bytes-like object
-            The buffer of data to be compressed and added as a chunk.
+        data: bytes-like object
+            The data to be compressed and added as a chunk.
 
         Returns
         -------
@@ -68,11 +68,11 @@ class SChunk(blosc2_ext.SChunk):
         --------
         >>> import numpy
         >>> schunk = blosc2.SChunk(chunksize=200*1000*4)
-        >>> buffer =  numpy.arange(200 * 1000, dtype='int32')
-        >>> schunk.append_buffer(buffer)
+        >>> data =  numpy.arange(200 * 1000, dtype='int32')
+        >>> schunk.append_data(data)
         1
         """
-        return super(SChunk, self).append_buffer(buffer)
+        return super(SChunk, self).append_data(data)
 
     def decompress_chunk(self, nchunk, dst=None):
         """Decompress the chunk given by its index `nchunk`.
@@ -106,7 +106,7 @@ class SChunk(blosc2_ext.SChunk):
         >>> storage = {'cparams': cparams}
         >>> schunk = blosc2.SChunk(chunksize=11, **storage)
         >>> buffer = b"wermqeoir23"
-        >>> schunk.append_buffer(buffer)
+        >>> schunk.append_data(buffer)
         1
         >>> schunk.decompress_chunk(0)
         b'wermqeoir23'
@@ -179,14 +179,14 @@ class SChunk(blosc2_ext.SChunk):
         """
         return super(SChunk, self).insert_chunk(nchunk, chunk)
 
-    def insert_buffer(self, nchunk, buffer, copy):
-        """Insert the buffer in the specified position in the SChunk.
+    def insert_data(self, nchunk, data, copy):
+        """Insert the data in the specified position in the SChunk.
 
         Parameters
         ----------
         nchunk: int
             The position in which the chunk will be inserted.
-        buffer: bytes object
+        data: bytes object
             The data that will be compressed and inserted as a chunk.
         copy: bool
             Whether to internally do a copy of the chunk to insert it or not.
@@ -201,7 +201,7 @@ class SChunk(blosc2_ext.SChunk):
         RunTimeError
             If some problem was detected.
         """
-        return super(SChunk, self).insert_buffer(nchunk, buffer, copy)
+        return super(SChunk, self).insert_data(nchunk, data, copy)
 
     def update_chunk(self, nchunk, chunk):
         """Update an existing chunk in the SChunk.
@@ -225,14 +225,14 @@ class SChunk(blosc2_ext.SChunk):
         """
         return super(SChunk, self).update_chunk(nchunk, chunk)
 
-    def update_buffer(self, nchunk, buffer, copy):
-        """Update the chunk in the `nchunk`-th position with the given buffer.
+    def update_data(self, nchunk, data, copy):
+        """Update the chunk in the `nchunk`-th position with the given data.
 
         Parameters
         ----------
         nchunk: int
             The position identifying the chunk that will be updated.
-        buffer: bytes object
+        data: bytes object
             The data that will be compressed and will replace the content of the old one.
         copy: bool
             Whether to internally do a copy of the chunk to update it or not.
@@ -247,7 +247,7 @@ class SChunk(blosc2_ext.SChunk):
         RunTimeError
             If some problem was detected.
         """
-        return super(SChunk, self).update_buffer(nchunk, buffer, copy)
+        return super(SChunk, self).update_data(nchunk, data, copy)
 
     def __dealloc__(self):
         super(SChunk, self).__dealloc__()

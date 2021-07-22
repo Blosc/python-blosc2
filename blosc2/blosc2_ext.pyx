@@ -680,7 +680,7 @@ cdef create_storage(blosc2_storage *storage, kwargs):
 cdef class SChunk:
     cdef blosc2_schunk *schunk
 
-    def __init__(self, chunksize=8*10**6, buffer=None, **kwargs):
+    def __init__(self, chunksize=8*10**6, data=None, **kwargs):
         cdef blosc2_storage storage
         # Create space for cparams and dparams in the stack
         cdef blosc2_cparams cparams = BLOSC2_CPARAMS_DEFAULTS
@@ -696,8 +696,8 @@ cdef class SChunk:
             raise RuntimeError("Could not create the Schunk")
         self.schunk.chunksize = chunksize
         cdef const uint8_t[:] typed_view
-        if buffer is not None:
-            mem_view = memoryview(buffer)
+        if data is not None:
+            mem_view = memoryview(data)
             typed_view = mem_view.cast('B')
             len_data = typed_view.nbytes
             nchunks = len_data // chunksize + 1 if len_data % chunksize != 0 else len_data // chunksize
@@ -709,9 +709,9 @@ cdef class SChunk:
                 if nchunks_ != (i + 1):
                     raise RuntimeError("An error occured while appending the chunks")
 
-    def append_buffer(self, buffer):
+    def append_data(self, data):
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-        PyObject_GetBuffer(buffer, buf, PyBUF_SIMPLE)
+        PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
         rc = blosc2_schunk_append_buffer(self.schunk, buf.buf, <int32_t> buf.len)
         PyBuffer_Release(buf)
         free(buf)
@@ -780,10 +780,10 @@ cdef class SChunk:
             raise RuntimeError("Could not insert the desired chunk")
         return rc
 
-    def insert_buffer(self, nchunk, buffer, copy):
+    def insert_data(self, nchunk, data, copy):
         cdef blosc2_context *cctx
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-        PyObject_GetBuffer(buffer, buf, PyBUF_SIMPLE)
+        PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
         cdef int size
         cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC_MAX_OVERHEAD)
         cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)
@@ -817,10 +817,10 @@ cdef class SChunk:
             raise RuntimeError("Could not update the desired chunk")
         return rc
 
-    def update_buffer(self, nchunk, buffer, copy):
+    def update_data(self, nchunk, data, copy):
         cdef blosc2_context *cctx
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-        PyObject_GetBuffer(buffer, buf, PyBUF_SIMPLE)
+        PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
         cdef int size
         cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC_MAX_OVERHEAD)
         cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)

@@ -29,7 +29,7 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
     schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, **storage)
     for i in range(nchunks):
         buffer = i * numpy.arange(200 * 1000, dtype="int32")
-        nchunks_ = schunk.append_buffer(buffer)
+        nchunks_ = schunk.append_data(buffer)
         assert nchunks_ == (i + 1)
 
     for i in range(nchunks):
@@ -74,7 +74,7 @@ def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):
     schunk = blosc2.SChunk(chunksize=2 * nbytes, **storage)
     for i in range(nchunks):
         bytes_obj = b"i " * nbytes
-        nchunks_ = schunk.append_buffer(bytes_obj)
+        nchunks_ = schunk.append_data(bytes_obj)
         assert nchunks_ == (i + 1)
 
     for i in range(nchunks):

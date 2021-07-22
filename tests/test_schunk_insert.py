@@ -38,7 +38,7 @@ def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts, copy, creat
     schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, **storage)
     for i in range(nchunks):
         buffer = i * numpy.arange(200 * 1000, dtype="int32")
-        nchunks_ = schunk.append_buffer(buffer)
+        nchunks_ = schunk.append_data(buffer)
         assert nchunks_ == (i + 1)
 
     for i in range(ninserts):
@@ -48,7 +48,7 @@ def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts, copy, creat
             chunk = blosc2.compress2(buffer)
             schunk.insert_chunk(pos, chunk)
         else:
-            schunk.insert_buffer(pos, buffer, copy)
+            schunk.insert_data(pos, buffer, copy)
         chunk_ = schunk.decompress_chunk(pos)
         bytes_obj = buffer.tobytes()
         assert chunk_ == bytes_obj
@@ -91,7 +91,7 @@ def test_insert(contiguous, urlpath, nchunks, ninserts, copy, create_chunk):
     schunk = blosc2.SChunk(chunksize=nbytes * 2, **storage)
     for i in range(nchunks):
         bytes_obj = b"i " * nbytes
-        nchunks_ = schunk.append_buffer(bytes_obj)
+        nchunks_ = schunk.append_data(bytes_obj)
         assert nchunks_ == (i + 1)
 
     for i in range(ninserts):
@@ -101,7 +101,7 @@ def test_insert(contiguous, urlpath, nchunks, ninserts, copy, create_chunk):
             chunk = blosc2.compress2(bytes_obj)
             schunk.insert_chunk(pos, chunk)
         else:
-            schunk.insert_buffer(pos, bytes_obj, copy)
+            schunk.insert_data(pos, bytes_obj, copy)
         res = schunk.decompress_chunk(pos)
         assert res == bytes_obj
 
