@@ -16,9 +16,9 @@ import blosc2
 @pytest.mark.parametrize(
     "cparams, dparams, nchunks",
     [
-        ({"compcode": blosc2.LZ4, "clevel": 6}, {}, 0),
-        ({}, {"nthreads": 4}, 1),
-        ({"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 5}, {"schunk": None}, 5),
+        ({"compcode": blosc2.LZ4, "clevel": 6,  "typesize": 4}, {}, 0),
+        ({ "typesize": 4}, {"nthreads": 4}, 1),
+        ({"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 5,  "typesize": 4}, {"schunk": None}, 5),
         ({"compcode": blosc2.LZ4HC, "typesize": 4}, {}, 10),
     ],
 )
@@ -60,10 +60,10 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
 @pytest.mark.parametrize(
     "nbytes, cparams, dparams, nchunks",
     [
-        (7, {"compcode": blosc2.LZ4, "clevel": 6}, {}, 0),
-        (641091, {}, {"nthreads": 4}, 1),
-        (136, {}, {}, 5),
-        (1231, blosc2.cparams_dflts, blosc2.dparams_dflts, 10),
+        (7, {"compcode": blosc2.LZ4, "clevel": 6,  "typesize": 1}, {}, 0),
+        (641091, {"typesize": 1}, {"nthreads": 4}, 1),
+        (136, {"typesize": 1}, {}, 5),
+        (1231, {"typesize": 1}, blosc2.dparams_dflts, 10),
     ],
 )
 def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):

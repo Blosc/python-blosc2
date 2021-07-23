@@ -18,16 +18,16 @@ import blosc2
         (numpy.random.randint(0, 10, 10), {"compcode": blosc2.LZ4, "clevel": 6}, {}),
         (
             numpy.arange(10, dtype="float32"),
-            {"filters": [blosc2.TRUNC_PREC, blosc2.BITSHUFFLE]},
+            {"filters": [blosc2.TRUNC_PREC, blosc2.BITSHUFFLE], "typesize": 4},
             {"nthreads": 4},
         ),
         (
             numpy.random.randint(0, 1000 + 1, 1000),
-            {"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 5},
+            {"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4},
             {"schunk": None},
         ),
-        (numpy.arange(45, dtype=numpy.float64), {"compcode": blosc2.LZ4HC}, {}),
-        (numpy.arange(50, dtype=numpy.int64), blosc2.cparams_dflts, blosc2.dparams_dflts),
+        (numpy.arange(45, dtype=numpy.float64), {"compcode": blosc2.LZ4HC, "typesize": 4}, {}),
+        (numpy.arange(50, dtype=numpy.int64), {"typesize": 4}, blosc2.dparams_dflts),
     ],
 )
 def test_compress2_numpy(obj, cparams, dparams):
@@ -53,10 +53,10 @@ def test_compress2_numpy(obj, cparams, dparams):
 @pytest.mark.parametrize(
     "nbytes, cparams, dparams",
     [
-        (7, {"compcode": blosc2.LZ4, "clevel": 6}, {}),
-        (641091, {}, {"nthreads": 4}),
-        (136, {}, {}),
-        (1231, blosc2.cparams_dflts, blosc2.dparams_dflts),
+        (7, {"compcode": blosc2.LZ4, "clevel": 6, "typesize": 1}, {}),
+        (641091, {"typesize": 1}, {"nthreads": 4}),
+        (136, {"typesize": 1}, {}),
+        (1231, {"typesize": 4}, blosc2.dparams_dflts),
     ],
 )
 def test_compress2(nbytes, cparams, dparams):

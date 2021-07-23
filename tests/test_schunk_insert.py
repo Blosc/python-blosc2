@@ -15,15 +15,14 @@ import blosc2
 @pytest.mark.parametrize("contiguous", [True, False])
 @pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize(
-    "nchunks",
+    "nchunks, ninserts",
     [
-        0,
-        1,
-        7,
-        10,
+        (0, 3),
+        (1, 1),
+        (10, 3),
+        (15, 17),
     ],
 )
-@pytest.mark.parametrize("ninserts", [0, 1, 17])
 @pytest.mark.parametrize("copy", [True, False])
 @pytest.mark.parametrize("create_chunk", [True, False])
 def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts, copy, create_chunk):
@@ -66,15 +65,14 @@ def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts, copy, creat
 @pytest.mark.parametrize("contiguous", [True, False])
 @pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize(
-    "nchunks",
+    "nchunks, ninserts",
     [
-        0,
-        1,
-        7,
-        10,
+        (0, 3),
+        (1, 1),
+        (10, 3),
+        (15, 17),
     ],
 )
-@pytest.mark.parametrize("ninserts", [0, 1, 17])
 @pytest.mark.parametrize("copy", [True, False])
 @pytest.mark.parametrize("create_chunk", [True, False])
 def test_insert(contiguous, urlpath, nchunks, ninserts, copy, create_chunk):

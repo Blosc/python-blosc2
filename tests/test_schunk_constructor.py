@@ -17,9 +17,9 @@ import blosc2
     "cparams, dparams, chunksize",
     [
         ({"compcode": blosc2.LZ4, "clevel": 6}, {}, 40000),
-        ({}, {"nthreads": 4}, 20 * 100),
-        ({"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 5}, {"schunk": None}, 500),
-        ({"compcode": blosc2.LZ4HC, "typesize": 4}, {}, 100),
+        ({}, {"nthreads": 4}, 20000),
+        ({"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 5}, {"schunk": None}, 20000),
+        ({"compcode": blosc2.LZ4HC, "typesize": 4}, {}, 40000),
     ],
 )
 def test_schunk_numpy(contiguous, urlpath, cparams, dparams, chunksize):
@@ -64,9 +64,9 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, chunksize):
 @pytest.mark.parametrize(
     " cparams, dparams, chunksize",
     [
-        ({"compcode": blosc2.LZ4, "clevel": 6, "typesize": 1}, {}, 100),
-        ({"typesize": 1}, {"nthreads": 4}, 25),
-        ({"typesize": 1}, {}, 50),
+        ({"compcode": blosc2.LZ4, "clevel": 6, "typesize": 1}, {}, 500),
+        ({"typesize": 1}, {"nthreads": 4}, 500),
+        ({"typesize": 1}, {}, 1000),
         ({"typesize": 1}, blosc2.dparams_dflts, 1000),
     ],
 )
