@@ -61,7 +61,7 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
     "nbytes, cparams, dparams, nchunks",
     [
         (7, {"compcode": blosc2.LZ4, "clevel": 6, "typesize": 1}, {}, 0),
-        (641091, {"typesize": 1}, {"nthreads": 4}, 1),
+        (641091, {"typesize": 1}, {"nthreads": 2}, 1),
         (136, {"typesize": 1}, {}, 5),
         (1231, {"typesize": 1}, blosc2.dparams_dflts, 10),
     ],

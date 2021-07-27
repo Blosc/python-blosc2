@@ -877,3 +877,4 @@ cdef class vlmeta:
             blosc2_vlmeta_update(self.schunk, name, <uint8_t*> content, len_content, &ccparams)
         else:
             blosc2_vlmeta_add(self.schunk, name,  <uint8_t*> content, len_content, &ccparams)
+

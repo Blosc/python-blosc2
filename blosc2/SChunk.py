@@ -18,6 +18,13 @@ class vlmeta(blosc2_ext.vlmeta):
     def __delitem__(self, name):
         del self.vlmeta[name]
 
+    def __len__(self):
+        return len(self.vlmeta)
+
+    def __contains__(self, name):
+        return name in self.vlmeta
+
+
 
 class SChunk(blosc2_ext.SChunk):
     def __init__(self, chunksize=8 * 10 ** 6, data=None, **kwargs):
