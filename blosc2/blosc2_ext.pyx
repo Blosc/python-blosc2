@@ -13,6 +13,7 @@ from cpython cimport (
     PyBytes_FromStringAndSize,
     PyObject_GetBuffer,
 )
+from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free, malloc, realloc
 from libcpp cimport bool
 
@@ -286,6 +287,7 @@ cdef extern from "blosc2.h":
     ctypedef struct blosc2_schunk:
         uint8_t version
         uint8_t compcode
+        uint8_t compcode_meta
         uint8_t clevel
         int32_t typesize
         int32_t blocksize
@@ -304,6 +306,7 @@ cdef extern from "blosc2.h":
         blosc2_context* dctx
         int16_t nmetalayers
         int16_t nvlmetalayers
+        blosc2_btune *udbtune
 
     ctypedef void* (*blosc2_open_cb)(const char *urlpath, const char *mode, void *params)
     ctypedef int(*blosc2_close_cb)(void *stream)
@@ -696,6 +699,7 @@ cdef class SChunk:
             raise RuntimeError("Could not create the Schunk")
         self.schunk.chunksize = chunksize
         cdef const uint8_t[:] typed_view
+        cdef int index
         if data is not None:
             mem_view = memoryview(data)
             typed_view = mem_view.cast('B')
@@ -705,9 +709,14 @@ cdef class SChunk:
             for i in range(nchunks):
                 if i == (nchunks - 1):
                     len_chunk = len_data - i*chunksize
-                nchunks_ = blosc2_schunk_append_buffer(self.schunk, &typed_view[i*chunksize] , len_chunk)
+                index = i*chunksize
+                nchunks_ = blosc2_schunk_append_buffer(self.schunk, &typed_view[index], len_chunk)
                 if nchunks_ != (i + 1):
                     raise RuntimeError("An error occured while appending the chunks")
+
+    @property
+    def c_schunk(self):
+        return <uintptr_t> self.schunk
 
     def append_data(self, data):
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
@@ -850,3 +859,21 @@ cdef class SChunk:
 
 def remove_urlpath(path):
     blosc2_remove_urlpath(path)
+
+
+cdef class vlmeta:
+    cdef blosc2_schunk* schunk
+    def __init__(self, schunk):
+        self.schunk = <blosc2_schunk*> <uintptr_t>schunk
+
+    def set_vlmeta(self, name, content, **cparams):
+        cdef blosc2_cparams ccparams
+        create_cparams_from_kwargs(&ccparams, cparams)
+        name = name.encode("utf-8") if isinstance(name, str) else name
+        content = content.encode("utf-8") if isinstance(content, str) else content
+        cdef uint32_t len_content = <uint32_t> len(content)
+        rc = blosc2_vlmeta_exists(self.schunk, name)
+        if rc >= 0:
+            blosc2_vlmeta_update(self.schunk, name, <uint8_t*> content, len_content, &ccparams)
+        else:
+            blosc2_vlmeta_add(self.schunk, name,  <uint8_t*> content, len_content, &ccparams)

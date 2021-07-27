@@ -2,6 +2,23 @@ import blosc2
 from blosc2 import blosc2_ext
 
 
+class vlmeta(blosc2_ext.vlmeta):
+    def __init__(self, schunk):
+        self.vlmeta = {}
+        super(vlmeta, self).__init__(schunk)
+
+    def __setitem__(self, name, content):
+        self.vlmeta[name] = content
+        cparams = {"typesize": 1}
+        super(vlmeta, self).set_vlmeta(name, content, **cparams)
+
+    def __getitem__(self, name):
+        return self.vlmeta[name]
+
+    def __delitem__(self, name):
+        del self.vlmeta[name]
+
+
 class SChunk(blosc2_ext.SChunk):
     def __init__(self, chunksize=8 * 10 ** 6, data=None, **kwargs):
         """Create a new super-chunk.
@@ -42,6 +59,7 @@ class SChunk(blosc2_ext.SChunk):
         >>> schunk = blosc2.SChunk(**storage)
         """
         super(SChunk, self).__init__(chunksize, data, **kwargs)
+        self.vlmeta = vlmeta(super(SChunk, self).c_schunk)
 
     def append_data(self, data):
         """Append a data data to the SChunk.
