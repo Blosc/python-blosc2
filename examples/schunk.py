@@ -5,8 +5,9 @@
 #
 ########################################################################
 
-import blosc2
 import numpy
+
+import blosc2
 
 nchunks = 10
 # Set the compression and decompression parameters

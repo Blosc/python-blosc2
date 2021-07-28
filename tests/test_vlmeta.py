@@ -58,10 +58,10 @@ def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):
 
 
 def add(schunk):
-    schunk.vlmeta['vlmeta1'] = 'val1'
-    schunk.vlmeta['vlmeta2'] = 'val2'
-    schunk.vlmeta['vlmeta3'] = 'val3'
-    assert (schunk.vlmeta['vlmeta1'] == 'val1')
-    assert (schunk.vlmeta['vlmeta2'] == 'val2')
-    assert (schunk.vlmeta['vlmeta3'] == 'val3')
-    assert (len(schunk.vlmeta) == 3)
+    schunk.vlmeta["vlmeta1"] = "val1"
+    schunk.vlmeta["vlmeta2"] = "val2"
+    schunk.vlmeta["vlmeta3"] = "val3"
+    assert schunk.vlmeta["vlmeta1"] == "val1"
+    assert schunk.vlmeta["vlmeta2"] == "val2"
+    assert schunk.vlmeta["vlmeta3"] == "val3"
+    assert len(schunk.vlmeta) == 3

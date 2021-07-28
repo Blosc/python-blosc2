@@ -17,7 +17,7 @@ class vlmeta(blosc2_ext.vlmeta):
 
     def __delitem__(self, name):
         raise NotImplementedError
-        #del self.vlmeta[name]
+        # del self.vlmeta[name]
 
     def __len__(self):
         return len(self.vlmeta)
