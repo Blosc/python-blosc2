@@ -687,19 +687,12 @@ def compress2(src, **kwargs):
                 `blosc2.NEVER_SPLIT`, `blosc2.AUTO_SPLIT` and `blosc2.FORWARD_COMPAT_SPLIT`.
                 The default value is `blosc2.FORWARD_COMPAT_SPLIT`.
 
-            schunk: -
 
             filters: list
                 The sequence of filters. By default: `{0, 0, 0, 0, 0, blosc2.BLOSC_SHUFFLE}`.
 
             filters_meta: list
                 The metadata for filters. By default: `{0, 0, 0, 0, 0, 0}`.
-
-            prefilter: -
-
-            pparams: -
-
-            udbtune: -
 
     Returns
     -------
@@ -738,9 +731,6 @@ def decompress2(src, dst=None, **kwargs):
         Keyword arguments supported:
         nthreads: int
         The number of threads to use internally (1 by default).
-        schunk:
-        postfilter:
-        postparams:
 
     Returns
     -------

@@ -16,6 +16,7 @@ contiguous = True
 urlpath = "filename"
 
 storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+blosc2.remove_urlpath(urlpath)
 
 # Create the empty SChunk
 schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, **storage)
@@ -48,7 +49,8 @@ schunk.insert_data(5, buffer, False)
 
 # Update a chunk compressing the data first
 buffer = 11 * numpy.arange(200 * 1000, dtype="int32")
-schunk.update_chunk(7, buffer)
+chunk = blosc2.compress2(buffer, **cparams)
+schunk.update_chunk(7, chunk)
 
 # Delete the 4th chunk
 schunk.delete_chunk(4)
