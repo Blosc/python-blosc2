@@ -8,6 +8,7 @@
 
 from __future__ import print_function
 
+import os
 from textwrap import dedent
 
 from skbuild import setup
