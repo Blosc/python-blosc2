@@ -42,6 +42,17 @@ dest = bytearray(buffer)
 schunk.decompress_chunk(1, dest)
 assert dest == bytes_obj
 
+# Insert a chunk in the 5th position
+buffer = 10 * numpy.arange(200 * 1000, dtype="int32")
+schunk.insert_data(5, buffer, False)
+
+# Update a chunk compressing the data first
+buffer = 11 * numpy.arange(200 * 1000, dtype="int32")
+schunk.update_chunk(7, buffer)
+
+# Delete the 4th chunk
+schunk.delete_chunk(4)
+
 # Get the compressed chunk
 schunk.get_chunk(1)
 
