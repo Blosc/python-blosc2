@@ -874,7 +874,10 @@ cdef class vlmeta:
         cdef uint32_t len_content = <uint32_t> len(content)
         rc = blosc2_vlmeta_exists(self.schunk, name)
         if rc >= 0:
-            blosc2_vlmeta_update(self.schunk, name, <uint8_t*> content, len_content, &ccparams)
+            rc = blosc2_vlmeta_update(self.schunk, name, <uint8_t*> content, len_content, &ccparams)
         else:
-            blosc2_vlmeta_add(self.schunk, name,  <uint8_t*> content, len_content, &ccparams)
+            rc = blosc2_vlmeta_add(self.schunk, name,  <uint8_t*> content, len_content, &ccparams)
+
+        if rc < 0:
+            raise RuntimeError
 

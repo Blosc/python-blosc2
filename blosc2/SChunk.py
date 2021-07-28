@@ -16,7 +16,8 @@ class vlmeta(blosc2_ext.vlmeta):
         return self.vlmeta[name]
 
     def __delitem__(self, name):
-        del self.vlmeta[name]
+        raise NotImplementedError
+        #del self.vlmeta[name]
 
     def __len__(self):
         return len(self.vlmeta)
@@ -24,6 +25,8 @@ class vlmeta(blosc2_ext.vlmeta):
     def __contains__(self, name):
         return name in self.vlmeta
 
+    def getall(self):
+        return self.vlmeta.copy()
 
 
 class SChunk(blosc2_ext.SChunk):

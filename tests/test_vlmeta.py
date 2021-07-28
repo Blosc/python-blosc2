@@ -30,7 +30,6 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
         assert nchunks_ == (i + 1)
 
     add(schunk)
-    remove(schunk)
 
     blosc2.remove_urlpath(urlpath)
 
@@ -54,7 +53,6 @@ def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):
         assert nchunks_ == (i + 1)
 
     add(schunk)
-    remove(schunk)
 
     blosc2.remove_urlpath(urlpath)
 
@@ -67,15 +65,3 @@ def add(schunk):
     assert (schunk.vlmeta['vlmeta2'] == 'val2')
     assert (schunk.vlmeta['vlmeta3'] == 'val3')
     assert (len(schunk.vlmeta) == 3)
-
-
-def remove(schunk):
-    # Remove one of them
-    assert('vlmeta2' in schunk.vlmeta)
-    del schunk.vlmeta['vlmeta2']
-    assert(('vlmeta2' in schunk.vlmeta) == False)
-    assert(schunk.vlmeta['vlmeta1'] == 'val1')
-    assert(schunk.vlmeta['vlmeta3'] == 'val3')
-    with pytest.raises(KeyError):
-        schunk.vlmeta['vlmeta2']
-    assert(len(schunk.vlmeta) == 2)
