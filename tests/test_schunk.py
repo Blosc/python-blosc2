@@ -33,7 +33,7 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
         assert nchunks_ == (i + 1)
 
     for i in range(nchunks):
-        buffer = i * numpy.arange(200 * 1000)
+        buffer = i * numpy.arange(200 * 1000, dtype="int32")
         bytes_obj = buffer.tobytes()
         res = schunk.decompress_chunk(i)
         assert res == bytes_obj

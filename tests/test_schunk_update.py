@@ -41,7 +41,7 @@ def test_schunk_update_numpy(contiguous, urlpath, nchunks, nupdates, copy, creat
 
     for i in range(nupdates):
         pos = random.randint(0, nchunks - 1)
-        buffer = pos * numpy.arange(200 * 1000)
+        buffer = pos * numpy.arange(200 * 1000, dtype="int32")
         if create_chunk:
             chunk = blosc2.compress2(buffer)
             schunk.update_chunk(pos, chunk)
