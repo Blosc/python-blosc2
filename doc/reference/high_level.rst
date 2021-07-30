@@ -26,7 +26,10 @@ Class to access the variable length metalayers of a super-chunk.
 
     value = schunk.vlmeta['vlmeta1']
 
-    Once added attributes cannot be removed.
+    Once added, a vlmeta can be deleted with:
+
+    del schunk.vlmeta['vlmeta1']
+
     This class also honors the `__contains__` and `__len__` special
     functions.  Moreover, a `getall()` method returns all the
     variable length metalayers as a dictionary.
