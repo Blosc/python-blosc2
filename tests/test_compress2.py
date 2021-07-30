@@ -56,7 +56,7 @@ def test_compress2_numpy(obj, cparams, dparams):
         (7, {"compcode": blosc2.LZ4, "clevel": 6, "typesize": 1}, {}),
         (641091, {"typesize": 1}, {"nthreads": 4}),
         (136, {"typesize": 1}, {}),
-        (1231, {"typesize": 4}, blosc2.dparams_dflts),
+        (1231, {"typesize": 1}, blosc2.dparams_dflts),
     ],
 )
 def test_compress2(nbytes, cparams, dparams):

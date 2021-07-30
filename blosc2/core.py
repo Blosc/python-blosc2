@@ -154,9 +154,9 @@ def decompress(src, dst=None, as_bytearray=False):
     True
     >>> b"" == blosc2.decompress(blosc2.compress(b"", 1))
     True
-    >>> b"1"*7 == blosc2.decompress(blosc2.compress(b"1"*7, 8))
+    >>> b"1"*7 == blosc2.decompress(blosc2.compress(b"1"*7, 1))
     True
-    >>> type(blosc2.decompress(blosc2.compress(b"1"*7, 8),
+    >>> type(blosc2.decompress(blosc2.compress(b"1"*7, 1),
     ...                                      as_bytearray=True)) is bytearray
     True
     >>> import numpy
@@ -225,7 +225,7 @@ def pack(obj, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname="blosclz"):
         _check_cname(cname)
         _check_typesize(itemsize)
         pickled_object = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
-        packed_object = compress(pickled_object, itemsize, clevel, shuffle, cname)
+        packed_object = compress(pickled_object, typesize=itemsize, clevel=clevel, shuffle=shuffle, cname=cname)
 
         return packed_object
 
