@@ -686,11 +686,8 @@ def compress2(src, **kwargs):
                 The splitmode for the blocks. It can be `blosc2.ALWAYS_SPLIT`,
                 `blosc2.NEVER_SPLIT`, `blosc2.AUTO_SPLIT` and `blosc2.FORWARD_COMPAT_SPLIT`.
                 The default value is `blosc2.FORWARD_COMPAT_SPLIT`.
-
-
             filters: list
                 The sequence of filters. By default: `{0, 0, 0, 0, 0, blosc2.BLOSC_SHUFFLE}`.
-
             filters_meta: list
                 The metadata for filters. By default: `{0, 0, 0, 0, 0, 0}`.
 
