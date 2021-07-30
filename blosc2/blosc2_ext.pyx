@@ -364,6 +364,7 @@ cdef extern from "blosc2.h":
                              uint8_t *content, uint32_t content_len, blosc2_cparams *cparams)
     int blosc2_vlmeta_get(blosc2_schunk *schunk, const char *name,
                           uint8_t ** content, uint32_t *content_len)
+    int blosc2_vlmeta_delete(blosc2_schunk *schunk, const char *name)
 
     int blosc_get_blocksize()
     void blosc_set_blocksize(size_t blocksize)
@@ -881,3 +882,8 @@ cdef class vlmeta:
         if rc < 0:
             raise RuntimeError
 
+    def __delitem__(self, name):
+        name = name.encode("utf-8") if isinstance(name, str) else name
+        rc = blosc2_vlmeta_delete(self.schunk, name)
+        if rc < 0:
+            raise RuntimeError("Could not delete the vlmeta")
