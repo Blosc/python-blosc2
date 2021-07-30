@@ -6,3 +6,4 @@ pydata-sphinx-theme
 numpydoc
 cmake>=3.14.0
 myst-parser
+ninja
