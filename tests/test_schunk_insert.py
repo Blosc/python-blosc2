@@ -29,7 +29,7 @@ def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts, copy, creat
     storage = {
         "contiguous": contiguous,
         "urlpath": urlpath,
-        "cparams": {"nthreads": 2},
+        "cparams": {"nthreads": 2, "typesize": 4},
         "dparams": {"nthreads": 2},
     }
     blosc2.remove_urlpath(urlpath)
@@ -79,7 +79,7 @@ def test_insert(contiguous, urlpath, nchunks, ninserts, copy, create_chunk):
     storage = {
         "contiguous": contiguous,
         "urlpath": urlpath,
-        "cparams": {"nthreads": 2},
+        "cparams": {"nthreads": 2, "typesize": 1},
         "dparams": {"nthreads": 2},
     }
 
@@ -96,7 +96,7 @@ def test_insert(contiguous, urlpath, nchunks, ninserts, copy, create_chunk):
         pos = random.randint(0, nchunks + i)
         bytes_obj = b"i " * nbytes
         if create_chunk:
-            chunk = blosc2.compress2(bytes_obj)
+            chunk = blosc2.compress2(bytes_obj, **storage["cparams"])
             schunk.insert_chunk(pos, chunk)
         else:
             schunk.insert_data(pos, bytes_obj, copy)

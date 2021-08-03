@@ -16,9 +16,9 @@ import blosc2
 @pytest.mark.parametrize(
     "cparams, dparams, chunksize",
     [
-        ({"compcode": blosc2.LZ4, "clevel": 6}, {}, 40000),
-        ({}, {"nthreads": 4}, 20000),
-        ({"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 5}, {"schunk": None}, 20000),
+        ({"compcode": blosc2.LZ4, "clevel": 6, "typesize": 4}, {}, 40000),
+        ({"typesize": 4}, {"nthreads": 4}, 20000),
+        ({"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {"schunk": None}, 20000),
         ({"compcode": blosc2.LZ4HC, "typesize": 4}, {}, 40000),
     ],
 )

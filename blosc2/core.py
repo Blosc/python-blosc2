@@ -154,9 +154,9 @@ def decompress(src, dst=None, as_bytearray=False):
     True
     >>> b"" == blosc2.decompress(blosc2.compress(b"", 1))
     True
-    >>> b"1"*7 == blosc2.decompress(blosc2.compress(b"1"*7, 8))
+    >>> b"1"*7 == blosc2.decompress(blosc2.compress(b"1"*7, 1))
     True
-    >>> type(blosc2.decompress(blosc2.compress(b"1"*7, 8),
+    >>> type(blosc2.decompress(blosc2.compress(b"1"*7, 1),
     ...                                      as_bytearray=True)) is bytearray
     True
     >>> import numpy
@@ -175,7 +175,7 @@ def pack(obj, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname="blosclz"):
 
     Parameters
     ----------
-    obj : Python object with `itemsize` attribute
+    obj : Python object
         The Python object to be packed.
     clevel : int (optional)
         The compression level from 0 (no compression) to 9
@@ -197,12 +197,8 @@ def pack(obj, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname="blosclz"):
 
     Raises
     ------
-    AttributeError
-        If the object does not have an `itemsize` attribute.
-        If the object does not have an `size` attribute.
     ValueError
-        If obj.itemsize * obj.size is larger than the maximum allowed buffer size.
-        If typesize is not within the allowed range.
+        If the pickled object size is larger than the maximum allowed buffer size.
         If clevel is not within the allowed range.
         If cname is not within the supported compressors.
 
@@ -214,20 +210,14 @@ def pack(obj, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname="blosclz"):
     >>> len(parray) < a.size*a.itemsize
     True
     """
-    if not hasattr(obj, "itemsize"):
-        raise AttributeError("The object must have an itemsize attribute.")
-    if not hasattr(obj, "size"):
-        raise AttributeError("The object must have an size attribute.")
-    else:
-        itemsize = obj.itemsize
-        _check_input_length("object size", obj.size * itemsize)
-        _check_clevel(clevel)
-        _check_cname(cname)
-        _check_typesize(itemsize)
-        pickled_object = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
-        packed_object = compress(pickled_object, itemsize, clevel, shuffle, cname)
+    _check_clevel(clevel)
+    _check_cname(cname)
+    pickled_object = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
+    # The object to be compressed is pickled_object, and not obj
+    _check_input_length("pickled object", len(pickled_object))
+    packed_object = compress(pickled_object, typesize=1, clevel=clevel, shuffle=shuffle, cname=cname)
 
-        return packed_object
+    return packed_object
 
 
 def unpack(packed_object, **kwargs):
@@ -277,7 +267,8 @@ def unpack(packed_object, **kwargs):
 
 
 def pack_array(arr, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname="blosclz"):
-    """Pack (compress) a NumPy array. It is equivalent to the pack function.
+    """Pack (compress) a NumPy array. It is equivalent to the pack function, except that it only
+    takes Python objects with attributes `itemsize` and `size`.
 
     Parameters
     ----------
@@ -305,9 +296,9 @@ def pack_array(arr, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname="blosclz"):
     ------
     AttributeError
         If the object does not have an `itemsize` attribute.
+        If the object does not have a `size` attribute.
     ValueError
-        If array.itemsize * array.size is larger than the maximum allowed buffer size.
-        If typesize is not within the allowed range.
+        If the pickled object size is larger than the maximum allowed buffer size.
         If clevel is not within the allowed range.
         If cname is not within the supported compressors.
 
@@ -323,6 +314,10 @@ def pack_array(arr, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname="blosclz"):
     >>> len(parray) < a.size*a.itemsize
     True
     """
+    if not hasattr(arr, "itemsize"):
+        raise AttributeError("The object must have an itemsize attribute.")
+    if not hasattr(arr, "size"):
+        raise AttributeError("The object must have an size attribute.")
     return pack(arr, clevel, shuffle, cname)
 
 
