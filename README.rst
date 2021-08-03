@@ -4,7 +4,6 @@ python-blosc2: a Python wrapper for the extremely fast Blosc2 compression librar
 :Author: The Blosc development team
 :Contact: blosc@blosc.org
 :Github: https://github.com/Blosc/python-blosc2
-:URL: http://python-blosc2.blosc.org
 :PyPi: |version|
 :Gitter: |gitter|
 :Code of Conduct: |Contributor Covenant|
