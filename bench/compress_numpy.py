@@ -46,8 +46,7 @@ for (in_, label) in arrays:
     print("\n*** %s ***" % label)
     for cname in blosc2.compressor_list():
         for filter in [blosc2.NOFILTER, blosc2.SHUFFLE, blosc2.BITSHUFFLE]:
-            # clevel 9 is usually the best setting for fast compressors
-            clevel = 9 if cname in ["lz4", "blosclz"] else 6
+            clevel = 6
             t0 = time.time()
             c = blosc2.compress(in_, in_.itemsize, clevel=clevel, shuffle=filter, cname=cname)
             tc = time.time() - t0

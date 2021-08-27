@@ -96,8 +96,7 @@ for (in_, label) in arrays:
     print("\n*** %s ***" % label)
     for cname in blosc2.compressor_list():
         print("Using *** %s *** compressor:" % cname)
-        # clevel 9 is usually the best setting for fast compressors
-        clevel = 9 if cname in ["lz4", "blosclz"] else 6
+        clevel = 6
 
         ctic = time.time()
         for i in range(NREP):
