@@ -60,10 +60,10 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
 @pytest.mark.parametrize(
     "nbytes, cparams, dparams, nchunks",
     [
-        (7, {"compcode": blosc2.LZ4, "clevel": 6, "typesize": 1}, {}, 0),
-        (641091, {"typesize": 1}, {"nthreads": 2}, 1),
+        (7, {"compcode": blosc2.LZ4, "clevel": 6, "typesize": 5}, {}, 1),
+        (641091, {"typesize": 3}, {"nthreads": 2}, 1),
         (136, {"typesize": 1}, {}, 5),
-        (1231, {"typesize": 1}, blosc2.dparams_dflts, 10),
+        (1231, {"typesize": 8}, blosc2.dparams_dflts, 10),
     ],
 )
 def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):

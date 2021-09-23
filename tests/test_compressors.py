@@ -13,7 +13,7 @@ import blosc2
 
 @pytest.mark.parametrize(
     "typesize, clevel, cname",
-    [(1, 8, "blosclz"), (1, 9, "lz4"), (1, 3, "lz4hc"), (1, 5, "zlib"), (1, 2, "zstd")],
+    [(7, 8, "blosclz"), (2, 9, "lz4"), (7, 3, "lz4hc"), (3, 5, "zlib"), (20, 2, "zstd")],
 )
 @pytest.mark.parametrize(
     "filt", [blosc2.BITSHUFFLE, blosc2.SHUFFLE, blosc2.NOFILTER, blosc2.DELTA, blosc2.TRUNC_PREC]
