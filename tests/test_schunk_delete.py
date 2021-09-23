@@ -27,7 +27,7 @@ def test_schunk_delete_numpy(contiguous, urlpath, nchunks, ndeletes):
     storage = {
         "contiguous": contiguous,
         "urlpath": urlpath,
-        "cparams": {"nthreads": 2, "typesize": 4},
+        "cparams": {"nthreads": 2},
         "dparams": {"nthreads": 2},
     }
     blosc2.remove_urlpath(urlpath)
@@ -70,7 +70,7 @@ def test_schunk_delete(contiguous, urlpath, nchunks, ndeletes):
     storage = {
         "contiguous": contiguous,
         "urlpath": urlpath,
-        "cparams": {"nthreads": 2, "typesize": 1},
+        "cparams": {"nthreads": 2},
         "dparams": {"nthreads": 2},
     }
     blosc2.remove_urlpath(urlpath)

@@ -27,8 +27,8 @@ for i in range(nchunks):
     nchunks_ = schunk.append_data(buffer)
     assert nchunks_ == (i + 1)
 
-# Decompress second the chunk in different ways
-buffer = 1 * numpy.arange(200 * 1000)
+# Decompress the second chunk in different ways
+buffer = 1 * numpy.arange(200 * 1000, dtype="int32")
 bytes_obj = buffer.tobytes()
 res = schunk.decompress_chunk(1)
 assert res == bytes_obj

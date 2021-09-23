@@ -54,7 +54,7 @@ def test_decompress_numpy(object, cname):
     ],
 )
 def test_decompress(object, cname):
-    c = blosc2.compress(object, cname=cname, typesize=1)
+    c = blosc2.compress(object, cname=cname)
 
     dest = bytearray(object)
     blosc2.decompress(c, dst=dest)

@@ -12,7 +12,7 @@ import pytest
 import blosc2
 
 
-@pytest.mark.parametrize("size, dtype", [(1e6, None)])
+@pytest.mark.parametrize("size, dtype", [(1e6, "int64")])
 def test_array(size, dtype):
     nparray = np.arange(size, dtype=dtype)
     parray = blosc2.pack_array(nparray)
