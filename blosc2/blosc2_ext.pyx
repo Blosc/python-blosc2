@@ -551,7 +551,8 @@ dparams_dflts = {
 }
 
 cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
-    cparams.compcode = kwargs.get('compcode', cparams_dflts['compcode'])
+    compcode = kwargs.get('compcode', cparams_dflts['compcode'])
+    cparams.compcode = compcode.value if isinstance(compcode, Enum) else compcode
     cparams.compcode_meta = kwargs.get('compcode_meta', cparams_dflts['compcode_meta'])
     cparams.clevel = kwargs.get('clevel', cparams_dflts['clevel'])
     cparams.use_dict = kwargs.get('use_dict', cparams_dflts['use_dict'])
