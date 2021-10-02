@@ -583,14 +583,6 @@ def detect_number_of_cores():
     return 1  # Default
 
 
-# Build a dict with all the available cnames
-_cnames2codecs = {
-    "blosclz": blosc2_ext.BLOSCLZ,
-    "lz4": blosc2_ext.LZ4,
-    "lz4hc": blosc2_ext.LZ4HC,
-    "zlib": blosc2_ext.ZLIB,
-    "zstd": blosc2_ext.ZSTD,
-}
 # Dictionaries for the maps between compressor names and libs
 cnames = compressor_list()
 # Map for compression libraries and versions
@@ -667,8 +659,9 @@ def compress2(src, **kwargs):
         Keyword arguments supported:
 
             compcode: int
-                The compressor code. It can be `blosc2.BLOSCLZ` (the default one),
-                `blosc2.LZ4`, `blosc2.LZ4HC`, `blosc2.ZLIB`, `blosc2.ZSTD` and maybe other too.
+                The compressor code. It can be `blosc2.Codec.BLOSCLZ` (the default one),
+                `blosc2.Codec.LZ4`, `blosc2.Codec.LZ4HC`,
+                `blosc2.Codec.ZLIB`, `blosc2.Codec.ZSTD` and maybe other too.
             compcode_meta: int
                 The metadata for the compressor code, 0 by default.
             clevel: int

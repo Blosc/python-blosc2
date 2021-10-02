@@ -16,7 +16,7 @@ import blosc2
 @pytest.mark.parametrize(
     "cparams, dparams, nchunks",
     [
-        ({"compcode": blosc2.LZ4, "clevel": 6, "typesize": 4}, {}, 10),
+        ({"compcode": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 10),
     ],
 )
 def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
@@ -40,7 +40,7 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
 @pytest.mark.parametrize(
     "nbytes, cparams, dparams, nchunks",
     [
-        (136, {"compcode": blosc2.LZ4, "clevel": 6, "typesize": 1}, {}, 10),
+        (136, {"compcode": blosc2.Codec.LZ4, "clevel": 6, "typesize": 1}, {}, 10),
     ],
 )
 def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):

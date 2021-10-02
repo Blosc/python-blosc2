@@ -33,11 +33,8 @@ class Filter(Enum):
 from .blosc2_ext import (
     ALWAYS_SPLIT,
     AUTO_SPLIT,
-    BLOSCLZ,
     EXTENDED_HEADER_LENGTH,
     FORWARD_COMPAT_SPLIT,
-    LZ4,
-    LZ4HC,
     MAX_BUFFERSIZE,
     MAX_TYPESIZE,
     MIN_HEADER_LENGTH,
@@ -45,8 +42,6 @@ from .blosc2_ext import (
     TRUNC_PREC,
     VERSION_DATE,
     VERSION_STRING,
-    ZLIB,
-    ZSTD,
     cparams_dflts,
     dparams_dflts,
     storage_dflts,
@@ -90,11 +85,6 @@ set_nthreads(nthreads)
 
 __all__ = [
     __version__,
-    BLOSCLZ,
-    LZ4,
-    LZ4HC,
-    ZLIB,
-    ZSTD,
     compress,
     decompress,
     set_compressor,
