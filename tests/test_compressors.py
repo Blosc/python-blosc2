@@ -16,7 +16,7 @@ import blosc2
     [(7, 8, "blosclz"), (2, 9, "lz4"), (7, 3, "lz4hc"), (3, 5, "zlib"), (20, 2, "zstd")],
 )
 @pytest.mark.parametrize(
-    "filt", [blosc2.BITSHUFFLE, blosc2.SHUFFLE, blosc2.NOFILTER, blosc2.DELTA, blosc2.TRUNC_PREC]
+    "filt", list(blosc2.Filter)
 )
 def test_compressors(typesize, clevel, filt, cname):
     src = b"Something to be compressed" * 100

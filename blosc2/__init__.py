@@ -5,15 +5,35 @@
 #
 ########################################################################
 
+from enum import Enum
 
-# Filters
-# Codecs
+
+class Codec(Enum):
+    """
+    Available codecs.
+    """
+    BLOSCLZ = 0
+    LZ4 = 1
+    LZ4HC = 2
+    ZLIB = 4
+    ZSTD = 5
+
+
+class Filter(Enum):
+    """
+    Available filters.
+    """
+    NOFILTER = 0
+    SHUFFLE = 1
+    BITSHUFFLE = 2
+    DELTA = 3
+    TRUNC_PREC = 4
+
+
 from .blosc2_ext import (
     ALWAYS_SPLIT,
     AUTO_SPLIT,
-    BITSHUFFLE,
     BLOSCLZ,
-    DELTA,
     EXTENDED_HEADER_LENGTH,
     FORWARD_COMPAT_SPLIT,
     LZ4,
@@ -22,9 +42,6 @@ from .blosc2_ext import (
     MAX_TYPESIZE,
     MIN_HEADER_LENGTH,
     NEVER_SPLIT,
-    NOFILTER,
-    NOSHUFFLE,
-    SHUFFLE,
     TRUNC_PREC,
     VERSION_DATE,
     VERSION_STRING,
@@ -64,16 +81,6 @@ from .version import __version__
 
 blosclib_version = "%s (%s)" % (VERSION_STRING, VERSION_DATE)
 
-# Filter names
-filter_names = {
-    NOFILTER: "nofilter",
-    NOSHUFFLE: "noshuffle",
-    SHUFFLE: "shuffle",
-    BITSHUFFLE: "bitshuffle",
-    DELTA: "delta",
-    TRUNC_PREC: "trun_prec",
-}
-
 # Internal Blosc threading
 nthreads = ncores = detect_number_of_cores()
 # Protection against too many cores
@@ -88,11 +95,6 @@ __all__ = [
     LZ4HC,
     ZLIB,
     ZSTD,
-    NOFILTER,
-    SHUFFLE,
-    BITSHUFFLE,
-    DELTA,
-    TRUNC_PREC,
     compress,
     decompress,
     set_compressor,
@@ -117,7 +119,6 @@ __all__ = [
     VERSION_DATE,
     MIN_HEADER_LENGTH,
     EXTENDED_HEADER_LENGTH,
-    filter_names,
     ALWAYS_SPLIT,
     AUTO_SPLIT,
     NEVER_SPLIT,
