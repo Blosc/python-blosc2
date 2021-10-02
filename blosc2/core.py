@@ -31,14 +31,14 @@ def _check_input_length(input_name, input_len):
 
 def _check_shuffle(shuffle):
     if shuffle not in [
-        blosc2_ext.NOFILTER,
-        blosc2_ext.SHUFFLE,
-        blosc2_ext.BITSHUFFLE,
-        blosc2_ext.DELTA,
-        blosc2_ext.TRUNC_PREC,
+        blosc2.Filter.NOFILTER,
+        blosc2.Filter.SHUFFLE,
+        blosc2.Filter.BITSHUFFLE,
+        blosc2.Filter.DELTA,
+        blosc2.Filter.TRUNC_PREC,
     ]:
         raise ValueError(
-            "shuffle can only be one of NOSHUFFLE, SHUFFLE, BITSHUFFLE" " DELTA, and TRUNC_PREC."
+            "shuffle can only be one of NOSHUFFLE, SHUFFLE, BITSHUFFLE, DELTA, and TRUNC_PREC."
         )
 
 
@@ -47,7 +47,7 @@ def _check_cname(cname):
         raise ValueError("cname can only be one of: %s, not '%s'" % (cnames, cname))
 
 
-def compress(src, typesize=8, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname="blosclz"):
+def compress(src, typesize=8, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz"):
     """Compress src, with a given type size.
 
     Parameters
@@ -61,8 +61,8 @@ def compress(src, typesize=8, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname="blosc
         (maximum compression).  The default is 9.
     shuffle : int (optional)
         The shuffle filter to be activated.  Allowed values are
-        blosc2.NOFILTER, blosc2.SHUFFLE and blosc2.BITSHUFFLE.  The
-        default is blosc2.SHUFFLE.
+        Filter.NOFILTER, Filter.SHUFFLE and Filter.BITSHUFFLE.  The
+        default is Filter.SHUFFLE.
     cname : string (optional)
         The name of the compressor used internally in Blosc. It can be
         any of the supported by Blosc ( `blosclz` , `lz4` , `lz4hc` ,
@@ -170,7 +170,7 @@ def decompress(src, dst=None, as_bytearray=False):
     return blosc2_ext.decompress(src, dst, as_bytearray)
 
 
-def pack(obj, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname="blosclz"):
+def pack(obj, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz"):
     """Pack (compress) a Python object.
 
     Parameters
@@ -182,8 +182,8 @@ def pack(obj, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname="blosclz"):
         (maximum compression).  The default is 9.
     shuffle : int (optional)
         The shuffle filter to be activated.  Allowed values are
-        blosc2.NOFILTER, blosc2.SHUFFLE and blosc2.BITSHUFFLE.  The
-        default is blosc2.SHUFFLE.
+        Filter.NOFILTER, Filter.SHUFFLE and Filter.BITSHUFFLE.  The
+        default is Filter.SHUFFLE.
     cname : string (optional)
         The name of the compressor used internally in Blosc. It can be
         any of the supported by Blosc ( `blosclz` , `lz4` , `lz4hc` ,
@@ -276,7 +276,7 @@ def unpack(packed_object, **kwargs):
     return obj
 
 
-def pack_array(arr, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname="blosclz"):
+def pack_array(arr, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz"):
     """Pack (compress) a NumPy array. It is equivalent to the pack function.
 
     Parameters
@@ -288,8 +288,8 @@ def pack_array(arr, clevel=9, shuffle=blosc2_ext.SHUFFLE, cname="blosclz"):
         (maximum compression).  The default is 9.
     shuffle : int (optional)
         The shuffle filter to be activated.  Allowed values are
-        blosc.NOSHUFFLE, blosc.SHUFFLE and blosc.BITSHUFFLE.  The
-        default is blosc.SHUFFLE.
+        Filter.NOFILTER, Filter.SHUFFLE and Filter.BITSHUFFLE.  The
+        default is Filter.SHUFFLE.
     cname : string (optional)
         The name of the compressor used internally in Blosc. It can be
         any of the supported by Blosc ( `blosclz` , `lz4` , `lz4hc` ,
@@ -583,14 +583,6 @@ def detect_number_of_cores():
     return 1  # Default
 
 
-# Build a dict with all the available cnames
-_cnames2codecs = {
-    "blosclz": blosc2_ext.BLOSCLZ,
-    "lz4": blosc2_ext.LZ4,
-    "lz4hc": blosc2_ext.LZ4HC,
-    "zlib": blosc2_ext.ZLIB,
-    "zstd": blosc2_ext.ZSTD,
-}
 # Dictionaries for the maps between compressor names and libs
 cnames = compressor_list()
 # Map for compression libraries and versions
@@ -667,8 +659,9 @@ def compress2(src, **kwargs):
         Keyword arguments supported:
 
             compcode: int
-                The compressor code. It can be `blosc2.BLOSCLZ` (the default one),
-                `blosc2.LZ4`, `blosc2.LZ4HC`, `blosc2.ZLIB`, `blosc2.ZSTD` and maybe other too.
+                The compressor code. It can be `blosc2.Codec.BLOSCLZ` (the default one),
+                `blosc2.Codec.LZ4`, `blosc2.Codec.LZ4HC`,
+                `blosc2.Codec.ZLIB`, `blosc2.Codec.ZSTD` and maybe other too.
             compcode_meta: int
                 The metadata for the compressor code, 0 by default.
             clevel: int
@@ -688,7 +681,7 @@ def compress2(src, **kwargs):
                 `blosc2.NEVER_SPLIT`, `blosc2.AUTO_SPLIT` and `blosc2.FORWARD_COMPAT_SPLIT`.
                 The default value is `blosc2.FORWARD_COMPAT_SPLIT`.
             filters: list
-                The sequence of filters. By default: `{0, 0, 0, 0, 0, blosc2.BLOSC_SHUFFLE}`.
+                The sequence of filters. By default: `{0, 0, 0, 0, 0, blosc2.Filter.BLOSC_SHUFFLE}`.
             filters_meta: list
                 The metadata for filters. By default: `{0, 0, 0, 0, 0, 0}`.
 

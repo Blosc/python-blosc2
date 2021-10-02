@@ -11,8 +11,8 @@ import numpy as np
 a = np.linspace(0, 1, 1_000_000, dtype=np.float64)
 typesize = a.dtype.itemsize
 c_bytesobj = blosc2.compress2(a, typesize=typesize,
-                              compcode=blosc2.ZSTD,
-                              filters=[blosc2.TRUNC_PREC, blosc2.SHUFFLE],
+                              compcode=blosc2.Codec.ZSTD,
+                              filters=[blosc2.Filter.TRUNC_PREC, blosc2.Filter.SHUFFLE],
                               filters_meta=[20, 0],
                               )
 assert len(c_bytesobj) < (len(a) * typesize)

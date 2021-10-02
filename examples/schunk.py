@@ -11,7 +11,7 @@ import blosc2
 
 nchunks = 10
 # Set the compression and decompression parameters
-cparams = {"compcode": blosc2.LZ4HC, "typesize": 4}
+cparams = {"compcode": blosc2.Codec.LZ4HC, "typesize": 4}
 dparams = {}
 contiguous = True
 urlpath = "filename"
