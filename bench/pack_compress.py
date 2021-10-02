@@ -100,7 +100,7 @@ for (in_, label) in arrays:
 
         ctic = time.time()
         for i in range(NREP):
-            c = blosc2.pack_array(in_, clevel=clevel, shuffle=True, cname=cname)
+            c = blosc2.pack_array(in_, clevel=clevel, shuffle=blosc2.Filter.SHUFFLE, cname=cname)
         ctoc = time.time()
         dtic = time.time()
         for i in range(NREP):
@@ -119,7 +119,7 @@ for (in_, label) in arrays:
 
         ctic = time.time()
         for i in range(NREP):
-            c = blosc2.compress(in_, clevel=clevel, shuffle=True, cname=cname)
+            c = blosc2.compress(in_, clevel=clevel, shuffle=blosc2.Filter.SHUFFLE, cname=cname)
         ctoc = time.time()
         out = np.full_like(in_, fill_value=0)
         dtic = time.time()
