@@ -18,7 +18,7 @@ import blosc2
         (numpy.random.randint(0, 10, 10), {"compcode": blosc2.LZ4, "clevel": 6}, {}),
         (
             numpy.arange(10, dtype="float32"),
-            {"filters": [blosc2.TRUNC_PREC, blosc2.BITSHUFFLE], "typesize": 4},
+            {"filters": [blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE], "typesize": 4},
             {"nthreads": 4},
         ),
         (

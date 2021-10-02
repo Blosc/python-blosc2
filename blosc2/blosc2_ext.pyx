@@ -16,6 +16,7 @@ from cpython cimport (
 from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free, malloc, realloc
 from libcpp cimport bool
+from enum import Enum
 
 
 cdef extern int blosc2_remove_urlpath(const char *path)
@@ -404,7 +405,7 @@ def _check_comp_length(comp_name, comp_len):
     if comp_len < BLOSC_MIN_HEADER_LENGTH:
         raise ValueError("%s cannot be less than %d bytes" % (comp_name, BLOSC_MIN_HEADER_LENGTH))
 
-cpdef compress(src, int32_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE, cname='blosclz'):
+cpdef compress(src, int32_t typesize=8, int clevel=9, shuffle=BLOSC_SHUFFLE, cname='blosclz'):
     set_compressor(cname)
     cdef int32_t len_src = <int32_t> len(src)
     cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
@@ -412,12 +413,13 @@ cpdef compress(src, int32_t typesize=8, int clevel=9, int shuffle=BLOSC_SHUFFLE,
     dest = bytes(buf.len + BLOSC_MAX_OVERHEAD)
     cdef int32_t len_dest =  <int32_t> len(dest)
     cdef int size
+    cdef int shuffle_ = shuffle.value if isinstance(shuffle, Enum) else shuffle
     if RELEASEGIL:
         _dest = <void*> <char *> dest
         with nogil:
-            size = blosc2_compress(clevel, shuffle, <int32_t> typesize, buf.buf, <int32_t> buf.len, _dest, len_dest)
+            size = blosc2_compress(clevel, shuffle_, <int32_t> typesize, buf.buf, <int32_t> buf.len, _dest, len_dest)
     else:
-        size = blosc2_compress(clevel, shuffle, <int32_t> typesize, buf.buf, <int32_t> buf.len, <void*> <char *> dest, len_dest)
+        size = blosc2_compress(clevel, shuffle_, <int32_t> typesize, buf.buf, <int32_t> buf.len, <void*> <char *> dest, len_dest)
     PyBuffer_Release(buf)
     free(buf)
     if size > 0:
@@ -568,7 +570,7 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     filters = kwargs.get('filters', cparams_dflts['filters'])
     j = 0
     for i in filters:
-        cparams.filters[j] = i
+        cparams.filters[j] = i.value if isinstance(i, Enum) else i
         j+=1
 
     filters_meta = kwargs.get('filters_meta', cparams_dflts['filters_meta'])
