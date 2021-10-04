@@ -23,7 +23,7 @@ jobs:
         #os: [ubuntu-latest, windows-latest, macos-latest]
         #os: [ubuntu-latest, macos-latest]
         os: [windows-latest]
-        arch: [auto]
+        arch: [amd64]
         exclude:
           - os: windows-latest
             arch: aarch64
