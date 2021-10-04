@@ -20,10 +20,8 @@ jobs:
     #if: startsWith(github.event.ref, 'refs/tags')
     strategy:
       matrix:
-        #os: [ubuntu-latest, windows-latest, macos-latest]
-        #os: [ubuntu-latest, macos-latest]
-        os: [windows-latest]
-        arch: [amd64]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        arch: [amd64, aarch64]
         exclude:
           - os: windows-latest
             arch: aarch64
@@ -47,11 +45,6 @@ jobs:
 
       - name: Install Ninja
         uses: seanmiddleditch/gha-setup-ninja@master
-
-          #      - name: Install MSVC x86
-          #        uses: ilammy/msvc-dev-cmd@v1
-          #        with:
-          #          arch: x86
 
       - name: Install MSVC amd64
         uses: ilammy/msvc-dev-cmd@v1
