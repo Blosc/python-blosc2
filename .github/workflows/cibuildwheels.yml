@@ -49,7 +49,12 @@ jobs:
       - name: Install MSVC x86
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: [x86, amd64]
+          arch: x86
+
+      - name: Install MSVC amd64
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: amd64
 
       - name: Install dependencies
         run: |
