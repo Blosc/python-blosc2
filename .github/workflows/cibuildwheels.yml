@@ -101,6 +101,7 @@ jobs:
           CIBW_TEST_COMMAND: python -m pytest {project}/tests
           CIBW_TEST_SKIP: '*_arm64'
           CIBW_BUILD_VERBOSITY: 1
+          CIBW_ENVIRONMENT: "CMAKE_OSX_ARCHITECTURES=arm64"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v2
