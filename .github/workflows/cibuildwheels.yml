@@ -98,6 +98,15 @@ jobs:
   build_sdist:
     name: Build sdist
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        arch: [auto]
+        exclude:
+          - os: [ubuntu-latest]
+            # We don't support 32-bit platforms in python-blosc2
+            arch: x86
+
     steps:
       - uses: actions/checkout@v2
         with:
