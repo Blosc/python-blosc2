@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from python-blosc2 0.2.0 to python-blosc2 0.2.1
+
+XXX version-specific blurb XXX
+
+
 ## Changes from python-blosc2 0.1.10 to python-blosc2 0.2.0
 
 * Internal C-Blosc updated to 2.0.4.
