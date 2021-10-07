@@ -1,8 +1,30 @@
 # Release notes
 
-## Changes from python-blosc2 0.1.10 to python-blosc2 0.1.11
+## Changes from python-blosc2 0.1.10 to python-blosc2 0.2.0
 
-XXX version-specific blurb XXX
+* Internal C-Blosc updated to 2.0.4.
+
+### Super-chunk implementation
+
+* New `SChunk` class that allows to create super-chunks. 
+  This includes the capability of storing data in 4 
+  different ways (sparse/contiguous and in memory/on-disk),
+  as well as storing variable length metalayers.
+
+* Also, during the contruction of a `SChunk` instance,
+  an arbitrarily large data buffer can be given so that it is
+  automatically split in chunks and those are appended to the
+  `SChunk`.
+
+* See `examples/schunk.py` and `examples/vlmeta.py` for some examples.
+
+* Documentation of the new API is here: https://python-blosc2.readthedocs.io
+
+This release is the result of a grant offered by
+the Python Software Foundation to Marta Iborra.
+A blog entry was written describing the difficulties and relevant 
+aspects learned during the work: 
+https://www.blosc.org/posts/python-blosc2-initial-release/
 
 
 ## Changes from python-blosc2 0.1.9 to python-blosc2 0.1.10

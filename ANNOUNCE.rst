@@ -1,8 +1,22 @@
-Announcing python-blosc2 0.1.10
-===============================
+Announcing python-blosc2 0.2.0
+==============================
 
-This is a maintenance release to use and distribute the latest
-C-Blosc2 2.0.2 library.
+This is a major release implementing the super-chunk container that
+appeared in C-Blosc2.
+
+This release is the result of a grant offered by
+the Python Software Foundation to Marta Iborra.
+A blog entry was written describing the difficulties and relevant
+aspects learned during the work:
+https://www.blosc.org/posts/python-blosc2-initial-release/
+
+For more info, you can have a look at the release notes in:
+
+https://github.com/Blosc/python-blosc2/releases
+
+More docs and examples are available in the documentation site:
+
+https://python-blosc2.rtfd.io
 
 
 Changes from python-blosc to python-blosc2
@@ -19,18 +33,6 @@ Changes from python-blosc to python-blosc2
 * A bytearray or NumPy object can be passed to the `blosc2.decompress` function to store the
   decompressed data.
 
-In this release the wheels come with headers and binaries for the C-Blosc2 library.
-This is a convenient way to get access to the C-Blosc2 development files without
-waiting for your favorite distribution system to get the latest version of it.
-
-For more info, you can have a look at the release notes in:
-
-https://github.com/Blosc/python-blosc2/releases
-
-More docs and examples are available in the documentation site:
-
-https://python-blosc2.rtfd.io
-
 
 ## What is it?
 
@@ -42,17 +44,17 @@ via a memcpy() OS call. Blosc main goal is not just to reduce the
 size of large datasets
 on-disk or in-memory, but also to accelerate memory-bound computations.
 
-python-blosc2 is a pythonic wrapper for the c-blosc2 library.
+python-blosc2 is a pythonic wrapper for the C-Blosc2 library.
 
 
 ## Sources repository
 
 The sources and documentation are managed through github services at:
 
-http://github.com/Blosc/c-blosc2
+http://github.com/Blosc/python-blosc2
 
 c-blosc2 is distributed using the BSD license, see
-[LICENSE](https://github.com/Blosc/c-blosc2/blob/master/LICENSE.txt)
+[LICENSE](https://github.com/Blosc/python-blosc2/blob/main/LICENSE)
 for details.
 
 
