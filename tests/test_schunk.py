@@ -13,6 +13,7 @@ import blosc2
 
 @pytest.mark.parametrize("contiguous", [True, False])
 @pytest.mark.parametrize("urlpath", [None, "b2frame"])
+@pytest.mark.parametrize("mode", ["r", "w", "a"])
 @pytest.mark.parametrize(
     "cparams, dparams, nchunks",
     [
@@ -22,37 +23,39 @@ import blosc2
         ({"compcode": blosc2.Codec.LZ4HC, "typesize": 4}, {}, 10),
     ],
 )
-def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
+def test_schunk_numpy(contiguous, urlpath, mode, cparams, dparams, nchunks):
     storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     blosc2.remove_urlpath(urlpath)
 
-    schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, **storage)
-    for i in range(nchunks):
-        buffer = i * numpy.arange(200 * 1000, dtype="int32")
-        nchunks_ = schunk.append_data(buffer)
-        assert nchunks_ == (i + 1)
+    if mode != "r" or urlpath is None:
+        schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, mode=mode, **storage)
 
-    for i in range(nchunks):
-        buffer = i * numpy.arange(200 * 1000, dtype="int32")
-        bytes_obj = buffer.tobytes()
-        res = schunk.decompress_chunk(i)
-        assert res == bytes_obj
+        for i in range(nchunks):
+            buffer = i * numpy.arange(200 * 1000, dtype="int32")
+            nchunks_ = schunk.append_data(buffer)
+            assert nchunks_ == (i + 1)
 
-        dest = numpy.empty(buffer.shape, buffer.dtype)
-        schunk.decompress_chunk(i, dest)
-        assert numpy.array_equal(buffer, dest)
+        for i in range(nchunks):
+            buffer = i * numpy.arange(200 * 1000, dtype="int32")
+            bytes_obj = buffer.tobytes()
+            res = schunk.decompress_chunk(i)
+            assert res == bytes_obj
 
-        schunk.decompress_chunk(i, memoryview(dest))
-        assert numpy.array_equal(buffer, dest)
+            dest = numpy.empty(buffer.shape, buffer.dtype)
+            schunk.decompress_chunk(i, dest)
+            assert numpy.array_equal(buffer, dest)
 
-        dest = bytearray(buffer)
-        schunk.decompress_chunk(i, dest)
-        assert dest == bytes_obj
+            schunk.decompress_chunk(i, memoryview(dest))
+            assert numpy.array_equal(buffer, dest)
 
-    for i in range(nchunks):
-        schunk.get_chunk(i)
+            dest = bytearray(buffer)
+            schunk.decompress_chunk(i, dest)
+            assert dest == bytes_obj
 
-    blosc2.remove_urlpath(urlpath)
+        for i in range(nchunks):
+            schunk.get_chunk(i)
+
+        blosc2.remove_urlpath(urlpath)
 
 
 @pytest.mark.parametrize("contiguous", [True, False])
