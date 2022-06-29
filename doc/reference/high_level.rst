@@ -47,4 +47,5 @@ Utils
 -----
 
 .. autofunction:: remove_urlpath
+.. autofunction:: open
 

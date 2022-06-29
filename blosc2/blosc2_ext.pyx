@@ -13,10 +13,12 @@ from cpython cimport (
     PyBytes_FromStringAndSize,
     PyObject_GetBuffer,
 )
+from cpython.pycapsule cimport PyCapsule_New, PyCapsule_GetPointer
 from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free, malloc, realloc
 from libcpp cimport bool
 from enum import Enum
+import blosc2
 
 
 cdef extern int blosc2_remove_urlpath(const char *path)
@@ -211,7 +213,7 @@ cdef extern from "blosc2.h":
         uint8_t filters[BLOSC2_MAX_FILTERS]
         uint8_t filters_meta[BLOSC2_MAX_FILTERS]
         blosc2_prefilter_fn prefilter
-        blosc2_prefilter_params * preparams
+        blosc2_prefilter_params* preparams
         blosc2_btune *udbtune
         bool instr_codec
 
@@ -219,7 +221,7 @@ cdef extern from "blosc2.h":
 
     ctypedef struct blosc2_dparams:
         int16_t nthreads
-        void * schunk
+        void* schunk
         blosc2_postfilter_fn postfilter
         blosc2_postfilter_params *postparams
 
@@ -680,7 +682,21 @@ cdef create_storage(blosc2_storage *storage, kwargs):
 cdef class SChunk:
     cdef blosc2_schunk *schunk
 
-    def __init__(self, chunksize=8*10**6, data=None, **kwargs):
+    def __init__(self, schunk=None, chunksize=8*10**6, data=None, mode="a", **kwargs):
+        if schunk is not None:
+            self.schunk = <blosc2_schunk *> PyCapsule_GetPointer(schunk, <char *> "blosc2_schunk*")
+            if mode == "w" and kwargs["urlpath"] is not None:
+                blosc2.remove_urlpath(kwargs["urlpath"])
+                self.schunk = blosc2_schunk_new(self.schunk.storage)
+            return
+
+        if kwargs is not None:
+            urlpath = kwargs.get("urlpath", None)
+            if mode == "w":
+                blosc2.remove_urlpath(urlpath)
+            elif mode == "r" and urlpath is not None:
+                raise ValueError("SChunk must already exist")
+
         cdef blosc2_storage storage
         # Create space for cparams and dparams in the stack
         cdef blosc2_cparams cparams = BLOSC2_CPARAMS_DEFAULTS
@@ -883,3 +899,29 @@ cdef class vlmeta:
         rc = blosc2_vlmeta_delete(self.schunk, name)
         if rc < 0:
             raise RuntimeError("Could not delete the vlmeta")
+
+
+def schunk_open(urlpath, mode, **kwargs):
+    urlpath = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
+    cdef blosc2_schunk* schunk = blosc2_schunk_open(urlpath)
+    kwargs["urlpath"] = urlpath
+    kwargs["contiguous"] = schunk.storage.contiguous
+    if mode != "w" and kwargs is not None:
+        _check_schunk_params(schunk, kwargs)
+    return blosc2.SChunk(schunk=PyCapsule_New(schunk, <char *> "blosc2_schunk*", NULL), mode=mode, **kwargs)
+
+
+def _check_access_mode(urlpath, mode):
+    if urlpath is not None and mode == "r":
+        raise ValueError("Cannot do this action with reading mode")
+
+
+cdef _check_schunk_params(blosc2_schunk* schunk, kwargs):
+    cparams = kwargs.get("cparams", None)
+    if cparams is not None:
+        blocksize = kwargs.get("blocksize", schunk.blocksize)
+        if blocksize not in [0, schunk.blocksize]:
+            raise ValueError("Cannot change blocksize with this mode")
+        typesize = kwargs.get("typesize", schunk.typesize)
+        if typesize != schunk.typesize:
+            raise ValueError("Cannot change typesize with this mode")

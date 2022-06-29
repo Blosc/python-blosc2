@@ -71,7 +71,7 @@ from .core import (
     unpack,
     unpack_array,
 )
-from .SChunk import SChunk
+from .SChunk import SChunk, open
 from .version import __version__
 
 blosclib_version = "%s (%s)" % (VERSION_STRING, VERSION_DATE)
@@ -119,4 +119,5 @@ __all__ = [
     dparams_dflts,
     storage_dflts,
     SChunk,
+    open,
 ]
