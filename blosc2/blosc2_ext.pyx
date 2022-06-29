@@ -40,11 +40,17 @@ cdef extern from "blosc2.h":
         BLOSC_BITSHUFFLE
         BLOSC_DELTA
         BLOSC_TRUNC_PREC
+        BLOSC_LAST_FILTER
+
+    ctypedef enum:
         BLOSC_BLOSCLZ
         BLOSC_LZ4
         BLOSC_LZ4HC
         BLOSC_ZLIB
         BLOSC_ZSTD
+        BLOSC_LAST_CODEC
+
+    ctypedef enum:
         BLOSC2_MAX_FILTERS
         BLOSC2_MAX_METALAYERS
         BLOSC2_MAX_VLMETALAYERS
@@ -104,39 +110,23 @@ cdef extern from "blosc2.h":
 
     cdef int INT_MAX
 
-
-    void blosc_init()
-
-    void blosc_destroy()
-
     int blosc_compress(int clevel, int doshuffle, size_t typesize,
                        size_t nbytes, const void* src, void* dest,
                        size_t destsize)
 
-    int blosc_decompress(const void*src, void*dest, size_t destsize)
+    int blosc_decompress(const void* src, void* dest, size_t destsize)
 
-    int blosc2_chunk_zeros(size_t nbytes, size_t typesize,
-                           void*dest, size_t destsize)
-
-    int blosc2_chunk_nans(size_t nbytes, size_t typesize,
-                          void*dest, size_t destsize)
-
-    int blosc2_chunk_repeatval(size_t nbytes, size_t typesize,
-                               void*dest, size_t destsize, void*repeatval)
-
-    int blosc_getitem(const void*src, int start, int nitems, void* dest)
+    int blosc_getitem(const void* src, int start, int nitems, void* dest)
 
     int blosc2_getitem(const void* src, int32_t srcsize, int start, int nitems,
                        void* dest, int32_t destsize)
 
     ctypedef void(*blosc_threads_callback)(void *callback_data, void (*dojob)(void *), int numjobs,
-                                          size_t jobdata_elsize, void *jobdata)
+                                           size_t jobdata_elsize, void *jobdata)
 
     void blosc_set_threads_callback(blosc_threads_callback callback, void *callback_data)
 
-    int blosc_get_nthreads()nogil
-
-    int blosc_set_nthreads(int nthreads)
+    int16_t blosc_set_nthreads(int16_t nthreads)
 
     const char* blosc_get_compressor()
 
@@ -150,15 +140,13 @@ cdef extern from "blosc2.h":
 
     const char* blosc_list_compressors()
 
-    const char*blosc_get_version_string()
-
     int blosc_get_complib_info(const char* compname, char** complib,
                                char** version)
 
     int blosc_free_resources()
 
-    void blosc_cbuffer_sizes(const void* cbuffer, size_t* nbytes,
-                             size_t* cbytes, size_t* blocksize)
+    void blosc_cbuffer_sizes(const void* cbuffer, size_t * nbytes,
+                             size_t * cbytes, size_t * blocksize)
 
     int blosc2_cbuffer_sizes(const void* cbuffer, int32_t* nbytes,
                              int32_t* cbytes, int32_t* blocksize)
@@ -174,33 +162,41 @@ cdef extern from "blosc2.h":
 
     const char* blosc_cbuffer_complib(const void* cbuffer)
 
+
     ctypedef struct blosc2_context:
         pass
 
     ctypedef struct blosc2_prefilter_params:
-        void * user_data
-        uint8_t * out
+        void* user_data
+        const uint8_t* input
+        uint8_t* out
         int32_t out_size
         int32_t out_typesize
         int32_t out_offset
+        int64_t nchunk
+        int32_t nblock
         int32_t tid
         uint8_t* ttmp;
         size_t ttmp_nbytes
         blosc2_context* ctx
 
+    ctypedef struct blosc2_postfilter_params:
+        void *user_data
+        const uint8_t *input
+        uint8_t *out
+        int32_t size
+        int32_t typesize
+        int32_t offset
+        int64_t nchunk
+        int32_t nblock
+        int32_t tid
+        uint8_t * ttmp
+        size_t ttmp_nbytes
+        blosc2_context *ctx
+
     ctypedef int(*blosc2_prefilter_fn)(blosc2_prefilter_params* params)
 
-    ctypedef struct blosc2_btune:
-        void(*btune_init)(void *config, blosc2_context*cctx, blosc2_context*dctx)
-        void (*btune_next_blocksize)(blosc2_context *context)
-        void(*btune_next_cparams)(blosc2_context *context)
-        void(*btune_update)(blosc2_context *context, double ctime)
-        void (*btune_free)(blosc2_context *context)
-        void * btune_config
-
-    ctypedef struct blosc2_io:
-        uint8_t id
-        void* params
+    ctypedef int(*blosc2_postfilter_fn)(blosc2_postfilter_params *params)
 
     ctypedef struct blosc2_cparams:
         uint8_t compcode
@@ -211,32 +207,19 @@ cdef extern from "blosc2.h":
         int16_t nthreads
         int32_t blocksize
         int32_t splitmode
-        void* schunk
+        void *schunk
         uint8_t filters[BLOSC2_MAX_FILTERS]
         uint8_t filters_meta[BLOSC2_MAX_FILTERS]
         blosc2_prefilter_fn prefilter
-        blosc2_prefilter_params* preparams
+        blosc2_prefilter_params * preparams
         blosc2_btune *udbtune
+        bool instr_codec
 
     cdef const blosc2_cparams BLOSC2_CPARAMS_DEFAULTS
 
-    ctypedef struct blosc2_postfilter_params:
-        void *user_data
-        const uint8_t * input
-        uint8_t *out
-        int32_t size
-        int32_t typesize
-        int32_t offset
-        int32_t tid
-        uint8_t * ttmp
-        size_t ttmp_nbytes
-        blosc2_context *ctx
-
-    ctypedef int(*blosc2_postfilter_fn)(blosc2_postfilter_params *params)
-
     ctypedef struct blosc2_dparams:
-        int nthreads
-        void* schunk
+        int16_t nthreads
+        void * schunk
         blosc2_postfilter_fn postfilter
         blosc2_postfilter_params *postparams
 
@@ -246,27 +229,30 @@ cdef extern from "blosc2.h":
 
     blosc2_context* blosc2_create_dctx(blosc2_dparams dparams)
 
-    void blosc2_free_ctx(blosc2_context* context)
+    void blosc2_free_ctx(blosc2_context * context)
 
     int blosc2_set_maskout(blosc2_context *ctx, bool *maskout, int nblocks)
 
+
     int blosc2_compress(int clevel, int doshuffle, int32_t typesize,
-                        const void* src, int32_t srcsize, void* dest,
+                        const void * src, int32_t srcsize, void * dest,
                         int32_t destsize) nogil
 
-    int blosc2_decompress(const void* src, int32_t srcsize,
-                          void* dest, int32_t destsize)
+    int blosc2_decompress(const void * src, int32_t srcsize,
+                          void * dest, int32_t destsize)
 
     int blosc2_compress_ctx(
-            blosc2_context* context, const void* src, int32_t srcsize, void* dest,
+            blosc2_context * context, const void * src, int32_t srcsize, void * dest,
             int32_t destsize) nogil
 
-    int blosc2_decompress_ctx(blosc2_context* context, const void* src,
-                              int32_t srcsize, void* dest, int32_t destsize)
+    int blosc2_decompress_ctx(blosc2_context * context, const void * src,
+                              int32_t srcsize, void * dest, int32_t destsize)
 
     int blosc2_getitem_ctx(blosc2_context* context, const void* src,
                            int32_t srcsize, int start, int nitems, void* dest,
                            int32_t destsize)
+
+
 
     ctypedef struct blosc2_storage:
         bool contiguous
@@ -285,6 +271,20 @@ cdef extern from "blosc2.h":
         uint8_t* content
         int32_t content_len
 
+
+    ctypedef struct blosc2_btune:
+        void(*btune_init)(void *config, blosc2_context*cctx, blosc2_context*dctx)
+        void (*btune_next_blocksize)(blosc2_context *context)
+        void(*btune_next_cparams)(blosc2_context *context)
+        void(*btune_update)(blosc2_context *context, double ctime)
+        void (*btune_free)(blosc2_context *context)
+        void * btune_config
+
+    ctypedef struct blosc2_io:
+        uint8_t id
+        void* params
+
+
     ctypedef struct blosc2_schunk:
         uint8_t version
         uint8_t compcode
@@ -295,82 +295,72 @@ cdef extern from "blosc2.h":
         int32_t chunksize
         uint8_t filters[BLOSC2_MAX_FILTERS]
         uint8_t filters_meta[BLOSC2_MAX_FILTERS]
-        int32_t nchunks
+        int64_t nchunks
+        int64_t current_nchunk
         int64_t nbytes
         int64_t cbytes
         uint8_t** data
         size_t data_len
         blosc2_storage* storage
         blosc2_frame* frame
-        blosc2_context* ctx
         blosc2_context* cctx
         blosc2_context* dctx
-        int16_t nmetalayers
+        blosc2_metalayer *metalayers[BLOSC2_MAX_METALAYERS]
+        uint16_t nmetalayers
+        blosc2_metalayer *vlmetalayers[BLOSC2_MAX_VLMETALAYERS]
         int16_t nvlmetalayers
         blosc2_btune *udbtune
-
-    ctypedef void* (*blosc2_open_cb)(const char *urlpath, const char *mode, void *params)
-    ctypedef int(*blosc2_close_cb)(void *stream)
-    ctypedef int64_t(*blosc2_tell_cb)(void *stream)
-    ctypedef int(*blosc2_seek_cb)(void *stream, int64_t offset, int whence)
-    ctypedef int64_t(*blosc2_write_cb)(const void *ptr, int64_t size, int64_t nitems, void *stream)
-    ctypedef int64_t(*blosc2_read_cb)(void *ptr, int64_t size, int64_t nitems, void *stream)
-    ctypedef int64_t(*blosc2_truncate_cb)(void *stream, int64_t size)
-
-    ctypedef struct blosc2_io_cb:
-        uint8_t id
-        blosc2_open_cb open
-        blosc2_close_cb close
-        blosc2_tell_cb tell
-        blosc2_seek_cb seek
-        blosc2_write_cb write
-        blosc2_read_cb read
-        blosc2_truncate_cb truncate
+        int8_t ndim
+        int64_t *blockshape
 
     blosc2_schunk *blosc2_schunk_new(blosc2_storage *storage)
-    blosc2_schunk *blosc2_schunk_empty(int nchunks, blosc2_storage *storage)
     blosc2_schunk *blosc2_schunk_copy(blosc2_schunk *schunk, blosc2_storage *storage)
-    blosc2_schunk *blosc2_schunk_from_buffer(uint8_t *cframe, int64_t length, bool copy)
-    blosc2_schunk *blosc2_schunk_open(const char *urlpath)
+    blosc2_schunk *blosc2_schunk_from_buffer(uint8_t *cframe, int64_t len, bool copy)
+    blosc2_schunk *blosc2_schunk_open(const char* urlpath)
+
     int64_t blosc2_schunk_to_buffer(blosc2_schunk* schunk, uint8_t** cframe, bool* needs_free)
     int64_t blosc2_schunk_to_file(blosc2_schunk* schunk, const char* urlpath)
-    int blosc2_schunk_free(blosc2_schunk *schunk)
-    int blosc2_schunk_append_chunk(blosc2_schunk *schunk, uint8_t *chunk, bool copy)
-    int blosc2_schunk_update_chunk(blosc2_schunk *schunk, int nchunk, uint8_t *chunk, bool copy)
-    int blosc2_schunk_insert_chunk(blosc2_schunk *schunk, int nchunk, uint8_t *chunk, bool copy)
+    int64_t blosc2_schunk_free(blosc2_schunk *schunk)
+    int64_t blosc2_schunk_append_chunk(blosc2_schunk *schunk, uint8_t *chunk, bool copy)
+    int64_t blosc2_schunk_update_chunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t *chunk, bool copy)
+    int64_t blosc2_schunk_insert_chunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t *chunk, bool copy)
+    int64_t blosc2_schunk_delete_chunk(blosc2_schunk *schunk, int64_t nchunk)
 
-    int blosc2_schunk_append_buffer(blosc2_schunk *schunk, void *src, int32_t nbytes)
-    int blosc2_schunk_decompress_chunk(blosc2_schunk *schunk, int nchunk, void *dest, int32_t nbytes)
+    int64_t blosc2_schunk_append_buffer(blosc2_schunk *schunk, void *src, int32_t nbytes)
+    int blosc2_schunk_decompress_chunk(blosc2_schunk *schunk, int64_t nchunk, void *dest, int32_t nbytes)
 
-    int blosc2_schunk_get_chunk(blosc2_schunk *schunk, int nchunk, uint8_t ** chunk,
+    int blosc2_schunk_get_chunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t ** chunk,
                                 bool *needs_free)
-    int blosc2_schunk_get_lazychunk(blosc2_schunk *schunk, int nchunk, uint8_t ** chunk,
+    int blosc2_schunk_get_lazychunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t ** chunk,
                                     bool *needs_free)
-    int blosc2_schunk_get_cparams(blosc2_schunk *schunk, blosc2_cparams ** cparams)
-    int blosc2_schunk_get_dparams(blosc2_schunk *schunk, blosc2_dparams ** dparams)
-    int blosc2_schunk_reorder_offsets(blosc2_schunk *schunk, int *offsets_order)
-    int blosc2_schunk_delete_chunk(blosc2_schunk *schunk, int nchunk)
-    int64_t blosc2_schunk_frame_len(blosc2_schunk*schunk)
+    int blosc2_schunk_get_cparams(blosc2_schunk *schunk, blosc2_cparams** cparams)
+    int blosc2_schunk_get_dparams(blosc2_schunk *schunk, blosc2_dparams** dparams)
+    int blosc2_schunk_reorder_offsets(blosc2_schunk *schunk, int64_t *offsets_order)
+    int64_t blosc2_schunk_frame_len(blosc2_schunk* schunk)
+
     int blosc2_meta_exists(blosc2_schunk *schunk, const char *name)
     int blosc2_meta_add(blosc2_schunk *schunk, const char *name, uint8_t *content,
-                        uint32_t content_len)
+                        int32_t content_len)
     int blosc2_meta_update(blosc2_schunk *schunk, const char *name, uint8_t *content,
-                           uint32_t content_len)
-    int blosc2_meta_get(blosc2_schunk *schunk, const char *name, uint8_t ** content,
-                        uint32_t *content_len)
+                           int32_t content_len)
+    int blosc2_meta_get(blosc2_schunk *schunk, const char *name, uint8_t **content,
+                        int32_t *content_len)
     int blosc2_vlmeta_exists(blosc2_schunk *schunk, const char *name)
     int blosc2_vlmeta_add(blosc2_schunk *schunk, const char *name,
-                          uint8_t *content, uint32_t content_len, blosc2_cparams *cparams)
+                          uint8_t *content, int32_t content_len, blosc2_cparams *cparams)
     int blosc2_vlmeta_update(blosc2_schunk *schunk, const char *name,
-                             uint8_t *content, uint32_t content_len, blosc2_cparams *cparams)
+                             uint8_t *content, int32_t content_len, blosc2_cparams *cparams)
     int blosc2_vlmeta_get(blosc2_schunk *schunk, const char *name,
-                          uint8_t ** content, uint32_t *content_len)
+                          uint8_t **content, int32_t *content_len)
     int blosc2_vlmeta_delete(blosc2_schunk *schunk, const char *name)
+
 
     int blosc_get_blocksize()
     void blosc_set_blocksize(size_t blocksize)
     void blosc_set_schunk(blosc2_schunk *schunk)
+
     int blosc2_remove_dir(const char *path)
+
 
 MAX_TYPESIZE = BLOSC_MAX_TYPESIZE
 MAX_BUFFERSIZE = BLOSC_MAX_BUFFERSIZE
@@ -438,18 +428,18 @@ def decompress(src, dst=None, as_bytearray=False):
     mem_view_src = memoryview(src)
     typed_view_src = mem_view_src.cast('B')
     _check_comp_length('src', len(typed_view_src))
-    blosc2_cbuffer_sizes(&typed_view_src[0], &nbytes, &cbytes, &blocksize)
+    blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
     if dst is not None:
         mem_view_dst = memoryview(dst)
         typed_view_dst = mem_view_dst.cast('B')
         if len(typed_view_dst) == 0:
             raise ValueError("The dst length must be greater than 0")
-        size = blosc_decompress(&typed_view_src[0], &typed_view_dst[0], len(typed_view_dst))
+        size = blosc_decompress(<void*>&typed_view_src[0], <void*>&typed_view_dst[0], len(typed_view_dst))
     else:
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
         if dst is None:
             raise RuntimeError("Could not get a bytes object")
-        size = blosc_decompress(&typed_view_src[0], <void*> <char *> dst, len(dst))
+        size = blosc_decompress(<void*>&typed_view_src[0], <void*> <char *> dst, len(dst))
         if as_bytearray:
             dst = bytearray(dst)
         if size >= 0:
@@ -539,7 +529,8 @@ cparams_dflts = {
         'filters_meta': {0, 0, 0, 0, 0, 0},
         'prefilter': None,
         'preparams': None,
-        'udbtune': None
+        'udbtune': None,
+        'instr_codec': False
 }
 
 # Defaults for decompression params
@@ -583,9 +574,11 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     cparams.prefilter = NULL
     cparams.preparams = NULL
     cparams.udbtune = NULL
+    cparams.instr_codec = False
     #cparams.prefilter = kwargs.get('prefilter', cparams_dflts['prefilter'])
     #cparams.preparams = kwargs.get('preparams', cparams_dflts['preparams'])
     #cparams.udbtune = kwargs.get('udbtune', cparams_dflts['udbtune'])
+    #cparams.instr_codec = kwargs.get('instr_codec', cparams_dflts['instr_codec'])
 
 
 def compress2(src, **kwargs):
@@ -634,20 +627,20 @@ def decompress2(src, dst=None, **kwargs):
     cdef int32_t nbytes
     cdef int32_t cbytes
     cdef int32_t blocksize
-    blosc2_cbuffer_sizes(&typed_view_src[0], &nbytes, &cbytes, &blocksize)
+    blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
     cdef uint8_t[:] typed_view_dst
     if dst is not None:
         mem_view_dst = memoryview(dst)
         typed_view_dst = mem_view_dst.cast('B')
         if len(typed_view_dst) == 0:
             raise ValueError("The dst length must be greater than 0")
-        size = blosc2_decompress_ctx(dctx, &typed_view_src[0], typed_view_src.nbytes,
-                                     &typed_view_dst[0], typed_view_dst.nbytes)
+        size = blosc2_decompress_ctx(dctx, <void*>&typed_view_src[0], typed_view_src.nbytes,
+                                     <void*>&typed_view_dst[0], typed_view_dst.nbytes)
     else:
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
         if dst is None:
             raise RuntimeError("Could not get a bytes object")
-        size = blosc2_decompress_ctx(dctx, &typed_view_src[0], typed_view_src.nbytes, <void*> <char *> dst, nbytes)
+        size = blosc2_decompress_ctx(dctx, <void*>&typed_view_src[0], typed_view_src.nbytes, <void*> <char *> dst, nbytes)
         if size >= 0:
             return dst
     if size < 0:
@@ -714,7 +707,7 @@ cdef class SChunk:
                 if i == (nchunks - 1):
                     len_chunk = len_data - i*chunksize
                 index = i*chunksize
-                nchunks_ = blosc2_schunk_append_buffer(self.schunk, &typed_view[index], len_chunk)
+                nchunks_ = blosc2_schunk_append_buffer(self.schunk, <void*>&typed_view[index], len_chunk)
                 if nchunks_ != (i + 1):
                     raise RuntimeError("An error occured while appending the chunks")
 
@@ -732,7 +725,7 @@ cdef class SChunk:
             raise RuntimeError("Could not append the buffer")
         return rc
 
-    def decompress_chunk(self, int nchunk, dst=None):
+    def decompress_chunk(self, nchunk, dst=None):
         cdef uint8_t[:] typed_view_dst
         cdef uint8_t *chunk
         cdef bool needs_free
@@ -753,7 +746,7 @@ cdef class SChunk:
             typed_view_dst = mem_view_dst.cast('B')
             if len(typed_view_dst) == 0:
                 raise ValueError("The dst length must be greater than 0")
-            size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, &typed_view_dst[0], typed_view_dst.nbytes)
+            size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, <void*>&typed_view_dst[0], typed_view_dst.nbytes)
         else:
             dst = PyBytes_FromStringAndSize(NULL, nbytes)
             if dst is None:
@@ -765,7 +758,7 @@ cdef class SChunk:
         if size < 0:
             raise RuntimeError("Error while decompressing the specified chunk")
 
-    def get_chunk(self, int nchunk):
+    def get_chunk(self, nchunk):
         cdef uint8_t[:] typed_view_dst
         cdef uint8_t *chunk
         cdef bool needs_free
