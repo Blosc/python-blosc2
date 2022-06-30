@@ -1,4 +1,3 @@
-import blosc2
 from blosc2 import blosc2_ext
 
 
@@ -45,7 +44,8 @@ class SChunk(blosc2_ext.SChunk):
             The data to be splitted into different chunks of size `chunksize`.
 
         mode: str, optional
-            Persistence mode: ‘r’ means read only (must exist); ‘a’ means read/write (create if doesn’t exist);
+            Persistence mode: ‘r’ means read only (must exist);
+            ‘a’ means read/write (create if doesn’t exist);
             ‘w’ means create (overwrite if exists).
 
         Other parameters
@@ -68,6 +68,7 @@ class SChunk(blosc2_ext.SChunk):
 
         Examples
         --------
+        >>> import blosc2
         >>> storage = {"contiguous": True, "cparams": {}, "dparams": {}}
         >>> schunk = blosc2.SChunk(**storage)
         """
@@ -105,6 +106,7 @@ class SChunk(blosc2_ext.SChunk):
 
         Examples
         --------
+        >>> import blosc2
         >>> import numpy
         >>> schunk = blosc2.SChunk(chunksize=200*1000*4)
         >>> data =  numpy.arange(200 * 1000, dtype='int32')
@@ -142,6 +144,7 @@ class SChunk(blosc2_ext.SChunk):
 
         Examples
         --------
+        >>> import blosc2
         >>> cparams = {'typesize': 1}
         >>> storage = {'cparams': cparams}
         >>> schunk = blosc2.SChunk(chunksize=11, **storage)
@@ -322,6 +325,7 @@ def open(urlpath, mode="a",  **kwargs):
 
     Examples
     --------
+    >>> import blosc2
     >>> import numpy
     >>> storage = {"contiguous": True, "urlpath": "b2frame", "cparams": {}, "dparams": {}}
     >>> nelem = 20 * 1000

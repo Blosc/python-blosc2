@@ -120,4 +120,5 @@ __all__ = [
     storage_dflts,
     SChunk,
     open,
+    remove_urlpath,
 ]

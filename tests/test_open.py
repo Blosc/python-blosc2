@@ -5,6 +5,7 @@
 #
 ########################################################################
 import random
+
 import numpy
 import pytest
 
@@ -18,7 +19,13 @@ import blosc2
     [
         ({"compcode": blosc2.Codec.LZ4, "clevel": 6, "typesize": 2}, {}, 0, 50, numpy.int16),
         ({"typesize": 4}, {"nthreads": 4}, 1, 200 * 100, float),
-        ({"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 2, "typesize": 1}, {"schunk": None}, 5, 201, numpy.int8),
+        (
+         {"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 2, "typesize": 1},
+         {"schunk": None},
+         5,
+         201,
+         numpy.int8
+         ),
         ({"compcode": blosc2.Codec.LZ4HC, "typesize": 8}, {}, 10, 30 * 100, numpy.int64),
     ],
 )

@@ -27,8 +27,8 @@ print(schunk.vlmeta.vlmeta)
 # Add another vlmeta
 schunk.vlmeta["vlmeta2"] = "second vlmeta"
 # Check that it has been added
-assert ("vlmeta2" in schunk.vlmeta) == True
+assert "vlmeta2" in schunk.vlmeta
 
 # Delete a vlmeta
 del schunk.vlmeta['vlmeta2']
-assert(('vlmeta2' in schunk.vlmeta) == False)
+assert 'vlmeta2' not in schunk.vlmeta

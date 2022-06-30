@@ -5,8 +5,9 @@
 #
 ########################################################################
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 a = np.linspace(0, 1, 1_000_000, dtype=np.float64)
 typesize = a.dtype.itemsize
@@ -21,4 +22,4 @@ print("cratio: %.3f" % cratio)
 
 a_bytesobj2 = blosc2.decompress2(c_bytesobj)
 # The next check does not work when using truncation (obviously)
-#assert a_bytesobj == a_bytesobj2
+# assert a_bytesobj == a_bytesobj2

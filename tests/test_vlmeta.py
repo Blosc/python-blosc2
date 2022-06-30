@@ -73,7 +73,7 @@ def delete(schunk):
     # Remove one of them
     assert('vlmeta2' in schunk.vlmeta)
     del schunk.vlmeta['vlmeta2']
-    assert(('vlmeta2' in schunk.vlmeta) == False)
+    assert 'vlmeta2' not in schunk.vlmeta
     assert(schunk.vlmeta['vlmeta1'] == 'val1')
     assert(schunk.vlmeta['vlmeta3'] == 'val3')
     with pytest.raises(KeyError):
