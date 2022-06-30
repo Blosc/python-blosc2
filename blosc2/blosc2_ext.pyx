@@ -13,11 +13,13 @@ from cpython cimport (
     PyBytes_FromStringAndSize,
     PyObject_GetBuffer,
 )
-from cpython.pycapsule cimport PyCapsule_New, PyCapsule_GetPointer
+from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
 from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free, malloc, realloc
 from libcpp cimport bool
+
 from enum import Enum
+
 import blosc2
 
 

@@ -238,6 +238,7 @@ class TestCodec(unittest.TestCase):
         dbuffer = blosc2.decompress(cbuffer)
         self.assertTrue(buffer == dbuffer)
 
+
 def run(verbosity=2):
     import blosc2.core
 
