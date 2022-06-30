@@ -1,3 +1,9 @@
+########################################################################
+#
+#       Author:  The Blosc development team - blosc@blosc.org
+#
+########################################################################
+
 from blosc2 import blosc2_ext
 
 
@@ -301,7 +307,7 @@ class SChunk(blosc2_ext.SChunk):
         super(SChunk, self).__dealloc__()
 
 
-def open(urlpath, mode="a",  **kwargs):
+def open(urlpath, mode="a", **kwargs):
     """Open an already persistently stored :class:`~blosc2.SChunk`.
 
     Parameters
