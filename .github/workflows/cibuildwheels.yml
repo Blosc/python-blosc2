@@ -68,7 +68,7 @@ jobs:
           python -m pip install cibuildwheel
           python -m cibuildwheel --output-dir wheelhouse
         env:
-          CIBW_BUILD: 'cp37-win_amd64 cp38-win_amd64 cp39-win_amd64 cp310-win_amd64'
+          CIBW_BUILD: 'cp38-win_amd64 cp39-win_amd64 cp310-win_amd64'
           CIBW_BEFORE_BUILD: python -m pip install -r requirements.txt
           CIBW_BEFORE_TEST: python -m pip install -r requirements-tests.txt
           CIBW_TEST_COMMAND: python -m pytest {project}/tests
@@ -81,7 +81,7 @@ jobs:
           python -m pip install cibuildwheel
           python -m cibuildwheel --output-dir wheelhouse
         env:
-          CIBW_BUILD: 'cp37-* cp38-* cp39-* cp310-*'
+          CIBW_BUILD: 'cp38-* cp39-* cp310-*'
           CIBW_SKIP: '*-manylinux*_i686'
           CIBW_ARCHS_LINUX: ${{ matrix.arch }}
           CIBW_BEFORE_BUILD: python -m pip install -r requirements.txt
