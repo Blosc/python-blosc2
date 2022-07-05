@@ -39,7 +39,8 @@ Tagging
 
 * Preliminary task: Double check that the supported Python versions for the
   wheels are the correct ones (`.github/workflows/cibuildwheels.yml`).
-  Add/remove Python version if needed.
+  Add/remove Python version if needed.  Also, update the `classifiers` field
+  for the supported Python versions.
 
 * Create a signed tag ``X.Y.Z`` from ``main``.  Use the next message::
 
