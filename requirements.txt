@@ -1,3 +1,3 @@
-scikit-build>=0.11.1
-cython>=0.29
-cmake>=3.14.0
+scikit-build
+cython
+cmake

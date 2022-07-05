@@ -1,9 +1,9 @@
-scikit-build>=0.11.1
-cython>=0.29
-numpy>=1.20.1
+scikit-build
+cython
+numpy
 sphinx
 pydata-sphinx-theme
 numpydoc
-cmake>=3.14.0
+cmake
 myst-parser
 ninja
