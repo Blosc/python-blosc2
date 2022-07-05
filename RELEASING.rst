@@ -37,7 +37,11 @@ is printing the correct versions.
 Tagging
 -------
 
-* Create a signed tag ``X.Y.Z`` from ``master``.  Use the next message::
+* Preliminary task: Double check that the supported Python versions for the
+  wheels are the correct ones (`.github/workflows/cibuildwheels.yml`).
+  Add/remove Python version if needed.
+
+* Create a signed tag ``X.Y.Z`` from ``main``.  Use the next message::
 
     git tag -a vX.Y.Z -m "Tagging version X.Y.Z"
 
