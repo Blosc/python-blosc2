@@ -1,14 +1,9 @@
-Announcing python-blosc2 0.2.0
+Announcing python-blosc2 0.3.0
 ==============================
 
-This is a major release implementing the super-chunk container that
-appeared in C-Blosc2.
-
-This release is the result of a grant offered by
-the Python Software Foundation to Marta Iborra.
-A blog entry was written describing the difficulties and relevant
-aspects learned during the work:
-https://www.blosc.org/posts/python-blosc2-initial-release/
+This is a minor release implementing `blosc2.open(urlpath, mode)` for opening
+persisted super-chunks.  Also, internal C-Blosc2 sources have been updated to
+latest 2.2.0 version.
 
 For more info, you can have a look at the release notes in:
 

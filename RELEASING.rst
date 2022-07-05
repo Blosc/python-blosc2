@@ -26,9 +26,6 @@ is printing the correct versions.
 * Make sure that `RELEASE_NOTES.md` and `ANNOUNCE.rst` are up to date with the latest news
   in the release.
 
-* Check any copyright listings and update them if necessary. You can use ``grep
-  -i copyright`` to figure out where they might be.
-
 * Commit the changes::
 
     git commit -a -m "Getting ready for release X.Y.Z"

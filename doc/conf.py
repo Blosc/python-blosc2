@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.abspath(".."))
 # -- Project information -----------------------------------------------------
 
 project = "python-blosc2"
-copyright = "2021, The Blosc Development Team"
+copyright = "2019-present, The Blosc Development Team"
 author = "The Blosc Development Team"
 
 

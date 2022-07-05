@@ -1,11 +1,15 @@
 # Release notes
 
-## Changes from python-blosc2 0.2.0 to python-blosc2 0.2.1
+## Changes from 0.2.0 to 0.3.0
 
-XXX version-specific blurb XXX
+* Added a new `blosc2.open(urlpath, mode)` function to be able to open persisted super-chunks.
+
+* Added a new tutorial in notebook format (`examples/tutorial-basics.ipynb`) about the basics of python-blosc2.
+
+* Internal C-Blosc2 updated to 2.2.0
 
 
-## Changes from python-blosc2 0.1.10 to python-blosc2 0.2.0
+## Changes from 0.1.10 to 0.2.0
 
 * Internal C-Blosc updated to 2.0.4.
 

@@ -2,7 +2,7 @@ BSD 3-Clause License
 
 For Blosc - A blocking, shuffling and lossless compression library
 
-Copyright (c) 2021, The Blosc Development Team <blosc@blosc.org>
+Copyright (c) 2019-present, The Blosc Development Team <blosc@blosc.org>
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
