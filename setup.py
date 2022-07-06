@@ -34,18 +34,23 @@ classifiers = dedent(
     Operating System :: Microsoft :: Windows
     Operating System :: Unix
     Programming Language :: Python :: 3
-    Programming Language :: Python :: 3.7
     Programming Language :: Python :: 3.8
     Programming Language :: Python :: 3.9
     Programming Language :: Python :: 3.10
     """
 )
 
+# read the contents of the README file
+from pathlib import Path
+this_directory = Path(__file__).parent
+long_description = (this_directory / "README.rst").read_text()
+
 setup(
     name="blosc2",
     version=VERSION,
     description="Python wrapper for the C-Blosc2 library.",
-    long_description=None,
+    long_description=long_description,
+    long_description_content_type='text/x-rst',
     classifiers=[c for c in classifiers.split("\n") if c],
     author="Blosc Development Team",
     author_email="blosc@blosc.org",
