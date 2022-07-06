@@ -34,15 +34,20 @@ is printing the correct versions.
 * Check that the documentation is correctly created in https://python-blosc2.rtfd.io.
 
 
+* Double check that the supported Python versions for the wheels are the correct ones
+  (`.github/workflows/cibuildwheels.yml`).  Add/remove Python version if needed.
+  Also, update the `classifiers` field for the supported Python versions.
+
+* Check that the metainfo for the package is correct::
+
+    python setup.py sdist
+    twine check dist/*
+
+
 Tagging
 -------
 
-* Preliminary task: Double check that the supported Python versions for the
-  wheels are the correct ones (`.github/workflows/cibuildwheels.yml`).
-  Add/remove Python version if needed.  Also, update the `classifiers` field
-  for the supported Python versions.
-
-* Create a signed tag ``X.Y.Z`` from ``main``.  Use the next message::
+* Create a (signed, if possible) tag ``X.Y.Z`` from ``main``.  Use the next message::
 
     git tag -a vX.Y.Z -m "Tagging version X.Y.Z"
 
