@@ -183,7 +183,7 @@ with 64 GB RAM running Clear Linux::
       *** zstd   , bitshuffle ***  0.858 s (0.87 GB/s) / 0.054 s (13.71 GB/s)	cr:   4.6x
 
 
-For the matter of comparision, here are the results for an ARM box; an Apple MacBook Air M1 (2021)
+For the matter of comparison, here are the results for an ARM box; an Apple MacBook Air M1 (2021)
 with 8 GB of RAM::
 
     -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=

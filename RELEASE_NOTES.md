@@ -20,7 +20,7 @@
   different ways (sparse/contiguous and in memory/on-disk),
   as well as storing variable length metalayers.
 
-* Also, during the contruction of a `SChunk` instance,
+* Also, during the construction of a `SChunk` instance,
   an arbitrarily large data buffer can be given so that it is
   automatically split in chunks and those are appended to the
   `SChunk`.
@@ -58,7 +58,7 @@ https://www.blosc.org/posts/python-blosc2-initial-release/
 
 * Internal C-Blosc2 submodule updated to 2.0.0-rc2.
 
-* Repeating measurements 4 times in benchs so as to get more
+* Repeating measurements 4 times in benches so as to get more
   consistent figures.
 
 

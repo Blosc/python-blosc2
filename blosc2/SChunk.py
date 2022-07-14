@@ -37,7 +37,7 @@ class SChunk(blosc2_ext.SChunk):
     def __init__(self, chunksize=8 * 10 ** 6, data=None, mode="a", **kwargs):
         """Create a new super-chunk.
 
-        If `data` is diferent than `None`, the `data` is split into
+        If `data` is different than `None`, the `data` is split into
         chunks of size `chunksize` and these chunks are appended into the created SChunk.
 
         Parameters
@@ -47,7 +47,7 @@ class SChunk(blosc2_ext.SChunk):
             it is set to 8MB.
 
         data: bytes-like object, optional
-            The data to be splitted into different chunks of size `chunksize`.
+            The data to be split into different chunks of size `chunksize`.
 
         mode: str, optional
             Persistence mode: ‘r’ means read only (must exist);
@@ -92,7 +92,7 @@ class SChunk(blosc2_ext.SChunk):
     def append_data(self, data):
         """Append a data data to the SChunk.
 
-        Tha data buffer must be of size `chunksize` specified in
+        The data buffer must be of size `chunksize` specified in
         :func:`~blosc2.SChunk.__init__` .
 
         Parameters
@@ -130,7 +130,7 @@ class SChunk(blosc2_ext.SChunk):
         nchunk: int
             The index of the chunk that will be decompressed.
         dst: NumPy object or bytearray
-            The destination NumPy object or bytearray to fill wich
+            The destination NumPy object or bytearray to fill which
             length must be greater than 0. The user must make sure
             that it has enough capacity for hosting the decompressed
             chunk. Default is None, meaning that a new bytes object
