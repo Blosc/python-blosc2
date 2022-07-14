@@ -726,7 +726,7 @@ cdef class SChunk:
                 index = i*chunksize
                 nchunks_ = blosc2_schunk_append_buffer(self.schunk, <void*>&typed_view[index], len_chunk)
                 if nchunks_ != (i + 1):
-                    raise RuntimeError("An error occured while appending the chunks")
+                    raise RuntimeError("An error occurred while appending the chunks")
 
     @property
     def c_schunk(self):
