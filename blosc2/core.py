@@ -111,7 +111,8 @@ def decompress(src, dst=None, as_bytearray=False):
         that supports the Python Buffer Protocol, like bytes, bytearray,
         memoryview, or numpy.ndarray.
     dst : NumPy object or bytearray
-        The destination NumPy object or bytearray to fill which length must be greater than 0.
+        The destination NumPy object or bytearray to fill,
+        the length of which must be greater than 0.
         The user must make sure
         that it has enough capacity for hosting the decompressed data.
         Default is None, meaning that a new `bytes` or `bytearray` object
@@ -710,8 +711,8 @@ def decompress2(src, dst=None, **kwargs):
         that supports the Python Buffer Protocol, like bytes,
         bytearray, memoryview, or numpy.ndarray.
     dst: NumPy object or bytearray
-        The destination NumPy object or bytearray to fill which
-        length must be greater than 0. The user must make sure
+        The destination NumPy object or bytearray to fill, the length
+        of which must be greater than 0. The user must make sure
         that it has enough capacity for hosting the decompressed
         data. Default is None, meaning that a new bytes object
         is created, filled and returned.
