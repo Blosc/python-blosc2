@@ -52,6 +52,7 @@ setup(
     long_description=long_description,
     long_description_content_type='text/x-rst',
     classifiers=[c for c in classifiers.split("\n") if c],
+    python_requires=">=3.8, <4",
     author="Blosc Development Team",
     author_email="blosc@blosc.org",
     maintainer="Blosc Development Team",
