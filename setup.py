@@ -6,8 +6,6 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-from __future__ import print_function
-
 from textwrap import dedent
 
 from skbuild import setup

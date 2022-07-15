@@ -7,7 +7,6 @@
 
 # Test the python-blosc API
 # -*- coding: utf-8 -*-
-from __future__ import division
 
 import ctypes
 import gc
@@ -16,9 +15,6 @@ import sys
 import unittest
 
 import blosc2
-
-# version number hack
-vi = sys.version_info
 
 try:
     import numpy
