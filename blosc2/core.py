@@ -603,8 +603,9 @@ def os_release_pretty_name():
                     return value
         except IOError:
             pass
-    else:
-        return None
+        finally:
+			f.close()
+    return None
 
 
 def print_versions():
