@@ -11,7 +11,6 @@
 import ctypes
 import gc
 import os
-import sys
 import unittest
 
 import blosc2
