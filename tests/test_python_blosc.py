@@ -134,7 +134,7 @@ class TestCodec(unittest.TestCase):
         self.assertRaises(ValueError, blosc2.compress, "abc", typesize=1, cname="foo")
 
         # Create a simple mock to avoid having to create a buffer of 2 GB
-        class LenMock(object):
+        class LenMock:
             def __len__(self):
                 return blosc2.MAX_BUFFERSIZE + 1
 
