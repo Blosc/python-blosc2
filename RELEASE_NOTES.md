@@ -58,7 +58,7 @@ https://www.blosc.org/posts/python-blosc2-initial-release/
 
 * Internal C-Blosc2 submodule updated to 2.0.0-rc2.
 
-* Repeating measurements 4 times in benches so as to get more
+* Repeating measurements 4 times in benchmarks so as to get more
   consistent figures.
 
 
