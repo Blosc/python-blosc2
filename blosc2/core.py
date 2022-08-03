@@ -17,15 +17,16 @@ def _check_typesize(typesize):
     if not 1 <= typesize <= blosc2_ext.MAX_TYPESIZE:
         raise ValueError("typesize can only be in the 1-%d range." % blosc2_ext.MAX_TYPESIZE)
 
-
 def _check_clevel(clevel):
     if not 0 <= clevel <= 9:
         raise ValueError("clevel can only be in the 0-9 range.")
 
 
-def _check_input_length(input_name, input_len):
+def _check_input_length(input_name, input_len, typesize, _ignore_multiple_size=False):
     if input_len > blosc2_ext.MAX_BUFFERSIZE:
         raise ValueError("%s cannot be larger than %d bytes" % (input_name, blosc2_ext.MAX_BUFFERSIZE))
+    if not _ignore_multiple_size and input_len % typesize != 0:
+        raise ValueError("len(%s) can only be a multiple of typesize (%d)." % (input_name, typesize))
 
 
 def _check_shuffle(shuffle):
@@ -46,7 +47,8 @@ def _check_cname(cname):
         raise ValueError("cname can only be one of: %s, not '%s'" % (cnames, cname))
 
 
-def compress(src, typesize=8, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz"):
+def compress(src, typesize=None, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz",
+             _ignore_multiple_size=False):
     """Compress src, with a given type size.
 
     Parameters
@@ -54,7 +56,7 @@ def compress(src, typesize=8, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="bl
     src : bytes-like object (supporting the buffer interface)
         The data to be compressed.
     typesize : int (optional) from 1 to 255
-        The data type size.
+        The data type size. The default is 1, or `src.itemsize` if it exists.
     clevel : int (optional)
         The compression level from 0 (no compression) to 9
         (maximum compression).  The default is 9.
@@ -93,10 +95,18 @@ def compress(src, typesize=8, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="bl
     True
     """
     len_src = len(src)
-    _check_input_length("src", len_src)
+    if hasattr(src, "itemsize"):
+        if typesize is None:
+            typesize = src.itemsize
+        len_src *= src.itemsize
+    else:
+        # Let's not guess the typesize for non NumPy objects
+        if typesize is None:
+            typesize = 1
     _check_clevel(clevel)
     _check_typesize(typesize)
     _check_shuffle(shuffle)
+    _check_input_length("src", len_src, typesize, _ignore_multiple_size=_ignore_multiple_size)
     cname = cname.encode("utf-8") if isinstance(cname, str) else cname
     return blosc2_ext.compress(src, typesize, clevel, shuffle, cname)
 
@@ -225,9 +235,10 @@ def pack(obj, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz"):
         _check_typesize(itemsize)
         pickled_object = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
         # The object to be compressed is pickled_object, and not obj
-        _check_input_length("pickled object", len(pickled_object))
+        len_src = len(pickled_object)
+        _check_input_length("pickled object", len_src, itemsize, _ignore_multiple_size=True)
         packed_object = compress(pickled_object, typesize=itemsize, clevel=clevel,
-                                 shuffle=shuffle, cname=cname)
+                                 shuffle=shuffle, cname=cname, _ignore_multiple_size=True)
     return packed_object
 
 

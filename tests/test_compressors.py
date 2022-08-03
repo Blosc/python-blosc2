@@ -11,15 +11,15 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "typesize, clevel, cname",
-    [(7, 8, "blosclz"), (2, 9, "lz4"), (7, 3, "lz4hc"), (3, 5, "zlib"), (20, 2, "zstd")],
+    "clevel, cname",
+    [(8, "blosclz"), (9, "lz4"), (3, "lz4hc"), (5, "zlib"), (2, "zstd")],
 )
 @pytest.mark.parametrize(
     "filt", list(blosc2.Filter)
 )
-def test_compressors(typesize, clevel, filt, cname):
+def test_compressors(clevel, filt, cname):
     src = b"Something to be compressed" * 100
-    dest = blosc2.compress(src, typesize, clevel, filt, cname)
+    dest = blosc2.compress(src, 1, clevel, filt, cname)
     src2 = blosc2.decompress(dest)
     assert src == src2
     if cname == "lz4hc":

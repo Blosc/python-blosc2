@@ -222,14 +222,16 @@ class TestCodec(unittest.TestCase):
         # Check the fix for #133
         x = numpy.ones(27266, dtype="uint8")
         xx = x.tobytes()
-        zxx = blosc2.compress(xx, typesize=8, shuffle=blosc2.Filter.BITSHUFFLE)
+        self.assertRaises(ValueError, blosc2.compress, xx, typesize=8, shuffle=blosc2.Filter.BITSHUFFLE)
+        zxx = blosc2.compress(xx, shuffle=blosc2.Filter.BITSHUFFLE)
         last_xx = blosc2.decompress(zxx)[-3:]
         self.assertEqual(last_xx, b"\x01\x01\x01")
 
     def test_bitshuffle_leftovers(self):
         # Test for https://github.com/blosc2/c-blosc22/pull/100
         buffer = b" " * 641091  # a buffer that is not divisible by 8
-        cbuffer = blosc2.compress(buffer, typesize=8, shuffle=blosc2.Filter.BITSHUFFLE, clevel=1)
+        self.assertRaises(ValueError, blosc2.compress, buffer, typesize=8, shuffle=blosc2.Filter.BITSHUFFLE, clevel=1)
+        cbuffer = blosc2.compress(buffer, shuffle=blosc2.Filter.BITSHUFFLE, clevel=1)
         dbuffer = blosc2.decompress(cbuffer)
         self.assertTrue(buffer == dbuffer)
 
