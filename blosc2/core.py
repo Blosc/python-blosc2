@@ -162,11 +162,11 @@ def decompress(src, dst=None, as_bytearray=False):
     >>> a_bytesobj2 = blosc2.decompress(c_bytesobj)
     >>> a_bytesobj == a_bytesobj2
     True
-    >>> b"" == blosc2.decompress(blosc2.compress(b"", 1))
+    >>> b"" == blosc2.decompress(blosc2.compress(b""))
     True
-    >>> b"1"*7 == blosc2.decompress(blosc2.compress(b"1"*7, 8))
+    >>> b"1"*7 == blosc2.decompress(blosc2.compress(b"1"*7))
     True
-    >>> type(blosc2.decompress(blosc2.compress(b"1"*7, 8),
+    >>> type(blosc2.decompress(blosc2.compress(b"1"*7),
     ...                                      as_bytearray=True)) is bytearray
     True
     >>> import numpy
