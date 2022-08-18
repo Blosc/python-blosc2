@@ -61,15 +61,15 @@ cdef extern from "blosc2.h":
         BLOSC_MAX_CODECS
         BLOSC_MIN_HEADER_LENGTH
         BLOSC_EXTENDED_HEADER_LENGTH
-        BLOSC_MAX_OVERHEAD
-        BLOSC_MAX_BUFFERSIZE
+        BLOSC2_MAX_OVERHEAD
+        BLOSC2_MAX_BUFFERSIZE
         BLOSC_MAX_TYPESIZE
         BLOSC_MIN_BUFFERSIZE
 
     ctypedef enum:
-        BLOSC_VERSION_STRING
-        BLOSC_VERSION_REVISION
-        BLOSC_VERSION_DATE
+        BLOSC2_VERSION_STRING
+        BLOSC2_VERSION_REVISION
+        BLOSC2_VERSION_DATE
 
     ctypedef enum:
         BLOSC_ALWAYS_SPLIT
@@ -113,57 +113,51 @@ cdef extern from "blosc2.h":
 
     cdef int INT_MAX
 
-    int blosc_compress(int clevel, int doshuffle, size_t typesize,
+    int blosc1_compress(int clevel, int doshuffle, size_t typesize,
                        size_t nbytes, const void* src, void* dest,
                        size_t destsize)
 
-    int blosc_decompress(const void* src, void* dest, size_t destsize)
+    int blosc1_decompress(const void* src, void* dest, size_t destsize)
 
-    int blosc_getitem(const void* src, int start, int nitems, void* dest)
+    int blosc1_getitem(const void* src, int start, int nitems, void* dest)
 
     int blosc2_getitem(const void* src, int32_t srcsize, int start, int nitems,
                        void* dest, int32_t destsize)
 
-    ctypedef void(*blosc_threads_callback)(void *callback_data, void (*dojob)(void *), int numjobs,
-                                           size_t jobdata_elsize, void *jobdata)
+    ctypedef void(*blosc2_threads_callback)(void *callback_data, void (*dojob)(void *), int numjobs,
+                                            size_t jobdata_elsize, void *jobdata)
 
-    void blosc_set_threads_callback(blosc_threads_callback callback, void *callback_data)
+    void blosc2_set_threads_callback(blosc2_threads_callback callback, void *callback_data)
 
-    int16_t blosc_set_nthreads(int16_t nthreads)
+    int16_t blosc2_set_nthreads(int16_t nthreads)
 
-    const char* blosc_get_compressor()
+    const char* blosc1_get_compressor()
 
-    int blosc_set_compressor(const char* compname)
+    int blosc1_set_compressor(const char* compname)
 
-    void blosc_set_delta(int dodelta)
+    void blosc2_set_delta(int dodelta)
 
-    int blosc_compcode_to_compname(int compcode, const char** compname)
+    int blosc2_compcode_to_compname(int compcode, const char** compname)
 
-    int blosc_compname_to_compcode(const char* compname)
+    int blosc2_compname_to_compcode(const char* compname)
 
-    const char* blosc_list_compressors()
+    const char* blosc2_list_compressors()
 
-    int blosc_get_complib_info(const char* compname, char** complib,
+    int blosc2_get_complib_info(const char* compname, char** complib,
                                char** version)
 
-    int blosc_free_resources()
-
-    void blosc_cbuffer_sizes(const void* cbuffer, size_t * nbytes,
-                             size_t * cbytes, size_t * blocksize)
+    int blosc2_free_resources()
 
     int blosc2_cbuffer_sizes(const void* cbuffer, int32_t* nbytes,
                              int32_t* cbytes, int32_t* blocksize)
 
-    int blosc_cbuffer_validate(const void* cbuffer, size_t cbytes,
-                               size_t* nbytes)
+    int blosc1_cbuffer_validate(const void* cbuffer, size_t cbytes, size_t* nbytes)
 
-    void blosc_cbuffer_metainfo(const void* cbuffer, size_t* typesize,
-                                int* flags)
+    void blosc1_cbuffer_metainfo(const void* cbuffer, size_t* typesize, int* flags)
 
-    void blosc_cbuffer_versions(const void* cbuffer, int* version,
-                                int* versionlz)
+    void blosc1_cbuffer_versions(const void* cbuffer, int* version, int* versionlz)
 
-    const char* blosc_cbuffer_complib(const void* cbuffer)
+    const char* blosc2_cbuffer_complib(const void* cbuffer)
 
 
     ctypedef struct blosc2_context:
@@ -358,17 +352,17 @@ cdef extern from "blosc2.h":
     int blosc2_vlmeta_delete(blosc2_schunk *schunk, const char *name)
 
 
-    int blosc_get_blocksize()
-    void blosc_set_blocksize(size_t blocksize)
-    void blosc_set_schunk(blosc2_schunk *schunk)
+    int blosc1_get_blocksize()
+    void blosc1_set_blocksize(size_t blocksize)
+    void blosc1_set_schunk(blosc2_schunk *schunk)
 
     int blosc2_remove_dir(const char *path)
 
 
 MAX_TYPESIZE = BLOSC_MAX_TYPESIZE
-MAX_BUFFERSIZE = BLOSC_MAX_BUFFERSIZE
-VERSION_STRING = (<char*>BLOSC_VERSION_STRING).decode()
-VERSION_DATE = (<char*>BLOSC_VERSION_DATE).decode()
+MAX_BUFFERSIZE = BLOSC2_MAX_BUFFERSIZE
+VERSION_STRING = (<char*>BLOSC2_VERSION_STRING).decode()
+VERSION_DATE = (<char*>BLOSC2_VERSION_DATE).decode()
 MIN_HEADER_LENGTH = BLOSC_MIN_HEADER_LENGTH
 EXTENDED_HEADER_LENGTH = BLOSC_EXTENDED_HEADER_LENGTH
 
@@ -403,7 +397,7 @@ cpdef compress(src, int32_t typesize=8, int clevel=9, shuffle=BLOSC_SHUFFLE, cna
     cdef int32_t len_src = <int32_t> len(src)
     cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
     PyObject_GetBuffer(src, buf, PyBUF_SIMPLE)
-    dest = bytes(buf.len + BLOSC_MAX_OVERHEAD)
+    dest = bytes(buf.len + BLOSC2_MAX_OVERHEAD)
     cdef int32_t len_dest =  <int32_t> len(dest)
     cdef int size
     cdef int shuffle_ = shuffle.value if isinstance(shuffle, Enum) else shuffle
@@ -437,12 +431,12 @@ def decompress(src, dst=None, as_bytearray=False):
         typed_view_dst = mem_view_dst.cast('B')
         if len(typed_view_dst) == 0:
             raise ValueError("The dst length must be greater than 0")
-        size = blosc_decompress(<void*>&typed_view_src[0], <void*>&typed_view_dst[0], len(typed_view_dst))
+        size = blosc1_decompress(<void*>&typed_view_src[0], <void*>&typed_view_dst[0], len(typed_view_dst))
     else:
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
         if dst is None:
             raise RuntimeError("Could not get a bytes object")
-        size = blosc_decompress(<void*>&typed_view_src[0], <void*> <char *> dst, len(dst))
+        size = blosc1_decompress(<void*>&typed_view_src[0], <void*> <char *> dst, len(dst))
         if as_bytearray:
             dst = bytearray(dst)
         if size >= 0:
@@ -452,51 +446,51 @@ def decompress(src, dst=None, as_bytearray=False):
 
 
 def set_compressor(compname):
-    size = blosc_set_compressor(compname)
+    size = blosc1_set_compressor(compname)
     if size == -1:
         raise ValueError("The code is not available")
     else:
         return size
 
 def free_resources():
-    rc = blosc_free_resources()
+    rc = blosc2_free_resources()
     if rc < 0:
         raise ValueError("Could not free the resources")
 
 def set_nthreads(nthreads):
     if nthreads > INT_MAX:
         raise ValueError("nthreads must be less or equal than 2^31 - 1.")
-    rc = blosc_set_nthreads(nthreads)
+    rc = blosc2_set_nthreads(nthreads)
     if rc < 0:
         raise ValueError("nthreads must be a positive integer.")
     else:
         return rc
 
 def compressor_list():
-    return blosc_list_compressors()
+    return blosc2_list_compressors()
 
 def set_blocksize(size_t blocksize=0):
-    return blosc_set_blocksize(blocksize)
+    return blosc1_set_blocksize(blocksize)
 
 def clib_info(cname):
     cdef char* clib
     cdef char* version
     cname = cname.encode("utf-8") if isinstance(cname, str) else cname
-    rc = blosc_get_complib_info(cname, &clib, &version)
+    rc = blosc2_get_complib_info(cname, &clib, &version)
     if rc >= 0:
         return clib, version
     else:
         raise ValueError("The compression library is not supported.")
 
 def get_clib(bytesobj):
-    rc = blosc_cbuffer_complib(<void *> <char*> bytesobj)
+    rc = blosc2_cbuffer_complib(<void *> <char*> bytesobj)
     if rc == NULL:
         raise ValueError("Cannot get the info for the compressor")
     else:
         return rc
 
 def get_compressor():
-    return blosc_get_compressor()
+    return blosc1_get_compressor()
 
 
 cdef bool RELEASEGIL = False
@@ -515,7 +509,7 @@ def get_blocksize():
     out : int
         The size in bytes of the internal block size.
     """
-    return blosc_get_blocksize()
+    return blosc1_get_blocksize()
 
 # Defaults for compression params
 cparams_dflts = {
@@ -592,7 +586,7 @@ def compress2(src, **kwargs):
     cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
     PyObject_GetBuffer(src, buf, PyBUF_SIMPLE)
     cdef int size
-    cdef int32_t len_dest = <int32_t> (buf.len + BLOSC_MAX_OVERHEAD)
+    cdef int32_t len_dest = <int32_t> (buf.len + BLOSC2_MAX_OVERHEAD)
     dest = bytes(len_dest)
     _dest = <void*> <char *> dest
 
@@ -808,7 +802,7 @@ cdef class SChunk:
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
         cdef int size
-        cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC_MAX_OVERHEAD)
+        cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC2_MAX_OVERHEAD)
         cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)
         with nogil:
             cctx = blosc2_create_cctx(self.schunk.storage.cparams[0])
@@ -845,7 +839,7 @@ cdef class SChunk:
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
         cdef int size
-        cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC_MAX_OVERHEAD)
+        cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC2_MAX_OVERHEAD)
         cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)
         with nogil:
             cctx = blosc2_create_cctx(self.schunk.storage.cparams[0])
