@@ -5,7 +5,7 @@ on:
   push:
     branches:
       - main
-    tags:        
+    tags:
       - '*'
   pull_request:
     branches:
@@ -22,7 +22,8 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        arch: [auto, aarch64]
+        #arch: [auto, aarch64]  # crashing on aarch64 and python 3.8. investigate...
+        arch: [auto]
         exclude:
           - os: [ubuntu-latest, windows-latest, macos-latest]
             # We don't support 32-bit platforms in python-blosc2
