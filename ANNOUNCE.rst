@@ -1,9 +1,8 @@
-Announcing python-blosc2 0.3.0
+Announcing python-blosc2 0.3.1
 ==============================
 
-This is a minor release implementing `blosc2.open(urlpath, mode)` for opening
-persisted super-chunks.  Also, internal C-Blosc2 sources have been updated to
-latest 2.2.0 version.
+This is a minor release for updating internal C-Blosc2 sources to
+latest 2.3.0 version.
 
 For more info, you can have a look at the release notes in:
 

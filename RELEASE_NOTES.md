@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from 0.3.0 to 0.3.1
+
+* Internal C-Blosc2 updated to 2.3.0
+
+
 ## Changes from 0.2.0 to 0.3.0
 
 * Added a new `blosc2.open(urlpath, mode)` function to be able to open persisted super-chunks.
@@ -12,6 +17,7 @@
 ## Changes from 0.1.10 to 0.2.0
 
 * Internal C-Blosc updated to 2.0.4.
+
 
 ### Super-chunk implementation
 
