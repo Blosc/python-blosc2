@@ -358,6 +358,8 @@ cdef extern from "blosc2.h":
 
     int blosc2_remove_dir(const char *path)
 
+    void blosc2_free_ctx(blosc2_context* context) nogil
+
 
 MAX_TYPESIZE = BLOSC_MAX_TYPESIZE
 MAX_BUFFERSIZE = BLOSC2_MAX_BUFFERSIZE
@@ -522,8 +524,8 @@ cparams_dflts = {
         'blocksize': 0,
         'splitmode': BLOSC_FORWARD_COMPAT_SPLIT,
         'schunk': None,
-        'filters': {0, 0, 0, 0, 0, BLOSC_SHUFFLE},
-        'filters_meta': {0, 0, 0, 0, 0, 0},
+        'filters': [0, 0, 0, 0, 0, BLOSC_SHUFFLE],
+        'filters_meta': [0, 0, 0, 0, 0, 0],
         'prefilter': None,
         'preparams': None,
         'udbtune': None,
@@ -593,6 +595,7 @@ def compress2(src, **kwargs):
     with nogil:
         cctx = blosc2_create_cctx(cparams)
         size = blosc2_compress_ctx(cctx, buf.buf, <int32_t> buf.len, _dest, len_dest)
+        blosc2_free_ctx(cctx)
     PyBuffer_Release(buf)
     free(buf)
     if size < 0:
@@ -633,11 +636,13 @@ def decompress2(src, dst=None, **kwargs):
             raise ValueError("The dst length must be greater than 0")
         size = blosc2_decompress_ctx(dctx, <void*>&typed_view_src[0], typed_view_src.nbytes,
                                      <void*>&typed_view_dst[0], typed_view_dst.nbytes)
+        blosc2_free_ctx(dctx)
     else:
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
         if dst is None:
             raise RuntimeError("Could not get a bytes object")
         size = blosc2_decompress_ctx(dctx, <void*>&typed_view_src[0], typed_view_src.nbytes, <void*> <char *> dst, nbytes)
+        blosc2_free_ctx(dctx)
         if size >= 0:
             return dst
     if size < 0:
