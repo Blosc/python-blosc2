@@ -22,8 +22,6 @@ from enum import Enum
 import blosc2
 
 
-cdef extern int blosc2_remove_urlpath(const char *path)
-
 cdef extern from "<stdint.h>":
     ctypedef   signed char  int8_t
     ctypedef   signed short int16_t
@@ -357,6 +355,7 @@ cdef extern from "blosc2.h":
     void blosc1_set_schunk(blosc2_schunk *schunk)
 
     int blosc2_remove_dir(const char *path)
+    int blosc2_remove_urlpath(const char *path)
 
 
 MAX_TYPESIZE = BLOSC_MAX_TYPESIZE
@@ -666,11 +665,10 @@ storage_dflts = {
 cdef create_storage(blosc2_storage *storage, kwargs):
     contiguous = kwargs.get('contiguous', storage_dflts['contiguous'])
     urlpath = kwargs.get('urlpath', storage_dflts['urlpath'])
-    urlpath = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
     if urlpath is None:
         storage.urlpath = NULL
     else:
-        storage.urlpath = <char *> urlpath
+        storage.urlpath = urlpath
     if kwargs.get('cparams', None) is not None:
         create_cparams_from_kwargs(storage.cparams, kwargs.get('cparams'))
 
@@ -687,15 +685,21 @@ cdef class SChunk:
     cdef blosc2_schunk *schunk
 
     def __init__(self, schunk=None, chunksize=8*10**6, data=None, mode="a", **kwargs):
+        # hold on to a bytestring of urlpath for the lifetime of the instance
+        # because it's value is referenced via a C-pointer
+        urlpath = kwargs.get("urlpath", None)
+        if urlpath is not None:
+            self._urlpath = urlpath.encode() if isinstance(urlpath, str) else urlpath
+            kwargs["urlpath"] = self._urlpath
+
         if schunk is not None:
             self.schunk = <blosc2_schunk *> PyCapsule_GetPointer(schunk, <char *> "blosc2_schunk*")
-            if mode == "w" and kwargs["urlpath"] is not None:
-                blosc2.remove_urlpath(kwargs["urlpath"])
+            if mode == "w" and urlpath is not None:
+                blosc2.remove_urlpath(urlpath)
                 self.schunk = blosc2_schunk_new(self.schunk.storage)
             return
 
         if kwargs is not None:
-            urlpath = kwargs.get("urlpath", None)
             if mode == "w":
                 blosc2.remove_urlpath(urlpath)
             elif mode == "r" and urlpath is not None:
@@ -873,7 +877,8 @@ cdef class SChunk:
         return rc
 
     def __dealloc__(self):
-        blosc2_schunk_free(self.schunk)
+        if self.schunk != NULL:
+            blosc2_schunk_free(self.schunk)
 
 
 def remove_urlpath(path):
@@ -910,6 +915,8 @@ cdef class vlmeta:
 def schunk_open(urlpath, mode, **kwargs):
     urlpath = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
     cdef blosc2_schunk* schunk = blosc2_schunk_open(urlpath)
+    if schunk == NULL:
+        raise RuntimeError(f'blosc2_schunk_open({urlpath!r}) returned NULL')
     kwargs["urlpath"] = urlpath
     kwargs["contiguous"] = schunk.storage.contiguous
     if mode != "w" and kwargs is not None:
