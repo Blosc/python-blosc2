@@ -226,7 +226,7 @@ cdef extern from "blosc2.h":
 
     blosc2_context* blosc2_create_dctx(blosc2_dparams dparams)
 
-    void blosc2_free_ctx(blosc2_context * context)
+    void blosc2_free_ctx(blosc2_context * context) nogil
 
     int blosc2_set_maskout(blosc2_context *ctx, bool *maskout, int nblocks)
 
@@ -357,8 +357,6 @@ cdef extern from "blosc2.h":
     void blosc1_set_schunk(blosc2_schunk *schunk)
 
     int blosc2_remove_dir(const char *path)
-
-    void blosc2_free_ctx(blosc2_context* context) nogil
 
 
 MAX_TYPESIZE = BLOSC_MAX_TYPESIZE
@@ -559,16 +557,15 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
         cparams.filters_meta[i] = 0
 
     filters = kwargs.get('filters', cparams_dflts['filters'])
-    j = 0
-    for i in filters:
-        cparams.filters[j] = i.value if isinstance(i, Enum) else i
-        j+=1
+    for i, filter in enumerate(filters):
+        cparams.filters[i] = filter.value if isinstance(filter, Enum) else filter
 
     filters_meta = kwargs.get('filters_meta', cparams_dflts['filters_meta'])
-    j = 0
-    for i in filters_meta:
-        cparams.filters_meta[j] = i
-        j+=1
+    cdef int8_t meta_value
+    for i, meta in enumerate(filters_meta):
+        # We still may want to encode negative values
+        meta_value = <int8_t>meta if meta < 0 else meta
+        cparams.filters_meta[i] = <uint8_t>meta_value
 
     cparams.prefilter = NULL
     cparams.preparams = NULL

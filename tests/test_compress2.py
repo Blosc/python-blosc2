@@ -17,7 +17,16 @@ import blosc2
         (numpy.random.randint(0, 10, 10), {"compcode": blosc2.Codec.LZ4, "clevel": 6}, {}),
         (
             numpy.arange(10, dtype="float32"),
-            {"filters": [blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE], "typesize": 4},
+            # Select an absolute precision of 10 bits in mantissa
+            {"filters": [blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE], "filters_meta": [10],
+             "typesize": 4},
+            {"nthreads": 4},
+        ),
+        (
+            numpy.arange(10, dtype="float32"),
+            # Do a reduction of precision of 10 bits in mantissa
+            {"filters": [blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE], "filters_meta": [-10],
+             "typesize": 4},
             {"nthreads": 4},
         ),
         (
