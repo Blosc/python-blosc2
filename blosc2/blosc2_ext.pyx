@@ -243,7 +243,7 @@ cdef extern from "blosc2.h":
             int32_t destsize) nogil
 
     int blosc2_decompress_ctx(blosc2_context * context, const void * src,
-                              int32_t srcsize, void * dest, int32_t destsize)
+                              int32_t srcsize, void * dest, int32_t destsize) nogil
 
     int blosc2_getitem_ctx(blosc2_context* context, const void* src,
                            int32_t srcsize, int start, int nitems, void* dest,
@@ -614,6 +614,8 @@ cdef create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs):
 
 def decompress2(src, dst=None, **kwargs):
     cdef blosc2_dparams dparams
+    cdef char *dst_buf
+    cdef void *view
     create_dparams_from_kwargs(&dparams, kwargs)
 
     cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
@@ -631,15 +633,20 @@ def decompress2(src, dst=None, **kwargs):
         typed_view_dst = mem_view_dst.cast('B')
         if len(typed_view_dst) == 0:
             raise ValueError("The dst length must be greater than 0")
-        size = blosc2_decompress_ctx(dctx, <void*>&typed_view_src[0], typed_view_src.nbytes,
-                                     <void*>&typed_view_dst[0], typed_view_dst.nbytes)
-        blosc2_free_ctx(dctx)
+        dst_buf = <char*>&typed_view_dst[0]
+        view = <void*>&typed_view_src[0]
+        with nogil:
+            size = blosc2_decompress_ctx(dctx, view, cbytes, <void*>dst_buf, nbytes)
+            blosc2_free_ctx(dctx)
     else:
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
         if dst is None:
             raise RuntimeError("Could not get a bytes object")
-        size = blosc2_decompress_ctx(dctx, <void*>&typed_view_src[0], typed_view_src.nbytes, <void*> <char *> dst, nbytes)
-        blosc2_free_ctx(dctx)
+        dst_buf = <char*>dst
+        view = <void*>&typed_view_src[0]
+        with nogil:
+            size = blosc2_decompress_ctx(dctx, view, cbytes, <void*>dst_buf, nbytes)
+            blosc2_free_ctx(dctx)
         if size >= 0:
             return dst
     if size < 0:
@@ -809,6 +816,7 @@ cdef class SChunk:
         with nogil:
             cctx = blosc2_create_cctx(self.schunk.storage.cparams[0])
             size = blosc2_compress_ctx(cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
+            blosc2_free_ctx(cctx)
         PyBuffer_Release(buf)
         free(buf)
         if size < 0:
@@ -846,6 +854,7 @@ cdef class SChunk:
         with nogil:
             cctx = blosc2_create_cctx(self.schunk.storage.cparams[0])
             size = blosc2_compress_ctx(cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
+            blosc2_free_ctx(cctx)
         PyBuffer_Release(buf)
         free(buf)
         if size < 0:
