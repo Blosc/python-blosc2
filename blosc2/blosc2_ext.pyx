@@ -686,7 +686,7 @@ cdef class SChunk:
 
     def __init__(self, schunk=None, chunksize=8*10**6, data=None, mode="a", **kwargs):
         # hold on to a bytestring of urlpath for the lifetime of the instance
-        # because it's value is referenced via a C-pointer
+        # because its value is referenced via a C-pointer
         urlpath = kwargs.get("urlpath", None)
         if urlpath is not None:
             self._urlpath = urlpath.encode() if isinstance(urlpath, str) else urlpath
