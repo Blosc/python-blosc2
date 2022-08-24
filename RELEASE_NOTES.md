@@ -1,5 +1,13 @@
 # Release notes
 
+## Changes from 0.3.1 to 0.3.2
+
+* Several leaks fixed.  Thanks to Christoph Gohlke.
+
+* Internal C-Blosc2 updated to 2.3.1
+
+
+
 ## Changes from 0.3.0 to 0.3.1
 
 * Internal C-Blosc2 updated to 2.3.0

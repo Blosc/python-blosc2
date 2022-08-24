@@ -1,8 +1,8 @@
-Announcing python-blosc2 0.3.1
+Announcing python-blosc2 0.3.2
 ==============================
 
 This is a minor release for updating internal C-Blosc2 sources to
-latest 2.3.0 version.
+latest 2.3.1 version.  Also, several leaks have been fixed.
 
 For more info, you can have a look at the release notes in:
 
