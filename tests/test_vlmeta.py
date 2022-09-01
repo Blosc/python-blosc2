@@ -59,12 +59,12 @@ def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):
 
 
 def add(schunk):
-    schunk.vlmeta["vlmeta1"] = "val1"
-    schunk.vlmeta["vlmeta2"] = "val2"
-    schunk.vlmeta["vlmeta3"] = "val3"
-    assert schunk.vlmeta["vlmeta1"] == "val1"
-    assert schunk.vlmeta["vlmeta2"] == "val2"
-    assert schunk.vlmeta["vlmeta3"] == "val3"
+    schunk.vlmeta["vlmeta1"] = b"val1"
+    schunk.vlmeta["vlmeta2"] = b"val2"
+    schunk.vlmeta["vlmeta3"] = b"val3"
+    assert schunk.vlmeta["vlmeta1"] == b"val1"
+    assert schunk.vlmeta["vlmeta2"] == b"val2"
+    assert schunk.vlmeta["vlmeta3"] == b"val3"
     assert len(schunk.vlmeta) == 3
 
 
@@ -73,8 +73,8 @@ def delete(schunk):
     assert('vlmeta2' in schunk.vlmeta)
     del schunk.vlmeta['vlmeta2']
     assert 'vlmeta2' not in schunk.vlmeta
-    assert(schunk.vlmeta['vlmeta1'] == 'val1')
-    assert(schunk.vlmeta['vlmeta3'] == 'val3')
+    assert(schunk.vlmeta['vlmeta1'] == b'val1')
+    assert(schunk.vlmeta['vlmeta3'] == b'val3')
     with pytest.raises(KeyError):
         schunk.vlmeta['vlmeta2']
     assert(len(schunk.vlmeta) == 2)

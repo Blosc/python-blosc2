@@ -348,6 +348,7 @@ cdef extern from "blosc2.h":
     int blosc2_vlmeta_get(blosc2_schunk *schunk, const char *name,
                           uint8_t **content, int32_t *content_len)
     int blosc2_vlmeta_delete(blosc2_schunk *schunk, const char *name)
+    int blosc2_vlmeta_get_names(blosc2_schunk *schunk, char **names)
 
 
     int blosc1_get_blocksize()
@@ -907,11 +908,42 @@ cdef class vlmeta:
         if rc < 0:
             raise RuntimeError
 
+    def get_vlmeta(self, name):
+        name = name.encode("utf-8") if isinstance(name, str) else name
+        rc = blosc2_vlmeta_exists(self.schunk, name)
+        cdef uint8_t* content
+        cdef int32_t content_len
+        if rc < 0:
+            raise KeyError
+        if rc >= 0:
+            rc = blosc2_vlmeta_get(self.schunk, name, &content, &content_len)
+        if rc < 0:
+            raise RuntimeError
+        return content[:content_len]
+
     def __delitem__(self, name):
         name = name.encode("utf-8") if isinstance(name, str) else name
         rc = blosc2_vlmeta_delete(self.schunk, name)
         if rc < 0:
             raise RuntimeError("Could not delete the vlmeta")
+
+    def __len__(self):
+        return self.schunk.nvlmetalayers
+
+    def exists_vlmeta(self, name):
+        name = name.encode("utf-8") if isinstance(name, str) else name
+        rc = blosc2_vlmeta_exists(self.schunk, name)
+        return True if rc >= 0 else False
+
+    def to_dict(self):
+        cdef char** names = <char **> malloc(self.schunk.nvlmetalayers * sizeof (char*))
+        rc = blosc2_vlmeta_get_names(self.schunk, names)
+        if rc != self.schunk.nvlmetalayers:
+            raise RuntimeError
+        res = {}
+        for i in range(rc):
+            res[names[i]] = self.get_vlmeta(names[i])
+        return res
 
 
 def schunk_open(urlpath, mode, **kwargs):
