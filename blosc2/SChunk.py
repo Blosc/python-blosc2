@@ -8,29 +8,31 @@ from blosc2 import blosc2_ext
 
 
 class vlmeta(blosc2_ext.vlmeta):
-    def __init__(self, schunk):
-        self.vlmeta = {}
+    def __init__(self, schunk, urlpath, mode):
+        self.urlpath = urlpath
+        self.mode = mode
         super(vlmeta, self).__init__(schunk)
 
     def __setitem__(self, name, content):
-        self.vlmeta[name] = content
+        blosc2_ext._check_access_mode(self.urlpath, self.mode)
         cparams = {"typesize": 1}
         super(vlmeta, self).set_vlmeta(name, content, **cparams)
 
     def __getitem__(self, name):
-        return self.vlmeta[name]
+        return super(vlmeta, self).get_vlmeta(name)
 
     def __delitem__(self, name):
-        del self.vlmeta[name]
+        blosc2_ext._check_access_mode(self.urlpath, self.mode)
+        super(vlmeta, self).__delitem__(name)
 
     def __len__(self):
-        return len(self.vlmeta)
+        return super(vlmeta, self).__len__()
 
     def __contains__(self, name):
-        return name in self.vlmeta
+        return super(vlmeta, self).exists_vlmeta(name)
 
     def getall(self):
-        return self.vlmeta.copy()
+        return super(vlmeta, self).to_dict()
 
 
 class SChunk(blosc2_ext.SChunk):
@@ -86,8 +88,8 @@ class SChunk(blosc2_ext.SChunk):
             self.urlpath = None
             sc = None
         super(SChunk, self).__init__(schunk=sc, chunksize=chunksize, data=data, mode=mode, **kwargs)
-        self.vlmeta = vlmeta(super(SChunk, self).c_schunk)
         self.mode = mode
+        self.vlmeta = vlmeta(super(SChunk, self).c_schunk, self.urlpath, self.mode)
 
     def append_data(self, data):
         """Append a data buffer to the SChunk.
