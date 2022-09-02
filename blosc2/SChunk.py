@@ -5,9 +5,11 @@
 ########################################################################
 
 from blosc2 import blosc2_ext
+from msgpack import packb, unpackb
+from collections.abc import MutableMapping
 
 
-class vlmeta(blosc2_ext.vlmeta):
+class vlmeta(MutableMapping, blosc2_ext.vlmeta):
     def __init__(self, schunk, urlpath, mode):
         self.urlpath = urlpath
         self.mode = mode
@@ -16,22 +18,28 @@ class vlmeta(blosc2_ext.vlmeta):
     def __setitem__(self, name, content):
         blosc2_ext._check_access_mode(self.urlpath, self.mode)
         cparams = {"typesize": 1}
-        super(vlmeta, self).set_vlmeta(name, content, **cparams)
+        super(vlmeta, self).set_vlmeta(name, packb(content), **cparams)
 
     def __getitem__(self, name):
-        return super(vlmeta, self).get_vlmeta(name)
+        return unpackb(super(vlmeta, self).get_vlmeta(name))
 
     def __delitem__(self, name):
         blosc2_ext._check_access_mode(self.urlpath, self.mode)
-        super(vlmeta, self).__delitem__(name)
+        super(vlmeta, self).del_vlmeta(name)
 
     def __len__(self):
-        return super(vlmeta, self).__len__()
+        return super(vlmeta, self).nvlmetalayers()
 
-    def __contains__(self, name):
-        return super(vlmeta, self).exists_vlmeta(name)
+    def __iter__(self):
+        keys = super(vlmeta, self).get_names()
+        for name in keys:
+            yield name
 
     def getall(self):
+        """
+        Return all the variable length metalayers as a dictionary
+
+        """
         return super(vlmeta, self).to_dict()
 
 

@@ -17,29 +17,47 @@ SChunk
 vlmeta
 ------
 Class to access the variable length metalayers of a super-chunk.
-    This class behaves very similarly to a dictionary, and variable length
-    metalayers can be appended in the typical way:
+    This class inherites from the
+    `MutableMapping <https://docs.python.org/3/library/collections.abc.html#collections.abc.MutableMapping>`_
+    class, so every method in this class is available. It
+    behaves very similarly to a dictionary, and variable length metalayers can be appended
+    in the typical way::
 
-    schunk.vlmeta['vlmeta1'] = 'something'
+        schunk.vlmeta['vlmeta1'] = 'something'
 
-    And can be retrieved similarly:
+    And can be retrieved similarly::
 
-    value = schunk.vlmeta['vlmeta1']
+        value = schunk.vlmeta['vlmeta1']
 
-    Once added, a vlmeta can be deleted with:
+    Once added, a vlmeta can be deleted with::
 
-    del schunk.vlmeta['vlmeta1']
+        del schunk.vlmeta['vlmeta1']
 
-    This class also honors the `__contains__` and `__len__` special
-    functions.  Moreover, a `getall()` method returns all the
+    Moreover, a `getall()` method returns all the
     variable length metalayers as a dictionary.
 
-.. autoclass:: vlmeta
-    :members:
-    :undoc-members:
-    :exclude-members: __dict__, __weakref__, __len__, __init__, __delitem__, getall, __getitem__,
-        __contains__, __setitem__, __module__, set_vlmeta
-    :special-members:
+.. autosummary::
+   :toctree: vlmeta
+   :nosignatures:
+
+    vlmeta.__getitem__
+    vlmeta.__setitem__
+    vlmeta.__delitem__
+    vlmeta.__iter__
+    vlmeta.__len__
+    vlmeta.__contains__
+    vlmeta.popitem
+    vlmeta.pop
+    vlmeta.values
+    vlmeta.keys
+    vlmeta.items
+    vlmeta.clear
+    vlmeta.update
+    vlmeta.setdefault
+    vlmeta.get
+    vlmeta.__eq__
+    vlmeta.__ne__
+    vlmeta.getall
 
 .. currentmodule:: blosc2
 

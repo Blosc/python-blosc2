@@ -16,6 +16,8 @@ from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
 from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free, malloc, realloc
 from libcpp cimport bool
+from msgpack import unpackb
+
 
 from enum import Enum
 
@@ -921,19 +923,22 @@ cdef class vlmeta:
             raise RuntimeError
         return content[:content_len]
 
-    def __delitem__(self, name):
+    def del_vlmeta(self, name):
         name = name.encode("utf-8") if isinstance(name, str) else name
         rc = blosc2_vlmeta_delete(self.schunk, name)
         if rc < 0:
             raise RuntimeError("Could not delete the vlmeta")
 
-    def __len__(self):
+    def nvlmetalayers(self):
         return self.schunk.nvlmetalayers
 
-    def exists_vlmeta(self, name):
-        name = name.encode("utf-8") if isinstance(name, str) else name
-        rc = blosc2_vlmeta_exists(self.schunk, name)
-        return True if rc >= 0 else False
+    def get_names(self):
+        cdef char** names = <char **> malloc(self.schunk.nvlmetalayers * sizeof (char *))
+        rc = blosc2_vlmeta_get_names(self.schunk, names)
+        if rc != self.schunk.nvlmetalayers:
+            raise RuntimeError
+        res = [names[i].decode() for i in range(rc)]
+        return res
 
     def to_dict(self):
         cdef char** names = <char **> malloc(self.schunk.nvlmetalayers * sizeof (char*))
@@ -942,7 +947,7 @@ cdef class vlmeta:
             raise RuntimeError
         res = {}
         for i in range(rc):
-            res[names[i]] = self.get_vlmeta(names[i])
+            res[names[i]] = unpackb(self.get_vlmeta(names[i]))
         return res
 
 
