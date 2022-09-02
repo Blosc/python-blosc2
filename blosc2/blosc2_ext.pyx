@@ -718,6 +718,8 @@ cdef class SChunk:
         self.schunk = blosc2_schunk_new(&storage)
         if self.schunk == NULL:
             raise RuntimeError("Could not create the Schunk")
+        if chunksize > INT_MAX:
+            raise ValueError("Maximum chunksize allowed is 2^31 - 1")
         self.schunk.chunksize = chunksize
         cdef const uint8_t[:] typed_view
         cdef int index
