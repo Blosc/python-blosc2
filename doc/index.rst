@@ -7,9 +7,6 @@
 .. include:: ../README.rst
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Contents:
    :hidden:
 
-   API Reference <reference/index>
-   Release Notes <release_notes/index>
+   python-blosc2
