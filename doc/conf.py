@@ -1,7 +1,15 @@
+# -- Path setup --------------------------------------------------------------
+import sys
+import os
+import blosc2
+
+sys.path.insert(0,  os.path.abspath(os.path.dirname(blosc2.__file__)))
+
 project = 'Python-Blosc2'
 copyright = '2019-present, The Blosc Developers'
 author = 'The Blosc Developers'
 extensions = [
+    'sphinx.ext.autosummary',
     'sphinx.ext.autodoc',
     'sphinx.ext.intersphinx',
     'numpydoc',
@@ -29,3 +37,5 @@ html_theme_options = {
     "github_url": "https://github.com/Blosc/c-blosc2",
     "twitter_url": "https://twitter.com/Blosc2",
 }
+
+html_show_sourcelink = False

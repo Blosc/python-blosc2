@@ -549,7 +549,8 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     cparams.typesize = kwargs.get('typesize', cparams_dflts['typesize'])
     cparams.nthreads = kwargs.get('nthreads', cparams_dflts['nthreads'])
     cparams.blocksize = kwargs.get('blocksize', cparams_dflts['blocksize'])
-    cparams.splitmode = kwargs.get('splitmode', cparams_dflts['splitmode'])
+    splitmode = kwargs.get('splitmode', cparams_dflts['splitmode'])
+    cparams.splitmode = splitmode.value if isinstance(splitmode, Enum) else splitmode
     # TODO: support the commented ones in the future
     #schunk_c = kwargs.get('schunk', cparams_dflts['schunk'])
     #cparams.schunk = <void *> schunk_c
