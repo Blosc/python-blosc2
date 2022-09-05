@@ -31,7 +31,7 @@ import blosc2
         ),
         (
             numpy.random.randint(0, 1000 + 1, 1000),
-            {"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4},
+            {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4},
             {"schunk": None},
         ),
         (numpy.arange(45, dtype=numpy.float64), {"compcode": blosc2.Codec.LZ4HC, "typesize": 4}, {}),

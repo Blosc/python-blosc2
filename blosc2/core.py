@@ -60,10 +60,9 @@ def compress(src, typesize=None, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname=
     clevel : int (optional)
         The compression level from 0 (no compression) to 9
         (maximum compression).  The default is 9.
-    shuffle : int (optional)
-        The shuffle filter to be activated.  Allowed values are
-        Filter.NOFILTER, Filter.SHUFFLE and Filter.BITSHUFFLE.  The
-        default is Filter.SHUFFLE.
+    shuffle : :class:`Filter` (optional)
+        The shuffle filter to be activated. The
+        default is :py:obj:`Filter.SHUFFLE <Filter>`.
     cname : string (optional)
         The name of the compressor used internally in Blosc. It can be
         any of the supported by Blosc ( `blosclz` , `lz4` , `lz4hc` ,
@@ -129,7 +128,7 @@ def decompress(src, dst=None, as_bytearray=False):
         is created, filled and returned.
     as_bytearray : bool (optional)
         If this flag is True then the return type will be a bytearray object
-        instead of a bytesobject.
+        instead of a bytes object.
 
     Returns
     -------
@@ -145,13 +144,13 @@ def decompress(src, dst=None, as_bytearray=False):
     Raises
     ------
     RuntimeError
-        The compressed data is corrupted or the output buffer is not large enough
-        Could not get a bytes object
+        The compressed data is corrupted or the output buffer is not large enough.
+        Could not get a bytes object.
     TypeError
-        If src does not support Buffer Protocol
+        If src does not support Buffer Protocol.
     ValueError
-        If the length of src is smaller than the minimum
-        If dst is not None and its length is 0
+        If the length of src is smaller than the minimum.
+        If dst is not None and its length is 0.
 
     Examples
     --------
@@ -190,10 +189,9 @@ def pack(obj, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz"):
     clevel : int (optional)
         The compression level from 0 (no compression) to 9
         (maximum compression).  The default is 9.
-    shuffle : int (optional)
-        The shuffle filter to be activated.  Allowed values are
-        Filter.NOFILTER, Filter.SHUFFLE and Filter.BITSHUFFLE.  The
-        default is Filter.SHUFFLE.
+    shuffle : :class:`Filter` (optional)
+        The shuffle filter to be activated. The
+        default is :py:obj:`Filter.SHUFFLE <Filter>`.
     cname : string (optional)
         The name of the compressor used internally in Blosc. It can be
         any of the supported by Blosc ( `blosclz` , `lz4` , `lz4hc` ,
@@ -298,10 +296,9 @@ def pack_array(arr, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz"):
     clevel : int (optional)
         The compression level from 0 (no compression) to 9
         (maximum compression).  The default is 9.
-    shuffle : int (optional)
-        The shuffle filter to be activated.  Allowed values are
-        Filter.NOFILTER, Filter.SHUFFLE and Filter.BITSHUFFLE.  The
-        default is Filter.SHUFFLE.
+    shuffle : :class:`Filter` (optional)
+        The shuffle filter to be activated. The
+        default is :py:obj:`Filter.SHUFFLE <Filter>`.
     cname : string (optional)
         The name of the compressor used internally in Blosc. It can be
         any of the supported by Blosc ( `blosclz` , `lz4` , `lz4hc` ,
@@ -671,10 +668,8 @@ def compress2(src, **kwargs):
     kwargs: dict, optional
         Keyword arguments supported:
 
-            compcode: int
-                The compressor code. It can be `blosc2.Codec.BLOSCLZ` (the default one),
-                `blosc2.Codec.LZ4`, `blosc2.Codec.LZ4HC`,
-                `blosc2.Codec.ZLIB`, `blosc2.Codec.ZSTD` and maybe other too.
+            compcode: :class:`Codec` or int
+                The compressor code. Default is :py:obj:`Codec.BLOSCLZ <Codec>`.
             compcode_meta: int
                 The metadata for the compressor code, 0 by default.
             clevel: int
@@ -689,12 +684,11 @@ def compress2(src, **kwargs):
             blocksize: int
                 The requested size of the compressed blocks. If 0 (the default)
                 blosc2 chooses it automatically.
-            splitmode: int
-                The splitmode for the blocks. It can be `blosc2.ALWAYS_SPLIT`,
-                `blosc2.NEVER_SPLIT`, `blosc2.AUTO_SPLIT` and `blosc2.FORWARD_COMPAT_SPLIT`.
-                The default value is `blosc2.FORWARD_COMPAT_SPLIT`.
-            filters: list
-                The sequence of filters. By default: `{0, 0, 0, 0, 0, blosc2.Filter.BLOSC_SHUFFLE}`.
+            splitmode: :class:`SplitMode` or int
+                The splitmode for the blocks.
+                The default value is :py:obj:`SplitMode.FORWARD_COMPAT_SPLIT <SplitMode>`.
+            filters: :class:`Filter` list
+                The sequence of filters. By default: {0, 0, 0, 0, 0, :py:obj:`Filter.SHUFFLE <Filter>`}.
             filters_meta: list
                 The metadata for filters. By default: `{0, 0, 0, 0, 0, 0}`.
 

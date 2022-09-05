@@ -3,42 +3,49 @@ Low level API
 
 .. currentmodule:: blosc2
 
-.. autofunction:: compress
+Compress and decompress
+-----------------------
 
-.. autofunction:: decompress
+.. autosummary::
+   :toctree: autofiles/low_level/
+   :nosignatures:
 
-.. autofunction:: pack_array
+   compress
+   compress2
+   decompress
+   decompress2
+   pack_array
+   pack
+   unpack_array
+   unpack
 
-.. autofunction:: pack
+Set / Get compress params
+-------------------------
 
-.. autofunction:: unpack_array
+.. autosummary::
+   :toctree: autofiles/low_level/
+   :nosignatures:
 
-.. autofunction:: unpack
+    clib_info
+    compressor_list
+    detect_number_of_cores
+    free_resources
+    get_clib
+    print_versions
+    set_blocksize
+    set_nthreads
+    set_releasegil
+    set_compressor
+    get_compressor
+    get_blocksize
 
-.. autofunction:: clib_info
+Enumerated classes
+------------------
 
-.. autofunction:: compressor_list
+.. autosummary::
+   :toctree: autofiles/low_level/
+   :nosignatures:
 
-.. autofunction:: detect_number_of_cores
-
-.. autofunction:: free_resources
-
-.. autofunction:: get_clib
-
-.. autofunction:: print_versions
-
-.. autofunction:: set_blocksize
-
-.. autofunction:: set_nthreads
-
-.. autofunction:: set_releasegil
-
-.. autofunction:: set_compressor
-
-.. autofunction:: get_compressor
-
-.. autofunction:: get_blocksize
-
-.. autofunction:: compress2
-
-.. autofunction:: decompress2
+   Codec
+   Filter
+   SplitMode

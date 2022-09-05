@@ -28,16 +28,23 @@ class Filter(Enum):
     DELTA = 3
     TRUNC_PREC = 4
 
+# Split mode
+class SplitMode(Enum):
+    """
+    Available split modes.
+    """
+
+    ALWAYS_SPLIT = 1
+    NEVER_SPLIT = 2
+    AUTO_SPLIT = 3
+    FORWARD_COMPAT_SPLIT = 4
+
 
 from .blosc2_ext import (
-    ALWAYS_SPLIT,
-    AUTO_SPLIT,
     EXTENDED_HEADER_LENGTH,
-    FORWARD_COMPAT_SPLIT,
     MAX_BUFFERSIZE,
     MAX_TYPESIZE,
     MIN_HEADER_LENGTH,
-    NEVER_SPLIT,
     TRUNC_PREC,
     VERSION_DATE,
     VERSION_STRING,
@@ -108,10 +115,6 @@ __all__ = [
     "VERSION_DATE",
     "MIN_HEADER_LENGTH",
     "EXTENDED_HEADER_LENGTH",
-    "ALWAYS_SPLIT",
-    "AUTO_SPLIT",
-    "NEVER_SPLIT",
-    "FORWARD_COMPAT_SPLIT",
     "compress2",
     "cparams_dflts",
     "decompress2",

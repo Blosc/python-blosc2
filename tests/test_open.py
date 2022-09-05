@@ -19,7 +19,7 @@ import blosc2
         ({"compcode": blosc2.Codec.LZ4, "clevel": 6, "typesize": 2}, {}, 0, 50, numpy.int16),
         ({"typesize": 4}, {"nthreads": 4}, 1, 200 * 100, float),
         (
-         {"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 2, "typesize": 1},
+         {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 2, "typesize": 1},
          {"schunk": None},
          5,
          201,

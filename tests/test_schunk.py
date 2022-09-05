@@ -18,7 +18,7 @@ import blosc2
     [
         ({"compcode": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 0),
         ({"typesize": 4}, {"nthreads": 4}, 1),
-        ({"splitmode": blosc2.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {"schunk": None}, 5),
+        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {"schunk": None}, 5),
         ({"compcode": blosc2.Codec.LZ4HC, "typesize": 4}, {}, 10),
     ],
 )

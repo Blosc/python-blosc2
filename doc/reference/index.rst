@@ -5,4 +5,5 @@ API Reference
     :maxdepth: 2
 
     low_level
-    high_level
+    schunk_api
+    utils
