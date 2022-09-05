@@ -1,5 +1,7 @@
-Python-Blosc2
-=============
+.. include:: ../README.rst
+
+Contents
+========
 
 .. toctree::
    :maxdepth: 2

@@ -14,15 +14,15 @@ html_css_files = [
     'css/custom.css',
 ]
 html_logo = "_static/blosc-logo_256.png"
-html_favicon = "blosc-logo_128.png"
+html_favicon = "_static/blosc-logo_128.png"
 html_theme_options = {
     "logo": {
-        "link": "/",
+        "link": "/index",
         "alt_text": "Blosc",
     },
     "external_links": [
-        {"name": "C-Blosc2", "url": "/c-blosc2/"},
-        {"name": "Python-Blosc", "url": "/python-blosc/"},
+        {"name": "C-Blosc2", "url": "/c-blosc2/c-blosc2.html"},
+        {"name": "Python-Blosc", "url": "/python-blosc/python-blosc.html"},
         {"name": "Blosc In Depth", "url": "/pages/blosc-in-depth/"},
         {"name": "Donate to Blosc", "url": "/pages/donate/"},
     ],

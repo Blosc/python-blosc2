@@ -1,5 +1,9 @@
-python-blosc2: a Python wrapper for the extremely fast Blosc2 compression library
-=================================================================================
+=============
+Python-Blosc2
+=============
+
+A Python wrapper for the extremely fast Blosc2 compression library
+==================================================================
 
 :Author: The Blosc development team
 :Contact: blosc@blosc.org
@@ -19,7 +23,7 @@ python-blosc2: a Python wrapper for the extremely fast Blosc2 compression librar
 
 
 What it is
-----------
+==========
 
 Blosc (http://blosc.org) is a high performance compressor optimized for
 binary data.  It has been designed to transmit data to the processor
@@ -46,7 +50,7 @@ That means that it can read data generated with python-blosc, but the opposite
 is not true (i.e. there is no *forward* compatibility).
 
 Installing
-----------
+==========
 
 Blosc is now offering Python wheels for the main OS (Win, Mac and Linux) and platforms.
 You can install binary packages from PyPi using ``pip``:
@@ -56,11 +60,11 @@ You can install binary packages from PyPi using ``pip``:
     pip install blosc2
 
 Documentation
--------------
+=============
 
 The documentation is here:
 
-https://python-blosc2.readthedocs.io/en/latest/
+https://blosc.org/python-blosc2/python-blosc2.html
 
 Also, some examples are available on:
 
@@ -68,7 +72,7 @@ https://github.com/Blosc/python-blosc2/tree/main/examples
 
 
 Building
---------
+========
 
 `python-blosc2` comes with the Blosc sources with it and can be built with:
 
@@ -83,7 +87,7 @@ Building
 That's all. You can proceed with testing section now.
 
 Testing
--------
+=======
 
 After compiling, you can quickly check that the package is sane by
 running the doctests in ``blosc/test.py``:
@@ -94,7 +98,7 @@ running the doctests in ``blosc/test.py``:
     python -m pytest  (add -v for verbose mode)
 
 Benchmarking
-------------
+============
 
 If curious, you may want to run a small benchmark that compares a plain
 NumPy array copy against compression through different compressors in
@@ -265,16 +269,15 @@ As can be seen, is perfectly possible for python-blosc2 to go faster than a plai
 
 Start using compression in your data workflows and feel the experience of doing more with less!
 
-
 License
--------
+=======
 
 The software is licenses under a 3-Clause BSD license. A copy of the
 python-blosc2 license can be found in `LICENSE <https://github.com/Blosc/python-blosc2/tree/main/LICENSE>`_. A copy of all licenses can be
 found in `LICENSES/ <https://github.com/Blosc/python-blosc2/blob/main/LICENSES>`_.
 
 Mailing list
-------------
+============
 
 Discussion about this module is welcome in the Blosc list:
 
@@ -283,9 +286,9 @@ blosc@googlegroups.com
 http://groups.google.es/group/blosc
 
 Twitter
--------
+=======
 
-Please follow @Blosc2 to get informed about the latest developments.
+Please follow `@Blosc2 <https://twitter.com/Blosc2>`_ to get informed about the latest developments.
 
 ----
 
