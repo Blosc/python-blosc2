@@ -28,7 +28,7 @@ class Filter(Enum):
     DELTA = 3
     TRUNC_PREC = 4
 
-# Split mode
+
 class SplitMode(Enum):
     """
     Available split modes.
@@ -45,7 +45,6 @@ from .blosc2_ext import (
     MAX_BUFFERSIZE,
     MAX_TYPESIZE,
     MIN_HEADER_LENGTH,
-    TRUNC_PREC,
     VERSION_DATE,
     VERSION_STRING,
     cparams_dflts,

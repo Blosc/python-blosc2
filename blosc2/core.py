@@ -17,6 +17,7 @@ def _check_typesize(typesize):
     if not 1 <= typesize <= blosc2_ext.MAX_TYPESIZE:
         raise ValueError("typesize can only be in the 1-%d range." % blosc2_ext.MAX_TYPESIZE)
 
+
 def _check_clevel(clevel):
     if not 0 <= clevel <= 9:
         raise ValueError("clevel can only be in the 0-9 range.")
@@ -77,7 +78,8 @@ def compress(src, typesize=None, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=b
 
     Notes
     -----
-    The `cname` param is substituted by :param:`codec`.
+    The `cname` param has been substituted by :param:`codec`, using `cname`
+     as parameter or a string as a param:`codec` value would not work.
 
     Examples
     --------

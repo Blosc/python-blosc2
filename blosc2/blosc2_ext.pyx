@@ -16,10 +16,10 @@ from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
 from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free, malloc, realloc
 from libcpp cimport bool
-from msgpack import unpackb
-
 
 from enum import Enum
+
+from msgpack import unpackb
 
 import blosc2
 
@@ -36,22 +36,6 @@ cdef extern from "<stdint.h>":
 
 
 cdef extern from "blosc2.h":
-    ctypedef enum:
-        BLOSC_NOFILTER
-        BLOSC_NOSHUFFLE
-        BLOSC_SHUFFLE
-        BLOSC_BITSHUFFLE
-        BLOSC_DELTA
-        BLOSC_TRUNC_PREC
-        BLOSC_LAST_FILTER
-
-    ctypedef enum:
-        BLOSC_BLOSCLZ
-        BLOSC_LZ4
-        BLOSC_LZ4HC
-        BLOSC_ZLIB
-        BLOSC_ZSTD
-        BLOSC_LAST_CODEC
 
     ctypedef enum:
         BLOSC2_MAX_FILTERS
@@ -70,12 +54,6 @@ cdef extern from "blosc2.h":
         BLOSC2_VERSION_STRING
         BLOSC2_VERSION_REVISION
         BLOSC2_VERSION_DATE
-
-    ctypedef enum:
-        BLOSC_ALWAYS_SPLIT
-        BLOSC_NEVER_SPLIT
-        BLOSC_AUTO_SPLIT
-        BLOSC_FORWARD_COMPAT_SPLIT
 
     ctypedef enum:
         BLOSC2_ERROR_SUCCESS
@@ -369,27 +347,6 @@ MIN_HEADER_LENGTH = BLOSC_MIN_HEADER_LENGTH
 EXTENDED_HEADER_LENGTH = BLOSC_EXTENDED_HEADER_LENGTH
 
 
-# Codecs
-BLOSCLZ = BLOSC_BLOSCLZ
-LZ4 = BLOSC_LZ4
-LZ4HC = BLOSC_LZ4HC
-ZLIB = BLOSC_ZLIB
-ZSTD = BLOSC_ZSTD
-
-# Filters
-NOFILTER = BLOSC_NOFILTER
-NOSHUFFLE = BLOSC_NOSHUFFLE
-SHUFFLE = BLOSC_SHUFFLE
-BITSHUFFLE = BLOSC_BITSHUFFLE
-DELTA = BLOSC_DELTA
-TRUNC_PREC = BLOSC_TRUNC_PREC
-
-# Split modes
-ALWAYS_SPLIT = BLOSC_ALWAYS_SPLIT
-NEVER_SPLIT = BLOSC_NEVER_SPLIT
-AUTO_SPLIT = BLOSC_AUTO_SPLIT
-FORWARD_COMPAT_SPLIT = BLOSC_FORWARD_COMPAT_SPLIT
-
 def _check_comp_length(comp_name, comp_len):
     if comp_len < BLOSC_MIN_HEADER_LENGTH:
         raise ValueError("%s cannot be less than %d bytes" % (comp_name, BLOSC_MIN_HEADER_LENGTH))
@@ -520,7 +477,7 @@ cparams_dflts = {
         'typesize': 8,
         'nthreads': 1,
         'blocksize': 0,
-        'splitmode': BLOSC_FORWARD_COMPAT_SPLIT,
+        'splitmode': blosc2.SplitMode.FORWARD_COMPAT_SPLIT,
         'schunk': None,
         'filters': [0, 0, 0, 0, 0, blosc2.Filter.SHUFFLE],
         'filters_meta': [0, 0, 0, 0, 0, 0],

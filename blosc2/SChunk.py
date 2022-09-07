@@ -4,9 +4,11 @@
 #
 ########################################################################
 
-from blosc2 import blosc2_ext
-from msgpack import packb, unpackb
 from collections.abc import MutableMapping
+
+from msgpack import packb, unpackb
+
+from blosc2 import blosc2_ext
 
 
 class vlmeta(MutableMapping, blosc2_ext.vlmeta):

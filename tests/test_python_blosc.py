@@ -148,7 +148,7 @@ class TestCodec(unittest.TestCase):
         self.assertRaises(AttributeError, blosc2.pack_array, "abc")
         self.assertRaises(AttributeError, blosc2.pack_array, 1.0)
 
-        items = (blosc2.MAX_BUFFERSIZE // 8) + 1
+        # items = (blosc2.MAX_BUFFERSIZE // 8) + 1
         one = numpy.ones(1, dtype=numpy.int64)
         self.assertRaises(ValueError, blosc2.pack_array, one, clevel=-1)
         self.assertRaises(ValueError, blosc2.pack_array, one, clevel=10)
@@ -228,7 +228,8 @@ class TestCodec(unittest.TestCase):
     def test_bitshuffle_leftovers(self):
         # Test for https://github.com/blosc2/c-blosc22/pull/100
         buffer = b" " * 641091  # a buffer that is not divisible by 8
-        self.assertRaises(ValueError, blosc2.compress, buffer, typesize=8, filter=blosc2.Filter.BITSHUFFLE, clevel=1)
+        self.assertRaises(ValueError, blosc2.compress, buffer, typesize=8,
+                          filter=blosc2.Filter.BITSHUFFLE, clevel=1)
         cbuffer = blosc2.compress(buffer, filter=blosc2.Filter.BITSHUFFLE, clevel=1)
         dbuffer = blosc2.decompress(cbuffer)
         self.assertTrue(buffer == dbuffer)
