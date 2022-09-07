@@ -394,8 +394,8 @@ def _check_comp_length(comp_name, comp_len):
     if comp_len < BLOSC_MIN_HEADER_LENGTH:
         raise ValueError("%s cannot be less than %d bytes" % (comp_name, BLOSC_MIN_HEADER_LENGTH))
 
-cpdef compress(src, int32_t typesize=8, int clevel=9, shuffle=BLOSC_SHUFFLE, cname='blosclz'):
-    set_compressor(cname)
+cpdef compress(src, int32_t typesize=8, int clevel=9, shuffle=BLOSC_SHUFFLE, codec=blosc2.Codec.BLOSCLZ):
+    set_compressor(codec)
     cdef int32_t len_src = <int32_t> len(src)
     cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
     PyObject_GetBuffer(src, buf, PyBUF_SIMPLE)
@@ -447,8 +447,9 @@ def decompress(src, dst=None, as_bytearray=False):
         raise RuntimeError("Cannot decompress")
 
 
-def set_compressor(compname):
-    size = blosc1_set_compressor(compname)
+def set_compressor(codec):
+    codec = codec.name.lower().encode("utf-8")
+    size = blosc1_set_compressor(codec)
     if size == -1:
         raise ValueError("The code is not available")
     else:
@@ -468,17 +469,14 @@ def set_nthreads(nthreads):
     else:
         return rc
 
-def compressor_list():
-    return blosc2_list_compressors()
-
 def set_blocksize(size_t blocksize=0):
     return blosc1_set_blocksize(blocksize)
 
-def clib_info(cname):
+def clib_info(codec):
     cdef char* clib
     cdef char* version
-    cname = cname.encode("utf-8") if isinstance(cname, str) else cname
-    rc = blosc2_get_complib_info(cname, &clib, &version)
+    codec = codec.name.lower().encode("utf-8")
+    rc = blosc2_get_complib_info(codec, &clib, &version)
     if rc >= 0:
         return clib, version
     else:
@@ -515,8 +513,8 @@ def get_blocksize():
 
 # Defaults for compression params
 cparams_dflts = {
-        'compcode': BLOSC_BLOSCLZ,
-        'compcode_meta': 0,
+        'codec': blosc2.Codec.BLOSCLZ,
+        'codec_meta': 0,
         'clevel': 5,
         'use_dict': False,
         'typesize': 8,
@@ -541,9 +539,9 @@ dparams_dflts = {
 }
 
 cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
-    compcode = kwargs.get('compcode', cparams_dflts['compcode'])
-    cparams.compcode = compcode.value if isinstance(compcode, Enum) else compcode
-    cparams.compcode_meta = kwargs.get('compcode_meta', cparams_dflts['compcode_meta'])
+    codec = kwargs.get('codec', cparams_dflts['codec'])
+    cparams.compcode = codec.value if isinstance(codec, Enum) else codec
+    cparams.compcode_meta = kwargs.get('codec_meta', cparams_dflts['codec_meta'])
     cparams.clevel = kwargs.get('clevel', cparams_dflts['clevel'])
     cparams.use_dict = kwargs.get('use_dict', cparams_dflts['use_dict'])
     cparams.typesize = kwargs.get('typesize', cparams_dflts['typesize'])
