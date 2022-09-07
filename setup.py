@@ -40,6 +40,7 @@ classifiers = dedent(
 
 # read the contents of the README file
 from pathlib import Path
+
 this_directory = Path(__file__).parent
 long_description = (this_directory / "README.rst").read_text()
 
