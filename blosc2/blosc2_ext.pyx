@@ -394,7 +394,7 @@ def _check_comp_length(comp_name, comp_len):
     if comp_len < BLOSC_MIN_HEADER_LENGTH:
         raise ValueError("%s cannot be less than %d bytes" % (comp_name, BLOSC_MIN_HEADER_LENGTH))
 
-cpdef compress(src, int32_t typesize=8, int clevel=9, shuffle=BLOSC_SHUFFLE, codec=blosc2.Codec.BLOSCLZ):
+cpdef compress(src, int32_t typesize=8, int clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ):
     set_compressor(codec)
     cdef int32_t len_src = <int32_t> len(src)
     cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
@@ -402,13 +402,13 @@ cpdef compress(src, int32_t typesize=8, int clevel=9, shuffle=BLOSC_SHUFFLE, cod
     dest = bytes(buf.len + BLOSC2_MAX_OVERHEAD)
     cdef int32_t len_dest =  <int32_t> len(dest)
     cdef int size
-    cdef int shuffle_ = shuffle.value if isinstance(shuffle, Enum) else shuffle
+    cdef int filter_ = filter.value if isinstance(filter, Enum) else filter
     if RELEASEGIL:
         _dest = <void*> <char *> dest
         with nogil:
-            size = blosc2_compress(clevel, shuffle_, <int32_t> typesize, buf.buf, <int32_t> buf.len, _dest, len_dest)
+            size = blosc2_compress(clevel, filter_, <int32_t> typesize, buf.buf, <int32_t> buf.len, _dest, len_dest)
     else:
-        size = blosc2_compress(clevel, shuffle_, <int32_t> typesize, buf.buf, <int32_t> buf.len, <void*> <char *> dest, len_dest)
+        size = blosc2_compress(clevel, filter_, <int32_t> typesize, buf.buf, <int32_t> buf.len, <void*> <char *> dest, len_dest)
     PyBuffer_Release(buf)
     free(buf)
     if size > 0:
@@ -522,7 +522,7 @@ cparams_dflts = {
         'blocksize': 0,
         'splitmode': BLOSC_FORWARD_COMPAT_SPLIT,
         'schunk': None,
-        'filters': [0, 0, 0, 0, 0, BLOSC_SHUFFLE],
+        'filters': [0, 0, 0, 0, 0, blosc2.Filter.SHUFFLE],
         'filters_meta': [0, 0, 0, 0, 0, 0],
         'prefilter': None,
         'preparams': None,

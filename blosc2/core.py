@@ -29,16 +29,10 @@ def _check_input_length(input_name, input_len, typesize, _ignore_multiple_size=F
         raise ValueError("len(%s) can only be a multiple of typesize (%d)." % (input_name, typesize))
 
 
-def _check_shuffle(shuffle):
-    if shuffle not in [
-        blosc2.Filter.NOFILTER,
-        blosc2.Filter.SHUFFLE,
-        blosc2.Filter.BITSHUFFLE,
-        blosc2.Filter.DELTA,
-        blosc2.Filter.TRUNC_PREC,
-    ]:
+def _check_filter(filter):
+    if filter not in blosc2.Filter:
         raise ValueError(
-            "shuffle can only be one of NOSHUFFLE, SHUFFLE, BITSHUFFLE, DELTA, and TRUNC_PREC."
+            "filter can only be one of ", blosc2.Filter.keys()
         )
 
 
@@ -47,7 +41,7 @@ def _check_codec(codec):
         raise ValueError("codec can only be one of: %s, not '%s'" % (codecs, codec))
 
 
-def compress(src, typesize=None, clevel=9, shuffle=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ,
+def compress(src, typesize=None, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ,
              _ignore_multiple_size=False):
     """Compress src, with a given type size.
 
@@ -60,8 +54,8 @@ def compress(src, typesize=None, clevel=9, shuffle=blosc2.Filter.SHUFFLE, codec=
     clevel : int (optional)
         The compression level from 0 (no compression) to 9
         (maximum compression).  The default is 9.
-    shuffle : :class:`Filter` (optional)
-        The shuffle filter to be activated. The
+    filter : :class:`Filter` (optional)
+        The filter to be activated. The
         default is :py:obj:`Filter.SHUFFLE <Filter>`.
     codec : :class:`Codec` (optional)
         The compressor used internally in Blosc. The default is :py:obj:`Codec.BLOSCLZ <Codec>`.
@@ -80,6 +74,10 @@ def compress(src, typesize=None, clevel=9, shuffle=blosc2.Filter.SHUFFLE, codec=
         If typesize is not within the allowed range.
         If clevel is not within the allowed range.
         If codec is not valid.
+
+    Notes
+    -----
+    The `cname` param is substituted by :param:`codec`.
 
     Examples
     --------
@@ -101,9 +99,9 @@ def compress(src, typesize=None, clevel=9, shuffle=blosc2.Filter.SHUFFLE, codec=
             typesize = 1
     _check_clevel(clevel)
     _check_typesize(typesize)
-    _check_shuffle(shuffle)
+    _check_filter(filter)
     _check_input_length("src", len_src, typesize, _ignore_multiple_size=_ignore_multiple_size)
-    return blosc2_ext.compress(src, typesize, clevel, shuffle, codec)
+    return blosc2_ext.compress(src, typesize, clevel, filter, codec)
 
 
 def decompress(src, dst=None, as_bytearray=False):
@@ -175,7 +173,7 @@ def decompress(src, dst=None, as_bytearray=False):
     return blosc2_ext.decompress(src, dst, as_bytearray)
 
 
-def pack(obj, clevel=9, shuffle=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ):
+def pack(obj, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ):
     """Pack (compress) a Python object.
 
     Parameters
@@ -185,8 +183,8 @@ def pack(obj, clevel=9, shuffle=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCL
     clevel : int (optional)
         The compression level from 0 (no compression) to 9
         (maximum compression).  The default is 9.
-    shuffle : :class:`Filter` (optional)
-        The shuffle filter to be activated. The
+    filter : :class:`Filter` (optional)
+        The filter to be activated. The
         default is :py:obj:`Filter.SHUFFLE <Filter>`.
     codec : :class:`Codec` (optional)
         The compressor used internally in Blosc. The default is
@@ -230,7 +228,7 @@ def pack(obj, clevel=9, shuffle=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCL
         len_src = len(pickled_object)
         _check_input_length("pickled object", len_src, itemsize, _ignore_multiple_size=True)
         packed_object = compress(pickled_object, typesize=itemsize, clevel=clevel,
-                                 shuffle=shuffle, codec=codec, _ignore_multiple_size=True)
+                                 filter=filter, codec=codec, _ignore_multiple_size=True)
     return packed_object
 
 
@@ -280,7 +278,7 @@ def unpack(packed_object, **kwargs):
     return obj
 
 
-def pack_array(arr, clevel=9, shuffle=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ):
+def pack_array(arr, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ):
     """Pack (compress) a NumPy array. It is equivalent to the pack function.
 
     Parameters
@@ -290,8 +288,8 @@ def pack_array(arr, clevel=9, shuffle=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.
     clevel : int (optional)
         The compression level from 0 (no compression) to 9
         (maximum compression).  The default is 9.
-    shuffle : :class:`Filter` (optional)
-        The shuffle filter to be activated. The
+    filter : :class:`Filter` (optional)
+        The filter to be activated. The
         default is :py:obj:`Filter.SHUFFLE <Filter>`.
     codec : :class:`Codec` (optional)
         The compressor used internally in Blosc. The default is
@@ -325,7 +323,7 @@ def pack_array(arr, clevel=9, shuffle=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.
     >>> len(parray) < a.size*a.itemsize
     True
     """
-    return pack(arr, clevel, shuffle, codec)
+    return pack(arr, clevel, filter, codec)
 
 
 def unpack_array(packed_array, **kwargs):
@@ -659,7 +657,7 @@ def compress2(src, **kwargs):
 
             codec: :class:`Codec` or int
                 The compressor code. Default is :py:obj:`Codec.BLOSCLZ <Codec>`.
-            compcode_meta: int
+            codec_meta: int
                 The metadata for the compressor code, 0 by default.
             clevel: int
                 The compression level from 0 (no compression) to 9
