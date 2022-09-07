@@ -47,8 +47,8 @@ class TestCodec(unittest.TestCase):
 
     def test_all_compressors(self):
         s = b"0123456789" * 100
-        for cname in blosc2.compressor_list():
-            c = blosc2.compress(s, typesize=1, cname=cname)
+        for codec in list(blosc2.Codec):
+            c = blosc2.compress(s, typesize=1, codec=codec)
             d = blosc2.decompress(c)
             self.assertEqual(s, d)
 
@@ -130,8 +130,6 @@ class TestCodec(unittest.TestCase):
 
         self.assertRaises(TypeError, blosc2.compress, 1.0, 1)
         self.assertRaises(TypeError, blosc2.compress, ["abc"], 1)
-
-        self.assertRaises(ValueError, blosc2.compress, "abc", typesize=1, cname="foo")
 
         # Create a simple mock to avoid having to create a buffer of 2 GB
         class LenMock:

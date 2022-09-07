@@ -42,12 +42,12 @@ def _check_shuffle(shuffle):
         )
 
 
-def _check_cname(cname):
-    if cname not in cnames:
-        raise ValueError("cname can only be one of: %s, not '%s'" % (cnames, cname))
+def _check_codec(codec):
+    if codec not in blosc2.Codec:
+        raise ValueError("codec can only be one of: %s, not '%s'" % (codecs, codec))
 
 
-def compress(src, typesize=None, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz",
+def compress(src, typesize=None, clevel=9, shuffle=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ,
              _ignore_multiple_size=False):
     """Compress src, with a given type size.
 
@@ -63,11 +63,8 @@ def compress(src, typesize=None, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname=
     shuffle : :class:`Filter` (optional)
         The shuffle filter to be activated. The
         default is :py:obj:`Filter.SHUFFLE <Filter>`.
-    cname : string (optional)
-        The name of the compressor used internally in Blosc. It can be
-        any of the supported by Blosc ( `blosclz` , `lz4` , `lz4hc` ,
-        `zlib` , `zstd` and maybe others too). The default is
-        `blosclz` .
+    codec : :class:`Codec` (optional)
+        The compressor used internally in Blosc. The default is :py:obj:`Codec.BLOSCLZ <Codec>`.
 
     Returns
     -------
@@ -82,7 +79,7 @@ def compress(src, typesize=None, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname=
         If src is too long.
         If typesize is not within the allowed range.
         If clevel is not within the allowed range.
-        If cname is not a valid codec.
+        If codec is not valid.
 
     Examples
     --------
@@ -106,8 +103,7 @@ def compress(src, typesize=None, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname=
     _check_typesize(typesize)
     _check_shuffle(shuffle)
     _check_input_length("src", len_src, typesize, _ignore_multiple_size=_ignore_multiple_size)
-    cname = cname.encode("utf-8") if isinstance(cname, str) else cname
-    return blosc2_ext.compress(src, typesize, clevel, shuffle, cname)
+    return blosc2_ext.compress(src, typesize, clevel, shuffle, codec)
 
 
 def decompress(src, dst=None, as_bytearray=False):
@@ -179,7 +175,7 @@ def decompress(src, dst=None, as_bytearray=False):
     return blosc2_ext.decompress(src, dst, as_bytearray)
 
 
-def pack(obj, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz"):
+def pack(obj, clevel=9, shuffle=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ):
     """Pack (compress) a Python object.
 
     Parameters
@@ -192,11 +188,9 @@ def pack(obj, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz"):
     shuffle : :class:`Filter` (optional)
         The shuffle filter to be activated. The
         default is :py:obj:`Filter.SHUFFLE <Filter>`.
-    cname : string (optional)
-        The name of the compressor used internally in Blosc. It can be
-        any of the supported by Blosc ( `blosclz` , `lz4` , `lz4hc` ,
-        `zlib` , `zstd` and maybe others too). The default is
-        `blosclz` .
+    codec : :class:`Codec` (optional)
+        The compressor used internally in Blosc. The default is
+        :py:obj:`Codec.BLOSCLZ <Codec>`.
 
     Returns
     -------
@@ -212,7 +206,7 @@ def pack(obj, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz"):
         If the pickled object size is larger than the maximum allowed buffer size.
         If typesize is not within the allowed range.
         If clevel is not within the allowed range.
-        If cname is not within the supported compressors.
+        If codec is not within the supported compressors.
 
     Examples
     --------
@@ -229,14 +223,14 @@ def pack(obj, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz"):
     else:
         itemsize = obj.itemsize
         _check_clevel(clevel)
-        _check_cname(cname)
+        _check_codec(codec)
         _check_typesize(itemsize)
         pickled_object = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
         # The object to be compressed is pickled_object, and not obj
         len_src = len(pickled_object)
         _check_input_length("pickled object", len_src, itemsize, _ignore_multiple_size=True)
         packed_object = compress(pickled_object, typesize=itemsize, clevel=clevel,
-                                 shuffle=shuffle, cname=cname, _ignore_multiple_size=True)
+                                 shuffle=shuffle, codec=codec, _ignore_multiple_size=True)
     return packed_object
 
 
@@ -248,8 +242,8 @@ def unpack(packed_object, **kwargs):
     packed_object : str / bytes
         The packed object to be decompressed.
     **kwargs : fix_imports / encoding / errors
-        Optional parameters that can be passed to the pickle.loads API
-        https://docs.python.org/3/library/pickle.html#pickle.loads
+        Optional parameters that can be passed to the
+        `pickle.loads API <https://docs.python.org/3/library/pickle.html#pickle.loads>`_
 
     Returns
     -------
@@ -286,7 +280,7 @@ def unpack(packed_object, **kwargs):
     return obj
 
 
-def pack_array(arr, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz"):
+def pack_array(arr, clevel=9, shuffle=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ):
     """Pack (compress) a NumPy array. It is equivalent to the pack function.
 
     Parameters
@@ -299,11 +293,9 @@ def pack_array(arr, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz"):
     shuffle : :class:`Filter` (optional)
         The shuffle filter to be activated. The
         default is :py:obj:`Filter.SHUFFLE <Filter>`.
-    cname : string (optional)
-        The name of the compressor used internally in Blosc. It can be
-        any of the supported by Blosc ( `blosclz` , `lz4` , `lz4hc` ,
-        `zlib` , `zstd` and maybe others too). The default is
-        `blosclz` .
+    codec : :class:`Codec` (optional)
+        The compressor used internally in Blosc. The default is
+        :py:obj:`Codec.BLOSCLZ <Codec>`.
 
     Returns
     -------
@@ -319,7 +311,7 @@ def pack_array(arr, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz"):
         If typesize is not within the allowed range.
         If the pickled object size is larger than the maximum allowed buffer size.
         If clevel is not within the allowed range.
-        If cname is not within the supported compressors.
+        If codec is not within the supported compressors.
 
     See also
     --------
@@ -333,7 +325,7 @@ def pack_array(arr, clevel=9, shuffle=blosc2.Filter.SHUFFLE, cname="blosclz"):
     >>> len(parray) < a.size*a.itemsize
     True
     """
-    return pack(arr, clevel, shuffle, cname)
+    return pack(arr, clevel, shuffle, codec)
 
 
 def unpack_array(packed_array, **kwargs):
@@ -386,15 +378,15 @@ def unpack_array(packed_array, **kwargs):
     return arr
 
 
-def set_compressor(compname):
+def set_compressor(codec):
     """Set the compressor to be used. The supported ones are `blosclz` ,
     `lz4` , `lz4hc` , `zlib` and `ztsd`. If this function is not
     called, then `blosclz` will be used.
 
     Parameters
     ----------
-    compname : str
-        The name of the compressor to be used.
+    codec : :class:`Codec`
+        The compressor to be used.
 
     Returns
     -------
@@ -406,8 +398,7 @@ def set_compressor(compname):
     ValueError
         If the compressor is not recognized, or there is not support for it.
     """
-    compname = compname.encode("utf-8") if isinstance(compname, str) else compname
-    return blosc2_ext.set_compressor(compname)
+    return blosc2_ext.set_compressor(codec)
 
 
 def free_resources():
@@ -476,9 +467,7 @@ def compressor_list():
     out : list
         The list of names.
     """
-    cnames = blosc2_ext.compressor_list().split(b",")
-    cnames = [cname.decode() for cname in cnames]
-    return cnames
+    return list(key.lower() for key in blosc2.Codec.__members__.keys())
 
 
 def set_blocksize(blocksize=0):
@@ -498,20 +487,20 @@ def set_blocksize(blocksize=0):
     return blosc2_ext.set_blocksize(blocksize)
 
 
-def clib_info(cname):
+def clib_info(codec):
     """Return info for compression libraries in C library.
 
     Parameters
     ----------
-    cname : str
-        The compressor name.
+    codec : :class:`Codec`
+        The compressor.
 
     Returns
     -------
     out : tuple
         The associated library name and version.
     """
-    return blosc2_ext.clib_info(cname)
+    return blosc2_ext.clib_info(codec)
 
 
 def get_clib(bytesobj):
@@ -528,7 +517,7 @@ def get_clib(bytesobj):
     out : str
         The name of the compression library.
     """
-    return blosc2_ext.get_clib(bytesobj)
+    return blosc2_ext.get_clib(bytesobj).decode()
 
 
 def get_compressor():
@@ -593,11 +582,11 @@ def detect_number_of_cores():
 
 
 # Dictionaries for the maps between compressor names and libs
-cnames = compressor_list()
+codecs = compressor_list()
 # Map for compression libraries and versions
 clib_versions = {}
-for cname in cnames:
-    clib_versions[cname] = clib_info(cname)[1].decode()
+for codec, value in blosc2.Codec.__members__.items():
+    clib_versions[codec] = clib_info(value)[1].decode()
 
 
 def os_release_pretty_name():
@@ -624,7 +613,7 @@ def print_versions():
     print("-=" * 38)
     print("python-blosc2 version: %s" % blosc2.__version__)
     print("Blosc version: %s" % blosc2.blosclib_version)
-    print("Compressors available: %s" % cnames)
+    print("Compressors available: %s" % codecs)
     print("Compressor library versions:")
     for clib in sorted(clib_versions.keys()):
         print("  %s: %s" % (clib, clib_versions[clib]))
@@ -668,7 +657,7 @@ def compress2(src, **kwargs):
     kwargs: dict, optional
         Keyword arguments supported:
 
-            compcode: :class:`Codec` or int
+            codec: :class:`Codec` or int
                 The compressor code. Default is :py:obj:`Codec.BLOSCLZ <Codec>`.
             compcode_meta: int
                 The metadata for the compressor code, 0 by default.

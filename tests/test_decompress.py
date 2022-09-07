@@ -12,17 +12,17 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "object, cname",
+    "object, codec",
     [
-        (numpy.random.randint(0, 10, 10), "lz4"),
-        (numpy.arange(10), "blosclz"),
-        (numpy.random.randint(0, 1000 + 1, 1000), "lz4hc"),
-        (numpy.arange(45, dtype=numpy.float64), "zlib"),
-        (numpy.arange(50, dtype=numpy.int64), "zstd"),
+        (numpy.random.randint(0, 10, 10), blosc2.Codec.LZ4),
+        (numpy.arange(10), blosc2.Codec.BLOSCLZ),
+        (numpy.random.randint(0, 1000 + 1, 1000), blosc2.Codec.LZ4HC),
+        (numpy.arange(45, dtype=numpy.float64), blosc2.Codec.ZLIB),
+        (numpy.arange(50, dtype=numpy.int64), blosc2.Codec.ZSTD),
     ],
 )
-def test_decompress_numpy(object, cname):
-    c = blosc2.compress(object, cname=cname)
+def test_decompress_numpy(object, codec):
+    c = blosc2.compress(object, codec=codec)
 
     dest = bytearray(object)
     blosc2.decompress(c, dst=dest)
@@ -44,16 +44,16 @@ def test_decompress_numpy(object, cname):
 
 
 @pytest.mark.parametrize(
-    "object, cname",
+    "object, codec",
     [
-        (bytearray([0, 12, 24, 33]), "lz4"),
-        (bytearray([2, 45, 6, 12, 78, 43, 23, 234]), "blosclz"),
-        (b"A string", "lz4hc"),
-        (bytearray("Another string" * 100, encoding="utf-8"), "zstd"),
+        (bytearray([0, 12, 24, 33]), blosc2.Codec.LZ4),
+        (bytearray([2, 45, 6, 12, 78, 43, 23, 234]), blosc2.Codec.BLOSCLZ),
+        (b"A string", blosc2.Codec.LZ4HC),
+        (bytearray("Another string" * 100, encoding="utf-8"), blosc2.Codec.ZSTD),
     ],
 )
-def test_decompress(object, cname):
-    c = blosc2.compress(object, cname=cname)
+def test_decompress(object, codec):
+    c = blosc2.compress(object, codec=codec)
 
     dest = bytearray(object)
     blosc2.decompress(c, dst=dest)
@@ -70,9 +70,9 @@ def test_decompress(object, cname):
     assert dest5 == object
 
 
-@pytest.mark.parametrize("object, cname", [(numpy.arange(0), "lz4"), (b"", "zlib")])
-def test_raise_error(object, cname):
-    c = blosc2.compress(object, cname=cname)
+@pytest.mark.parametrize("object, codec", [(numpy.arange(0), blosc2.Codec.LZ4), (b"", blosc2.Codec.ZLIB)])
+def test_raise_error(object, codec):
+    c = blosc2.compress(object, codec=codec)
 
     dest = bytearray(object)
     with pytest.raises(ValueError):
