@@ -1,6 +1,8 @@
 Low level API
 =============
 
+This API is meant to be compatible with the existing python-blosc API. There could be some parameters that are called differently, but other than that, they are largely compatible.
+
 .. currentmodule:: blosc2
 
 Compress and decompress
@@ -19,8 +21,8 @@ Compress and decompress
    unpack_array
    unpack
 
-Set / Get compress params
--------------------------
+Set / Get compression params
+----------------------------
 
 .. autosummary::
    :toctree: autofiles/low_level/
