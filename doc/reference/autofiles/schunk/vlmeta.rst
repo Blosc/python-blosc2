@@ -3,7 +3,7 @@
 
 .. currentmodule:: blosc2.SChunk
 
-Class to access the variable length metalayers of a super-chunk.
+Accessor to the variable length metalayers.
     This class inherits from the
     `MutableMapping <https://docs.python.org/3/library/collections.abc.html#collections.abc.MutableMapping>`_
     class, so every method in this class is available. It

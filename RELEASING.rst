@@ -31,9 +31,6 @@ is printing the correct versions.
     git commit -a -m "Getting ready for release X.Y.Z"
     git push
 
-* Check that the documentation is correctly created in https://python-blosc2.rtfd.io.
-
-
 * Double check that the supported Python versions for the wheels are the correct ones
   (`.github/workflows/cibuildwheels.yml`).  Add/remove Python version if needed.
   Also, update the `classifiers` field for the supported Python versions.
@@ -54,6 +51,9 @@ Tagging
 * Push the tag to the github repo::
 
     git push --tags
+
+* Go to Blosc/blogsite repo and click on the `Re-run all jobs` button to regenerate the
+  documentation and check that it has been correctly updated in https://www.blosc.org.
 
 
 Checking packaging
