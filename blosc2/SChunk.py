@@ -49,8 +49,8 @@ class SChunk(blosc2_ext.SChunk):
     def __init__(self, chunksize=8 * 10 ** 6, data=None, mode="a", **kwargs):
         """Create a new super-chunk.
 
-        If `data` is different from `None`, the `data` is split into
-        chunks of size `chunksize` and these chunks are appended into the created SChunk.
+        If :paramref:`data` is different from `None`, the :paramref:`data` is split into
+        chunks of size :paramref:`chunksize` and these chunks are appended into the created SChunk.
 
         Parameters
         ----------
@@ -59,7 +59,7 @@ class SChunk(blosc2_ext.SChunk):
             it is set to 8MB.
 
         data: bytes-like object, optional
-            The data to be split into different chunks of size `chunksize`.
+            The data to be split into different chunks of size :paramref:`chunksize`.
 
         mode: str, optional
             Persistence mode: ‘r’ means read only (must exist);
@@ -74,7 +74,7 @@ class SChunk(blosc2_ext.SChunk):
                 contiguous: bool
                     If the chunks are stored contiguously or not.
                 urlpath: String
-                    If the storage is persistent the name of the file (when `contiguous = True`) or
+                    If the storage is persistent, the name of the file (when `contiguous = True`) or
                     the directory (if `contiguous = False`).
                     If the storage is in-memory, then this field is `None`.
                 cparams: dict
@@ -120,7 +120,7 @@ class SChunk(blosc2_ext.SChunk):
         Raises
         ------
         RunTimeError
-            If the data could not be appended.
+            If :paramref:`data` could not be appended.
 
         Examples
         --------
@@ -135,7 +135,7 @@ class SChunk(blosc2_ext.SChunk):
         return super(SChunk, self).append_data(data)
 
     def decompress_chunk(self, nchunk, dst=None):
-        """Decompress the chunk given by its index `nchunk`.
+        """Decompress the chunk given by its index :paramref:`nchunk`.
 
         Parameters
         ----------
@@ -152,8 +152,8 @@ class SChunk(blosc2_ext.SChunk):
         -------
         out: str/bytes
             The decompressed chunk in form of a Python str / bytes object if
-            `dst` is `None`. Otherwise, it will return `None` because the result
-            will already be in `dst`.
+            :paramref:`dst` is `None`. Otherwise, it will return `None` because the result
+            will already be in :paramref:`dst`.
 
         Raises
         ------
@@ -291,7 +291,7 @@ class SChunk(blosc2_ext.SChunk):
         return super(SChunk, self).update_chunk(nchunk, chunk)
 
     def update_data(self, nchunk, data, copy):
-        """Update the chunk in the `nchunk`-th position with the given data.
+        """Update the chunk in the :paramref:`nchunk`-th position with the given data.
 
         Parameters
         ----------
@@ -325,7 +325,7 @@ def open(urlpath, mode="a", **kwargs):
     Parameters
     ----------
     urlpath: str
-        The path where the SChunk is stored.
+        The path where the :class:`~blosc2.SChunk` is stored.
     mode: str, optional
         The open mode.
 

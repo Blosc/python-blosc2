@@ -69,17 +69,20 @@ def compress(src, typesize=None, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=b
     Raises
     ------
     TypeError
-        If src doesn't support the buffer interface.
+        If :paramref:`src` doesn't support the buffer interface.
     ValueError
-        If src is too long.
-        If typesize is not within the allowed range.
-        If clevel is not within the allowed range.
-        If codec is not valid.
+        If :paramref:`src` is too long.
+        If :paramref:`typesize` is not within the allowed range.
+        If :paramref:`clevel` is not within the allowed range.
+        If :paramref:`codec` is not within the supported compressors.
 
     Notes
     -----
-    The `cname` param has been substituted by :param:`codec`, using `cname`
-     as parameter or a string as a param:`codec` value would not work.
+    The `cname` and `shuffle` parameters in python-blosc API have been replaced by :paramref:`codec` and
+    :paramref:`filter` respectively.
+    To set :paramref:`codec` and :paramref:`fitler`, the enumerates :class:`Codec` and :class:`Filter`
+    have to be used instead of the python-blosc API variables such as `blosc.SHUFFLE` for :paramref:`filter`
+    or strings like "blosclz" for :paramref:`codec`.
 
     Examples
     --------
@@ -114,7 +117,7 @@ def decompress(src, dst=None, as_bytearray=False):
     src : bytes-like object
         The data to be decompressed.  Must be a bytes-like object
         that supports the Python Buffer Protocol, like bytes, bytearray,
-        memoryview, or numpy.ndarray.
+        memoryview, or `numpy.ndarray <https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html>`_.
     dst : NumPy object or bytearray
         The destination NumPy object or bytearray to fill,
         the length of which must be greater than 0.
@@ -128,14 +131,12 @@ def decompress(src, dst=None, as_bytearray=False):
 
     Returns
     -------
-    If `dst=None`
-    out : str / bytes or bytearray
-        The decompressed data in form of a Python str / bytes object.
-        If as_bytearray is True then this will be a bytearray object, otherwise
-        this will be a str/ bytes object.
-    If `dst!=None`
-    out : None
-        As the result will already be in `dst`.
+    out: str/bytes or bytearray
+        If :paramref:`dst` is `None`, the decompressed data in form of a Python str / bytes object.
+        If as_bytearray is True then this will be a bytearray object.
+
+        If :paramref:`dst` is not `None`, it will return `None` because the result
+        will already be in :paramref:`dst`.
 
     Raises
     ------
@@ -143,10 +144,10 @@ def decompress(src, dst=None, as_bytearray=False):
         The compressed data is corrupted or the output buffer is not large enough.
         Could not get a bytes object.
     TypeError
-        If src does not support Buffer Protocol.
+        If :paramref:`src` does not support Buffer Protocol.
     ValueError
-        If the length of src is smaller than the minimum.
-        If dst is not None and its length is 0.
+        If the length of :paramref:`src` is smaller than the minimum.
+        If :paramref:`dst` is not None and its length is 0.
 
     Examples
     --------
@@ -200,13 +201,21 @@ def pack(obj, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ
     Raises
     ------
     AttributeError
-        If the object does not have an `itemsize` attribute.
-        If the object does not have an `size` attribute.
+        If :paramref:`obj` does not have an `itemsize` attribute.
+        If :paramref:`obj` does not have an `size` attribute.
     ValueError
         If the pickled object size is larger than the maximum allowed buffer size.
         If typesize is not within the allowed range.
-        If clevel is not within the allowed range.
-        If codec is not within the supported compressors.
+        If :paramref:`clevel` is not within the allowed range.
+        If :paramref:`codec` is not within the supported compressors.
+
+    Notes
+    -----
+    The `cname` and `shuffle` parameters in python-blosc API have been replaced by :paramref:`codec` and
+    :paramref:`filter` respectively.
+    To set :paramref:`codec` and :paramref:`fitler`, the enumerates :class:`Codec` and :class:`Filter`
+    have to be used instead of the python-blosc API variables such as `blosc.SHUFFLE` for :paramref:`filter`
+    or strings like "blosclz" for :paramref:`codec`.
 
     Examples
     --------
@@ -253,7 +262,7 @@ def unpack(packed_object, **kwargs):
     Raises
     ------
     TypeError
-        If packed_object is not of type bytes or string.
+        If :paramref:`packed_object` is not of type bytes or string.
 
     Examples
     --------
@@ -305,17 +314,17 @@ def pack_array(arr, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.B
     Raises
     ------
     AttributeError
-        If the object does not have an `itemsize` attribute.
-        If the object does not have a `size` attribute.
+        If :paramref:`arr` does not have an `itemsize` attribute.
+        If :paramref:`arr` does not have a `size` attribute.
     ValueError
         If typesize is not within the allowed range.
         If the pickled object size is larger than the maximum allowed buffer size.
-        If clevel is not within the allowed range.
-        If codec is not within the supported compressors.
+        If :paramref:`clevel` is not within the allowed range.
+        If :paramref:`codec` is not within the supported compressors.
 
     See also
     --------
-    func: `pack(object)`
+    :func:`~blosc2.pack`
 
     Examples
     --------
@@ -336,8 +345,8 @@ def unpack_array(packed_array, **kwargs):
     packed_array : str / bytes
         The packed array to be decompressed.
     **kwargs : fix_imports / encoding / errors
-        Optional parameters that can be passed to the pickle.loads API
-        https://docs.python.org/3/library/pickle.html#pickle.loads
+        Optional parameters that can be passed to the
+        `pickle.loads API <https://docs.python.org/3/library/pickle.html#pickle.loads>`_.
 
     Returns
     -------
@@ -347,7 +356,7 @@ def unpack_array(packed_array, **kwargs):
     Raises
     ------
     TypeError
-        If packed_array is not of type bytes or string.
+        If :paramref:`packed_array` is not of type bytes or string.
 
     Examples
     --------
@@ -379,9 +388,8 @@ def unpack_array(packed_array, **kwargs):
 
 
 def set_compressor(codec):
-    """Set the compressor to be used. The supported ones are `blosclz` ,
-    `lz4` , `lz4hc` , `zlib` and `ztsd`. If this function is not
-    called, then `blosclz` will be used.
+    """Set the compressor to be used. If this function is not
+    called, then :py:obj:`blosc2.Codec.BLOSCLZ <Codec>` will be used.
 
     Parameters
     ----------
@@ -397,6 +405,11 @@ def set_compressor(codec):
     ------
     ValueError
         If the compressor is not recognized, or there is not support for it.
+
+    Notes
+    -----
+    The `compname` parameter in python-blosc API has been replaced by :paramref:`codec` , using `compname`
+    as parameter or a string as a :paramref:`codec` value will not work.
     """
     return blosc2_ext.set_compressor(codec)
 
@@ -437,15 +450,15 @@ def set_nthreads(nthreads):
     Raises
     ------
     ValueError
-        If nthreads is larger that the maximum number of threads blosc can use.
-        If nthreads is not a positive integer.
+        If :paramref:`nthreads` is larger than the maximum number of threads blosc can use.
+        If :paramref:`nthreads` is not a positive integer.
 
     Notes
     -----
     The maximum number of threads for Blosc is :math:`2^{31} - 1`. In some
     cases Blosc gets better results if you set the number of threads
     to a value slightly below than your number of cores
-    (via `detect_number_of_cores`).
+    (via :func:`~blosc2.detect_number_of_cores`).
 
     Examples
     --------
@@ -499,13 +512,18 @@ def clib_info(codec):
     -------
     out : tuple
         The associated library name and version.
+
+    Notes
+    -----
+    The `cname` parameter in python-blosc API has been replaced by :paramref:`codec` , using `cname`
+    as parameter or a string as a :paramref:`codec` value will not work.
     """
     return blosc2_ext.clib_info(codec)
 
 
 def get_clib(bytesobj):
     """
-    Return the name of the compression library for Blosc `bytesobj` buffer.
+    Return the name of the compression library for Blosc :paramref:`bytesobj` buffer.
 
     Parameters
     ----------
@@ -607,7 +625,7 @@ def os_release_pretty_name():
 
 
 def print_versions():
-    """Print all the versions of software that python-blosc relies on."""
+    """Print all the versions of software that python-blosc2 relies on."""
     import platform
 
     print("-=" * 38)
@@ -646,7 +664,7 @@ def get_blocksize():
 
 
 def compress2(src, **kwargs):
-    """Compress src with the given compression params (if given)
+    """Compress :paramref:`src` with the given compression params (if given)
 
     Parameters
     ----------
@@ -657,7 +675,7 @@ def compress2(src, **kwargs):
     kwargs: dict, optional
         Keyword arguments supported:
 
-            codec: :class:`Codec` or int
+            codec: :class:`Codec`
                 The compressor code. Default is :py:obj:`Codec.BLOSCLZ <Codec>`.
             codec_meta: int
                 The metadata for the compressor code, 0 by default.
@@ -665,7 +683,7 @@ def compress2(src, **kwargs):
                 The compression level from 0 (no compression) to 9
                 (maximum compression). By default: 5.
             use_dict: bool
-                Use dicts or not when compressing (only for ZSTD). By default `False`.
+                Use dicts or not when compressing (only for :py:obj:`blosc2.Codec.ZSTD <Codec>`). By default `False`.
             typesize: int from 1 to 255
                 The data type size. By default: 8.
             nthreads: int
@@ -673,8 +691,8 @@ def compress2(src, **kwargs):
             blocksize: int
                 The requested size of the compressed blocks. If 0 (the default)
                 blosc2 chooses it automatically.
-            splitmode: :class:`SplitMode` or int
-                The splitmode for the blocks.
+            splitmode: :class:`SplitMode`
+                The split mode for the blocks.
                 The default value is :py:obj:`SplitMode.FORWARD_COMPAT_SPLIT <SplitMode>`.
             filters: :class:`Filter` list
                 The sequence of filters. By default: {0, 0, 0, 0, 0, :py:obj:`Filter.SHUFFLE <Filter>`}.
@@ -697,7 +715,7 @@ def compress2(src, **kwargs):
 
 
 def decompress2(src, dst=None, **kwargs):
-    """Compress src with the given compression params (if given)
+    """Compress :paramref:`src` with the given compression params (if given)
 
     Parameters
     ----------
@@ -709,7 +727,7 @@ def decompress2(src, dst=None, **kwargs):
         The destination NumPy object or bytearray to fill, the length
         of which must be greater than 0. The user must make sure
         that it has enough capacity for hosting the decompressed
-        data. Default is None, meaning that a new bytes object
+        data. Default is `None`, meaning that a new bytes object
         is created, filled and returned.
 
     Other Parameters
@@ -723,28 +741,28 @@ def decompress2(src, dst=None, **kwargs):
     -------
     out: str/bytes
         The decompressed data in form of a Python str / bytes object if
-        `dst` is `None`. Otherwise, it will return `None` because the result
-        will already be in `dst`.
+        :paramref:`dst` is `None`. Otherwise, it will return `None` because the result
+        will already be in :paramref:`dst`.
 
     Raises
     ------
     RuntimeError
-        If the data cannot be compressed into `dst`.
+        If the data cannot be compressed into :paramref:`dst`.
         If an internal error occurred, probably because some
         parameter is not a valid one.
-        If `dst` is `None` and could not create a bytes object to store the result.
+        If :paramref:`dst` is `None` and could not create a bytes object to store the result.
     TypeError
-        If src does not support the Buffer Protocol
+        If :paramref:`src` does not support the Buffer Protocol.
     ValueError
-        If the length of src is smaller than the minimum
-        If dst is not None and its length is 0
+        If the length of :paramref:`src` is smaller than the minimum.
+        If :paramref:`dst` is not None and its length is 0.
     """
     return blosc2_ext.decompress2(src, dst, **kwargs)
 
 
 # Directory utilities
 def remove_urlpath(path):
-    """Permanently remove the file or the directory given by `path`. This function is used during
+    """Permanently remove the file or the directory given by :paramref:`path`. This function is used during
     the tests of a persistent SChunk to remove it.
 
     Parameters

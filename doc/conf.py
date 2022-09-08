@@ -4,7 +4,7 @@ import sys
 
 import blosc2
 
-sys.path.insert(0,  os.path.abspath(os.path.dirname(blosc2.__file__)))
+sys.path.insert(0, os.path.abspath(os.path.dirname(blosc2.__file__)))
 
 project = 'Python-Blosc2'
 copyright = '2019-present, The Blosc Developers'
@@ -13,8 +13,10 @@ extensions = [
     'sphinx.ext.autosummary',
     'sphinx.ext.autodoc',
     'sphinx.ext.intersphinx',
+    'sphinx.ext.napoleon',
     'numpydoc',
-    'myst_parser'
+    'myst_parser',
+    'sphinx_paramlinks',
 ]
 source_suffix = [".rst", ".md"]
 html_theme = "pydata_sphinx_theme"
@@ -40,3 +42,16 @@ html_theme_options = {
 }
 
 html_show_sourcelink = False
+
+
+hidden = "_ignore_multiple_size"
+
+
+def process_sig(app, what, name, obj, options, signature, return_annotation):
+    if signature and hidden in signature:
+        signature = signature.split(hidden)[0] + ")"
+    return (signature, return_annotation)
+
+
+def setup(app):
+    app.connect("autodoc-process-signature", process_sig)

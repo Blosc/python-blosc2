@@ -359,7 +359,7 @@ cpdef compress(src, int32_t typesize=8, int clevel=9, filter=blosc2.Filter.SHUFF
     dest = bytes(buf.len + BLOSC2_MAX_OVERHEAD)
     cdef int32_t len_dest =  <int32_t> len(dest)
     cdef int size
-    cdef int filter_ = filter.value if isinstance(filter, Enum) else filter
+    cdef int filter_ = filter.value if isinstance(filter, Enum) else 0
     if RELEASEGIL:
         _dest = <void*> <char *> dest
         with nogil:
@@ -497,7 +497,7 @@ dparams_dflts = {
 
 cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     codec = kwargs.get('codec', cparams_dflts['codec'])
-    cparams.compcode = codec.value if isinstance(codec, Enum) else codec
+    cparams.compcode = codec.value
     cparams.compcode_meta = kwargs.get('codec_meta', cparams_dflts['codec_meta'])
     cparams.clevel = kwargs.get('clevel', cparams_dflts['clevel'])
     cparams.use_dict = kwargs.get('use_dict', cparams_dflts['use_dict'])
@@ -505,7 +505,7 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     cparams.nthreads = kwargs.get('nthreads', cparams_dflts['nthreads'])
     cparams.blocksize = kwargs.get('blocksize', cparams_dflts['blocksize'])
     splitmode = kwargs.get('splitmode', cparams_dflts['splitmode'])
-    cparams.splitmode = splitmode.value if isinstance(splitmode, Enum) else splitmode
+    cparams.splitmode = splitmode.value
     # TODO: support the commented ones in the future
     #schunk_c = kwargs.get('schunk', cparams_dflts['schunk'])
     #cparams.schunk = <void *> schunk_c
@@ -516,7 +516,7 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
 
     filters = kwargs.get('filters', cparams_dflts['filters'])
     for i, filter in enumerate(filters):
-        cparams.filters[i] = filter.value if isinstance(filter, Enum) else filter
+        cparams.filters[i] = filter.value if isinstance(filter, Enum) else 0
 
     filters_meta = kwargs.get('filters_meta', cparams_dflts['filters_meta'])
     cdef int8_t meta_value
