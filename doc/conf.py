@@ -37,7 +37,7 @@ html_theme_options = {
         {"name": "Blosc In Depth", "url": "/pages/blosc-in-depth/"},
         {"name": "Donate to Blosc", "url": "/pages/donate/"},
     ],
-    "github_url": "https://github.com/Blosc/c-blosc2",
+    "github_url": "https://github.com/Blosc/python-blosc2",
     "twitter_url": "https://twitter.com/Blosc2",
 }
 
