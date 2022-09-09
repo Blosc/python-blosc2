@@ -45,7 +45,7 @@ XXX version-specific blurb XXX
 
 * See `examples/schunk.py` and `examples/vlmeta.py` for some examples.
 
-* Documentation of the new API is here: https://python-blosc2.readthedocs.io
+* Documentation of the new API is here: https://www.blosc.org/python-blosc2/python-blosc2.html
 
 This release is the result of a grant offered by
 the Python Software Foundation to Marta Iborra.
