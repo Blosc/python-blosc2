@@ -19,7 +19,7 @@ A Python wrapper for the extremely fast Blosc2 compression library
 .. |gitter| image:: https://badges.gitter.im/Blosc/c-blosc.svg
         :target: https://gitter.im/Blosc/c-blosc
 .. |Contributor Covenant| image:: https://img.shields.io/badge/Contributor%20Covenant-v2.0%20adopted-ff69b4.svg
-        :target: code_of_conduct.md
+        :target: https://github.com/Blosc/community/blob/master/code_of_conduct.md
 
 
 What it is
