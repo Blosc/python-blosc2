@@ -308,6 +308,8 @@ cdef extern from "blosc2.h":
                                 bool *needs_free)
     int blosc2_schunk_get_lazychunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t ** chunk,
                                     bool *needs_free)
+    int blosc2_schunk_get_slice_buffer(blosc2_schunk *schunk, int64_t start, int64_t stop, void *buffer)
+    int blosc2_schunk_set_slice_buffer(blosc2_schunk *schunk, int64_t start, int64_t stop, void *buffer)
     int blosc2_schunk_get_cparams(blosc2_schunk *schunk, blosc2_cparams** cparams)
     int blosc2_schunk_get_dparams(blosc2_schunk *schunk, blosc2_dparams** dparams)
     int blosc2_schunk_reorder_offsets(blosc2_schunk *schunk, int64_t *offsets_order)
@@ -836,6 +838,52 @@ cdef class SChunk:
         if rc < 0:
             raise RuntimeError("Could not update the desired chunk")
         return rc
+
+    def get_slice(self, start=0, stop=None, out=None):
+        start, stop = self._massage_key(start, stop)
+        cdef int nbytes = (stop - start) * self.schunk.typesize
+        cdef Py_buffer *buf
+        if out is not None:
+            buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+            PyObject_GetBuffer(out, buf, PyBUF_SIMPLE)
+            if buf.len < nbytes:
+                raise ValueError("Not enough space for writing the slice in out")
+            rc = blosc2_schunk_get_slice_buffer(self.schunk, start, stop, <void *> buf.buf)
+            PyBuffer_Release(buf)
+        else:
+            out = PyBytes_FromStringAndSize(NULL, nbytes)
+            if out is None:
+                raise RuntimeError("Could not get a bytes object")
+            rc = blosc2_schunk_get_slice_buffer(self.schunk, start, stop, <void*><char *> out)
+            if rc >= 0:
+                return out
+        if rc < 0:
+            raise RuntimeError("Error while getting the slice")
+
+    def set_slice(self, value, start=0, stop=None):
+        start, stop = self._massage_key(start, stop)
+        cdef int nbytes = (stop - start) * self.schunk.typesize
+        cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+        PyObject_GetBuffer(value, buf, PyBUF_SIMPLE)
+        if buf.len < nbytes:
+            raise ValueError("Not enough data for writing the slice")
+        rc = blosc2_schunk_set_slice_buffer(self.schunk, start, stop, <void *> buf.buf)
+        PyBuffer_Release(buf)
+        if rc < 0:
+            raise RuntimeError("Error while setting the slice")
+
+    def _massage_key(self, start, stop):
+        if stop is None:
+            stop = self.schunk.nbytes / self.schunk.typesize
+        elif stop < 0:
+            stop += self.schunk.nbytes / self.schunk.typesize
+        if start is None:
+            start = 0
+        elif start < 0:
+            start += self.schunk.nbytes / self.schunk.typesize
+        if stop - start <= 0:
+            raise ValueError("`stop` mut be greater than `start`")
+        return start, stop
 
     def __dealloc__(self):
         if self.schunk != NULL:

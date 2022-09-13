@@ -315,6 +315,70 @@ class SChunk(blosc2_ext.SChunk):
         blosc2_ext._check_access_mode(self.urlpath, self.mode)
         return super(SChunk, self).update_data(nchunk, data, copy)
 
+    def get_slice(self, start=0, stop=None, out=None):
+        """Get a slice from :paramref:`start` to :paramref:`stop`.
+
+        Parameters
+        ----------
+        start: int
+            The nth item where the slice will begin. Default is 0.
+        stop: int
+            The nth item where the slice will end (without including it).
+            Default is until the SChunk end.
+        out: bytes-like object or bytearray
+            The destination object (supporting the
+            `Buffer Protocol <https://docs.python.org/3/c-api/buffer.html>`_) to fill.
+            The user must make sure
+            that it has enough capacity for hosting the decompressed
+            data. Default is None, meaning that a new bytes object
+            is created, filled and returned.
+
+        Returns
+        -------
+        out: str/bytes or None
+            The decompressed slice in form of a Python str / bytes object if
+            :paramref:`out` is `None`. Otherwise, it will return `None` as the result
+            will already be in :paramref:`out`.
+
+        Raises
+        ------
+        ValueError
+            If the size to get is negative.
+            If there is not enough space in :paramref:`out`.
+        RunTimeError
+            If some problem was detected.
+
+        """
+        return super(SChunk, self).get_slice(start, stop, out)
+
+    def __setitem__(self, key, value):
+        """Set slice to :paramref:`value`.
+
+        Parameters
+        ----------
+        key: int or slice
+            The index of the slice to update. Note that step parameter is not honored.
+        value: bytes-like object
+            An object supporting the
+            `Buffer Protocol <https://docs.python.org/3/c-api/buffer.html>`_ used to overwrite the slice.
+
+        Returns
+        -------
+        out: None
+
+        Raises
+        ------
+        ValueError
+            If you cannot modify :paramref:`self`.
+            If the size to get is negative.
+            If there is not enough space in :paramref:`value` to update the slice.
+        RunTimeError
+            If some problem was detected.
+
+        """
+        blosc2_ext._check_access_mode(self.urlpath, self.mode)
+        return super(SChunk, self).set_slice(start=key.start, stop=key.stop, value=value)
+
     def __dealloc__(self):
         super(SChunk, self).__dealloc__()
 

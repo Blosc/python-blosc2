@@ -19,6 +19,8 @@ Methods
     SChunk.insert_data
     SChunk.update_chunk
     SChunk.update_data
+    SChunk.get_slice
+    SChunk.__setitem__
 
 Attributes
 ----------
