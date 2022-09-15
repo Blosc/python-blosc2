@@ -321,9 +321,9 @@ class SChunk(blosc2_ext.SChunk):
         Parameters
         ----------
         start: int
-            The nth item where the slice will begin. Default is 0.
+            The index where the slice will begin. Default is 0.
         stop: int
-            The nth item where the slice will end (without including it).
+            The index where the slice will end (without including it).
             Default is until the SChunk ends.
         out: bytes-like object or bytearray
             The destination object (supporting the

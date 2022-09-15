@@ -893,12 +893,20 @@ cdef class SChunk:
                     chunk_nbytes = (stop * self.schunk.typesize) % self.schunk.chunksize
                 data  = <uint8_t *> malloc(chunk_nbytes)
                 rc = blosc2_schunk_decompress_chunk(self.schunk, self.schunk.nchunks - 1, data, chunk_nbytes)
+                if rc < 0:
+                    free(data)
+                    raise RuntimeError("Error while decompressig the chunk")
                 memcpy(&data[nitems * self.schunk.typesize], &buf_ptr[buf_pos], chunk_nbytes - buf_pos)
                 chunk = <uint8_t *> malloc(chunk_nbytes + BLOSC2_MAX_OVERHEAD)
                 rc = blosc2_compress_ctx(self.schunk.cctx, data, chunk_nbytes, chunk, chunk_nbytes + BLOSC2_MAX_OVERHEAD)
+                free(data)
+                if rc < 0:
+                    free(chunk)
+                    raise RuntimeError("Error while compressing the data")
                 rc = blosc2_schunk_update_chunk(self.schunk, self.schunk.nchunks - 1, chunk, True)
                 free(chunk)
-                free(data)
+                if rc < 0:
+                    raise RuntimeError("Error while updating the chunk")
                 buf_pos += chunk_nbytes - buf_pos
             # Append data if needed
             if buf_pos < buf.len:
@@ -911,6 +919,8 @@ cdef class SChunk:
                     else:
                         chunksize = (stop * self.schunk.typesize) % self.schunk.chunksize
                     rc = blosc2_schunk_append_buffer(self.schunk, &buf_ptr[buf_pos], chunksize)
+                    if rc < 0:
+                        raise RuntimeError("Error while appending the chunk")
                     buf_pos += chunksize
         else:
             rc = blosc2_schunk_set_slice_buffer(self.schunk, start, stop, <void *> buf.buf)
