@@ -6,11 +6,12 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import blosc2
-import numpy as np
 import sys
 from time import time
 
+import numpy as np
+
+import blosc2
 
 # Dimensions, type and persistence properties for the arrays
 shape = 10_000 * 10_000
@@ -54,4 +55,3 @@ t1 = time()
 print("Time for setting with setitem: %.3fs" % (t1 - t0))
 
 blosc2.remove_urlpath(urlpath)
-
