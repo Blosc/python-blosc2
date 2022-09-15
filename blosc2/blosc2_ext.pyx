@@ -9,7 +9,6 @@ from cpython cimport (
     PyBuffer_Release,
     PyBytes_FromStringAndSize,
     PyObject_GetBuffer,
-    PyBuffer_IsContiguous,
 )
 from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
 from libc.stdint cimport uintptr_t

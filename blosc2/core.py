@@ -117,7 +117,8 @@ def decompress(src, dst=None, as_bytearray=False):
     src : bytes-like object
         The data to be decompressed.  Must be a bytes-like object
         that supports the Python Buffer Protocol, like bytes, bytearray,
-        memoryview, or `numpy.ndarray <https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html>`_.
+        memoryview, or
+        `numpy.ndarray <https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html>`_.
     dst : NumPy object or bytearray
         The destination NumPy object or bytearray to fill,
         the length of which must be greater than 0.
@@ -683,7 +684,8 @@ def compress2(src, **kwargs):
                 The compression level from 0 (no compression) to 9
                 (maximum compression). By default: 5.
             use_dict: bool
-                Use dicts or not when compressing (only for :py:obj:`blosc2.Codec.ZSTD <Codec>`). By default `False`.
+                Use dicts or not when compressing
+                (only for :py:obj:`blosc2.Codec.ZSTD <Codec>`). By default `False`.
             typesize: int from 1 to 255
                 The data type size. By default: 8.
             nthreads: int
