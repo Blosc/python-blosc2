@@ -105,7 +105,7 @@ class SChunk(blosc2_ext.SChunk):
         """Append a data buffer to the SChunk.
 
         The data buffer must be of size `chunksize` specified in
-        :func:`~blosc2.SChunk.__init__` .
+        :func:`__init__` .
 
         Parameters
         ----------
@@ -324,7 +324,7 @@ class SChunk(blosc2_ext.SChunk):
             The nth item where the slice will begin. Default is 0.
         stop: int
             The nth item where the slice will end (without including it).
-            Default is until the SChunk end.
+            Default is until the SChunk ends.
         out: bytes-like object or bytearray
             The destination object (supporting the
             `Buffer Protocol <https://docs.python.org/3/c-api/buffer.html>`_) to fill.
@@ -345,11 +345,48 @@ class SChunk(blosc2_ext.SChunk):
         ValueError
             If the size to get is negative.
             If there is not enough space in :paramref:`out`.
+            If :paramref:`start` is greater or equal than the SChunk nitems
         RunTimeError
             If some problem was detected.
 
+        See Also
+        --------
+        :func:`get_slice`
+
         """
         return super(SChunk, self).get_slice(start, stop, out)
+
+    def __getitem__(self, item):
+        """ Get a slice from the SChunk.
+
+        Parameters
+        ----------
+        item: int or slice
+            The index for the slice. Note that the step parameter is not honored.
+
+        Returns
+        -------
+        out: str/bytes
+            The decompressed slice in form of a Python str / bytes object.
+
+        Raises
+        ------
+        ValueError
+            If the size to get is negative.
+            If :paramref:`item`.start is greater or equal than the SChunk nitems
+        RunTimeError
+            If some problem was detected.
+        IndexError
+            If `step` is not 1.
+
+        See Also
+        --------
+        :func:`get_slice`
+
+        """
+        if item.step is not None and item.step != 1:
+            raise IndexError("`step` must be 1")
+        return self.get_slice(item.start, item.stop)
 
     def __setitem__(self, key, value):
         """Set slice to :paramref:`value`.
@@ -372,10 +409,20 @@ class SChunk(blosc2_ext.SChunk):
             If you cannot modify :paramref:`self`.
             If the size to get is negative.
             If there is not enough space in :paramref:`value` to update the slice.
+            If :paramref:`start` is greater than the SChunk nitems
         RunTimeError
             If some problem was detected.
+        IndexError
+            If `step` is not 1.
+
+        Notes
+        -----
+        This method can also be used to append new data if :paramref:`key`.stop
+        is greater than the SChunk nitems.
 
         """
+        if key.step is not None and key.step != 1:
+            raise IndexError("`step` must be 1")
         blosc2_ext._check_access_mode(self.urlpath, self.mode)
         return super(SChunk, self).set_slice(start=key.start, stop=key.stop, value=value)
 

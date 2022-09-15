@@ -58,4 +58,22 @@ schunk.delete_chunk(4)
 # Get the compressed chunk
 schunk.get_chunk(1)
 
+# Set a slice from the SChunk
+start = 5 * 200 * 1000 + 47
+stop = start + 200 * 1000 + 4
+val = nchunks * numpy.arange(stop - start, dtype="int32")
+schunk[start:stop] = val
+
+# Get the modified slice
+out = numpy.empty(val.shape, dtype="int32")
+schunk.get_slice(start, stop, out)
+assert numpy.array_equal(val, out)
+
+# Expand the SChunk with __setitem__
+# When a part of the slice section overflows the SChunk size, the remaining data is appended until stop is reached
+start = nchunks * 200 * 1000 - 40
+stop = start + 200 * 1000
+val = nchunks * numpy.arange(stop - start, dtype="int32")
+schunk[start:stop] = val
+
 blosc2.remove_urlpath(urlpath)

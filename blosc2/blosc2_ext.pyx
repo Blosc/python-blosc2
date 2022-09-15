@@ -3,18 +3,18 @@
 #       Author:  The Blosc development team - blosc@blosc.org
 #
 ########################################################################
-
-
 from cpython cimport (
     Py_buffer,
     PyBUF_SIMPLE,
     PyBuffer_Release,
     PyBytes_FromStringAndSize,
     PyObject_GetBuffer,
+    PyBuffer_IsContiguous,
 )
 from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
 from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free, malloc, realloc
+from libc.string cimport memcpy
 from libcpp cimport bool
 
 from enum import Enum
@@ -840,7 +840,11 @@ cdef class SChunk:
         return rc
 
     def get_slice(self, start=0, stop=None, out=None):
-        start, stop = self._massage_key(start, stop)
+        cdef int64_t nitems = self.schunk.nbytes // self.schunk.typesize
+        start, stop = self._massage_key(start, stop, nitems)
+        if start >= nitems:
+            raise ValueError("`start` cannot be greater or equal than the SChunk nitems")
+
         cdef int nbytes = (stop - start) * self.schunk.typesize
         cdef Py_buffer *buf
         if out is not None:
@@ -861,28 +865,73 @@ cdef class SChunk:
             raise RuntimeError("Error while getting the slice")
 
     def set_slice(self, value, start=0, stop=None):
-        start, stop = self._massage_key(start, stop)
+        cdef int64_t nitems = self.schunk.nbytes // self.schunk.typesize
+        start, stop = self._massage_key(start, stop, nitems)
+        if start > nitems:
+            raise ValueError("`start` cannot be greater than the SChunk nitems")
+
         cdef int nbytes = (stop - start) * self.schunk.typesize
+
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(value, buf, PyBUF_SIMPLE)
+        cdef uint8_t *buf_ptr = <uint8_t *> buf.buf
+        cdef uint8_t *data
+        cdef uint8_t *chunk
         if buf.len < nbytes:
             raise ValueError("Not enough data for writing the slice")
-        rc = blosc2_schunk_set_slice_buffer(self.schunk, start, stop, <void *> buf.buf)
+
+        if stop > nitems:
+            # Increase SChunk's size
+            buf_pos = 0
+            if start < nitems:
+                rc = blosc2_schunk_set_slice_buffer(self.schunk, start, nitems, <void *> buf.buf)
+                buf_pos = (nitems - start) * self.schunk.typesize
+            if self.schunk.nbytes % self.schunk.chunksize != 0:
+                # Update last chunk before appending any other
+                if stop * self.schunk.typesize >= self.schunk.chunksize * self.schunk.nchunks:
+                    chunk_nbytes = self.schunk.chunksize
+                else:
+                    chunk_nbytes = (stop * self.schunk.typesize) % self.schunk.chunksize
+                data  = <uint8_t *> malloc(chunk_nbytes)
+                rc = blosc2_schunk_decompress_chunk(self.schunk, self.schunk.nchunks - 1, data, chunk_nbytes)
+                memcpy(&data[nitems * self.schunk.typesize], &buf_ptr[buf_pos], chunk_nbytes - buf_pos)
+                chunk = <uint8_t *> malloc(chunk_nbytes + BLOSC2_MAX_OVERHEAD)
+                rc = blosc2_compress_ctx(self.schunk.cctx, data, chunk_nbytes, chunk, chunk_nbytes + BLOSC2_MAX_OVERHEAD)
+                rc = blosc2_schunk_update_chunk(self.schunk, self.schunk.nchunks - 1, chunk, True)
+                free(chunk)
+                free(data)
+                buf_pos += chunk_nbytes - buf_pos
+            # Append data if needed
+            if buf_pos < buf.len:
+                nappends = int(stop * self.schunk.typesize / self.schunk.chunksize - self.schunk.nchunks)
+                if (stop * self.schunk.typesize) % self.schunk.chunksize != 0:
+                    nappends += 1
+                for i in range(nappends):
+                    if (self.schunk.nchunks + 1) * self.schunk.chunksize <= stop * self.schunk.typesize:
+                        chunksize = self.schunk.chunksize
+                    else:
+                        chunksize = (stop * self.schunk.typesize) % self.schunk.chunksize
+                    rc = blosc2_schunk_append_buffer(self.schunk, &buf_ptr[buf_pos], chunksize)
+                    buf_pos += chunksize
+        else:
+            rc = blosc2_schunk_set_slice_buffer(self.schunk, start, stop, <void *> buf.buf)
         PyBuffer_Release(buf)
         if rc < 0:
             raise RuntimeError("Error while setting the slice")
 
-    def _massage_key(self, start, stop):
+    def _massage_key(self, start, stop, nitems):
         if stop is None:
-            stop = self.schunk.nbytes / self.schunk.typesize
+            stop = nitems
         elif stop < 0:
-            stop += self.schunk.nbytes / self.schunk.typesize
+            stop += nitems
         if start is None:
             start = 0
         elif start < 0:
-            start += self.schunk.nbytes / self.schunk.typesize
+            start += nitems
         if stop - start <= 0:
             raise ValueError("`stop` mut be greater than `start`")
+
+
         return start, stop
 
     def __dealloc__(self):
