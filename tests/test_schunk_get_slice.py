@@ -39,30 +39,51 @@ def test_schunk_get_slice(contiguous, urlpath, mode, cparams, dparams, nchunks, 
         stop_ = data.size
 
     sl = data[start_:stop]
-    if start is None and stop is None:
-        res = schunk.get_slice()
-    else:
-        res = schunk.get_slice(start, stop)
+    res = schunk.get_slice(start, stop)
+    assert res == sl.tobytes()
+
+    res = schunk[start:stop]
     assert res == sl.tobytes()
 
     out = numpy.empty(sl.shape, dtype="int32")
-    if start is None and stop is None:
-        schunk.get_slice(out=out)
-    else:
-        schunk.get_slice(start, stop, out)
+    schunk.get_slice(start, stop, out)
     assert numpy.array_equal(data[start_:stop_], out)
 
-    if start is None and stop is None:
-        schunk.get_slice(out=memoryview(out))
-    else:
-        schunk.get_slice(start, stop, memoryview(out))
+    schunk.get_slice(start, stop, memoryview(out))
     assert numpy.array_equal(data[start_:stop_], out)
 
     out = bytearray(res)
-    if start is None and stop is None:
-        schunk.get_slice(out=out)
-    else:
-        schunk.get_slice(start, stop, out)
+    schunk.get_slice(start, stop, out)
     assert out == bytearray(data)[start_*4:stop_*4]
 
     blosc2.remove_urlpath(urlpath)
+
+
+def test_schunk_get_slice_raises():
+    storage = {"contiguous": True, "urlpath": "schunk.b2frame", "cparams": {"typesize": 4}, "dparams": {}}
+    blosc2.remove_urlpath(storage["urlpath"])
+
+    nchunks = 2
+    data = numpy.arange(200 * 100 * nchunks, dtype="int32")
+    schunk = blosc2.SChunk(chunksize=200 * 100 * 4, data=data, **storage)
+
+    start = 200 * 100
+    stop = 200 * 100 * nchunks
+    with pytest.raises(IndexError):
+        res = schunk[start:stop:2]
+
+    out = numpy.empty(stop - start - 1, dtype="int32")
+    with pytest.raises(ValueError):
+        schunk.get_slice(start, stop, out)
+
+    start = -1
+    stop = -4
+    with pytest.raises(ValueError):
+        res = schunk[start:stop]
+
+    start = 200 * 100 * nchunks
+    stop = start + 4
+    with pytest.raises(ValueError):
+        res = schunk[start:stop]
+
+    blosc2.remove_urlpath(storage["urlpath"])

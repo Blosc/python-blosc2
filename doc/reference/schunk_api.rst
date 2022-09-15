@@ -20,6 +20,7 @@ Methods
     SChunk.update_chunk
     SChunk.update_data
     SChunk.get_slice
+    SChunk.__getitem__
     SChunk.__setitem__
 
 Attributes

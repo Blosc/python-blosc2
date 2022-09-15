@@ -27,7 +27,7 @@ contiguous = True
 persistent = bool(sys.argv[1]) if len(sys.argv) > 1 else False
 
 if persistent:
-    urlpath = "bench_getitem.b2frame"
+    urlpath = "bench_setitem.b2frame"
 else:
     urlpath = None
 
@@ -44,12 +44,14 @@ for i in range(nchunks):
     assert nchunks_ == (i + 1)
 
 
-# Use get_slice for reading blocks individually
+# Use set_slice
+start = 1 * chunksize + 3
+stop = shape
+val = nchunks * np.arange(start, stop, dtype=dtype)
 t0 = time()
-for i in range(shape // blocksize):
-    _ = schunk.get_slice(start=i * blocksize, stop=(i+1) * blocksize - 1)
+schunk[start:stop] = val
 t1 = time()
-print("Time for reading with get_slice: %.3fs" % (t1 - t0))
+print("Time for setting with setitem: %.3fs" % (t1 - t0))
 
 blosc2.remove_urlpath(urlpath)
 
