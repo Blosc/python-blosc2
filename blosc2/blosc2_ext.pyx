@@ -293,6 +293,7 @@ cdef extern from "blosc2.h":
     blosc2_schunk *blosc2_schunk_open(const char* urlpath)
 
     int64_t blosc2_schunk_to_buffer(blosc2_schunk* schunk, uint8_t** cframe, bool* needs_free)
+    void blosc2_schunk_avoid_cframe_free(blosc2_schunk *schunk, bool avoid_cframe_free)
     int64_t blosc2_schunk_to_file(blosc2_schunk* schunk, const char* urlpath)
     int64_t blosc2_schunk_free(blosc2_schunk *schunk)
     int64_t blosc2_schunk_append_chunk(blosc2_schunk *schunk, uint8_t *chunk, bool copy)
@@ -928,6 +929,21 @@ cdef class SChunk:
         if rc < 0:
             raise RuntimeError("Error while setting the slice")
 
+    def to_cframe(self):
+        cdef bool needs_free
+        cdef uint8_t *cframe
+        cframe_len = blosc2_schunk_to_buffer(self.schunk, &cframe, &needs_free)
+        if cframe_len < 0:
+            raise RuntimeError("Error while getting the cframe")
+        out = PyBytes_FromStringAndSize(<char*>cframe, cframe_len)
+        if needs_free:
+            free(cframe)
+
+        return out
+
+    def _avoid_cframe_free(self, avoid_cframe_free):
+        blosc2_schunk_avoid_cframe_free(self.schunk, avoid_cframe_free)
+
     def _massage_key(self, start, stop, nitems):
         if stop is None:
             stop = nitems
@@ -1039,3 +1055,14 @@ cdef _check_schunk_params(blosc2_schunk* schunk, kwargs):
         typesize = kwargs.get("typesize", schunk.typesize)
         if typesize != schunk.typesize:
             raise ValueError("Cannot change typesize with this mode")
+
+
+def schunk_from_cframe(cframe, copy=False):
+    cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+    PyObject_GetBuffer(cframe, buf, PyBUF_SIMPLE)
+    cdef blosc2_schunk *schunk_ = blosc2_schunk_from_buffer(<uint8_t *>buf.buf, buf.len, copy)
+    schunk = blosc2.SChunk(schunk=PyCapsule_New(schunk_, <char *> "blosc2_schunk*", NULL))
+    PyBuffer_Release(buf)
+    if not copy:
+        schunk._avoid_cframe_free(True)
+    return schunk

@@ -3,6 +3,9 @@ Utils
 
 .. currentmodule:: blosc2
 
-.. autofunction:: remove_urlpath
+.. autosummary::
+   :toctree: autofiles/utils/
 
-.. autofunction:: open
+    remove_urlpath
+    open
+    schunk_from_cframe

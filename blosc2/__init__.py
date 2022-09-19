@@ -69,6 +69,7 @@ from .core import (
     pack_array,
     print_versions,
     remove_urlpath,
+    schunk_from_cframe,
     set_blocksize,
     set_compressor,
     set_nthreads,
@@ -76,7 +77,7 @@ from .core import (
     unpack,
     unpack_array,
 )
-from .SChunk import SChunk, open
+from .SChunk import (SChunk, open)
 from .version import __version__
 
 blosclib_version = "%s (%s)" % (VERSION_STRING, VERSION_DATE)

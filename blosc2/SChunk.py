@@ -351,7 +351,7 @@ class SChunk(blosc2_ext.SChunk):
 
         See Also
         --------
-        :func:`get_slice`
+        :func:`__getitem__`
 
         """
         return super(SChunk, self).get_slice(start, stop, out)
@@ -425,6 +425,21 @@ class SChunk(blosc2_ext.SChunk):
             raise IndexError("`step` must be 1")
         blosc2_ext._check_access_mode(self.urlpath, self.mode)
         return super(SChunk, self).set_slice(start=key.start, stop=key.stop, value=value)
+
+    def to_cframe(self):
+        """ Get a contiguous bytes buffer representing a :class:`~blosc2.SChunk`.
+
+        Returns
+        -------
+        out: bytes
+            The contiguous bytes buffer containing the :class:`~blosc2.SChunk`.
+
+        See Also
+        --------
+        :func:`~blosc2.schunk_from_cframe`
+
+        """
+        return super(SChunk, self).to_cframe()
 
     def __dealloc__(self):
         super(SChunk, self).__dealloc__()
