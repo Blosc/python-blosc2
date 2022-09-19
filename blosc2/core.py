@@ -464,6 +464,7 @@ def set_nthreads(nthreads):
     Examples
     --------
     Set the number of threads to 2 and then to 1:
+
     >>> oldn = blosc2.set_nthreads(2)
     >>> blosc2.set_nthreads(1)
     2
@@ -779,3 +780,27 @@ def remove_urlpath(path):
     if path is not None:
         path = path.encode("utf-8") if isinstance(path, str) else path
         blosc2_ext.remove_urlpath(path)
+
+
+def schunk_from_cframe(cframe, copy=False):
+    """Create a :class:`~blosc2.SChunk` out of a contiguous frame buffer.
+
+    Parameters
+    ----------
+    cframe: bytes /str
+        The bytes object containing the in-memory frame.
+    copy: bool
+        Whether to internally do a copy or not. If `False`,
+        the user is responsible of keeping the reference.
+
+    Returns
+    -------
+    out: :class:`~blosc2.SChunk`
+        A new :class:`~blosc2.SChunk` containing the data passed.
+
+    See Also
+    --------
+    :func:`~blosc2.SChunk.SChunk.to_cframe`
+
+    """
+    return blosc2_ext.schunk_from_cframe(cframe, copy)

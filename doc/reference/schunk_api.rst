@@ -22,6 +22,7 @@ Methods
     SChunk.get_slice
     SChunk.__getitem__
     SChunk.__setitem__
+    SChunk.to_cframe
 
 Attributes
 ----------

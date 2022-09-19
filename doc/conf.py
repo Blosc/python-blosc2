@@ -43,6 +43,7 @@ html_theme_options = {
 
 html_show_sourcelink = False
 
+autosummary_generate_overwrite = False
 
 hidden = "_ignore_multiple_size"
 

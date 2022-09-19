@@ -92,3 +92,40 @@ def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):
         schunk.get_chunk(i)
 
     blosc2.remove_urlpath(urlpath)
+
+
+@pytest.mark.parametrize("contiguous", [True, False])
+@pytest.mark.parametrize("urlpath", [None, "b2frame"])
+@pytest.mark.parametrize(
+    "cparams, dparams, nchunks",
+    [
+        ({"compcode": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 1),
+        ({"typesize": 4}, {"nthreads": 4}, 1),
+        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {"schunk": None}, 5),
+        ({"compcode": blosc2.Codec.LZ4HC, "typesize": 4}, {}, 10),
+    ],
+)
+@pytest.mark.parametrize("copy", [True, False])
+def test_schunk_cframe(contiguous, urlpath, cparams, dparams, nchunks, copy):
+    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    blosc2.remove_urlpath(urlpath)
+
+    data = numpy.arange(200 * 1000 * nchunks, dtype="int32")
+    schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, data=data, **storage)
+
+    cframe = schunk.to_cframe()
+    schunk2 = blosc2.schunk_from_cframe(cframe, copy)
+    data2 = numpy.empty(data.shape, dtype=data.dtype)
+    schunk2.get_slice(out=data2)
+    assert numpy.array_equal(data, data2)
+
+    del cframe
+    schunk2.get_slice(out=data2)
+    assert numpy.array_equal(data, data2)
+
+    cframe = schunk.to_cframe()
+    schunk3 = blosc2.schunk_from_cframe(cframe, copy)
+    del schunk3
+    _ = str(cframe)
+
+    blosc2.remove_urlpath(urlpath)
