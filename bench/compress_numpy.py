@@ -42,11 +42,11 @@ print("  *** np.copyto() *** Time for memcpy():\t%.3f s\t(%.2f GB/s)" % (tcpy, (
 print("\nTimes for compressing/decompressing:")
 for (in_, label) in arrays:
     print("\n*** %s ***" % label)
-    for cname in blosc2.compressor_list():
+    for codec in blosc2.Codec:
         for filter in [blosc2.Filter.NOFILTER, blosc2.Filter.SHUFFLE, blosc2.Filter.BITSHUFFLE]:
             clevel = 6
             t0 = time.time()
-            c = blosc2.compress(in_, in_.itemsize, clevel=clevel, shuffle=filter, cname=cname)
+            c = blosc2.compress(in_, in_.itemsize, clevel=clevel, filter=filter, codec=codec)
             tc = time.time() - t0
             # Cause a page fault here
             out = np.full_like(in_, fill_value=0)
@@ -57,7 +57,7 @@ for (in_, label) in arrays:
             assert np.array_equal(in_, out)
             print(
                 "  *** %-7s, %-10s *** %6.3f s (%.2f GB/s) / %5.3f s (%.2f GB/s)"
-                % (cname, filter, tc, ((N * 8 / tc) / 2 ** 30), td, ((N * 8 / td) / 2 ** 30)),
+                % (codec, filter, tc, ((N * 8 / tc) / 2 ** 30), td, ((N * 8 / td) / 2 ** 30)),
                 end="",
             )
             print("\tcr: %5.1fx" % (N * 8.0 / len(c)))

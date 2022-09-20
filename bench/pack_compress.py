@@ -92,24 +92,25 @@ print()
 
 for (in_, label) in arrays:
     print("\n*** %s ***" % label)
-    for cname in blosc2.compressor_list():
-        print("Using *** %s *** compressor:" % cname)
+    for codec in blosc2.Codec:
+        print("Using *** %s *** compressor:" % codec)
         clevel = 6
+        cparams = {"codec": codec, "clevel": 6}
 
         ctic = time.time()
         for i in range(NREP):
-            c = blosc2.pack_array(in_, clevel=clevel, shuffle=blosc2.Filter.SHUFFLE, cname=cname)
+            c = blosc2.pack_array2(in_, cparams=cparams)
         ctoc = time.time()
         dtic = time.time()
         for i in range(NREP):
-            out = blosc2.unpack_array(c)
+            out = blosc2.unpack_array2(c)
         dtoc = time.time()
 
         assert np.array_equal(in_, out)
         tc = (ctoc - ctic) / NREP
         td = (dtoc - dtic) / NREP
         print(
-            "  Time for pack_array/unpack_array:     %.3f/%.3f s (%.2f/%.2f GB/s)) "
+            "  Time for pack_array2/unpack_array2:   %.3f/%.3f s (%.2f/%.2f GB/s)) "
             % (tc, td, ((N * 8 / tc) / 2 ** 30), ((N * 8 / td) / 2 ** 30)),
             end="",
         )
@@ -117,7 +118,7 @@ for (in_, label) in arrays:
 
         ctic = time.time()
         for i in range(NREP):
-            c = blosc2.compress(in_, clevel=clevel, shuffle=blosc2.Filter.SHUFFLE, cname=cname)
+            c = blosc2.compress(in_, clevel=clevel, codec=codec)
         ctoc = time.time()
         out = np.full_like(in_, fill_value=0)
         dtic = time.time()
