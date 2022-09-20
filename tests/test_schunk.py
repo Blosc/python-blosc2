@@ -119,7 +119,7 @@ def test_schunk_cframe(contiguous, urlpath, cparams, dparams, nchunks, copy):
     schunk2.get_slice(out=data2)
     assert numpy.array_equal(data, data2)
 
-    del cframe
+    # del cframe  # after this we cannot guarantee schunk2 working anymore
     schunk2.get_slice(out=data2)
     assert numpy.array_equal(data, data2)
 
