@@ -431,15 +431,15 @@ def pack_array2(arr, chunksize=8 * 10 ** 6, mode="a", **kwargs):
     --------
     :func:`~blosc2.unpack_array2`
     """
+    # If not passed, set a sensible typesize
     if 'cparams' in kwargs:
-        cparams = kwargs['cparams']
+        cparams = kwargs.pop('cparams')
         if 'typesize' not in cparams:
             cparams['typesize'] = arr.itemsize
-        del kwargs['cparams']
     else:
         cparams = {"typesize": arr.itemsize}
 
-    schunk = blosc2.SChunk(chunksize=chunksize, contiguous=True, data=arr,
+    schunk = blosc2.SChunk(chunksize=chunksize, contiguous=False, data=arr,
                            cparams=cparams, **kwargs)
     schunk.vlmeta['dtype'] = msgpack.packb(str(arr.dtype))
     schunk.vlmeta['shape'] = msgpack.packb(arr.shape)

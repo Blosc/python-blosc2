@@ -10,7 +10,7 @@
 import numpy as np
 import blosc2
 
-a = np.arange(1000_000)
+a = np.arange(1_000_000)
 
 cparams = {"codec": blosc2.Codec.BLOSCLZ}
 cframe = blosc2.pack_array2(a, cparams=cparams)

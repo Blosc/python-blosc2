@@ -632,14 +632,17 @@ cdef class SChunk:
 
         cdef blosc2_storage storage
         # Create space for cparams and dparams in the stack
-        cdef blosc2_cparams cparams = BLOSC2_CPARAMS_DEFAULTS
-        cdef blosc2_dparams dparams = BLOSC2_DPARAMS_DEFAULTS
+        cdef blosc2_cparams cparams
+        cdef blosc2_dparams dparams
+        create_cparams_from_kwargs(&cparams, kwargs)
+        create_dparams_from_kwargs(&dparams, kwargs)
         storage.cparams = &cparams
         storage.dparams = &dparams
         if kwargs is None:
             storage = BLOSC2_STORAGE_DEFAULTS
         else:
             create_storage(&storage, kwargs)
+
         self.schunk = blosc2_schunk_new(&storage)
         if self.schunk == NULL:
             raise RuntimeError("Could not create the Schunk")
