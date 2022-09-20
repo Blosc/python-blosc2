@@ -16,10 +16,12 @@ Compress and decompress
    compress2
    decompress
    decompress2
-   pack_array
    pack
-   unpack_array
+   pack_array
+   pack_array2
    unpack
+   unpack_array
+   unpack_array2
 
 Set / Get compression params
 ----------------------------

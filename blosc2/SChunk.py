@@ -49,22 +49,20 @@ class SChunk(blosc2_ext.SChunk):
     def __init__(self, chunksize=8 * 10 ** 6, data=None, mode="a", **kwargs):
         """Create a new super-chunk.
 
-        If :paramref:`data` is different from `None`, the :paramref:`data` is split into
-        chunks of size :paramref:`chunksize` and these chunks are appended into the created SChunk.
-
         Parameters
         ----------
         chunksize: int
-            The size, in bytes, of the chunks from the super-chunk. If the chunksize is not provided
+            The size, in bytes, of the chunks from the super-chunk. If not provided,
             it is set to 8MB.
 
         data: bytes-like object, optional
             The data to be split into different chunks of size :paramref:`chunksize`.
+            If None, the Schunk instance will be empty initially.
 
         mode: str, optional
             Persistence mode: ‘r’ means read only (must exist);
-            ‘a’ means read/write (create if doesn’t exist);
-            ‘w’ means create (overwrite if exists).
+            ‘a’ means read/write (create if it doesn’t exist);
+            ‘w’ means create (overwrite if it exists).
 
         Other parameters
         ----------------

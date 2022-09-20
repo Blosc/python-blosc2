@@ -9,6 +9,8 @@ import os
 import pickle
 import sys
 
+import msgpack
+
 import blosc2
 from blosc2 import blosc2_ext
 
@@ -164,7 +166,7 @@ def decompress(src, dst=None, as_bytearray=False):
     >>> b"1"*7 == blosc2.decompress(blosc2.compress(b"1"*7))
     True
     >>> type(blosc2.decompress(blosc2.compress(b"1"*7),
-    ...                                      as_bytearray=True)) is bytearray
+    ...                        as_bytearray=True)) is bytearray
     True
     >>> import numpy
     >>> arr = numpy.arange(10)
@@ -386,6 +388,108 @@ def unpack_array(packed_array, **kwargs):
         arr = pickle.loads(pickled_array)
 
     return arr
+
+
+def pack_array2(arr, chunksize=8 * 10 ** 6, mode="a", **kwargs):
+    """Pack (compress) a NumPy array. This is faster, and it does not have a 2 GB limitation.
+
+    Parameters
+    ----------
+    arr : ndarray
+        The NumPy array to be packed.
+
+    chunksize: int
+        The size (in bytes) for the chunks during compression. If not provided,
+        it is set to 8MB.
+
+    mode: str, optional
+        Persistence mode: ‘r’ means read only (must exist);
+        ‘a’ means read/write (create if it doesn’t exist);
+        ‘w’ means create (overwrite if exists).
+
+    Other parameters
+    ----------------
+    kwargs: dict, optional
+        Keyword arguments supported:
+
+            cparams: dict
+                A dictionary with the compression parameters, which are the same that can be
+                used in the :func:`~blosc2.compress2` function.
+            dparams: dict
+                A dictionary with the decompression parameters, which are the same that can be
+                used in the :func:`~blosc2.decompress2` function.
+
+    Examples
+    --------
+    >>> import numpy
+    >>> a = numpy.arange(1e6)
+    >>> parray = blosc2.pack_array2(a)
+    >>> len(parray) < a.size * a.itemsize
+    True
+
+    See also
+    --------
+    :func:`~blosc2.unpack_array2`
+    """
+    if 'cparams' in kwargs:
+        cparams = kwargs['cparams']
+        if 'typesize' not in cparams:
+            cparams['typesize'] = arr.itemsize
+        del kwargs['cparams']
+    else:
+        cparams = {"typesize": arr.itemsize}
+
+    schunk = blosc2.SChunk(chunksize=chunksize, contiguous=True, data=arr,
+                           cparams=cparams, **kwargs)
+    schunk.vlmeta['dtype'] = msgpack.packb(str(arr.dtype))
+    schunk.vlmeta['shape'] = msgpack.packb(arr.shape)
+
+    cframe = schunk.to_cframe()
+    return cframe
+
+
+def unpack_array2(cframe):
+    """Unpack (decompress) a packed NumPy array via a cframe.
+
+    Parameters
+    ----------
+    cframe : bytes
+        The packed array to be decompressed.
+
+    Returns
+    -------
+    out : ndarray
+        The decompressed data in form of a NumPy array.
+
+    Raises
+    ------
+    TypeError
+        If :paramref:`cframe` is not of type bytes
+    RunTimeError
+        If some problem was detected.
+
+    Examples
+    --------
+    >>> import numpy
+    >>> a = numpy.arange(1e6)
+    >>> cframe = blosc2.pack_array2(a)
+    >>> len(cframe) < a.size*a.itemsize
+    True
+    >>> a2 = blosc2.unpack_array2(cframe)
+    >>> numpy.array_equal(a, a2)
+    True
+
+    See also
+    --------
+    :func:`~blosc2.pack_array2`
+    """
+    import numpy
+    schunk = blosc2.schunk_from_cframe(cframe, False)
+    dtype = msgpack.unpackb(schunk.vlmeta['dtype'])
+    shape = msgpack.unpackb(schunk.vlmeta['shape'])
+    data = numpy.empty(shape, dtype=dtype)
+    schunk.get_slice(out=data)
+    return data
 
 
 def set_compressor(codec):

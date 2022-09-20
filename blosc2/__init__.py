@@ -67,6 +67,7 @@ from .core import (
     get_compressor,
     pack,
     pack_array,
+    pack_array2,
     print_versions,
     remove_urlpath,
     schunk_from_cframe,
@@ -76,6 +77,7 @@ from .core import (
     set_releasegil,
     unpack,
     unpack_array,
+    unpack_array2,
 )
 from .SChunk import (SChunk, open)
 from .version import __version__

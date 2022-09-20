@@ -625,17 +625,18 @@ storage_dflts = {
 
 cdef create_storage(blosc2_storage *storage, kwargs):
     contiguous = kwargs.get('contiguous', storage_dflts['contiguous'])
+    storage.contiguous = contiguous
     urlpath = kwargs.get('urlpath', storage_dflts['urlpath'])
     if urlpath is None:
         storage.urlpath = NULL
     else:
         storage.urlpath = urlpath
+
     if kwargs.get('cparams', None) is not None:
         create_cparams_from_kwargs(storage.cparams, kwargs.get('cparams'))
 
     if kwargs.get('dparams', None) is not None:
         create_dparams_from_kwargs(storage.dparams, kwargs.get('dparams'))
-    storage.contiguous = contiguous
 
     storage.io = NULL
     # TODO: support the next ones in the future
