@@ -16,7 +16,7 @@ import blosc2
 @pytest.mark.parametrize(
     "cparams, dparams, nchunks, chunk_nitems, dtype",
     [
-        ({"compcode": blosc2.Codec.LZ4, "clevel": 6, "typesize": 2}, {}, 0, 50, numpy.int16),
+        ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 2}, {}, 0, 50, numpy.int16),
         ({"typesize": 4}, {"nthreads": 4}, 1, 200 * 100, float),
         (
          {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 2, "typesize": 1},
@@ -25,7 +25,7 @@ import blosc2
          201,
          numpy.int8
          ),
-        ({"compcode": blosc2.Codec.LZ4HC, "typesize": 8}, {}, 10, 30 * 100, numpy.int64),
+        ({"codec": blosc2.Codec.LZ4HC, "typesize": 8}, {}, 10, 30 * 100, numpy.int64),
     ],
 )
 @pytest.mark.parametrize("mode", ["w", "r", "a"])

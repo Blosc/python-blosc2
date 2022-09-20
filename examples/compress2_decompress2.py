@@ -11,7 +11,7 @@ import blosc2
 a = np.linspace(0, 1, 1_000_000, dtype=np.float64)
 typesize = a.dtype.itemsize
 c_bytesobj = blosc2.compress2(a, typesize=typesize,
-                              compcode=blosc2.Codec.ZSTD,
+                              codec=blosc2.Codec.ZSTD,
                               filters=[blosc2.Filter.TRUNC_PREC, blosc2.Filter.SHUFFLE],
                               filters_meta=[20, 0],
                               )

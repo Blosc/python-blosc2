@@ -469,6 +469,8 @@ def get_blocksize():
     return blosc1_get_blocksize()
 
 cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
+    if "compcode" in kwargs:
+        raise NameError("`compcode` has been renamed to `codec`.  Please go update your code.")
     codec = kwargs.get('codec', blosc2.cparams_dflts['codec'])
     cparams.compcode = codec.value
     cparams.compcode_meta = kwargs.get('codec_meta', blosc2.cparams_dflts['codec_meta'])

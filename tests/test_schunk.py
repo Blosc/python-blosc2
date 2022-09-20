@@ -16,10 +16,10 @@ import blosc2
 @pytest.mark.parametrize(
     "cparams, dparams, nchunks",
     [
-        ({"compcode": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 0),
+        ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 0),
         ({"typesize": 4}, {"nthreads": 4}, 1),
         ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {"schunk": None}, 5),
-        ({"compcode": blosc2.Codec.LZ4HC, "typesize": 4}, {}, 10),
+        ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {}, 10),
     ],
 )
 def test_schunk_numpy(contiguous, urlpath, mode, cparams, dparams, nchunks):
@@ -62,7 +62,7 @@ def test_schunk_numpy(contiguous, urlpath, mode, cparams, dparams, nchunks):
 @pytest.mark.parametrize(
     "nbytes, cparams, dparams, nchunks",
     [
-        (7, {"compcode": blosc2.Codec.LZ4, "clevel": 6, "typesize": 5}, {}, 1),
+        (7, {"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 5}, {}, 1),
         (641091, {"typesize": 3}, {"nthreads": 2}, 1),
         (136, {"typesize": 1}, {}, 5),
         (1231, {"typesize": 8}, blosc2.dparams_dflts, 10),
@@ -99,10 +99,10 @@ def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):
 @pytest.mark.parametrize(
     "cparams, dparams, nchunks",
     [
-        ({"compcode": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 1),
+        ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 1),
         ({"typesize": 4}, {"nthreads": 4}, 1),
         ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {"schunk": None}, 5),
-        ({"compcode": blosc2.Codec.LZ4HC, "typesize": 4}, {}, 10),
+        ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {}, 10),
     ],
 )
 @pytest.mark.parametrize("copy", [True, False])

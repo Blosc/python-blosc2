@@ -8,7 +8,9 @@
 
 * New `Schunk.get_slice()`, `SChunk.__getitem__` and `SChunk.__setitem__` methods for getting/setting slices from/to `SChunk` instances.
 
-* More doc restructurings. Hopefully, they are more pleasant to read now.
+* The `compcode` parameter has been renamed to `codec`.  A `NameError` exception will be raised when using the old name.  Please update your code when you see this exception.
+
+* More doc restructurings.  Hopefully, they are more pleasant to read now.
 
 
 ## Changes from 0.3.1 to 0.3.2

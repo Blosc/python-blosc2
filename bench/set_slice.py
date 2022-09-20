@@ -22,7 +22,7 @@ dtype = np.float64
 
 nchunks = shape // chunksize
 # Set the compression and decompression parameters
-cparams = {"compcode": blosc2.Codec.BLOSCLZ, "typesize": 8, "blocksize": blocksize * 8}
+cparams = {"codec": blosc2.Codec.BLOSCLZ, "typesize": 8, "blocksize": blocksize * 8}
 dparams = {}
 contiguous = True
 persistent = bool(sys.argv[1]) if len(sys.argv) > 1 else False
