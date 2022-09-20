@@ -17,9 +17,7 @@ from libc.string cimport memcpy
 from libcpp cimport bool
 
 from enum import Enum
-
 from msgpack import unpackb
-
 import blosc2
 
 
@@ -470,57 +468,30 @@ def get_blocksize():
     """
     return blosc1_get_blocksize()
 
-# Defaults for compression params
-cparams_dflts = {
-        'codec': blosc2.Codec.BLOSCLZ,
-        'codec_meta': 0,
-        'clevel': 5,
-        'use_dict': False,
-        'typesize': 8,
-        'nthreads': 1,
-        'blocksize': 0,
-        'splitmode': blosc2.SplitMode.FORWARD_COMPAT_SPLIT,
-        'schunk': None,
-        'filters': [0, 0, 0, 0, 0, blosc2.Filter.SHUFFLE],
-        'filters_meta': [0, 0, 0, 0, 0, 0],
-        'prefilter': None,
-        'preparams': None,
-        'udbtune': None,
-        'instr_codec': False
-}
-
-# Defaults for decompression params
-dparams_dflts = {
-    'nthreads': 1,
-    'schunk': None,
-    'postfilter': None,
-    'postparams': None
-}
-
 cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
-    codec = kwargs.get('codec', cparams_dflts['codec'])
+    codec = kwargs.get('codec', blosc2.cparams_dflts['codec'])
     cparams.compcode = codec.value
-    cparams.compcode_meta = kwargs.get('codec_meta', cparams_dflts['codec_meta'])
-    cparams.clevel = kwargs.get('clevel', cparams_dflts['clevel'])
-    cparams.use_dict = kwargs.get('use_dict', cparams_dflts['use_dict'])
-    cparams.typesize = kwargs.get('typesize', cparams_dflts['typesize'])
-    cparams.nthreads = kwargs.get('nthreads', cparams_dflts['nthreads'])
-    cparams.blocksize = kwargs.get('blocksize', cparams_dflts['blocksize'])
-    splitmode = kwargs.get('splitmode', cparams_dflts['splitmode'])
+    cparams.compcode_meta = kwargs.get('codec_meta', blosc2.cparams_dflts['codec_meta'])
+    cparams.clevel = kwargs.get('clevel', blosc2.cparams_dflts['clevel'])
+    cparams.use_dict = kwargs.get('use_dict', blosc2.cparams_dflts['use_dict'])
+    cparams.typesize = kwargs.get('typesize', blosc2.cparams_dflts['typesize'])
+    cparams.nthreads = kwargs.get('nthreads', blosc2.cparams_dflts['nthreads'])
+    cparams.blocksize = kwargs.get('blocksize', blosc2.cparams_dflts['blocksize'])
+    splitmode = kwargs.get('splitmode', blosc2.cparams_dflts['splitmode'])
     cparams.splitmode = splitmode.value
     # TODO: support the commented ones in the future
-    #schunk_c = kwargs.get('schunk', cparams_dflts['schunk'])
+    #schunk_c = kwargs.get('schunk', blosc2.cparams_dflts['schunk'])
     #cparams.schunk = <void *> schunk_c
     cparams.schunk = NULL
     for i in range(BLOSC2_MAX_FILTERS):
         cparams.filters[i] = 0
         cparams.filters_meta[i] = 0
 
-    filters = kwargs.get('filters', cparams_dflts['filters'])
+    filters = kwargs.get('filters', blosc2.cparams_dflts['filters'])
     for i, filter in enumerate(filters):
         cparams.filters[i] = filter.value if isinstance(filter, Enum) else 0
 
-    filters_meta = kwargs.get('filters_meta', cparams_dflts['filters_meta'])
+    filters_meta = kwargs.get('filters_meta', blosc2.cparams_dflts['filters_meta'])
     cdef int8_t meta_value
     for i, meta in enumerate(filters_meta):
         # We still may want to encode negative values
@@ -531,10 +502,10 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     cparams.preparams = NULL
     cparams.udbtune = NULL
     cparams.instr_codec = False
-    #cparams.prefilter = kwargs.get('prefilter', cparams_dflts['prefilter'])
-    #cparams.preparams = kwargs.get('preparams', cparams_dflts['preparams'])
-    #cparams.udbtune = kwargs.get('udbtune', cparams_dflts['udbtune'])
-    #cparams.instr_codec = kwargs.get('instr_codec', cparams_dflts['instr_codec'])
+    #cparams.prefilter = kwargs.get('prefilter', blosc2.cparams_dflts['prefilter'])
+    #cparams.preparams = kwargs.get('preparams', blosc2.cparams_dflts['preparams'])
+    #cparams.udbtune = kwargs.get('udbtune', blosc2.cparams_dflts['udbtune'])
+    #cparams.instr_codec = kwargs.get('instr_codec', blosc2.cparams_dflts['instr_codec'])
 
 
 def compress2(src, **kwargs):
@@ -563,14 +534,14 @@ def compress2(src, **kwargs):
     return dest[:size]
 
 cdef create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs):
-    dparams.nthreads = kwargs.get('nthreads', dparams_dflts['nthreads'])
+    dparams.nthreads = kwargs.get('nthreads', blosc2.dparams_dflts['nthreads'])
     dparams.schunk = NULL
     dparams.postfilter = NULL
     dparams.postparams = NULL
     # TODO: support the next ones in the future
-    #dparams.schunk = kwargs.get('schunk', dparams_dflts['schunk'])
-    #dparams.postfilter = kwargs.get('postfilter', dparams_dflts['postfilter'])
-    #dparams.postparams = kwargs.get('postparams', dparams_dflts['postparams'])
+    #dparams.schunk = kwargs.get('schunk', blosc2.dparams_dflts['schunk'])
+    #dparams.postfilter = kwargs.get('postfilter', blosc2.dparams_dflts['postfilter'])
+    #dparams.postparams = kwargs.get('postparams', blosc2.dparams_dflts['postparams'])
 
 def decompress2(src, dst=None, **kwargs):
     cdef blosc2_dparams dparams
@@ -613,20 +584,10 @@ def decompress2(src, dst=None, **kwargs):
         raise ValueError("Error while decompressing, check the src data and/or the dparams")
 
 
-# Default for #blosc2_storage
-storage_dflts = {
-    'contiguous': False,
-    'urlpath': None,
-    'cparams': None,
-    'dparams': None,
-    'io': None
-}
-
-
 cdef create_storage(blosc2_storage *storage, kwargs):
-    contiguous = kwargs.get('contiguous', storage_dflts['contiguous'])
+    contiguous = kwargs.get('contiguous', blosc2.storage_dflts['contiguous'])
     storage.contiguous = contiguous
-    urlpath = kwargs.get('urlpath', storage_dflts['urlpath'])
+    urlpath = kwargs.get('urlpath', blosc2.storage_dflts['urlpath'])
     if urlpath is None:
         storage.urlpath = NULL
     else:
@@ -640,7 +601,7 @@ cdef create_storage(blosc2_storage *storage, kwargs):
 
     storage.io = NULL
     # TODO: support the next ones in the future
-    #storage.io = kwargs.get('io', storage_dflts['io'])
+    #storage.io = kwargs.get('io', blosc2.storage_dflts['io'])
 
 
 cdef class SChunk:

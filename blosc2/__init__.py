@@ -40,18 +40,6 @@ class SplitMode(Enum):
     FORWARD_COMPAT_SPLIT = 4
 
 
-from .blosc2_ext import (
-    EXTENDED_HEADER_LENGTH,
-    MAX_BUFFERSIZE,
-    MAX_TYPESIZE,
-    MIN_HEADER_LENGTH,
-    VERSION_DATE,
-    VERSION_STRING,
-    cparams_dflts,
-    dparams_dflts,
-    storage_dflts,
-)
-
 # Public API for container module
 from .core import (
     clib_info,
@@ -82,6 +70,16 @@ from .core import (
 from .SChunk import (SChunk, open)
 from .version import __version__
 
+from .blosc2_ext import (
+    EXTENDED_HEADER_LENGTH,
+    MAX_BUFFERSIZE,
+    MAX_TYPESIZE,
+    MIN_HEADER_LENGTH,
+    VERSION_DATE,
+    VERSION_STRING,
+)
+
+
 blosclib_version = "%s (%s)" % (VERSION_STRING, VERSION_DATE)
 
 # Internal Blosc threading
@@ -91,10 +89,50 @@ if nthreads > 8:
     nthreads = 8
 set_nthreads(nthreads)
 
+# Defaults for compression params
+cparams_dflts = {
+    'codec': Codec.BLOSCLZ,
+    'codec_meta': 0,
+    'clevel': 5,
+    'use_dict': False,
+    'typesize': 8,
+    'nthreads': nthreads,
+    'blocksize': 0,
+    'splitmode': SplitMode.FORWARD_COMPAT_SPLIT,
+    'schunk': None,
+    'filters': [0, 0, 0, 0, 0, Filter.SHUFFLE],
+    'filters_meta': [0, 0, 0, 0, 0, 0],
+    'prefilter': None,
+    'preparams': None,
+    'udbtune': None,
+    'instr_codec': False
+}
+
+# Defaults for decompression params
+dparams_dflts = {
+    'nthreads': nthreads,
+    'schunk': None,
+    'postfilter': None,
+    'postparams': None
+}
+
+# Default for storage
+storage_dflts = {
+    'contiguous': False,
+    'urlpath': None,
+    'cparams': None,
+    'dparams': None,
+    'io': None
+}
+
+
 __all__ = [
     "__version__",
     "compress",
     "decompress",
+    "cparams_dflts",
+    "dparams_dflts",
+    "storage_dflts",
     "set_compressor",
     "free_resources",
     "set_nthreads",
@@ -118,10 +156,7 @@ __all__ = [
     "MIN_HEADER_LENGTH",
     "EXTENDED_HEADER_LENGTH",
     "compress2",
-    "cparams_dflts",
     "decompress2",
-    "dparams_dflts",
-    "storage_dflts",
     "SChunk",
     "open",
     "remove_urlpath",
