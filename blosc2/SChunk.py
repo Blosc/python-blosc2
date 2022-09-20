@@ -427,12 +427,12 @@ class SChunk(blosc2_ext.SChunk):
         return super(SChunk, self).set_slice(start=key.start, stop=key.stop, value=value)
 
     def to_cframe(self):
-        """ Get a contiguous bytes buffer representing a :class:`~blosc2.SChunk`.
+        """ Get a bytes object containing the serialized :class:`~blosc2.SChunk` instance.
 
         Returns
         -------
         out: bytes
-            The contiguous bytes buffer containing the :class:`~blosc2.SChunk`.
+            The buffer containing the serialized :class:`~blosc2.SChunk` instance.
 
         See Also
         --------

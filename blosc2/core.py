@@ -783,15 +783,15 @@ def remove_urlpath(path):
 
 
 def schunk_from_cframe(cframe, copy=False):
-    """Create a :class:`~blosc2.SChunk` out of a contiguous frame buffer.
+    """Create a :class:`~blosc2.SChunk` instance out of a contiguous frame buffer.
 
     Parameters
     ----------
     cframe: bytes /str
-        The bytes object containing the in-memory frame.
+        The bytes object containing the in-memory cframe.
     copy: bool
         Whether to internally do a copy or not. If `False`,
-        the user is responsible of keeping the reference.
+        the user is responsible for keeping a reference to `cframe`.
 
     Returns
     -------

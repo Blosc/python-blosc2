@@ -126,6 +126,7 @@ def test_schunk_cframe(contiguous, urlpath, cparams, dparams, nchunks, copy):
     cframe = schunk.to_cframe()
     schunk3 = blosc2.schunk_from_cframe(cframe, copy)
     del schunk3
+    # Check that we can still access the external cframe buffer
     _ = str(cframe)
 
     blosc2.remove_urlpath(urlpath)
