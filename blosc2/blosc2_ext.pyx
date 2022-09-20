@@ -647,7 +647,7 @@ cdef class SChunk:
             raise ValueError("Maximum chunksize allowed is 2^31 - 1")
         self.schunk.chunksize = chunksize
         cdef const uint8_t[:] typed_view
-        cdef int index
+        cdef int64_t index
         if data is not None:
             mem_view = memoryview(data)
             typed_view = mem_view.cast('B')
@@ -656,8 +656,8 @@ cdef class SChunk:
             len_chunk = chunksize
             for i in range(nchunks):
                 if i == (nchunks - 1):
-                    len_chunk = len_data - i*chunksize
-                index = i*chunksize
+                    len_chunk = len_data - i * chunksize
+                index = i * chunksize
                 nchunks_ = blosc2_schunk_append_buffer(self.schunk, <void*>&typed_view[index], len_chunk)
                 if nchunks_ != (i + 1):
                     raise RuntimeError("An error occurred while appending the chunks")
@@ -809,7 +809,7 @@ cdef class SChunk:
         if start >= nitems:
             raise ValueError("`start` cannot be greater or equal than the SChunk nitems")
 
-        cdef int nbytes = (stop - start) * self.schunk.typesize
+        cdef Py_ssize_t nbytes = (stop - start) * self.schunk.typesize
         cdef Py_buffer *buf
         if out is not None:
             buf = <Py_buffer *> malloc(sizeof(Py_buffer))
