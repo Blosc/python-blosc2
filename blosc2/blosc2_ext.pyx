@@ -669,6 +669,10 @@ cdef class SChunk:
     def c_schunk(self):
         return <uintptr_t> self.schunk
 
+    @property
+    def chunksize(self):
+        return self.schunk.chunksize
+
     def append_data(self, data):
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
