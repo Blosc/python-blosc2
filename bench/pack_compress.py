@@ -120,8 +120,8 @@ for (in_, label) in arrays:
         for i in range(NREP):
             c = blosc2.compress(in_, clevel=clevel, codec=codec)
         ctoc = time.time()
-        out = np.full_like(in_, fill_value=0)
         dtic = time.time()
+        out = np.empty_like(in_)
         for i in range(NREP):
             blosc2.decompress(c, dst=out)
         dtoc = time.time()

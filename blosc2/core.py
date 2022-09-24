@@ -9,8 +9,6 @@ import os
 import pickle
 import sys
 
-import msgpack
-
 import blosc2
 from blosc2 import blosc2_ext
 
@@ -390,7 +388,7 @@ def unpack_array(packed_array, **kwargs):
     return arr
 
 
-def pack_array2(arr, chunksize=8 * 10 ** 6, mode="a", **kwargs):
+def pack_array2(arr, chunksize=2 ** 22, mode="a", **kwargs):
     """Pack (compress) a NumPy array. This is faster, and it does not have a 2 GB limitation.
 
     Parameters
@@ -441,8 +439,8 @@ def pack_array2(arr, chunksize=8 * 10 ** 6, mode="a", **kwargs):
 
     schunk = blosc2.SChunk(chunksize=chunksize, contiguous=False, data=arr,
                            cparams=cparams, **kwargs)
-    schunk.vlmeta['dtype'] = msgpack.packb(str(arr.dtype))
-    schunk.vlmeta['shape'] = msgpack.packb(arr.shape)
+    schunk.vlmeta['dtype'] = str(arr.dtype)
+    schunk.vlmeta['shape'] = arr.shape
 
     cframe = schunk.to_cframe()
     return cframe
@@ -485,8 +483,8 @@ def unpack_array2(cframe):
     """
     import numpy
     schunk = blosc2.schunk_from_cframe(cframe, False)
-    dtype = msgpack.unpackb(schunk.vlmeta['dtype'])
-    shape = msgpack.unpackb(schunk.vlmeta['shape'])
+    dtype = schunk.vlmeta['dtype']
+    shape = schunk.vlmeta['shape']
     data = numpy.empty(shape, dtype=dtype)
     schunk.get_slice(out=data)
     return data

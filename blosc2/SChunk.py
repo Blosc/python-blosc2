@@ -125,7 +125,7 @@ class SChunk(blosc2_ext.SChunk):
         >>> import blosc2
         >>> import numpy
         >>> schunk = blosc2.SChunk(chunksize=200*1000*4)
-        >>> data =  numpy.arange(200 * 1000, dtype='int32')
+        >>> data = numpy.arange(200 * 1000, dtype='int32')
         >>> schunk.append_data(data)
         1
         """
