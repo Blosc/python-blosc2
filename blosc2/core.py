@@ -388,7 +388,7 @@ def unpack_array(packed_array, **kwargs):
     return arr
 
 
-def pack_array2(arr, chunksize=2 ** 22, mode="a", **kwargs):
+def pack_array2(arr, chunksize=2 ** 26, mode="a", **kwargs):
     """Pack (compress) a NumPy array. This is faster, and it does not have a 2 GB limitation.
 
     Parameters
