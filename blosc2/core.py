@@ -388,7 +388,7 @@ def unpack_array(packed_array, **kwargs):
     return arr
 
 
-def pack_array2(arr, chunksize=2 ** 26, mode="a", **kwargs):
+def pack_array2(arr, chunksize=None, mode="a", **kwargs):
     """Pack (compress) a NumPy array. This is faster, and it does not have a 2 GB limitation.
 
     Parameters
@@ -398,7 +398,7 @@ def pack_array2(arr, chunksize=2 ** 26, mode="a", **kwargs):
 
     chunksize: int
         The size (in bytes) for the chunks during compression. If not provided,
-        it is set to 8MB.
+        it is computed automatically.
 
     mode: str, optional
         Persistence mode: ‘r’ means read only (must exist);
@@ -437,6 +437,10 @@ def pack_array2(arr, chunksize=2 ** 26, mode="a", **kwargs):
     else:
         cparams = {"typesize": arr.itemsize}
 
+    if chunksize is None:
+        chunksize = arr.size * arr.itemsize
+        if chunksize > blosc2.MAX_BUFFERSIZE:
+            chunksize = blosc2.MAX_BUFFERSIZE
     schunk = blosc2.SChunk(chunksize=chunksize, contiguous=False, data=arr,
                            cparams=cparams, **kwargs)
     schunk.vlmeta['dtype'] = str(arr.dtype)

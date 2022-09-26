@@ -95,7 +95,7 @@ for (in_, label) in arrays:
     for codec in blosc2.Codec:
         print("Using *** %s *** compressor:" % codec)
         clevel = 6
-        cparams = {"codec": codec, "clevel": 6}
+        cparams = {"codec": codec, "clevel": clevel}
 
         ctic = time.time()
         for i in range(NREP):
