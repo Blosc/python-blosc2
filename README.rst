@@ -108,162 +108,98 @@ your Blosc build:
 
      PYTHONPATH=. python bench/compress_numpy.py
 
-Just to whet your appetite, here are some speed figures for an Intel box (i9-10940X @ 3.30GHz)
-with 64 GB RAM running Clear Linux::
+Just to whet your appetite, here are some speed figures for an AMD box (5950X, 16 cores)
+running Ubuntu 22.04.  In particular, see how performance for `pack_array2/unpack_array2` has
+improved vs the previous version (labeled as `pack_array/unpack_array`)::
 
     -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-    python-blosc2 version: 0.1.7
-    Blosc version: 2.0.0.rc2 ($Date:: 2021-05-26 #$)
+    python-blosc2 version: 0.3.3.dev0
+    Blosc version: 2.4.2.dev ($Date:: 2022-09-16 #$)
     Compressors available: ['blosclz', 'lz4', 'lz4hc', 'zlib', 'zstd']
     Compressor library versions:
-      blosclz: 2.4.0
-      lz4: 1.9.3
-      lz4hc: 1.9.3
-      zlib: 1.2.11.zlib-ng
-      zstd: 1.5.0
-    Python version: 3.7.9 (default, Aug 31 2020, 12:42:55)
-    [GCC 7.3.0]
-    Platform: Linux-5.12.6-1043.native-x86_64 (#1 SMP Sat May 22 04:04:10 PDT 2021)
-    Linux dist: Clear Linux OS
-    Processor: not recognized
+      BLOSCLZ: 2.5.1
+      LZ4: 1.9.4
+      LZ4HC: 1.9.4
+      ZLIB: 1.2.11.zlib-ng
+      ZSTD: 1.5.2
+    Python version: 3.9.13 | packaged by conda-forge | (main, May 27 2022, 16:56:21)
+    [GCC 10.3.0]
+    Platform: Linux-5.15.0-47-generic-x86_64 (#51-Ubuntu SMP Thu Aug 11 07:51:15 UTC 2022)
+    Linux dist: Ubuntu 22.04.1 LTS
+    Processor: x86_64
     Byte-ordering: little
-    Detected cores: 28
+    Detected cores: 16.0
     Number of threads to use by default: 8
     -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
     Creating NumPy arrays with 10**8 int64/float64 elements:
-      *** np.copyto() *** Time for memcpy():	0.083 s	(8.93 GB/s)
+      Time for copying array with np.copy:                  0.107 s (6.94 GB/s))
 
-    Times for compressing/decompressing:
 
     *** the arange linear distribution ***
-      *** blosclz, noshuffle  ***  0.219 s (3.41 GB/s) / 0.083 s (8.93 GB/s)	cr:   2.0x
-      *** blosclz, shuffle    ***  0.027 s (27.26 GB/s) / 0.035 s (21.38 GB/s)	cr: 469.7x
-      *** blosclz, bitshuffle ***  0.078 s (9.56 GB/s) / 0.135 s (5.53 GB/s)	cr: 488.2x
-      *** lz4    , noshuffle  ***  0.223 s (3.33 GB/s) / 0.075 s (9.92 GB/s)	cr:   2.0x
-      *** lz4    , shuffle    ***  0.025 s (29.69 GB/s) / 0.035 s (21.18 GB/s)	cr: 279.2x
-      *** lz4    , bitshuffle ***  0.079 s (9.43 GB/s) / 0.138 s (5.40 GB/s)	cr:  87.7x
-      *** lz4hc  , noshuffle  ***  1.273 s (0.59 GB/s) / 0.076 s (9.85 GB/s)	cr:   2.0x
-      *** lz4hc  , shuffle    ***  0.108 s (6.87 GB/s) / 0.032 s (23.37 GB/s)	cr: 155.9x
-      *** lz4hc  , bitshuffle ***  0.359 s (2.08 GB/s) / 0.037 s (19.88 GB/s)	cr: 239.5x
-      *** zlib   , noshuffle  ***  2.732 s (0.27 GB/s) / 0.146 s (5.09 GB/s)	cr:   5.3x
-      *** zlib   , shuffle    ***  0.129 s (5.78 GB/s) / 0.046 s (16.11 GB/s)	cr: 273.8x
-      *** zlib   , bitshuffle ***  0.179 s (4.17 GB/s) / 0.058 s (12.78 GB/s)	cr: 457.9x
-      *** zstd   , noshuffle  ***  1.912 s (0.39 GB/s) / 0.113 s (6.61 GB/s)	cr:   7.9x
-      *** zstd   , shuffle    ***  0.223 s (3.34 GB/s) / 0.031 s (24.18 GB/s)	cr: 644.9x
-      *** zstd   , bitshuffle ***  0.242 s (3.07 GB/s) / 0.038 s (19.61 GB/s)	cr: 985.6x
+    Using *** Codec.BLOSCLZ *** compressor:
+      Time for pack_array/unpack_array:     0.247/0.325 s (3.01/2.29 GB/s)) 	cr: 441.6x
+      Time for pack_array2/unpack_array2:   0.033/0.137 s (22.34/5.42 GB/s)) 	cr: 444.0x
+      Time for compress/decompress:         0.028/0.070 s (26.20/10.59 GB/s)) cr: 444.1x
+    Using *** Codec.LZ4 *** compressor:
+      Time for pack_array/unpack_array:     0.253/0.325 s (2.95/2.30 GB/s)) 	cr: 277.7x
+      Time for pack_array2/unpack_array2:   0.033/0.133 s (22.87/5.62 GB/s)) 	cr: 279.2x
+      Time for compress/decompress:         0.030/0.070 s (24.76/10.61 GB/s)) cr: 279.2x
+    Using *** Codec.LZ4HC *** compressor:
+      Time for pack_array/unpack_array:     0.309/0.320 s (2.41/2.33 GB/s)) 	cr: 155.4x
+      Time for pack_array2/unpack_array2:   0.083/0.128 s (8.95/5.83 GB/s)) 	cr: 155.9x
+      Time for compress/decompress:         0.077/0.062 s (9.66/12.01 GB/s)) 	cr: 155.9x
+    Using *** Codec.ZLIB *** compressor:
+      Time for pack_array/unpack_array:     0.311/0.322 s (2.40/2.31 GB/s)) 	cr: 273.3x
+      Time for pack_array2/unpack_array2:   0.099/0.121 s (7.50/6.15 GB/s)) 	cr: 273.8x
+      Time for compress/decompress:         0.095/0.066 s (7.87/11.32 GB/s)) 	cr: 273.8x
+    Using *** Codec.ZSTD *** compressor:
+      Time for pack_array/unpack_array:     0.374/0.315 s (1.99/2.36 GB/s)) 	cr: 630.8x
+      Time for pack_array2/unpack_array2:   0.177/0.096 s (4.22/7.75 GB/s)) 	cr: 644.7x
+      Time for compress/decompress:         0.167/0.062 s (4.46/12.07 GB/s)) 	cr: 644.9x
 
     *** the linspace linear distribution ***
-      *** blosclz, noshuffle  ***  0.099 s (7.55 GB/s) / 0.031 s (23.76 GB/s)	cr:   1.0x
-      *** blosclz, shuffle    ***  0.050 s (15.02 GB/s) / 0.036 s (20.98 GB/s)	cr:  33.5x
-      *** blosclz, bitshuffle ***  0.087 s (8.53 GB/s) / 0.147 s (5.08 GB/s)	cr:  55.4x
-      *** lz4    , noshuffle  ***  0.085 s (8.77 GB/s) / 0.031 s (23.86 GB/s)	cr:   1.0x
-      *** lz4    , shuffle    ***  0.038 s (19.53 GB/s) / 0.034 s (21.78 GB/s)	cr:  40.5x
-      *** lz4    , bitshuffle ***  0.081 s (9.24 GB/s) / 0.146 s (5.09 GB/s)	cr:  59.5x
-      *** lz4hc  , noshuffle  ***  1.902 s (0.39 GB/s) / 0.075 s (9.92 GB/s)	cr:   1.1x
-      *** lz4hc  , shuffle    ***  0.237 s (3.14 GB/s) / 0.031 s (24.09 GB/s)	cr:  44.7x
-      *** lz4hc  , bitshuffle ***  0.438 s (1.70 GB/s) / 0.035 s (21.03 GB/s)	cr:  58.0x
-      *** zlib   , noshuffle  ***  2.078 s (0.36 GB/s) / 0.267 s (2.79 GB/s)	cr:   1.6x
-      *** zlib   , shuffle    ***  0.239 s (3.11 GB/s) / 0.053 s (13.98 GB/s)	cr:  44.6x
-      *** zlib   , bitshuffle ***  0.275 s (2.71 GB/s) / 0.065 s (11.45 GB/s)	cr:  66.9x
-      *** zstd   , noshuffle  ***  2.792 s (0.27 GB/s) / 0.099 s (7.55 GB/s)	cr:   1.2x
-      *** zstd   , shuffle    ***  0.374 s (1.99 GB/s) / 0.037 s (20.18 GB/s)	cr:  70.5x
-      *** zstd   , bitshuffle ***  0.367 s (2.03 GB/s) / 0.053 s (14.10 GB/s)	cr:  51.2x
+    Using *** Codec.BLOSCLZ *** compressor:
+      Time for pack_array/unpack_array:     0.263/0.320 s (2.83/2.33 GB/s)) 	cr:  35.7x
+      Time for pack_array2/unpack_array2:   0.069/0.118 s (10.82/6.32 GB/s)) 	cr:  35.6x
+      Time for compress/decompress:         0.041/0.068 s (18.35/11.01 GB/s)) cr:  35.6x
+    Using *** Codec.LZ4 *** compressor:
+      Time for pack_array/unpack_array:     0.263/0.320 s (2.84/2.33 GB/s)) 	cr:  40.5x
+      Time for pack_array2/unpack_array2:   0.058/0.143 s (12.83/5.20 GB/s)) 	cr:  40.5x
+      Time for compress/decompress:         0.037/0.068 s (19.87/10.97 GB/s)) cr:  40.5x
+    Using *** Codec.LZ4HC *** compressor:
+      Time for pack_array/unpack_array:     0.400/0.317 s (1.86/2.35 GB/s)) 	cr:  44.7x
+      Time for pack_array2/unpack_array2:   0.208/0.109 s (3.57/6.86 GB/s)) 	cr:  44.7x
+      Time for compress/decompress:         0.188/0.063 s (3.97/11.79 GB/s)) 	cr:  44.7x
+    Using *** Codec.ZLIB *** compressor:
+      Time for pack_array/unpack_array:     0.393/0.327 s (1.89/2.28 GB/s)) 	cr:  44.6x
+      Time for pack_array2/unpack_array2:   0.216/0.130 s (3.44/5.71 GB/s)) 	cr:  44.6x
+      Time for compress/decompress:         0.186/0.067 s (4.00/11.19 GB/s)) 	cr:  44.6x
+    Using *** Codec.ZSTD *** compressor:
+      Time for pack_array/unpack_array:     0.440/0.316 s (1.69/2.36 GB/s)) 	cr:  78.8x
+      Time for pack_array2/unpack_array2:   0.259/0.107 s (2.88/6.98 GB/s)) 	cr:  78.8x
+      Time for compress/decompress:         0.237/0.061 s (3.15/12.17 GB/s)) 	cr:  78.8x
 
     *** the random distribution ***
-      *** blosclz, noshuffle  ***  0.245 s (3.04 GB/s) / 0.105 s (7.12 GB/s)	cr:   2.1x
-      *** blosclz, shuffle    ***  0.098 s (7.59 GB/s) / 0.038 s (19.56 GB/s)	cr:   4.0x
-      *** blosclz, bitshuffle ***  0.163 s (4.57 GB/s) / 0.139 s (5.35 GB/s)	cr:   4.0x
-      *** lz4    , noshuffle  ***  0.240 s (3.10 GB/s) / 0.040 s (18.65 GB/s)	cr:   2.1x
-      *** lz4    , shuffle    ***  0.109 s (6.83 GB/s) / 0.039 s (19.28 GB/s)	cr:   4.0x
-      *** lz4    , bitshuffle ***  0.144 s (5.18 GB/s) / 0.139 s (5.35 GB/s)	cr:   4.6x
-      *** lz4hc  , noshuffle  ***  1.222 s (0.61 GB/s) / 0.035 s (21.25 GB/s)	cr:   2.8x
-      *** lz4hc  , shuffle    ***  0.453 s (1.65 GB/s) / 0.038 s (19.66 GB/s)	cr:   4.0x
-      *** lz4hc  , bitshuffle ***  0.419 s (1.78 GB/s) / 0.041 s (17.97 GB/s)	cr:   4.5x
-      *** zlib   , noshuffle  ***  4.050 s (0.18 GB/s) / 0.208 s (3.58 GB/s)	cr:   3.2x
-      *** zlib   , shuffle    ***  0.654 s (1.14 GB/s) / 0.074 s (10.06 GB/s)	cr:   4.7x
-      *** zlib   , bitshuffle ***  0.610 s (1.22 GB/s) / 0.078 s (9.51 GB/s)	cr:   4.6x
-      *** zstd   , noshuffle  ***  2.214 s (0.34 GB/s) / 0.125 s (5.95 GB/s)	cr:   4.0x
-      *** zstd   , shuffle    ***  0.874 s (0.85 GB/s) / 0.039 s (19.01 GB/s)	cr:   4.4x
-      *** zstd   , bitshuffle ***  0.858 s (0.87 GB/s) / 0.054 s (13.71 GB/s)	cr:   4.6x
-
-
-For the matter of comparison, here are the results for an ARM box; an Apple MacBook Air M1 (2021)
-with 8 GB of RAM::
-
-    -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-    python-blosc2 version: 0.1.6.dev0
-    Blosc version: 2.0.0.rc2 ($Date:: 2021-05-26 #$)
-    Compressors available: ['blosclz', 'lz4', 'lz4hc', 'zlib', 'zstd']
-    Compressor library versions:
-      blosclz: 2.4.0
-      lz4: 1.9.3
-      lz4hc: 1.9.3
-      zlib: 1.2.11.zlib-ng
-      zstd: 1.5.0
-    Python version: 3.9.5 (default, May  3 2021, 19:12:05)
-    [Clang 12.0.5 (clang-1205.0.22.9)]
-    Platform: Darwin-20.4.0-arm64 (Darwin Kernel Version 20.4.0: Fri Mar  5 01:14:02 PST 2021; root:xnu-7195.101.1~3/RELEASE_ARM64_T8101)
-    Processor: arm
-    Byte-ordering: little
-    Detected cores: 8
-    Number of threads to use by default: 8
-    -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
-    Creating NumPy arrays with 10**8 int64/float64 elements:
-      *** np.copyto() *** Time for memcpy():	0.030 s	(25.04 GB/s)
-
-    Times for compressing/decompressing:
-
-    *** the arange linear distribution ***
-      *** blosclz, noshuffle  ***  0.253 s (2.95 GB/s) / 0.109 s (6.83 GB/s)	cr:   2.0x
-      *** blosclz, shuffle    ***  0.036 s (20.44 GB/s) / 0.024 s (31.08 GB/s)	cr: 469.7x
-      *** blosclz, bitshuffle ***  0.123 s (6.04 GB/s) / 0.238 s (3.13 GB/s)	cr: 488.2x
-      *** lz4    , noshuffle  ***  0.332 s (2.24 GB/s) / 0.072 s (10.39 GB/s)	cr:   2.0x
-      *** lz4    , shuffle    ***  0.035 s (21.18 GB/s) / 0.030 s (24.93 GB/s)	cr: 279.2x
-      *** lz4    , bitshuffle ***  0.126 s (5.91 GB/s) / 0.239 s (3.12 GB/s)	cr:  87.7x
-      *** lz4hc  , noshuffle  ***  2.365 s (0.32 GB/s) / 0.080 s (9.35 GB/s)	cr:   2.0x
-      *** lz4hc  , shuffle    ***  0.136 s (5.48 GB/s) / 0.047 s (15.89 GB/s)	cr: 155.9x
-      *** lz4hc  , bitshuffle ***  0.545 s (1.37 GB/s) / 0.168 s (4.42 GB/s)	cr: 239.5x
-      *** zlib   , noshuffle  ***  4.875 s (0.15 GB/s) / 0.279 s (2.67 GB/s)	cr:   5.3x
-      *** zlib   , shuffle    ***  0.213 s (3.50 GB/s) / 0.091 s (8.20 GB/s)	cr: 273.8x
-      *** zlib   , bitshuffle ***  0.344 s (2.16 GB/s) / 0.213 s (3.50 GB/s)	cr: 457.9x
-      *** zstd   , noshuffle  ***  2.961 s (0.25 GB/s) / 0.168 s (4.44 GB/s)	cr:   7.9x
-      *** zstd   , shuffle    ***  0.265 s (2.82 GB/s) / 0.035 s (21.46 GB/s)	cr: 644.9x
-      *** zstd   , bitshuffle ***  0.392 s (1.90 GB/s) / 0.158 s (4.73 GB/s)	cr: 985.6x
-
-    *** the linspace linear distribution ***
-      *** blosclz, noshuffle  ***  0.372 s (2.00 GB/s) / 0.029 s (25.42 GB/s)	cr:   1.0x
-      *** blosclz, shuffle    ***  0.065 s (11.46 GB/s) / 0.035 s (21.13 GB/s)	cr:  33.5x
-      *** blosclz, bitshuffle ***  0.148 s (5.03 GB/s) / 0.250 s (2.98 GB/s)	cr:  55.4x
-      *** lz4    , noshuffle  ***  0.109 s (6.84 GB/s) / 0.037 s (19.89 GB/s)	cr:   1.0x
-      *** lz4    , shuffle    ***  0.052 s (14.27 GB/s) / 0.038 s (19.65 GB/s)	cr:  40.5x
-      *** lz4    , bitshuffle ***  0.138 s (5.42 GB/s) / 0.250 s (2.99 GB/s)	cr:  59.5x
-      *** lz4hc  , noshuffle  ***  3.962 s (0.19 GB/s) / 0.070 s (10.61 GB/s)	cr:   1.1x
-      *** lz4hc  , shuffle    ***  0.366 s (2.04 GB/s) / 0.037 s (19.99 GB/s)	cr:  44.7x
-      *** lz4hc  , bitshuffle ***  0.764 s (0.97 GB/s) / 0.159 s (4.69 GB/s)	cr:  58.0x
-      *** zlib   , noshuffle  ***  3.290 s (0.23 GB/s) / 0.502 s (1.49 GB/s)	cr:   1.6x
-      *** zlib   , shuffle    ***  0.403 s (1.85 GB/s) / 0.103 s (7.23 GB/s)	cr:  44.6x
-      *** zlib   , bitshuffle ***  0.533 s (1.40 GB/s) / 0.228 s (3.27 GB/s)	cr:  66.9x
-      *** zstd   , noshuffle  ***  3.747 s (0.20 GB/s) / 0.192 s (3.89 GB/s)	cr:   1.2x
-      *** zstd   , shuffle    ***  0.483 s (1.54 GB/s) / 0.057 s (13.17 GB/s)	cr:  70.5x
-      *** zstd   , bitshuffle ***  0.634 s (1.17 GB/s) / 0.204 s (3.65 GB/s)	cr:  51.2x
-
-    *** the random distribution ***
-      *** blosclz, noshuffle  ***  0.410 s (1.82 GB/s) / 0.135 s (5.50 GB/s)	cr:   2.1x
-      *** blosclz, shuffle    ***  0.087 s (8.53 GB/s) / 0.029 s (25.29 GB/s)	cr:   4.0x
-      *** blosclz, bitshuffle ***  0.169 s (4.40 GB/s) / 0.236 s (3.15 GB/s)	cr:   4.0x
-      *** lz4    , noshuffle  ***  0.359 s (2.08 GB/s) / 0.060 s (12.50 GB/s)	cr:   2.1x
-      *** lz4    , shuffle    ***  0.075 s (9.88 GB/s) / 0.029 s (25.40 GB/s)	cr:   4.0x
-      *** lz4    , bitshuffle ***  0.155 s (4.81 GB/s) / 0.239 s (3.12 GB/s)	cr:   4.6x
-      *** lz4hc  , noshuffle  ***  2.053 s (0.36 GB/s) / 0.045 s (16.71 GB/s)	cr:   2.8x
-      *** lz4hc  , shuffle    ***  0.797 s (0.93 GB/s) / 0.051 s (14.63 GB/s)	cr:   4.0x
-      *** lz4hc  , bitshuffle ***  0.795 s (0.94 GB/s) / 0.177 s (4.21 GB/s)	cr:   4.5x
-      *** zlib   , noshuffle  ***  5.562 s (0.13 GB/s) / 0.367 s (2.03 GB/s)	cr:   3.2x
-      *** zlib   , shuffle    ***  0.934 s (0.80 GB/s) / 0.148 s (5.03 GB/s)	cr:   4.7x
-      *** zlib   , bitshuffle ***  0.959 s (0.78 GB/s) / 0.262 s (2.85 GB/s)	cr:   4.6x
-      *** zstd   , noshuffle  ***  3.841 s (0.19 GB/s) / 0.228 s (3.27 GB/s)	cr:   4.0x
-      *** zstd   , shuffle    ***  1.078 s (0.69 GB/s) / 0.069 s (10.76 GB/s)	cr:   4.4x
-      *** zstd   , bitshuffle ***  1.044 s (0.71 GB/s) / 0.201 s (3.71 GB/s)	cr:   4.6x
-
+    Using *** Codec.BLOSCLZ *** compressor:
+      Time for pack_array/unpack_array:     0.323/0.333 s (2.30/2.24 GB/s)) 	cr:   4.0x
+      Time for pack_array2/unpack_array2:   0.425/0.106 s (1.75/7.04 GB/s)) 	cr:   4.0x
+      Time for compress/decompress:         0.135/0.072 s (5.53/10.30 GB/s)) 	cr:   4.0x
+    Using *** Codec.LZ4 *** compressor:
+      Time for pack_array/unpack_array:     0.329/0.328 s (2.27/2.27 GB/s)) 	cr:   4.0x
+      Time for pack_array2/unpack_array2:   0.430/0.154 s (1.73/4.83 GB/s)) 	cr:   4.0x
+      Time for compress/decompress:         0.131/0.072 s (5.70/10.29 GB/s)) 	cr:   4.0x
+    Using *** Codec.LZ4HC *** compressor:
+      Time for pack_array/unpack_array:     0.663/0.331 s (1.12/2.25 GB/s)) 	cr:   4.0x
+      Time for pack_array2/unpack_array2:   0.740/0.089 s (1.01/8.34 GB/s)) 	cr:   4.0x
+      Time for compress/decompress:         0.435/0.068 s (1.71/10.98 GB/s)) 	cr:   4.0x
+    Using *** Codec.ZLIB *** compressor:
+      Time for pack_array/unpack_array:     0.683/0.340 s (1.09/2.19 GB/s)) 	cr:   4.7x
+      Time for pack_array2/unpack_array2:   0.748/0.122 s (1.00/6.09 GB/s)) 	cr:   4.7x
+      Time for compress/decompress:         0.469/0.083 s (1.59/9.00 GB/s)) 	cr:   4.7x
+    Using *** Codec.ZSTD *** compressor:
+      Time for pack_array/unpack_array:     0.667/0.322 s (1.12/2.31 GB/s)) 	cr:   4.4x
+      Time for pack_array2/unpack_array2:   0.860/0.099 s (0.87/7.54 GB/s)) 	cr:   4.4x
+      Time for compress/decompress:         0.478/0.066 s (1.56/11.23 GB/s)) 	cr:   4.4x
 
 As can be seen, is perfectly possible for python-blosc2 to go faster than a plain memcpy().
 
