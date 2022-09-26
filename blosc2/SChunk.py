@@ -46,23 +46,18 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
 
 
 class SChunk(blosc2_ext.SChunk):
-    def __init__(self, chunksize=8 * 10 ** 6, data=None, mode="a", **kwargs):
+    def __init__(self, chunksize=2 ** 24, data=None, **kwargs):
         """Create a new super-chunk.
 
         Parameters
         ----------
         chunksize: int
             The size, in bytes, of the chunks from the super-chunk. If not provided,
-            it is set to 8MB.
+            it is set to 16 MB.
 
         data: bytes-like object, optional
             The data to be split into different chunks of size :paramref:`chunksize`.
             If None, the Schunk instance will be empty initially.
-
-        mode: str, optional
-            Persistence mode: ‘r’ means read only (must exist);
-            ‘a’ means read/write (create if it doesn’t exist);
-            ‘w’ means create (overwrite if it exists).
 
         Other parameters
         ----------------
@@ -75,6 +70,10 @@ class SChunk(blosc2_ext.SChunk):
                     If the storage is persistent, the name of the file (when `contiguous = True`) or
                     the directory (if `contiguous = False`).
                     If the storage is in-memory, then this field is `None`.
+                mode: str, optional
+                    Persistence mode: ‘r’ means read only (must exist);
+                    ‘a’ means read/write (create if it doesn’t exist);
+                    ‘w’ means create (overwrite if it exists).
                 cparams: dict
                     A dictionary with the compression parameters, which are the same that can be
                     used in the :func:`~blosc2.compress2` function.
@@ -95,8 +94,7 @@ class SChunk(blosc2_ext.SChunk):
         else:
             self.urlpath = None
             sc = None
-        super(SChunk, self).__init__(schunk=sc, chunksize=chunksize, data=data, mode=mode, **kwargs)
-        self.mode = mode
+        super(SChunk, self).__init__(schunk=sc, chunksize=chunksize, data=data, **kwargs)
         self.vlmeta = vlmeta(super(SChunk, self).c_schunk, self.urlpath, self.mode)
 
     def append_data(self, data):

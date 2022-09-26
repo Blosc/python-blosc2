@@ -609,13 +609,14 @@ cdef create_storage(blosc2_storage *storage, kwargs):
 cdef class SChunk:
     cdef blosc2_schunk *schunk
 
-    def __init__(self, schunk=None, chunksize=8*10**6, data=None, mode="a", **kwargs):
+    def __init__(self, schunk=None, chunksize=2 ** 24, data=None, **kwargs):
         # hold on to a bytestring of urlpath for the lifetime of the instance
         # because its value is referenced via a C-pointer
         urlpath = kwargs.get("urlpath", None)
         if urlpath is not None:
             self._urlpath = urlpath.encode() if isinstance(urlpath, str) else urlpath
             kwargs["urlpath"] = self._urlpath
+        self.mode = mode = kwargs.get("mode", "a")
 
         if schunk is not None:
             self.schunk = <blosc2_schunk *> PyCapsule_GetPointer(schunk, <char *> "blosc2_schunk*")

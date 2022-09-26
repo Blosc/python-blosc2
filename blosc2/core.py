@@ -388,7 +388,7 @@ def unpack_array(packed_array, **kwargs):
     return arr
 
 
-def pack_array2(arr, chunksize=None, mode="a", **kwargs):
+def pack_array2(arr, chunksize=None, **kwargs):
     """Pack (compress) a NumPy array. This is faster, and it does not have a 2 GB limitation.
 
     Parameters
@@ -400,22 +400,15 @@ def pack_array2(arr, chunksize=None, mode="a", **kwargs):
         The size (in bytes) for the chunks during compression. If not provided,
         it is computed automatically.
 
-    mode: str, optional
-        Persistence mode: ‘r’ means read only (must exist);
-        ‘a’ means read/write (create if it doesn’t exist);
-        ‘w’ means create (overwrite if exists).
+    Returns
+    -------
+    out : bytes
+        The serialized version (cframe) of the array.
 
     Other parameters
     ----------------
     kwargs: dict, optional
-        Keyword arguments supported:
-
-            cparams: dict
-                A dictionary with the compression parameters, which are the same that can be
-                used in the :func:`~blosc2.compress2` function.
-            dparams: dict
-                A dictionary with the decompression parameters, which are the same that can be
-                used in the :func:`~blosc2.decompress2` function.
+        These are the same as the kwargs in :func:`~blosc2.SChunk.SChunk.__init__`.
 
     Examples
     --------
