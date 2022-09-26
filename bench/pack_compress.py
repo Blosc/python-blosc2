@@ -23,7 +23,7 @@ Nexp = np.log10(N)
 blosc2.print_versions()
 print("Creating NumPy arrays with 10**%d int64/float64 elements:" % Nexp)
 arrays = (
-    (np.arange(N, dtype=np.int64), "the arange linear distribution"),
+    (np.arange(N), "the arange linear distribution"),
     (np.linspace(0, 10_000, N), "the linspace linear distribution"),
     (np.random.randint(0, 10_000, N), "the random distribution"),
 )
@@ -95,6 +95,25 @@ for (in_, label) in arrays:
         print("Using *** %s *** compressor:" % codec)
         clevel = 6
         cparams = {"codec": codec, "clevel": clevel}
+
+        ctic = time.time()
+        for i in range(NREP):
+            c = blosc2.pack_array(in_, clevel=clevel, codec=codec)
+        ctoc = time.time()
+        dtic = time.time()
+        for i in range(NREP):
+            out = blosc2.unpack_array(c)
+        dtoc = time.time()
+
+        assert np.array_equal(in_, out)
+        tc = (ctoc - ctic) / NREP
+        td = (dtoc - dtic) / NREP
+        print(
+            "  Time for pack_array/unpack_array:   %.3f/%.3f s (%.2f/%.2f GB/s)) "
+            % (tc, td, ((N * 8 / tc) / 2 ** 30), ((N * 8 / td) / 2 ** 30)),
+            end="",
+        )
+        print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
 
         ctic = time.time()
         for i in range(NREP):
