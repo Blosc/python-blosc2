@@ -484,6 +484,9 @@ def unpack_array2(cframe):
     shape = schunk.vlmeta['shape']
     data = numpy.empty(shape, dtype=dtype)
     schunk.get_slice(out=data)
+    # The next looks similar in efficiency
+    # out = schunk.get_slice()
+    # data = numpy.frombuffer(out, dtype=dtype).reshape(shape)
     return data
 
 

@@ -83,8 +83,8 @@ from .blosc2_ext import (
 blosclib_version = "%s (%s)" % (VERSION_STRING, VERSION_DATE)
 
 # Internal Blosc threading
-nthreads = ncores = detect_number_of_cores()
-# Protection against too many cores
+nthreads = ncores = detect_number_of_cores() / 2
+# Protection against too many threads
 if nthreads > 8:
     nthreads = 8
 set_nthreads(nthreads)

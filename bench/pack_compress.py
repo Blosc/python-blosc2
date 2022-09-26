@@ -12,12 +12,11 @@ compression through different compressors in blosc2.
 """
 
 import time
-
 import numpy as np
-
 import blosc2
 
-NREP = 4
+
+NREP = 1
 N = int(1e8)
 Nexp = np.log10(N)
 
