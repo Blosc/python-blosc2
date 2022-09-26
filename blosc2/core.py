@@ -432,8 +432,9 @@ def pack_array2(arr, chunksize=None, **kwargs):
 
     if chunksize is None:
         chunksize = arr.size * arr.itemsize
-        if chunksize > blosc2.MAX_BUFFERSIZE:
-            chunksize = blosc2.MAX_BUFFERSIZE
+        # Use a cap of 256 MB (most of the modern machines should have this RAM available)
+        if chunksize > 2 ** 28:
+            chunksize = 2 ** 28
     schunk = blosc2.SChunk(chunksize=chunksize, contiguous=False, data=arr,
                            cparams=cparams, **kwargs)
     schunk.vlmeta['dtype'] = str(arr.dtype)
