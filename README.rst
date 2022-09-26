@@ -161,11 +161,11 @@ improved vs the previous version (labeled as `pack_array/unpack_array`)::
     Using *** Codec.BLOSCLZ *** compressor:
       Time for pack_array/unpack_array:     0.263/0.320 s (2.83/2.33 GB/s)) 	cr:  35.7x
       Time for pack_array2/unpack_array2:   0.069/0.118 s (10.82/6.32 GB/s)) 	cr:  35.6x
-      Time for compress/decompress:         0.041/0.068 s (18.35/11.01 GB/s)) cr:  35.6x
+      Time for compress/decompress:         0.041/0.068 s (18.35/11.01 GB/s))  cr:  35.6x
     Using *** Codec.LZ4 *** compressor:
       Time for pack_array/unpack_array:     0.263/0.320 s (2.84/2.33 GB/s)) 	cr:  40.5x
       Time for pack_array2/unpack_array2:   0.058/0.143 s (12.83/5.20 GB/s)) 	cr:  40.5x
-      Time for compress/decompress:         0.037/0.068 s (19.87/10.97 GB/s)) cr:  40.5x
+      Time for compress/decompress:         0.037/0.068 s (19.87/10.97 GB/s))  cr:  40.5x
     Using *** Codec.LZ4HC *** compressor:
       Time for pack_array/unpack_array:     0.400/0.317 s (1.86/2.35 GB/s)) 	cr:  44.7x
       Time for pack_array2/unpack_array2:   0.208/0.109 s (3.57/6.86 GB/s)) 	cr:  44.7x
@@ -183,11 +183,11 @@ improved vs the previous version (labeled as `pack_array/unpack_array`)::
     Using *** Codec.BLOSCLZ *** compressor:
       Time for pack_array/unpack_array:     0.323/0.333 s (2.30/2.24 GB/s)) 	cr:   4.0x
       Time for pack_array2/unpack_array2:   0.425/0.106 s (1.75/7.04 GB/s)) 	cr:   4.0x
-      Time for compress/decompress:         0.135/0.072 s (5.53/10.30 GB/s)) 	cr:   4.0x
+      Time for compress/decompress:         0.135/0.072 s (5.53/10.30 GB/s))   cr:   4.0x
     Using *** Codec.LZ4 *** compressor:
       Time for pack_array/unpack_array:     0.329/0.328 s (2.27/2.27 GB/s)) 	cr:   4.0x
       Time for pack_array2/unpack_array2:   0.430/0.154 s (1.73/4.83 GB/s)) 	cr:   4.0x
-      Time for compress/decompress:         0.131/0.072 s (5.70/10.29 GB/s)) 	cr:   4.0x
+      Time for compress/decompress:         0.131/0.072 s (5.70/10.29 GB/s))   cr:   4.0x
     Using *** Codec.LZ4HC *** compressor:
       Time for pack_array/unpack_array:     0.663/0.331 s (1.12/2.25 GB/s)) 	cr:   4.0x
       Time for pack_array2/unpack_array2:   0.740/0.089 s (1.01/8.34 GB/s)) 	cr:   4.0x
