@@ -23,7 +23,7 @@ import blosc2
         ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {}, 7, None, None),
         ({"typesize": 4, "blocksize": 200 * 100}, {}, 7, 3, -12),
         ({"blocksize": 200 * 100, "typesize": 4}, {}, 5, -2456, -234),
-        ({"blocksize": 200 * 100 + 3, "typesize": 4}, {}, 2, -1, 200 * 100 * 3 + 7),
+        ({"blocksize": 200 * 100 + 4 * 2, "typesize": 4}, {}, 2, -1, 200 * 100 * 3 + 7),
     ],
 )
 def test_schunk_set_slice(contiguous, urlpath, mode, cparams, dparams, nchunks, start, stop):
