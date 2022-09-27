@@ -10,6 +10,17 @@ from msgpack import packb, unpackb
 
 from blosc2 import blosc2_ext
 
+# See https://github.com/dask/distributed/issues/3716#issuecomment-632913789
+def encode_tuple(obj):
+    if isinstance(obj, tuple):
+        obj = ["__tuple__", *obj]
+    return obj
+
+def decode_tuple(obj):
+    if obj[0] == "__tuple__":
+        obj = tuple(obj[1:])
+    return obj
+
 
 class vlmeta(MutableMapping, blosc2_ext.vlmeta):
     def __init__(self, schunk, urlpath, mode):
@@ -20,10 +31,11 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
     def __setitem__(self, name, content):
         blosc2_ext._check_access_mode(self.urlpath, self.mode)
         cparams = {"typesize": 1}
-        super(vlmeta, self).set_vlmeta(name, packb(content), **cparams)
+        content = packb(content, default=encode_tuple, strict_types=True, use_bin_type=True)
+        super(vlmeta, self).set_vlmeta(name, content, **cparams)
 
     def __getitem__(self, name):
-        return unpackb(super(vlmeta, self).get_vlmeta(name))
+        return unpackb(super(vlmeta, self).get_vlmeta(name), list_hook=decode_tuple)
 
     def __delitem__(self, name):
         blosc2_ext._check_access_mode(self.urlpath, self.mode)

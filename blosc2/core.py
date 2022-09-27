@@ -439,7 +439,9 @@ def pack_array2(arr, chunksize=None, **kwargs):
     chunksize = chunksize // arr.itemsize * arr.itemsize
     schunk = blosc2.SChunk(chunksize=chunksize, contiguous=False, data=arr,
                            cparams=cparams, **kwargs)
-    schunk.vlmeta['dtype'] = str(arr.dtype)
+    # dtype encoding requires some care
+    dtype = arr.dtype.descr if arr.dtype.kind == 'V' else arr.dtype.str
+    schunk.vlmeta['dtype'] = dtype
     schunk.vlmeta['shape'] = arr.shape
 
     cframe = schunk.to_cframe()
