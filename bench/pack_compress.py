@@ -109,7 +109,7 @@ for (in_, label) in arrays:
         tc = (ctoc - ctic) / NREP
         td = (dtoc - dtic) / NREP
         print(
-            "  Time for pack_array/unpack_array:   %.3f/%.3f s (%.2f/%.2f GB/s)) "
+            "  Time for pack_array/unpack_array:     %.3f/%.3f s (%.2f/%.2f GB/s)) "
             % (tc, td, ((N * 8 / tc) / 2 ** 30), ((N * 8 / td) / 2 ** 30)),
             end="",
         )
