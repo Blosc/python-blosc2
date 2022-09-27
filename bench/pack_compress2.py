@@ -17,7 +17,7 @@ import blosc2
 
 
 NREP = 1
-N = int(4e8)  # larger than 2 GB
+N = int(4e8 - 2**27)  # larger than 2 GB
 Nexp = np.log10(N)
 
 store = False
@@ -26,7 +26,7 @@ if len(sys.argv) > 1:
 
 #blosc2.set_nthreads(2)
 
-print("Creating NumPy array with 10**%d int64 elements:" % Nexp)
+print(f"Creating NumPy array with {float(N):.3g} int64 elements...")
 in_ = np.arange(N, dtype=np.int64)
 
 if store:
