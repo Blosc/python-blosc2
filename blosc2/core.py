@@ -402,8 +402,9 @@ def pack_array2(arr, chunksize=None, **kwargs):
 
     Returns
     -------
-    out : bytes
+    out : bytes | int
         The serialized version (cframe) of the array.
+        If urlpath is provided, the number of bytes in file is returned instead.
 
     Other parameters
     ----------------
@@ -430,6 +431,9 @@ def pack_array2(arr, chunksize=None, **kwargs):
     else:
         cparams = {"typesize": arr.itemsize}
 
+    urlpath = kwargs.get('urlpath', None)
+    contiguous = False if urlpath is None else True
+
     if chunksize is None:
         chunksize = arr.size * arr.itemsize
         # Use a cap of 256 MB (most of the modern machines should have this RAM available)
@@ -437,15 +441,17 @@ def pack_array2(arr, chunksize=None, **kwargs):
             chunksize = 2 ** 28
     # Make that a multiple of typesize
     chunksize = chunksize // arr.itemsize * arr.itemsize
-    schunk = blosc2.SChunk(chunksize=chunksize, contiguous=False, data=arr,
+    schunk = blosc2.SChunk(chunksize=chunksize, contiguous=contiguous, data=arr,
                            cparams=cparams, **kwargs)
     # dtype encoding requires some care
     dtype = arr.dtype.descr if arr.dtype.kind == 'V' else arr.dtype.str
     schunk.vlmeta['dtype'] = dtype
     schunk.vlmeta['shape'] = arr.shape
 
-    cframe = schunk.to_cframe()
-    return cframe
+    if urlpath is None:
+        return schunk.to_cframe()
+    else:
+        return os.stat(urlpath).st_size
 
 
 def unpack_array2(cframe):
@@ -459,14 +465,14 @@ def unpack_array2(cframe):
     Returns
     -------
     out : ndarray
-        The decompressed data in form of a NumPy array.
+        The unpacked NumPy array.
 
     Raises
     ------
     TypeError
-        If :paramref:`cframe` is not of type bytes
+        If :paramref:`cframe` is not of type bytes, or not a cframe.
     RunTimeError
-        If some problem was detected.
+        If some other problem is detected.
 
     Examples
     --------
@@ -492,6 +498,91 @@ def unpack_array2(cframe):
     # The next looks similar in efficiency
     # out = schunk.get_slice()
     # data = numpy.frombuffer(out, dtype=dtype).reshape(shape)
+    return data
+
+
+def save_array(arr, urlpath, chunksize=None, **kwargs):
+    """Save a compressed NumPy array in `urlpath`.
+
+    Parameters
+    ----------
+    arr : ndarray
+        The NumPy array to be saved.
+
+    urlpath : string
+        The path for the file where the array is saved.
+
+    chunksize: int
+        The size (in bytes) for the chunks during compression. If not provided,
+        it is computed automatically.
+
+    Returns
+    -------
+    out : int
+        The number of bytes of the saved array.
+
+    Other parameters
+    ----------------
+    kwargs: dict, optional
+        These are the same as the kwargs in :func:`~blosc2.SChunk.SChunk.__init__`.
+
+    Examples
+    --------
+    >>> import numpy
+    >>> a = numpy.arange(1e6)
+    >>> serial_size = blosc2.save_array(a, "test.bl2", mode="w")
+    >>> serial_size < a.size * a.itemsize
+    True
+
+    See also
+    --------
+    :func:`~blosc2.load_array`
+    :func:`~blosc2.open`
+    """
+    return pack_array2(arr, chunksize=chunksize, urlpath=urlpath, **kwargs)
+
+
+def load_array(urlpath):
+    """Load a compressed NumPy array in urlpath (in cframe format).
+
+    Parameters
+    ----------
+    urlpath : string
+        The file where the array is to be loaded.
+
+    Returns
+    -------
+    out : ndarray
+        The unpacked NumPy array.
+
+    Raises
+    ------
+    TypeError
+        If :paramref:`urlpath` is not in cframe format
+    RunTimeError
+        If some other problem is detected.
+
+    Examples
+    --------
+    >>> import numpy
+    >>> a = numpy.arange(1e6)
+    >>> serial_size = blosc2.save_array(a, "test.bl2", mode="w")
+    >>> serial_size < a.size * a.itemsize
+    True
+    >>> a2 = blosc2.load_array("test.bl2")
+    >>> numpy.array_equal(a, a2)
+    True
+
+    See also
+    --------
+    :func:`~blosc2.save_array`
+    """
+    import numpy
+    schunk = blosc2.open(urlpath)
+    dtype = schunk.vlmeta['dtype']
+    shape = schunk.vlmeta['shape']
+    data = numpy.empty(shape, dtype=dtype)
+    schunk.get_slice(out=data)
     return data
 
 

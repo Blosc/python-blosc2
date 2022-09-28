@@ -22,6 +22,8 @@ Compress and decompress
    unpack
    unpack_array
    unpack_array2
+   save_array
+   load_array
 
 Set / Get compression params
 ----------------------------

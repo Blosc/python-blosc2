@@ -56,6 +56,7 @@ from .core import (
     pack,
     pack_array,
     pack_array2,
+    save_array,
     print_versions,
     remove_urlpath,
     schunk_from_cframe,
@@ -66,6 +67,7 @@ from .core import (
     unpack,
     unpack_array,
     unpack_array2,
+    load_array,
 )
 from .SChunk import (SChunk, open)
 from .version import __version__
@@ -143,7 +145,11 @@ __all__ = [
     "pack",
     "unpack",
     "pack_array",
+    "pack_array2",
+    "save_array",
     "unpack_array",
+    "unpack_array2",
+    "load_array",
     "get_compressor",
     "set_releasegil",
     "detect_number_of_cores",
