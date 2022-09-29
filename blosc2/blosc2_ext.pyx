@@ -1033,6 +1033,8 @@ def schunk_from_cframe(cframe, copy=False):
     cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
     PyObject_GetBuffer(cframe, buf, PyBUF_SIMPLE)
     cdef blosc2_schunk *schunk_ = blosc2_schunk_from_buffer(<uint8_t *>buf.buf, buf.len, copy)
+    if schunk_ == NULL:
+        raise RuntimeError("Could not get the schunk from the cframe")
     schunk = blosc2.SChunk(schunk=PyCapsule_New(schunk_, <char *> "blosc2_schunk*", NULL))
     PyBuffer_Release(buf)
     if not copy:
