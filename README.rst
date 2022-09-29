@@ -200,7 +200,7 @@ improved vs the previous version (labeled as `pack_array/unpack_array`)::
       Time for pack_array2/unpack_array2:   1.066/0.093 s (0.70/7.99 GB/s)) 	cr:   4.4x
       Time for compress/decompress:         0.828/0.052 s (0.90/14.45 GB/s)) 	cr:   4.4x
 
-As can be seen, is perfectly possible for python-blosc2 to go faster than a plain memcpy(). But more interestingly, you can persist and transmit data faster and using less memory.
+As can be seen, is perfectly possible for python-blosc2 to go faster than a plain memcpy(). But more interestingly, you can easily choose the codecs and filters that better adapt to your datasets, and persist and transmit them faster and using less memory.
 
 Start using compression in your data workflows and feel the experience of doing more with less.
 
