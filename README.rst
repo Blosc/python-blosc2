@@ -132,73 +132,74 @@ improved vs the previous version (labeled as `pack_array/unpack_array`)::
     Number of threads to use by default: 8
     -=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
     Creating NumPy arrays with 10**8 int64/float64 elements:
-      Time for copying array with np.copy:                  0.196 s (3.80 GB/s))
+      Time for copying array with np.copy:                  0.394 s (3.79 GB/s))
+
 
     *** the arange linear distribution ***
     Using *** Codec.BLOSCLZ *** compressor:
-      Time for pack_array/unpack_array:     0.312/0.414 s (2.39/1.80 GB/s)) 	cr: 441.6x
-      Time for pack_array2/unpack_array2:   0.039/0.084 s (19.02/8.88 GB/s)) 	cr: 444.0x
-      Time for compress/decompress:         0.037/0.057 s (20.26/12.98 GB/s)) 	cr: 444.1x
+      Time for compress/decompress:         0.051/0.101 s (29.08/14.80 GB/s)) 	cr: 444.3x
+      Time for pack_array/unpack_array:     0.600/0.764 s (2.49/1.95 GB/s)) 	cr: 442.3x
+      Time for pack_array2/unpack_array2:   0.059/0.158 s (25.28/9.44 GB/s)) 	cr: 444.2x
     Using *** Codec.LZ4 *** compressor:
-      Time for pack_array/unpack_array:     0.308/0.384 s (2.42/1.94 GB/s)) 	cr: 277.7x
-      Time for pack_array2/unpack_array2:   0.037/0.096 s (20.27/7.80 GB/s)) 	cr: 279.2x
-      Time for compress/decompress:         0.034/0.053 s (22.19/13.98 GB/s)) 	cr: 279.2x
+      Time for compress/decompress:         0.059/0.116 s (25.07/12.82 GB/s)) 	cr: 279.2x
+      Time for pack_array/unpack_array:     0.615/0.758 s (2.42/1.97 GB/s)) 	cr: 277.9x
+      Time for pack_array2/unpack_array2:   0.058/0.160 s (25.52/9.31 GB/s)) 	cr: 279.2x
     Using *** Codec.LZ4HC *** compressor:
-      Time for pack_array/unpack_array:     0.423/0.386 s (1.76/1.93 GB/s)) 	cr: 155.4x
-      Time for pack_array2/unpack_array2:   0.119/0.094 s (6.27/7.94 GB/s)) 	cr: 155.9x
-      Time for compress/decompress:         0.120/0.044 s (6.21/16.77 GB/s)) 	cr: 155.9x
+      Time for compress/decompress:         0.193/0.085 s (7.71/17.45 GB/s)) 	cr: 155.9x
+      Time for pack_array/unpack_array:     0.786/0.754 s (1.89/1.98 GB/s)) 	cr: 155.4x
+      Time for pack_array2/unpack_array2:   0.218/0.165 s (6.84/9.02 GB/s)) 	cr: 155.9x
     Using *** Codec.ZLIB *** compressor:
-      Time for pack_array/unpack_array:     0.404/0.423 s (1.84/1.76 GB/s)) 	cr: 273.3x
-      Time for pack_array2/unpack_array2:   0.139/0.126 s (5.38/5.90 GB/s)) 	cr: 273.8x
-      Time for compress/decompress:         0.130/0.078 s (5.75/9.58 GB/s)) 	cr: 273.8x
+      Time for compress/decompress:         0.250/0.141 s (5.96/10.55 GB/s)) 	cr: 273.8x
+      Time for pack_array/unpack_array:     0.799/0.845 s (1.87/1.76 GB/s)) 	cr: 273.2x
+      Time for pack_array2/unpack_array2:   0.261/0.243 s (5.71/6.13 GB/s)) 	cr: 273.8x
     Using *** Codec.ZSTD *** compressor:
-      Time for pack_array/unpack_array:     0.398/0.410 s (1.87/1.82 GB/s)) 	cr: 630.8x
-      Time for pack_array2/unpack_array2:   0.121/0.088 s (6.16/8.50 GB/s)) 	cr: 644.7x
-      Time for compress/decompress:         0.112/0.045 s (6.65/16.58 GB/s)) 	cr: 644.9x
+      Time for compress/decompress:         0.189/0.079 s (7.89/18.92 GB/s)) 	cr: 644.9x
+      Time for pack_array/unpack_array:     0.725/0.770 s (2.06/1.94 GB/s)) 	cr: 630.9x
+      Time for pack_array2/unpack_array2:   0.206/0.143 s (7.25/10.39 GB/s)) 	cr: 644.8x
 
     *** the linspace linear distribution ***
     Using *** Codec.BLOSCLZ *** compressor:
-      Time for pack_array/unpack_array:     0.333/0.398 s (2.24/1.87 GB/s)) 	cr:  35.7x
-      Time for pack_array2/unpack_array2:   0.095/0.096 s (7.81/7.74 GB/s)) 	cr:  35.6x
-      Time for compress/decompress:         0.076/0.062 s (9.82/12.02 GB/s)) 	cr:  35.6x
+      Time for compress/decompress:         0.091/0.113 s (16.34/13.21 GB/s)) 	cr:  50.1x
+      Time for pack_array/unpack_array:     0.623/0.751 s (2.39/1.98 GB/s)) 	cr:  50.0x
+      Time for pack_array2/unpack_array2:   0.124/0.163 s (11.98/9.12 GB/s)) 	cr:  50.1x
     Using *** Codec.LZ4 *** compressor:
-      Time for pack_array/unpack_array:     0.327/0.398 s (2.28/1.87 GB/s)) 	cr:  40.5x
-      Time for pack_array2/unpack_array2:   0.063/0.095 s (11.91/7.82 GB/s)) 	cr:  40.5x
-      Time for compress/decompress:         0.059/0.060 s (12.73/12.45 GB/s)) 	cr:  40.5x
+      Time for compress/decompress:         0.077/0.114 s (19.33/13.12 GB/s)) 	cr:  55.7x
+      Time for pack_array/unpack_array:     0.624/0.740 s (2.39/2.01 GB/s)) 	cr:  55.8x
+      Time for pack_array2/unpack_array2:   0.098/0.190 s (15.19/7.83 GB/s)) 	cr:  55.7x
     Using *** Codec.LZ4HC *** compressor:
-      Time for pack_array/unpack_array:     0.555/0.406 s (1.34/1.83 GB/s)) 	cr:  44.7x
-      Time for pack_array2/unpack_array2:   0.291/0.093 s (2.56/8.04 GB/s)) 	cr:  44.7x
-      Time for compress/decompress:         0.259/0.036 s (2.88/20.49 GB/s)) 	cr:  44.7x
+      Time for compress/decompress:         0.352/0.075 s (4.23/19.98 GB/s)) 	cr:  53.6x
+      Time for pack_array/unpack_array:     0.918/0.781 s (1.62/1.91 GB/s)) 	cr:  53.6x
+      Time for pack_array2/unpack_array2:   0.389/0.139 s (3.83/10.72 GB/s)) 	cr:  53.6x
     Using *** Codec.ZLIB *** compressor:
-      Time for pack_array/unpack_array:     0.516/0.427 s (1.44/1.74 GB/s)) 	cr:  44.6x
-      Time for pack_array2/unpack_array2:   0.265/0.132 s (2.82/5.67 GB/s)) 	cr:  44.6x
-      Time for compress/decompress:         0.235/0.060 s (3.17/12.33 GB/s)) 	cr:  44.6x
+      Time for compress/decompress:         0.395/0.148 s (3.77/10.08 GB/s)) 	cr:  50.4x
+      Time for pack_array/unpack_array:     0.940/0.824 s (1.59/1.81 GB/s)) 	cr:  50.4x
+      Time for pack_array2/unpack_array2:   0.433/0.252 s (3.44/5.92 GB/s)) 	cr:  50.4x
     Using *** Codec.ZSTD *** compressor:
-      Time for pack_array/unpack_array:     0.470/0.396 s (1.58/1.88 GB/s)) 	cr:  78.8x
-      Time for pack_array2/unpack_array2:   0.189/0.099 s (3.93/7.53 GB/s)) 	cr:  78.8x
-      Time for compress/decompress:         0.183/0.072 s (4.07/10.36 GB/s)) 	cr:  78.8x
+      Time for compress/decompress:         0.402/0.098 s (3.71/15.22 GB/s)) 	cr:  74.7x
+      Time for pack_array/unpack_array:     0.949/0.782 s (1.57/1.91 GB/s)) 	cr:  74.7x
+      Time for pack_array2/unpack_array2:   0.426/0.175 s (3.50/8.49 GB/s)) 	cr:  74.7x
 
     *** the random distribution ***
     Using *** Codec.BLOSCLZ *** compressor:
-      Time for pack_array/unpack_array:     0.419/0.401 s (1.78/1.86 GB/s)) 	cr:   4.0x
-      Time for pack_array2/unpack_array2:   0.301/0.076 s (2.48/9.85 GB/s)) 	cr:   4.0x
-      Time for compress/decompress:         0.148/0.059 s (5.03/12.70 GB/s)) 	cr:   4.0x
+      Time for compress/decompress:         0.240/0.119 s (6.22/12.48 GB/s)) 	cr:   4.0x
+      Time for pack_array/unpack_array:     0.794/0.767 s (1.88/1.94 GB/s)) 	cr:   4.0x
+      Time for pack_array2/unpack_array2:   0.578/0.162 s (2.58/9.20 GB/s)) 	cr:   4.0x
     Using *** Codec.LZ4 *** compressor:
-      Time for pack_array/unpack_array:     0.402/0.401 s (1.85/1.86 GB/s)) 	cr:   4.0x
-      Time for pack_array2/unpack_array2:   0.310/0.090 s (2.40/8.31 GB/s)) 	cr:   4.0x
-      Time for compress/decompress:         0.130/0.060 s (5.73/12.35 GB/s)) 	cr:   4.0x
+      Time for compress/decompress:         0.250/0.114 s (5.97/13.11 GB/s)) 	cr:   4.0x
+      Time for pack_array/unpack_array:     0.794/0.767 s (1.88/1.94 GB/s)) 	cr:   4.0x
+      Time for pack_array2/unpack_array2:   0.590/0.161 s (2.53/9.24 GB/s)) 	cr:   4.0x
     Using *** Codec.LZ4HC *** compressor:
-      Time for pack_array/unpack_array:     0.866/0.411 s (0.86/1.81 GB/s)) 	cr:   4.0x
-      Time for pack_array2/unpack_array2:   0.744/0.076 s (1.00/9.76 GB/s)) 	cr:   4.0x
-      Time for compress/decompress:         0.568/0.062 s (1.31/12.05 GB/s)) 	cr:   4.0x
+      Time for compress/decompress:         1.102/0.088 s (1.35/17.01 GB/s)) 	cr:   4.0x
+      Time for pack_array/unpack_array:     1.690/0.758 s (0.88/1.97 GB/s)) 	cr:   4.0x
+      Time for pack_array2/unpack_array2:   1.445/0.178 s (1.03/8.38 GB/s)) 	cr:   4.0x
     Using *** Codec.ZLIB *** compressor:
-      Time for pack_array/unpack_array:     0.961/0.446 s (0.78/1.67 GB/s)) 	cr:   4.7x
-      Time for pack_array2/unpack_array2:   0.826/0.166 s (0.90/4.50 GB/s)) 	cr:   4.7x
-      Time for compress/decompress:         0.681/0.107 s (1.09/6.96 GB/s)) 	cr:   4.7x
+      Time for compress/decompress:         1.258/0.210 s (1.18/7.11 GB/s)) 	cr:   4.7x
+      Time for pack_array/unpack_array:     1.822/0.898 s (0.82/1.66 GB/s)) 	cr:   4.7x
+      Time for pack_array2/unpack_array2:   1.549/0.355 s (0.96/4.20 GB/s)) 	cr:   4.7x
     Using *** Codec.ZSTD *** compressor:
-      Time for pack_array/unpack_array:     1.105/0.414 s (0.67/1.80 GB/s)) 	cr:   4.4x
-      Time for pack_array2/unpack_array2:   1.066/0.093 s (0.70/7.99 GB/s)) 	cr:   4.4x
-      Time for compress/decompress:         0.828/0.052 s (0.90/14.45 GB/s)) 	cr:   4.4x
+      Time for compress/decompress:         1.653/0.098 s (0.90/15.21 GB/s)) 	cr:   4.4x
+      Time for pack_array/unpack_array:     2.206/0.796 s (0.68/1.87 GB/s)) 	cr:   4.4x
+      Time for pack_array2/unpack_array2:   2.077/0.179 s (0.72/8.30 GB/s)) 	cr:   4.4x
 
 As can be seen, is perfectly possible for python-blosc2 to go faster than a plain memcpy(). But more interestingly, you can easily choose the codecs and filters that better adapt to your datasets, and persist and transmit them faster and using less memory.
 

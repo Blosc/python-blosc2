@@ -17,7 +17,7 @@ import blosc2
 
 
 NREP = 1
-N = int(1e8)
+N = int(2e8)
 Nexp = np.log10(N)
 
 comprehensive_copy_timing = False
@@ -42,8 +42,8 @@ print(
 )
 
 if comprehensive_copy_timing:
-    out_ = np.empty_like(in_)
     tic = time.time()
+    out_ = np.empty_like(in_)
     for i in range(NREP):
         np.copyto(out_, in_)
     toc = time.time()
@@ -57,8 +57,8 @@ if comprehensive_copy_timing:
     # empty_like and explicitly assigns zeros, which is basically like calling
     # full_like
     # Here we benchmark what happens when we allocate memory using calloc
-    out_ = np.zeros(in_.shape, dtype=in_.dtype)
     tic = time.time()
+    out_ = np.zeros(in_.shape, dtype=in_.dtype)
     for i in range(NREP):
         np.copyto(out_, in_)
     toc = time.time()
@@ -69,8 +69,8 @@ if comprehensive_copy_timing:
     )
 
     # Cause a page fault before the benchmark
-    out_ = np.full_like(in_, fill_value=0)
     tic = time.time()
+    out_ = np.full_like(in_, fill_value=0)
     for i in range(NREP):
         np.copyto(out_, in_)
     toc = time.time()
@@ -80,8 +80,8 @@ if comprehensive_copy_timing:
         % (tcpy, ((N * 8 / tcpy) / 2 ** 30))
     )
 
-    out_ = np.full_like(in_, fill_value=0)
     tic = time.time()
+    out_ = np.full_like(in_, fill_value=0)
     for i in range(NREP):
         out_[...] = in_
     toc = time.time()
@@ -99,6 +99,26 @@ for (in_, label) in arrays:
         print("Using *** %s *** compressor:" % codec)
         clevel = 6
         cparams = {"codec": codec, "clevel": clevel}
+
+        ctic = time.time()
+        for i in range(NREP):
+            c = blosc2.compress(in_, clevel=clevel, codec=codec)
+        ctoc = time.time()
+        dtic = time.time()
+        out = np.empty_like(in_)
+        for i in range(NREP):
+            blosc2.decompress(c, dst=out)
+        dtoc = time.time()
+
+        assert np.array_equal(in_, out)
+        tc = (ctoc - ctic) / NREP
+        td = (dtoc - dtic) / NREP
+        print(
+            "  Time for compress/decompress:         %.3f/%.3f s (%.2f/%.2f GB/s)) "
+            % (tc, td, ((N * 8 / tc) / 2 ** 30), ((N * 8 / td) / 2 ** 30)),
+            end="",
+        )
+        print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
 
         ctic = time.time()
         for i in range(NREP):
@@ -133,26 +153,6 @@ for (in_, label) in arrays:
         td = (dtoc - dtic) / NREP
         print(
             "  Time for pack_array2/unpack_array2:   %.3f/%.3f s (%.2f/%.2f GB/s)) "
-            % (tc, td, ((N * 8 / tc) / 2 ** 30), ((N * 8 / td) / 2 ** 30)),
-            end="",
-        )
-        print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
-
-        ctic = time.time()
-        for i in range(NREP):
-            c = blosc2.compress(in_, clevel=clevel, codec=codec)
-        ctoc = time.time()
-        dtic = time.time()
-        out = np.empty_like(in_)
-        for i in range(NREP):
-            blosc2.decompress(c, dst=out)
-        dtoc = time.time()
-
-        assert np.array_equal(in_, out)
-        tc = (ctoc - ctic) / NREP
-        td = (dtoc - dtic) / NREP
-        print(
-            "  Time for compress/decompress:         %.3f/%.3f s (%.2f/%.2f GB/s)) "
             % (tc, td, ((N * 8 / tc) / 2 ** 30), ((N * 8 / td) / 2 ** 30)),
             end="",
         )
