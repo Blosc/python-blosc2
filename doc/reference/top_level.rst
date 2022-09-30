@@ -1,4 +1,4 @@
-Low level API
+Top level API
 =============
 
 This API is meant to be compatible with the existing python-blosc API. There could be some parameters that are called differently, but other than that, they are largely compatible.
@@ -9,7 +9,7 @@ Compress and decompress
 -----------------------
 
 .. autosummary::
-   :toctree: autofiles/low_level/
+   :toctree: autofiles/top_level/
    :nosignatures:
 
    compress
@@ -29,7 +29,7 @@ Set / Get compression params
 ----------------------------
 
 .. autosummary::
-   :toctree: autofiles/low_level/
+   :toctree: autofiles/top_level/
    :nosignatures:
 
     clib_info
@@ -49,7 +49,7 @@ Enumerated classes
 ------------------
 
 .. autosummary::
-   :toctree: autofiles/low_level/
+   :toctree: autofiles/top_level/
    :nosignatures:
 
    Codec

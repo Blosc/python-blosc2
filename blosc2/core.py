@@ -613,6 +613,11 @@ def set_compressor(codec):
     -----
     The `compname` parameter in python-blosc API has been replaced by :paramref:`codec` , using `compname`
     as parameter or a string as a :paramref:`codec` value will not work.
+
+    See also
+    --------
+    :func:`~blosc2.get_compressor`
+    :func:`~blosc2.compressor_list`
     """
     return blosc2_ext.set_compressor(codec)
 
@@ -670,6 +675,10 @@ def set_nthreads(nthreads):
     >>> oldn = blosc2.set_nthreads(2)
     >>> blosc2.set_nthreads(1)
     2
+
+    See also
+    --------
+    :func:`~blosc2.get_nthreads`
     """
     blosc2.nthreads = nthreads
     return blosc2_ext.set_nthreads(nthreads)
@@ -677,12 +686,18 @@ def set_nthreads(nthreads):
 
 def compressor_list():
     """
-    Returns a list of compressors available in C library.
+    Returns a list of compressors (codecs) available in C library.
 
     Returns
     -------
     out : list
-        The list of names.
+        The list of codec names.
+
+    See also
+    --------
+    :func:`~blosc2.get_compressor`
+    :func:`~blosc2.set_compressor`
+
     """
     return list(key.lower() for key in blosc2.Codec.__members__.keys())
 
@@ -749,6 +764,12 @@ def get_compressor():
     -------
     out : str
         The name of the compressor.
+
+    See also
+    --------
+    :func:`~blosc2.set_compressor`
+    :func:`~blosc2.compressor_list`
+
     """
     return blosc2_ext.get_compressor().decode()
 
