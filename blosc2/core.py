@@ -422,6 +422,7 @@ def pack_array2(arr, chunksize=None, **kwargs):
     See also
     --------
     :func:`~blosc2.unpack_array2`
+    :func:`~blosc2.save_array`
     """
     # If not passed, set a sensible typesize
     if 'cparams' in kwargs:
@@ -488,6 +489,7 @@ def unpack_array2(cframe):
     See also
     --------
     :func:`~blosc2.pack_array2`
+    :func:`~blosc2.save_array`
     """
     import numpy
     schunk = blosc2.schunk_from_cframe(cframe, False)
@@ -537,6 +539,7 @@ def save_array(arr, urlpath, chunksize=None, **kwargs):
     See also
     --------
     :func:`~blosc2.load_array`
+    :func:`~blosc2.pack_array2`
     :func:`~blosc2.open`
     """
     return pack_array2(arr, chunksize=chunksize, urlpath=urlpath, **kwargs)
@@ -576,6 +579,7 @@ def load_array(urlpath):
     See also
     --------
     :func:`~blosc2.save_array`
+    :func:`~blosc2.pack_array2`
     """
     import numpy
     schunk = blosc2.open(urlpath)
