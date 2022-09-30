@@ -4,13 +4,13 @@
 
 * New `pack_array2()` and `unpack_array2()` functions for packing NumPy arrays.  Contrarily to `pack_array()` and `unpack_array()` counterparts, the new ones allow for compressing arrays larger than 2 GB in size.
 
-* New `Scunk.to_cframe()` and `blosc2.from_cframe()` functions for serializing/deserialzing `SChunk` instances.
+* New `Scunk.to_cframe()` and `blosc2.from_cframe()` methods for serializing/deserialzing `SChunk` instances.
 
-* New `Schunk.get_slice()`, `SChunk.__getitem__` and `SChunk.__setitem__` methods for getting/setting slices from/to `SChunk` instances.
+* New `Schunk.get_slice()`, `SChunk.__getitem__()` and `SChunk.__setitem__()` methods for getting/setting slices from/to `SChunk` instances.
 
 * The `compcode` parameter has been renamed to `codec`.  A `NameError` exception will be raised when using the old name.  Please update your code when you see this exception.
 
-* More doc restructurings.  Hopefully, they are more pleasant to read now.
+* More doc restructurings.  Hopefully, they are more pleasant to read now :-)
 
 
 ## Changes from 0.3.1 to 0.3.2

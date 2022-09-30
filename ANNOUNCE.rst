@@ -1,8 +1,14 @@
-Announcing python-blosc2 0.3.2
+Announcing python-blosc2 0.4.0
 ==============================
 
-This is a minor release for updating internal C-Blosc2 sources to
-latest 2.3.1 version.  Also, several leaks have been fixed.
+This is a major release introducing new `pack_array2()` and
+`unpack_array2()` functions for packing NumPy arrays.
+Also, there are new `Scunk.to_cframe()` and `blosc2.from_cframe()`
+methods for serializing/deserialzing `SChunk` instances.
+
+Finally, we have added new `Schunk.get_slice()`, `SChunk.__getitem__()`
+and `SChunk.__setitem__()` methods for getting/setting slices from/to
+`SChunk` instances.
 
 For more info, you can have a look at the release notes in:
 
