@@ -85,7 +85,10 @@ from .blosc2_ext import (
 blosclib_version = "%s (%s)" % (VERSION_STRING, VERSION_DATE)
 
 # Internal Blosc threading
-nthreads = ncores = detect_number_of_cores() / 2
+ncores = detect_number_of_cores() / 2
+nthreads = ncores
+"""Number of threads to be used in compression/decompression.
+"""
 # Protection against too many threads
 if nthreads > 8:
     nthreads = 8
@@ -166,4 +169,5 @@ __all__ = [
     "SChunk",
     "open",
     "remove_urlpath",
+    "nthreads"
 ]

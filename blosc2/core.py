@@ -409,7 +409,7 @@ def pack_array2(arr, chunksize=None, **kwargs):
     Other parameters
     ----------------
     kwargs: dict, optional
-        These are the same as the kwargs in :func:`~blosc2.SChunk.SChunk.__init__`.
+        These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.SChunk.SChunk.__init__>`.
 
     Examples
     --------
@@ -526,7 +526,7 @@ def save_array(arr, urlpath, chunksize=None, **kwargs):
     Other parameters
     ----------------
     kwargs: dict, optional
-        These are the same as the kwargs in :func:`~blosc2.SChunk.SChunk.__init__`.
+        These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.SChunk.SChunk.__init__>`.
 
     Examples
     --------
@@ -678,7 +678,7 @@ def set_nthreads(nthreads):
 
     See also
     --------
-    :func:`~blosc2.get_nthreads`
+    :attr:`~blosc2.nthreads`
     """
     blosc2.nthreads = nthreads
     return blosc2_ext.set_nthreads(nthreads)

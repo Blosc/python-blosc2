@@ -40,6 +40,7 @@ Set / Get compression params
     print_versions
     set_blocksize
     set_nthreads
+    nthreads
     set_releasegil
     set_compressor
     get_compressor
