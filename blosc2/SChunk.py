@@ -435,12 +435,12 @@ class SChunk(blosc2_ext.SChunk):
         return super(SChunk, self).set_slice(start=key.start, stop=key.stop, value=value)
 
     def to_cframe(self):
-        """ Get a bytes object containing the serialized :class:`~blosc2.SChunk` instance.
+        """ Get a bytes object containing the serialized :ref:`SChunk <SChunk>` instance.
 
         Returns
         -------
         out: bytes
-            The buffer containing the serialized :class:`~blosc2.SChunk` instance.
+            The buffer containing the serialized :ref:`SChunk <SChunk>` instance.
 
         See Also
         --------
@@ -454,12 +454,12 @@ class SChunk(blosc2_ext.SChunk):
 
 
 def open(urlpath, mode="a", **kwargs):
-    """Open an already persistently stored :class:`~blosc2.SChunk`.
+    """Open an already persistently stored :ref:`SChunk <SChunk>`.
 
     Parameters
     ----------
     urlpath: str
-        The path where the :class:`~blosc2.SChunk` is stored.
+        The path where the :ref:`SChunk <SChunk>` is stored.
     mode: str, optional
         The open mode.
 

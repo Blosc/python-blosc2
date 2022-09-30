@@ -1,3 +1,5 @@
+.. _SChunk:
+
 Super-chunk API
 ===============
 

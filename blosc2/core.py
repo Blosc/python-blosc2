@@ -1006,7 +1006,7 @@ def remove_urlpath(path):
 
 
 def schunk_from_cframe(cframe, copy=False):
-    """Create a :class:`~blosc2.SChunk` instance out of a contiguous frame buffer.
+    """Create a :ref:`SChunk <SChunk>` instance out of a contiguous frame buffer.
 
     Parameters
     ----------
@@ -1018,8 +1018,8 @@ def schunk_from_cframe(cframe, copy=False):
 
     Returns
     -------
-    out: :class:`~blosc2.SChunk`
-        A new :class:`~blosc2.SChunk` containing the data passed.
+    out: :ref:`SChunk <SChunk>`
+        A new :ref:`SChunk <SChunk>` containing the data passed.
 
     See Also
     --------
