@@ -73,7 +73,7 @@ jobs:
           CIBW_BUILD: 'cp38-win_amd64 cp39-win_amd64 cp310-win_amd64'
           CIBW_BEFORE_BUILD: python -m pip install -r requirements.txt
           CIBW_BEFORE_TEST: python -m pip install -r requirements-tests.txt
-          CIBW_TEST_COMMAND: python -m pytest {project}/tests
+          CIBW_TEST_COMMAND: python -m pytest -m "not heavy" {project}/tests
           CIBW_BUILD_VERBOSITY: 1
 
       - name: Build wheels (Linux / Mac OSX)
@@ -88,7 +88,7 @@ jobs:
           CIBW_ARCHS_LINUX: ${{ matrix.arch }}
           CIBW_BEFORE_BUILD: python -m pip install -r requirements.txt
           CIBW_BEFORE_TEST: python -m pip install -r requirements-tests.txt
-          CIBW_TEST_COMMAND: python -m pytest {project}/tests
+          CIBW_TEST_COMMAND: python -m pytest -m "not heavy" {project}/tests
           CIBW_BUILD_VERBOSITY: 1
 
       - name: Upload wheels
@@ -144,7 +144,7 @@ jobs:
       - name: Test sdist package with pytest
         run: |
           cd ./dist/blosc2-*/
-          python -m pytest
+          python -m pytest -m "not heavy"
 
 
   upload_pypi:
