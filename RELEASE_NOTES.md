@@ -107,12 +107,18 @@ and `size`.
 * On the other hand, the function `unpack` doesn't 
 return a numpy array whereas the `unpack_array` 
 builds that array.
+
+* The `compcode` parameter has been renamed to `codec`.
+A `NameError` exception will be raised when using the old name.
+Please update your code when you see this exception.
+
+* The different codecs are accessible via the `Codec` enumerated.
+E.g. `Codec.LZ4` or `Codec.Zlib`
   
-* The `blosc.NOSHUFFLE` is replaced 
-  by the `blosc2.NOFILTER`, but for backward 
-  compatibility `blosc2.NOSHUFFLE` still exists.
+* The different filters are accessible via the `Filter` enumerated.
+E.g. `Filter.SHUFFLE` or `Filter.BITSHUFFLE`
   
-* A bytearray or NumPy object can be passed to
-the `blosc2.decompress` function to store the 
-  decompressed data.
+* The `blosc.NOSHUFFLE` is replaced by the `blosc2.Filter.NOFILTER`.
   
+* A bytearray or NumPy object can be passed to the `blosc2.decompress`
+function to store the decompressed data.

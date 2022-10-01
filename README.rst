@@ -106,7 +106,7 @@ your Blosc build:
 
 .. code-block:: console
 
-     PYTHONPATH=. python bench/compress_numpy.py
+     PYTHONPATH=. python bench/pack_compress.py
 
 Just to whet your appetite, here are some speed figures for an Intel box (i9-10940X CPU @ 3.30GHz, 14 cores)
 running Ubuntu 22.04.  In particular, see how performance for `pack_array2/unpack_array2` has
