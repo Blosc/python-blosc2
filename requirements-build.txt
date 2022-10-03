@@ -1,4 +1,3 @@
 scikit-build
 cython
 cmake
-msgpack

@@ -61,4 +61,5 @@ setup(
     platforms=["any"],
     packages=["blosc2"],
     package_dir={"blosc2": "blosc2"},
+    install_requires=open("requirements-runtime.txt").read().split()
 )
