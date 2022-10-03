@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from 0.4.0 to 0.4.1
+
+* Add `msgpack` as a runtime requirement
+
+
 ## Changes from 0.3.2 to 0.4.0
 
 * New `pack_array2()` and `unpack_array2()` functions for packing NumPy arrays.  Contrarily to `pack_array()` and `unpack_array()` counterparts, the new ones allow for compressing arrays larger than 2 GB in size.

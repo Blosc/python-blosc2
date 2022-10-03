@@ -1,4 +1,4 @@
-Announcing python-blosc2 0.4.0
+Announcing python-blosc2 0.4.1
 ==============================
 
 This is a major release introducing new `pack_array2()` and
