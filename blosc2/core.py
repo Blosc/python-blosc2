@@ -223,7 +223,7 @@ def pack(obj, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ
     >>> import numpy
     >>> a = numpy.arange(1e6)
     >>> parray = blosc2.pack(a)
-    >>> len(parray) < a.size*a.itemsize
+    >>> len(parray) < a.size * a.itemsize
     True
     """
     if not hasattr(obj, "itemsize"):
@@ -270,7 +270,7 @@ def unpack(packed_object, **kwargs):
     >>> import numpy
     >>> a = numpy.arange(1e6)
     >>> parray = blosc2.pack(a)
-    >>> len(parray) < a.size*a.itemsize
+    >>> len(parray) < a.size * a.itemsize
     True
     >>> a2 = blosc2.unpack(parray)
     >>> numpy.array_equal(a, a2)
@@ -339,12 +339,12 @@ def pack_array(arr, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.B
 
 
 def unpack_array(packed_array, **kwargs):
-    """Unpack (decompress) a packed NumPy array.
+    """Restore a packed NumPy array.
 
     Parameters
     ----------
     packed_array : str / bytes
-        The packed array to be decompressed.
+        The packed array to be restored.
     **kwargs : fix_imports / encoding / errors
         Optional parameters that can be passed to the
         `pickle.loads API <https://docs.python.org/3/library/pickle.html#pickle.loads>`_.
@@ -415,8 +415,8 @@ def pack_array2(arr, chunksize=None, **kwargs):
     --------
     >>> import numpy
     >>> a = numpy.arange(1e6)
-    >>> parray = blosc2.pack_array2(a)
-    >>> len(parray) < a.size * a.itemsize
+    >>> cframe = blosc2.pack_array2(a)
+    >>> len(cframe) < a.size * a.itemsize
     True
 
     See also
@@ -462,7 +462,7 @@ def unpack_array2(cframe):
     Parameters
     ----------
     cframe : bytes
-        The packed array to be decompressed.
+        The packed array to be restored.
 
     Returns
     -------
@@ -617,9 +617,9 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
     Examples
     --------
     >>> import torch
-    >>> th = torch.arange(1e3)
-    >>> ptensor = blosc2.pack_tensor(th)
-    >>> len(ptensor) < th.size()[0] * th.itemsize
+    >>> th = torch.arange(1e6, dtype=torch.float32)
+    >>> cframe = blosc2.pack_tensor(th)
+    >>> len(cframe) < th.size()[0] * 4
     True
 
     See also
@@ -658,6 +658,55 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
         return schunk.to_cframe()
     else:
         return os.stat(urlpath).st_size
+
+
+def unpack_tensor(cframe):
+    """Unpack (decompress) a packed TensorFlow / PyTorch via a cframe.
+
+    Parameters
+    ----------
+    cframe : bytes
+        The packed tensor to be restored.
+
+    Returns
+    -------
+    out : ndarray
+        The unpacked TensorFlow / PyTorch.
+
+    Raises
+    ------
+    TypeError
+        If :paramref:`cframe` is not of type bytes, or not a cframe.
+    RunTimeError
+        If some other problem is detected.
+
+    Examples
+    --------
+    >>> import torch
+    >>> import numpy as np
+    >>> th = torch.arange(1e3, dtype=torch.float32)
+    >>> cframe = blosc2.pack_tensor(th)
+    >>> len(cframe) < th.size()[0] * 4
+    True
+    >>> th2 = blosc2.unpack_tensor(cframe)
+    >>> a = np.asarray(th)
+    >>> a2 = np.asarray(th2)
+    >>> np.array_equal(a, a2)
+    True
+
+    See also
+    --------
+    :func:`~blosc2.pack_tensor`
+    :func:`~blosc2.save_tensor`
+    """
+    import numpy
+    import torch
+    schunk = blosc2.schunk_from_cframe(cframe, False)
+    shape, dtype = schunk.vlmeta['__pack_tensor__']
+    out = numpy.empty(shape, dtype=dtype)
+    schunk.get_slice(out=out)
+    th = torch.from_numpy(out)
+    return th
 
 
 def set_compressor(codec):
