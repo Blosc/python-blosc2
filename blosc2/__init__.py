@@ -69,6 +69,7 @@ from .core import (
     unpack_array2,
     load_array,
     pack_tensor,
+    unpack_tensor,
 )
 from .SChunk import (SChunk, open)
 from .version import __version__
