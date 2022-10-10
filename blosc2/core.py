@@ -427,6 +427,7 @@ def pack_array2(arr, chunksize=None, **kwargs):
     # If not passed, set a sensible typesize
     if 'cparams' in kwargs:
         cparams = kwargs.pop('cparams')
+        cparams = cparams.copy()
         if 'typesize' not in cparams:
             cparams['typesize'] = arr.itemsize
     else:
@@ -588,6 +589,75 @@ def load_array(urlpath):
     data = numpy.empty(shape, dtype=dtype)
     schunk.get_slice(out=data)
     return data
+
+
+def pack_tensor(tensor, chunksize=None, **kwargs):
+    """Pack (compress) a TensorFlow or PyTorch tensor.
+
+    Parameters
+    ----------
+    tensor : TensorFlow or PyTorch tensor
+        The tensor to be packed.
+
+    chunksize: int
+        The size (in bytes) for the chunks during compression. If not provided,
+        it is computed automatically.
+
+    Returns
+    -------
+    out : bytes | int
+        The serialized version (cframe) of the array.
+        If urlpath is provided, the number of bytes in file is returned instead.
+
+    Other parameters
+    ----------------
+    kwargs: dict, optional
+        These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.SChunk.SChunk.__init__>`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> th = torch.arange(1e3)
+    >>> ptensor = blosc2.pack_tensor(th)
+    >>> len(ptensor) < th.size()[0] * th.itemsize
+    True
+
+    See also
+    --------
+    :func:`~blosc2.unpack_tensor`
+    :func:`~blosc2.save_tensor`
+    """
+    import numpy as np
+    arr = np.asarray(tensor)
+    # If not passed, set a sensible typesize
+    if 'cparams' in kwargs:
+        cparams = kwargs.pop('cparams')
+        cparams = cparams.copy()
+        if 'typesize' not in cparams:
+            cparams['typesize'] = arr.itemsize
+    else:
+        cparams = {"typesize": arr.itemsize}
+
+    urlpath = kwargs.get('urlpath', None)
+    contiguous = False if urlpath is None else True
+
+    if chunksize is None:
+        chunksize = arr.size * arr.itemsize
+        # Use a cap of 256 MB (most of the modern machines should have this RAM available)
+        if chunksize > 2 ** 28:
+            chunksize = 2 ** 28
+    # Make that a multiple of typesize
+    chunksize = chunksize // arr.itemsize * arr.itemsize
+    schunk = blosc2.SChunk(chunksize=chunksize, contiguous=contiguous, data=arr,
+                           cparams=cparams, **kwargs)
+    # dtype encoding requires some care
+    dtype = arr.dtype.descr if arr.dtype.kind == 'V' else arr.dtype.str
+    schunk.vlmeta['__pack_tensor__'] = (arr.shape, dtype)
+
+    if urlpath is None:
+        return schunk.to_cframe()
+    else:
+        return os.stat(urlpath).st_size
 
 
 def set_compressor(codec):
