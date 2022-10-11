@@ -447,8 +447,7 @@ def pack_array2(arr, chunksize=None, **kwargs):
                            cparams=cparams, **kwargs)
     # dtype encoding requires some care
     dtype = arr.dtype.descr if arr.dtype.kind == 'V' else arr.dtype.str
-    schunk.vlmeta['dtype'] = dtype
-    schunk.vlmeta['shape'] = arr.shape
+    schunk.vlmeta['__pack_array__'] = ("numpy", arr.shape, dtype)
 
     if urlpath is None:
         return schunk.to_cframe()
@@ -494,8 +493,7 @@ def unpack_array2(cframe):
     """
     import numpy
     schunk = blosc2.schunk_from_cframe(cframe, False)
-    dtype = schunk.vlmeta['dtype']
-    shape = schunk.vlmeta['shape']
+    kind, shape, dtype = schunk.vlmeta['__pack_array__']
     data = numpy.empty(shape, dtype=dtype)
     schunk.get_slice(out=data)
     # The next looks similar in efficiency
@@ -584,8 +582,7 @@ def load_array(urlpath):
     """
     import numpy
     schunk = blosc2.open(urlpath)
-    dtype = schunk.vlmeta['dtype']
-    shape = schunk.vlmeta['shape']
+    kind, shape, dtype = schunk.vlmeta['__pack_array__']
     data = numpy.empty(shape, dtype=dtype)
     schunk.get_slice(out=data)
     return data
@@ -628,6 +625,7 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
     :func:`~blosc2.save_tensor`
     """
     import numpy as np
+    import torch
     arr = np.asarray(tensor)
     # If not passed, set a sensible typesize
     if 'cparams' in kwargs:
@@ -652,7 +650,8 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
                            cparams=cparams, **kwargs)
     # dtype encoding requires some care
     dtype = arr.dtype.descr if arr.dtype.kind == 'V' else arr.dtype.str
-    schunk.vlmeta['__pack_tensor__'] = (arr.shape, dtype)
+    kind = "torch" if type(tensor) == torch.Tensor else "tensorflow"
+    schunk.vlmeta['__pack_tensor__'] = (kind, arr.shape, dtype)
 
     if urlpath is None:
         return schunk.to_cframe()
@@ -701,11 +700,15 @@ def unpack_tensor(cframe):
     """
     import numpy
     import torch
+    import tensorflow as tf
     schunk = blosc2.schunk_from_cframe(cframe, False)
-    shape, dtype = schunk.vlmeta['__pack_tensor__']
+    kind, shape, dtype = schunk.vlmeta['__pack_tensor__']
     out = numpy.empty(shape, dtype=dtype)
     schunk.get_slice(out=out)
-    th = torch.from_numpy(out)
+    if kind == "torch":
+        th = torch.from_numpy(out)
+    else:
+        th = tf.constant(out)
     return th
 
 
