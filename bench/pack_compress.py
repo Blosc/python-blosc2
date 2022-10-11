@@ -23,7 +23,7 @@ Nexp = np.log10(N)
 comprehensive_copy_timing = False
 
 blosc2.print_versions()
-print("Creating NumPy arrays with 10**%d int64/float64 elements:" % Nexp)
+print(f"Creating NumPy arrays with 10 ** {Nexp:.2f} int64/float64 elements:")
 arrays = (
     (np.arange(N), "the arange linear distribution"),
     (np.linspace(0, 10_000, N), "the linspace linear distribution"),
