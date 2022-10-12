@@ -3,3 +3,5 @@ numpy
 pytest
 psutil
 msgpack
+torch
+tensorflow
