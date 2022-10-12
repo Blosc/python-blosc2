@@ -589,12 +589,12 @@ def load_array(urlpath):
 
 
 def pack_tensor(tensor, chunksize=None, **kwargs):
-    """Pack (compress) a TensorFlow or PyTorch tensor.
+    """Pack (compress) a TensorFlow / PyTorch tensor or a NumPy array.
 
     Parameters
     ----------
-    tensor : TensorFlow or PyTorch tensor
-        The tensor to be packed.
+    tensor : TensorFlow / PyTorch tensor or a NumPy array.
+        The tensor / array to be packed.
 
     chunksize: int
         The size (in bytes) for the chunks during compression. If not provided,
@@ -625,7 +625,6 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
     :func:`~blosc2.save_tensor`
     """
     import numpy as np
-    import torch
     arr = np.asarray(tensor)
     # If not passed, set a sensible typesize
     if 'cparams' in kwargs:
@@ -648,9 +647,20 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
     chunksize = chunksize // arr.itemsize * arr.itemsize
     schunk = blosc2.SChunk(chunksize=chunksize, contiguous=contiguous, data=arr,
                            cparams=cparams, **kwargs)
+    # Guess the kind of tensor / array
+    repr_tensor = repr(tensor)
+    if "tensor" in repr_tensor:
+        kind = "torch"
+    elif "Tensor" in repr_tensor:
+        kind = "tensorflow"
+    elif "array" in repr_tensor:
+        kind = "numpy"
+    else:
+        raise TypeError(f"Unrecognized tensor/array: {tensor!r}")
+
     # dtype encoding requires some care
     dtype = arr.dtype.descr if arr.dtype.kind == 'V' else arr.dtype.str
-    kind = "torch" if type(tensor) == torch.Tensor else "tensorflow"
+
     schunk.vlmeta['__pack_tensor__'] = (kind, arr.shape, dtype)
 
     if urlpath is None:
@@ -699,16 +709,20 @@ def unpack_tensor(cframe):
     :func:`~blosc2.save_tensor`
     """
     import numpy
-    import torch
-    import tensorflow as tf
     schunk = blosc2.schunk_from_cframe(cframe, False)
     kind, shape, dtype = schunk.vlmeta['__pack_tensor__']
     out = numpy.empty(shape, dtype=dtype)
     schunk.get_slice(out=out)
     if kind == "torch":
+        import torch
         th = torch.from_numpy(out)
-    else:
+    elif kind == "tensorflow":
+        import tensorflow as tf
         th = tf.constant(out)
+    elif kind == "numpy":
+        th = out
+    else:
+        raise TypeError(f"Unrecognized tensor kind: {kind}")
     return th
 
 
