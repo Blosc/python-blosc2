@@ -423,36 +423,11 @@ def pack_array2(arr, chunksize=None, **kwargs):
     --------
     :func:`~blosc2.unpack_array2`
     :func:`~blosc2.save_array`
+    :func:`~blosc2.pack_tensor`
+    :func:`~blosc2.save_tensor`
     """
-    # If not passed, set a sensible typesize
-    if 'cparams' in kwargs:
-        cparams = kwargs.pop('cparams')
-        cparams = cparams.copy()
-        if 'typesize' not in cparams:
-            cparams['typesize'] = arr.itemsize
-    else:
-        cparams = {"typesize": arr.itemsize}
-
-    urlpath = kwargs.get('urlpath', None)
-    contiguous = False if urlpath is None else True
-
-    if chunksize is None:
-        chunksize = arr.size * arr.itemsize
-        # Use a cap of 256 MB (most of the modern machines should have this RAM available)
-        if chunksize > 2 ** 28:
-            chunksize = 2 ** 28
-    # Make that a multiple of typesize
-    chunksize = chunksize // arr.itemsize * arr.itemsize
-    schunk = blosc2.SChunk(chunksize=chunksize, contiguous=contiguous, data=arr,
-                           cparams=cparams, **kwargs)
-    # dtype encoding requires some care
-    dtype = arr.dtype.descr if arr.dtype.kind == 'V' else arr.dtype.str
-    schunk.vlmeta['__pack_array__'] = ("numpy", arr.shape, dtype)
-
-    if urlpath is None:
-        return schunk.to_cframe()
-    else:
-        return os.stat(urlpath).st_size
+    # May we raise a DeprecationWarning here in the future?
+    return pack_tensor(arr, chunksize, **kwargs)
 
 
 def unpack_array2(cframe):
@@ -489,28 +464,23 @@ def unpack_array2(cframe):
     See also
     --------
     :func:`~blosc2.pack_array2`
+    :func:`~blosc2.pack_tensor`
     :func:`~blosc2.save_array`
+    :func:`~blosc2.save_tensor`
     """
-    import numpy
-    schunk = blosc2.schunk_from_cframe(cframe, False)
-    kind, shape, dtype = schunk.vlmeta['__pack_array__']
-    data = numpy.empty(shape, dtype=dtype)
-    schunk.get_slice(out=data)
-    # The next looks similar in efficiency
-    # out = schunk.get_slice()
-    # data = numpy.frombuffer(out, dtype=dtype).reshape(shape)
-    return data
+    # May we raise a DeprecationWarning here in the future?
+    return unpack_tensor(cframe)
 
 
 def save_array(arr, urlpath, chunksize=None, **kwargs):
-    """Save a compressed NumPy array in `urlpath`.
+    """Save a serialized NumPy array in `urlpath`.
 
     Parameters
     ----------
     arr : ndarray
         The NumPy array to be saved.
 
-    urlpath : string
+    urlpath : str
         The path for the file where the array is saved.
 
     chunksize: int
@@ -539,17 +509,19 @@ def save_array(arr, urlpath, chunksize=None, **kwargs):
     --------
     :func:`~blosc2.load_array`
     :func:`~blosc2.pack_array2`
+    :func:`~blosc2.save_tensor`
     :func:`~blosc2.open`
     """
-    return pack_array2(arr, chunksize=chunksize, urlpath=urlpath, **kwargs)
+    # May we raise a DeprecationWarning here in the future?
+    return pack_tensor(arr, chunksize=chunksize, urlpath=urlpath, **kwargs)
 
 
 def load_array(urlpath):
-    """Load a compressed NumPy array in urlpath (in cframe format).
+    """Load a serialized NumPy array in urlpath.
 
     Parameters
     ----------
-    urlpath : string
+    urlpath : str
         The file where the array is to be loaded.
 
     Returns
@@ -578,14 +550,12 @@ def load_array(urlpath):
     See also
     --------
     :func:`~blosc2.save_array`
+    :func:`~blosc2.load_tensor`
     :func:`~blosc2.pack_array2`
+    :func:`~blosc2.pack_tensor`
     """
-    import numpy
-    schunk = blosc2.open(urlpath)
-    kind, shape, dtype = schunk.vlmeta['__pack_array__']
-    data = numpy.empty(shape, dtype=dtype)
-    schunk.get_slice(out=data)
-    return data
+    # May we raise a DeprecationWarning here in the future?
+    return load_tensor(urlpath)
 
 
 def pack_tensor(tensor, chunksize=None, **kwargs):
@@ -593,7 +563,7 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
 
     Parameters
     ----------
-    tensor : TensorFlow / PyTorch tensor or a NumPy array.
+    tensor : tensor, ndarray.
         The tensor / array to be packed.
 
     chunksize: int
@@ -699,7 +669,7 @@ def unpack_tensor(cframe):
     Returns
     -------
     out : tensor, ndarray
-        The unpacked TensorFlow / PyTorch.
+        The unpacked TensorFlow / PyTorch tensor or NumPy array.
 
     Raises
     ------
@@ -732,14 +702,14 @@ def unpack_tensor(cframe):
 
 
 def save_tensor(tensor, urlpath, chunksize=None, **kwargs):
-    """Save a compressed NumPy array in `urlpath`.
+    """Save a serialized PyTorch / TensorFlow tensor or NumPy array in `urlpath`.
 
     Parameters
     ----------
-    tensor : ndarray
-        The NumPy array to be saved.
+    tensor : tensor, ndarray
+        The tensor / array to be saved.
 
-    urlpath : string
+    urlpath : str
         The path for the file where the array is saved.
 
     chunksize: int
@@ -749,7 +719,7 @@ def save_tensor(tensor, urlpath, chunksize=None, **kwargs):
     Returns
     -------
     out : int
-        The number of bytes of the saved array.
+        The number of bytes of the saved tensor / array.
 
     Other parameters
     ----------------
@@ -760,8 +730,8 @@ def save_tensor(tensor, urlpath, chunksize=None, **kwargs):
     --------
     >>> import torch
     >>> th = torch.arange(1e6, dtype=torch.float32)
-    >>> cframe = blosc2.save_tensor(th, "test.bl2", mode="w")
-    >>> len(cframe) < th.size()[0] * 4
+    >>> serial_size = blosc2.save_tensor(th, "test.bl2", mode="w")
+    >>> serial_size < th.size()[0] * 4
     True
 
     See also
@@ -774,17 +744,17 @@ def save_tensor(tensor, urlpath, chunksize=None, **kwargs):
 
 
 def load_tensor(urlpath):
-    """Load a compressed PyTorch / TensorFlow / NumPy array in urlpath (in cframe format).
+    """Load a serialized PyTorch / TensorFlow  tensor or NumPy array in `urlpath`.
 
     Parameters
     ----------
-    urlpath : string
+    urlpath : str
         The file where the tensor / array is to be loaded.
 
     Returns
     -------
     out : tensor, ndarray
-        The unpacked PyTorch / TensorFlow / NumPy tensor / array.
+        The unpacked PyTorch / TensorFlow tensor or NumPy array.
 
     Raises
     ------
@@ -1217,7 +1187,7 @@ def remove_urlpath(path):
 
     Parameters
     ----------
-    path: String
+    path: str
         The path of the directory or file.
 
     Returns
