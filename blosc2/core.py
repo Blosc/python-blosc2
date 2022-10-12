@@ -583,10 +583,10 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
 
     Examples
     --------
-    >>> import torch
-    >>> th = torch.arange(1e6, dtype=torch.float32)
+    >>> import numpy as np
+    >>> th = np.arange(1e6, dtype=np.float32)
     >>> cframe = blosc2.pack_tensor(th)
-    >>> len(cframe) < th.size()[0] * 4
+    >>> len(cframe) < th.size * th.itemsize
     True
 
     See also
@@ -680,11 +680,10 @@ def unpack_tensor(cframe):
 
     Examples
     --------
-    >>> import torch
     >>> import numpy as np
-    >>> th = torch.arange(1e3, dtype=torch.float32)
+    >>> th = np.arange(1e3, dtype=np.float32)
     >>> cframe = blosc2.pack_tensor(th)
-    >>> len(cframe) < th.size()[0] * 4
+    >>> len(cframe) < th.size * th.itemsize
     True
     >>> th2 = blosc2.unpack_tensor(cframe)
     >>> a = np.asarray(th)
@@ -728,10 +727,10 @@ def save_tensor(tensor, urlpath, chunksize=None, **kwargs):
 
     Examples
     --------
-    >>> import torch
-    >>> th = torch.arange(1e6, dtype=torch.float32)
+    >>> import numpy as np
+    >>> th = np.arange(1e6, dtype=np.float32)
     >>> serial_size = blosc2.save_tensor(th, "test.bl2", mode="w")
-    >>> serial_size < th.size()[0] * 4
+    >>> serial_size < th.size * th.itemsize
     True
 
     See also
@@ -766,13 +765,12 @@ def load_tensor(urlpath):
     Examples
     --------
     >>> import numpy as np
-    >>> import torch
-    >>> th = torch.arange(1e6, dtype=torch.float32)
+    >>> th = np.arange(1e6, dtype=np.float32)
     >>> size = blosc2.save_tensor(th, "test.bl2", mode="w")
-    >>> size < th.size()[0] * 4
+    >>> size < th.size * th.itemsize
     True
     >>> th2 = blosc2.load_tensor("test.bl2")
-    >>> np.array_equal(th.numpy(), th2.numpy())
+    >>> np.array_equal(th, th2)
     True
 
     See also

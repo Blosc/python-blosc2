@@ -8,8 +8,12 @@
 import numpy as np
 import pytest
 import blosc2
-import torch
-import tensorflow as tf
+
+try:
+    import torch
+    import tensorflow as tf
+except ImportError:
+    pytest.skip("skipping torch / tensorflow tests", allow_module_level=True)
 
 
 ##### pack / unpack  #####

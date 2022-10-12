@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from 0.5.0 to 0.5.1
+
+* Remove the testing of packing PyTorch or TensorFlow objects during wheels build.
+
+
 ## Changes from 0.4.1 to 0.5.0
 
 * New `pack_tensor`, `unpack_tensor`, `save_tensor` and `load_tensor` functions for serializing/deserializing PyTorch and TensorFlow tensor objects.  They also understand NumPy arrays, so these are the new recommended ones for serialization.

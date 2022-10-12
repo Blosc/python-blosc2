@@ -1,0 +1,5 @@
+pip
+numpy
+pytest
+psutil
+msgpack
