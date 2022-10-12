@@ -19,11 +19,15 @@ Compress and decompress
    pack
    pack_array
    pack_array2
+   pack_tensor
    unpack
    unpack_array
    unpack_array2
+   unpack_tensor
    save_array
    load_array
+   save_tensor
+   load_tensor
 
 Set / Get compression params
 ----------------------------

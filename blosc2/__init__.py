@@ -70,6 +70,8 @@ from .core import (
     load_array,
     pack_tensor,
     unpack_tensor,
+    save_tensor,
+    load_tensor,
 )
 from .SChunk import (SChunk, open)
 from .version import __version__

@@ -669,6 +669,25 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
         return os.stat(urlpath).st_size
 
 
+def _unpack_tensor(schunk):
+    import numpy
+    kind, shape, dtype = schunk.vlmeta['__pack_tensor__']
+    out = numpy.empty(shape, dtype=dtype)
+    schunk.get_slice(out=out)
+
+    if kind == "torch":
+        import torch
+        th = torch.from_numpy(out)
+    elif kind == "tensorflow":
+        import tensorflow as tf
+        th = tf.constant(out)
+    elif kind == "numpy":
+        th = out
+    else:
+        raise TypeError(f"Unrecognized tensor kind: {kind}")
+    return th
+
+
 def unpack_tensor(cframe):
     """Unpack (decompress) a packed TensorFlow / PyTorch via a cframe.
 
@@ -679,7 +698,7 @@ def unpack_tensor(cframe):
 
     Returns
     -------
-    out : ndarray
+    out : tensor, ndarray
         The unpacked TensorFlow / PyTorch.
 
     Raises
@@ -708,22 +727,91 @@ def unpack_tensor(cframe):
     :func:`~blosc2.pack_tensor`
     :func:`~blosc2.save_tensor`
     """
-    import numpy
     schunk = blosc2.schunk_from_cframe(cframe, False)
-    kind, shape, dtype = schunk.vlmeta['__pack_tensor__']
-    out = numpy.empty(shape, dtype=dtype)
-    schunk.get_slice(out=out)
-    if kind == "torch":
-        import torch
-        th = torch.from_numpy(out)
-    elif kind == "tensorflow":
-        import tensorflow as tf
-        th = tf.constant(out)
-    elif kind == "numpy":
-        th = out
-    else:
-        raise TypeError(f"Unrecognized tensor kind: {kind}")
-    return th
+    return _unpack_tensor(schunk)
+
+
+def save_tensor(tensor, urlpath, chunksize=None, **kwargs):
+    """Save a compressed NumPy array in `urlpath`.
+
+    Parameters
+    ----------
+    tensor : ndarray
+        The NumPy array to be saved.
+
+    urlpath : string
+        The path for the file where the array is saved.
+
+    chunksize: int
+        The size (in bytes) for the chunks during compression. If not provided,
+        it is computed automatically.
+
+    Returns
+    -------
+    out : int
+        The number of bytes of the saved array.
+
+    Other parameters
+    ----------------
+    kwargs: dict, optional
+        These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.SChunk.SChunk.__init__>`.
+
+    Examples
+    --------
+    >>> import torch
+    >>> th = torch.arange(1e6, dtype=torch.float32)
+    >>> cframe = blosc2.save_tensor(th, "test.bl2", mode="w")
+    >>> len(cframe) < th.size()[0] * 4
+    True
+
+    See also
+    --------
+    :func:`~blosc2.load_tensor`
+    :func:`~blosc2.pack_tensor`
+    :func:`~blosc2.open`
+    """
+    return pack_tensor(tensor, chunksize=chunksize, urlpath=urlpath, **kwargs)
+
+
+def load_tensor(urlpath):
+    """Load a compressed PyTorch / TensorFlow / NumPy array in urlpath (in cframe format).
+
+    Parameters
+    ----------
+    urlpath : string
+        The file where the tensor / array is to be loaded.
+
+    Returns
+    -------
+    out : tensor, ndarray
+        The unpacked PyTorch / TensorFlow / NumPy tensor / array.
+
+    Raises
+    ------
+    TypeError
+        If :paramref:`urlpath` is not in cframe format
+    RunTimeError
+        If some other problem is detected.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import torch
+    >>> th = torch.arange(1e6, dtype=torch.float32)
+    >>> size = blosc2.save_tensor(th, "test.bl2", mode="w")
+    >>> size < th.size()[0] * 4
+    True
+    >>> th2 = blosc2.load_tensor("test.bl2")
+    >>> np.array_equal(th.numpy(), th2.numpy())
+    True
+
+    See also
+    --------
+    :func:`~blosc2.save_tensor`
+    :func:`~blosc2.pack_tensor`
+    """
+    schunk = blosc2.open(urlpath)
+    return _unpack_tensor(schunk)
 
 
 def set_compressor(codec):
