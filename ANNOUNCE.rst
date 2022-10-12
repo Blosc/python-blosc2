@@ -1,14 +1,10 @@
-Announcing python-blosc2 0.4.1
+Announcing python-blosc2 0.5.0
 ==============================
 
-This is a major release introducing new `pack_array2()` and
-`unpack_array2()` functions for packing NumPy arrays.
-Also, there are new `Scunk.to_cframe()` and `blosc2.from_cframe()`
-methods for serializing/deserialzing `SChunk` instances.
-
-Finally, we have added new `Schunk.get_slice()`, `SChunk.__getitem__()`
-and `SChunk.__setitem__()` methods for getting/setting slices from/to
-`SChunk` instances.
+This is a major release introducing new `pack_tensor`, `unpack_tensor`,
+`save_tensor` and `load_tensor` functions for serializing/deserializing
+PyTorch and TensorFlow tensor objects.  They also understand NumPy arrays,
+so these are the new recommended ones for serialization.
 
 For more info, you can have a look at the release notes in:
 

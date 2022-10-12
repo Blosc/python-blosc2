@@ -19,7 +19,9 @@ import tensorflow as tf
 
 
 NREP = 1
-# N = int(4e8 - 2**27)  # larger than 2 GB
+# N = int(5e8 + 2**27)  # larger than 2 GB
+# Using tensors > 2 GB makes tensorflow serialization to raise this error:
+# [libprotobuf FATAL google/protobuf/io/coded_stream.cc:831] CHECK failed: overrun <= kSlopBytes:
 N = int(1e8)
 
 store = True
@@ -78,8 +80,6 @@ if store:
     c = None
     ctic = time.time()
     for i in range(NREP):
-        # _in = np.asarray(memoryview(tt))
-        # c = blosc2.pack_array2(_in, cparams=cparams)
         c = blosc2.pack_tensor(in_, cparams=cparams)
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
@@ -96,8 +96,6 @@ if store:
     c = None
     ctic = time.time()
     for i in range(NREP):
-        #_in = np.asarray(th)
-        #c = blosc2.pack_array2(_in, cparams=cparams)
         c = blosc2.pack_tensor(in_, cparams=cparams)
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP

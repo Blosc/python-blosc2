@@ -1,5 +1,16 @@
 # Release notes
 
+## Changes from 0.4.1 to 0.5.0
+
+* New `pack_tensor`, `unpack_tensor`, `save_tensor` and `load_tensor` functions for serializing/deserializing PyTorch and TensorFlow tensor objects.  They also understand NumPy arrays, so these are the new recommended ones for serialization.
+
+* ``pack_array2`` do not modify the value of a possible `cparams` parameter anymore.
+
+* The `pack_array2` / `save_array` have changed the serialization format to follow the new standard introduced in `pack_tensor`.  In the future `pack_array2` / `save_array` will probably be deprecated, so please change to `pack_tensor` / `save_tensor` as soon as you can.
+
+* The new 'standard' for serialization relies on using the '__pack_tensor__' attribute as a `vlmeta` (variable length) metalayer.
+
+
 ## Changes from 0.4.0 to 0.4.1
 
 * Add `msgpack` as a runtime requirement

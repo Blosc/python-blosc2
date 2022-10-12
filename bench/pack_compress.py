@@ -16,7 +16,7 @@ import numpy as np
 import blosc2
 
 
-NREP = 1
+NREP = 3
 N = int(2e8)
 Nexp = np.log10(N)
 
