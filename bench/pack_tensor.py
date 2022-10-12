@@ -26,10 +26,11 @@ store = True
 if len(sys.argv) > 1:
     store = True
 
-#blosc2.set_nthreads(2)
+# blosc2.set_nthreads(8)
 
-print(f"Creating NumPy array with {float(N):.3g} float64 elements...")
-in_ = np.arange(N, dtype=np.float64)
+print(f"Creating NumPy array with {float(N):.3g} float32 elements...")
+# in_ = np.arange(N, dtype=np.float32)
+in_ = np.linspace(0, 1, N, dtype=np.float32)
 
 if store:
     tt = tf.constant(in_)
@@ -43,7 +44,7 @@ if store:
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for tensorflow (io.serialize):\t\t%.3f (%.2f GB/s)) "
+        "  Time for tensorflow (io.serialize):\t\t%.3f s (%.2f GB/s)) "
         % (tc, ((N * 8 / tc) / 2 ** 30)), end=""
     )
     print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
@@ -60,7 +61,7 @@ if store:
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for torch (torch.save):\t\t\t%.3f (%.2f GB/s)) "
+        "  Time for torch (torch.save):\t\t\t%.3f s (%.2f GB/s)) "
         % (tc, ((N * 8 / tc) / 2 ** 30)), end=""
     )
     buff.seek(0)
@@ -70,7 +71,7 @@ if store:
     with open("serialize_torch.bin", 'wb') as f:
         f.write(c)
 
-    codec = blosc2.Codec.BLOSCLZ
+    codec = blosc2.Codec.LZ4
     # print(f"Storing with {codec}")
     cparams = {"codec": codec, "clevel": 9}
 
@@ -83,7 +84,7 @@ if store:
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for tensorflow (blosc2.pack_tensor):\t%.3f (%.2f GB/s)) "
+        "  Time for tensorflow (blosc2.pack_tensor):\t%.3f s (%.2f GB/s)) "
         % (tc, ((N * 8 / tc) / 2 ** 30)), end=""
     )
     print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
@@ -101,7 +102,7 @@ if store:
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for torch (blosc2.pack_tensor):\t\t%.3f (%.2f GB/s)) "
+        "  Time for torch (blosc2.pack_tensor):\t\t%.3f s (%.2f GB/s)) "
         % (tc, ((N * 8 / tc) / 2 ** 30)), end=""
     )
     print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
@@ -130,6 +131,7 @@ if True:
     out = None
     dtic = time.time()
     for i in range(NREP):
+        buff.seek(0)
         out = torch.load(buff)
     dtoc = time.time()
     td = (dtoc - dtic) / NREP
@@ -148,7 +150,7 @@ if True:
     dtoc = time.time()
     td = (dtoc - dtic) / NREP
     print(
-        "  Time for unpack_tensor (tensorflow):\t\t%.3f s (%.2f GB/s)) "
+        "  Time for tensorflow (unpack_tensor):\t\t%.3f s (%.2f GB/s)) "
         % (td, ((N * 8 / td) / 2 ** 30)),
     )
     assert np.array_equal(in_, out)
