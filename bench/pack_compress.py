@@ -141,18 +141,18 @@ for (in_, label) in arrays:
 
         ctic = time.time()
         for i in range(NREP):
-            c = blosc2.pack_array2(in_, cparams=cparams)
+            c = blosc2.pack_tensor(in_, cparams=cparams)
         ctoc = time.time()
         dtic = time.time()
         for i in range(NREP):
-            out = blosc2.unpack_array2(c)
+            out = blosc2.unpack_tensor(c)
         dtoc = time.time()
 
         assert np.array_equal(in_, out)
         tc = (ctoc - ctic) / NREP
         td = (dtoc - dtic) / NREP
         print(
-            "  Time for pack_array2/unpack_array2:   %.3f/%.3f s (%.2f/%.2f GB/s)) "
+            "  Time for pack_tensor/unpack_tensor:   %.3f/%.3f s (%.2f/%.2f GB/s)) "
             % (tc, td, ((N * 8 / tc) / 2 ** 30), ((N * 8 / td) / 2 ** 30)),
             end="",
         )

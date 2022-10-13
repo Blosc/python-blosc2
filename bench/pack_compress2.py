@@ -37,11 +37,11 @@ if store:
     c = None
     ctic = time.time()
     for i in range(NREP):
-        c = blosc2.pack_array2(in_, cparams=cparams)
+        c = blosc2.pack_tensor(in_, cparams=cparams)
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for pack_array2:   %.3f (%.2f GB/s)) "
+        "  Time for pack_tensor:   %.3f (%.2f GB/s)) "
         % (tc, ((N * 8 / tc) / 2 ** 30)),
     )
     print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
@@ -56,12 +56,12 @@ else:
     out = None
     dtic = time.time()
     for i in range(NREP):
-        out = blosc2.unpack_array2(c)
+        out = blosc2.unpack_tensor(c)
     dtoc = time.time()
 
     td = (dtoc - dtic) / NREP
     print(
-        "  Time for unpack_array2:   %.3f s (%.2f GB/s)) "
+        "  Time for unpack_tensor:   %.3f s (%.2f GB/s)) "
         % (td, ((N * 8 / td) / 2 ** 30)),
     )
     assert np.array_equal(in_, out)

@@ -5,16 +5,15 @@
 ########################################################################
 
 
-# A simple example using the pack_array2 and unpack_array2 functions
+# A simple example using the save_tensor and load_tensor functions
 
 import numpy as np
 import blosc2
 
 a = np.arange(1_000_000)
 
-cparams = {"codec": blosc2.Codec.BLOSCLZ}
-cframe = blosc2.pack_array2(a, cparams=cparams)
-print("Length of packed array in bytes:", len(cframe))
+file_size = blosc2.save_tensor(a, "save_tensor.bl2", mode="w")
+print("Length of saved tensor in file (bytes):", file_size)
 
-a2 = blosc2.unpack_array2(cframe)
+a2 = blosc2.load_tensor("save_tensor.bl2")
 assert np.alltrue(a == a2)
