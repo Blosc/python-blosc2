@@ -89,7 +89,7 @@ from .blosc2_ext import (
 blosclib_version = "%s (%s)" % (VERSION_STRING, VERSION_DATE)
 
 # Internal Blosc threading
-nthreads = ncores = detect_number_of_cores() / 2
+nthreads = ncores = detect_number_of_cores() // 2
 """Number of threads to be used in compression/decompression.
 """
 # Protection against too many threads
@@ -99,7 +99,7 @@ set_nthreads(nthreads)
 
 # Defaults for compression params
 cparams_dflts = {
-    'codec': Codec.BLOSCLZ,
+    'codec': Codec.LZ4,
     'codec_meta': 0,
     'clevel': 5,
     'use_dict': False,
