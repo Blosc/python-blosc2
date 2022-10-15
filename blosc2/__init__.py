@@ -33,7 +33,6 @@ class SplitMode(Enum):
     """
     Available split modes.
     """
-
     ALWAYS_SPLIT = 1
     NEVER_SPLIT = 2
     AUTO_SPLIT = 3

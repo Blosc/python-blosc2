@@ -12,7 +12,9 @@ import blosc2
 
 a = np.arange(1_000_000)
 
-cparams = {"codec": blosc2.Codec.BLOSCLZ}
+cparams = {"codec": blosc2.Codec.ZSTD, "clevel": 9,
+           "filters": [blosc2.Filter.BITSHUFFLE],
+           }
 cframe = blosc2.pack_tensor(a, cparams=cparams)
 print("Length of packed array in bytes:", len(cframe))
 

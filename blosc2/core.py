@@ -597,13 +597,13 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
     import numpy as np
     arr = np.asarray(tensor)
     # If not passed, set a sensible typesize
-    if 'cparams' in kwargs:
+    if 'cparams' in kwargs and 'typesize' not in kwargs['cparams']:
         cparams = kwargs.pop('cparams')
         cparams = cparams.copy()
-        if 'typesize' not in cparams:
-            cparams['typesize'] = arr.itemsize
-    else:
-        cparams = {"typesize": arr.itemsize}
+        cparams['typesize'] = arr.itemsize
+        kwargs['cparams'] = cparams
+    elif 'typesize' not in kwargs:
+        kwargs['typesize'] = arr.itemsize
 
     urlpath = kwargs.get('urlpath', None)
     contiguous = False if urlpath is None else True
@@ -615,8 +615,7 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
             chunksize = 2 ** 28
     # Make that a multiple of typesize
     chunksize = chunksize // arr.itemsize * arr.itemsize
-    schunk = blosc2.SChunk(chunksize=chunksize, contiguous=contiguous, data=arr,
-                           cparams=cparams, **kwargs)
+    schunk = blosc2.SChunk(chunksize=chunksize, contiguous=contiguous, data=arr, **kwargs)
     # Guess the kind of tensor / array
     repr_tensor = repr(tensor)
     if "tensor" in repr_tensor:
