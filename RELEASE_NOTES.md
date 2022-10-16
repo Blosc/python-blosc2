@@ -30,7 +30,7 @@ XXX version-specific blurb XXX
 
 * New `pack_array2()` and `unpack_array2()` functions for packing NumPy arrays.  Contrarily to `pack_array()` and `unpack_array()` counterparts, the new ones allow for compressing arrays larger than 2 GB in size.
 
-* New `Scunk.to_cframe()` and `blosc2.from_cframe()` methods for serializing/deserialzing `SChunk` instances.
+* New `Scunk.to_cframe()` and `blosc2.from_cframe()` methods for serializing/deserializing `SChunk` instances.
 
 * New `Schunk.get_slice()`, `SChunk.__getitem__()` and `SChunk.__setitem__()` methods for getting/setting slices from/to `SChunk` instances.
 
