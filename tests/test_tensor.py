@@ -5,6 +5,7 @@
 ########################################################################
 
 
+import os
 import numpy as np
 import pytest
 import blosc2
@@ -170,3 +171,18 @@ def test_save_tensor_torch(size, dtype, urlpath):
     tensor2 = blosc2.load_tensor(urlpath)
     blosc2.remove_urlpath(urlpath)
     assert np.array_equal(nparray, np.asarray(tensor2))
+
+@pytest.mark.parametrize(
+    "size, sparse, urlpath", [
+    (1e6, True, "test.bl2"),
+    (1e6, False, "test.bl2"),
+    ])
+def test_save_tensor_sparse(size, sparse, urlpath):
+    nparray = np.arange(size, dtype=np.int32)
+    serial_size = blosc2.save_tensor(nparray, urlpath, mode="w", contiguous=not sparse)
+    assert serial_size < nparray.size * nparray.itemsize
+
+    a2 = blosc2.load_tensor(urlpath)
+    assert os.path.isdir(urlpath) == sparse
+    blosc2.remove_urlpath(urlpath)
+    assert np.array_equal(nparray, a2)
