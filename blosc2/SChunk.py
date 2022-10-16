@@ -58,14 +58,14 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
 
 
 class SChunk(blosc2_ext.SChunk):
-    def __init__(self, chunksize=2 ** 24, data=None, **kwargs):
+    def __init__(self, chunksize=None, data=None, **kwargs):
         """Create a new super-chunk.
 
         Parameters
         ----------
         chunksize: int
             The size, in bytes, of the chunks from the super-chunk. If not provided,
-            it is set to 16 MB.
+            it is set automatically to a reasonable value.
 
         data: bytes-like object, optional
             The data to be split into different chunks of size :paramref:`chunksize`.
@@ -99,13 +99,34 @@ class SChunk(blosc2_ext.SChunk):
         >>> storage = {"contiguous": True, "cparams": {}, "dparams": {}}
         >>> schunk = blosc2.SChunk(**storage)
         """
-        if kwargs is not None:
-            # This a private param to get an SChunk from a blosc2_schunk*
-            sc = kwargs.pop("schunk", None)
-            self.urlpath = kwargs.get("urlpath", None)
-        else:
-            self.urlpath = None
-            sc = None
+        self.urlpath = kwargs.get("urlpath", None)
+        if 'contiguous' not in kwargs:
+            # Make contiguous true for disk, else sparse (for in-memory performance)
+            kwargs['contiguous'] = False if self.urlpath is None else True
+
+        # This a private param to get an SChunk from a blosc2_schunk*
+        sc = kwargs.pop("schunk", None)
+
+        # If not passed, set a sensible typesize
+        if data is not None and hasattr(data, "itemsize"):
+            if 'cparams' in kwargs and 'typesize' not in kwargs['cparams']:
+                cparams = kwargs.pop('cparams').copy()
+                cparams['typesize'] = data.itemsize
+                kwargs['cparams'] = cparams
+            elif 'typesize' not in kwargs:
+                kwargs['typesize'] = data.itemsize
+
+        # chunksize handling
+        if chunksize is None:
+            chunksize = 2 ** 24
+            if data is not None:
+                chunksize = data.size * data.itemsize
+                # Make that a multiple of typesize
+                chunksize = chunksize // data.itemsize * data.itemsize
+            # Use a cap of 256 MB (most of the modern machines should have this RAM available)
+            if chunksize > 2 ** 28:
+                chunksize = 2 ** 28
+
         super(SChunk, self).__init__(schunk=sc, chunksize=chunksize, data=data, **kwargs)
         self.vlmeta = vlmeta(super(SChunk, self).c_schunk, self.urlpath, self.mode)
 

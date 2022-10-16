@@ -596,26 +596,9 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
     """
     import numpy as np
     arr = np.asarray(tensor)
-    # If not passed, set a sensible typesize
-    if 'cparams' in kwargs and 'typesize' not in kwargs['cparams']:
-        cparams = kwargs.pop('cparams').copy()
-        cparams['typesize'] = arr.itemsize
-        kwargs['cparams'] = cparams
-    elif 'typesize' not in kwargs:
-        kwargs['typesize'] = arr.itemsize
 
-    urlpath = kwargs.get('urlpath', None)
-    if 'contiguous' not in kwargs:
-        kwargs['contiguous'] = False if urlpath is None else True
-
-    if chunksize is None:
-        chunksize = arr.size * arr.itemsize
-        # Use a cap of 256 MB (most of the modern machines should have this RAM available)
-        if chunksize > 2 ** 28:
-            chunksize = 2 ** 28
-    # Make that a multiple of typesize
-    chunksize = chunksize // arr.itemsize * arr.itemsize
     schunk = blosc2.SChunk(chunksize=chunksize, data=arr, **kwargs)
+
     # Guess the kind of tensor / array
     repr_tensor = repr(tensor)
     if "tensor" in repr_tensor:
@@ -632,10 +615,10 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
 
     schunk.vlmeta['__pack_tensor__'] = (kind, arr.shape, dtype)
 
-    if urlpath is None:
+    if schunk.urlpath is None:
         return schunk.to_cframe()
     else:
-        return os.stat(urlpath).st_size
+        return os.stat(schunk.urlpath).st_size
 
 
 def _unpack_tensor(schunk):
