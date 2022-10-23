@@ -98,7 +98,7 @@ set_nthreads(nthreads)
 
 # Defaults for compression params
 cparams_dflts = {
-    'codec': Codec.LZ4,
+    'codec': Codec.BLOSCLZ,
     'codec_meta': 0,
     'clevel': 5,
     'use_dict': False,
