@@ -46,7 +46,7 @@ if store:
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for tensorflow (io.serialize):\t\t%.3f s (%.2f GB/s)) "
+        "  Time for tensorflow (tf.io.serialize):\t%.3f s (%.2f GB/s)) "
         % (tc, ((N * 8 / tc) / 2 ** 30)), end=""
     )
     print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
@@ -119,7 +119,7 @@ if True:
     dtoc = time.time()
     td = (dtoc - dtic) / NREP
     print(
-        "  Time for tensorflow (parse_tensor):\t\t%.3f s (%.2f GB/s)) "
+        "  Time for tensorflow (tf.io.parse_tensor):\t%.3f s (%.2f GB/s)) "
         % (td, ((N * 8 / td) / 2 ** 30)),
     )
 
@@ -148,7 +148,7 @@ if True:
     dtoc = time.time()
     td = (dtoc - dtic) / NREP
     print(
-        "  Time for tensorflow (unpack_tensor):\t\t%.3f s (%.2f GB/s)) "
+        "  Time for tensorflow (blosc2.unpack_tensor):\t%.3f s (%.2f GB/s)) "
         % (td, ((N * 8 / td) / 2 ** 30)),
     )
     assert np.array_equal(in_, out)
