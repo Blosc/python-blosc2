@@ -1,10 +1,18 @@
-Announcing python-blosc2 0.5.0
+Announcing python-blosc2 0.5.2
 ==============================
 
-This is a major release introducing new `pack_tensor`, `unpack_tensor`,
-`save_tensor` and `load_tensor` functions for serializing/deserializing
-PyTorch and TensorFlow tensor objects.  They also understand NumPy arrays,
-so these are the new recommended ones for serialization.
+This is a minor release where it honors now nested `cparams` properties in
+kwargs for most of the functions.  So e.g. you can write:
+
+```
+blosc2.save_tensor(a, "test.bl2", mode="w",
+                   filters=[blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE],
+                   filters_meta=[13, 0],
+                   codec=blosc2.Codec.LZ4,
+                   clevel=9)
+```
+
+without a need to build a proper `cparams` dict first.
 
 For more info, you can have a look at the release notes in:
 

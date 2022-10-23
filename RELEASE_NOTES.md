@@ -1,8 +1,12 @@
 # Release notes
 
-## Changes from 0.5.0 to 0.5.1
+## Changes from 0.5.1 to 0.5.2
 
-XXX version-specific blurb XXX
+* Honor nested cparams properties in kwargs.
+
+* C-Blosc2 upgraded to 2.4.3.  It should improve cratio for BloscLZ in combination with bitshuffle.
+
+* Prefer pack_tensor/save_tensor in benchs and examples
 
 
 ## Changes from 0.5.0 to 0.5.1
