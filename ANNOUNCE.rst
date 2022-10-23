@@ -20,7 +20,7 @@ https://github.com/Blosc/python-blosc2/releases
 
 More docs and examples are available in the documentation site:
 
-https://python-blosc2.rtfd.io
+https://www.blosc.org/python-blosc2/python-blosc2.html
 
 
 Changes from python-blosc to python-blosc2

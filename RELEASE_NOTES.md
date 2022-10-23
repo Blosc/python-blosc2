@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from 0.5.2 to 0.5.3
+
+XXX version-specific blurb XXX
+
+
 ## Changes from 0.5.1 to 0.5.2
 
 * Honor nested cparams properties in kwargs.
