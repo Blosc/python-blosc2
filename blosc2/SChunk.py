@@ -46,8 +46,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
 
     def __iter__(self):
         keys = super(vlmeta, self).get_names()
-        for name in keys:
-            yield name
+        yield from keys
 
     def getall(self):
         """
