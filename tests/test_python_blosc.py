@@ -6,7 +6,6 @@
 
 
 # Test the python-blosc API
-# -*- coding: utf-8 -*-
 
 import ctypes
 import gc
