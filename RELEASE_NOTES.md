@@ -76,8 +76,8 @@ XXX version-specific blurb XXX
 
 ### Super-chunk implementation
 
-* New `SChunk` class that allows to create super-chunks. 
-  This includes the capability of storing data in 4 
+* New `SChunk` class that allows to create super-chunks.
+  This includes the capability of storing data in 4
   different ways (sparse/contiguous and in memory/on-disk),
   as well as storing variable length metalayers.
 
@@ -92,8 +92,8 @@ XXX version-specific blurb XXX
 
 This release is the result of a grant offered by
 the Python Software Foundation to Marta Iborra.
-A blog entry was written describing the difficulties and relevant 
-aspects learned during the work: 
+A blog entry was written describing the difficulties and relevant
+aspects learned during the work:
 https://www.blosc.org/posts/python-blosc2-initial-release/
 
 
@@ -139,8 +139,8 @@ Pickle protocol 5 comes with out-of-band data.
 which accepts any object with attributes `itemsize`
 and `size`.
 
-* On the other hand, the function `unpack` doesn't 
-return a numpy array whereas the `unpack_array` 
+* On the other hand, the function `unpack` doesn't
+return a numpy array whereas the `unpack_array`
 builds that array.
 
 * The `compcode` parameter has been renamed to `codec`.
@@ -149,11 +149,11 @@ Please update your code when you see this exception.
 
 * The different codecs are accessible via the `Codec` enumerated.
 E.g. `Codec.LZ4` or `Codec.Zlib`
-  
+
 * The different filters are accessible via the `Filter` enumerated.
 E.g. `Filter.SHUFFLE` or `Filter.BITSHUFFLE`
-  
+
 * The `blosc.NOSHUFFLE` is replaced by the `blosc2.Filter.NOFILTER`.
-  
+
 * A bytearray or NumPy object can be passed to the `blosc2.decompress`
 function to store the decompressed data.
