@@ -1,6 +1,12 @@
 set(STATIC_LIB ON CACHE BOOL "Build a static version of the blosc library.")
 set(SHARED_LIB ON CACHE BOOL "Build a shared library version of the blosc
     library.")
+
+set(BUILD_TESTS OFF CACHE BOOL "Build C-Blosc2 tests")
+set(BUILD_EXAMPLES OFF CACHE BOOL "Build C-Blosc2 examples")
+set(BUILD_BENCHMARKS OFF CACHE BOOL "Build C-Blosc2 benchmarks")
+set(BUILD_FUZZERS OFF CACHE BOOL "Build C-Blosc2 fuzzers")
+
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 # we want the binaries of the C-Blosc2 library to go into the wheels
 set(BLOSC_INSTALL ON)
