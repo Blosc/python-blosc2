@@ -1,6 +1,5 @@
 set(STATIC_LIB ON CACHE BOOL "Build a static version of the blosc library.")
-set(SHARED_LIB ON CACHE BOOL "Build a shared library version of the blosc
-    library.")
+set(SHARED_LIB ON CACHE BOOL "Build a shared library version of the blosc library.")
 
 set(BUILD_TESTS OFF CACHE BOOL "Build C-Blosc2 tests")
 set(BUILD_EXAMPLES OFF CACHE BOOL "Build C-Blosc2 examples")
