@@ -874,7 +874,7 @@ def compressor_list():
     :func:`~blosc2.set_compressor`
 
     """
-    return list(key.lower() for key in blosc2.Codec.__members__.keys())
+    return list(key.lower() for key in blosc2.Codec.__members__)
 
 
 def set_blocksize(blocksize=0):
