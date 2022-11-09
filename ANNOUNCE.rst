@@ -55,7 +55,7 @@ python-blosc2 is a pythonic wrapper for the C-Blosc2 library.
 
 The sources and documentation are managed through github services at:
 
-http://github.com/Blosc/python-blosc2
+https://github.com/Blosc/python-blosc2
 
 c-blosc2 is distributed using the BSD license, see
 [LICENSE](https://github.com/Blosc/python-blosc2/blob/main/LICENSE)
@@ -69,7 +69,7 @@ c-blosc2 are welcome:
 
 blosc@googlegroups.com
 
-http://groups.google.es/group/blosc
+https://groups.google.es/group/blosc
 
 
 ## Tweeter feed

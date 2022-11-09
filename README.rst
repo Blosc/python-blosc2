@@ -25,7 +25,7 @@ A Python wrapper for the extremely fast Blosc2 compression library
 What it is
 ==========
 
-Blosc (http://blosc.org) is a high performance compressor optimized for
+Blosc (https://blosc.org) is a high performance compressor optimized for
 binary data.  It has been designed to transmit data to the processor
 cache faster than the traditional, non-compressed, direct memory fetch
 approach via a memcpy() OS call.
@@ -209,8 +209,7 @@ License
 =======
 
 The software is licenses under a 3-Clause BSD license. A copy of the
-python-blosc2 license can be found in `LICENSE <https://github.com/Blosc/python-blosc2/tree/main/LICENSE>`_. A copy of all licenses can be
-found in `LICENSES/ <https://github.com/Blosc/python-blosc2/blob/main/LICENSES>`_.
+python-blosc2 license can be found in `LICENSE <https://github.com/Blosc/python-blosc2/tree/main/LICENSE>`_.
 
 Mailing list
 ============
@@ -219,7 +218,7 @@ Discussion about this module is welcome in the Blosc list:
 
 blosc@googlegroups.com
 
-http://groups.google.es/group/blosc
+https://groups.google.es/group/blosc
 
 Twitter
 =======
