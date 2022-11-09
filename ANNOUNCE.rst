@@ -58,7 +58,7 @@ The sources and documentation are managed through github services at:
 https://github.com/Blosc/python-blosc2
 
 c-blosc2 is distributed using the BSD license, see
-[LICENSE](https://github.com/Blosc/python-blosc2/blob/main/LICENSE)
+[LICENSE.txt](https://github.com/Blosc/python-blosc2/blob/main/LICENSE.txt)
 for details.
 
 
