@@ -98,7 +98,7 @@ class SChunk(blosc2_ext.SChunk):
         >>> storage = {"contiguous": True, "cparams": {}, "dparams": {}}
         >>> schunk = blosc2.SChunk(**storage)
         """
-        self.urlpath = kwargs.get("urlpath", None)
+        self.urlpath = kwargs.get("urlpath")
         if 'contiguous' not in kwargs:
             # Make contiguous true for disk, else sparse (for in-memory performance)
             kwargs['contiguous'] = False if self.urlpath is None else True
