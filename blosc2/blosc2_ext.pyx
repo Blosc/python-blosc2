@@ -3,6 +3,9 @@
 #       Author:  The Blosc development team - blosc@blosc.org
 #
 ########################################################################
+
+#cython: language_level=3
+
 from cpython cimport (
     Py_buffer,
     PyBUF_SIMPLE,
