@@ -12,9 +12,9 @@ Small benchmark that exercises packaging of arrays larger than 2 GB.
 
 import sys
 import time
-import numpy as np
-import blosc2
 
+import blosc2
+import numpy as np
 
 NREP = 1
 N = int(4e8 - 2**27)  # larger than 2 GB
@@ -24,7 +24,7 @@ store = False
 if len(sys.argv) > 1:
     store = True
 
-#blosc2.set_nthreads(2)
+# blosc2.set_nthreads(2)
 
 print(f"Creating NumPy array with {float(N):.3g} int64 elements...")
 in_ = np.arange(N, dtype=np.int64)

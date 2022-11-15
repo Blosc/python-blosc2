@@ -9,9 +9,8 @@
 import sys
 from time import time
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 # Dimensions, type and persistence properties for the arrays
 shape = 10_000 * 10_000

@@ -1,6 +1,7 @@
+from time import time
+
 import blosc2
 import numpy as np
-from time import time
 
 
 # Size and dtype of super-chunks
@@ -30,6 +31,7 @@ print(f"time append: {time() - t0:.2f}s")
 @blosc2.postfilter(schunk, np.dtype(dtype))
 def py_postfilter(input, output):
     output[:] = input + 1
+
 
 t0 = time()
 sum = 0

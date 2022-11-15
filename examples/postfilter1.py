@@ -1,0 +1,42 @@
+########################################################################
+#
+#       Author:  The Blosc development team - blosc@blosc.org
+#
+########################################################################
+
+import blosc2
+import numpy as np
+
+nchunks = 5
+input_dtype = np.dtype(np.int32)
+output_dtype = np.dtype(np.float32)
+
+# Set the compression and decompression parameters
+cparams = {"codec": blosc2.Codec.LZ4, "typesize": 4}
+dparams = {"nthreads": 4}
+contiguous = True
+urlpath = None
+storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+# Remove previous SChunk
+blosc2.remove_urlpath(urlpath)
+# Create and set data
+data = np.arange(200 * 1000 * nchunks, dtype=input_dtype)
+schunk = blosc2.SChunk(chunksize=200 * 1000 * input_dtype.itemsize, data=data, **storage)
+
+out1 = np.empty(200 * 1000 * nchunks, dtype=input_dtype)
+schunk.get_slice(0, 200 * 1000 * nchunks, out=out1)
+
+
+# Set postfilter with decorator
+@blosc2.postfilter(schunk, input_dtype, output_dtype)
+def postfilter(input, output, start):
+    output[:] = input - np.pi
+
+
+out2 = np.empty(200 * 1000 * nchunks, dtype=output_dtype)
+schunk.get_slice(0, 200 * 1000 * nchunks, out=out2)
+
+res = np.empty(out1.shape, dtype=output_dtype)
+postfilter(data, res, None)
+# Check postfilter is applied
+assert np.allclose(res, out2)

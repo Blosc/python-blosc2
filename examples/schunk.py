@@ -4,9 +4,8 @@
 #
 ########################################################################
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 nchunks = 10
 # Set the compression and decompression parameters

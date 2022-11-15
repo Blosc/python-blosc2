@@ -4,10 +4,10 @@
 #
 ########################################################################
 
-import numpy as np
 import pytest
 
 import blosc2
+import numpy as np
 
 
 @pytest.mark.parametrize("contiguous", [True, False])
@@ -40,15 +40,16 @@ def test_iterchunks(contiguous, urlpath, cparams, dparams, nchunks):
     blosc2.remove_urlpath(urlpath)
 
 
-@pytest.mark.parametrize("contiguous", [False])
-@pytest.mark.parametrize("urlpath", ["b2frame"])
+@pytest.mark.parametrize("contiguous", [True, False])
+@pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize(
     "cparams, dparams, nchunks",
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 2),
         ({"typesize": 4}, {"nthreads": 4}, 1),
         ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {"schunk": None}, 5),
-        ({"codec": blosc2.Codec.LZ4, "typesize": 4}, {}, 3), #TODO: Fix LZ4HC, ZLIB, ZSTD with postfilter without split
+        # TODO: Fix LZ4HC, ZLIB, ZSTD with postfilter without split
+        ({"codec": blosc2.Codec.LZ4, "typesize": 4}, {}, 3),
     ],
 )
 def test_iterchunks_pf(contiguous, urlpath, cparams, dparams, nchunks):
@@ -60,7 +61,7 @@ def test_iterchunks_pf(contiguous, urlpath, cparams, dparams, nchunks):
     schunk = blosc2.SChunk(chunksize=chunkshape * 4, data=data, **storage)
 
     @blosc2.postfilter(schunk, np.int32, np.int32)
-    def postf1(input, output):
+    def postf1(input, output, start):
         output[:] = input - 1
 
     data -= 1
@@ -68,4 +69,3 @@ def test_iterchunks_pf(contiguous, urlpath, cparams, dparams, nchunks):
         assert np.array_equal(chunk, data[i * chunkshape:(i + 1) * chunkshape])
 
     blosc2.remove_urlpath(urlpath)
-
