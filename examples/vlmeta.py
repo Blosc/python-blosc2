@@ -4,14 +4,14 @@
 #
 ########################################################################
 
-import numpy
+import numpy as np
 
 import blosc2
 
 nchunks = 10
 schunk = blosc2.SChunk(chunksize=200 * 1000 * 4)
 for i in range(nchunks):
-    buffer = i * numpy.arange(200 * 1000, dtype="int32")
+    buffer = i * np.arange(200 * 1000, dtype="int32")
     nchunks_ = schunk.append_data(buffer)
     assert nchunks_ == (i + 1)
 

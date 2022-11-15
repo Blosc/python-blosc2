@@ -82,8 +82,11 @@ from .blosc2_ext import (
     MIN_HEADER_LENGTH,
     VERSION_DATE,
     VERSION_STRING,
+    postfilter,
 )
 
+# Register for postfilters
+postfilter_funcs = {}
 
 blosclib_version = "%s (%s)" % (VERSION_STRING, VERSION_DATE)
 

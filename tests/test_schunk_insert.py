@@ -5,7 +5,7 @@
 ########################################################################
 import random
 
-import numpy
+import numpy as np
 import pytest
 
 import blosc2
@@ -35,13 +35,13 @@ def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts, copy, creat
 
     schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, **storage)
     for i in range(nchunks):
-        buffer = i * numpy.arange(200 * 1000, dtype="int32")
+        buffer = i * np.arange(200 * 1000, dtype="int32")
         nchunks_ = schunk.append_data(buffer)
         assert nchunks_ == (i + 1)
 
     for i in range(ninserts):
         pos = random.randint(0, nchunks + i)
-        buffer = pos * numpy.arange(200 * 1000, dtype="int32")
+        buffer = pos * np.arange(200 * 1000, dtype="int32")
         if create_chunk:
             chunk = blosc2.compress2(buffer)
             schunk.insert_chunk(pos, chunk)
@@ -51,9 +51,9 @@ def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts, copy, creat
         bytes_obj = buffer.tobytes()
         assert chunk_ == bytes_obj
 
-        dest = numpy.empty(buffer.shape, buffer.dtype)
+        dest = np.empty(buffer.shape, buffer.dtype)
         schunk.decompress_chunk(pos, dest)
-        assert numpy.array_equal(buffer, dest)
+        assert np.array_equal(buffer, dest)
 
     for i in range(nchunks + ninserts):
         schunk.decompress_chunk(i)

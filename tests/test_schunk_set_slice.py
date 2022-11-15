@@ -4,7 +4,7 @@
 #
 ########################################################################
 
-import numpy
+import numpy as np
 import pytest
 
 import blosc2
@@ -30,7 +30,7 @@ def test_schunk_set_slice(contiguous, urlpath, mode, cparams, dparams, nchunks, 
     storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     blosc2.remove_urlpath(urlpath)
 
-    data = numpy.arange(200 * 100 * nchunks, dtype="int32")
+    data = np.arange(200 * 100 * nchunks, dtype="int32")
     schunk = blosc2.SChunk(chunksize=200 * 100 * 4, data=data, mode=mode, **storage)
 
     _start, _stop = start, stop
@@ -43,13 +43,13 @@ def test_schunk_set_slice(contiguous, urlpath, mode, cparams, dparams, nchunks, 
     elif _stop < 0:
         _stop += data.size
 
-    val = nchunks * numpy.arange(_stop - _start, dtype="int32")
+    val = nchunks * np.arange(_stop - _start, dtype="int32")
     schunk[start:stop] = val
 
-    out = numpy.empty(val.shape, dtype="int32")
+    out = np.empty(val.shape, dtype="int32")
 
     schunk.get_slice(_start, _stop, out)
-    assert numpy.array_equal(val, out)
+    assert np.array_equal(val, out)
 
     blosc2.remove_urlpath(urlpath)
 
@@ -59,13 +59,13 @@ def test_schunk_set_slice_raises():
     blosc2.remove_urlpath(storage["urlpath"])
 
     nchunks = 2
-    data = numpy.arange(200 * 100 * nchunks, dtype="int32")
+    data = np.arange(200 * 100 * nchunks, dtype="int32")
     blosc2.SChunk(chunksize=200 * 100 * 4, data=data, **storage)
 
     schunk = blosc2.open(storage["urlpath"], mode="r")
     start = 200 * 100
     stop = 200 * 100 * nchunks
-    val = 3 * numpy.arange(start, stop, dtype="int32")
+    val = 3 * np.arange(start, stop, dtype="int32")
 
     with pytest.raises(ValueError):
         schunk[start:stop] = val

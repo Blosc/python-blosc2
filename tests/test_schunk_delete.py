@@ -5,7 +5,7 @@
 ########################################################################
 import random
 
-import numpy
+import numpy as np
 import pytest
 
 import blosc2
@@ -33,7 +33,7 @@ def test_schunk_delete_numpy(contiguous, urlpath, nchunks, ndeletes):
 
     schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, **storage)
     for i in range(nchunks):
-        buffer = i * numpy.arange(200 * 1000, dtype="int32")
+        buffer = i * np.arange(200 * 1000, dtype="int32")
         nchunks_ = schunk.append_data(buffer)
         assert nchunks_ == (i + 1)
 

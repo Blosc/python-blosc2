@@ -4,7 +4,7 @@
 #
 ########################################################################
 
-import numpy
+import numpy as np
 import pytest
 
 import blosc2
@@ -30,7 +30,7 @@ def test_schunk_get_slice(contiguous, urlpath, mode, cparams, dparams, nchunks, 
     storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     blosc2.remove_urlpath(urlpath)
 
-    data = numpy.arange(200 * 100 * nchunks, dtype="int32")
+    data = np.arange(200 * 100 * nchunks, dtype="int32")
     schunk = blosc2.SChunk(chunksize=200 * 100 * 4, data=data, mode=mode, **storage)
 
     start_, stop_ = start, stop
@@ -46,12 +46,12 @@ def test_schunk_get_slice(contiguous, urlpath, mode, cparams, dparams, nchunks, 
     res = schunk[start:stop]
     assert res == sl.tobytes()
 
-    out = numpy.empty(sl.shape, dtype="int32")
+    out = np.empty(sl.shape, dtype="int32")
     schunk.get_slice(start, stop, out)
-    assert numpy.array_equal(data[start_:stop_], out)
+    assert np.array_equal(data[start_:stop_], out)
 
     schunk.get_slice(start, stop, memoryview(out))
-    assert numpy.array_equal(data[start_:stop_], out)
+    assert np.array_equal(data[start_:stop_], out)
 
     out = bytearray(res)
     schunk.get_slice(start, stop, out)
@@ -65,7 +65,7 @@ def test_schunk_get_slice_raises():
     blosc2.remove_urlpath(storage["urlpath"])
 
     nchunks = 2
-    data = numpy.arange(200 * 100 * nchunks, dtype="int32")
+    data = np.arange(200 * 100 * nchunks, dtype="int32")
     schunk = blosc2.SChunk(chunksize=200 * 100 * 4, data=data, **storage)
 
     start = 200 * 100
@@ -73,7 +73,7 @@ def test_schunk_get_slice_raises():
     with pytest.raises(IndexError):
         res = schunk[start:stop:2]
 
-    out = numpy.empty(stop - start - 1, dtype="int32")
+    out = np.empty(stop - start - 1, dtype="int32")
     with pytest.raises(ValueError):
         schunk.get_slice(start, stop, out)
 

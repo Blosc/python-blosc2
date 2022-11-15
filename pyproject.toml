@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "scikit-build", "cython", "cmake", "ninja"]
+requires = ["setuptools", "scikit-build", "cython", "cmake", "ninja", "numpy"]
 
 [tool.black]
 line-length = 109

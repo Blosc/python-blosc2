@@ -22,6 +22,9 @@ from libcpp cimport bool
 from enum import Enum
 from msgpack import unpackb
 import blosc2
+import numpy as np
+cimport numpy as np
+np.import_array()
 
 
 cdef extern from "<stdint.h>":
@@ -342,6 +345,15 @@ cdef extern from "blosc2.h":
     int blosc2_remove_urlpath(const char *path)
 
 
+    ctypedef struct postfilters_udata:
+        char* py_func
+        char input_cdtype
+        char output_cdtype
+
+    int blosc2_schunk_set_postfilter(blosc2_schunk *schunk, blosc2_postfilter_fn postfilter, char *func,
+                                     char input_cdtype, char output_cdtype)
+
+
 MAX_TYPESIZE = BLOSC_MAX_TYPESIZE
 MAX_BUFFERSIZE = BLOSC2_MAX_BUFFERSIZE
 VERSION_STRING = (<char*>BLOSC2_VERSION_STRING).decode()
@@ -382,18 +394,19 @@ def decompress(src, dst=None, as_bytearray=False):
     cdef int32_t cbytes
     cdef int32_t blocksize
     cdef const uint8_t[:] typed_view_src
-    cdef uint8_t[:] typed_view_dst
 
     mem_view_src = memoryview(src)
     typed_view_src = mem_view_src.cast('B')
     _check_comp_length('src', len(typed_view_src))
     blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
+    cdef Py_buffer *buf
     if dst is not None:
-        mem_view_dst = memoryview(dst)
-        typed_view_dst = mem_view_dst.cast('B')
-        if len(typed_view_dst) == 0:
+        buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+        PyObject_GetBuffer(dst, buf, PyBUF_SIMPLE)
+        if buf.len == 0:
             raise ValueError("The dst length must be greater than 0")
-        size = blosc1_decompress(<void*>&typed_view_src[0], <void*>&typed_view_dst[0], len(typed_view_dst))
+        size = blosc1_decompress(<void*>&typed_view_src[0], buf.buf, buf.len)
+        PyBuffer_Release(buf)
     else:
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
         if dst is None:
@@ -563,17 +576,17 @@ def decompress2(src, dst=None, **kwargs):
     cdef int32_t cbytes
     cdef int32_t blocksize
     blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
-    cdef uint8_t[:] typed_view_dst
+    cdef Py_buffer *buf
     if dst is not None:
-        mem_view_dst = memoryview(dst)
-        typed_view_dst = mem_view_dst.cast('B')
-        if len(typed_view_dst) == 0:
+        buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+        PyObject_GetBuffer(dst, buf, PyBUF_SIMPLE)
+        if buf.len == 0:
             raise ValueError("The dst length must be greater than 0")
-        dst_buf = <char*>&typed_view_dst[0]
         view = <void*>&typed_view_src[0]
         with nogil:
-            size = blosc2_decompress_ctx(dctx, view, cbytes, <void*>dst_buf, nbytes)
+            size = blosc2_decompress_ctx(dctx, view, cbytes, buf.buf, nbytes)
             blosc2_free_ctx(dctx)
+        PyBuffer_Release(buf)
     else:
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
         if dst is None:
@@ -655,23 +668,33 @@ cdef class SChunk:
         self.schunk.chunksize = chunksize
         cdef const uint8_t[:] typed_view
         cdef int64_t index
+        cdef Py_buffer *buf
         if data is not None:
-            mem_view = memoryview(data)
-            typed_view = mem_view.cast('B')
-            len_data = typed_view.nbytes
+            buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+            PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
+            len_data = buf.len
             nchunks = len_data // chunksize + 1 if len_data % chunksize != 0 else len_data // chunksize
             len_chunk = chunksize
             for i in range(nchunks):
                 if i == (nchunks - 1):
                     len_chunk = len_data - i * chunksize
                 index = i * chunksize
-                nchunks_ = blosc2_schunk_append_buffer(self.schunk, <void*>&typed_view[index], len_chunk)
+                nchunks_ = blosc2_schunk_append_buffer(self.schunk, <void*>&buf.buf[index], len_chunk)
                 if nchunks_ != (i + 1):
+                    PyBuffer_Release(buf)
                     raise RuntimeError("An error occurred while appending the chunks")
+            PyBuffer_Release(buf)
 
     @property
     def c_schunk(self):
         return <uintptr_t> self.schunk
+
+    @property
+    def chunkshape(self):
+        return self.schunk.chunksize // self.schunk.typesize
+
+    def __len__(self):
+        return self.schunk.nbytes // self.schunk.typesize
 
     @property
     def chunksize(self):
@@ -688,7 +711,6 @@ cdef class SChunk:
         return rc
 
     def decompress_chunk(self, nchunk, dst=None):
-        cdef uint8_t[:] typed_view_dst
         cdef uint8_t *chunk
         cdef bool needs_free
         rc = blosc2_schunk_get_chunk(self.schunk, nchunk, &chunk, &needs_free)
@@ -703,12 +725,14 @@ cdef class SChunk:
         if needs_free:
             free(chunk)
 
+        cdef Py_buffer *buf
         if dst is not None:
-            mem_view_dst = memoryview(dst)
-            typed_view_dst = mem_view_dst.cast('B')
-            if len(typed_view_dst) == 0:
+            buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+            PyObject_GetBuffer(dst, buf, PyBUF_SIMPLE)
+            if buf.len == 0:
                 raise ValueError("The dst length must be greater than 0")
-            size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, <void*>&typed_view_dst[0], typed_view_dst.nbytes)
+            size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, buf.buf, buf.len)
+            PyBuffer_Release(buf)
         else:
             dst = PyBytes_FromStringAndSize(NULL, nbytes)
             if dst is None:
@@ -721,7 +745,6 @@ cdef class SChunk:
             raise RuntimeError("Error while decompressing the specified chunk")
 
     def get_chunk(self, nchunk):
-        cdef uint8_t[:] typed_view_dst
         cdef uint8_t *chunk
         cdef bool needs_free
         cbytes = blosc2_schunk_get_chunk(self.schunk, nchunk, &chunk, &needs_free)
@@ -934,9 +957,69 @@ cdef class SChunk:
 
         return start, stop
 
+    def _set_postfilter(self, func, dtype_input, dtype_output=None):
+        func_id = func.__name__
+        func_id = func_id.encode("utf-8") if isinstance(func_id, str) else func_id
+        blosc2.postfilter_funcs[func_id] = func
+
+        dtype_output = dtype_input if dtype_output is None else dtype_output
+        if dtype_output.itemsize != dtype_input.itemsize:
+            raise ValueError("`dtype_input` and `dtype_output` must have the same size")
+        cdef char input_cdtype = np.dtype(dtype_input).char.encode("utf-8")[0]
+        cdef char output_cdtype = np.dtype(dtype_output).char.encode("utf-8")[0]
+        rc = blosc2_schunk_set_postfilter(<blosc2_schunk *> self.schunk, general_postfilter, func_id, input_cdtype,
+                                          output_cdtype)
+        if rc < 0:
+            raise RuntimeError("Error while setting the postfilter")
+
     def __dealloc__(self):
         if self.schunk != NULL:
             blosc2_schunk_free(self.schunk)
+
+
+char2dtype = {'?': np.NPY_BOOL,
+              'b': np.NPY_INT8,
+              'h': np.NPY_INT16,
+              'i': np.NPY_INT32,
+              'l': np.NPY_INT64,
+              'B': np.NPY_UINT8,
+              'H': np.NPY_UINT16,
+              'I': np.NPY_UINT32,
+              'L': np.NPY_UINT64,
+              'e': np.NPY_FLOAT16,
+              'f': np.NPY_FLOAT32,
+              'd': np.NPY_FLOAT64,
+              'c': np.NPY_COMPLEX128,
+              's': np.NPY_STRING,
+              'M': np.NPY_DATETIME,
+              'm': np.NPY_TIMEDELTA,
+              }
+
+
+cdef int general_postfilter(blosc2_postfilter_params *params):
+    cdef postfilters_udata *udata = <postfilters_udata *> params.user_data
+    cdef int nd = 1
+    cdef np.npy_intp dims = params.size // params.typesize
+
+    input_cdtype = chr(udata.input_cdtype)
+    output_cdtype = chr(udata.output_cdtype)
+    input = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[input_cdtype], <void *> params.input)
+    output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.out)
+
+    func_id = udata.py_func
+    blosc2.postfilter_funcs[func_id](input, output)
+
+    return 0
+
+
+# postfilter decorator
+def postfilter(schunk, input_dtype, output_dtype=None):
+    def initialize(func):
+        schunk._set_postfilter(func, input_dtype, output_dtype)
+        def exec_func(*args):
+            func(*args)
+        return exec_func
+    return initialize
 
 
 def remove_urlpath(path):

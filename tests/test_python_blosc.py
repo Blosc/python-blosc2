@@ -15,7 +15,7 @@ import unittest
 import blosc2
 
 try:
-    import numpy
+    import numpy as np
 except ImportError:
     has_numpy = False
 else:
@@ -148,12 +148,12 @@ class TestCodec(unittest.TestCase):
         self.assertRaises(AttributeError, blosc2.pack_array, 1.0)
 
         # items = (blosc2.MAX_BUFFERSIZE // 8) + 1
-        one = numpy.ones(1, dtype=numpy.int64)
+        one = np.ones(1, dtype=np.int64)
         self.assertRaises(ValueError, blosc2.pack_array, one, clevel=-1)
         self.assertRaises(ValueError, blosc2.pack_array, one, clevel=10)
 
         # use stride trick to make an array that looks like a huge one
-        # ones = numpy.lib.stride_tricks.as_strided(one, shape=(1, items), strides=(8, 0))[0]
+        # ones = np.lib.stride_tricks.as_strided(one, shape=(1, items), strides=(8, 0))[0]
         # This should always raise an error
         # FIXME: temporary disable this, as it seems that it can raise MemoryError
         #   when building wheels.  Not sure why this is happening.
@@ -217,7 +217,7 @@ class TestCodec(unittest.TestCase):
 
     def test_bitshuffle_not_multiple(self):
         # Check the fix for #133
-        x = numpy.ones(27266, dtype="uint8")
+        x = np.ones(27266, dtype="uint8")
         xx = x.tobytes()
         self.assertRaises(ValueError, blosc2.compress, xx, typesize=8, filter=blosc2.Filter.BITSHUFFLE)
         zxx = blosc2.compress(xx, filter=blosc2.Filter.BITSHUFFLE)
