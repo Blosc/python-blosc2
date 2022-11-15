@@ -2,33 +2,45 @@ import blosc2
 import numpy as np
 from time import time
 
-nchunks = 1_000
+
+# Size and dtype of super-chunks
+nchunks = 20_000
+chunkshape = 50_000
+dtype = np.dtype(np.int32)
+chunksize = chunkshape * dtype.itemsize
+
 # Set the compression and decompression parameters
-cparams = {"codec": blosc2.Codec.LZ4, "typesize": 4, "nthreads": 1}
-dparams = {"nthreads": 4}
-contiguous = True
-urlpath = "filename"
+cparams = {"clevel": 9, "codec": blosc2.Codec.BLOSCLZ, "typesize": 4, "nthreads": 1}
+dparams = {"nthreads": 1}
+storage = {"cparams": cparams, "dparams": dparams}
 
-storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
-blosc2.remove_urlpath(urlpath)
+# Create super-chunks
+schunk0 = blosc2.SChunk(chunksize=chunksize, **storage)
+schunk = blosc2.SChunk(chunksize=chunksize, **storage)
 
-chunkshape = 500 * 1000
-schunk = blosc2.SChunk(chunksize=chunkshape * 4, **storage)
-data = np.arange(chunkshape, dtype=np.int32)
-
+data = np.arange(chunkshape, dtype=dtype)
 t0 = time()
 for i in range(nchunks):
     schunk.append_data(data)
-print(f"time append: {time() - t0:.2f} s")
+    schunk0.append_data(data)
+print(f"time append: {time() - t0:.2f}s")
+# print(f"cratio: {schunk.nbytes / schunk.cbytes:.2f}x")
 
-
-@blosc2.postfilter(schunk, np.dtype(np.int32), np.dtype(np.int32))
+# Associate a postfilter to schunk
+@blosc2.postfilter(schunk, np.dtype(dtype))
 def py_postfilter(input, output):
     output[:] = input + 1
 
 t0 = time()
 sum = 0
-for chunk in schunk.iterchunks(np.int32):
+for chunk in schunk0.iterchunks(dtype):
     sum += chunk.sum()
-print(f"time sum: {time() - t0:.2f} s")
+print(f"time sum (no postfilter): {time() - t0:.2f}s")
+print(sum)
+
+t0 = time()
+sum = 0
+for chunk in schunk.iterchunks(dtype):
+    sum += chunk.sum()
+print(f"time sum (postfilter): {time() - t0:.2f}s")
 print(sum)
