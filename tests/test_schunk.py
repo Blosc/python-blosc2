@@ -4,7 +4,7 @@
 #
 ########################################################################
 
-import numpy
+import numpy as np
 import pytest
 
 import blosc2
@@ -30,22 +30,22 @@ def test_schunk_numpy(contiguous, urlpath, mode, cparams, dparams, nchunks):
         schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, mode=mode, **storage)
 
         for i in range(nchunks):
-            buffer = i * numpy.arange(200 * 1000, dtype="int32")
+            buffer = i * np.arange(200 * 1000, dtype="int32")
             nchunks_ = schunk.append_data(buffer)
             assert nchunks_ == (i + 1)
 
         for i in range(nchunks):
-            buffer = i * numpy.arange(200 * 1000, dtype="int32")
+            buffer = i * np.arange(200 * 1000, dtype="int32")
             bytes_obj = buffer.tobytes()
             res = schunk.decompress_chunk(i)
             assert res == bytes_obj
 
-            dest = numpy.empty(buffer.shape, buffer.dtype)
+            dest = np.empty(buffer.shape, buffer.dtype)
             schunk.decompress_chunk(i, dest)
-            assert numpy.array_equal(buffer, dest)
+            assert np.array_equal(buffer, dest)
 
             schunk.decompress_chunk(i, memoryview(dest))
-            assert numpy.array_equal(buffer, dest)
+            assert np.array_equal(buffer, dest)
 
             dest = bytearray(buffer)
             schunk.decompress_chunk(i, dest)
@@ -110,14 +110,14 @@ def test_schunk_cframe(contiguous, urlpath, cparams, dparams, nchunks, copy):
     storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     blosc2.remove_urlpath(urlpath)
 
-    data = numpy.arange(200 * 1000 * nchunks, dtype="int32")
+    data = np.arange(200 * 1000 * nchunks, dtype="int32")
     schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, data=data, **storage)
 
     cframe = schunk.to_cframe()
     schunk2 = blosc2.schunk_from_cframe(cframe, copy)
-    data2 = numpy.empty(data.shape, dtype=data.dtype)
+    data2 = np.empty(data.shape, dtype=data.dtype)
     schunk2.get_slice(out=data2)
-    assert numpy.array_equal(data, data2)
+    assert np.array_equal(data, data2)
 
     cframe = schunk.to_cframe()
     schunk3 = blosc2.schunk_from_cframe(cframe, copy)

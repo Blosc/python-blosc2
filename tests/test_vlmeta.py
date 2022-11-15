@@ -4,7 +4,7 @@
 #
 ########################################################################
 
-import numpy
+import numpy as np
 import pytest
 
 import blosc2
@@ -24,7 +24,7 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
 
     schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, **storage)
     for i in range(nchunks):
-        buffer = i * numpy.arange(200 * 1000, dtype="int32")
+        buffer = i * np.arange(200 * 1000, dtype="int32")
         nchunks_ = schunk.append_data(buffer)
         assert nchunks_ == (i + 1)
 
@@ -95,7 +95,7 @@ def iter(schunk):
 
 
 def clear(schunk):
-    nparray = numpy.arange(start=0, stop=2)
+    nparray = np.arange(start=0, stop=2)
     schunk.vlmeta["vlmeta2"] = nparray.tobytes()
     assert schunk.vlmeta["vlmeta2"] == nparray.tobytes()
     assert schunk.vlmeta.__len__() == 3

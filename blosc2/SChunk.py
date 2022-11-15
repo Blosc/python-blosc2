@@ -5,10 +5,10 @@
 ########################################################################
 
 from collections.abc import MutableMapping
-
 from msgpack import packb, unpackb
-
 from blosc2 import blosc2_ext
+import numpy as np
+
 
 # See https://github.com/dask/distributed/issues/3716#issuecomment-632913789
 def encode_tuple(obj):
@@ -153,9 +153,9 @@ class SChunk(blosc2_ext.SChunk):
         Examples
         --------
         >>> import blosc2
-        >>> import numpy
+        >>> import numpy as np
         >>> schunk = blosc2.SChunk(chunksize=200*1000*4)
-        >>> data = numpy.arange(200 * 1000, dtype='int32')
+        >>> data = np.arange(200 * 1000, dtype='int32')
         >>> schunk.append_data(data)
         1
         """
@@ -469,6 +469,12 @@ class SChunk(blosc2_ext.SChunk):
         """
         return super(SChunk, self).to_cframe()
 
+    def iterchunks(self, dtype):
+        out = np.empty(self.chunkshape, dtype)
+        for i in range(0, len(self), self.chunkshape):
+            self.get_slice(i, i + self.chunkshape, out)
+            yield out
+
     def __dealloc__(self):
         super(SChunk, self).__dealloc__()
 
@@ -498,22 +504,22 @@ def open(urlpath, mode="a", **kwargs):
     Examples
     --------
     >>> import blosc2
-    >>> import numpy
+    >>> import numpy as np
     >>> storage = {"contiguous": True, "urlpath": "b2frame", "cparams": {}, "dparams": {}}
     >>> nelem = 20 * 1000
     >>> nchunks = 5
     >>> chunksize = nelem * 4 // nchunks
-    >>> data = numpy.arange(nelem, dtype="int32")
+    >>> data = np.arange(nelem, dtype="int32")
     >>> # Create SChunk and append data
     >>> schunk = blosc2.SChunk(chunksize=chunksize, data=data.tobytes(), mode="w", **storage)
     >>> # Open SChunk
     >>> sc_open = blosc2.open(urlpath=storage["urlpath"])
     >>> for i in range(nchunks):
-    ...     dest = numpy.empty(nelem // nchunks, dtype=data.dtype)
+    ...     dest = np.empty(nelem // nchunks, dtype=data.dtype)
     ...     schunk.decompress_chunk(i, dest)
-    ...     dest1 = numpy.empty(nelem // nchunks, dtype=data.dtype)
+    ...     dest1 = np.empty(nelem // nchunks, dtype=data.dtype)
     ...     sc_open.decompress_chunk(i, dest1)
-    ...     numpy.array_equal(dest, dest1)
+    ...     np.array_equal(dest, dest1)
     True
     True
     True

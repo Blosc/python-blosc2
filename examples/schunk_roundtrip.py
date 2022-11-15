@@ -4,7 +4,7 @@
 #
 ########################################################################
 
-import numpy
+import numpy as np
 
 import blosc2
 
@@ -19,14 +19,14 @@ storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dp
 blosc2.remove_urlpath(urlpath)
 
 # Create the SChunk
-data = numpy.arange(200 * 1000 * nchunks)
+data = np.arange(200 * 1000 * nchunks)
 schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, data=data, **storage)
 
 cframe = schunk.to_cframe()
 
 schunk2 = blosc2.schunk_from_cframe(cframe, False)
-data2 = numpy.empty(data.shape, dtype=data.dtype)
+data2 = np.empty(data.shape, dtype=data.dtype)
 schunk2.get_slice(out=data2)
-assert numpy.array_equal(data, data2)
+assert np.array_equal(data, data2)
 
 blosc2.remove_urlpath(urlpath)

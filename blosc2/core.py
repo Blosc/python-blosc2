@@ -167,12 +167,12 @@ def decompress(src, dst=None, as_bytearray=False):
     >>> type(blosc2.decompress(blosc2.compress(b"1"*7),
     ...                        as_bytearray=True)) is bytearray
     True
-    >>> import numpy
-    >>> arr = numpy.arange(10)
+    >>> import numpy as np
+    >>> arr = np.arange(10)
     >>> comp_arr = blosc2.compress(arr)
-    >>> dest = numpy.empty(arr.shape, arr.dtype)
+    >>> dest = np.empty(arr.shape, arr.dtype)
     >>> blosc2.decompress(comp_arr, dst=dest)
-    >>> numpy.array_equal(arr, dest)
+    >>> np.array_equal(arr, dest)
     True
     """
     return blosc2_ext.decompress(src, dst, as_bytearray)
@@ -221,8 +221,8 @@ def pack(obj, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ
 
     Examples
     --------
-    >>> import numpy
-    >>> a = numpy.arange(1e6)
+    >>> import numpy as np
+    >>> a = np.arange(1e6)
     >>> parray = blosc2.pack(a)
     >>> len(parray) < a.size * a.itemsize
     True
@@ -268,18 +268,18 @@ def unpack(packed_object, **kwargs):
 
     Examples
     --------
-    >>> import numpy
-    >>> a = numpy.arange(1e6)
+    >>> import numpy as np
+    >>> a = np.arange(1e6)
     >>> parray = blosc2.pack(a)
     >>> len(parray) < a.size * a.itemsize
     True
     >>> a2 = blosc2.unpack(parray)
-    >>> numpy.array_equal(a, a2)
+    >>> np.array_equal(a, a2)
     True
-    >>> a = numpy.array(['å', 'ç', 'ø'])
+    >>> a = np.array(['å', 'ç', 'ø'])
     >>> parray = blosc2.pack(a)
     >>> a2 = blosc2.unpack(parray)
-    >>> numpy.array_equal(a, a2)
+    >>> np.array_equal(a, a2)
     True
     """
     pickled_object = decompress(packed_object)
@@ -330,8 +330,8 @@ def pack_array(arr, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.B
 
     Examples
     --------
-    >>> import numpy
-    >>> a = numpy.arange(1e6)
+    >>> import numpy as np
+    >>> a = np.arange(1e6)
     >>> parray = blosc2.pack_array(a)
     >>> len(parray) < a.size*a.itemsize
     True
@@ -362,27 +362,26 @@ def unpack_array(packed_array, **kwargs):
 
     Examples
     --------
-    >>> import numpy
-    >>> a = numpy.arange(1e6)
+    >>> import numpy as np
+    >>> a = np.arange(1e6)
     >>> parray = blosc2.pack_array(a)
     >>> len(parray) < a.size*a.itemsize
     True
     >>> a2 = blosc2.unpack_array(parray)
-    >>> numpy.array_equal(a, a2)
+    >>> np.array_equal(a, a2)
     True
-    >>> a = numpy.array(['å', 'ç', 'ø'])
+    >>> a = np.array(['å', 'ç', 'ø'])
     >>> parray = blosc2.pack_array(a)
     >>> a2 = blosc2.unpack_array(parray)
-    >>> numpy.array_equal(a, a2)
+    >>> np.array_equal(a, a2)
     True
     """
     pickled_array = decompress(packed_array)
     if kwargs:
         arr = pickle.loads(pickled_array, **kwargs)
         if all(isinstance(x, bytes) for x in arr.tolist()):
-            import numpy
-
-            arr = numpy.array([x.decode("utf-8") for x in arr.tolist()])
+            import numpy as np
+            arr = np.array([x.decode("utf-8") for x in arr.tolist()])
     else:
         arr = pickle.loads(pickled_array)
 
@@ -414,8 +413,8 @@ def pack_array2(arr, chunksize=None, **kwargs):
 
     Examples
     --------
-    >>> import numpy
-    >>> a = numpy.arange(1e6)
+    >>> import numpy as np
+    >>> a = np.arange(1e6)
     >>> cframe = blosc2.pack_array2(a)
     >>> len(cframe) < a.size * a.itemsize
     True
@@ -453,13 +452,13 @@ def unpack_array2(cframe):
 
     Examples
     --------
-    >>> import numpy
-    >>> a = numpy.arange(1e6)
+    >>> import numpy as np
+    >>> a = np.arange(1e6)
     >>> cframe = blosc2.pack_array2(a)
     >>> len(cframe) < a.size*a.itemsize
     True
     >>> a2 = blosc2.unpack_array2(cframe)
-    >>> numpy.array_equal(a, a2)
+    >>> np.array_equal(a, a2)
     True
 
     See also
@@ -500,8 +499,8 @@ def save_array(arr, urlpath, chunksize=None, **kwargs):
 
     Examples
     --------
-    >>> import numpy
-    >>> a = numpy.arange(1e6)
+    >>> import numpy as np
+    >>> a = np.arange(1e6)
     >>> serial_size = blosc2.save_array(a, "test.bl2", mode="w")
     >>> serial_size < a.size * a.itemsize
     True
@@ -539,13 +538,13 @@ def load_array(urlpath):
 
     Examples
     --------
-    >>> import numpy
-    >>> a = numpy.arange(1e6)
+    >>> import numpy as np
+    >>> a = np.arange(1e6)
     >>> serial_size = blosc2.save_array(a, "test.bl2", mode="w")
     >>> serial_size < a.size * a.itemsize
     True
     >>> a2 = blosc2.load_array("test.bl2")
-    >>> numpy.array_equal(a, a2)
+    >>> np.array_equal(a, a2)
     True
 
     See also
@@ -623,9 +622,9 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
 
 
 def _unpack_tensor(schunk):
-    import numpy
+    import numpy as np
     kind, shape, dtype = schunk.vlmeta['__pack_tensor__']
-    out = numpy.empty(shape, dtype=dtype)
+    out = np.empty(shape, dtype=dtype)
     schunk.get_slice(out=out)
 
     if kind == "torch":
