@@ -13,9 +13,8 @@ compression through different compressors in blosc2.
 
 import time
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 NREP = 4
 N = int(1e8)

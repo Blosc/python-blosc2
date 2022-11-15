@@ -7,8 +7,8 @@
 
 # A simple example using the pack_tensor and unpack_tensor functions
 
-import numpy as np
 import blosc2
+import numpy as np
 
 a = np.arange(1_000_000)
 

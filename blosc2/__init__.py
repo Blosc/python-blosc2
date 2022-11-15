@@ -39,6 +39,16 @@ class SplitMode(Enum):
     FORWARD_COMPAT_SPLIT = 4
 
 
+from .blosc2_ext import (
+    EXTENDED_HEADER_LENGTH,
+    MAX_BUFFERSIZE,
+    MAX_TYPESIZE,
+    MIN_HEADER_LENGTH,
+    VERSION_DATE,
+    VERSION_STRING,
+    postfilter,
+)
+
 # Public API for container module
 from .core import (
     clib_info,
@@ -52,12 +62,16 @@ from .core import (
     get_blocksize,
     get_clib,
     get_compressor,
+    load_array,
+    load_tensor,
     pack,
     pack_array,
     pack_array2,
-    save_array,
+    pack_tensor,
     print_versions,
     remove_urlpath,
+    save_array,
+    save_tensor,
     schunk_from_cframe,
     set_blocksize,
     set_compressor,
@@ -66,24 +80,10 @@ from .core import (
     unpack,
     unpack_array,
     unpack_array2,
-    load_array,
-    pack_tensor,
     unpack_tensor,
-    save_tensor,
-    load_tensor,
 )
-from .SChunk import (SChunk, open)
+from .SChunk import SChunk, open
 from .version import __version__
-
-from .blosc2_ext import (
-    EXTENDED_HEADER_LENGTH,
-    MAX_BUFFERSIZE,
-    MAX_TYPESIZE,
-    MIN_HEADER_LENGTH,
-    VERSION_DATE,
-    VERSION_STRING,
-    postfilter,
-)
 
 # Register for postfilters
 postfilter_funcs = {}

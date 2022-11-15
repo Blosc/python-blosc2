@@ -5,9 +5,11 @@
 ########################################################################
 
 from collections.abc import MutableMapping
+
 from msgpack import packb, unpackb
-from blosc2 import blosc2_ext
+
 import numpy as np
+from blosc2 import blosc2_ext
 
 
 # See https://github.com/dask/distributed/issues/3716#issuecomment-632913789
@@ -15,6 +17,7 @@ def encode_tuple(obj):
     if isinstance(obj, tuple):
         obj = ["__tuple__", *obj]
     return obj
+
 
 def decode_tuple(obj):
     if obj[0] == "__tuple__":

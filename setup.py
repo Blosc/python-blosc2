@@ -6,6 +6,7 @@
 # LICENSE.txt file in the root directory of this source tree)
 #######################################################################
 
+from pathlib import Path
 from textwrap import dedent
 
 from skbuild import setup
@@ -39,9 +40,8 @@ classifiers = dedent(
     """
 )
 
-# read the contents of the README file
-from pathlib import Path
 
+# read the contents of the README file
 this_directory = Path(__file__).parent
 long_description = (this_directory / "README.rst").read_text()
 

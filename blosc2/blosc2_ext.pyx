@@ -20,10 +20,14 @@ from libc.string cimport memcpy
 from libcpp cimport bool
 
 from enum import Enum
+
 from msgpack import unpackb
+
 import blosc2
 import numpy as np
+
 cimport numpy as np
+
 np.import_array()
 
 
@@ -349,6 +353,8 @@ cdef extern from "blosc2.h":
         char* py_func
         char input_cdtype
         char output_cdtype
+        int64_t chunkshape
+        int64_t blockshape
 
     int blosc2_schunk_set_postfilter(blosc2_schunk *schunk, blosc2_postfilter_fn postfilter, char *func,
                                      char input_cdtype, char output_cdtype)
@@ -963,6 +969,8 @@ cdef class SChunk:
         blosc2.postfilter_funcs[func_id] = func
 
         dtype_output = dtype_input if dtype_output is None else dtype_output
+        dtype_input = np.dtype(dtype_input)
+        dtype_output = np.dtype(dtype_output)
         if dtype_output.itemsize != dtype_input.itemsize:
             raise ValueError("`dtype_input` and `dtype_output` must have the same size")
         cdef char input_cdtype = np.dtype(dtype_input).char.encode("utf-8")[0]
@@ -989,8 +997,8 @@ char2dtype = {'?': np.NPY_BOOL,
               'e': np.NPY_FLOAT16,
               'f': np.NPY_FLOAT32,
               'd': np.NPY_FLOAT64,
-              'c': np.NPY_COMPLEX128,
-              's': np.NPY_STRING,
+              'F': np.NPY_COMPLEX64,
+              'D': np.NPY_COMPLEX128,
               'M': np.NPY_DATETIME,
               'm': np.NPY_TIMEDELTA,
               }
@@ -1005,9 +1013,10 @@ cdef int general_postfilter(blosc2_postfilter_params *params):
     output_cdtype = chr(udata.output_cdtype)
     input = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[input_cdtype], <void *> params.input)
     output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.out)
+    start = params.nchunk * udata.chunkshape + params.nblock * udata.blockshape
 
     func_id = udata.py_func
-    blosc2.postfilter_funcs[func_id](input, output)
+    blosc2.postfilter_funcs[func_id](input, output, start)
 
     return 0
 

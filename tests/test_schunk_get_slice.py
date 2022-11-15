@@ -4,10 +4,10 @@
 #
 ########################################################################
 
-import numpy as np
 import pytest
 
 import blosc2
+import numpy as np
 
 
 @pytest.mark.parametrize("contiguous", [True, False])
@@ -71,7 +71,7 @@ def test_schunk_get_slice_raises():
     start = 200 * 100
     stop = 200 * 100 * nchunks
     with pytest.raises(IndexError):
-        res = schunk[start:stop:2]
+        schunk[start:stop:2]
 
     out = np.empty(stop - start - 1, dtype="int32")
     with pytest.raises(ValueError):
@@ -80,11 +80,11 @@ def test_schunk_get_slice_raises():
     start = -1
     stop = -4
     with pytest.raises(ValueError):
-        res = schunk[start:stop]
+        schunk[start:stop]
 
     start = 200 * 100 * nchunks
     stop = start + 4
     with pytest.raises(ValueError):
-        res = schunk[start:stop]
+        schunk[start:stop]
 
     blosc2.remove_urlpath(storage["urlpath"])
