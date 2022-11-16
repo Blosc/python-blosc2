@@ -706,6 +706,20 @@ cdef class SChunk:
     def chunksize(self):
         return self.schunk.chunksize
 
+    @property
+    def cratio(self):
+        if self.schunk.cbytes == 0:
+            raise ZeroDivisionError("Empty schunk")
+        return self.schunk.nbytes / self.schunk.cbytes
+
+    @property
+    def nbytes(self):
+        return self.schunk.nbytes
+
+    @property
+    def cbytes(self):
+        return self.schunk.cbytes
+
     def append_data(self, data):
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)

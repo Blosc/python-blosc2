@@ -27,15 +27,16 @@ def test_schunk_numpy(contiguous, urlpath, mode, cparams, dparams, nchunks):
     blosc2.remove_urlpath(urlpath)
 
     if mode != "r" or urlpath is None:
-        schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, mode=mode, **storage)
+        chunk_len = 200 * 1000
+        schunk = blosc2.SChunk(chunksize=chunk_len * 4, mode=mode, **storage)
 
         for i in range(nchunks):
-            buffer = i * np.arange(200 * 1000, dtype="int32")
+            buffer = i * np.arange(chunk_len, dtype="int32")
             nchunks_ = schunk.append_data(buffer)
             assert nchunks_ == (i + 1)
 
         for i in range(nchunks):
-            buffer = i * np.arange(200 * 1000, dtype="int32")
+            buffer = i * np.arange(chunk_len, dtype="int32")
             bytes_obj = buffer.tobytes()
             res = schunk.decompress_chunk(i)
             assert res == bytes_obj
@@ -53,6 +54,11 @@ def test_schunk_numpy(contiguous, urlpath, mode, cparams, dparams, nchunks):
 
         for i in range(nchunks):
             schunk.get_chunk(i)
+
+        if nchunks >= 2:
+            assert schunk.cratio > 1
+            assert schunk.cratio == schunk.nbytes / schunk.cbytes
+        assert schunk.nbytes >= nchunks * chunk_len * 4
 
         blosc2.remove_urlpath(urlpath)
 
