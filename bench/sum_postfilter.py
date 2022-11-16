@@ -25,11 +25,11 @@ for i in range(nchunks):
     schunk.append_data(data)
     schunk0.append_data(data)
 print(f"time append: {time() - t0:.2f}s")
-# print(f"cratio: {schunk.nbytes / schunk.cbytes:.2f}x")
+# print(f"cratio: {schunk.cratio:.2f}x")
 
 # Associate a postfilter to schunk
 @blosc2.postfilter(schunk, np.dtype(dtype))
-def py_postfilter(input, output):
+def py_postfilter(input, output, offset):
     output[:] = input + 1
 
 
