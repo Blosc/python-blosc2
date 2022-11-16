@@ -30,7 +30,7 @@ schunk.get_slice(0, chunkshape * nchunks, out=out1)
 
 # Set postfilter with decorator
 @blosc2.postfilter(schunk, input_dtype, output_dtype)
-def postfilter(input, output, start):
+def postfilter(input, output, offset):
     output[:] = input <= np.datetime64('1997-12-31')
 
 
