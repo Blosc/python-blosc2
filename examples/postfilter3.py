@@ -29,9 +29,9 @@ schunk.get_slice(0, chunkshape * nchunks, out=out1)
 
 # Set postfilter with decorator
 @blosc2.postfilter(schunk, input_dtype)
-def postfilter(input, output, start):
+def postfilter(input, output, offset):
     for i in range(input.size):
-        output[i] = start + i
+        output[i] = offset + i
 
 
 out2 = np.empty(chunkshape * nchunks, dtype=input_dtype)

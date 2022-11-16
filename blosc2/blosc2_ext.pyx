@@ -1013,10 +1013,10 @@ cdef int general_postfilter(blosc2_postfilter_params *params):
     output_cdtype = chr(udata.output_cdtype)
     input = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[input_cdtype], <void *> params.input)
     output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.out)
-    start = params.nchunk * udata.chunkshape + params.nblock * udata.blockshape
+    offset = params.nchunk * udata.chunkshape + params.nblock * udata.blockshape
 
     func_id = udata.py_func
-    blosc2.postfilter_funcs[func_id](input, output, start)
+    blosc2.postfilter_funcs[func_id](input, output, offset)
 
     return 0
 

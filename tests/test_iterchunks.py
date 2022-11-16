@@ -61,7 +61,7 @@ def test_iterchunks_pf(contiguous, urlpath, cparams, dparams, nchunks):
     schunk = blosc2.SChunk(chunksize=chunkshape * 4, data=data, **storage)
 
     @blosc2.postfilter(schunk, np.int32, np.int32)
-    def postf1(input, output, start):
+    def postf1(input, output, offset):
         output[:] = input - 1
 
     data -= 1
