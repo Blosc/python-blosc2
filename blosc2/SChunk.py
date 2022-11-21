@@ -101,6 +101,10 @@ class SChunk(blosc2_ext.SChunk):
         >>> storage = {"contiguous": True, "cparams": {}, "dparams": {}}
         >>> schunk = blosc2.SChunk(**storage)
         """
+        # Check only allowed kwarg are passed
+        allowed_kwargs = all(kwarg in ["urlpath", "contiguous", "cparams", "dparams", "schunk", "mode"] for kwarg in kwargs.keys())
+        if not allowed_kwargs:
+            raise ValueError("Only `urlpath`, `contiguous`, `cparams`, `dparams` and `mode` are supported as keyword arguments")
         self.urlpath = kwargs.get("urlpath")
         if 'contiguous' not in kwargs:
             # Make contiguous true for disk, else sparse (for in-memory performance)
@@ -477,6 +481,36 @@ class SChunk(blosc2_ext.SChunk):
         for i in range(0, len(self), self.chunkshape):
             self.get_slice(i, i + self.chunkshape, out)
             yield out
+
+    def remove_postfilter(self, func_name):
+        """Remove the postfilter from the SChunk.
+
+        Parameters
+        ----------
+        func_name: str
+            Name of the postfilter func.
+
+        Returns
+        -------
+        out: None
+
+        """
+        return super(SChunk, self).remove_postfilter(func_name)
+
+    def remove_prefilter(self, func_name):
+        """Remove the prefilter from the SChunk.
+
+        Parameters
+        ----------
+        func_name: str
+            Name of the prefilter function.
+
+        Returns
+        -------
+        out: None
+
+        """
+        return super(SChunk, self).remove_prefilter(func_name)
 
     def __dealloc__(self):
         super(SChunk, self).__dealloc__()

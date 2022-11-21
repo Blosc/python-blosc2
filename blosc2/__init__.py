@@ -46,7 +46,6 @@ from .blosc2_ext import (
     MIN_HEADER_LENGTH,
     VERSION_DATE,
     VERSION_STRING,
-    postfilter,
 )
 
 # Public API for container module
@@ -85,8 +84,10 @@ from .core import (
 from .SChunk import SChunk, open
 from .version import __version__
 
-# Register for postfilters
+# Registry for postfilters
 postfilter_funcs = {}
+# Registry for prefilters
+prefilter_funcs = {}
 
 blosclib_version = "%s (%s)" % (VERSION_STRING, VERSION_DATE)
 
