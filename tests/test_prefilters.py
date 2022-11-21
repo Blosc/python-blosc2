@@ -12,19 +12,19 @@ import numpy as np
 
 @pytest.mark.parametrize("func, op_dtype, op2_dtype, schunk_dtype, offset",
                          [
-                            ("constr1", np.dtype(np.int32), None, np.dtype(np.int64), 0),
-                            ("constr1", np.dtype(np.int32), None, np.dtype(np.float32), 0),
-                            ("constr1", np.dtype(np.complex128), None, np.dtype(np.complex128), 0),
+                            ("fill_f1", np.dtype(np.int32), None, np.dtype(np.int64), 0),
+                            ("fill_f1", np.dtype(np.int32), None, np.dtype(np.float32), 0),
+                            ("fill_f1", np.dtype(np.complex128), None, np.dtype(np.complex128), 0),
                             (
-                                    "constr2",
+                                    "fill_f2",
                                     np.dtype(np.float64),
                                     np.dtype(np.int32),
                                     np.dtype(np.float64),
                                     None
                             ),
-                            ("constr3", np.dtype("M8[D]"), None, np.dtype(np.bool_), None),
+                            ("fill_f3", np.dtype("M8[D]"), None, np.dtype(np.bool_), None),
                             (
-                                    "constr4",
+                                    "fill_f4",
                                     np.dtype(np.float32),
                                     np.dtype(np.int32),
                                     np.dtype(np.float64),
@@ -63,37 +63,37 @@ def test_fillers(contiguous, urlpath, cparams, dparams, nchunks, func, op_dtype,
                               data=data,
                               cparams={"typesize": op_dtype.itemsize})
     res = np.empty(chunk_len * nchunks, dtype=schunk_dtype)
-    if func == "constr1":
+    if func == "fill_f1":
         @schunk.filler(((schunk_op, op_dtype), ), schunk_dtype)
-        def constr1(inputs_tuple, output, offset):
+        def fill_f1(inputs_tuple, output, offset):
             for i in range(output.size):
                 output[i] = offset + i
 
-        constr1((data, ), res, offset)
+        fill_f1((data, ), res, offset)
 
-    elif func == "constr2":
+    elif func == "fill_f2":
         data2 = np.full(chunk_len * nchunks, 3, dtype=op2_dtype)
         schunk_op2 = blosc2.SChunk(chunksize=chunk_len * op2_dtype.itemsize, data=data2,
                                    cparams={"typesize": op2_dtype.itemsize})
 
         @schunk.filler(((schunk_op, op_dtype), (schunk_op2, op2_dtype)), schunk_dtype)
-        def constr2(inputs_tuple, output, offset):
+        def fill_f2(inputs_tuple, output, offset):
             output[:] = inputs_tuple[0] * inputs_tuple[1]
 
-        constr2((data, data2), res, offset)
+        fill_f2((data, data2), res, offset)
 
-    elif func == "constr3":
+    elif func == "fill_f3":
         @schunk.filler(((schunk_op, op_dtype), ), schunk_dtype)
-        def constr3(inputs_tuple, output, offset):
+        def fill_f3(inputs_tuple, output, offset):
             output[:] = inputs_tuple[0] <= np.datetime64('1997-12-31')
-        constr3((data, ), res, offset)
+        fill_f3((data, ), res, offset)
     else:
         data2 = np.full(chunk_len * nchunks, 3, dtype=op2_dtype)
 
         @schunk.filler(((schunk_op, op_dtype), (data2, op2_dtype), (np.pi, np.float32)), schunk_dtype)
-        def constr3(inputs_tuple, output, offset):
+        def fill_f4(inputs_tuple, output, offset):
             output[:] = inputs_tuple[0] - inputs_tuple[1] * inputs_tuple[2]
-        constr3((data, data2, np.pi), res, offset)
+        fill_f4((data, data2, np.pi), res, offset)
 
     pre_data = np.empty(chunk_len * nchunks, dtype=schunk_dtype)
     schunk.get_slice(0, chunk_len * nchunks, out=pre_data)
