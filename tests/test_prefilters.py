@@ -15,9 +15,21 @@ import numpy as np
                             ("constr1", np.dtype(np.int32), None, np.dtype(np.int64), 0),
                             ("constr1", np.dtype(np.int32), None, np.dtype(np.float32), 0),
                             ("constr1", np.dtype(np.complex128), None, np.dtype(np.complex128), 0),
-                            ("constr2", np.dtype(np.float64), np.dtype(np.int32), np.dtype(np.float64), None),
+                            (
+                                    "constr2",
+                                    np.dtype(np.float64),
+                                    np.dtype(np.int32),
+                                    np.dtype(np.float64),
+                                    None
+                            ),
                             ("constr3", np.dtype("M8[D]"), None, np.dtype(np.bool_), None),
-                            ("constr4", np.dtype(np.float32), np.dtype(np.int32), np.dtype(np.float64), None),
+                            (
+                                    "constr4",
+                                    np.dtype(np.float32),
+                                    np.dtype(np.int32),
+                                    np.dtype(np.float64),
+                                    None
+                            ),
                          ])
 @pytest.mark.parametrize(
     "cparams, dparams, nchunks, contiguous, urlpath",
@@ -34,7 +46,8 @@ import numpy as np
         ({"codec": blosc2.Codec.LZ4HC, "nthreads": 1}, {"nthreads": 1}, 3, False, "test_fillers.b2frame"),
     ],
 )
-def test_fillers(contiguous, urlpath, cparams, dparams, nchunks, func, op_dtype, op2_dtype, schunk_dtype, offset):
+def test_fillers(contiguous, urlpath, cparams, dparams, nchunks, func, op_dtype, op2_dtype,
+                 schunk_dtype, offset):
     blosc2.remove_urlpath(urlpath)
 
     chunk_len = 20_000
@@ -46,7 +59,9 @@ def test_fillers(contiguous, urlpath, cparams, dparams, nchunks, func, op_dtype,
                            contiguous=contiguous, urlpath=urlpath, cparams=cparams, dparams=dparams)
 
     data = np.arange(0, chunk_len * nchunks, dtype=op_dtype)
-    schunk_op = blosc2.SChunk(chunksize=chunk_len * op_dtype.itemsize, data=data, cparams={"typesize": op_dtype.itemsize})
+    schunk_op = blosc2.SChunk(chunksize=chunk_len * op_dtype.itemsize,
+                              data=data,
+                              cparams={"typesize": op_dtype.itemsize})
     res = np.empty(chunk_len * nchunks, dtype=schunk_dtype)
     if func == "constr1":
         @schunk.filler(((schunk_op, op_dtype), ), schunk_dtype)

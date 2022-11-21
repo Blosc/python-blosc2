@@ -3,7 +3,6 @@ from time import time
 import blosc2
 import numpy as np
 
-
 # Size and dtype of super-chunks
 nchunks = 20_000
 chunkshape = 50_000
@@ -27,8 +26,9 @@ for i in range(nchunks):
 print(f"time append: {time() - t0:.2f}s")
 # print(f"cratio: {schunk.cratio:.2f}x")
 
+
 # Associate a postfilter to schunk
-@blosc2.postfilter(schunk, np.dtype(dtype))
+@schunk.postfilter(np.dtype(dtype))
 def py_postfilter(input, output, offset):
     output[:] = input + 1
 

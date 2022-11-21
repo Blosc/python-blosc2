@@ -102,9 +102,11 @@ class SChunk(blosc2_ext.SChunk):
         >>> schunk = blosc2.SChunk(**storage)
         """
         # Check only allowed kwarg are passed
-        allowed_kwargs = all(kwarg in ["urlpath", "contiguous", "cparams", "dparams", "schunk", "mode"] for kwarg in kwargs.keys())
+        allowed_kwargs = all(kwarg in ["urlpath", "contiguous", "cparams", "dparams", "schunk", "mode"]
+                             for kwarg in kwargs.keys())
         if not allowed_kwargs:
-            raise ValueError("Only `urlpath`, `contiguous`, `cparams`, `dparams` and `mode` are supported as keyword arguments")
+            raise ValueError("Only `urlpath`, `contiguous`, `cparams`, `dparams` and `mode` "
+                             "are supported as keyword arguments")
         self.urlpath = kwargs.get("urlpath")
         if 'contiguous' not in kwargs:
             # Make contiguous true for disk, else sparse (for in-memory performance)

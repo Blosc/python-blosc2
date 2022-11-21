@@ -28,7 +28,7 @@ schunk.get_slice(0, 200 * 1000 * nchunks, out=out1)
 
 
 # Set postfilter with decorator
-@blosc2.postfilter(schunk, input_dtype, output_dtype)
+@schunk.postfilter(input_dtype, output_dtype)
 def postfilter(input, output, offset):
     output[:] = input - np.pi
 
