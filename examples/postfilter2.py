@@ -13,7 +13,7 @@ output_dtype = np.int64
 
 # Set the compression and decompression parameters
 cparams = {"codec": blosc2.Codec.LZ4, "typesize": input_dtype.itemsize}
-dparams = {"nthreads": 4}
+dparams = {"nthreads": 1}
 contiguous = True
 urlpath = "filename"
 storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}

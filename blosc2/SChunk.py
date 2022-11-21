@@ -122,7 +122,7 @@ class SChunk(blosc2_ext.SChunk):
                 cparams['typesize'] = data.itemsize
                 kwargs['cparams'] = cparams
             elif 'typesize' not in kwargs:
-                kwargs['typesize'] = data.itemsize
+                kwargs['cparams'] = {"typesize": data.itemsize}
 
         # chunksize handling
         if chunksize is None:
