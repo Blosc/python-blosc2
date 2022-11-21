@@ -33,7 +33,8 @@ import numpy as np
         ({"codec": blosc2.Codec.LZ4HC}, {"nthreads": 1}, 3, False, "test_postfilters.b2frame"),
     ],
 )
-def test_postfilters(contiguous, urlpath, cparams, dparams, nchunks, func, input_dtype, output_dtype, offset):
+def test_postfilters(contiguous, urlpath, cparams, dparams, nchunks, func, input_dtype,
+                     output_dtype, offset):
     blosc2.remove_urlpath(urlpath)
 
     output_dtype = input_dtype if output_dtype is None else output_dtype
