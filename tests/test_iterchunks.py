@@ -15,10 +15,10 @@ import numpy as np
 @pytest.mark.parametrize(
     "cparams, dparams, nchunks",
     [
-        ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 0),
-        ({"typesize": 4}, {"nthreads": 4}, 1),
-        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {"schunk": None}, 5),
-        ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {}, 10),
+        ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {"nthreads": 1}, 0),
+        ({"typesize": 4}, {"nthreads": 1}, 1),
+        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {"schunk": None, "nthreads": 1}, 5),
+        ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {"nthreads": 1}, 10),
     ],
 )
 def test_iterchunks(contiguous, urlpath, cparams, dparams, nchunks):
@@ -45,11 +45,10 @@ def test_iterchunks(contiguous, urlpath, cparams, dparams, nchunks):
 @pytest.mark.parametrize(
     "cparams, dparams, nchunks",
     [
-        ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 2),
-        ({"typesize": 4}, {"nthreads": 4}, 1),
-        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {"schunk": None}, 5),
-        # TODO: Fix LZ4HC, ZLIB, ZSTD with postfilter without split
-        ({"codec": blosc2.Codec.LZ4, "typesize": 4}, {}, 3),
+        ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {"nthreads": 1}, 2),
+        ({"typesize": 4}, {"nthreads": 1}, 1),
+        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {"schunk": None, "nthreads": 1}, 5),
+        ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {"nthreads": 1}, 3),
     ],
 )
 def test_iterchunks_pf(contiguous, urlpath, cparams, dparams, nchunks):
@@ -60,7 +59,7 @@ def test_iterchunks_pf(contiguous, urlpath, cparams, dparams, nchunks):
     data = np.arange(0, nchunks * chunkshape, dtype=np.int32)
     schunk = blosc2.SChunk(chunksize=chunkshape * 4, data=data, **storage)
 
-    @blosc2.postfilter(schunk, np.int32, np.int32)
+    @schunk.postfilter(np.int32, np.int32)
     def postf1(input, output, offset):
         output[:] = input - 1
 

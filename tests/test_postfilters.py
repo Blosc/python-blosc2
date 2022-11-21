@@ -22,15 +22,15 @@ import numpy as np
     "cparams, dparams, nchunks, contiguous, urlpath",
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6}, {"nthreads": 1}, 2, True, None),
-        ({}, {"nthreads": 2}, 1, True, "test_postfilters.b2frame"),
+        ({}, {"nthreads": 1}, 1, True, "test_postfilters.b2frame"),
         (
                 {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 4},
-                {"schunk": None, "nthreads": 4},
+                {"schunk": None, "nthreads": 1},
                 5,
                 False,
                 None
         ),
-        ({"codec": blosc2.Codec.LZ4HC}, {"nthreads": 4}, 3, False, "test_postfilters.b2frame"),
+        ({"codec": blosc2.Codec.LZ4HC}, {"nthreads": 1}, 3, False, "test_postfilters.b2frame"),
     ],
 )
 def test_postfilters(contiguous, urlpath, cparams, dparams, nchunks, func, input_dtype, output_dtype, offset):
@@ -40,19 +40,19 @@ def test_postfilters(contiguous, urlpath, cparams, dparams, nchunks, func, input
     chunk_len = 2_000
     data = np.arange(0, chunk_len * nchunks, dtype=input_dtype)
     schunk = blosc2.SChunk(chunksize=chunk_len * input_dtype.itemsize, data=data,
-                           contiguous=contiguous, urlpath=urlpath, cparams=cparams, dparams=dparams,
-                           typesize=input_dtype.itemsize)
+                           contiguous=contiguous, urlpath=urlpath, cparams=cparams, dparams=dparams)
+    assert schunk.typesize == input_dtype.itemsize
     if func == "postf1":
-        @blosc2.postfilter(schunk, input_dtype, output_dtype)
+        @schunk.postfilter(input_dtype, output_dtype)
         def postf1(input, output, offset):
             for i in range(input.size):
                 output[i] = offset + i
     elif func == "postf2":
-        @blosc2.postfilter(schunk, input_dtype, output_dtype)
+        @schunk.postfilter(input_dtype, output_dtype)
         def postf2(input, output, offset):
             output[:] = input - np.pi
     else:
-        @blosc2.postfilter(schunk, input_dtype, output_dtype)
+        @schunk.postfilter(input_dtype, output_dtype)
         def postf3(input, output, offset):
             output[:] = input <= np.datetime64('1997-12-31')
 
@@ -65,5 +65,13 @@ def test_postfilters(contiguous, urlpath, cparams, dparams, nchunks, func, input
         assert np.allclose(post_data, res)
     else:
         assert np.array_equal(post_data, res)
+
+    schunk.remove_postfilter(func)
+    res = np.empty(chunk_len * nchunks, dtype=input_dtype)
+    schunk.get_slice(out=res)
+    if "f" in input_dtype.str:
+        assert np.allclose(data, res)
+    else:
+        assert np.array_equal(data, res)
 
     blosc2.remove_urlpath(urlpath)

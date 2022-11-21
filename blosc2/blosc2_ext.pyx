@@ -6,6 +6,7 @@
 
 #cython: language_level=3
 
+import _ctypes
 from cpython cimport (
     Py_buffer,
     PyBUF_SIMPLE,
@@ -17,7 +18,7 @@ from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
 from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free, malloc, realloc
 from libc.string cimport memcpy
-from libcpp cimport bool
+from libcpp cimport bool as c_bool
 
 from enum import Enum
 
@@ -195,7 +196,7 @@ cdef extern from "blosc2.h":
         blosc2_prefilter_fn prefilter
         blosc2_prefilter_params* preparams
         blosc2_btune *udbtune
-        bool instr_codec
+        c_bool instr_codec
 
     cdef const blosc2_cparams BLOSC2_CPARAMS_DEFAULTS
 
@@ -213,7 +214,7 @@ cdef extern from "blosc2.h":
 
     void blosc2_free_ctx(blosc2_context * context) nogil
 
-    int blosc2_set_maskout(blosc2_context *ctx, bool *maskout, int nblocks)
+    int blosc2_set_maskout(blosc2_context *ctx, c_bool *maskout, int nblocks)
 
 
     int blosc2_compress(int clevel, int doshuffle, int32_t typesize,
@@ -237,7 +238,7 @@ cdef extern from "blosc2.h":
 
 
     ctypedef struct blosc2_storage:
-        bool contiguous
+        c_bool contiguous
         char* urlpath
         blosc2_cparams* cparams
         blosc2_dparams* dparams
@@ -297,25 +298,25 @@ cdef extern from "blosc2.h":
 
     blosc2_schunk *blosc2_schunk_new(blosc2_storage *storage)
     blosc2_schunk *blosc2_schunk_copy(blosc2_schunk *schunk, blosc2_storage *storage)
-    blosc2_schunk *blosc2_schunk_from_buffer(uint8_t *cframe, int64_t len, bool copy)
+    blosc2_schunk *blosc2_schunk_from_buffer(uint8_t *cframe, int64_t len, c_bool copy)
     blosc2_schunk *blosc2_schunk_open(const char* urlpath)
 
-    int64_t blosc2_schunk_to_buffer(blosc2_schunk* schunk, uint8_t** cframe, bool* needs_free)
-    void blosc2_schunk_avoid_cframe_free(blosc2_schunk *schunk, bool avoid_cframe_free)
+    int64_t blosc2_schunk_to_buffer(blosc2_schunk* schunk, uint8_t** cframe, c_bool* needs_free)
+    void blosc2_schunk_avoid_cframe_free(blosc2_schunk *schunk, c_bool avoid_cframe_free)
     int64_t blosc2_schunk_to_file(blosc2_schunk* schunk, const char* urlpath)
     int64_t blosc2_schunk_free(blosc2_schunk *schunk)
-    int64_t blosc2_schunk_append_chunk(blosc2_schunk *schunk, uint8_t *chunk, bool copy)
-    int64_t blosc2_schunk_update_chunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t *chunk, bool copy)
-    int64_t blosc2_schunk_insert_chunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t *chunk, bool copy)
+    int64_t blosc2_schunk_append_chunk(blosc2_schunk *schunk, uint8_t *chunk, c_bool copy)
+    int64_t blosc2_schunk_update_chunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t *chunk, c_bool copy)
+    int64_t blosc2_schunk_insert_chunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t *chunk, c_bool copy)
     int64_t blosc2_schunk_delete_chunk(blosc2_schunk *schunk, int64_t nchunk)
 
     int64_t blosc2_schunk_append_buffer(blosc2_schunk *schunk, void *src, int32_t nbytes)
     int blosc2_schunk_decompress_chunk(blosc2_schunk *schunk, int64_t nchunk, void *dest, int32_t nbytes)
 
     int blosc2_schunk_get_chunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t ** chunk,
-                                bool *needs_free)
+                                c_bool *needs_free)
     int blosc2_schunk_get_lazychunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t ** chunk,
-                                    bool *needs_free)
+                                    c_bool *needs_free)
     int blosc2_schunk_get_slice_buffer(blosc2_schunk *schunk, int64_t start, int64_t stop, void *buffer)
     int blosc2_schunk_set_slice_buffer(blosc2_schunk *schunk, int64_t start, int64_t stop, void *buffer)
     int blosc2_schunk_get_cparams(blosc2_schunk *schunk, blosc2_cparams** cparams)
@@ -349,7 +350,7 @@ cdef extern from "blosc2.h":
     int blosc2_remove_urlpath(const char *path)
 
 
-    ctypedef struct postfilters_udata:
+    ctypedef struct user_filters_udata:
         char* py_func
         char input_cdtype
         char output_cdtype
@@ -358,6 +359,20 @@ cdef extern from "blosc2.h":
 
     int blosc2_schunk_set_postfilter(blosc2_schunk *schunk, blosc2_postfilter_fn postfilter, char *func,
                                      char input_cdtype, char output_cdtype)
+    int blosc2_schunk_remove_postfilter(blosc2_schunk *schunk)
+
+    ctypedef struct filler_udata:
+        char* py_func
+        int64_t inputs_id
+        char output_cdtype
+        int64_t chunkshape
+        int64_t blockshape
+
+    int blosc2_schunk_set_filler(blosc2_schunk *schunk, blosc2_prefilter_fn prefilter, char *func,
+                                     int64_t inputs_id, char output_cdtype)
+    int blosc2_schunk_set_prefilter(blosc2_schunk *schunk, blosc2_prefilter_fn prefilter, char *func,
+                                     char input_cdtype, char output_cdtype)
+    int blosc2_schunk_remove_prefilter(blosc2_schunk *schunk)
 
 
 MAX_TYPESIZE = BLOSC_MAX_TYPESIZE
@@ -472,9 +487,9 @@ def get_compressor():
     return blosc1_get_compressor()
 
 
-cdef bool RELEASEGIL = False
+cdef c_bool RELEASEGIL = False
 
-def set_releasegil(bool gilstate):
+def set_releasegil(c_bool gilstate):
     global RELEASEGIL
     oldstate = RELEASEGIL
     RELEASEGIL = gilstate
@@ -526,8 +541,6 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     cparams.preparams = NULL
     cparams.udbtune = NULL
     cparams.instr_codec = False
-    #cparams.prefilter = kwargs.get('prefilter', blosc2.cparams_dflts['prefilter'])
-    #cparams.preparams = kwargs.get('preparams', blosc2.cparams_dflts['preparams'])
     #cparams.udbtune = kwargs.get('udbtune', blosc2.cparams_dflts['udbtune'])
     #cparams.instr_codec = kwargs.get('instr_codec', blosc2.cparams_dflts['instr_codec'])
 
@@ -564,8 +577,6 @@ cdef create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs):
     dparams.postparams = NULL
     # TODO: support the next ones in the future
     #dparams.schunk = kwargs.get('schunk', blosc2.dparams_dflts['schunk'])
-    #dparams.postfilter = kwargs.get('postfilter', blosc2.dparams_dflts['postfilter'])
-    #dparams.postparams = kwargs.get('postparams', blosc2.dparams_dflts['postparams'])
 
 def decompress2(src, dst=None, **kwargs):
     cdef blosc2_dparams dparams
@@ -617,11 +628,8 @@ cdef create_storage(blosc2_storage *storage, kwargs):
     else:
         storage.urlpath = urlpath
 
-    if kwargs.get('cparams', None) is not None:
-        create_cparams_from_kwargs(storage.cparams, kwargs.get('cparams'))
-
-    if kwargs.get('dparams', None) is not None:
-        create_dparams_from_kwargs(storage.dparams, kwargs.get('dparams'))
+    create_cparams_from_kwargs(storage.cparams, kwargs.get('cparams', {}))
+    create_dparams_from_kwargs(storage.dparams, kwargs.get('dparams', {}))
 
     storage.io = NULL
     # TODO: support the next ones in the future
@@ -657,8 +665,6 @@ cdef class SChunk:
         # Create space for cparams and dparams in the stack
         cdef blosc2_cparams cparams
         cdef blosc2_dparams dparams
-        create_cparams_from_kwargs(&cparams, kwargs)
-        create_dparams_from_kwargs(&dparams, kwargs)
         storage.cparams = &cparams
         storage.dparams = &dparams
         if kwargs is None:
@@ -720,6 +726,10 @@ cdef class SChunk:
     def cbytes(self):
         return self.schunk.cbytes
 
+    @property
+    def typesize(self):
+        return self.schunk.typesize
+
     def append_data(self, data):
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
@@ -732,7 +742,7 @@ cdef class SChunk:
 
     def decompress_chunk(self, nchunk, dst=None):
         cdef uint8_t *chunk
-        cdef bool needs_free
+        cdef c_bool needs_free
         rc = blosc2_schunk_get_chunk(self.schunk, nchunk, &chunk, &needs_free)
 
         if rc < 0:
@@ -766,7 +776,7 @@ cdef class SChunk:
 
     def get_chunk(self, nchunk):
         cdef uint8_t *chunk
-        cdef bool needs_free
+        cdef c_bool needs_free
         cbytes = blosc2_schunk_get_chunk(self.schunk, nchunk, &chunk, &needs_free)
         if cbytes < 0:
            raise RuntimeError("Error while getting the chunk")
@@ -948,7 +958,7 @@ cdef class SChunk:
             raise RuntimeError("Error while setting the slice")
 
     def to_cframe(self):
-        cdef bool needs_free
+        cdef c_bool needs_free
         cdef uint8_t *cframe
         cframe_len = blosc2_schunk_to_buffer(self.schunk, &cframe, &needs_free)
         if cframe_len < 0:
@@ -974,13 +984,12 @@ cdef class SChunk:
         if stop - start <= 0:
             raise ValueError("`stop` mut be greater than `start`")
 
-
         return start, stop
 
     def _set_postfilter(self, func, dtype_input, dtype_output=None):
         func_id = func.__name__
-        func_id = func_id.encode("utf-8") if isinstance(func_id, str) else func_id
         blosc2.postfilter_funcs[func_id] = func
+        func_id = func_id.encode("utf-8") if isinstance(func_id, str) else func_id
 
         dtype_output = dtype_input if dtype_output is None else dtype_output
         dtype_input = np.dtype(dtype_input)
@@ -989,10 +998,95 @@ cdef class SChunk:
             raise ValueError("`dtype_input` and `dtype_output` must have the same size")
         cdef char input_cdtype = np.dtype(dtype_input).char.encode("utf-8")[0]
         cdef char output_cdtype = np.dtype(dtype_output).char.encode("utf-8")[0]
+        if self.schunk.storage.dparams.nthreads > 1:
+            raise AttributeError("decompress `nthreads` must be 1 when assigning a postfilter")
         rc = blosc2_schunk_set_postfilter(<blosc2_schunk *> self.schunk, general_postfilter, func_id, input_cdtype,
                                           output_cdtype)
         if rc < 0:
             raise RuntimeError("Error while setting the postfilter")
+
+    # postfilter decorator
+    def postfilter(self, dtype_input, dtype_output=None):
+        def initialize(func):
+            self._set_postfilter(func, dtype_input, dtype_output)
+            def exec_func(*args):
+                func(*args)
+            return exec_func
+        return initialize
+
+    def remove_postfilter(self, func_name):
+        del blosc2.postfilter_funcs[func_name]
+        rc = blosc2_schunk_remove_postfilter(self.schunk)
+        if rc < 0:
+            raise RuntimeError("Error while removing the postfilter")
+
+    def _set_filler(self, func, inputs_id, dtype_output):
+        func_id = func.__name__
+        blosc2.prefilter_funcs[func_id] = func
+        func_id = func_id.encode("utf-8") if isinstance(func_id, str) else func_id
+
+        dtype_output = np.dtype(dtype_output)
+        cdef char output_cdtype = np.dtype(dtype_output).char.encode("utf-8")[0]
+        if self.schunk.storage.cparams.nthreads > 1:
+            raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
+        rc = blosc2_schunk_set_filler(<blosc2_schunk *> self.schunk, general_filler, func_id, inputs_id,
+                                          output_cdtype)
+        if rc < 0:
+            raise RuntimeError("Error while setting the filler")
+
+    # filler decorator
+    def filler(self, inputs_tuple, output_dtype):
+        def initialize(func):
+            nelem = nelem_from_inputs(inputs_tuple)
+            self._set_filler(func, id(inputs_tuple), output_dtype)
+            chunksize = self.chunksize
+            written_nbytes = 0
+            nbytes = nelem * self.typesize
+            while written_nbytes < nbytes:
+                chunk = np.zeros(chunksize // self.typesize, dtype=output_dtype)
+                self.append_data(chunk)
+                written_nbytes += chunksize
+                if (nbytes - written_nbytes) < self.chunksize:
+                    chunksize = nbytes - written_nbytes
+            self.remove_prefilter(func.__name__)
+            def exec_func(*args):
+                func(*args)
+            return exec_func
+        return initialize
+
+    def _set_prefilter(self, func, dtype_input, dtype_output=None):
+        func_id = func.__name__
+        blosc2.prefilter_funcs[func_id] = func
+        func_id = func_id.encode("utf-8") if isinstance(func_id, str) else func_id
+
+        dtype_output = dtype_input if dtype_output is None else dtype_output
+        dtype_input = np.dtype(dtype_input)
+        dtype_output = np.dtype(dtype_output)
+        if dtype_output.itemsize != dtype_input.itemsize:
+            raise ValueError("`dtype_input` and `dtype_output` must have the same size")
+        cdef char input_cdtype = np.dtype(dtype_input).char.encode("utf-8")[0]
+        cdef char output_cdtype = np.dtype(dtype_output).char.encode("utf-8")[0]
+        if self.schunk.storage.cparams.nthreads > 1:
+            raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
+        rc = blosc2_schunk_set_prefilter(<blosc2_schunk *> self.schunk, general_prefilter, func_id, input_cdtype,
+                                          output_cdtype)
+        if rc < 0:
+            raise RuntimeError("Error while setting the prefilter")
+
+    # prefilter decorator
+    def prefilter(self, dtype_input, dtype_output=None):
+        def initialize(func):
+            self._set_prefilter(func, dtype_input, dtype_output)
+            def exec_func(*args):
+                func(*args)
+            return exec_func
+        return initialize
+
+    def remove_prefilter(self, func_name):
+        del blosc2.prefilter_funcs[func_name]
+        rc = blosc2_schunk_remove_prefilter(self.schunk)
+        if rc < 0:
+            raise RuntimeError("Error while removing the prefilter")
 
     def __dealloc__(self):
         if self.schunk != NULL:
@@ -1017,9 +1111,9 @@ char2dtype = {'?': np.NPY_BOOL,
               'm': np.NPY_TIMEDELTA,
               }
 
-
+# postfilter
 cdef int general_postfilter(blosc2_postfilter_params *params):
-    cdef postfilters_udata *udata = <postfilters_udata *> params.user_data
+    cdef user_filters_udata *udata = <user_filters_udata *> params.user_data
     cdef int nd = 1
     cdef np.npy_intp dims = params.size // params.typesize
 
@@ -1029,20 +1123,68 @@ cdef int general_postfilter(blosc2_postfilter_params *params):
     output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.out)
     offset = params.nchunk * udata.chunkshape + params.nblock * udata.blockshape
 
-    func_id = udata.py_func
+    func_id = udata.py_func.decode()
     blosc2.postfilter_funcs[func_id](input, output, offset)
 
     return 0
 
 
-# postfilter decorator
-def postfilter(schunk, input_dtype, output_dtype=None):
-    def initialize(func):
-        schunk._set_postfilter(func, input_dtype, output_dtype)
-        def exec_func(*args):
-            func(*args)
-        return exec_func
-    return initialize
+# filler
+cdef int general_filler(blosc2_prefilter_params *params):
+    cdef filler_udata *udata = <filler_udata *> params.user_data
+    cdef int nd = 1
+    cdef np.npy_intp dims = params.out_size // params.out_typesize
+
+    inputs_tuple = _ctypes.PyObj_FromPtr(udata.inputs_id)
+    output_cdtype = chr(udata.output_cdtype)
+    output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.out)
+    offset = params.nchunk * udata.chunkshape + params.nblock * udata.blockshape
+
+    inputs = []
+    for obj, dtype in inputs_tuple:
+        if isinstance(obj, blosc2.SChunk):
+            out = np.empty(dims, dtype=dtype)
+            obj.get_slice(start=offset, stop=offset + dims, out=out)
+            inputs.append(out)
+        elif isinstance(obj, np.ndarray):
+            inputs.append(obj[offset : offset + dims])
+        elif isinstance(obj, (int, float, bool, complex)):
+            inputs.append(np.full(dims, obj, dtype=dtype))
+        else:
+            raise ValueError("Unsupported operand")
+
+    func_id = udata.py_func.decode()
+    blosc2.prefilter_funcs[func_id](tuple(inputs), output, offset)
+
+    return 0
+
+def nelem_from_inputs(inputs_tuple):
+    nelem = None
+    for obj, dtype in inputs_tuple:
+        if isinstance(obj, blosc2.SChunk):
+            if nelem is not None and nelem != (obj.nbytes / obj.typesize):
+                raise ValueError("operands must have same nelems")
+            nelem = obj.nbytes / obj.typesize
+    if nelem is None:
+        raise ValueError("At least 1 operand must be a SChunk")
+    return nelem
+
+# prefilter
+cdef int general_prefilter(blosc2_prefilter_params *params):
+    cdef user_filters_udata *udata = <user_filters_udata *> params.user_data
+    cdef int nd = 1
+    cdef np.npy_intp dims = params.out_size // params.out_typesize
+
+    input_cdtype = chr(udata.input_cdtype)
+    output_cdtype = chr(udata.output_cdtype)
+    input = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[input_cdtype], <void *> params.input)
+    output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.out)
+    offset = params.nchunk * udata.chunkshape + params.nblock * udata.blockshape
+
+    func_id = udata.py_func.decode()
+    blosc2.prefilter_funcs[func_id](input, output, offset)
+
+    return 0
 
 
 def remove_urlpath(path):
