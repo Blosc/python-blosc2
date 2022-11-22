@@ -32,21 +32,29 @@ import numpy as np
                             ),
                          ])
 @pytest.mark.parametrize(
-    "cparams, dparams, nchunks, contiguous, urlpath",
+    "cparams, dparams, nchunks, contiguous, urlpath, nelem",
     [
-        ({"codec": blosc2.Codec.LZ4, "clevel": 6, "nthreads": 1}, {"nthreads": 4}, 2, True, None),
-        ({"nthreads": 1}, {"nthreads": 2}, 1, True, "test_fillers.b2frame"),
+        ({"codec": blosc2.Codec.LZ4, "clevel": 6, "nthreads": 1}, {"nthreads": 4}, 2, True, None, None),
+        ({"nthreads": 1}, {"nthreads": 2}, 1, True, "test_fillers.b2frame", 1 * 20_000),
         (
                 {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 1},
                 {"schunk": None, "nthreads": 4},
                 5,
                 False,
+                None,
+                5 * 20_000,
+        ),
+        (
+                {"codec": blosc2.Codec.LZ4HC, "nthreads": 1},
+                {"nthreads": 1},
+                3,
+                False,
+                "test_fillers.b2frame",
                 None
         ),
-        ({"codec": blosc2.Codec.LZ4HC, "nthreads": 1}, {"nthreads": 1}, 3, False, "test_fillers.b2frame"),
     ],
 )
-def test_fillers(contiguous, urlpath, cparams, dparams, nchunks, func, op_dtype, op2_dtype,
+def test_fillers(contiguous, urlpath, cparams, dparams, nchunks, nelem, func, op_dtype, op2_dtype,
                  schunk_dtype, offset):
     blosc2.remove_urlpath(urlpath)
 
@@ -64,7 +72,7 @@ def test_fillers(contiguous, urlpath, cparams, dparams, nchunks, func, op_dtype,
                               cparams={"typesize": op_dtype.itemsize})
     res = np.empty(chunk_len * nchunks, dtype=schunk_dtype)
     if func == "fill_f1":
-        @schunk.filler(((schunk_op, op_dtype), ), schunk_dtype)
+        @schunk.filler(((schunk_op, op_dtype), ), schunk_dtype, nelem)
         def fill_f1(inputs_tuple, output, offset):
             for i in range(output.size):
                 output[i] = offset + i
@@ -76,21 +84,21 @@ def test_fillers(contiguous, urlpath, cparams, dparams, nchunks, func, op_dtype,
         schunk_op2 = blosc2.SChunk(chunksize=chunk_len * op2_dtype.itemsize, data=data2,
                                    cparams={"typesize": op2_dtype.itemsize})
 
-        @schunk.filler(((schunk_op, op_dtype), (schunk_op2, op2_dtype)), schunk_dtype)
+        @schunk.filler(((schunk_op, op_dtype), (schunk_op2, op2_dtype)), schunk_dtype, nelem)
         def fill_f2(inputs_tuple, output, offset):
             output[:] = inputs_tuple[0] * inputs_tuple[1]
 
         fill_f2((data, data2), res, offset)
 
     elif func == "fill_f3":
-        @schunk.filler(((schunk_op, op_dtype), ), schunk_dtype)
+        @schunk.filler(((schunk_op, op_dtype), ), schunk_dtype, nelem)
         def fill_f3(inputs_tuple, output, offset):
             output[:] = inputs_tuple[0] <= np.datetime64('1997-12-31')
         fill_f3((data, ), res, offset)
     else:
         data2 = np.full(chunk_len * nchunks, 3, dtype=op2_dtype)
 
-        @schunk.filler(((schunk_op, op_dtype), (data2, op2_dtype), (np.pi, np.float32)), schunk_dtype)
+        @schunk.filler(((schunk_op, op_dtype), (data2, op2_dtype), (np.pi, np.float32)), schunk_dtype, nelem)
         def fill_f4(inputs_tuple, output, offset):
             output[:] = inputs_tuple[0] - inputs_tuple[1] * inputs_tuple[2]
         fill_f4((data, data2, np.pi), res, offset)

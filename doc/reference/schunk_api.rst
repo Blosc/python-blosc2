@@ -25,6 +25,11 @@ Methods
     SChunk.__getitem__
     SChunk.__setitem__
     SChunk.to_cframe
+    SChunk.postfilter
+    SChunk.remove_postfilter
+    SChunk.filler
+    SChunk.prefilter
+    SChunk.remove_prefilter
 
 Attributes
 ----------

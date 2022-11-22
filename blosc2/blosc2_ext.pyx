@@ -1005,15 +1005,6 @@ cdef class SChunk:
         if rc < 0:
             raise RuntimeError("Error while setting the postfilter")
 
-    # postfilter decorator
-    def postfilter(self, dtype_input, dtype_output=None):
-        def initialize(func):
-            self._set_postfilter(func, dtype_input, dtype_output)
-            def exec_func(*args):
-                func(*args)
-            return exec_func
-        return initialize
-
     def remove_postfilter(self, func_name):
         del blosc2.postfilter_funcs[func_name]
         rc = blosc2_schunk_remove_postfilter(self.schunk)
@@ -1034,26 +1025,6 @@ cdef class SChunk:
         if rc < 0:
             raise RuntimeError("Error while setting the filler")
 
-    # filler decorator
-    def filler(self, inputs_tuple, output_dtype):
-        def initialize(func):
-            nelem = nelem_from_inputs(inputs_tuple)
-            self._set_filler(func, id(inputs_tuple), output_dtype)
-            chunksize = self.chunksize
-            written_nbytes = 0
-            nbytes = nelem * self.typesize
-            while written_nbytes < nbytes:
-                chunk = np.zeros(chunksize // self.typesize, dtype=output_dtype)
-                self.append_data(chunk)
-                written_nbytes += chunksize
-                if (nbytes - written_nbytes) < self.chunksize:
-                    chunksize = nbytes - written_nbytes
-            self.remove_prefilter(func.__name__)
-            def exec_func(*args):
-                func(*args)
-            return exec_func
-        return initialize
-
     def _set_prefilter(self, func, dtype_input, dtype_output=None):
         func_id = func.__name__
         blosc2.prefilter_funcs[func_id] = func
@@ -1072,15 +1043,6 @@ cdef class SChunk:
                                           output_cdtype)
         if rc < 0:
             raise RuntimeError("Error while setting the prefilter")
-
-    # prefilter decorator
-    def prefilter(self, dtype_input, dtype_output=None):
-        def initialize(func):
-            self._set_prefilter(func, dtype_input, dtype_output)
-            def exec_func(*args):
-                func(*args)
-            return exec_func
-        return initialize
 
     def remove_prefilter(self, func_name):
         del blosc2.prefilter_funcs[func_name]
@@ -1158,15 +1120,18 @@ cdef int general_filler(blosc2_prefilter_params *params):
 
     return 0
 
-def nelem_from_inputs(inputs_tuple):
-    nelem = None
+def nelem_from_inputs(inputs_tuple, nelem=None):
     for obj, dtype in inputs_tuple:
         if isinstance(obj, blosc2.SChunk):
             if nelem is not None and nelem != (obj.nbytes / obj.typesize):
                 raise ValueError("operands must have same nelems")
             nelem = obj.nbytes / obj.typesize
+        elif isinstance(obj, np.ndarray):
+            if nelem is not None and nelem != obj.size:
+                raise ValueError("operands must have same nelems")
+            nelem = obj.size
     if nelem is None:
-        raise ValueError("At least 1 operand must be a SChunk")
+        raise ValueError("`nelem` must be set if none of the operands is a SChunk or a np.ndarray")
     return nelem
 
 # prefilter
