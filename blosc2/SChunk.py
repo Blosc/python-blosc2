@@ -484,6 +484,45 @@ class SChunk(blosc2_ext.SChunk):
             self.get_slice(i, i + self.chunkshape, out)
             yield out
 
+    def postfilter(self, input_dtype, output_dtype=None):
+        """Decorator to set a function as a postfilter.
+
+        The postfilter function will be executed each time after decompressing the data.
+        It will receive three parameters: the input np.ndarray from which to read,
+        the output np.ndarray to fill and the offset inside the SChunk where the corresponding block begins.
+
+        Parameters
+        ----------
+        input_dtype: np.dtype
+            Data type of the input that will receive the postfilter function.
+        output_dtype: np.dtype
+            Data type of the output that will receive and fill the postfilter function.
+            If None (default) it will be :paramref:`input_dtype`.
+
+        Returns
+        -------
+        out: None
+
+        Notes
+        -----
+        * `nthreads` must be 1 when decompressing.
+
+        * The :paramref:`input_dtype` itemsize must be the same as the :paramref:`output_dtype` itemsize.
+
+        See Also
+        --------
+        :meth:`remove_postfilter`
+        :meth:`prefilter`
+
+        """
+        def initialize(func):
+            super(SChunk, self)._set_postfilter(func, input_dtype, output_dtype)
+
+            def exec_func(*args):
+                func(*args)
+            return exec_func
+        return initialize
+
     def remove_postfilter(self, func_name):
         """Remove the postfilter from the SChunk.
 
@@ -498,6 +537,95 @@ class SChunk(blosc2_ext.SChunk):
 
         """
         return super(SChunk, self).remove_postfilter(func_name)
+
+    def filler(self, inputs_tuple, schunk_dtype, nelem=None):
+        """Decorator to set a filler function.
+
+        This function will fill :paramref:`self` according to :paramref:`nelem`.
+        It will receive three parameters: a tuple with the inputs as np.ndarrays from which to read,
+        the np.ndarray to fill :paramref:`self` and the offset inside the SChunk where the corresponding
+        block begins.
+
+        Parameters
+        ----------
+        inputs_tuple: tuple of tuples
+            Tuple which will contain a tuple for each argument that the function will receive
+            with their corresponding np.dtype.
+            The supported operand types are :ref:`SChunk <SChunk>`, np.ndarray and Python scalars.
+        schunk_dtype: np.dtype
+            The data type to use to fill :paramref:`self`.
+        nelem: int
+            Number of elements to append to :paramref:`self`. If None (default) it
+            will be the number of elements from the operands.
+
+        Returns
+        -------
+        out: None
+
+        Notes
+        -----
+        * Compression `nthreads` must be 1 when using this.
+
+        """
+        def initialize(func):
+            if self.nbytes != 0:
+                raise ValueError("Cannot apply a filler to a non empty SChunk")
+            nelem_ = blosc2_ext.nelem_from_inputs(inputs_tuple, nelem)
+            super(SChunk, self)._set_filler(func, id(inputs_tuple), schunk_dtype)
+            chunksize = self.chunksize
+            written_nbytes = 0
+            nbytes = nelem_ * self.typesize
+            while written_nbytes < nbytes:
+                chunk = np.zeros(chunksize // self.typesize, dtype=schunk_dtype)
+                self.append_data(chunk)
+                written_nbytes += chunksize
+                if (nbytes - written_nbytes) < self.chunksize:
+                    chunksize = nbytes - written_nbytes
+            self.remove_prefilter(func.__name__)
+
+            def exec_func(*args):
+                func(*args)
+            return exec_func
+        return initialize
+
+    def prefilter(self, input_dtype, output_dtype=None):
+        """Decorator to set a function as a prefilter.
+
+        This function will be executed each time before compressing the data.
+        It will receive three parameters: the actual data as a np.ndarray from which to read,
+        the np.ndarray to fill and the offset inside the SChunk where the corresponding block begins.
+
+        Parameters
+        ----------
+        input_dtype: np.dtype
+            Data type of the input that will receive the prefilter function.
+        output_dtype: np.dtype
+            Data type of the output that will receive and fill the prefilter function.
+            If None (default) it will be :paramref:`input_dtype`.
+
+        Returns
+        -------
+        out: None
+
+        Notes
+        -----
+        * `nthreads` must be 1 when compressing.
+
+        * The :paramref:`input_dtype` itemsize must be the same as the :paramref:`output_dtype` itemsize.
+
+        See Also
+        --------
+        :meth:`remove_prefilter`
+        :meth:`postfilter`
+
+        """
+        def initialize(func):
+            super(SChunk, self)._set_prefilter(func, input_dtype, output_dtype)
+
+            def exec_func(*args):
+                func(*args)
+            return exec_func
+        return initialize
 
     def remove_prefilter(self, func_name):
         """Remove the prefilter from the SChunk.
