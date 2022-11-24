@@ -38,7 +38,7 @@ import numpy as np
         ({"nthreads": 1}, {"nthreads": 2}, 1, True, "test_fillers.b2frame", 1 * 20_000),
         (
                 {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 1},
-                {"schunk": None, "nthreads": 4},
+                {"nthreads": 4},
                 5,
                 False,
                 None,
@@ -103,6 +103,9 @@ def test_fillers(contiguous, urlpath, cparams, dparams, nchunks, nelem, func, op
             output[:] = inputs_tuple[0] - inputs_tuple[1] * inputs_tuple[2]
         fill_f4((data, data2, np.pi), res, offset)
 
+    new_cparams = {"nthreads": 2}
+    schunk.cparams = new_cparams
+
     pre_data = np.empty(chunk_len * nchunks, dtype=schunk_dtype)
     schunk.get_slice(0, chunk_len * nchunks, out=pre_data)
 
@@ -139,7 +142,7 @@ def test_fillers(contiguous, urlpath, cparams, dparams, nchunks, nelem, func, op
         ({"nthreads": 1}, {"nthreads": 2}, 1, True, "test_prefilters.b2frame"),
         (
                 {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 1},
-                {"schunk": None, "nthreads": 4},
+                {"nthreads": 4},
                 5,
                 False,
                 None
@@ -169,9 +172,9 @@ def test_prefilters(contiguous, urlpath, cparams, dparams, nchunks, func, data_d
         @schunk.prefilter(data_dtype, schunk_dtype)
         def pref3(input, output, offset):
             output[:] = input <= np.datetime64('1997-12-31')
+    schunk.cparams = {"nthreads": 1}
 
     schunk[:nchunks * chunk_len] = data
-
     post_data = np.empty(chunk_len * nchunks, dtype=schunk_dtype)
     schunk.get_slice(0, chunk_len * nchunks, out=post_data)
 

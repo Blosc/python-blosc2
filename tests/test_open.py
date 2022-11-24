@@ -20,7 +20,7 @@ import numpy as np
         ({"typesize": 4}, {"nthreads": 4}, 1, 200 * 100, float),
         (
          {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 2, "typesize": 1},
-         {"schunk": None},
+         {},
          5,
          201,
          np.int8
@@ -41,6 +41,11 @@ def test_open(contiguous, urlpath, cparams, dparams, nchunks, chunk_nitems, dtyp
 
     del schunk
     schunk_open = blosc2.open(urlpath, mode)
+
+    for key in cparams:
+        if key == "nthreads":
+            continue
+        assert schunk_open.cparams[key] == cparams[key]
 
     buffer = np.zeros(chunk_nitems, dtype=dtype)
     if mode != "r":

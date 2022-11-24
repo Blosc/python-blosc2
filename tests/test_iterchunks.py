@@ -19,7 +19,7 @@ import numpy as np
         ({"typesize": 4}, {"nthreads": 1}, 1),
         (
                 {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4},
-                {"schunk": None, "nthreads": 1},
+                {"nthreads": 1},
                 5
         ),
         ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {"nthreads": 1}, 10),
@@ -53,7 +53,7 @@ def test_iterchunks(contiguous, urlpath, cparams, dparams, nchunks):
         ({"typesize": 4}, {"nthreads": 1}, 1),
         (
                 {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4},
-                {"schunk": None, "nthreads": 1},
+                {"nthreads": 1},
                 5
         ),
         ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {"nthreads": 1}, 3),

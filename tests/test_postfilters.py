@@ -25,7 +25,7 @@ import numpy as np
         ({}, {"nthreads": 1}, 1, True, "test_postfilters.b2frame"),
         (
                 {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 4},
-                {"schunk": None, "nthreads": 1},
+                {"nthreads": 1},
                 5,
                 False,
                 None
@@ -57,6 +57,7 @@ def test_postfilters(contiguous, urlpath, cparams, dparams, nchunks, func, input
         def postf3(input, output, offset):
             output[:] = input <= np.datetime64('1997-12-31')
 
+    schunk.dparams = {"nthreads": 1}
     post_data = np.empty(chunk_len * nchunks, dtype=output_dtype)
     schunk.get_slice(0, chunk_len * nchunks, out=post_data)
 
