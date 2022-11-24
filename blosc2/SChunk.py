@@ -117,11 +117,12 @@ class SChunk(blosc2_ext.SChunk):
 
         # If not passed, set a sensible typesize
         if data is not None and hasattr(data, "itemsize"):
-            if 'cparams' in kwargs and 'typesize' not in kwargs['cparams']:
-                cparams = kwargs.pop('cparams').copy()
-                cparams['typesize'] = data.itemsize
-                kwargs['cparams'] = cparams
-            elif 'typesize' not in kwargs:
+            if 'cparams' in kwargs:
+                if 'typesize' not in kwargs['cparams']:
+                    cparams = kwargs.pop('cparams').copy()
+                    cparams['typesize'] = data.itemsize
+                    kwargs['cparams'] = cparams
+            else:
                 kwargs['cparams'] = {"typesize": data.itemsize}
 
         # chunksize handling
@@ -137,6 +138,26 @@ class SChunk(blosc2_ext.SChunk):
 
         super(SChunk, self).__init__(schunk=sc, chunksize=chunksize, data=data, **kwargs)
         self.vlmeta = vlmeta(super(SChunk, self).c_schunk, self.urlpath, self.mode)
+        self.cparams_ = super(SChunk, self).get_cparams()
+        self.dparams_ = super(SChunk, self).get_dparams()
+
+    @property
+    def cparams(self):
+        return self.cparams_
+
+    @cparams.setter
+    def cparams(self, value):
+        super(SChunk, self).update_cparams(value)
+        self.cparams_ = super(SChunk, self).get_cparams()
+
+    @property
+    def dparams(self):
+        return self.dparams_
+
+    @dparams.setter
+    def dparams(self, value):
+        super(SChunk, self).update_dparams(value)
+        self.dparams_ = super(SChunk, self).get_dparams()
 
     def append_data(self, data):
         """Append a data buffer to the SChunk.

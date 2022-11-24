@@ -17,7 +17,7 @@ import numpy as np
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6}, {}, 40000),
         ({}, {"nthreads": 4}, 20000),
-        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5}, {"schunk": None}, 20000),
+        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5}, {}, 20000),
         ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {}, 40000),
     ],
 )

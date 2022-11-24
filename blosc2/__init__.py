@@ -33,10 +33,10 @@ class SplitMode(Enum):
     """
     Available split modes.
     """
-    ALWAYS_SPLIT = 1
-    NEVER_SPLIT = 2
-    AUTO_SPLIT = 3
-    FORWARD_COMPAT_SPLIT = 4
+    ALWAYS_SPLIT = 0
+    NEVER_SPLIT = 1
+    AUTO_SPLIT = 2
+    FORWARD_COMPAT_SPLIT = 3
 
 
 from .blosc2_ext import (
@@ -110,7 +110,8 @@ cparams_dflts = {
     'blocksize': 0,
     'splitmode': SplitMode.FORWARD_COMPAT_SPLIT,
     'schunk': None,
-    'filters': [0, 0, 0, 0, 0, Filter.SHUFFLE],
+    'filters': [Filter.NOFILTER, Filter.NOFILTER, Filter.NOFILTER,
+                Filter.NOFILTER, Filter.NOFILTER, Filter.SHUFFLE],
     'filters_meta': [0, 0, 0, 0, 0, 0],
     'prefilter': None,
     'preparams': None,

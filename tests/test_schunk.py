@@ -18,7 +18,7 @@ import numpy as np
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 0),
         ({"typesize": 4}, {"nthreads": 4}, 1),
-        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {"schunk": None}, 5),
+        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {}, 5),
         ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {}, 10),
     ],
 )
@@ -107,7 +107,7 @@ def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 1),
         ({"typesize": 4}, {"nthreads": 4}, 1),
-        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {"schunk": None}, 5),
+        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {}, 5),
         ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {}, 10),
     ],
 )
@@ -121,6 +121,11 @@ def test_schunk_cframe(contiguous, urlpath, cparams, dparams, nchunks, copy):
 
     cframe = schunk.to_cframe()
     schunk2 = blosc2.schunk_from_cframe(cframe, copy)
+    for key in cparams:
+        if key == "nthreads":
+            continue
+        assert schunk2.cparams[key] == cparams[key]
+
     data2 = np.empty(data.shape, dtype=data.dtype)
     schunk2.get_slice(out=data2)
     assert np.array_equal(data, data2)
@@ -132,3 +137,71 @@ def test_schunk_cframe(contiguous, urlpath, cparams, dparams, nchunks, copy):
     _ = str(cframe)
 
     blosc2.remove_urlpath(urlpath)
+
+
+@pytest.mark.parametrize(
+    "cparams, dparams, new_cparams, new_dparams",
+    [
+        (
+                {"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4},
+                {},
+                {"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4},
+                {"nthreads": 4}
+        ),
+        (
+                {"typesize": 4},
+                {"nthreads": 4},
+                {"codec": blosc2.Codec.ZLIB, "splitmode": blosc2.SplitMode.ALWAYS_SPLIT},
+                {"nthreads": 1}
+        ),
+        (
+                {"codec": blosc2.Codec.ZLIB, "splitmode": blosc2.SplitMode.ALWAYS_SPLIT},
+                {},
+                {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4,
+                 "filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.TRUNC_PREC]},
+                {"nthreads": 16}),
+        (
+                {"codec": blosc2.Codec.LZ4HC, "typesize": 4},
+                {},
+                {"filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.TRUNC_PREC]},
+                {"nthreads": 3}
+        ),
+    ],
+)
+def test_schunk_cdparams(cparams, dparams, new_cparams, new_dparams):
+    storage = {"cparams": cparams, "dparams": dparams}
+
+    chunk_len = 200 * 1000
+    schunk = blosc2.SChunk(chunksize=chunk_len * 4, **storage)
+
+    # Check cparams have been set correctly
+    for key in cparams:
+        assert schunk.cparams[key] == cparams[key]
+    for key in dparams:
+        assert schunk.dparams[key] == dparams[key]
+
+    schunk.cparams = new_cparams
+    schunk.dparams = new_dparams
+    for key in schunk.cparams:
+        if key in new_cparams:
+            if key == "filters":
+                assert schunk.cparams[key][:len(new_cparams[key])] == new_cparams[key]
+            else:
+                assert schunk.cparams[key] == new_cparams[key]
+        elif key in cparams:
+            if key == "filters":
+                assert schunk.cparams[key][:len(cparams[key])] == cparams[key]
+            else:
+                assert schunk.cparams[key] == cparams[key]
+        else:
+            if key == "filters":
+                assert schunk.cparams[key][:len(blosc2.cparams_dflts[key])] == blosc2.cparams_dflts[key]
+            else:
+                assert schunk.cparams[key] == blosc2.cparams_dflts[key]
+
+    if "nthreads" in new_dparams:
+        assert schunk.dparams["nthreads"] == new_dparams["nthreads"]
+    elif "nthreads" in dparams:
+        assert schunk.dparams["nthreads"] == dparams["nthreads"]
+    else:
+        assert schunk.dparams["nthreads"] == blosc2.dparams_dflts["nthreads"]

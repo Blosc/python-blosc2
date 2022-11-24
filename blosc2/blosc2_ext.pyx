@@ -7,6 +7,7 @@
 #cython: language_level=3
 
 import _ctypes
+
 from cpython cimport (
     Py_buffer,
     PyBUF_SIMPLE,
@@ -15,9 +16,10 @@ from cpython cimport (
     PyObject_GetBuffer,
 )
 from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
+from cython.operator cimport dereference
 from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free, malloc, realloc
-from libc.string cimport memcpy
+from libc.string cimport memcpy, strcpy, strlen
 from libcpp cimport bool as c_bool
 
 from enum import Enum
@@ -159,7 +161,7 @@ cdef extern from "blosc2.h":
         int64_t nchunk
         int32_t nblock
         int32_t tid
-        uint8_t* ttmp;
+        uint8_t* ttmp
         size_t ttmp_nbytes
         blosc2_context* ctx
 
@@ -273,6 +275,7 @@ cdef extern from "blosc2.h":
         uint8_t compcode
         uint8_t compcode_meta
         uint8_t clevel
+        uint8_t splitmode
         int32_t typesize
         int32_t blocksize
         int32_t chunksize
@@ -350,29 +353,19 @@ cdef extern from "blosc2.h":
     int blosc2_remove_urlpath(const char *path)
 
 
-    ctypedef struct user_filters_udata:
-        char* py_func
-        char input_cdtype
-        char output_cdtype
-        int64_t chunkshape
-        int64_t blockshape
+ctypedef struct user_filters_udata:
+    char* py_func
+    char input_cdtype
+    char output_cdtype
+    int64_t chunkshape
+    int64_t blockshape
 
-    int blosc2_schunk_set_postfilter(blosc2_schunk *schunk, blosc2_postfilter_fn postfilter, char *func,
-                                     char input_cdtype, char output_cdtype)
-    int blosc2_schunk_remove_postfilter(blosc2_schunk *schunk)
-
-    ctypedef struct filler_udata:
-        char* py_func
-        int64_t inputs_id
-        char output_cdtype
-        int64_t chunkshape
-        int64_t blockshape
-
-    int blosc2_schunk_set_filler(blosc2_schunk *schunk, blosc2_prefilter_fn prefilter, char *func,
-                                     int64_t inputs_id, char output_cdtype)
-    int blosc2_schunk_set_prefilter(blosc2_schunk *schunk, blosc2_prefilter_fn prefilter, char *func,
-                                     char input_cdtype, char output_cdtype)
-    int blosc2_schunk_remove_prefilter(blosc2_schunk *schunk)
+ctypedef struct filler_udata:
+    char* py_func
+    int64_t inputs_id
+    char output_cdtype
+    int64_t chunkshape
+    int64_t blockshape
 
 
 MAX_TYPESIZE = BLOSC_MAX_TYPESIZE
@@ -730,6 +723,80 @@ cdef class SChunk:
     def typesize(self):
         return self.schunk.typesize
 
+    def get_cparams(self):
+        cparams_dict = {"codec": blosc2.Codec(self.schunk.storage.cparams.compcode),
+                        "codec_meta": self.schunk.storage.cparams.compcode_meta,
+                        "clevel": self.schunk.storage.cparams.clevel,
+                        "use_dict": self.schunk.storage.cparams.use_dict,
+                        "typesize": self.schunk.storage.cparams.typesize,
+                        "nthreads": self.schunk.storage.cparams.nthreads,
+                        "blocksize": self.schunk.storage.cparams.blocksize,
+                        "splitmode": blosc2.SplitMode(self.schunk.storage.cparams.splitmode)}
+
+        filters = [0] * BLOSC2_MAX_FILTERS
+        filters_meta = [0] * BLOSC2_MAX_FILTERS
+        for i in range(BLOSC2_MAX_FILTERS):
+            filters[i] = blosc2.Filter(self.schunk.filters[i])
+            filters_meta[i] = self.schunk.filters_meta[i]
+        cparams_dict["filters"] = filters
+        cparams_dict["filters_meta"] = filters_meta
+        return cparams_dict
+
+    def update_cparams(self, cparams_dict):
+        cdef blosc2_cparams* cparams = self.schunk.storage.cparams
+        codec = cparams_dict.get('codec', None)
+        cparams.compcode = cparams.compcode if codec is None else codec.value
+        cparams.compcode_meta = cparams_dict.get('codec_meta', cparams.compcode_meta)
+        cparams.clevel = cparams_dict.get('clevel', cparams.clevel)
+        cparams.use_dict = cparams_dict.get('use_dict', cparams.use_dict)
+        cparams.typesize = cparams_dict.get('typesize', cparams.typesize)
+        cparams.nthreads = cparams_dict.get('nthreads', cparams.nthreads)
+        cparams.blocksize = cparams_dict.get('blocksize', cparams.blocksize)
+        splitmode = cparams_dict.get('splitmode', None)
+        cparams.splitmode = cparams.splitmode if splitmode is None else splitmode.value
+
+        filters = cparams_dict.get('filters', None)
+        if filters is not None:
+            for i, filter in enumerate(filters):
+                cparams.filters[i] = filter.value if isinstance(filter, Enum) else 0
+
+        filters_meta = cparams_dict.get('filters_meta', None)
+        cdef int8_t meta_value
+        if filters_meta is not None:
+            for i, meta in enumerate(filters_meta):
+                # We still may want to encode negative values
+                meta_value = <int8_t> meta if meta < 0 else meta
+                cparams.filters_meta[i] = <uint8_t> meta_value
+
+        if cparams.nthreads != 1 and self.schunk.storage.cparams.prefilter != NULL:
+            raise ValueError("`nthreads` must be 1 when a prefilter is set")
+
+        blosc2_free_ctx(self.schunk.cctx)
+        self.schunk.cctx = blosc2_create_cctx(dereference(self.schunk.storage.cparams))
+
+        self.schunk.compcode = self.schunk.storage.cparams.compcode
+        self.schunk.compcode_meta = self.schunk.storage.cparams.compcode_meta
+        self.schunk.clevel = self.schunk.storage.cparams.clevel
+        self.schunk.splitmode = self.schunk.storage.cparams.splitmode
+        self.schunk.typesize = self.schunk.storage.cparams.typesize
+        self.schunk.blocksize = self.schunk.storage.cparams.blocksize
+        self.schunk.filters = self.schunk.storage.cparams.filters
+        self.schunk.filters_meta = self.schunk.storage.cparams.filters_meta
+
+    def get_dparams(self):
+        dparams_dict = {"nthreads": self.schunk.storage.dparams.nthreads}
+        return dparams_dict
+
+    def update_dparams(self, dparams_dict):
+        cdef blosc2_dparams* dparams = self.schunk.storage.dparams
+        dparams.nthreads = dparams_dict.get('nthreads', dparams.nthreads)
+
+        if dparams.nthreads != 1 and dparams.postfilter != NULL:
+            raise ValueError("`nthreads` must be 1 when a postfilter is set")
+
+        blosc2_free_ctx(self.schunk.dctx)
+        self.schunk.dctx = blosc2_create_dctx(dereference(self.schunk.storage.dparams))
+
     def append_data(self, data):
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
@@ -987,6 +1054,9 @@ cdef class SChunk:
         return start, stop
 
     def _set_postfilter(self, func, dtype_input, dtype_output=None):
+        if self.schunk.storage.dparams.nthreads > 1:
+            raise AttributeError("decompress `nthreads` must be 1 when assigning a postfilter")
+        # Get user data
         func_id = func.__name__
         blosc2.postfilter_funcs[func_id] = func
         func_id = func_id.encode("utf-8") if isinstance(func_id, str) else func_id
@@ -996,36 +1066,64 @@ cdef class SChunk:
         dtype_output = np.dtype(dtype_output)
         if dtype_output.itemsize != dtype_input.itemsize:
             raise ValueError("`dtype_input` and `dtype_output` must have the same size")
-        cdef char input_cdtype = np.dtype(dtype_input).char.encode("utf-8")[0]
-        cdef char output_cdtype = np.dtype(dtype_output).char.encode("utf-8")[0]
-        if self.schunk.storage.dparams.nthreads > 1:
-            raise AttributeError("decompress `nthreads` must be 1 when assigning a postfilter")
-        rc = blosc2_schunk_set_postfilter(<blosc2_schunk *> self.schunk, general_postfilter, func_id, input_cdtype,
-                                          output_cdtype)
-        if rc < 0:
-            raise RuntimeError("Error while setting the postfilter")
+
+        # Set postfilter
+        cdef blosc2_dparams* dparams = self.schunk.storage.dparams
+        dparams.postfilter = <blosc2_postfilter_fn> general_postfilter
+        # Fill postparams
+        cdef blosc2_postfilter_params* postparams = <blosc2_postfilter_params *> malloc(sizeof(blosc2_postfilter_params))
+        cdef user_filters_udata* postf_udata = <user_filters_udata * > malloc(sizeof(user_filters_udata))
+        postf_udata.py_func = <char * > malloc(strlen(func_id) + 1)
+        strcpy(postf_udata.py_func, func_id)
+        postf_udata.input_cdtype = dtype_input.char.encode("utf-8")[0]
+        postf_udata.output_cdtype = dtype_output.char.encode("utf-8")[0]
+        postf_udata.chunkshape = self.schunk.chunksize // self.schunk.typesize
+        postf_udata.blockshape = self.schunk.blocksize // self.schunk.typesize
+
+        postparams.user_data = <void *> postf_udata
+        dparams.postparams = postparams
+
+        blosc2_free_ctx(self.schunk.dctx)
+        self.schunk.dctx = blosc2_create_dctx(dereference(dparams))
 
     def remove_postfilter(self, func_name):
         del blosc2.postfilter_funcs[func_name]
-        rc = blosc2_schunk_remove_postfilter(self.schunk)
-        if rc < 0:
-            raise RuntimeError("Error while removing the postfilter")
+        self.schunk.storage.dparams.postfilter = NULL
+        free(self.schunk.storage.dparams.postparams)
+
+        blosc2_free_ctx(self.schunk.dctx)
+        self.schunk.dctx = blosc2_create_dctx(dereference(self.schunk.storage.dparams))
 
     def _set_filler(self, func, inputs_id, dtype_output):
+        if self.schunk.storage.cparams.nthreads > 1:
+            raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
+
         func_id = func.__name__
         blosc2.prefilter_funcs[func_id] = func
         func_id = func_id.encode("utf-8") if isinstance(func_id, str) else func_id
 
-        dtype_output = np.dtype(dtype_output)
-        cdef char output_cdtype = np.dtype(dtype_output).char.encode("utf-8")[0]
-        if self.schunk.storage.cparams.nthreads > 1:
-            raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
-        rc = blosc2_schunk_set_filler(<blosc2_schunk *> self.schunk, general_filler, func_id, inputs_id,
-                                          output_cdtype)
-        if rc < 0:
-            raise RuntimeError("Error while setting the filler")
+        # Set prefilter
+        cdef blosc2_cparams* cparams = self.schunk.storage.cparams
+        cparams.prefilter = <blosc2_prefilter_fn> general_filler
+
+        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
+        cdef filler_udata* fill_udata = <filler_udata *> malloc(sizeof(filler_udata))
+        fill_udata.py_func = <char *> malloc(strlen(func_id) + 1)
+        strcpy(fill_udata.py_func, func_id)
+        fill_udata.inputs_id = inputs_id
+        fill_udata.output_cdtype = np.dtype(dtype_output).char.encode("utf-8")[0]
+        fill_udata.chunkshape = self.schunk.chunksize // self.schunk.typesize
+        fill_udata.blockshape = self.schunk.blocksize // self.schunk.typesize
+
+        preparams.user_data = <void *> fill_udata
+        cparams.preparams = preparams
+
+        blosc2_free_ctx(self.schunk.cctx)
+        self.schunk.cctx = blosc2_create_cctx(dereference(cparams))
 
     def _set_prefilter(self, func, dtype_input, dtype_output=None):
+        if self.schunk.storage.cparams.nthreads > 1:
+            raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
         func_id = func.__name__
         blosc2.prefilter_funcs[func_id] = func
         func_id = func_id.encode("utf-8") if isinstance(func_id, str) else func_id
@@ -1035,20 +1133,32 @@ cdef class SChunk:
         dtype_output = np.dtype(dtype_output)
         if dtype_output.itemsize != dtype_input.itemsize:
             raise ValueError("`dtype_input` and `dtype_output` must have the same size")
-        cdef char input_cdtype = np.dtype(dtype_input).char.encode("utf-8")[0]
-        cdef char output_cdtype = np.dtype(dtype_output).char.encode("utf-8")[0]
-        if self.schunk.storage.cparams.nthreads > 1:
-            raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
-        rc = blosc2_schunk_set_prefilter(<blosc2_schunk *> self.schunk, general_prefilter, func_id, input_cdtype,
-                                          output_cdtype)
-        if rc < 0:
-            raise RuntimeError("Error while setting the prefilter")
+
+
+        cdef blosc2_cparams* cparams = self.schunk.storage.cparams
+        cparams.prefilter = <blosc2_prefilter_fn> general_prefilter
+        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
+        cdef user_filters_udata* pref_udata = <user_filters_udata*> malloc(sizeof(user_filters_udata))
+        pref_udata.py_func = <char *> malloc(strlen(func_id) + 1)
+        strcpy(pref_udata.py_func, func_id)
+        pref_udata.input_cdtype = dtype_input.char.encode("utf-8")[0]
+        pref_udata.output_cdtype = dtype_output.char.encode("utf-8")[0]
+        pref_udata.chunkshape = self.schunk.chunksize // self.schunk.typesize
+        pref_udata.blockshape = self.schunk.blocksize // self.schunk.typesize
+
+        preparams.user_data = <void *> pref_udata
+        cparams.preparams = preparams
+
+        blosc2_free_ctx(self.schunk.cctx)
+        self.schunk.cctx = blosc2_create_cctx(dereference(cparams))
 
     def remove_prefilter(self, func_name):
         del blosc2.prefilter_funcs[func_name]
-        rc = blosc2_schunk_remove_prefilter(self.schunk)
-        if rc < 0:
-            raise RuntimeError("Error while removing the prefilter")
+        self.schunk.storage.cparams.prefilter = NULL
+        free(self.schunk.storage.cparams.preparams)
+
+        blosc2_free_ctx(self.schunk.cctx)
+        self.schunk.cctx = blosc2_create_cctx(dereference(self.schunk.storage.cparams))
 
     def __dealloc__(self):
         if self.schunk != NULL:

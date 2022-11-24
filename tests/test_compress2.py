@@ -32,7 +32,7 @@ import numpy as np
         (
             np.random.randint(0, 1000 + 1, 1000),
             {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4},
-            {"schunk": None},
+            {},
         ),
         (np.arange(45, dtype=np.float64), {"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {}),
         (np.arange(50, dtype=np.int64), {"typesize": 4}, blosc2.dparams_dflts),
