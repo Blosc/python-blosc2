@@ -13,7 +13,6 @@ Accessor to the variable length metalayers.
         schunk.vlmeta['vlmeta1'] = 'something'
 
     And can be retrieved similarly::
-    And can be retrieved similarly::
 
         value = schunk.vlmeta['vlmeta1']
 

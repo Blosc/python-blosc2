@@ -154,10 +154,10 @@ cdef extern from "blosc2.h":
     ctypedef struct blosc2_prefilter_params:
         void* user_data
         const uint8_t* input
-        uint8_t* out
-        int32_t out_size
-        int32_t out_typesize
-        int32_t out_offset
+        uint8_t* output
+        int32_t output_size
+        int32_t output_typesize
+        int32_t output_offset
         int64_t nchunk
         int32_t nblock
         int32_t tid
@@ -168,7 +168,7 @@ cdef extern from "blosc2.h":
     ctypedef struct blosc2_postfilter_params:
         void *user_data
         const uint8_t *input
-        uint8_t *out
+        uint8_t *output
         int32_t size
         int32_t typesize
         int32_t offset
@@ -1192,7 +1192,7 @@ cdef int general_postfilter(blosc2_postfilter_params *params):
     input_cdtype = chr(udata.input_cdtype)
     output_cdtype = chr(udata.output_cdtype)
     input = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[input_cdtype], <void *> params.input)
-    output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.out)
+    output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.output)
     offset = params.nchunk * udata.chunkshape + params.nblock * udata.blockshape
 
     func_id = udata.py_func.decode()
@@ -1205,11 +1205,11 @@ cdef int general_postfilter(blosc2_postfilter_params *params):
 cdef int general_filler(blosc2_prefilter_params *params):
     cdef filler_udata *udata = <filler_udata *> params.user_data
     cdef int nd = 1
-    cdef np.npy_intp dims = params.out_size // params.out_typesize
+    cdef np.npy_intp dims = params.output_size // params.output_typesize
 
     inputs_tuple = _ctypes.PyObj_FromPtr(udata.inputs_id)
     output_cdtype = chr(udata.output_cdtype)
-    output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.out)
+    output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.output)
     offset = params.nchunk * udata.chunkshape + params.nblock * udata.blockshape
 
     inputs = []
@@ -1248,12 +1248,12 @@ def nelem_from_inputs(inputs_tuple, nelem=None):
 cdef int general_prefilter(blosc2_prefilter_params *params):
     cdef user_filters_udata *udata = <user_filters_udata *> params.user_data
     cdef int nd = 1
-    cdef np.npy_intp dims = params.out_size // params.out_typesize
+    cdef np.npy_intp dims = params.output_size // params.output_typesize
 
     input_cdtype = chr(udata.input_cdtype)
     output_cdtype = chr(udata.output_cdtype)
     input = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[input_cdtype], <void *> params.input)
-    output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.out)
+    output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.output)
     offset = params.nchunk * udata.chunkshape + params.nblock * udata.blockshape
 
     func_id = udata.py_func.decode()
