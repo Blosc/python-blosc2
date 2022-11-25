@@ -696,6 +696,9 @@ cdef class SChunk:
 
     @property
     def chunkshape(self):
+        """
+        Number of elements per chunk.
+        """
         return self.schunk.chunksize // self.schunk.typesize
 
     def __len__(self):
@@ -703,24 +706,39 @@ cdef class SChunk:
 
     @property
     def chunksize(self):
+        """
+        Number of bytes in  each chunk.
+        """
         return self.schunk.chunksize
 
     @property
     def cratio(self):
+        """
+        Compression ratio.
+        """
         if self.schunk.cbytes == 0:
             raise ZeroDivisionError("Empty schunk")
         return self.schunk.nbytes / self.schunk.cbytes
 
     @property
     def nbytes(self):
+        """
+        Number of data bytes in the `SChunk`.
+        """
         return self.schunk.nbytes
 
     @property
     def cbytes(self):
+        """
+        Number of compressed bytes.
+        """
         return self.schunk.cbytes
 
     @property
     def typesize(self):
+        """
+        Type size of the `SChunk`.
+        """
         return self.schunk.typesize
 
     def get_cparams(self):
