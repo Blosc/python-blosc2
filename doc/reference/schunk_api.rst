@@ -19,6 +19,7 @@ Methods
     SChunk.get_chunk
     SChunk.insert_chunk
     SChunk.insert_data
+    SChunk.iterchunks
     SChunk.update_chunk
     SChunk.update_data
     SChunk.get_slice
@@ -35,5 +36,8 @@ Attributes
 ----------
 
 .. toctree::
+   :titlesonly:
 
-    autofiles/schunk/vlmeta
+   autofiles/schunk/attributes/vlmeta
+   autofiles/schunk/attributes/blosc2.SChunk.SChunk.cparams
+   autofiles/schunk/attributes/blosc2.SChunk.SChunk.dparams

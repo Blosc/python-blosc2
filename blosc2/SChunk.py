@@ -143,6 +143,9 @@ class SChunk(blosc2_ext.SChunk):
 
     @property
     def cparams(self):
+        """
+        Dictionary with the compression parameters.
+        """
         return self.cparams_
 
     @cparams.setter
@@ -152,6 +155,9 @@ class SChunk(blosc2_ext.SChunk):
 
     @property
     def dparams(self):
+        """
+        Dictionary with the decompression parameters.
+        """
         return self.dparams_
 
     @dparams.setter
@@ -500,6 +506,20 @@ class SChunk(blosc2_ext.SChunk):
         return super(SChunk, self).to_cframe()
 
     def iterchunks(self, dtype):
+        """
+        Iterate over :paramref:`self` chunks.
+
+        Parameters
+        ----------
+        dtype: np.dtype
+            The data type to use.
+
+        Yields
+        ------
+        chunk: NumPy ndarray
+           The decompressed chunk.
+
+        """
         out = np.empty(self.chunkshape, dtype)
         for i in range(0, len(self), self.chunkshape):
             self.get_slice(i, i + self.chunkshape, out)
@@ -508,9 +528,10 @@ class SChunk(blosc2_ext.SChunk):
     def postfilter(self, input_dtype, output_dtype=None):
         """Decorator to set a function as a postfilter.
 
-        The postfilter function will be executed each time after decompressing the data.
-        It will receive three parameters: the input np.ndarray from which to read,
-        the output np.ndarray to fill and the offset inside the SChunk where the corresponding block begins.
+        The postfilter function will be executed each time after decompressing blocks of data.
+        It will receive three parameters: the input `ndarray` from which to read,
+        the output `ndarray` to fill and the offset inside the `SChunk` instance where
+        the corresponding block begins (see example below).
 
         Parameters
         ----------
@@ -535,6 +556,22 @@ class SChunk(blosc2_ext.SChunk):
         :meth:`remove_postfilter`
         :meth:`prefilter`
 
+        Examples
+        --------
+        .. code-block:: python
+
+            # Create SChunk
+            input_dtype = np.dtype(np.int64)
+            cparams = {"typesize": input_dtype.itemsize}
+            dparams = {"nthreads": 1}
+            storage = {"cparams": cparams, "dparams": dparams}
+            schunk = blosc2.SChunk(chunksize=20_000 * input_dtype.itemsize, **storage)
+
+            # Create postfilter and associate it to the schunk
+            @schunk.postfilter(input_dtype)
+            def postfilter(input, output, offset):
+                output[:] = offset + np.arange(input.size)
+
         """
         def initialize(func):
             super(SChunk, self)._set_postfilter(func, input_dtype, output_dtype)
@@ -545,7 +582,7 @@ class SChunk(blosc2_ext.SChunk):
         return initialize
 
     def remove_postfilter(self, func_name):
-        """Remove the postfilter from the SChunk.
+        """Remove the postfilter from the `SChunk` instance.
 
         Parameters
         ----------
@@ -563,16 +600,17 @@ class SChunk(blosc2_ext.SChunk):
         """Decorator to set a filler function.
 
         This function will fill :paramref:`self` according to :paramref:`nelem`.
-        It will receive three parameters: a tuple with the inputs as np.ndarrays from which to read,
-        the np.ndarray to fill :paramref:`self` and the offset inside the SChunk where the corresponding
-        block begins.
+        It will receive three parameters: a tuple with the inputs as `ndarrays` from which to read,
+        the `ndarray` to fill :paramref:`self` and the offset inside the `SChunk`
+        instance where the corresponding
+        block begins (see example below).
 
         Parameters
         ----------
         inputs_tuple: tuple of tuples
             Tuple which will contain a tuple for each argument that the function will receive
             with their corresponding np.dtype.
-            The supported operand types are :ref:`SChunk <SChunk>`, np.ndarray and Python scalars.
+            The supported operand types are :ref:`SChunk <SChunk>`, `ndarray` and Python scalars.
         schunk_dtype: np.dtype
             The data type to use to fill :paramref:`self`.
         nelem: int
@@ -586,6 +624,32 @@ class SChunk(blosc2_ext.SChunk):
         Notes
         -----
         * Compression `nthreads` must be 1 when using this.
+        * This does not need to be removed from the created `SChunk` instance.
+
+        See Also
+        --------
+        :meth:`prefilter`
+
+        Examples
+        --------
+        .. code-block:: python
+
+            # Set the compression and decompression parameters
+            schunk_dtype = np.dtype(np.float64)
+            cparams = {"typesize": schunk_dtype.itemsize, "nthreads": 1}
+            storage = {"cparams": cparams}
+            # Create empty SChunk
+            schunk = blosc2.SChunk(chunksize=20_000 * schunk_dtype.itemsize, **storage)
+
+            # Create operands
+            op_dtype = np.dtype(np.int32)
+            data = np.full(20_000 * 3, 12, dtype=op_dtype)
+            schunk_op = blosc2.SChunk(chunksize=20_000 * op_dtype.itemsize, data=data)
+
+            # Create filler
+            @schunk.filler(((schunk_op, op_dtype), (np.e, np.float32)), schunk_dtype)
+            def filler(inputs_tuple, output, offset):
+                output[:] = inputs_tuple[0] - inputs_tuple[1]
 
         """
         def initialize(func):
@@ -613,8 +677,9 @@ class SChunk(blosc2_ext.SChunk):
         """Decorator to set a function as a prefilter.
 
         This function will be executed each time before compressing the data.
-        It will receive three parameters: the actual data as a np.ndarray from which to read,
-        the np.ndarray to fill and the offset inside the SChunk where the corresponding block begins.
+        It will receive three parameters: the actual data as a `ndarray` from which to read,
+        the `ndarray` to fill and the offset inside the `SChunk` instance where the
+        corresponding block begins (see example below).
 
         Parameters
         ----------
@@ -638,6 +703,24 @@ class SChunk(blosc2_ext.SChunk):
         --------
         :meth:`remove_prefilter`
         :meth:`postfilter`
+        :meth:`filler`
+
+        Examples
+        --------
+        .. code-block:: python
+
+            # Set the compression and decompression parameters
+            input_dtype = np.dtype(np.int32)
+            output_dtype = np.dtype(np.float32)
+            cparams = {"typesize": output_dtype.itemsize, "nthreads": 1}
+            storage = {"cparams": cparams}
+            # Create schunk
+            schunk = blosc2.SChunk(chunksize=200 * 1000 * input_dtype.itemsize, **storage)
+
+            # Set prefilter with decorator
+            @schunk.prefilter(input_dtype, output_dtype)
+            def prefilter(input, output, offset):
+                output[:] = input - np.pi
 
         """
         def initialize(func):
@@ -649,7 +732,7 @@ class SChunk(blosc2_ext.SChunk):
         return initialize
 
     def remove_prefilter(self, func_name):
-        """Remove the prefilter from the SChunk.
+        """Remove the prefilter from the `SChunk` instance.
 
         Parameters
         ----------
