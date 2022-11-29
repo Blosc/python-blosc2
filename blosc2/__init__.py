@@ -48,6 +48,7 @@ from .blosc2_ext import (
     MIN_HEADER_LENGTH,
     VERSION_DATE,
     VERSION_STRING,
+    register_codec,
 )
 
 # Public API for container module
@@ -90,6 +91,9 @@ from .version import __version__
 postfilter_funcs = {}
 # Registry for prefilters
 prefilter_funcs = {}
+
+# Registry for user-defined codecs
+ucodec_registry = {}
 
 blosclib_version = "%s (%s)" % (VERSION_STRING, VERSION_DATE)
 
