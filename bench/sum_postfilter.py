@@ -10,7 +10,7 @@ dtype = np.dtype(np.int32)
 chunksize = chunkshape * dtype.itemsize
 
 # Set the compression and decompression parameters
-cparams = {"clevel": 9, "codec": blosc2.Codec.BLOSCLZ, "typesize": 4, "nthreads": 1}
+cparams = {"typesize": 4, "nthreads": 1}
 dparams = {"nthreads": 1}
 storage = {"cparams": cparams, "dparams": dparams}
 
@@ -24,7 +24,7 @@ for i in range(nchunks):
     schunk.append_data(data)
     schunk0.append_data(data)
 print(f"time append: {time() - t0:.2f}s")
-# print(f"cratio: {schunk.cratio:.2f}x")
+print(f"cratio: {schunk.cratio:.2f}x")
 
 
 # Associate a postfilter to schunk
@@ -36,6 +36,7 @@ def py_postfilter(input, output, offset):
 t0 = time()
 sum = 0
 for chunk in schunk0.iterchunks(dtype):
+    chunk += 1
     sum += chunk.sum()
 print(f"time sum (no postfilter): {time() - t0:.2f}s")
 print(sum)
