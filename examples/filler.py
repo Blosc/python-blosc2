@@ -1,8 +1,10 @@
-########################################################################
+#######################################################################
+# Copyright (C) 2019-present, Blosc Development team <blosc@blosc.org>
+# All rights reserved.
 #
-#       Author:  The Blosc development team - blosc@blosc.org
-#
-########################################################################
+# This source code is licensed under a BSD-style license (found in the
+# LICENSE file in the root directory of this source tree)
+#######################################################################
 
 import blosc2
 import numpy as np
@@ -36,7 +38,7 @@ def filler(inputs_tuple, output, offset):
     output[:] = inputs_tuple[0] - inputs_tuple[1] * inputs_tuple[2]
 
 
-# Check SChunk has been filled correctly
+# Check that SChunk has been filled correctly
 out = np.empty(chunk_len * nchunks, dtype=schunk_dtype)
 schunk.get_slice(0, chunk_len * nchunks, out=out)
 
