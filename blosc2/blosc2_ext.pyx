@@ -1,8 +1,10 @@
-########################################################################
+#######################################################################
+# Copyright (C) 2019-present, Blosc Development team <blosc@blosc.org>
+# All rights reserved.
 #
-#       Author:  The Blosc development team - blosc@blosc.org
-#
-########################################################################
+# This source code is licensed under a BSD-style license (found in the
+# LICENSE file in the root directory of this source tree)
+#######################################################################
 
 #cython: language_level=3
 
@@ -707,7 +709,7 @@ cdef class SChunk:
     @property
     def chunksize(self):
         """
-        Number of bytes in  each chunk.
+        Number of bytes in each chunk.
         """
         return self.schunk.chunksize
 
@@ -717,20 +719,20 @@ cdef class SChunk:
         Compression ratio.
         """
         if self.schunk.cbytes == 0:
-            raise ZeroDivisionError("Empty schunk")
+            return 0.
         return self.schunk.nbytes / self.schunk.cbytes
 
     @property
     def nbytes(self):
         """
-        Number of data bytes in the `SChunk`.
+        Amount of uncompressed data bytes.
         """
         return self.schunk.nbytes
 
     @property
     def cbytes(self):
         """
-        Number of compressed bytes.
+        Amount of compressed data bytes.
         """
         return self.schunk.cbytes
 

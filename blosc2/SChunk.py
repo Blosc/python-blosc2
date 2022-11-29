@@ -1,8 +1,10 @@
-########################################################################
+#######################################################################
+# Copyright (C) 2019-present, Blosc Development team <blosc@blosc.org>
+# All rights reserved.
 #
-#       Author:  The Blosc development team - blosc@blosc.org
-#
-########################################################################
+# This source code is licensed under a BSD-style license (found in the
+# LICENSE file in the root directory of this source tree)
+#######################################################################
 
 from collections.abc import MutableMapping
 
@@ -138,32 +140,32 @@ class SChunk(blosc2_ext.SChunk):
 
         super(SChunk, self).__init__(schunk=sc, chunksize=chunksize, data=data, **kwargs)
         self.vlmeta = vlmeta(super(SChunk, self).c_schunk, self.urlpath, self.mode)
-        self.cparams_ = super(SChunk, self).get_cparams()
-        self.dparams_ = super(SChunk, self).get_dparams()
+        self._cparams = super(SChunk, self).get_cparams()
+        self._dparams = super(SChunk, self).get_dparams()
 
     @property
     def cparams(self):
         """
         Dictionary with the compression parameters.
         """
-        return self.cparams_
+        return self._cparams
 
     @cparams.setter
     def cparams(self, value):
         super(SChunk, self).update_cparams(value)
-        self.cparams_ = super(SChunk, self).get_cparams()
+        self._cparams = super(SChunk, self).get_cparams()
 
     @property
     def dparams(self):
         """
         Dictionary with the decompression parameters.
         """
-        return self.dparams_
+        return self._dparams
 
     @dparams.setter
     def dparams(self, value):
         super(SChunk, self).update_dparams(value)
-        self.dparams_ = super(SChunk, self).get_dparams()
+        self._dparams = super(SChunk, self).get_dparams()
 
     def append_data(self, data):
         """Append a data buffer to the SChunk.
@@ -539,7 +541,7 @@ class SChunk(blosc2_ext.SChunk):
             Data type of the input that will receive the postfilter function.
         output_dtype: np.dtype
             Data type of the output that will receive and fill the postfilter function.
-            If None (default) it will be :paramref:`input_dtype`.
+            If None (default) it will be set to :paramref:`input_dtype`.
 
         Returns
         -------
@@ -600,10 +602,10 @@ class SChunk(blosc2_ext.SChunk):
         """Decorator to set a filler function.
 
         This function will fill :paramref:`self` according to :paramref:`nelem`.
-        It will receive three parameters: a tuple with the inputs as `ndarrays` from which to read,
-        the `ndarray` to fill :paramref:`self` and the offset inside the `SChunk`
-        instance where the corresponding
-        block begins (see example below).
+        It will receive three parameters: a tuple with the inputs as `ndarrays`
+        from which to read, the `ndarray` to fill :paramref:`self` and the
+        offset inside the `SChunk` instance where the corresponding block
+        begins (see example below).
 
         Parameters
         ----------
@@ -713,9 +715,8 @@ class SChunk(blosc2_ext.SChunk):
             input_dtype = np.dtype(np.int32)
             output_dtype = np.dtype(np.float32)
             cparams = {"typesize": output_dtype.itemsize, "nthreads": 1}
-            storage = {"cparams": cparams}
             # Create schunk
-            schunk = blosc2.SChunk(chunksize=200 * 1000 * input_dtype.itemsize, **storage)
+            schunk = blosc2.SChunk(chunksize=200 * 1000 * input_dtype.itemsize, cparams=cparams)
 
             # Set prefilter with decorator
             @schunk.prefilter(input_dtype, output_dtype)
