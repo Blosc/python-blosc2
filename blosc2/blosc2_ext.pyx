@@ -965,7 +965,7 @@ cdef class SChunk:
             PyObject_GetBuffer(out, buf, PyBUF_SIMPLE)
             if buf.len < nbytes:
                 raise ValueError("Not enough space for writing the slice in out")
-            rc = blosc2_schunk_get_slice_buffer(self.schunk, start, stop, <void *> buf.buf)
+            rc = blosc2_schunk_get_slice_buffer(self.schunk, start, stop, buf.buf)
             PyBuffer_Release(buf)
         else:
             out = PyBytes_FromStringAndSize(NULL, nbytes)
@@ -997,7 +997,7 @@ cdef class SChunk:
             # Increase SChunk's size
             buf_pos = 0
             if start < nitems:
-                rc = blosc2_schunk_set_slice_buffer(self.schunk, start, nitems, <void *> buf.buf)
+                rc = blosc2_schunk_set_slice_buffer(self.schunk, start, nitems, buf.buf)
                 buf_pos = (nitems - start) * self.schunk.typesize
             if self.schunk.nbytes % self.schunk.chunksize != 0:
                 # Update last chunk before appending any other
@@ -1037,7 +1037,7 @@ cdef class SChunk:
                         raise RuntimeError("Error while appending the chunk")
                     buf_pos += chunksize
         else:
-            rc = blosc2_schunk_set_slice_buffer(self.schunk, start, stop, <void *> buf.buf)
+            rc = blosc2_schunk_set_slice_buffer(self.schunk, start, stop, buf.buf)
         PyBuffer_Release(buf)
         if rc < 0:
             raise RuntimeError("Error while setting the slice")
@@ -1097,7 +1097,7 @@ cdef class SChunk:
         postf_udata.output_cdtype = dtype_output.char.encode("utf-8")[0]
         postf_udata.chunkshape = self.schunk.chunksize // self.schunk.typesize
 
-        postparams.user_data = <void *> postf_udata
+        postparams.user_data = postf_udata
         dparams.postparams = postparams
 
         blosc2_free_ctx(self.schunk.dctx)
@@ -1131,7 +1131,7 @@ cdef class SChunk:
         fill_udata.output_cdtype = np.dtype(dtype_output).char.encode("utf-8")[0]
         fill_udata.chunkshape = self.schunk.chunksize // self.schunk.typesize
 
-        preparams.user_data = <void *> fill_udata
+        preparams.user_data = fill_udata
         cparams.preparams = preparams
 
         blosc2_free_ctx(self.schunk.cctx)
@@ -1161,7 +1161,7 @@ cdef class SChunk:
         pref_udata.output_cdtype = dtype_output.char.encode("utf-8")[0]
         pref_udata.chunkshape = self.schunk.chunksize // self.schunk.typesize
 
-        preparams.user_data = <void *> pref_udata
+        preparams.user_data = pref_udata
         cparams.preparams = preparams
 
         blosc2_free_ctx(self.schunk.cctx)
@@ -1206,8 +1206,8 @@ cdef int general_postfilter(blosc2_postfilter_params *params):
 
     input_cdtype = chr(udata.input_cdtype)
     output_cdtype = chr(udata.output_cdtype)
-    input = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[input_cdtype], <void *> params.input)
-    output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.output)
+    input = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[input_cdtype], params.input)
+    output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], params.output)
     offset = params.nchunk * udata.chunkshape + params.offset // params.typesize
 
     func_id = udata.py_func.decode()
@@ -1224,7 +1224,7 @@ cdef int general_filler(blosc2_prefilter_params *params):
 
     inputs_tuple = _ctypes.PyObj_FromPtr(udata.inputs_id)
     output_cdtype = chr(udata.output_cdtype)
-    output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.output)
+    output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], params.output)
     offset = params.nchunk * udata.chunkshape + params.output_offset // params.output_typesize
 
     inputs = []
@@ -1267,8 +1267,8 @@ cdef int general_prefilter(blosc2_prefilter_params *params):
 
     input_cdtype = chr(udata.input_cdtype)
     output_cdtype = chr(udata.output_cdtype)
-    input = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[input_cdtype], <void *> params.input)
-    output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.output)
+    input = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[input_cdtype], params.input)
+    output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], params.output)
     offset = params.nchunk * udata.chunkshape + params.output_offset // params.output_typesize
 
     func_id = udata.py_func.decode()
