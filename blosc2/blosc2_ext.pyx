@@ -360,14 +360,12 @@ ctypedef struct user_filters_udata:
     char input_cdtype
     char output_cdtype
     int64_t chunkshape
-    int64_t blockshape
 
 ctypedef struct filler_udata:
     char* py_func
     int64_t inputs_id
     char output_cdtype
     int64_t chunkshape
-    int64_t blockshape
 
 
 MAX_TYPESIZE = BLOSC_MAX_TYPESIZE
@@ -1098,7 +1096,6 @@ cdef class SChunk:
         postf_udata.input_cdtype = dtype_input.char.encode("utf-8")[0]
         postf_udata.output_cdtype = dtype_output.char.encode("utf-8")[0]
         postf_udata.chunkshape = self.schunk.chunksize // self.schunk.typesize
-        postf_udata.blockshape = self.schunk.blocksize // self.schunk.typesize
 
         postparams.user_data = <void *> postf_udata
         dparams.postparams = postparams
@@ -1133,7 +1130,6 @@ cdef class SChunk:
         fill_udata.inputs_id = inputs_id
         fill_udata.output_cdtype = np.dtype(dtype_output).char.encode("utf-8")[0]
         fill_udata.chunkshape = self.schunk.chunksize // self.schunk.typesize
-        fill_udata.blockshape = self.schunk.blocksize // self.schunk.typesize
 
         preparams.user_data = <void *> fill_udata
         cparams.preparams = preparams
@@ -1164,7 +1160,6 @@ cdef class SChunk:
         pref_udata.input_cdtype = dtype_input.char.encode("utf-8")[0]
         pref_udata.output_cdtype = dtype_output.char.encode("utf-8")[0]
         pref_udata.chunkshape = self.schunk.chunksize // self.schunk.typesize
-        pref_udata.blockshape = self.schunk.blocksize // self.schunk.typesize
 
         preparams.user_data = <void *> pref_udata
         cparams.preparams = preparams
@@ -1213,7 +1208,7 @@ cdef int general_postfilter(blosc2_postfilter_params *params):
     output_cdtype = chr(udata.output_cdtype)
     input = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[input_cdtype], <void *> params.input)
     output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.output)
-    offset = params.nchunk * udata.chunkshape + params.nblock * udata.blockshape
+    offset = params.nchunk * udata.chunkshape + params.offset // params.typesize
 
     func_id = udata.py_func.decode()
     blosc2.postfilter_funcs[func_id](input, output, offset)
@@ -1230,7 +1225,7 @@ cdef int general_filler(blosc2_prefilter_params *params):
     inputs_tuple = _ctypes.PyObj_FromPtr(udata.inputs_id)
     output_cdtype = chr(udata.output_cdtype)
     output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.output)
-    offset = params.nchunk * udata.chunkshape + params.nblock * udata.blockshape
+    offset = params.nchunk * udata.chunkshape + params.output_offset // params.output_typesize
 
     inputs = []
     for obj, dtype in inputs_tuple:
@@ -1274,7 +1269,7 @@ cdef int general_prefilter(blosc2_prefilter_params *params):
     output_cdtype = chr(udata.output_cdtype)
     input = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[input_cdtype], <void *> params.input)
     output = np.PyArray_SimpleNewFromData(nd, &dims, char2dtype[output_cdtype], <void *> params.output)
-    offset = params.nchunk * udata.chunkshape + params.nblock * udata.blockshape
+    offset = params.nchunk * udata.chunkshape + params.output_offset // params.output_typesize
 
     func_id = udata.py_func.decode()
     blosc2.prefilter_funcs[func_id](input, output, offset)

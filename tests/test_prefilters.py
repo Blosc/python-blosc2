@@ -61,9 +61,7 @@ def test_fillers(contiguous, urlpath, cparams, dparams, nchunks, nelem, func, op
     blosc2.remove_urlpath(urlpath)
 
     chunk_len = 20_000
-    block_len = 5_000
     cparams["typesize"] = schunk_dtype.itemsize
-    cparams["blocksize"] = block_len * schunk_dtype.itemsize
 
     schunk = blosc2.SChunk(chunksize=chunk_len * schunk_dtype.itemsize,
                            contiguous=contiguous, urlpath=urlpath, cparams=cparams, dparams=dparams)

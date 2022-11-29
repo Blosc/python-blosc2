@@ -44,4 +44,4 @@ schunk.get_slice(0, chunk_len * nchunks, out=out)
 
 res = np.empty(data.shape, dtype=schunk_dtype)
 filler((data, nparray_op, py_scalar), res, None)
-assert np.allclose(res, out)
+np.testing.assert_allclose(out, res)
