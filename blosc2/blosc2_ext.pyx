@@ -684,7 +684,7 @@ cdef class SChunk:
                 if i == (nchunks - 1):
                     len_chunk = len_data - i * chunksize
                 index = i * chunksize
-                nchunks_ = blosc2_schunk_append_buffer(self.schunk, <void*>&buf.buf[index], len_chunk)
+                nchunks_ = blosc2_schunk_append_buffer(self.schunk, &buf.buf[index], len_chunk)
                 if nchunks_ != (i + 1):
                     PyBuffer_Release(buf)
                     raise RuntimeError("An error occurred while appending the chunks")
