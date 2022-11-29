@@ -1,18 +1,17 @@
-Announcing python-blosc2 0.5.2
+Announcing python-blosc2 0.6.0
 ==============================
 
-This is a minor release where it honors now nested `cparams` properties in
-kwargs for most of the functions.  So e.g. you can write:
+This is a major release that implements support for C-Blosc2 prefilters and postfilters!
+Essentially, you can implement these parts of the C-Blosc2 filter pipeline with
+Python functions, which allows for a lot of flexibility and efficiency.
 
-```
-blosc2.save_tensor(a, "test.bl2", mode="w",
-                   filters=[blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE],
-                   filters_meta=[13, 0],
-                   codec=blosc2.Codec.LZ4,
-                   clevel=9)
-```
+For more info about the prefilter and postfilter machinery, see slides in:
+https://www.blosc.org/docs/Blosc2-Debunking-Myths.pdf
 
-without a need to build a proper `cparams` dict first.
+See also some notebooks exercising these exciting new features:
+
+https://github.com/Blosc/python-blosc2/blob/main/examples/prefilters.ipynb
+https://github.com/Blosc/python-blosc2/blob/main/examples/postfilters.ipynb
 
 For more info, you can have a look at the release notes in:
 

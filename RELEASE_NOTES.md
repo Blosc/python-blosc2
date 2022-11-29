@@ -1,8 +1,18 @@
 # Release notes
 
-## Changes from 0.5.2 to 0.5.3
+## Changes from 0.5.2 to 0.6.0
 
-XXX version-specific blurb XXX
+* Support for Python prefilters and postfilters.  With this, you can pre-process or post-process data in super-chunks automatically.  This machinery is handled internally by C-Blosc2, so it is very efficient (although it cannot work in multi-thread mode due to the GIL).  See the examples/ directory for different ways of using this.
+
+* Support for fillers.  This is a specialization of a prefilter, and it allows to use Python functions to create new super-chunks from different kind of inputs (NumPy, SChunk instances, scalars), allowing computations among them and getting the result automatically compressed.  See a sample script in the examples/ directory.
+
+* Lots of small improvements in the style, consistency and other glitches in the code.  Thanks to Dimitri Papadopoulos for the attention to detail.
+
+* No need to compile C-Blosc2 tests, benchs or fuzzers.  Compilation time is much shorter now.
+
+* Added `cratio`, `nbytes` and `cbytes` properties to `SChunk` instances.
+
+* Added setters for `dparams` and `cparams` attributes in `SChunk`.
 
 
 ## Changes from 0.5.1 to 0.5.2
@@ -39,9 +49,9 @@ XXX version-specific blurb XXX
 
 * New `pack_array2()` and `unpack_array2()` functions for packing NumPy arrays.  Contrarily to `pack_array()` and `unpack_array()` counterparts, the new ones allow for compressing arrays larger than 2 GB in size.
 
-* New `Scunk.to_cframe()` and `blosc2.from_cframe()` methods for serializing/deserializing `SChunk` instances.
+* New `SChunk.to_cframe()` and `blosc2.from_cframe()` methods for serializing/deserializing `SChunk` instances.
 
-* New `Schunk.get_slice()`, `SChunk.__getitem__()` and `SChunk.__setitem__()` methods for getting/setting slices from/to `SChunk` instances.
+* New `SChunk.get_slice()`, `SChunk.__getitem__()` and `SChunk.__setitem__()` methods for getting/setting slices from/to `SChunk` instances.
 
 * The `compcode` parameter has been renamed to `codec`.  A `NameError` exception will be raised when using the old name.  Please update your code when you see this exception.
 

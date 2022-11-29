@@ -11,7 +11,7 @@ import numpy as np
 
 nchunks = 10
 input_dtype = np.dtype("M8[D]")
-output_dtype = np.int64
+output_dtype = np.int64  # output dtype has to be of the same size as input
 
 # Set the compression and decompression parameters
 cparams = {"codec": blosc2.Codec.LZ4, "typesize": input_dtype.itemsize}
