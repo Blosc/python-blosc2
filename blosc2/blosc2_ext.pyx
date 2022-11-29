@@ -101,6 +101,15 @@ cdef extern from "blosc2.h":
         BLOSC2_ERROR_PLUGIN_IO
         BLOSC2_ERROR_FILE_REMOVE
 
+    ctypedef enum:
+        BLOSC2_DEFINED_CODECS_START
+        BLOSC2_DEFINED_CODECS_STOP
+        BLOSC2_GLOBAL_REGISTERED_CODECS_START
+        BLOSC2_GLOBAL_REGISTERED_CODECS_STOP
+        BLOSC2_GLOBAL_REGISTERED_CODECS
+        BLOSC2_USER_REGISTERED_CODECS_START
+        BLOSC2_USER_REGISTERED_CODECS_STOP
+
     cdef int INT_MAX
 
     int blosc1_compress(int clevel, int doshuffle, size_t typesize,
@@ -354,6 +363,21 @@ cdef extern from "blosc2.h":
     int blosc2_remove_dir(const char *path)
     int blosc2_remove_urlpath(const char *path)
 
+    ctypedef int(*blosc2_codec_encoder_cb)(const uint8_t *input, int32_t input_len, uint8_t *output, int32_t output_len,
+                                          uint8_t meta, blosc2_cparams *cparams, const void *chunk)
+    ctypedef int(*blosc2_codec_decoder_cb)(const uint8_t *input, int32_t input_len, uint8_t *output, int32_t output_len,
+                                          uint8_t meta, blosc2_dparams *dparams, const void *chunk)
+
+    ctypedef struct blosc2_codec:
+        uint8_t compcode
+        char* compname
+        uint8_t complib
+        uint8_t compver
+        blosc2_codec_encoder_cb encoder
+        blosc2_codec_decoder_cb decoder
+
+    int blosc2_register_codec(blosc2_codec *codec)
+
 
 ctypedef struct user_filters_udata:
     char* py_func
@@ -363,7 +387,7 @@ ctypedef struct user_filters_udata:
 
 ctypedef struct filler_udata:
     char* py_func
-    int64_t inputs_id
+    uintptr_t inputs_id
     int output_cdtype
     int32_t chunkshape
 
@@ -502,7 +526,7 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     if "compcode" in kwargs:
         raise NameError("`compcode` has been renamed to `codec`.  Please go update your code.")
     codec = kwargs.get('codec', blosc2.cparams_dflts['codec'])
-    cparams.compcode = codec.value
+    cparams.compcode = codec if not isinstance(codec, blosc2.Codec) else codec.value
     cparams.compcode_meta = kwargs.get('codec_meta', blosc2.cparams_dflts['codec_meta'])
     cparams.clevel = kwargs.get('clevel', blosc2.cparams_dflts['clevel'])
     cparams.use_dict = kwargs.get('use_dict', blosc2.cparams_dflts['use_dict'])
@@ -530,6 +554,9 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
         meta_value = <int8_t>meta if meta < 0 else meta
         cparams.filters_meta[i] = <uint8_t>meta_value
 
+    if BLOSC2_USER_REGISTERED_CODECS_START <= cparams.compcode <= BLOSC2_USER_REGISTERED_CODECS_STOP \
+            and cparams.nthreads > 1:
+        raise ValueError("Cannot use multi-threading with user defined codecs")
     cparams.prefilter = NULL
     cparams.preparams = NULL
     cparams.udbtune = NULL
@@ -631,6 +658,7 @@ cdef create_storage(blosc2_storage *storage, kwargs):
 
 cdef class SChunk:
     cdef blosc2_schunk *schunk
+    cdef c_bool _is_view
 
     def __init__(self, schunk=None, chunksize=2 ** 24, data=None, **kwargs):
         # hold on to a bytestring of urlpath for the lifetime of the instance
@@ -640,6 +668,8 @@ cdef class SChunk:
             self._urlpath = urlpath.encode() if isinstance(urlpath, str) else urlpath
             kwargs["urlpath"] = self._urlpath
         self.mode = mode = kwargs.get("mode", "a")
+        # `_is_view` indicates if a free should be done on this instance
+        self._is_view = kwargs.get("_is_view", False)
 
         if schunk is not None:
             self.schunk = <blosc2_schunk *> PyCapsule_GetPointer(schunk, <char *> "blosc2_schunk*")
@@ -744,14 +774,20 @@ cdef class SChunk:
         return self.schunk.typesize
 
     def get_cparams(self):
-        cparams_dict = {"codec": blosc2.Codec(self.schunk.storage.cparams.compcode),
+        cparams_dict = {
                         "codec_meta": self.schunk.storage.cparams.compcode_meta,
                         "clevel": self.schunk.storage.cparams.clevel,
                         "use_dict": self.schunk.storage.cparams.use_dict,
                         "typesize": self.schunk.storage.cparams.typesize,
                         "nthreads": self.schunk.storage.cparams.nthreads,
                         "blocksize": self.schunk.storage.cparams.blocksize,
-                        "splitmode": blosc2.SplitMode(self.schunk.storage.cparams.splitmode)}
+                        "splitmode": blosc2.SplitMode(self.schunk.storage.cparams.splitmode)
+        }
+        if self.schunk.storage.cparams.compcode in blosc2.Codec._value2member_map_:
+            cparams_dict["codec"] = blosc2.Codec(self.schunk.storage.cparams.compcode)
+        else:
+            # User codec
+            cparams_dict["codec"] = self.schunk.storage.cparams.compcode
 
         filters = [0] * BLOSC2_MAX_FILTERS
         filters_meta = [0] * BLOSC2_MAX_FILTERS
@@ -765,7 +801,10 @@ cdef class SChunk:
     def update_cparams(self, cparams_dict):
         cdef blosc2_cparams* cparams = self.schunk.storage.cparams
         codec = cparams_dict.get('codec', None)
-        cparams.compcode = cparams.compcode if codec is None else codec.value
+        if codec is None:
+            cparams.compcode = cparams.compcode
+        else:
+            cparams.compcode = codec if not isinstance(codec, blosc2.Codec) else codec.value
         cparams.compcode_meta = cparams_dict.get('codec_meta', cparams.compcode_meta)
         cparams.clevel = cparams_dict.get('clevel', cparams.clevel)
         cparams.use_dict = cparams_dict.get('use_dict', cparams.use_dict)
@@ -788,8 +827,11 @@ cdef class SChunk:
                 meta_value = <int8_t> meta if meta < 0 else meta
                 cparams.filters_meta[i] = <uint8_t> meta_value
 
-        if cparams.nthreads != 1 and self.schunk.storage.cparams.prefilter != NULL:
-            raise ValueError("`nthreads` must be 1 when a prefilter is set")
+        if cparams.nthreads != 1:
+            if self.schunk.storage.cparams.prefilter != NULL:
+                raise ValueError("`nthreads` must be 1 when a prefilter is set")
+            elif BLOSC2_USER_REGISTERED_CODECS_START <= cparams.compcode <= BLOSC2_USER_REGISTERED_CODECS_STOP:
+                raise ValueError("Cannot use multi-threading with user defined codecs")
 
         blosc2_free_ctx(self.schunk.cctx)
         self.schunk.cctx = blosc2_create_cctx(dereference(self.schunk.storage.cparams))
@@ -811,8 +853,11 @@ cdef class SChunk:
         cdef blosc2_dparams* dparams = self.schunk.storage.dparams
         dparams.nthreads = dparams_dict.get('nthreads', dparams.nthreads)
 
-        if dparams.nthreads != 1 and dparams.postfilter != NULL:
-            raise ValueError("`nthreads` must be 1 when a postfilter is set")
+        if dparams.nthreads != 1:
+            if dparams.postfilter != NULL:
+                raise ValueError("`nthreads` must be 1 when a postfilter is set")
+            elif BLOSC2_USER_REGISTERED_CODECS_START <= self.schunk.compcode <= BLOSC2_USER_REGISTERED_CODECS_STOP:
+                raise ValueError("Cannot use multi-threading with user defined codecs")
 
         blosc2_free_ctx(self.schunk.dctx)
         self.schunk.dctx = blosc2_create_dctx(dereference(self.schunk.storage.dparams))
@@ -1178,7 +1223,7 @@ cdef class SChunk:
         self.schunk.cctx = blosc2_create_cctx(dereference(self.schunk.storage.cparams))
 
     def __dealloc__(self):
-        if self.schunk != NULL:
+        if self.schunk != NULL and not self._is_view:
             blosc2_schunk_free(self.schunk)
 
 
@@ -1359,3 +1404,70 @@ def schunk_from_cframe(cframe, copy=False):
     if not copy:
         schunk._avoid_cframe_free(True)
     return schunk
+
+
+cdef int general_encoder(const uint8_t* input_buffer, int32_t input_len,
+                        uint8_t* output_buffer, int32_t output_len,
+                        uint8_t meta,
+                        blosc2_cparams* cparams, const void* chunk):
+    cdef int nd = 1
+    cdef np.npy_intp input_dims = input_len
+    cdef np.npy_intp output_dims = output_len
+    input = np.PyArray_SimpleNewFromData(nd, &input_dims, np.NPY_UINT8, input_buffer)
+    output = np.PyArray_SimpleNewFromData(nd, &output_dims, np.NPY_UINT8, output_buffer)
+
+    cdef blosc2_schunk *sc = <blosc2_schunk *> cparams.schunk
+    if sc != NULL:
+        schunk = blosc2.SChunk(schunk=PyCapsule_New(sc, <char *> "blosc2_schunk*", NULL), _is_view=True)
+    else:
+        raise RuntimeError("Cannot apply user codec without an SChunk")
+    rc = blosc2.ucodec_registry[cparams.compcode][1](input, output, meta, schunk)
+    if rc is None:
+        raise RuntimeError("encoder must return the number of compressed bytes")
+
+    return rc
+
+
+cdef int general_decoder(const uint8_t* input_buffer, int32_t input_len,
+                        uint8_t* output_buffer, int32_t output_len,
+                        uint8_t meta,
+                        blosc2_dparams *dparams, const void* chunk):
+    cdef int nd = 1
+    cdef np.npy_intp input_dims = input_len
+    cdef np.npy_intp output_dims = output_len
+    input = np.PyArray_SimpleNewFromData(nd, &input_dims, np.NPY_UINT8, input_buffer)
+    output = np.PyArray_SimpleNewFromData(nd, &output_dims, np.NPY_UINT8, output_buffer)
+
+    cdef blosc2_schunk *sc = <blosc2_schunk *> dparams.schunk
+    if sc != NULL:
+        schunk = blosc2.SChunk(schunk=PyCapsule_New(sc, <char *> "blosc2_schunk*", NULL), _is_view=True)
+    else:
+        raise RuntimeError("Cannot apply user codec without an SChunk")
+
+    rc = blosc2.ucodec_registry[sc.compcode][2](input, output, meta, schunk)
+    if rc is None:
+        raise RuntimeError("decoder must return the number of decompressed bytes")
+
+    return rc if rc is not None else output_len
+
+
+def register_codec(codec_name, id, encoder, decoder, version=1):
+    if id < BLOSC2_USER_REGISTERED_CODECS_START or id > BLOSC2_USER_REGISTERED_CODECS_STOP:
+        raise ValueError("`id` must be between ", BLOSC2_USER_REGISTERED_CODECS_START,
+                         " and ", BLOSC2_USER_REGISTERED_CODECS_STOP)
+
+    cdef blosc2_codec codec
+    codec.compcode = id
+    codec.compver = version
+    codec.complib = id
+    codec_name_ = codec_name.encode() if isinstance(codec_name, str) else codec_name
+    codec.compname = <char *> malloc(strlen(codec_name_) + 1)
+    strcpy(codec.compname, codec_name_)
+    codec.encoder = general_encoder
+    codec.decoder = general_decoder
+
+    rc = blosc2_register_codec(&codec)
+    if rc < 0:
+        raise RuntimeError("Error while registering codec")
+
+    blosc2.ucodec_registry[id] = (codec_name, encoder, decoder)

@@ -104,7 +104,8 @@ class SChunk(blosc2_ext.SChunk):
         >>> schunk = blosc2.SChunk(**storage)
         """
         # Check only allowed kwarg are passed
-        allowed_kwargs = all(kwarg in ["urlpath", "contiguous", "cparams", "dparams", "schunk", "mode"]
+        allowed_kwargs = all(kwarg in ["urlpath", "contiguous", "cparams", "dparams", "schunk",
+                                       "mode", "_is_view"]
                              for kwarg in kwargs.keys())
         if not allowed_kwargs:
             raise ValueError("Only `urlpath`, `contiguous`, `cparams`, `dparams` and `mode` "
