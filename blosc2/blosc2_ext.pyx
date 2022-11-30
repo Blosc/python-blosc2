@@ -1182,22 +1182,22 @@ cdef class SChunk:
             blosc2_schunk_free(self.schunk)
 
 
-char2dtype = {'?': np.NPY_BOOL,
-              'b': np.NPY_INT8,
-              'h': np.NPY_INT16,
-              'i': np.NPY_INT32,
-              'l': np.NPY_INT64,
-              'B': np.NPY_UINT8,
-              'H': np.NPY_UINT16,
-              'I': np.NPY_UINT32,
-              'L': np.NPY_UINT64,
-              'e': np.NPY_FLOAT16,
-              'f': np.NPY_FLOAT32,
-              'd': np.NPY_FLOAT64,
-              'F': np.NPY_COMPLEX64,
-              'D': np.NPY_COMPLEX128,
-              'M': np.NPY_DATETIME,
-              'm': np.NPY_TIMEDELTA,
+char2dtype = {np.dtype(np.bool_).char: np.NPY_BOOL,
+              np.dtype(np.int8).char: np.NPY_INT8,
+              np.dtype(np.int16).char: np.NPY_INT16,
+              np.dtype(np.int32).char: np.NPY_INT32,
+              np.dtype(np.int64).char: np.NPY_INT64,
+              np.dtype(np.uint8).char: np.NPY_UINT8,
+              np.dtype(np.uint16).char: np.NPY_UINT16,
+              np.dtype(np.uint32).char: np.NPY_UINT32,
+              np.dtype(np.uint64).char: np.NPY_UINT64,
+              np.dtype(np.float16).char: np.NPY_FLOAT16,
+              np.dtype(np.float32).char: np.NPY_FLOAT32,
+              np.dtype(np.float64).char: np.NPY_FLOAT64,
+              np.dtype(np.complex64).char: np.NPY_COMPLEX64,
+              np.dtype(np.complex128).char: np.NPY_COMPLEX128,
+              np.dtype(np.datetime64).char: np.NPY_DATETIME,
+              np.dtype(np.timedelta64).char: np.NPY_TIMEDELTA,
               }
 
 # postfilter
