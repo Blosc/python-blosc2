@@ -412,14 +412,14 @@ def decompress(src, dst=None, as_bytearray=False):
     mem_view_src = memoryview(src)
     typed_view_src = mem_view_src.cast('B')
     _check_comp_length('src', len(typed_view_src))
-    blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
+    blosc2_cbuffer_sizes(<void*>(&typed_view_src[0]), &nbytes, &cbytes, &blocksize)
     cdef Py_buffer *buf
     if dst is not None:
         buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(dst, buf, PyBUF_SIMPLE)
         if buf.len == 0:
             raise ValueError("The dst length must be greater than 0")
-        size = blosc1_decompress(<void*>&typed_view_src[0], buf.buf, buf.len)
+        size = blosc1_decompress(<void*>(&typed_view_src[0]), buf.buf, buf.len)
         PyBuffer_Release(buf)
     else:
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
@@ -585,14 +585,14 @@ def decompress2(src, dst=None, **kwargs):
     cdef int32_t nbytes
     cdef int32_t cbytes
     cdef int32_t blocksize
-    blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
+    blosc2_cbuffer_sizes(<void*>(&typed_view_src[0]), &nbytes, &cbytes, &blocksize)
     cdef Py_buffer *buf
     if dst is not None:
         buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(dst, buf, PyBUF_SIMPLE)
         if buf.len == 0:
             raise ValueError("The dst length must be greater than 0")
-        view = <void*>&typed_view_src[0]
+        view = <void*>(&typed_view_src[0])
         with nogil:
             size = blosc2_decompress_ctx(dctx, view, cbytes, buf.buf, nbytes)
             blosc2_free_ctx(dctx)
@@ -602,7 +602,7 @@ def decompress2(src, dst=None, **kwargs):
         if dst is None:
             raise RuntimeError("Could not get a bytes object")
         dst_buf = <char*>dst
-        view = <void*>&typed_view_src[0]
+        view = <void*>(&typed_view_src[0])
         with nogil:
             size = blosc2_decompress_ctx(dctx, view, cbytes, <void*>dst_buf, nbytes)
             blosc2_free_ctx(dctx)
