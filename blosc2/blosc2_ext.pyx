@@ -412,14 +412,14 @@ def decompress(src, dst=None, as_bytearray=False):
     mem_view_src = memoryview(src)
     typed_view_src = mem_view_src.cast('B')
     _check_comp_length('src', len(typed_view_src))
-    blosc2_cbuffer_sizes(<void*>(&typed_view_src[0]), &nbytes, &cbytes, &blocksize)
+    blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
     cdef Py_buffer *buf
     if dst is not None:
         buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(dst, buf, PyBUF_SIMPLE)
         if buf.len == 0:
             raise ValueError("The dst length must be greater than 0")
-        size = blosc1_decompress(<void*>(&typed_view_src[0]), buf.buf, buf.len)
+        size = blosc1_decompress(<void*>&typed_view_src[0], buf.buf, buf.len)
         PyBuffer_Release(buf)
     else:
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
@@ -585,14 +585,14 @@ def decompress2(src, dst=None, **kwargs):
     cdef int32_t nbytes
     cdef int32_t cbytes
     cdef int32_t blocksize
-    blosc2_cbuffer_sizes(<void*>(&typed_view_src[0]), &nbytes, &cbytes, &blocksize)
+    blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
     cdef Py_buffer *buf
     if dst is not None:
         buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(dst, buf, PyBUF_SIMPLE)
         if buf.len == 0:
             raise ValueError("The dst length must be greater than 0")
-        view = <void*>(&typed_view_src[0])
+        view = <void*>&typed_view_src[0]
         with nogil:
             size = blosc2_decompress_ctx(dctx, view, cbytes, buf.buf, nbytes)
             blosc2_free_ctx(dctx)
@@ -602,7 +602,7 @@ def decompress2(src, dst=None, **kwargs):
         if dst is None:
             raise RuntimeError("Could not get a bytes object")
         dst_buf = <char*>dst
-        view = <void*>(&typed_view_src[0])
+        view = <void*>&typed_view_src[0]
         with nogil:
             size = blosc2_decompress_ctx(dctx, view, cbytes, <void*>dst_buf, nbytes)
             blosc2_free_ctx(dctx)
@@ -674,9 +674,11 @@ cdef class SChunk:
         cdef const uint8_t[:] typed_view
         cdef int64_t index
         cdef Py_buffer *buf
+        cdef uint8_t *buf_ptr
         if data is not None:
             buf = <Py_buffer *> malloc(sizeof(Py_buffer))
             PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
+            buf_ptr = <uint8_t *> buf.buf
             len_data = buf.len
             nchunks = len_data // chunksize + 1 if len_data % chunksize != 0 else len_data // chunksize
             len_chunk = chunksize
@@ -684,7 +686,7 @@ cdef class SChunk:
                 if i == (nchunks - 1):
                     len_chunk = len_data - i * chunksize
                 index = i * chunksize
-                nchunks_ = blosc2_schunk_append_buffer(self.schunk, &buf.buf[index], len_chunk)
+                nchunks_ = blosc2_schunk_append_buffer(self.schunk, buf_ptr + index, len_chunk)
                 if nchunks_ != (i + 1):
                     PyBuffer_Release(buf)
                     raise RuntimeError("An error occurred while appending the chunks")
@@ -988,6 +990,7 @@ cdef class SChunk:
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(value, buf, PyBUF_SIMPLE)
         cdef uint8_t *buf_ptr = <uint8_t *> buf.buf
+        cdef int64_t buf_pos = 0
         cdef uint8_t *data
         cdef uint8_t *chunk
         if buf.len < nbytes:
@@ -995,7 +998,6 @@ cdef class SChunk:
 
         if stop > nitems:
             # Increase SChunk's size
-            buf_pos = 0
             if start < nitems:
                 rc = blosc2_schunk_set_slice_buffer(self.schunk, start, nitems, buf.buf)
                 buf_pos = (nitems - start) * self.schunk.typesize
@@ -1010,7 +1012,7 @@ cdef class SChunk:
                 if rc < 0:
                     free(data)
                     raise RuntimeError("Error while decompressig the chunk")
-                memcpy(&data[nitems * self.schunk.typesize], &buf_ptr[buf_pos], chunk_nbytes - buf_pos)
+                memcpy(data + nitems * self.schunk.typesize, buf_ptr + buf_pos, chunk_nbytes - buf_pos)
                 chunk = <uint8_t *> malloc(chunk_nbytes + BLOSC2_MAX_OVERHEAD)
                 rc = blosc2_compress_ctx(self.schunk.cctx, data, chunk_nbytes, chunk, chunk_nbytes + BLOSC2_MAX_OVERHEAD)
                 free(data)
@@ -1032,7 +1034,7 @@ cdef class SChunk:
                         chunksize = self.schunk.chunksize
                     else:
                         chunksize = (stop * self.schunk.typesize) % self.schunk.chunksize
-                    rc = blosc2_schunk_append_buffer(self.schunk, &buf_ptr[buf_pos], chunksize)
+                    rc = blosc2_schunk_append_buffer(self.schunk, buf_ptr + buf_pos, chunksize)
                     if rc < 0:
                         raise RuntimeError("Error while appending the chunk")
                     buf_pos += chunksize
