@@ -4,4 +4,4 @@ pytest
 psutil
 msgpack
 torch
-tensorflow
+#tensorflow  # too large dependency; torch should be enough for testing

@@ -14,12 +14,6 @@ import pytest
 import blosc2
 import numpy as np
 
-try:
-    import tensorflow as tf
-    import torch
-except ImportError:
-    pytest.skip("skipping torch / tensorflow tests", allow_module_level=True)
-
 
 ##### pack / unpack  #####
 
@@ -73,11 +67,13 @@ def test_pack_array2_struct(size, dtype):
 @pytest.mark.parametrize(
     "size, dtype",
     [
-        (1e6, torch.float32),
-        (1e6, torch.float64),
-        (1e6, torch.int8),
+        (1e6, "float32"),
+        (1e6, "float64"),
+        (1e6, "int8"),
     ])
 def test_pack_tensor_torch(size, dtype):
+    torch = pytest.importorskip("torch")
+    dtype = getattr(torch, dtype)
     tensor = torch.arange(size, dtype=dtype)
     cframe = blosc2.pack_tensor(tensor)
     atensor = np.asarray(tensor)
@@ -95,8 +91,9 @@ def test_pack_tensor_torch(size, dtype):
         (1e6, np.int8),
     ])
 def test_pack_tensor_tensorflow(size, dtype):
+    tensorflow = pytest.importorskip("tensorflow")
     array = np.arange(size, dtype=dtype)
-    tensor = tf.constant(array)
+    tensor = tensorflow.constant(array)
     cframe = blosc2.pack_tensor(tensor)
     atensor = np.asarray(tensor)
     assert len(cframe) < atensor.size * atensor.dtype.itemsize
@@ -164,8 +161,9 @@ def test_save_tensor_array(size, dtype, urlpath):
         (1e6, "float32", "test.bl2"),
     ])
 def test_save_tensor_tensorflow(size, dtype, urlpath):
+    tensorflow = pytest.importorskip("tensorflow")
     nparray = np.arange(size, dtype=dtype)
-    tensor = tf.constant(nparray)
+    tensor = tensorflow.constant(nparray)
     serial_size = blosc2.save_tensor(tensor, urlpath, mode="w")
     assert serial_size < nparray.size * nparray.itemsize
 
@@ -181,6 +179,7 @@ def test_save_tensor_tensorflow(size, dtype, urlpath):
         (1e6, "float32", "test.bl2"),
     ])
 def test_save_tensor_torch(size, dtype, urlpath):
+    torch = pytest.importorskip("torch")
     nparray = np.arange(size, dtype=dtype)
     tensor = torch.tensor(nparray)
     serial_size = blosc2.save_tensor(tensor, urlpath, mode="w")
