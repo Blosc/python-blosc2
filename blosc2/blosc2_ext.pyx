@@ -359,13 +359,13 @@ ctypedef struct user_filters_udata:
     char* py_func
     char input_cdtype
     char output_cdtype
-    int64_t chunkshape
+    int32_t chunkshape
 
 ctypedef struct filler_udata:
     char* py_func
     int64_t inputs_id
     char output_cdtype
-    int64_t chunkshape
+    int32_t chunkshape
 
 
 MAX_TYPESIZE = BLOSC_MAX_TYPESIZE
@@ -848,7 +848,7 @@ cdef class SChunk:
             PyObject_GetBuffer(dst, buf, PyBUF_SIMPLE)
             if buf.len == 0:
                 raise ValueError("The dst length must be greater than 0")
-            size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, buf.buf, buf.len)
+            size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, buf.buf, <int32_t>buf.len)
             PyBuffer_Release(buf)
         else:
             dst = PyBytes_FromStringAndSize(NULL, nbytes)
