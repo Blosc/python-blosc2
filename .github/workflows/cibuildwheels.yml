@@ -43,7 +43,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.8'
 
       - name: Set up QEMU
         if: ${{ matrix.arch == 'aarch64' }}
@@ -99,14 +99,13 @@ jobs:
 
   build_sdist:
     name: Build sdist
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest]
         arch: [auto]
-        python-version: ['3.10']
         exclude:
-          - os: [ubuntu-latest, windows-latest, macos-latest]
+          - os: [ubuntu-latest]
             # We don't support 32-bit platforms in python-blosc2
             arch: x86
 
