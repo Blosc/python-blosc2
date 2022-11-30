@@ -1,4 +1,4 @@
-Announcing python-blosc2 0.6.0
+Announcing python-blosc2 0.6.1
 ==============================
 
 This is a major release that implements support for C-Blosc2 prefilters and postfilters!

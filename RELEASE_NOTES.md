@@ -1,12 +1,12 @@
 # Release notes
 
-## Changes from 0.5.2 to 0.6.0
+## Changes from 0.5.2 to 0.6.1
 
 * Support for Python prefilters and postfilters.  With this, you can pre-process or post-process data in super-chunks automatically.  This machinery is handled internally by C-Blosc2, so it is very efficient (although it cannot work in multi-thread mode due to the GIL).  See the examples/ directory for different ways of using this.
 
 * Support for fillers.  This is a specialization of a prefilter, and it allows to use Python functions to create new super-chunks from different kind of inputs (NumPy, SChunk instances, scalars), allowing computations among them and getting the result automatically compressed.  See a sample script in the examples/ directory.
 
-* Lots of small improvements in the style, consistency and other glitches in the code.  Thanks to Dimitri Papadopoulos for the attention to detail.
+* Lots of small improvements in the style, consistency and other glitches in the code.  Thanks to Dimitri Papadopoulos for hist attention to detail.
 
 * No need to compile C-Blosc2 tests, benchs or fuzzers.  Compilation time is much shorter now.
 
