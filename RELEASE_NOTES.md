@@ -1,5 +1,11 @@
 # Release notes
 
+
+## Changes from 0.6.1 to 0.6.2
+
+XXX version-specific blurb XXX
+
+
 ## Changes from 0.5.2 to 0.6.1
 
 * Support for Python prefilters and postfilters.  With this, you can pre-process or post-process data in super-chunks automatically.  This machinery is handled internally by C-Blosc2, so it is very efficient (although it cannot work in multi-thread mode due to the GIL).  See the examples/ directory for different ways of using this.
