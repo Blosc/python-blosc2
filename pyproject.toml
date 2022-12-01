@@ -1,6 +1,9 @@
 [build-system]
 requires = ["setuptools", "scikit-build", "cython", "cmake", "ninja", "numpy"]
 
+[tool.cibuildwheel]
+skip = "cp36-* cp37-* pp37-* *-manylinux_i686 *_ppc64le *_s390x *-musllinux*"
+
 [tool.black]
 line-length = 109
 
