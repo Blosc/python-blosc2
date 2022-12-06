@@ -7,5 +7,3 @@ Utils
    :toctree: autofiles/utils/
 
     remove_urlpath
-    open
-    schunk_from_cframe

@@ -51,6 +51,14 @@ cdef extern from "blosc2.h":
 
     ctypedef enum:
         BLOSC2_MAX_FILTERS
+        BLOSC2_DEFINED_FILTERS_START
+        BLOSC2_DEFINED_FILTERS_STOP
+        BLOSC2_GLOBAL_REGISTERED_FILTERS_START
+        BLOSC2_GLOBAL_REGISTERED_FILTERS_STOP
+        BLOSC2_GLOBAL_REGISTERED_FILTERS
+        BLOSC2_USER_REGISTERED_FILTERS_START
+        BLOSC2_USER_REGISTERED_FILTERS_STOP
+        BLOSC2_MAX_UDFILTERS
         BLOSC2_MAX_METALAYERS
         BLOSC2_MAX_VLMETALAYERS
         BLOSC2_PREFILTER_INPUTS_MAX
@@ -378,6 +386,16 @@ cdef extern from "blosc2.h":
 
     int blosc2_register_codec(blosc2_codec *codec)
 
+    ctypedef int(*blosc2_filter_forward_cb)(const uint8_t *, uint8_t *, int32_t, uint8_t, blosc2_cparams *, uint8_t);
+    ctypedef int(*blosc2_filter_backward_cb)(const uint8_t *, uint8_t *, int32_t, uint8_t, blosc2_dparams *, uint8_t);
+
+    ctypedef struct blosc2_filter:
+        uint8_t id
+        blosc2_filter_forward_cb forward
+        blosc2_filter_backward_cb backward
+
+    int blosc2_register_filter(blosc2_filter *filter)
+
 
 ctypedef struct user_filters_udata:
     char* py_func
@@ -522,6 +540,29 @@ def get_blocksize():
     """
     return blosc1_get_blocksize()
 
+cdef _check_cparams(blosc2_cparams *cparams):
+    if cparams.nthreads > 1:
+        if BLOSC2_USER_REGISTERED_CODECS_START <= cparams.compcode <= BLOSC2_USER_REGISTERED_CODECS_STOP:
+            raise ValueError("Cannot use multi-threading with user defined codecs")
+        elif any([BLOSC2_USER_REGISTERED_FILTERS_START <= filter <= BLOSC2_USER_REGISTERED_FILTERS_STOP
+                  for filter in cparams.filters]):
+            raise ValueError("Cannot use multi-threading with user defined filters")
+        elif cparams.prefilter != NULL:
+            raise ValueError("`nthreads` must be 1 when a prefilter is set")
+
+cdef _check_dparams(blosc2_dparams* dparams, blosc2_cparams* cparams=NULL):
+    if cparams == NULL:
+        return
+    if dparams.nthreads > 1:
+        if BLOSC2_USER_REGISTERED_CODECS_START <= cparams.compcode <= BLOSC2_USER_REGISTERED_CODECS_STOP:
+            raise ValueError("Cannot use multi-threading with user defined codecs")
+        elif any([BLOSC2_USER_REGISTERED_FILTERS_START <= filter <= BLOSC2_USER_REGISTERED_FILTERS_STOP
+                  for filter in cparams.filters]):
+            raise ValueError("Cannot use multi-threading with user defined filters")
+        elif dparams.postfilter != NULL:
+            raise ValueError("`nthreads` must be 1 when a postfilter is set")
+
+
 cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     if "compcode" in kwargs:
         raise NameError("`compcode` has been renamed to `codec`.  Please go update your code.")
@@ -544,25 +585,27 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
         cparams.filters_meta[i] = 0
 
     filters = kwargs.get('filters', blosc2.cparams_dflts['filters'])
+    if len(filters) > BLOSC2_MAX_FILTERS:
+        raise ValueError(f"filters list cannot exceed {BLOSC2_MAX_FILTERS}")
     for i, filter in enumerate(filters):
-        cparams.filters[i] = filter.value if isinstance(filter, Enum) else 0
+        cparams.filters[i] = filter.value if isinstance(filter, Enum) else filter
 
     filters_meta = kwargs.get('filters_meta', blosc2.cparams_dflts['filters_meta'])
+    if len(filters) != len(filters_meta):
+        raise ValueError("filters and filters_meta lists must have same length")
     cdef int8_t meta_value
     for i, meta in enumerate(filters_meta):
         # We still may want to encode negative values
         meta_value = <int8_t>meta if meta < 0 else meta
         cparams.filters_meta[i] = <uint8_t>meta_value
 
-    if BLOSC2_USER_REGISTERED_CODECS_START <= cparams.compcode <= BLOSC2_USER_REGISTERED_CODECS_STOP \
-            and cparams.nthreads > 1:
-        raise ValueError("Cannot use multi-threading with user defined codecs")
     cparams.prefilter = NULL
     cparams.preparams = NULL
     cparams.udbtune = NULL
     cparams.instr_codec = False
     #cparams.udbtune = kwargs.get('udbtune', blosc2.cparams_dflts['udbtune'])
     #cparams.instr_codec = kwargs.get('instr_codec', blosc2.cparams_dflts['instr_codec'])
+    _check_cparams(cparams)
 
 
 def compress2(src, **kwargs):
@@ -590,13 +633,14 @@ def compress2(src, **kwargs):
         raise RuntimeError("The result could not fit ")
     return dest[:size]
 
-cdef create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs):
+cdef create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs, blosc2_cparams* cparams=NULL):
     dparams.nthreads = kwargs.get('nthreads', blosc2.dparams_dflts['nthreads'])
     dparams.schunk = NULL
     dparams.postfilter = NULL
     dparams.postparams = NULL
     # TODO: support the next ones in the future
     #dparams.schunk = kwargs.get('schunk', blosc2.dparams_dflts['schunk'])
+    _check_dparams(dparams, cparams)
 
 def decompress2(src, dst=None, **kwargs):
     cdef blosc2_dparams dparams
@@ -649,7 +693,7 @@ cdef create_storage(blosc2_storage *storage, kwargs):
         storage.urlpath = urlpath
 
     create_cparams_from_kwargs(storage.cparams, kwargs.get('cparams', {}))
-    create_dparams_from_kwargs(storage.dparams, kwargs.get('dparams', {}))
+    create_dparams_from_kwargs(storage.dparams, kwargs.get('dparams', {}), storage.cparams)
 
     storage.io = NULL
     # TODO: support the next ones in the future
@@ -792,7 +836,11 @@ cdef class SChunk:
         filters = [0] * BLOSC2_MAX_FILTERS
         filters_meta = [0] * BLOSC2_MAX_FILTERS
         for i in range(BLOSC2_MAX_FILTERS):
-            filters[i] = blosc2.Filter(self.schunk.filters[i])
+            if self.schunk.filters[i] in blosc2.Filter._value2member_map_:
+                filters[i] = blosc2.Filter(self.schunk.filters[i])
+            else:
+                # User filter
+                filters[i] = self.schunk.filters[i]
             filters_meta[i] = self.schunk.filters_meta[i]
         cparams_dict["filters"] = filters
         cparams_dict["filters_meta"] = filters_meta
@@ -817,7 +865,7 @@ cdef class SChunk:
         filters = cparams_dict.get('filters', None)
         if filters is not None:
             for i, filter in enumerate(filters):
-                cparams.filters[i] = filter.value if isinstance(filter, Enum) else 0
+                cparams.filters[i] = filter.value if isinstance(filter, Enum) else filter
 
         filters_meta = cparams_dict.get('filters_meta', None)
         cdef int8_t meta_value
@@ -827,11 +875,7 @@ cdef class SChunk:
                 meta_value = <int8_t> meta if meta < 0 else meta
                 cparams.filters_meta[i] = <uint8_t> meta_value
 
-        if cparams.nthreads != 1:
-            if self.schunk.storage.cparams.prefilter != NULL:
-                raise ValueError("`nthreads` must be 1 when a prefilter is set")
-            elif BLOSC2_USER_REGISTERED_CODECS_START <= cparams.compcode <= BLOSC2_USER_REGISTERED_CODECS_STOP:
-                raise ValueError("Cannot use multi-threading with user defined codecs")
+        _check_cparams(cparams)
 
         blosc2_free_ctx(self.schunk.cctx)
         self.schunk.cctx = blosc2_create_cctx(dereference(self.schunk.storage.cparams))
@@ -853,11 +897,7 @@ cdef class SChunk:
         cdef blosc2_dparams* dparams = self.schunk.storage.dparams
         dparams.nthreads = dparams_dict.get('nthreads', dparams.nthreads)
 
-        if dparams.nthreads != 1:
-            if dparams.postfilter != NULL:
-                raise ValueError("`nthreads` must be 1 when a postfilter is set")
-            elif BLOSC2_USER_REGISTERED_CODECS_START <= self.schunk.compcode <= BLOSC2_USER_REGISTERED_CODECS_STOP:
-                raise ValueError("Cannot use multi-threading with user defined codecs")
+        _check_dparams(dparams, self.schunk.storage.cparams)
 
         blosc2_free_ctx(self.schunk.dctx)
         self.schunk.dctx = blosc2_create_dctx(dereference(self.schunk.storage.dparams))
@@ -1119,8 +1159,6 @@ cdef class SChunk:
         return start, stop
 
     def _set_postfilter(self, func, dtype_input, dtype_output=None):
-        if self.schunk.storage.dparams.nthreads > 1:
-            raise AttributeError("decompress `nthreads` must be 1 when assigning a postfilter")
         # Get user data
         func_id = func.__name__
         blosc2.postfilter_funcs[func_id] = func
@@ -1130,6 +1168,7 @@ cdef class SChunk:
         dtype_input = np.dtype(dtype_input)
         dtype_output = np.dtype(dtype_output)
         if dtype_output.itemsize != dtype_input.itemsize:
+            del blosc2.postfilter_funcs[func_id]
             raise ValueError("`dtype_input` and `dtype_output` must have the same size")
 
         # Set postfilter
@@ -1146,6 +1185,7 @@ cdef class SChunk:
 
         postparams.user_data = postf_udata
         dparams.postparams = postparams
+        _check_dparams(dparams, self.schunk.storage.cparams)
 
         blosc2_free_ctx(self.schunk.dctx)
         self.schunk.dctx = blosc2_create_dctx(dereference(dparams))
@@ -1180,6 +1220,7 @@ cdef class SChunk:
 
         preparams.user_data = fill_udata
         cparams.preparams = preparams
+        _check_cparams(cparams)
 
         blosc2_free_ctx(self.schunk.cctx)
         self.schunk.cctx = blosc2_create_cctx(dereference(cparams))
@@ -1195,6 +1236,7 @@ cdef class SChunk:
         dtype_input = np.dtype(dtype_input)
         dtype_output = np.dtype(dtype_output)
         if dtype_output.itemsize != dtype_input.itemsize:
+            del blosc2.prefilter_funcs[func_id]
             raise ValueError("`dtype_input` and `dtype_output` must have the same size")
 
 
@@ -1210,6 +1252,7 @@ cdef class SChunk:
 
         preparams.user_data = pref_udata
         cparams.preparams = preparams
+        _check_cparams(cparams)
 
         blosc2_free_ctx(self.schunk.cctx)
         self.schunk.cctx = blosc2_create_cctx(dereference(cparams))
@@ -1421,7 +1464,7 @@ cdef int general_encoder(const uint8_t* input_buffer, int32_t input_len,
         schunk = blosc2.SChunk(schunk=PyCapsule_New(sc, <char *> "blosc2_schunk*", NULL), _is_view=True)
     else:
         raise RuntimeError("Cannot apply user codec without an SChunk")
-    rc = blosc2.ucodec_registry[cparams.compcode][1](input, output, meta, schunk)
+    rc = blosc2.ucodecs_registry[cparams.compcode][1](input, output, meta, schunk)
     if rc is None:
         raise RuntimeError("encoder must return the number of compressed bytes")
 
@@ -1444,7 +1487,7 @@ cdef int general_decoder(const uint8_t* input_buffer, int32_t input_len,
     else:
         raise RuntimeError("Cannot apply user codec without an SChunk")
 
-    rc = blosc2.ucodec_registry[sc.compcode][2](input, output, meta, schunk)
+    rc = blosc2.ucodecs_registry[sc.compcode][2](input, output, meta, schunk)
     if rc is None:
         raise RuntimeError("decoder must return the number of decompressed bytes")
 
@@ -1470,4 +1513,55 @@ def register_codec(codec_name, id, encoder, decoder, version=1):
     if rc < 0:
         raise RuntimeError("Error while registering codec")
 
-    blosc2.ucodec_registry[id] = (codec_name, encoder, decoder)
+    blosc2.ucodecs_registry[id] = (codec_name, encoder, decoder)
+
+
+cdef int general_forward(const uint8_t* input_buffer, uint8_t* output_buffer, int32_t size,
+                        uint8_t meta, blosc2_cparams* cparams, uint8_t id):
+    cdef int nd = 1
+    cdef np.npy_intp dims = size
+    input = np.PyArray_SimpleNewFromData(nd, &dims, np.NPY_UINT8, input_buffer)
+    output = np.PyArray_SimpleNewFromData(nd, &dims, np.NPY_UINT8, output_buffer)
+
+    cdef blosc2_schunk *sc = <blosc2_schunk *> cparams.schunk
+    if sc != NULL:
+        schunk = blosc2.SChunk(schunk=PyCapsule_New(sc, <char *> "blosc2_schunk*", NULL), _is_view=True)
+    else:
+        raise RuntimeError("Cannot apply user codec without an SChunk")
+    blosc2.ufilters_registry[id][0](input, output, meta, schunk)
+
+    return BLOSC2_ERROR_SUCCESS
+
+
+cdef int general_backward(const uint8_t* input_buffer, uint8_t* output_buffer, int32_t size,
+                            uint8_t meta, blosc2_dparams* dparams, uint8_t id):
+    cdef int nd = 1
+    cdef np.npy_intp dims = size
+    input = np.PyArray_SimpleNewFromData(nd, &dims, np.NPY_UINT8, input_buffer)
+    output = np.PyArray_SimpleNewFromData(nd, &dims, np.NPY_UINT8, output_buffer)
+
+    cdef blosc2_schunk *sc = <blosc2_schunk *> dparams.schunk
+    if sc != NULL:
+        schunk = blosc2.SChunk(schunk=PyCapsule_New(sc, <char *> "blosc2_schunk*", NULL), _is_view=True)
+    else:
+        raise RuntimeError("Cannot apply user filter without an SChunk")
+
+    blosc2.ufilters_registry[id][1](input, output, meta, schunk)
+
+    return BLOSC2_ERROR_SUCCESS
+
+
+def register_filter(id, forward, backward):
+    if id < BLOSC2_USER_REGISTERED_FILTERS_START or id > BLOSC2_USER_REGISTERED_FILTERS_STOP:
+        raise ValueError("`id` must be between ", BLOSC2_USER_REGISTERED_FILTERS_START,
+                         " and ", BLOSC2_USER_REGISTERED_FILTERS_STOP)
+
+    cdef blosc2_filter filter
+    filter.id = id
+    filter.forward = general_forward
+    filter.backward = general_backward
+    rc = blosc2_register_filter(&filter)
+    if rc < 0:
+        raise RuntimeError("Error while registering filter")
+
+    blosc2.ufilters_registry[id] = (forward, backward)

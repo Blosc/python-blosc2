@@ -47,3 +47,14 @@ Attributes
    autofiles/schunk/attributes/blosc2.SChunk.SChunk.nbytes
    autofiles/schunk/attributes/blosc2.SChunk.SChunk.typesize
    autofiles/schunk/attributes/vlmeta
+
+Functions
+---------
+
+.. currentmodule:: blosc2
+
+.. autosummary::
+   :toctree: autofiles/schunk/
+
+    open
+    schunk_from_cframe
