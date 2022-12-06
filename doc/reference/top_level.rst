@@ -41,10 +41,12 @@ Set / Get compression params
     detect_number_of_cores
     free_resources
     get_clib
+    nthreads
     print_versions
+    register_codec
+    register_filter
     set_blocksize
     set_nthreads
-    nthreads
     set_releasegil
     set_compressor
     get_compressor

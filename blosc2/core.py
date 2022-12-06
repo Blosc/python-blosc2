@@ -1218,9 +1218,11 @@ def register_codec(codec_name, id, encoder, decoder, version=1):
     encoder: Python function
         This will receive an input to compress as a ndarray of dtype uint8, an output to fill
         the compressed buffer in as a ndarray of dtype uint8, the codec meta and the `SChunk` instance.
+        It must return the size of the compressed buffer in bytes.
     decoder: Python function
         This will receive an input to decompress as a ndarray of dtype uint8, an output to fill
         the decompressed buffer in as a ndarray of dtype uint8, the codec meta and the `SChunk` instance.
+        It must return the size of the decompressed buffer in bytes.
     version: int
         Codec version. Default is 1.
 
@@ -1233,7 +1235,99 @@ def register_codec(codec_name, id, encoder, decoder, version=1):
     * Cannot use multi-threading when using an user defined codec.
 
     * User defined codecs can only be used inside a `SChunk` instance.
+
+    See Also
+    --------
+    :func:`register_filter`
+
+    Examples
+    --------
+    .. code-block:: python
+
+        # Define encoder and decoder functions
+        def encoder(input, output, meta, schunk):
+            # Check whether the data is an arange
+            step = int(input[1] - input[0])
+            res = input[1:] - input[:-1]
+            if np.min(res) == np.max(res):
+                output[0:4] = input[0:4]  # start
+                n = step.to_bytes(4, sys.byteorder)
+                output[4:8] = [n[i] for i in range(4)]
+                return 8
+            else:
+                # Not compressible, tell Blosc2 to do a memcpy
+                return 0
+
+
+        def decoder1(input, output, meta, schunk):
+            # For decoding we only have to worry about the arange case
+            # (other cases are handled by Blosc2)
+            output[:] = [input[0] + i * input[1] for i in range(output.size)]
+
+            return output.size
+
+
+        # Register codec
+        codec_name = 'codec1'
+        id = 180
+        blosc2.register_codec(codec_name, id, encoder, decoder)
     """
-    if id in blosc2.ucodec_registry.keys():
+    if id in blosc2.ucodecs_registry.keys():
         raise ValueError("Id already in use")
     blosc2_ext.register_codec(codec_name, id, encoder, decoder, version)
+
+
+def register_filter(id, forward, backward):
+    """Register an user defined filter.
+
+    Parameters
+    ----------
+    id: int
+        Filter id, must be between 160 and 255 (both included).
+    forward: Python function
+        This will receive an input to apply the filter as a ndarray of dtype uint8, an output to fill
+        as a ndarray of dtype uint8, the filter meta and the corresponding `SChunk` instance.
+    backward: Python function
+        This will receive an input as a ndarray of dtype uint8, an output to fill
+        as a ndarray of dtype uint8, the filter meta and the `SChunk` instance.
+
+    Returns
+    -------
+    out: None
+
+    Notes
+    -----
+    * Cannot use multi-threading when using an user defined filter.
+
+    * User defined filters can only be used inside a `SChunk` instance.
+
+    See Also
+    --------
+    :func:`register_codec`
+
+    Examples
+    --------
+    .. code-block:: python
+
+        # Define forward and backward functions
+        def forward(input, output, meta, schunk):
+            nd_input = input.view(dtype)
+            nd_output = output.view(dtype)
+
+            nd_output[:] = nd_input + 1
+
+
+        def backward(input, output, meta, schunk):
+            nd_input = input.view(dtype)
+            nd_output = output.view(dtype)
+
+            nd_output[:] = nd_input - 1
+
+
+        # Register filter
+        id = 160
+        blosc2.register_filter(id, forward, backward)
+    """
+    if id in blosc2.ufilters_registry.keys():
+        raise ValueError("Id already in use")
+    blosc2_ext.register_filter(id, forward, backward)
