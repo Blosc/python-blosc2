@@ -12,11 +12,11 @@ import blosc2
 import numpy as np
 
 
-@pytest.mark.parametrize("id, dtype",
+@pytest.mark.parametrize("filters, filters_meta, dtype",
                          [
-                            (160, np.dtype(np.int32)),
-                            (180, np.dtype(np.float64)),
-                            (255, np.dtype(np.uint8)),
+                            ([160], [0], np.dtype(np.int32)),
+                            ([180, 184], [0, 25], np.dtype(np.float64)),  # 2 user-defined filters
+                            ([255, blosc2.Filter.SHUFFLE], [0, 0], np.dtype(np.uint8)),
                          ])
 @pytest.mark.parametrize(
     "nchunks, contiguous, urlpath",
@@ -27,10 +27,10 @@ import numpy as np
         (3, False, "test_filter.b2frame"),
     ],
 )
-def test_ufilters(contiguous, urlpath, nchunks, id, dtype):
+def test_ufilters(contiguous, urlpath, nchunks, filters, filters_meta, dtype):
     blosc2.remove_urlpath(urlpath)
 
-    cparams = {"nthreads": 1, "filters": [id], "filters_meta": [0]}
+    cparams = {"nthreads": 1, "filters": filters, "filters_meta": filters_meta}
     dparams = {"nthreads": 1}
     chunk_len = 20 * 1000
 
@@ -46,8 +46,25 @@ def test_ufilters(contiguous, urlpath, nchunks, id, dtype):
 
         nd_output[:] = nd_input - 1
 
+    def forward2(input, output, meta, schunk):
+        nd_input = input.view(dtype)
+        nd_output = output.view(dtype)
+
+        nd_output[:] = nd_input + meta
+
+    def backward2(input, output, meta, schunk):
+        nd_input = input.view(dtype)
+        nd_output = output.view(dtype)
+
+        nd_output[:] = nd_input - meta
+
+    id = filters[0]
     if id not in blosc2.ufilters_registry:
         blosc2.register_filter(id, forward, backward)
+    if len(filters) == 2 and not isinstance(filters[1], blosc2.Filter):
+        if filters[1] not in blosc2.ufilters_registry:
+            blosc2.register_filter(filters[1], forward2, backward2)
+
     if "f" in dtype.str:
         data = np.linspace(0, 50, chunk_len * nchunks, dtype=dtype)
     else:
