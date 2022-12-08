@@ -1,10 +1,9 @@
-Announcing python-blosc2 0.6.1
+Announcing Python-Blosc2 0.6.2
 ==============================
 
-This is a major release that implements support for C-Blosc2 prefilters and postfilters!
-Essentially, you can implement these parts of the C-Blosc2 filter pipeline with
-Python functions, which allows for a lot of flexibility and efficiency.
+This is a maintenance release that updates C-Blosc2 to 2.6.0.
 
+Remember that in the 0.6 we introduced support for pre- and post-filters.
 For more info about the prefilter and postfilter machinery, see slides in:
 https://www.blosc.org/docs/Blosc2-Debunking-Myths.pdf
 

@@ -3,7 +3,7 @@
 
 ## Changes from 0.6.1 to 0.6.2
 
-XXX version-specific blurb XXX
+* Updated C-Blosc2 to 2.6.0.
 
 
 ## Changes from 0.5.2 to 0.6.1
