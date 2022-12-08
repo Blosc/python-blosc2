@@ -818,7 +818,13 @@ cdef class SChunk:
         return self.schunk.typesize
 
     def get_cparams(self):
+        if self.schunk.storage.cparams.compcode in blosc2.Codec._value2member_map_:
+            codec = blosc2.Codec(self.schunk.storage.cparams.compcode)
+        else:
+            # User codec
+            codec = self.schunk.storage.cparams.compcode
         cparams_dict = {
+                        "codec": codec,
                         "codec_meta": self.schunk.storage.cparams.compcode_meta,
                         "clevel": self.schunk.storage.cparams.clevel,
                         "use_dict": self.schunk.storage.cparams.use_dict,
@@ -827,11 +833,6 @@ cdef class SChunk:
                         "blocksize": self.schunk.storage.cparams.blocksize,
                         "splitmode": blosc2.SplitMode(self.schunk.storage.cparams.splitmode)
         }
-        if self.schunk.storage.cparams.compcode in blosc2.Codec._value2member_map_:
-            cparams_dict["codec"] = blosc2.Codec(self.schunk.storage.cparams.compcode)
-        else:
-            # User codec
-            cparams_dict["codec"] = self.schunk.storage.cparams.compcode
 
         filters = [0] * BLOSC2_MAX_FILTERS
         filters_meta = [0] * BLOSC2_MAX_FILTERS
