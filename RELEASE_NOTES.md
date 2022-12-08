@@ -1,6 +1,11 @@
 # Release notes
 
 
+## Changes from 0.6.2 to 0.6.3
+
+XXX version-specific blurb XXX
+
+
 ## Changes from 0.6.1 to 0.6.2
 
 * Updated C-Blosc2 to 2.6.0.
