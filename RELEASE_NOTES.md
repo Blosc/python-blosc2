@@ -2,7 +2,7 @@
 
 ## Changes from 0.6.3 to 0.6.4
 
-XXX version-specific blurb XXX
+* Add arm64 wheels.
 
 
 ## Changes from 0.6.2 to 0.6.3

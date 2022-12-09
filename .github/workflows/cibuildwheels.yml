@@ -23,8 +23,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         # Not generating for aarch64 (see https://github.com/Blosc/python-blosc2/pull/47#issuecomment-1225633013)
-        # arch: [auto, aarch64]
-        arch: [auto]
+        arch: [auto, aarch64]
+        # arch: [auto]
         exclude:
           - os: [ubuntu-latest, windows-latest, macos-latest]
             # We don't support 32-bit platforms in python-blosc2
@@ -83,8 +83,8 @@ jobs:
           python -m pip install cibuildwheel
           python -m cibuildwheel --output-dir wheelhouse
         env:
-          CIBW_BUILD: 'cp38-* cp39-*  cp310-* cp311-*'
-          CIBW_SKIP: '*-manylinux*_i686'
+          CIBW_BUILD: 'cp38-* cp39-* cp310-* cp311-*'
+          CIBW_SKIP: '*-manylinux*_i686' "*-musllinux_* ${{ env.CIBW_SKIP}}"
           CIBW_ARCHS_LINUX: ${{ matrix.arch }}
           CIBW_BEFORE_BUILD: python -m pip install -r requirements-build.txt
           CIBW_BEFORE_TEST: python -m pip install -r requirements-test-wheels.txt
