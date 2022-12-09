@@ -1,7 +1,7 @@
-Announcing Python-Blosc2 0.6.2
+Announcing Python-Blosc2 0.6.3
 ==============================
 
-This is a maintenance release that updates C-Blosc2 to 2.6.0.
+This is a maintenance release that uses oldest-supported-numpy.
 
 Remember that in the 0.6 we introduced support for pre- and post-filters.
 For more info about the prefilter and postfilter machinery, see slides in:

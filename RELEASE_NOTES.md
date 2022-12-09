@@ -3,7 +3,7 @@
 
 ## Changes from 0.6.2 to 0.6.3
 
-XXX version-specific blurb XXX
+* Use oldest-supported-numpy for maximum compatibility.
 
 
 ## Changes from 0.6.1 to 0.6.2
