@@ -84,7 +84,7 @@ jobs:
           python -m cibuildwheel --output-dir wheelhouse
         env:
           CIBW_BUILD: 'cp38-* cp39-* cp310-* cp311-*'
-          CIBW_SKIP: '*-manylinux*_i686' "*-musllinux_* ${{ env.CIBW_SKIP}}"
+          CIBW_SKIP: '*-manylinux*_i686 *-musllinux_* ${{ env.CIBW_SKIP}}'
           CIBW_ARCHS_LINUX: ${{ matrix.arch }}
           CIBW_BEFORE_BUILD: python -m pip install -r requirements-build.txt
           CIBW_BEFORE_TEST: python -m pip install -r requirements-test-wheels.txt
