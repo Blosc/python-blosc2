@@ -1,9 +1,13 @@
 # Release notes
 
+## Changes from 0.6.4 to 0.6.5
+
+XXX version-specific blurb XXX
+
+
 ## Changes from 0.6.3 to 0.6.4
 
-* Add arm64 wheels.
-
+* Add arm64 wheels and remove musl builds (NumPy not having them makes the build process too long).
 
 ## Changes from 0.6.2 to 0.6.3
 
