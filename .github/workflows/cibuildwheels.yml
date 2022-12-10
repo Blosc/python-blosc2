@@ -25,6 +25,9 @@ jobs:
         # Not generating for aarch64 (see https://github.com/Blosc/python-blosc2/pull/47#issuecomment-1225633013)
         arch: [auto, aarch64]
         # arch: [auto]
+        include:
+           - os: macos-latest
+             arch: arm64
         exclude:
           - os: [ubuntu-latest, windows-latest, macos-latest]
             # We don't support 32-bit platforms in python-blosc2
