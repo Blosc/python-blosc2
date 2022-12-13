@@ -19,7 +19,7 @@ dtype = np.dtype(np.int32)
 
 
 # Define encoder and decoder functions
-def coder1(input, output, meta, schunk):
+def encoder1(input, output, meta, schunk):
     # Check whether the data is an arange
     nd_input = input.view(dtype)
     step = int(nd_input[1] - nd_input[0])
@@ -47,7 +47,7 @@ def decoder1(input, output, meta, schunk):
 # Register codec
 codec_name = 'codec'
 id = 180
-blosc2.register_codec(codec_name, id, coder1, decoder1)
+blosc2.register_codec(codec_name, id, encoder1, decoder1)
 
 # Set the compression and decompression parameters
 cparams = {"typesize": dtype.itemsize, "nthreads": 1, "filters": [blosc2.Filter.NOFILTER],

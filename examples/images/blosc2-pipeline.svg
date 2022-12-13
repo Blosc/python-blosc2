@@ -1,0 +1,1333 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="240.173mm"
+   height="142.86899mm"
+   viewBox="0 0 240.17301 142.86899"
+   version="1.1"
+   id="svg1200"
+   inkscape:version="1.1.1 (3bf5ae0d25, 2021-09-20)"
+   sodipodi:docname="blosc2-pipeline.svg"
+   inkscape:export-filename="C:\Users\marta\Desktop\inkscape\blosc2-pipeline.png"
+   inkscape:export-xdpi="519.22131"
+   inkscape:export-ydpi="519.22131"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1202"
+     pagecolor="#ffffff"
+     bordercolor="#666666"
+     borderopacity="1.0"
+     inkscape:pageshadow="2"
+     inkscape:pageopacity="1"
+     inkscape:pagecheckerboard="0"
+     inkscape:document-units="mm"
+     showgrid="false"
+     inkscape:zoom="0.8233622"
+     inkscape:cx="414.15552"
+     inkscape:cy="310.92027"
+     inkscape:window-width="1920"
+     inkscape:window-height="986"
+     inkscape:window-x="-11"
+     inkscape:window-y="-11"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer1"
+     units="mm"
+     width="46.37283mm" />
+  <defs
+     id="defs1197">
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009" />
+    <marker
+       id="ExperimentalArrow"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="TriangleOutS"
+       refX="0"
+       refY="0"
+       orient="auto"
+       inkscape:stockid="TriangleOutS"
+       inkscape:isstock="true">
+      <path
+         transform="scale(0.2)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 5.77,0 -2.88,5 V -5 Z"
+         id="path2231" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="marker2470"
+       refX="0"
+       refY="0"
+       orient="auto"
+       inkscape:stockid="Arrow1Lend"
+       inkscape:isstock="true">
+      <path
+         transform="matrix(-0.8,0,0,-0.8,-10,0)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         id="path2468" />
+    </marker>
+    <marker
+       style="overflow:visible"
+       id="Arrow1Lend"
+       refX="0"
+       refY="0"
+       orient="auto"
+       inkscape:stockid="Arrow1Lend"
+       inkscape:isstock="true">
+      <path
+         transform="matrix(-0.8,0,0,-0.8,-10,0)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 0,0 5,-5 -12.5,0 5,5 Z"
+         id="path2086" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-0"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-0" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-0-9"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-0-3" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-0-9-7"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-0-3-9" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-0-9-1"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-0-3-90" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-0-9-8"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-0-3-8" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-0-9-19"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-0-3-99" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-3"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-8" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-0-1"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-0-6" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-0-9-0"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-0-3-98" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-0-9-8-2"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-0-3-8-2" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-0-9-1-8"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-0-3-90-3" />
+    </marker>
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-1" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-2" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-6" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-2" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-9" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-4" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-5" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-3" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-53" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-42" />
+    <marker
+       id="ExperimentalArrow-2"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-9" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-0-2"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-0-9" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-0-9-190"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-0-3-6" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-0-9-8-4"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-0-3-8-3" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-0-9-1-2"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-0-3-90-0" />
+    </marker>
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-8" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-2-9" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-51" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-6-0" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-2-3" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-9-0" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-4-7" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-5-1" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-3-7" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-53-1" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="28.54151"
+       height="14.726204"
+       id="rect16009-6-5-42-4" />
+    <marker
+       id="ExperimentalArrow-9"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-3" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-7"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-2" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-27"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-01" />
+    </marker>
+    <marker
+       id="ExperimentalArrow-78"
+       refX="5"
+       refY="3"
+       orient="auto-start-reverse"
+       inkscape:stockid="ExperimentalArrow"
+       inkscape:isstock="true">
+      <path
+         style="fill:context-stroke"
+         d="M 10,3 0,6 V 0 Z"
+         id="path2338-5" />
+    </marker>
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="72.416489"
+       height="9.2608089"
+       id="rect16009-6-5-4-7-9" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="72.416489"
+       height="9.2608089"
+       id="rect16009-6-5-4-7-9-2" />
+    <rect
+       x="9.8680754"
+       y="32.185104"
+       width="72.416489"
+       height="9.2608089"
+       id="rect16009-6-5-4-7-9-2-5" />
+    <filter
+       inkscape:label="Fill Background"
+       inkscape:menu="Fill and Transparency"
+       inkscape:menu-tooltip="Adds a colorizable opaque background"
+       style="color-interpolation-filters:sRGB"
+       id="filter1400"
+       x="0"
+       y="0"
+       width="1"
+       height="1">
+      <feFlood
+         result="result1"
+         flood-color="rgb(153,193,241)"
+         flood-opacity="1"
+         id="feFlood1388" />
+      <feImage
+         xlink:href=""
+         result="result2"
+         id="feImage1390" />
+      <feBlend
+         result="result4"
+         in2="result1"
+         mode="multiply"
+         id="feBlend1392" />
+      <feMerge
+         result="result3"
+         id="feMerge1398">
+        <feMergeNode
+           in="result1"
+           id="feMergeNode1394" />
+        <feMergeNode
+           in="SourceGraphic"
+           id="feMergeNode1396" />
+      </feMerge>
+    </filter>
+    <filter
+       inkscape:label="Fill Background"
+       inkscape:menu="Fill and Transparency"
+       inkscape:menu-tooltip="Adds a colorizable opaque background"
+       style="color-interpolation-filters:sRGB"
+       id="filter10604"
+       x="0"
+       y="0"
+       width="1"
+       height="1">
+      <feFlood
+         result="result1"
+         flood-color="rgb(249,240,107)"
+         flood-opacity="1"
+         id="feFlood10592" />
+      <feImage
+         xlink:href=""
+         result="result2"
+         id="feImage10594" />
+      <feBlend
+         result="result4"
+         in2="result1"
+         mode="multiply"
+         id="feBlend10596" />
+      <feMerge
+         result="result3"
+         id="feMerge10602">
+        <feMergeNode
+           in="result1"
+           id="feMergeNode10598" />
+        <feMergeNode
+           in="SourceGraphic"
+           id="feMergeNode10600" />
+      </feMerge>
+    </filter>
+    <filter
+       inkscape:label="Fill Background"
+       inkscape:menu="Fill and Transparency"
+       inkscape:menu-tooltip="Adds a colorizable opaque background"
+       style="color-interpolation-filters:sRGB"
+       id="filter12358"
+       x="0"
+       y="0"
+       width="1"
+       height="1">
+      <feFlood
+         result="result1"
+         flood-color="rgb(249,240,107)"
+         flood-opacity="1"
+         id="feFlood12346" />
+      <feImage
+         xlink:href=""
+         result="result2"
+         id="feImage12348" />
+      <feBlend
+         result="result4"
+         in2="result1"
+         mode="multiply"
+         id="feBlend12350" />
+      <feMerge
+         result="result3"
+         id="feMerge12356">
+        <feMergeNode
+           in="result1"
+           id="feMergeNode12352" />
+        <feMergeNode
+           in="SourceGraphic"
+           id="feMergeNode12354" />
+      </feMerge>
+    </filter>
+    <filter
+       inkscape:label="Fill Background"
+       inkscape:menu="Fill and Transparency"
+       inkscape:menu-tooltip="Adds a colorizable opaque background"
+       style="color-interpolation-filters:sRGB"
+       id="filter14472"
+       x="0"
+       y="0"
+       width="1"
+       height="1">
+      <feFlood
+         result="result1"
+         flood-color="rgb(249,240,107)"
+         flood-opacity="1"
+         id="feFlood14460" />
+      <feImage
+         xlink:href=""
+         result="result2"
+         id="feImage14462" />
+      <feBlend
+         result="result4"
+         in2="result1"
+         mode="multiply"
+         id="feBlend14464" />
+      <feMerge
+         result="result3"
+         id="feMerge14470">
+        <feMergeNode
+           in="result1"
+           id="feMergeNode14466" />
+        <feMergeNode
+           in="SourceGraphic"
+           id="feMergeNode14468" />
+      </feMerge>
+    </filter>
+    <filter
+       inkscape:label="Fill Background"
+       inkscape:menu="Fill and Transparency"
+       inkscape:menu-tooltip="Adds a colorizable opaque background"
+       style="color-interpolation-filters:sRGB"
+       id="filter16056"
+       x="0"
+       y="0"
+       width="1"
+       height="1">
+      <feFlood
+         result="result1"
+         flood-color="rgb(220,138,221)"
+         flood-opacity="1"
+         id="feFlood16044" />
+      <feImage
+         xlink:href=""
+         result="result2"
+         id="feImage16046" />
+      <feBlend
+         result="result4"
+         in2="result1"
+         mode="multiply"
+         id="feBlend16048" />
+      <feMerge
+         result="result3"
+         id="feMerge16054">
+        <feMergeNode
+           in="result1"
+           id="feMergeNode16050" />
+        <feMergeNode
+           in="SourceGraphic"
+           id="feMergeNode16052" />
+      </feMerge>
+    </filter>
+    <filter
+       inkscape:label="Fill Background"
+       inkscape:menu="Fill and Transparency"
+       inkscape:menu-tooltip="Adds a colorizable opaque background"
+       style="color-interpolation-filters:sRGB"
+       id="filter23508"
+       x="0"
+       y="0"
+       width="1"
+       height="1">
+      <feFlood
+         result="result1"
+         flood-color="rgb(153,193,241)"
+         flood-opacity="1"
+         id="feFlood23496" />
+      <feImage
+         xlink:href=""
+         result="result2"
+         id="feImage23498" />
+      <feBlend
+         result="result4"
+         in2="result1"
+         mode="multiply"
+         id="feBlend23500" />
+      <feMerge
+         result="result3"
+         id="feMerge23506">
+        <feMergeNode
+           in="result1"
+           id="feMergeNode23502" />
+        <feMergeNode
+           in="SourceGraphic"
+           id="feMergeNode23504" />
+      </feMerge>
+    </filter>
+    <filter
+       inkscape:label="Fill Background"
+       inkscape:menu="Fill and Transparency"
+       inkscape:menu-tooltip="Adds a colorizable opaque background"
+       style="color-interpolation-filters:sRGB"
+       id="filter24548"
+       x="0"
+       y="0"
+       width="1"
+       height="1">
+      <feFlood
+         result="result1"
+         flood-color="rgb(249,240,107)"
+         flood-opacity="1"
+         id="feFlood24536" />
+      <feImage
+         xlink:href=""
+         result="result2"
+         id="feImage24538" />
+      <feBlend
+         result="result4"
+         in2="result1"
+         mode="multiply"
+         id="feBlend24540" />
+      <feMerge
+         result="result3"
+         id="feMerge24546">
+        <feMergeNode
+           in="result1"
+           id="feMergeNode24542" />
+        <feMergeNode
+           in="SourceGraphic"
+           id="feMergeNode24544" />
+      </feMerge>
+    </filter>
+    <filter
+       inkscape:label="Fill Background"
+       inkscape:menu="Fill and Transparency"
+       inkscape:menu-tooltip="Adds a colorizable opaque background"
+       style="color-interpolation-filters:sRGB"
+       id="filter26980"
+       x="0"
+       y="0"
+       width="1"
+       height="1">
+      <feFlood
+         result="result1"
+         flood-color="rgb(249,240,107)"
+         flood-opacity="1"
+         id="feFlood26968" />
+      <feImage
+         xlink:href=""
+         result="result2"
+         id="feImage26970" />
+      <feBlend
+         result="result4"
+         in2="result1"
+         mode="multiply"
+         id="feBlend26972" />
+      <feMerge
+         result="result3"
+         id="feMerge26978">
+        <feMergeNode
+           in="result1"
+           id="feMergeNode26974" />
+        <feMergeNode
+           in="SourceGraphic"
+           id="feMergeNode26976" />
+      </feMerge>
+    </filter>
+    <filter
+       inkscape:label="Fill Background"
+       inkscape:menu="Fill and Transparency"
+       inkscape:menu-tooltip="Adds a colorizable opaque background"
+       style="color-interpolation-filters:sRGB"
+       id="filter27376"
+       x="0"
+       y="0"
+       width="1"
+       height="1">
+      <feFlood
+         result="result1"
+         flood-color="rgb(249,240,107)"
+         flood-opacity="1"
+         id="feFlood27364" />
+      <feImage
+         xlink:href=""
+         result="result2"
+         id="feImage27366" />
+      <feBlend
+         result="result4"
+         in2="result1"
+         mode="multiply"
+         id="feBlend27368" />
+      <feMerge
+         result="result3"
+         id="feMerge27374">
+        <feMergeNode
+           in="result1"
+           id="feMergeNode27370" />
+        <feMergeNode
+           in="SourceGraphic"
+           id="feMergeNode27372" />
+      </feMerge>
+    </filter>
+    <filter
+       inkscape:label="Fill Background"
+       inkscape:menu="Fill and Transparency"
+       inkscape:menu-tooltip="Adds a colorizable opaque background"
+       style="color-interpolation-filters:sRGB"
+       id="filter27756"
+       x="0"
+       y="0"
+       width="1"
+       height="1">
+      <feFlood
+         result="result1"
+         flood-color="rgb(220,138,221)"
+         flood-opacity="1"
+         id="feFlood27744" />
+      <feImage
+         xlink:href=""
+         result="result2"
+         id="feImage27746" />
+      <feBlend
+         result="result4"
+         in2="result1"
+         mode="multiply"
+         id="feBlend27748" />
+      <feMerge
+         result="result3"
+         id="feMerge27754">
+        <feMergeNode
+           in="result1"
+           id="feMergeNode27750" />
+        <feMergeNode
+           in="SourceGraphic"
+           id="feMergeNode27752" />
+      </feMerge>
+    </filter>
+  </defs>
+  <g
+     inkscape:label="Capa 1"
+     inkscape:groupmode="layer"
+     id="layer1"
+     transform="translate(-4.1891731,-4.6862507)">
+    <rect
+       style="fill:#ffffff;stroke:#000000;stroke-width:0.694795;stroke-miterlimit:4;stroke-dasharray:none"
+       id="rect1283"
+       width="18.158682"
+       height="11.122278"
+       x="4.7988677"
+       y="39.10709"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <rect
+       style="fill:#ffffff;stroke:#000000;stroke-width:0.694795;stroke-miterlimit:4;stroke-dasharray:none"
+       id="rect1283-2"
+       width="18.158682"
+       height="11.122278"
+       x="49.272099"
+       y="39.10709"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <rect
+       style="fill:#ffffff;stroke:#000000;stroke-width:0.694795;stroke-miterlimit:4;stroke-dasharray:none"
+       id="rect1283-7"
+       width="18.158682"
+       height="11.122278"
+       x="93.712502"
+       y="39.10709"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.440428;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:2.5;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#ExperimentalArrow)"
+       d="m 23.305322,44.724933 h 23.13487"
+       id="path2671"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.43613;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:2.5;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#ExperimentalArrow-0)"
+       d="M 67.721479,44.971589 H 90.402698"
+       id="path2671-1"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.438077;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:2.5;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#ExperimentalArrow-0-9)"
+       d="m 112.03721,44.56715 h 22.88846"
+       id="path2671-1-3"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <rect
+       style="fill:#ffffff;stroke:#000000;stroke-width:0.694795;stroke-miterlimit:4;stroke-dasharray:none"
+       id="rect1283-7-2"
+       width="18.158682"
+       height="11.122278"
+       x="181.81914"
+       y="39.309361"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.434138;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:2.5;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#ExperimentalArrow-0-9-8)"
+       d="m 200.14389,44.769377 h 22.47398"
+       id="path2671-1-3-5"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <rect
+       style="fill:#ffffff;stroke:#000000;stroke-width:0.694795;stroke-miterlimit:4;stroke-dasharray:none"
+       id="rect1283-7-6"
+       width="18.158682"
+       height="11.122278"
+       x="137.78221"
+       y="39.309361"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.438502;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:2.5;stroke-dasharray:none;stroke-opacity:1;marker-end:url(#ExperimentalArrow-0-9-1)"
+       d="m 156.10693,44.769377 h 22.92751"
+       id="path2671-1-3-2"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <rect
+       style="fill:#ffffff;stroke:#000000;stroke-width:0.694795;stroke-miterlimit:4;stroke-dasharray:none"
+       id="rect1283-7-21"
+       width="18.158682"
+       height="11.122278"
+       x="225.85609"
+       y="39.309361"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,-4.3159732,-31.720797)"
+       id="text16007-6"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1954">src</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,214.98672,-31.450935)"
+       id="text16007-6-0"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-2);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1956">c_src</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,38.288063,-31.212116)"
+       id="text16007-6-2"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1958">tmp1</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,82.940505,-31.502296)"
+       id="text16007-6-2-3"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-6);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1960">tmp2
+</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,126.89961,-31.160092)"
+       id="text16007-6-2-7"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-2);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1962">tmp3</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,171.1161,-31.219567)"
+       id="text16007-6-2-6"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-9);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1964">tmp4</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,11.479456,-41.053761)"
+       id="text16007-6-2-4"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-4);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none;filter:url(#filter1400)"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1966">prefilter</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,57.002633,-41.053764)"
+       id="text16007-6-2-8"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-5);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none;filter:url(#filter10604)"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1968">filter 1</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,100.24963,-40.711561)"
+       id="text16007-6-2-1"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-3);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none;filter:url(#filter12358)"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1970">filter 32</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,143.38773,-40.198253)"
+       id="text16007-6-2-80"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-53);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none;filter:url(#filter14472)"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1972">filter 160</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,190.61312,-39.283279)"
+       id="text16007-6-2-0"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-42);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none;filter:url(#filter16056)"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1974">codec</tspan></text>
+    <rect
+       style="fill:#ffffff;stroke:#000000;stroke-width:0.694795;stroke-miterlimit:4;stroke-dasharray:none"
+       id="rect1283-24"
+       width="18.158682"
+       height="11.122278"
+       x="4.7988677"
+       y="135.88339"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <rect
+       style="fill:#ffffff;stroke:#000000;stroke-width:0.694795;stroke-miterlimit:4;stroke-dasharray:none"
+       id="rect1283-2-1"
+       width="18.158682"
+       height="11.122278"
+       x="49.27211"
+       y="135.88339"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <rect
+       style="fill:#ffffff;stroke:#000000;stroke-width:0.694795;stroke-miterlimit:4;stroke-dasharray:none"
+       id="rect1283-7-5"
+       width="18.158682"
+       height="11.122278"
+       x="93.712479"
+       y="135.88339"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <rect
+       style="fill:#ffffff;stroke:#000000;stroke-width:0.694795;stroke-miterlimit:4;stroke-dasharray:none"
+       id="rect1283-7-2-6"
+       width="18.158682"
+       height="11.122278"
+       x="181.81914"
+       y="136.08556"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.440629;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:2.5;stroke-dasharray:none;stroke-opacity:1;marker-start:url(#ExperimentalArrow)"
+       d="m 202.51412,141.54569 h 23.51799"
+       id="path2671-1-3-5-6"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.432658;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:2.5;stroke-dasharray:none;stroke-opacity:1;marker-start:url(#ExperimentalArrow-9)"
+       d="m 158.6569,141.19019 h 22.67217"
+       id="path2671-1-3-5-6-8"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.440629;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:2.5;stroke-dasharray:none;stroke-opacity:1;marker-start:url(#ExperimentalArrow-7)"
+       d="M 115.55569,141.54569 H 139.0737"
+       id="path2671-1-3-5-6-5"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.432658;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:2.5;stroke-dasharray:none;stroke-opacity:1;marker-start:url(#ExperimentalArrow-27)"
+       d="M 70.577199,141.54569 H 93.249365"
+       id="path2671-1-3-5-6-7"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.440629;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:2.5;stroke-dasharray:none;stroke-opacity:1;marker-start:url(#ExperimentalArrow-78)"
+       d="M 25.598713,141.54569 H 49.116686"
+       id="path2671-1-3-5-6-6"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <rect
+       style="fill:#ffffff;stroke:#000000;stroke-width:0.694795;stroke-miterlimit:4;stroke-dasharray:none"
+       id="rect1283-7-6-2"
+       width="18.158682"
+       height="11.122278"
+       x="137.7822"
+       y="136.08556"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <rect
+       style="fill:#ffffff;stroke:#000000;stroke-width:0.694795;stroke-miterlimit:4;stroke-dasharray:none"
+       id="rect1283-7-21-6"
+       width="18.158682"
+       height="11.122278"
+       x="225.85609"
+       y="136.08556"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96" />
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,-4.3159738,65.055483)"
+       id="text16007-6-21"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-8);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1976">src</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,214.9867,65.32534)"
+       id="text16007-6-0-4"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-2-9);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1978">c_src</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,38.288054,65.564177)"
+       id="text16007-6-2-05"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-51);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1980">tmp1</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,82.940484,65.273991)"
+       id="text16007-6-2-3-8"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-6-0);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1982">tmp2
+</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,126.8996,65.616191)"
+       id="text16007-6-2-7-5"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-2-3);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1984">tmp3</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,171.11609,65.556733)"
+       id="text16007-6-2-6-2"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-9-0);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1986">tmp4</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,14.666078,56.064724)"
+       id="text16007-6-2-4-1"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-4-7);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none;filter:url(#filter23508)"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1988">postfilter</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,-10.969182,21.050001)"
+       id="text16007-6-2-4-1-3"
+       style="font-size:5.33333px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-4-7-9);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="37.051306"
+         id="tspan1990">Decompression process</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,-11.053527,-69.930528)"
+       id="text16007-6-2-4-1-3-2"
+       style="font-size:5.33333px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-4-7-9-2);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="37.051306"
+         id="tspan1992">Compression process</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,93.239191,15.773364)"
+       id="text16007-6-2-4-1-3-2-8"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-4-7-9-2-5);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1994">Filters pipeline</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,62.237759,56.749109)"
+       id="text16007-6-2-8-3"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-5-1);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none;filter:url(#filter24548)"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1996">filter 1</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,105.02956,57.091312)"
+       id="text16007-6-2-1-0"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-3-7);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none;filter:url(#filter26980)"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan1998">filter 32</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,146.80195,56.578002)"
+       id="text16007-6-2-80-4"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-53-1);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none;filter:url(#filter27376)"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan2000">filter 160</tspan></text>
+    <text
+       xml:space="preserve"
+       transform="matrix(1.499282,0,0,2.2540524,194.02735,57.492992)"
+       id="text16007-6-2-0-8"
+       style="font-size:2.66667px;line-height:1.25;font-family:sans-serif;white-space:pre;shape-inside:url(#rect16009-6-5-42-4);stroke-width:2.13543;stroke-miterlimit:3.31818;stroke-dasharray:none;filter:url(#filter27756)"
+       inkscape:export-filename="C:\Users\marta\Desktop\rect1283.png"
+       inkscape:export-xdpi="96"
+       inkscape:export-ydpi="96"><tspan
+         x="9.8671875"
+         y="34.618431"
+         id="tspan2002">codec</tspan></text>
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.625295;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       d="m 57.612704,54.712002 c 0.15994,22.828687 64.687016,1.235894 65.165646,22.070021 0.19055,-21.17074 65.38061,0.127676 65.16567,-22.070021"
+       id="path2662"
+       sodipodi:nodetypes="ccc" />
+    <path
+       style="fill:none;stroke:#000000;stroke-width:0.625295;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-opacity:1"
+       d="m 187.55281,131.58329 c -0.26668,-22.8264 -64.69122,-0.54732 -65.26791,-21.37604 -0.0909,21.17227 -65.37957,0.56812 -65.060128,22.76293"
+       id="path2662-1"
+       sodipodi:nodetypes="ccc" />
+  </g>
+</svg>
