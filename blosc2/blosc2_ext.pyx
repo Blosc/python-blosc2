@@ -867,6 +867,8 @@ cdef class SChunk:
         if filters is not None:
             for i, filter in enumerate(filters):
                 cparams.filters[i] = filter.value if isinstance(filter, Enum) else filter
+            for i in range(len(filters), BLOSC2_MAX_FILTERS):
+                cparams.filters[i] = 0
 
         filters_meta = cparams_dict.get('filters_meta', None)
         cdef int8_t meta_value
@@ -875,6 +877,8 @@ cdef class SChunk:
                 # We still may want to encode negative values
                 meta_value = <int8_t> meta if meta < 0 else meta
                 cparams.filters_meta[i] = <uint8_t> meta_value
+            for i in range(len(filters_meta), BLOSC2_MAX_FILTERS):
+                cparams.filters_meta[i] = 0
 
         _check_cparams(cparams)
 

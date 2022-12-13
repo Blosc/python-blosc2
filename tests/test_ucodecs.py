@@ -49,7 +49,7 @@ def test_ucodecs(contiguous, urlpath, cparams, nchunks, codec_name, id, dtype):
     blocksize = chunk_len / 10
     cparams["blocksize"] = blocksize
 
-    def coder1(input, output, meta, schunk):
+    def encoder1(input, output, meta, schunk):
         nd_input = input.view(dtype)
         if np.max(nd_input) == np.min(nd_input):
             output[0:schunk.typesize] = input[0:schunk.typesize]
@@ -67,7 +67,7 @@ def test_ucodecs(contiguous, urlpath, cparams, nchunks, codec_name, id, dtype):
         return nd_input[1] * schunk.typesize
 
     if id not in blosc2.ucodecs_registry:
-        blosc2.register_codec(codec_name, id, coder1, decoder1)
+        blosc2.register_codec(codec_name, id, encoder1, decoder1)
     if "f" in dtype.str:
         data = np.linspace(0, 50, chunk_len * nchunks, dtype=dtype)
     else:
