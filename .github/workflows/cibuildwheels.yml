@@ -10,8 +10,6 @@ on:
   pull_request:
     branches:
       - main
-  release:
-    types: [ created ]
 
 
 jobs:
@@ -98,8 +96,6 @@ jobs:
   build_sdist:
     name: Build sdist
     runs-on: ubuntu-latest
-    # Only build wheels when tagging (typically a release)
-    if: startsWith(github.event.ref, 'refs/tags')
     strategy:
       matrix:
         os: [ubuntu-latest]
@@ -145,3 +141,19 @@ jobs:
         run: |
           cd ./dist/blosc2-*/
           python -m pytest -m "not heavy"
+
+  upload_pypi:
+    needs: [ build_wheels, build_sdist ]  # last but not least
+    runs-on: ubuntu-latest
+    # Only upload wheels when tagging (typically a release)
+    if: startsWith(github.event.ref, 'refs/tags')
+    steps:
+      - uses: actions/download-artifact@v3
+        with:
+          name: artifact
+          path: dist
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.blosc_pypi_secret }}
