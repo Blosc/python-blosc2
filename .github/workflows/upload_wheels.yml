@@ -1,0 +1,20 @@
+name: Upload wheels to PyPI
+on:
+  # Trigger when a new relase is cut in GitHub
+  release:
+    types: [ created ]
+
+jobs:
+  upload_pypi:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' && github.event.action == 'created'
+    steps:
+      - uses: actions/download-artifact@v3
+        with:
+          name: artifact
+          path: dist
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          user: __token__
+          password: ${{ secrets.blosc_pypi_secret }}
