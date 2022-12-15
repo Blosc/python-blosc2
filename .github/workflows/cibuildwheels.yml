@@ -148,7 +148,7 @@ jobs:
 
 
   upload_pypi:
-    needs: [ build_wheels, build_sdist ]  # last but not least
+    #needs: [ build_wheels, build_sdist ]  # last but not least
     runs-on: ubuntu-latest
     if: github.event_name == 'release' && github.event.action == 'created'
     steps:
