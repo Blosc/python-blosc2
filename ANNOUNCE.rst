@@ -1,7 +1,7 @@
-Announcing Python-Blosc2 0.6.5
+Announcing Python-Blosc2 0.6.6
 ==============================
 
-This is a maintenance release that provides arm64 wheels for Mac.
+This is a maintenance release that provides arm64 wheels for Mac (this time for real).
 
 Remember that in the 0.6 we introduced support for pre- and post-filters.
 For more info about the prefilter and postfilter machinery, see slides in:

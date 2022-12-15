@@ -1,8 +1,9 @@
 # Release notes
 
+
 ## Changes from 0.6.5 to 0.6.6
 
-XXX version-specific blurb XXX
+* Add arm64 wheels for macosx (this time for real).
 
 
 ## Changes from 0.6.4 to 0.6.5
