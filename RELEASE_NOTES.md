@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 0.6.6 to 0.6.7
+
+XXX version-specific blurb XXX
+
 
 ## Changes from 0.6.5 to 0.6.6
 
