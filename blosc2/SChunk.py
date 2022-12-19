@@ -104,19 +104,20 @@ class SChunk(blosc2_ext.SChunk):
         >>> schunk = blosc2.SChunk(**storage)
         """
         # Check only allowed kwarg are passed
-        allowed_kwargs = all(kwarg in ["urlpath", "contiguous", "cparams", "dparams", "schunk",
-                                       "mode", "_is_view"]
-                             for kwarg in kwargs.keys())
-        if not allowed_kwargs:
-            raise ValueError("Only `urlpath`, `contiguous`, `cparams`, `dparams` and `mode` "
-                             "are supported as keyword arguments")
+        allowed_kwargs = ["urlpath", "contiguous", "cparams", "dparams", "_schunk",
+                          "mode", "_is_view"]
+        all_allowed_kwargs = all(kwarg in allowed_kwargs for kwarg in kwargs.keys())
+        if not all_allowed_kwargs:
+            for kwarg in kwargs.keys():
+                if kwarg not in allowed_kwargs:
+                    raise ValueError(f"{kwarg} is not supported as keyword argument")
         self.urlpath = kwargs.get("urlpath")
         if 'contiguous' not in kwargs:
             # Make contiguous true for disk, else sparse (for in-memory performance)
             kwargs['contiguous'] = False if self.urlpath is None else True
 
         # This a private param to get an SChunk from a blosc2_schunk*
-        sc = kwargs.pop("schunk", None)
+        sc = kwargs.pop("_schunk", None)
 
         # If not passed, set a sensible typesize
         if data is not None and hasattr(data, "itemsize"):
@@ -139,7 +140,7 @@ class SChunk(blosc2_ext.SChunk):
             if chunksize > 2 ** 28:
                 chunksize = 2 ** 28
 
-        super(SChunk, self).__init__(schunk=sc, chunksize=chunksize, data=data, **kwargs)
+        super(SChunk, self).__init__(_schunk=sc, chunksize=chunksize, data=data, **kwargs)
         self.vlmeta = vlmeta(super(SChunk, self).c_schunk, self.urlpath, self.mode)
         self._cparams = super(SChunk, self).get_cparams()
         self._dparams = super(SChunk, self).get_dparams()
