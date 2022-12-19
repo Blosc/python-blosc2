@@ -704,7 +704,7 @@ cdef class SChunk:
     cdef blosc2_schunk *schunk
     cdef c_bool _is_view
 
-    def __init__(self, schunk=None, chunksize=2 ** 24, data=None, **kwargs):
+    def __init__(self, _schunk=None, chunksize=2 ** 24, data=None, **kwargs):
         # hold on to a bytestring of urlpath for the lifetime of the instance
         # because its value is referenced via a C-pointer
         urlpath = kwargs.get("urlpath", None)
@@ -715,8 +715,8 @@ cdef class SChunk:
         # `_is_view` indicates if a free should be done on this instance
         self._is_view = kwargs.get("_is_view", False)
 
-        if schunk is not None:
-            self.schunk = <blosc2_schunk *> PyCapsule_GetPointer(schunk, <char *> "blosc2_schunk*")
+        if _schunk is not None:
+            self.schunk = <blosc2_schunk *> PyCapsule_GetPointer(_schunk, <char *> "blosc2_schunk*")
             if mode == "w" and urlpath is not None:
                 blosc2.remove_urlpath(urlpath)
                 self.schunk = blosc2_schunk_new(self.schunk.storage)
@@ -1422,7 +1422,7 @@ def schunk_open(urlpath, mode, **kwargs):
     kwargs["contiguous"] = schunk.storage.contiguous
     if mode != "w" and kwargs is not None:
         _check_schunk_params(schunk, kwargs)
-    return blosc2.SChunk(schunk=PyCapsule_New(schunk, <char *> "blosc2_schunk*", NULL), mode=mode, **kwargs)
+    return blosc2.SChunk(_schunk=PyCapsule_New(schunk, <char *> "blosc2_schunk*", NULL), mode=mode, **kwargs)
 
 
 def _check_access_mode(urlpath, mode):
@@ -1447,7 +1447,7 @@ def schunk_from_cframe(cframe, copy=False):
     cdef blosc2_schunk *schunk_ = blosc2_schunk_from_buffer(<uint8_t *>buf.buf, buf.len, copy)
     if schunk_ == NULL:
         raise RuntimeError("Could not get the schunk from the cframe")
-    schunk = blosc2.SChunk(schunk=PyCapsule_New(schunk_, <char *> "blosc2_schunk*", NULL))
+    schunk = blosc2.SChunk(_schunk=PyCapsule_New(schunk_, <char *> "blosc2_schunk*", NULL))
     PyBuffer_Release(buf)
     if not copy:
         schunk._avoid_cframe_free(True)
@@ -1466,7 +1466,7 @@ cdef int general_encoder(const uint8_t* input_buffer, int32_t input_len,
 
     cdef blosc2_schunk *sc = <blosc2_schunk *> cparams.schunk
     if sc != NULL:
-        schunk = blosc2.SChunk(schunk=PyCapsule_New(sc, <char *> "blosc2_schunk*", NULL), _is_view=True)
+        schunk = blosc2.SChunk(_schunk=PyCapsule_New(sc, <char *> "blosc2_schunk*", NULL), _is_view=True)
     else:
         raise RuntimeError("Cannot apply user codec without an SChunk")
     rc = blosc2.ucodecs_registry[cparams.compcode][1](input, output, meta, schunk)
@@ -1488,7 +1488,7 @@ cdef int general_decoder(const uint8_t* input_buffer, int32_t input_len,
 
     cdef blosc2_schunk *sc = <blosc2_schunk *> dparams.schunk
     if sc != NULL:
-        schunk = blosc2.SChunk(schunk=PyCapsule_New(sc, <char *> "blosc2_schunk*", NULL), _is_view=True)
+        schunk = blosc2.SChunk(_schunk=PyCapsule_New(sc, <char *> "blosc2_schunk*", NULL), _is_view=True)
     else:
         raise RuntimeError("Cannot apply user codec without an SChunk")
 
@@ -1496,7 +1496,7 @@ cdef int general_decoder(const uint8_t* input_buffer, int32_t input_len,
     if rc is None:
         raise RuntimeError("decoder must return the number of decompressed bytes")
 
-    return rc if rc is not None else output_len
+    return rc
 
 
 def register_codec(codec_name, id, encoder, decoder, version=1):
@@ -1530,7 +1530,7 @@ cdef int general_forward(const uint8_t* input_buffer, uint8_t* output_buffer, in
 
     cdef blosc2_schunk *sc = <blosc2_schunk *> cparams.schunk
     if sc != NULL:
-        schunk = blosc2.SChunk(schunk=PyCapsule_New(sc, <char *> "blosc2_schunk*", NULL), _is_view=True)
+        schunk = blosc2.SChunk(_schunk=PyCapsule_New(sc, <char *> "blosc2_schunk*", NULL), _is_view=True)
     else:
         raise RuntimeError("Cannot apply user codec without an SChunk")
     blosc2.ufilters_registry[id][0](input, output, meta, schunk)
@@ -1547,7 +1547,7 @@ cdef int general_backward(const uint8_t* input_buffer, uint8_t* output_buffer, i
 
     cdef blosc2_schunk *sc = <blosc2_schunk *> dparams.schunk
     if sc != NULL:
-        schunk = blosc2.SChunk(schunk=PyCapsule_New(sc, <char *> "blosc2_schunk*", NULL), _is_view=True)
+        schunk = blosc2.SChunk(_schunk=PyCapsule_New(sc, <char *> "blosc2_schunk*", NULL), _is_view=True)
     else:
         raise RuntimeError("Cannot apply user filter without an SChunk")
 
