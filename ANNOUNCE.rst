@@ -1,14 +1,23 @@
-Announcing Python-Blosc2 0.6.6
+Announcing Python-Blosc2 2.0.0
 ==============================
 
-This is a maintenance release that provides arm64 wheels for Mac (this time for real).
+This provides user-defined filters and codecs.
+It is a major release, meaning that the API will be frozen.
+This is a well tested library and it is ready for being used
+in production scenarios.
 
-Remember that in the 0.6 we introduced support for pre- and post-filters.
-For more info about the prefilter and postfilter machinery, see slides in:
-https://www.blosc.org/docs/Blosc2-Debunking-Myths.pdf
+Now you can define your own filters and codecs for the Blosc2 compression
+pipeline. They are very easy to use because they conveniently wrap input
+and output data as NumPy arrays. So, you can start experimenting with
+different filter/compression algorithms straight from Python. You can
+even come with a library of such filters/codecs that can be used in
+all your data pipeline processing. Welcome to compression made easy!
 
-See also some notebooks exercising these exciting new features:
+We have blogged about the features in this new release:
+https://www.blosc.org/posts/python-blosc2-pipeline/
 
+See also some notebooks on how to use them:
+https://github.com/Blosc/python-blosc2/blob/main/examples/ucodecs-ufilters.ipynb
 https://github.com/Blosc/python-blosc2/blob/main/examples/prefilters.ipynb
 https://github.com/Blosc/python-blosc2/blob/main/examples/postfilters.ipynb
 

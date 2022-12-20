@@ -1,8 +1,8 @@
 # Release notes
 
-## Changes from 0.6.6 to 0.6.7
+## Changes from 0.6.6 to 2.0.0
 
-XXX version-specific blurb XXX
+* Add support for user-defined filters and codecs.
 
 
 ## Changes from 0.6.5 to 0.6.6
