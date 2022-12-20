@@ -23,7 +23,7 @@ open("blosc2/version.py", "w").write('__version__ = "%s"\n' % VERSION)
 
 classifiers = dedent(
     """\
-    Development Status :: 3 - Alpha
+    Development Status :: 5 - Production/Stable
     Intended Audience :: Developers
     Intended Audience :: Information Technology
     Intended Audience :: Science/Research
