@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from 2.0.0 to 2.0.1
+
+XXX version-specific blurb XXX
+
+
 ## Changes from 0.6.6 to 2.0.0
 
 * Add support for user-defined filters and codecs.
