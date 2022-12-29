@@ -42,7 +42,7 @@ XXX version-specific blurb XXX
 
 * Lots of small improvements in the style, consistency and other glitches in the code.  Thanks to Dimitri Papadopoulos for hist attention to detail.
 
-* No need to compile C-Blosc2 tests, benchs or fuzzers.  Compilation time is much shorter now.
+* No need to compile C-Blosc2 tests, benches or fuzzers.  Compilation time is much shorter now.
 
 * Added `cratio`, `nbytes` and `cbytes` properties to `SChunk` instances.
 
@@ -55,7 +55,7 @@ XXX version-specific blurb XXX
 
 * C-Blosc2 upgraded to 2.4.3.  It should improve cratio for BloscLZ in combination with bitshuffle.
 
-* Prefer pack_tensor/save_tensor in benchs and examples
+* Prefer pack_tensor/save_tensor in benches and examples
 
 
 ## Changes from 0.5.0 to 0.5.1
