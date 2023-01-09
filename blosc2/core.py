@@ -1012,17 +1012,15 @@ for codec, value in blosc2.Codec.__members__.items():
 def os_release_pretty_name():
     for p in ("/etc/os-release", "/usr/lib/os-release"):
         try:
-            f = open(p)
-            for line in f:
-                name, _, value = line.rstrip().partition("=")
-                if name == "PRETTY_NAME":
-                    if len(value) >= 2 and value[0] in "\"'" and value[0] == value[-1]:
-                        value = value[1:-1]
-                    return value
+            with open(p) as f:
+                for line in f:
+                    name, _, value = line.rstrip().partition("=")
+                    if name == "PRETTY_NAME":
+                        if len(value) >= 2 and value[0] in "\"'" and value[0] == value[-1]:
+                            value = value[1:-1]
+                        return value
         except OSError:
             pass
-        finally:
-            f.close()
     return None
 
 
