@@ -209,7 +209,7 @@ License
 =======
 
 The software is licenses under a 3-Clause BSD license. A copy of the
-python-blosc2 license can be found in `LICENSE <https://github.com/Blosc/python-blosc2/tree/main/LICENSE>`_.
+python-blosc2 license can be found in `LICENSE.txt <https://github.com/Blosc/python-blosc2/tree/main/LICENSE.txt>`_.
 
 Mailing list
 ============
