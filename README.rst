@@ -81,7 +81,7 @@ Building
     git clone https://github.com/Blosc/python-blosc2/
     cd python-blosc2
     git submodule update --init --recursive
-    python -m pip install -r requirements.txt
+    python -m pip install -r requirements-build.txt
     python setup.py build_ext --inplace
 
 That's all. You can proceed with testing section now.
