@@ -21,7 +21,7 @@ from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
 from cython.operator cimport dereference
 from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free, malloc, realloc
-from libc.string cimport memcpy, strcpy, strlen
+from libc.string cimport memcpy, strcpy, strdup, strlen
 from libcpp cimport bool as c_bool
 
 from enum import Enum
@@ -386,8 +386,8 @@ cdef extern from "blosc2.h":
 
     int blosc2_register_codec(blosc2_codec *codec)
 
-    ctypedef int(*blosc2_filter_forward_cb)(const uint8_t *, uint8_t *, int32_t, uint8_t, blosc2_cparams *, uint8_t);
-    ctypedef int(*blosc2_filter_backward_cb)(const uint8_t *, uint8_t *, int32_t, uint8_t, blosc2_dparams *, uint8_t);
+    ctypedef int(*blosc2_filter_forward_cb)(const uint8_t *, uint8_t *, int32_t, uint8_t, blosc2_cparams *, uint8_t)
+    ctypedef int(*blosc2_filter_backward_cb)(const uint8_t *, uint8_t *, int32_t, uint8_t, blosc2_dparams *, uint8_t)
 
     ctypedef struct blosc2_filter:
         uint8_t id
@@ -395,6 +395,48 @@ cdef extern from "blosc2.h":
         blosc2_filter_backward_cb backward
 
     int blosc2_register_filter(blosc2_filter *filter)
+
+
+cdef extern from "b2nd.h":
+    ctypedef enum:
+        B2ND_MAX_DIM
+        B2ND_MAX_METALAYERS
+
+    cdef struct chunk_cache_s:
+        uint8_t *data
+        int64_t nchunk
+
+    ctypedef struct b2nd_array_t:
+        blosc2_schunk* sc
+        int64_t shape[B2ND_MAX_DIM]
+        int32_t chunkshape[B2ND_MAX_DIM]
+        int64_t extshape[B2ND_MAX_DIM]
+        int32_t blockshape[B2ND_MAX_DIM]
+        int64_t extchunkshape[B2ND_MAX_DIM]
+        int64_t nitems
+        int32_t chunknitems
+        int64_t extnitems
+        int32_t blocknitems
+        int64_t extchunknitems
+        int8_t ndim
+        chunk_cache_s chunk_cache
+        int64_t item_array_strides[B2ND_MAX_DIM]
+        int64_t item_chunk_strides[B2ND_MAX_DIM]
+        int64_t item_extchunk_strides[B2ND_MAX_DIM]
+        int64_t item_block_strides[B2ND_MAX_DIM]
+        int64_t block_chunk_strides[B2ND_MAX_DIM]
+        int64_t chunk_array_strides[B2ND_MAX_DIM]
+
+    ctypedef struct b2nd_context_t:
+        pass
+    b2nd_context_t *b2nd_create_ctx(blosc2_storage *b2_storage, int8_t ndim, int64_t *shape,
+                                    int32_t *chunkshape, int32_t *blockshape,
+                                    blosc2_metalayer *metalayers, int32_t nmetalayers)
+    int b2nd_free_ctx(b2nd_context_t *ctx)
+
+    int b2nd_empty(b2nd_context_t *ctx, b2nd_array_t **array)
+
+    int b2nd_free(b2nd_array_t *array)
 
 
 ctypedef struct user_filters_udata:
@@ -1570,3 +1612,105 @@ def register_filter(id, forward, backward):
         raise RuntimeError("Error while registering filter")
 
     blosc2.ufilters_registry[id] = (forward, backward)
+
+def _check_rc(rc, message):
+    if rc < 0:
+        raise RuntimeError(message)
+
+# NDArray
+cdef class NDArray:
+    cdef b2nd_array_t* array
+    cdef b2nd_context_t *ctx
+
+    def __init__(self, array):
+        self.array = <b2nd_array_t *> PyCapsule_GetPointer(array, <char *> "b2nd_array_t*")
+
+    @property
+    def shape(self):
+        """The shape of this container."""
+        return tuple([self.array.shape[i] for i in range(self.array.ndim)])
+
+    @property
+    def chunks(self):
+        """The chunk shape of this container."""
+        return tuple([self.array.chunkshape[i] for i in range(self.array.ndim)])
+
+    @property
+    def blocks(self):
+        """The block shape of this container."""
+        return tuple([self.array.blockshape[i] for i in range(self.array.ndim)])
+
+    @property
+    def ndim(self):
+        """The number of dimensions of this container."""
+        return self.array.ndim
+
+    def __dealloc__(self):
+        if self.array != NULL:
+            b2nd_free(self.array)
+
+
+cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, typesize, kwargs):
+    urlpath = kwargs.get("urlpath")
+    if 'contiguous' not in kwargs:
+        # Make contiguous true for disk, else sparse (for in-memory performance)
+        kwargs['contiguous'] = False if urlpath is None else True
+
+    if urlpath is not None:
+        _urlpath = urlpath.encode() if isinstance(urlpath, str) else urlpath
+        kwargs["urlpath"] = _urlpath
+
+    mode = mode = kwargs.get("mode", "a")
+    if kwargs is not None:
+        if mode == "w":
+            blosc2.remove_urlpath(urlpath)
+        elif mode == "r" and urlpath is not None:
+            raise ValueError("NDArray must already exist")
+
+    # Create storage
+    cdef blosc2_storage storage
+    cdef blosc2_cparams cparams
+    cdef blosc2_dparams dparams
+    storage.cparams = &cparams
+    storage.dparams = &dparams
+    create_storage(&storage, kwargs)
+    storage.cparams.typesize = typesize
+
+    # Shapes
+    ndim = len(shape)
+    cdef int64_t[B2ND_MAX_DIM] shape_
+    cdef int32_t[B2ND_MAX_DIM] chunkshape
+    cdef int32_t[B2ND_MAX_DIM] blockshape
+    for i in range(ndim):
+        chunkshape[i] = chunks[i]
+        blockshape[i] = blocks[i]
+        shape_[i] = shape[i]
+
+    # Metalayers
+    meta = kwargs.get('meta', None)
+    cdef blosc2_metalayer[B2ND_MAX_METALAYERS] metalayers
+
+    if meta is None:
+        return b2nd_create_ctx(&storage, len(shape), shape_, chunkshape, blockshape,
+                              NULL, 0)  # For now don't take care of metalayers
+    else:
+        nmetalayers = len(meta)
+        for i, (name, content) in enumerate(meta.items()):
+            name2 = name.encode("utf-8") if isinstance(name, str) else name # do a copy
+            metalayers[i].name = strdup(name2)
+            metalayers[i].content = <uint8_t *> malloc(len(content))
+            memcpy(metalayers[i].content, <uint8_t *> content, len(content))
+            metalayers[i].content_len = len(content)
+
+        return b2nd_create_ctx(&storage, len(shape), shape_, chunkshape, blockshape,
+                              metalayers, nmetalayers)
+
+def ndarray_empty(shape, chunks, blocks, typesize, **kwargs):
+    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, typesize, kwargs)
+
+    cdef b2nd_array_t *array
+    _check_rc(b2nd_empty(ctx, &array), "Could not build empty array")
+    ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
+                             _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
+
+    return ndarray

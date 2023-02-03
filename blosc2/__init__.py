@@ -85,6 +85,7 @@ from .core import (
     unpack_array2,
     unpack_tensor,
 )
+from .ndarray import NDArray, ndarray_empty
 from .SChunk import SChunk, open
 from .version import __version__
 
