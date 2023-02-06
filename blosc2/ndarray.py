@@ -52,7 +52,8 @@ class NDArray(blosc2_ext.NDArray):
         key = (start, stop)
         shape = [sp - st for st, sp in zip(start, stop)]
         arr = np.zeros(shape, dtype=f"S{self.schunk.typesize}")
-        return blosc2_ext.get_slice_numpy(arr, self, key)
+
+        return super(NDArray, self).get_slice_numpy(arr, key)
 
 
 def empty(shape, chunks, blocks, typesize, **kwargs):
@@ -91,7 +92,6 @@ def empty(shape, chunks, blocks, typesize, **kwargs):
     out: NDArray
         A `NDArray` is returned.
     """
-
     arr = blosc2_ext.empty(shape, chunks, blocks, typesize, **kwargs)
     return arr
 
@@ -110,4 +110,36 @@ def zeros(shape, chunks, blocks, typesize, **kwargs):
         A `NDArray` is returned.
     """
     arr = blosc2_ext.zeros(shape, chunks, blocks, typesize, **kwargs)
+    return arr
+
+
+def full(shape, chunks, blocks, fill_value, **kwargs):
+    """Create an array, with @p fill_value being used as the default value
+    for uninitialized portions of the array.
+
+    Parameters
+    ----------
+    shape: tuple or list
+        The shape for the final array.
+    chunks: tuple or list
+        The chunk shape.
+    blocks: tuple or list
+        The block shape. This will override the `blocksize`
+        in the cparams in case they are passed.
+    fill_value: bytes
+        Default value to use for uninitialized portions of the array.
+        Its size will override the `typesize`
+        in the cparams in case they are passed.
+
+    Other Parameters
+    ----------------
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :py:meth:`caterva.empty` constructor.
+
+    Returns
+    -------
+    out: NDArray
+        A `NDArray` is returned.
+    """
+    arr = blosc2_ext.full(shape, chunks, blocks, fill_value, **kwargs)
     return arr
