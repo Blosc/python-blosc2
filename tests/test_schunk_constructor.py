@@ -31,6 +31,14 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, chunksize):
     data = np.arange(num_elem, dtype="int32")
     bytes_obj = data.tobytes()
     schunk = blosc2.SChunk(chunksize=chunksize, data=data, **storage)
+    # Test properties
+    assert chunksize == schunk.chunksize
+    assert chunksize / 4 == schunk.chunkshape
+    assert cparams.get("blocksize", 0) == schunk.blocksize
+    assert nchunks == schunk.nchunks
+    assert num_elem * 4 == schunk.nbytes
+    assert schunk.nbytes / schunk.cbytes == schunk.cratio
+    assert schunk.typesize == 4
 
     for i in range(nchunks):
         start = i * chunksize
@@ -97,5 +105,14 @@ def test_schunk(contiguous, urlpath, cparams, dparams, chunksize):
 
     for i in range(nchunks):
         schunk.get_chunk(i)
+
+    # Test properties
+    assert chunksize == schunk.chunksize
+    assert chunksize == schunk.chunkshape
+    assert cparams.get("blocksize", 0) == schunk.blocksize
+    assert nchunks == schunk.nchunks
+    assert len(buffer) == schunk.nbytes
+    assert schunk.nbytes / schunk.cbytes == schunk.cratio
+    assert schunk.typesize == 1
 
     blosc2.remove_urlpath(urlpath)

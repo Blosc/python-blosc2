@@ -14,8 +14,8 @@ import pytest
 import blosc2
 import numpy as np
 
-
 ##### pack / unpack  #####
+
 
 @pytest.mark.parametrize("size, dtype", [
     (1e6, "int64"),
