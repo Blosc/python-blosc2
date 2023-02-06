@@ -435,8 +435,12 @@ cdef extern from "b2nd.h":
     int b2nd_free_ctx(b2nd_context_t *ctx)
 
     int b2nd_empty(b2nd_context_t *ctx, b2nd_array_t **array)
+    int b2nd_zeros(b2nd_context_t *ctx, b2nd_array_t **array)
 
     int b2nd_free(b2nd_array_t *array)
+    int b2nd_get_slice_cbuffer(b2nd_array_t *array,
+                               int64_t *start, int64_t *stop,
+                               void *buffer, int64_t *buffershape, int64_t buffersize)
 
 
 ctypedef struct user_filters_udata:
@@ -828,6 +832,16 @@ cdef class SChunk:
         Number of bytes in each chunk.
         """
         return self.schunk.chunksize
+
+    @property
+    def blocksize(self):
+        """The block size (in bytes)."""
+        return self.schunk.blocksize
+
+    @property
+    def nchunks(self):
+        """The number of chunks."""
+        return int(self.schunk.nbytes / self.schunk.chunksize)
 
     @property
     def cratio(self):
@@ -1705,12 +1719,52 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, typesize, kwargs
         return b2nd_create_ctx(&storage, len(shape), shape_, chunkshape, blockshape,
                               metalayers, nmetalayers)
 
-def ndarray_empty(shape, chunks, blocks, typesize, **kwargs):
+
+def get_slice_numpy(arr, NDArray src, key):
+    ndim = src.ndim
+    start, stop = key
+
+    cdef int64_t[B2ND_MAX_DIM] start_, stop_
+    cdef int64_t buffersize_ = src.schunk.typesize
+    cdef int64_t[B2ND_MAX_DIM] buffershape_
+    for i in range(src.ndim):
+        start_[i] = start[i]
+        stop_[i] = stop[i]
+        buffershape_[i] = stop_[i] - start_[i]
+        buffersize_ *= buffershape_[i]
+
+    buffershape = [sp - st for st, sp in zip(start, stop)]
+    cdef int64_t buffersize = src.schunk.typesize
+
+    cdef Py_buffer view
+    PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
+    _check_rc(b2nd_get_slice_cbuffer(src.array, start_, stop_,
+                           <void *> view.buf, buffershape_, buffersize_),
+              "Error while getting the buffer")
+    PyBuffer_Release(&view)
+
+    return arr.squeeze()
+
+
+def empty(shape, chunks, blocks, typesize, **kwargs):
     cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, typesize, kwargs)
 
     cdef b2nd_array_t *array
     _check_rc(b2nd_empty(ctx, &array), "Could not build empty array")
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
+    _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
+
+    return ndarray
+
+
+def zeros(shape, chunks, blocks, typesize, **kwargs):
+    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, typesize, kwargs)
+
+    cdef b2nd_array_t *array
+    _check_rc(b2nd_zeros(ctx, &array), "Could not build zeros array")
+    ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
+                             _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
+    _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
 
     return ndarray
