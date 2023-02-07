@@ -6,25 +6,12 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-from collections.abc import MutableMapping
+from collections.abc import Mapping, MutableMapping
 
 from msgpack import packb, unpackb
 
 import numpy as np
 from blosc2 import blosc2_ext
-
-
-# See https://github.com/dask/distributed/issues/3716#issuecomment-632913789
-def encode_tuple(obj):
-    if isinstance(obj, tuple):
-        obj = ["__tuple__", *obj]
-    return obj
-
-
-def decode_tuple(obj):
-    if obj[0] == "__tuple__":
-        obj = tuple(obj[1:])
-    return obj
 
 
 class vlmeta(MutableMapping, blosc2_ext.vlmeta):
@@ -36,11 +23,11 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
     def __setitem__(self, name, content):
         blosc2_ext._check_access_mode(self.urlpath, self.mode)
         cparams = {"typesize": 1}
-        content = packb(content, default=encode_tuple, strict_types=True, use_bin_type=True)
+        content = packb(content, default=blosc2_ext.encode_tuple, strict_types=True, use_bin_type=True)
         super(vlmeta, self).set_vlmeta(name, content, **cparams)
 
     def __getitem__(self, name):
-        return unpackb(super(vlmeta, self).get_vlmeta(name), list_hook=decode_tuple)
+        return unpackb(super(vlmeta, self).get_vlmeta(name), list_hook=blosc2_ext.decode_tuple)
 
     def __delitem__(self, name):
         blosc2_ext._check_access_mode(self.urlpath, self.mode)
@@ -59,6 +46,79 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
 
         """
         return super(vlmeta, self).to_dict()
+
+
+class Meta(Mapping):
+    """
+    Class providing access to user meta on a :py:class:`SChunk`.
+    It will be available via the `.meta` property of a SChunk.
+    """
+    def get(self, key, default=None):
+        """Return the value for `key` if `key` is in the dictionary, else `default`.
+        If `default` is not given, it defaults to ``None``."""
+        return self[key] if key in self else default
+
+    def __del__(self):
+        pass
+
+    def __init__(self, schunk):
+        self.schunk = schunk
+
+    def __contains__(self, key):
+        """Check if the `key` metalayer exists or not."""
+        return blosc2_ext.meta__contains__(self.schunk, key)
+
+    def __delitem__(self, key):
+        return None
+
+    def __setitem__(self, key, value):
+        """Update the `key` metalayer with `value`.
+
+        Parameters
+        ----------
+        key: str
+            The name of the metalayer to update.
+        value: bytes
+            The buffer containing the new content for the metalayer.
+
+            ..warning: Note that the *length* of the metalayer cannot not change,
+            else an exception will be raised.
+        """
+        value = packb(value, default=blosc2_ext.encode_tuple, strict_types=True, use_bin_type=True)
+        return blosc2_ext.meta__setitem__(self.schunk, key, value)
+
+    def __getitem__(self, item):
+        """Return the `item` metalayer.
+
+        Parameters
+        ----------
+        item: str
+            The name of the metalayer to return.
+
+        Returns
+        -------
+        bytes
+            The buffer containing the metalayer info.
+        """
+        return unpackb(blosc2_ext.meta__getitem__(self.schunk, item), list_hook=blosc2_ext.decode_tuple)
+
+    def keys(self):
+        """Return the metalayers keys."""
+        return blosc2_ext.meta_keys(self.schunk)
+
+    def values(self):
+        raise NotImplementedError("Values can not be accessed")
+
+    def items(self):
+        raise NotImplementedError("Items can not be accessed")
+
+    def __iter__(self):
+        """Iter over the keys of the metalayers."""
+        return iter(self.keys())
+
+    def __len__(self):
+        """Return the number of metalayers."""
+        return blosc2_ext.meta__len__(self.schunk)
 
 
 class SChunk(blosc2_ext.SChunk):
@@ -96,6 +156,13 @@ class SChunk(blosc2_ext.SChunk):
                 dparams: dict
                     A dictionary with the decompression parameters, which are the same that can be
                     used in the :func:`~blosc2.decompress2` function.
+                meta: dict or None
+                    A dictionary with different metalayers.  One entry per metalayer:
+
+                        key: bytes or str
+                            The name of the metalayer.
+                        value: object
+                            The metalayer object that will be serialized using msgpack.
 
         Examples
         --------
@@ -104,7 +171,7 @@ class SChunk(blosc2_ext.SChunk):
         >>> schunk = blosc2.SChunk(**storage)
         """
         # Check only allowed kwarg are passed
-        allowed_kwargs = ["urlpath", "contiguous", "cparams", "dparams", "_schunk",
+        allowed_kwargs = ["urlpath", "contiguous", "cparams", "dparams", "_schunk", "meta",
                           "mode", "_is_view"]
         all_allowed_kwargs = all(kwarg in allowed_kwargs for kwarg in kwargs.keys())
         if not all_allowed_kwargs:
@@ -168,6 +235,10 @@ class SChunk(blosc2_ext.SChunk):
     def dparams(self, value):
         super(SChunk, self).update_dparams(value)
         self._dparams = super(SChunk, self).get_dparams()
+
+    @property
+    def meta(self):
+        return Meta(self)
 
     def append_data(self, data):
         """Append a data buffer to the SChunk.

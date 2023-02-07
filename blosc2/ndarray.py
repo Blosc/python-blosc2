@@ -76,16 +76,8 @@ def empty(shape, chunks, blocks, typesize, **kwargs):
     ----------------
     kwargs: dict, optional
         Keyword arguments supported:
-            meta: dict or None
-                A dictionary with different metalayers.  One entry per metalayer:
 
-                    key: bytes or str
-                        The name of the metalayer.
-                    value: object
-                        The metalayer object already serialized using msgpack.
-
-        In addition, all the keyword arguments supported in the :py_meth:`SChunk`
-        are supported here as well.
+        The keyword arguments supported are the same than for the :py_meth:`SChunk`.
 
     Returns
     -------
