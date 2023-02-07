@@ -71,7 +71,7 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, chunksize):
 @pytest.mark.parametrize("contiguous", [True, False])
 @pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize(
-    " cparams, dparams, chunksize",
+    "cparams, dparams, chunksize",
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 1}, {}, 500),
         ({"typesize": 1}, {"nthreads": 4}, 500),

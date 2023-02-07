@@ -26,7 +26,7 @@ from libcpp cimport bool as c_bool
 
 from enum import Enum
 
-from msgpack import unpackb
+from msgpack import packb, unpackb
 
 import blosc2
 import numpy as np
@@ -789,6 +789,16 @@ cdef class SChunk:
         self.schunk = blosc2_schunk_new(&storage)
         if self.schunk == NULL:
             raise RuntimeError("Could not create the Schunk")
+
+        # Add metalayers
+        meta = kwargs.get("meta")
+        if meta is not None:
+            for (name, content) in meta.items():
+                name = name.encode("utf-8") if isinstance(name, str) else name
+                content = packb(content, default=encode_tuple, strict_types=True, use_bin_type=True)
+                _check_rc(blosc2_meta_add(self.schunk, name, content, len(content)),
+                          "Error while adding the metalayers")
+
         if chunksize > INT_MAX:
             raise ValueError("Maximum chunksize allowed is 2^31 - 1")
         self.schunk.chunksize = chunksize
@@ -1409,6 +1419,19 @@ def remove_urlpath(path):
     blosc2_remove_urlpath(path)
 
 
+# See https://github.com/dask/distributed/issues/3716#issuecomment-632913789
+def encode_tuple(obj):
+    if isinstance(obj, tuple):
+        obj = ["__tuple__", *obj]
+    return obj
+
+
+def decode_tuple(obj):
+    if obj[0] == "__tuple__":
+        obj = tuple(obj[1:])
+    return obj
+
+
 cdef class vlmeta:
     cdef blosc2_schunk* schunk
     def __init__(self, schunk):
@@ -1468,6 +1491,42 @@ cdef class vlmeta:
         for i in range(rc):
             res[names[i]] = unpackb(self.get_vlmeta(names[i]))
         return res
+
+
+def meta__contains__(self, name):
+    cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
+    name = name.encode("utf-8") if isinstance(name, str) else name
+    n = blosc2_meta_exists(schunk, name)
+    return False if n < 0 else True
+
+def meta__getitem__(self, name):
+    cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
+    name = name.encode("utf-8") if isinstance(name, str) else name
+    cdef uint8_t *content
+    cdef int32_t content_len
+    n = blosc2_meta_get(schunk, name, &content, &content_len)
+    return PyBytes_FromStringAndSize(<char *> content, content_len)
+
+def meta__setitem__(self, name, content):
+    cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
+    name = name.encode("utf-8") if isinstance(name, str) else name
+    old_content = meta__getitem__(self, name)
+    if len(old_content) != len(content):
+        raise ValueError("The length of the content in a metalayer cannot change.")
+    n = blosc2_meta_update(schunk, name, content, len(content))
+    return n
+
+def meta__len__(self):
+    cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
+    return schunk.nmetalayers
+
+def meta_keys(self):
+    cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
+    keys = []
+    for i in range(meta__len__(self)):
+        name = schunk.metalayers[i].name.decode("utf-8")
+        keys.append(name)
+    return keys
 
 
 def schunk_open(urlpath, mode, **kwargs):
@@ -1738,6 +1797,7 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, typesize, kwargs
         for i, (name, content) in enumerate(meta.items()):
             name2 = name.encode("utf-8") if isinstance(name, str) else name # do a copy
             metalayers[i].name = strdup(name2)
+            content = packb(content, default=encode_tuple, strict_types=True, use_bin_type=True)
             metalayers[i].content = <uint8_t *> malloc(len(content))
             memcpy(metalayers[i].content, <uint8_t *> content, len(content))
             metalayers[i].content_len = len(content)

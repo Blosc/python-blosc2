@@ -78,10 +78,23 @@ def test_schunk_numpy(contiguous, urlpath, mode, cparams, dparams, nchunks):
 )
 def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):
     storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
-
+    numpy_meta = {b"dtype": str(np.dtype(np.uint8))}
+    test_meta = {b"lorem": 1234}
+    meta = {"numpy": numpy_meta,
+            "test": test_meta}
     blosc2.remove_urlpath(urlpath)
 
-    schunk = blosc2.SChunk(chunksize=2 * nbytes, **storage)
+    schunk = blosc2.SChunk(chunksize=2 * nbytes, meta=meta, **storage)
+
+    assert ("numpy" in schunk.meta)
+    assert ("error" not in schunk.meta)
+    assert (schunk.meta["numpy"] == numpy_meta)
+    assert ("test" in schunk.meta)
+    assert (schunk.meta["test"] == test_meta)
+    test_meta = {b"lorem": 4231}
+    schunk.meta["test"] = test_meta
+    assert (schunk.meta["test"] == test_meta)
+
     for i in range(nchunks):
         bytes_obj = b"i " * nbytes
         nchunks_ = schunk.append_data(bytes_obj)
