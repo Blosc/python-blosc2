@@ -3,6 +3,7 @@ import ndindex
 import numpy as np
 from blosc2 import blosc2_ext
 
+from .info import InfoReporter
 from .SChunk import SChunk
 
 
@@ -33,6 +34,28 @@ class NDArray(blosc2_ext.NDArray):
     def __init__(self, **kwargs):
         self.schunk = SChunk(_schunk=kwargs["_schunk"], _is_view=True)  # SChunk Python instance
         super(NDArray, self).__init__(kwargs["_array"])
+
+    @property
+    def info(self):
+        """
+        Print information about this array.
+        """
+        return InfoReporter(self)
+
+    @property
+    def info_items(self):
+        items = []
+        items += [("Type", f"{self.__class__.__name__}")]
+        items += [("Typesize", self.schunk.typesize)]
+        items += [("Shape", self.shape)]
+        items += [("Chunks", self.chunks)]
+        items += [("Blocks", self.blocks)]
+        items += [("Comp. codec", self.schunk.cparams["codec"].name)]
+        items += [("Comp. level", self.schunk.cparams["clevel"])]
+        filters = [f.name for f in self.schunk.cparams["filters"] if f.name != "NOFILTER"]
+        items += [("Comp. filters", f"[{', '.join(map(str, filters))}]")]
+        items += [("Comp. ratio", f"{self.schunk.cratio:.2f}")]
+        return items
 
     def __getitem__(self, key):
         """ Get a (multidimensional) slice as specified in key.
