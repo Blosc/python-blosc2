@@ -65,6 +65,26 @@ class NDArray(blosc2_ext.NDArray):
         """
         return super(NDArray, self).to_buffer()
 
+    def copy(self, **kwargs):
+        """Create a copy of an array.
+
+        Parameters
+        ----------
+        array: NDArray
+            The array to be copied.
+
+        Other Parameters
+        ----------------
+        kwargs: dict, optional
+            Keyword arguments that are supported by the :py:meth:`caterva.empty` constructor.
+
+        Returns
+        -------
+        out: NDArray
+            A `NDArray` with a copy of the data.
+        """
+        return super(NDArray, self).copy(**kwargs)
+
 
 def empty(shape, chunks, blocks, typesize, **kwargs):
     """Create an empty array.
@@ -176,3 +196,49 @@ def from_buffer(buffer, shape, chunks, blocks, typesize, **kwargs):
     """
     arr = blosc2_ext.from_buffer(buffer, shape, chunks, blocks, typesize, **kwargs)
     return arr
+
+
+def copy(array, **kwargs):
+    """Create a copy of an array.
+
+    Parameters
+    ----------
+    array: NDArray
+        The array to be copied.
+
+    Other Parameters
+    ----------------
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :py:meth:`caterva.empty` constructor.
+
+    Returns
+    -------
+    out: NDArray
+        A `NDArray` with a copy of the data.
+    """
+    arr = array.copy(**kwargs)
+    return arr
+
+
+
+
+
+def asarray(array, chunks, blocks, **kwargs):
+    """Convert the input to an array.
+
+    Parameters
+    ----------
+    array: array_like
+        An array supporting the python buffer protocol and the numpy array interface.
+
+    Other Parameters
+    ----------------
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :py:meth:`caterva.empty` constructor.
+
+    Returns
+    -------
+    out: NDArray
+        A Caterva array interpretation of `ndarray`.
+    """
+    return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
