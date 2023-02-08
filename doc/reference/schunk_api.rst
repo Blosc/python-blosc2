@@ -56,5 +56,4 @@ Functions
 .. autosummary::
    :toctree: autofiles/schunk/
 
-    open
     schunk_from_cframe

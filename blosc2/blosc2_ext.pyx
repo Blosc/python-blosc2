@@ -1539,7 +1539,7 @@ def meta_keys(self):
     return keys
 
 
-def schunk_open(urlpath, mode, **kwargs):
+def open(urlpath, mode, **kwargs):
     urlpath = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
     cdef blosc2_schunk* schunk = blosc2_schunk_open(urlpath)
     if schunk == NULL:
@@ -1743,8 +1743,8 @@ cdef class NDArray:
     def shape(self):
         """The data shape of this container.
 
-        In case it is multiple in each dimension of :py_meth:`chunks`,
-        it will be the same as :py_meth:`ext_shape`.
+        In case it is multiple in each dimension of :attr:`chunks`,
+        it will be the same as :attr:`ext_shape`.
 
         See Also
         --------
@@ -1756,8 +1756,9 @@ cdef class NDArray:
     def ext_shape(self):
         """The real shape of its corresponding schunk.
 
-        In case :py_meth:`shape` is not multiple in each dimension of :py_meth:`chunks`,
-        this will define the real :param:`schunk.nbytes` stored, although the added positions
+        In case :attr:`shape` is not multiple in each dimension of :attr:`chunks`,
+        this will define the real :attr:`blosc2.SChunk.SChunk.nbytes` stored, although the added positions
+        ??? em pense que no és exactament això.
         will be zeros and will not be retrieved when getting the data via the NDArray api.
 
         See Also
@@ -1770,8 +1771,8 @@ cdef class NDArray:
     def chunks(self):
         """The data chunk shape of this container.
 
-        In case it is multiple in each dimension of :py_meth:`blocks`,
-        it will be the same as :py_meth:`ext_chunks`.
+        In case it is multiple in each dimension of :attr:`blocks`,
+        it will be the same as :attr:`ext_chunks`.
 
         See Also
         --------
@@ -1782,7 +1783,7 @@ cdef class NDArray:
     def ext_chunks(self):
         """The real chunk shape which defines the actual chunksize in the schunk.
 
-        In case :py_meth:`chunks` is not multiple in each dimension of :py_meth:`blocks`,
+        In case :attr:`chunks` is not multiple in each dimension of :attr:`blocks`,
         this will be the chunk shape used to store each chunk, filling the extra positions
         with zeros.
 
