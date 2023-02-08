@@ -92,6 +92,22 @@ class NDArray(blosc2_ext.NDArray):
         """
         return super(NDArray, self).copy(**kwargs)
 
+    def resize(self, newshape):
+        """Change the shape of the array by growing one or more dimensions.
+
+        Parameters
+        ----------
+        newshape : tuple or list
+            The new shape of the array. It should have the same dimensions
+            as `self`.
+
+        Notes
+        -----
+        The array values corresponding to the added positions are not initialized.
+        Thus, the user is in charge of initializing them.
+        """
+        return super(NDArray, self).resize(newshape)
+
     def squeeze(self):
         """Remove the 1's in array's shape."""
         super(NDArray, self).squeeze()
