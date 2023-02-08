@@ -6,4 +6,5 @@ Utils
 .. autosummary::
    :toctree: autofiles/utils/
 
+    open
     remove_urlpath

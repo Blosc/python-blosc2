@@ -35,6 +35,12 @@ class NDArray(blosc2_ext.NDArray):
         self.schunk = SChunk(_schunk=kwargs["_schunk"], _is_view=True)  # SChunk Python instance
         super(NDArray, self).__init__(kwargs["_array"])
 
+    @classmethod
+    def cast(cls, cont):
+        cont.__class__ = cls
+        assert isinstance(cont, NDArray)
+        return cont
+
     @property
     def info(self):
         """
@@ -68,7 +74,7 @@ class NDArray(blosc2_ext.NDArray):
 
         Returns
         -------
-        out: NDArray
+        out: :ref:`NDArray <NDArray>`
             An array, stored in a non-compressed buffer, with the requested data.
         """
         key, _ = process_key(key, self.shape)
@@ -101,18 +107,18 @@ class NDArray(blosc2_ext.NDArray):
 
         Parameters
         ----------
-        array: NDArray
+        array: :ref:`NDArray <NDArray>`
             The array to be copied.
 
         Other Parameters
         ----------------
         kwargs: dict, optional
-            Keyword arguments that are supported by the :py:meth:`caterva.empty` constructor.
+            Keyword arguments that are supported by the :func:`empty` constructor.
 
         Returns
         -------
-        out: NDArray
-            A `NDArray` with a copy of the data.
+        out: :ref:`NDArray <NDArray>`
+            A :ref:`NDArray <NDArray>` with a copy of the data.
         """
         return super(NDArray, self).copy(**kwargs)
 
@@ -123,7 +129,7 @@ class NDArray(blosc2_ext.NDArray):
         ----------
         newshape : tuple or list
             The new shape of the array. It should have the same dimensions
-            as `self`.
+            as :paramref:`self`.
 
         Notes
         -----
@@ -133,7 +139,7 @@ class NDArray(blosc2_ext.NDArray):
         return super(NDArray, self).resize(newshape)
 
     def slice(self, key, **kwargs):
-        """ Get a (multidimensional) slice as specified in key. Generalizes :py:meth:`__getitem__`.
+        """ Get a (multidimensional) slice as specified in key. Generalizes :meth:`__getitem__`.
 
         Parameters
         ----------
@@ -144,11 +150,11 @@ class NDArray(blosc2_ext.NDArray):
         Other Parameters
         ----------------
         kwargs: dict, optional
-            Keyword arguments that are supported by the :py:meth:`caterva.empty` constructor.
+            Keyword arguments that are supported by the :func:`empty` constructor.
 
         Returns
         -------
-        out: NDArray
+        out: :ref:`NDArray <NDArray>`
             An array with the requested data.
         """
         key, mask = process_key(key, self.shape)
@@ -161,7 +167,7 @@ class NDArray(blosc2_ext.NDArray):
         super(NDArray, self).squeeze()
 
 
-def empty(shape, chunks, blocks, typesize, **kwargs):
+def empty(shape, chunks, blocks, typesize=1, **kwargs):
     """Create an empty array.
 
     Parameters
@@ -173,8 +179,9 @@ def empty(shape, chunks, blocks, typesize, **kwargs):
     blocks: tuple or list
         The block shape. This will override the `blocksize`
         in the cparams in case they are passed.
-    typesize: int
-        The size, in bytes, of each element. This will override the `typesize`
+    typesize: int, optional
+        The size, in bytes, of each element. Default is 1.
+        This will override the `typesize`
         in the cparams in case they are passed.
 
     Other Parameters
@@ -182,36 +189,36 @@ def empty(shape, chunks, blocks, typesize, **kwargs):
     kwargs: dict, optional
         Keyword arguments supported:
 
-        The keyword arguments supported are the same than for the :py_meth:`SChunk`.
+        The keyword arguments supported are the same than for the
+        :obj:`SChunk.__init__ <blosc2.SChunk.SChunk.__init__>`.
 
     Returns
     -------
-    out: NDArray
-        A `NDArray` is returned.
+    out: :ref:`NDArray <NDArray>`
+        A :ref:`NDArray <NDArray>` is returned.
     """
     arr = blosc2_ext.empty(shape, chunks, blocks, typesize, **kwargs)
     return arr
 
 
-def zeros(shape, chunks, blocks, typesize, **kwargs):
+def zeros(shape, chunks, blocks, typesize=1, **kwargs):
     """Create an array, with zero being used as the default value
     for uninitialized portions of the array.
 
-    Parameters
-    ----------
-    The parameters are the same than for the :py:meth:`caterva.empty` constructor.
+    The parameters and keyword arguments are the same than for the
+    :func:`empty` constructor.
 
     Returns
     -------
-    out: NDArray
-        A `NDArray` is returned.
+    out: :ref:`NDArray <NDArray>`
+        A :ref:`NDArray <NDArray>` is returned.
     """
     arr = blosc2_ext.zeros(shape, chunks, blocks, typesize, **kwargs)
     return arr
 
 
 def full(shape, chunks, blocks, fill_value, **kwargs):
-    """Create an array, with @p fill_value being used as the default value
+    """Create an array, with :paramref:`fill_value` being used as the default value
     for uninitialized portions of the array.
 
     Parameters
@@ -231,18 +238,18 @@ def full(shape, chunks, blocks, fill_value, **kwargs):
     Other Parameters
     ----------------
     kwargs: dict, optional
-        Keyword arguments that are supported by the :py:meth:`caterva.empty` constructor.
+        Keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
-    out: NDArray
-        A `NDArray` is returned.
+    out: :ref:`NDArray <NDArray>`
+        A :ref:`NDArray <NDArray>` is returned.
     """
     arr = blosc2_ext.full(shape, chunks, blocks, fill_value, **kwargs)
     return arr
 
 
-def from_buffer(buffer, shape, chunks, blocks, typesize, **kwargs):
+def from_buffer(buffer, shape, chunks, blocks, typesize=1, **kwargs):
     """Create an array out of a buffer.
 
     Parameters
@@ -256,18 +263,20 @@ def from_buffer(buffer, shape, chunks, blocks, typesize, **kwargs):
     blocks: tuple or list
         The block shape. This will override the `blocksize`
         in the cparams in case they are passed.
-    typesize: int
-        The size, in bytes, of each element.
+    typesize: int, optional
+        The size, in bytes, of each element. Default is 1.
+        This will override the `typesize`
+        in the cparams in case they are passed.
 
     Other Parameters
     ----------------
     kwargs: dict, optional
-        Keyword arguments that are supported by the :py:meth:`caterva.empty` constructor.
+        Keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
-    out: NDArray
-        A `NDArray` is returned.
+    out: :ref:`NDArray <NDArray>`
+        A :ref:`NDArray <NDArray>` is returned.
     """
     arr = blosc2_ext.from_buffer(buffer, shape, chunks, blocks, typesize, **kwargs)
     return arr
@@ -278,18 +287,18 @@ def copy(array, **kwargs):
 
     Parameters
     ----------
-    array: NDArray
+    array: :ref:`NDArray <NDArray>`
         The array to be copied.
 
     Other Parameters
     ----------------
     kwargs: dict, optional
-        Keyword arguments that are supported by the :py:meth:`caterva.empty` constructor.
+        Keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
-    out: NDArray
-        A `NDArray` with a copy of the data.
+    out: :ref:`NDArray <NDArray>`
+        A :ref:`NDArray <NDArray>` with a copy of the data.
     """
     arr = array.copy(**kwargs)
     return arr
@@ -302,15 +311,20 @@ def asarray(array, chunks, blocks, **kwargs):
     ----------
     array: array_like
         An array supporting the python buffer protocol and the numpy array interface.
+    chunks: tuple or list
+        The chunk shape.
+    blocks: tuple or list
+        The block shape. This will override the `blocksize`
+        in the cparams in case they are passed.
 
     Other Parameters
     ----------------
     kwargs: dict, optional
-        Keyword arguments that are supported by the :py:meth:`caterva.empty` constructor.
+        Keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
-    out: NDArray
-        A Caterva array interpretation of `ndarray`.
+    out: :ref:`NDArray <NDArray>`
+        An array interpretation of :paramref:`array`.
     """
     return blosc2_ext.asarray(array, chunks, blocks, **kwargs)

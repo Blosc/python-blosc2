@@ -65,6 +65,7 @@ from .core import (
     get_compressor,
     load_array,
     load_tensor,
+    open,
     pack,
     pack_array,
     pack_array2,
@@ -86,7 +87,7 @@ from .core import (
     unpack_tensor,
 )
 from .ndarray import NDArray, asarray, copy, empty, from_buffer, full, zeros
-from .SChunk import SChunk, open
+from .SChunk import SChunk
 from .version import __version__
 
 # Registry for postfilters
