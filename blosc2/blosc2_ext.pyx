@@ -444,9 +444,12 @@ cdef extern from "b2nd.h":
                                void *buffer, int64_t *buffershape, int64_t buffersize)
     int b2nd_set_slice_cbuffer(void *buffer, int64_t *buffershape, int64_t buffersize,
                                int64_t *start, int64_t *stop, b2nd_array_t *array)
+    int b2nd_get_slice(b2nd_context_t *ctx, b2nd_array_t **array, b2nd_array_t *src, const int64_t *start,
+                       const int64_t *stop)
     int b2nd_from_cbuffer(b2nd_context_t *ctx, b2nd_array_t **array, void *buffer, int64_t buffersize)
     int b2nd_to_cbuffer(b2nd_array_t *array, void *buffer, int64_t buffersize)
     int b2nd_squeeze(b2nd_array_t *array)
+    int b2nd_squeeze_index(b2nd_array_t *array, const bool *index)
     int b2nd_resize(b2nd_array_t *array, const int64_t *new_shape, const int64_t *start)
     int b2nd_copy(b2nd_context_t *ctx, b2nd_array_t *src, b2nd_array_t **array)
 
@@ -1810,6 +1813,32 @@ cdef class NDArray:
         PyBuffer_Release(&view)
 
         return arr.squeeze()
+
+    def get_slice(self, key, mask, **kwargs):
+        # shape will be overwritten by get_slice
+        cdef b2nd_context_t *ctx = create_b2nd_context(self.shape, self.chunks, self.blocks,
+                                                       self.schunk.typesize, kwargs)
+        ndim = self.ndim
+        start, stop = key
+        cdef int64_t[B2ND_MAX_DIM] start_, stop_
+        for i in range(ndim):
+            start_[i] = start[i]
+            stop_[i] = stop[i]
+
+        cdef b2nd_array_t *array
+        _check_rc(b2nd_get_slice(ctx, &array, self.array, start_, stop_),
+                  "Error while getting the slice")
+
+        cdef bool mask_[B2ND_MAX_DIM]
+        for i in range(ndim):
+            mask_[i] = mask[i]
+        _check_rc(b2nd_squeeze_index(array, mask_))
+        ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
+                                 _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
+
+        _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
+
+        return ndarray
 
     def set_slice(self, key, ndarray):
         ndim = self.ndim

@@ -8,8 +8,9 @@ from .SChunk import SChunk
 
 def process_key(key, shape):
     key = ndindex.ndindex(key).expand(shape).raw
+    mask = tuple(True if isinstance(k, int) else False for k in key)
     key = tuple(k if isinstance(k, slice) else slice(k, k+1, None) for k in key)
-    return key
+    return key, mask
 
 
 def prod(list):
@@ -47,7 +48,7 @@ class NDArray(blosc2_ext.NDArray):
         out: NDArray
             An array, stored in a non-compressed buffer, with the requested data.
         """
-        key = process_key(key, self.shape)
+        key, _ = process_key(key, self.shape)
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
         shape = [sp - st for st, sp in zip(start, stop)]
@@ -56,7 +57,7 @@ class NDArray(blosc2_ext.NDArray):
         return super(NDArray, self).get_slice_numpy(arr, key)
 
     def __setitem__(self, key, value):
-        key = process_key(key, self.shape)
+        key, _ = process_key(key, self.shape)
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
 
@@ -107,6 +108,30 @@ class NDArray(blosc2_ext.NDArray):
         Thus, the user is in charge of initializing them.
         """
         return super(NDArray, self).resize(newshape)
+
+    def slice(self, key, **kwargs):
+        """ Get a (multidimensional) slice as specified in key. Generalizes :py:meth:`__getitem__`.
+
+        Parameters
+        ----------
+        key: int, slice or sequence of slices
+            The index for the slices to be updated. Note that step parameter is not honored yet in
+            slices.
+
+        Other Parameters
+        ----------------
+        kwargs: dict, optional
+            Keyword arguments that are supported by the :py:meth:`caterva.empty` constructor.
+
+        Returns
+        -------
+        out: NDArray
+            An array with the requested data.
+        """
+        key, mask = process_key(key, self.shape)
+        start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
+        key = (start, stop)
+        return super(NDArray, self).get_slice(self, key, mask, **kwargs)
 
     def squeeze(self):
         """Remove the 1's in array's shape."""
