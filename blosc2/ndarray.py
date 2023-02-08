@@ -55,6 +55,16 @@ class NDArray(blosc2_ext.NDArray):
 
         return super(NDArray, self).get_slice_numpy(arr, key)
 
+    def to_buffer(self):
+        """Returns a buffer with the data contents.
+
+        Returns
+        -------
+        bytes
+            The buffer containing the data of the whole array.
+        """
+        return super(NDArray, self).to_buffer()
+
 
 def empty(shape, chunks, blocks, typesize, **kwargs):
     """Create an empty array.
@@ -134,4 +144,35 @@ def full(shape, chunks, blocks, fill_value, **kwargs):
         A `NDArray` is returned.
     """
     arr = blosc2_ext.full(shape, chunks, blocks, fill_value, **kwargs)
+    return arr
+
+
+def from_buffer(buffer, shape, chunks, blocks, typesize, **kwargs):
+    """Create an array out of a buffer.
+
+    Parameters
+    ----------
+    buffer: bytes
+        The buffer of the data to populate the container.
+    shape: tuple or list
+        The shape for the final container.
+    chunks: tuple or list
+        The chunk shape.
+    blocks: tuple or list
+        The block shape. This will override the `blocksize`
+        in the cparams in case they are passed.
+    typesize: int
+        The size, in bytes, of each element.
+
+    Other Parameters
+    ----------------
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :py:meth:`caterva.empty` constructor.
+
+    Returns
+    -------
+    out: NDArray
+        A `NDArray` is returned.
+    """
+    arr = blosc2_ext.from_buffer(buffer, shape, chunks, blocks, typesize, **kwargs)
     return arr
