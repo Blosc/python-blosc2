@@ -442,8 +442,11 @@ cdef extern from "b2nd.h":
     int b2nd_get_slice_cbuffer(b2nd_array_t *array,
                                int64_t *start, int64_t *stop,
                                void *buffer, int64_t *buffershape, int64_t buffersize)
+    int b2nd_set_slice_cbuffer(void *buffer, int64_t *buffershape, int64_t buffersize,
+                               int64_t *start, int64_t *stop, b2nd_array_t *array)
     int b2nd_from_cbuffer(b2nd_context_t *ctx, b2nd_array_t **array, void *buffer, int64_t buffersize)
     int b2nd_to_cbuffer(b2nd_array_t *array, void *buffer, int64_t buffersize)
+    int b2nd_squeeze(b2nd_array_t *array)
     int b2nd_copy(b2nd_context_t *ctx, b2nd_array_t *src, b2nd_array_t **array)
 
 ctypedef struct user_filters_udata:
@@ -1807,6 +1810,24 @@ cdef class NDArray:
 
         return arr.squeeze()
 
+    def set_slice(self, key, ndarray):
+        ndim = self.ndim
+        start, stop = key
+        cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+        PyObject_GetBuffer(ndarray, buf, PyBUF_SIMPLE)
+
+        cdef int64_t[B2ND_MAX_DIM] buffershape_, start_, stop_
+        for i in range(ndim):
+            start_[i] = start[i]
+            stop_[i] = stop[i]
+            buffershape_[i] = stop[i] - start[i]
+
+        _check_rc(b2nd_set_slice_cbuffer(buf.buf, buffershape_, buf.len, start_, stop_, self.array),
+                  "Error while setting the slice")
+        PyBuffer_Release(buf)
+
+        return self
+
     def to_buffer(self):
         buffersize = self.size
         buffer = bytes(buffersize)
@@ -1837,6 +1858,9 @@ cdef class NDArray:
         _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
 
         return ndarray
+
+    def squeeze(self):
+        _check_rc(b2nd_squeeze(self.array), "Error while performing the squeeze")
 
     def __dealloc__(self):
         if self.array != NULL:
