@@ -449,9 +449,10 @@ cdef extern from "b2nd.h":
     int b2nd_from_cbuffer(b2nd_context_t *ctx, b2nd_array_t **array, void *buffer, int64_t buffersize)
     int b2nd_to_cbuffer(b2nd_array_t *array, void *buffer, int64_t buffersize)
     int b2nd_squeeze(b2nd_array_t *array)
-    int b2nd_squeeze_index(b2nd_array_t *array, const bool *index)
+    int b2nd_squeeze_index(b2nd_array_t *array, const c_bool *index)
     int b2nd_resize(b2nd_array_t *array, const int64_t *new_shape, const int64_t *start)
     int b2nd_copy(b2nd_context_t *ctx, b2nd_array_t *src, b2nd_array_t **array)
+    int b2nd_from_schunk(blosc2_schunk *schunk, b2nd_array_t **array)
 
 ctypedef struct user_filters_udata:
     char* py_func
@@ -1543,11 +1544,41 @@ def schunk_open(urlpath, mode, **kwargs):
     cdef blosc2_schunk* schunk = blosc2_schunk_open(urlpath)
     if schunk == NULL:
         raise RuntimeError(f'blosc2_schunk_open({urlpath!r}) returned NULL')
+
+    meta1 = "b2nd"
+    meta1 = meta1.encode("utf-8") if isinstance(meta1, str) else meta1
+    meta2 = "b2nd"
+    meta2 = meta2.encode("utf-8") if isinstance(meta2, str) else meta2
+    is_ndarray = blosc2_meta_exists(schunk, meta1) >= 0 or blosc2_meta_exists(schunk, meta2) >= 0
+
+    cdef b2nd_array_t *array
+    if is_ndarray:
+        _check_rc(b2nd_from_schunk(schunk, &array),
+                  "Could not create array from schunk")
+
     kwargs["urlpath"] = urlpath
     kwargs["contiguous"] = schunk.storage.contiguous
     if mode != "w" and kwargs is not None:
         _check_schunk_params(schunk, kwargs)
-    return blosc2.SChunk(_schunk=PyCapsule_New(schunk, <char *> "blosc2_schunk*", NULL), mode=mode, **kwargs)
+    cparams = kwargs.get("cparams")
+    dparams = kwargs.get("dparams")
+
+    if is_ndarray:
+        res = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
+                             _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
+        if cparams is not None:
+            res.schunk.cparams = cparams
+        if dparams is not None:
+            res.schunk.dparams = dparams
+    else:
+        res = blosc2.SChunk(_schunk=PyCapsule_New(schunk, <char *> "blosc2_schunk*", NULL),
+                            mode=mode, **kwargs)
+        if cparams is not None:
+            res.cparams = cparams
+        if dparams is not None:
+            res.dparams = dparams
+
+    return res
 
 
 def _check_access_mode(urlpath, mode):
@@ -1829,7 +1860,7 @@ cdef class NDArray:
         _check_rc(b2nd_get_slice(ctx, &array, self.array, start_, stop_),
                   "Error while getting the slice")
 
-        cdef bool mask_[B2ND_MAX_DIM]
+        cdef c_bool mask_[B2ND_MAX_DIM]
         for i in range(ndim):
             mask_[i] = mask[i]
         _check_rc(b2nd_squeeze_index(array, mask_))

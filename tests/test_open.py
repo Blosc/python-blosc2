@@ -43,7 +43,10 @@ def test_open(contiguous, urlpath, cparams, dparams, nchunks, chunk_nitems, dtyp
         assert nchunks_ == (i + 1)
 
     del schunk
-    schunk_open = blosc2.open(urlpath, mode)
+    cparams2 = cparams
+    cparams2["nthreads"] = 1
+    schunk_open = blosc2.open(urlpath, mode, cparams=cparams2)
+    assert schunk_open.cparams["nthreads"] == cparams2["nthreads"]
 
     for key in cparams:
         if key == "nthreads":
