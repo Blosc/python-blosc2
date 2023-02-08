@@ -1,2 +1,2 @@
 msgpack
-ndindex
+ndindex>=1.4
