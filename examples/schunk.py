@@ -18,9 +18,13 @@ urlpath = "filename"
 
 storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
 blosc2.remove_urlpath(urlpath)
+numpy_meta = {b"dtype": str(np.dtype("int32"))}
+test_meta = {b"lorem": 1234}
+meta = {"numpy": numpy_meta,
+        "test": test_meta}
 
 # Create the empty SChunk
-schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, **storage)
+schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, meta=meta, **storage)
 # Append some chunks
 for i in range(nchunks):
     buffer = i * np.arange(200 * 1000, dtype="int32")

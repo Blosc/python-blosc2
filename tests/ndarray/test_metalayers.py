@@ -21,10 +21,10 @@ import numpy as np
                          ])
 @pytest.mark.parametrize("shape, chunks, blocks, urlpath, dtype",
                          [
-                             ([556], [221], [33], "testmeta00.cat", np.float64),
-                             ([20, 134, 13], [12, 66, 8], [3, 13, 5], "testmeta01.cat", np.int32),
+                             ([556], [221], [33], "testmeta00.b2nd", np.float64),
+                             ([20, 134, 13], [12, 66, 8], [3, 13, 5], "testmeta01.b2nd", np.int32),
                              ([12, 13, 14, 15, 16], [8, 9, 4, 12, 9], [2, 6, 4, 5, 4],
-                              "testmeta02.cat", np.float32)
+                              "testmeta02.b2nd", np.float32)
                          ])
 def test_metalayers(shape, chunks, blocks, urlpath, contiguous, dtype):
     blosc2.remove_urlpath(urlpath)

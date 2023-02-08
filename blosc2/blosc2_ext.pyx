@@ -442,7 +442,8 @@ cdef extern from "b2nd.h":
     int b2nd_get_slice_cbuffer(b2nd_array_t *array,
                                int64_t *start, int64_t *stop,
                                void *buffer, int64_t *buffershape, int64_t buffersize)
-
+    int b2nd_from_cbuffer(b2nd_context_t *ctx, b2nd_array_t **array, void *buffer, int64_t buffersize)
+    int b2nd_to_cbuffer(b2nd_array_t *array, void *buffer, int64_t buffersize)
 
 ctypedef struct user_filters_udata:
     char* py_func
@@ -852,7 +853,7 @@ cdef class SChunk:
     @property
     def nchunks(self):
         """The number of chunks."""
-        return int(self.schunk.nbytes / self.schunk.chunksize)
+        return self.schunk.nchunks
 
     @property
     def cratio(self):
@@ -873,7 +874,7 @@ cdef class SChunk:
     @property
     def cbytes(self):
         """
-        Amount of compressed data bytes.
+        Amount of compressed data bytes (data size + chunk headers size).
         """
         return self.schunk.cbytes
 
@@ -1701,13 +1702,56 @@ cdef class NDArray:
 
     @property
     def shape(self):
-        """The shape of this container."""
+        """The data shape of this container.
+
+        In case it is multiple in each dimension of :py_meth:`chunks`,
+        it will be the same as :py_meth:`ext_shape`.
+
+        See Also
+        --------
+
+        """
         return tuple([self.array.shape[i] for i in range(self.array.ndim)])
 
     @property
+    def ext_shape(self):
+        """The real shape of its corresponding schunk.
+
+        In case :py_meth:`shape` is not multiple in each dimension of :py_meth:`chunks`,
+        this will define the real :param:`schunk.nbytes` stored, although the added positions
+        will be zeros and will not be retrieved when getting the data via the NDArray api.
+
+        See Also
+        --------
+
+        """
+        return tuple([self.array.extshape[i] for i in range(self.array.ndim)])
+
+    @property
     def chunks(self):
-        """The chunk shape of this container."""
+        """The data chunk shape of this container.
+
+        In case it is multiple in each dimension of :py_meth:`blocks`,
+        it will be the same as :py_meth:`ext_chunks`.
+
+        See Also
+        --------
+        """
         return tuple([self.array.chunkshape[i] for i in range(self.array.ndim)])
+
+    @property
+    def ext_chunks(self):
+        """The real chunk shape which defines the actual chunksize in the schunk.
+
+        In case :py_meth:`chunks` is not multiple in each dimension of :py_meth:`blocks`,
+        this will be the chunk shape used to store each chunk, filling the extra positions
+        with zeros.
+
+        See Also
+        --------
+
+        """
+        return tuple([self.array.extchunkshape[i] for i in range(self.array.ndim)])
 
     @property
     def blocks(self):
@@ -1718,6 +1762,24 @@ cdef class NDArray:
     def ndim(self):
         """The number of dimensions of this container."""
         return self.array.ndim
+
+    @property
+    def size(self):
+        """The size (in bytes) for this container."""
+        return self.array.nitems * self.array.sc.typesize
+
+    @property
+    def chunksize(self):
+        """The chunk size (in bytes) for this container.
+
+        This will not be the same as schunk.chunksize in case there is
+        padding.
+
+        See Also
+        --------
+
+        """
+        return self.array.chunknitems * self.array.sc.typesize
 
     def get_slice_numpy(self, arr, key):
         ndim = self.ndim
@@ -1743,6 +1805,14 @@ cdef class NDArray:
         PyBuffer_Release(&view)
 
         return arr.squeeze()
+
+    def to_buffer(self):
+        buffersize = self.size
+        buffer = bytes(buffersize)
+        _check_rc(b2nd_to_cbuffer(self.array, <void *> <char *> buffer, buffersize),
+                  "Error while filling the buffer")
+
+        return buffer
 
     def __dealloc__(self):
         if self.array != NULL:
@@ -1837,6 +1907,19 @@ def full(shape, chunks, blocks, fill_value, **kwargs):
     cdef uint8_t *fill_value_ = <uint8_t *> fill_value
     cdef b2nd_array_t *array
     _check_rc(b2nd_full(ctx, &array, fill_value_), "Could not build zeros array")
+    ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
+                             _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
+    _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
+
+    return ndarray
+
+
+def from_buffer(buf, shape, chunks, blocks, typesize, **kwargs):
+    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, typesize, kwargs)
+
+    cdef b2nd_array_t *array
+    _check_rc(b2nd_from_cbuffer(ctx, &array,  <void*> <char *> buf, len(buf)),
+              "Error while creating the ndarray")
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
     _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
