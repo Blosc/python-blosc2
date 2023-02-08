@@ -55,6 +55,13 @@ class NDArray(blosc2_ext.NDArray):
 
         return super(NDArray, self).get_slice_numpy(arr, key)
 
+    def __setitem__(self, key, value):
+        key = process_key(key, self.shape)
+        start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
+        key = (start, stop)
+
+        return super(NDArray, self).set_slice(key, value)
+
     def to_buffer(self):
         """Returns a buffer with the data contents.
 
@@ -84,6 +91,10 @@ class NDArray(blosc2_ext.NDArray):
             A `NDArray` with a copy of the data.
         """
         return super(NDArray, self).copy(**kwargs)
+
+    def squeeze(self):
+        """Remove the 1's in array's shape."""
+        super(NDArray, self).squeeze()
 
 
 def empty(shape, chunks, blocks, typesize, **kwargs):
@@ -218,9 +229,6 @@ def copy(array, **kwargs):
     """
     arr = array.copy(**kwargs)
     return arr
-
-
-
 
 
 def asarray(array, chunks, blocks, **kwargs):

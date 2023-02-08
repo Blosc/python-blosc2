@@ -1,3 +1,4 @@
 msgpack
 py-cpuinfo
 ndindex
+ndindex>=1.4
