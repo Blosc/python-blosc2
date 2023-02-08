@@ -447,6 +447,7 @@ cdef extern from "b2nd.h":
     int b2nd_from_cbuffer(b2nd_context_t *ctx, b2nd_array_t **array, void *buffer, int64_t buffersize)
     int b2nd_to_cbuffer(b2nd_array_t *array, void *buffer, int64_t buffersize)
     int b2nd_squeeze(b2nd_array_t *array)
+    int b2nd_resize(b2nd_array_t *array, const int64_t *new_shape, const int64_t *start)
     int b2nd_copy(b2nd_context_t *ctx, b2nd_array_t *src, b2nd_array_t **array)
 
 ctypedef struct user_filters_udata:
@@ -1858,6 +1859,14 @@ cdef class NDArray:
         _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
 
         return ndarray
+
+    def resize(self, new_shape):
+        cdef int64_t new_shape_[B2ND_MAX_DIM]
+        for i, s in enumerate(new_shape):
+            new_shape_[i] = s
+        _check_rc(b2nd_resize(self.array, new_shape_, NULL),
+                  "Error while resizing the array")
+        return self
 
     def squeeze(self):
         _check_rc(b2nd_squeeze(self.array), "Error while performing the squeeze")
