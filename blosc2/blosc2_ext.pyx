@@ -444,6 +444,7 @@ cdef extern from "b2nd.h":
                                void *buffer, int64_t *buffershape, int64_t buffersize)
     int b2nd_from_cbuffer(b2nd_context_t *ctx, b2nd_array_t **array, void *buffer, int64_t buffersize)
     int b2nd_to_cbuffer(b2nd_array_t *array, void *buffer, int64_t buffersize)
+    int b2nd_copy(b2nd_context_t *ctx, b2nd_array_t *src, b2nd_array_t **array)
 
 ctypedef struct user_filters_udata:
     char* py_func
@@ -1814,6 +1815,29 @@ cdef class NDArray:
 
         return buffer
 
+    def copy(self, **kwargs):
+        chunks = kwargs.get("chunks", self.chunks)
+        blocks = kwargs.get("blocks", self.blocks)
+        if "typesize" in kwargs:
+            typesize = kwargs.get("typesize")
+        elif "cparams" in kwargs:
+            cparams = kwargs["cparams"]
+            typesize = cparams.get("typesize", self.schunk.typesize)
+        else:
+            typesize = self.schunk.typesize
+
+        cdef b2nd_context_t *ctx = create_b2nd_context(self.shape, chunks, blocks, typesize, kwargs)
+
+        cdef b2nd_array_t *array
+        _check_rc(b2nd_copy(ctx, self.array, &array),
+                  "Error while copying the array")
+
+        ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
+                                 _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
+        _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
+
+        return ndarray
+
     def __dealloc__(self):
         if self.array != NULL:
             b2nd_free(self.array)
@@ -1919,7 +1943,27 @@ def from_buffer(buf, shape, chunks, blocks, typesize, **kwargs):
 
     cdef b2nd_array_t *array
     _check_rc(b2nd_from_cbuffer(ctx, &array,  <void*> <char *> buf, len(buf)),
-              "Error while creating the ndarray")
+              "Error while creating the NDArray")
+    ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
+                             _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
+    _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
+
+    return ndarray
+
+
+def asarray(ndarray, chunks, blocks,  **kwargs):
+    interface = ndarray.__array_interface__
+    cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+    PyObject_GetBuffer(ndarray, buf, PyBUF_SIMPLE)
+
+    shape = interface["shape"]
+    typesize = buf.itemsize
+    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, typesize, kwargs)
+
+    cdef b2nd_array_t *array
+    _check_rc(b2nd_from_cbuffer(ctx, &array, <void *> <char *> buf.buf, buf.len),
+              "Error while creating the NDArray")
+    PyBuffer_Release(buf)
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
     _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
