@@ -21,7 +21,7 @@ itemsize = np.dtype(dtype).itemsize
 # Create a numpy array
 nparray = np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape)
 
-# Create a caterva array from a numpy array
+# Create a b2nd array from a numpy array
 a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks)
 
 # Get a slice

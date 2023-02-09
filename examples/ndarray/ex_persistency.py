@@ -6,7 +6,6 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import os
 
 import blosc2
 import numpy as np
@@ -15,7 +14,8 @@ shape = (128, 128)
 chunks = (32, 32)
 blocks = (8, 8)
 
-urlpath = "ex_meta.b2nd"
+urlpath = "ex_persistency.b2nd"
+
 blosc2.remove_urlpath(urlpath)
 
 dtype = np.dtype(np.complex128)
@@ -24,20 +24,16 @@ typesize = dtype.itemsize
 # Create a numpy array
 nparray = np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape)
 
-meta = {
-    "m1": b"1111",
-    "m2": b"2222",
-}
 # Create a b2nd array from a numpy array (on disk)
-a = blosc2.from_buffer(bytes(nparray), nparray.shape, chunks=chunks, blocks=blocks,
-                       urlpath=urlpath, typesize=typesize, meta=meta)
+a = blosc2.from_buffer(bytes(nparray), nparray.shape, typesize=typesize, chunks=chunks, blocks=blocks,
+                       urlpath=urlpath, contiguous=False)
 
 # Read a b2nd array from disk
 b = blosc2.open(urlpath)
 
-# Deal with meta
-m1 = b.meta.get("m5", b"0000")
-m2 = b.meta["m2"]
+# Convert a b2nd array to a numpy array
+nparray2 = np.asarray(b[...]).view(dtype)
+np.testing.assert_almost_equal(nparray, nparray2)
 
 # Remove file on disk
-os.remove(urlpath)
+blosc2.remove_urlpath(urlpath)
