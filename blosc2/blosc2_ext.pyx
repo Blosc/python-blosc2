@@ -1748,21 +1748,24 @@ cdef class NDArray:
 
         See Also
         --------
+        :attr:`ext_shape`
 
         """
         return tuple([self.array.shape[i] for i in range(self.array.ndim)])
 
     @property
     def ext_shape(self):
-        """The real shape of its corresponding schunk.
+        """The padded data shape.
 
-        In case :attr:`shape` is not multiple in each dimension of :attr:`chunks`,
-        this will define the real :attr:`blosc2.SChunk.SChunk.nbytes` stored, although the added positions
-        ??? em pense que no és exactament això.
-        will be zeros and will not be retrieved when getting the data via the NDArray api.
+        The padded data is filled with zeros to make the real data fit into blocks and chunks, but it
+        will never be retrieved as actual data (so the user can ignore this).
+        In case :attr:`shape` is multiple in each dimension of :attr:`chunks` it will be the same
+        as :attr:`shape`.
 
         See Also
         --------
+        :attr:`shape`
+        :attr:`chunks`
 
         """
         return tuple([self.array.extshape[i] for i in range(self.array.ndim)])
@@ -1776,19 +1779,22 @@ cdef class NDArray:
 
         See Also
         --------
+        :attr:`ext_chunks`
+
         """
         return tuple([self.array.chunkshape[i] for i in range(self.array.ndim)])
 
     @property
     def ext_chunks(self):
-        """The real chunk shape which defines the actual chunksize in the schunk.
+        """The padded chunk shape which defines the chunksize in the associated schunk.
 
-        In case :attr:`chunks` is not multiple in each dimension of :attr:`blocks`,
-        this will be the chunk shape used to store each chunk, filling the extra positions
-        with zeros.
+        This will be the chunk shape used to store each chunk, filling the extra positions
+        with zeros (padding). In case :attr:`chunks` is multiple in
+        each dimension of :attr:`blocks` it will be the same as :attr:`chunks`.
 
         See Also
         --------
+        :attr:`chunks`
 
         """
         return tuple([self.array.extchunkshape[i] for i in range(self.array.ndim)])
@@ -1812,11 +1818,16 @@ cdef class NDArray:
     def chunksize(self):
         """The chunk size (in bytes) for this container.
 
-        This will not be the same as schunk.chunksize in case there is
-        padding.
+        This will not be the same as
+        :attr:`SChunk.chunksize <blosc2.SChunk.SChunk.chunksize>`
+        in case :attr:`chunks` is not multiple in
+        each dimension of :attr:`blocks` (or equivalently, in case :attr:`chunks` is
+        not the same as :attr:`ext_chunks`.
 
         See Also
         --------
+        :attr:`chunks`
+        :attr:`ext_chunks`
 
         """
         return self.array.chunknitems * self.array.sc.typesize
