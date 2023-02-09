@@ -86,6 +86,19 @@ class NDArray(blosc2_ext.NDArray):
         return super(NDArray, self).get_slice_numpy(arr, key)
 
     def __setitem__(self, key, value):
+        """Set a slice.
+
+        Parameters
+        ----------
+        key: int, slice or sequence of slices
+            The index for the slices to be updated. Note that step parameter
+            is not honored yet.
+        value: Py_Object Supporting the Buffer Protocol
+            An object supporting the
+            `Buffer Protocol <https://docs.python.org/3/c-api/buffer.html>`_
+            used to overwrite the slice.
+
+        """
         key, _ = process_key(key, self.shape)
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
