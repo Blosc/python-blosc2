@@ -19,7 +19,6 @@ urlpath = "ex_meta.b2nd"
 blosc2.remove_urlpath(urlpath)
 
 dtype = np.dtype(np.complex128)
-typesize = dtype.itemsize
 
 # Create a numpy array
 nparray = np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape)
@@ -30,14 +29,14 @@ meta = {
 }
 # Create a b2nd array from a numpy array (on disk)
 a = blosc2.from_buffer(bytes(nparray), nparray.shape, chunks=chunks, blocks=blocks,
-                       urlpath=urlpath, typesize=typesize, meta=meta)
+                       urlpath=urlpath, dtype=dtype, meta=meta)
 
 # Read a b2nd array from disk
 b = blosc2.open(urlpath)
 
 # Deal with meta
-m1 = b.meta.get("m5", b"0000")
-m2 = b.meta["m2"]
+m1 = b.schunk.meta.get("m5", b"0000")
+m2 = b.schunk.meta["m2"]
 
 # Remove file on disk
 os.remove(urlpath)

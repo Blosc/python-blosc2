@@ -15,13 +15,14 @@ shape = (50, 50)
 chunks = (49, 49)
 blocks = (48, 48)
 
-typesize = 8
+dtype = np.dtype("|S8")
+typesize = dtype.itemsize
 
 # Create a buffer
 buffer = bytes(np.random.normal(0, 1, np.prod(shape)) * typesize)
 
 # Create a b2nd array from a buffer
-a = blosc2.from_buffer(buffer, shape, chunks=chunks, blocks=blocks, typesize=typesize)
+a = blosc2.from_buffer(buffer, shape, chunks=chunks, blocks=blocks, dtype=dtype)
 print(a.schunk.cparams["filters"])
 print(a.schunk.cparams["codec"])
 print(a.schunk.cratio)

@@ -16,20 +16,19 @@ blocks = (2, 2)
 slices = (slice(2, 5), slice(4, 8))
 
 dtype = np.int32
-itemsize = np.dtype(dtype).itemsize
 
 # Create a numpy array
 nparray = np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape)
 
 # Create a b2nd array from a numpy array
-a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks)
+a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks, dtype=dtype)
 
 # Get a slice
-buffer = np.asarray(a[slices]).view(dtype)
+buffer = a[slices]
 buffer2 = nparray[slices]
 
 np.testing.assert_almost_equal(buffer, buffer2)
 
 a[slices] = np.ones((5, 5), dtype=dtype)
 
-print(np.asarray(a[...]).view(dtype))
+print(a[...])
