@@ -20,6 +20,6 @@ import numpy as np
 def test_numpy(shape, chunks, blocks, dtype):
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
-    a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks)
-    nparray2 = np.asarray(a[:]).view(dtype)
+    a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks, dtype=dtype)
+    nparray2 = a[...]
     np.testing.assert_almost_equal(nparray, nparray2)

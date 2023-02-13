@@ -15,7 +15,6 @@ chunks = (32, 32)
 blocks = (8, 8)
 
 urlpath = "ex_persistency.b2nd"
-
 blosc2.remove_urlpath(urlpath)
 
 dtype = np.dtype(np.complex128)
@@ -25,14 +24,14 @@ typesize = dtype.itemsize
 nparray = np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape)
 
 # Create a b2nd array from a numpy array (on disk)
-a = blosc2.from_buffer(bytes(nparray), nparray.shape, typesize=typesize, chunks=chunks, blocks=blocks,
+a = blosc2.from_buffer(bytes(nparray), nparray.shape, dtype=dtype, chunks=chunks, blocks=blocks,
                        urlpath=urlpath, contiguous=False)
 
 # Read a b2nd array from disk
 b = blosc2.open(urlpath)
 
 # Convert a b2nd array to a numpy array
-nparray2 = np.asarray(b[...]).view(dtype)
+nparray2 = b[...]
 np.testing.assert_almost_equal(nparray, nparray2)
 
 # Remove file on disk

@@ -35,12 +35,6 @@ class NDArray(blosc2_ext.NDArray):
         self.schunk = SChunk(_schunk=kwargs["_schunk"], _is_view=True)  # SChunk Python instance
         super(NDArray, self).__init__(kwargs["_array"])
 
-    @classmethod
-    def cast(cls, cont):
-        cont.__class__ = cls
-        assert isinstance(cont, NDArray)
-        return cont
-
     @property
     def info(self):
         """
@@ -63,6 +57,14 @@ class NDArray(blosc2_ext.NDArray):
         items += [("Comp. ratio", f"{self.schunk.cratio:.2f}")]
         return items
 
+    @property
+    def dtype(self):
+        """Data-type of the array’s elements."""
+        meta = self.schunk.meta["b2nd"]
+        dtype = meta[-1]
+
+        return np.dtype(dtype)
+
     def __getitem__(self, key):
         """ Get a (multidimensional) slice as specified in key.
 
@@ -81,7 +83,7 @@ class NDArray(blosc2_ext.NDArray):
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
         shape = [sp - st for st, sp in zip(start, stop)]
-        arr = np.zeros(shape, dtype=f"S{self.schunk.typesize}")
+        arr = np.zeros(shape, dtype=self.dtype)
 
         return super(NDArray, self).get_slice_numpy(arr, key)
 
@@ -180,7 +182,7 @@ class NDArray(blosc2_ext.NDArray):
         super(NDArray, self).squeeze()
 
 
-def empty(shape, chunks, blocks, typesize=1, **kwargs):
+def empty(shape, chunks, blocks, dtype=np.uint8, **kwargs):
     """Create an empty array.
 
     Parameters
@@ -192,8 +194,8 @@ def empty(shape, chunks, blocks, typesize=1, **kwargs):
     blocks: tuple or list
         The block shape. This will override the `blocksize`
         in the cparams in case they are passed.
-    typesize: int, optional
-        The size, in bytes, of each element. Default is 1.
+    dtype: np.dtype
+        The ndarray dtype in NumPy format. Default is `np.uint8`.
         This will override the `typesize`
         in the cparams in case they are passed.
 
@@ -210,11 +212,11 @@ def empty(shape, chunks, blocks, typesize=1, **kwargs):
     out: :ref:`NDArray <NDArray>`
         A :ref:`NDArray <NDArray>` is returned.
     """
-    arr = blosc2_ext.empty(shape, chunks, blocks, typesize, **kwargs)
+    arr = blosc2_ext.empty(shape, chunks, blocks, dtype, **kwargs)
     return arr
 
 
-def zeros(shape, chunks, blocks, typesize=1, **kwargs):
+def zeros(shape, chunks, blocks, dtype=np.uint8, **kwargs):
     """Create an array, with zero being used as the default value
     for uninitialized portions of the array.
 
@@ -226,11 +228,11 @@ def zeros(shape, chunks, blocks, typesize=1, **kwargs):
     out: :ref:`NDArray <NDArray>`
         A :ref:`NDArray <NDArray>` is returned.
     """
-    arr = blosc2_ext.zeros(shape, chunks, blocks, typesize, **kwargs)
+    arr = blosc2_ext.zeros(shape, chunks, blocks, dtype, **kwargs)
     return arr
 
 
-def full(shape, chunks, blocks, fill_value, **kwargs):
+def full(shape, chunks, blocks, fill_value, dtype=None, **kwargs):
     """Create an array, with :paramref:`fill_value` being used as the default value
     for uninitialized portions of the array.
 
@@ -247,37 +249,9 @@ def full(shape, chunks, blocks, fill_value, **kwargs):
         Default value to use for uninitialized portions of the array.
         Its size will override the `typesize`
         in the cparams in case they are passed.
-
-    Other Parameters
-    ----------------
-    kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
-
-    Returns
-    -------
-    out: :ref:`NDArray <NDArray>`
-        A :ref:`NDArray <NDArray>` is returned.
-    """
-    arr = blosc2_ext.full(shape, chunks, blocks, fill_value, **kwargs)
-    return arr
-
-
-def from_buffer(buffer, shape, chunks, blocks, typesize=1, **kwargs):
-    """Create an array out of a buffer.
-
-    Parameters
-    ----------
-    buffer: bytes
-        The buffer of the data to populate the container.
-    shape: tuple or list
-        The shape for the final container.
-    chunks: tuple or list
-        The chunk shape.
-    blocks: tuple or list
-        The block shape. This will override the `blocksize`
-        in the cparams in case they are passed.
-    typesize: int, optional
-        The size, in bytes, of each element. Default is 1.
+    dtype: np.dtype
+        The ndarray dtype in NumPy format. By default this will
+        be taken from the :paramref:`fill_value`.
         This will override the `typesize`
         in the cparams in case they are passed.
 
@@ -291,7 +265,44 @@ def from_buffer(buffer, shape, chunks, blocks, typesize=1, **kwargs):
     out: :ref:`NDArray <NDArray>`
         A :ref:`NDArray <NDArray>` is returned.
     """
-    arr = blosc2_ext.from_buffer(buffer, shape, chunks, blocks, typesize, **kwargs)
+    if isinstance(fill_value, bytes):
+        dtype = np.dtype(f"S{len(fill_value)}")
+    if dtype is None:
+        dtype = np.dtype(type(fill_value))
+    arr = blosc2_ext.full(shape, chunks, blocks, fill_value, dtype, **kwargs)
+    return arr
+
+
+def from_buffer(buffer, shape, chunks, blocks, dtype=np.dtype("|S1"), **kwargs):
+    """Create an array out of a buffer.
+
+    Parameters
+    ----------
+    buffer: bytes
+        The buffer of the data to populate the container.
+    shape: tuple or list
+        The shape for the final container.
+    chunks: tuple or list
+        The chunk shape.
+    blocks: tuple or list
+        The block shape. This will override the `blocksize`
+        in the cparams in case they are passed.
+    dtype: np.dtype
+        The ndarray dtype in NumPy format. Default is `np.uint8`.
+        This will override the `typesize`
+        in the cparams in case they are passed.
+
+    Other Parameters
+    ----------------
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: :ref:`NDArray <NDArray>`
+        A :ref:`NDArray <NDArray>` is returned.
+    """
+    arr = blosc2_ext.from_buffer(buffer, shape, chunks, blocks, dtype, **kwargs)
     return arr
 
 
@@ -317,7 +328,7 @@ def copy(array, **kwargs):
     return arr
 
 
-def asarray(array, chunks, blocks, **kwargs):
+def asarray(array, chunks, blocks, dtype, **kwargs):
     """Convert the input to an array.
 
     Parameters
@@ -340,4 +351,4 @@ def asarray(array, chunks, blocks, **kwargs):
     out: :ref:`NDArray <NDArray>`
         An array interpretation of :paramref:`array`.
     """
-    return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
+    return blosc2_ext.asarray(array, chunks, blocks, dtype, **kwargs)

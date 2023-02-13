@@ -12,24 +12,25 @@ import blosc2
 import numpy as np
 
 
-@pytest.mark.parametrize("shape, chunks, blocks, typesize, cparams",
+@pytest.mark.parametrize("shape, chunks, blocks, dtype, cparams",
                          [
-                             ((100, 1230), (200, 100), (55, 3), 4,
+                             ((100, 1230), (200, 100), (55, 3), np.int32,
                               {"codec": blosc2.Codec.ZSTD, "clevel": 4,
                                "use_dict": 0, "nthreads": 1}),
-                             ((23, 34), (10, 10), (10, 10), 8,
+                             ((23, 34), (10, 10), (10, 10), np.float64,
                               {"codec": blosc2.Codec.BLOSCLZ, "clevel": 8,
                                "use_dict": False, "nthreads": 2}),
-                             ((80, 51, 60), (20, 10, 33), (6, 6, 26), 3,
+                             ((80, 51, 60), (20, 10, 33), (6, 6, 26), np.bool_,
                               {"codec": blosc2.Codec.LZ4, "clevel": 5,
                                "use_dict": 1, "nthreads": 2})
                          ])
-def test_zeros(shape, chunks, blocks, typesize, cparams):
+def test_zeros(shape, chunks, blocks, dtype, cparams):
+    dtype = np.dtype(dtype)
     a = blosc2.zeros(shape,
                      chunks=chunks,
                      blocks=blocks,
-                     typesize=typesize,
+                     dtype=dtype,
                      cparams=cparams)
 
-    for i in np.nditer(np.array(a[:])):
-        assert i == bytes(typesize)
+    b = np.zeros(shape=shape, dtype=dtype)
+    np.array_equal(a[:], b)

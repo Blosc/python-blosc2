@@ -19,10 +19,10 @@ dtype = bool
 nparray = np.random.choice(a=[True, False], size=np.prod(shape)).reshape(shape)
 
 # Create a b2nd array from a numpy array
-a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks)
+a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks, dtype=dtype)
 b = a.copy()
 
 # Convert a b2nd array to a numpy array
-nparray2 = np.asarray(b[...]).view(dtype)
+nparray2 = b[...]
 
 np.testing.assert_almost_equal(nparray, nparray2)
