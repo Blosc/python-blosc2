@@ -422,6 +422,19 @@ def _check_comp_length(comp_name, comp_len):
     if comp_len < BLOSC_MIN_HEADER_LENGTH:
         raise ValueError("%s cannot be less than %d bytes" % (comp_name, BLOSC_MIN_HEADER_LENGTH))
 
+
+def cbuffer_sizes(src):
+    cdef const uint8_t[:] typed_view_src
+    mem_view_src = memoryview(src)
+    typed_view_src = mem_view_src.cast('B')
+    _check_comp_length('src', typed_view_src.nbytes)
+    cdef int32_t nbytes
+    cdef int32_t cbytes
+    cdef int32_t blocksize
+    blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
+    return nbytes, cbytes, blocksize
+
+
 cpdef compress(src, int32_t typesize=8, int clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ):
     set_compressor(codec)
     cdef int32_t len_src = <int32_t> len(src)

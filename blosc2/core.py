@@ -1063,6 +1063,26 @@ def get_blocksize():
     return blosc2_ext.get_blocksize()
 
 
+def get_cbuffer_sizes(src):
+    """
+    Get the sizes of a compressed `src` buffer.
+
+    Parameters
+    ----------
+    src: bytes-like object
+        A compressed buffer. Must be a bytes-like object
+        that supports the Python Buffer Protocol, like bytes,
+        bytearray, memoryview, or numpy.ndarray.
+
+    Returns
+    -------
+    (nbytes, cbytes, blocksize): tuple
+        A tuple with the `nbytes`, `cbytes` and `blocksize` for the
+        `src` compressed buffer.
+    """
+    return blosc2_ext.cbuffer_sizes(src)
+
+
 def compress2(src, **kwargs):
     """Compress :paramref:`src` with the given compression params (if given)
 

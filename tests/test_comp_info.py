@@ -8,9 +8,10 @@
 
 
 import pytest
-
+import numpy as np
 import blosc2
 
+SIZE = 1_000_000
 
 @pytest.mark.parametrize("codec", list(blosc2.Codec))
 def test_comp_info(codec):
@@ -18,4 +19,10 @@ def test_comp_info(codec):
     blosc2.clib_info(codec)
     blosc2.set_compressor(codec)
     assert codec.name.lower() == blosc2.get_compressor()
+    src = blosc2.compress2(np.zeros(SIZE, dtype="i8"), clevel=9)
+    nbytes, cbytes, blocksize = blosc2.get_cbuffer_sizes(src)
+    assert nbytes == SIZE * 8
+    assert cbytes == 32
+    # When raising the next limit when this would fail in the future, one should raise the SIZE too
+    assert blocksize <= 2 ** 22
     blosc2.print_versions()

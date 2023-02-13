@@ -63,6 +63,7 @@ from .core import (
     get_blocksize,
     get_clib,
     get_compressor,
+    get_cbuffer_sizes,
     load_array,
     load_tensor,
     pack,
