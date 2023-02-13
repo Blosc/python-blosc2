@@ -1219,7 +1219,7 @@ def get_chunksize(blocksize):
 
 def compute_chunks_blocks(shape, chunks=None, blocks=None, **cparams):
     """
-    Compute the chunks and blocks for a NDArray.
+    Compute chunks and blocks for a NDArray.
 
     Parameters
     ----------
@@ -1238,31 +1238,42 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, **cparams):
         A (chunks, blocks) tuple with the computed chunks and blocks.
     """
 
+    def compute_partition(nitems, blocks, maxs):
+        if 0 in maxs:
+            raise ValueError("shapes with 0 dims are not supported")
+        blocks = blocks.copy()
+        while math.prod(blocks) < nitems:
+            nitems_prev = math.prod(blocks)
+            # Increase dims starting from the latest
+            for i in reversed(range(len(blocks))):
+                if nitems_prev >= nitems:
+                    break
+                if blocks[i] * 2 <= maxs[i]:
+                    blocks[i] *= 2
+                else:
+                    blocks[i] = maxs[i]
+            nitems_new = math.prod(blocks)
+            if nitems_new == nitems_prev:
+                # Not progressing anymore
+                break
+        return blocks
+
     itemsize = cparams["typesize"]
+
     if blocks is None:
         # Get the default blocksize for the compression params
-        src = blosc2.compress2(np.zeros(1_000_000, dtype="V%d"%itemsize), **cparams)
+        # Using an 8 MB buffer should be enough for detecting the whole range of blocksizes
+        nitems = 2 ** 23 // itemsize
+        src = blosc2.compress2(np.zeros(nitems, dtype="V%d" % itemsize), **cparams)
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
-        blockitems = blocksize // itemsize
-        # Compute the blockshape
         blocks = [2] * len(shape)
-        while math.prod(blocks) < blockitems:
-            # Increase dims starting from the latest
-            for i in range(len(blocks) - 1, -1, -1):
-                if math.prod(blocks) >= blockitems:
-                    break
-                blocks[i] *= 2
+        blocks = compute_partition(blocksize // itemsize, blocks, shape)
+
     if chunks is None:
         blocksize = math.prod(blocks) * itemsize
         chunksize = get_chunksize(blocksize)
-        chunkitems = chunksize // itemsize
-        chunks = blocks.copy()
-        while math.prod(chunks) < chunkitems:
-            # Increase dims starting from the latest
-            for i in range(len(chunks) - 1, -1, -1):
-                if math.prod(chunks) >= chunkitems:
-                    break
-                chunks[i] *= 2
+        chunks = compute_partition(chunksize // itemsize, blocks, shape)
+
     return tuple(chunks), tuple(blocks)
 
 
