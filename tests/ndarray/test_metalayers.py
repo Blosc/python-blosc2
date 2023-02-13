@@ -33,8 +33,7 @@ def test_metalayers(shape, chunks, blocks, urlpath, contiguous, dtype):
     test_meta = {b"lorem": 1234}
 
     # Create an empty b2nd array (on disk)
-    typesize = np.dtype(dtype).itemsize
-    a = blosc2.empty(shape, chunks, blocks, typesize,
+    a = blosc2.empty(shape, chunks, blocks, dtype,
                      urlpath=urlpath, contiguous=contiguous,
                      meta={"numpy": numpy_meta,
                            "test": test_meta})

@@ -23,10 +23,9 @@ shape = (1000 * 1000,)
 chunks = (100,)
 blocks = (100,)
 dtype = np.dtype(np.float64)
-typesize = dtype.itemsize
 
 t0 = time()
-a = blosc2.empty(shape, typesize=8, chunks=chunks, blocks=blocks, urlpath=urlpath_sparse,
+a = blosc2.empty(shape, dtype=dtype, chunks=chunks, blocks=blocks, urlpath=urlpath_sparse,
                  contiguous=False)
 for nchunk in range(a.schunk.nchunks):
     a[nchunk * chunks[0]: (nchunk + 1) * chunks[0]] = np.arange(chunks[0], dtype=dtype)
@@ -34,11 +33,10 @@ t1 = time()
 
 print(f"Time: {(t1 - t0):.4f} s")
 print(a.schunk.nchunks)
-an = np.array(a[:]).view(dtype)
-
+an = a[...]
 
 t0 = time()
-b = blosc2.empty(shape, typesize=typesize, chunks=chunks, blocks=blocks,
+b = blosc2.empty(shape, dtype=dtype, chunks=chunks, blocks=blocks,
                  urlpath=urlpath_contiguous, contiguous=True)
 
 print(b.schunk.nchunks)
@@ -48,6 +46,6 @@ t1 = time()
 
 print(f"Time: {(t1 - t0):.4f} s")
 print(b.schunk.nchunks)
-bn = np.array(b[:]).view(dtype)
+bn = b[...]
 
 np.testing.assert_allclose(an, bn)

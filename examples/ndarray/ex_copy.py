@@ -19,7 +19,7 @@ dtype = np.dtype(np.float64)
 buffer = bytes(np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape))
 
 # Create a b2nd array from a buffer
-a = blosc2.from_buffer(buffer, shape, typesize=dtype.itemsize,
+a = blosc2.from_buffer(buffer, shape, dtype=dtype,
                        chunks=chunks, blocks=blocks)
 
 # Get a copy of a b2nd array
@@ -28,7 +28,7 @@ d = b.copy()
 
 aux = np.asarray(b[...])
 aux[1, 2] = 0
-aux2 = blosc2.asarray(aux, chunks=chunks, blocks=blocks)
+aux2 = blosc2.asarray(aux, chunks=chunks, blocks=blocks, dtype=dtype)
 
 print(np.asarray(aux2))
 

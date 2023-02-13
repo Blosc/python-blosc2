@@ -430,7 +430,7 @@ cdef extern from "b2nd.h":
     ctypedef struct b2nd_context_t:
         pass
     b2nd_context_t *b2nd_create_ctx(blosc2_storage *b2_storage, int8_t ndim, int64_t *shape,
-                                    int32_t *chunkshape, int32_t *blockshape,
+                                    int32_t *chunkshape, int32_t *blockshape, char *dtype,
                                     blosc2_metalayer *metalayers, int32_t nmetalayers)
     int b2nd_free_ctx(b2nd_context_t *ctx)
 
@@ -453,6 +453,7 @@ cdef extern from "b2nd.h":
     int b2nd_resize(b2nd_array_t *array, const int64_t *new_shape, const int64_t *start)
     int b2nd_copy(b2nd_context_t *ctx, b2nd_array_t *src, b2nd_array_t **array)
     int b2nd_from_schunk(blosc2_schunk *schunk, b2nd_array_t **array)
+
 
 ctypedef struct user_filters_udata:
     char* py_func
@@ -1833,7 +1834,6 @@ cdef class NDArray:
         return self.array.chunknitems * self.array.sc.typesize
 
     def get_slice_numpy(self, arr, key):
-        ndim = self.ndim
         start, stop = key
 
         cdef int64_t[B2ND_MAX_DIM] start_, stop_
@@ -1844,9 +1844,6 @@ cdef class NDArray:
             stop_[i] = stop[i]
             buffershape_[i] = stop_[i] - start_[i]
             buffersize_ *= buffershape_[i]
-
-        buffershape = [sp - st for st, sp in zip(start, stop)]
-        cdef int64_t buffersize = self.array.sc.typesize
 
         cdef Py_buffer view
         PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
@@ -1912,15 +1909,11 @@ cdef class NDArray:
     def copy(self, **kwargs):
         chunks = kwargs.get("chunks", self.chunks)
         blocks = kwargs.get("blocks", self.blocks)
-        if "typesize" in kwargs:
-            typesize = kwargs.get("typesize")
-        elif "cparams" in kwargs:
-            cparams = kwargs["cparams"]
-            typesize = cparams.get("typesize", self.schunk.typesize)
+        if "dtype" not in kwargs:
+            dtype = self.dtype
         else:
-            typesize = self.schunk.typesize
-
-        cdef b2nd_context_t *ctx = create_b2nd_context(self.shape, chunks, blocks, typesize, kwargs)
+            dtype = kwargs.get("dtype")
+        cdef b2nd_context_t *ctx = create_b2nd_context(self.shape, chunks, blocks, dtype, kwargs)
 
         cdef b2nd_array_t *array
         _check_rc(b2nd_copy(ctx, self.array, &array),
@@ -1948,7 +1941,15 @@ cdef class NDArray:
             b2nd_free(self.array)
 
 
-cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, typesize, kwargs):
+cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
+    dtype = np.dtype(dtype)
+    typesize = dtype.itemsize
+    if dtype.kind == 'V':
+        str_dtype = str(dtype)
+    else:
+        str_dtype = dtype.str
+    str_dtype = str_dtype.encode("utf-8") if isinstance(str_dtype, str) else str_dtype
+
     urlpath = kwargs.get("urlpath")
     if 'contiguous' not in kwargs:
         # Make contiguous true for disk, else sparse (for in-memory performance)
@@ -1989,7 +1990,7 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, typesize, kwargs
     cdef blosc2_metalayer[B2ND_MAX_METALAYERS] metalayers
 
     if meta is None:
-        return b2nd_create_ctx(&storage, len(shape), shape_, chunkshape, blockshape,
+        return b2nd_create_ctx(&storage, len(shape), shape_, chunkshape, blockshape, str_dtype,
                               NULL, 0)
     else:
         nmetalayers = len(meta)
@@ -2001,12 +2002,12 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, typesize, kwargs
             memcpy(metalayers[i].content, <uint8_t *> content, len(content))
             metalayers[i].content_len = len(content)
 
-        return b2nd_create_ctx(&storage, len(shape), shape_, chunkshape, blockshape,
+        return b2nd_create_ctx(&storage, len(shape), shape_, chunkshape, blockshape, str_dtype,
                               metalayers, nmetalayers)
 
 
-def empty(shape, chunks, blocks, typesize, **kwargs):
-    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, typesize, kwargs)
+def empty(shape, chunks, blocks, dtype, **kwargs):
+    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
 
     cdef b2nd_array_t *array
     _check_rc(b2nd_empty(ctx, &array), "Could not build empty array")
@@ -2017,8 +2018,8 @@ def empty(shape, chunks, blocks, typesize, **kwargs):
     return ndarray
 
 
-def zeros(shape, chunks, blocks, typesize, **kwargs):
-    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, typesize, kwargs)
+def zeros(shape, chunks, blocks, dtype, **kwargs):
+    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
 
     cdef b2nd_array_t *array
     _check_rc(b2nd_zeros(ctx, &array), "Could not build zeros array")
@@ -2029,13 +2030,17 @@ def zeros(shape, chunks, blocks, typesize, **kwargs):
     return ndarray
 
 
-def full(shape, chunks, blocks, fill_value, **kwargs):
-    typesize = len(fill_value)
-    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, typesize, kwargs)
+def full(shape, chunks, blocks, fill_value, dtype, **kwargs):
+    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
 
-    cdef uint8_t *fill_value_ = <uint8_t *> fill_value
+    nparr = np.array([fill_value], dtype=dtype)
+    cdef Py_buffer *val = <Py_buffer *> malloc(sizeof(Py_buffer))
+    PyObject_GetBuffer(nparr, val, PyBUF_SIMPLE)
+
     cdef b2nd_array_t *array
-    _check_rc(b2nd_full(ctx, &array, fill_value_), "Could not build zeros array")
+    _check_rc(b2nd_full(ctx, &array, val.buf), "Could not create full array")
+    PyBuffer_Release(val)
+
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
     _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
@@ -2043,8 +2048,8 @@ def full(shape, chunks, blocks, fill_value, **kwargs):
     return ndarray
 
 
-def from_buffer(buf, shape, chunks, blocks, typesize, **kwargs):
-    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, typesize, kwargs)
+def from_buffer(buf, shape, chunks, blocks, dtype, **kwargs):
+    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
 
     cdef b2nd_array_t *array
     _check_rc(b2nd_from_cbuffer(ctx, &array,  <void*> <char *> buf, len(buf)),
@@ -2056,14 +2061,13 @@ def from_buffer(buf, shape, chunks, blocks, typesize, **kwargs):
     return ndarray
 
 
-def asarray(ndarray, chunks, blocks,  **kwargs):
+def asarray(ndarray, chunks, blocks,  dtype, **kwargs):
     interface = ndarray.__array_interface__
     cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
     PyObject_GetBuffer(ndarray, buf, PyBUF_SIMPLE)
 
     shape = interface["shape"]
-    typesize = buf.itemsize
-    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, typesize, kwargs)
+    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
 
     cdef b2nd_array_t *array
     _check_rc(b2nd_from_cbuffer(ctx, &array, <void *> <char *> buf.buf, buf.len),

@@ -26,7 +26,7 @@ shape, chunks, blocks, typesize, codec, clevel, use_dict, nthreads, filters = (
 
 cparams = {"codec": codec, "clevel": clevel, "use_dict": use_dict,
            "nthreads": nthreads, "filters": filters, "filters_meta": [0] * len(filters)}
-a = blosc2.empty(shape, chunks=chunks, blocks=blocks, typesize=typesize,
+a = blosc2.empty(shape, chunks=chunks, blocks=blocks, dtype=np.uint8,
                  cparams=cparams, dparams={"nthreads": nthreads})
 
 print("HOLA")

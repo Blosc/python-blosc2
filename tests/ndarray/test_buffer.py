@@ -12,14 +12,16 @@ import blosc2
 import numpy as np
 
 
-@pytest.mark.parametrize("shape, chunks, blocks, typesize",
+@pytest.mark.parametrize("shape, chunks, blocks, dtype",
                          [
-                             ([450], [128], [25], 8),
-                             ([20, 134, 13], [3, 13, 5], [3, 10, 5], 4),
+                             ([450], [128], [25], "|S8"),
+                             ([20, 134, 13], [3, 13, 5], [3, 10, 5], "|S4"),
                          ])
-def test_buffer(shape, chunks, blocks, typesize):
+def test_buffer(shape, chunks, blocks, dtype):
+    dtype = np.dtype(dtype)
+    typesize = dtype.itemsize
     size = int(np.prod(shape))
     buffer = bytes(size * typesize)
-    a = blosc2.from_buffer(buffer, shape, chunks, blocks, typesize)
+    a = blosc2.from_buffer(buffer, shape, chunks, blocks, dtype=dtype)
     buffer2 = a.to_buffer()
     assert buffer == buffer2
