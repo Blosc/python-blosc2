@@ -29,6 +29,7 @@ jobs:
         python -m pip install --upgrade pip
         python -m pip install -r requirements-build.txt
         python -m pip install -r requirements-tests.txt
+        python -m pip install -r requirements-runtime.txt
 
     - name: Build
       run: |

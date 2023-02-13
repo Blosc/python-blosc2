@@ -57,6 +57,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-build.txt
           python -m pip install -r requirements-test-wheels.txt
+          python -m pip install -r requirements-runtime.txt
 
       - name: Build wheels (Windows)
         if: runner.os == 'Windows'
@@ -66,8 +67,6 @@ jobs:
           python -m cibuildwheel --output-dir wheelhouse
         env:
           CIBW_BUILD: 'cp38-win_amd64 cp39-win_amd64 cp310-win_amd64 cp311-win_amd64'
-          CIBW_BEFORE_BUILD: python -m pip install -r requirements-build.txt
-          CIBW_BEFORE_TEST: python -m pip install -r requirements-test-wheels.txt
           CIBW_TEST_COMMAND: python -m pytest -m "not heavy" {project}/tests
           CIBW_BUILD_VERBOSITY: 1
 
@@ -81,8 +80,6 @@ jobs:
           CIBW_BUILD: 'cp38-* cp39-* cp310-* cp311-*'
           CIBW_SKIP: '*-manylinux*_i686 *-musllinux_* ${{ env.CIBW_SKIP}}'
           CIBW_ARCHS_LINUX: ${{ matrix.arch }}
-          CIBW_BEFORE_BUILD: python -m pip install -r requirements-build.txt
-          CIBW_BEFORE_TEST: python -m pip install -r requirements-test-wheels.txt
           CIBW_TEST_COMMAND: python -m pytest -m "not heavy" {project}/tests
           CIBW_BUILD_VERBOSITY: 1
           CIBW_ARCHS_MACOS: "x86_64 arm64"
@@ -120,6 +117,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-build.txt
           python -m pip install -r requirements-tests.txt
+          python -m pip install -r requirements-runtime.txt
 
       - name: Build sdist
         run: |
