@@ -822,3 +822,58 @@ class SChunk(blosc2_ext.SChunk):
 
     def __dealloc__(self):
         super(SChunk, self).__dealloc__()
+
+
+def open(urlpath, mode="a", **kwargs):
+    """Open an already persistently stored :ref:`SChunk <SChunk>` or :ref:`NDArray <NDArray>`.
+
+    Parameters
+    ----------
+    urlpath: str
+        The path where the :ref:`SChunk <SChunk>` (or :ref:`NDArray <NDArray>`) is stored.
+    mode: str, optional
+        The open mode.
+
+    Other parameters
+    ----------------
+    kwargs: dict, optional
+            Keyword arguments supported:
+                cparams: dict
+                    A dictionary with the compression parameters, which are the same that can be
+                    used in the :func:`~blosc2.compress2` function. Typesize and blocksize cannot
+                    be changed.
+                dparams: dict
+                    A dictionary with the decompression parameters, which are the same that can be
+                    used in the :func:`~blosc2.decompress2` function.
+
+    Returns
+    -------
+    out: :ref:`SChunk <SChunk>` or :ref:`NDArray <NDArray>`
+        The SChunk or NDArray (in case there is a "b2nd" metalayer").
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> storage = {"contiguous": True, "urlpath": "b2frame", "cparams": {}, "dparams": {}}
+    >>> nelem = 20 * 1000
+    >>> nchunks = 5
+    >>> chunksize = nelem * 4 // nchunks
+    >>> data = np.arange(nelem, dtype="int32")
+    >>> # Create SChunk and append data
+    >>> schunk = blosc2.SChunk(chunksize=chunksize, data=data.tobytes(), mode="w", **storage)
+    >>> # Open SChunk
+    >>> sc_open = blosc2.open(urlpath=storage["urlpath"])
+    >>> for i in range(nchunks):
+    ...     dest = np.empty(nelem // nchunks, dtype=data.dtype)
+    ...     schunk.decompress_chunk(i, dest)
+    ...     dest1 = np.empty(nelem // nchunks, dtype=data.dtype)
+    ...     sc_open.decompress_chunk(i, dest1)
+    ...     np.array_equal(dest, dest1)
+    True
+    True
+    True
+    True
+    True
+    """
+    return blosc2_ext.open(urlpath, mode, **kwargs)
