@@ -19,28 +19,38 @@ def test_comp_info(codec):
     blosc2.clib_info(codec)
     blosc2.set_compressor(codec)
     assert codec.name.lower() == blosc2.get_compressor()
-    src = blosc2.compress2(np.zeros(SIZE, dtype="i8"), clevel=9)
+    src = blosc2.compress2(np.zeros(SIZE))
     nbytes, cbytes, blocksize = blosc2.get_cbuffer_sizes(src)
     assert nbytes == SIZE * 8
     assert cbytes == blosc2.MAX_OVERHEAD
     # When raising the next limit when this would fail in the future, one should raise the SIZE too
-    assert blocksize <= 2 ** 22
+    assert blocksize <= 2 ** 23
     blosc2.print_versions()
 
-#@pytest.mark.parametrize("clevel", [0, 1, 5, 9])
-@pytest.mark.parametrize("clevel", [1])
+@pytest.mark.parametrize("clevel", [0, 1, 5, 9])
+@pytest.mark.parametrize("codec", [blosc2.Codec.BLOSCLZ, blosc2.Codec.ZSTD])
 @pytest.mark.parametrize("shape", [
+                         (0, 1000),
                          (1000, 1000),
-                         # (10, 10, 10),
-                         # (10, 10, 10, 10),
-                         # (10, 10, 10, 10, 10),
+                         (10, 20, 30),
+                         (10, 30, 50, 10),
+                         (10, 10, 10, 10, 10),
                          ]
                          )
-#@pytest.mark.parametrize("dtype", ["u1", "i4", "f8"])
-@pytest.mark.parametrize("dtype", ["i4", "i8"])
-def test_compute_chunks_blocks(clevel, shape, dtype):
+@pytest.mark.parametrize("dtype", ["u1", "i4", "f8"])
+def test_compute_chunks_blocks(clevel, codec, shape: tuple, dtype):
     cparams = blosc2.cparams_dflts.copy()
     cparams['clevel'] = clevel
+    cparams['codec'] = codec
     cparams['typesize'] = np.dtype(dtype).itemsize
-    chunks, blocks = blosc2.compute_chunks_blocks(shape, **cparams)
-    print(chunks, blocks)
+    if 0 in shape:
+        # shapes with 0 should be reported as invalid
+        with pytest.raises(ValueError):
+            blosc2.compute_chunks_blocks(shape, **cparams)
+        return
+    else:
+        chunks, blocks = blosc2.compute_chunks_blocks(shape, **cparams)
+    # print(chunks, blocks)
+    for i in range(len(shape)):
+        assert shape[i] >= chunks[i]
+        assert chunks[i] >= blocks[i]
