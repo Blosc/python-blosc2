@@ -1193,6 +1193,79 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, **cparams):
     return tuple(chunks), tuple(blocks)
 
 
+def get_chunksize(blocksize):
+    # Start with a default when L3 cannot be detected by cpuinfo
+    chunksize = blocksize * 16
+    cpu_info = blosc2.cpu_info
+    if 'l3_cache_size' in cpu_info:
+        # In general, is a good idea to set the chunksize equal to L3
+        l3_cache_size = cpu_info['l3_cache_size']
+        # cpuinfo sometimes returns cache sizes as strings (like,
+        # "4096 KB"), so refuse the temptation to guess and use the
+        # value only when it is an actual int.
+        # Also, sometimes cpuinfo does not return a correct L3 size;
+        # so in general, enforcing L3 > L2 is a good sanity check.
+        l2_cache_size = cpu_info.get('l2_cache_size', "Not found")
+        if (type(l3_cache_size) is int and
+                type(l2_cache_size) is int and
+                l3_cache_size > l2_cache_size):
+            chunksize = l3_cache_size
+
+    # In Blosc2, the chunksize cannot be larger than 2 GB - BLOSC2_MAX_BUFFERSIZE
+    if chunksize > 2 ** 31 - blosc2.MAX_OVERHEAD:
+        chunksize = 2 ** 31 - blosc2.MAX_OVERHEAD
+    return chunksize
+
+
+def compute_chunks_blocks(shape, chunks=None, blocks=None, **cparams):
+    """
+    Compute the chunks and blocks for a NDArray.
+
+    Parameters
+    ----------
+    shape: tuple
+        The shape of the array.
+    chunks: tuple
+        The shape of the chunk.
+    blocks: tuple
+        The shape of the block
+    cparams: dict
+        The compression params.
+
+    Returns
+    -------
+    tuple
+        A (chunks, blocks) tuple with the computed chunks and blocks.
+    """
+
+    itemsize = cparams["typesize"]
+    if blocks is None:
+        # Get the default blocksize for the compression params
+        src = blosc2.compress2(np.zeros(1_000_000, dtype="V%d"%itemsize), **cparams)
+        _, _, blocksize = blosc2.get_cbuffer_sizes(src)
+        blockitems = blocksize // itemsize
+        # Compute the blockshape
+        blocks = [2] * len(shape)
+        while math.prod(blocks) < blockitems:
+            # Increase dims starting from the latest
+            for i in range(len(blocks) - 1, -1, -1):
+                if math.prod(blocks) >= blockitems:
+                    break
+                blocks[i] *= 2
+    if chunks is None:
+        blocksize = math.prod(blocks) * itemsize
+        chunksize = get_chunksize(blocksize)
+        chunkitems = chunksize // itemsize
+        chunks = blocks.copy()
+        while math.prod(chunks) < chunkitems:
+            # Increase dims starting from the latest
+            for i in range(len(chunks) - 1, -1, -1):
+                if math.prod(chunks) >= chunkitems:
+                    break
+                chunks[i] *= 2
+    return tuple(chunks), tuple(blocks)
+
+
 def compress2(src, **kwargs):
     """Compress :paramref:`src` with the given compression params (if given)
 
