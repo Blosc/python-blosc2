@@ -401,6 +401,7 @@ cdef extern from "b2nd.h":
     ctypedef enum:
         B2ND_MAX_DIM
         B2ND_MAX_METALAYERS
+        B2ND_DEFAULT_DTYPE_FORMAT
 
     cdef struct chunk_cache_s:
         uint8_t *data
@@ -426,12 +427,14 @@ cdef extern from "b2nd.h":
         int64_t item_block_strides[B2ND_MAX_DIM]
         int64_t block_chunk_strides[B2ND_MAX_DIM]
         int64_t chunk_array_strides[B2ND_MAX_DIM]
+        char *dtype
+        int8_t dtype_format
 
     ctypedef struct b2nd_context_t:
         pass
     b2nd_context_t *b2nd_create_ctx(blosc2_storage *b2_storage, int8_t ndim, int64_t *shape,
                                     int32_t *chunkshape, int32_t *blockshape, char *dtype,
-                                    blosc2_metalayer *metalayers, int32_t nmetalayers)
+                                    int8_t dtype_format, blosc2_metalayer *metalayers, int32_t nmetalayers)
     int b2nd_free_ctx(b2nd_context_t *ctx)
 
     int b2nd_empty(b2nd_context_t *ctx, b2nd_array_t **array)
@@ -475,6 +478,7 @@ VERSION_DATE = (<char*>BLOSC2_VERSION_DATE).decode()
 MIN_HEADER_LENGTH = BLOSC_MIN_HEADER_LENGTH
 EXTENDED_HEADER_LENGTH = BLOSC_EXTENDED_HEADER_LENGTH
 
+DEFAULT_DTYPE_FORMAT = B2ND_DEFAULT_DTYPE_FORMAT
 
 def _check_comp_length(comp_name, comp_len):
     if comp_len < BLOSC_MIN_HEADER_LENGTH:
@@ -1548,7 +1552,7 @@ def open(urlpath, mode, **kwargs):
 
     meta1 = "b2nd"
     meta1 = meta1.encode("utf-8") if isinstance(meta1, str) else meta1
-    meta2 = "b2nd"
+    meta2 = "caterva"
     meta2 = meta2.encode("utf-8") if isinstance(meta2, str) else meta2
     is_ndarray = blosc2_meta_exists(schunk, meta1) >= 0 or blosc2_meta_exists(schunk, meta2) >= 0
 
@@ -1942,6 +1946,7 @@ cdef class NDArray:
 
 
 cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
+    # This is used only in constructors, dtype will always have NumPy format
     dtype = np.dtype(dtype)
     typesize = dtype.itemsize
     if dtype.kind == 'V':
@@ -1991,7 +1996,7 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
 
     if meta is None:
         return b2nd_create_ctx(&storage, len(shape), shape_, chunkshape, blockshape, str_dtype,
-                              NULL, 0)
+                              B2ND_DEFAULT_DTYPE_FORMAT, NULL, 0)
     else:
         nmetalayers = len(meta)
         for i, (name, content) in enumerate(meta.items()):
@@ -2003,7 +2008,7 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
             metalayers[i].content_len = len(content)
 
         return b2nd_create_ctx(&storage, len(shape), shape_, chunkshape, blockshape, str_dtype,
-                              metalayers, nmetalayers)
+                              B2ND_DEFAULT_DTYPE_FORMAT, metalayers, nmetalayers)
 
 
 def empty(shape, chunks, blocks, dtype, **kwargs):
