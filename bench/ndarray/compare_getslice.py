@@ -68,7 +68,7 @@ content = np.random.normal(0, 1, int(np.prod(shape))).reshape(shape)
 
 # Create and fill a b2nd array using a block iterator
 t0 = time()
-a = blosc2.empty(shape, typesize=content.itemsize, chunks=chunks, blocks=blocks,
+a = blosc2.empty(shape, dtype=content.dtype, chunks=chunks, blocks=blocks,
                  urlpath=fname_b2nd, cparams=cparams)
 a[:] = content
 acratio = a.schunk.cratio

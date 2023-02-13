@@ -61,6 +61,9 @@ class NDArray(blosc2_ext.NDArray):
     def dtype(self):
         """Data-type of the array’s elements."""
         meta = self.schunk.meta["b2nd"]
+        dtype_format = int(meta[-2])
+        if dtype_format != blosc2_ext.DEFAULT_DTYPE_FORMAT:
+            raise ValueError("Only NumPy dtypes are supported")
         dtype = meta[-1]
 
         return np.dtype(dtype)
