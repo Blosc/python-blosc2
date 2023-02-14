@@ -5,12 +5,12 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
-
-
+import math
 import os
 import pickle
 import subprocess
 import sys
+import numpy as np
 
 import blosc2
 from blosc2 import blosc2_ext
@@ -983,21 +983,8 @@ def detect_number_of_cores():
     out : int
         The number of cores in this system.
     """
-    # Linux, Unix and MacOS:
-    if hasattr(os, "sysconf"):
-        if "SC_NPROCESSORS_ONLN" in os.sysconf_names:
-            # Linux & Unix:
-            ncpus = os.sysconf("SC_NPROCESSORS_ONLN")
-            if isinstance(ncpus, int) and ncpus > 0:
-                return ncpus
-        else:  # OSX:
-            return int(subprocess.run(("sysctl", "-n", "hw.ncpu"),
-                                      stdout=subprocess.PIPE).stdout)
-    # Windows:
-    if "NUMBER_OF_PROCESSORS" in os.environ:
-        ncpus = int(os.environ["NUMBER_OF_PROCESSORS"])
-        if ncpus > 0:
-            return ncpus
+    if 'count' in blosc2.cpu_info:
+        return blosc2.cpu_info['count']
     return 1  # Default
 
 
@@ -1061,6 +1048,149 @@ def get_blocksize():
         The size in bytes of the internal block size.
     """
     return blosc2_ext.get_blocksize()
+
+
+def get_cbuffer_sizes(src):
+    """
+    Get the sizes of a compressed `src` buffer.
+
+    Parameters
+    ----------
+    src: bytes-like object
+        A compressed buffer. Must be a bytes-like object
+        that supports the Python Buffer Protocol, like bytes,
+        bytearray, memoryview, or numpy.ndarray.
+
+    Returns
+    -------
+    (nbytes, cbytes, blocksize): tuple
+        A tuple with the `nbytes`, `cbytes` and `blocksize` for the
+        `src` compressed buffer.
+    """
+    return blosc2_ext.cbuffer_sizes(src)
+
+# Compute a decent value for chunksize based on L3 and/or heuristics
+def get_chunksize(blocksize, l3_minimum=2**21, l3_maximum=2**25):
+    cpu_info = blosc2.cpu_info
+    if 'l3_cache_size' in cpu_info:
+        # In general, is a good idea to set the chunksize equal to L3
+        l3_cache_size = cpu_info['l3_cache_size']
+        # cpuinfo sometimes returns cache sizes as strings (like,
+        # "4096 KB"), so refuse the temptation to guess and use the
+        # value only when it is an actual int.
+        # Also, sometimes cpuinfo does not return a correct L3 size;
+        # so in general, enforcing L3 > L2 is a good sanity check.
+        l2_cache_size = cpu_info.get('l2_cache_size', "Not found")
+        if (type(l3_cache_size) is int and
+                type(l2_cache_size) is int and
+                l3_cache_size > l2_cache_size):
+            chunksize = l3_cache_size
+    else:
+        # Find a decent default when L3 cannot be detected by cpuinfo
+        # Based mainly in heuristics
+        chunksize = blocksize
+        if blocksize * 16 < l3_maximum:
+            chunksize = blocksize * 16
+        # This should be at least the size of L2
+        l2_cache_size = cpu_info.get('l2_cache_size', "Not found")
+        if (type(l2_cache_size) is int and
+            l2_cache_size > chunksize):
+            chunksize = l2_cache_size
+
+    # Ensure a minimum
+    if chunksize < l3_minimum:
+        chunksize = l3_minimum
+
+    # In Blosc2, the chunksize cannot be larger than 2 GB - BLOSC2_MAX_BUFFERSIZE
+    if chunksize > 2 ** 31 - blosc2.MAX_OVERHEAD:
+        chunksize = 2 ** 31 - blosc2.MAX_OVERHEAD
+
+    return chunksize
+
+
+def compute_chunks_blocks(shape, chunks=None, blocks=None, **cparams):
+    """
+    Compute chunks and blocks for a NDArray.
+
+    Parameters
+    ----------
+    shape: tuple
+        The shape of the array.
+    chunks: tuple
+        The shape of the chunk.
+    blocks: tuple
+        The shape of the block.
+    cparams: dict
+        The compression params.
+
+    Returns
+    -------
+    tuple
+        A (chunks, blocks) tuple with the computed chunks and blocks.
+    """
+
+    def compute_partition(nitems, parts, maxs, blocks=False):
+        if 0 in maxs:
+            raise ValueError("shapes with 0 dims are not supported")
+        if nitems == 0:
+            raise ValueError("partitions with 0 dims are not supported")
+        parts = list(parts)
+        while math.prod(parts) <= nitems:
+            nitems_prev = math.prod(parts)
+            # Increase dims starting from the latest
+            for i in reversed(range(len(parts))):
+                if blocks and parts[i] > maxs[i]:
+                    raise ValueError("blocks should be smaller than chunks or shape in any dim!"
+                                     " If you do want this blocks, please specify a chunks too.")
+                if nitems_prev > nitems:
+                    break
+                if parts[i] * 2 <= maxs[i]:
+                    if math.prod(parts) * 2 <= nitems:
+                        parts[i] *= 2
+                else:
+                    parts[i] = maxs[i]
+            nitems_new = math.prod(parts)
+            if nitems_new == nitems_prev:
+                # Not progressing anymore
+                break
+        return parts
+
+    if blocks and len(blocks) != len(shape):
+        raise ValueError("blocks should have the same length than shape")
+    if chunks and len(chunks) != len(shape):
+        raise ValueError("chunks should have the same length than shape")
+
+    if not cparams:
+        cparams = blosc2.cparams_dflts.copy()
+    itemsize = cparams["typesize"]
+
+    if blocks is None:
+        # Get the default blocksize for the compression params
+        # Using an 8 MB buffer should be enough for detecting the whole range of blocksizes
+        nitems = 2 ** 23 // itemsize
+        src = blosc2.compress2(np.zeros(nitems, dtype="V%d" % itemsize), **cparams)
+        _, _, blocksize = blosc2.get_cbuffer_sizes(src)
+        # Starting point for the guess
+        if chunks is None:
+            blocks = [1 if shape[i] == 1 else 2 for i in range(len(shape))]
+        else:
+            blocks = [1 if chunks[i] == 1 else 2 for i in range(len(shape))]
+    else:
+        blocksize = math.prod(blocks) * itemsize
+    # Logic here is complex.  We normalize blocksize, even if user specify it.
+    # We do that in order to compute saner automatic chunks later.
+    if chunks is None:
+        maxs = shape
+    else:
+        maxs = [min(els) for els in zip(chunks, shape)]
+    blocks = compute_partition(blocksize // itemsize, blocks, maxs, blocks=True)
+
+    if chunks is None:
+        blocksize = math.prod(blocks) * itemsize
+        chunksize = get_chunksize(blocksize)
+        chunks = compute_partition(chunksize // itemsize, blocks, shape)
+
+    return tuple(chunks), tuple(blocks)
 
 
 def compress2(src, **kwargs):

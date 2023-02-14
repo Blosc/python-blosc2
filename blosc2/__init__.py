@@ -7,6 +7,7 @@
 #######################################################################
 
 from enum import Enum
+import cpuinfo
 
 
 class Codec(Enum):
@@ -45,14 +46,19 @@ from .blosc2_ext import (
     EXTENDED_HEADER_LENGTH,
     MAX_BUFFERSIZE,
     MAX_TYPESIZE,
+    MAX_OVERHEAD,
     MIN_HEADER_LENGTH,
     VERSION_DATE,
     VERSION_STRING,
 )
 
+
+cpu_info = cpuinfo.get_cpu_info()
+
 # Public API for container module
 from .core import (
     clib_info,
+    compute_chunks_blocks,
     compress,
     compress2,
     compressor_list,
@@ -63,6 +69,7 @@ from .core import (
     get_blocksize,
     get_clib,
     get_compressor,
+    get_cbuffer_sizes,
     load_array,
     load_tensor,
     pack,
@@ -185,5 +192,7 @@ __all__ = [
     "SChunk",
     "open",
     "remove_urlpath",
-    "nthreads"
+    "nthreads",
+    "compute_chunks_blocks",
+    "cpu_info",
 ]
