@@ -1119,7 +1119,7 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, **cparams):
     chunks: tuple
         The shape of the chunk.
     blocks: tuple
-        The shape of the block
+        The shape of the block.
     cparams: dict
         The compression params.
 
@@ -1129,7 +1129,7 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, **cparams):
         A (chunks, blocks) tuple with the computed chunks and blocks.
     """
 
-    def compute_partition(nitems, parts, maxs):
+    def compute_partition(nitems, parts, maxs, blocks=False):
         if 0 in maxs:
             raise ValueError("shapes with 0 dims are not supported")
         if nitems == 0:
@@ -1139,6 +1139,9 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, **cparams):
             nitems_prev = math.prod(parts)
             # Increase dims starting from the latest
             for i in reversed(range(len(parts))):
+                if blocks and parts[i] > maxs[i]:
+                    raise ValueError("blocks should be smaller than chunks or shape in any dim!"
+                                     " If you do want this blocks, please specify a chunks too.")
                 if nitems_prev > nitems:
                     break
                 if parts[i] * 2 <= maxs[i]:
@@ -1152,6 +1155,11 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, **cparams):
                 break
         return parts
 
+    if blocks and len(blocks) != len(shape):
+        raise ValueError("blocks should have the same length than shape")
+    if chunks and len(chunks) != len(shape):
+        raise ValueError("chunks should have the same length than shape")
+
     if not cparams:
         cparams = blosc2.cparams_dflts.copy()
     itemsize = cparams["typesize"]
@@ -1162,7 +1170,11 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, **cparams):
         nitems = 2 ** 23 // itemsize
         src = blosc2.compress2(np.zeros(nitems, dtype="V%d" % itemsize), **cparams)
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
-        blocks = [2] * len(shape)
+        # Starting point for the guess
+        if chunks is None:
+            blocks = [1 if shape[i] == 1 else 2 for i in range(len(shape))]
+        else:
+            blocks = [1 if chunks[i] == 1 else 2 for i in range(len(shape))]
     else:
         blocksize = math.prod(blocks) * itemsize
     # Logic here is complex.  We normalize blocksize, even if user specify it.
@@ -1171,7 +1183,7 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, **cparams):
         maxs = shape
     else:
         maxs = [min(els) for els in zip(chunks, shape)]
-    blocks = compute_partition(blocksize // itemsize, blocks, maxs)
+    blocks = compute_partition(blocksize // itemsize, blocks, maxs, blocks=True)
 
     if chunks is None:
         blocksize = math.prod(blocks) * itemsize
