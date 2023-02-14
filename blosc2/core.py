@@ -1108,62 +1108,69 @@ def get_chunksize(blocksize, l3_minimum=2**21, l3_maximum=2**25):
 
     return chunksize
 
+# Compute chunks and blocks partitions
+def compute_partition(nitems, parts, maxs, blocks=False):
+    if 0 in maxs:
+        raise ValueError("shapes with 0 dims are not supported")
+    if nitems == 0:
+        raise ValueError("partitions with 0 dims are not supported")
+    parts = list(parts)
+    while math.prod(parts) <= nitems:
+        nitems_prev = math.prod(parts)
+        # Increase dims starting from the latest
+        for i in reversed(range(len(parts))):
+            if blocks and parts[i] > maxs[i]:
+                raise ValueError("blocks should be smaller than chunks or shape in any dim!"
+                                 " If you do want this blocks, please specify a chunks too.")
+            if nitems_prev > nitems:
+                break
+            if parts[i] * 2 <= maxs[i]:
+                if math.prod(parts) * 2 <= nitems:
+                    parts[i] *= 2
+            else:
+                parts[i] = maxs[i]
+        nitems_new = math.prod(parts)
+        if nitems_new == nitems_prev:
+            # Not progressing anymore
+            break
+    return parts
 
-def compute_chunks_blocks(shape, chunks=None, blocks=None, **cparams):
+
+def compute_chunks_blocks(shape, chunks=None, blocks=None, dtype=np.uint8, **kwargs):
     """
-    Compute chunks and blocks for a NDArray.
+    Compute educated guesses for chunks and blocks of a NDArray.
 
     Parameters
     ----------
     shape: tuple
         The shape of the array.
     chunks: tuple
-        The shape of the chunk.
+        The shape of the chunk.  If None, a guess is computed based on cache sizes
+        and heuristics.
     blocks: tuple
-        The shape of the block.
+        The shape of the block.  If None, a guess is computed based on cache sizes
+        and heuristics.
     cparams: dict
         The compression params.
 
     Returns
     -------
     tuple
-        A (chunks, blocks) tuple with the computed chunks and blocks.
+        A (chunks, blocks) tuple with the computed guesses for chunks and blocks.
     """
 
-    def compute_partition(nitems, parts, maxs, blocks=False):
-        if 0 in maxs:
-            raise ValueError("shapes with 0 dims are not supported")
-        if nitems == 0:
-            raise ValueError("partitions with 0 dims are not supported")
-        parts = list(parts)
-        while math.prod(parts) <= nitems:
-            nitems_prev = math.prod(parts)
-            # Increase dims starting from the latest
-            for i in reversed(range(len(parts))):
-                if blocks and parts[i] > maxs[i]:
-                    raise ValueError("blocks should be smaller than chunks or shape in any dim!"
-                                     " If you do want this blocks, please specify a chunks too.")
-                if nitems_prev > nitems:
-                    break
-                if parts[i] * 2 <= maxs[i]:
-                    if math.prod(parts) * 2 <= nitems:
-                        parts[i] *= 2
-                else:
-                    parts[i] = maxs[i]
-            nitems_new = math.prod(parts)
-            if nitems_new == nitems_prev:
-                # Not progressing anymore
-                break
-        return parts
+    if chunks is not None and blocks is not None:
+        return chunks, blocks
 
     if blocks and len(blocks) != len(shape):
         raise ValueError("blocks should have the same length than shape")
     if chunks and len(chunks) != len(shape):
         raise ValueError("chunks should have the same length than shape")
 
+    cparams = kwargs['cparams'] if 'cparams' in kwargs else {}
     if not cparams:
         cparams = blosc2.cparams_dflts.copy()
-    itemsize = cparams["typesize"]
+    itemsize = cparams["typesize"] = np.dtype(dtype).itemsize
 
     if blocks is None:
         # Get the default blocksize for the compression params

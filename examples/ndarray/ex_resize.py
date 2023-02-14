@@ -12,15 +12,12 @@ import numpy as np
 np.random.seed(123)
 
 shape = (8, 8)
-chunks = (4, 4)
-blocks = (2, 2)
 cparams = {"nthreads": 2}
 dparams = {"nthreads": 2}
 
 
 fill_value = b"1"
-a = blosc2.full(shape, fill_value=fill_value, chunks=chunks, blocks=blocks,
-                cparams=cparams, dparams=dparams)
+a = blosc2.full(shape, fill_value=fill_value, cparams=cparams, dparams=dparams)
 print(a.schunk.cparams)
 print(a.schunk.dparams)
 a.resize((10, 10))

@@ -1,7 +1,7 @@
 import ndindex
 
 import numpy as np
-from blosc2 import blosc2_ext
+from blosc2 import blosc2_ext, compute_chunks_blocks
 
 from .info import InfoReporter
 from .SChunk import SChunk
@@ -180,7 +180,7 @@ class NDArray(blosc2_ext.NDArray):
         super(NDArray, self).squeeze()
 
 
-def empty(shape, chunks, blocks, dtype=np.uint8, **kwargs):
+def empty(shape, chunks=None, blocks=None, dtype=np.uint8, **kwargs):
     """Create an empty array.
 
     Parameters
@@ -202,7 +202,7 @@ def empty(shape, chunks, blocks, dtype=np.uint8, **kwargs):
     kwargs: dict, optional
         Keyword arguments supported:
 
-        The keyword arguments supported are the same than for the
+        The keyword arguments supported are the same as for the
         :obj:`SChunk.__init__ <blosc2.SChunk.SChunk.__init__>`.
 
     Returns
@@ -210,11 +210,12 @@ def empty(shape, chunks, blocks, dtype=np.uint8, **kwargs):
     out: :ref:`NDArray <NDArray>`
         A :ref:`NDArray <NDArray>` is returned.
     """
+    chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
     arr = blosc2_ext.empty(shape, chunks, blocks, dtype, **kwargs)
     return arr
 
 
-def zeros(shape, chunks, blocks, dtype=np.uint8, **kwargs):
+def zeros(shape, chunks=None, blocks=None, dtype=np.uint8, **kwargs):
     """Create an array, with zero being used as the default value
     for uninitialized portions of the array.
 
@@ -226,11 +227,12 @@ def zeros(shape, chunks, blocks, dtype=np.uint8, **kwargs):
     out: :ref:`NDArray <NDArray>`
         A :ref:`NDArray <NDArray>` is returned.
     """
+    chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
     arr = blosc2_ext.zeros(shape, chunks, blocks, dtype, **kwargs)
     return arr
 
 
-def full(shape, chunks, blocks, fill_value, dtype=None, **kwargs):
+def full(shape, fill_value, chunks=None, blocks=None, dtype=None, **kwargs):
     """Create an array, with :paramref:`fill_value` being used as the default value
     for uninitialized portions of the array.
 
@@ -238,19 +240,9 @@ def full(shape, chunks, blocks, fill_value, dtype=None, **kwargs):
     ----------
     shape: tuple or list
         The shape for the final array.
-    chunks: tuple or list
-        The chunk shape.
-    blocks: tuple or list
-        The block shape. This will override the `blocksize`
-        in the cparams in case they are passed.
     fill_value: bytes
         Default value to use for uninitialized portions of the array.
         Its size will override the `typesize`
-        in the cparams in case they are passed.
-    dtype: np.dtype
-        The ndarray dtype in NumPy format. By default this will
-        be taken from the :paramref:`fill_value`.
-        This will override the `typesize`
         in the cparams in case they are passed.
 
     Other Parameters
@@ -267,11 +259,12 @@ def full(shape, chunks, blocks, fill_value, dtype=None, **kwargs):
         dtype = np.dtype(f"S{len(fill_value)}")
     if dtype is None:
         dtype = np.dtype(type(fill_value))
+    chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
     arr = blosc2_ext.full(shape, chunks, blocks, fill_value, dtype, **kwargs)
     return arr
 
 
-def from_buffer(buffer, shape, chunks, blocks, dtype=np.dtype("|S1"), **kwargs):
+def from_buffer(buffer, shape, chunks=None, blocks=None, dtype=np.dtype("|S1"), **kwargs):
     """Create an array out of a buffer.
 
     Parameters
@@ -280,15 +273,6 @@ def from_buffer(buffer, shape, chunks, blocks, dtype=np.dtype("|S1"), **kwargs):
         The buffer of the data to populate the container.
     shape: tuple or list
         The shape for the final container.
-    chunks: tuple or list
-        The chunk shape.
-    blocks: tuple or list
-        The block shape. This will override the `blocksize`
-        in the cparams in case they are passed.
-    dtype: np.dtype
-        The ndarray dtype in NumPy format. Default is `np.uint8`.
-        This will override the `typesize`
-        in the cparams in case they are passed.
 
     Other Parameters
     ----------------
@@ -300,6 +284,7 @@ def from_buffer(buffer, shape, chunks, blocks, dtype=np.dtype("|S1"), **kwargs):
     out: :ref:`NDArray <NDArray>`
         A :ref:`NDArray <NDArray>` is returned.
     """
+    chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
     arr = blosc2_ext.from_buffer(buffer, shape, chunks, blocks, dtype, **kwargs)
     return arr
 
@@ -326,18 +311,13 @@ def copy(array, **kwargs):
     return arr
 
 
-def asarray(array, chunks, blocks, dtype, **kwargs):
+def asarray(array, chunks=None, blocks=None, dtype=np.uint8, **kwargs):
     """Convert the input to an array.
 
     Parameters
     ----------
     array: array_like
         An array supporting the python buffer protocol and the numpy array interface.
-    chunks: tuple or list
-        The chunk shape.
-    blocks: tuple or list
-        The block shape. This will override the `blocksize`
-        in the cparams in case they are passed.
 
     Other Parameters
     ----------------
@@ -349,4 +329,5 @@ def asarray(array, chunks, blocks, dtype, **kwargs):
     out: :ref:`NDArray <NDArray>`
         An array interpretation of :paramref:`array`.
     """
+    chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, dtype, **kwargs)
     return blosc2_ext.asarray(array, chunks, blocks, dtype, **kwargs)

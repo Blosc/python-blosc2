@@ -1934,12 +1934,13 @@ cdef class NDArray:
         return buffer
 
     def copy(self, **kwargs):
-        chunks = kwargs.get("chunks", self.chunks)
-        blocks = kwargs.get("blocks", self.blocks)
+        chunks = kwargs.pop("chunks", self.chunks)
+        blocks = kwargs.pop("blocks", self.blocks)
         if "dtype" not in kwargs:
             dtype = self.dtype
         else:
-            dtype = kwargs.get("dtype")
+            dtype = kwargs.pop("dtype")
+        chunks, blocks = blosc2.compute_chunks_blocks(self.shape, chunks, blocks, dtype, **kwargs)
         cdef b2nd_context_t *ctx = create_b2nd_context(self.shape, chunks, blocks, dtype, kwargs)
 
         cdef b2nd_array_t *array
@@ -2090,7 +2091,7 @@ def from_buffer(buf, shape, chunks, blocks, dtype, **kwargs):
     return ndarray
 
 
-def asarray(ndarray, chunks, blocks,  dtype, **kwargs):
+def asarray(ndarray, chunks, blocks, dtype, **kwargs):
     interface = ndarray.__array_interface__
     cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
     PyObject_GetBuffer(ndarray, buf, PyBUF_SIMPLE)
