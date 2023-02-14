@@ -930,7 +930,7 @@ def get_clib(bytesobj):
     out : str
         The name of the compression library.
     """
-    return blosc2_ext.get_clib(bytesobj).decode()
+    return blosc2_ext.get_clib(bytesobj).decode("utf-8")
 
 
 def get_compressor():
@@ -947,7 +947,7 @@ def get_compressor():
     :func:`~blosc2.compressor_list`
 
     """
-    return blosc2_ext.get_compressor().decode()
+    return blosc2_ext.get_compressor().decode("utf-8")
 
 
 def set_releasegil(gilstate):
@@ -1006,7 +1006,7 @@ codecs = compressor_list()
 # Map for compression libraries and versions
 clib_versions = {}
 for codec, value in blosc2.Codec.__members__.items():
-    clib_versions[codec] = clib_info(value)[1].decode()
+    clib_versions[codec] = clib_info(value)[1].decode("utf-8")
 
 
 def os_release_pretty_name():
