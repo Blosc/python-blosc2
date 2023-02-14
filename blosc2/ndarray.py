@@ -57,17 +57,6 @@ class NDArray(blosc2_ext.NDArray):
         items += [("Comp. ratio", f"{self.schunk.cratio:.2f}")]
         return items
 
-    @property
-    def dtype(self):
-        """Data-type of the array’s elements."""
-        meta = self.schunk.meta["b2nd"]
-        dtype_format = int(meta[-2])
-        if dtype_format != blosc2_ext.DEFAULT_DTYPE_FORMAT:
-            raise ValueError("Only NumPy dtypes are supported")
-        dtype = meta[-1]
-
-        return np.dtype(dtype)
-
     def __getitem__(self, key):
         """ Get a (multidimensional) slice as specified in key.
 
@@ -107,6 +96,12 @@ class NDArray(blosc2_ext.NDArray):
         key, _ = process_key(key, self.shape)
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
+
+        if isinstance(value, (int, float, bool)):
+            shape = [sp - st for sp, st in zip(stop, start)]
+            value = np.full(shape, value, dtype=self.dtype)
+        elif isinstance(value, NDArray):
+            value = value[...]
 
         return super(NDArray, self).set_slice(key, value)
 
@@ -178,7 +173,7 @@ class NDArray(blosc2_ext.NDArray):
         key, mask = process_key(key, self.shape)
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
-        return super(NDArray, self).get_slice(self, key, mask, **kwargs)
+        return super(NDArray, self).get_slice(key, mask, **kwargs)
 
     def squeeze(self):
         """Remove the 1's in array's shape."""
