@@ -32,3 +32,19 @@ def test_buffer(shape, chunks, blocks, dtype, urlpath, contiguous, meta):
     assert buffer == buffer2
 
     blosc2.remove_urlpath(urlpath)
+
+@pytest.mark.parametrize("shape, dtype",
+                         [
+                             ([450], "|S8"),
+                             ([20, 134, 13], np.complex128),
+                             ([45], "|S4"),
+                             ([30, 29], np.int16),
+                         ])
+def test_buffer_simple(shape, dtype):
+    dtype = np.dtype(dtype)
+    typesize = dtype.itemsize
+    size = int(np.prod(shape))
+    buffer = bytes(size * typesize)
+    a = blosc2.from_buffer(buffer, shape, dtype=dtype)
+    buffer2 = a.to_buffer()
+    assert buffer == buffer2

@@ -28,7 +28,8 @@ import numpy as np
                          ])
 def test_full(shape, chunks, blocks, fill_value, cparams, dparams, dtype, urlpath, contiguous):
     blosc2.remove_urlpath(urlpath)
-    a = blosc2.full(shape, chunks, blocks, fill_value, dtype=dtype, cparams=cparams, dparams=dparams,
+    a = blosc2.full(shape, fill_value, chunks=chunks, blocks=blocks,
+                    dtype=dtype, cparams=cparams, dparams=dparams,
                     urlpath=urlpath, contiguous=contiguous)
     assert a.schunk.dparams == dparams
     if isinstance(fill_value, bytes):
@@ -43,3 +44,23 @@ def test_full(shape, chunks, blocks, fill_value, cparams, dparams, dtype, urlpat
         np.array_equal(a[...], b)
 
     blosc2.remove_urlpath(urlpath)
+
+@pytest.mark.parametrize("shape, fill_value, dtype",
+                         [
+                             ((100, 1230), b"0123", None),
+                             ((23, 34), b"sun", None),
+                             ((80, 51, 60), 3.14, "f8"),
+                             ((13, 13), 123456789, None)
+                         ])
+def test_full_simple(shape, fill_value, dtype):
+    a = blosc2.full(shape, fill_value)
+    if isinstance(fill_value, bytes):
+        dtype = np.dtype(f"S{len(fill_value)}")
+    assert a.dtype == np.dtype(dtype) if dtype is not None else np.dtype(np.uint8)
+
+    b = np.full(shape=shape, fill_value=fill_value, dtype=a.dtype)
+    tol = 1e-5 if dtype is np.float32 else 1e-14
+    if dtype in [np.float32, np.float64]:
+        np.testing.assert_allclose(a[...], b, rtol=tol, atol=tol)
+    else:
+        np.array_equal(a[...], b)

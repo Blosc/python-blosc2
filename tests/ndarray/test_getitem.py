@@ -40,3 +40,13 @@ def test_getitem_numpy(shape, chunks, blocks, slices, dtype):
     a_slice = a[slices]
 
     np.testing.assert_almost_equal(a_slice, nparray_slice)
+
+@pytest.mark.parametrize(argnames, argvalues)
+def test_getitem_simple(shape, chunks, blocks, slices, dtype):
+    size = int(np.prod(shape))
+    nparray = np.arange(size, dtype=dtype).reshape(shape)
+    a = blosc2.asarray(nparray, dtype=dtype)
+    nparray_slice = nparray[slices]
+    a_slice = a[slices]
+
+    np.testing.assert_almost_equal(a_slice, nparray_slice)
