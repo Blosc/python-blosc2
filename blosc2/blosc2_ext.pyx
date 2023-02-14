@@ -1520,7 +1520,10 @@ def meta__getitem__(self, name):
     cdef uint8_t *content
     cdef int32_t content_len
     n = blosc2_meta_get(schunk, name, &content, &content_len)
-    return PyBytes_FromStringAndSize(<char *> content, content_len)
+    res = PyBytes_FromStringAndSize(<char *> content, content_len)
+    free(content)
+
+    return res
 
 def meta__setitem__(self, name, content):
     cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
@@ -1739,7 +1742,6 @@ def _check_rc(rc, message):
 # NDArray
 cdef class NDArray:
     cdef b2nd_array_t* array
-    cdef b2nd_context_t *ctx
 
     def __init__(self, array):
         self.array = <b2nd_array_t *> PyCapsule_GetPointer(array, <char *> "b2nd_array_t*")
@@ -1837,22 +1839,29 @@ cdef class NDArray:
         """
         return self.array.chunknitems * self.array.sc.typesize
 
+    @property
+    def dtype(self):
+        """Data-type of the array’s elements."""
+        if self.array.dtype_format != B2ND_DEFAULT_DTYPE_FORMAT:
+            raise ValueError("Only NumPy dtypes are supported")
+        cdef char *dtype = self.array.dtype
+
+        return np.dtype(dtype.decode())
+
     def get_slice_numpy(self, arr, key):
         start, stop = key
 
         cdef int64_t[B2ND_MAX_DIM] start_, stop_
-        cdef int64_t buffersize_ = self.array.sc.typesize
         cdef int64_t[B2ND_MAX_DIM] buffershape_
         for i in range(self.ndim):
             start_[i] = start[i]
             stop_[i] = stop[i]
             buffershape_[i] = stop_[i] - start_[i]
-            buffersize_ *= buffershape_[i]
 
         cdef Py_buffer view
         PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
         _check_rc(b2nd_get_slice_cbuffer(self.array, start_, stop_,
-                                         <void *> view.buf, buffershape_, buffersize_),
+                                         <void *> view.buf, buffershape_, view.len),
                   "Error while getting the buffer")
         PyBuffer_Release(&view)
 
@@ -1861,7 +1870,7 @@ cdef class NDArray:
     def get_slice(self, key, mask, **kwargs):
         # shape will be overwritten by get_slice
         cdef b2nd_context_t *ctx = create_b2nd_context(self.shape, self.chunks, self.blocks,
-                                                       self.schunk.typesize, kwargs)
+                                                       self.dtype, kwargs)
         ndim = self.ndim
         start, stop = key
         cdef int64_t[B2ND_MAX_DIM] start_, stop_
@@ -1876,7 +1885,7 @@ cdef class NDArray:
         cdef c_bool mask_[B2ND_MAX_DIM]
         for i in range(ndim):
             mask_[i] = mask[i]
-        _check_rc(b2nd_squeeze_index(array, mask_))
+        _check_rc(b2nd_squeeze_index(array, mask_), "Error while squeezing sliced array")
         ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                                  _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
 
@@ -1942,7 +1951,7 @@ cdef class NDArray:
 
     def __dealloc__(self):
         if self.array != NULL:
-            b2nd_free(self.array)
+            _check_rc(b2nd_free(self.array), "Error while freeing the array")
 
 
 cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
@@ -2038,6 +2047,7 @@ def zeros(shape, chunks, blocks, dtype, **kwargs):
 def full(shape, chunks, blocks, fill_value, dtype, **kwargs):
     cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
 
+    dtype = np.dtype(dtype)
     nparr = np.array([fill_value], dtype=dtype)
     cdef Py_buffer *val = <Py_buffer *> malloc(sizeof(Py_buffer))
     PyObject_GetBuffer(nparr, val, PyBUF_SIMPLE)

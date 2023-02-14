@@ -12,16 +12,23 @@ import blosc2
 import numpy as np
 
 
-@pytest.mark.parametrize("shape, chunks, blocks, dtype",
+@pytest.mark.parametrize("shape, chunks, blocks, dtype, urlpath, contiguous, meta",
                          [
-                             ([450], [128], [25], "|S8"),
-                             ([20, 134, 13], [3, 13, 5], [3, 10, 5], "|S4"),
+                             ([450], [128], [25], "|S8", "from_buffer.b2nd", True, None),
+                             ([20, 134, 13], [3, 13, 5], [3, 10, 5], np.complex128, "from_buffer.b2nd",
+                              False, {"123": 123}),
+                             ([45], [12], [6], "|S4", None, True, None),
+                             ([30, 29], [15, 28], [5, 27], np.int16, None, False, {"2": 123, "meta2": "abcdef"}),
                          ])
-def test_buffer(shape, chunks, blocks, dtype):
+def test_buffer(shape, chunks, blocks, dtype, urlpath, contiguous, meta):
+    blosc2.remove_urlpath(urlpath)
+
     dtype = np.dtype(dtype)
     typesize = dtype.itemsize
     size = int(np.prod(shape))
     buffer = bytes(size * typesize)
-    a = blosc2.from_buffer(buffer, shape, chunks, blocks, dtype=dtype)
+    a = blosc2.from_buffer(buffer, shape, chunks, blocks, dtype=dtype, urpath=urlpath, contiguous=contiguous, meta=meta)
     buffer2 = a.to_buffer()
     assert buffer == buffer2
+
+    blosc2.remove_urlpath(urlpath)
