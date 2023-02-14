@@ -1184,6 +1184,7 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, **cparams):
     else:
         maxs = [min(els) for els in zip(chunks, shape)]
     blocks = compute_partition(blocksize // itemsize, blocks, maxs, blocks=True)
+<<<<<<< HEAD
 
     if chunks is None:
         blocksize = math.prod(blocks) * itemsize
