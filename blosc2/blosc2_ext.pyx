@@ -473,8 +473,8 @@ ctypedef struct filler_udata:
 
 MAX_TYPESIZE = BLOSC_MAX_TYPESIZE
 MAX_BUFFERSIZE = BLOSC2_MAX_BUFFERSIZE
-VERSION_STRING = (<char*>BLOSC2_VERSION_STRING).decode()
-VERSION_DATE = (<char*>BLOSC2_VERSION_DATE).decode()
+VERSION_STRING = (<char*>BLOSC2_VERSION_STRING).decode("utf-8")
+VERSION_DATE = (<char*>BLOSC2_VERSION_DATE).decode("utf-8")
 MIN_HEADER_LENGTH = BLOSC_MIN_HEADER_LENGTH
 EXTENDED_HEADER_LENGTH = BLOSC_EXTENDED_HEADER_LENGTH
 
@@ -1365,7 +1365,7 @@ cdef int general_postfilter(blosc2_postfilter_params *params):
     input = np.PyArray_SimpleNewFromData(nd, &dims, udata.input_cdtype, params.input)
     output = np.PyArray_SimpleNewFromData(nd, &dims, udata.output_cdtype, params.output)
     offset = params.nchunk * udata.chunkshape + params.offset // params.typesize
-    func_id = udata.py_func.decode()
+    func_id = udata.py_func.decode("utf-8")
     blosc2.postfilter_funcs[func_id](input, output, offset)
     return 0
 
@@ -1394,7 +1394,7 @@ cdef int general_filler(blosc2_prefilter_params *params):
         else:
             raise ValueError("Unsupported operand")
 
-    func_id = udata.py_func.decode()
+    func_id = udata.py_func.decode("utf-8")
     blosc2.prefilter_funcs[func_id](tuple(inputs), output, offset)
 
     return 0
@@ -1424,7 +1424,7 @@ cdef int general_prefilter(blosc2_prefilter_params *params):
     output = np.PyArray_SimpleNewFromData(nd, &dims, udata.output_cdtype, params.output)
     offset = params.nchunk * udata.chunkshape + params.output_offset // params.output_typesize
 
-    func_id = udata.py_func.decode()
+    func_id = udata.py_func.decode("utf-8")
     blosc2.prefilter_funcs[func_id](input, output, offset)
 
     return 0
@@ -1494,7 +1494,7 @@ cdef class vlmeta:
         rc = blosc2_vlmeta_get_names(self.schunk, names)
         if rc != self.schunk.nvlmetalayers:
             raise RuntimeError
-        res = [names[i].decode() for i in range(rc)]
+        res = [names[i].decode("utf-8") for i in range(rc)]
         return res
 
     def to_dict(self):
@@ -1846,7 +1846,7 @@ cdef class NDArray:
             raise ValueError("Only NumPy dtypes are supported")
         cdef char *dtype = self.array.dtype
 
-        return np.dtype(dtype.decode())
+        return np.dtype(dtype.decode("utf-8"))
 
     def get_slice_numpy(self, arr, key):
         start, stop = key
