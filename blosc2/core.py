@@ -1069,10 +1069,8 @@ def get_cbuffer_sizes(src):
     """
     return blosc2_ext.cbuffer_sizes(src)
 
-
-def get_chunksize(blocksize):
-    # Start with a default when L3 cannot be detected by cpuinfo
-    chunksize = blocksize * 16
+# Compute a decent value for chunksize based on L3 and/or heuristics
+def get_chunksize(blocksize, l3_minimum=2**21, l3_maximum=2**25):
     cpu_info = blosc2.cpu_info
     if 'l3_cache_size' in cpu_info:
         # In general, is a good idea to set the chunksize equal to L3
@@ -1087,10 +1085,26 @@ def get_chunksize(blocksize):
                 type(l2_cache_size) is int and
                 l3_cache_size > l2_cache_size):
             chunksize = l3_cache_size
+    else:
+        # Find a decent default when L3 cannot be detected by cpuinfo
+        # Based mainly in heuristics
+        chunksize = blocksize
+        if blocksize * 16 < l3_maximum:
+            chunksize = blocksize * 16
+        # This should be at least the size of L2
+        l2_cache_size = cpu_info.get('l2_cache_size', "Not found")
+        if (type(l2_cache_size) is int and
+            l2_cache_size > chunksize):
+            chunksize = l2_cache_size
+
+    # Ensure a minimum
+    if chunksize < l3_minimum:
+        chunksize = l3_minimum
 
     # In Blosc2, the chunksize cannot be larger than 2 GB - BLOSC2_MAX_BUFFERSIZE
     if chunksize > 2 ** 31 - blosc2.MAX_OVERHEAD:
         chunksize = 2 ** 31 - blosc2.MAX_OVERHEAD
+
     return chunksize
 
 
@@ -1115,26 +1129,31 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, **cparams):
         A (chunks, blocks) tuple with the computed chunks and blocks.
     """
 
-    def compute_partition(nitems, blocks, maxs):
+    def compute_partition(nitems, parts, maxs):
         if 0 in maxs:
             raise ValueError("shapes with 0 dims are not supported")
-        blocks = blocks.copy()
-        while math.prod(blocks) < nitems:
-            nitems_prev = math.prod(blocks)
+        if nitems == 0:
+            raise ValueError("partitions with 0 dims are not supported")
+        parts = list(parts)
+        while math.prod(parts) <= nitems:
+            nitems_prev = math.prod(parts)
             # Increase dims starting from the latest
-            for i in reversed(range(len(blocks))):
-                if nitems_prev >= nitems:
+            for i in reversed(range(len(parts))):
+                if nitems_prev > nitems:
                     break
-                if blocks[i] * 2 <= maxs[i]:
-                    blocks[i] *= 2
+                if parts[i] * 2 <= maxs[i]:
+                    if math.prod(parts) * 2 <= nitems:
+                        parts[i] *= 2
                 else:
-                    blocks[i] = maxs[i]
-            nitems_new = math.prod(blocks)
+                    parts[i] = maxs[i]
+            nitems_new = math.prod(parts)
             if nitems_new == nitems_prev:
                 # Not progressing anymore
                 break
-        return blocks
+        return parts
 
+    if not cparams:
+        cparams = blosc2.cparams_dflts.copy()
     itemsize = cparams["typesize"]
 
     if blocks is None:
@@ -1144,7 +1163,15 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, **cparams):
         src = blosc2.compress2(np.zeros(nitems, dtype="V%d" % itemsize), **cparams)
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
         blocks = [2] * len(shape)
-        blocks = compute_partition(blocksize // itemsize, blocks, shape)
+    else:
+        blocksize = math.prod(blocks) * itemsize
+    # Logic here is complex.  We normalize blocksize, even if user specify it.
+    # We do that in order to compute saner automatic chunks later.
+    if chunks is None:
+        maxs = shape
+    else:
+        maxs = [min(els) for els in zip(chunks, shape)]
+    blocks = compute_partition(blocksize // itemsize, blocks, maxs)
 
     if chunks is None:
         blocksize = math.prod(blocks) * itemsize

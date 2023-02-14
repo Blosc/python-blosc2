@@ -54,3 +54,49 @@ def test_compute_chunks_blocks(clevel, codec, shape: tuple, dtype):
     for i in range(len(shape)):
         assert shape[i] >= chunks[i]
         assert chunks[i] >= blocks[i]
+
+@pytest.mark.parametrize("shape, blocks", [
+    ((1000, 1000), (0, 10)),
+    ((1000, 1000), (10, 10)),
+    ((10, 20, 30), (1, 2, 3)),
+    ((10, 30, 50, 10), (10, 30, 50, 10)),
+    ((10, 10, 10, 10, 10), (10, 11, 10, 9, 10)),
+    ((100, 10, 20, 100, 10), (10, 11, 10, 9, 10)),
+    ((1000, 10, 20, 100, 10), (100, 11, 10, 90, 10)),
+    ]
+    )
+def test_compute_chunks(shape: tuple, blocks: tuple):
+    if 0 in blocks:
+        # blocks with 0 should be reported as invalid
+        with pytest.raises(ValueError):
+            blosc2.compute_chunks_blocks(shape, blocks=blocks)
+        return
+    else:
+        chunks, blocks = blosc2.compute_chunks_blocks(shape, blocks=blocks)
+    # print(chunks, blocks)
+    for i in range(len(shape)):
+        assert shape[i] >= chunks[i]
+        assert chunks[i] >= blocks[i]
+
+@pytest.mark.parametrize("shape, chunks", [
+    ((1000, 1000), (0, 10)),
+    ((1000, 1000), (10, 10)),
+    ((10, 20, 30), (1, 2, 3)),
+    ((10, 30, 50, 10), (10, 30, 50, 10)),
+    ((10, 10, 10, 10, 10), (10, 11, 10, 9, 10)),
+    ((100, 10, 20, 100, 10), (10, 11, 10, 9, 10)),
+    ((1000, 10, 20, 100, 10), (100, 11, 10, 90, 10)),
+    ]
+    )
+def test_compute_blocks(shape: tuple, chunks: tuple):
+    if 0 in chunks:
+        # chunks with 0 should be reported as invalid
+        with pytest.raises(ValueError):
+            blosc2.compute_chunks_blocks(shape, chunks=chunks)
+        return
+    else:
+        chunks, blocks = blosc2.compute_chunks_blocks(shape, chunks=chunks)
+    # print(chunks, blocks)
+    for i in range(len(shape)):
+        # assert shape[i] >= chunks[i]  # chunks can exceed shape if user wants to
+        assert chunks[i] >= blocks[i]
