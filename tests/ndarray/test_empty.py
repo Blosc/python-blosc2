@@ -12,22 +12,26 @@ import blosc2
 import numpy as np
 
 
-@pytest.mark.parametrize("shape, chunks, blocks, dtype, cparams",
+@pytest.mark.parametrize("shape, chunks, blocks, dtype, cparams, urlpath, contiguous",
                          [
                              ((100, 1230), (200, 100), (55, 3), np.uint8,
                               {"codec": blosc2.Codec.LZ4, "clevel": 4, "use_dict": 0,
-                               "nthreads": 1, "filters": [blosc2.Filter.SHUFFLE]}
+                               "nthreads": 1, "filters": [blosc2.Filter.SHUFFLE]},
+                              None, True
                               ),
                              ((234, 125), (90, 90), (20, 10), np.int32,
                               {"codec": blosc2.Codec.LZ4HC, "clevel": 8, "use_dict": False,
-                               "nthreads": 2, "filters": [blosc2.Filter.DELTA, blosc2.Filter.BITSHUFFLE]}
+                               "nthreads": 2, "filters": [blosc2.Filter.DELTA, blosc2.Filter.BITSHUFFLE]},
+                              "empty.b2nd", False
                               ),
                              ((400, 399, 401), (20, 10, 130), (6, 6, 26), np.float64,
                               {"codec": blosc2.Codec.BLOSCLZ, "clevel": 5, "use_dict": True,
-                               "nthreads": 2, "filters": [blosc2.Filter.DELTA, blosc2.Filter.TRUNC_PREC]}
+                               "nthreads": 2, "filters": [blosc2.Filter.DELTA, blosc2.Filter.TRUNC_PREC]},
+                              None, False
                               )
                          ])
-def test_empty(shape, chunks, blocks, dtype, cparams):
+def test_empty(shape, chunks, blocks, dtype, cparams, urlpath, contiguous):
+    blosc2.remove_urlpath(urlpath)
     filters = cparams["filters"]
     cparams["filters_meta"] = [0] * len(filters)
     a = blosc2.empty(shape,
@@ -35,7 +39,9 @@ def test_empty(shape, chunks, blocks, dtype, cparams):
                      blocks=blocks,
                      dtype=dtype,
                      cparams=cparams,
-                     dparams={"nthreads": 2})
+                     dparams={"nthreads": 2},
+                     urlpath=urlpath,
+                     contiguous=contiguous)
 
     dtype = np.dtype(dtype)
     assert a.shape == shape
@@ -47,3 +53,5 @@ def test_empty(shape, chunks, blocks, dtype, cparams):
     assert a.schunk.cparams["clevel"] == cparams["clevel"]
     assert a.schunk.cparams["filters"][:len(filters)] == filters
     assert a.schunk.dparams["nthreads"] == 2
+
+    blosc2.remove_urlpath(urlpath)

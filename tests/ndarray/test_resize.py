@@ -15,8 +15,8 @@ import numpy as np
 @pytest.mark.parametrize("shape, new_shape, chunks, blocks, fill_value",
                          [
                              ((100, 1230), (200, 1230), (200, 100), (55, 3), b"0123"),
-                             ((23, 34), (23, 120), (20, 20), (10, 10), b"sun"),
-                             ((80, 51, 60), (80, 100, 100), (20, 10, 33), (6, 6, 26), b"qwerty")
+                             ((23, 34), (23, 120), (20, 20), (10, 10), 1234),
+                             ((80, 51, 60), (80, 100, 100), (20, 10, 33), (6, 6, 26), 3.333)
                          ])
 def test_resize(shape, new_shape, chunks, blocks, fill_value):
     a = blosc2.full(shape, fill_value=fill_value, chunks=chunks, blocks=blocks)
