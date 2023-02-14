@@ -1071,6 +1071,12 @@ def get_cbuffer_sizes(src):
 
 # Compute a decent value for chunksize based on L3 and/or heuristics
 def get_chunksize(blocksize, l3_minimum=2**21, l3_maximum=2**25):
+    # Find a decent default when L3 cannot be detected by cpuinfo
+    # Based mainly in heuristics
+    chunksize = blocksize
+    if blocksize * 16 < l3_maximum:
+        chunksize = blocksize * 16
+    # Refine with L2/L3 measurements (not always possible)
     cpu_info = blosc2.cpu_info
     if 'l3_cache_size' in cpu_info:
         # In general, is a good idea to set the chunksize equal to L3
@@ -1086,18 +1092,13 @@ def get_chunksize(blocksize, l3_minimum=2**21, l3_maximum=2**25):
                 l3_cache_size > l2_cache_size):
             chunksize = l3_cache_size
     else:
-        # Find a decent default when L3 cannot be detected by cpuinfo
-        # Based mainly in heuristics
-        chunksize = blocksize
-        if blocksize * 16 < l3_maximum:
-            chunksize = blocksize * 16
-        # This should be at least the size of L2
+        # Chunksize should be at least the size of L2
         l2_cache_size = cpu_info.get('l2_cache_size', "Not found")
         if (type(l2_cache_size) is int and
             l2_cache_size > chunksize):
             chunksize = l2_cache_size
 
-    # Ensure a minimum
+    # Ensure a minimum size
     if chunksize < l3_minimum:
         chunksize = l3_minimum
 
