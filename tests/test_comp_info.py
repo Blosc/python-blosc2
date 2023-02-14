@@ -19,7 +19,7 @@ def test_comp_info(codec):
     blosc2.clib_info(codec)
     blosc2.set_compressor(codec)
     assert codec.name.lower() == blosc2.get_compressor()
-    src = blosc2.compress2(np.zeros(SIZE))
+    src = blosc2.compress2(np.zeros(SIZE, dtype="V8"))
     nbytes, cbytes, blocksize = blosc2.get_cbuffer_sizes(src)
     assert nbytes == SIZE * 8
     assert cbytes == blosc2.MAX_OVERHEAD
