@@ -11,15 +11,14 @@ import numpy as np
 
 shape = (1234, 23)
 chunks = (253, 23)
-blocks = (10, 23)
 
 dtype = bool
 
 # Create a buffer
 nparray = np.random.choice(a=[True, False], size=np.prod(shape)).reshape(shape)
 
-# Create a b2nd array from a numpy array
-a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks, dtype=dtype)
+# Create a NDArray from a numpy array
+a = blosc2.asarray(nparray, chunks=chunks, dtype=dtype)
 b = a.copy()
 
 # Convert a b2nd array to a numpy array

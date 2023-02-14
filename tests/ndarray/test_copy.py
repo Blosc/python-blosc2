@@ -48,3 +48,16 @@ def test_copy_numpy(shape, chunks1, blocks1, chunks2, blocks2, dtype):
     cparams = {"clevel": 5, "filters": [blosc2.Filter.BITSHUFFLE], "filters_meta": [0]}
     b = a.copy(chunks=chunks2, blocks=blocks2, cparams=cparams)
     np.testing.assert_almost_equal(b[...], nparray)
+
+@pytest.mark.parametrize("shape, dtype",
+                         [
+                             ([521], "i8"),
+                             ([20, 134, 13], "f4"),
+                             ([12, 13, 14, 15, 16], "f8")
+                         ])
+def test_copy_simple(shape, dtype):
+    size = int(np.prod(shape))
+    nparray = np.arange(size, dtype=dtype).reshape(shape)
+    a = blosc2.asarray(nparray, dtype=dtype)
+    b = a.copy()
+    np.testing.assert_almost_equal(b[...], nparray)

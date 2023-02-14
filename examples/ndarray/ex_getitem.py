@@ -10,9 +10,6 @@ import blosc2
 import numpy as np
 
 shape = (10, 10)
-chunks = (5, 7)
-blocks = (2, 2)
-
 slices = (slice(2, 5), slice(4, 8))
 
 dtype = np.int32
@@ -20,8 +17,8 @@ dtype = np.int32
 # Create a numpy array
 nparray = np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape)
 
-# Create a b2nd array from a numpy array
-a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks, dtype=dtype)
+# Create a NDArray from a numpy array
+a = blosc2.asarray(nparray, dtype=dtype)
 
 # Get a slice
 buffer = a[slices]

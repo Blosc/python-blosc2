@@ -41,7 +41,7 @@ def test_zeros(shape, chunks, blocks, dtype, cparams, urlpath, contiguous, meta)
                      meta=meta)
 
     b = np.zeros(shape=shape, dtype=dtype)
-    np.array_equal(a[:], b)
+    assert np.array_equal(a[:], b)
 
     if meta is not None:
         for metalayer in meta:
@@ -49,3 +49,24 @@ def test_zeros(shape, chunks, blocks, dtype, cparams, urlpath, contiguous, meta)
             assert m == meta[metalayer]
 
     blosc2.remove_urlpath(urlpath)
+
+@pytest.mark.parametrize("shape, dtype",
+                         [
+                             ((100, 1230), np.uint8),
+                             ((234, 125), np.int32),
+                             ((80, 51, 60), np.bool_),
+                             ((400, 399, 401), np.float64),
+                         ])
+def test_zeros_minimal(shape, dtype):
+    a = blosc2.zeros(shape, dtype=dtype)
+
+    b = np.zeros(shape=shape, dtype=dtype)
+    assert np.array_equal(a[:], b)
+
+    dtype = np.dtype(dtype)
+    assert a.shape == shape
+    assert a.chunks != None
+    assert a.blocks != None
+    assert all(c >= b for c, b in zip(a.chunks, a.blocks))
+    assert a.dtype == dtype
+    assert a.schunk.typesize == dtype.itemsize

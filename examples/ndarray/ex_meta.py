@@ -12,8 +12,6 @@ import blosc2
 import numpy as np
 
 shape = (128, 128)
-chunks = (32, 32)
-blocks = (8, 8)
 
 urlpath = "ex_meta.b2nd"
 blosc2.remove_urlpath(urlpath)
@@ -27,9 +25,8 @@ meta = {
     "m1": b"1111",
     "m2": b"2222",
 }
-# Create a b2nd array from a numpy array (on disk)
-a = blosc2.from_buffer(bytes(nparray), nparray.shape, chunks=chunks, blocks=blocks,
-                       urlpath=urlpath, dtype=dtype, meta=meta)
+# Create a NDArray from a numpy array (on disk)
+a = blosc2.from_buffer(bytes(nparray), nparray.shape, urlpath=urlpath, dtype=dtype, meta=meta)
 
 # Read a b2nd array from disk
 b = blosc2.open(urlpath)

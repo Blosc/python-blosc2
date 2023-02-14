@@ -10,7 +10,6 @@ import blosc2
 import numpy as np
 
 shape = (10, 10)
-chunks = (10, 10)
 blocks = (10, 10)
 
 dtype = np.dtype(np.float64)
@@ -18,9 +17,8 @@ dtype = np.dtype(np.float64)
 # Create a buffer
 buffer = bytes(np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape))
 
-# Create a b2nd array from a buffer
-a = blosc2.from_buffer(buffer, shape, dtype=dtype,
-                       chunks=chunks, blocks=blocks)
+# Create a NDArray from a buffer
+a = blosc2.from_buffer(buffer, shape, dtype=dtype, blocks=blocks)
 
 # Get a copy of a b2nd array
 b = blosc2.copy(a)
@@ -28,7 +26,7 @@ d = b.copy()
 
 aux = np.asarray(b[...])
 aux[1, 2] = 0
-aux2 = blosc2.asarray(aux, chunks=chunks, blocks=blocks, dtype=dtype)
+aux2 = blosc2.asarray(aux, blocks=blocks, dtype=dtype)
 
 print(np.asarray(aux2))
 
