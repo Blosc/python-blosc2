@@ -1881,9 +1881,11 @@ cdef class NDArray:
 
         return arr.squeeze()
 
-    def get_slice(self, key, mask, chunks, blocks, **kwargs):
+    def get_slice(self, key, mask, **kwargs):
         start, stop = key
         shape = tuple(sp - st for sp, st in zip(stop, start))
+        chunks = kwargs.pop("chunks", None)
+        blocks = kwargs.pop("blocks", None)
         if blocks and len(shape) != len(blocks):
             for i in range(len(shape)):
                 if shape[i] == 1:
@@ -1945,12 +1947,12 @@ cdef class NDArray:
         return buffer
 
     def copy(self, **kwargs):
-        chunks = kwargs.pop("chunks", self.chunks)
-        blocks = kwargs.pop("blocks", self.blocks)
         if "dtype" not in kwargs:
             dtype = self.dtype
         else:
             dtype = kwargs.pop("dtype")
+        chunks = kwargs.pop("chunks", None)
+        blocks = kwargs.pop("blocks", None)
         chunks, blocks = blosc2.compute_chunks_blocks(self.shape, chunks, blocks, dtype, **kwargs)
         cdef b2nd_context_t *ctx = create_b2nd_context(self.shape, chunks, blocks, dtype, kwargs)
 
