@@ -133,6 +133,7 @@ class NDArray(blosc2_ext.NDArray):
         out: :ref:`NDArray <NDArray>`
             A :ref:`NDArray <NDArray>` with a copy of the data.
         """
+        _check_ndarray_kwargs(**kwargs)
         return super(NDArray, self).copy(**kwargs)
 
     def resize(self, newshape):
@@ -170,6 +171,7 @@ class NDArray(blosc2_ext.NDArray):
         out: :ref:`NDArray <NDArray>`
             An array with the requested data.
         """
+        _check_ndarray_kwargs(**kwargs)
         key, mask = process_key(key, self.shape)
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
@@ -212,6 +214,7 @@ def empty(shape, dtype=np.uint8, **kwargs):
     out: :ref:`NDArray <NDArray>`
         A :ref:`NDArray <NDArray>` is returned.
     """
+    _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
@@ -231,6 +234,7 @@ def zeros(shape, dtype=np.uint8, **kwargs):
     out: :ref:`NDArray <NDArray>`
         A :ref:`NDArray <NDArray>` is returned.
     """
+    _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
@@ -270,6 +274,7 @@ def full(shape, fill_value, dtype=None, **kwargs):
         dtype = np.dtype(f"S{len(fill_value)}")
     if dtype is None:
         dtype = np.dtype(type(fill_value))
+    _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
@@ -301,6 +306,7 @@ def from_buffer(buffer, shape, dtype=np.dtype("|S1"), **kwargs):
     out: :ref:`NDArray <NDArray>`
         A :ref:`NDArray <NDArray>` is returned.
     """
+    _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
@@ -352,7 +358,15 @@ def asarray(array, chunks=None, blocks=None, dtype=np.uint8, **kwargs):
     out: :ref:`NDArray <NDArray>`
         An array interpretation of :paramref:`array`.
     """
+    _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, dtype, **kwargs)
     return blosc2_ext.asarray(array, chunks, blocks, dtype, **kwargs)
+
+
+def _check_ndarray_kwargs(**kwargs):
+    supported_keys = ["chunks", "blocks", "cparams", "dparams", "meta", "urlpath", "contiguous"]
+    for key in kwargs.keys():
+        if key not in supported_keys:
+            raise KeyError(f"Only {str(supported_keys)} are supported as keyword arguments")

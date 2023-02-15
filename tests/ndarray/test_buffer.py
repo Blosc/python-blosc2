@@ -29,7 +29,7 @@ def test_buffer(shape, chunks, blocks, dtype, urlpath, contiguous, meta):
     size = int(np.prod(shape))
     buffer = bytes(size * typesize)
     a = blosc2.from_buffer(buffer, shape, chunks=chunks, blocks=blocks,
-                           dtype=dtype, urpath=urlpath, contiguous=contiguous, meta=meta)
+                           dtype=dtype, urlpath=urlpath, contiguous=contiguous, meta=meta)
     buffer2 = a.to_buffer()
     assert buffer == buffer2
 
