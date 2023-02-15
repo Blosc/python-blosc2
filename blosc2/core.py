@@ -8,11 +8,10 @@
 import math
 import os
 import pickle
-import subprocess
 import sys
-import numpy as np
 
 import blosc2
+import numpy as np
 from blosc2 import blosc2_ext
 
 
@@ -1069,6 +1068,7 @@ def get_cbuffer_sizes(src):
     """
     return blosc2_ext.cbuffer_sizes(src)
 
+
 # Compute a decent value for chunksize based on L3 and/or heuristics
 def get_chunksize(blocksize, l3_minimum=2**21, l3_maximum=2**25):
     # Find a decent default when L3 cannot be detected by cpuinfo
@@ -1095,7 +1095,7 @@ def get_chunksize(blocksize, l3_minimum=2**21, l3_maximum=2**25):
         # Chunksize should be at least the size of L2
         l2_cache_size = cpu_info.get('l2_cache_size', "Not found")
         if (type(l2_cache_size) is int and
-            l2_cache_size > chunksize):
+                l2_cache_size > chunksize):
             chunksize = l2_cache_size
 
     # Ensure a minimum size
@@ -1107,6 +1107,7 @@ def get_chunksize(blocksize, l3_minimum=2**21, l3_maximum=2**25):
         chunksize = 2 ** 31 - blosc2.MAX_OVERHEAD
 
     return chunksize
+
 
 # Compute chunks and blocks partitions
 def compute_partition(nitems, parts, maxs, blocks=False):
@@ -1159,13 +1160,20 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, dtype=np.uint8, **kwa
         A (chunks, blocks) tuple with the computed guesses for chunks and blocks.
     """
 
-    if chunks is not None and blocks is not None:
-        return chunks, blocks
-
-    if blocks and len(blocks) != len(shape):
-        raise ValueError("blocks should have the same length than shape")
+    if blocks:
+        if len(blocks) != len(shape):
+            raise ValueError("blocks should have the same length than shape")
+        for i in range(len(blocks)):
+            if blocks[i] > shape[i]:
+                raise ValueError("blocks cannot be greater than shape")
     if chunks and len(chunks) != len(shape):
         raise ValueError("chunks should have the same length than shape")
+
+    if chunks is not None and blocks is not None:
+        for i in range(len(blocks)):
+            if blocks[i] > chunks[i]:
+                raise ValueError("blocks cannot be greater than chunks")
+        return chunks, blocks
 
     cparams = kwargs['cparams'] if 'cparams' in kwargs else {}
     if not cparams:

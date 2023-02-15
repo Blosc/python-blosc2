@@ -1881,12 +1881,23 @@ cdef class NDArray:
 
         return arr.squeeze()
 
-    def get_slice(self, key, mask, **kwargs):
+    def get_slice(self, key, mask, chunks, blocks, **kwargs):
+        start, stop = key
+        shape = tuple(sp - st for sp, st in zip(stop, start))
+        if blocks and len(shape) != len(blocks):
+            for i in range(len(shape)):
+                if shape[i] == 1:
+                    blocks.insert(i, 1)
+        if chunks and len(shape) != len(chunks):
+            for i in range(len(shape)):
+                if shape[i] == 1:
+                    chunks.insert(i, 1)
+        chunks, blocks = blosc2.compute_chunks_blocks(shape, chunks, blocks, self.dtype)
+
         # shape will be overwritten by get_slice
-        cdef b2nd_context_t *ctx = create_b2nd_context(self.shape, self.chunks, self.blocks,
+        cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks,
                                                        self.dtype, kwargs)
         ndim = self.ndim
-        start, stop = key
         cdef int64_t[B2ND_MAX_DIM] start_, stop_
         for i in range(ndim):
             start_[i] = start[i]
