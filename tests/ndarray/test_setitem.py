@@ -42,6 +42,10 @@ def test_setitem(shape, chunks, blocks, slices, dtype):
     np.testing.assert_almost_equal(a[...], nparray)
 
     # blosc2.NDArray
+    if slice_shape == () or len(slice_shape) != len(blocks):
+        chunks = None
+        blocks = None
+
     b = blosc2.full(slice_shape, fill_value=1234567, chunks=chunks, blocks=blocks, dtype=dtype)
     a[slices] = b
     nparray[slices] = b[...]
