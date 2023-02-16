@@ -235,7 +235,7 @@ def zeros(shape, dtype=np.uint8, **kwargs):
     """Create an array, with zero being used as the default value
     for uninitialized portions of the array.
 
-    The parameters and keyword arguments are the same than for the
+    The parameters and keyword arguments are the same as for the
     :func:`empty` constructor.
 
     Returns
