@@ -7,6 +7,7 @@
 #######################################################################
 
 from textwrap import TextWrapper
+import print_dict
 
 
 def info_text_report(items: list) -> str:
@@ -14,18 +15,21 @@ def info_text_report(items: list) -> str:
     max_key_len = max(len(k) for k in keys)
     report = ""
     for k, v in items:
-        wrapper = TextWrapper(
-            width=80,
-            initial_indent=k.ljust(max_key_len) + " : ",
-            subsequent_indent=" " * max_key_len + " : ",
-        )
-        text = wrapper.fill(str(v))
+        if type(v) is dict:
+            text = k.ljust(max_key_len) + " : " + print_dict.format_dict(v, sort_keys=True)
+        else:
+            wrapper = TextWrapper(
+                width=96,
+                initial_indent=k.ljust(max_key_len) + " : ",
+                subsequent_indent=" " * max_key_len + " : ",
+            )
+            text = wrapper.fill(str(v))
         report += text + "\n"
     return report
 
 
 def info_html_report(items: list) -> str:
-    report = '<table class="iarray-info">'
+    report = '<table class="NDArray-info">'
     report += "<tbody>"
     for k, v in items:
         report += (

@@ -1,5 +1,4 @@
 import ndindex
-
 import numpy as np
 from blosc2 import blosc2_ext, compute_chunks_blocks
 
@@ -45,16 +44,14 @@ class NDArray(blosc2_ext.NDArray):
     @property
     def info_items(self):
         items = []
-        items += [("Type", f"{self.__class__.__name__}")]
-        items += [("Typesize", self.schunk.typesize)]
-        items += [("Shape", self.shape)]
-        items += [("Chunks", self.chunks)]
-        items += [("Blocks", self.blocks)]
-        items += [("Comp. codec", self.schunk.cparams["codec"].name)]
-        items += [("Comp. level", self.schunk.cparams["clevel"])]
-        filters = [f.name for f in self.schunk.cparams["filters"] if f.name != "NOFILTER"]
-        items += [("Comp. filters", f"[{', '.join(map(str, filters))}]")]
-        items += [("Comp. ratio", f"{self.schunk.cratio:.2f}")]
+        items += [("type", f"{self.__class__.__name__}")]
+        items += [("shape", self.shape)]
+        items += [("chunks", self.chunks)]
+        items += [("blocks", self.blocks)]
+        items += [("dtype", self.dtype)]
+        items += [("cratio", f"{self.schunk.cratio:.2f}")]
+        items += [("cparams", self.schunk.cparams)]
+        items += [("dparams", self.schunk.dparams)]
         return items
 
     @property
