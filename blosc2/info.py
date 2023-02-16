@@ -7,7 +7,16 @@
 #######################################################################
 
 from textwrap import TextWrapper
-import print_dict
+# print_dict is nice, but rich is way more popular and can be used for more things
+# import print_dict
+import rich
+import io
+
+
+def info_text_report_(items: list) -> str:
+    with io.StringIO() as buf:
+        print(items, file=buf)
+        return buf.getvalue()
 
 
 def info_text_report(items: list) -> str:
@@ -16,7 +25,14 @@ def info_text_report(items: list) -> str:
     report = ""
     for k, v in items:
         if type(v) is dict:
-            text = k.ljust(max_key_len) + " : " + print_dict.format_dict(v, sort_keys=True)
+            # print_dict way
+            # text = k.ljust(max_key_len) + " : " + print_dict.format_dict(v, sort_keys=True)
+            # rich way
+            with io.StringIO() as buf:
+                v_sorted = {k: val for k, val in sorted(v.items())}
+                rich.print(v_sorted, file=buf)
+                str_v = buf.getvalue()[:-1]  # remove the trailing \n
+            text = k.ljust(max_key_len) + " : " + str_v
         else:
             wrapper = TextWrapper(
                 width=96,
