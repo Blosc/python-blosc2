@@ -52,6 +52,7 @@ def test_zeros(shape, chunks, blocks, dtype, cparams, urlpath, contiguous, meta)
 
 @pytest.mark.parametrize("shape, dtype",
                          [
+                             (100, np.uint8),
                              ((100, 1230), np.uint8),
                              ((234, 125), np.int32),
                              ((80, 51, 60), np.bool_),
@@ -64,7 +65,7 @@ def test_zeros_minimal(shape, dtype):
     assert np.array_equal(a[:], b)
 
     dtype = np.dtype(dtype)
-    assert a.shape == shape
+    assert (a.shape == shape or a.shape[0] == shape)
     assert a.chunks != None
     assert a.blocks != None
     assert all(c >= b for c, b in zip(a.chunks, a.blocks))
