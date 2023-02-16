@@ -9,6 +9,7 @@
 #cython: language_level=3
 
 import _ctypes
+import ast
 
 from cpython cimport (
     Py_buffer,
@@ -1758,6 +1759,7 @@ cdef class NDArray:
     cdef b2nd_array_t* array
 
     def __init__(self, array):
+        self._dtype = None
         self.array = <b2nd_array_t *> PyCapsule_GetPointer(array, <char *> "b2nd_array_t*")
 
     @property
@@ -1856,11 +1858,20 @@ cdef class NDArray:
     @property
     def dtype(self):
         """Data-type of the array’s elements."""
+        if self._dtype is not None:
+            return self._dtype
+
+        # Not in cache yet
         if self.array.dtype_format != B2ND_DEFAULT_DTYPE_FORMAT:
             raise ValueError("Only NumPy dtypes are supported")
-        cdef char *dtype = self.array.dtype
-
-        return np.dtype(dtype.decode("utf-8"))
+        cdef char *bytes_dtype = self.array.dtype
+        str_dtype = bytes_dtype.decode("utf-8")
+        try:
+            dtype = np.dtype(str_dtype)
+        except TypeError:
+            dtype = np.dtype(ast.literal_eval(str_dtype))
+        self._dtype = dtype
+        return dtype
 
     def get_slice_numpy(self, arr, key):
         start, stop = key
