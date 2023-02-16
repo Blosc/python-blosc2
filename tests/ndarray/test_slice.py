@@ -29,6 +29,7 @@ def test_slice(shape, chunks, blocks, slices, dtype):
                        chunks=chunks, blocks=blocks)
     b = a.slice(slices)
     np_slice = a[slices]
+    assert b.shape == np_slice.shape
     np.testing.assert_almost_equal(b[...], np_slice)
 
 

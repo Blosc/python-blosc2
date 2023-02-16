@@ -336,7 +336,7 @@ def copy(array, **kwargs):
     return arr
 
 
-def asarray(array, chunks=None, blocks=None, dtype=np.uint8, **kwargs):
+def asarray(array, dtype=np.uint8, **kwargs):
     """Convert the input to an array.
 
     Parameters
