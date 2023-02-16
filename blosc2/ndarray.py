@@ -1,4 +1,5 @@
 import ndindex
+
 import numpy as np
 from blosc2 import blosc2_ext, compute_chunks_blocks
 
@@ -80,6 +81,18 @@ class NDArray(blosc2_ext.NDArray):
         -------
         out: :ref:`NDArray <NDArray>`
             An array, stored in a non-compressed buffer, with the requested data.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> shape = [25, 10]
+        >>> # Create an array
+        >>> a = blosc2.full(shape, 3.3333)
+        >>> b = np.full(shape, 3.3333)
+        >>> # Get slice as a NumPy array
+        >>> c = a[...]
+        >>> np.testing.assert_allclose(c, b)
         """
         key, _ = process_key(key, self.shape)
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
@@ -102,6 +115,17 @@ class NDArray(blosc2_ext.NDArray):
             `Buffer Protocol <https://docs.python.org/3/c-api/buffer.html>`_
             used to overwrite the slice.
 
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> shape = [25, 10]
+        >>> # Create an array
+        >>> a = blosc2.full(shape, 3.3333)
+        >>> # Set a slice to 0
+        >>> a[:5, :5] = 0
+        >>> b = np.zeros([5, 5])
+        >>> assert np.array_equal(a[:5, :5], b)
         """
         key, _ = process_key(key, self.shape)
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
@@ -122,29 +146,69 @@ class NDArray(blosc2_ext.NDArray):
         -------
         bytes
             The buffer containing the data of the whole array.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> dtype = np.int32
+        >>> shape = [23, 11]
+        >>> a = np.arange(0, int(np.prod(shape)), dtype=dtype).reshape(shape)
+        >>> # Create an array
+        >>> b = blosc2.asarray(a, dtype=dtype)
+        >>> assert b.to_buffer() == bytes(a[...])
         """
         return super(NDArray, self).to_buffer()
 
-    def copy(self, **kwargs):
-        """Create a copy of an array.
+    def copy(self, dtype=None, **kwargs):
+        """Create a copy of an array with same parameters.
 
         Parameters
         ----------
-        array: :ref:`NDArray <NDArray>`
-            The array to be copied.
+        dtype: NumPy.dtype
+            The new array dtype. Default `self.dtype`.
 
         Other Parameters
         ----------------
         kwargs: dict, optional
-            Keyword arguments that are supported by the :func:`empty` constructor.
+            Keyword arguments that are supported by the :func:`empty` constructor. If some
+            are not specified, the default will be the ones from the original array (except for the urlpath).
 
         Returns
         -------
         out: :ref:`NDArray <NDArray>`
             A :ref:`NDArray <NDArray>` with a copy of the data.
+
+        See Also
+        --------
+        :func:`copy`
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> shape = (10, 10)
+        >>> blocks = (10, 10)
+        >>> dtype = np.bool_
+        >>> # Create a NDArray  with default chunks
+        >>> a = blosc2.zeros(shape, blocks=blocks, dtype=dtype)
+        >>> # Get a copy with default chunks and blocks
+        >>> b = a.copy(chunks=None, blocks=None)
+        >>> assert np.array_equal(b[...], a[...])
         """
+        if dtype is None:
+            dtype = self.dtype
+        kwargs["cparams"] = kwargs.get("cparams", self.schunk.cparams).copy()
+        kwargs["dparams"] = kwargs.get("dparams", self.schunk.dparams).copy()
+        if "meta" not in kwargs:
+            # Copy metalayers as well
+            meta_dict = {}
+            for meta in self.schunk.meta.keys():
+                meta_dict[meta] = self.schunk.meta[meta]
+            kwargs["meta"] = meta_dict
         _check_ndarray_kwargs(**kwargs)
-        return super(NDArray, self).copy(**kwargs)
+
+        return super(NDArray, self).copy(dtype, **kwargs)
 
     def resize(self, newshape):
         """Change the shape of the array by growing one or more dimensions.
@@ -159,11 +223,26 @@ class NDArray(blosc2_ext.NDArray):
         -----
         The array values corresponding to the added positions are not initialized.
         Thus, the user is in charge of initializing them.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> dtype = np.float32
+        >>> shape = [23, 11]
+        >>> a = np.linspace(1, 3, num=int(np.prod(shape))).reshape(shape)
+        >>> # Create an array
+        >>> b = blosc2.asarray(a, dtype=dtype)
+        >>> newshape = [50, 10]
+        >>> # Extend first dimension, shrink second dimension
+        >>> _ = b.resize(newshape)
+        >>> assert b.shape == tuple(newshape)
         """
         return super(NDArray, self).resize(newshape)
 
     def slice(self, key, **kwargs):
-        """ Get a (multidimensional) slice as specified in key. Generalizes :meth:`__getitem__`.
+        """ Get a (multidimensional) slice as specified in key as a new :ref:`NDArray <NDArray>`.
+        The dtype used will be the same as `self`.
 
         Parameters
         ----------
@@ -240,7 +319,7 @@ def empty(shape, dtype=np.uint8, **kwargs):
     >>> dtype = np.int32
     >>> # Create empty array with default chunks and blocks
     >>> array = blosc2.empty(shape, dtype=dtype)
-    >>> assert array.shape == shape
+    >>> assert array.shape == tuple(shape)
     >>> assert array.dtype == dtype
     """
     shape = _check_shape(shape)
@@ -274,9 +353,9 @@ def zeros(shape, dtype=np.uint8, **kwargs):
     >>> dtype = np.float64
     >>> # Create zeros array
     >>> array = blosc2.zeros(shape, dtype=dtype, chunks=chunks, blocks=blocks)
-    >>> assert array.shape == shape
-    >>> assert array.chunks == chunks
-    >>> assert array.blocks == blocks
+    >>> assert array.shape == tuple(shape)
+    >>> assert array.chunks == tuple(chunks)
+    >>> assert array.blocks == tuple(blocks)
     >>> assert array.dtype == dtype
     >>> # Get array data as a NumPy array ?? posar-ho en la gertitem???
     >>> nparray = array[...]
@@ -327,13 +406,12 @@ def full(shape, fill_value, dtype=None, **kwargs):
     >>> shape = [25, 10]
     >>> # Create array filled with True
     >>> array = blosc2.full(shape, True)
-    >>> assert array.shape == shape
+    >>> assert array.shape == tuple(shape)
     >>> assert array.dtype == np.bool_
     >>> # Get array data as a NumPy array
     >>> nparray = array[...]
     >>> assert nparray.shape == array.shape
     >>> assert nparray.dtype == array.dtype
-    >>> nparray
     """
     if isinstance(fill_value, bytes):
         dtype = np.dtype(f"S{len(fill_value)}")
@@ -397,42 +475,11 @@ def from_buffer(buffer, shape, dtype=np.dtype("|S1"), **kwargs):
     return arr
 
 
-def copy(array, **kwargs):
-    """Create a copy of an array.
-
-    Parameters
-    ----------
-    array: :ref:`NDArray <NDArray>`
-        The array to be copied.
-
-    Other Parameters
-    ----------------
-    kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
-
-    Returns
-    -------
-    out: :ref:`NDArray <NDArray>`
-        A :ref:`NDArray <NDArray>` with a copy of the data.
-
-    See Also
-    --------
-    :meth:`NDArray.copy`
-
-    Examples
-    --------
-    >>> import blosc2
-    >>> import numpy as np
-    >>> shape = (10, 10)
-    >>> blocks = (10, 10)
-    >>> # Create a NDArray  with default chunks
-    >>> a = blosc2.zeros(shape, blocks=blocks, dtype=dtype)
-    >>> # Get a copy on-disk
-    >>> b = blosc2.copy(a, urlpath="copy.b2nd")
-    >>>
-
+def copy(array, dtype=None, **kwargs):
     """
-    arr = array.copy(**kwargs)
+    This is equivalent to :meth:`NDArray.copy`
+    """
+    arr = array.copy(dtype, **kwargs)
     return arr
 
 
@@ -457,6 +504,20 @@ def asarray(array, dtype=np.uint8, **kwargs):
     -------
     out: :ref:`NDArray <NDArray>`
         An array interpretation of :paramref:`array`.
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> shape = [25, 10]
+    >>> dtype = np.int64
+    >>> # Create some data
+    >>> nparray = np.arange(0, np.prod(shape), dtype=dtype)
+    >>> # Create a NDArray from a NumPy array
+    >>> a = blosc2.asarray(nparray, dtype)
+    >>> # Convert the array to a buffer
+    >>> buffer2 = a.to_buffer()
+    >>> assert nparray.tobytes() == buffer2
     """
     _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)

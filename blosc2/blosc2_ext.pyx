@@ -1965,13 +1965,11 @@ cdef class NDArray:
 
         return buffer
 
-    def copy(self, **kwargs):
-        if "dtype" not in kwargs:
-            dtype = self.dtype
-        else:
-            dtype = kwargs.pop("dtype")
-        chunks = kwargs.pop("chunks", None)
-        blocks = kwargs.pop("blocks", None)
+    def copy(self, dtype, **kwargs):
+        chunks = kwargs.pop("chunks", self.chunks)
+        blocks = kwargs.pop("blocks", self.blocks)
+        kwargs["contiguous"] =  kwargs.get("contiguous", self.array.sc.storage.contiguous)
+
         chunks, blocks = blosc2.compute_chunks_blocks(self.shape, chunks, blocks, dtype, **kwargs)
         cdef b2nd_context_t *ctx = create_b2nd_context(self.shape, chunks, blocks, dtype, kwargs)
 
