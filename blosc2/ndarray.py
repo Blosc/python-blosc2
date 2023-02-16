@@ -182,12 +182,20 @@ class NDArray(blosc2_ext.NDArray):
         super(NDArray, self).squeeze()
 
 
+def _check_shape(shape):
+    if type(shape) is int:
+        shape = (shape,)
+    if type(shape) not in (tuple, list):
+        raise ValueError("shape should be a tuple or a list!")
+    return shape
+
+
 def empty(shape, dtype=np.uint8, **kwargs):
     """Create an empty array.
 
     Parameters
     ----------
-    shape: tuple or list
+    shape: int, tuple or list
         The shape for the final array.
     dtype: np.dtype
         The ndarray dtype in NumPy format. Default is `np.uint8`.
@@ -214,6 +222,7 @@ def empty(shape, dtype=np.uint8, **kwargs):
     out: :ref:`NDArray <NDArray>`
         A :ref:`NDArray <NDArray>` is returned.
     """
+    shape = _check_shape(shape)
     _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
@@ -234,6 +243,7 @@ def zeros(shape, dtype=np.uint8, **kwargs):
     out: :ref:`NDArray <NDArray>`
         A :ref:`NDArray <NDArray>` is returned.
     """
+    shape = _check_shape(shape)
     _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
@@ -248,7 +258,7 @@ def full(shape, fill_value, dtype=None, **kwargs):
 
     Parameters
     ----------
-    shape: tuple or list
+    shape: int, tuple or list
         The shape for the final array.
     fill_value: bytes
         Default value to use for uninitialized portions of the array.
@@ -274,6 +284,7 @@ def full(shape, fill_value, dtype=None, **kwargs):
         dtype = np.dtype(f"S{len(fill_value)}")
     if dtype is None:
         dtype = np.dtype(type(fill_value))
+    shape = _check_shape(shape)
     _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
@@ -289,7 +300,7 @@ def from_buffer(buffer, shape, dtype=np.dtype("|S1"), **kwargs):
     ----------
     buffer: bytes
         The buffer of the data to populate the container.
-    shape: tuple or list
+    shape: int, tuple or list
         The shape for the final container.
     dtype: np.dtype
         The ndarray dtype in NumPy format. Default is `|S1`.
@@ -306,6 +317,7 @@ def from_buffer(buffer, shape, dtype=np.dtype("|S1"), **kwargs):
     out: :ref:`NDArray <NDArray>`
         A :ref:`NDArray <NDArray>` is returned.
     """
+    shape = _check_shape(shape)
     _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)

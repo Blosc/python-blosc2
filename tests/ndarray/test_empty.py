@@ -58,6 +58,7 @@ def test_empty(shape, chunks, blocks, dtype, cparams, urlpath, contiguous):
 
 @pytest.mark.parametrize("shape, dtype",
                          [
+                             (100, np.uint8),
                              ((100, 1230), np.uint8),
                              ((234, 125), np.int32),
                              ((400, 399, 401), np.float64),
@@ -66,7 +67,7 @@ def test_empty_minimal(shape, dtype):
     a = blosc2.empty(shape, dtype=dtype)
 
     dtype = np.dtype(dtype)
-    assert a.shape == shape
+    assert (a.shape == shape or a.shape[0] == shape)
     assert a.chunks != None
     assert a.blocks != None
     assert all(c >= b for c, b in zip(a.chunks, a.blocks))
