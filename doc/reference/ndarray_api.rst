@@ -7,21 +7,6 @@ The multidimensional data array class. This class consists of a set of useful pa
 
 .. currentmodule:: blosc2.NDArray
 
-Attributes
-----------
-
-.. autosummary::
-    :toctree: autofiles/ndarray
-
-    ndim
-    shape
-    ext_shape
-    chunks
-    ext_chunks
-    blocks
-    chunksize
-    size
-
 Methods
 -------
 
@@ -36,6 +21,23 @@ Methods
     squeeze
     resize
     to_buffer
+
+Attributes
+----------
+
+.. autosummary::
+    :toctree: autofiles/ndarray
+
+    ndim
+    shape
+    ext_shape
+    chunks
+    ext_chunks
+    blocks
+    chunksize
+    schunk
+    size
+
 
 .. currentmodule:: blosc2
 

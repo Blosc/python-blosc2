@@ -8,8 +8,9 @@
 
 #cython: language_level=3
 
-import _ctypes
 import ast
+
+import _ctypes
 
 from cpython cimport (
     Py_buffer,
@@ -1857,11 +1858,16 @@ cdef class NDArray:
 
     @property
     def dtype(self):
-        """Data-type of the array’s elements."""
+        """
+        Data-type of the array’s elements.
+        If it is an old caterva array, it will be a bytes string of `typesize` length.
+        """
         if self._dtype is not None:
             return self._dtype
 
         # Not in cache yet
+        if self.array.dtype == NULL:
+            return np.dtype(f"S{self.array.sc.typesize}")
         if self.array.dtype_format != B2ND_DEFAULT_DTYPE_FORMAT:
             raise ValueError("Only NumPy dtypes are supported")
         cdef char *bytes_dtype = self.array.dtype

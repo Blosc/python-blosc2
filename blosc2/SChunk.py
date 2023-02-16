@@ -100,7 +100,10 @@ class Meta(Mapping):
         bytes
             The buffer containing the metalayer info.
         """
-        return unpackb(blosc2_ext.meta__getitem__(self.schunk, item), list_hook=blosc2_ext.decode_tuple)
+        if self.__contains__(item):
+            return unpackb(blosc2_ext.meta__getitem__(self.schunk, item), list_hook=blosc2_ext.decode_tuple)
+        else:
+            raise KeyError(f"{item} not found")
 
     def keys(self):
         """Return the metalayers keys."""

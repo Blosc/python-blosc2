@@ -32,6 +32,8 @@ Methods
     SChunk.prefilter
     SChunk.remove_prefilter
 
+.. _SChunkAttributes:
+
 Attributes
 ----------
 
@@ -47,6 +49,7 @@ Attributes
    autofiles/schunk/attributes/blosc2.SChunk.SChunk.nbytes
    autofiles/schunk/attributes/blosc2.SChunk.SChunk.typesize
    autofiles/schunk/attributes/vlmeta
+   autofiles/schunk/attributes/meta
 
 Functions
 ---------
