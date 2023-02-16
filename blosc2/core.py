@@ -1166,8 +1166,12 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, dtype=np.uint8, **kwa
         for i in range(len(blocks)):
             if blocks[i] > shape[i]:
                 raise ValueError("blocks cannot be greater than shape")
-    if chunks and len(chunks) != len(shape):
-        raise ValueError("chunks should have the same length than shape")
+    if chunks:
+        if len(chunks) != len(shape):
+            raise ValueError("chunks should have the same length than shape")
+        for i in range(len(chunks)):
+            if shape[i] == 1 and chunks[i] > shape[i]:
+                raise ValueError("chunks cannot be greater than shape if it is 1")
 
     if chunks is not None and blocks is not None:
         for i in range(len(blocks)):
