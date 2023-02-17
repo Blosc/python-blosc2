@@ -21,11 +21,11 @@ typesize = dtype.itemsize
 buffer = bytes(np.random.normal(0, 1, np.prod(shape)) * typesize)
 
 # Create a NDArray from a buffer
-a = blosc2.from_buffer(buffer, shape, chunks=chunks, dtype=dtype)
+a = blosc2.frombuffer(buffer, shape, chunks=chunks, dtype=dtype)
 print(a.schunk.cparams["filters"])
 print(a.schunk.cparams["codec"])
 print(a.schunk.cratio)
 
 # Convert a b2nd array to a buffer
-buffer2 = a.to_buffer()
+buffer2 = a.tobytes()
 assert buffer == buffer2

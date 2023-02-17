@@ -39,6 +39,7 @@ Attributes
 
 .. toctree::
    :titlesonly:
+   :maxdepth: 1
 
    autofiles/schunk/attributes/blosc2.SChunk.SChunk.cbytes
    autofiles/schunk/attributes/blosc2.SChunk.SChunk.chunkshape

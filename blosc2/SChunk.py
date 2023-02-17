@@ -50,8 +50,8 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
 
 class Meta(Mapping):
     """
-    Class providing access to user meta on a :py:class:`SChunk`.
-    It will be available via the `.meta` property of a SChunk.
+    Class providing access to user meta on a :ref:`SChunk <SChunk>`.
+    It will be available via the `.meta` property of a :ref:`SChunk <SChunk>`.
     """
     def get(self, key, default=None):
         """Return the value for `key` if `key` is in the dictionary, else `default`.
@@ -145,6 +145,7 @@ class SChunk(blosc2_ext.SChunk):
 
                 contiguous: bool
                     If the chunks are stored contiguously or not.
+                    Default is True when :paramref:`urlpath` is not None and False otherwise.
                 urlpath: String
                     If the storage is persistent, the name of the file (when `contiguous = True`) or
                     the directory (if `contiguous = False`).

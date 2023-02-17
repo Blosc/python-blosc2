@@ -26,7 +26,7 @@ meta = {
     "m2": b"2222",
 }
 # Create a NDArray from a numpy array (on disk)
-a = blosc2.from_buffer(bytes(nparray), nparray.shape, urlpath=urlpath, dtype=dtype, meta=meta)
+a = blosc2.frombuffer(bytes(nparray), nparray.shape, urlpath=urlpath, dtype=dtype, meta=meta)
 print(a.info)
 
 # Read a b2nd array from disk

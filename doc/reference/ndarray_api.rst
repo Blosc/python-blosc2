@@ -20,7 +20,7 @@ Methods
     slice
     squeeze
     resize
-    to_buffer
+    tobytes
 
 Attributes
 ----------
@@ -51,6 +51,6 @@ Constructors
     asarray
     copy
     empty
-    from_buffer
+    frombuffer
     full
     zeros
