@@ -31,6 +31,8 @@ def test_schunk_numpy(contiguous, urlpath, mode, cparams, dparams, nchunks):
     if mode != "r" or urlpath is None:
         chunk_len = 200 * 1000
         schunk = blosc2.SChunk(chunksize=chunk_len * 4, mode=mode, **storage)
+        assert schunk.urlpath == urlpath
+        assert schunk.contiguous == contiguous
 
         for i in range(nchunks):
             buffer = i * np.arange(chunk_len, dtype="int32")
