@@ -915,6 +915,21 @@ cdef class SChunk:
         """
         return self.schunk.typesize
 
+    @property
+    def urlpath(self):
+        """
+        Path where the `SChunk` is stored.
+        """
+        urlpath = self.schunk.storage.urlpath
+        return urlpath.decode() if urlpath != NULL else None
+
+    @property
+    def contiguous(self):
+        """
+        Whether the `SChunk` is stored contiguously or sparsely.
+        """
+        return self.schunk.storage.contiguous
+
     def get_cparams(self):
         if self.schunk.storage.cparams.compcode in blosc2.Codec._value2member_map_:
             codec = blosc2.Codec(self.schunk.storage.cparams.compcode)
@@ -1564,8 +1579,8 @@ def meta_keys(self):
 
 
 def open(urlpath, mode, **kwargs):
-    urlpath = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
-    cdef blosc2_schunk* schunk = blosc2_schunk_open(urlpath)
+    urlpath_ = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
+    cdef blosc2_schunk* schunk = blosc2_schunk_open(urlpath_)
     if schunk == NULL:
         raise RuntimeError(f'blosc2_schunk_open({urlpath!r}) returned NULL')
 
@@ -1594,6 +1609,7 @@ def open(urlpath, mode, **kwargs):
             res.schunk.cparams = cparams
         if dparams is not None:
             res.schunk.dparams = dparams
+        res.schunk.mode = mode
     else:
         res = blosc2.SChunk(_schunk=PyCapsule_New(schunk, <char *> "blosc2_schunk*", NULL),
                             mode=mode, **kwargs)
@@ -1916,6 +1932,8 @@ cdef class NDArray:
         # shape will be overwritten by get_slice
         cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks,
                                                        self.dtype, kwargs)
+        if ctx == NULL:
+            raise RuntimeError("Error while creating the context")
         ndim = self.ndim
         cdef int64_t[B2ND_MAX_DIM] start_, stop_
         for i in range(ndim):
@@ -1972,6 +1990,8 @@ cdef class NDArray:
 
         chunks, blocks = blosc2.compute_chunks_blocks(self.shape, chunks, blocks, dtype, **kwargs)
         cdef b2nd_context_t *ctx = create_b2nd_context(self.shape, chunks, blocks, dtype, kwargs)
+        if ctx == NULL:
+            raise RuntimeError("Error while creating the context")
 
         cdef b2nd_array_t *array
         _check_rc(b2nd_copy(ctx, self.array, &array),
@@ -2020,7 +2040,7 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
         _urlpath = urlpath.encode() if isinstance(urlpath, str) else urlpath
         kwargs["urlpath"] = _urlpath
 
-    mode = mode = kwargs.get("mode", "a")
+    mode = kwargs.get("mode", "a")
     if kwargs is not None:
         if mode == "w":
             blosc2.remove_urlpath(urlpath)
@@ -2069,30 +2089,38 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
 
 def empty(shape, chunks, blocks, dtype, **kwargs):
     cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
+    if ctx == NULL:
+        raise RuntimeError("Error while creating the context")
 
     cdef b2nd_array_t *array
     _check_rc(b2nd_empty(ctx, &array), "Could not build empty array")
+    _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
-    _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
+    ndarray.schunk.mode = kwargs.get("mode", "a")
 
     return ndarray
 
 
 def zeros(shape, chunks, blocks, dtype, **kwargs):
     cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
+    if ctx == NULL:
+        raise RuntimeError("Error while creating the context")
 
     cdef b2nd_array_t *array
     _check_rc(b2nd_zeros(ctx, &array), "Could not build zeros array")
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
     _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
+    ndarray.schunk.mode = kwargs.get("mode", "a")
 
     return ndarray
 
 
 def full(shape, chunks, blocks, fill_value, dtype, **kwargs):
     cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
+    if ctx == NULL:
+        raise RuntimeError("Error while creating the context")
 
     dtype = np.dtype(dtype)
     nparr = np.array([fill_value], dtype=dtype)
@@ -2106,12 +2134,15 @@ def full(shape, chunks, blocks, fill_value, dtype, **kwargs):
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
     _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
+    ndarray.schunk.mode = kwargs.get("mode", "a")
 
     return ndarray
 
 
 def from_buffer(buf, shape, chunks, blocks, dtype, **kwargs):
     cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
+    if ctx == NULL:
+        raise RuntimeError("Error while creating the context")
 
     cdef b2nd_array_t *array
     _check_rc(b2nd_from_cbuffer(ctx, &array,  <void*> <char *> buf, len(buf)),
@@ -2119,6 +2150,7 @@ def from_buffer(buf, shape, chunks, blocks, dtype, **kwargs):
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
     _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
+    ndarray.schunk.mode = kwargs.get("mode", "a")
 
     return ndarray
 
@@ -2130,6 +2162,8 @@ def asarray(ndarray, chunks, blocks, dtype, **kwargs):
 
     shape = interface["shape"]
     cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
+    if ctx == NULL:
+        raise RuntimeError("Error while creating the context")
 
     cdef b2nd_array_t *array
     _check_rc(b2nd_from_cbuffer(ctx, &array, <void *> <char *> buf.buf, buf.len),
@@ -2138,5 +2172,6 @@ def asarray(ndarray, chunks, blocks, dtype, **kwargs):
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
     _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
+    ndarray.schunk.mode = kwargs.get("mode", "a")
 
     return ndarray

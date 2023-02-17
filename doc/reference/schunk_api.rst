@@ -44,13 +44,15 @@ Attributes
    autofiles/schunk/attributes/blosc2.SChunk.SChunk.cbytes
    autofiles/schunk/attributes/blosc2.SChunk.SChunk.chunkshape
    autofiles/schunk/attributes/blosc2.SChunk.SChunk.chunksize
+   autofiles/schunk/attributes/blosc2.SChunk.SChunk.contiguous
    autofiles/schunk/attributes/blosc2.SChunk.SChunk.cparams
    autofiles/schunk/attributes/blosc2.SChunk.SChunk.cratio
    autofiles/schunk/attributes/blosc2.SChunk.SChunk.dparams
+   autofiles/schunk/attributes/meta
    autofiles/schunk/attributes/blosc2.SChunk.SChunk.nbytes
    autofiles/schunk/attributes/blosc2.SChunk.SChunk.typesize
+   autofiles/schunk/attributes/blosc2.SChunk.SChunk.urlpath
    autofiles/schunk/attributes/vlmeta
-   autofiles/schunk/attributes/meta
 
 Functions
 ---------

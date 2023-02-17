@@ -182,10 +182,10 @@ class SChunk(blosc2_ext.SChunk):
             for kwarg in kwargs.keys():
                 if kwarg not in allowed_kwargs:
                     raise ValueError(f"{kwarg} is not supported as keyword argument")
-        self.urlpath = kwargs.get("urlpath")
+        urlpath = kwargs.get("urlpath")
         if 'contiguous' not in kwargs:
             # Make contiguous true for disk, else sparse (for in-memory performance)
-            kwargs['contiguous'] = False if self.urlpath is None else True
+            kwargs['contiguous'] = False if urlpath is None else True
 
         # This a private param to get an SChunk from a blosc2_schunk*
         sc = kwargs.pop("_schunk", None)
