@@ -134,6 +134,7 @@ class NDArray(blosc2_ext.NDArray):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
+        blosc2_ext._check_access_mode(self.schunk.urlpath, self.schunk.mode)
         key, _ = process_key(key, self.shape)
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
@@ -248,6 +249,7 @@ class NDArray(blosc2_ext.NDArray):
         >>> b.shape
         (50, 10)
         """
+        blosc2_ext._check_access_mode(self.schunk.urlpath, self.schunk.mode)
         return super(NDArray, self).resize(newshape)
 
     def slice(self, key, **kwargs):
