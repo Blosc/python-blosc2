@@ -38,15 +38,14 @@ chunks = (20, 500, 50)
 blocks = (10, 100, 25)
 # This config generates containers of more than 2 GB in size
 # shape = (250, 4000, 350)
-# pshape = (200, 100, 100)
 dtype = np.float64
 
 # Compression properties
-cparams = {"codec": blosc2.Codec.ZSTD, "clevel": 6, "filters": [blosc2.Filter.SHUFFLE],
+cparams = {"codec": blosc2.Codec.LZ4, "clevel": 9, "filters": [blosc2.Filter.SHUFFLE],
            "filters_meta": [0], "nthreads": 1}
 dparams = {"nthreads": 1}
-cname = "zstd"
-clevel = 6
+cname = "lz4"
+clevel = 9
 filter = blosc2.Filter.SHUFFLE
 zfilter = numcodecs.Blosc.SHUFFLE
 nthreads = 1
@@ -64,9 +63,10 @@ if persistent:
     blosc2.remove_urlpath(fname_h5)
 
 # Create content for populating arrays
-content = np.random.normal(0, 1, int(np.prod(shape))).reshape(shape)
+# content = np.random.normal(0, 1, int(np.prod(shape))).reshape(shape)
+content = np.linspace(0, 1, int(np.prod(shape))).reshape(shape)
 
-# Create and fill a b2nd array using a block iterator
+# Create and fill a NDArray
 t0 = time()
 a = blosc2.empty(shape, dtype=content.dtype, chunks=chunks, blocks=blocks,
                  urlpath=fname_b2nd, cparams=cparams)
@@ -75,7 +75,7 @@ acratio = a.schunk.cratio
 if persistent:
     del a
 t1 = time()
-print("Time for filling array (b2nd, iter): %.3fs ; CRatio: %.1fx" % ((t1 - t0), acratio))
+print("Time for filling array (blosc2): %.3fs ; CRatio: %.1fx" % ((t1 - t0), acratio))
 
 # Create and fill a zarr array
 t0 = time()
@@ -94,7 +94,7 @@ print("Time for filling array (zarr): %.3fs ; CRatio: %.1fx" % ((t1 - t0), zrati
 
 # Create and fill a hdf5 array
 t0 = time()
-filters = tables.Filters(complevel=clevel, complib="blosc:%s" % cname, shuffle=True)
+filters = tables.Filters(complevel=clevel, complib="blosc2:%s" % cname, shuffle=True)
 tables.set_blosc_max_threads(nthreads)
 if persistent:
     h5f = tables.open_file(fname_h5, 'w')
@@ -108,42 +108,73 @@ if persistent:
 t1 = time()
 print("Time for filling array (hdf5): %.3fs ; CRatio: %.1fx" % ((t1 - t0), h5ratio))
 
-# Setup the coordinates for random planes
-planes_idx = np.random.randint(0, shape[1], 100)
 
-# Time getitem with blosc2
-t0 = time()
-if persistent:
-    a = blosc2.open(fname_b2nd)  # reopen
-for i in planes_idx:
-    rbytes = a[:, i, :]
-del a
-t1 = time()
-print("Time for reading with getitem (blosc2): %.3fs" % (t1 - t0))
+for ndim in range(len(shape)):
+    print(f"Slicing in dim {ndim}...")
 
-# Time getitem with zarr
-t0 = time()
-if persistent:
-    z = zarr.open(fname_zarr, mode='r')
-for i in planes_idx:
-    block = z[:, i, :]
-del z
-t1 = time()
-print("Time for reading with getitem (zarr): %.3fs" % (t1 - t0))
+    # Setup the coordinates for random planes
+    planes_idx = np.random.randint(0, shape[ndim], 100)
 
-# Time getitem with hdf5
-t0 = time()
-if persistent:
-    h5f = tables.open_file(fname_h5, 'r', filters=filters)
-h5ca = h5f.root.carray
-for i in planes_idx:
-    block = h5ca[:, i, :]
-h5f.close()
-t1 = time()
-print("Time for reading with getitem (hdf5): %.3fs" % (t1 - t0))
+    # Time getitem with blosc2
+    t0 = time()
+    if persistent:
+        a = blosc2.open(fname_b2nd)  # reopen
+    if ndim == 0:
+        for i in planes_idx:
+            rbytes = a[i, :, :]
+    elif ndim == 1:
+        for i in planes_idx:
+            rbytes = a[:, i, :]
+    else:
+        for i in planes_idx:
+            rbytes = a[:, :, i]
 
+    t1 = time()
+    print("Time for reading with getitem (blosc2): %.3fs" % (t1 - t0))
 
-if persistent:
-    os.remove(fname_b2nd)
-    shutil.rmtree(fname_zarr)
-    os.remove(fname_h5)
+    # Time getitem with zarr
+    t0 = time()
+    if persistent:
+        z = zarr.open(fname_zarr, mode='r')
+
+    if ndim == 0:
+        for i in planes_idx:
+            rbytes = z[i, :, :]
+    elif ndim == 1:
+        for i in planes_idx:
+            rbytes = z[:, i, :]
+    else:
+        for i in planes_idx:
+            rbytes = z[:, :, i]
+
+    t1 = time()
+    print("Time for reading with getitem (zarr): %.3fs" % (t1 - t0))
+
+    # Time getitem with hdf5
+    t0 = time()
+    if persistent:
+        h5f = tables.open_file(fname_h5, 'r', driver='H5FD_CORE')
+    h = h5f.root.carray
+
+    if ndim == 0:
+        for i in planes_idx:
+            rbytes = h[i, :, :]
+    elif ndim == 1:
+        for i in planes_idx:
+            rbytes = h[:, i, :]
+    else:
+        for i in planes_idx:
+            rbytes = h[:, :, i]
+
+    if persistent:
+        h5f.close()
+    t1 = time()
+    print("Time for reading with getitem (hdf5): %.3fs" % (t1 - t0))
+    print()
+
+if not persistent:
+    h5f.close()
+# if persistent:
+#     os.remove(fname_b2nd)
+#     shutil.rmtree(fname_zarr)
+#     os.remove(fname_h5)
