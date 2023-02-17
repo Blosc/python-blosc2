@@ -326,7 +326,7 @@ def empty(shape, dtype=np.uint8, **kwargs):
     ----------
     shape: int, tuple or list
         The shape for the final array.
-    dtype: np.dtype
+    dtype: NumPy.dtype
         The ndarray dtype in NumPy format. Default is `np.uint8`.
         This will override the `typesize`
         in the cparams in case they are passed.
@@ -425,7 +425,7 @@ def full(shape, fill_value, dtype=None, **kwargs):
         Default value to use for uninitialized portions of the array.
         Its size will override the `typesize`
         in the cparams in case they are passed.
-    dtype: np.dtype
+    dtype: NumPy.dtype
          The ndarray dtype in NumPy format. By default this will
          be taken from the :paramref:`fill_value`.
          This will override the `typesize`
@@ -475,8 +475,8 @@ def frombuffer(buffer, shape, dtype=np.uint8, **kwargs):
         The buffer of the data to populate the container.
     shape: int, tuple or list
         The shape for the final container.
-    dtype: np.dtype
-        The ndarray dtype in NumPy format. Default is `|S1`.
+    dtype: NumPy.dtype
+        The ndarray dtype in NumPy format. Default is `np.uint8`.
         This will override the `typesize`
         in the cparams in case they are passed.
 
@@ -527,7 +527,7 @@ def asarray(array, dtype=np.uint8, **kwargs):
     ----------
     array: array_like
         An array supporting the python buffer protocol and the numpy array interface.
-    dtype: np.dtype
+    dtype: NumPy.dtype
         The ndarray dtype in NumPy format. Default is `np.uint8`.
         This will override the `typesize`
         in the cparams in case they are passed.

@@ -50,6 +50,7 @@ def test_zeros(shape, chunks, blocks, dtype, cparams, urlpath, contiguous, meta)
 
     blosc2.remove_urlpath(urlpath)
 
+
 @pytest.mark.parametrize("shape, dtype",
                          [
                              (100, np.uint8),
@@ -66,8 +67,8 @@ def test_zeros_minimal(shape, dtype):
 
     dtype = np.dtype(dtype)
     assert (a.shape == shape or a.shape[0] == shape)
-    assert a.chunks != None
-    assert a.blocks != None
+    assert a.chunks is not None
+    assert a.blocks is not None
     assert all(c >= b for c, b in zip(a.chunks, a.blocks))
     assert a.dtype == dtype
     assert a.schunk.typesize == dtype.itemsize
