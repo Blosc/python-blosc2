@@ -7,6 +7,7 @@
 #######################################################################
 
 from enum import Enum
+
 import cpuinfo
 
 
@@ -45,31 +46,30 @@ class SplitMode(Enum):
 from .blosc2_ext import (
     EXTENDED_HEADER_LENGTH,
     MAX_BUFFERSIZE,
-    MAX_TYPESIZE,
     MAX_OVERHEAD,
+    MAX_TYPESIZE,
     MIN_HEADER_LENGTH,
     VERSION_DATE,
     VERSION_STRING,
 )
-
 
 cpu_info = cpuinfo.get_cpu_info()
 
 # Public API for container module
 from .core import (
     clib_info,
-    compute_chunks_blocks,
     compress,
     compress2,
     compressor_list,
+    compute_chunks_blocks,
     decompress,
     decompress2,
     detect_number_of_cores,
     free_resources,
     get_blocksize,
+    get_cbuffer_sizes,
     get_clib,
     get_compressor,
-    get_cbuffer_sizes,
     load_array,
     load_tensor,
     pack,
@@ -92,7 +92,7 @@ from .core import (
     unpack_array2,
     unpack_tensor,
 )
-from .ndarray import NDArray, asarray, copy, empty, from_buffer, full, zeros
+from .ndarray import NDArray, asarray, copy, empty, frombuffer, full, zeros
 from .SChunk import SChunk, open
 from .version import __version__
 

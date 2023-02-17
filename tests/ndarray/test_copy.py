@@ -25,12 +25,12 @@ def test_copy(shape, chunks1, blocks1, chunks2, blocks2, dtype):
     size = int(np.prod(shape))
     buffer = bytes(size * typesize)
     cparams1 = {"clevel": 2}
-    a = blosc2.from_buffer(buffer, shape, dtype=dtype, chunks=chunks1, blocks=blocks1,
-                           cparams=cparams1)
+    a = blosc2.frombuffer(buffer, shape, dtype=dtype, chunks=chunks1, blocks=blocks1,
+                          cparams=cparams1)
     cparams2 = {"clevel": 5, "filters": [blosc2.Filter.BITSHUFFLE], "filters_meta": [0]}
     b = a.copy(chunks=chunks2, blocks=blocks2,
                cparams=cparams2)
-    buffer2 = b.to_buffer()
+    buffer2 = b.tobytes()
     assert buffer == buffer2
 
 
@@ -48,6 +48,7 @@ def test_copy_numpy(shape, chunks1, blocks1, chunks2, blocks2, dtype):
     cparams = {"clevel": 5, "filters": [blosc2.Filter.BITSHUFFLE], "filters_meta": [0]}
     b = a.copy(chunks=chunks2, blocks=blocks2, cparams=cparams)
     np.testing.assert_almost_equal(b[...], nparray)
+
 
 @pytest.mark.parametrize("shape, dtype",
                          [

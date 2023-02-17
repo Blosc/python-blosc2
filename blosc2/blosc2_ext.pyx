@@ -1957,7 +1957,7 @@ cdef class NDArray:
 
         return self
 
-    def to_buffer(self):
+    def tobytes(self):
         buffersize = self.size
         buffer = bytes(buffersize)
         _check_rc(b2nd_to_cbuffer(self.array, <void *> <char *> buffer, buffersize),

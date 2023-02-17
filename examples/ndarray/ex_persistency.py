@@ -22,8 +22,8 @@ typesize = dtype.itemsize
 nparray = np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape)
 
 # Create a NDArray from a numpy array (on disk)
-a = blosc2.from_buffer(bytes(nparray), nparray.shape, dtype=dtype,
-                       urlpath=urlpath, contiguous=False)
+a = blosc2.frombuffer(bytes(nparray), nparray.shape, dtype=dtype,
+                      urlpath=urlpath, contiguous=False)
 
 # Read the array from disk
 b = blosc2.open(urlpath)

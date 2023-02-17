@@ -18,7 +18,7 @@ dtype = np.dtype(np.float64)
 buffer = bytes(np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape))
 
 # Create a NDArray from a buffer
-a = blosc2.from_buffer(buffer, shape, dtype=dtype, blocks=blocks)
+a = blosc2.frombuffer(buffer, shape, dtype=dtype, blocks=blocks)
 
 # Get a copy of a b2nd array
 b = blosc2.copy(a)
@@ -40,7 +40,7 @@ del b
 print(c)
 
 # Convert the copy to a buffer
-buffer1 = a.to_buffer()
-buffer2 = d.to_buffer()
+buffer1 = a.tobytes()
+buffer2 = d.tobytes()
 
 assert buffer1 == buffer2

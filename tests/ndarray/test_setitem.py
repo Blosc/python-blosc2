@@ -25,8 +25,8 @@ argvalues = [
 def test_setitem(shape, chunks, blocks, slices, dtype):
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
-    a = blosc2.from_buffer(bytes(nparray), nparray.shape, dtype=dtype,
-                           chunks=chunks, blocks=blocks)
+    a = blosc2.frombuffer(bytes(nparray), nparray.shape, dtype=dtype,
+                          chunks=chunks, blocks=blocks)
 
     # Python scalar
     nparray = a[...]

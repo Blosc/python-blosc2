@@ -85,14 +85,16 @@ class NDArray(blosc2_ext.NDArray):
         Examples
         --------
         >>> import blosc2
-        >>> import numpy as np
         >>> shape = [25, 10]
         >>> # Create an array
         >>> a = blosc2.full(shape, 3.3333)
-        >>> b = np.full(shape, 3.3333)
         >>> # Get slice as a NumPy array
-        >>> c = a[...]
-        >>> np.testing.assert_allclose(c, b)
+        >>> a[:5, :5]
+        array([[3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
+               [3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
+               [3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
+               [3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
+               [3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
         key, _ = process_key(key, self.shape)
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
@@ -118,14 +120,19 @@ class NDArray(blosc2_ext.NDArray):
         Examples
         --------
         >>> import blosc2
-        >>> import numpy as np
-        >>> shape = [25, 10]
         >>> # Create an array
-        >>> a = blosc2.full(shape, 3.3333)
+        >>> a = blosc2.full([8, 8], 3.3333)
         >>> # Set a slice to 0
         >>> a[:5, :5] = 0
-        >>> b = np.zeros([5, 5])
-        >>> assert np.array_equal(a[:5, :5], b)
+        >>> a[:]
+        array([[0.    , 0.    , 0.    , 0.    , 0.    , 3.3333, 3.3333, 3.3333],
+               [0.    , 0.    , 0.    , 0.    , 0.    , 3.3333, 3.3333, 3.3333],
+               [0.    , 0.    , 0.    , 0.    , 0.    , 3.3333, 3.3333, 3.3333],
+               [0.    , 0.    , 0.    , 0.    , 0.    , 3.3333, 3.3333, 3.3333],
+               [0.    , 0.    , 0.    , 0.    , 0.    , 3.3333, 3.3333, 3.3333],
+               [3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
+               [3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
+               [3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
         key, _ = process_key(key, self.shape)
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
@@ -139,12 +146,12 @@ class NDArray(blosc2_ext.NDArray):
 
         return super(NDArray, self).set_slice(key, value)
 
-    def to_buffer(self):
+    def tobytes(self):
         """Returns a buffer with the data contents.
 
         Returns
         -------
-        bytes
+        out: bytes
             The buffer containing the data of the whole array.
 
         Examples
@@ -156,9 +163,10 @@ class NDArray(blosc2_ext.NDArray):
         >>> a = np.arange(0, int(np.prod(shape)), dtype=dtype).reshape(shape)
         >>> # Create an array
         >>> b = blosc2.asarray(a, dtype=dtype)
-        >>> assert b.to_buffer() == bytes(a[...])
+        >>> b.tobytes() == bytes(a[...])
+        True
         """
-        return super(NDArray, self).to_buffer()
+        return super(NDArray, self).tobytes()
 
     def copy(self, dtype=None, **kwargs):
         """Create a copy of an array with same parameters.
@@ -194,7 +202,8 @@ class NDArray(blosc2_ext.NDArray):
         >>> a = blosc2.zeros(shape, blocks=blocks, dtype=dtype)
         >>> # Get a copy with default chunks and blocks
         >>> b = a.copy(chunks=None, blocks=None)
-        >>> assert np.array_equal(b[...], a[...])
+        >>> np.array_equal(b[...], a[...])
+        True
         """
         if dtype is None:
             dtype = self.dtype
@@ -211,7 +220,7 @@ class NDArray(blosc2_ext.NDArray):
         return super(NDArray, self).copy(dtype, **kwargs)
 
     def resize(self, newshape):
-        """Change the shape of the array by growing one or more dimensions.
+        """Change the shape of the array by growing or shrinking one or more dimensions.
 
         Parameters
         ----------
@@ -236,7 +245,8 @@ class NDArray(blosc2_ext.NDArray):
         >>> newshape = [50, 10]
         >>> # Extend first dimension, shrink second dimension
         >>> _ = b.resize(newshape)
-        >>> assert b.shape == tuple(newshape)
+        >>> b.shape
+        (50, 10)
         """
         return super(NDArray, self).resize(newshape)
 
@@ -259,6 +269,20 @@ class NDArray(blosc2_ext.NDArray):
         -------
         out: :ref:`NDArray <NDArray>`
             An array with the requested data.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> shape = [23, 11]
+        >>> a = np.arange(np.prod(shape)).reshape(shape)
+        >>> # Create an array
+        >>> b = blosc2.asarray(a, dtype=a.dtype)
+        >>> slices = (slice(3, 7), slice(1, 11))
+        >>> # Get a slice as a new NDArray
+        >>> c = b.slice(slices)
+        >>> c.shape
+        (4, 10)
         """
         _check_ndarray_kwargs(**kwargs)
         key, mask = process_key(key, self.shape)
@@ -267,7 +291,21 @@ class NDArray(blosc2_ext.NDArray):
         return super(NDArray, self).get_slice(key, mask, **kwargs)
 
     def squeeze(self):
-        """Remove the 1's in array's shape."""
+        """Remove the 1's in array's shape.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> shape = [1, 23, 1, 11, 1]
+        >>> # Create an array
+        >>> a = blosc2.full(shape, 2**30)
+        >>> a.shape
+        (1, 23, 1, 11, 1)
+        >>> # Squeeze the array
+        >>> a.squeeze()
+        >>> a.shape
+        (23, 11)
+        """
         super(NDArray, self).squeeze()
 
 
@@ -319,8 +357,10 @@ def empty(shape, dtype=np.uint8, **kwargs):
     >>> dtype = np.int32
     >>> # Create empty array with default chunks and blocks
     >>> array = blosc2.empty(shape, dtype=dtype)
-    >>> assert array.shape == tuple(shape)
-    >>> assert array.dtype == dtype
+    >>> array.shape
+    (20, 20)
+    >>> array.dtype
+    dtype('int32')
     """
     shape = _check_shape(shape)
     _check_ndarray_kwargs(**kwargs)
@@ -347,20 +387,20 @@ def zeros(shape, dtype=np.uint8, **kwargs):
     --------
     >>> import blosc2
     >>> import numpy as np
-    >>> shape = [25, 10]
-    >>> chunks = [10, 10]
+    >>> shape = [8, 8]
+    >>> chunks = [6, 5]
     >>> blocks = [5, 5]
     >>> dtype = np.float64
     >>> # Create zeros array
     >>> array = blosc2.zeros(shape, dtype=dtype, chunks=chunks, blocks=blocks)
-    >>> assert array.shape == tuple(shape)
-    >>> assert array.chunks == tuple(chunks)
-    >>> assert array.blocks == tuple(blocks)
-    >>> assert array.dtype == dtype
-    >>> # Get array data as a NumPy array ?? posar-ho en la gertitem???
-    >>> nparray = array[...]
-    >>> assert nparray.shape == array.shape
-    >>> assert nparray.dtype == array.dtype
+    >>> array.shape
+    (8, 8)
+    >>> array.chunks
+    (6, 5)
+    >>> array.blocks
+    (5, 5)
+    >>> array.dtype
+    dtype('float64')
     """
     shape = _check_shape(shape)
     _check_ndarray_kwargs(**kwargs)
@@ -406,12 +446,10 @@ def full(shape, fill_value, dtype=None, **kwargs):
     >>> shape = [25, 10]
     >>> # Create array filled with True
     >>> array = blosc2.full(shape, True)
-    >>> assert array.shape == tuple(shape)
-    >>> assert array.dtype == np.bool_
-    >>> # Get array data as a NumPy array
-    >>> nparray = array[...]
-    >>> assert nparray.shape == array.shape
-    >>> assert nparray.dtype == array.dtype
+    >>> array.shape
+    (25, 10)
+    >>> array.dtype
+    dtype('bool')
     """
     if isinstance(fill_value, bytes):
         dtype = np.dtype(f"S{len(fill_value)}")
@@ -426,7 +464,7 @@ def full(shape, fill_value, dtype=None, **kwargs):
     return arr
 
 
-def from_buffer(buffer, shape, dtype=np.dtype("|S1"), **kwargs):
+def frombuffer(buffer, shape, dtype=np.uint8, **kwargs):
     """Create an array out of a buffer.
 
     Parameters
@@ -461,10 +499,7 @@ def from_buffer(buffer, shape, dtype=np.dtype("|S1"), **kwargs):
     >>> # Create a buffer
     >>> buffer = bytes(np.random.normal(0, 1, np.prod(shape)) * typesize)
     >>> # Create a NDArray from a buffer with default blocks
-    >>> a = blosc2.from_buffer(buffer, shape, chunks=chunks, dtype=dtype)
-    >>> # Convert the array to a buffer
-    >>> buffer2 = a.to_buffer()
-    >>> assert buffer == buffer2
+    >>> a = blosc2.frombuffer(buffer, shape, chunks=chunks, dtype=dtype)
     """
     shape = _check_shape(shape)
     _check_ndarray_kwargs(**kwargs)
@@ -515,9 +550,6 @@ def asarray(array, dtype=np.uint8, **kwargs):
     >>> nparray = np.arange(0, np.prod(shape), dtype=dtype)
     >>> # Create a NDArray from a NumPy array
     >>> a = blosc2.asarray(nparray, dtype)
-    >>> # Convert the array to a buffer
-    >>> buffer2 = a.to_buffer()
-    >>> assert nparray.tobytes() == buffer2
     """
     _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
@@ -527,7 +559,7 @@ def asarray(array, dtype=np.uint8, **kwargs):
 
 
 def _check_ndarray_kwargs(**kwargs):
-    supported_keys = ["chunks", "blocks", "cparams", "dparams", "meta", "urlpath", "contiguous"]
+    supported_keys = ["chunks", "blocks", "cparams", "dparams", "meta", "urlpath", "contiguous", "mode"]
     for key in kwargs.keys():
         if key not in supported_keys:
             raise KeyError(f"Only {str(supported_keys)} are supported as keyword arguments")
