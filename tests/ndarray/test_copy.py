@@ -30,6 +30,17 @@ def test_copy(shape, chunks1, blocks1, chunks2, blocks2, dtype):
     cparams2 = {"clevel": 5, "filters": [blosc2.Filter.BITSHUFFLE], "filters_meta": [0]}
     b = a.copy(chunks=chunks2, blocks=blocks2,
                cparams=cparams2)
+    assert a.shape == b.shape
+    assert a.schunk.dparams == b.schunk.dparams
+    for key in cparams2.keys():
+        if key in ["filters", "filters_meta"]:
+            assert b.schunk.cparams[key][:len(cparams2[key])] == cparams2[key]
+            continue
+        assert b.schunk.cparams[key] == cparams2[key]
+    assert b.chunks == tuple(chunks2)
+    assert b.blocks == tuple(blocks2)
+    assert a.dtype == b.dtype
+
     buffer2 = b.tobytes()
     assert buffer == buffer2
 
