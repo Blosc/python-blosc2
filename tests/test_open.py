@@ -84,3 +84,8 @@ def test_open(contiguous, urlpath, cparams, dparams, nchunks, chunk_nitems, dtyp
                 assert np.array_equal(buffer, dest)
 
     blosc2.remove_urlpath(urlpath)
+
+
+def test_open_fake():
+    with pytest.raises(FileNotFoundError):
+        _ = blosc2.open("none.b2nd")

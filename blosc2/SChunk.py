@@ -6,6 +6,7 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+import os
 from collections.abc import Mapping, MutableMapping
 
 from msgpack import packb, unpackb
@@ -880,4 +881,6 @@ def open(urlpath, mode="a", **kwargs):
     True
     True
     """
+    if not os.path.exists(urlpath):
+        raise FileNotFoundError(f"No such file or directory: {urlpath}")
     return blosc2_ext.open(urlpath, mode, **kwargs)
