@@ -93,7 +93,7 @@ from .core import (
     unpack_tensor,
 )
 from .ndarray import NDArray, asarray, copy, empty, frombuffer, full, zeros
-from .SChunk import SChunk, open
+from .schunk import SChunk, open
 from .version import __version__
 
 # Registry for postfilters

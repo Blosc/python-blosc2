@@ -31,7 +31,8 @@ if persistent:
 else:
     urlpath = None
 
-storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+storage = {"contiguous": contiguous, "urlpath": urlpath,
+           "cparams": cparams, "dparams": dparams}
 blosc2.remove_urlpath(urlpath)
 
 # Create the empty SChunk
@@ -43,11 +44,10 @@ for i in range(nchunks):
     nchunks_ = schunk.append_data(buffer)
     assert nchunks_ == (i + 1)
 
-
 # Use get_slice for reading blocks individually
 t0 = time()
 for i in range(shape // blocksize):
-    _ = schunk.get_slice(start=i * blocksize, stop=(i+1) * blocksize - 1)
+    _ = schunk.get_slice(start=i * blocksize, stop=(i + 1) * blocksize - 1)
 t1 = time()
 print("Time for reading with get_slice: %.3fs" % (t1 - t0))
 
