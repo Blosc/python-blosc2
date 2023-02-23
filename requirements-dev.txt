@@ -1,0 +1,7 @@
+pre-commit
+black
+isort
+ruff
+h5py
+hdf5plugins
+zarr

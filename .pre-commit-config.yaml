@@ -1,17 +1,18 @@
 repos:
--   repo: https://github.com/pycqa/isort
-    rev: '5.8.0'
-    hooks:
-    - id: isort
-      exclude: blosc2/c-blosc2
--   repo: https://github.com/ambv/black
-    rev: 21.5b0
-    hooks:
-    - id: black
-      language_version: python3
-      exclude: blosc2/c-blosc2
--   repo: https://gitlab.com/pycqa/flake8
-    rev: '3.9.1'
-    hooks:
-    - id: flake8
-      exclude: blosc2/c-blosc2
+- repo: https://github.com/pycqa/isort
+  rev: '5.12.0'
+  hooks:
+  - id: isort
+    exclude: blosc2/c-blosc2
+- repo: https://github.com/ambv/black
+  rev: 23.1.0
+  hooks:
+  - id: black
+    language_version: python3
+    exclude: blosc2/c-blosc2
+- repo: https://github.com/charliermarsh/ruff-pre-commit
+  # Ruff version.
+  rev: 'v0.0.252'
+  hooks:
+  - id: ruff
+    exclude: blosc2/c-blosc2
