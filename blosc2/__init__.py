@@ -6,6 +6,10 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+# Hey Ruff, please ignore the next violations
+# ruff: noqa: E402 - Module level import not at top of file
+# ruff: noqa: F401 - `var` imported but unused
+
 from enum import Enum
 
 import cpuinfo
