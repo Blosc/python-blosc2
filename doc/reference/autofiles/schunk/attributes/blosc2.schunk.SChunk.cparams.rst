@@ -1,6 +1,6 @@
 ﻿SChunk.cparams
 ==============
 
-.. currentmodule:: blosc2.SChunk
+.. currentmodule:: blosc2.schunk
 
 .. autoproperty:: SChunk.cparams

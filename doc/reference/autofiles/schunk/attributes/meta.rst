@@ -2,18 +2,18 @@ SChunk.meta
 ===========
 Metalayers are small metadata for informing about the properties of data that is stored on a container. NDArray implements its own metalayer on top of C-Blosc2 for storing multidimensional information.
 
-.. currentmodule:: blosc2.SChunk
+.. currentmodule:: blosc2.schunk
 
 .. autoclass:: Meta
    :exclude-members: get, keys, items, values
 
-.. currentmodule:: blosc2.SChunk.Meta
+.. currentmodule:: blosc2.schunk.Meta
 
 Methods
 -------
 
 .. autosummary::
-    :toctree: autofiles/schunk/attributes/meta
+    :toctree: meta/
     :nosignatures:
 
     __getitem__

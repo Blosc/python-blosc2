@@ -1,6 +1,6 @@
 ﻿SChunk.prefilter
 ================
 
-.. currentmodule:: blosc2.SChunk
+.. currentmodule:: blosc2.schunk
 
 .. automethod:: SChunk.prefilter

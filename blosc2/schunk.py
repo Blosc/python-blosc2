@@ -9,9 +9,9 @@
 import os
 from collections.abc import Mapping, MutableMapping
 
-import numpy as np
 from msgpack import packb, unpackb
 
+import numpy as np
 from blosc2 import blosc2_ext
 
 
@@ -919,6 +919,7 @@ def open(urlpath, mode="a", **kwargs):
     True
     True
     True
+
     """
     if not os.path.exists(urlpath):
         raise FileNotFoundError(f"No such file or directory: {urlpath}")

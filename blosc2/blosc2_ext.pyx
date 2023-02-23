@@ -28,10 +28,10 @@ from libcpp cimport bool as c_bool
 
 from enum import Enum
 
-import numpy as np
 from msgpack import packb, unpackb
 
 import blosc2
+import numpy as np
 
 cimport numpy as np
 
@@ -1856,7 +1856,7 @@ cdef class NDArray:
 
     @property
     def chunksize(self):
-        """The chunk size (in bytes) for this container.
+        """The data chunk size (in bytes) for this container.
 
         This will not be the same as
         :attr:`SChunk.chunksize <blosc2.SChunk.SChunk.chunksize>`

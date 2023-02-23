@@ -3,7 +3,7 @@
 Super-chunk API
 ===============
 
-.. currentmodule:: blosc2.SChunk
+.. currentmodule:: blosc2.schunk
 
 Methods
 -------
@@ -41,17 +41,17 @@ Attributes
    :titlesonly:
    :maxdepth: 1
 
-   autofiles/schunk/attributes/blosc2.SChunk.SChunk.cbytes
-   autofiles/schunk/attributes/blosc2.SChunk.SChunk.chunkshape
-   autofiles/schunk/attributes/blosc2.SChunk.SChunk.chunksize
-   autofiles/schunk/attributes/blosc2.SChunk.SChunk.contiguous
-   autofiles/schunk/attributes/blosc2.SChunk.SChunk.cparams
-   autofiles/schunk/attributes/blosc2.SChunk.SChunk.cratio
-   autofiles/schunk/attributes/blosc2.SChunk.SChunk.dparams
+   autofiles/schunk/attributes/blosc2.schunk.SChunk.cbytes
+   autofiles/schunk/attributes/blosc2.schunk.SChunk.chunkshape
+   autofiles/schunk/attributes/blosc2.schunk.SChunk.chunksize
+   autofiles/schunk/attributes/blosc2.schunk.SChunk.contiguous
+   autofiles/schunk/attributes/blosc2.schunk.SChunk.cparams
+   autofiles/schunk/attributes/blosc2.schunk.SChunk.cratio
+   autofiles/schunk/attributes/blosc2.schunk.SChunk.dparams
    autofiles/schunk/attributes/meta
-   autofiles/schunk/attributes/blosc2.SChunk.SChunk.nbytes
-   autofiles/schunk/attributes/blosc2.SChunk.SChunk.typesize
-   autofiles/schunk/attributes/blosc2.SChunk.SChunk.urlpath
+   autofiles/schunk/attributes/blosc2.schunk.SChunk.nbytes
+   autofiles/schunk/attributes/blosc2.schunk.SChunk.typesize
+   autofiles/schunk/attributes/blosc2.schunk.SChunk.urlpath
    autofiles/schunk/attributes/vlmeta
 
 Functions

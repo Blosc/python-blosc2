@@ -1,6 +1,6 @@
 ﻿SChunk.to\_cframe
 =================
 
-.. currentmodule:: blosc2.SChunk
+.. currentmodule:: blosc2.schunk
 
 .. automethod:: SChunk.to_cframe

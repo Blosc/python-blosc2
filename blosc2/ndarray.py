@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Sequence
 
 import ndindex
-import numpy as np
 
+import numpy as np
 from blosc2 import blosc2_ext, compute_chunks_blocks
 
 from .info import InfoReporter
@@ -71,6 +71,20 @@ class NDArray(blosc2_ext.NDArray):
         :ref:`SChunk Attributes <SChunkAttributes>`
         """
         return self._schunk
+
+    @property
+    def blocksize(self):
+        """The block size (in bytes) for this container.
+
+        This is a shortcut to
+        :attr:`SChunk.blocksize <blosc2.SChunk.SChunk.blocksize>` and can be accessed
+        through the :attr:`schunk` attribute as well.
+
+        See Also
+        --------
+        :attr:`schunk`
+        """
+        return self._schunk.blocksize
 
     def __getitem__(self, key: int | slice | Sequence[slice]) -> np.ndarray:
         """Get a (multidimensional) slice as specified in key.

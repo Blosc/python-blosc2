@@ -34,6 +34,7 @@ Attributes
     chunks
     ext_chunks
     blocks
+    blocksize
     chunksize
     schunk
     size

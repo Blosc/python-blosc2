@@ -1,6 +1,6 @@
 ﻿SChunk.cratio
 =============
 
-.. currentmodule:: blosc2.SChunk
+.. currentmodule:: blosc2.schunk
 
 .. autoattribute:: SChunk.cratio

@@ -1,7 +1,7 @@
 ﻿SChunk.vlmeta
 =============
 
-.. currentmodule:: blosc2.SChunk
+.. currentmodule:: blosc2.schunk
 
 Accessor to the variable length metalayers.
     This class inherits from the
