@@ -14,12 +14,15 @@ import blosc2
 
 @pytest.mark.parametrize(
     "clevel, codec",
-    [(8, blosc2.Codec.BLOSCLZ), (9, blosc2.Codec.LZ4), (3, blosc2.Codec.LZ4HC),
-     (5, blosc2.Codec.ZLIB), (2, blosc2.Codec.ZSTD)],
+    [
+        (8, blosc2.Codec.BLOSCLZ),
+        (9, blosc2.Codec.LZ4),
+        (3, blosc2.Codec.LZ4HC),
+        (5, blosc2.Codec.ZLIB),
+        (2, blosc2.Codec.ZSTD),
+    ],
 )
-@pytest.mark.parametrize(
-    "filt", list(blosc2.Filter)
-)
+@pytest.mark.parametrize("filt", list(blosc2.Filter))
 def test_compressors(clevel, filt, codec):
     src = b"Something to be compressed" * 100
     dest = blosc2.compress(src, 1, clevel, filt, codec)

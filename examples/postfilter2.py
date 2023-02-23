@@ -33,7 +33,7 @@ schunk.get_slice(0, chunkshape * nchunks, out=out1)
 # Set postfilter with decorator
 @schunk.postfilter(input_dtype, output_dtype)
 def postfilter(input, output, offset):
-    output[:] = input <= np.datetime64('1997-12-31')
+    output[:] = input <= np.datetime64("1997-12-31")
 
 
 out2 = np.empty(chunkshape * nchunks, dtype=output_dtype)

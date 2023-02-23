@@ -21,13 +21,7 @@ import numpy as np
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 2}, {}, 0, 50, np.int16),
         ({"typesize": 4}, {"nthreads": 4}, 1, 200 * 100, float),
-        (
-         {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 2, "typesize": 1},
-         {},
-         5,
-         201,
-         np.int8
-         ),
+        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 2, "typesize": 1}, {}, 5, 201, np.int8),
         ({"codec": blosc2.Codec.LZ4HC, "typesize": 8}, {}, 10, 30 * 100, np.int64),
     ],
 )

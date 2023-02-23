@@ -36,8 +36,7 @@ def get_ndarray_start_stop(ndim, key, shape):
 
 class NDArray(blosc2_ext.NDArray):
     def __init__(self, **kwargs):
-        self._schunk = SChunk(_schunk=kwargs["_schunk"],
-                              _is_view=True)  # SChunk Python instance
+        self._schunk = SChunk(_schunk=kwargs["_schunk"], _is_view=True)  # SChunk Python instance
         super(NDArray, self).__init__(kwargs["_array"])
 
     @property
@@ -74,7 +73,7 @@ class NDArray(blosc2_ext.NDArray):
         return self._schunk
 
     def __getitem__(self, key: int | slice | Sequence[slice]) -> np.ndarray:
-        """ Get a (multidimensional) slice as specified in key.
+        """Get a (multidimensional) slice as specified in key.
 
         Parameters
         ----------
@@ -259,7 +258,7 @@ class NDArray(blosc2_ext.NDArray):
         return super(NDArray, self).resize(newshape)
 
     def slice(self, key, **kwargs):
-        """ Get a (multidimensional) slice as a new :ref:`NDArray <NDArray>`.
+        """Get a (multidimensional) slice as a new :ref:`NDArray <NDArray>`.
 
         Parameters
         ----------
@@ -471,8 +470,9 @@ def full(shape, fill_value, dtype=None, **kwargs):
     return arr
 
 
-def frombuffer(buffer: bytes, shape: int | tuple | list,
-               dtype: np.dtype = np.uint8, **kwargs: dict) -> NDArray:
+def frombuffer(
+    buffer: bytes, shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict
+) -> NDArray:
     """Create an array out of a buffer.
 
     Parameters
@@ -567,9 +567,16 @@ def asarray(array: np.ndarray, dtype: np.dtype = np.uint8, **kwargs: dict) -> ND
 
 
 def _check_ndarray_kwargs(**kwargs):
-    supported_keys = ["chunks", "blocks", "cparams", "dparams", "meta", "urlpath",
-                      "contiguous", "mode"]
+    supported_keys = [
+        "chunks",
+        "blocks",
+        "cparams",
+        "dparams",
+        "meta",
+        "urlpath",
+        "contiguous",
+        "mode",
+    ]
     for key in kwargs.keys():
         if key not in supported_keys:
-            raise KeyError(f"Only {str(supported_keys)} are supported as"
-                           f" keyword arguments")
+            raise KeyError(f"Only {str(supported_keys)} are supported as" f" keyword arguments")

@@ -32,7 +32,7 @@ def prefilter(input, output, offset):
 
 # Append data
 data = np.arange(200 * 1000 * nchunks, dtype=input_dtype)
-schunk[:200 * 1000 * nchunks] = data
+schunk[: 200 * 1000 * nchunks] = data
 
 # Check prefilter is applied correctly
 out2 = np.empty(200 * 1000 * nchunks, dtype=output_dtype)

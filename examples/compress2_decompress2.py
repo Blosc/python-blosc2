@@ -11,11 +11,13 @@ import numpy as np
 
 a = np.linspace(0, 1, 1_000_000, dtype=np.float64)
 typesize = a.dtype.itemsize
-c_bytesobj = blosc2.compress2(a, typesize=typesize,
-                              codec=blosc2.Codec.ZSTD,
-                              filters=[blosc2.Filter.TRUNC_PREC, blosc2.Filter.SHUFFLE],
-                              filters_meta=[20, 0],
-                              )
+c_bytesobj = blosc2.compress2(
+    a,
+    typesize=typesize,
+    codec=blosc2.Codec.ZSTD,
+    filters=[blosc2.Filter.TRUNC_PREC, blosc2.Filter.SHUFFLE],
+    filters_meta=[20, 0],
+)
 assert len(c_bytesobj) < (len(a) * typesize)
 cratio = (len(a) * typesize) / len(c_bytesobj)
 print("cratio: %.3f" % cratio)

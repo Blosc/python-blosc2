@@ -14,10 +14,8 @@ import numpy as np
 argnames = "shape, chunks, blocks, slices, dtype"
 argvalues = [
     ([456], [258], [73], slice(0, 1), np.int32),
-    ([77, 134, 13], [31, 13, 5], [7, 8, 3], (slice(3, 7), slice(50, 100), 7),
-     np.float64),
-    ([12, 13, 14, 15, 16], [5, 5, 5, 5, 5], [2, 2, 2, 2, 2], (slice(1, 3), ..., slice(3, 6)),
-     np.float32)
+    ([77, 134, 13], [31, 13, 5], [7, 8, 3], (slice(3, 7), slice(50, 100), 7), np.float64),
+    ([12, 13, 14, 15, 16], [5, 5, 5, 5, 5], [2, 2, 2, 2, 2], (slice(1, 3), ..., slice(3, 6)), np.float32),
 ]
 
 
@@ -25,8 +23,7 @@ argvalues = [
 def test_setitem(shape, chunks, blocks, slices, dtype):
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
-    a = blosc2.frombuffer(bytes(nparray), nparray.shape, dtype=dtype,
-                          chunks=chunks, blocks=blocks)
+    a = blosc2.frombuffer(bytes(nparray), nparray.shape, dtype=dtype, chunks=chunks, blocks=blocks)
 
     # Python scalar
     nparray = a[...]

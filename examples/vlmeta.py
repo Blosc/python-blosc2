@@ -30,5 +30,5 @@ schunk.vlmeta["vlmeta2"] = "second vlmeta"
 assert "vlmeta2" in schunk.vlmeta
 
 # Delete a vlmeta
-del schunk.vlmeta['vlmeta2']
-assert 'vlmeta2' not in schunk.vlmeta
+del schunk.vlmeta["vlmeta2"]
+assert "vlmeta2" not in schunk.vlmeta

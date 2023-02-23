@@ -45,13 +45,17 @@ def decoder1(input, output, meta, schunk):
 
 
 # Register codec
-codec_name = 'codec'
+codec_name = "codec"
 id = 180
 blosc2.register_codec(codec_name, id, encoder1, decoder1)
 
 # Set the compression and decompression parameters
-cparams = {"typesize": dtype.itemsize, "nthreads": 1, "filters": [blosc2.Filter.NOFILTER],
-           "filters_meta": [0]}
+cparams = {
+    "typesize": dtype.itemsize,
+    "nthreads": 1,
+    "filters": [blosc2.Filter.NOFILTER],
+    "filters_meta": [0],
+}
 dparams = {"nthreads": 1}
 cparams["codec"] = id
 

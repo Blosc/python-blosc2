@@ -62,7 +62,7 @@ class TestCodec(unittest.TestCase):
             self.assertEqual(s, d)
 
     def test_set_nthreads_exceptions(self):
-        self.assertRaises(ValueError, blosc2.set_nthreads, 2 ** 31)
+        self.assertRaises(ValueError, blosc2.set_nthreads, 2**31)
 
     def test_compress_input_types(self):
         import numpy as np
@@ -145,7 +145,6 @@ class TestCodec(unittest.TestCase):
 
     @unittest.skipIf(not has_numpy, "Numpy not available")
     def test_pack_array_exceptions(self):
-
         self.assertRaises(AttributeError, blosc2.pack_array, "abc")
         self.assertRaises(AttributeError, blosc2.pack_array, 1.0)
 
@@ -182,7 +181,6 @@ class TestCodec(unittest.TestCase):
 
     @unittest.skipIf(not psutil, "psutil not available, cannot test for leaks")
     def test_no_leaks(self):
-
         num_elements = 10000000
         typesize = 8
         data = [float(i) for i in range(num_elements)]  # ~76MB
@@ -212,10 +210,10 @@ class TestCodec(unittest.TestCase):
 
     def test_get_blocksize(self):
         s = b"0123456789" * 1000
-        blosc2.set_blocksize(2 ** 14)
+        blosc2.set_blocksize(2**14)
         blosc2.compress(s, typesize=1)
         d = blosc2.get_blocksize()
-        self.assertEqual(d, 2 ** 14)
+        self.assertEqual(d, 2**14)
 
     def test_bitshuffle_not_multiple(self):
         # Check the fix for #133
@@ -229,8 +227,9 @@ class TestCodec(unittest.TestCase):
     def test_bitshuffle_leftovers(self):
         # Test for https://github.com/blosc2/c-blosc22/pull/100
         buffer = b" " * 641091  # a buffer that is not divisible by 8
-        self.assertRaises(ValueError, blosc2.compress, buffer, typesize=8,
-                          filter=blosc2.Filter.BITSHUFFLE, clevel=1)
+        self.assertRaises(
+            ValueError, blosc2.compress, buffer, typesize=8, filter=blosc2.Filter.BITSHUFFLE, clevel=1
+        )
         cbuffer = blosc2.compress(buffer, filter=blosc2.Filter.BITSHUFFLE, clevel=1)
         dbuffer = blosc2.decompress(cbuffer)
         self.assertTrue(buffer == dbuffer)

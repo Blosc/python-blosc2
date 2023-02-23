@@ -15,6 +15,7 @@ class Codec(Enum):
     """
     Available codecs.
     """
+
     BLOSCLZ = 0
     LZ4 = 1
     LZ4HC = 2
@@ -26,6 +27,7 @@ class Filter(Enum):
     """
     Available filters.
     """
+
     NOFILTER = 0
     SHUFFLE = 1
     BITSHUFFLE = 2
@@ -37,6 +39,7 @@ class SplitMode(Enum):
     """
     Available split modes.
     """
+
     ALWAYS_SPLIT = 1
     NEVER_SPLIT = 2
     AUTO_SPLIT = 3
@@ -118,40 +121,35 @@ set_nthreads(nthreads)
 
 # Defaults for compression params
 cparams_dflts = {
-    'codec': Codec.BLOSCLZ,
-    'codec_meta': 0,
-    'clevel': 5,
-    'use_dict': False,
-    'typesize': 8,
-    'nthreads': nthreads,
-    'blocksize': 0,
-    'splitmode': SplitMode.FORWARD_COMPAT_SPLIT,
-    'schunk': None,
-    'filters': [Filter.NOFILTER, Filter.NOFILTER, Filter.NOFILTER,
-                Filter.NOFILTER, Filter.NOFILTER, Filter.SHUFFLE],
-    'filters_meta': [0, 0, 0, 0, 0, 0],
-    'prefilter': None,
-    'preparams': None,
-    'udbtune': None,
-    'instr_codec': False
+    "codec": Codec.BLOSCLZ,
+    "codec_meta": 0,
+    "clevel": 5,
+    "use_dict": False,
+    "typesize": 8,
+    "nthreads": nthreads,
+    "blocksize": 0,
+    "splitmode": SplitMode.FORWARD_COMPAT_SPLIT,
+    "schunk": None,
+    "filters": [
+        Filter.NOFILTER,
+        Filter.NOFILTER,
+        Filter.NOFILTER,
+        Filter.NOFILTER,
+        Filter.NOFILTER,
+        Filter.SHUFFLE,
+    ],
+    "filters_meta": [0, 0, 0, 0, 0, 0],
+    "prefilter": None,
+    "preparams": None,
+    "udbtune": None,
+    "instr_codec": False,
 }
 
 # Defaults for decompression params
-dparams_dflts = {
-    'nthreads': nthreads,
-    'schunk': None,
-    'postfilter': None,
-    'postparams': None
-}
+dparams_dflts = {"nthreads": nthreads, "schunk": None, "postfilter": None, "postparams": None}
 
 # Default for storage
-storage_dflts = {
-    'contiguous': False,
-    'urlpath': None,
-    'cparams': None,
-    'dparams': None,
-    'io': None
-}
+storage_dflts = {"contiguous": False, "urlpath": None, "cparams": None, "dparams": None, "io": None}
 
 
 __all__ = [

@@ -12,14 +12,16 @@ import blosc2
 import numpy as np
 
 
-@pytest.mark.parametrize("shape, dtype, urlpath",
-                         [
-                             ((100, 123), "f4,f8", None),
-                             ((234, 125), "f4,(2,)f8", "test1.b2nd"),
-                             (80, [('f0', '<f4'), ('f1', '<f8')], "test2.b2nd"),
-                             ((40,), [('field 1', '<f4'), ('mamà', '<f8')], None),
-                             ((40,), [('field 1', '<f4'), ('mamà', '<f8')], "test3.b2nd"),
-                         ])
+@pytest.mark.parametrize(
+    "shape, dtype, urlpath",
+    [
+        ((100, 123), "f4,f8", None),
+        ((234, 125), "f4,(2,)f8", "test1.b2nd"),
+        (80, [("f0", "<f4"), ("f1", "<f8")], "test2.b2nd"),
+        ((40,), [("field 1", "<f4"), ("mamà", "<f8")], None),
+        ((40,), [("field 1", "<f4"), ("mamà", "<f8")], "test3.b2nd"),
+    ],
+)
 def test_scalar(shape, dtype, urlpath):
     blosc2.remove_urlpath(urlpath)
 
@@ -28,7 +30,7 @@ def test_scalar(shape, dtype, urlpath):
     assert np.array_equal(a[:], b)
 
     dtype = np.dtype(dtype)
-    assert (a.shape == shape or a.shape[0] == shape)
+    assert a.shape == shape or a.shape[0] == shape
     assert a.dtype == dtype
     assert a.schunk.typesize == dtype.itemsize
     assert a.shape == b.shape

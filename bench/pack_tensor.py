@@ -48,12 +48,12 @@ if store:
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for tensorflow (tf.io.serialize):\t%.3f s (%.2f GB/s)) "
-        % (tc, ((N * 8 / tc) / 2 ** 30)), end=""
+        "  Time for tensorflow (tf.io.serialize):\t%.3f s (%.2f GB/s)) " % (tc, ((N * 8 / tc) / 2**30)),
+        end="",
     )
     print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
 
-    with open("serialize_tensorflow.bin", 'wb') as f:
+    with open("serialize_tensorflow.bin", "wb") as f:
         f.write(c)
 
     # Standard PyTorch serialization
@@ -65,14 +65,13 @@ if store:
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for torch (torch.save):\t\t\t%.3f s (%.2f GB/s)) "
-        % (tc, ((N * 8 / tc) / 2 ** 30)), end=""
+        "  Time for torch (torch.save):\t\t\t%.3f s (%.2f GB/s)) " % (tc, ((N * 8 / tc) / 2**30)), end=""
     )
     buff.seek(0)
     c = buff.read()
     print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
 
-    with open("serialize_torch.bin", 'wb') as f:
+    with open("serialize_torch.bin", "wb") as f:
         f.write(c)
 
     codec = blosc2.Codec.LZ4
@@ -86,12 +85,12 @@ if store:
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for tensorflow (blosc2.pack_tensor):\t%.3f s (%.2f GB/s)) "
-        % (tc, ((N * 8 / tc) / 2 ** 30)), end=""
+        "  Time for tensorflow (blosc2.pack_tensor):\t%.3f s (%.2f GB/s)) " % (tc, ((N * 8 / tc) / 2**30)),
+        end="",
     )
     print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
 
-    with open("pack_tensorflow.bl2", 'wb') as f:
+    with open("pack_tensorflow.bl2", "wb") as f:
         f.write(c)
 
     tt = torch.from_numpy(in_)
@@ -102,16 +101,16 @@ if store:
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for torch (blosc2.pack_tensor):\t\t%.3f s (%.2f GB/s)) "
-        % (tc, ((N * 8 / tc) / 2 ** 30)), end=""
+        "  Time for torch (blosc2.pack_tensor):\t\t%.3f s (%.2f GB/s)) " % (tc, ((N * 8 / tc) / 2**30)),
+        end="",
     )
     print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
 
-    with open("pack_torch.bl2", 'wb') as f:
+    with open("pack_torch.bl2", "wb") as f:
         f.write(c)
 
 if True:
-    with open("serialize_tensorflow.bin", 'rb') as f:
+    with open("serialize_tensorflow.bin", "rb") as f:
         c = f.read()
 
     out = None
@@ -121,11 +120,10 @@ if True:
     dtoc = time.time()
     td = (dtoc - dtic) / NREP
     print(
-        "  Time for tensorflow (tf.io.parse_tensor):\t%.3f s (%.2f GB/s)) "
-        % (td, ((N * 8 / td) / 2 ** 30)),
+        "  Time for tensorflow (tf.io.parse_tensor):\t%.3f s (%.2f GB/s)) " % (td, ((N * 8 / td) / 2**30)),
     )
 
-    with open("serialize_torch.bin", 'rb') as f:
+    with open("serialize_torch.bin", "rb") as f:
         buff = io.BytesIO(f.read())
 
     out = None
@@ -136,11 +134,10 @@ if True:
     dtoc = time.time()
     td = (dtoc - dtic) / NREP
     print(
-        "  Time for torch (torch.load):\t\t\t%.3f s (%.2f GB/s)) "
-        % (td, ((N * 8 / td) / 2 ** 30)),
+        "  Time for torch (torch.load):\t\t\t%.3f s (%.2f GB/s)) " % (td, ((N * 8 / td) / 2**30)),
     )
 
-    with open("pack_tensorflow.bl2", 'rb') as f:
+    with open("pack_tensorflow.bl2", "rb") as f:
         c = f.read()
 
     out = None
@@ -151,11 +148,11 @@ if True:
     td = (dtoc - dtic) / NREP
     print(
         "  Time for tensorflow (blosc2.unpack_tensor):\t%.3f s (%.2f GB/s)) "
-        % (td, ((N * 8 / td) / 2 ** 30)),
+        % (td, ((N * 8 / td) / 2**30)),
     )
     assert np.array_equal(in_, out)
 
-    with open("pack_torch.bl2", 'rb') as f:
+    with open("pack_torch.bl2", "rb") as f:
         c = f.read()
 
     out = None
@@ -167,7 +164,6 @@ if True:
 
     td = (dtoc - dtic) / NREP
     print(
-        "  Time for torch (blosc2.unpack_tensor):\t%.3f s (%.2f GB/s)) "
-        % (td, ((N * 8 / td) / 2 ** 30)),
+        "  Time for torch (blosc2.unpack_tensor):\t%.3f s (%.2f GB/s)) " % (td, ((N * 8 / td) / 2**30)),
     )
     assert np.array_equal(in_, out)

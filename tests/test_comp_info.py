@@ -25,5 +25,5 @@ def test_comp_info(codec):
     assert nbytes == arr.size * arr.dtype.itemsize
     assert cbytes == blosc2.MAX_OVERHEAD
     # When raising the next limit when this would fail in the future, one should raise the SIZE too
-    assert blocksize <= 2 ** 23
+    assert blocksize <= 2**23
     blosc2.print_versions()

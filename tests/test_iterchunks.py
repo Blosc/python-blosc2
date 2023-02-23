@@ -19,11 +19,7 @@ import numpy as np
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {"nthreads": 1}, 0),
         ({"typesize": 4}, {"nthreads": 1}, 1),
-        (
-                {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4},
-                {"nthreads": 1},
-                5
-        ),
+        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {"nthreads": 1}, 5),
         ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {"nthreads": 1}, 10),
     ],
 )
@@ -53,11 +49,7 @@ def test_iterchunks(contiguous, urlpath, cparams, dparams, nchunks):
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {"nthreads": 1}, 2),
         ({"typesize": 4}, {"nthreads": 1}, 1),
-        (
-                {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4},
-                {"nthreads": 1},
-                5
-        ),
+        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {"nthreads": 1}, 5),
         ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {"nthreads": 1}, 3),
     ],
 )
@@ -75,6 +67,6 @@ def test_iterchunks_pf(contiguous, urlpath, cparams, dparams, nchunks):
 
     data -= 1
     for i, chunk in enumerate(schunk.iterchunks(np.int32)):
-        assert np.array_equal(chunk, data[i * chunkshape:(i + 1) * chunkshape])
+        assert np.array_equal(chunk, data[i * chunkshape : (i + 1) * chunkshape])
 
     blosc2.remove_urlpath(urlpath)

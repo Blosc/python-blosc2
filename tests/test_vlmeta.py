@@ -78,14 +78,14 @@ def add(schunk):
 
 def delete(schunk):
     # Remove one of them
-    assert('vlmeta2' in schunk.vlmeta)
-    del schunk.vlmeta['vlmeta2']
-    assert 'vlmeta2' not in schunk.vlmeta
-    assert(schunk.vlmeta['vlmeta1'] == b'val1')
-    assert(schunk.vlmeta['vlmeta3'] == {b"lorem": 4231})
+    assert "vlmeta2" in schunk.vlmeta
+    del schunk.vlmeta["vlmeta2"]
+    assert "vlmeta2" not in schunk.vlmeta
+    assert schunk.vlmeta["vlmeta1"] == b"val1"
+    assert schunk.vlmeta["vlmeta3"] == {b"lorem": 4231}
     with pytest.raises(KeyError):
-        schunk.vlmeta['vlmeta2']
-    assert(len(schunk.vlmeta) == 2)
+        schunk.vlmeta["vlmeta2"]
+    assert len(schunk.vlmeta) == 2
 
 
 def iter(schunk):
