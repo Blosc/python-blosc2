@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Sequence
 
 import ndindex
-
 import numpy as np
+
 from blosc2 import blosc2_ext, compute_chunks_blocks
 
 from .info import InfoReporter

@@ -50,7 +50,7 @@ setup(
     version=VERSION,
     description="Python wrapper for the C-Blosc2 library.",
     long_description=long_description,
-    long_description_content_type='text/x-rst',
+    long_description_content_type="text/x-rst",
     classifiers=[c for c in classifiers.split("\n") if c],
     python_requires=">=3.8, <4",
     author="Blosc Development Team",
@@ -62,5 +62,5 @@ setup(
     platforms=["any"],
     packages=["blosc2"],
     package_dir={"blosc2": "blosc2"},
-    install_requires=open("requirements-runtime.txt").read().split()
+    install_requires=open("requirements-runtime.txt").read().split(),
 )

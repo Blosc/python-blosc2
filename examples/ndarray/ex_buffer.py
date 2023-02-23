@@ -6,8 +6,9 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 np.random.seed(123)
 

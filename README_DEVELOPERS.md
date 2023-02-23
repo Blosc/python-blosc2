@@ -6,8 +6,8 @@ the pre-commit actions by following the [instructions](https://pre-commit.com/#i
 As the config files are already there, this essentially boils down to:
 
 ``` bash
-  $ pip install pre-commit
-  $ pre-commit install
+  python -m pip install pre-commit
+  pre-commit install
 ```
 
 You are done!

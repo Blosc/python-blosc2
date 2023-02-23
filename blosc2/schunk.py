@@ -8,8 +8,10 @@
 
 import os
 from collections.abc import Mapping, MutableMapping
-from msgpack import packb, unpackb
+
 import numpy as np
+from msgpack import packb, unpackb
+
 from blosc2 import blosc2_ext
 
 

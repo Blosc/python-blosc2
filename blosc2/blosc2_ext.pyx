@@ -28,10 +28,10 @@ from libcpp cimport bool as c_bool
 
 from enum import Enum
 
+import numpy as np
 from msgpack import packb, unpackb
 
 import blosc2
-import numpy as np
 
 cimport numpy as np
 

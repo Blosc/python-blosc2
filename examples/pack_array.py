@@ -7,9 +7,10 @@
 #######################################################################
 
 
+import numpy as np
+
 # A simple example using the pack and unpack functions
 import blosc2
-import numpy as np
 
 a = np.array(["å", "ç", "ø"])
 parray = blosc2.pack(a, 9)

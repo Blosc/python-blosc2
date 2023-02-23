@@ -6,10 +6,10 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+import numpy as np
 import pytest
 
 import blosc2
-import numpy as np
 
 
 @pytest.mark.parametrize(
@@ -105,8 +105,8 @@ def test_empty_minimal(shape, dtype):
 
     dtype = np.dtype(dtype)
     assert a.shape == shape or a.shape[0] == shape
-    assert a.chunks != None
-    assert a.blocks != None
+    assert a.chunks is not None
+    assert a.blocks is not None
     assert all(c >= b for c, b in zip(a.chunks, a.blocks))
     assert a.dtype == dtype
     assert a.schunk.typesize == dtype.itemsize

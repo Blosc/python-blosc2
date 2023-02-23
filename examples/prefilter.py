@@ -6,8 +6,9 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 nchunks = 3
 input_dtype = np.dtype(np.int32)

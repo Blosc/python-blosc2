@@ -10,8 +10,9 @@ import os
 import pickle
 import sys
 
-import blosc2
 import numpy as np
+
+import blosc2
 from blosc2 import blosc2_ext
 
 

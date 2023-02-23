@@ -6,8 +6,9 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 shape = (10, 10)
 slices = (slice(2, 5), slice(4, 8))

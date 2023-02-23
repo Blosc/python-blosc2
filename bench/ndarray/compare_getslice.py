@@ -16,17 +16,17 @@
 
 import math
 import os
-import shutil
 import sys
 from time import time
+
+import h5py
 import hdf5plugin
 import numcodecs
-import tables
-import h5py
-import zarr
-import blosc2
 import numpy as np
+import tables
+import zarr
 
+import blosc2
 
 persistent = True if len(sys.argv) == 1 else False
 if persistent:

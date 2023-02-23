@@ -6,8 +6,9 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 np.random.seed(123)
 
@@ -21,12 +22,19 @@ shape, chunks, blocks, typesize, codec, clevel, use_dict, nthreads, filters = (
     5,
     False,
     2,
-    [blosc2.Filter.DELTA, blosc2.Filter.TRUNC_PREC]
+    [blosc2.Filter.DELTA, blosc2.Filter.TRUNC_PREC],
 )
 
-cparams = {"codec": codec, "clevel": clevel, "use_dict": use_dict,
-           "nthreads": nthreads, "filters": filters, "filters_meta": [0] * len(filters)}
-a = blosc2.empty(shape, chunks=chunks, blocks=blocks, dtype=np.uint8,
-                 cparams=cparams, dparams={"nthreads": nthreads})
+cparams = {
+    "codec": codec,
+    "clevel": clevel,
+    "use_dict": use_dict,
+    "nthreads": nthreads,
+    "filters": filters,
+    "filters_meta": [0] * len(filters),
+}
+a = blosc2.empty(
+    shape, chunks=chunks, blocks=blocks, dtype=np.uint8, cparams=cparams, dparams={"nthreads": nthreads}
+)
 
 print("HOLA")
