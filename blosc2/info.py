@@ -7,6 +7,7 @@
 #######################################################################
 
 from textwrap import TextWrapper
+
 # print_dict is nice, but rich is way more popular and can be used for more things
 # import print_dict
 import rich

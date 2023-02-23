@@ -15,25 +15,29 @@ import blosc2
 import numpy as np
 
 
-@pytest.mark.parametrize("contiguous",
-                         [
-                             True,
-                             False,
-                         ])
-@pytest.mark.parametrize("shape, chunks, blocks, urlpath, dtype",
-                         [
-                             ([634], [156], [33], "test00.b2nd", np.float64),
-                             ([20, 134, 13], [7, 22, 5], [3, 5, 3], "test01.b2nd", np.int32),
-                             ([12, 13, 14, 15, 16], [4, 6, 4, 7, 5], [2, 4, 2, 3, 3], "test02.b2nd",
-                              np.float32)
-                         ])
+@pytest.mark.parametrize(
+    "contiguous",
+    [
+        True,
+        False,
+    ],
+)
+@pytest.mark.parametrize(
+    "shape, chunks, blocks, urlpath, dtype",
+    [
+        ([634], [156], [33], "test00.b2nd", np.float64),
+        ([20, 134, 13], [7, 22, 5], [3, 5, 3], "test01.b2nd", np.int32),
+        ([12, 13, 14, 15, 16], [4, 6, 4, 7, 5], [2, 4, 2, 3, 3], "test02.b2nd", np.float32),
+    ],
+)
 def test_persistency(shape, chunks, blocks, urlpath, contiguous, dtype):
     blosc2.remove_urlpath(urlpath)
 
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
-    _ = blosc2.asarray(nparray, chunks=chunks, blocks=blocks, dtype=dtype,
-                       urlpath=urlpath, contiguous=contiguous)
+    _ = blosc2.asarray(
+        nparray, chunks=chunks, blocks=blocks, dtype=dtype, urlpath=urlpath, contiguous=contiguous
+    )
     b = blosc2.open(urlpath)
 
     bc = b[:]

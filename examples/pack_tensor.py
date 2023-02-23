@@ -14,10 +14,12 @@ import numpy as np
 
 a = np.arange(1_000_000)
 
-cparams = {"codec": blosc2.Codec.ZSTD, "clevel": 9,
-           "filters": [blosc2.Filter.BITSHUFFLE],
-           "filters_meta": [0],
-           }
+cparams = {
+    "codec": blosc2.Codec.ZSTD,
+    "clevel": 9,
+    "filters": [blosc2.Filter.BITSHUFFLE],
+    "filters_meta": [0],
+}
 cframe = blosc2.pack_tensor(a, cparams=cparams)
 print("Length of packed array in bytes:", len(cframe))
 

@@ -12,12 +12,14 @@ import blosc2
 import numpy as np
 
 
-@pytest.mark.parametrize("filters, filters_meta, dtype",
-                         [
-                            ([160], [0], np.dtype(np.int32)),
-                            ([180, 184], [0, 25], np.dtype(np.float64)),  # 2 user-defined filters
-                            ([255, blosc2.Filter.SHUFFLE], [0, 0], np.dtype(np.uint8)),
-                         ])
+@pytest.mark.parametrize(
+    "filters, filters_meta, dtype",
+    [
+        ([160], [0], np.dtype(np.int32)),
+        ([180, 184], [0, 25], np.dtype(np.float64)),  # 2 user-defined filters
+        ([255, blosc2.Filter.SHUFFLE], [0, 0], np.dtype(np.uint8)),
+    ],
+)
 @pytest.mark.parametrize(
     "nchunks, contiguous, urlpath",
     [
@@ -71,8 +73,14 @@ def test_ufilters(contiguous, urlpath, nchunks, filters, filters_meta, dtype):
         fill_value = 341 if dtype == np.int32 else 33
         data = np.full(chunk_len * nchunks, fill_value, dtype=dtype)
 
-    schunk = blosc2.SChunk(chunksize=chunk_len * dtype.itemsize, data=data,
-                           contiguous=contiguous, urlpath=urlpath, cparams=cparams, dparams=dparams)
+    schunk = blosc2.SChunk(
+        chunksize=chunk_len * dtype.itemsize,
+        data=data,
+        contiguous=contiguous,
+        urlpath=urlpath,
+        cparams=cparams,
+        dparams=dparams,
+    )
 
     out = np.empty(chunk_len * nchunks, dtype=dtype)
     schunk.get_slice(0, chunk_len * nchunks, out=out)

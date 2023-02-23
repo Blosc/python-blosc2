@@ -82,20 +82,19 @@ def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):
     storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     numpy_meta = {b"dtype": str(np.dtype(np.uint8))}
     test_meta = {b"lorem": 1234}
-    meta = {"numpy": numpy_meta,
-            "test": test_meta}
+    meta = {"numpy": numpy_meta, "test": test_meta}
     blosc2.remove_urlpath(urlpath)
 
     schunk = blosc2.SChunk(chunksize=2 * nbytes, meta=meta, **storage)
 
-    assert ("numpy" in schunk.meta)
-    assert ("error" not in schunk.meta)
-    assert (schunk.meta["numpy"] == numpy_meta)
-    assert ("test" in schunk.meta)
-    assert (schunk.meta["test"] == test_meta)
+    assert "numpy" in schunk.meta
+    assert "error" not in schunk.meta
+    assert schunk.meta["numpy"] == numpy_meta
+    assert "test" in schunk.meta
+    assert schunk.meta["test"] == test_meta
     test_meta = {b"lorem": 4231}
     schunk.meta["test"] = test_meta
-    assert (schunk.meta["test"] == test_meta)
+    assert schunk.meta["test"] == test_meta
 
     for i in range(nchunks):
         bytes_obj = b"i " * nbytes
@@ -160,28 +159,33 @@ def test_schunk_cframe(contiguous, urlpath, cparams, dparams, nchunks, copy):
     "cparams, dparams, new_cparams, new_dparams",
     [
         (
-                {"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4},
-                {},
-                {"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4},
-                {"nthreads": 4}
+            {"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4},
+            {},
+            {"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4},
+            {"nthreads": 4},
         ),
         (
-                {"typesize": 4},
-                {"nthreads": 4},
-                {"codec": blosc2.Codec.ZLIB, "splitmode": blosc2.SplitMode.ALWAYS_SPLIT},
-                {"nthreads": 1}
+            {"typesize": 4},
+            {"nthreads": 4},
+            {"codec": blosc2.Codec.ZLIB, "splitmode": blosc2.SplitMode.ALWAYS_SPLIT},
+            {"nthreads": 1},
         ),
         (
-                {"codec": blosc2.Codec.ZLIB, "splitmode": blosc2.SplitMode.ALWAYS_SPLIT},
-                {},
-                {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4,
-                 "filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.TRUNC_PREC]},
-                {"nthreads": 16}),
+            {"codec": blosc2.Codec.ZLIB, "splitmode": blosc2.SplitMode.ALWAYS_SPLIT},
+            {},
+            {
+                "splitmode": blosc2.SplitMode.ALWAYS_SPLIT,
+                "nthreads": 5,
+                "typesize": 4,
+                "filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.TRUNC_PREC],
+            },
+            {"nthreads": 16},
+        ),
         (
-                {"codec": blosc2.Codec.LZ4HC, "typesize": 4},
-                {},
-                {"filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.TRUNC_PREC]},
-                {"nthreads": 3}
+            {"codec": blosc2.Codec.LZ4HC, "typesize": 4},
+            {},
+            {"filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.TRUNC_PREC]},
+            {"nthreads": 3},
         ),
     ],
 )
@@ -202,17 +206,17 @@ def test_schunk_cdparams(cparams, dparams, new_cparams, new_dparams):
     for key in schunk.cparams:
         if key in new_cparams:
             if key == "filters":
-                assert schunk.cparams[key][:len(new_cparams[key])] == new_cparams[key]
+                assert schunk.cparams[key][: len(new_cparams[key])] == new_cparams[key]
             else:
                 assert schunk.cparams[key] == new_cparams[key]
         elif key in cparams:
             if key == "filters":
-                assert schunk.cparams[key][:len(cparams[key])] == cparams[key]
+                assert schunk.cparams[key][: len(cparams[key])] == cparams[key]
             else:
                 assert schunk.cparams[key] == cparams[key]
         else:
             if key == "filters":
-                assert schunk.cparams[key][:len(blosc2.cparams_dflts[key])] == blosc2.cparams_dflts[key]
+                assert schunk.cparams[key][: len(blosc2.cparams_dflts[key])] == blosc2.cparams_dflts[key]
             else:
                 assert schunk.cparams[key] == blosc2.cparams_dflts[key]
 

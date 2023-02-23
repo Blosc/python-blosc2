@@ -34,9 +34,7 @@ def _check_input_length(input_name, input_len, typesize, _ignore_multiple_size=F
 
 def _check_filter(filter):
     if filter not in blosc2.Filter:
-        raise ValueError(
-            "filter can only be one of ", blosc2.Filter.keys()
-        )
+        raise ValueError("filter can only be one of ", blosc2.Filter.keys())
 
 
 def _check_codec(codec):
@@ -44,8 +42,14 @@ def _check_codec(codec):
         raise ValueError("codec can only be one of: %s, not '%s'" % (codecs, codec))
 
 
-def compress(src, typesize=None, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ,
-             _ignore_multiple_size=False):
+def compress(
+    src,
+    typesize=None,
+    clevel=9,
+    filter=blosc2.Filter.SHUFFLE,
+    codec=blosc2.Codec.BLOSCLZ,
+    _ignore_multiple_size=False,
+):
     """Compress src, with a given type size.
 
     Parameters
@@ -241,8 +245,14 @@ def pack(obj, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ
         # The object to be compressed is pickled_object, and not obj
         len_src = len(pickled_object)
         _check_input_length("pickled object", len_src, itemsize, _ignore_multiple_size=True)
-        packed_object = compress(pickled_object, typesize=itemsize, clevel=clevel,
-                                 filter=filter, codec=codec, _ignore_multiple_size=True)
+        packed_object = compress(
+            pickled_object,
+            typesize=itemsize,
+            clevel=clevel,
+            filter=filter,
+            codec=codec,
+            _ignore_multiple_size=True,
+        )
     return packed_object
 
 
@@ -382,6 +392,7 @@ def unpack_array(packed_array, **kwargs):
         arr = pickle.loads(pickled_array, **kwargs)
         if all(isinstance(x, bytes) for x in arr.tolist()):
             import numpy as np
+
             arr = np.array([x.decode("utf-8") for x in arr.tolist()])
     else:
         arr = pickle.loads(pickled_array)
@@ -596,6 +607,7 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
     :func:`~blosc2.save_tensor`
     """
     import numpy as np
+
     arr = np.asarray(tensor)
 
     schunk = blosc2.SChunk(chunksize=chunksize, data=arr, **kwargs)
@@ -612,9 +624,9 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
         raise TypeError(f"Unrecognized tensor/array: {tensor!r}")
 
     # dtype encoding requires some care
-    dtype = arr.dtype.descr if arr.dtype.kind == 'V' else arr.dtype.str
+    dtype = arr.dtype.descr if arr.dtype.kind == "V" else arr.dtype.str
 
-    schunk.vlmeta['__pack_tensor__'] = (kind, arr.shape, dtype)
+    schunk.vlmeta["__pack_tensor__"] = (kind, arr.shape, dtype)
 
     if schunk.urlpath is None:
         return schunk.to_cframe()
@@ -624,15 +636,18 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
 
 def _unpack_tensor(schunk):
     import numpy as np
-    kind, shape, dtype = schunk.vlmeta['__pack_tensor__']
+
+    kind, shape, dtype = schunk.vlmeta["__pack_tensor__"]
     out = np.empty(shape, dtype=dtype)
     schunk.get_slice(out=out)
 
     if kind == "torch":
         import torch
+
         th = torch.from_numpy(out)
     elif kind == "tensorflow":
         import tensorflow as tf
+
         th = tf.constant(out)
     elif kind == "numpy":
         th = out
@@ -982,8 +997,8 @@ def detect_number_of_cores():
     out : int
         The number of cores in this system.
     """
-    if 'count' in blosc2.cpu_info:
-        return blosc2.cpu_info['count']
+    if "count" in blosc2.cpu_info:
+        return blosc2.cpu_info["count"]
     return 1  # Default
 
 
@@ -1078,24 +1093,21 @@ def get_chunksize(blocksize, l3_minimum=2**21, l3_maximum=2**25):
         chunksize = blocksize * 16
     # Refine with L2/L3 measurements (not always possible)
     cpu_info = blosc2.cpu_info
-    if 'l3_cache_size' in cpu_info:
+    if "l3_cache_size" in cpu_info:
         # In general, is a good idea to set the chunksize equal to L3
-        l3_cache_size = cpu_info['l3_cache_size']
+        l3_cache_size = cpu_info["l3_cache_size"]
         # cpuinfo sometimes returns cache sizes as strings (like,
         # "4096 KB"), so refuse the temptation to guess and use the
         # value only when it is an actual int.
         # Also, sometimes cpuinfo does not return a correct L3 size;
         # so in general, enforcing L3 > L2 is a good sanity check.
-        l2_cache_size = cpu_info.get('l2_cache_size', "Not found")
-        if (type(l3_cache_size) is int and
-                type(l2_cache_size) is int and
-                l3_cache_size > l2_cache_size):
+        l2_cache_size = cpu_info.get("l2_cache_size", "Not found")
+        if type(l3_cache_size) is int and type(l2_cache_size) is int and l3_cache_size > l2_cache_size:
             chunksize = l3_cache_size
     else:
         # Chunksize should be at least the size of L2
-        l2_cache_size = cpu_info.get('l2_cache_size', "Not found")
-        if (type(l2_cache_size) is int and
-                l2_cache_size > chunksize):
+        l2_cache_size = cpu_info.get("l2_cache_size", "Not found")
+        if type(l2_cache_size) is int and l2_cache_size > chunksize:
             chunksize = l2_cache_size
 
     # Ensure a minimum size
@@ -1103,8 +1115,8 @@ def get_chunksize(blocksize, l3_minimum=2**21, l3_maximum=2**25):
         chunksize = l3_minimum
 
     # In Blosc2, the chunksize cannot be larger than 2 GB - BLOSC2_MAX_BUFFERSIZE
-    if chunksize > 2 ** 31 - blosc2.MAX_OVERHEAD:
-        chunksize = 2 ** 31 - blosc2.MAX_OVERHEAD
+    if chunksize > 2**31 - blosc2.MAX_OVERHEAD:
+        chunksize = 2**31 - blosc2.MAX_OVERHEAD
 
     return chunksize
 
@@ -1121,8 +1133,10 @@ def compute_partition(nitems, parts, maxs, blocks=False):
         # Increase dims starting from the latest
         for i in reversed(range(len(parts))):
             if blocks and parts[i] > maxs[i]:
-                raise ValueError("blocks should be smaller than chunks or shape in any dim!"
-                                 " If you do want this blocks, please specify a chunks too.")
+                raise ValueError(
+                    "blocks should be smaller than chunks or shape in any dim!"
+                    " If you do want this blocks, please specify a chunks too."
+                )
             if nitems_prev > nitems:
                 break
             if parts[i] * 2 <= maxs[i]:
@@ -1179,7 +1193,7 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, dtype=np.uint8, **kwa
                 raise ValueError("blocks cannot be greater than chunks")
         return chunks, blocks
 
-    cparams = kwargs['cparams'] if 'cparams' in kwargs else {}
+    cparams = kwargs["cparams"] if "cparams" in kwargs else {}
     if not cparams:
         cparams = blosc2.cparams_dflts.copy()
     itemsize = cparams["typesize"] = np.dtype(dtype).itemsize
@@ -1187,7 +1201,7 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, dtype=np.uint8, **kwa
     if blocks is None:
         # Get the default blocksize for the compression params
         # Using an 8 MB buffer should be enough for detecting the whole range of blocksizes
-        nitems = 2 ** 23 // itemsize
+        nitems = 2**23 // itemsize
         src = blosc2.compress2(np.zeros(nitems, dtype="V%d" % itemsize), **cparams)
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
         # Starting point for the guess

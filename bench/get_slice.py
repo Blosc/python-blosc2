@@ -31,8 +31,7 @@ if persistent:
 else:
     urlpath = None
 
-storage = {"contiguous": contiguous, "urlpath": urlpath,
-           "cparams": cparams, "dparams": dparams}
+storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
 blosc2.remove_urlpath(urlpath)
 
 # Create the empty SChunk

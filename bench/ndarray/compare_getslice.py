@@ -42,8 +42,8 @@ else:
 
 # 4D
 shape = (50, 100, 300, 250)
-chunks = (10, 25,  50,  50)
-blocks = ( 3,  5,  10,  20)
+chunks = (10, 25, 50, 50)
+blocks = (3, 5, 10, 20)
 
 # Smaller sizes (for quick testing)
 # shape = (100, 200, 250)
@@ -62,8 +62,13 @@ clevel = 1
 cname = "zstd"
 nthreads = 8
 filter = blosc2.Filter.SHUFFLE
-cparams = {"codec": blosc2.Codec.ZSTD, "clevel": clevel, "filters": [filter],
-           "filters_meta": [0], "nthreads": nthreads}
+cparams = {
+    "codec": blosc2.Codec.ZSTD,
+    "clevel": clevel,
+    "filters": [filter],
+    "filters_meta": [0],
+    "nthreads": nthreads,
+}
 dparams = {"nthreads": nthreads}
 
 zfilter = numcodecs.Blosc.SHUFFLE
@@ -90,8 +95,9 @@ content = np.linspace(0, 1, int(np.prod(shape))).reshape(shape)
 print("\nCreating datasets...")
 # Create and fill a NDArray
 t0 = time()
-b2 = blosc2.empty(shape, dtype=content.dtype, chunks=chunks, blocks=blocks,
-                  urlpath=fname_b2nd, cparams=cparams)
+b2 = blosc2.empty(
+    shape, dtype=content.dtype, chunks=chunks, blocks=blocks, urlpath=fname_b2nd, cparams=cparams
+)
 b2[:] = content
 t = time() - t0
 speed = dset_size / (t * 2**30)
@@ -114,10 +120,10 @@ t0 = time()
 filters = tables.Filters(complevel=clevel, complib="blosc2:%s" % cname, shuffle=True)
 tables.set_blosc_max_threads(nthreads)
 if persistent:
-    h5f = tables.open_file(fname_tables, 'w')
+    h5f = tables.open_file(fname_tables, "w")
 else:
-    h5f = tables.open_file(fname_tables, 'w', driver='H5FD_CORE', driver_core_backing_store=0)
-h5ca = h5f.create_carray(h5f.root, 'carray', filters=filters, chunkshape=chunks, obj=content)
+    h5f = tables.open_file(fname_tables, "w", driver="H5FD_CORE", driver_core_backing_store=0)
+h5ca = h5f.create_carray(h5f.root, "carray", filters=filters, chunkshape=chunks, obj=content)
 t = time() - t0
 speed = dset_size / (t * 2**30)
 cratio = dset_size / h5ca.size_on_disk
@@ -127,12 +133,12 @@ print(f"Time for filling array (hdf5, tables): {t:.3f} s ({speed:.2f} GB/s) ; cr
 t0 = time()
 filters = hdf5plugin.Blosc2(clevel=clevel, cname=cname, filters=hdf5plugin.Blosc2.SHUFFLE)
 if persistent:
-    h5pyf = h5py.File(fname_h5py, 'w')
+    h5pyf = h5py.File(fname_h5py, "w")
 else:
-    h5pyf = h5py.File(fname_h5py, 'w', driver='core', backing_store=False)
-h5d = h5pyf.create_dataset('dataset', dtype=dtype, data=content, chunks=chunks, **filters)
+    h5pyf = h5py.File(fname_h5py, "w", driver="core", backing_store=False)
+h5d = h5pyf.create_dataset("dataset", dtype=dtype, data=content, chunks=chunks, **filters)
 t = time() - t0
-speed = dset_size / (t * 2 ** 30)
+speed = dset_size / (t * 2**30)
 if persistent:
     num_blocks = os.stat(fname_h5py).st_blocks
     # block_size = os.statvfs(fname_h5py).f_bsize
@@ -147,31 +153,32 @@ print("\nComplete reads...")
 t0 = time()
 r = b2[:]
 t = time() - t0
-speed = dset_size / (t * 2 ** 30)
+speed = dset_size / (t * 2**30)
 print(f"Time for complete read (blosc2): {t:.3f} s ({speed:.2f} GB/s)")
 
 t0 = time()
 r = z[:]
 t = time() - t0
-speed = dset_size / (t * 2 ** 30)
+speed = dset_size / (t * 2**30)
 print(f"Time for complete read (zarr): {t:.3f} s ({speed:.2f} GB/s)")
 
 t0 = time()
 r = h5ca[:]
 t = time() - t0
-speed = dset_size / (t * 2 ** 30)
+speed = dset_size / (t * 2**30)
 print(f"Time for complete read (hdf5, tables): {t:.3f} s ({speed:.2f} GB/s)")
 
 t0 = time()
 r = h5d[:]
 t = time() - t0
-speed = dset_size / (t * 2 ** 30)
+speed = dset_size / (t * 2**30)
 print(f"Time for complete read (hdf5, h5py): {t:.3f} s ({speed:.2f} GB/s)")
 
 # Reading by slices
 print("\nReading by slices...")
 # The coordinates for random planes
 planes_idx = np.random.randint(0, min(shape), 100)
+
 
 def time_slices(dset, idx):
     r = None

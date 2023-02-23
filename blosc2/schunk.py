@@ -22,13 +22,16 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
     def __setitem__(self, name, content):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         cparams = {"typesize": 1}
-        content = packb(content, default=blosc2_ext.encode_tuple, strict_types=True,
-                        use_bin_type=True)
+        content = packb(
+            content,
+            default=blosc2_ext.encode_tuple,
+            strict_types=True,
+            use_bin_type=True,
+        )
         super(vlmeta, self).set_vlmeta(name, content, **cparams)
 
     def __getitem__(self, name):
-        return unpackb(super(vlmeta, self).get_vlmeta(name),
-                       list_hook=blosc2_ext.decode_tuple)
+        return unpackb(super(vlmeta, self).get_vlmeta(name), list_hook=blosc2_ext.decode_tuple)
 
     def __delitem__(self, name):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
@@ -86,8 +89,7 @@ class Meta(Mapping):
             ..warning: Note that the *length* of the metalayer cannot not change,
             else an exception will be raised.
         """
-        value = packb(value, default=blosc2_ext.encode_tuple, strict_types=True,
-                      use_bin_type=True)
+        value = packb(value, default=blosc2_ext.encode_tuple, strict_types=True, use_bin_type=True)
         return blosc2_ext.meta__setitem__(self.schunk, key, value)
 
     def __getitem__(self, item):
@@ -104,8 +106,10 @@ class Meta(Mapping):
             The buffer containing the metalayer info.
         """
         if self.__contains__(item):
-            return unpackb(blosc2_ext.meta__getitem__(self.schunk, item),
-                           list_hook=blosc2_ext.decode_tuple)
+            return unpackb(
+                blosc2_ext.meta__getitem__(self.schunk, item),
+                list_hook=blosc2_ext.decode_tuple,
+            )
         else:
             raise KeyError(f"{item} not found")
 
@@ -181,45 +185,51 @@ class SChunk(blosc2_ext.SChunk):
         >>> schunk = blosc2.SChunk(**storage)
         """
         # Check only allowed kwarg are passed
-        allowed_kwargs = ["urlpath", "contiguous", "cparams", "dparams", "_schunk",
-                          "meta",
-                          "mode", "_is_view"]
+        allowed_kwargs = [
+            "urlpath",
+            "contiguous",
+            "cparams",
+            "dparams",
+            "_schunk",
+            "meta",
+            "mode",
+            "_is_view",
+        ]
         all_allowed_kwargs = all(kwarg in allowed_kwargs for kwarg in kwargs.keys())
         if not all_allowed_kwargs:
             for kwarg in kwargs.keys():
                 if kwarg not in allowed_kwargs:
                     raise ValueError(f"{kwarg} is not supported as keyword argument")
         urlpath = kwargs.get("urlpath")
-        if 'contiguous' not in kwargs:
+        if "contiguous" not in kwargs:
             # Make contiguous true for disk, else sparse (for in-memory performance)
-            kwargs['contiguous'] = False if urlpath is None else True
+            kwargs["contiguous"] = False if urlpath is None else True
 
         # This a private param to get an SChunk from a blosc2_schunk*
         sc = kwargs.pop("_schunk", None)
 
         # If not passed, set a sensible typesize
         if data is not None and hasattr(data, "itemsize"):
-            if 'cparams' in kwargs:
-                if 'typesize' not in kwargs['cparams']:
-                    cparams = kwargs.pop('cparams').copy()
-                    cparams['typesize'] = data.itemsize
-                    kwargs['cparams'] = cparams
+            if "cparams" in kwargs:
+                if "typesize" not in kwargs["cparams"]:
+                    cparams = kwargs.pop("cparams").copy()
+                    cparams["typesize"] = data.itemsize
+                    kwargs["cparams"] = cparams
             else:
-                kwargs['cparams'] = {"typesize": data.itemsize}
+                kwargs["cparams"] = {"typesize": data.itemsize}
 
         # chunksize handling
         if chunksize is None:
-            chunksize = 2 ** 24
+            chunksize = 2**24
             if data is not None:
                 chunksize = data.size * data.itemsize
                 # Make that a multiple of typesize
                 chunksize = chunksize // data.itemsize * data.itemsize
             # Use a cap of 256 MB (modern boxes should all have this RAM available)
-            if chunksize > 2 ** 28:
-                chunksize = 2 ** 28
+            if chunksize > 2**28:
+                chunksize = 2**28
 
-        super(SChunk, self).__init__(_schunk=sc, chunksize=chunksize, data=data,
-                                     **kwargs)
+        super(SChunk, self).__init__(_schunk=sc, chunksize=chunksize, data=data, **kwargs)
         self.vlmeta = vlmeta(super(SChunk, self).c_schunk, self.urlpath, self.mode)
         self._cparams = super(SChunk, self).get_cparams()
         self._dparams = super(SChunk, self).get_dparams()
@@ -508,7 +518,7 @@ class SChunk(blosc2_ext.SChunk):
         return super(SChunk, self).get_slice(start, stop, out)
 
     def __getitem__(self, item):
-        """ Get a slice from the SChunk.
+        """Get a slice from the SChunk.
 
         Parameters
         ----------
@@ -576,8 +586,7 @@ class SChunk(blosc2_ext.SChunk):
         if key.step is not None and key.step != 1:
             raise IndexError("`step` must be 1")
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
-        return super(SChunk, self).set_slice(
-            start=key.start, stop=key.stop, value=value)
+        return super(SChunk, self).set_slice(start=key.start, stop=key.stop, value=value)
 
     def to_cframe(self):
         """Get a bytes object containing the serialized :ref:`SChunk <SChunk>` instance.
