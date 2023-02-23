@@ -1598,7 +1598,7 @@ def open(urlpath, mode, **kwargs):
     kwargs["urlpath"] = urlpath
     kwargs["contiguous"] = schunk.storage.contiguous
     if mode != "w" and kwargs is not None:
-        _check_schunk_params(schunk, kwargs)
+        check_schunk_params(schunk, kwargs)
     cparams = kwargs.get("cparams")
     dparams = kwargs.get("dparams")
 
@@ -1621,12 +1621,12 @@ def open(urlpath, mode, **kwargs):
     return res
 
 
-def _check_access_mode(urlpath, mode):
+def check_access_mode(urlpath, mode):
     if urlpath is not None and mode == "r":
         raise ValueError("Cannot do this action with reading mode")
 
 
-cdef _check_schunk_params(blosc2_schunk* schunk, kwargs):
+cdef check_schunk_params(blosc2_schunk* schunk, kwargs):
     cparams = kwargs.get("cparams", None)
     if cparams is not None:
         blocksize = kwargs.get("blocksize", schunk.blocksize)

@@ -1,16 +1,20 @@
+from __future__ import annotations
+
+from typing import Sequence
+
 import ndindex
 
 import numpy as np
 from blosc2 import blosc2_ext, compute_chunks_blocks
 
 from .info import InfoReporter
-from .SChunk import SChunk
+from .schunk import SChunk
 
 
 def process_key(key, shape):
     key = ndindex.ndindex(key).expand(shape).raw
     mask = tuple(True if isinstance(k, int) else False for k in key)
-    key = tuple(k if isinstance(k, slice) else slice(k, k+1, None) for k in key)
+    key = tuple(k if isinstance(k, slice) else slice(k, k + 1, None) for k in key)
     return key, mask
 
 
@@ -32,7 +36,8 @@ def get_ndarray_start_stop(ndim, key, shape):
 
 class NDArray(blosc2_ext.NDArray):
     def __init__(self, **kwargs):
-        self._schunk = SChunk(_schunk=kwargs["_schunk"], _is_view=True)  # SChunk Python instance
+        self._schunk = SChunk(_schunk=kwargs["_schunk"],
+                              _is_view=True)  # SChunk Python instance
         super(NDArray, self).__init__(kwargs["_array"])
 
     @property
@@ -59,8 +64,8 @@ class NDArray(blosc2_ext.NDArray):
     def schunk(self):
         """
         The :ref:`SChunk <SChunk>` reference of the :ref:`NDArray <NDArray>`.
-        All the attributes from the :ref:`SChunk <SChunk>` can be accessed through this instance
-        as `self.schunk`.
+        All the attributes from the :ref:`SChunk <SChunk>` can be accessed through
+        this instance as `self.schunk`.
 
         See Also
         --------
@@ -68,19 +73,19 @@ class NDArray(blosc2_ext.NDArray):
         """
         return self._schunk
 
-    def __getitem__(self, key):
+    def __getitem__(self, key: int | slice | Sequence[slice]) -> np.ndarray:
         """ Get a (multidimensional) slice as specified in key.
 
         Parameters
         ----------
         key: int, slice or sequence of slices
-            The index for the slices to be updated. Note that step parameter is not honored yet
+            The slice(s) to be retrieved. Note that step parameter is not honored yet
             in slices.
 
         Returns
         -------
-        out: :ref:`NDArray <NDArray>`
-            An array, stored in a non-compressed buffer, with the requested data.
+        out: np.ndarray
+            An array with the requested data.
 
         Examples
         --------
@@ -134,7 +139,7 @@ class NDArray(blosc2_ext.NDArray):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
-        blosc2_ext._check_access_mode(self.schunk.urlpath, self.schunk.mode)
+        blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
         key, _ = process_key(key, self.shape)
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
@@ -159,7 +164,7 @@ class NDArray(blosc2_ext.NDArray):
         --------
         >>> import blosc2
         >>> import numpy as np
-        >>> dtype = np.int32
+        >>> dtype = np.dtype("i4")
         >>> shape = [23, 11]
         >>> a = np.arange(0, int(np.prod(shape)), dtype=dtype).reshape(shape)
         >>> # Create an array
@@ -174,14 +179,15 @@ class NDArray(blosc2_ext.NDArray):
 
         Parameters
         ----------
-        dtype: NumPy.dtype
+        dtype: np.dtype
             The new array dtype. Default `self.dtype`.
 
         Other Parameters
         ----------------
         kwargs: dict, optional
-            Keyword arguments that are supported by the :func:`empty` constructor. If some
-            are not specified, the default will be the ones from the original array (except for the urlpath).
+            Keyword arguments that are supported by the :func:`empty` constructor.
+            If some are not specified, the default will be the ones from the original
+            array (except for the urlpath).
 
         Returns
         -------
@@ -238,7 +244,7 @@ class NDArray(blosc2_ext.NDArray):
         --------
         >>> import blosc2
         >>> import numpy as np
-        >>> dtype = np.float32
+        >>> dtype = np.dtype(np.float32)
         >>> shape = [23, 11]
         >>> a = np.linspace(1, 3, num=int(np.prod(shape))).reshape(shape)
         >>> # Create an array
@@ -249,18 +255,17 @@ class NDArray(blosc2_ext.NDArray):
         >>> b.shape
         (50, 10)
         """
-        blosc2_ext._check_access_mode(self.schunk.urlpath, self.schunk.mode)
+        blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
         return super(NDArray, self).resize(newshape)
 
     def slice(self, key, **kwargs):
-        """ Get a (multidimensional) slice as specified in key as a new :ref:`NDArray <NDArray>`.
-        The dtype used will be the same as `self`.
+        """ Get a (multidimensional) slice as a new :ref:`NDArray <NDArray>`.
 
         Parameters
         ----------
         key: int, slice or sequence of slices
-            The index for the slices to be updated. Note that step parameter is not honored yet in
-            slices.
+            The index for the slices to be updated. Note that the step parameter is
+            not honored yet in slices.
 
         Other Parameters
         ----------------
@@ -270,7 +275,7 @@ class NDArray(blosc2_ext.NDArray):
         Returns
         -------
         out: :ref:`NDArray <NDArray>`
-            An array with the requested data.
+            An array with the requested data. The dtype will be the same as `self`.
 
         Examples
         --------
@@ -326,7 +331,7 @@ def empty(shape, dtype=np.uint8, **kwargs):
     ----------
     shape: int, tuple or list
         The shape for the final array.
-    dtype: NumPy.dtype
+    dtype: np.dtype
         The ndarray dtype in NumPy format. Default is `np.uint8`.
         This will override the `typesize`
         in the cparams in case they are passed.
@@ -425,7 +430,7 @@ def full(shape, fill_value, dtype=None, **kwargs):
         Default value to use for uninitialized portions of the array.
         Its size will override the `typesize`
         in the cparams in case they are passed.
-    dtype: NumPy.dtype
+    dtype: np.dtype
          The ndarray dtype in NumPy format. By default this will
          be taken from the :paramref:`fill_value`.
          This will override the `typesize`
@@ -466,7 +471,8 @@ def full(shape, fill_value, dtype=None, **kwargs):
     return arr
 
 
-def frombuffer(buffer, shape, dtype=np.uint8, **kwargs):
+def frombuffer(buffer: bytes, shape: int | tuple | list,
+               dtype: np.dtype = np.uint8, **kwargs: dict) -> NDArray:
     """Create an array out of a buffer.
 
     Parameters
@@ -475,7 +481,7 @@ def frombuffer(buffer, shape, dtype=np.uint8, **kwargs):
         The buffer of the data to populate the container.
     shape: int, tuple or list
         The shape for the final container.
-    dtype: NumPy.dtype
+    dtype: np.dtype
         The ndarray dtype in NumPy format. Default is `np.uint8`.
         This will override the `typesize`
         in the cparams in case they are passed.
@@ -520,14 +526,14 @@ def copy(array, dtype=None, **kwargs):
     return arr
 
 
-def asarray(array, dtype=np.uint8, **kwargs):
-    """Convert the input to an array.
+def asarray(array: np.ndarray, dtype: np.dtype = np.uint8, **kwargs: dict) -> NDArray:
+    """Convert the `array` to an `NDArray`.
 
     Parameters
     ----------
     array: array_like
         An array supporting the python buffer protocol and the numpy array interface.
-    dtype: NumPy.dtype
+    dtype: np.dtype
         The ndarray dtype in NumPy format. Default is `np.uint8`.
         This will override the `typesize`
         in the cparams in case they are passed.
@@ -540,7 +546,7 @@ def asarray(array, dtype=np.uint8, **kwargs):
     Returns
     -------
     out: :ref:`NDArray <NDArray>`
-        An array interpretation of :paramref:`array`.
+        An new NDArray made of :paramref:`array`.
 
     Examples
     --------
@@ -561,7 +567,9 @@ def asarray(array, dtype=np.uint8, **kwargs):
 
 
 def _check_ndarray_kwargs(**kwargs):
-    supported_keys = ["chunks", "blocks", "cparams", "dparams", "meta", "urlpath", "contiguous", "mode"]
+    supported_keys = ["chunks", "blocks", "cparams", "dparams", "meta", "urlpath",
+                      "contiguous", "mode"]
     for key in kwargs.keys():
         if key not in supported_keys:
-            raise KeyError(f"Only {str(supported_keys)} are supported as keyword arguments")
+            raise KeyError(f"Only {str(supported_keys)} are supported as"
+                           f" keyword arguments")
