@@ -57,13 +57,13 @@ to a n-dim 2-level partitioning, allowing to slice and dice arbitrary large and
 compressed data in a more fine-grained way:
 
 .. image:: ./images/b2nd-2level-parts.png
-  :width: 50%
+  :width: 75%
 
 To wet you appetite, here it is how the `NDArray` object performs on getting slices
 orthogonal to the different axis of a 4-dim dataset:
 
 .. image:: ./images/Read-Partial-Slices-B2ND.png
-  :width: 50%
+  :width: 75%
 
 We have blogged about this: https://www.blosc.org/posts/blosc2-ndim-intro
 
