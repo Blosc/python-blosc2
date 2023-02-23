@@ -8,8 +8,9 @@
 
 import os
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 shape = (128, 128)
 

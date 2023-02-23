@@ -14,8 +14,9 @@ Small benchmark that exercises packaging of arrays larger than 2 GB.
 import sys
 import time
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 NREP = 1
 N = int(4e8 - 2**27)  # larger than 2 GB

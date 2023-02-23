@@ -6,12 +6,12 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+import io
 from textwrap import TextWrapper
 
 # print_dict is nice, but rich is way more popular and can be used for more things
 # import print_dict
 import rich
-import io
 
 
 def info_text_report_(items: list) -> str:

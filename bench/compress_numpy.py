@@ -14,8 +14,9 @@ compression through different compressors in blosc2.
 
 import time
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 NREP = 4
 N = int(1e8)
@@ -43,7 +44,11 @@ print("\nTimes for compressing/decompressing:")
 for in_, label in arrays:
     print("\n*** %s ***" % label)
     for codec in blosc2.Codec:
-        for filter in [blosc2.Filter.NOFILTER, blosc2.Filter.SHUFFLE, blosc2.Filter.BITSHUFFLE]:
+        for filter in [
+            blosc2.Filter.NOFILTER,
+            blosc2.Filter.SHUFFLE,
+            blosc2.Filter.BITSHUFFLE,
+        ]:
             clevel = 6
             t0 = time.time()
             c = blosc2.compress(in_, in_.itemsize, clevel=clevel, filter=filter, codec=codec)
@@ -57,7 +62,14 @@ for in_, label in arrays:
             assert np.array_equal(in_, out)
             print(
                 "  *** %-7s, %-10s *** %6.3f s (%.2f GB/s) / %5.3f s (%.2f GB/s)"
-                % (codec, filter, tc, ((N * 8 / tc) / 2**30), td, ((N * 8 / td) / 2**30)),
+                % (
+                    codec,
+                    filter,
+                    tc,
+                    ((N * 8 / tc) / 2**30),
+                    td,
+                    ((N * 8 / td) / 2**30),
+                ),
                 end="",
             )
             print("\tcr: %5.1fx" % (N * 8.0 / len(c)))

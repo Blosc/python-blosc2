@@ -6,23 +6,23 @@ import blosc2
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(blosc2.__file__)))
 
-project = 'Python-Blosc2'
-copyright = '2019-present, The Blosc Developers'
-author = 'The Blosc Developers'
+project = "Python-Blosc2"
+copyright = "2019-present, The Blosc Developers"
+author = "The Blosc Developers"
 extensions = [
-    'sphinx.ext.autosummary',
-    'sphinx.ext.autodoc',
-    'sphinx.ext.intersphinx',
-    'sphinx.ext.napoleon',
-    'numpydoc',
-    'myst_parser',
-    'sphinx_paramlinks',
+    "sphinx.ext.autosummary",
+    "sphinx.ext.autodoc",
+    "sphinx.ext.intersphinx",
+    "sphinx.ext.napoleon",
+    "numpydoc",
+    "myst_parser",
+    "sphinx_paramlinks",
 ]
 source_suffix = [".rst", ".md"]
 html_theme = "pydata_sphinx_theme"
-html_static_path = ['_static']
+html_static_path = ["_static"]
 html_css_files = [
-    'css/custom.css',
+    "css/custom.css",
 ]
 html_logo = "_static/blosc-logo_256.png"
 html_favicon = "_static/blosc-logo_128.png"
