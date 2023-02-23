@@ -27,7 +27,7 @@ d = b.copy()
 
 aux = np.asarray(b[...])
 aux[1, 2] = 0
-aux2 = blosc2.asarray(aux, blocks=blocks, dtype=dtype)
+aux2 = blosc2.asarray(aux, blocks=blocks)
 
 print(np.asarray(aux2))
 

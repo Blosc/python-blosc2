@@ -32,7 +32,7 @@ def test_getitem(shape, chunks, blocks, slices, dtype):
 def test_getitem_numpy(shape, chunks, blocks, slices, dtype):
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
-    a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks, dtype=dtype)
+    a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks)
     nparray_slice = nparray[slices]
     a_slice = a[slices]
 
@@ -43,7 +43,7 @@ def test_getitem_numpy(shape, chunks, blocks, slices, dtype):
 def test_getitem_simple(shape, chunks, blocks, slices, dtype):
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
-    a = blosc2.asarray(nparray, dtype=dtype)
+    a = blosc2.asarray(nparray)
     nparray_slice = nparray[slices]
     a_slice = a[slices]
 

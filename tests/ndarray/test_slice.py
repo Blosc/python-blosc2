@@ -23,7 +23,7 @@ argvalues = [
 def test_slice(shape, chunks, blocks, slices, dtype):
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
-    a = blosc2.asarray(nparray, dtype=dtype, chunks=chunks, blocks=blocks)
+    a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks)
     b = a.slice(slices)
     np_slice = a[slices]
     assert b.shape == np_slice.shape
@@ -50,7 +50,7 @@ argvalues = [
 def test_slice_chunks_blocks(shape, chunks, blocks, chunks2, blocks2, slices, dtype):
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
-    a = blosc2.asarray(nparray, dtype=dtype, chunks=chunks, blocks=blocks)
+    a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks)
     b = a.slice(slices, chunks=chunks2, blocks=blocks2)
     np_slice = a[slices]
     np.testing.assert_almost_equal(b[...], np_slice)

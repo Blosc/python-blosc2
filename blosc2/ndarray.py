@@ -167,7 +167,7 @@ class NDArray(blosc2_ext.NDArray):
         >>> shape = [23, 11]
         >>> a = np.arange(0, int(np.prod(shape)), dtype=dtype).reshape(shape)
         >>> # Create an array
-        >>> b = blosc2.asarray(a, dtype=dtype)
+        >>> b = blosc2.asarray(a)
         >>> b.tobytes() == bytes(a[...])
         True
         """
@@ -247,7 +247,7 @@ class NDArray(blosc2_ext.NDArray):
         >>> shape = [23, 11]
         >>> a = np.linspace(1, 3, num=int(np.prod(shape))).reshape(shape)
         >>> # Create an array
-        >>> b = blosc2.asarray(a, dtype=dtype)
+        >>> b = blosc2.asarray(a)
         >>> newshape = [50, 10]
         >>> # Extend first dimension, shrink second dimension
         >>> _ = b.resize(newshape)
@@ -283,7 +283,7 @@ class NDArray(blosc2_ext.NDArray):
         >>> shape = [23, 11]
         >>> a = np.arange(np.prod(shape)).reshape(shape)
         >>> # Create an array
-        >>> b = blosc2.asarray(a, dtype=a.dtype)
+        >>> b = blosc2.asarray(a)
         >>> slices = (slice(3, 7), slice(1, 11))
         >>> # Get a slice as a new NDArray
         >>> c = b.slice(slices)
@@ -526,17 +526,13 @@ def copy(array, dtype=None, **kwargs):
     return arr
 
 
-def asarray(array: np.ndarray, dtype: np.dtype = np.uint8, **kwargs: dict) -> NDArray:
+def asarray(array: np.ndarray, **kwargs: dict) -> NDArray:
     """Convert the `array` to an `NDArray`.
 
     Parameters
     ----------
     array: array_like
-        An array supporting the python buffer protocol and the numpy array interface.
-    dtype: np.dtype
-        The ndarray dtype in NumPy format. Default is `np.uint8`.
-        This will override the `typesize`
-        in the cparams in case they are passed.
+        An array supporting numpy array interface.
 
     Other Parameters
     ----------------
@@ -552,18 +548,17 @@ def asarray(array: np.ndarray, dtype: np.dtype = np.uint8, **kwargs: dict) -> ND
     --------
     >>> import blosc2
     >>> import numpy as np
-    >>> shape = [25, 10]
-    >>> dtype = np.int64
     >>> # Create some data
-    >>> nparray = np.arange(0, np.prod(shape), dtype=dtype)
+    >>> shape = [25, 10]
+    >>> a = np.arange(0, np.prod(shape), dtype=np.int64).reshape(shape)
     >>> # Create a NDArray from a NumPy array
-    >>> a = blosc2.asarray(nparray, dtype)
+    >>> nda = blosc2.asarray(a)
     """
     _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
-    chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, dtype, **kwargs)
-    return blosc2_ext.asarray(array, chunks, blocks, dtype, **kwargs)
+    chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, array.dtype, **kwargs)
+    return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
 
 
 def _check_ndarray_kwargs(**kwargs):

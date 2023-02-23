@@ -2155,12 +2155,13 @@ def from_buffer(buf, shape, chunks, blocks, dtype, **kwargs):
     return ndarray
 
 
-def asarray(ndarray, chunks, blocks, dtype, **kwargs):
+def asarray(ndarray, chunks, blocks, **kwargs):
     interface = ndarray.__array_interface__
     cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
     PyObject_GetBuffer(ndarray, buf, PyBUF_SIMPLE)
 
     shape = interface["shape"]
+    dtype = interface["typestr"]
     cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
     if ctx == NULL:
         raise RuntimeError("Error while creating the context")

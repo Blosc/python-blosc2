@@ -19,7 +19,7 @@ dtype = np.int32
 nparray = np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape)
 
 # Create a NDArray from a numpy array
-a = blosc2.asarray(nparray, dtype=dtype)
+a = blosc2.asarray(nparray)
 
 # Get a slice
 buffer = a[slices]

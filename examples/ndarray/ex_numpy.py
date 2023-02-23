@@ -18,11 +18,11 @@ dtype = bool
 # Create a buffer
 nparray = np.random.choice(a=[True, False], size=np.prod(shape)).reshape(shape)
 
-# Create a NDArray from a numpy array
-a = blosc2.asarray(nparray, chunks=chunks, dtype=dtype)
+# Create a NDArray from a NumPy array
+a = blosc2.asarray(nparray, chunks=chunks)
 b = a.copy()
 
-# Convert a b2nd array to a numpy array
+# Convert a NDArray to a NumPy array
 nparray2 = b[...]
 
 np.testing.assert_almost_equal(nparray, nparray2)
