@@ -268,7 +268,7 @@ class SChunk(blosc2_ext.SChunk):
         """Append a data buffer to the SChunk.
 
         The data buffer must be of size `chunksize` specified in
-        :func:`SChunk.__init__ <blosc2.SChunk.SChunk.__init__>`.
+        :func:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`.
 
         Parameters
         ----------

@@ -41,6 +41,7 @@ Attributes
    :titlesonly:
    :maxdepth: 1
 
+   autofiles/schunk/attributes/blosc2.schunk.SChunk.blocksize
    autofiles/schunk/attributes/blosc2.schunk.SChunk.cbytes
    autofiles/schunk/attributes/blosc2.schunk.SChunk.chunkshape
    autofiles/schunk/attributes/blosc2.schunk.SChunk.chunksize

@@ -1859,7 +1859,7 @@ cdef class NDArray:
         """The data chunk size (in bytes) for this container.
 
         This will not be the same as
-        :attr:`SChunk.chunksize <blosc2.SChunk.SChunk.chunksize>`
+        :attr:`SChunk.chunksize <blosc2.schunk.SChunk.chunksize>`
         in case :attr:`chunks` is not multiple in
         each dimension of :attr:`blocks` (or equivalently, in case :attr:`chunks` is
         not the same as :attr:`ext_chunks`.

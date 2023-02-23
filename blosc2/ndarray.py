@@ -77,7 +77,7 @@ class NDArray(blosc2_ext.NDArray):
         """The block size (in bytes) for this container.
 
         This is a shortcut to
-        :attr:`SChunk.blocksize <blosc2.SChunk.SChunk.blocksize>` and can be accessed
+        :attr:`SChunk.blocksize <blosc2.schunk.SChunk.blocksize>` and can be accessed
         through the :attr:`schunk` attribute as well.
 
         See Also
@@ -362,7 +362,7 @@ def empty(shape, dtype=np.uint8, **kwargs):
                 in the cparams in case they are passed.
 
         The other keyword arguments supported are the same as for the
-        :obj:`SChunk.__init__ <blosc2.SChunk.SChunk.__init__>`.
+        :obj:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`.
 
     Returns
     -------

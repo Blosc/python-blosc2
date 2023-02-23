@@ -10,9 +10,8 @@ import os
 import pickle
 import sys
 
-import numpy as np
-
 import blosc2
+import numpy as np
 from blosc2 import blosc2_ext
 
 
@@ -422,7 +421,7 @@ def pack_array2(arr, chunksize=None, **kwargs):
     Other parameters
     ----------------
     kwargs: dict, optional
-        These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.SChunk.SChunk.__init__>`.
+        These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`.
 
     Examples
     --------
@@ -508,7 +507,7 @@ def save_array(arr, urlpath, chunksize=None, **kwargs):
     Other parameters
     ----------------
     kwargs: dict, optional
-        These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.SChunk.SChunk.__init__>`.
+        These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`.
 
     Examples
     --------
@@ -592,7 +591,7 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
     Other parameters
     ----------------
     kwargs: dict, optional
-        These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.SChunk.SChunk.__init__>`.
+        These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`.
 
     Examples
     --------
@@ -722,7 +721,7 @@ def save_tensor(tensor, urlpath, chunksize=None, **kwargs):
     Other parameters
     ----------------
     kwargs: dict, optional
-        These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.SChunk.SChunk.__init__>`.
+        These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`.
 
     Examples
     --------
@@ -1363,7 +1362,7 @@ def schunk_from_cframe(cframe, copy=False):
 
     See Also
     --------
-    :func:`~blosc2.SChunk.SChunk.to_cframe`
+    :func:`~blosc2.schunk.SChunk.to_cframe`
 
     """
     return blosc2_ext.schunk_from_cframe(cframe, copy)
