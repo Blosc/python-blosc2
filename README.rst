@@ -68,6 +68,8 @@ orthogonal to the different axis of a 4-dim dataset:
 
 We have blogged about this: https://www.blosc.org/posts/blosc2-ndim-intro
 
+We also have a `explanatory video on why the double partition is useful
+<https://www.youtube.com/watch?v=LvP9zxMGBng>`_ (~2 min).
 
 Installing
 ==========
