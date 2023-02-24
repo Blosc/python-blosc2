@@ -32,16 +32,17 @@ both the C-Blosc1 API and its in-memory format.
 
 Python-Blosc2 is a Python package that wraps C-Blosc2, the newest version of
 the Blosc compressor.  Currently Python-Blosc2 already reproduces the API of
-`Python-Blosc <https://github.com/Blosc/python-blosc>`_, so the former can be
-used as a drop-in replacement for the later. However, there are a `few exceptions
-for full compatibility.
-<https://github.com/Blosc/python-blosc2/blob/main/RELEASE_NOTES.md#changes-from-python-blosc-to-python-blosc2`_
+`Python-Blosc <https://github.com/Blosc/python-blosc>`_, so it can be
+used as a drop-in replacement.  However, there are a `few exceptions
+for a full compatibility.
+<https://github.com/Blosc/python-blosc2/blob/main/RELEASE_NOTES.md#changes-from-python-blosc-to-python-blosc2>`_
 
 In addition, Python-Blosc2 aims to leverage the new C-Blosc2 API so as to support
-super-chunks, multi-dimensional arrays (`NDArray`), serialization and the rest
-of bells and whistles introduced in C-Blosc2.  Although this is always and endless
-process, we are almost catching up with the full C-Blosc2 potential, but with the
-convenience of Python.
+super-chunks, multi-dimensional arrays
+(`NDArray <https://www.blosc.org/python-blosc2/reference/ndarray_api.html>`_),
+serialization and other bells and whistles introduced in C-Blosc2.  Although
+this is always and endless process, we are have almost catched up with the full
+C-Blosc2 potential (with the convenience of Python :-).
 
 **Note:** Python-Blosc2 is meant to be backward compatible with Python-Blosc data.
 That means that it can read data generated with Python-Blosc, but the opposite
