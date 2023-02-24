@@ -65,6 +65,7 @@ def test_copy_numpy(shape, chunks1, blocks1, chunks2, blocks2, dtype):
     a = blosc2.asarray(nparray, chunks=chunks1, blocks=blocks1)
     cparams = {"clevel": 5, "filters": [blosc2.Filter.BITSHUFFLE], "filters_meta": [0]}
     b = a.copy(chunks=chunks2, blocks=blocks2, cparams=cparams)
+    assert b.dtype == nparray.dtype
     if dtype.kind == "V":
         assert b.tobytes() == nparray.tobytes()
     else:
