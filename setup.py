@@ -6,6 +6,7 @@
 # LICENSE.txt file in the root directory of this source tree)
 #######################################################################
 
+from pathlib import Path
 from textwrap import dedent
 
 from skbuild import setup
@@ -41,18 +42,8 @@ classifiers = dedent(
 
 
 # read the contents of the README file
-long_description = """
-Python-Blosc2 is a Python package that wraps C-Blosc2, the newest version of
-the Blosc compressor.  Python-Blosc2 reproduces quite well the API of its Python-Blosc
-predecessor, so it can be used as a drop-in replacement (bar some exceptions; read the
-docs if this is important for you).
-
-In addition, Python-Blosc2 aims to leverage the new C-Blosc2 API so as to support
-super-chunks, multi-dimensional arrays, serialization and other bells and whistles
-introduced in C-Blosc2.
-
-More info at: `https://www.blosc.org <https://www.blosc.org>`_
-"""
+this_directory = Path(__file__).parent
+long_description = (this_directory / "README.rst").read_text()
 
 setup(
     name="blosc2",

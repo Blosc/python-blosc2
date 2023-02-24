@@ -1,4 +1,4 @@
-Announcing Python-Blosc2 2.1.0
+Announcing Python-Blosc2 2.1.1
 ==============================
 
 We are happy to inform that we are introducing `NDArray`, a object for handling
