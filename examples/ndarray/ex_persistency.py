@@ -6,31 +6,21 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+# Shows how you can persist an array on disk
 
 import numpy as np
 
 import blosc2
 
 shape = (128, 128)
-
 urlpath = "ex_persistency.b2nd"
-blosc2.remove_urlpath(urlpath)
+dtype = np.complex128
 
-dtype = np.dtype(np.complex128)
-typesize = dtype.itemsize
-
-# Create a numpy array
+# Create a NDArray from a numpy array (and save it on disk)
 nparray = np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape)
-
-# Create a NDArray from a numpy array (on disk)
-a = blosc2.frombuffer(bytes(nparray), nparray.shape, dtype=dtype, urlpath=urlpath, contiguous=False)
+a = blosc2.asarray(nparray, urlpath=urlpath, mode="w")
 
 # Read the array from disk
 b = blosc2.open(urlpath)
-
-# Convert NDArray to a numpy array
-nparray2 = b[...]
-np.testing.assert_almost_equal(nparray, nparray2)
-
-# Remove file on disk
-blosc2.remove_urlpath(urlpath)
+# And see its contents
+print(b[...])

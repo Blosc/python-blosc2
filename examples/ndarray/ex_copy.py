@@ -6,42 +6,24 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+# Copying NDArrays
+
 import numpy as np
 
 import blosc2
 
 shape = (10, 10)
 blocks = (10, 10)
-
-dtype = np.dtype(np.float64)
-
-# Create a buffer
-buffer = bytes(np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape))
+dtype = np.float64
 
 # Create a NDArray from a buffer
+buffer = bytes(np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape))
 a = blosc2.frombuffer(buffer, shape, dtype=dtype, blocks=blocks)
 
-# Get a copy of a b2nd array
+# Get a copy of a
 b = blosc2.copy(a)
-d = b.copy()
 
-aux = np.asarray(b[...])
-aux[1, 2] = 0
-aux2 = blosc2.asarray(aux, blocks=blocks)
-
-print(np.asarray(aux2))
-
-c = np.asarray(b[...])
-
-c[3:5, 2:7] = 0
-print(c)
-
-del b
-
-print(c)
-
-# Convert the copy to a buffer
-buffer1 = a.tobytes()
-buffer2 = d.tobytes()
-
-assert buffer1 == buffer2
+# Another copy example
+b[1:5, 2:9] = 0
+b2 = blosc2.copy(b, blocks=blocks)
+print(b2[...])

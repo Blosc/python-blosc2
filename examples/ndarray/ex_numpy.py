@@ -6,13 +6,14 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+# Shows how you can easily convert from/to NumPy arrays
+
 import numpy as np
 
 import blosc2
 
 shape = (1234, 23)
 chunks = (253, 23)
-
 dtype = bool
 
 # Create a buffer
@@ -24,5 +25,4 @@ b = a.copy()
 
 # Convert a NDArray to a NumPy array
 nparray2 = b[...]
-
-np.testing.assert_almost_equal(nparray, nparray2)
+print(nparray2)

@@ -6,35 +6,20 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import numpy as np
+# Create an empty array with different compression parameters and set some values on it
 
 import blosc2
 
-np.random.seed(123)
-
-
-shape, chunks, blocks, typesize, codec, clevel, use_dict, nthreads, filters = (
-    (400, 399, 401),
-    (20, 10, 130),
-    (6, 6, 26),
-    3,
-    blosc2.Codec.BLOSCLZ,
-    5,
-    False,
-    2,
-    [blosc2.Filter.DELTA, blosc2.Filter.TRUNC_PREC],
-)
-
 cparams = {
-    "codec": codec,
-    "clevel": clevel,
-    "use_dict": use_dict,
-    "nthreads": nthreads,
-    "filters": filters,
-    "filters_meta": [0] * len(filters),
+    "codec": blosc2.Codec.LZ4,
+    "clevel": 5,
+    "nthreads": 4,
+    "filters": [blosc2.Filter.DELTA, blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE],
+    "filters_meta": [0, 3, 0],  # keep just 3 bits in mantissa
 }
-a = blosc2.empty(
-    shape, chunks=chunks, blocks=blocks, dtype=np.uint8, cparams=cparams, dparams={"nthreads": nthreads}
-)
+a = blosc2.empty(shape=(40, 401), blocks=(6, 26), dtype="f8", cparams=cparams)
 
-print("HOLA")
+a[...] = 222
+print(a.info)
+
+print(a[:, 0])  # note the truncation filter at work

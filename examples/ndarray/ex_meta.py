@@ -6,18 +6,15 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import os
+# Store metadata in persistent arrays
 
 import numpy as np
 
 import blosc2
 
 shape = (128, 128)
-
 urlpath = "ex_meta.b2nd"
-blosc2.remove_urlpath(urlpath)
-
-dtype = np.dtype(np.complex128)
+dtype = np.complex128
 
 # Create a numpy array
 nparray = np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape)
@@ -27,7 +24,7 @@ meta = {
     "m2": b"2222",
 }
 # Create a NDArray from a numpy array (on disk)
-a = blosc2.frombuffer(bytes(nparray), nparray.shape, urlpath=urlpath, dtype=dtype, meta=meta)
+a = blosc2.frombuffer(bytes(nparray), nparray.shape, urlpath=urlpath, mode="w", dtype=dtype, meta=meta)
 print(a.info)
 
 # Read a b2nd array from disk
@@ -36,6 +33,5 @@ b = blosc2.open(urlpath)
 # Deal with meta
 m1 = b.schunk.meta.get("m5", b"0000")
 m2 = b.schunk.meta["m2"]
-
-# Remove file on disk
-os.remove(urlpath)
+print("m1 meta:", m1)
+print("m2 meta:", m2)
