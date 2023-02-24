@@ -1,8 +1,17 @@
 # Release notes
 
-## Changes from 2.0.0 to 2.0.1
+## Changes from 2.0.0 to 2.1.0
 
-XXX version-specific blurb XXX
+* New `NDArray` class for handling multidimensional arrays using compression. It includes:
+  - Data type handling (fully compatible with NumPy)
+  - Double partitioning
+
+  See examples at: https://github.com/Blosc/python-blosc2/tree/main/examples/ndarray
+  NDarray docs at: https://www.blosc.org/python-blosc2/reference/ndarray_api.html
+  Explanatory video on why double partitioning: https://youtu.be/LvP9zxMGBng
+  Also, see our blog on C-Blosc2 NDim counterpart: https://www.blosc.org/posts/blosc2-ndim-intro/
+
+* Internal C-Blosc2 bumped to latest 2.7.1 version.
 
 
 ## Changes from 0.6.6 to 2.0.0
