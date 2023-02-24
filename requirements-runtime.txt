@@ -3,3 +3,4 @@ ndindex>=1.4
 numpy>=1.20.3
 py-cpuinfo
 rich
+pytest
