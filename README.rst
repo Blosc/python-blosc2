@@ -61,11 +61,11 @@ and vice-versa; as a bonus, the serialization/deserialization process also works
 arrays and PyTorch/TensorFlow tensors at a blazing speed:
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/linspace-compress.png?raw=true
-  :width: 50%
+  :width: 45%
   :alt: Compression speed for different codecs
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/linspace-decompress.png?raw=true
-  :width: 50%
+  :width: 45%
   :alt: Decompression speed for different codecs
 
 while reaching excellent compression ratios:
@@ -79,11 +79,11 @@ Also, if you are a Mac M1/M2 owner, make you a favor and use its native arm64 ar
 distributing Mac arm64 wheels too; you are welcome ;-):
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/M1-i386-vs-arm64-pack.png?raw=true
-  :width: 50%
+  :width: 45%
   :alt: Compression speed for different codecs on Apple M1
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/M1-i386-vs-arm64-unpack.png?raw=true
-  :width: 50%
+  :width: 45%
   :alt: Decompression speed for different codecs on Apple M1
 
 Read more about `SChunk` features in our blog entry at: https://www.blosc.org/posts/python-blosc2-improvements
