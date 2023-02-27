@@ -28,10 +28,10 @@ What it is
 
 `C-Blosc2 <https://github.com/Blosc/c-blosc2>`_ is the new major version of
 `C-Blosc <https://github.com/Blosc/c-blosc>`_, and is backward compatible with
-both the C-Blosc1 API and its in-memory format.
+both the C-Blosc1 API and its in-memory format. Python-Blosc2 is a Python package
+that wraps C-Blosc2, the newest version of the Blosc compressor.
 
-Python-Blosc2 is a Python package that wraps C-Blosc2, the newest version of
-the Blosc compressor.  Currently Python-Blosc2 already reproduces the API of
+Currently Python-Blosc2 already reproduces the API of
 `Python-Blosc <https://github.com/Blosc/python-blosc>`_, so it can be
 used as a drop-in replacement.  However, there are a `few exceptions
 for a full compatibility.
@@ -47,6 +47,46 @@ C-Blosc2 potential (with the convenience of Python :-).
 **Note:** Python-Blosc2 is meant to be backward compatible with Python-Blosc data.
 That means that it can read data generated with Python-Blosc, but the opposite
 is not true (i.e. there is no *forward* compatibility).
+
+SChunk: a 64-bit compressed store
+=================================
+
+`SChunk` is the simple data container that handles setting, expanding and getting
+data and metadata. Contrarily to chunks, a super-chunk can update and resize the data
+that it contains, supports user metadata, and it does not have the 2 GB storage limitation.
+
+Additionally, you can convert a SChunk into a contiguous, serialized buffer (aka
+`cframe <https://github.com/Blosc/c-blosc2/blob/main/README_CFRAME_FORMAT.rst>`_)
+and vice-versa; as a bonus, the serialization/deserialization process also works with NumPy
+arrays and PyTorch/TensorFlow tensors at a blazing speed:
+
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/linspace-compress.png?raw=true
+  :width: 50%
+  :alt: Compression speed for different codecs
+
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/linspace-decompress.png?raw=true
+  :width: 50%
+  :alt: Decompression speed for different codecs
+
+while reaching excellent compression ratios:
+
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/pack-array-cratios.png?raw=true
+  :width: 75%
+  :align: center
+  :alt: Compression ratio for different codecs
+
+Also, if you are a Mac M1/M2 owner, make you a favor and use its native arm64 arch (yes, we are
+distributing Mac arm64 wheels too; you are welcome ;-):
+
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/M1-i386-vs-arm64-pack.png?raw=true
+  :width: 50%
+  :alt: Compression speed for different codecs on Apple M1
+
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/M1-i386-vs-arm64-unpack.png?raw=true
+  :width: 50%
+  :alt: Decompression speed for different codecs on Apple M1
+
+Read more about `SChunk` features in our blog entry at: https://www.blosc.org/posts/python-blosc2-improvements
 
 NDArray: an N-Dimensional store
 ===============================
