@@ -116,8 +116,13 @@ orthogonal to the different axis of a 4-dim dataset:
 
 We have blogged about this: https://www.blosc.org/posts/blosc2-ndim-intro
 
-We also have a `explanatory video on why the double partition is useful
-<https://www.youtube.com/watch?v=LvP9zxMGBng>`_ (~2 min).
+We also have a ~2 min explanatory video on `why slicing in a pineapple-style (aka double partition)
+is useful <https://www.youtube.com/watch?v=LvP9zxMGBng>`_ .
+
+.. youtube:: LvP9zxMGBng
+    :height: 315
+    :width: 560
+    :align: left
 
 Installing
 ==========
