@@ -41,7 +41,7 @@ In addition, Python-Blosc2 aims to leverage the new C-Blosc2 API so as to suppor
 super-chunks, multi-dimensional arrays
 (`NDArray <https://www.blosc.org/python-blosc2/reference/ndarray_api.html>`_),
 serialization and other bells and whistles introduced in C-Blosc2.  Although
-this is always and endless process, we are have almost catched up with the full
+this is always and endless process, we are have almost caught up with the full
 C-Blosc2 potential (with the convenience of Python :-).
 
 **Note:** Python-Blosc2 is meant to be backward compatible with Python-Blosc data.
