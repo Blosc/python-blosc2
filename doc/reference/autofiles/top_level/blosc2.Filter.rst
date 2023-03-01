@@ -14,5 +14,6 @@
       ~Filter.BITSHUFFLE
       ~Filter.DELTA
       ~Filter.TRUNC_PREC
-   
+      ~Filter.NDCELL
+      ~Filter.NDMEAN
    

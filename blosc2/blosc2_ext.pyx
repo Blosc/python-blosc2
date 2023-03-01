@@ -9,6 +9,7 @@
 #cython: language_level=3
 
 import ast
+import atexit
 
 import _ctypes
 
@@ -28,10 +29,10 @@ from libcpp cimport bool as c_bool
 
 from enum import Enum
 
-import numpy as np
 from msgpack import packb, unpackb
 
 import blosc2
+import numpy as np
 
 cimport numpy as np
 
@@ -121,6 +122,9 @@ cdef extern from "blosc2.h":
         BLOSC2_USER_REGISTERED_CODECS_STOP
 
     cdef int INT_MAX
+
+    void blosc2_init()
+    void blosc2_destroy()
 
     int blosc1_compress(int clevel, int doshuffle, size_t typesize,
                        size_t nbytes, const void* src, void* dest,
@@ -486,6 +490,13 @@ DEFAULT_DTYPE_FORMAT = B2ND_DEFAULT_DTYPE_FORMAT
 def _check_comp_length(comp_name, comp_len):
     if comp_len < BLOSC_MIN_HEADER_LENGTH:
         raise ValueError("%s cannot be less than %d bytes" % (comp_name, BLOSC_MIN_HEADER_LENGTH))
+
+
+blosc2_init()
+
+@atexit.register
+def destroy():
+    blosc2_destroy()
 
 
 def cbuffer_sizes(src):
