@@ -14,5 +14,9 @@
       ~Codec.LZ4HC
       ~Codec.ZLIB
       ~Codec.ZSTD
+      ~Codec.NDLZ
+      ~Codec.ZFP_ACC
+      ~Codec.ZFP_PREC
+      ~Codec.ZFP_RATE
    
    

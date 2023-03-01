@@ -25,6 +25,10 @@ class Codec(Enum):
     LZ4HC = 2
     ZLIB = 4
     ZSTD = 5
+    NDLZ = 32
+    ZFP_ACC = 33
+    ZFP_PREC = 34
+    ZFP_RATE = 35
 
 
 class Filter(Enum):
@@ -37,6 +41,8 @@ class Filter(Enum):
     BITSHUFFLE = 2
     DELTA = 3
     TRUNC_PREC = 4
+    NDCELL = 32
+    NDMEAN = 33
 
 
 class SplitMode(Enum):
