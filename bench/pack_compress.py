@@ -98,6 +98,8 @@ print()
 for in_, label in arrays:
     print("\n*** %s ***" % label)
     for codec in blosc2.Codec:
+        if codec.value > blosc2.DEFINED_CODECS_STOP:
+            continue
         clevel = 8
         print(f"Using *** {codec} (clevel {clevel}) *** :")
         cparams = {"codec": codec, "clevel": clevel}
