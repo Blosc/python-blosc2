@@ -98,8 +98,8 @@ print()
 for in_, label in arrays:
     print("\n*** %s ***" % label)
     for codec in blosc2.Codec:
-        print("Using *** %s *** compressor:" % codec)
-        clevel = 6
+        clevel = 8
+        print(f"Using *** {codec} (clevel {clevel}) *** :")
         cparams = {"codec": codec, "clevel": clevel}
 
         ctic = time.time()
