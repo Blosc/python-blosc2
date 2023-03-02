@@ -13,15 +13,10 @@ import pytest
 import blosc2
 
 
-@pytest.mark.parametrize("codec", list(blosc2.Codec))
+@pytest.mark.parametrize("codec", blosc2.compressor_list())
 def test_comp_info(codec):
-    blosc2.compressor_list()
     blosc2.clib_info(codec)
-    try:
-        blosc2.set_compressor(codec)
-    except ValueError:
-        assert codec.value > blosc2.DEFINED_CODECS_STOP
-        return
+    blosc2.set_compressor(codec)
     assert codec.name.lower() == blosc2.get_compressor()
 
     arr = np.zeros(1_000_000, dtype="V8")

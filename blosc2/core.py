@@ -10,8 +10,9 @@ import os
 import pickle
 import sys
 
-import blosc2
 import numpy as np
+
+import blosc2
 from blosc2 import blosc2_ext
 
 
@@ -874,9 +875,14 @@ def set_nthreads(nthreads):
     return blosc2_ext.set_nthreads(nthreads)
 
 
-def compressor_list():
+def compressor_list(plugins=False):
     """
-    Returns a list of compressors (codecs) available in C library.
+    Returns a list of compressors (codecs) available in the C library.
+
+    Parameters
+    ----------
+    plugins : bool
+        Whether to include plugins or not.
 
     Returns
     -------
@@ -889,7 +895,8 @@ def compressor_list():
     :func:`~blosc2.set_compressor`
 
     """
-    return list(key.lower() for key in blosc2.Codec.__members__)
+    cap = 255 if plugins else blosc2.DEFINED_CODECS_STOP
+    return list(key for key in blosc2.Codec if key.value <= cap)
 
 
 def set_blocksize(blocksize=0):
@@ -1003,11 +1010,11 @@ def detect_number_of_cores():
 
 
 # Dictionaries for the maps between compressor names and libs
-codecs = compressor_list()
+codecs = compressor_list(plugins=True)
 # Map for compression libraries and versions
 clib_versions = {}
-for codec, value in blosc2.Codec.__members__.items():
-    clib_versions[codec] = clib_info(value)[1].decode("utf-8")
+for codec in compressor_list(plugins=False):
+    clib_versions[codec.name] = clib_info(codec)[1].decode("utf-8")
 
 
 def os_release_pretty_name():
@@ -1032,8 +1039,8 @@ def print_versions():
     print("-=" * 38)
     print("python-blosc2 version: %s" % blosc2.__version__)
     print("Blosc version: %s" % blosc2.blosclib_version)
-    print("Compressors available: %s" % codecs)
-    print("Compressor library versions:")
+    print(f"Codecs available (including plugins): {[codec.name for codec in codecs]}")
+    print("Main codec library versions:")
     for clib in sorted(clib_versions.keys()):
         print("  %s: %s" % (clib, clib_versions[clib]))
     print("Python version: %s" % sys.version)
