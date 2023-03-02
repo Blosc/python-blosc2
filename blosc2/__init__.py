@@ -57,6 +57,7 @@ class SplitMode(Enum):
 
 
 from .blosc2_ext import (
+    DEFINED_CODECS_STOP,
     EXTENDED_HEADER_LENGTH,
     MAX_BUFFERSIZE,
     MAX_OVERHEAD,
