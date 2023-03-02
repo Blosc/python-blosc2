@@ -49,7 +49,11 @@ class TestCodec(unittest.TestCase):
     def test_all_compressors(self):
         s = b"0123456789" * 100
         for codec in list(blosc2.Codec):
-            c = blosc2.compress(s, typesize=1, codec=codec)
+            try:
+                c = blosc2.compress(s, typesize=1, codec=codec)
+            except ValueError:
+                assert codec.value > blosc2.DEFINED_CODECS_STOP
+                return
             d = blosc2.decompress(c)
             self.assertEqual(s, d)
 

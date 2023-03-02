@@ -29,10 +29,10 @@ from libcpp cimport bool as c_bool
 
 from enum import Enum
 
+import numpy as np
 from msgpack import packb, unpackb
 
 import blosc2
-import numpy as np
 
 cimport numpy as np
 
@@ -484,7 +484,7 @@ VERSION_STRING = (<char*>BLOSC2_VERSION_STRING).decode("utf-8")
 VERSION_DATE = (<char*>BLOSC2_VERSION_DATE).decode("utf-8")
 MIN_HEADER_LENGTH = BLOSC_MIN_HEADER_LENGTH
 EXTENDED_HEADER_LENGTH = BLOSC_EXTENDED_HEADER_LENGTH
-
+DEFINED_CODECS_STOP = BLOSC2_DEFINED_CODECS_STOP
 DEFAULT_DTYPE_FORMAT = B2ND_DEFAULT_DTYPE_FORMAT
 
 def _check_comp_length(comp_name, comp_len):
