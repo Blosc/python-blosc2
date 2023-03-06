@@ -14,7 +14,7 @@ A Python wrapper for the extremely fast Blosc2 compression library
 :Code of Conduct: |Contributor Covenant|
 
 .. |version| image:: https://img.shields.io/pypi/v/blosc2.png
-        :target: https://pypi.python.org/pypi/blosc
+        :target: https://pypi.python.org/pypi/blosc2
 .. |Contributor Covenant| image:: https://img.shields.io/badge/Contributor%20Covenant-v2.0%20adopted-ff69b4.svg
         :target: https://github.com/Blosc/community/blob/master/code_of_conduct.md
 .. |numfocus| image:: https://img.shields.io/badge/powered%20by-NumFOCUS-orange.svg?style=flat&colorA=E1523D&colorB=007D8A
