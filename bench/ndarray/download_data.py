@@ -5,24 +5,39 @@ import xarray as xr
 
 import blosc2
 
+dir_path = "era5-pds"
 
-def open_zarr(year, month, datestart, dateend):
+
+def open_zarr(year, month, datestart, dateend, dset):
     fs = s3fs.S3FileSystem(anon=True)
     datestring = "era5-pds/zarr/{year}/{month:02d}/data/".format(year=year, month=month)
-    s3map = s3fs.S3Map(datestring + "precipitation_amount_1hour_Accumulation.zarr/", s3=fs)
-    precip_zarr = xr.open_dataset(s3map, engine="zarr")
-    precip_zarr = precip_zarr.sel(time1=slice(np.datetime64(datestart), np.datetime64(dateend)))
+    s3map = s3fs.S3Map(datestring + dset + ".zarr/", s3=fs)
+    arr = xr.open_dataset(s3map, engine="zarr")
+    if dset[:3] == "air" or dset[:3] == "sno" or dset[:3] == "eas":
+        arr = arr.sel(time0=slice(np.datetime64(datestart), np.datetime64(dateend)))
+    else:
+        arr = arr.sel(time1=slice(np.datetime64(datestart), np.datetime64(dateend)))
+    return getattr(arr, dset)
 
-    return precip_zarr.precipitation_amount_1hour_Accumulation
 
+datasets = [
+    ("precipitation_amount_1hour_Accumulation", "precip"),
+    ("integral_wrt_time_of_surface_direct_downwelling_shortwave_flux_in_air_1hour_Accumulation", "flux"),
+    ("air_pressure_at_mean_sea_level", "pressure"),
+    ("snow_density", "snow"),
+    ("eastward_wind_at_10_metres", "wind"),
+]
 
-print("Fetching data from S3 (era5-pds)...")
-precip_m0 = open_zarr(1987, 10, "1987-10-01", "1987-10-30 23:59")
-
-shape = precip_m0.shape
-# chunks = (128, 128, 256)
-# blocks = (32, 32, 32)
-precip0 = blosc2.empty(shape=precip_m0.shape, dtype=precip_m0.dtype, urlpath="precip1.b2nd")
-print("Fetching and storing 1st month...")
-values = precip_m0.values
-precip0[:] = values
+for dset, short in datasets:
+    print(f"Fetching dataset {dset} from S3 (era5-pds)...")
+    precip_m0 = open_zarr(1987, 10, "1987-10-01", "1987-10-30 23:59", dset)
+    cparams = {"codec": blosc2.Codec.ZSTD, "clevel": 5}
+    precip0 = blosc2.empty(
+        shape=precip_m0.shape,
+        dtype=precip_m0.dtype,
+        cparams=cparams,
+        urlpath="%s/%s.b2nd" % (dir_path, short),
+        mode="w",
+    )
+    values = precip_m0.values
+    precip0[:] = values
