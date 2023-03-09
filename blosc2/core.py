@@ -1172,8 +1172,11 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, dtype=np.uint8, **kwa
     blocks: tuple
         The shape of the block.  If None, a guess is computed based on cache sizes
         and heuristics.
-    cparams: dict
-        The compression params.
+    dtype: np.dtype
+        The dtype of the array.
+
+    The other keyword arguments supported are the same as for the
+    :obj:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>` constructor.
 
     Returns
     -------
@@ -1209,7 +1212,14 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, dtype=np.uint8, **kwa
         # Get the default blocksize for the compression params
         # Using an 8 MB buffer should be enough for detecting the whole range of blocksizes
         nitems = 2**23 // itemsize
-        src = blosc2.compress2(np.zeros(nitems, dtype="V%d" % itemsize), **cparams)
+        cparams2 = cparams
+        if "filters" in cparams and blosc2.Filter.BYTEDELTA in cparams["filters"]:
+            # bytedelta typesize cannot be zero when using compress2
+            pos = cparams["filters"].index(blosc2.Filter.BYTEDELTA)
+            if cparams["filters_meta"][pos] == 0:
+                cparams2 = cparams.copy()
+                cparams2["filters_meta"][pos] = itemsize
+        src = blosc2.compress2(np.zeros(nitems, dtype="V%d" % itemsize), **cparams2)
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
         # Starting point for the guess
         if chunks is None:
