@@ -2044,8 +2044,7 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
     dtype = np.dtype(dtype)
     typesize = dtype.itemsize
     if 'cparams' in kwargs:
-        if 'typesize' not in kwargs['cparams']:
-            kwargs['cparams']['typesize'] = typesize
+        kwargs['cparams']['typesize'] = typesize
     else:
         kwargs['cparams'] = {'typesize': typesize}
     if dtype.kind == 'V':
