@@ -19,6 +19,8 @@ cparams = {
     # "filters_meta": [3, 0, 4],
 }
 
+if not os.path.isdir(dir_path):
+    os.mkdir(dir_path)
 
 for fname in os.listdir(dir_path):
     path = os.path.join(dir_path, fname)
