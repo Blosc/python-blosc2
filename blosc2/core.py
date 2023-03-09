@@ -1212,14 +1212,7 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, dtype=np.uint8, **kwa
         # Get the default blocksize for the compression params
         # Using an 8 MB buffer should be enough for detecting the whole range of blocksizes
         nitems = 2**23 // itemsize
-        cparams2 = cparams
-        if "filters" in cparams and blosc2.Filter.BYTEDELTA in cparams["filters"]:
-            # bytedelta typesize cannot be zero when using compress2
-            pos = cparams["filters"].index(blosc2.Filter.BYTEDELTA)
-            if cparams["filters_meta"][pos] == 0:
-                cparams2 = cparams.copy()
-                cparams2["filters_meta"][pos] = itemsize
-        src = blosc2.compress2(np.zeros(nitems, dtype="V%d" % itemsize), **cparams2)
+        src = blosc2.compress2(np.zeros(nitems, dtype="V%d" % itemsize), **cparams)
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
         # Starting point for the guess
         if chunks is None:
@@ -1262,12 +1255,12 @@ def compress2(src, **kwargs):
                 The metadata for the compressor code, 0 by default.
             clevel: int
                 The compression level from 0 (no compression) to 9
-                (maximum compression). By default: 5.
+                (maximum compression). Default: 5.
             use_dict: bool
                 Use dicts or not when compressing
                 (only for :py:obj:`blosc2.Codec.ZSTD <Codec>`). By default `False`.
             typesize: int from 1 to 255
-                The data type size. By default: 8.
+                The data type size. Default: 8.
             nthreads: int
                 The number of threads to use internally (1 by default).
             blocksize: int
@@ -1277,9 +1270,9 @@ def compress2(src, **kwargs):
                 The split mode for the blocks.
                 The default value is :py:obj:`SplitMode.FORWARD_COMPAT_SPLIT <SplitMode>`.
             filters: :class:`Filter` list
-                The sequence of filters. By default: {0, 0, 0, 0, 0, :py:obj:`Filter.SHUFFLE <Filter>`}.
+                The sequence of filters. Default: {0, 0, 0, 0, 0, :py:obj:`Filter.SHUFFLE <Filter>`}.
             filters_meta: list
-                The metadata for filters. By default: `{0, 0, 0, 0, 0, 0}`.
+                The metadata for filters. Default: `{0, 0, 0, 0, 0, 0}`.
 
     Returns
     -------

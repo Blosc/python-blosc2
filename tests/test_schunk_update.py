@@ -96,7 +96,7 @@ def test_update(contiguous, urlpath, nchunks, nupdates, copy, create_chunk):
         pos = random.randint(0, nchunks - 1)
         bytes_obj = b"i " * nbytes
         if create_chunk:
-            chunk = blosc2.compress2(bytes_obj)
+            chunk = blosc2.compress2(bytes_obj, typesize=1)
             schunk.update_chunk(pos, chunk)
         else:
             schunk.update_data(pos, bytes_obj, copy)

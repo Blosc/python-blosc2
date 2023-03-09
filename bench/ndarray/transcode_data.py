@@ -5,15 +5,15 @@ import blosc2
 in_ = sys.argv[1]
 out_ = sys.argv[2]
 cparams = {
-    "codec": blosc2.Codec.LZ4,
-    "clevel": 9,
+    "codec": blosc2.Codec.ZSTD,
+    "clevel": 5,
     # "filters": [blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE, blosc2.Filter.BYTEDELTA],
     # "filters_meta": [3, 0, 4],
     # "filters": [blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE],
     # "filters_meta": [3, 0],
     "filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA],
-    "filters_meta": [0, 4],
-    # "filters": [blosc2.Filter.SHUFFLE],
+    "filters_meta": [0, 0],
+    # "filters": [blosc2.Filter.BITSHUFFLE],
     # "filters_meta": [0],
     "nthreads": 8,
 }

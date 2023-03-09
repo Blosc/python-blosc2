@@ -660,7 +660,7 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     cparams.compcode_meta = kwargs.get('codec_meta', blosc2.cparams_dflts['codec_meta'])
     cparams.clevel = kwargs.get('clevel', blosc2.cparams_dflts['clevel'])
     cparams.use_dict = kwargs.get('use_dict', blosc2.cparams_dflts['use_dict'])
-    cparams.typesize = kwargs.get('typesize', blosc2.cparams_dflts['typesize'])
+    cparams.typesize = typesize = kwargs.get('typesize', blosc2.cparams_dflts['typesize'])
     cparams.nthreads = kwargs.get('nthreads', blosc2.cparams_dflts['nthreads'])
     cparams.blocksize = kwargs.get('blocksize', blosc2.cparams_dflts['blocksize'])
     splitmode = kwargs.get('splitmode', blosc2.cparams_dflts['splitmode'])
@@ -678,6 +678,9 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
         raise ValueError(f"filters list cannot exceed {BLOSC2_MAX_FILTERS}")
     for i, filter in enumerate(filters):
         cparams.filters[i] = filter.value if isinstance(filter, Enum) else filter
+        # Bytedelta does not work on typesize 1
+        if cparams.filters[i] == blosc2.Filter.BYTEDELTA.value and typesize == 1:
+            cparams.filters[i] = 0
 
     filters_meta = kwargs.get('filters_meta', blosc2.cparams_dflts['filters_meta'])
     if len(filters) != len(filters_meta):
@@ -686,7 +689,11 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     for i, meta in enumerate(filters_meta):
         # We still may want to encode negative values
         meta_value = <int8_t>meta if meta < 0 else meta
-        cparams.filters_meta[i] = <uint8_t>meta_value
+        if meta_value == 0 and cparams.filters[i] == blosc2.Filter.BYTEDELTA.value:
+            # bytedelta typesize cannot be zero when using compress2
+            cparams.filters_meta[i] = <uint8_t>typesize
+        else:
+            cparams.filters_meta[i] = <uint8_t>meta_value
 
     cparams.prefilter = NULL
     cparams.preparams = NULL
@@ -2036,6 +2043,11 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
     # This is used only in constructors, dtype will always have NumPy format
     dtype = np.dtype(dtype)
     typesize = dtype.itemsize
+    if 'cparams' in kwargs:
+        if 'typesize' not in kwargs['cparams']:
+            kwargs['cparams']['typesize'] = typesize
+    else:
+        kwargs['cparams'] = {'typesize': typesize}
     if dtype.kind == 'V':
         str_dtype = str(dtype)
     else:
@@ -2065,7 +2077,6 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
     storage.cparams = cparams
     storage.dparams = dparams
     create_storage(&storage, kwargs)
-    storage.cparams.typesize = typesize
 
     # Shapes
     ndim = len(shape)

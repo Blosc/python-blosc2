@@ -98,7 +98,7 @@ def test_insert(contiguous, urlpath, nchunks, ninserts, copy, create_chunk):
         pos = random.randint(0, nchunks + i)
         bytes_obj = b"i " * nbytes
         if create_chunk:
-            chunk = blosc2.compress2(bytes_obj)
+            chunk = blosc2.compress2(bytes_obj, typesize=1)
             schunk.insert_chunk(pos, chunk)
         else:
             schunk.insert_data(pos, bytes_obj, copy)

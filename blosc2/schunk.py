@@ -9,9 +9,9 @@
 import os
 from collections.abc import Mapping, MutableMapping
 
+import numpy as np
 from msgpack import packb, unpackb
 
-import numpy as np
 from blosc2 import blosc2_ext
 
 
@@ -211,14 +211,14 @@ class SChunk(blosc2_ext.SChunk):
         sc = kwargs.pop("_schunk", None)
 
         # If not passed, set a sensible typesize
-        if data is not None and hasattr(data, "itemsize"):
-            if "cparams" in kwargs:
-                if "typesize" not in kwargs["cparams"]:
-                    cparams = kwargs.pop("cparams").copy()
-                    cparams["typesize"] = data.itemsize
-                    kwargs["cparams"] = cparams
-            else:
-                kwargs["cparams"] = {"typesize": data.itemsize}
+        itemsize = data.itemsize if data is not None and hasattr(data, "itemsize") else 1
+        if "cparams" in kwargs:
+            if "typesize" not in kwargs["cparams"]:
+                cparams = kwargs.pop("cparams").copy()
+                cparams["typesize"] = itemsize
+                kwargs["cparams"] = cparams
+        else:
+            kwargs["cparams"] = {"typesize": itemsize}
 
         # chunksize handling
         if chunksize is None:
