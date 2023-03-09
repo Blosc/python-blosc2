@@ -75,7 +75,7 @@ def test_schunk_numpy(contiguous, urlpath, mode, cparams, dparams, nchunks):
         (7, {"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 5}, {}, 1),
         (641091, {"typesize": 3}, {"nthreads": 2}, 1),
         (136, {"typesize": 1}, {}, 5),
-        (1231, {"typesize": 8}, blosc2.dparams_dflts, 10),
+        (1232, {"typesize": 8}, blosc2.dparams_dflts, 10),
     ],
 )
 def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):
@@ -217,6 +217,12 @@ def test_schunk_cdparams(cparams, dparams, new_cparams, new_dparams):
         else:
             if key == "filters":
                 assert schunk.cparams[key][: len(blosc2.cparams_dflts[key])] == blosc2.cparams_dflts[key]
+            elif key == "filters_meta":
+                # Exception for testing bytedelta in the last position
+                assert (
+                    schunk.cparams[key][: len(blosc2.cparams_dflts[key]) - 1]
+                    == blosc2.cparams_dflts[key][:-1]
+                )
             else:
                 assert schunk.cparams[key] == blosc2.cparams_dflts[key]
 
