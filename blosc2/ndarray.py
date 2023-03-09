@@ -3,8 +3,8 @@ from __future__ import annotations
 from typing import Sequence
 
 import ndindex
-
 import numpy as np
+
 from blosc2 import blosc2_ext, compute_chunks_blocks
 
 from .info import InfoReporter
@@ -362,7 +362,7 @@ def empty(shape, dtype=np.uint8, **kwargs):
                 in the cparams in case they are passed.
 
         The other keyword arguments supported are the same as for the
-        :obj:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`.
+        :obj:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>` constructor.
 
     Returns
     -------
@@ -444,7 +444,7 @@ def full(shape, fill_value, dtype=None, **kwargs):
         Its size will override the `typesize`
         in the cparams in case they are passed.
     dtype: np.dtype
-         The ndarray dtype in NumPy format. By default this will
+         The ndarray dtype in NumPy format. By default, this will
          be taken from the :paramref:`fill_value`.
          This will override the `typesize`
          in the cparams in case they are passed.
