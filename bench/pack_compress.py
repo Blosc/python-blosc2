@@ -100,7 +100,12 @@ for in_, label in arrays:
     for codec in blosc2.compressor_list():
         clevel = 8
         print(f"Using *** {codec} (clevel {clevel}) *** :")
-        cparams = {"codec": codec, "clevel": clevel}
+        cparams = {
+            "codec": codec,
+            "clevel": clevel,
+            "filters": [blosc2.Filter.NOFILTER] * 4 + [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA],
+            "filters_meta": [0] * 6,
+        }
 
         ctic = time.time()
         for i in range(NREP):
@@ -124,7 +129,7 @@ for in_, label in arrays:
 
         ctic = time.time()
         for i in range(NREP):
-            c = blosc2.pack_array2(in_, cparams=dict(clevel=clevel, codec=codec))
+            c = blosc2.pack_array2(in_, cparams=cparams)
         ctoc = time.time()
         dtic = time.time()
         for i in range(NREP):

@@ -43,6 +43,7 @@ class Filter(Enum):
     TRUNC_PREC = 4
     NDCELL = 32
     NDMEAN = 33
+    BYTEDELTA = 34
 
 
 class SplitMode(Enum):
