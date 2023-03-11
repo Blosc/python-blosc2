@@ -54,4 +54,5 @@ Constructors
     empty
     frombuffer
     full
+    uninit
     zeros
