@@ -421,7 +421,7 @@ def uninit(shape, dtype=np.uint8, **kwargs):
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
-    arr = blosc2_ext.zeros(shape, chunks, blocks, dtype, **kwargs)
+    arr = blosc2_ext.uninit(shape, chunks, blocks, dtype, **kwargs)
     return arr
 
 

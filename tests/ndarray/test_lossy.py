@@ -6,10 +6,10 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+import numpy as np
 import pytest
 
 import blosc2
-import numpy as np
 
 
 @pytest.mark.parametrize(
@@ -60,12 +60,10 @@ import numpy as np
     ],
 )
 def test_lossy(shape, cparams, dtype, urlpath, contiguous):
-    blosc2.remove_urlpath(urlpath)
     if cparams.get("codec") == blosc2.Codec.NDLZ:
         dtype = np.uint8
     array = np.linspace(0, np.prod(shape), np.prod(shape), dtype=dtype).reshape(shape)
-
-    a = blosc2.asarray(array, cparams=cparams, urlpath=urlpath, contiguous=contiguous)
+    a = blosc2.asarray(array, cparams=cparams, urlpath=urlpath, contiguous=contiguous, mode="w")
 
     if (
         a.schunk.cparams["codec"] in [blosc2.Codec.ZFP_RATE, blosc2.Codec.ZFP_PREC, blosc2.Codec.ZFP_ACC]

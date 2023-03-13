@@ -1206,13 +1206,25 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, dtype=np.uint8, **kwa
     cparams = kwargs["cparams"] if "cparams" in kwargs else {}
     if not cparams:
         cparams = blosc2.cparams_dflts.copy()
+    # Typesize in dtype always has preference over typesize in cparams
     itemsize = cparams["typesize"] = np.dtype(dtype).itemsize
 
     if blocks is None:
         # Get the default blocksize for the compression params
         # Using an 8 MB buffer should be enough for detecting the whole range of blocksizes
         nitems = 2**23 // itemsize
-        src = blosc2.compress2(np.zeros(nitems, dtype="V%d" % itemsize), **cparams)
+        # compress2 is used just to provide a hint on the blocksize
+        # However, it does not work well with filters that are not shuffle or bitshuffle,
+        # so let's get rid of them
+        filters = cparams.get("filters", None)
+        if filters:
+            cparams2 = cparams.copy()
+            for i, filter in enumerate(filters):
+                if filter not in (blosc2.Filter.SHUFFLE, blosc2.Filter.BITSHUFFLE):
+                    cparams2["filters"][i] = blosc2.Filter.NOFILTER
+        else:
+            cparams2 = cparams
+        src = blosc2.compress2(np.zeros(nitems, dtype="V%d" % itemsize), **cparams2)
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
         # Starting point for the guess
         if chunks is None:
