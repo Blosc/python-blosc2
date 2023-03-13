@@ -5,6 +5,7 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+import copy
 import math
 import os
 import pickle
@@ -1039,7 +1040,7 @@ def print_versions():
     print("-=" * 38)
     print("python-blosc2 version: %s" % blosc2.__version__)
     print("Blosc version: %s" % blosc2.blosclib_version)
-    print(f"Codecs available (including plugins): {[codec.name for codec in codecs]}")
+    print(f"Codecs available (including plugins): {', '.join([codec.name for codec in codecs])}")
     print("Main codec library versions:")
     for clib in sorted(clib_versions.keys()):
         print("  %s: %s" % (clib, clib_versions[clib]))
@@ -1205,7 +1206,7 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, dtype=np.uint8, **kwa
 
     cparams = kwargs["cparams"] if "cparams" in kwargs else {}
     if not cparams:
-        cparams = blosc2.cparams_dflts.copy()
+        cparams = copy.deepcopy(blosc2.cparams_dflts)
     # Typesize in dtype always has preference over typesize in cparams
     itemsize = cparams["typesize"] = np.dtype(dtype).itemsize
 
@@ -1218,7 +1219,7 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, dtype=np.uint8, **kwa
         # so let's get rid of them
         filters = cparams.get("filters", None)
         if filters:
-            cparams2 = cparams.copy()
+            cparams2 = copy.deepcopy(cparams)
             for i, filter in enumerate(filters):
                 if filter not in (blosc2.Filter.SHUFFLE, blosc2.Filter.BITSHUFFLE):
                     cparams2["filters"][i] = blosc2.Filter.NOFILTER

@@ -103,8 +103,9 @@ for in_, label in arrays:
         cparams = {
             "codec": codec,
             "clevel": clevel,
-            "filters": [blosc2.Filter.NOFILTER] * 4 + [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA],
-            "filters_meta": [0] * 6,
+            # "filters": [blosc2.Filter.NOFILTER] * 4 + [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA],
+            # "filters_meta": [0] * 6,
+            # "splitmode": blosc2.SplitMode.NEVER_SPLIT
         }
 
         ctic = time.time()
