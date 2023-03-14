@@ -218,7 +218,7 @@ class NDArray(blosc2_ext.NDArray):
         >>> shape = (10, 10)
         >>> blocks = (10, 10)
         >>> dtype = np.bool_
-        >>> # Create a NDArray  with default chunks
+        >>> # Create a NDArray with default chunks
         >>> a = blosc2.zeros(shape, blocks=blocks, dtype=dtype)
         >>> # Get a copy with default chunks and blocks
         >>> b = a.copy(chunks=None, blocks=None)
@@ -622,4 +622,8 @@ def _check_ndarray_kwargs(**kwargs):
     ]
     for key in kwargs.keys():
         if key not in supported_keys:
-            raise KeyError(f"Only {str(supported_keys)} are supported as" f" keyword arguments")
+            raise KeyError(
+                f"Only {str(supported_keys)} are supported as"
+                f" keyword arguments"
+                f", and you passed {str(key)}"
+            )
