@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+import os.path
+
 import numpy as np
 import s3fs
 import xarray as xr
@@ -27,6 +29,9 @@ datasets = [
     ("snow_density", "snow"),
     ("eastward_wind_at_10_metres", "wind"),
 ]
+
+if not os.path.isdir(dir_path):
+    os.mkdir(dir_path)
 
 for dset, short in datasets:
     print(f"Fetching dataset {dset} from S3 (era5-pds)...")
