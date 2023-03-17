@@ -14,8 +14,10 @@ companion download_data.py script.
 """
 
 import copy
-import os
+from pathlib import Path
 from time import time
+
+import pandas as pd
 
 import blosc2
 
@@ -35,37 +37,43 @@ codecs = [(blosc2.Codec.LZ4, 9), (blosc2.Codec.BLOSCLZ, 9)]
 # codecs = [(codec, (9 if codec.value <= blosc2.Codec.LZ4.value else 6))
 #          for codec in blosc2.Codec if codec.value <= blosc2.Codec.ZSTD.value]
 
-cparams = {}
-cparams["nofilter"] = {
-    "filters": [blosc2.Filter.NOFILTER],
-    "filters_meta": [0],
-    "nthreads": nthreads_comp,
-}
-cparams["shuffle"] = {
-    "filters": [blosc2.Filter.SHUFFLE],
-    "filters_meta": [0],
-    "nthreads": nthreads_comp,
-}
-cparams["bitshuffle"] = {
-    "filters": [blosc2.Filter.BITSHUFFLE],
-    "filters_meta": [0],
-    "nthreads": nthreads_comp,
-}
-cparams["bytedelta"] = {
-    "filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA],
-    "filters_meta": [0, 0],
-    "nthreads": nthreads_comp,
+# measurements
+keys = ["dset", "codec", "clevel", "filter", "cspeed", "dspeed", "cratio"]
+meas = dict(((k, []) for k in keys))
+
+cparams = {
+    "nofilter": {
+        "filters": [blosc2.Filter.NOFILTER],
+        "filters_meta": [0],
+        "nthreads": nthreads_comp,
+    },
+    "shuffle": {
+        "filters": [blosc2.Filter.SHUFFLE],
+        "filters_meta": [0],
+        "nthreads": nthreads_comp,
+    },
+    "bitshuffle": {
+        "filters": [blosc2.Filter.BITSHUFFLE],
+        "filters_meta": [0],
+        "nthreads": nthreads_comp,
+    },
+    "bytedelta": {
+        "filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA],
+        "filters_meta": [0, 0],
+        "nthreads": nthreads_comp,
+    },
 }
 
 dparams = {
     "nthreads": nthreads_decomp,
 }
 
-if not os.path.isdir(dir_path):
-    os.mkdir(dir_path)
+dir_path = Path(dir_path)
+if not dir_path.is_dir():
+    raise IOError(f"{dir_path} must be the directory with datasets")
 
-for fname in os.listdir(dir_path):
-    path = os.path.join(dir_path, fname)
+for fname in dir_path.iterdir():
+    path = str(fname)
     if not path.endswith(".b2nd"):
         continue
     finput = blosc2.open(path)
@@ -103,10 +111,32 @@ for fname in os.listdir(dir_path):
                     pass
                 lt.append(time() - t0)
             tdecomp = min(lt)
+            cspeed = schunk.nbytes / (tcomp * 2**30)
+            dspeed = schunk.nbytes / (tdecomp * 2**30)
             print(
-                f"  Using {filter};\t compr time: {tcomp:.2f}s ({schunk.nbytes / (tcomp * 2**30):.3f} GB/s)"
-                f"; decompr time: {tdecomp:.2f}s ({schunk.nbytes / (tdecomp * 2**30):.3f} GB/s)"
+                f"  Using {filter};\t compr time: {tcomp:.2f}s ({cspeed:.3f} GB/s)"
+                f"; decompr time: {tdecomp:.2f}s ({dspeed:.3f} GB/s)"
                 f" / cratio: {schunk.cratio:.2f} x"
             )
 
+            # Fill measurements
+            fname_ = fname.name
+            dset = fname_[: fname_.find(".")]
+            this_meas = {
+                "dset": dset,
+                "codec": codec[0].name,
+                "clevel": codec[1],
+                "filter": filter,
+                "cspeed": cspeed,
+                "dspeed": dspeed,
+                "cratio": schunk.cratio,
+            }
+            for k in meas.keys():
+                meas[k].append(this_meas[k])
+
+meas_df = pd.DataFrame.from_dict(meas)
+print("measurements:\n", meas_df)
+fdest = dir_path / "measurements.parquet"
+meas_df.to_parquet(fdest)
+print("measurements stored at:", fdest)
 print("All done!")
