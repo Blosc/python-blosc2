@@ -32,10 +32,16 @@ nthreads_comp = blosc2.nthreads  # 24
 nthreads_decomp = blosc2.nthreads  # 32
 
 # put here your desired codec and clevel
-codecs = [(blosc2.Codec.LZ4, 9), (blosc2.Codec.BLOSCLZ, 9)]
+# codecs = [(blosc2.Codec.LZ4, 9), (blosc2.Codec.BLOSCLZ, 9)]
 # codecs = [(blosc2.Codec.BLOSCLZ, 9)]
 # codecs = [(codec, (9 if codec.value <= blosc2.Codec.LZ4.value else 6))
-#          for codec in blosc2.Codec if codec.value <= blosc2.Codec.ZSTD.value]
+#           for codec in blosc2.Codec if codec.value <= blosc2.Codec.ZSTD.value]
+codecs = [
+    (codec, clevel)
+    for codec in blosc2.Codec
+    if codec.value <= blosc2.Codec.ZSTD.value
+    for clevel in (0, 1, 3, 6, 9)
+]
 
 # measurements
 keys = ["dset", "codec", "clevel", "filter", "cspeed", "dspeed", "cratio"]
@@ -91,12 +97,15 @@ for fname in dir_path.iterdir():
         print("Using codec: ", codec)
         for filter in cparams:
             cparams2 = copy.deepcopy(cparams[filter])
-            cparams2["codec"] = codec[0]
-            cparams2["clevel"] = codec[1]
+            codec_, clevel = codec
+            cparams2["codec"] = codec_
+            cparams2["clevel"] = clevel
 
             # Compression.  Do a copy and subtract the time for decompression.
             lt = []
-            for rep in range(NREP):
+            # Do not spend too much time performing costly compression settings
+            nrep = 1 if codec_.value >= blosc2.Codec.LZ4HC.value and clevel == 9 else NREP
+            for rep in range(nrep):
                 t0 = time()
                 fout = mcpy.copy(cparams=cparams2, dparams=dparams)
                 lt.append(time() - t0)
@@ -133,6 +142,10 @@ for fname in dir_path.iterdir():
             }
             for k in meas.keys():
                 meas[k].append(this_meas[k])
+
+            # Skip the other filters when no compression is going on
+            if clevel == 0:
+                break
 
 meas_df = pd.DataFrame.from_dict(meas)
 print("measurements:\n", meas_df)
