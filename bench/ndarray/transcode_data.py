@@ -33,7 +33,7 @@ nthreads_decomp = blosc2.nthreads  # 32
 
 # put here your desired codec and clevel
 # codecs = [(blosc2.Codec.LZ4, 9), (blosc2.Codec.BLOSCLZ, 9)]
-# codecs = [(blosc2.Codec.BLOSCLZ, 9)]
+# codecs = [(blosc2.Codec.BLOSCLZ, clevel) for clevel in (0, 1, 3, 6, 9)]
 # codecs = [(codec, (9 if codec.value <= blosc2.Codec.LZ4.value else 6))
 #           for codec in blosc2.Codec if codec.value <= blosc2.Codec.ZSTD.value]
 codecs = [
@@ -83,7 +83,8 @@ for fname in dir_path.iterdir():
     if not path.endswith(".b2nd"):
         continue
     finput = blosc2.open(path)
-    mcpy = finput.copy(dparams=dparams)  # copy in memory
+    # 64 KB is a good balance for both compression and decompression speeds
+    mcpy = finput.copy(blocks=(16, 32, 32), dparams=dparams)  # copy in memory
     # Compute decompression time for subtracting from copy later
     lt = []
     for rep in range(NREP):
