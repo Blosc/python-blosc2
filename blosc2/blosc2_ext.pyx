@@ -683,9 +683,13 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
         if cparams.filters[i] == blosc2.Filter.BYTEDELTA.value and typesize == 1:
             cparams.filters[i] = 0
 
-    filters_meta = kwargs.get('filters_meta', blosc2.cparams_dflts['filters_meta'])
-    if len(filters) != len(filters_meta):
-        raise ValueError("filters and filters_meta lists must have same length")
+    if "filters_meta" not in kwargs:
+        # If not specified, we can still assign a 0 list to it
+        filters_meta = [0] * len(filters)
+    else:
+        filters_meta = kwargs['filters_meta']
+        if len(filters) != len(filters_meta):
+            raise ValueError("filters and filters_meta lists must have same length")
     cdef int8_t meta_value
     for i, meta in enumerate(filters_meta):
         # We still may want to encode negative values

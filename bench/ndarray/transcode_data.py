@@ -32,7 +32,7 @@ nthreads_comp = blosc2.nthreads  # 24
 nthreads_decomp = blosc2.nthreads  # 32
 
 # put here your desired codec and clevel
-# codecs = [(blosc2.Codec.LZ4, 9), (blosc2.Codec.BLOSCLZ, 9)]
+# codecs = [(blosc2.Codec.LZ4, 9)]
 # codecs = [(blosc2.Codec.BLOSCLZ, clevel) for clevel in (0, 1, 3, 6, 9)]
 # codecs = [(codec, (9 if codec.value <= blosc2.Codec.LZ4.value else 6))
 #           for codec in blosc2.Codec if codec.value <= blosc2.Codec.ZSTD.value]
@@ -47,26 +47,18 @@ codecs = [
 keys = ["dset", "codec", "clevel", "filter", "cspeed", "dspeed", "cratio"]
 meas = dict(((k, []) for k in keys))
 
-cparams = {
+filters = {
     "nofilter": {
         "filters": [blosc2.Filter.NOFILTER],
-        "filters_meta": [0],
-        "nthreads": nthreads_comp,
     },
     "shuffle": {
         "filters": [blosc2.Filter.SHUFFLE],
-        "filters_meta": [0],
-        "nthreads": nthreads_comp,
     },
     "bitshuffle": {
         "filters": [blosc2.Filter.BITSHUFFLE],
-        "filters_meta": [0],
-        "nthreads": nthreads_comp,
     },
     "bytedelta": {
         "filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA],
-        "filters_meta": [0, 0],
-        "nthreads": nthreads_comp,
     },
 }
 
@@ -96,11 +88,12 @@ for fname in dir_path.iterdir():
     print(f"Transcoding {path} (shape: {mcpy.shape}, dtype: {mcpy.dtype})")
     for codec in codecs:
         print("Using codec: ", codec)
-        for filter in cparams:
-            cparams2 = copy.deepcopy(cparams[filter])
+        for filter in filters:
+            cparams2 = copy.deepcopy(filters[filter])
             codec_, clevel = codec
             cparams2["codec"] = codec_
             cparams2["clevel"] = clevel
+            cparams2["nthreads"] = nthreads_comp
 
             # Compression.  Do a copy and subtract the time for decompression.
             lt = []
