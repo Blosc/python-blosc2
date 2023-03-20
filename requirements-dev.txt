@@ -7,3 +7,7 @@ hdf5plugin
 zarr
 xarray
 s3fs
+pandas
+pyarrow
+plotly
+matplotlib

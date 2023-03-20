@@ -81,7 +81,7 @@ for fname in dir_path.iterdir():
     lt = []
     for rep in range(NREP):
         t0 = time()
-        for chunk in mcpy.schunk.iterchunks(dtype=mcpy.dtype):
+        for chunk in mcpy.schunk.iterchunks(dtype=mcpy.dtype, dparams=dparams):
             pass
         lt.append(time() - t0)
     tdecomp0 = min(lt)
