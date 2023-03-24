@@ -103,19 +103,17 @@ for in_, label in arrays:
         cparams = {
             "codec": codec,
             "clevel": clevel,
-            # "filters": [blosc2.Filter.NOFILTER] * 4 + [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA],
-            # "filters_meta": [0] * 6,
-            # "splitmode": blosc2.SplitMode.NEVER_SPLIT
+            "filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA],
         }
 
         ctic = time.time()
         for i in range(NREP):
-            c = blosc2.compress(in_, clevel=clevel, codec=codec)
+            c = blosc2.compress2(in_, codec=codec, clevel=clevel, filters=cparams["filters"])
         ctoc = time.time()
         dtic = time.time()
         out = np.empty_like(in_)
         for i in range(NREP):
-            blosc2.decompress(c, dst=out)
+            blosc2.decompress2(c, dst=out)
         dtoc = time.time()
 
         assert np.array_equal(in_, out)
