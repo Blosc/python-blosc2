@@ -128,7 +128,7 @@ nthreads = ncores = detect_number_of_cores() // 2
 """Number of threads to be used in compression/decompression.
 """
 # Protection against too many threads
-nthreads = min(nthreads, 8)
+nthreads = min(nthreads, 16)
 set_nthreads(nthreads)
 
 # Defaults for compression params
