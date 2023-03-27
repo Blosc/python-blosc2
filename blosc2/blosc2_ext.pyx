@@ -29,10 +29,10 @@ from libcpp cimport bool as c_bool
 
 from enum import Enum
 
-import numpy as np
 from msgpack import packb, unpackb
 
 import blosc2
+import numpy as np
 
 cimport numpy as np
 
@@ -386,7 +386,7 @@ cdef extern from "blosc2.h":
         uint8_t compcode
         char* compname
         uint8_t complib
-        uint8_t compver
+        uint8_t version
         blosc2_codec_encoder_cb encoder
         blosc2_codec_decoder_cb decoder
 
@@ -1725,7 +1725,7 @@ def register_codec(codec_name, id, encoder, decoder, version=1):
 
     cdef blosc2_codec codec
     codec.compcode = id
-    codec.compver = version
+    codec.version = version
     codec.complib = id
     codec_name_ = codec_name.encode() if isinstance(codec_name, str) else codec_name
     codec.compname = <char *> malloc(strlen(codec_name_) + 1)
