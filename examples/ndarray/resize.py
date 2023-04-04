@@ -10,6 +10,7 @@
 
 import blosc2
 
-a = blosc2.full((8, 8), fill_value=9)
-a.resize((10, 10))
+a = blosc2.full((4, 4), fill_value=9)
+a.resize((5, 7))
+a[3:5, 2:7] = 8
 print(a[:])
