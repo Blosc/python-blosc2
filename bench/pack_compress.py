@@ -94,16 +94,18 @@ if comprehensive_copy_timing:
     )
 
 print()
+filters = [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA]
+print(f"Using {filters=}")
 
 for in_, label in arrays:
     print("\n*** %s ***" % label)
     for codec in blosc2.compressor_list():
-        clevel = 8
+        clevel = 6
         print(f"Using *** {codec} (clevel {clevel}) *** :")
         cparams = {
             "codec": codec,
             "clevel": clevel,
-            "filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA],
+            "filters": filters,
         }
 
         ctic = time.time()
