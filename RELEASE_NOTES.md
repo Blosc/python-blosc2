@@ -1,8 +1,24 @@
 # Release notes
 
-## Changes from 2.1.1 to 2.1.2
+## Changes from 2.1.1 to 2.2.0
 
-XXX version-specific blurb XXX
+* New bytedelta filter.  We have blogged about this: https://www.blosc.org/posts/bytedelta-enhance-compression-toolset/.  See the examples/ndarray/bytedelta_filter.py for a sample script.  We also have a short video on how bytedelta works: https://www.youtube.com/watch?v=5OXs7w2x6nw
+
+* The compression defaults are changed to get a better balance between compression ratio, compression speed and decompression speed.  The new defaults are:
+
+  - `cparams.typesize = 8`
+  - `cparams.clevel = 1`
+  - `cparams.compcode = Codec.ZSTD`
+  - `filters = [Filter.SHUFFLE]`
+  - `splitmode = SplitMode.ALWAYS_SPLIT`
+
+  These changes have been based on the mentioned blog post above.
+
+* `dtype.itemsize` will have preference over typesize in cparams (as it was documented).
+
+* `blosc2.compressor_list(plugins=False)` do not list codec plugins by default now.  If you want to list plugins too, you need to pass `plugins=True`.
+
+* Internal C-Blosc2 updated to latest version (2.8.0).
 
 
 ## Changes from 2.0.0 to 2.1.1

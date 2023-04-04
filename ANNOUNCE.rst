@@ -1,15 +1,10 @@
-Announcing Python-Blosc2 2.1.1
+Announcing Python-Blosc2 2.2.0
 ==============================
 
-We are happy to inform that we are introducing `NDArray`, a object for handling
-multidimensional arrays using compression. It includes:
-  - Data type handling (fully compatible with NumPy)
-  - Double partitioning
+We have added support for bytedelta, a new filter that normally leads to better compression ratios.
+We have blogged about bytedelta here: https://www.blosc.org/posts/bytedelta-enhance-compression-toolset/
 
-We have plenty of documentation on `blosc2.NDArray`:
-See examples at: https://github.com/Blosc/python-blosc2/tree/main/examples/ndarray
-NDarray docs at: https://www.blosc.org/python-blosc2/reference/ndarray_api.html
-Explanatory video on why double partitioning: https://youtu.be/LvP9zxMGBng
+We also have a short video on how bytedelta works: https://www.youtube.com/watch?v=5OXs7w2x6nw
 Also, see our blog on C-Blosc2 NDim counterpart: https://www.blosc.org/posts/blosc2-ndim-intro/
 
 For more info, you can have a look at the release notes in:
