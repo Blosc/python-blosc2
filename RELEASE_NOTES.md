@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from 2.2.0 to 2.2.1
+
+XXX version-specific blurb XXX
+
+
 ## Changes from 2.1.1 to 2.2.0
 
 * New bytedelta filter.  We have blogged about this: https://www.blosc.org/posts/bytedelta-enhance-compression-toolset/.  See the examples/ndarray/bytedelta_filter.py for a sample script.  We also have a short video on how bytedelta works: https://www.youtube.com/watch?v=5OXs7w2x6nw
