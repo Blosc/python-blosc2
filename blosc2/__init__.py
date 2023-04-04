@@ -133,14 +133,14 @@ set_nthreads(nthreads)
 
 # Defaults for compression params
 cparams_dflts = {
-    "codec": Codec.BLOSCLZ,
+    "codec": Codec.ZSTD,
     "codec_meta": 0,
-    "clevel": 5,
+    "clevel": 1,
     "use_dict": False,
     "typesize": 8,
     "nthreads": nthreads,
     "blocksize": 0,
-    "splitmode": SplitMode.FORWARD_COMPAT_SPLIT,
+    "splitmode": SplitMode.ALWAYS_SPLIT,
     "schunk": None,
     "filters": [
         Filter.NOFILTER,
