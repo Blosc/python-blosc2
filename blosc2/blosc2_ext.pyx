@@ -222,7 +222,8 @@ cdef extern from "blosc2.h":
         uint8_t filters_meta[BLOSC2_MAX_FILTERS]
         blosc2_prefilter_fn prefilter
         blosc2_prefilter_params* preparams
-        blosc2_btune *udbtune
+        int tune_id
+        void* tune_params
         c_bool instr_codec
 
     cdef const blosc2_cparams BLOSC2_CPARAMS_DEFAULTS
@@ -282,13 +283,14 @@ cdef extern from "blosc2.h":
         int32_t content_len
 
 
-    ctypedef struct blosc2_btune:
-        void(*btune_init)(void *config, blosc2_context*cctx, blosc2_context*dctx)
-        void (*btune_next_blocksize)(blosc2_context *context)
-        void(*btune_next_cparams)(blosc2_context *context)
-        void(*btune_update)(blosc2_context *context, double ctime)
-        void (*btune_free)(blosc2_context *context)
-        void * btune_config
+    ctypedef struct blosc2_tune:
+        void(*init)(void *config, blosc2_context*cctx, blosc2_context*dctx)
+        void (*next_blocksize)(blosc2_context *context)
+        void(*next_cparams)(blosc2_context *context)
+        void(*update)(blosc2_context *context, double ctime)
+        void (*free)(blosc2_context *context)
+        int id
+        char *name
 
     ctypedef struct blosc2_io:
         uint8_t id
@@ -320,7 +322,8 @@ cdef extern from "blosc2.h":
         uint16_t nmetalayers
         blosc2_metalayer *vlmetalayers[BLOSC2_MAX_VLMETALAYERS]
         int16_t nvlmetalayers
-        blosc2_btune *udbtune
+        int tune_id
+        void *tune_params
         int8_t ndim
         int64_t *blockshape
 
@@ -702,7 +705,8 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
 
     cparams.prefilter = NULL
     cparams.preparams = NULL
-    cparams.udbtune = NULL
+    cparams.tune_params = NULL
+    cparams.tune_id = 0
     cparams.instr_codec = False
     #cparams.udbtune = kwargs.get('udbtune', blosc2.cparams_dflts['udbtune'])
     #cparams.instr_codec = kwargs.get('instr_codec', blosc2.cparams_dflts['instr_codec'])
