@@ -36,13 +36,5 @@ if not os.path.isdir(dir_path):
 for dset, short in datasets:
     print(f"Fetching dataset {dset} from S3 (era5-pds)...")
     precip_m0 = open_zarr(1987, 10, "1987-10-01", "1987-10-30 23:59", dset)
-    cparams = {"codec": blosc2.Codec.ZSTD, "clevel": 5}
-    precip0 = blosc2.empty(
-        shape=precip_m0.shape,
-        dtype=precip_m0.dtype,
-        cparams=cparams,
-        urlpath="%s/%s.b2nd" % (dir_path, short),
-        mode="w",
-    )
-    values = precip_m0.values
-    precip0[:] = values
+    cparams = {"codec": blosc2.Codec.ZSTD, "clevel": 6}
+    blosc2.asarray(precip_m0.values, urlpath="%s/%s.b2nd" % (dir_path, short), mode="w", cparams=cparams)
