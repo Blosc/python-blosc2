@@ -708,7 +708,8 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     cparams.tune_params = NULL
     cparams.tune_id = 0
     cparams.instr_codec = False
-    #cparams.udbtune = kwargs.get('udbtune', blosc2.cparams_dflts['udbtune'])
+    #cparams.tune_id = kwargs.get('tune_id', blosc2.cparams_dflts['tune_id'])
+    #cparams.tune_params = kwargs.get('tune_params', blosc2.cparams_dflts['tune_params'])
     #cparams.instr_codec = kwargs.get('instr_codec', blosc2.cparams_dflts['instr_codec'])
     _check_cparams(cparams)
 
