@@ -32,7 +32,7 @@ jobs:
         python -m pip install -r requirements-tests.txt
         #conda install -c conda-forge ndindex
         python -m pip install -r requirements-runtime.txt
-        python -v -c "import ndindex"
+        python -vv -c "import ndindex"
 
     - name: Build
       run: |
