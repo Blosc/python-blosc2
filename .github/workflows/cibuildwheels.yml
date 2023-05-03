@@ -35,6 +35,11 @@ jobs:
         with:
           submodules: 'recursive'
 
+      - uses: conda-incubator/setup-miniconda@v2
+        with:
+          auto-update-conda: true
+          python-version: ${{ matrix.python-version }}
+
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -57,6 +62,10 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements-build.txt
           python -m pip install -r requirements-test-wheels.txt
+          # For some reason, the created ndindex wheel issues the next error on Win:
+          # ImportError: DLL load failed while importing ndindex: %1 is not a valid Win32 application.
+          # As a workaround, we install ndindex from conda-forge, but this should be fixed somehow
+          conda install -c conda-forge ndindex
           python -m pip install -r requirements-runtime.txt
 
       - name: Build wheels (Windows)
