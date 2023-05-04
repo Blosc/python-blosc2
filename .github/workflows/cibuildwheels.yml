@@ -65,6 +65,7 @@ jobs:
           # For some reason, the created ndindex wheel issues the next error on Win:
           # ImportError: DLL load failed while importing ndindex: %1 is not a valid Win32 application.
           # As a workaround, we install ndindex from conda-forge, but this should be fixed somehow
+          # This has been fixed; see https://github.com/Quansight-Labs/ndindex/issues/156
           # conda install -c conda-forge ndindex
           python -m pip install -r requirements-runtime.txt
 
