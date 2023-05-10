@@ -1,15 +1,7 @@
-Announcing Python-Blosc2 2.2.0
+Announcing Python-Blosc2 2.2.1
 ==============================
 
-We have added support for bytedelta, a new filter that normally leads to
-better compression ratios. We have blogged about bytedelta here:
-https://www.blosc.org/posts/bytedelta-enhance-compression-toolset/
-
-We also have a short video on how bytedelta works:
-https://www.youtube.com/watch?v=5OXs7w2x6nw
-
-Also, see our blog on C-Blosc2 NDim counterpart:
-https://www.blosc.org/posts/blosc2-ndim-intro/
+We have updated to latest C-Blosc2 2.9.0.
 
 For more info, you can have a look at the release notes in:
 
