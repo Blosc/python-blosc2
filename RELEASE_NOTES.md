@@ -2,7 +2,7 @@
 
 ## Changes from 2.2.0 to 2.2.1
 
-* Updated to latest C-Blosc2 2.9.0.
+* Updated to latest C-Blosc2 2.9.1.
 
 
 ## Changes from 2.1.1 to 2.2.0
