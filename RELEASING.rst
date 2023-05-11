@@ -38,7 +38,7 @@ is printing the correct versions.
 
 * Check that the metainfo for the package is correct::
 
-    python setup.py sdist
+    python -m build --sdist 
     twine check dist/*
 
 
