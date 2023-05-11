@@ -1,7 +1,9 @@
 [build-system]
 # scikit-build > 0.17.1 does not build due to this error:
 # -- Could NOT find PythonLibs (missing: PYTHON_LIBRARIES) (found version "3.11.3")
-requires = ["setuptools", "scikit-build == 0.17.1", "cython", "cmake", "ninja", "oldest-supported-numpy"]
+# requires = ["setuptools", "scikit-build == 0.17.1", "cython", "cmake", "ninja", "oldest-supported-numpy"]
+# Apparently scikit-build folks fixed this in 0.17.4 (see https://github.com/scikit-build/scikit-build/pull/974)
+requires = ["setuptools", "scikit-build", "cython", "cmake", "ninja", "oldest-supported-numpy"]
 
 [tool.cibuildwheel]
 skip = "cp36-* cp37-* pp37-* *-manylinux_i686 *_ppc64le *_s390x *-musllinux*"
