@@ -1,9 +1,35 @@
 [build-system]
-# scikit-build > 0.17.1 does not build due to this error:
-# -- Could NOT find PythonLibs (missing: PYTHON_LIBRARIES) (found version "3.11.3")
-# requires = ["setuptools", "scikit-build == 0.17.1", "cython", "cmake", "ninja", "oldest-supported-numpy"]
-# Apparently scikit-build folks fixed this in 0.17.4 (see https://github.com/scikit-build/scikit-build/pull/974)
 requires = ["setuptools", "scikit-build", "cython", "cmake", "ninja", "oldest-supported-numpy"]
+
+[project]
+name = "blosc2"
+description = "Python wrapper for the C-Blosc2 library"
+readme = "README.rst"
+authors = [{name = "Blosc Development Team", email = "blosc@blosc.org"}]
+maintainers = [{ name = "Blosc Development Team", email = "blosc@blosc.org"}]
+license = {text = "BSD-3-Clause"}
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD License",
+    "Programming Language :: Python",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: Unix",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+requires-python = ">=3.8, <4"
+dynamic = ["version"]
+
+[project.urls]
+homepage = "https://github.com/Blosc/python-blosc2"
+documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 
 [tool.cibuildwheel]
 skip = "cp36-* cp37-* pp37-* *-manylinux_i686 *_ppc64le *_s390x *-musllinux*"
