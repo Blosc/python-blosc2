@@ -133,7 +133,7 @@ jobs:
 
       - name: Build sdist
         run: |
-          python setup.py sdist
+          python -m build --sdist
 
       - name: Upload sdist package
         uses: actions/upload-artifact@v3

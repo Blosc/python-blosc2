@@ -2,3 +2,4 @@ scikit-build
 cython
 cmake
 numpy
+build
