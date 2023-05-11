@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from 2.2.2 to 2.2.3
+
+XXX version-specific blurb XXX
+
+
 ## Changes from 2.2.1 to 2.2.2
 
 * Wheels are not including blosc2.pc (pkgconfig) anymore.  For details see:
