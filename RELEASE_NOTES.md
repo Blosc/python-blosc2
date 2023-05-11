@@ -2,7 +2,9 @@
 
 ## Changes from 2.2.1 to 2.2.2
 
-XXX version-specific blurb XXX
+* Wheels are not including blosc2.pc (pkgconfig) anymore.  For details see:
+  https://github.com/Blosc/python-blosc2/pull/111
+  Thanks to @bnavigator for the PR.
 
 
 ## Changes from 2.2.0 to 2.2.1

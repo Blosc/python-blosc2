@@ -1,7 +1,9 @@
-Announcing Python-Blosc2 2.2.1
+Announcing Python-Blosc2 2.2.2
 ==============================
 
-We have updated to latest C-Blosc2 2.9.1.
+Wheels are not including blosc2.pc (pkgconfig) anymore.  For details see:
+https://github.com/Blosc/python-blosc2/pull/111
+Thanks to @bnavigator for the PR.
 
 For more info, you can have a look at the release notes in:
 
