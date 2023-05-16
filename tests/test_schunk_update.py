@@ -14,6 +14,7 @@ import pytest
 import blosc2
 
 
+@pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize("contiguous", [True, False])
 @pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize(
@@ -26,7 +27,8 @@ import blosc2
 )
 @pytest.mark.parametrize("copy", [True, False])
 @pytest.mark.parametrize("create_chunk", [True, False])
-def test_schunk_update_numpy(contiguous, urlpath, nchunks, nupdates, copy, create_chunk):
+def test_schunk_update_numpy(contiguous, urlpath, nchunks, nupdates, copy, create_chunk, gil):
+    blosc2.set_releasegil(gil)
     storage = {
         "contiguous": contiguous,
         "urlpath": urlpath,
@@ -59,10 +61,10 @@ def test_schunk_update_numpy(contiguous, urlpath, nchunks, nupdates, copy, creat
 
     for i in range(nchunks):
         schunk.decompress_chunk(i)
-
     blosc2.remove_urlpath(urlpath)
 
 
+@pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize("contiguous", [True, False])
 @pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize(
@@ -75,7 +77,8 @@ def test_schunk_update_numpy(contiguous, urlpath, nchunks, nupdates, copy, creat
 )
 @pytest.mark.parametrize("copy", [True, False])
 @pytest.mark.parametrize("create_chunk", [True, False])
-def test_update(contiguous, urlpath, nchunks, nupdates, copy, create_chunk):
+def test_update(contiguous, urlpath, nchunks, nupdates, copy, create_chunk, gil):
+    blosc2.set_releasegil(gil)
     storage = {
         "contiguous": contiguous,
         "urlpath": urlpath,
@@ -105,5 +108,4 @@ def test_update(contiguous, urlpath, nchunks, nupdates, copy, create_chunk):
 
     for i in range(nchunks):
         schunk.decompress_chunk(i)
-
     blosc2.remove_urlpath(urlpath)

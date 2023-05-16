@@ -13,6 +13,7 @@ import pytest
 import blosc2
 
 
+@pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
     "object, codec",
     [
@@ -23,7 +24,8 @@ import blosc2
         (np.arange(50, dtype=np.int64), blosc2.Codec.ZSTD),
     ],
 )
-def test_decompress_numpy(object, codec):
+def test_decompress_numpy(object, codec, gil):
+    blosc2.set_releasegil(gil)
     c = blosc2.compress(object, codec=codec)
 
     dest = bytearray(object)

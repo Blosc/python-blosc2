@@ -12,6 +12,7 @@ import pytest
 import blosc2
 
 
+@pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
     "clevel, codec",
     [
@@ -23,7 +24,8 @@ import blosc2
     ],
 )
 @pytest.mark.parametrize("filt", list(blosc2.Filter))
-def test_compressors(clevel, filt, codec):
+def test_compressors(clevel, filt, codec, gil):
+    blosc2.set_releasegil(gil)
     src = b"Something to be compressed" * 100
     dest = blosc2.compress(src, 1, clevel, filt, codec)
     src2 = blosc2.decompress(dest)

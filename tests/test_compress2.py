@@ -13,6 +13,7 @@ import pytest
 import blosc2
 
 
+@pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
     "obj, cparams, dparams",
     [
@@ -46,7 +47,8 @@ import blosc2
         (np.arange(50, dtype=np.int64), {"typesize": 4}, blosc2.dparams_dflts),
     ],
 )
-def test_compress2_numpy(obj, cparams, dparams):
+def test_compress2_numpy(obj, cparams, dparams, gil):
+    blosc2.set_releasegil(gil)
     bytes_obj = obj.tobytes()
     c = blosc2.compress2(obj, **cparams)
 
@@ -66,6 +68,7 @@ def test_compress2_numpy(obj, cparams, dparams):
     assert np.array_equal(dest4, obj)
 
 
+@pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
     "nbytes, cparams, dparams",
     [
@@ -75,7 +78,8 @@ def test_compress2_numpy(obj, cparams, dparams):
         (1231, {"typesize": 4}, blosc2.dparams_dflts),
     ],
 )
-def test_compress2(nbytes, cparams, dparams):
+def test_compress2(nbytes, cparams, dparams, gil):
+    blosc2.set_releasegil(gil)
     bytes_obj = b" " * nbytes
     c = blosc2.compress2(bytes_obj, **cparams)
 
@@ -91,11 +95,13 @@ def test_compress2(nbytes, cparams, dparams):
     assert dest3 == bytes_obj
 
 
+@pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
     "object, cparams, dparams",
     [(np.arange(0), {"codec": blosc2.Codec.LZ4, "clevel": 6}, {}), (b"", {}, {"nthreads": 3})],
 )
-def test_raise_error(object, cparams, dparams):
+def test_raise_error(object, cparams, dparams, gil):
+    blosc2.set_releasegil(gil)
     c = blosc2.compress2(object, **cparams, **dparams)
 
     dest = bytearray(object)
