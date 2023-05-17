@@ -29,10 +29,10 @@ from libcpp cimport bool as c_bool
 
 from enum import Enum
 
+import numpy as np
 from msgpack import packb, unpackb
 
 import blosc2
-import numpy as np
 
 cimport numpy as np
 
@@ -222,8 +222,8 @@ cdef extern from "blosc2.h":
         uint8_t filters_meta[BLOSC2_MAX_FILTERS]
         blosc2_prefilter_fn prefilter
         blosc2_prefilter_params* preparams
-        int tune_id
-        void* tune_params
+        int tuner_id
+        void* tuner_params
         c_bool instr_codec
 
     cdef const blosc2_cparams BLOSC2_CPARAMS_DEFAULTS
@@ -283,7 +283,7 @@ cdef extern from "blosc2.h":
         int32_t content_len
 
 
-    ctypedef struct blosc2_tune:
+    ctypedef struct blosc2_tuner:
         void(*init)(void *config, blosc2_context*cctx, blosc2_context*dctx)
         void (*next_blocksize)(blosc2_context *context)
         void(*next_cparams)(blosc2_context *context)
@@ -322,8 +322,8 @@ cdef extern from "blosc2.h":
         uint16_t nmetalayers
         blosc2_metalayer *vlmetalayers[BLOSC2_MAX_VLMETALAYERS]
         int16_t nvlmetalayers
-        int tune_id
-        void *tune_params
+        int tuner_id
+        void *tuner_params
         int8_t ndim
         int64_t *blockshape
 
@@ -706,12 +706,9 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
 
     cparams.prefilter = NULL
     cparams.preparams = NULL
-    cparams.tune_params = NULL
-    cparams.tune_id = 0
+    cparams.tuner_params = NULL
+    cparams.tuner_id = 0
     cparams.instr_codec = False
-    #cparams.tune_id = kwargs.get('tune_id', blosc2.cparams_dflts['tune_id'])
-    #cparams.tune_params = kwargs.get('tune_params', blosc2.cparams_dflts['tune_params'])
-    #cparams.instr_codec = kwargs.get('instr_codec', blosc2.cparams_dflts['instr_codec'])
     _check_cparams(cparams)
 
 
