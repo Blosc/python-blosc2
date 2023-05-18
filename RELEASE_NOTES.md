@@ -2,7 +2,9 @@
 
 ## Changes from 2.2.2 to 2.2.3
 
-XXX version-specific blurb XXX
+* Updated to latest C-Blosc2 2.9.2.
+
+* Better GIL handling.  Thanks to @martaiborra.
 
 
 ## Changes from 2.2.1 to 2.2.2
