@@ -6,6 +6,8 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+import os
+
 import numpy as np
 import pytest
 
@@ -137,10 +139,11 @@ def test_schunk_cframe(contiguous, urlpath, cparams, dparams, nchunks, copy):
 
     cframe = schunk.to_cframe()
     schunk2 = blosc2.schunk_from_cframe(cframe, copy)
-    for key in cparams:
-        if key == "nthreads":
-            continue
-        assert schunk2.cparams[key] == cparams[key]
+    if not os.getenv("BTUNE_BALANCE"):
+        for key in cparams:
+            if key == "nthreads":
+                continue
+            assert schunk2.cparams[key] == cparams[key]
 
     data2 = np.empty(data.shape, dtype=data.dtype)
     schunk2.get_slice(out=data2)
