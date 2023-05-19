@@ -38,7 +38,7 @@ def test_ucodecs(contiguous, urlpath, cparams, nchunks, codec_name, id, dtype):
     cparams["codec"] = id
     dparams = {"nthreads": 1}
     chunk_len = 20 * 1000
-    blocksize = chunk_len / 10
+    blocksize = chunk_len * dtype.itemsize / 10
     cparams["blocksize"] = blocksize
 
     def encoder1(input, output, meta, schunk):
