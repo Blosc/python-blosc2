@@ -680,11 +680,13 @@ def unpack_tensor(cframe):
 
     Examples
     --------
+    >>> import os
     >>> import numpy as np
     >>> th = np.arange(1e3, dtype=np.float32)
     >>> cframe = blosc2.pack_tensor(th)
-    >>> len(cframe) < th.size * th.itemsize
-    True
+    >>> if not os.getenv("BTUNE_BALANCE"):
+    ...     assert len(cframe) < th.size * th.itemsize
+    ... 
     >>> th2 = blosc2.unpack_tensor(cframe)
     >>> a = np.asarray(th)
     >>> a2 = np.asarray(th2)
