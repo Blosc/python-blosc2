@@ -207,7 +207,8 @@ def test_save_tensor_torch(size, dtype, urlpath):
 def test_save_tensor_sparse(size, sparse, urlpath):
     nparray = np.arange(size, dtype=np.int32)
     serial_size = blosc2.save_tensor(nparray, urlpath, mode="w", contiguous=not sparse)
-    assert serial_size < nparray.size * nparray.itemsize
+    if not os.getenv("BTUNE_BALANCE"):
+        assert serial_size < nparray.size * nparray.itemsize
 
     a2 = blosc2.load_tensor(urlpath)
     assert os.path.isdir(urlpath) == sparse
