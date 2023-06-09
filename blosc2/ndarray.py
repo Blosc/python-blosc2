@@ -118,7 +118,10 @@ class NDArray(blosc2_ext.NDArray):
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
         shape = [sp - st for st, sp in zip(start, stop)]
-        arr = np.zeros(shape, dtype=self.dtype)
+        # arr = np.zeros(shape, dtype=self.dtype)
+        # Benchmarking shows that empty is faster than zeros
+        # (besides we don't need to fill padding with zeros)
+        arr = np.empty(shape, dtype=self.dtype)
 
         return super(NDArray, self).get_slice_numpy(arr, key)
 
