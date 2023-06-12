@@ -7,12 +7,13 @@
 #######################################################################
 
 import os
+from collections import namedtuple
 from collections.abc import Mapping, MutableMapping
 
 import numpy as np
 from msgpack import packb, unpackb
 
-from blosc2 import blosc2_ext
+from blosc2 import SpecialValue, blosc2_ext
 
 
 class vlmeta(MutableMapping, blosc2_ext.vlmeta):
@@ -296,6 +297,34 @@ class SChunk(blosc2_ext.SChunk):
         """
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super(SChunk, self).append_data(data)
+
+    def fill_special(self, nitems, special_value):
+        """Fill the SChunk with a special value.  SChunk must be empty.
+
+        Parameters
+        ----------
+        nitems: int
+            The number of items to fill with the special value.
+        special_value: SpecialValue
+            The special value to be used for filling the SChunk.
+
+        Returns
+        -------
+        out: int
+            The number of chunks in the SChunk.
+
+        Raises
+        ------
+        RunTimeError
+            If the SChunk could not be filled with the special value.
+
+        """
+        if not isinstance(special_value, SpecialValue):
+            raise ValueError("special_value must be a SpecialValue instance")
+        nchunks = super(SChunk, self).fill_special(nitems, special_value.value)
+        if nchunks < 0:
+            raise RuntimeError("Unable to fill with special values")
+        return nchunks
 
     def decompress_chunk(self, nchunk, dst=None):
         """Decompress the chunk given by its index :paramref:`nchunk`.
@@ -624,6 +653,29 @@ class SChunk(blosc2_ext.SChunk):
         for i in range(0, len(self), self.chunkshape):
             self.get_slice(i, i + self.chunkshape, out)
             yield out
+
+    def iterchunks_info(self):
+        """
+        Iterate over :paramref:`self` chunks, providing info on index and special values.
+
+        Yields
+        ------
+        info: namedtuple
+            A namedtuple with the following fields:
+            nchunk: the index of the chunk.
+            special: the special value enum of the chunk; if 0, the chunk is not special.
+            repeated_value: the repeated value for the chunk; if not SpecialValue.VALUE, it is None.
+            lazychunk: a buffer with the complete lazy chunk.
+        """
+        ChunkInfo = namedtuple("ChunkInfo", ["nchunk", "special", "repeated_value", "lazychunk"])
+        for nchunk in range(self.nchunks):
+            lazychunk = self.get_lazychunk(nchunk)
+            # Blosc2 flags are encoded at the end of the header
+            is_special = (lazychunk[31] & 0x70) >> 4
+            special = SpecialValue(is_special)
+            # The special value is encoded at the end of the header
+            repeated_value = lazychunk[32:] if special == SpecialValue.VALUE else None
+            yield ChunkInfo(nchunk, special, repeated_value, lazychunk)
 
     def postfilter(self, input_dtype, output_dtype=None):
         """Decorator to set a function as a postfilter.

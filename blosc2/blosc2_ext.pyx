@@ -74,6 +74,11 @@ cdef extern from "blosc2.h":
         BLOSC_MIN_BUFFERSIZE
 
     ctypedef enum:
+        BLOSC2_SPECIAL_ZERO
+        BLOSC2_SPECIAL_NAN
+        BLOSC2_SPECIAL_UNINIT
+
+    ctypedef enum:
         BLOSC2_VERSION_STRING
         BLOSC2_VERSION_REVISION
         BLOSC2_VERSION_DATE
@@ -340,6 +345,8 @@ cdef extern from "blosc2.h":
     int64_t blosc2_schunk_update_chunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t *chunk, c_bool copy)
     int64_t blosc2_schunk_insert_chunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t *chunk, c_bool copy)
     int64_t blosc2_schunk_delete_chunk(blosc2_schunk *schunk, int64_t nchunk)
+    int64_t blosc2_schunk_fill_special(blosc2_schunk *schunk, int64_t nitems, int special_value,
+                                       int32_t chunksize);
 
     int64_t blosc2_schunk_append_buffer(blosc2_schunk *schunk, void *src, int32_t nbytes)
     int blosc2_schunk_decompress_chunk(blosc2_schunk *schunk, int64_t nchunk, void *dest, int32_t nbytes)
@@ -1066,6 +1073,9 @@ cdef class SChunk:
             raise RuntimeError("Could not append the buffer")
         return rc
 
+    def fill_special(self, nitems, special_value):
+        return blosc2_schunk_fill_special(self.schunk, nitems, special_value, self.chunksize)
+
     def decompress_chunk(self, nchunk, dst=None):
         cdef uint8_t *chunk
         cdef c_bool needs_free
@@ -1106,6 +1116,17 @@ cdef class SChunk:
         cbytes = blosc2_schunk_get_chunk(self.schunk, nchunk, &chunk, &needs_free)
         if cbytes < 0:
            raise RuntimeError("Error while getting the chunk")
+        ret_chunk = PyBytes_FromStringAndSize(<char*>chunk, cbytes)
+        if needs_free:
+            free(chunk)
+        return ret_chunk
+
+    def get_lazychunk(self, nchunk):
+        cdef uint8_t *chunk
+        cdef c_bool needs_free
+        cbytes = blosc2_schunk_get_lazychunk(self.schunk, nchunk, &chunk, &needs_free)
+        if cbytes < 0:
+           raise RuntimeError("Error while getting the lazychunk")
         ret_chunk = PyBytes_FromStringAndSize(<char*>chunk, cbytes)
         if needs_free:
             free(chunk)

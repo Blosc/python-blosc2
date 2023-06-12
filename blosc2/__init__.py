@@ -57,6 +57,14 @@ class SplitMode(Enum):
     FORWARD_COMPAT_SPLIT = 4
 
 
+class SpecialValue(Enum):
+    NOT_SPECIAL = 0
+    ZERO = 1
+    NAN = 2
+    VALUE = 3
+    UNINIT = 4
+
+
 from .blosc2_ext import (
     DEFINED_CODECS_STOP,
     EXTENDED_HEADER_LENGTH,
