@@ -1127,6 +1127,15 @@ cdef class SChunk:
         cbytes = blosc2_schunk_get_lazychunk(self.schunk, nchunk, &chunk, &needs_free)
         if cbytes < 0:
            raise RuntimeError("Error while getting the lazychunk")
+        # The next does not always work (bug)
+        # cdef uint8_t is_lazy = chunk[BLOSC2_MAX_OVERHEAD - 1] & 0x08
+        # Workaround
+        cdef uint8_t is_lazy = chunk[BLOSC2_MAX_OVERHEAD - 1] & 0x70
+        if not is_lazy:
+            # Put a cap on the buffer size for the non-lazy chunk
+            cbytes = MAX_OVERHEAD
+            # Set the lazy flag for temporarily fix the chunk
+            chunk[BLOSC2_MAX_OVERHEAD - 1] |= 0x08
         ret_chunk = PyBytes_FromStringAndSize(<char*>chunk, cbytes)
         if needs_free:
             free(chunk)
