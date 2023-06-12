@@ -1134,8 +1134,6 @@ cdef class SChunk:
         if not is_lazy:
             # Put a cap on the buffer size for the non-lazy chunk
             cbytes = MAX_OVERHEAD
-            # Set the lazy flag for temporarily fix the chunk
-            chunk[BLOSC2_MAX_OVERHEAD - 1] |= 0x08
         ret_chunk = PyBytes_FromStringAndSize(<char*>chunk, cbytes)
         if needs_free:
             free(chunk)
