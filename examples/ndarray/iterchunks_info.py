@@ -28,5 +28,5 @@ a[slice_] = 1  # blosc2 is currently not able to determine special values in thi
 t0 = time()
 for info in a.iterchunks_info():
     print(info)
-    # Do something with the chunk
+    # Do something fancy with the chunk
 print(f"Time for iterating over {a.schunk.nchunks} chunks: {time() - t0:.4f} s")

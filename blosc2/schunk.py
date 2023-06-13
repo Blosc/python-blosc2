@@ -672,6 +672,7 @@ class SChunk(blosc2_ext.SChunk):
         for nchunk in range(self.nchunks):
             lazychunk = self.get_lazychunk(nchunk)
             # Blosc2 flags are encoded at the end of the header
+            # (see https://github.com/Blosc/c-blosc2/blob/main/README_CHUNK_FORMAT.rst)
             is_special = (lazychunk[31] & 0x70) >> 4
             special = SpecialValue(is_special)
             # The special value is encoded at the end of the header
