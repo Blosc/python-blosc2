@@ -17,6 +17,7 @@ Methods
     __getitem__
     __setitem__
     copy
+    iterchunks_info
     slice
     squeeze
     resize
