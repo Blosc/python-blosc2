@@ -179,20 +179,21 @@ class NDArray(blosc2_ext.NDArray):
             A namedtuple with the following fields:
             nchunk: the index of the chunk.
             coords: the coordinates where the chunk starts.
+            cratio: the compression ratio of the chunk.
             special: the special value enum of the chunk; if 0, the chunk is not special.
             repeated_value: the repeated value for the chunk; if not SpecialValue.VALUE, it is None.
             lazychunk: a buffer with the complete lazy chunk.
         """
         ChunkInfoNDArray = namedtuple(
-            "ChunkInfoNDArray", ["nchunk", "coords", "special", "repeated_value", "lazychunk"]
+            "ChunkInfoNDArray", ["nchunk", "coords", "cratio", "special", "repeated_value", "lazychunk"]
         )
         chunks_idx = np.array(self.shape) // np.array(self.chunks)
         for cinfo in self.schunk.iterchunks_info():
-            nchunk, special, repeated_value, lazychunk = cinfo
+            nchunk, cratio, special, repeated_value, lazychunk = cinfo
             coords = tuple(np.unravel_index(cinfo.nchunk, chunks_idx) * np.array(self.chunks))
             if cinfo.special == SpecialValue.VALUE:
                 repeated_value = np.frombuffer(cinfo.repeated_value, dtype=self.dtype)[0]
-            yield ChunkInfoNDArray(nchunk, coords, special, repeated_value, lazychunk)
+            yield ChunkInfoNDArray(nchunk, coords, cratio, special, repeated_value, lazychunk)
 
     def tobytes(self):
         """Returns a buffer with the data contents.

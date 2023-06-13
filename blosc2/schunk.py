@@ -663,11 +663,12 @@ class SChunk(blosc2_ext.SChunk):
         info: namedtuple
             A namedtuple with the following fields:
             nchunk: the index of the chunk.
+            cratio: the compression ratio of the chunk.
             special: the special value enum of the chunk; if 0, the chunk is not special.
             repeated_value: the repeated value for the chunk; if not SpecialValue.VALUE, it is None.
             lazychunk: a buffer with the complete lazy chunk.
         """
-        ChunkInfo = namedtuple("ChunkInfo", ["nchunk", "special", "repeated_value", "lazychunk"])
+        ChunkInfo = namedtuple("ChunkInfo", ["nchunk", "cratio", "special", "repeated_value", "lazychunk"])
         for nchunk in range(self.nchunks):
             lazychunk = self.get_lazychunk(nchunk)
             # Blosc2 flags are encoded at the end of the header
@@ -675,7 +676,12 @@ class SChunk(blosc2_ext.SChunk):
             special = SpecialValue(is_special)
             # The special value is encoded at the end of the header
             repeated_value = lazychunk[32:] if special == SpecialValue.VALUE else None
-            yield ChunkInfo(nchunk, special, repeated_value, lazychunk)
+            # Compression ratio
+            cratio = (
+                np.frombuffer(lazychunk[4:8], dtype=np.int32)[0]
+                / np.frombuffer(lazychunk[12:16], dtype=np.int32)[0]
+            )
+            yield ChunkInfo(nchunk, cratio, special, repeated_value, lazychunk)
 
     def postfilter(self, input_dtype, output_dtype=None):
         """Decorator to set a function as a postfilter.
