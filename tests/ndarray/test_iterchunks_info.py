@@ -15,10 +15,10 @@ import blosc2
 @pytest.mark.parametrize(
     "shape, chunks, dtype, fill_value",
     [
-        ((400, 100), (200, 10), "S10", "Hola!"),  # repeated string
-        ((1000, 100), (200, 20), np.bool_, False),  # zeros
-        ((1000, 100), (200, 20), np.int32, 1),  # ones
-        ((800, 100), (20, 20), np.float64, np.nan),  # repeated float
+        ((401, 100), (200, 10), "S10", "Hola!"),  # repeated string
+        ((1020, 100), (200, 20), np.bool_, False),  # zeros
+        ((1000, 99), (200, 20), np.int32, 1),  # ones
+        ((799, 99), (20, 20), np.float64, np.nan),  # repeated float
     ],
 )
 def test_iterchunks_info(shape, chunks, dtype, fill_value):

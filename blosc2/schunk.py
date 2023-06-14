@@ -662,11 +662,11 @@ class SChunk(blosc2_ext.SChunk):
         ------
         info: namedtuple
             A namedtuple with the following fields:
-            nchunk: the index of the chunk.
-            cratio: the compression ratio of the chunk.
-            special: the special value enum of the chunk; if 0, the chunk is not special.
+            nchunk: the index of the chunk (int).
+            cratio: the compression ratio of the chunk (float).
+            special: the special value enum of the chunk; if 0, the chunk is not special (SpecialValue).
             repeated_value: the repeated value for the chunk; if not SpecialValue.VALUE, it is None.
-            lazychunk: a buffer with the complete lazy chunk.
+            lazychunk: a buffer with the complete lazy chunk (bytes).
         """
         ChunkInfo = namedtuple("ChunkInfo", ["nchunk", "cratio", "special", "repeated_value", "lazychunk"])
         for nchunk in range(self.nchunks):
@@ -677,10 +677,10 @@ class SChunk(blosc2_ext.SChunk):
             special = SpecialValue(is_special)
             # The special value is encoded at the end of the header
             repeated_value = lazychunk[32:] if special == SpecialValue.VALUE else None
-            # Compression ratio
+            # Compression ratio (nbytes and cbytes are little-endian)
             cratio = (
-                np.frombuffer(lazychunk[4:8], dtype=np.int32)[0]
-                / np.frombuffer(lazychunk[12:16], dtype=np.int32)[0]
+                np.frombuffer(lazychunk[4:8], dtype="<i4")[0]
+                / np.frombuffer(lazychunk[12:16], dtype="<i4")[0]
             )
             yield ChunkInfo(nchunk, cratio, special, repeated_value, lazychunk)
 
