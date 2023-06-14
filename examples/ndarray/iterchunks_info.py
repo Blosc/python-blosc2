@@ -12,7 +12,7 @@ from time import time
 
 import blosc2
 
-shape = (1_000,) * 3
+shape = (1000,) * 3
 chunks = (500,) * 3
 dtype = "f4"
 
