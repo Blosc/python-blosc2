@@ -1762,10 +1762,13 @@ cdef int general_decoder(const uint8_t* input_buffer, int32_t input_len,
     return rc
 
 
-def register_codec(codec_name, id, encoder, decoder, version=1):
+def register_codec(codec_name, id, encoder=None, decoder=None, version=1):
     if id < BLOSC2_USER_REGISTERED_CODECS_START or id > BLOSC2_USER_REGISTERED_CODECS_STOP:
         raise ValueError("`id` must be between ", BLOSC2_USER_REGISTERED_CODECS_START,
                          " and ", BLOSC2_USER_REGISTERED_CODECS_STOP)
+
+    if (encoder is None and decoder is not None) or (encoder is not None and decoder is None):
+        raise ValueError("both encoder and decoder must be given, or none")
 
     cdef blosc2_codec codec
     codec.compcode = id
@@ -1774,14 +1777,21 @@ def register_codec(codec_name, id, encoder, decoder, version=1):
     codec_name_ = codec_name.encode() if isinstance(codec_name, str) else codec_name
     codec.compname = <char *> malloc(strlen(codec_name_) + 1)
     strcpy(codec.compname, codec_name_)
-    codec.encoder = general_encoder
-    codec.decoder = general_decoder
+    if encoder is None:
+        codec.encoder = NULL
+    else:
+        codec.encoder = general_encoder
+    if decoder is None:
+        codec.decoder = NULL
+    else:
+        codec.decoder = general_decoder
 
     rc = blosc2_register_codec(&codec)
     if rc < 0:
         raise RuntimeError("Error while registering codec")
 
-    blosc2.ucodecs_registry[id] = (codec_name, encoder, decoder)
+    if encoder and decoder:
+        blosc2.ucodecs_registry[id] = (codec_name, encoder, decoder)
 
 
 cdef int general_forward(const uint8_t* input_buffer, uint8_t* output_buffer, int32_t size,

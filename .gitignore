@@ -137,3 +137,5 @@ _skbuild/
 # sphinx
 doc/_build/
 
+
+.*.swp
