@@ -1393,7 +1393,7 @@ def schunk_from_cframe(cframe, copy=False):
     return blosc2_ext.schunk_from_cframe(cframe, copy)
 
 
-def register_codec(codec_name, id, encoder, decoder, version=1):
+def register_codec(codec_name, id, encoder=None, decoder=None, version=1):
     """Register an user defined codec.
 
     Parameters
@@ -1402,14 +1402,16 @@ def register_codec(codec_name, id, encoder, decoder, version=1):
         Name of the codec.
     id: int
         Codec id, must be between 160 and 255 (both included).
-    encoder: Python function
+    encoder: Python function or None
         This will receive an input to compress as a ndarray of dtype uint8, an output to fill
         the compressed buffer in as a ndarray of dtype uint8, the codec meta and the `SChunk` instance.
         It must return the size of the compressed buffer in bytes.
-    decoder: Python function
+        If None then the codec name indicates a dynamic plugin which must be installed.
+    decoder: Python function or None
         This will receive an input to decompress as a ndarray of dtype uint8, an output to fill
         the decompressed buffer in as a ndarray of dtype uint8, the codec meta and the `SChunk` instance.
         It must return the size of the decompressed buffer in bytes.
+        If None then the codec name indicates a dynamic plugin which must be installed.
     version: int
         Codec version. Default is 1.
 
@@ -1422,6 +1424,9 @@ def register_codec(codec_name, id, encoder, decoder, version=1):
     * Cannot use multi-threading when using an user defined codec.
 
     * User defined codecs can only be used inside a `SChunk` instance.
+
+    * Both encoder and encoder functions must be given (for a Python codec), or none (for
+      a dynamic plugin).
 
     See Also
     --------

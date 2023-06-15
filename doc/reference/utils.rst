@@ -7,4 +7,5 @@ Utils
    :toctree: autofiles/utils/
 
     open
+    register_codec
     remove_urlpath
