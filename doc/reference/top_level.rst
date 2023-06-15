@@ -62,3 +62,14 @@ Enumerated classes
    Codec
    Filter
    SplitMode
+
+Utils
+-----
+
+.. currentmodule:: blosc2
+
+.. autosummary::
+   :toctree: autofiles/top_level/
+
+    open
+    remove_urlpath
