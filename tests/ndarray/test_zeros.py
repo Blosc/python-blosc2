@@ -46,8 +46,8 @@ import blosc2
             {"abc": 123, "2": [0, 1, 24]},
         ),
         (
-            (2_000,) * 3,
-            (1_000,) * 3,
+            (2**32,),
+            (2**31,),
             None,
             np.float32,
             {"codec": blosc2.Codec.LZ4, "clevel": 5, "nthreads": 2},
@@ -61,7 +61,7 @@ def test_zeros(shape, chunks, blocks, dtype, cparams, urlpath, contiguous, meta)
     blosc2.remove_urlpath(urlpath)
 
     dtype = np.dtype(dtype)
-    if np.prod(chunks) * dtype.itemsize > (2**31 - 1):
+    if np.prod(chunks) * dtype.itemsize > (2**31 - 1 - 32):
         with pytest.raises(RuntimeError):
             _ = blosc2.zeros(
                 shape,
