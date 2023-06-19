@@ -45,22 +45,46 @@ import blosc2
             False,
             {"abc": 123, "2": [0, 1, 24]},
         ),
+        (
+            (2_000,) * 3,
+            (1_000,) * 3,
+            None,
+            np.float32,
+            {"codec": blosc2.Codec.LZ4, "clevel": 5, "nthreads": 2},
+            None,
+            False,
+            None,
+        ),
     ],
 )
 def test_zeros(shape, chunks, blocks, dtype, cparams, urlpath, contiguous, meta):
     blosc2.remove_urlpath(urlpath)
 
     dtype = np.dtype(dtype)
-    a = blosc2.zeros(
-        shape,
-        chunks=chunks,
-        blocks=blocks,
-        dtype=dtype,
-        cparams=cparams,
-        urlpath=urlpath,
-        contiguous=contiguous,
-        meta=meta,
-    )
+    if np.prod(chunks) * dtype.itemsize > (2**31 - 1):
+        with pytest.raises(RuntimeError):
+            _ = blosc2.zeros(
+                shape,
+                chunks=chunks,
+                blocks=blocks,
+                dtype=dtype,
+                cparams=cparams,
+                urlpath=urlpath,
+                contiguous=contiguous,
+                meta=meta,
+            )
+        return
+    else:
+        a = blosc2.zeros(
+            shape,
+            chunks=chunks,
+            blocks=blocks,
+            dtype=dtype,
+            cparams=cparams,
+            urlpath=urlpath,
+            contiguous=contiguous,
+            meta=meta,
+        )
 
     b = np.zeros(shape=shape, dtype=dtype)
     assert np.array_equal(a[:], b)
