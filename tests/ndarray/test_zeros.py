@@ -61,7 +61,7 @@ def test_zeros(shape, chunks, blocks, dtype, cparams, urlpath, contiguous, meta)
     blosc2.remove_urlpath(urlpath)
 
     dtype = np.dtype(dtype)
-    if np.prod(chunks) * dtype.itemsize > (2**31 - 1 - 32):
+    if np.prod(chunks) * dtype.itemsize > blosc2.MAX_BUFFERSIZE:
         with pytest.raises(RuntimeError):
             _ = blosc2.zeros(
                 shape,
