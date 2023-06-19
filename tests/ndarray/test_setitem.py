@@ -39,7 +39,7 @@ def test_setitem(shape, chunks, blocks, slices, dtype):
     np.testing.assert_almost_equal(a[...], nparray)
 
     # blosc2.NDArray
-    if slice_shape == () or len(slice_shape) != len(blocks):
+    if np.prod(slice_shape) == 1 or len(slice_shape) != len(blocks):
         chunks = None
         blocks = None
 

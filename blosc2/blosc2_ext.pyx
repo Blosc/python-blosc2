@@ -1989,7 +1989,8 @@ cdef class NDArray:
                   "Error while getting the buffer")
         PyBuffer_Release(&view)
 
-        return arr.squeeze()
+        return arr
+
 
     def get_slice(self, key, mask, **kwargs):
         start, stop = key
@@ -2026,8 +2027,6 @@ cdef class NDArray:
         for i in range(ndim):
             mask_[i] = mask[i]
         _check_rc(b2nd_squeeze_index(array, mask_), "Error while squeezing sliced array")
-        if array.ndim == 1 and array.shape[0] == 1:
-            array.ndim = 0
         ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                                  _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
 

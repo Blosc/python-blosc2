@@ -48,3 +48,23 @@ def test_getitem_simple(shape, chunks, blocks, slices, dtype):
     a_slice = a[slices]
 
     np.testing.assert_almost_equal(a_slice, nparray_slice)
+
+
+def test_getitem_shapes():
+    shape = (5, 5)
+    slice_ = (slice(4, 6), slice(4, 6))
+
+    npa = np.arange(int(np.prod(shape)), dtype=np.int32).reshape(shape)
+    b2a = blosc2.asarray(npa)
+
+    # One elem slice
+    assert b2a[4, 4].shape == npa[4, 4].shape
+    assert b2a[4:, 4].shape == npa[4:, 4].shape
+    assert b2a[4, 4:].shape == npa[4, 4:].shape
+    assert b2a[4:, 4:].shape == npa[4:, 4:].shape
+    assert b2a[slice_].shape == npa[slice_].shape
+
+    # More than one elem slice
+    assert b2a[3:, 4].shape == npa[3:, 4].shape
+    assert b2a[3, 4:].shape == npa[3, 4:].shape
+    assert b2a[3:, 4:].shape == npa[3:, 4:].shape

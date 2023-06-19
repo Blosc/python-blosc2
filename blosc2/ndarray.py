@@ -115,10 +115,11 @@ class NDArray(blosc2_ext.NDArray):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
-        key, _ = process_key(key, self.shape)
+        key, mask = process_key(key, self.shape)
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
-        shape = [sp - st for st, sp in zip(start, stop)]
+        shape = np.array([sp - st for st, sp in zip(start, stop)])
+        shape = tuple(shape[[not m for m in mask]])
         # arr = np.zeros(shape, dtype=self.dtype)
         # Benchmarking shows that empty is faster than zeros
         # (besides we don't need to fill padding with zeros)
