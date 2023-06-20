@@ -8,3 +8,5 @@ cmake
 myst-parser
 ninja
 sphinx-paramlinks
+nbsphinx
+sphinx-panels

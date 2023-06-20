@@ -17,6 +17,8 @@ extensions = [
     "numpydoc",
     "myst_parser",
     "sphinx_paramlinks",
+    "sphinx_panels",
+    "nbsphinx",
 ]
 source_suffix = [".rst", ".md"]
 html_theme = "pydata_sphinx_theme"
