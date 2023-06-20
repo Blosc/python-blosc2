@@ -13,8 +13,8 @@ that wraps C-Blosc2, the newest version of the Blosc compressor.
     Getting Started
     ^^^^^^^^^^^^^^^
 
-    New to *python-blosc2*? Check out the getting started guides. They contain an
-    introduction to *python-blosc2* main concepts and an installation tutorial.
+    New to Python-Blosc2? Check out the getting started guides. They contain an
+    introduction to Python-Blosc2 main concepts and an installation tutorial.
 
     +++
 
@@ -28,7 +28,7 @@ that wraps C-Blosc2, the newest version of the Blosc compressor.
     API Reference
     ^^^^^^^^^^^^^
 
-    The reference guide contains a detailed description of the *python-blosc2* API.
+    The reference guide contains a detailed description of the Python-Blosc2 API.
     The reference describes how the functions work and which parameters can
     be used.
 
@@ -47,7 +47,7 @@ that wraps C-Blosc2, the newest version of the Blosc compressor.
 
     Saw a typo in the documentation? Want to improve
     existing functionalities? The contributing guidelines will guide
-    you through the process of improving *python-blosc2*.
+    you through the process of improving Python-Blosc2.
 
     +++
 
