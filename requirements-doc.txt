@@ -10,3 +10,4 @@ ninja
 sphinx-paramlinks
 nbsphinx
 sphinx-panels
+pandoc
