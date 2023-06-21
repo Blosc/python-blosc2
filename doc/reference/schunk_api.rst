@@ -1,7 +1,7 @@
 .. _SChunk:
 
-Super-chunk API
-===============
+SChunk API
+==========
 
 .. currentmodule:: blosc2.schunk
 
