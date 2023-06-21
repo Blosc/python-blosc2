@@ -1,9 +1,9 @@
-Announcing Python-Blosc2 2.2.3
+Announcing Python-Blosc2 2.2.4
 ==============================
 
-This is a maintenance release, mainly for including recent
-fixes in the underlying C-Blosc2 library (now at 2.9.2).
-An upgrade is recommended for all users.
+This is a maintenance release, were we have added tutorials for a quick start.
+We have also added a new method `interchunks_info` for `SChunk` and `NDArray` classes.
+Finally, we have updated C-Blosc2 library to latest version (2.9.3).
 
 For more info, you can have a look at the release notes in:
 

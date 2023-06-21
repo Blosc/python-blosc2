@@ -2,6 +2,30 @@
 
 ## Changes from 2.2.2 to 2.2.3
 
+* Added a new [section of tutorials](https://www.blosc.org/python-blosc2/getting_started/tutorials.html)
+  for a quick get start.
+
+* Added a new [section on how to cite Blosc](https://github.com/Blosc/python-blosc2/tree/main#citing-blosc).
+
+* New method `interchunks_info` for `SChunk` and `NDArray` classes.
+  This iterates through chunks for getting meta info, like
+  decompression ratio, whether the chunk is special or not, among
+  others. For more information on how this works see
+  [this example](https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/iterchunks_info.py).
+
+* Now it is possible to register a dynamic plugin by passing None
+  as the `encoder` and `decoder` arguments in the
+  [register_codec](https://www.blosc.org/python-blosc2/reference/autofiles/top_level/blosc2.register_codec.html#blosc2.register_codec)
+  function.
+
+* Make shape of scalar slices NDArray objects to follow NumPy conventions.
+  See [#117](https://github.com/Blosc/python-blosc2/issues/117).
+
+* Updated to latest C-Blosc2 2.9.3.
+
+
+## Changes from 2.2.2 to 2.2.3
+
 * Updated to latest C-Blosc2 2.9.2.
 
 * Better GIL handling.  Thanks to @martaiborra.
