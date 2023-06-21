@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 2.2.3 to 2.2.4
+
+XXX version-specific blurb XXX
+
 ## Changes from 2.2.2 to 2.2.3
 
 * Added a new [section of tutorials](https://www.blosc.org/python-blosc2/getting_started/tutorials.html)
