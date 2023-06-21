@@ -23,7 +23,7 @@ def info_text_report(items: list) -> str:
     report = ""
     for k, v in items:
         if type(v) is dict:
-            # rich way
+            # rich way, this is disabled because it doesn't work well in the notebooks
             # with io.StringIO() as buf:
             #     v_sorted = {k: val for k, val in sorted(v.items())}
             #     rich.print(v_sorted, file=buf)
