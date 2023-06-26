@@ -14,7 +14,7 @@ that wraps C-Blosc2, the newest version of the Blosc compressor.
     ^^^^^^^^^^^^^^^
 
     New to Python-Blosc2? Check out the getting started guides. They contain an
-    introduction to Python-Blosc2 main concepts and an installation tutorial.
+    introduction to Python-Blosc2 main concepts and different tutorials.
 
     +++
 
