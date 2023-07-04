@@ -139,7 +139,7 @@ def test_schunk_cframe(contiguous, urlpath, cparams, dparams, nchunks, copy):
 
     cframe = schunk.to_cframe()
     schunk2 = blosc2.schunk_from_cframe(cframe, copy)
-    if not os.getenv("BTUNE_BALANCE"):
+    if not os.getenv("BTUNE_TRADEOFF"):
         for key in cparams:
             if key == "nthreads":
                 continue

@@ -684,9 +684,9 @@ def unpack_tensor(cframe):
     >>> import numpy as np
     >>> th = np.arange(1e3, dtype=np.float32)
     >>> cframe = blosc2.pack_tensor(th)
-    >>> if not os.getenv("BTUNE_BALANCE"):
+    >>> if not os.getenv("BTUNE_TRADEOFF"):
     ...     assert len(cframe) < th.size * th.itemsize
-    ... 
+    ...
     >>> th2 = blosc2.unpack_tensor(cframe)
     >>> a = np.asarray(th)
     >>> a2 = np.asarray(th2)

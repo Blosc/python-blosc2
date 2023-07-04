@@ -28,7 +28,7 @@ import blosc2
 def test_pack_array(size, dtype):
     nparray = np.arange(size, dtype=dtype)
     parray = blosc2.pack_array(nparray)
-    if not os.getenv("BTUNE_BALANCE"):
+    if not os.getenv("BTUNE_TRADEOFF"):
         assert len(parray) < nparray.size * nparray.itemsize
 
     a2 = blosc2.unpack_array(parray)
@@ -48,7 +48,7 @@ def test_pack_array(size, dtype):
 def test_pack_array2(size, dtype):
     nparray = np.arange(size, dtype=dtype)
     parray = blosc2.pack_array2(nparray)
-    if not os.getenv("BTUNE_BALANCE"):
+    if not os.getenv("BTUNE_TRADEOFF"):
         assert len(parray) < nparray.size * nparray.itemsize
 
     a2 = blosc2.unpack_array2(parray)
@@ -59,7 +59,7 @@ def test_pack_array2(size, dtype):
 def test_pack_array2_struct(size, dtype):
     nparray = np.fromiter(iter(range(size)), dtype="i4,f4,S8")
     parray = blosc2.pack_array2(nparray)
-    if not os.getenv("BTUNE_BALANCE"):
+    if not os.getenv("BTUNE_TRADEOFF"):
         assert len(parray) < nparray.size * nparray.itemsize
 
     a2 = blosc2.unpack_array2(parray)
@@ -80,7 +80,7 @@ def test_pack_tensor_torch(size, dtype):
     tensor = torch.arange(size, dtype=dtype)
     cframe = blosc2.pack_tensor(tensor)
     atensor = np.asarray(tensor)
-    if not os.getenv("BTUNE_BALANCE"):
+    if not os.getenv("BTUNE_TRADEOFF"):
         assert len(cframe) < atensor.size * atensor.dtype.itemsize
 
     tensor2 = blosc2.unpack_tensor(cframe)
@@ -101,7 +101,7 @@ def test_pack_tensor_tensorflow(size, dtype):
     tensor = tensorflow.constant(array)
     cframe = blosc2.pack_tensor(tensor)
     atensor = np.asarray(tensor)
-    if not os.getenv("BTUNE_BALANCE"):
+    if not os.getenv("BTUNE_TRADEOFF"):
         assert len(cframe) < atensor.size * atensor.dtype.itemsize
 
     tensor2 = blosc2.unpack_tensor(cframe)
@@ -121,7 +121,7 @@ def test_pack_tensor_tensorflow(size, dtype):
 def test_pack_tensor_array(size, dtype):
     nparray = np.arange(size, dtype=dtype)
     parray = blosc2.pack_tensor(nparray)
-    if not os.getenv("BTUNE_BALANCE"):
+    if not os.getenv("BTUNE_TRADEOFF"):
         assert len(parray) < nparray.size * nparray.itemsize
 
     a2 = blosc2.unpack_tensor(parray)
@@ -141,7 +141,7 @@ def test_pack_tensor_array(size, dtype):
 def test_save_array(size, dtype, urlpath):
     nparray = np.arange(size, dtype=dtype)
     serial_size = blosc2.save_array(nparray, urlpath, mode="w")
-    if not os.getenv("BTUNE_BALANCE"):
+    if not os.getenv("BTUNE_TRADEOFF"):
         assert serial_size < nparray.size * nparray.itemsize
 
     a2 = blosc2.load_array(urlpath)
@@ -159,7 +159,7 @@ def test_save_array(size, dtype, urlpath):
 def test_save_tensor_array(size, dtype, urlpath):
     nparray = np.arange(size, dtype=dtype)
     serial_size = blosc2.save_tensor(nparray, urlpath, mode="w")
-    if not os.getenv("BTUNE_BALANCE"):
+    if not os.getenv("BTUNE_TRADEOFF"):
         assert serial_size < nparray.size * nparray.itemsize
 
     a2 = blosc2.load_tensor(urlpath)
@@ -179,7 +179,7 @@ def test_save_tensor_tensorflow(size, dtype, urlpath):
     nparray = np.arange(size, dtype=dtype)
     tensor = tensorflow.constant(nparray)
     serial_size = blosc2.save_tensor(tensor, urlpath, mode="w")
-    if not os.getenv("BTUNE_BALANCE"):
+    if not os.getenv("BTUNE_TRADEOFF"):
         assert serial_size < nparray.size * nparray.itemsize
 
     tensor2 = blosc2.load_tensor(urlpath)
@@ -199,7 +199,7 @@ def test_save_tensor_torch(size, dtype, urlpath):
     nparray = np.arange(size, dtype=dtype)
     tensor = torch.tensor(nparray)
     serial_size = blosc2.save_tensor(tensor, urlpath, mode="w")
-    if not os.getenv("BTUNE_BALANCE"):
+    if not os.getenv("BTUNE_TRADEOFF"):
         assert serial_size < nparray.size * nparray.itemsize
 
     tensor2 = blosc2.load_tensor(urlpath)
@@ -217,7 +217,7 @@ def test_save_tensor_torch(size, dtype, urlpath):
 def test_save_tensor_sparse(size, sparse, urlpath):
     nparray = np.arange(size, dtype=np.int32)
     serial_size = blosc2.save_tensor(nparray, urlpath, mode="w", contiguous=not sparse)
-    if not os.getenv("BTUNE_BALANCE"):
+    if not os.getenv("BTUNE_TRADEOFF"):
         assert serial_size < nparray.size * nparray.itemsize
 
     a2 = blosc2.load_tensor(urlpath)
