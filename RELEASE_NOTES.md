@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from 2.2.5 to 2.2.6
+
+XXX version-specific blurb XXX
+
+
 ## Changes from 2.2.4 to 2.2.5
 
 * Updated to latest C-Blosc2 2.10.0.
