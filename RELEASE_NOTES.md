@@ -1,10 +1,15 @@
 # Release notes
 
-## Changes from 2.2.3 to 2.2.4
+## Changes from 2.2.4 to 2.2.5
 
-XXX version-specific blurb XXX
+* Updated to latest C-Blosc2 2.10.0.
 
-## Changes from 2.2.2 to 2.2.3
+* Use the new, fixed bytedelta filter introduced in C-Blosc2 2.10.0.
+
+* Some small fixes in tutorials.
+
+
+## Changes from 2.2.2 to 2.2.4
 
 * Added a new [section of tutorials](https://www.blosc.org/python-blosc2/getting_started/tutorials.html)
   for a quick get start.

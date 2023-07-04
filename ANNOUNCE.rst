@@ -1,9 +1,10 @@
-Announcing Python-Blosc2 2.2.4
+Announcing Python-Blosc2 2.2.5
 ==============================
 
-This is a maintenance release, were we have added tutorials for a quick start.
-We have also added a new method `interchunks_info` for `SChunk` and `NDArray` classes.
-Finally, we have updated C-Blosc2 library to latest version (2.9.3).
+This is a maintenance release, where we have upgraded to latest C-Blosc2 2.10.0.
+This provides fixes for a bytedelta filter (see
+https://github.com/Blosc/c-blosc2/pull/532).  Hence, an upgrade is recommended
+for everybody, most especially, if you are using bytedelta.
 
 For more info, you can have a look at the release notes in:
 
