@@ -600,8 +600,9 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
     >>> import numpy as np
     >>> th = np.arange(1e6, dtype=np.float32)
     >>> cframe = blosc2.pack_tensor(th)
-    >>> len(cframe) < th.size * th.itemsize
-    True
+    >>> if not os.getenv("BTUNE_TRADEOFF"):
+    ...     assert len(cframe) < th.size * th.itemsize
+    ...
 
     See also
     --------
@@ -732,8 +733,9 @@ def save_tensor(tensor, urlpath, chunksize=None, **kwargs):
     >>> import numpy as np
     >>> th = np.arange(1e6, dtype=np.float32)
     >>> serial_size = blosc2.save_tensor(th, "test.bl2", mode="w")
-    >>> serial_size < th.size * th.itemsize
-    True
+    >>> if not os.getenv("BTUNE_TRADEOFF"):
+    ...     assert serial_size < th.size * th.itemsize
+    ...
 
     See also
     --------
@@ -769,8 +771,9 @@ def load_tensor(urlpath):
     >>> import numpy as np
     >>> th = np.arange(1e6, dtype=np.float32)
     >>> size = blosc2.save_tensor(th, "test.bl2", mode="w")
-    >>> size < th.size * th.itemsize
-    True
+    >>> if not os.getenv("BTUNE_TRADEOFF"):
+    ...     assert size < th.size * th.itemsize
+    ...
     >>> th2 = blosc2.load_tensor("test.bl2")
     >>> np.array_equal(th, th2)
     True
