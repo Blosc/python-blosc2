@@ -230,6 +230,8 @@ cdef extern from "blosc2.h":
         int tuner_id
         void* tuner_params
         c_bool instr_codec
+        void* codec_params
+        void* filter_params[BLOSC2_MAX_FILTERS]
 
     cdef const blosc2_cparams BLOSC2_CPARAMS_DEFAULTS
 
@@ -713,9 +715,13 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
 
     cparams.prefilter = NULL
     cparams.preparams = NULL
-    cparams.tuner_params = NULL
     cparams.tuner_id = 0
+    cparams.tuner_params = NULL
     cparams.instr_codec = False
+    cparams.codec_params = NULL
+    for i in range(len(filters)):
+        cparams.filter_params[i] = NULL
+
     _check_cparams(cparams)
 
 
