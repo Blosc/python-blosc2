@@ -658,3 +658,7 @@ def _check_ndarray_kwargs(**kwargs):
                 f" keyword arguments"
                 f", and you passed {str(key)}"
             )
+    if "cparams" in kwargs and "chunks" in kwargs["cparams"]:
+        raise ValueError("You cannot pass chunks in cparams, use `chunks` argument instead")
+    if "cparams" in kwargs and "blocks" in kwargs["cparams"]:
+        raise ValueError("You cannot pass chunks in cparams, use `blocks` argument instead")

@@ -110,3 +110,16 @@ def test_empty_minimal(shape, dtype):
     assert all(c >= b for c, b in zip(a.chunks, a.blocks))
     assert a.dtype == dtype
     assert a.schunk.typesize == dtype.itemsize
+
+
+@pytest.mark.parametrize(
+    "shape, cparams",
+    [
+        (100, dict(chunks=(10,))),
+        ((100,), dict(blocks=(10,))),
+        ((100,), dict(chunks=(10,), blocks=(10,))),
+    ],
+)
+def test_cparams_chunks_blocks(shape, cparams):
+    with pytest.raises(ValueError):
+        blosc2.empty(shape, cparams=cparams)
