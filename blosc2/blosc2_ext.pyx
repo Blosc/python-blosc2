@@ -1787,11 +1787,11 @@ def register_codec(codec_name, id, encoder=None, decoder=None, version=1):
     if encoder is None:
         codec.encoder = NULL
     else:
-        codec.encoder = general_encoder
+        codec.encoder = <blosc2_codec_encoder_cb> general_encoder
     if decoder is None:
         codec.decoder = NULL
     else:
-        codec.decoder = general_decoder
+        codec.decoder = <blosc2_codec_decoder_cb> general_decoder
 
     rc = blosc2_register_codec(&codec)
     if rc < 0:
@@ -1848,11 +1848,11 @@ def register_filter(id, forward, backward, filter_name):
     if forward is None:
         filter.forward = NULL
     else:
-        filter.forward = general_forward
+        filter.forward = <blosc2_filter_forward_cb> general_forward
     if backward is None:
         filter.backward = NULL
     else:
-        filter.backward = general_backward
+        filter.backward = <blosc2_filter_backward_cb> general_backward
     if filter_name is None and not forward and not backward:
         raise ValueError("You need to pass the filter name or the forward and backward functions")
     if filter_name:
