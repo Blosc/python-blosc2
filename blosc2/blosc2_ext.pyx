@@ -409,6 +409,7 @@ cdef extern from "blosc2.h":
 
     ctypedef struct blosc2_filter:
         uint8_t id
+        char* name
         blosc2_filter_forward_cb forward
         blosc2_filter_backward_cb backward
 
@@ -1835,20 +1836,35 @@ cdef int general_backward(const uint8_t* input_buffer, uint8_t* output_buffer, i
     return BLOSC2_ERROR_SUCCESS
 
 
-def register_filter(id, forward, backward):
+def register_filter(id, forward, backward, filter_name):
     if id < BLOSC2_USER_REGISTERED_FILTERS_START or id > BLOSC2_USER_REGISTERED_FILTERS_STOP:
         raise ValueError("`id` must be between ", BLOSC2_USER_REGISTERED_FILTERS_START,
                          " and ", BLOSC2_USER_REGISTERED_FILTERS_STOP)
+    if (forward is None and backward is not None) or (forward is not None and backward is None):
+        raise ValueError("both encoder and decoder must be given, or none")
 
     cdef blosc2_filter filter
     filter.id = id
-    filter.forward = general_forward
-    filter.backward = general_backward
+    if forward is None:
+        filter.forward = NULL
+    else:
+        filter.forward = general_forward
+    if backward is None:
+        filter.backward = NULL
+    else:
+        filter.backward = general_backward
+    if filter_name is None and not forward and not backward:
+        raise ValueError("You need to pass the filter name or the forward and backward functions")
+    if filter_name:
+        filter_name_ = filter_name.encode() if isinstance(filter_name, str) else filter_name
+        filter.name = <char *> malloc(strlen(filter_name_) + 1)
+        strcpy(filter.name, filter_name_)
+
     rc = blosc2_register_filter(&filter)
     if rc < 0:
         raise RuntimeError("Error while registering filter")
-
-    blosc2.ufilters_registry[id] = (forward, backward)
+    if forward and backward:
+        blosc2.ufilters_registry[id] = (forward, backward)
 
 def _check_rc(rc, message):
     if rc < 0:

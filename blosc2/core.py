@@ -1472,7 +1472,7 @@ def register_codec(codec_name, id, encoder=None, decoder=None, version=1):
     blosc2_ext.register_codec(codec_name, id, encoder, decoder, version)
 
 
-def register_filter(id, forward, backward):
+def register_filter(id, forward=None, backward=None, name=None):
     """Register an user defined filter.
 
     Parameters
@@ -1482,10 +1482,15 @@ def register_filter(id, forward, backward):
     forward: Python function
         This will receive an input to apply the filter as a ndarray of dtype uint8, an output to fill
         as a ndarray of dtype uint8, the filter meta and the corresponding `SChunk` instance.
+        If None then the filter name indicates a dynamic plugin which must be installed.
     backward: Python function
         This will receive an input as a ndarray of dtype uint8, an output to fill
         as a ndarray of dtype uint8, the filter meta and the `SChunk` instance.
-
+        If None then the filter name indicates a dynamic plugin which must be installed.
+    name: str
+        The filter name.
+        If both `forward`and `backward` are None, this parameter must be passed to correctly
+        load the dynamic filter.
     Returns
     -------
     out: None
@@ -1525,4 +1530,4 @@ def register_filter(id, forward, backward):
     """
     if id in blosc2.ufilters_registry.keys():
         raise ValueError("Id already in use")
-    blosc2_ext.register_filter(id, forward, backward)
+    blosc2_ext.register_filter(id, forward, backward, name)
