@@ -646,24 +646,34 @@ def get_blocksize():
 
 cdef _check_cparams(blosc2_cparams *cparams):
     if cparams.nthreads > 1:
-        if BLOSC2_USER_REGISTERED_CODECS_START <= cparams.compcode <= BLOSC2_USER_REGISTERED_CODECS_STOP:
-            raise ValueError("Cannot use multi-threading with user defined codecs")
-        elif any([BLOSC2_USER_REGISTERED_FILTERS_START <= filter <= BLOSC2_USER_REGISTERED_FILTERS_STOP
-                  for filter in cparams.filters]):
-            raise ValueError("Cannot use multi-threading with user defined filters")
-        elif cparams.prefilter != NULL:
+        if BLOSC2_USER_REGISTERED_CODECS_START <= cparams.compcode <= BLOSC2_USER_REGISTERED_CODECS_STOP\
+                and cparams.compcode in blosc2.ucodecs_registry.keys():
+            raise ValueError("Cannot use multi-threading with user defined Python codecs")
+
+        ufilters = [BLOSC2_USER_REGISTERED_FILTERS_START <= filter <= BLOSC2_USER_REGISTERED_FILTERS_STOP
+                  for filter in cparams.filters]
+        for i in range(len(ufilters)):
+            if ufilters[i] and cparams.filters[i] in blosc2.ufilters_registry.keys():
+                raise ValueError("Cannot use multi-threading with user defined Python filters")
+
+        if cparams.prefilter != NULL:
             raise ValueError("`nthreads` must be 1 when a prefilter is set")
 
 cdef _check_dparams(blosc2_dparams* dparams, blosc2_cparams* cparams=NULL):
     if cparams == NULL:
         return
     if dparams.nthreads > 1:
-        if BLOSC2_USER_REGISTERED_CODECS_START <= cparams.compcode <= BLOSC2_USER_REGISTERED_CODECS_STOP:
-            raise ValueError("Cannot use multi-threading with user defined codecs")
-        elif any([BLOSC2_USER_REGISTERED_FILTERS_START <= filter <= BLOSC2_USER_REGISTERED_FILTERS_STOP
-                  for filter in cparams.filters]):
-            raise ValueError("Cannot use multi-threading with user defined filters")
-        elif dparams.postfilter != NULL:
+        if BLOSC2_USER_REGISTERED_CODECS_START <= cparams.compcode <= BLOSC2_USER_REGISTERED_CODECS_STOP\
+                and cparams.compcode in blosc2.ucodecs_registry.keys():
+            raise ValueError("Cannot use multi-threading with user defined Python codecs")
+
+        ufilters = [BLOSC2_USER_REGISTERED_FILTERS_START <= filter <= BLOSC2_USER_REGISTERED_FILTERS_STOP
+                    for filter in cparams.filters]
+        for i in range(len(ufilters)):
+            if ufilters[i] and cparams.filters[i] in blosc2.ufilters_registry.keys():
+                raise ValueError("Cannot use multi-threading with user defined Python filters")
+
+        if dparams.postfilter != NULL:
             raise ValueError("`nthreads` must be 1 when a postfilter is set")
 
 
