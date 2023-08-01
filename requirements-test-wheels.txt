@@ -1,5 +1,5 @@
 pip
-numpy
+numpy<2
 pytest
 psutil
 msgpack

@@ -2,8 +2,19 @@
 
 ## Changes from 2.2.5 to 2.2.6
 
-XXX version-specific blurb XXX
+* Multithreading checks only apply to Python defined codecs and filters.
+  Now it is possible to use multithreading with C codecs and filters plugins.
+  See PR #127.
 
+* New support for dynamic filters registry for Python.
+
+* Now params for codec and filter plugins are correctly initialized
+  when using `register_codec` and `register_filter` functions.
+
+* Some fixes for Cython 3.0.0.  However,compatibility with Cython 3.0.0
+  is not here yet, so build and install scripts are still requiring Cython<3.
+
+* Updated to latest C-Blosc2 2.10.1.
 
 ## Changes from 2.2.4 to 2.2.5
 

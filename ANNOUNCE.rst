@@ -1,10 +1,9 @@
-Announcing Python-Blosc2 2.2.5
+Announcing Python-Blosc2 2.2.6
 ==============================
 
-This is a maintenance release, where we have upgraded to latest C-Blosc2 2.10.0.
-This provides fixes for a bytedelta filter (see
-https://github.com/Blosc/c-blosc2/pull/532).  Hence, an upgrade is recommended
-for everybody, most especially, if you are using bytedelta.
+This is a maintenance release, where we have upgraded to latest C-Blosc2 2.10.1.
+This provides fixes for dynamic plugins and the possibility to run them
+in multithreading mode (see PR #127).
 
 For more info, you can have a look at the release notes in:
 

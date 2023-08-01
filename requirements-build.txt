@@ -1,5 +1,5 @@
 scikit-build
 cython<3
 cmake
-numpy
+numpy<2
 build
