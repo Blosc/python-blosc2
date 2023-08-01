@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from 2.2.6 to 2.2.7
+
+XXX version-specific blurb XXX
+
+
 ## Changes from 2.2.5 to 2.2.6
 
 * Multithreading checks only apply to Python defined codecs and filters.
