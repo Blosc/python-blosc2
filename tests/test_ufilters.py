@@ -90,3 +90,64 @@ def test_ufilters(contiguous, urlpath, nchunks, filters, filters_meta, dtype):
         assert np.array_equal(data, out)
 
     blosc2.remove_urlpath(urlpath)
+
+@pytest.mark.parametrize(
+    "cparams, dparams",
+    [
+        ({"nthreads": 4, "filters": [255, blosc2.Filter.SHUFFLE], "filters_meta": [0, 0]}, {"nthreads": 1}),
+        ({"nthreads": 1, "filters": [255], "filters_meta": [4]}, {"nthreads": 4})
+    ],
+)
+def test_pyufilters_error(cparams, dparams):
+    dtype = np.dtype(np.int32)
+    def forward(input, output, meta, schunk):
+        nd_input = input.view(dtype)
+        nd_output = output.view(dtype)
+
+        nd_output[:] = nd_input + 1
+
+    def backward(input, output, meta, schunk):
+        nd_input = input.view(dtype)
+        nd_output = output.view(dtype)
+
+        nd_output[:] = nd_input - 1
+    if 255 not in blosc2.ufilters_registry:
+        blosc2.register_filter(255, forward, backward)
+
+    nchunks = 1
+    chunk_len = 100
+    fill_value = 341
+    data = np.full(chunk_len * nchunks, fill_value, dtype=dtype)
+
+    with pytest.raises(ValueError):
+        _ = blosc2.SChunk(
+            chunksize=chunk_len * dtype.itemsize,
+            data=data,
+            cparams=cparams,
+            dparams=dparams,
+        )
+
+
+@pytest.mark.parametrize(
+    "cparams, dparams",
+    [
+        ({"nthreads": 4, "filters": [163, blosc2.Filter.SHUFFLE], "filters_meta": [0, 0]}, {"nthreads": 1}),
+        ({"nthreads": 1, "filters": [163], "filters_meta": [4]}, {"nthreads": 4})
+    ],
+)
+def test_dynamic_ufilters_error(cparams, dparams):
+    dtype = np.dtype(np.int32)
+    blosc2.register_filter(163, None, None, "ufilter_test")
+
+    nchunks = 1
+    chunk_len = 100
+    fill_value = 341
+    data = np.full(chunk_len * nchunks, fill_value, dtype=dtype)
+
+    with pytest.raises(RuntimeError):
+        _ = blosc2.SChunk(
+            chunksize=chunk_len * dtype.itemsize,
+            data=data,
+            cparams=cparams,
+            dparams=dparams,
+        )
