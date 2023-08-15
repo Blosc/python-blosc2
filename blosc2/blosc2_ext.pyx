@@ -1163,7 +1163,7 @@ cdef class SChunk:
         return rc
 
     def insert_chunk(self, nchunk, chunk):
-        cdef const uint8_t[:] typed_view_chunk
+        cdef uint8_t[:] typed_view_chunk
         mem_view_chunk = memoryview(chunk)
         typed_view_chunk = mem_view_chunk.cast('B')
         _check_comp_length('chunk', len(typed_view_chunk))
@@ -1203,7 +1203,7 @@ cdef class SChunk:
         return rc
 
     def update_chunk(self, nchunk, chunk):
-        cdef const uint8_t[:] typed_view_chunk
+        cdef uint8_t[:] typed_view_chunk
         mem_view_chunk = memoryview(chunk)
         typed_view_chunk = mem_view_chunk.cast('B')
         _check_comp_length('chunk', len(typed_view_chunk))
@@ -1477,8 +1477,8 @@ cdef int general_postfilter(blosc2_postfilter_params *params):
     cdef user_filters_udata *udata = <user_filters_udata *> params.user_data
     cdef int nd = 1
     cdef np.npy_intp dims = params.size // params.typesize
-    input = np.PyArray_SimpleNewFromData(nd, &dims, udata.input_cdtype, params.input)
-    output = np.PyArray_SimpleNewFromData(nd, &dims, udata.output_cdtype, params.output)
+    input = np.PyArray_SimpleNewFromData(nd, &dims, udata.input_cdtype, <void*>params.input)
+    output = np.PyArray_SimpleNewFromData(nd, &dims, udata.output_cdtype, <void*>params.output)
     offset = params.nchunk * udata.chunkshape + params.offset // params.typesize
     func_id = udata.py_func.decode("utf-8")
     blosc2.postfilter_funcs[func_id](input, output, offset)
@@ -1493,7 +1493,7 @@ cdef int general_filler(blosc2_prefilter_params *params):
 
     inputs_tuple = _ctypes.PyObj_FromPtr(udata.inputs_id)
 
-    output = np.PyArray_SimpleNewFromData(nd, &dims, udata.output_cdtype, params.output)
+    output = np.PyArray_SimpleNewFromData(nd, &dims, udata.output_cdtype, <void*>params.output)
     offset = params.nchunk * udata.chunkshape + params.output_offset // params.output_typesize
 
     inputs = []
@@ -1535,8 +1535,8 @@ cdef int general_prefilter(blosc2_prefilter_params *params):
     cdef np.npy_intp dims = params.output_size // params.output_typesize
 
 
-    input = np.PyArray_SimpleNewFromData(nd, &dims, udata.input_cdtype, params.input)
-    output = np.PyArray_SimpleNewFromData(nd, &dims, udata.output_cdtype, params.output)
+    input = np.PyArray_SimpleNewFromData(nd, &dims, udata.input_cdtype, <void*>params.input)
+    output = np.PyArray_SimpleNewFromData(nd, &dims, udata.output_cdtype, <void*>params.output)
     offset = params.nchunk * udata.chunkshape + params.output_offset // params.output_typesize
 
     func_id = udata.py_func.decode("utf-8")
@@ -1741,8 +1741,8 @@ cdef int general_encoder(const uint8_t* input_buffer, int32_t input_len,
     cdef int nd = 1
     cdef np.npy_intp input_dims = input_len
     cdef np.npy_intp output_dims = output_len
-    input = np.PyArray_SimpleNewFromData(nd, &input_dims, np.NPY_UINT8, input_buffer)
-    output = np.PyArray_SimpleNewFromData(nd, &output_dims, np.NPY_UINT8, output_buffer)
+    input = np.PyArray_SimpleNewFromData(nd, &input_dims, np.NPY_UINT8, <void*>input_buffer)
+    output = np.PyArray_SimpleNewFromData(nd, &output_dims, np.NPY_UINT8, <void*>output_buffer)
 
     cdef blosc2_schunk *sc = <blosc2_schunk *> cparams.schunk
     if sc != NULL:
@@ -1763,8 +1763,8 @@ cdef int general_decoder(const uint8_t* input_buffer, int32_t input_len,
     cdef int nd = 1
     cdef np.npy_intp input_dims = input_len
     cdef np.npy_intp output_dims = output_len
-    input = np.PyArray_SimpleNewFromData(nd, &input_dims, np.NPY_UINT8, input_buffer)
-    output = np.PyArray_SimpleNewFromData(nd, &output_dims, np.NPY_UINT8, output_buffer)
+    input = np.PyArray_SimpleNewFromData(nd, &input_dims, np.NPY_UINT8, <void*>input_buffer)
+    output = np.PyArray_SimpleNewFromData(nd, &output_dims, np.NPY_UINT8, <void*>output_buffer)
 
     cdef blosc2_schunk *sc = <blosc2_schunk *> dparams.schunk
     if sc != NULL:
@@ -1815,8 +1815,8 @@ cdef int general_forward(const uint8_t* input_buffer, uint8_t* output_buffer, in
                         uint8_t meta, blosc2_cparams* cparams, uint8_t id):
     cdef int nd = 1
     cdef np.npy_intp dims = size
-    input = np.PyArray_SimpleNewFromData(nd, &dims, np.NPY_UINT8, input_buffer)
-    output = np.PyArray_SimpleNewFromData(nd, &dims, np.NPY_UINT8, output_buffer)
+    input = np.PyArray_SimpleNewFromData(nd, &dims, np.NPY_UINT8, <void*>input_buffer)
+    output = np.PyArray_SimpleNewFromData(nd, &dims, np.NPY_UINT8, <void*>output_buffer)
 
     cdef blosc2_schunk *sc = <blosc2_schunk *> cparams.schunk
     if sc != NULL:
@@ -1832,8 +1832,8 @@ cdef int general_backward(const uint8_t* input_buffer, uint8_t* output_buffer, i
                             uint8_t meta, blosc2_dparams* dparams, uint8_t id):
     cdef int nd = 1
     cdef np.npy_intp dims = size
-    input = np.PyArray_SimpleNewFromData(nd, &dims, np.NPY_UINT8, input_buffer)
-    output = np.PyArray_SimpleNewFromData(nd, &dims, np.NPY_UINT8, output_buffer)
+    input = np.PyArray_SimpleNewFromData(nd, &dims, np.NPY_UINT8, <void*>input_buffer)
+    output = np.PyArray_SimpleNewFromData(nd, &dims, np.NPY_UINT8, <void*>output_buffer)
 
     cdef blosc2_schunk *sc = <blosc2_schunk *> dparams.schunk
     if sc != NULL:
