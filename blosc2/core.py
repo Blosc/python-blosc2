@@ -88,7 +88,7 @@ def compress(
     -----
     The `cname` and `shuffle` parameters in python-blosc API have been replaced by :paramref:`codec` and
     :paramref:`filter` respectively.
-    To set :paramref:`codec` and :paramref:`fitler`, the enumerates :class:`Codec` and :class:`Filter`
+    To set :paramref:`codec` and :paramref:`filter`, the enumerates :class:`Codec` and :class:`Filter`
     have to be used instead of the python-blosc API variables such as `blosc.SHUFFLE` for :paramref:`filter`
     or strings like "blosclz" for :paramref:`codec`.
 
@@ -222,7 +222,7 @@ def pack(obj, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ
     -----
     The `cname` and `shuffle` parameters in python-blosc API have been replaced by :paramref:`codec` and
     :paramref:`filter` respectively.
-    To set :paramref:`codec` and :paramref:`fitler`, the enumerates :class:`Codec` and :class:`Filter`
+    To set :paramref:`codec` and :paramref:`filter`, the enumerates :class:`Codec` and :class:`Filter`
     have to be used instead of the python-blosc API variables such as `blosc.SHUFFLE` for :paramref:`filter`
     or strings like "blosclz" for :paramref:`codec`.
 
