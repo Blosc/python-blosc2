@@ -29,6 +29,7 @@ class Codec(Enum):
     ZFP_ACC = 33
     ZFP_PREC = 34
     ZFP_RATE = 35
+    OPENHTJ2K = 36
 
 
 class Filter(Enum):
