@@ -39,10 +39,11 @@ https://github.com/Blosc/python-blosc2/blob/main/LICENSE.txt
 for details.
 
 
-## Tweeter feed
+## Mastodon feed
 
-Please follow @Blosc2 to get informed about the latest developments.
+Please follow https://fosstodon.org/@Blosc2 to get informed about the latest
+developments.
 
 
-Enjoy Data!
 - The Blosc Development Team
+  We make compression better

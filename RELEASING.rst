@@ -83,7 +83,7 @@ Announcing
 * Send an announcement to the Blosc list.  Use the ``ANNOUNCE.rst`` file as skeleton
   (or possibly as the definitive version). Start the subject with ANN:.
 
-* Announce in Twitter via @Blosc2 account and rejoice.
+* Announce in Mastodon via https://fosstodon.org/@Blosc2 account and rejoice.
 
 
 Post-release actions
