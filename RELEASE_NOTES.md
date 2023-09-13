@@ -2,7 +2,11 @@
 
 ## Changes from 2.2.6 to 2.2.7
 
-XXX version-specific blurb XXX
+* Updated to latest C-Blosc2 2.10.3.
+
+* Added openhtj2k codec plugin.
+
+* Some small fixes regarding typos.
 
 
 ## Changes from 2.2.5 to 2.2.6

@@ -10,8 +10,8 @@ Preliminaries
   version that will be documented in the `RELEASE_NOTES.md`)::
 
     cd blosc2/c-blosc2
-    git checkout <desired tag>
     git pull
+    git checkout <desired tag>
     cd ../..
     git commit -m "Update c-blosc2 sources" blosc2/c-blosc2
     git push

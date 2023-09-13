@@ -1,9 +1,9 @@
 Announcing Python-Blosc2 2.2.6
 ==============================
 
-This is a maintenance release, where we have upgraded to latest C-Blosc2 2.10.1.
-This provides fixes for dynamic plugins and the possibility to run them
-in multithreading mode (see PR #127).
+This is a maintenance release, where we have upgraded to latest C-Blosc2 2.10.3.
+This provides the ability to use the blosc2_openhtj2k dynamic plugin
+(see https://github.com/Blosc/blosc2_openhtj2k for more info on this).
 
 For more info, you can have a look at the release notes in:
 
