@@ -1,4 +1,4 @@
-Announcing Python-Blosc2 2.2.6
+Announcing Python-Blosc2 2.2.7
 ==============================
 
 This is a maintenance release, where we have upgraded to latest C-Blosc2 2.10.3.
