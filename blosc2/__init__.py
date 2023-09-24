@@ -130,7 +130,7 @@ ucodecs_registry = {}
 # Registry for user-defined filters
 ufilters_registry = {}
 
-blosclib_version = "%s (%s)" % (VERSION_STRING, VERSION_DATE)
+blosclib_version = f"{VERSION_STRING} ({VERSION_DATE})"
 
 # Internal Blosc threading
 nthreads = ncores = detect_number_of_cores() // 2

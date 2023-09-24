@@ -16,7 +16,7 @@ def cmake_bool(cond):
 # Blosc version
 VERSION = open("VERSION").read().strip()
 # Create the version.py file
-open("blosc2/version.py", "w").write('__version__ = "%s"\n' % VERSION)
+open("blosc2/version.py", "w").write(f'__version__ = "{VERSION}"\n')
 
 def exclude_pkgconfig(cmake_manifest):
     """remove pkgconfig file from installation: gh-110."""

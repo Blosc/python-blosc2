@@ -41,9 +41,9 @@ if __name__ == "__main__":
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for pack_tensor:   %.3f (%.2f GB/s)) " % (tc, ((N * 8 / tc) / 2**30)),
+        "  Time for pack_tensor:   {:.3f} ({:.2f} GB/s)) ".format(tc, ((N * 8 / tc) / 2**30)),
     )
-    print("\tcr: %5.1fx" % (in_.size * in_.dtype.itemsize * 1.0 / len(c)))
+    print("\tcr: {:5.1f}x".format(in_.size * in_.dtype.itemsize * 1.0 / len(c)))
 
     out = None
     dtic = time.time()
@@ -53,6 +53,6 @@ if __name__ == "__main__":
 
     td = (dtoc - dtic) / NREP
     print(
-        "  Time for unpack_tensor:   %.3f s (%.2f GB/s)) " % (td, ((N * 8 / td) / 2**30)),
+        "  Time for unpack_tensor:   {:.3f} s ({:.2f} GB/s)) ".format(td, ((N * 8 / td) / 2**30)),
     )
     assert np.array_equal(in_, out)

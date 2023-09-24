@@ -47,10 +47,10 @@ def info_html_report(items: list) -> str:
     report += "<tbody>"
     for k, v in items:
         report += (
-            "<tr>"
-            '<th style="text-align: left">%s</th>'
-            '<td style="text-align: left">%s</td>'
-            "</tr>" % (k, v)
+            f"<tr>"
+            f'<th style="text-align: left">{k}</th>'
+            f'<td style="text-align: left">{v}</td>'
+            f"</tr>"
         )
     report += "</tbody>"
     report += "</table>"
