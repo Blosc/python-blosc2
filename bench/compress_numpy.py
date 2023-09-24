@@ -44,11 +44,11 @@ print("\nTimes for compressing/decompressing:")
 for in_, label in arrays:
     print("\n*** %s ***" % label)
     for codec in blosc2.Codec:
-        for filter in [
+        for filter in (
             blosc2.Filter.NOFILTER,
             blosc2.Filter.SHUFFLE,
             blosc2.Filter.BITSHUFFLE,
-        ]:
+        ):
             clevel = 6
             t0 = time.time()
             c = blosc2.compress(in_, in_.itemsize, clevel=clevel, filter=filter, codec=codec)
