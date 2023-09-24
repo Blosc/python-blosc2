@@ -12,7 +12,7 @@ dir_path = "era5-pds"
 
 def open_zarr(year, month, datestart, dateend, dset):
     fs = s3fs.S3FileSystem(anon=True)
-    datestring = "era5-pds/zarr/{year}/{month:02d}/data/".format(year=year, month=month)
+    datestring = f"era5-pds/zarr/{year}/{month:02d}/data/"
     s3map = s3fs.S3Map(datestring + dset + ".zarr/", s3=fs)
     arr = xr.open_dataset(s3map, engine="zarr")
     if dset[:3] in ("air", "sno", "eas"):
@@ -37,4 +37,4 @@ for dset, short in datasets:
     print(f"Fetching dataset {dset} from S3 (era5-pds)...")
     precip_m0 = open_zarr(1987, 10, "1987-10-01", "1987-10-30 23:59", dset)
     cparams = {"codec": blosc2.Codec.ZSTD, "clevel": 6}
-    blosc2.asarray(precip_m0.values, urlpath="%s/%s.b2nd" % (dir_path, short), mode="w", cparams=cparams)
+    blosc2.asarray(precip_m0.values, urlpath=f"{dir_path}/{short}.b2nd", mode="w", cparams=cparams)

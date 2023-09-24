@@ -21,7 +21,7 @@ c_bytesobj = blosc2.compress2(
 )
 assert len(c_bytesobj) < (len(a) * typesize)
 cratio = (len(a) * typesize) / len(c_bytesobj)
-print("cratio: %.3f" % cratio)
+print(f"cratio: {cratio:.3f}")
 
 a_bytesobj2 = blosc2.decompress2(c_bytesobj)
 # The next check does not work when using truncation (obviously)

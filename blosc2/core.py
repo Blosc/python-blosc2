@@ -19,7 +19,7 @@ from blosc2 import blosc2_ext
 
 def _check_typesize(typesize):
     if not 1 <= typesize <= blosc2_ext.MAX_TYPESIZE:
-        raise ValueError("typesize can only be in the 1-%d range." % blosc2_ext.MAX_TYPESIZE)
+        raise ValueError(f"typesize can only be in the 1-{blosc2_ext.MAX_TYPESIZE} range.")
 
 
 def _check_clevel(clevel):
@@ -29,19 +29,19 @@ def _check_clevel(clevel):
 
 def _check_input_length(input_name, input_len, typesize, _ignore_multiple_size=False):
     if input_len > blosc2_ext.MAX_BUFFERSIZE:
-        raise ValueError("%s cannot be larger than %d bytes" % (input_name, blosc2_ext.MAX_BUFFERSIZE))
+        raise ValueError(f"{input_name} cannot be larger than {blosc2_ext.MAX_BUFFERSIZE} bytes")
     if not _ignore_multiple_size and input_len % typesize != 0:
-        raise ValueError("len(%s) can only be a multiple of typesize (%d)." % (input_name, typesize))
+        raise ValueError(f"len({input_name}) can only be a multiple of typesize ({typesize}).")
 
 
 def _check_filter(filter):
     if filter not in blosc2.Filter:
-        raise ValueError("filter can only be one of ", blosc2.Filter.keys())
+        raise ValueError(f"filter can only be one of: {blosc2.Filter.keys()}")
 
 
 def _check_codec(codec):
     if codec not in blosc2.Codec:
-        raise ValueError("codec can only be one of: %s, not '%s'" % (codecs, codec))
+        raise ValueError(f"codec can only be one of: {codecs}, not '{codec}'")
 
 
 def compress(
@@ -1043,26 +1043,26 @@ def print_versions():
     import platform
 
     print("-=" * 38)
-    print("python-blosc2 version: %s" % blosc2.__version__)
-    print("Blosc version: %s" % blosc2.blosclib_version)
+    print(f"python-blosc2 version: {blosc2.__version__}")
+    print(f"Blosc version: {blosc2.blosclib_version}")
     print(f"Codecs available (including plugins): {', '.join([codec.name for codec in codecs])}")
     print("Main codec library versions:")
     for clib in sorted(clib_versions.keys()):
-        print("  %s: %s" % (clib, clib_versions[clib]))
-    print("Python version: %s" % sys.version)
+        print(f"  {clib}: {clib_versions[clib]}")
+    print(f"Python version: {sys.version}")
     (sysname, nodename, release, version, machine, processor) = platform.uname()
-    print("Platform: %s-%s-%s (%s)" % (sysname, release, machine, version))
+    print(f"Platform: {sysname}-{release}-{machine} ({version})")
     if sysname == "Linux":
         distro = os_release_pretty_name()
         if distro:
-            print("Linux dist:", distro)
+            print(f"Linux dist: {distro}")
     if not processor:
         processor = "not recognized"
-    print("Processor: %s" % processor)
-    print("Byte-ordering: %s" % sys.byteorder)
+    print(f"Processor: {processor}")
+    print(f"Byte-ordering: {sys.byteorder}")
     # Internal Blosc threading
-    print("Detected cores: %s" % blosc2.ncores)
-    print("Number of threads to use by default: %s" % blosc2.nthreads)
+    print(f"Detected cores: {blosc2.ncores}")
+    print(f"Number of threads to use by default: {blosc2.nthreads}")
     print("-=" * 38)
 
 
@@ -1230,7 +1230,7 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, dtype=np.uint8, **kwa
                     cparams2["filters"][i] = blosc2.Filter.NOFILTER
         else:
             cparams2 = cparams
-        src = blosc2.compress2(np.zeros(nitems, dtype="V%d" % itemsize), **cparams2)
+        src = blosc2.compress2(np.zeros(nitems, dtype=f"V{itemsize}"), **cparams2)
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
         # Starting point for the guess
         if chunks is None:

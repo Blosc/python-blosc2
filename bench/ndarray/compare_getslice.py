@@ -117,7 +117,7 @@ print(f"Time for filling array (zarr): {t:.3f} s ({speed:.2f} GB/s) ; cratio: {c
 
 # Create and fill an HDF5 array (PyTables)
 t0 = time()
-filters = tables.Filters(complevel=clevel, complib="blosc2:%s" % cname, shuffle=True)
+filters = tables.Filters(complevel=clevel, complib=f"blosc2:{cname}", shuffle=True)
 tables.set_blosc_max_threads(nthreads)
 if persistent:
     h5f = tables.open_file(fname_tables, "w")

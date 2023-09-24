@@ -504,7 +504,7 @@ DEFAULT_DTYPE_FORMAT = B2ND_DEFAULT_DTYPE_FORMAT
 
 def _check_comp_length(comp_name, comp_len):
     if comp_len < BLOSC_MIN_HEADER_LENGTH:
-        raise ValueError("%s cannot be less than %d bytes" % (comp_name, BLOSC_MIN_HEADER_LENGTH))
+        raise ValueError(f"{comp_name} cannot be less than {BLOSC_MIN_HEADER_LENGTH} bytes")
 
 
 blosc2_init()

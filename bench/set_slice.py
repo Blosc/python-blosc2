@@ -52,6 +52,6 @@ val = nchunks * np.arange(start, stop, dtype=dtype)
 t0 = time()
 schunk[start:stop] = val
 t1 = time()
-print("Time for setting with setitem: %.3fs" % (t1 - t0))
+print("Time for setting with setitem: {:.3f}s".format(t1 - t0))
 
 blosc2.remove_urlpath(urlpath)

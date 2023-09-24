@@ -49,6 +49,6 @@ t0 = time()
 for i in range(shape // blocksize):
     _ = schunk.get_slice(start=i * blocksize, stop=(i + 1) * blocksize - 1)
 t1 = time()
-print("Time for reading with get_slice: %.3fs" % (t1 - t0))
+print("Time for reading with get_slice: {:.3f}s".format(t1 - t0))
 
 blosc2.remove_urlpath(urlpath)
