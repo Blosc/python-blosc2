@@ -57,7 +57,7 @@ def info_html_report(items: list) -> str:
     return report
 
 
-class InfoReporter(object):
+class InfoReporter:
     def __init__(self, obj):
         self.obj = obj
 
