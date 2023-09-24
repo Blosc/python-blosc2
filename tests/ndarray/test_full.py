@@ -81,7 +81,7 @@ def test_full(shape, chunks, blocks, fill_value, cparams, dparams, dtype, urlpat
 
     b = np.full(shape=shape, fill_value=fill_value, dtype=a.dtype)
     tol = 1e-5 if dtype is np.float32 else 1e-14
-    if dtype in [np.float32, np.float64]:
+    if dtype in (np.float32, np.float64):
         np.testing.assert_allclose(a[...], b, rtol=tol, atol=tol)
     else:
         np.array_equal(a[...], b)
@@ -106,7 +106,7 @@ def test_full_simple(shape, fill_value, dtype):
 
     b = np.full(shape=shape, fill_value=fill_value, dtype=a.dtype)
     tol = 1e-5 if dtype is np.float32 else 1e-14
-    if dtype in [np.float32, np.float64]:
+    if dtype in (np.float32, np.float64):
         np.testing.assert_allclose(a[...], b, rtol=tol, atol=tol)
     else:
         np.array_equal(a[...], b)
