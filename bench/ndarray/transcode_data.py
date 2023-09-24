@@ -44,8 +44,15 @@ codecs = [
 ]
 
 # measurements
-keys = ["dset", "codec", "clevel", "filter", "cspeed", "dspeed", "cratio"]
-meas = dict(((k, []) for k in keys))
+meas = {
+    "dset": [],
+    "codec": [],
+    "clevel": [],
+    "filter": [],
+    "cspeed": [],
+    "dspeed": [],
+    "cratio": [},
+}
 
 filters = {
     "nofilter": {
