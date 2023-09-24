@@ -15,7 +15,7 @@ def open_zarr(year, month, datestart, dateend, dset):
     datestring = "era5-pds/zarr/{year}/{month:02d}/data/".format(year=year, month=month)
     s3map = s3fs.S3Map(datestring + dset + ".zarr/", s3=fs)
     arr = xr.open_dataset(s3map, engine="zarr")
-    if dset[:3] == "air" or dset[:3] == "sno" or dset[:3] == "eas":
+    if dset[:3] in ("air", "sno", "eas"):
         arr = arr.sel(time0=slice(np.datetime64(datestart), np.datetime64(dateend)))
     else:
         arr = arr.sel(time1=slice(np.datetime64(datestart), np.datetime64(dateend)))
