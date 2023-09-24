@@ -114,7 +114,7 @@ def test_zeros_minimal(shape, dtype):
     assert np.array_equal(a[:], b)
 
     dtype = np.dtype(dtype)
-    assert a.shape == shape or a.shape[0] == shape
+    assert shape in (a.shape, a.shape[0])
     assert a.chunks is not None
     assert a.blocks is not None
     assert all(c >= b for c, b in zip(a.chunks, a.blocks))

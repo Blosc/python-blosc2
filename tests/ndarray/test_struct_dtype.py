@@ -30,7 +30,7 @@ def test_scalar(shape, dtype, urlpath):
     assert np.array_equal(a[:], b)
 
     dtype = np.dtype(dtype)
-    assert a.shape == shape or a.shape[0] == shape
+    assert shape in (a.shape, a.shape[0])
     assert a.dtype == dtype
     assert a.schunk.typesize == dtype.itemsize
     assert a.shape == b.shape
