@@ -38,7 +38,7 @@ def get_ndarray_start_stop(ndim, key, shape):
 class NDArray(blosc2_ext.NDArray):
     def __init__(self, **kwargs):
         self._schunk = SChunk(_schunk=kwargs["_schunk"], _is_view=True)  # SChunk Python instance
-        super(NDArray, self).__init__(kwargs["_array"])
+        super().__init__(kwargs["_array"])
 
     @property
     def info(self):
@@ -125,7 +125,7 @@ class NDArray(blosc2_ext.NDArray):
         # (besides we don't need to fill padding with zeros)
         arr = np.empty(shape, dtype=self.dtype)
 
-        return super(NDArray, self).get_slice_numpy(arr, key)
+        return super().get_slice_numpy(arr, key)
 
     def __setitem__(self, key, value):
         """Set a slice.
@@ -168,7 +168,7 @@ class NDArray(blosc2_ext.NDArray):
         elif isinstance(value, NDArray):
             value = value[...]
 
-        return super(NDArray, self).set_slice(key, value)
+        return super().set_slice(key, value)
 
     def iterchunks_info(self):
         """
@@ -216,7 +216,7 @@ class NDArray(blosc2_ext.NDArray):
         >>> b.tobytes() == bytes(a[...])
         True
         """
-        return super(NDArray, self).tobytes()
+        return super().tobytes()
 
     def copy(self, dtype=None, **kwargs):
         """Create a copy of an array with same parameters.
@@ -268,7 +268,7 @@ class NDArray(blosc2_ext.NDArray):
             kwargs["meta"] = meta_dict
         _check_ndarray_kwargs(**kwargs)
 
-        return super(NDArray, self).copy(dtype, **kwargs)
+        return super().copy(dtype, **kwargs)
 
     def resize(self, newshape):
         """Change the shape of the array by growing or shrinking one or more dimensions.
@@ -300,7 +300,7 @@ class NDArray(blosc2_ext.NDArray):
         (50, 10)
         """
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
-        return super(NDArray, self).resize(newshape)
+        return super().resize(newshape)
 
     def slice(self, key, **kwargs):
         """Get a (multidimensional) slice as a new :ref:`NDArray <NDArray>`.
@@ -339,7 +339,7 @@ class NDArray(blosc2_ext.NDArray):
         key, mask = process_key(key, self.shape)
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
-        return super(NDArray, self).get_slice(key, mask, **kwargs)
+        return super().get_slice(key, mask, **kwargs)
 
     def squeeze(self):
         """Remove the 1's in array's shape.
@@ -357,7 +357,7 @@ class NDArray(blosc2_ext.NDArray):
         >>> a.shape
         (23, 11)
         """
-        super(NDArray, self).squeeze()
+        super().squeeze()
 
 
 def _check_shape(shape):

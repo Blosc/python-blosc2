@@ -20,7 +20,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
     def __init__(self, schunk, urlpath, mode):
         self.urlpath = urlpath
         self.mode = mode
-        super(vlmeta, self).__init__(schunk)
+        super().__init__(schunk)
 
     def __setitem__(self, name, content):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
@@ -31,20 +31,20 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
             strict_types=True,
             use_bin_type=True,
         )
-        super(vlmeta, self).set_vlmeta(name, content, **cparams)
+        super().set_vlmeta(name, content, **cparams)
 
     def __getitem__(self, name):
-        return unpackb(super(vlmeta, self).get_vlmeta(name), list_hook=blosc2_ext.decode_tuple)
+        return unpackb(super().get_vlmeta(name), list_hook=blosc2_ext.decode_tuple)
 
     def __delitem__(self, name):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
-        super(vlmeta, self).del_vlmeta(name)
+        super().del_vlmeta(name)
 
     def __len__(self):
-        return super(vlmeta, self).nvlmetalayers()
+        return super().nvlmetalayers()
 
     def __iter__(self):
-        keys = super(vlmeta, self).get_names()
+        keys = super().get_names()
         yield from keys
 
     def getall(self):
@@ -52,7 +52,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
         Return all the variable length metalayers as a dictionary
 
         """
-        return super(vlmeta, self).to_dict()
+        return super().to_dict()
 
 
 class Meta(Mapping):
