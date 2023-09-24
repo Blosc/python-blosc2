@@ -654,9 +654,9 @@ def _check_ndarray_kwargs(**kwargs):
     for key in kwargs.keys():
         if key not in supported_keys:
             raise KeyError(
-                f"Only {str(supported_keys)} are supported as"
+                f"Only {supported_keys} are supported as"
                 f" keyword arguments"
-                f", and you passed {str(key)}"
+                f", and you passed {key}"
             )
     if "cparams" in kwargs and "chunks" in kwargs["cparams"]:
         raise ValueError("You cannot pass chunks in cparams, use `chunks` argument instead")
