@@ -68,7 +68,7 @@ dparams = {
 
 dir_path = Path(dir_path)
 if not dir_path.is_dir():
-    raise IOError(f"{dir_path} must be the directory with datasets")
+    raise OSError(f"{dir_path} must be the directory with datasets")
 
 for fname in dir_path.iterdir():
     path = str(fname)
