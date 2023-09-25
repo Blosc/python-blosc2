@@ -51,7 +51,7 @@ meas = {
     "filter": [],
     "cspeed": [],
     "dspeed": [],
-    "cratio": [},
+    "cratio": [],
 }
 
 filters = {
