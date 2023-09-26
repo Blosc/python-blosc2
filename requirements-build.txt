@@ -1,5 +1,6 @@
 scikit-build
 cython<3
 cmake
-oldest-supported-numpy
+#oldest-supported-numpy
+numpy<2
 build
