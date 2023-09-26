@@ -1,8 +1,10 @@
 [build-system]
-requires = ["setuptools", "scikit-build", "cython<3", "cmake", "ninja", "oldest-supported-numpy"]
+requires = ["scikit-build-core", "cython", "numpy>=1.20.3", "ndindex>=1.4", "msgpack"]
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "blosc2"
+version = "2.2.8"
 description = "Python wrapper for the C-Blosc2 library"
 readme = "README.rst"
 authors = [{name = "Blosc Development Team", email = "blosc@blosc.org"}]
@@ -19,13 +21,25 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
     "Operating System :: Unix",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
-requires-python = ">=3.8, <4"
-dynamic = ["version", "dependencies"]
+requires-python = ">=3.9, <4"
+dependencies = [
+    "numpy>=1.20.3",
+    "ndindex>=1.4",
+    "msgpack",
+]
+
+[tool.scikit-build]
+# Verbose printout when building.
+cmake.verbose = true
+cmake.build-type = "Release"
+wheel.license-files = ["LICENSE.txt"]
+backport.find-python = "3.26.1"
+sdist.exclude = ["blosc2/c-blosc2"]
 
 [project.urls]
 homepage = "https://github.com/Blosc/python-blosc2"
