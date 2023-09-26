@@ -1,6 +1,6 @@
 scikit-build
 cython<3
-oldest-supported-numpy
+numpy<2
 sphinx
 pydata-sphinx-theme
 numpydoc

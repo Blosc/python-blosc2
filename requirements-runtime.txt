@@ -1,4 +1,4 @@
 msgpack
 ndindex>=1.4
-oldest-supported-numpy
+numpy<2
 py-cpuinfo

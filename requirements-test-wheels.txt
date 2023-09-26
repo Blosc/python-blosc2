@@ -1,5 +1,5 @@
 pip
-oldest-supported-numpy
+numpy<2
 pytest
 psutil
 msgpack
