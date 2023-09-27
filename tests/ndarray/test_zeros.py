@@ -6,6 +6,8 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+import math
+
 import numpy as np
 import pytest
 
@@ -61,7 +63,7 @@ def test_zeros(shape, chunks, blocks, dtype, cparams, urlpath, contiguous, meta)
     blosc2.remove_urlpath(urlpath)
 
     dtype = np.dtype(dtype)
-    if np.prod(chunks) * dtype.itemsize > blosc2.MAX_BUFFERSIZE:
+    if math.prod(chunks) * dtype.itemsize > blosc2.MAX_BUFFERSIZE:
         with pytest.raises(RuntimeError):
             _ = blosc2.zeros(
                 shape,
