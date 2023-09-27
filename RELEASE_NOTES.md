@@ -2,8 +2,12 @@
 
 ## Changes from 2.2.7 to 2.2.8
 
-* XXX version-specific blurb XXX
+* Binary wheels for forthcoming Python 3.12 are available!
 
+* Different improvements suggested by refurb and pyupgrade.
+  Thanks to Dimitri Papadopoulos.
+
+* Updated to latest C-Blosc2 2.10.4.
 
 ## Changes from 2.2.6 to 2.2.7
 
