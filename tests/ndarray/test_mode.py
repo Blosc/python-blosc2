@@ -38,7 +38,7 @@ import blosc2
 def test_mode(shape, fill_value, cparams, dparams, dtype, urlpath, contiguous, mode):
     blosc2.remove_urlpath(urlpath)
     if mode == "r":
-        with pytest.raises(RuntimeError):
+        with pytest.raises(ValueError):
             blosc2.full(
                 shape,
                 fill_value,
