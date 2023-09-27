@@ -1,9 +1,8 @@
-Announcing Python-Blosc2 2.2.7
+Announcing Python-Blosc2 2.2.8
 ==============================
 
-This is a maintenance release, where we have upgraded to latest C-Blosc2 2.10.3.
-This provides the ability to use the blosc2_openhtj2k dynamic plugin
-(see https://github.com/Blosc/blosc2_openhtj2k for more info on this).
+This is a maintenance release, where we are providing binary wheels
+for Python 3.12 (yay!).  We have also upgraded to latest C-Blosc2 2.10.4.
 
 For more info, you can have a look at the release notes in:
 

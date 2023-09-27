@@ -12,7 +12,6 @@ on:
       - main
 
 env:
-  #CIBW_BEFORE_BUILD: pip install -r requirements-build.txt
   CIBW_BUILD_VERBOSITY: 1
   CIBW_TEST_REQUIRES: pytest psutil
   CIBW_TEST_COMMAND: python -m pytest -m "not heavy" {project}/tests
@@ -25,7 +24,7 @@ jobs:
 
   build_wheels:
     # Only build wheels when tagging (typically a release)
-    # if: startsWith(github.event.ref, 'refs/tags')
+    if: startsWith(github.event.ref, 'refs/tags')
     name: Build wheels on ${{ matrix.os }} for ${{ matrix.arch }} - ${{ matrix.p_ver }}
     runs-on: ${{ matrix.os }}
     permissions:
