@@ -27,5 +27,4 @@ setup(
     package_dir={"blosc2": "blosc2"},
     include_package_data=True,
     cmake_process_manifest_hook=exclude_pkgconfig,
-    # install_requires=open("requirements-runtime.txt").read().split(),
 )

@@ -80,8 +80,8 @@ Checking packaging
 Announcing
 ----------
 
-* Send an announcement to the Blosc list.  Use the ``ANNOUNCE.rst`` file as skeleton
-  (or possibly as the definitive version). Start the subject with ANN:.
+* Send an announcement to the Blosc and PyData lists.  Use the ``ANNOUNCE.rst`` file as
+skeleton (or possibly as the definitive version). Start the subject with ANN:.
 
 * Announce in Mastodon via https://fosstodon.org/@Blosc2 account and rejoice.
 

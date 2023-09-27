@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 2.2.8 to 2.2.9
+
+XXX version-specific blurb XXX
+
 ## Changes from 2.2.7 to 2.2.8
 
 * Binary wheels for forthcoming Python 3.12 are available!
