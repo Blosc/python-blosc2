@@ -66,9 +66,6 @@ jobs:
         if: ${{ matrix.arch == 'aarch64' }}
         uses: docker/setup-qemu-action@v3
 
-      - name: Install Ninja
-        uses: seanmiddleditch/gha-setup-ninja@master
-
       - name: Build wheels
         run: |
           python -m cibuildwheel --output-dir wheelhouse
