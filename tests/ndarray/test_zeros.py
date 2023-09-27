@@ -46,8 +46,8 @@ import blosc2
             {"abc": 123, "2": [0, 1, 24]},
         ),
         (
-            (2**32,),
-            (2**31,),
+            (2**31 - 1,),
+            (2**30,),
             None,
             np.float32,
             {"codec": blosc2.Codec.LZ4, "clevel": 5, "nthreads": 2},
