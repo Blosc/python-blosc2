@@ -1,5 +1,11 @@
 [build-system]
-requires = ["setuptools", "scikit-build", "cython", "ninja", "oldest-supported-numpy"]
+requires = [
+    "setuptools",
+    "scikit-build",
+    "cython",
+    "cmake",
+    "ninja",
+    "oldest-supported-numpy"]
 
 [project]
 name = "blosc2"
