@@ -49,7 +49,7 @@ import blosc2
             (2**31 - 1,),
             (2**30,),
             None,
-            np.float32,
+            np.int8,
             {"codec": blosc2.Codec.LZ4, "clevel": 5, "nthreads": 2},
             None,
             False,
