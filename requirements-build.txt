@@ -1,5 +1,6 @@
+setuptools
 scikit-build
-cython<3
+cython
 cmake
-numpy<2
-build
+oldest-supported-numpy
+ninja
