@@ -17,4 +17,5 @@ def exclude_pkgconfig(cmake_manifest):
 setup(
     packages=["blosc2"],
     cmake_process_manifest_hook=exclude_pkgconfig,
+    # include_package_data=True,
 )

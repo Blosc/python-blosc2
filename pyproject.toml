@@ -1,5 +1,6 @@
 [build-system]
-requires = ["scikit-build-core", "cython", "numpy>=1.20.3", "ndindex>=1.4", "msgpack"]
+requires = ["scikit-build-core", "cython", "numpy>=1.20.3"]
+#requires = ["scikit-build-core", "cython", "oldest-supported-numpy"]
 build-backend = "scikit_build_core.build"
 
 [project]
@@ -31,6 +32,7 @@ dependencies = [
     "numpy>=1.20.3",
     "ndindex>=1.4",
     "msgpack",
+    "py-cpuinfo",
 ]
 
 [tool.scikit-build]
@@ -46,7 +48,7 @@ homepage = "https://github.com/Blosc/python-blosc2"
 documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 
 [tool.cibuildwheel]
-skip = "cp36-* cp37-* pp37-* *-manylinux_i686 *_ppc64le *_s390x *-musllinux*"
+skip = "cp36-* cp37-* pp37-* cp38-* pp38-* *-musllinux*"
 
 [tool.black]
 line-length = 109

@@ -7,7 +7,6 @@ add_custom_command(
   COMMAND "${CYTHON}" "${CMAKE_CURRENT_SOURCE_DIR}/blosc2_ext.pyx" --output-file
           "${CMAKE_CURRENT_BINARY_DIR}/blosc2_ext.c")
 
-Python_add_library(blosc2_ext MODULE "${CMAKE_CURRENT_BINARY_DIR}/blosc2_ext.c" WITH_SOABI)
 
 if(USE_SYSTEM_BLOSC2)
     set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
@@ -31,5 +30,7 @@ else()
 endif()
 
 include_directories("${Python_NumPy_INCLUDE_DIRS}")
+Python_add_library(blosc2_ext MODULE "${CMAKE_CURRENT_BINARY_DIR}/blosc2_ext.c"
+                   WITH_SOABI)
 
-install(TARGETS blosc2_ext DESTINATION ${SKBUILD_PROJECT_NAME})
+install(TARGETS blosc2_ext LIBRARY DESTINATION ${SKBUILD_PROJECT_NAME})
