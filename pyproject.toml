@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools", "scikit-build", "cython<3", "cmake", "ninja", "oldest-supported-numpy"]
+requires = ["setuptools", "scikit-build", "cython", "ninja", "oldest-supported-numpy"]
 
 [project]
 name = "blosc2"
@@ -19,20 +19,26 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
     "Operating System :: Unix",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
 ]
-requires-python = ">=3.8, <4"
-dynamic = ["version", "dependencies"]
+requires-python = ">=3.9, <4"
+dependencies = [
+    "numpy>=1.20.3",
+    "ndindex>=1.4",
+    "msgpack",
+    "py-cpuinfo",
+]
+dynamic = ["version"]
 
 [project.urls]
 homepage = "https://github.com/Blosc/python-blosc2"
 documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 
 [tool.cibuildwheel]
-skip = "cp36-* cp37-* pp37-* *-manylinux_i686 *_ppc64le *_s390x *-musllinux*"
+skip = "cp36-* cp37-* pp37-* cp38-* pp38-* *-manylinux_i686 *_ppc64le *_s390x"
 
 [tool.black]
 line-length = 109
