@@ -25,7 +25,7 @@ jobs:
 
   build_wheels:
     # Only build wheels when tagging (typically a release)
-    #if: startsWith(github.event.ref, 'refs/tags')
+    # if: startsWith(github.event.ref, 'refs/tags')
     name: Build wheels on ${{ matrix.os }} for ${{ matrix.arch }} - ${{ matrix.p_ver }}
     runs-on: ${{ matrix.os }}
     permissions:
