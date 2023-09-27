@@ -66,6 +66,7 @@ def test_pack_array2_struct(size, dtype):
     assert np.array_equal(nparray, a2)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Torch has issues with oldest-supported-numpy on Windows")
 @pytest.mark.parametrize(
     "size, dtype",
     [
