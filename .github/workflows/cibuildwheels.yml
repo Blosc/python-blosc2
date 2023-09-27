@@ -14,7 +14,7 @@ on:
 env:
   #CIBW_BEFORE_BUILD: pip install -r requirements-build.txt
   CIBW_BUILD_VERBOSITY: 1
-  CIBW_TEST_REQUIRES: pytest numpy<2 psutil msgpack
+  CIBW_TEST_REQUIRES: pytest psutil
   CIBW_TEST_COMMAND: python -m pytest -m "not heavy" {project}/tests
   CIBW_TEST_SKIP: "*macosx*arm64*"
   # Building for musllinux and aarch64 takes way too much time.
