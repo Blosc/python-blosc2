@@ -16,11 +16,6 @@ jobs:
       with:
         submodules: 'recursive'
 
-    # - uses: conda-incubator/setup-miniconda@v2
-    #   with:
-    #     auto-update-conda: true
-    #     python-version: ${{ matrix.python-version }}
-
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v4
       with:
@@ -29,21 +24,14 @@ jobs:
     - name: Install Ninja
       uses: seanmiddleditch/gha-setup-ninja@master
 
-    - name: Install dependencies
+    - name: Build
       run: |
         python -m pip install --upgrade pip
         python -m pip install -r requirements-build.txt
-        python -m pip install -r requirements-tests.txt
-        # For some reason, the created ndindex wheel issues the next error on Win:
-        # ImportError: DLL load failed while importing ndindex: %1 is not a valid Win32 application.
-        # As a workaround, we install ndindex from conda-forge, but this should be fixed somehow
-        # This has been fixed; see https://github.com/Quansight-Labs/ndindex/issues/156
-        # conda install -c conda-forge ndindex
-        python -m pip install -r requirements-runtime.txt
-
-    - name: Build
-      run: |
         python setup.py build_ext --inplace
+
     - name: Test
       run: |
+        python -m pip install -r requirements-runtime.txt
+        python -m pip install -r requirements-tests.txt
         python -m pytest
