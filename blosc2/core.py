@@ -1467,7 +1467,7 @@ def register_codec(codec_name, id, encoder=None, decoder=None, version=1):
         id = 180
         blosc2.register_codec(codec_name, id, encoder, decoder)
     """
-    if id in blosc2.ucodecs_registry.keys():
+    if id in blosc2.ucodecs_registry:
         raise ValueError("Id already in use")
     blosc2_ext.register_codec(codec_name, id, encoder, decoder, version)
 
@@ -1528,6 +1528,6 @@ def register_filter(id, forward=None, backward=None, name=None):
         id = 160
         blosc2.register_filter(id, forward, backward)
     """
-    if id in blosc2.ufilters_registry.keys():
+    if id in blosc2.ufilters_registry:
         raise ValueError("Id already in use")
     blosc2_ext.register_filter(id, forward, backward, name)

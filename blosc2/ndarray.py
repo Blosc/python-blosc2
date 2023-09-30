@@ -651,7 +651,7 @@ def _check_ndarray_kwargs(**kwargs):
         "contiguous",
         "mode",
     ]
-    for key in kwargs.keys():
+    for key in kwargs:
         if key not in supported_keys:
             raise KeyError(
                 f"Only {supported_keys} are supported as"
