@@ -141,8 +141,8 @@ for fname in dir_path.iterdir():
                 "dspeed": dspeed,
                 "cratio": schunk.cratio,
             }
-            for k in meas.keys():
-                meas[k].append(this_meas[k])
+            for k, v in meas.items():
+                v.append(this_meas[k])
 
             # Skip the other filters when no compression is going on
             if clevel == 0:
