@@ -198,11 +198,9 @@ class SChunk(blosc2_ext.SChunk):
             "mode",
             "_is_view",
         ]
-        all_allowed_kwargs = all(kwarg in allowed_kwargs for kwarg in kwargs.keys())
-        if not all_allowed_kwargs:
-            for kwarg in kwargs.keys():
-                if kwarg not in allowed_kwargs:
-                    raise ValueError(f"{kwarg} is not supported as keyword argument")
+        for kwarg in kwargs:
+            if kwarg not in allowed_kwargs:
+                raise ValueError(f"{kwarg} is not supported as keyword argument")
         urlpath = kwargs.get("urlpath")
         if "contiguous" not in kwargs:
             # Make contiguous true for disk, else sparse (for in-memory performance)
