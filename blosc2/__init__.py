@@ -66,6 +66,14 @@ class SpecialValue(Enum):
     UNINIT = 4
 
 
+class Tuner(Enum):
+    """
+    Available tuners.
+    """
+
+    BTUNE = 32
+
+
 from .blosc2_ext import (
     DEFINED_CODECS_STOP,
     EXTENDED_HEADER_LENGTH,
@@ -162,7 +170,7 @@ cparams_dflts = {
     "filters_meta": [0, 0, 0, 0, 0, 0],
     "prefilter": None,
     "preparams": None,
-    "udbtune": None,
+    "tuner": Tuner.STUNE,
     "instr_codec": False,
 }
 

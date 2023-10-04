@@ -726,7 +726,8 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
 
     cparams.prefilter = NULL
     cparams.preparams = NULL
-    cparams.tuner_id = 0
+    tuner = kwargs.get('tuner', blosc2.cparams_dflts['tuner'])
+    cparams.tuner_id = tuner.value
     cparams.tuner_params = NULL
     cparams.instr_codec = False
     cparams.codec_params = NULL
@@ -748,6 +749,8 @@ def compress2(src, **kwargs):
     dest = bytes(len_dest)
     _dest = <void*> <char *> dest
     cctx = blosc2_create_cctx(cparams)
+    if cctx == NULL:
+        raise RuntimeError("Could not create the compression context")
     if RELEASEGIL:
         with nogil:
             size = blosc2_compress_ctx(cctx, buf.buf, <int32_t> buf.len, _dest, len_dest)
@@ -779,6 +782,8 @@ def decompress2(src, dst=None, **kwargs):
     create_dparams_from_kwargs(&dparams, kwargs)
 
     cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
+    if dctx == NULL:
+        raise RuntimeError("Could not create decompression context")
     cdef const uint8_t[:] typed_view_src
     mem_view_src = memoryview(src)
     typed_view_src = mem_view_src.cast('B')
@@ -1057,7 +1062,8 @@ cdef class SChunk:
 
         blosc2_free_ctx(self.schunk.cctx)
         self.schunk.cctx = blosc2_create_cctx(dereference(self.schunk.storage.cparams))
-
+        if self.schunk.cctx == NULL:
+            raise RuntimeError("Could not create compression context")
         self.schunk.compcode = self.schunk.storage.cparams.compcode
         self.schunk.compcode_meta = self.schunk.storage.cparams.compcode_meta
         self.schunk.clevel = self.schunk.storage.cparams.clevel
@@ -1079,6 +1085,8 @@ cdef class SChunk:
 
         blosc2_free_ctx(self.schunk.dctx)
         self.schunk.dctx = blosc2_create_dctx(dereference(self.schunk.storage.dparams))
+        if self.schunk.dctx == NULL:
+            raise RuntimeError("Could not create decompression context")
 
     def append_data(self, data):
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
@@ -1391,6 +1399,8 @@ cdef class SChunk:
 
         blosc2_free_ctx(self.schunk.dctx)
         self.schunk.dctx = blosc2_create_dctx(dereference(dparams))
+        if self.schunk.dctx == NULL:
+            raise RuntimeError("Could not create decompression context")
 
     def remove_postfilter(self, func_name):
         del blosc2.postfilter_funcs[func_name]
@@ -1399,6 +1409,8 @@ cdef class SChunk:
 
         blosc2_free_ctx(self.schunk.dctx)
         self.schunk.dctx = blosc2_create_dctx(dereference(self.schunk.storage.dparams))
+        if self.schunk.dctx == NULL:
+            raise RuntimeError("Could not create decompression context")
 
     def _set_filler(self, func, inputs_id, dtype_output):
         if self.schunk.storage.cparams.nthreads > 1:
@@ -1426,6 +1438,8 @@ cdef class SChunk:
 
         blosc2_free_ctx(self.schunk.cctx)
         self.schunk.cctx = blosc2_create_cctx(dereference(cparams))
+        if self.schunk.cctx == NULL:
+            raise RuntimeError("Could not create compression context")
 
     def _set_prefilter(self, func, dtype_input, dtype_output=None):
         if self.schunk.storage.cparams.nthreads > 1:
@@ -1458,6 +1472,8 @@ cdef class SChunk:
 
         blosc2_free_ctx(self.schunk.cctx)
         self.schunk.cctx = blosc2_create_cctx(dereference(cparams))
+        if self.schunk.cctx == NULL:
+            raise RuntimeError("Could not create compression context")
 
     def remove_prefilter(self, func_name):
         del blosc2.prefilter_funcs[func_name]
@@ -1466,6 +1482,8 @@ cdef class SChunk:
 
         blosc2_free_ctx(self.schunk.cctx)
         self.schunk.cctx = blosc2_create_cctx(dereference(self.schunk.storage.cparams))
+        if self.schunk.cctx == NULL:
+            raise RuntimeError("Could not create compression context")
 
     def __dealloc__(self):
         if self.schunk != NULL and not self._is_view:
