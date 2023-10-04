@@ -62,6 +62,7 @@ Enumerated classes
    Codec
    Filter
    SplitMode
+   Tuner
 
 Utils
 -----

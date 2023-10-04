@@ -1230,7 +1230,11 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, dtype=np.uint8, **kwa
                     cparams2["filters"][i] = blosc2.Filter.NOFILTER
         else:
             cparams2 = cparams
+        # Do not apply specific tuner
+        aux_tuner = cparams2["tuner"] if "tuner" in cparams2 else blosc2.Tuner.STUNE
+        cparams2["tuner"] = blosc2.Tuner.STUNE
         src = blosc2.compress2(np.zeros(nitems, dtype=f"V{itemsize}"), **cparams2)
+        cparams2["tuner"] = aux_tuner
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
         # Starting point for the guess
         if chunks is None:
@@ -1291,6 +1295,8 @@ def compress2(src, **kwargs):
                 The sequence of filters. Default: {0, 0, 0, 0, 0, :py:obj:`Filter.SHUFFLE <Filter>`}.
             filters_meta: list
                 The metadata for filters. Default: `{0, 0, 0, 0, 0, 0}`.
+            tuner: :class:`Tuner`
+                The tuner to use. Default: :py:obj:`Tuner.STUNE <Tuner>`.
 
     Returns
     -------
