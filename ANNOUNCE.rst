@@ -1,8 +1,9 @@
-Announcing Python-Blosc2 2.2.8
+Announcing Python-Blosc2 2.2.9
 ==============================
 
-This is a maintenance release, where we are providing binary wheels
-for Python 3.12 (yay!).  We have also upgraded to latest C-Blosc2 2.10.4.
+This is a maintenance release, where we are introducing support for
+Python 3.8 and adding support for specifying (plugable) tuner parameters
+in cparams.  There have been some minor fixes too.
 
 For more info, you can have a look at the release notes in:
 

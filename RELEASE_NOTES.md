@@ -2,7 +2,15 @@
 
 ## Changes from 2.2.8 to 2.2.9
 
-XXX version-specific blurb XXX
+* Support for specifying (plugable) tuner parameters in cparams. Thanks to
+  Marta Iborra.
+
+* Re-add support for Python 3.8.  Although we don't provide wheels for it,
+  support for is there.
+
+* Avoid duplicate iteration over the same dict.  Thanks to Dimitri Papadopoulos.
+
+* Fix different issues with f-strings. Thanks to Dimitri Papadopoulos.
 
 ## Changes from 2.2.7 to 2.2.8
 
