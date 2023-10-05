@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 2.2.9 to 2.2.10
+
+XXX version-specific blurb XXX
+
 ## Changes from 2.2.8 to 2.2.9
 
 * Support for specifying (plugable) tuner parameters in cparams. Thanks to
