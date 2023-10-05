@@ -71,6 +71,9 @@ class Tuner(Enum):
     Available tuners.
     """
 
+    #: A 'simple' tuner. This is the default in the Blosc2 library
+    STUNE = 0
+    #: A more sophisticated tuner that can select different codecs/filters for different chunks (more info `here <https://github.com/Blosc/blosc2_btune/>`_).
     BTUNE = 32
 
 

@@ -1230,12 +1230,12 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, dtype=np.uint8, **kwa
                     cparams2["filters"][i] = blosc2.Filter.NOFILTER
         else:
             cparams2 = cparams
-        # Do not apply specific tuner
+        # Force STUNE to get a hint on the blocksize
         aux_tuner = cparams2["tuner"] if "tuner" in cparams2 else blosc2.Tuner.STUNE
         cparams2["tuner"] = blosc2.Tuner.STUNE
         src = blosc2.compress2(np.zeros(nitems, dtype=f"V{itemsize}"), **cparams2)
-        cparams2["tuner"] = aux_tuner
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
+        cparams2["tuner"] = aux_tuner
         # Starting point for the guess
         if chunks is None:
             blocks = [1 if shape[i] == 1 else 2 for i in range(len(shape))]
