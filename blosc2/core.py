@@ -1141,7 +1141,7 @@ def compute_partition(nitems, parts, maxs, blocks=False):
     if nitems == 0:
         raise ValueError("partitions with 0 dims are not supported")
     parts = list(parts)
-    while math.prod(parts) <= nitems:
+    while math.prod(parts) < nitems:
         nitems_prev = math.prod(parts)
         # Increase dims starting from the latest
         for i in reversed(range(len(parts))):
