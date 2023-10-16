@@ -1150,8 +1150,6 @@ def compute_partition(nitems, parts, maxs, blocks=False):
                     "blocks should be smaller than chunks or shape in any dim!"
                     " If you do want this blocks, please specify a chunks too."
                 )
-            if nitems_prev > nitems:
-                break
             if parts[i] * 2 <= maxs[i]:
                 if math.prod(parts) * 2 <= nitems:
                     parts[i] *= 2
