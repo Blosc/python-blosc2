@@ -1156,7 +1156,8 @@ def compute_partition(nitems, parts, maxs, blocks=False):
                 if math.prod(parts) * 2 <= nitems:
                     parts[i] *= 2
             else:
-                parts[i] = maxs[i]
+                if math.prod(parts) // parts[i] * maxs[i] <= nitems:
+                    parts[i] = maxs[i]
         nitems_new = math.prod(parts)
         if nitems_new == nitems_prev:
             # Not progressing anymore
