@@ -8,6 +8,9 @@
 ;;;
 ;;; Use "guix build -L $PWD/.guix/modules -L /path/to/c-blosc2/.guix/modules
 ;;; python-blosc2" to build.
+;;;
+;;; "/path/to/c-blosc2" may be "$PWD/blosc2/c-blosc2" to use the current
+;;; C-Blosc2 Git submodule.
 
 (define-module (python-blosc2-package)
   #:use-module (guix)
