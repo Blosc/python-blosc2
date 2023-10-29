@@ -117,4 +117,10 @@ to access its data, so it can be used as a drop-in replacement.")
     (inputs (list c-blosc2-with-avx2))
     (name "python-blosc2-with-avx2")))
 
+(define-public python-blosc2-with-avx512
+  (package
+    (inherit python-blosc2)
+    (inputs (list c-blosc2-with-avx512))
+    (name "python-blosc2-with-avx512")))
+
 python-blosc2
