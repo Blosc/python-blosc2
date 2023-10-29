@@ -111,4 +111,10 @@ Python-Blosc2 also reproduces the API of Python-Blosc and is meant to be able
 to access its data, so it can be used as a drop-in replacement.")
     (license license:bsd-3)))
 
+(define-public python-blosc2-with-avx2
+  (package
+    (inherit python-blosc2)
+    (inputs (list c-blosc2-with-avx2))
+    (name "python-blosc2-with-avx2")))
+
 python-blosc2
