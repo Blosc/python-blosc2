@@ -1,0 +1,1 @@
+.guix/modules/python-blosc2-package.scm
