@@ -96,8 +96,8 @@
     (inputs (list c-blosc2))
     (propagated-inputs (list python-msgpack python-ndindex python-numpy
                              python-py-cpuinfo))
-    (native-inputs (list cmake-minimal pkg-config python-cython python-pytest
-                         python-scikit-build))
+    (native-inputs (list cmake-minimal pkg-config python-cython-3
+                         python-pytest python-scikit-build))
     (home-page "https://github.com/blosc/python-blosc2")
     (synopsis "Python wrapper for the Blosc2 data compressor library")
     (description
