@@ -95,8 +95,7 @@ def test_open_offset(offset, urlpath):
 
     # Create a temporary file with data.
     data = np.arange(100)
-    schunk_temp = blosc2.SChunk(data=data, urlpath=urlpath_temp)
-    del schunk_temp
+    blosc2.SChunk(data=data, urlpath=urlpath_temp)
     # Create the final file with the temporary data after "offset" bytes.
     with open(urlpath, "wb") as schunk_file:
         schunk_temp_data = None
@@ -106,9 +105,7 @@ def test_open_offset(offset, urlpath):
         schunk_file.write(schunk_temp_data)
     blosc2.remove_urlpath(urlpath_temp)
 
-    schunk_open = blosc2.open(urlpath, "r", offset=offset)
-    schunk_data = schunk_open[:]
-    del schunk_open
+    schunk_data = blosc2.open(urlpath, "r", offset=offset)[:]
     assert np.array_equal(schunk_data, data.tobytes())
 
     with pytest.raises(RuntimeError):
