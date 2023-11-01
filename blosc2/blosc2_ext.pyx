@@ -337,7 +337,7 @@ cdef extern from "blosc2.h":
     blosc2_schunk *blosc2_schunk_new(blosc2_storage *storage)
     blosc2_schunk *blosc2_schunk_copy(blosc2_schunk *schunk, blosc2_storage *storage)
     blosc2_schunk *blosc2_schunk_from_buffer(uint8_t *cframe, int64_t len, c_bool copy)
-    blosc2_schunk *blosc2_schunk_open(const char* urlpath)
+    blosc2_schunk *blosc2_schunk_open_offset(const char* urlpath, int64_t offset)
 
     int64_t blosc2_schunk_to_buffer(blosc2_schunk* schunk, uint8_t** cframe, c_bool* needs_free)
     void blosc2_schunk_avoid_cframe_free(blosc2_schunk *schunk, c_bool avoid_cframe_free)
@@ -1680,11 +1680,11 @@ def meta_keys(self):
     return keys
 
 
-def open(urlpath, mode, **kwargs):
+def open(urlpath, mode, offset, **kwargs):
     urlpath_ = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
-    cdef blosc2_schunk* schunk = blosc2_schunk_open(urlpath_)
+    cdef blosc2_schunk* schunk = blosc2_schunk_open_offset(urlpath_, offset)
     if schunk == NULL:
-        raise RuntimeError(f'blosc2_schunk_open({urlpath!r}) returned NULL')
+        raise RuntimeError(f'blosc2_schunk_open_offset({urlpath!r}, {offset!r}) returned NULL')
 
     meta1 = "b2nd"
     meta1 = meta1.encode("utf-8") if isinstance(meta1, str) else meta1

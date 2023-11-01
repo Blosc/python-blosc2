@@ -83,3 +83,36 @@ def test_open(contiguous, urlpath, cparams, dparams, nchunks, chunk_nitems, dtyp
 def test_open_fake():
     with pytest.raises(FileNotFoundError):
         _ = blosc2.open("none.b2nd")
+
+
+@pytest.mark.parametrize("offset", [0, 42])
+@pytest.mark.parametrize("urlpath", ["schunk.b2frame"])
+def test_open_offset(offset, urlpath):
+    urlpath_temp = urlpath + ".temp"
+
+    blosc2.remove_urlpath(urlpath)
+    blosc2.remove_urlpath(urlpath_temp)
+
+    # Create a temporary file with data.
+    data = np.arange(100)
+    blosc2.SChunk(data=data, urlpath=urlpath_temp)
+    # Create the final file with the temporary data after "offset" bytes.
+    with open(urlpath, "wb") as schunk_file:
+        schunk_temp_data = None
+        with open(urlpath_temp, "rb") as schunk_temp_file:
+            schunk_temp_data = schunk_temp_file.read()
+        schunk_file.seek(offset)
+        schunk_file.write(schunk_temp_data)
+    blosc2.remove_urlpath(urlpath_temp)
+
+    schunk_data = blosc2.open(urlpath, "r", offset=offset)[:]
+    assert np.array_equal(schunk_data, data.tobytes())
+
+    with pytest.raises(RuntimeError):
+        blosc2.open(urlpath, "r", offset=offset + 1)
+
+    if offset > 0:
+        with pytest.raises(RuntimeError):
+            blosc2.open(urlpath, "r")
+
+    blosc2.remove_urlpath(urlpath)
