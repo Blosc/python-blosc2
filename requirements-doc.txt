@@ -1,5 +1,5 @@
 scikit-build
-cython<3
+cython>=3
 numpy<2
 sphinx
 pydata-sphinx-theme
