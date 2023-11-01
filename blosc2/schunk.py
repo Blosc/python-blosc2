@@ -924,7 +924,7 @@ class SChunk(blosc2_ext.SChunk):
         super(SChunk, self).__dealloc__()
 
 
-def open(urlpath, mode="a", **kwargs):
+def open(urlpath, mode="a", offset=0, **kwargs):
     """Open a persistent :ref:`SChunk <SChunk>` (or :ref:`NDArray <NDArray>`).
 
     Parameters
@@ -934,6 +934,9 @@ def open(urlpath, mode="a", **kwargs):
         is stored.
     mode: str, optional
         The open mode.
+    offset: int, optional
+        An offset in the file where super-chunk or array data is located
+        (e.g. in a file containing several such objects).
 
     Other parameters
     ----------------
@@ -980,4 +983,4 @@ def open(urlpath, mode="a", **kwargs):
     """
     if not os.path.exists(urlpath):
         raise FileNotFoundError(f"No such file or directory: {urlpath}")
-    return blosc2_ext.open(urlpath, mode, **kwargs)
+    return blosc2_ext.open(urlpath, mode, offset, **kwargs)
