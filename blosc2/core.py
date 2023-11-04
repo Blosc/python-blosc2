@@ -1398,8 +1398,32 @@ def schunk_from_cframe(cframe, copy=False):
     return blosc2_ext.schunk_from_cframe(cframe, copy)
 
 
+def ndarray_from_cframe(cframe, copy=False):
+    """Create a :ref:`NDArray <NDArray>` instance out of a contiguous frame buffer.
+
+    Parameters
+    ----------
+    cframe: bytes /str
+        The bytes object containing the in-memory cframe.
+    copy: bool
+        Whether to internally do a copy or not. If `False`,
+        the user is responsible for keeping a reference to `cframe`.
+
+    Returns
+    -------
+    out: :ref:`NDArray <NDArray>`
+        A new :ref:`NDArray <NDArray>` containing the data passed.
+
+    See Also
+    --------
+    :func:`~blosc2.ndarray.NDArray.to_cframe`
+
+    """
+    return blosc2_ext.ndarray_from_cframe(cframe, copy)
+
+
 def register_codec(codec_name, id, encoder=None, decoder=None, version=1):
-    """Register an user defined codec.
+    """Register a user defined codec.
 
     Parameters
     ----------
