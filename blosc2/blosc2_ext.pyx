@@ -471,6 +471,10 @@ cdef extern from "b2nd.h":
                        const int64_t *stop)
     int b2nd_from_cbuffer(b2nd_context_t *ctx, b2nd_array_t **array, void *buffer, int64_t buffersize)
     int b2nd_to_cbuffer(b2nd_array_t *array, void *buffer, int64_t buffersize)
+    int b2nd_from_cframe(uint8_t *cframe, int64_t cframe_len, c_bool copy, b2nd_array_t ** array);
+    int b2nd_to_cframe(const b2nd_array_t *array, uint8_t ** cframe, int64_t *cframe_len,
+                       c_bool *needs_free);
+
     int b2nd_squeeze(b2nd_array_t *array)
     int b2nd_squeeze_index(b2nd_array_t *array, const c_bool *index)
     int b2nd_resize(b2nd_array_t *array, const int64_t *new_shape, const int64_t *start)
@@ -2109,6 +2113,20 @@ cdef class NDArray:
 
         return buffer
 
+    def to_cframe(self):
+        cdef c_bool needs_free
+        cdef uint8_t *cframe
+        cdef int64_t cframe_len;
+        cdef int rc;
+        rc = b2nd_to_cframe(self.array, &cframe, &cframe_len, &needs_free)
+        if rc < 0:
+            raise RuntimeError("Error while getting the cframe")
+        out = PyBytes_FromStringAndSize(<char*>cframe, cframe_len)
+        if needs_free:
+            free(cframe)
+
+        return out
+
     def copy(self, dtype, **kwargs):
         chunks = kwargs.pop("chunks", self.chunks)
         blocks = kwargs.pop("blocks", self.blocks)
@@ -2322,4 +2340,21 @@ def asarray(ndarray, chunks, blocks, **kwargs):
     _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
     ndarray.schunk.mode = kwargs.get("mode", "a")
 
+    return ndarray
+
+
+def ndarray_from_cframe(cframe, copy=False):
+    cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+    PyObject_GetBuffer(cframe, buf, PyBUF_SIMPLE)
+    cdef b2nd_array_t *array
+    cdef int rc
+    rc = b2nd_from_cframe(<uint8_t *>buf.buf, buf.len, copy, &array)
+    if rc < 0:
+        raise RuntimeError("Could not get the NDArray from the cframe")
+    ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
+                             _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
+
+    PyBuffer_Release(buf)
+    if not copy:
+        ndarray._schunk._avoid_cframe_free(True)
     return ndarray

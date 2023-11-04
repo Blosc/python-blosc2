@@ -218,6 +218,21 @@ class NDArray(blosc2_ext.NDArray):
         """
         return super().tobytes()
 
+    def to_cframe(self):
+        """Get a bytes object containing the serialized :ref:`NDArray <NDArray>` instance.
+
+        Returns
+        -------
+        out: bytes
+            The buffer containing the serialized :ref:`NDArray <NDArray>` instance.
+
+        See Also
+        --------
+        :func:`~blosc2.ndarray_from_cframe`
+
+        """
+        return super(NDArray, self).to_cframe()
+
     def copy(self, dtype=None, **kwargs):
         """Create a copy of an array with same parameters.
 
@@ -654,9 +669,7 @@ def _check_ndarray_kwargs(**kwargs):
     for key in kwargs:
         if key not in supported_keys:
             raise KeyError(
-                f"Only {supported_keys} are supported as"
-                f" keyword arguments"
-                f", and you passed {key}"
+                f"Only {supported_keys} are supported as" f" keyword arguments" f", and you passed {key}"
             )
     if "cparams" in kwargs and "chunks" in kwargs["cparams"]:
         raise ValueError("You cannot pass chunks in cparams, use `chunks` argument instead")

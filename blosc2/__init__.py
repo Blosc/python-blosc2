@@ -73,7 +73,8 @@ class Tuner(Enum):
 
     #: A 'simple' tuner. This is the default in the Blosc2 library
     STUNE = 0
-    #: A more sophisticated tuner that can select different codecs/filters for different chunks (more info `here <https://github.com/Blosc/blosc2_btune/>`_).
+    #: A more sophisticated tuner that can select different codecs/filters for different chunks
+    #: (more info `here <https://github.com/Blosc/blosc2_btune/>`_).
     BTUNE = 32
 
 
@@ -107,6 +108,7 @@ from .core import (
     get_compressor,
     load_array,
     load_tensor,
+    ndarray_from_cframe,
     pack,
     pack_array,
     pack_array2,

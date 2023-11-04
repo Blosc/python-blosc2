@@ -2,7 +2,8 @@
 
 ## Changes from 2.2.9 to 2.2.10
 
-XXX version-specific blurb XXX
+* New `NDArray.to_cframe()` method and `blosc2.ndarray_from_cframe()` function for
+  serializing and deserializing NDArrays to/from contiguous in-memory frames.
 
 ## Changes from 2.2.8 to 2.2.9
 
