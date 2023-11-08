@@ -38,7 +38,7 @@ is printing the correct versions.
 
 * Check that the metainfo for the package is correct::
 
-    python -m build --sdist 
+    python -m build --sdist
     twine check dist/*
 
 
@@ -47,14 +47,19 @@ Tagging
 
 * Create a (signed, if possible) tag ``X.Y.Z`` from ``main``.  Use the next message::
 
-    git tag -a vX.Y.Z -m "Tagging version X.Y.Z"
+    git tag -a vX.Y.Z -m "Tagging python-blosc2 version X.Y.Z"
 
 * Push the tag to the github repo::
 
     git push --tags
 
-* Go to Blosc/blogsite repo and click on the `Re-run all jobs` button to regenerate the
-  documentation and check that it has been correctly updated in https://www.blosc.org.
+* Make sure that the tag is passing the tests in continuous integration (this
+  may take more than an hour).
+
+* Go to ``Blosc/blogsite`` repo, then to "Actions", click on the most recent
+  workflow run (at the top of the list), and then click on the "Re-run all
+  jobs" button to regenerate the documentation and check that it has been
+  correctly updated in https://www.blosc.org.
 
 
 Checking packaging
@@ -62,7 +67,8 @@ Checking packaging
 
 * Do an actual release in github by visiting:
   https://github.com/Blosc/python-blosc2/releases/new
-  Add the notes specific for this release.
+  Add the notes specific for this release
+  (you may want to remove newlines for aesthetics).
   This will upload the wheels to PyPI too.
 
 * Check that the package (and wheels!) have been uploaded to PyPI
@@ -72,8 +78,9 @@ Checking packaging
 * Check that the packages and wheels are sane::
 
     python -m pip install blosc2 -U
+    pip install -r requirements-test-wheels.txt
     cd tests
-    python -c"import blosc2; blosc2.print_versions()"
+    python -c "import blosc2; blosc2.print_versions()"
     pytest
 
 
@@ -93,13 +100,15 @@ Post-release actions
 
     cd $HOME/blosc/python-blosc2
 
-* Create new headers for adding new features in ``RELEASE_NOTES.md``
-  add this place-holder:
+* Create a new header for adding new features in ``RELEASE_NOTES.md``
+  with a placeholder text::
 
-  XXX version-specific blurb XXX
+    ## Changes from X.Y.Z to X.Y.(Z+1)
+
+    XXX version-specific blurb XXX
 
 * Edit ``VERSION`` in master to increment the version to the next
-  minor one (i.e. X.Y.Z --> X.Y.(Z+1).dev0).
+  patch one (i.e. X.Y.Z --> X.Y.(Z+1).dev0).
 
 * Commit your changes with::
 
