@@ -68,6 +68,8 @@ jobs:
       - name: Build wheels
         run: |
           python -m cibuildwheel --output-dir wheelhouse
+        env:
+          CIBW_ENVIRONMENT: DISABLE_AVX512='TRUE'
 
       - name: Upload wheels
         uses: actions/upload-artifact@v3
