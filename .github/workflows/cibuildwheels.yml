@@ -119,6 +119,8 @@ jobs:
           tar -xzf blosc2-*.tar.gz
           cd ./blosc2-*/
           python setup.py build_ext --inplace
+        env:
+          CIBW_ENVIRONMENT: DISABLE_AVX512='TRUE'
 
       - name: Test sdist package with pytest
         run: |
