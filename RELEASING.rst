@@ -4,10 +4,10 @@ python-blosc2 release procedure
 Preliminaries
 -------------
 
-* Check that `VERSION` file contains the correct number.
+* Check that ``VERSION`` file contains the correct number.
 
 * Make sure that the c-blosc2 submodule is updated to the latest version (or a specific
-  version that will be documented in the `RELEASE_NOTES.md`)::
+  version that will be documented in the ``RELEASE_NOTES.md``)::
 
     cd blosc2/c-blosc2
     git pull
@@ -24,7 +24,7 @@ Preliminaries
 
 is printing the correct versions.
 
-* Make sure that `RELEASE_NOTES.md` and `ANNOUNCE.rst` are up to date with the latest news
+* Make sure that ``RELEASE_NOTES.md`` and ``ANNOUNCE.rst`` are up to date with the latest news
   in the release.
 
 * Commit the changes::
@@ -33,8 +33,8 @@ is printing the correct versions.
     git push
 
 * Double check that the supported Python versions for the wheels are the correct ones
-  (`.github/workflows/cibuildwheels.yml`).  Add/remove Python version if needed.
-  Also, update the `classifiers` field for the supported Python versions.
+  (``.github/workflows/cibuildwheels.yml``).  Add/remove Python version if needed.
+  Also, update the ``classifiers`` field for the supported Python versions.
 
 * Check that the metainfo for the package is correct::
 
