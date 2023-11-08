@@ -13,7 +13,7 @@ Preliminaries
     git pull
     git checkout <desired tag>
     cd ../..
-    git commit -m "Update c-blosc2 sources" blosc2/c-blosc2
+    git commit -m "Update C-Blosc2 sources to <desired tag>" blosc2/c-blosc2
     git push
 
 * Make sure that the current master branch is passing the tests in continuous integration.
