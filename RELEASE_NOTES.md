@@ -1,9 +1,26 @@
 # Release notes
 
-## Changes from 2.2.9 to 2.2.10
+## Changes from 2.2.9 to 2.3.0
 
-* New `NDArray.to_cframe()` method and `blosc2.ndarray_from_cframe()` function for
-  serializing and deserializing NDArrays to/from contiguous in-memory frames.
+* Require at least Cython 3 for building. Using previous versions worked but
+  error handling was not correct (wheels were being built with Cython 3
+  anyway).
+
+* New `NDArray.to_cframe()` method and `blosc2.ndarray_from_cframe()` function
+  for serializing and deserializing NDArrays to/from contiguous in-memory
+  frames. Thanks to Francesc Alted.
+
+* Add an optional `offset` argument to `blosc2.schunk.open()`, to access
+  super-chunks stored in containers like HDF5. Thanks to Ivan Vilata.
+
+* Assorted minor fixes to the blocksize/blockshape computation algorithm,
+  avoiding some cases where it resulted in values exceeding maximum
+  limits. Thanks to Ivan Vilata.
+
+* Updated to latest C-Blosc2 2.11.2. It adds AVX512 support for the bitshuffle
+  filter, fixes ARM and Raspberry Pi compatibility and assorted issues.
+
+* Add python-blosc2 package definition for Guix. Thanks to Ivan Vilata.
 
 ## Changes from 2.2.8 to 2.2.9
 

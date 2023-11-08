@@ -1,9 +1,12 @@
-Announcing Python-Blosc2 2.2.9
+Announcing Python-Blosc2 2.3.0
 ==============================
 
-This is a maintenance release, where we are introducing support for
-Python 3.8 and adding support for specifying (plugable) tuner parameters
-in cparams.  There have been some minor fixes too.
+This new minor release adds methods to handle NDArrays serialized into memory
+frames, and allows opening super-chunks stored in container files (like HDF5)
+by their offset.  C-Blosc2 is updated to the latest stable version, which
+provides support for AVX512 and fixes compatibility with ARM platforms
+(e.g. Raspberry Pi).  Cython 3 is now required for building, and other minor
+fixes and additions are included as well.
 
 For more info, you can have a look at the release notes in:
 
@@ -13,7 +16,8 @@ More docs and examples are available in the documentation site:
 
 https://www.blosc.org/python-blosc2/python-blosc2.html
 
-## What is it?
+What is it?
+-----------
 
 Python-Blosc2 is a Python package that wraps C-Blosc2, the newest version of
 the Blosc compressor.  Currently Python-Blosc2 already reproduces the API of
@@ -28,7 +32,8 @@ follows the same (or very similar) API as NumPy arrays, so it can be used
 as a drop-in replacement.  See the documentation for more details:
 https://www.blosc.org/python-blosc2/reference/ndarray_api.html
 
-## Sources repository
+Sources repository
+------------------
 
 The sources and documentation are managed through github services at:
 
@@ -38,8 +43,8 @@ c-blosc2 is distributed using the BSD license, see
 https://github.com/Blosc/python-blosc2/blob/main/LICENSE.txt
 for details.
 
-
-## Mastodon feed
+Mastodon feed
+-------------
 
 Please follow https://fosstodon.org/@Blosc2 to get informed about the latest
 developments.
