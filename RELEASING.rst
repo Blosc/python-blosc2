@@ -65,12 +65,6 @@ Tagging
 Checking packaging
 ------------------
 
-* Do an actual release in github by visiting:
-  https://github.com/Blosc/python-blosc2/releases/new
-  Add the notes specific for this release
-  (you may want to remove newlines for aesthetics).
-  This will upload the wheels to PyPI too.
-
 * Check that the package (and wheels!) have been uploaded to PyPI
   (they should have been created when GHA would finish the tag trigger):
   https://pypi.org/project/blosc2/
@@ -78,10 +72,16 @@ Checking packaging
 * Check that the packages and wheels are sane::
 
     python -m pip install blosc2 -U
-    pip install -r requirements-test-wheels.txt
+    python -m pip install -r requirements-test-wheels.txt
     cd tests
     python -c "import blosc2; blosc2.print_versions()"
     pytest
+
+* Do an actual release in github by visiting:
+  https://github.com/Blosc/python-blosc2/releases/new
+  Add the notes specific for this release
+  (you may want to remove newlines for aesthetics).
+  This will upload the wheels to PyPI too.
 
 
 Announcing
