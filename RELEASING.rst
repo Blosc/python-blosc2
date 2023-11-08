@@ -22,7 +22,7 @@ Preliminaries
 
     PYTHONPATH=. python -c "import blosc2; blosc2.print_versions()"
 
-is printing the correct versions.
+  is printing the correct versions.
 
 * Make sure that ``RELEASE_NOTES.md`` and ``ANNOUNCE.rst`` are up to date with the latest news
   in the release.
@@ -88,7 +88,7 @@ Announcing
 ----------
 
 * Send an announcement to the Blosc and PyData lists.  Use the ``ANNOUNCE.rst`` file as
-skeleton (or possibly as the definitive version). Start the subject with ANN:.
+  skeleton (or possibly as the definitive version). Start the subject with ANN:.
 
 * Announce in Mastodon via https://fosstodon.org/@Blosc2 account and rejoice.
 
