@@ -69,7 +69,7 @@ jobs:
         run: |
           python -m cibuildwheel --output-dir wheelhouse
         env:
-          CIBW_ENVIRONMENT: DISABLE_AVX512='TRUE'
+          CIBW_CONFIG_SETTINGS: "--build-option=-DDEACTIVATE_AVX512:BOOL=YES"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v3
@@ -118,9 +118,7 @@ jobs:
           cd ./dist
           tar -xzf blosc2-*.tar.gz
           cd ./blosc2-*/
-          python setup.py build_ext --inplace
-        env:
-          CIBW_ENVIRONMENT: DISABLE_AVX512='TRUE'
+          python setup.py build_ext --inplace -DDEACTIVATE_AVX512:BOOL=YES
 
       - name: Test sdist package with pytest
         run: |
