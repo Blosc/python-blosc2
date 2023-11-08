@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 2.3.1 to 2.3.2
+
+XXX version-specific blurb XXX
+
 ## Changes from 2.3.0 to 2.3.1
 
 * Temporarily disable AVX512 support in C-Blosc2 for wheels built by CI until
