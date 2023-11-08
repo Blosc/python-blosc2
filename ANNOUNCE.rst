@@ -1,12 +1,13 @@
-Announcing Python-Blosc2 2.3.0
+Announcing Python-Blosc2 2.3.1
 ==============================
 
-This new minor release adds methods to handle NDArrays serialized into memory
-frames, and allows opening super-chunks stored in container files (like HDF5)
-by their offset.  C-Blosc2 is updated to the latest stable version, which
-provides support for AVX512 and fixes compatibility with ARM platforms
-(e.g. Raspberry Pi).  Cython 3 is now required for building, and other minor
-fixes and additions are included as well.
+The new minor release 2.3 adds methods to handle NDArrays serialized into
+memory frames, and allows opening super-chunks stored in container files (like
+HDF5) by their offset.  C-Blosc2 is updated to the latest stable version,
+which provides support for AVX512 (temporarily disabled in wheels) and fixes
+compatibility with ARM platforms (e.g. Raspberry Pi).  Cython 3 is now
+required for building, and other minor fixes and additions are included as
+well.
 
 For more info, you can have a look at the release notes in:
 

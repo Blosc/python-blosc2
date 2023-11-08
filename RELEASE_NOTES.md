@@ -2,7 +2,8 @@
 
 ## Changes from 2.3.0 to 2.3.1
 
-XXX version-specific blurb XXX
+* Temporarily disable AVX512 support in C-Blosc2 for wheels built by CI until
+  run-time detection works properly.
 
 ## Changes from 2.2.9 to 2.3.0
 
