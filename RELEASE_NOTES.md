@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 2.3.0 to 2.3.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 2.2.9 to 2.3.0
 
 * Require at least Cython 3 for building. Using previous versions worked but
