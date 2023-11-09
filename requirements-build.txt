@@ -5,3 +5,4 @@ cmake
 oldest-supported-numpy
 ninja
 build
+pathlib

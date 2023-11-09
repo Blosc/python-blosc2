@@ -37,6 +37,7 @@ Attributes
     blocks
     blocksize
     chunksize
+    dtype
     schunk
     size
 

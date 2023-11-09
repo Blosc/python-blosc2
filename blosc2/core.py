@@ -8,6 +8,7 @@
 import copy
 import math
 import os
+import pathlib
 import pickle
 import sys
 
@@ -1370,6 +1371,8 @@ def remove_urlpath(path):
     None
     """
     if path is not None:
+        if isinstance(path, pathlib.PurePath):
+            path = str(path)
         path = path.encode("utf-8") if isinstance(path, str) else path
         blosc2_ext.remove_urlpath(path)
 

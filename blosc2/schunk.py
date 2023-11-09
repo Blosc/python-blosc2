@@ -7,6 +7,7 @@
 #######################################################################
 
 import os
+import pathlib
 from collections import namedtuple
 from collections.abc import Mapping, MutableMapping
 
@@ -981,6 +982,8 @@ def open(urlpath, mode="a", offset=0, **kwargs):
     True
 
     """
+    if isinstance(urlpath, pathlib.PurePath):
+        urlpath = str(urlpath)
     if not os.path.exists(urlpath):
         raise FileNotFoundError(f"No such file or directory: {urlpath}")
     return blosc2_ext.open(urlpath, mode, offset, **kwargs)

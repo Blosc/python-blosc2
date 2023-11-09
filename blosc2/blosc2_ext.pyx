@@ -12,6 +12,7 @@ import ast
 import atexit
 
 import _ctypes
+import pathlib
 
 from cpython cimport (
     Py_buffer,
@@ -856,6 +857,8 @@ cdef class SChunk:
         # because its value is referenced via a C-pointer
         urlpath = kwargs.get("urlpath", None)
         if urlpath is not None:
+            if isinstance(urlpath, pathlib.PurePath):
+                urlpath = str(urlpath)
             self._urlpath = urlpath.encode() if isinstance(urlpath, str) else urlpath
             kwargs["urlpath"] = self._urlpath
         self.mode = mode = kwargs.get("mode", "a")
@@ -2185,6 +2188,8 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
         kwargs['contiguous'] = False if urlpath is None else True
 
     if urlpath is not None:
+        if isinstance(urlpath, pathlib.PurePath):
+            urlpath = str(urlpath)
         _urlpath = urlpath.encode() if isinstance(urlpath, str) else urlpath
         kwargs["urlpath"] = _urlpath
 
