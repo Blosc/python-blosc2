@@ -38,12 +38,16 @@ t0 = time.time()
 for i in range(NREP):
     np.copyto(out_, in_)
 tcpy = (time.time() - t0) / NREP
-print("  *** np.copyto() *** Time for memcpy():\t{:.3f} s\t({:.2f} GB/s)".format(tcpy, (N * 8 / tcpy) / 2**30))
+print(
+    "  *** np.copyto() *** Time for memcpy():\t{:.3f} s\t({:.2f} GB/s)".format(
+        tcpy, (N * 8 / tcpy) / 2**30
+    )
+)
 
 print("\nTimes for compressing/decompressing:")
 for in_, label in arrays:
     print(f"\n*** {label} ***")
-    for codec in blosc2.Codec:
+    for codec in blosc2.compressor_list():
         for filter in (
             blosc2.Filter.NOFILTER,
             blosc2.Filter.SHUFFLE,
@@ -61,8 +65,7 @@ for in_, label in arrays:
             td = (time.time() - t0) / NREP
             assert np.array_equal(in_, out)
             print(
-                "  *** {:-7s}, {:-10s} *** {:6.3f} s ({:.2f} GB/s) / {:5.3f} s ({:.2f} GB/s)"
-                .format(
+                "  *** {:15s}, {:20s} *** {:6.3f} s ({:.2f} GB/s) / {:5.3f} s ({:.2f} GB/s)".format(
                     codec,
                     filter,
                     tc,
