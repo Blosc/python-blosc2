@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from collections import namedtuple
 from typing import Sequence
 
@@ -19,19 +20,10 @@ def process_key(key, shape):
     return key, mask
 
 
-def prod(list):
-    prod = 1
-    for li in list:
-        prod *= li
-    return prod
-
-
 def get_ndarray_start_stop(ndim, key, shape):
     start = tuple(s.start if s.start is not None else 0 for s in key)
     stop = tuple(s.stop if s.stop is not None else sh for s, sh in zip(key, shape))
-
-    size = prod([stop[i] - start[i] for i in range(ndim)])
-
+    size = math.prod([stop[i] - start[i] for i in range(ndim)])
     return start, stop, size
 
 
