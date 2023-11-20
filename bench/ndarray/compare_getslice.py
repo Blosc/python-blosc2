@@ -89,8 +89,8 @@ if persistent:
     blosc2.remove_urlpath(fname_h5py)
 
 # Create datasets in different formats
-# content = np.random.normal(0, 1, int(np.prod(shape))).reshape(shape)
-content = np.linspace(0, 1, int(np.prod(shape))).reshape(shape)
+# content = np.random.normal(0, 1, int(np.prod(shape)), dtype=dtype).reshape(shape)
+content = np.linspace(0, 1, int(np.prod(shape)), dtype=dtype).reshape(shape)
 
 print("\nCreating datasets...")
 # Create and fill a NDArray
@@ -108,7 +108,7 @@ print(f"Time for filling array (blosc2): {t:.3f} s ({speed:.2f} GB/s) ; cratio: 
 t0 = time()
 compressor = numcodecs.Blosc(cname=cname, clevel=clevel, shuffle=zfilter, blocksize=blocksize)
 numcodecs.blosc.set_nthreads(nthreads)
-z = zarr.open(fname_zarr, shape=shape, chunks=chunks, dtype=dtype, compressor=compressor)
+z = zarr.open(fname_zarr, shape=shape, chunks=chunks, dtype=content.dtype, compressor=compressor)
 z[:] = content
 t = time() - t0
 speed = dset_size / (t * 2**30)
@@ -136,7 +136,7 @@ if persistent:
     h5pyf = h5py.File(fname_h5py, "w")
 else:
     h5pyf = h5py.File(fname_h5py, "w", driver="core", backing_store=False)
-h5d = h5pyf.create_dataset("dataset", dtype=dtype, data=content, chunks=chunks, **filters)
+h5d = h5pyf.create_dataset("dataset", dtype=content.dtype, data=content, chunks=chunks, **filters)
 t = time() - t0
 speed = dset_size / (t * 2**30)
 if persistent:
