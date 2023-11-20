@@ -6,6 +6,8 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+# Example of prefiltering data before compression
+
 import numpy as np
 
 import blosc2
@@ -15,12 +17,9 @@ input_dtype = np.dtype(np.int32)
 output_dtype = np.dtype(np.float32)
 
 # Set the compression and decompression parameters
-cparams = {"codec": blosc2.Codec.LZ4, "typesize": 4, "nthreads": 1}
+cparams = {"typesize": 4, "nthreads": 1}
 dparams = {"nthreads": 4}
-contiguous = True
-urlpath = None
-storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
-
+storage = {"cparams": cparams, "dparams": dparams}
 # Create empty schunk
 schunk = blosc2.SChunk(chunksize=200 * 1000 * input_dtype.itemsize, **storage)
 

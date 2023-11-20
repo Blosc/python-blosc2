@@ -6,6 +6,8 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+# Fill an SChunk with a filler decorator
+
 import numpy as np
 
 import blosc2
@@ -14,15 +16,11 @@ nchunks = 3
 chunk_len = 200 * 1000
 schunk_dtype = np.dtype(np.float64)
 
-# Set the compression and decompression parameters
-cparams = {"codec": blosc2.Codec.LZ4, "typesize": schunk_dtype.itemsize, "nthreads": 1}
-dparams = {"nthreads": 4}
-contiguous = True
-urlpath = None
-storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+# Set the compression parameters. We need nthreads=1 for this example.
+cparams = {"typesize": schunk_dtype.itemsize, "nthreads": 1}
 
 # Create empty SChunk
-schunk = blosc2.SChunk(chunksize=chunk_len * schunk_dtype.itemsize, **storage)
+schunk = blosc2.SChunk(chunksize=chunk_len * schunk_dtype.itemsize, cparams=cparams)
 
 # Create operands (can be a SChunk, numpy.ndarray or Python scalar)
 op_dtype = np.dtype(np.int32)
