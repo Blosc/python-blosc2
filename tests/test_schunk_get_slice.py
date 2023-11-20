@@ -84,14 +84,13 @@ def test_schunk_get_slice_raises():
     with pytest.raises(ValueError):
         schunk.get_slice(start, stop, out)
 
+    # The next are not raising errors, but returning empty bytes
     start = -1
     stop = -4
-    with pytest.raises(ValueError):
-        schunk[start:stop]
+    assert schunk[start:stop] == b""
 
     start = 200 * 100 * nchunks
     stop = start + 4
-    with pytest.raises(ValueError):
-        schunk[start:stop]
+    assert schunk[start:stop] == b""
 
     blosc2.remove_urlpath(storage["urlpath"])

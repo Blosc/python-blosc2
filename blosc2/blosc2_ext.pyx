@@ -10,9 +10,9 @@
 
 import ast
 import atexit
+import pathlib
 
 import _ctypes
-import pathlib
 
 from cpython cimport (
     Py_buffer,
@@ -1258,9 +1258,9 @@ cdef class SChunk:
 
     def get_slice(self, start=0, stop=None, out=None):
         cdef int64_t nitems = self.schunk.nbytes // self.schunk.typesize
-        start, stop = self._massage_key(start, stop, nitems)
-        if start >= nitems:
-            raise ValueError("`start` cannot be greater or equal than the SChunk nitems")
+        start, stop, _ = slice(start, stop, 1).indices(nitems)
+        if start >= stop:
+            return b''
 
         cdef Py_ssize_t nbytes = (stop - start) * self.schunk.typesize
         cdef Py_buffer *buf
