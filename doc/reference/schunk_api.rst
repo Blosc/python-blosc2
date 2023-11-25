@@ -21,6 +21,7 @@ Methods
     SChunk.insert_data
     SChunk.iterchunks
     SChunk.iterchunks_info
+    SChunk.fill_special
     SChunk.update_chunk
     SChunk.update_data
     SChunk.get_slice
