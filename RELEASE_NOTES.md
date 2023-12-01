@@ -2,7 +2,14 @@
 
 ## Changes from 2.3.1 to 2.3.2
 
-XXX version-specific blurb XXX
+* Support for `pathlib.Path` objects in all the places where `urlpath` is
+  used (e.g. `blosc2.open()`). Thanks to Marta Iborra.
+
+* Included docs for `SChunk.fill_special()` and `NDArray.dtype`. Thanks
+  to Francesc Alted.
+
+* Upgrade to latest C-Blosc2 2.11.3. It fixes a bug preventing the use of
+  typesize > 255 in frames.  Now you can use a typesize up to 2**31-1.
 
 ## Changes from 2.3.0 to 2.3.1
 

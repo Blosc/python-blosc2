@@ -2010,7 +2010,6 @@ cdef class NDArray:
     def dtype(self):
         """
         Data-type of the array’s elements.
-        If it is an old caterva array, it will be a bytes string of `typesize` length.
         """
         if self._dtype is not None:
             return self._dtype

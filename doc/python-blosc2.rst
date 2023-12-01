@@ -1,8 +1,10 @@
 Python-Blosc2 documentation
 ============================
 
-Python-Blosc2 is a Python package
-that wraps C-Blosc2, the newest version of the Blosc compressor.
+Python-Blosc2 is a Python package for handling large NDim and plain datasets stored in a compressed state either in-memory or on-disk.
+Under the hood, it uses [C-Blosc2](https://www.blosc.org/c-blosc2/c-blosc2.html), a fast, compressed and persistent data store library
+for C.
+
 
 .. panels::
     :card: + intro-card text-center
