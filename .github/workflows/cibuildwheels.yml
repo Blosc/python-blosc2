@@ -69,7 +69,8 @@ jobs:
         run: |
           python -m cibuildwheel --output-dir wheelhouse
         env:
-          CIBW_CONFIG_SETTINGS: "--build-option=-DDEACTIVATE_AVX512:BOOL=YES"
+          # Starting with C-Blosc2 2.11.3, we should not need to deactivate AVX512
+          # CIBW_CONFIG_SETTINGS: "--build-option=-DDEACTIVATE_AVX512:BOOL=YES"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v3
@@ -118,7 +119,9 @@ jobs:
           cd ./dist
           tar -xzf blosc2-*.tar.gz
           cd ./blosc2-*/
-          python setup.py build_ext --inplace -DDEACTIVATE_AVX512:BOOL=YES
+          # Starting with C-Blosc2 2.11.3, we should not need to deactivate AVX512
+          # python setup.py build_ext --inplace -DDEACTIVATE_AVX512:BOOL=YES
+          python setup.py build_ext --inplace
 
       - name: Test sdist package with pytest
         run: |
