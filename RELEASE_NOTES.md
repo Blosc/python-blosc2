@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 2.3.2 to 2.3.3
+
+XXX version-specific blurb XXX
+
 ## Changes from 2.3.1 to 2.3.2
 
 * Support for `pathlib.Path` objects in all the places where `urlpath` is
