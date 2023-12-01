@@ -68,8 +68,8 @@ jobs:
       - name: Build wheels
         run: |
           python -m cibuildwheel --output-dir wheelhouse
-        env:
-          # Starting with C-Blosc2 2.11.3, we should not need to deactivate AVX512
+        # Starting with C-Blosc2 2.11.3, we should not need to deactivate AVX512
+        #env:
           # CIBW_CONFIG_SETTINGS: "--build-option=-DDEACTIVATE_AVX512:BOOL=YES"
 
       - name: Upload wheels
