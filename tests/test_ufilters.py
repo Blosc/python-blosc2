@@ -91,15 +91,17 @@ def test_ufilters(contiguous, urlpath, nchunks, filters, filters_meta, dtype):
 
     blosc2.remove_urlpath(urlpath)
 
+
 @pytest.mark.parametrize(
     "cparams, dparams",
     [
         ({"nthreads": 4, "filters": [255, blosc2.Filter.SHUFFLE], "filters_meta": [0, 0]}, {"nthreads": 1}),
-        ({"nthreads": 1, "filters": [255], "filters_meta": [4]}, {"nthreads": 4})
+        ({"nthreads": 1, "filters": [255], "filters_meta": [4]}, {"nthreads": 4}),
     ],
 )
 def test_pyufilters_error(cparams, dparams):
     dtype = np.dtype(np.int32)
+
     def forward(input, output, meta, schunk):
         nd_input = input.view(dtype)
         nd_output = output.view(dtype)
@@ -111,6 +113,7 @@ def test_pyufilters_error(cparams, dparams):
         nd_output = output.view(dtype)
 
         nd_output[:] = nd_input - 1
+
     if 255 not in blosc2.ufilters_registry:
         blosc2.register_filter(255, forward, backward)
 
@@ -132,7 +135,7 @@ def test_pyufilters_error(cparams, dparams):
     "cparams, dparams",
     [
         ({"nthreads": 4, "filters": [163, blosc2.Filter.SHUFFLE], "filters_meta": [0, 0]}, {"nthreads": 1}),
-        ({"nthreads": 1, "filters": [163], "filters_meta": [4]}, {"nthreads": 4})
+        ({"nthreads": 1, "filters": [163], "filters_meta": [4]}, {"nthreads": 4}),
     ],
 )
 def test_dynamic_ufilters_error(cparams, dparams):

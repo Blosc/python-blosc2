@@ -39,8 +39,9 @@ for i in range(NREP):
 toc = time.time()
 tcpy = (toc - tic) / NREP
 print(
-    "  Time for copying array with np.copy:                  {:.3f} s ({:.2f} GB/s))"
-    .format(tcpy, ((N * 8 / tcpy) / 2**30))
+    "  Time for copying array with np.copy:                  {:.3f} s ({:.2f} GB/s))".format(
+        tcpy, ((N * 8 / tcpy) / 2**30)
+    )
 )
 
 if comprehensive_copy_timing:
@@ -51,8 +52,9 @@ if comprehensive_copy_timing:
     toc = time.time()
     tcpy = (toc - tic) / NREP
     print(
-        "  Time for copying array with np.copyto and empty_like: {:.3f} s ({:.2f} GB/s))"
-        .format(tcpy, ((N * 8 / tcpy) / 2**30))
+        "  Time for copying array with np.copyto and empty_like: {:.3f} s ({:.2f} GB/s))".format(
+            tcpy, ((N * 8 / tcpy) / 2**30)
+        )
     )
 
     # Unlike numpy.zeros, numpy.zeros_like doesn't use calloc, but instead uses
@@ -66,8 +68,9 @@ if comprehensive_copy_timing:
     toc = time.time()
     tcpy = (toc - tic) / NREP
     print(
-        "  Time for copying array with np.copyto and zeros:      {:.3f} s ({:.2f} GB/s))"
-        .format(tcpy, ((N * 8 / tcpy) / 2**30))
+        "  Time for copying array with np.copyto and zeros:      {:.3f} s ({:.2f} GB/s))".format(
+            tcpy, ((N * 8 / tcpy) / 2**30)
+        )
     )
 
     # Cause a page fault before the benchmark
@@ -78,8 +81,9 @@ if comprehensive_copy_timing:
     toc = time.time()
     tcpy = (toc - tic) / NREP
     print(
-        "  Time for copying array with np.copyto and full_like:  {:.3f} s ({:.2f} GB/s))"
-        .format(tcpy, ((N * 8 / tcpy) / 2**30))
+        "  Time for copying array with np.copyto and full_like:  {:.3f} s ({:.2f} GB/s))".format(
+            tcpy, ((N * 8 / tcpy) / 2**30)
+        )
     )
 
     tic = time.time()
@@ -89,8 +93,9 @@ if comprehensive_copy_timing:
     toc = time.time()
     tcpy = (toc - tic) / NREP
     print(
-        "  Time for copying array with numpy assignment:         {:.3f} s ({:.2f} GB/s))"
-        .format(tcpy, ((N * 8 / tcpy) / 2**30))
+        "  Time for copying array with numpy assignment:         {:.3f} s ({:.2f} GB/s))".format(
+            tcpy, ((N * 8 / tcpy) / 2**30)
+        )
     )
 
 print()
@@ -122,8 +127,9 @@ for in_, label in arrays:
         tc = (ctoc - ctic) / NREP
         td = (dtoc - dtic) / NREP
         print(
-            "  Time for compress/decompress:         {:.3f}/{:.3f} s ({:.2f}/{:.2f} GB/s)) "
-            .format(tc, td, ((N * 8 / tc) / 2**30), ((N * 8 / td) / 2**30)),
+            "  Time for compress/decompress:         {:.3f}/{:.3f} s ({:.2f}/{:.2f} GB/s)) ".format(
+                tc, td, ((N * 8 / tc) / 2**30), ((N * 8 / td) / 2**30)
+            ),
             end="",
         )
         print("\tcr: {:5.1f}x".format(in_.size * in_.dtype.itemsize * 1.0 / len(c)))
@@ -141,8 +147,9 @@ for in_, label in arrays:
         tc = (ctoc - ctic) / NREP
         td = (dtoc - dtic) / NREP
         print(
-            "  Time for pack_array2/unpack_array2:   {:.3f}/{:.3f} s ({:.2f}/{:.2f} GB/s)) "
-            .format(tc, td, ((N * 8 / tc) / 2**30), ((N * 8 / td) / 2**30)),
+            "  Time for pack_array2/unpack_array2:   {:.3f}/{:.3f} s ({:.2f}/{:.2f} GB/s)) ".format(
+                tc, td, ((N * 8 / tc) / 2**30), ((N * 8 / td) / 2**30)
+            ),
             end="",
         )
         print("\tcr: {:5.1f}x".format(in_.size * in_.dtype.itemsize * 1.0 / len(c)))
@@ -160,8 +167,9 @@ for in_, label in arrays:
         tc = (ctoc - ctic) / NREP
         td = (dtoc - dtic) / NREP
         print(
-            "  Time for pack_tensor/unpack_tensor:   {:.3f}/{:.3f} s ({:.2f}/{:.2f} GB/s)) "
-            .format(tc, td, ((N * 8 / tc) / 2**30), ((N * 8 / td) / 2**30)),
+            "  Time for pack_tensor/unpack_tensor:   {:.3f}/{:.3f} s ({:.2f}/{:.2f} GB/s)) ".format(
+                tc, td, ((N * 8 / tc) / 2**30), ((N * 8 / td) / 2**30)
+            ),
             end="",
         )
         print("\tcr: {:5.1f}x".format(in_.size * in_.dtype.itemsize * 1.0 / len(c)))
