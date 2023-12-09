@@ -109,7 +109,7 @@ def test_raise_error(object, cparams, dparams, gil):
         blosc2.decompress2(c, dst=dest)
 
     dest3 = blosc2.decompress2(c)
-    if type(object) is bytes:
+    if isinstance(object, bytes):
         assert dest3 == object
     else:
         assert dest3 == object.tobytes()

@@ -83,13 +83,13 @@ def test_raise_error(object, codec):
         blosc2.decompress(c, dst=dest)
 
     dest3 = blosc2.decompress(c)
-    if type(object) is bytes:
+    if isinstance(object, bytes):
         assert dest3 == object
     else:
         assert dest3 == object.tobytes()
 
     dest4 = blosc2.decompress(c, as_bytearray=True)
-    if type(object) is bytes:
+    if isinstance(object, bytes):
         assert dest4 == object
     else:
         assert dest4 == object.tobytes()
