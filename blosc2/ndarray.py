@@ -368,9 +368,9 @@ class NDArray(blosc2_ext.NDArray):
 
 
 def _check_shape(shape):
-    if type(shape) is int:
+    if isinstance(shape, int):
         shape = (shape,)
-    if type(shape) not in (tuple, list):
+    elif not isinstance(shape, (tuple, list)):
         raise ValueError("shape should be a tuple or a list!")
     return shape
 

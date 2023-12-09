@@ -1115,13 +1115,14 @@ def get_chunksize(blocksize, l3_minimum=2**21, l3_maximum=2**25):
         # value only when it is an actual int.
         # Also, sometimes cpuinfo does not return a correct L3 size;
         # so in general, enforcing L3 > L2 is a good sanity check.
-        l2_cache_size = cpu_info.get("l2_cache_size", "Not found")
-        if type(l3_cache_size) is int and type(l2_cache_size) is int and l3_cache_size > l2_cache_size:
-            chunksize = l3_cache_size
+        if isinstance(l3_cache_size, int):
+            l2_cache_size = cpu_info.get("l2_cache_size", "Not found")
+            if isinstance(l2_cache_size, int) and l3_cache_size > l2_cache_size:
+                chunksize = l3_cache_size
     else:
         # Chunksize should be at least the size of L2
         l2_cache_size = cpu_info.get("l2_cache_size", "Not found")
-        if type(l2_cache_size) is int and l2_cache_size > chunksize:
+        if isinstance(l2_cache_size, int) and l2_cache_size > chunksize:
             chunksize = l2_cache_size
 
     # Ensure a minimum size

@@ -22,7 +22,7 @@ def info_text_report(items: list) -> str:
     max_key_len = max(len(k) for k in keys)
     report = ""
     for k, v in items:
-        if type(v) is dict:
+        if isinstance(v, dict):
             # rich way, this is disabled because it doesn't work well in the notebooks
             # with io.StringIO() as buf:
             #     v_sorted = {k: val for k, val in sorted(v.items())}

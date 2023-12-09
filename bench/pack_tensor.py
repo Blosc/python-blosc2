@@ -48,7 +48,7 @@ if store:
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for tensorflow (tf.io.serialize):\t[:.3f} s ({:.2f} GB/s)) ".format(tc, ((N * 8 / tc) / 2**30)),
+        "  Time for tensorflow (tf.io.serialize):\t{:.3f} s ({:.2f} GB/s)) ".format(tc, ((N * 8 / tc) / 2**30)),
         end="",
     )
     print("\tcr: {:5.1f}x".format(in_.size * in_.dtype.itemsize * 1.0 / len(c)))
