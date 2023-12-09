@@ -48,7 +48,9 @@ if store:
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for tensorflow (tf.io.serialize):\t{:.3f} s ({:.2f} GB/s)) ".format(tc, ((N * 8 / tc) / 2**30)),
+        "  Time for tensorflow (tf.io.serialize):\t{:.3f} s ({:.2f} GB/s)) ".format(
+            tc, ((N * 8 / tc) / 2**30)
+        ),
         end="",
     )
     print("\tcr: {:5.1f}x".format(in_.size * in_.dtype.itemsize * 1.0 / len(c)))
@@ -65,7 +67,8 @@ if store:
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for torch (torch.save):\t\t\t{:.3f} s ({:.2f} GB/s)) ".format(tc, ((N * 8 / tc) / 2**30)), end=""
+        "  Time for torch (torch.save):\t\t\t{:.3f} s ({:.2f} GB/s)) ".format(tc, ((N * 8 / tc) / 2**30)),
+        end="",
     )
     buff.seek(0)
     c = buff.read()
@@ -85,7 +88,9 @@ if store:
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for tensorflow (blosc2.pack_tensor):\t{:.3f} s ({:.2f} GB/s)) ".format(tc, ((N * 8 / tc) / 2**30)),
+        "  Time for tensorflow (blosc2.pack_tensor):\t{:.3f} s ({:.2f} GB/s)) ".format(
+            tc, ((N * 8 / tc) / 2**30)
+        ),
         end="",
     )
     print("\tcr: {:5.1f}x".format(in_.size * in_.dtype.itemsize * 1.0 / len(c)))
@@ -101,7 +106,9 @@ if store:
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for torch (blosc2.pack_tensor):\t\t{:.3f} s ({:.2f} GB/s)) ".format(tc, ((N * 8 / tc) / 2**30)),
+        "  Time for torch (blosc2.pack_tensor):\t\t{:.3f} s ({:.2f} GB/s)) ".format(
+            tc, ((N * 8 / tc) / 2**30)
+        ),
         end="",
     )
     print("\tcr: {:5.1f}x".format(in_.size * in_.dtype.itemsize * 1.0 / len(c)))
@@ -120,7 +127,9 @@ if True:
     dtoc = time.time()
     td = (dtoc - dtic) / NREP
     print(
-        "  Time for tensorflow (tf.io.parse_tensor):\t{:.3f} s ({:.2f} GB/s)) ".format(td, ((N * 8 / td) / 2**30)),
+        "  Time for tensorflow (tf.io.parse_tensor):\t{:.3f} s ({:.2f} GB/s)) ".format(
+            td, ((N * 8 / td) / 2**30)
+        ),
     )
 
     with open("serialize_torch.bin", "rb") as f:
@@ -147,8 +156,9 @@ if True:
     dtoc = time.time()
     td = (dtoc - dtic) / NREP
     print(
-        "  Time for tensorflow (blosc2.unpack_tensor):\t{:.3f} s ({:.2f} GB/s)) "
-        .format(td, ((N * 8 / td) / 2**30)),
+        "  Time for tensorflow (blosc2.unpack_tensor):\t{:.3f} s ({:.2f} GB/s)) ".format(
+            td, ((N * 8 / td) / 2**30)
+        ),
     )
     assert np.array_equal(in_, out)
 
@@ -164,6 +174,8 @@ if True:
 
     td = (dtoc - dtic) / NREP
     print(
-        "  Time for torch (blosc2.unpack_tensor):\t{:.3f} s ({:.2f} GB/s)) ".format(td, ((N * 8 / td) / 2**30)),
+        "  Time for torch (blosc2.unpack_tensor):\t{:.3f} s ({:.2f} GB/s)) ".format(
+            td, ((N * 8 / td) / 2**30)
+        ),
     )
     assert np.array_equal(in_, out)
