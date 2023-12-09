@@ -142,11 +142,10 @@ def test_dynamic_ucodecs_error(cparams, dparams):
     chunk_len = 100
     dtype = np.dtype(np.int32)
     nchunks = 1
-    fill_value = 341
     data = np.arange(chunk_len * nchunks, dtype=dtype)
 
     with pytest.raises(RuntimeError):
-        schunk = blosc2.SChunk(
+        _ = blosc2.SChunk(
             chunksize=chunk_len * dtype.itemsize,
             data=data,
             cparams=cparams,
