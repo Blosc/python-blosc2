@@ -11,10 +11,10 @@
 # https://github.com/Blosc/blosc2_btune/blob/main/README.md
 #######################################################################
 
+import blosc2_btune
 import numpy as np
 
 import blosc2
-import blosc2_btune
 
 nchunks = 10
 # Set the compression and decompression parameters, use BTUNE tuner
