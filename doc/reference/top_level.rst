@@ -72,5 +72,6 @@ Utils
 .. autosummary::
    :toctree: autofiles/top_level/
 
+    get_slice_nchunks
     open
     remove_urlpath

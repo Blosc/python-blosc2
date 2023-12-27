@@ -672,16 +672,20 @@ def _check_ndarray_kwargs(**kwargs):
 def get_slice_nchunks(schunk, key):
     """
     Get the unidimensional chunk indexes needed to get a
-    slice of a SChunk or a NDArray.
+    slice of a :ref:`SChunk <SChunk>` or a :ref:`NDArray <NDArray>`.
 
     Parameters
     ----------
-    schunk:
-    key
+    schunk: :ref:`SChunk <SChunk>` or :ref:`NDArray <NDArray>`
+        The super-chunk or ndarray container.
+    key: tuple(int, int), int, slice or sequence of slices
+        If it is a super-chunk, the tuple with start and stop of the slice.
+        If it is a ndarray, it can be any of the other types representing the slice.
 
     Returns
     -------
-
+    out: np.ndarray
+        An array with the unidimensional chunk indexes.
     """
     if isinstance(schunk, NDArray):
         array = schunk
