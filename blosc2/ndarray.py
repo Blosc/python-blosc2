@@ -667,3 +667,27 @@ def _check_ndarray_kwargs(**kwargs):
         raise ValueError("You cannot pass chunks in cparams, use `chunks` argument instead")
     if "cparams" in kwargs and "blocks" in kwargs["cparams"]:
         raise ValueError("You cannot pass chunks in cparams, use `blocks` argument instead")
+
+
+def get_slice_nchunks(schunk, key):
+    """
+    Get the unidimensional chunk indexes needed to get a
+    slice of a SChunk or a NDArray.
+
+    Parameters
+    ----------
+    schunk:
+    key
+
+    Returns
+    -------
+
+    """
+    if isinstance(schunk, NDArray):
+        array = schunk
+        key, _ = process_key(key, array.shape)
+        start, stop, _ = get_ndarray_start_stop(array.ndim, key, array.shape)
+        key = (start, stop)
+        return blosc2_ext.array_get_slice_nchunks(array, key)
+    else:
+        return blosc2_ext.schunk_get_slice_nchunks(schunk, key)

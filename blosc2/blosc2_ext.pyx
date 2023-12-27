@@ -416,6 +416,8 @@ cdef extern from "blosc2.h":
 
     int blosc2_register_filter(blosc2_filter *filter)
 
+    int blosc2_get_slice_nchunks(blosc2_schunk * schunk, int64_t *start, int64_t *stop, int64_t ** chunks_idx)
+
 
 cdef extern from "b2nd.h":
     ctypedef enum:
@@ -2362,3 +2364,38 @@ def ndarray_from_cframe(cframe, copy=False):
     if not copy:
         ndarray._schunk._avoid_cframe_free(True)
     return ndarray
+
+
+def array_get_slice_nchunks(array: NDArray, key):
+    start, stop = key
+    cdef int64_t[B2ND_MAX_DIM] start_, stop_
+    for i in range(array.ndim):
+        start_[i] = start[i]
+        stop_[i] = stop[i]
+    cdef int64_t *chunks_idx
+    rc = blosc2_get_slice_nchunks(array.array.sc, start_, stop_, &chunks_idx)
+    _check_rc(rc, "Error while getting the chunk indexes")
+    res = np.empty(rc, dtype=np.int64)
+    for i in range(rc):
+        res[i] = chunks_idx[i]
+    free(chunks_idx)
+    return res
+
+
+def schunk_get_slice_nchunks(schunk: SChunk, key):
+    start, stop = key
+    nitems = schunk.nbytes // schunk.typesize
+    start, stop, _ = slice(start, stop, 1).indices(nitems)
+
+    cdef int64_t start_, stop_
+    start_ = start
+    stop_ = stop
+    cdef int64_t *chunks_idx
+    rc = blosc2_get_slice_nchunks(schunk.schunk, &start_, &stop_, &chunks_idx)
+    _check_rc(rc, "Error while getting the chunk indexes")
+
+    res = np.empty(rc, dtype=np.int64)
+    for i in range(rc):
+        res[i] = chunks_idx[i]
+    free(chunks_idx)
+    return res

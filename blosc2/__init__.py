@@ -129,7 +129,7 @@ from .core import (
     unpack_array2,
     unpack_tensor,
 )
-from .ndarray import NDArray, asarray, copy, empty, frombuffer, full, uninit, zeros
+from .ndarray import NDArray, asarray, copy, empty, frombuffer, full, get_slice_nchunks, uninit, zeros
 from .schunk import SChunk, open
 from .version import __version__
 
@@ -227,4 +227,5 @@ __all__ = [
     "nthreads",
     "compute_chunks_blocks",
     "cpu_info",
+    "get_slice_nchunks",
 ]
