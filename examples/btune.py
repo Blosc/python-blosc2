@@ -28,7 +28,7 @@ blosc2.remove_urlpath(urlpath)
 
 # Set the Btune configuration to use
 btune_conf = {"tradeoff": 0.3, "perf_mode": blosc2_btune.PerformanceMode.DECOMP}
-blosc2_btune.set_params_defaults()
+blosc2_btune.set_params_defaults(**btune_conf)
 
 # Create the SChunk
 data = np.arange(200 * 1000 * nchunks)

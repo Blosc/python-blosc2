@@ -1,13 +1,12 @@
-Announcing Python-Blosc2 2.3.1
+Announcing Python-Blosc2 2.4.0
 ==============================
 
-The new minor release 2.3 adds methods to handle NDArrays serialized into
-memory frames, and allows opening super-chunks stored in container files (like
-HDF5) by their offset.  C-Blosc2 is updated to the latest stable version,
-which provides support for AVX512 (temporarily disabled in wheels) and fixes
-compatibility with ARM platforms (e.g. Raspberry Pi).  Cython 3 is now
-required for building, and other minor fixes and additions are included as
-well.
+The new minor release 2.4 adds the grok codec plugin (more info in the blog
+post: https://www.blosc.org/posts/blosc2-grok-release/ ),
+the `blosc2.get_slice_nchunks()` function to get an array of chunk
+indexes needed to get a slice of a Blosc2 container and an
+imported target with pkg-config to support windows.
+C-Blosc2 is updated to the latest stable version.
 
 For more info, you can have a look at the release notes in:
 

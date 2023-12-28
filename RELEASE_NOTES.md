@@ -1,8 +1,15 @@
 # Release notes
 
-## Changes from 2.3.2 to 2.3.3
+## Changes from 2.3.2 to 2.4.0
 
-XXX version-specific blurb XXX
+* Updated to latest C-Blosc2 2.12.0.
+
+* Added `blosc2.get_slice_nchunks()` to get array of chunk 
+  indexes needed to get a slice of a Blosc2 container.
+
+* Added grok codec plugin.
+
+* Added imported target with pkg-config to support windows.
 
 ## Changes from 2.3.1 to 2.3.2
 
