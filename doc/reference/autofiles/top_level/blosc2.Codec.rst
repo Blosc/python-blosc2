@@ -19,5 +19,5 @@
       ~Codec.ZFP_PREC
       ~Codec.ZFP_RATE
       ~Codec.OPENHTJ2K
-   
+      ~Codec.GROK
    
