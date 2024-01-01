@@ -73,7 +73,7 @@ jobs:
           # CIBW_CONFIG_SETTINGS: "--build-option=-DDEACTIVATE_AVX512:BOOL=YES"
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           path: ./wheelhouse/*.whl
 
@@ -110,7 +110,7 @@ jobs:
           python -m build --sdist
 
       - name: Upload sdist package
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           path: dist/*.tar.gz
 
