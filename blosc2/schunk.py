@@ -224,9 +224,12 @@ class SChunk(blosc2_ext.SChunk):
         if chunksize is None:
             chunksize = 2**24
             if data is not None:
-                chunksize = data.size * data.itemsize
-                # Make that a multiple of typesize
-                chunksize = chunksize // data.itemsize * data.itemsize
+                if hasattr(data, "itemsize"):
+                    chunksize = data.size * data.itemsize
+                    # Make that a multiple of typesize
+                    chunksize = chunksize // data.itemsize * data.itemsize
+                else:
+                    chunksize = len(data)
             # Use a cap of 256 MB (modern boxes should all have this RAM available)
             if chunksize > 2**28:
                 chunksize = 2**28
@@ -235,6 +238,10 @@ class SChunk(blosc2_ext.SChunk):
         self.vlmeta = vlmeta(super(SChunk, self).c_schunk, self.urlpath, self.mode)
         self._cparams = super(SChunk, self).get_cparams()
         self._dparams = super(SChunk, self).get_dparams()
+
+    def __len__(self):
+        """Return the number of items in the SChunk."""
+        return self.nbytes // self.typesize
 
     @property
     def cparams(self):

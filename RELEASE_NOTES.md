@@ -7,6 +7,8 @@
 * Support for slices in ``blosc2.get_slice_nchunks()`` when using SChunk
   objects.
 
+* Added a new `Schunk.__len__()` method.
+
 ## Changes from 2.3.2 to 2.4.0
 
 * Updated to latest C-Blosc2 2.12.0.
