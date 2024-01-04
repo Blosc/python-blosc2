@@ -40,7 +40,8 @@ def test_schunk_get_slice(contiguous, urlpath, cparams, nchunks, start, stop):
 
     aux = np.empty(200 * 100 * nchunks, dtype=np.int32)
     res = aux[start:stop]
-    sl = schunk.get_slice(start, stop, res)
     np.array_equal(np.unique(res), blosc2.get_slice_nchunks(schunk, (start, stop)))
+    # slice variant
+    np.array_equal(np.unique(res), blosc2.get_slice_nchunks(schunk, slice(start, stop)))
 
     blosc2.remove_urlpath(urlpath)

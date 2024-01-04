@@ -690,8 +690,14 @@ def get_slice_nchunks(schunk, key):
     if isinstance(schunk, NDArray):
         array = schunk
         key, _ = process_key(key, array.shape)
-        start, stop, _ = get_ndarray_start_stop(array.ndim, key, array.shape)
+        start, stop, step = get_ndarray_start_stop(array.ndim, key, array.shape)
         key = (start, stop)
         return blosc2_ext.array_get_slice_nchunks(array, key)
     else:
+        if isinstance(key, int):
+            key = (key, key + 1, 1)
+        elif isinstance(key, slice):
+            if key.step not in (1, None):
+                raise IndexError("Only step=1 is supported")
+            key = (key.start, key.stop)
         return blosc2_ext.schunk_get_slice_nchunks(schunk, key)
