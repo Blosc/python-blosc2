@@ -2,8 +2,6 @@
 
 ## Changes from 2.4.0 to 2.4.1
 
-* Updated to latest C-Blosc2 2.12.0 (this time for real).
-
 * Support for slices in ``blosc2.get_slice_nchunks()`` when using SChunk
   objects.
 
