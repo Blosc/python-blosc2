@@ -1420,7 +1420,7 @@ def ndarray_from_cframe(cframe, copy=False):
 
     See Also
     --------
-    :func:`~blosc2.ndarray.NDArray.to_cframe`
+    :func:`~blosc2.NDArray.to_cframe`
 
     """
     return blosc2_ext.ndarray_from_cframe(cframe, copy)

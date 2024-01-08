@@ -22,6 +22,7 @@ Methods
     squeeze
     resize
     tobytes
+    to_cframe
 
 Attributes
 ----------
@@ -38,6 +39,7 @@ Attributes
     blocksize
     chunksize
     dtype
+    info
     schunk
     size
 
@@ -56,5 +58,6 @@ Constructors
     empty
     frombuffer
     full
+    ndarray_from_cframe
     uninit
     zeros

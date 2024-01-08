@@ -27,6 +27,7 @@ Methods
     SChunk.get_slice
     SChunk.__getitem__
     SChunk.__setitem__
+    SChunk.__len__
     SChunk.to_cframe
     SChunk.postfilter
     SChunk.remove_postfilter

@@ -60,6 +60,9 @@ class SplitMode(Enum):
 
 
 class SpecialValue(Enum):
+    """
+    Possible special values in a chunk.
+    """
     NOT_SPECIAL = 0
     ZERO = 1
     NAN = 2
@@ -89,6 +92,9 @@ from .blosc2_ext import (
     VERSION_DATE,
     VERSION_STRING,
 )
+DEFINED_CODECS_STOP = DEFINED_CODECS_STOP
+"""
+Defined."""
 
 cpu_info = cpuinfo.get_cpu_info()
 
@@ -136,16 +142,30 @@ from .version import __version__
 
 # Registry for postfilters
 postfilter_funcs = {}
+"""
+Registry for postfilter functions. For more info see
+ :func:`SChunk.postfilter <blosc2.schunk.SChunk.postfilter>`"""
 # Registry for prefilters
 prefilter_funcs = {}
+"""
+Registry for prefilter functions. For more info see
+ :func:`SChunk.prefilter <blosc2.schunk.SChunk.prefilter>`"""
 
 # Registry for user-defined codecs
 ucodecs_registry = {}
+"""
+Registry for user-defined codecs. For more info see
+ :func:`blosc2.register_codec <blosc2.register_codec>`"""
 # Registry for user-defined filters
 ufilters_registry = {}
+"""
+Registry for user-defined filters. For more info see
+ :func:`blosc2.register_filter <blosc2.register_filter>`"""
 
 blosclib_version = f"{VERSION_STRING} ({VERSION_DATE})"
-
+"""
+The blosc2 version + date.
+"""
 # Internal Blosc threading
 nthreads = ncores = detect_number_of_cores() // 2
 """Number of threads to be used in compression/decompression.
@@ -179,13 +199,20 @@ cparams_dflts = {
     "tuner": Tuner.STUNE,
     "instr_codec": False,
 }
+"""
+Compression params defaults.
+"""
 
 # Defaults for decompression params
 dparams_dflts = {"nthreads": nthreads, "schunk": None, "postfilter": None, "postparams": None}
-
+"""
+Decompression params defaults.
+"""
 # Default for storage
 storage_dflts = {"contiguous": False, "urlpath": None, "cparams": None, "dparams": None, "io": None}
-
+"""
+Storage params defaults. This is meant only for :ref:`SChunk <SChunk>` or :ref:`NDArray <NDArray>`.
+"""
 
 __all__ = [
     "__version__",

@@ -51,6 +51,10 @@ Set / Get compression params
     set_compressor
     get_compressor
     get_blocksize
+    get_cbuffer_sizes
+    cparams_dflts
+    dparams_dflts
+    storage_dflts
 
 Enumerated classes
 ------------------
@@ -61,6 +65,7 @@ Enumerated classes
 
    Codec
    Filter
+   SpecialValue
    SplitMode
    Tuner
 
@@ -72,6 +77,26 @@ Utils
 .. autosummary::
    :toctree: autofiles/top_level/
 
+    compute_chunks_blocks
     get_slice_nchunks
     open
     remove_urlpath
+
+Utility variables
+-----------------
+
+.. currentmodule:: blosc2
+
+.. autosummary::
+   :toctree: autofiles/top_level/
+
+    DEFINED_CODECS_STOP
+    EXTENDED_HEADER_LENGTH
+    MAX_BUFFERSIZE
+    MAX_OVERHEAD
+    MAX_TYPESIZE
+    MIN_HEADER_LENGTH
+    VERSION_DATE
+    VERSION_STRING
+    __version__
+    blosclib_version
