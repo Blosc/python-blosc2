@@ -94,7 +94,36 @@ from .blosc2_ext import (
 )
 DEFINED_CODECS_STOP = DEFINED_CODECS_STOP
 """
-Defined."""
+Maximum possible Blosc2-defined codec id."""
+
+EXTENDED_HEADER_LENGTH = EXTENDED_HEADER_LENGTH
+"""
+Blosc2 extended header length in bytes."""
+
+MAX_BUFFERSIZE = MAX_BUFFERSIZE
+"""
+Maximum buffer size in bytes for a Blosc2 chunk."""
+
+MAX_OVERHEAD = MAX_OVERHEAD
+"""
+Maximum overhead during compression (in bytes). This is
+equal to :py:obj:`blosc2.EXTENDED_HEADER_LENGTH <EXTENDED_HEADER_LENGTH>`."""
+
+MAX_TYPESIZE = MAX_TYPESIZE
+"""
+Blosc2 maximum type size (in bytes)."""
+
+MIN_HEADER_LENGTH = MIN_HEADER_LENGTH
+"""
+Blosc2 minimum header length (in bytes)."""
+
+VERSION_DATE = VERSION_DATE
+"""
+The C-Blosc2 version's date."""
+
+VERSION_STRING = VERSION_STRING
+"""
+The C-Blosc2 version's string."""
 
 cpu_info = cpuinfo.get_cpu_info()
 
@@ -139,6 +168,10 @@ from .core import (
 from .ndarray import NDArray, asarray, copy, empty, frombuffer, full, get_slice_nchunks, uninit, zeros
 from .schunk import SChunk, open
 from .version import __version__
+__version__ = __version__
+"""
+Python-Blosc2 version.
+"""
 
 # Registry for postfilters
 postfilter_funcs = {}

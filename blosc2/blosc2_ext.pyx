@@ -500,9 +500,6 @@ ctypedef struct filler_udata:
 
 
 MAX_TYPESIZE = BLOSC_MAX_TYPESIZE
-"""
-Max typesize for blosc2
-"""
 MAX_BUFFERSIZE = BLOSC2_MAX_BUFFERSIZE
 MAX_OVERHEAD = BLOSC2_MAX_OVERHEAD
 VERSION_STRING = (<char*>BLOSC2_VERSION_STRING).decode("utf-8")
