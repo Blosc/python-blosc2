@@ -695,7 +695,7 @@ def get_slice_nchunks(schunk, key):
         return blosc2_ext.array_get_slice_nchunks(array, key)
     else:
         if isinstance(key, int):
-            key = (key, key + 1, 1)
+            key = (key, key + 1)
         elif isinstance(key, slice):
             if key.step not in (1, None):
                 raise IndexError("Only step=1 is supported")

@@ -29,6 +29,7 @@ import blosc2
         (True, None, {"blocksize": 200 * 100, "typesize": 4}, 5, -2456, -234),
         (True, "b2frame", {"blocksize": 200 * 100, "typesize": 4}, 4, 2456, -234),
         (False, None, {"blocksize": 100 * 100, "typesize": 4}, 2, -200 * 100 + 234, 40000),
+        (True, None, {"blocksize": 100 * 100, "typesize": 4}, 2, 0, None),
     ],
 )
 def test_schunk_get_slice(contiguous, urlpath, cparams, nchunks, start, stop):
@@ -39,9 +40,14 @@ def test_schunk_get_slice(contiguous, urlpath, cparams, nchunks, start, stop):
         schunk.append_data(chunk)
 
     aux = np.empty(200 * 100 * nchunks, dtype=np.int32)
-    res = aux[start:stop]
-    np.array_equal(np.unique(res), blosc2.get_slice_nchunks(schunk, (start, stop)))
-    # slice variant
-    np.array_equal(np.unique(res), blosc2.get_slice_nchunks(schunk, slice(start, stop)))
+    schunk.get_slice(start, stop, aux)
+    if stop is None and start is not None:
+        res = aux[start]
+        np.array_equal(res, blosc2.get_slice_nchunks(schunk, start))
+    else:
+        res = aux[start:stop]
+        np.array_equal(np.unique(res), blosc2.get_slice_nchunks(schunk, (start, stop)))
+        # slice variant
+        np.array_equal(np.unique(res), blosc2.get_slice_nchunks(schunk, slice(start, stop)))
 
     blosc2.remove_urlpath(urlpath)
