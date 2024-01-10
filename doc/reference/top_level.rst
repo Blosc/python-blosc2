@@ -90,13 +90,17 @@ Utility variables
 .. autosummary::
    :toctree: autofiles/top_level/
 
+    blosclib_version
     DEFINED_CODECS_STOP
     EXTENDED_HEADER_LENGTH
     MAX_BUFFERSIZE
     MAX_OVERHEAD
     MAX_TYPESIZE
     MIN_HEADER_LENGTH
+    prefilter_funcs
+    postfilter_funcs
+    ucodecs_registry
+    ufilters_registry
     VERSION_DATE
     VERSION_STRING
     __version__
-    blosclib_version
