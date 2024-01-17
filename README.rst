@@ -37,12 +37,11 @@ used as a drop-in replacement.  However, there are a `few exceptions
 for a full compatibility.
 <https://github.com/Blosc/python-blosc2/blob/main/RELEASE_NOTES.md#changes-from-python-blosc-to-python-blosc2>`_
 
-In addition, Python-Blosc2 aims to leverage the new C-Blosc2 API so as to support
-super-chunks, multi-dimensional arrays
+In addition, Python-Blosc2 aims to leverage the full C-Blosc2 functionality to support
+super-chunks (`SChunk <https://www.blosc.org/python-blosc2/reference/schunk_api.html>`_),
+multi-dimensional arrays
 (`NDArray <https://www.blosc.org/python-blosc2/reference/ndarray_api.html>`_),
-serialization and other bells and whistles introduced in C-Blosc2.  Although
-this is always and endless process, we have already catch up with most of the
-C-Blosc2 API capabilities.
+metadata, serialization and other bells and whistles introduced in C-Blosc2.
 
 **Note:** Python-Blosc2 is meant to be backward compatible with Python-Blosc data.
 That means that it can read data generated with Python-Blosc, but the opposite
@@ -51,7 +50,8 @@ is not true (i.e. there is no *forward* compatibility).
 SChunk: a 64-bit compressed store
 =================================
 
-`SChunk` is the simple data container that handles setting, expanding and getting
+A `SChunk <https://www.blosc.org/python-blosc2/reference/schunk_api.html>`_ is a simple data
+container that handles setting, expanding and getting
 data and metadata. Contrarily to chunks, a super-chunk can update and resize the data
 that it contains, supports user metadata, and it does not have the 2 GB storage limitation.
 
