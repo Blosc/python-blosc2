@@ -16,4 +16,6 @@
       ~Filter.TRUNC_PREC
       ~Filter.NDCELL
       ~Filter.NDMEAN
+      ~Filter.BYTEDELTA
+      ~Filter.INT_TRUNC
    
