@@ -70,6 +70,37 @@ def test_compress2_numpy(obj, cparams, dparams, gil):
 
 @pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
+    "obj, cparams, dparams",
+    [
+        (
+            np.random.randint(0, 10, 10, dtype=np.int64),
+            {"codec": blosc2.Codec.LZ4, "clevel": 6, "filters_meta": [-50]},
+            {}
+        ),
+        (
+            np.arange(10, dtype="int32"),
+            {"filters_meta": [-20]},
+            {"nthreads": 4},
+        ),
+        (np.arange(45, dtype=np.int16), {"codec": blosc2.Codec.LZ4HC, "filters_meta": [-10]}, {}),
+        (np.arange(50, dtype=np.int8), {"filters_meta": [-5]}, blosc2.dparams_dflts),
+    ],
+)
+def test_compress2_int_trunc(obj, cparams, dparams, gil):
+    blosc2.set_releasegil(gil)
+    cparams["filters"] = [blosc2.Filter.INT_TRUNC]
+    cparams["typesize"] = obj.dtype.itemsize
+    c = blosc2.compress2(obj, **cparams)
+
+    dest = np.empty(obj.shape, obj.dtype)
+    blosc2.decompress2(c, dst=dest, **dparams)
+
+    for i in range(obj.shape[0]):
+        assert (obj[i] - dest[i]) <= (2**((-1)*cparams["filters_meta"][0]))
+
+
+@pytest.mark.parametrize("gil", [True, False])
+@pytest.mark.parametrize(
     "nbytes, cparams, dparams",
     [
         (7, {"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 1}, {}),
