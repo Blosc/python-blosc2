@@ -1,11 +1,20 @@
 # Release notes
 
-## Changes from 2.4.0 to 2.4.1
+## Changes from 2.4.0 to 2.5.0
+
+* Updated to latest C-Blosc2 2.13.0.
+
+* Added the filter `INT_TRUNC` for integer truncation.
+
+* Added some optimizations for zstd.
+
+* Now the grok library is initialized when loading the 
+  plugin from C-Blosc2.
+
+* Improved doc.
 
 * Support for slices in ``blosc2.get_slice_nchunks()`` when using SChunk
   objects.
-
-* Added a new `Schunk.__len__()` method.
 
 ## Changes from 2.3.2 to 2.4.0
 

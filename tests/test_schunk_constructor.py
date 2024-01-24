@@ -32,6 +32,7 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, chunksize):
     bytes_obj = data.tobytes()
     schunk = blosc2.SChunk(chunksize=chunksize, data=data, **storage)
     # Test properties
+    assert len(schunk) == num_elem
     assert chunksize == schunk.chunksize
     assert chunksize / 4 == schunk.chunkshape
     assert cparams.get("blocksize", 0) == schunk.blocksize

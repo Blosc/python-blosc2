@@ -940,6 +940,9 @@ cdef class SChunk:
         return self.schunk.chunksize // self.schunk.typesize
 
     def __len__(self):
+        """
+        Return the number of items in the SChunk.
+        """
         return self.schunk.nbytes // self.schunk.typesize
 
     @property

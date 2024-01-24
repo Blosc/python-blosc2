@@ -239,10 +239,6 @@ class SChunk(blosc2_ext.SChunk):
         self._cparams = super(SChunk, self).get_cparams()
         self._dparams = super(SChunk, self).get_dparams()
 
-    def __len__(self):
-        """Return the number of items in the SChunk."""
-        return self.nbytes // self.typesize
-
     @property
     def cparams(self):
         """
