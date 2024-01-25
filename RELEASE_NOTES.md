@@ -1,5 +1,11 @@
 # Release notes
 
+## Changes from 2.5.0 to 2.5.1
+
+* Updated to latest C-Blosc2 2.13.1.
+
+* Fixed bug in `b2nd.h`.
+
 ## Changes from 2.4.0 to 2.5.0
 
 * Updated to latest C-Blosc2 2.13.0.

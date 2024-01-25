@@ -16,7 +16,7 @@ Preliminaries
     git commit -m "Update C-Blosc2 sources to <desired tag>" blosc2/c-blosc2
     git push
 
-* Make sure that the current master branch is passing the tests in continuous integration.
+* Make sure that the current main branch is passing the tests in continuous integration.
 
 * Build the package and make sure that::
 

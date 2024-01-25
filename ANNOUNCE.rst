@@ -1,12 +1,11 @@
-Announcing Python-Blosc2 2.5.0
+Announcing Python-Blosc2 2.5.1
 ==============================
 
+This is a patch release for fixing a bug.
 The new minor release 2.5 adds the `INT_TRUNC` filter for integer
 truncation, some optimizations for the zstd codec and the support for slices
 in ``blosc2.get_slice_nchunks()`` when using SChunk objects.
-Furthermore, the grok library will now be initialized when
-loading the plugin (so no need to import the package from Python to do so),
-the doc was revised and improved, and C-Blosc2
+Furthermore, the doc was revised and improved, and C-Blosc2
 is updated to the latest stable version.
 
 For more info, you can have a look at the release notes in:
