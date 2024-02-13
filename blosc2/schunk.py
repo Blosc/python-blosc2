@@ -954,6 +954,12 @@ def open(urlpath, mode="a", offset=0, **kwargs):
             A dictionary with the decompression parameters, which are the same that can
             be used in the :func:`~blosc2.decompress2` function.
 
+    Notes
+    -----
+    This is just a 'logical' open, so no there is not a `close()` counterpart because
+    currently there is no need for it.  However, you should keep a reference to the
+    opened `urlpath` to ensure safe access to data/metadata.
+
     Returns
     -------
     out: :ref:`SChunk <SChunk>` or :ref:`NDArray <NDArray>`
