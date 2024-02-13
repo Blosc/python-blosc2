@@ -957,8 +957,7 @@ def open(urlpath, mode="a", offset=0, **kwargs):
     Notes
     -----
     This is just a 'logical' open, so no there is not a `close()` counterpart because
-    currently there is no need for it.  However, you should keep a reference to the
-    opened `urlpath` to ensure safe access to data/metadata.
+    currently there is no need for it.
 
     Returns
     -------
