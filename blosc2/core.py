@@ -531,13 +531,21 @@ def save_array(arr, urlpath, chunksize=None, **kwargs):
     return pack_tensor(arr, chunksize=chunksize, urlpath=urlpath, **kwargs)
 
 
-def load_array(urlpath):
+def load_array(urlpath, **kwargs):
     """Load a serialized NumPy array in urlpath.
 
     Parameters
     ----------
     urlpath : str
         The file where the array is to be loaded.
+    
+    Other parameters
+    ----------------
+    kwargs: dict, optional
+        Keyword arguments supported:
+        dparams: dict
+            A dictionary with the decompression parameters, which are the same that can
+            be used in the :func:`~blosc2.decompress2` function.
 
     Returns
     -------
@@ -570,7 +578,7 @@ def load_array(urlpath):
     :func:`~blosc2.pack_tensor`
     """
     # May we raise a DeprecationWarning here in the future?
-    return load_tensor(urlpath)
+    return load_tensor(urlpath, **kwargs)
 
 
 def pack_tensor(tensor, chunksize=None, **kwargs):
@@ -747,13 +755,21 @@ def save_tensor(tensor, urlpath, chunksize=None, **kwargs):
     return pack_tensor(tensor, chunksize=chunksize, urlpath=urlpath, **kwargs)
 
 
-def load_tensor(urlpath):
+def load_tensor(urlpath, **kwargs):
     """Load a serialized PyTorch / TensorFlow  tensor or NumPy array in `urlpath`.
 
     Parameters
     ----------
     urlpath : str
         The file where the tensor / array is to be loaded.
+    
+    Other parameters
+    ----------------
+    kwargs: dict, optional
+        Keyword arguments supported:
+        dparams: dict
+            A dictionary with the decompression parameters, which are the same that can
+            be used in the :func:`~blosc2.decompress2` function.
 
     Returns
     -------
@@ -784,7 +800,7 @@ def load_tensor(urlpath):
     :func:`~blosc2.save_tensor`
     :func:`~blosc2.pack_tensor`
     """
-    schunk = blosc2.open(urlpath)
+    schunk = blosc2.open(urlpath, **kwargs)
     return _unpack_tensor(schunk)
 
 
