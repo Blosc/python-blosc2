@@ -131,7 +131,7 @@ The C-Blosc2 version's string."""
 cpu_info = cpuinfo.get_cpu_info()
 
 # Public API for container module
-from .core import (
+from .core import (  # noqa: I001
     clib_info,
     compress,
     compress2,
@@ -168,8 +168,8 @@ from .core import (
     unpack_array2,
     unpack_tensor,
 )
-from .lazy_expr import LazyExpr
-from .ndarray import (
+
+from .ndarray import (  # noqa: I001
     NDArray,
     asarray,
     copy,
@@ -184,6 +184,9 @@ from .ndarray import (
     uninit,
     zeros,
 )
+
+from .lazy_expr import LazyExpr
+
 from .schunk import SChunk, open
 from .version import __version__
 

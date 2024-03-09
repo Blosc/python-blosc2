@@ -9,7 +9,6 @@ import numexpr
 import numpy as np
 
 import blosc2
-from blosc2 import NDArray
 
 
 def fuse_operands(operands1, operands2):
@@ -197,7 +196,7 @@ class LazyExpr:
     def __invert__(self):
         return self.update_expr(new_op=(self, "not", None))
 
-    def evaluate(self, **kwargs) -> NDArray:
+    def evaluate(self, **kwargs) -> blosc2.NDArray:
         """Evaluate the lazy expression in self.
 
         Parameters
@@ -236,7 +235,7 @@ def validate_inputs(inputs: dict) -> tuple:
     return first_input.shape, first_input.dtype
 
 
-def evaluate(expression: str, operands: dict, **kwargs) -> NDArray:
+def evaluate(expression: str, operands: dict, **kwargs) -> blosc2.NDArray:
     # Convert NDArray objects to numpy arrays
     numpy_operands = {key: value[:] for key, value in operands.items()}
     # Evaluate the expression using numexpr
@@ -245,7 +244,7 @@ def evaluate(expression: str, operands: dict, **kwargs) -> NDArray:
     return blosc2.asarray(result, **kwargs)
 
 
-def evaluate_chunked(expression: str, operands: dict, shape, dtype, **kwargs) -> NDArray:
+def evaluate_chunked(expression: str, operands: dict, shape, dtype, **kwargs) -> blosc2.NDArray:
     out = blosc2.empty(shape, dtype=dtype, **kwargs)
     for info in operands["o0"].iterchunks_info():
         # Iterate over the operands and get the chunks
