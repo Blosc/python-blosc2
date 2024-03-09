@@ -64,6 +64,7 @@ class SpecialValue(Enum):
     """
     Possible special values in a chunk.
     """
+
     NOT_SPECIAL = 0
     ZERO = 1
     NAN = 2
@@ -93,6 +94,7 @@ from .blosc2_ext import (
     VERSION_DATE,
     VERSION_STRING,
 )
+
 DEFINED_CODECS_STOP = DEFINED_CODECS_STOP
 """
 Maximum possible Blosc2-defined codec id."""
@@ -166,9 +168,25 @@ from .core import (
     unpack_array2,
     unpack_tensor,
 )
-from .ndarray import NDArray, asarray, copy, empty, frombuffer, full, get_slice_nchunks, uninit, zeros
+from .lazy_expr import LazyExpr
+from .ndarray import (
+    NDArray,
+    asarray,
+    copy,
+    cos,
+    empty,
+    frombuffer,
+    full,
+    get_slice_nchunks,
+    sin,
+    sqrt,
+    tan,
+    uninit,
+    zeros,
+)
 from .schunk import SChunk, open
 from .version import __version__
+
 __version__ = __version__
 """
 Python-Blosc2 version.
@@ -247,6 +265,8 @@ storage_dflts = {"contiguous": False, "urlpath": None, "cparams": None, "dparams
 """
 Storage params defaults. This is meant only for :ref:`SChunk <SChunk>` or :ref:`NDArray <NDArray>`.
 """
+
+_disable_overloaded_equal = False
 
 __all__ = [
     "__version__",
