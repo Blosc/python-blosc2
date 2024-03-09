@@ -1,3 +1,11 @@
+#######################################################################
+# Copyright (c) 2019-present, Blosc Development Team <blosc@blosc.org>
+# All rights reserved.
+#
+# This source code is licensed under a BSD-style license (found in the
+# LICENSE file in the root directory of this source tree)
+#######################################################################
+
 from __future__ import annotations
 
 import math
@@ -7,6 +15,7 @@ from typing import Sequence
 import ndindex
 import numpy as np
 
+import blosc2
 from blosc2 import SpecialValue, blosc2_ext, compute_chunks_blocks
 
 from .info import InfoReporter
@@ -368,6 +377,169 @@ class NDArray(blosc2_ext.NDArray):
         (23, 11)
         """
         super().squeeze()
+
+    def _check_allowed_dtypes(self, value: bool | int | float | NDArray, dtype_category: str, op: str):
+        if not isinstance(value, (int, float, bool, blosc2.LazyExpr, NDArray)):
+            raise RuntimeError("Expected bool, int, float, LazyExpr or NDArray instance")
+
+    def __add__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__add__")
+        return blosc2.LazyExpr(new_op=(self, "+", value))
+
+    def __radd__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__radd__")
+        return blosc2.LazyExpr(new_op=(value, "+", self))
+
+    def __iadd__(self, value: int | float | NDArray, /):
+        raise NotImplementedError("self.__iadd__ is not supported yet")
+
+    def __sub__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__sub__")
+        return blosc2.LazyExpr(new_op=(self, "-", value))
+
+    def __rsub__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__rsub__")
+        return blosc2.LazyExpr(new_op=(value, "-", self))
+
+    def __isub__(self, value: int | float | NDArray, /):
+        raise NotImplementedError("self.__isub__ is not supported yet")
+
+    def __array_namespace__(self, *, api_version: str | None = None):
+        if api_version is not None and not api_version.startswith("2021."):
+            raise ValueError(f"Unrecognized array API version: {api_version!r}")
+        return blosc2
+
+    def __mul__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__mul__")
+        return blosc2.LazyExpr(new_op=(self, "*", value))
+
+    def __rmul__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__rmul__")
+        return blosc2.LazyExpr(new_op=(value, "*", self))
+
+    def __imul__(self, value: int | float | NDArray, /):
+        raise NotImplementedError("self.__imul__ is not supported yet")
+
+    def __truediv__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__truediv__")
+        return blosc2.LazyExpr(new_op=(self, "/", value))
+
+    def __rtruediv__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__rtruediv__")
+        return blosc2.LazyExpr(new_op=(value, "/", self))
+
+    def __itruediv__(self, value: int | float | NDArray, /):
+        raise NotImplementedError("self.__itruediv__ is not supported yet")
+
+    def __lt__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__lt__")
+        return blosc2.LazyExpr(new_op=(self, "<", value))
+
+    def __le__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__le__")
+        return blosc2.LazyExpr(new_op=(self, "<=", value))
+
+    def __gt__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__gt__")
+        return blosc2.LazyExpr(new_op=(self, ">", value))
+
+    def __ge__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__ge__")
+        return blosc2.LazyExpr(new_op=(self, ">=", value))
+
+    def __eq__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "all", "__eq__")
+        if blosc2._disable_overloaded_equal:
+            return self is value
+        return blosc2.LazyExpr(new_op=(self, "==", value))
+
+    def __ne__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "all", "__ne__")
+        return blosc2.LazyExpr(new_op=(self, "!=", value))
+
+
+def sin(ndarr: NDArray, /):
+    """
+    Trigonometric sine, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+        Angle, in radians.
+
+    Returns
+    -------
+    out: :ref:`blosc2.Expr`
+        A lazy expression that must be evaluated via `out.evaluate()`.
+
+    References
+    ----------
+    `np.sin <https://numpy.org/doc/stable/reference/generated/numpy.sin.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "sin", None))
+
+
+def cos(ndarr: NDArray, /):
+    """
+    Trigonometric cosine, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+        Angle, in radians.
+
+    Returns
+    -------
+    out: :ref:`blosc2.Expr`
+        A lazy expression that must be evaluated via `out.evaluate()`.
+
+    References
+    ----------
+    `np.cos <https://numpy.org/doc/stable/reference/generated/numpy.cos.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "cos", None))
+
+
+def tan(ndarr: NDArray, /):
+    """
+    Trigonometric tangent, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+            Angle, in radians.
+
+    Returns
+    -------
+    out: :ref:`blosc2.Expr`
+            A lazy expression that must be evaluated via `out.evaluate()`.
+
+    References
+    ----------
+    `np.tan <https://numpy.org/doc/stable/reference/generated/numpy.tan.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "tan", None))
+
+
+def sqrt(ndarr: NDArray, /):
+    """
+    Return the non-negative square-root of an array, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+            The input array.
+
+    Returns
+    -------
+    out: :ref:`blosc2.Expr`
+            A lazy expression that must be evaluated via `out.evaluate()`.
+
+    References
+    ----------
+    `np.sqrt <https://numpy.org/doc/stable/reference/generated/numpy.sqrt.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "sqrt", None))
 
 
 def _check_shape(shape):

@@ -168,7 +168,22 @@ from .core import (
     unpack_array2,
     unpack_tensor,
 )
-from .ndarray import NDArray, asarray, copy, empty, frombuffer, full, get_slice_nchunks, uninit, zeros
+from .lazy_expr import LazyExpr
+from .ndarray import (
+    NDArray,
+    asarray,
+    copy,
+    cos,
+    empty,
+    frombuffer,
+    full,
+    get_slice_nchunks,
+    sin,
+    sqrt,
+    tan,
+    uninit,
+    zeros,
+)
 from .schunk import SChunk, open
 from .version import __version__
 
@@ -250,6 +265,8 @@ storage_dflts = {"contiguous": False, "urlpath": None, "cparams": None, "dparams
 """
 Storage params defaults. This is meant only for :ref:`SChunk <SChunk>` or :ref:`NDArray <NDArray>`.
 """
+
+_disable_overloaded_equal = False
 
 __all__ = [
     "__version__",
