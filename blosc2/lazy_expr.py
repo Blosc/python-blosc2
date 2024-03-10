@@ -5,7 +5,7 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
-import numexpr
+import numexpr as ne
 import numpy as np
 
 import blosc2
@@ -196,12 +196,15 @@ class LazyExpr:
     def __invert__(self):
         return self.update_expr(new_op=(self, "not", None))
 
-    def evaluate(self, **kwargs) -> blosc2.NDArray:
+    def evaluate(self, item=None, **kwargs) -> blosc2.NDArray:
         """Evaluate the lazy expression in self.
 
         Parameters
         ----------
-         kwargs: dict, optional
+        item: slice, list of slices, optional
+            If not None, only the chunks that intersect with the slices
+            in items will be evaluated.
+        kwargs: dict, optional
             Keyword arguments that are supported by the :func:`empty` constructor.
 
         Returns
@@ -209,13 +212,21 @@ class LazyExpr:
         :ref:`NDArray`
             The output array.
         """
-        shape, dtype = validate_inputs(self.operands)
+        shape, dtype, equal_chunks = validate_inputs(self.operands)
         nelem = np.prod(shape)
+        if item is not None:
+            return evaluate_slices(self.expression, self.operands, shape, dtype, _slice=item, **kwargs)
         if nelem <= 10_000:  # somewhat arbitrary threshold
-            out = evaluate(self.expression, self.operands, **kwargs)
+            out = evaluate_incache(self.expression, self.operands, **kwargs)
+        elif equal_chunks:
+            out = evaluate_chunks(self.expression, self.operands, shape, dtype, **kwargs)
         else:
-            out = evaluate_chunked(self.expression, self.operands, shape, dtype, **kwargs)
+            out = evaluate_slices(self.expression, self.operands, shape, dtype, **kwargs)
         return out
+
+    def __getitem__(self, item):
+        ndarray = self.evaluate(item=item)
+        return ndarray[item] if item is not None else ndarray[:]
 
     def __str__(self):
         expression = f"{self.expression}"
@@ -223,28 +234,76 @@ class LazyExpr:
 
 
 def validate_inputs(inputs: dict) -> tuple:
+    """Validate the inputs for the expression."""
     if len(inputs) == 0:
         raise ValueError(
             "You need to pass at least one array.  Use blosc2.empty() if values are not really needed."
         )
     inputs = list(inputs.values())
     first_input = inputs[0]
+    equal_chunks = True
     for input_ in inputs[1:]:
         if first_input.shape != input_.shape:
             raise ValueError("Inputs should have the same shape")
-    return first_input.shape, first_input.dtype
+        if first_input.chunks != input_.chunks:
+            equal_chunks = False
+    return first_input.shape, first_input.dtype, equal_chunks
 
 
-def evaluate(expression: str, operands: dict, **kwargs) -> blosc2.NDArray:
+def evaluate_incache(expression: str, operands: dict, **kwargs) -> blosc2.NDArray:
+    """Evaluate the expression in chunks of operands.
+
+    This can be used when operands fit in CPU cache.
+
+    Parameters
+    ----------
+    expression: str
+        The expression to evaluate.
+    operands: dict
+        A dictionary with the operands.
+    shape: tuple
+        The shape of the output array.
+    dtype: np.dtype
+        The dtype of the output array.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    :ref:`NDArray`
+        The output array.
+    """
     # Convert NDArray objects to numpy arrays
     numpy_operands = {key: value[:] for key, value in operands.items()}
     # Evaluate the expression using numexpr
-    result = numexpr.evaluate(expression, numpy_operands)
+    result = ne.evaluate(expression, numpy_operands)
     # Convert the resulting numpy array back to an NDArray
     return blosc2.asarray(result, **kwargs)
 
 
-def evaluate_chunked(expression: str, operands: dict, shape, dtype, **kwargs) -> blosc2.NDArray:
+def evaluate_chunks(expression: str, operands: dict, shape, dtype, **kwargs) -> blosc2.NDArray:
+    """Evaluate the expression in chunks of operands.
+
+    This can be used when the expression is too big to fit in CPU cache.
+
+    Parameters
+    ----------
+    expression: str
+        The expression to evaluate.
+    operands: dict
+        A dictionary with the operands.
+    shape: tuple
+        The shape of the output array.
+    dtype: np.dtype
+        The dtype of the output array.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    :ref:`NDArray`
+        The output array.
+    """
     out = blosc2.empty(shape, dtype=dtype, **kwargs)
     for info in operands["o0"].iterchunks_info():
         # Iterate over the operands and get the chunks
@@ -254,9 +313,100 @@ def evaluate_chunked(expression: str, operands: dict, shape, dtype, **kwargs) ->
             npbuff = np.frombuffer(buff, dtype=value.dtype)
             chunk_operands[key] = npbuff
         # Evaluate the expression using chunks of operands
-        result = numexpr.evaluate(expression, chunk_operands)
+        result = ne.evaluate(expression, chunk_operands)
         out.schunk.update_data(info.nchunk, result, copy=False)
     return out
+
+
+def evaluate_slices(
+    expression: str, operands: dict, shape: tuple | list, dtype: np.dtype, _slice=None, **kwargs
+) -> blosc2.NDArray:
+    """Evaluate the expression in chunks of operands.
+
+    This can be used when the operands in the expression have different chunk shapes.
+    Also, it can be used when only a slice of the output array is needed.
+
+    Parameters
+    ----------
+    expression: str
+        The expression to evaluate.
+    operands: dict
+        A dictionary with the operands.
+    shape: tuple
+        The shape of the output array.
+    dtype: np.dtype
+        The dtype of the output array.
+    _slice: slice, list of slices, optional
+        If not None, only the chunks that intersect with this slice
+        will be evaluated.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    :ref:`NDArray`
+        The output array.
+    """
+    out = blosc2.empty(shape, dtype=dtype, **kwargs)
+    operand = operands["o0"]
+    chunks = operand.chunks
+    for info in operand.iterchunks_info():
+        # Iterate over the operands and get the chunks
+        chunk_operands = {}
+        coords = info.coords
+        slice_ = [slice(c * s, (c + 1) * s) for c, s in zip(coords, chunks)]
+        # Check whether current slice_ intersects with _slice
+        if _slice is not None:
+            intersects = do_slices_intersect(_slice, slice_)
+            if not intersects:
+                continue
+        if len(slice_) == 1:
+            slice_ = slice_[0]
+        # Get the slice of each operand
+        for key, value in operands.items():
+            chunk_operands[key] = value[slice_]
+        # Evaluate the expression using chunks of operands
+        result = ne.evaluate(expression, chunk_operands)
+        out[slice_] = result
+    return out
+
+
+def do_slices_intersect(slice1, slice2):
+    """
+    Check whether two slices intersect.
+
+    Parameters
+    ----------
+    slice1: slice, list of slices
+        The first slice
+    slice2: slice, list of slices
+        The second slice
+
+    Returns
+    -------
+    bool
+        Whether the slices intersect
+    """
+    # Ensure the slices are in list format
+    if not isinstance(slice1, list):
+        slice1 = [slice1]
+    if not isinstance(slice2, list):
+        slice2 = [slice2]
+
+    # Pad the shorter slice list with full slices (:)
+    while len(slice1) < len(slice2):
+        slice1.append(slice(None))
+    while len(slice2) < len(slice1):
+        slice2.append(slice(None))
+
+    # Check each dimension for intersection
+    for s1, s2 in zip(slice1, slice2):
+        if s1.start is not None and s2.stop is not None and s1.start >= s2.stop:
+            return False
+        if s1.stop is not None and s2.start is not None and s1.stop <= s2.start:
+            return False
+
+    return True
 
 
 if __name__ == "__main__":
@@ -271,16 +421,28 @@ if __name__ == "__main__":
     a3 = blosc2.asarray(na3)
     na4 = np.copy(na1)
     a4 = blosc2.asarray(na4)
+    # Interesting slice
+    # sl = None
+    sl = slice(0, 10_000)
     # Create a simple lazy expression
     expr = a1 + a2
     print(expr)
     t0 = time()
-    res = expr.evaluate()
-    print(f"Elapsed time: {time() - t0:.3f} s")
-    t0 = time()
     nres = na1 + na2
-    print(f"Elapsed time (numpy): {time() - t0:.3f} s")
-    np.testing.assert_allclose(res[:], nres)
+    print(f"Elapsed time (numpy, [:]): {time() - t0:.3f} s")
+    t0 = time()
+    nres = ne.evaluate("na1 + na2")
+    print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
+    nres = nres[sl] if sl is not None else nres
+    t0 = time()
+    res = expr.evaluate(item=sl)
+    print(f"Elapsed time (evaluate): {time() - t0:.3f} s")
+    res = res[sl] if sl is not None else res[:]
+    t0 = time()
+    res2 = expr[sl]
+    print(f"Elapsed time (getitem): {time() - t0:.3f} s")
+    np.testing.assert_allclose(res, nres)
+    np.testing.assert_allclose(res2, nres)
 
     # Complex lazy expression
     expr = blosc2.tan(a1) * (blosc2.sin(a2) * blosc2.sin(a2) + blosc2.cos(a3)) + (blosc2.sqrt(a4) * 2)
@@ -288,11 +450,20 @@ if __name__ == "__main__":
     expr += 2
     print(expr)
     t0 = time()
-    res = expr.evaluate()
-    print(f"Elapsed time: {time() - t0:.3f} s")
-    t0 = time()
     nres = np.tan(na1) * (np.sin(na2) * np.sin(na2) + np.cos(na3)) + (np.sqrt(na4) * 2) + 2
-    print(f"Elapsed time (numpy): {time() - t0:.3f} s")
     # nres = np.sin(na1[:]) + 2 * na1[:] + 1 + 2
-    np.testing.assert_allclose(res[:], nres)
+    print(f"Elapsed time (numpy, [:]): {time() - t0:.3f} s")
+    t0 = time()
+    nres = ne.evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
+    print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
+    nres = nres[sl] if sl is not None else nres
+    t0 = time()
+    res = expr.evaluate(sl)
+    print(f"Elapsed time (evaluate): {time() - t0:.3f} s")
+    res = res[sl] if sl is not None else res[:]
+    t0 = time()
+    res2 = expr[sl]
+    print(f"Elapsed time (getitem): {time() - t0:.3f} s")
+    np.testing.assert_allclose(res, nres)
+    np.testing.assert_allclose(res2, nres)
     print("Everything is working fine")
