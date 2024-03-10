@@ -205,7 +205,7 @@ from .ndarray import (  # noqa: I001
     abs,
 )
 
-from .lazy_expr import LazyExpr
+from .lazyexpr import LazyExpr
 
 from .schunk import SChunk, open
 from .version import __version__
