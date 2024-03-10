@@ -538,7 +538,7 @@ def load_array(urlpath, **kwargs):
     ----------
     urlpath : str
         The file where the array is to be loaded.
-    
+
     Other parameters
     ----------------
     kwargs: dict, optional
@@ -762,7 +762,7 @@ def load_tensor(urlpath, **kwargs):
     ----------
     urlpath : str
         The file where the tensor / array is to be loaded.
-    
+
     Other parameters
     ----------------
     kwargs: dict, optional
@@ -1178,7 +1178,9 @@ def compute_partition(nitems, parts, maxs, blocks=False):
     return parts
 
 
-def compute_chunks_blocks(shape, chunks=None, blocks=None, dtype=np.uint8, **kwargs):
+def compute_chunks_blocks(
+    shape, chunks: tuple | list | None = None, blocks: tuple | list | None = None, dtype=np.uint8, **kwargs
+):
     """
     Compute educated guesses for chunks and blocks of a NDArray.
 

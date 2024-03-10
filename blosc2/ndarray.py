@@ -383,23 +383,25 @@ class NDArray(blosc2_ext.NDArray):
         self._check_allowed_dtypes(value, "numeric", "__add__")
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
+    def __iadd__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__iadd__")
+        return blosc2.LazyExpr(new_op=(self, "+", value))
+
     def __radd__(self, value: int | float | NDArray, /):
         self._check_allowed_dtypes(value, "numeric", "__radd__")
         return blosc2.LazyExpr(new_op=(value, "+", self))
-
-    def __iadd__(self, value: int | float | NDArray, /):
-        raise NotImplementedError("self.__iadd__ is not supported yet")
 
     def __sub__(self, value: int | float | NDArray, /):
         self._check_allowed_dtypes(value, "numeric", "__sub__")
         return blosc2.LazyExpr(new_op=(self, "-", value))
 
+    def __isub__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__isub__")
+        return blosc2.LazyExpr(new_op=(self, "-", value))
+
     def __rsub__(self, value: int | float | NDArray, /):
         self._check_allowed_dtypes(value, "numeric", "__rsub__")
         return blosc2.LazyExpr(new_op=(value, "-", self))
-
-    def __isub__(self, value: int | float | NDArray, /):
-        raise NotImplementedError("self.__isub__ is not supported yet")
 
     def __array_namespace__(self, *, api_version: str | None = None):
         if api_version is not None and not api_version.startswith("2021."):
@@ -410,23 +412,25 @@ class NDArray(blosc2_ext.NDArray):
         self._check_allowed_dtypes(value, "numeric", "__mul__")
         return blosc2.LazyExpr(new_op=(self, "*", value))
 
+    def __imul__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__imul__")
+        return blosc2.LazyExpr(new_op=(self, "*", value))
+
     def __rmul__(self, value: int | float | NDArray, /):
         self._check_allowed_dtypes(value, "numeric", "__rmul__")
         return blosc2.LazyExpr(new_op=(value, "*", self))
-
-    def __imul__(self, value: int | float | NDArray, /):
-        raise NotImplementedError("self.__imul__ is not supported yet")
 
     def __truediv__(self, value: int | float | NDArray, /):
         self._check_allowed_dtypes(value, "numeric", "__truediv__")
         return blosc2.LazyExpr(new_op=(self, "/", value))
 
+    def __itruediv__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__itruediv__")
+        return blosc2.LazyExpr(new_op=(self, "/", value))
+
     def __rtruediv__(self, value: int | float | NDArray, /):
         self._check_allowed_dtypes(value, "numeric", "__rtruediv__")
         return blosc2.LazyExpr(new_op=(value, "/", self))
-
-    def __itruediv__(self, value: int | float | NDArray, /):
-        raise NotImplementedError("self.__itruediv__ is not supported yet")
 
     def __lt__(self, value: int | float | NDArray, /):
         self._check_allowed_dtypes(value, "numeric", "__lt__")
@@ -466,8 +470,8 @@ def sin(ndarr: NDArray, /):
 
     Returns
     -------
-    out: :ref:`blosc2.Expr`
-        A lazy expression that must be evaluated via `out.evaluate()`.
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
 
     References
     ----------
@@ -487,8 +491,8 @@ def cos(ndarr: NDArray, /):
 
     Returns
     -------
-    out: :ref:`blosc2.Expr`
-        A lazy expression that must be evaluated via `out.evaluate()`.
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
 
     References
     ----------
@@ -508,8 +512,8 @@ def tan(ndarr: NDArray, /):
 
     Returns
     -------
-    out: :ref:`blosc2.Expr`
-            A lazy expression that must be evaluated via `out.evaluate()`.
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
 
     References
     ----------
@@ -529,14 +533,352 @@ def sqrt(ndarr: NDArray, /):
 
     Returns
     -------
-    out: :ref:`blosc2.Expr`
-            A lazy expression that must be evaluated via `out.evaluate()`.
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
 
     References
     ----------
     `np.sqrt <https://numpy.org/doc/stable/reference/generated/numpy.sqrt.html>`_
     """
     return blosc2.LazyExpr(new_op=(ndarr, "sqrt", None))
+
+
+def sinh(ndarr: NDArray, /):
+    """
+    Hyperbolic sine, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+            The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.sinh <https://numpy.org/doc/stable/reference/generated/numpy.sinh.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "sinh", None))
+
+
+def cosh(ndarr: NDArray, /):
+    """
+    Hyperbolic cosine, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+            The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.cosh <https://numpy.org/doc/stable/reference/generated/numpy.cosh.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "cosh", None))
+
+
+def tanh(ndarr: NDArray, /):
+    """
+    Hyperbolic tangent, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+            The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.tanh <https://numpy.org/doc/stable/reference/generated/numpy.tanh.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "tanh", None))
+
+
+def arcsin(ndarr: NDArray, /):
+    """
+    Inverse sine, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+            The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.arcsin <https://numpy.org/doc/stable/reference/generated/numpy.arcsin.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "arcsin", None))
+
+
+def arccos(ndarr: NDArray, /):
+    """
+    Trigonometric inverse cosine, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+            The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.arccos <https://numpy.org/doc/stable/reference/generated/numpy.arccos.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "arccos", None))
+
+
+def arctan(ndarr: NDArray, /):
+    """
+    Trigonometric inverse tangent, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+            The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.arctan <https://numpy.org/doc/stable/reference/generated/numpy.arctan.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "arctan", None))
+
+
+def arctan2(ndarr1: NDArray, ndarr2: NDArray, /):
+    """
+    Element-wise arc tangent of ``ndarr1 / ndarr2`` choosing the quadrant correctly.
+
+    Parameters
+    ----------
+    ndarr1: :ref:`NDArray`
+            The input array.
+    ndarr2: :ref:`NDArray`
+            The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.arctan2 <https://numpy.org/doc/stable/reference/generated/numpy.arctan2.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr1, "arctan2", ndarr2))
+
+
+def arcsinh(ndarr: NDArray, /):
+    """
+    Inverse hyperbolic sine, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+            The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.arcsinh <https://numpy.org/doc/stable/reference/generated/numpy.arcsinh.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "arcsinh", None))
+
+
+def arccosh(ndarr: NDArray, /):
+    """
+    Inverse hyperbolic cosine, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.arccosh <https://numpy.org/doc/stable/reference/generated/numpy.arccosh.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "arccosh", None))
+
+
+def arctanh(ndarr: NDArray, /):
+    """
+    Inverse hyperbolic tangent, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.arctanh <https://numpy.org/doc/stable/reference/generated/numpy.arctanh.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "arctanh", None))
+
+
+def exp(ndarr: NDArray, /):
+    """
+    Calculate the exponential of all elements in the input array.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+            The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.exp <https://numpy.org/doc/stable/reference/generated/numpy.exp.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "exp", None))
+
+
+def expm1(ndarr: NDArray, /):
+    """
+    Calculate ``exp(ndarr) - 1`` for all elements in the array.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+            The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.expm1 <https://numpy.org/doc/stable/reference/generated/numpy.expm1.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "expm1", None))
+
+
+def log(ndarr: NDArray, /):
+    """
+    Natural logarithm, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.log <https://numpy.org/doc/stable/reference/generated/numpy.log.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "log", None))
+
+
+def log10(ndarr: NDArray, /):
+    """
+    Return the base 10 logarithm of the input array, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.log10 <https://numpy.org/doc/stable/reference/generated/numpy.log10.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "log10", None))
+
+
+def log1p(ndarr: NDArray, /):
+    """
+    Return the natural logarithm of one plus the input array, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.log1p <https://numpy.org/doc/stable/reference/generated/numpy.log1p.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "log1p", None))
+
+
+def abs(ndarr: NDArray, /):
+    """
+    Calculate the absolute value element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.abs <https://numpy.org/doc/stable/reference/generated/numpy.abs.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "abs", None))
 
 
 def _check_shape(shape):
