@@ -176,6 +176,8 @@ from .ndarray import (  # noqa: I001
     empty,
     frombuffer,
     full,
+    uninit,
+    zeros,
     get_slice_nchunks,
     sin,
     cos,
@@ -196,8 +198,11 @@ from .ndarray import (  # noqa: I001
     log10,
     log1p,
     sqrt,
-    uninit,
-    zeros,
+    conj,
+    real,
+    imag,
+    contains,
+    abs,
 )
 
 from .lazy_expr import LazyExpr

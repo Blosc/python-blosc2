@@ -863,6 +863,90 @@ def log1p(ndarr: NDArray, /):
     return blosc2.LazyExpr(new_op=(ndarr, "log1p", None))
 
 
+def conj(ndarr: NDArray, /):
+    """
+    Return the complex conjugate, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.conj <https://numpy.org/doc/stable/reference/generated/numpy.conj.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "conj", None))
+
+
+def real(ndarr: NDArray, /):
+    """
+    Return the real part of the complex array, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+            The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+            A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.real <https://numpy.org/doc/stable/reference/generated/numpy.real.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "real", None))
+
+
+def imag(ndarr: NDArray, /):
+    """
+    Return the imaginary part of the complex array, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+
+    References
+    ----------
+    `np.imag <https://numpy.org/doc/stable/reference/generated/numpy.imag.html>`_
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "imag", None))
+
+
+def contains(ndarr: NDArray, value: str | NDArray, /):
+    """
+    Check if the array contains a string value.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray`
+        The input array.
+    value: str or :ref:`NDArray`
+        The value to be checked.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated.
+    """
+    if not isinstance(value, (str, NDArray)):
+        raise ValueError("value should be a string or a NDArray!")
+    return blosc2.LazyExpr(new_op=(ndarr, "contains", value))
+
+
 def abs(ndarr: NDArray, /):
     """
     Calculate the absolute value element-wise.
