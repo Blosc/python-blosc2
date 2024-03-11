@@ -16,9 +16,22 @@ NITEMS = 1_000_000
 
 
 @pytest.fixture(params=[np.float32, np.float64])
-def array_fixture(request):
-    dtype = request.param
-    na1 = np.linspace(0, 10, NITEMS, dtype=dtype)
+def dtype_fixture(request):
+    return request.param
+
+
+# Multimensional arrays still fails
+# @pytest.fixture(params=[(NITEMS,), (NITEMS // 2, 2)])
+@pytest.fixture(params=[(NITEMS,)])
+def shape_fixture(request):
+    return request.param
+
+
+@pytest.fixture
+def array_fixture(dtype_fixture, shape_fixture):
+    dtype = dtype_fixture
+    shape = shape_fixture
+    na1 = np.linspace(0, 10, NITEMS, dtype=dtype).reshape(shape)
     a1 = blosc2.asarray(na1)
     na2 = np.copy(na1)
     a2 = blosc2.asarray(na2)
@@ -75,7 +88,6 @@ def test_complex_getitem_slice(array_fixture):
     np.testing.assert_allclose(res, nres[sl])
 
 
-# TODO: this is failing
 def test_expression_with_constants(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + 2 - a3 * 3.14
