@@ -314,6 +314,9 @@ def evaluate_chunks(expression: str, operands: dict, shape, dtype, **kwargs) -> 
             chunk_operands[key] = npbuff
         # Evaluate the expression using chunks of operands
         result = ne.evaluate(expression, chunk_operands)
+        # Sometimes, some constants make the result to be of a different dtype
+        if result.dtype != out.dtype:
+            result = result.astype(out.dtype)
         out.schunk.update_data(info.nchunk, result, copy=False)
     return out
 
