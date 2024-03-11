@@ -76,7 +76,7 @@ def test_complex_getitem_slice(array_fixture):
 
 
 # TODO: this is failing
-def _test_expression_with_constants(array_fixture):
+def test_expression_with_constants(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + 2 - a3 * 3.14
     nres = ne.evaluate("na1 + 2 - na3 * 3.14")
