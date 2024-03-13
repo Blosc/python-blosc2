@@ -47,3 +47,20 @@ def test_setitem(shape, chunks, blocks, slices, dtype):
     a[slices] = b
     nparray[slices] = b[...]
     np.testing.assert_almost_equal(a[...], nparray)
+
+
+@pytest.mark.parametrize(
+    "shape, slices",
+    [
+        ([456], slice(0, 1)),
+        ([77, 134, 13], (slice(3, 7), slice(50, 100), 7)),
+        ([12, 13, 14, 15, 16], (slice(1, 3), ..., slice(3, 6))),
+    ],
+)
+def test_setitem_different_dtype(shape, slices):
+    size = int(np.prod(shape))
+    nparray = np.arange(size, dtype=np.int32).reshape(shape)
+    a = blosc2.empty(nparray.shape, dtype=np.float64)
+
+    with pytest.raises(ValueError):
+        a[slices] = nparray

@@ -159,6 +159,9 @@ class NDArray(blosc2_ext.NDArray):
             value = np.full(shape, value, dtype=self.dtype)
         elif isinstance(value, NDArray):
             value = value[...]
+        elif isinstance(value, np.ndarray):
+            if value.dtype != self.dtype:
+                raise ValueError("The dtype of the value should be the same as the array")
 
         return super().set_slice(key, value)
 
