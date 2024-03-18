@@ -5,6 +5,7 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+import ndindex
 import numexpr as ne
 import numpy as np
 
@@ -304,7 +305,9 @@ def evaluate_chunks(expression: str, operands: dict, shape, dtype, **kwargs) -> 
     :ref:`NDArray`
         The output array.
     """
-    out = blosc2.empty(shape, dtype=dtype, **kwargs)
+    operand = operands["o0"]
+    chunks = operand.chunks
+    out = blosc2.empty(shape, chunks=chunks, dtype=dtype, **kwargs)
     for info in operands["o0"].iterchunks_info():
         # Iterate over the operands and get the chunks
         chunk_operands = {}
@@ -365,6 +368,8 @@ def evaluate_slices(
                 continue
         if len(slice_) == 1:
             slice_ = slice_[0]
+        else:
+            slice_ = ndindex.Tuple(*slice_)
         # Get the slice of each operand
         for key, value in operands.items():
             chunk_operands[key] = value[slice_]

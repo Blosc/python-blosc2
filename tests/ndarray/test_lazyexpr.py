@@ -21,8 +21,7 @@ def dtype_fixture(request):
 
 
 # Multimensional arrays still fails
-# @pytest.fixture(params=[(NITEMS,), (NITEMS // 2, 2)])
-@pytest.fixture(params=[(NITEMS,)])
+@pytest.fixture(params=[(NITEMS,), (NITEMS // 2, 2)])
 def shape_fixture(request):
     return request.param
 
