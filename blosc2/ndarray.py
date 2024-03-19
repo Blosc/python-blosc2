@@ -226,7 +226,7 @@ class NDArray(blosc2_ext.NDArray):
         :func:`~blosc2.ndarray_from_cframe`
 
         """
-        return super(NDArray, self).to_cframe()
+        return super().to_cframe()
 
     def copy(self, dtype=None, **kwargs):
         """Create a copy of an array with same parameters.
