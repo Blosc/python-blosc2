@@ -538,7 +538,7 @@ def load_array(urlpath, **kwargs):
     ----------
     urlpath : str
         The file where the array is to be loaded.
-    
+
     Other parameters
     ----------------
     kwargs: dict, optional
@@ -762,7 +762,7 @@ def load_tensor(urlpath, **kwargs):
     ----------
     urlpath : str
         The file where the tensor / array is to be loaded.
-    
+
     Other parameters
     ----------------
     kwargs: dict, optional
