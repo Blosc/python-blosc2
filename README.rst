@@ -13,7 +13,7 @@ A Python wrapper for the extremely fast Blosc2 compression library
 :NumFOCUS: |numfocus|
 :Code of Conduct: |Contributor Covenant|
 
-.. |version| image:: https://img.shields.io/pypi/v/blosc2.png
+.. |version| image:: https://img.shields.io/pypi/v/blosc2.svg
         :target: https://pypi.python.org/pypi/blosc2
 .. |Contributor Covenant| image:: https://img.shields.io/badge/Contributor%20Covenant-v2.0%20adopted-ff69b4.svg
         :target: https://github.com/Blosc/community/blob/master/code_of_conduct.md
