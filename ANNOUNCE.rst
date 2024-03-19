@@ -50,5 +50,5 @@ Please follow https://fosstodon.org/@Blosc2 to get informed about the latest
 developments.
 
 
-- The Blosc Development Team
+- Blosc Development Team
   We make compression better
