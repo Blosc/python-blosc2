@@ -461,6 +461,18 @@ class NDArray(blosc2_ext.NDArray):
         self._check_allowed_dtypes(value, "all", "__ne__")
         return blosc2.LazyExpr(new_op=(self, "!=", value))
 
+    def __pow__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__pow__")
+        return blosc2.LazyExpr(new_op=(self, "**", value))
+
+    def __ipow__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__ipow__")
+        return blosc2.LazyExpr(new_op=(self, "**", value))
+
+    def __rpow__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__rpow__")
+        return blosc2.LazyExpr(new_op=(value, "**", self))
+
 
 def sin(ndarr: NDArray, /):
     """
