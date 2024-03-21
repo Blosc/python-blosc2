@@ -197,6 +197,13 @@ class LazyExpr:
     def __invert__(self):
         return self.update_expr(new_op=(self, "not", None))
 
+    def __pow__(self, value):
+        return self.update_expr(new_op=(self, "**", value))
+
+    def __rpow__(self, value):
+        return self.update_expr(new_op=(value, "**", self))
+
+
     def evaluate(self, item=None, **kwargs) -> blosc2.NDArray:
         """Evaluate the lazy expression in self.
 
