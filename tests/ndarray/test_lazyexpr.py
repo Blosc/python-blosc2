@@ -91,15 +91,20 @@ def test_simple_expression(array_fixture):
 
 def test_pow(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    a = LazyExpr((a1, None, None))
-    b = LazyExpr((a2, None, None))
-    c = LazyExpr((a3, None, None))
-    d = LazyExpr((a4, None, None))
-    expr = (a ** 3) + (b ** 2) + (c ** 3) - d + 3
+    expr = a1**3 + a2**2 + a3**3 - a4 + 3
     res = expr.evaluate()
     nres = ne.evaluate("na1**3 + na2**2 + na3**3 - na4 + 3")
     np.testing.assert_allclose(res[:], nres)
 
+
+def test_ipow(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1 ** 3 + a2 ** 2 + a3 ** 3 - a4 + 3
+    expr **= 2
+    print(expr)
+    res = expr.evaluate()
+    nres = ne.evaluate("(na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) ** 2")
+    np.testing.assert_allclose(res[:], nres)
 
 
 def test_complex_evaluate(array_fixture):

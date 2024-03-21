@@ -203,6 +203,10 @@ class LazyExpr:
     def __rpow__(self, value):
         return self.update_expr(new_op=(value, "**", self))
 
+    def __ipow__(self, value):
+        return self.update_expr(new_op=(self, "**", value))
+
+
 
     def evaluate(self, item=None, **kwargs) -> blosc2.NDArray:
         """Evaluate the lazy expression in self.
