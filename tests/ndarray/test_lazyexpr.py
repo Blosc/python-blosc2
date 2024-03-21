@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2 import LazyExpr
 
 NITEMS_SMALL = 1_000
 NITEMS = 100_000
@@ -87,6 +88,18 @@ def test_simple_expression(array_fixture):
     nres = ne.evaluate("na1 + na2 - na3 * na4")
     res = expr.evaluate()
     np.testing.assert_allclose(res[:], nres)
+
+def test_pow(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    a = LazyExpr((a1, None, None))
+    b = LazyExpr((a2, None, None))
+    c = LazyExpr((a3, None, None))
+    d = LazyExpr((a4, None, None))
+    expr = (a ** 3) + (b ** 2) + (c ** 3) - d + 3
+    res = expr.evaluate()
+    nres = ne.evaluate("na1**3 + na2**2 + na3**3 - na4 + 3")
+    np.testing.assert_allclose(res[:], nres)
+
 
 
 def test_complex_evaluate(array_fixture):
