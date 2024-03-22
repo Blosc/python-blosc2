@@ -239,23 +239,23 @@ def pack(obj, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ
         raise AttributeError("The object must have an itemsize attribute.")
     if not hasattr(obj, "size"):
         raise AttributeError("The object must have an size attribute.")
-    else:
-        itemsize = obj.itemsize
-        _check_clevel(clevel)
-        _check_codec(codec)
-        _check_typesize(itemsize)
-        pickled_object = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
-        # The object to be compressed is pickled_object, and not obj
-        len_src = len(pickled_object)
-        _check_input_length("pickled object", len_src, itemsize, _ignore_multiple_size=True)
-        packed_object = compress(
-            pickled_object,
-            typesize=itemsize,
-            clevel=clevel,
-            filter=filter,
-            codec=codec,
-            _ignore_multiple_size=True,
-        )
+
+    itemsize = obj.itemsize
+    _check_clevel(clevel)
+    _check_codec(codec)
+    _check_typesize(itemsize)
+    pickled_object = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
+    # The object to be compressed is pickled_object, and not obj
+    len_src = len(pickled_object)
+    _check_input_length("pickled object", len_src, itemsize, _ignore_multiple_size=True)
+    packed_object = compress(
+        pickled_object,
+        typesize=itemsize,
+        clevel=clevel,
+        filter=filter,
+        codec=codec,
+        _ignore_multiple_size=True,
+    )
     return packed_object
 
 
