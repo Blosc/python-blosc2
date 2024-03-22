@@ -12,6 +12,7 @@ import pytest
 
 import blosc2
 
+NITEMS_SMALL = 1_000
 NITEMS = 1_000_000
 
 
@@ -20,18 +21,19 @@ def dtype_fixture(request):
     return request.param
 
 
-# Multimensional arrays still fails
-@pytest.fixture(params=[(NITEMS,), (NITEMS // 2, 2)])
+@pytest.fixture(params=[(NITEMS_SMALL,), (NITEMS,), (NITEMS // 200, 200)])
 def shape_fixture(request):
     return request.param
 
 
 @pytest.fixture
 def array_fixture(dtype_fixture, shape_fixture):
-    dtype = dtype_fixture
-    shape = shape_fixture
-    na1 = np.linspace(0, 10, NITEMS, dtype=dtype).reshape(shape)
-    a1 = blosc2.asarray(na1)
+    nelems = np.prod(shape_fixture)
+    na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
+    # For generality, use partitions with padding
+    chunks = [c // 11 for c in na1.shape]
+    blocks = [c // 71 for c in na1.shape]
+    a1 = blosc2.asarray(na1, chunks=chunks, blocks=blocks)
     na2 = np.copy(na1)
     a2 = blosc2.asarray(na2)
     na3 = np.copy(na1)
@@ -87,6 +89,7 @@ def test_complex_getitem_slice(array_fixture):
     np.testing.assert_allclose(res, nres[sl])
 
 
+# TODO: This stopped to work when we added chunks and blocks with padding
 def test_expression_with_constants(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + 2 - a3 * 3.14
