@@ -309,10 +309,7 @@ def evaluate_chunks(expression: str, operands: dict, shape, dtype, **kwargs) -> 
         The output array.
     """
     operand = operands["o0"]
-    chunks = operand.chunks
-    blocks = operand.blocks
-    # Due to padding, it is critical to have the same chunks and blocks as the operands
-    out = blosc2.empty(shape, chunks=chunks, blocks=blocks, dtype=dtype, **kwargs)
+    out = None
     for info in operands["o0"].iterchunks_info():
         # Iterate over the operands and get the chunks
         chunk_operands = {}
@@ -335,9 +332,13 @@ def evaluate_chunks(expression: str, operands: dict, shape, dtype, **kwargs) -> 
             chunk_operands[key] = npbuff
         # Evaluate the expression using chunks of operands
         result = ne.evaluate(expression, chunk_operands)
-        # Sometimes, some constants make the result to be of a different dtype
-        if result.dtype != out.dtype:
-            result = result.astype(out.dtype)
+        # Sometimes NumPy/numexpr upcast the result
+        if result.dtype != dtype:
+            # Make the output array be of the same dtype as the numexpr result
+            dtype = result.dtype
+        if out is None:
+            # Due to padding, it is critical to have the same chunks and blocks as the operands
+            out = blosc2.empty(shape, chunks=operand.chunks, blocks=operand.blocks, dtype=dtype, **kwargs)
         out.schunk.update_data(info.nchunk, result, copy=False)
     return out
 
@@ -371,9 +372,9 @@ def evaluate_slices(
     :ref:`NDArray`
         The output array.
     """
-    out = blosc2.empty(shape, dtype=dtype, **kwargs)
     operand = operands["o0"]
     chunks = operand.chunks
+    out = None
     for info in operand.iterchunks_info():
         # Iterate over the operands and get the chunks
         chunk_operands = {}
@@ -391,8 +392,16 @@ def evaluate_slices(
         # Get the slice of each operand
         for key, value in operands.items():
             chunk_operands[key] = value[slice_]
+
         # Evaluate the expression using chunks of operands
         result = ne.evaluate(expression, chunk_operands)
+        # Sometimes NumPy/numexpr upcast the result
+        if result.dtype != dtype:
+            # Make the output array be of the same dtype as the numexpr result
+            dtype = result.dtype
+        if out is None:
+            # Let's use the same chunks as the first operand (it could have been any automatic too)
+            out = blosc2.empty(shape, chunks=chunks, dtype=dtype, **kwargs)
         out[slice_] = result
     return out
 
