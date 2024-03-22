@@ -19,4 +19,4 @@ file_size = blosc2.save_tensor(a, "save_tensor.bl2", mode="w")
 print("Length of saved tensor in file (bytes):", file_size)
 
 a2 = blosc2.load_tensor("save_tensor.bl2")
-assert np.alltrue(a == a2)
+assert np.all(a == a2)
