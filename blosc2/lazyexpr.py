@@ -213,13 +213,13 @@ class LazyExpr:
         :ref:`NDArray`
             The output array.
         """
-        shape, dtype, equal_chunks = validate_inputs(self.operands)
+        shape, dtype, equal_chunks, equal_blocks = validate_inputs(self.operands)
         nelem = np.prod(shape)
-        if item is not None:
+        if item is not None and item != slice(None, None, None):
             return evaluate_slices(self.expression, self.operands, shape, dtype, _slice=item, **kwargs)
         if nelem <= 10_000:  # somewhat arbitrary threshold
             out = evaluate_incache(self.expression, self.operands, **kwargs)
-        elif equal_chunks:
+        elif equal_chunks and equal_blocks:
             out = evaluate_chunks(self.expression, self.operands, shape, dtype, **kwargs)
         else:
             out = evaluate_slices(self.expression, self.operands, shape, dtype, **kwargs)
@@ -243,12 +243,15 @@ def validate_inputs(inputs: dict) -> tuple:
     inputs = list(inputs.values())
     first_input = inputs[0]
     equal_chunks = True
+    equal_blocks = True
     for input_ in inputs[1:]:
         if first_input.shape != input_.shape:
             raise ValueError("Inputs should have the same shape")
         if first_input.chunks != input_.chunks:
             equal_chunks = False
-    return first_input.shape, first_input.dtype, equal_chunks
+        if first_input.blocks != input_.blocks:
+            equal_blocks = False
+    return first_input.shape, first_input.dtype, equal_chunks, equal_blocks
 
 
 def evaluate_incache(expression: str, operands: dict, **kwargs) -> blosc2.NDArray:
@@ -307,12 +310,27 @@ def evaluate_chunks(expression: str, operands: dict, shape, dtype, **kwargs) -> 
     """
     operand = operands["o0"]
     chunks = operand.chunks
-    out = blosc2.empty(shape, chunks=chunks, dtype=dtype, **kwargs)
+    blocks = operand.blocks
+    # Due to padding, it is critical to have the same chunks and blocks as the operands
+    out = blosc2.empty(shape, chunks=chunks, blocks=blocks, dtype=dtype, **kwargs)
     for info in operands["o0"].iterchunks_info():
         # Iterate over the operands and get the chunks
         chunk_operands = {}
+        is_special = info.special
+        if is_special == blosc2.SpecialValue.ZERO:
+            # print("Zero!")
+            pass
         for key, value in operands.items():
+            lazychunk = value.schunk.get_lazychunk(info.nchunk)
+            special = lazychunk[15] >> 4
+            if is_special == blosc2.SpecialValue.ZERO and special == blosc2.SpecialValue.ZERO:
+                # TODO: If both are zeros, we can skip the computation under some conditions
+                # print("Skipping chunk")
+                # continue
+                pass
             buff = value.schunk.decompress_chunk(info.nchunk)
+            # npbuff = np.frombuffer(buff, dtype=value.dtype).reshape(value.chunks)
+            # We don't need to reshape the buffer
             npbuff = np.frombuffer(buff, dtype=value.dtype)
             chunk_operands[key] = npbuff
         # Evaluate the expression using chunks of operands
