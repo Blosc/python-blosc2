@@ -234,10 +234,10 @@ class SChunk(blosc2_ext.SChunk):
             if chunksize > 2**28:
                 chunksize = 2**28
 
-        super(SChunk, self).__init__(_schunk=sc, chunksize=chunksize, data=data, **kwargs)
-        self.vlmeta = vlmeta(super(SChunk, self).c_schunk, self.urlpath, self.mode)
-        self._cparams = super(SChunk, self).get_cparams()
-        self._dparams = super(SChunk, self).get_dparams()
+        super().__init__(_schunk=sc, chunksize=chunksize, data=data, **kwargs)
+        self.vlmeta = vlmeta(super().c_schunk, self.urlpath, self.mode)
+        self._cparams = super().get_cparams()
+        self._dparams = super().get_dparams()
 
     @property
     def cparams(self):
@@ -248,8 +248,8 @@ class SChunk(blosc2_ext.SChunk):
 
     @cparams.setter
     def cparams(self, value):
-        super(SChunk, self).update_cparams(value)
-        self._cparams = super(SChunk, self).get_cparams()
+        super().update_cparams(value)
+        self._cparams = super().get_cparams()
 
     @property
     def dparams(self):
@@ -260,8 +260,8 @@ class SChunk(blosc2_ext.SChunk):
 
     @dparams.setter
     def dparams(self, value):
-        super(SChunk, self).update_dparams(value)
-        self._dparams = super(SChunk, self).get_dparams()
+        super().update_dparams(value)
+        self._dparams = super().get_dparams()
 
     @property
     def meta(self):
@@ -298,7 +298,7 @@ class SChunk(blosc2_ext.SChunk):
         1
         """
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
-        return super(SChunk, self).append_data(data)
+        return super().append_data(data)
 
     def fill_special(self, nitems, special_value):
         """Fill the SChunk with a special value.  SChunk must be empty.
@@ -323,7 +323,7 @@ class SChunk(blosc2_ext.SChunk):
         """
         if not isinstance(special_value, SpecialValue):
             raise ValueError("special_value must be a SpecialValue instance")
-        nchunks = super(SChunk, self).fill_special(nitems, special_value.value)
+        nchunks = super().fill_special(nitems, special_value.value)
         if nchunks < 0:
             raise RuntimeError("Unable to fill with special values")
         return nchunks
@@ -370,7 +370,7 @@ class SChunk(blosc2_ext.SChunk):
         >>> bytes_obj == buffer
         True
         """
-        return super(SChunk, self).decompress_chunk(nchunk, dst)
+        return super().decompress_chunk(nchunk, dst)
 
     def get_chunk(self, nchunk):
         """Return the compressed chunk that is in the SChunk.
@@ -390,7 +390,7 @@ class SChunk(blosc2_ext.SChunk):
         RunTimeError
             If some problem is detected.
         """
-        return super(SChunk, self).get_chunk(nchunk)
+        return super().get_chunk(nchunk)
 
     def delete_chunk(self, nchunk):
         """Delete the specified chunk from the SChunk.
@@ -411,7 +411,7 @@ class SChunk(blosc2_ext.SChunk):
             If some problem was detected.
         """
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
-        return super(SChunk, self).delete_chunk(nchunk)
+        return super().delete_chunk(nchunk)
 
     def insert_chunk(self, nchunk, chunk):
         """Insert an already compressed chunk in the SChunk.
@@ -434,7 +434,7 @@ class SChunk(blosc2_ext.SChunk):
             If some problem was detected.
         """
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
-        return super(SChunk, self).insert_chunk(nchunk, chunk)
+        return super().insert_chunk(nchunk, chunk)
 
     def insert_data(self, nchunk, data, copy):
         """Insert the data in the specified position in the SChunk.
@@ -459,7 +459,7 @@ class SChunk(blosc2_ext.SChunk):
             If some problem was detected.
         """
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
-        return super(SChunk, self).insert_data(nchunk, data, copy)
+        return super().insert_data(nchunk, data, copy)
 
     def update_chunk(self, nchunk, chunk):
         """Update an existing chunk in the SChunk.
@@ -482,7 +482,7 @@ class SChunk(blosc2_ext.SChunk):
             If some problem was detected.
         """
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
-        return super(SChunk, self).update_chunk(nchunk, chunk)
+        return super().update_chunk(nchunk, chunk)
 
     def update_data(self, nchunk, data, copy):
         """Update the chunk in the :paramref:`nchunk`-th position with the given data.
@@ -507,7 +507,7 @@ class SChunk(blosc2_ext.SChunk):
             If some problem was detected.
         """
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
-        return super(SChunk, self).update_data(nchunk, data, copy)
+        return super().update_data(nchunk, data, copy)
 
     def get_slice(self, start=0, stop=None, out=None):
         """Get a slice from :paramref:`start` to :paramref:`stop`.
@@ -548,7 +548,7 @@ class SChunk(blosc2_ext.SChunk):
         :func:`__getitem__`
 
         """
-        return super(SChunk, self).get_slice(start, stop, out)
+        return super().get_slice(start, stop, out)
 
     def __getitem__(self, item):
         """Get a slice from the SChunk.
@@ -619,7 +619,7 @@ class SChunk(blosc2_ext.SChunk):
         if key.step is not None and key.step != 1:
             raise IndexError("`step` must be 1")
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
-        return super(SChunk, self).set_slice(start=key.start, stop=key.stop, value=value)
+        return super().set_slice(start=key.start, stop=key.stop, value=value)
 
     def to_cframe(self):
         """Get a bytes object containing the serialized :ref:`SChunk <SChunk>` instance.
@@ -634,7 +634,7 @@ class SChunk(blosc2_ext.SChunk):
         :func:`~blosc2.schunk_from_cframe`
 
         """
-        return super(SChunk, self).to_cframe()
+        return super().to_cframe()
 
     def iterchunks(self, dtype):
         """
@@ -762,7 +762,7 @@ class SChunk(blosc2_ext.SChunk):
         out: None
 
         """
-        return super(SChunk, self).remove_postfilter(func_name)
+        return super().remove_postfilter(func_name)
 
     def filler(self, inputs_tuple, schunk_dtype, nelem=None):
         """Decorator to set a filler function.
@@ -922,10 +922,10 @@ class SChunk(blosc2_ext.SChunk):
         out: None
 
         """
-        return super(SChunk, self).remove_prefilter(func_name)
+        return super().remove_prefilter(func_name)
 
     def __dealloc__(self):
-        super(SChunk, self).__dealloc__()
+        super().__dealloc__()
 
 
 def open(urlpath, mode="a", offset=0, **kwargs):
