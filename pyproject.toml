@@ -5,7 +5,9 @@ requires = [
     "cython>=3",
     "cmake",
     "ninja",
-    "oldest-supported-numpy"]
+    "oldest-supported-numpy",
+]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "blosc2"
