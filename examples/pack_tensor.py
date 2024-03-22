@@ -25,4 +25,4 @@ cframe = blosc2.pack_tensor(a, cparams=cparams)
 print("Length of packed array in bytes:", len(cframe))
 
 a2 = blosc2.unpack_tensor(cframe)
-assert np.alltrue(a == a2)
+assert np.all(a == a2)

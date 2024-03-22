@@ -64,6 +64,7 @@ class SpecialValue(Enum):
     """
     Possible special values in a chunk.
     """
+
     NOT_SPECIAL = 0
     ZERO = 1
     NAN = 2
@@ -93,6 +94,7 @@ from .blosc2_ext import (
     VERSION_DATE,
     VERSION_STRING,
 )
+
 DEFINED_CODECS_STOP = DEFINED_CODECS_STOP
 """
 Maximum possible Blosc2-defined codec id."""
@@ -169,6 +171,7 @@ from .core import (
 from .ndarray import NDArray, asarray, copy, empty, frombuffer, full, get_slice_nchunks, uninit, zeros
 from .schunk import SChunk, open
 from .version import __version__
+
 __version__ = __version__
 """
 Python-Blosc2 version.
