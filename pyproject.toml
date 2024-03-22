@@ -54,7 +54,9 @@ line-length = 109
 extend-select = [
     "B",
     "I",
+    "UP",
 ]
 ignore = [
     "B007",
 ]
+extend-exclude = ["bench"]
