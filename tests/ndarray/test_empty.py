@@ -123,3 +123,9 @@ def test_empty_minimal(shape, dtype):
 def test_cparams_chunks_blocks(shape, cparams):
     with pytest.raises(ValueError):
         blosc2.empty(shape, cparams=cparams)
+
+
+def test_zero_in_blockshape():
+    # Check for #165
+    with pytest.raises(ValueError):
+        blosc2.empty(shape=(1200,), chunks=(100,), blocks=(0,))
