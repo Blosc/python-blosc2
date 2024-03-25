@@ -1649,7 +1649,7 @@ cdef class vlmeta:
             raise RuntimeError
         res = {}
         for i in range(rc):
-            res[names[i]] = unpackb(self.get_vlmeta(names[i]))
+            res[names[i]] = unpackb(self.get_vlmeta(names[i]), list_hook=decode_tuple)
         return res
 
 
