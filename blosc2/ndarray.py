@@ -379,6 +379,10 @@ class NDArray(blosc2_ext.NDArray):
         if not isinstance(value, (int, float, bool, blosc2.LazyExpr, NDArray)):
             raise RuntimeError("Expected bool, int, float, LazyExpr or NDArray instance")
 
+    def __and__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__and__")
+        return blosc2.LazyExpr(new_op=(self, "&", value))
+
     def __add__(self, value: int | float | NDArray, /):
         self._check_allowed_dtypes(value, "numeric", "__add__")
         return blosc2.LazyExpr(new_op=(self, "+", value))
@@ -457,6 +461,20 @@ class NDArray(blosc2_ext.NDArray):
     def __ne__(self, value: int | float | NDArray, /):
         self._check_allowed_dtypes(value, "all", "__ne__")
         return blosc2.LazyExpr(new_op=(self, "!=", value))
+
+    def __pow__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__pow__")
+        return blosc2.LazyExpr(new_op=(self, "**", value))
+
+    def __ipow__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__ipow__")
+        return blosc2.LazyExpr(new_op=(self, "**", value))
+
+    def __rpow__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__rpow__")
+        return blosc2.LazyExpr(new_op=(value, "**", self))
+
+
 
 
 def sin(ndarr: NDArray, /):
