@@ -379,6 +379,10 @@ class NDArray(blosc2_ext.NDArray):
         if not isinstance(value, (int, float, bool, blosc2.LazyExpr, NDArray)):
             raise RuntimeError("Expected bool, int, float, LazyExpr or NDArray instance")
 
+    def __and__(self, value: int | float | NDArray, /):
+        self._check_allowed_dtypes(value, "numeric", "__and__")
+        return blosc2.LazyExpr(new_op=(self, "&", value))
+
     def __add__(self, value: int | float | NDArray, /):
         self._check_allowed_dtypes(value, "numeric", "__add__")
         return blosc2.LazyExpr(new_op=(self, "+", value))
@@ -469,6 +473,8 @@ class NDArray(blosc2_ext.NDArray):
     def __rpow__(self, value: int | float | NDArray, /):
         self._check_allowed_dtypes(value, "numeric", "__rpow__")
         return blosc2.LazyExpr(new_op=(value, "**", self))
+
+
 
 
 def sin(ndarr: NDArray, /):
