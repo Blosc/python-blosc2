@@ -89,6 +89,38 @@ def test_simple_expression(array_fixture):
     res = expr.evaluate()
     np.testing.assert_allclose(res[:], nres)
 
+def test_iadd(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1 ** 3 + a2 ** 2 + a3 ** 3 - a4 + 3
+    expr += 5
+    res = expr.evaluate()
+    nres = ne.evaluate("(na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5")
+    np.testing.assert_allclose(res[:], nres)
+
+def test_isub(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1 ** 3 + a2 ** 2 + a3 ** 3 - a4 + 3
+    expr -= 15
+    res = expr.evaluate()
+    nres = ne.evaluate("(na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) - 15")
+    np.testing.assert_allclose(res[:], nres)
+
+def test_imul(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1 ** 3 + a2 ** 2 + a3 ** 3 - a4 + 3
+    expr *= 5
+    res = expr.evaluate()
+    nres = ne.evaluate("(na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) * 5")
+    np.testing.assert_allclose(res[:], nres)
+
+def test_itruediv(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1 ** 3 + a2 ** 2 + a3 ** 3 - a4 + 3
+    expr /= 7
+    res = expr.evaluate()
+    nres = ne.evaluate("(na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) / 7")
+    np.testing.assert_allclose(res[:], nres)
+
 def test_pow(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1**3 + a2**2 + a3**3 - a4 + 3
@@ -101,10 +133,10 @@ def test_ipow(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 ** 3 + a2 ** 2 + a3 ** 3 - a4 + 3
     expr **= 2
-    print(expr)
     res = expr.evaluate()
     nres = ne.evaluate("(na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) ** 2")
     np.testing.assert_allclose(res[:], nres)
+
 
 
 def test_complex_evaluate(array_fixture):
