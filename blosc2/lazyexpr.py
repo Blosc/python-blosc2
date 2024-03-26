@@ -161,10 +161,16 @@ class LazyExpr:
     def __add__(self, value):
         return self.update_expr(new_op=(self, "+", value))
 
+    def __iadd__(self, other):
+        return self.update_expr(new_op=(self, "+", other))
+
     def __radd__(self, value):
         return self.update_expr(new_op=(value, "+", self))
 
     def __sub__(self, value):
+        return self.update_expr(new_op=(self, "-", value))
+
+    def __isub__(self, value):
         return self.update_expr(new_op=(self, "-", value))
 
     def __rsub__(self, value):
@@ -173,10 +179,16 @@ class LazyExpr:
     def __mul__(self, value):
         return self.update_expr(new_op=(self, "*", value))
 
+    def __imul__(self, value):
+        return self.update_expr(new_op=(self, "*", value))
+
     def __rmul__(self, value):
         return self.update_expr(new_op=(value, "*", self))
 
     def __truediv__(self, value):
+        return self.update_expr(new_op=(self, "/", value))
+
+    def __itruediv__(self, value):
         return self.update_expr(new_op=(self, "/", value))
 
     def __rtruediv__(self, value):
