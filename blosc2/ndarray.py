@@ -16,10 +16,10 @@ import ndindex
 import numpy as np
 
 import blosc2
-from blosc2 import SpecialValue, blosc2_ext, compute_chunks_blocks
+import blosc2.blosc2_ext
+from blosc2 import SChunk, SpecialValue, compute_chunks_blocks
 
 from .info import InfoReporter
-from .schunk import SChunk
 
 
 def process_key(key, shape):
@@ -36,7 +36,7 @@ def get_ndarray_start_stop(ndim, key, shape):
     return start, stop, size
 
 
-class NDArray(blosc2_ext.NDArray):
+class NDArray(blosc2.blosc2_ext.NDArray):
     def __init__(self, **kwargs):
         self._schunk = SChunk(_schunk=kwargs["_schunk"], _is_view=True)  # SChunk Python instance
         super().__init__(kwargs["_array"])
@@ -158,7 +158,7 @@ class NDArray(blosc2_ext.NDArray):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
-        blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
+        blosc2.blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
         key, _ = process_key(key, self.shape)
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
@@ -318,7 +318,7 @@ class NDArray(blosc2_ext.NDArray):
         >>> b.shape
         (50, 10)
         """
-        blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
+        blosc2.blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
         return super().resize(newshape)
 
     def slice(self, key, **kwargs):
@@ -1044,7 +1044,7 @@ def empty(shape, dtype=np.uint8, **kwargs):
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
-    arr = blosc2_ext.empty(shape, chunks, blocks, dtype, **kwargs)
+    arr = blosc2.blosc2_ext.empty(shape, chunks, blocks, dtype, **kwargs)
     return arr
 
 
@@ -1078,7 +1078,7 @@ def uninit(shape, dtype=np.uint8, **kwargs):
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
-    arr = blosc2_ext.uninit(shape, chunks, blocks, dtype, **kwargs)
+    arr = blosc2.blosc2_ext.uninit(shape, chunks, blocks, dtype, **kwargs)
     return arr
 
 
@@ -1118,7 +1118,7 @@ def zeros(shape, dtype=np.uint8, **kwargs):
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
-    arr = blosc2_ext.zeros(shape, chunks, blocks, dtype, **kwargs)
+    arr = blosc2.blosc2_ext.zeros(shape, chunks, blocks, dtype, **kwargs)
     return arr
 
 
@@ -1171,7 +1171,7 @@ def full(shape, fill_value, dtype=None, **kwargs):
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
-    arr = blosc2_ext.full(shape, chunks, blocks, fill_value, dtype, **kwargs)
+    arr = blosc2.blosc2_ext.full(shape, chunks, blocks, fill_value, dtype, **kwargs)
     return arr
 
 
@@ -1219,7 +1219,7 @@ def frombuffer(
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
-    arr = blosc2_ext.from_buffer(buffer, shape, chunks, blocks, dtype, **kwargs)
+    arr = blosc2.blosc2_ext.from_buffer(buffer, shape, chunks, blocks, dtype, **kwargs)
     return arr
 
 
@@ -1263,7 +1263,7 @@ def asarray(array: np.ndarray, **kwargs: dict) -> NDArray:
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, array.dtype, **kwargs)
-    return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
+    return blosc2.blosc2_ext.asarray(array, chunks, blocks, **kwargs)
 
 
 def _check_ndarray_kwargs(**kwargs):
@@ -1312,7 +1312,7 @@ def get_slice_nchunks(schunk, key):
         key, _ = process_key(key, array.shape)
         start, stop, step = get_ndarray_start_stop(array.ndim, key, array.shape)
         key = (start, stop)
-        return blosc2_ext.array_get_slice_nchunks(array, key)
+        return blosc2.blosc2_ext.array_get_slice_nchunks(array, key)
     else:
         if isinstance(key, int):
             key = (key, key + 1)
@@ -1320,4 +1320,4 @@ def get_slice_nchunks(schunk, key):
             if key.step not in (1, None):
                 raise IndexError("Only step=1 is supported")
             key = (key.start, key.stop)
-        return blosc2_ext.schunk_get_slice_nchunks(schunk, key)
+        return blosc2.blosc2_ext.schunk_get_slice_nchunks(schunk, key)
