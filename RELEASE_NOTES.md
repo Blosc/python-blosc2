@@ -1,8 +1,26 @@
 # Release notes
 
-## Changes from 2.5.1 to 2.5.2
+## Changes from 2.5.1 to 2.6.0
 
-XXX version-specific blurb XXX
+* New evaluation engine for NDArray instances.  Now, you can evaluate
+  expressions like `a + b + 1` where `a` and `b` are NDArray instances.
+  This is a powerful feature that allows for efficient computations on
+  compressed data.  See this 
+  [example](https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/eval_expr.py)
+  to see how this works.  Thanks to @omaech for her help in the `pow` function.
+
+* As a consequence, there are many new functions to operate with NDArray
+  instances.  See the 
+  [NDArray API](https://www.blosc.org/python-blosc2/reference/ndarray_api.html)
+  for more information.
+
+* Add `**kwargs` to `load_tensor()` function.  This allows to
+  pass additional parameters to the deserialization function.
+  Thanks to @jasam-sheja.
+
+* 
+
+* Updated to latest C-Blosc2 2.14.0.
 
 ## Changes from 2.5.0 to 2.5.1
 
