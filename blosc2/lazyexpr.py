@@ -91,12 +91,12 @@ class LazyExpr:
             self.operands = {"o0": value1, "o1": value2}
             self.expression = f"{op}(o0, o1)"
             return
-        if isinstance(value1, (int, float)) and isinstance(value2, (int, float)):
+        if isinstance(value1, int | float) and isinstance(value2, int | float):
             self.expression = f"({value1} {op} {value2})"
-        elif isinstance(value2, (int, float)):
+        elif isinstance(value2, int | float):
             self.operands = {"o0": value1}
             self.expression = f"(o0 {op} {value2})"
-        elif isinstance(value1, (int, float)):
+        elif isinstance(value1, int | float):
             self.operands = {"o0": value2}
             self.expression = f"({value1} {op} o0)"
         else:
@@ -133,7 +133,7 @@ class LazyExpr:
         elif isinstance(value1, LazyExpr):
             if op == "not":
                 self.expression = f"({op}{self.expression})"
-            elif isinstance(value2, (int, float)):
+            elif isinstance(value2, int | float):
                 self.expression = f"({self.expression} {op} {value2})"
             else:
                 try:
@@ -143,7 +143,7 @@ class LazyExpr:
                     self.operands[op_name] = value2
                 self.expression = f"({self.expression} {op} {op_name})"
         else:
-            if isinstance(value1, (int, float)):
+            if isinstance(value1, int | float):
                 self.expression = f"({value1} {op} {self.expression})"
             else:
                 try:

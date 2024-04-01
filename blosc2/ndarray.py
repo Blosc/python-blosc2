@@ -163,7 +163,7 @@ class NDArray(blosc2_ext.NDArray):
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
 
-        if isinstance(value, (int, float, bool)):
+        if isinstance(value, int | float | bool):
             shape = [sp - st for sp, st in zip(stop, start, strict=False)]
             value = np.full(shape, value, dtype=self.dtype)
         elif isinstance(value, NDArray):
@@ -379,7 +379,7 @@ class NDArray(blosc2_ext.NDArray):
         super().squeeze()
 
     def _check_allowed_dtypes(self, value: bool | int | float | NDArray, dtype_category: str, op: str):
-        if not isinstance(value, (int, float, bool, blosc2.LazyExpr, NDArray)):
+        if not isinstance(value, int | float | bool | blosc2.LazyExpr | NDArray):
             raise RuntimeError("Expected bool, int, float, LazyExpr or NDArray instance")
 
     def __and__(self, value: int | float | NDArray, /):
@@ -960,7 +960,7 @@ def contains(ndarr: NDArray, value: str | NDArray, /):
     out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
     """
-    if not isinstance(value, (str, NDArray)):
+    if not isinstance(value, str | NDArray):
         raise ValueError("value should be a string or a NDArray!")
     return blosc2.LazyExpr(new_op=(ndarr, "contains", value))
 
@@ -989,7 +989,7 @@ def abs(ndarr: NDArray, /):
 def _check_shape(shape):
     if isinstance(shape, int):
         shape = (shape,)
-    elif not isinstance(shape, (tuple, list)):
+    elif not isinstance(shape, tuple | list):
         raise ValueError("shape should be a tuple or a list!")
     return shape
 
