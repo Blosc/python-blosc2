@@ -107,10 +107,8 @@ def delete(schunk):
 
 def iter(schunk):
     keys = ["vlmeta1", "vlmeta2", "vlmeta3", "vlmeta4", "vlmeta5"]
-    i = 0
-    for vlmeta in schunk.vlmeta:
+    for i, vlmeta in enumerate(schunk.vlmeta):
         assert vlmeta == keys[i]
-        i += 1
 
 
 def clear(schunk):
