@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import math
 from collections import namedtuple
-from typing import Sequence
+from collections.abc import Sequence
 
 import ndindex
 import numpy as np
