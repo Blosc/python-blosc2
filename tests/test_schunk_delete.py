@@ -40,7 +40,7 @@ def test_schunk_delete_numpy(contiguous, urlpath, nchunks, ndeletes):
         nchunks_ = schunk.append_data(buffer)
         assert nchunks_ == (i + 1)
 
-    for i in range(ndeletes):
+    for _ in range(ndeletes):
         pos = random.randint(0, nchunks - 1)
         if pos != (nchunks - 1):
             buff = schunk.decompress_chunk(pos + 1)
@@ -84,7 +84,7 @@ def test_schunk_delete(contiguous, urlpath, nchunks, ndeletes):
         nchunks_ = schunk.append_data(bytes_obj)
         assert nchunks_ == (i + 1)
 
-    for i in range(ndeletes):
+    for _ in range(ndeletes):
         pos = random.randint(0, nchunks - 1)
         if pos != (nchunks - 1):
             buff = schunk.decompress_chunk(pos + 1)

@@ -58,6 +58,3 @@ extend-select = [
     "I",
     "UP",
 ]
-ignore = [
-    "B007",
-]
