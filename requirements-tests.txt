@@ -1,6 +1,6 @@
-numpy<2
+numpy
 pytest
 psutil
 msgpack
-torch
+#torch  # takes ages to build in combination with numpy 2; let's wait some time before uncommenting
 #tensorflow  # too large dependency; torch should be enough for testing
