@@ -50,6 +50,7 @@ skip = "cp36-* cp37-* pp37-* cp38-* pp38-* cp39-* pp39-* *-manylinux_i686 *_ppc6
 
 [tool.ruff]
 line-length = 109
+extend-exclude = ["bench"]
 
 [tool.ruff.lint]
 extend-select = [
@@ -60,4 +61,3 @@ extend-select = [
 ignore = [
     "B007",
 ]
-extend-exclude = ["bench"]
