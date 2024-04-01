@@ -43,7 +43,7 @@ def test_schunk_update_numpy(contiguous, urlpath, nchunks, nupdates, copy, creat
         nchunks_ = schunk.append_data(buffer)
         assert nchunks_ == (i + 1)
 
-    for i in range(nupdates):
+    for _ in range(nupdates):
         pos = random.randint(0, nchunks - 1)
         buffer = pos * np.arange(200 * 1000, dtype="int32")
         if create_chunk:
@@ -95,7 +95,7 @@ def test_update(contiguous, urlpath, nchunks, nupdates, copy, create_chunk, gil)
         nchunks_ = schunk.append_data(bytes_obj)
         assert nchunks_ == (i + 1)
 
-    for i in range(nupdates):
+    for _ in range(nupdates):
         pos = random.randint(0, nchunks - 1)
         bytes_obj = b"i " * nbytes
         if create_chunk:
