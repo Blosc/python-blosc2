@@ -216,13 +216,13 @@ class LazyExpr:
         shape, dtype, equal_chunks, equal_blocks = validate_inputs(self.operands)
         nelem = np.prod(shape)
         if item is not None and item != slice(None, None, None):
-            return evaluate_slices(self.expression, self.operands, shape, dtype, _slice=item, **kwargs)
+            return evaluate_slices(self.expression, self.operands, _slice=item, **kwargs)
         if nelem <= 10_000:  # somewhat arbitrary threshold
             out = evaluate_incache(self.expression, self.operands, **kwargs)
         elif equal_chunks and equal_blocks:
-            out = evaluate_chunks(self.expression, self.operands, shape, dtype, **kwargs)
+            out = evaluate_chunks(self.expression, self.operands, **kwargs)
         else:
-            out = evaluate_slices(self.expression, self.operands, shape, dtype, **kwargs)
+            out = evaluate_slices(self.expression, self.operands, **kwargs)
         return out
 
     def __getitem__(self, item):
@@ -265,10 +265,6 @@ def evaluate_incache(expression: str, operands: dict, **kwargs) -> blosc2.NDArra
         The expression to evaluate.
     operands: dict
         A dictionary with the operands.
-    shape: tuple
-        The shape of the output array.
-    dtype: np.dtype
-        The dtype of the output array.
     kwargs: dict, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
@@ -285,7 +281,7 @@ def evaluate_incache(expression: str, operands: dict, **kwargs) -> blosc2.NDArra
     return blosc2.asarray(result, **kwargs)
 
 
-def evaluate_chunks(expression: str, operands: dict, shape, dtype, **kwargs) -> blosc2.NDArray:
+def evaluate_chunks(expression: str, operands: dict, **kwargs) -> blosc2.NDArray:
     """Evaluate the expression in chunks of operands.
 
     This can be used when the expression is too big to fit in CPU cache.
@@ -296,10 +292,6 @@ def evaluate_chunks(expression: str, operands: dict, shape, dtype, **kwargs) -> 
         The expression to evaluate.
     operands: dict
         A dictionary with the operands.
-    shape: tuple
-        The shape of the output array.
-    dtype: np.dtype
-        The dtype of the output array.
     kwargs: dict, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
@@ -309,6 +301,7 @@ def evaluate_chunks(expression: str, operands: dict, shape, dtype, **kwargs) -> 
         The output array.
     """
     operand = operands["o0"]
+    shape = operand.shape
     out = None
     for info in operands["o0"].iterchunks_info():
         # Iterate over the operands and get the chunks
@@ -332,20 +325,16 @@ def evaluate_chunks(expression: str, operands: dict, shape, dtype, **kwargs) -> 
             chunk_operands[key] = npbuff
         # Evaluate the expression using chunks of operands
         result = ne.evaluate(expression, chunk_operands)
-        # Sometimes NumPy/numexpr upcast the result
-        if result.dtype != dtype:
-            # Make the output array be of the same dtype as the numexpr result
-            dtype = result.dtype
         if out is None:
             # Due to padding, it is critical to have the same chunks and blocks as the operands
-            out = blosc2.empty(shape, chunks=operand.chunks, blocks=operand.blocks, dtype=dtype, **kwargs)
+            out = blosc2.empty(
+                shape, chunks=operand.chunks, blocks=operand.blocks, dtype=result.dtype, **kwargs
+            )
         out.schunk.update_data(info.nchunk, result, copy=False)
     return out
 
 
-def evaluate_slices(
-    expression: str, operands: dict, shape: tuple | list, dtype: np.dtype, _slice=None, **kwargs
-) -> blosc2.NDArray:
+def evaluate_slices(expression: str, operands: dict, _slice=None, **kwargs) -> blosc2.NDArray:
     """Evaluate the expression in chunks of operands.
 
     This can be used when the operands in the expression have different chunk shapes.
@@ -357,10 +346,6 @@ def evaluate_slices(
         The expression to evaluate.
     operands: dict
         A dictionary with the operands.
-    shape: tuple
-        The shape of the output array.
-    dtype: np.dtype
-        The dtype of the output array.
     _slice: slice, list of slices, optional
         If not None, only the chunks that intersect with this slice
         will be evaluated.
@@ -373,6 +358,7 @@ def evaluate_slices(
         The output array.
     """
     operand = operands["o0"]
+    shape = operand.shape
     chunks = operand.chunks
     out = None
     for info in operand.iterchunks_info():
@@ -395,13 +381,9 @@ def evaluate_slices(
 
         # Evaluate the expression using chunks of operands
         result = ne.evaluate(expression, chunk_operands)
-        # Sometimes NumPy/numexpr upcast the result
-        if result.dtype != dtype:
-            # Make the output array be of the same dtype as the numexpr result
-            dtype = result.dtype
         if out is None:
             # Let's use the same chunks as the first operand (it could have been any automatic too)
-            out = blosc2.empty(shape, chunks=chunks, dtype=dtype, **kwargs)
+            out = blosc2.empty(shape, chunks=chunks, dtype=result.dtype, **kwargs)
         out[slice_] = result
     return out
 
