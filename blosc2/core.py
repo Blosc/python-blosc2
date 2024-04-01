@@ -239,23 +239,23 @@ def pack(obj, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ
         raise AttributeError("The object must have an itemsize attribute.")
     if not hasattr(obj, "size"):
         raise AttributeError("The object must have an size attribute.")
-    else:
-        itemsize = obj.itemsize
-        _check_clevel(clevel)
-        _check_codec(codec)
-        _check_typesize(itemsize)
-        pickled_object = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
-        # The object to be compressed is pickled_object, and not obj
-        len_src = len(pickled_object)
-        _check_input_length("pickled object", len_src, itemsize, _ignore_multiple_size=True)
-        packed_object = compress(
-            pickled_object,
-            typesize=itemsize,
-            clevel=clevel,
-            filter=filter,
-            codec=codec,
-            _ignore_multiple_size=True,
-        )
+
+    itemsize = obj.itemsize
+    _check_clevel(clevel)
+    _check_codec(codec)
+    _check_typesize(itemsize)
+    pickled_object = pickle.dumps(obj, pickle.HIGHEST_PROTOCOL)
+    # The object to be compressed is pickled_object, and not obj
+    len_src = len(pickled_object)
+    _check_input_length("pickled object", len_src, itemsize, _ignore_multiple_size=True)
+    packed_object = compress(
+        pickled_object,
+        typesize=itemsize,
+        clevel=clevel,
+        filter=filter,
+        codec=codec,
+        _ignore_multiple_size=True,
+    )
     return packed_object
 
 
@@ -538,7 +538,7 @@ def load_array(urlpath, **kwargs):
     ----------
     urlpath : str
         The file where the array is to be loaded.
-    
+
     Other parameters
     ----------------
     kwargs: dict, optional
@@ -762,7 +762,7 @@ def load_tensor(urlpath, **kwargs):
     ----------
     urlpath : str
         The file where the tensor / array is to be loaded.
-    
+
     Other parameters
     ----------------
     kwargs: dict, optional
@@ -1168,7 +1168,7 @@ def compute_partition(nitems, parts, maxs, blocks=False):
                     "blocks should be smaller than chunks or shape in any dim!"
                     " If you do want this blocks, please specify a chunks too."
                 )
-            new_part = parts[i] * 2 if parts[i] * 2 <= maxs[i] else maxs[i]
+            new_part = min(parts[i] * 2, maxs[i])
             if math.prod(parts) // parts[i] * new_part <= nitems:
                 parts[i] = new_part
         nitems_new = math.prod(parts)
@@ -1208,6 +1208,8 @@ def compute_chunks_blocks(shape, chunks=None, blocks=None, dtype=np.uint8, **kwa
         if len(blocks) != len(shape):
             raise ValueError("blocks should have the same length than shape")
         for i in range(len(blocks)):
+            if blocks[i] == 0:
+                raise ValueError("blocks cannot contain 0 dimension")
             if blocks[i] > shape[i]:
                 raise ValueError("blocks cannot be greater than shape")
     if chunks:

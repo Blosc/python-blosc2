@@ -48,7 +48,7 @@ jobs:
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           submodules: 'recursive'
 
@@ -73,7 +73,7 @@ jobs:
           # CIBW_CONFIG_SETTINGS: "--build-option=-DDEACTIVATE_AVX512:BOOL=YES"
 
       - name: Upload wheels
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           path: ./wheelhouse/*.whl
 
@@ -91,7 +91,7 @@ jobs:
             arch: x86
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           submodules: 'recursive'
 
@@ -110,7 +110,7 @@ jobs:
           python -m build --sdist
 
       - name: Upload sdist package
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           path: dist/*.tar.gz
 
@@ -136,7 +136,7 @@ jobs:
     # Only upload wheels when tagging (typically a release)
     if: startsWith(github.event.ref, 'refs/tags')
     steps:
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
         with:
           name: artifact
           path: dist

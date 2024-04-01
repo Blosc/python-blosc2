@@ -64,6 +64,7 @@ class SpecialValue(Enum):
     """
     Possible special values in a chunk.
     """
+
     NOT_SPECIAL = 0
     ZERO = 1
     NAN = 2
