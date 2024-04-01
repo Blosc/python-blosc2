@@ -57,6 +57,7 @@ def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):
         assert nchunks_ == (i + 1)
 
     add(schunk)
+    to_dict(schunk)
     iter(schunk)
     delete(schunk)
     clear(schunk)
@@ -68,12 +69,26 @@ def add(schunk):
     schunk.vlmeta["vlmeta1"] = b"val1"
     schunk.vlmeta["vlmeta2"] = "val2"
     schunk.vlmeta["vlmeta3"] = {b"lorem": 4231}
+    schunk.vlmeta["vlmeta4"] = [1, 2, 3]
+    schunk.vlmeta["vlmeta5"] = (1, 2, 3)
 
     assert schunk.vlmeta["vlmeta1"] == b"val1"
     assert schunk.vlmeta["vlmeta2"] == "val2"
     assert schunk.vlmeta["vlmeta3"] == {b"lorem": 4231}
+    assert schunk.vlmeta["vlmeta4"] == [1, 2, 3]
+    assert schunk.vlmeta["vlmeta5"] == (1, 2, 3)
     assert "vlmeta1" in schunk.vlmeta
-    assert len(schunk.vlmeta) == 3
+    assert len(schunk.vlmeta) == 5
+
+
+def to_dict(schunk):
+    assert schunk.vlmeta.to_dict() == {
+        b"vlmeta1": b"val1",
+        b"vlmeta2": "val2",
+        b"vlmeta3": {b"lorem": 4231},
+        b"vlmeta4": [1, 2, 3],
+        b"vlmeta5": (1, 2, 3),
+    }
 
 
 def delete(schunk):
@@ -83,13 +98,15 @@ def delete(schunk):
     assert "vlmeta2" not in schunk.vlmeta
     assert schunk.vlmeta["vlmeta1"] == b"val1"
     assert schunk.vlmeta["vlmeta3"] == {b"lorem": 4231}
+    assert schunk.vlmeta["vlmeta4"] == [1, 2, 3]
+    assert schunk.vlmeta["vlmeta5"] == (1, 2, 3)
     with pytest.raises(KeyError):
         schunk.vlmeta["vlmeta2"]
-    assert len(schunk.vlmeta) == 2
+    assert len(schunk.vlmeta) == 4
 
 
 def iter(schunk):
-    keys = ["vlmeta1", "vlmeta2", "vlmeta3"]
+    keys = ["vlmeta1", "vlmeta2", "vlmeta3", "vlmeta4", "vlmeta5"]
     for i, vlmeta in enumerate(schunk.vlmeta):
         assert vlmeta == keys[i]
 
@@ -98,7 +115,7 @@ def clear(schunk):
     nparray = np.arange(start=0, stop=2)
     schunk.vlmeta["vlmeta2"] = nparray.tobytes()
     assert schunk.vlmeta["vlmeta2"] == nparray.tobytes()
-    assert schunk.vlmeta.__len__() == 3
+    assert schunk.vlmeta.__len__() == 5
 
     schunk.vlmeta.clear()
     assert schunk.vlmeta.__len__() == 0
