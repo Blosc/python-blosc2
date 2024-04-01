@@ -394,8 +394,6 @@ def unpack_array(packed_array, **kwargs):
     if kwargs:
         arr = pickle.loads(pickled_array, **kwargs)
         if all(isinstance(x, bytes) for x in arr.tolist()):
-            import numpy as np
-
             arr = np.array([x.decode("utf-8") for x in arr.tolist()])
     else:
         arr = pickle.loads(pickled_array)
@@ -618,8 +616,6 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
     :func:`~blosc2.unpack_tensor`
     :func:`~blosc2.save_tensor`
     """
-    import numpy as np
-
     arr = np.asarray(tensor)
 
     schunk = blosc2.SChunk(chunksize=chunksize, data=arr, **kwargs)
@@ -647,8 +643,6 @@ def pack_tensor(tensor, chunksize=None, **kwargs):
 
 
 def _unpack_tensor(schunk):
-    import numpy as np
-
     kind, shape, dtype = schunk.vlmeta["__pack_tensor__"]
     out = np.empty(shape, dtype=dtype)
     schunk.get_slice(out=out)
