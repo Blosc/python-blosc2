@@ -2,23 +2,34 @@
 
 ## Changes from 2.5.1 to 2.6.0
 
-* New evaluation engine for NDArray instances.  Now, you can evaluate
-  expressions like `a + b + 1` where `a` and `b` are NDArray instances.
-  This is a powerful feature that allows for efficient computations on
-  compressed data.  See this 
+* New evaluation engine (based on numexpr) for NDArray instances.  Now,
+  you can evaluate expressions like `a + b + 1` where `a` and `b` are
+  NDArray instances.  This is a powerful feature that allows for
+  efficient computations on compressed data.  See this
   [example](https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/eval_expr.py)
   to see how this works.  Thanks to @omaech for her help in the `pow` function.
 
 * As a consequence, there are many new functions to operate with NDArray
-  instances.  See the 
-  [NDArray API](https://www.blosc.org/python-blosc2/reference/ndarray_api.html)
+  instances.  See the function section in
+  [NDArray API](https://www.blosc.org/python-blosc2/reference/ndarray_api.html#functions)
   for more information.
+
+* Support for NumPy 2.0.0 is here!  Now, the wheels are built with NumPy 2.0.0rc1.
+  Please tell us in case you see any issues with this new version.
 
 * Add `**kwargs` to `load_tensor()` function.  This allows to
   pass additional parameters to the deserialization function.
   Thanks to @jasam-sheja.
 
-* 
+* Fix `vlmeta.to_dict()` not honoring tuple encoding.  Thanks to @ivilata.
+
+* Check that chunks/blocks computation does not allow a 0 in blocks.
+  Thanks to @ivilata.
+
+* Many improvements in ruff rules and others.  Thanks to @DimitriPapadopoulos.
+
+* Remove printing large arrays in notebooks (they use too much RAM in recent versions
+  of Jupyter notebook).
 
 * Updated to latest C-Blosc2 2.14.0.
 

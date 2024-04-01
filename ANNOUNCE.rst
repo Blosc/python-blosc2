@@ -1,12 +1,15 @@
-Announcing Python-Blosc2 2.5.1
+Announcing Python-Blosc2 2.6.0
 ==============================
 
-This is a patch release for fixing a bug.
-The new minor release 2.5 adds the `INT_TRUNC` filter for integer
-truncation, some optimizations for the zstd codec and the support for slices
-in ``blosc2.get_slice_nchunks()`` when using SChunk objects.
-Furthermore, the doc was revised and improved, and C-Blosc2
-is updated to the latest stable version.
+New evaluation engine (based on numexpr) for NDArray instances.  Now,
+you can evaluate expressions like `a + b + 1` where `a` and `b` are
+NDArray instances.  This is a powerful feature that allows for
+efficient computations on compressed data.  See this
+[example](https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/eval_expr.py)
+to see how this works.  Thanks to @omaech for her help in the `pow` function.
+
+Also, this is the first version supporting NumPy 2.0.0.  Please tell us
+if you find any issues with this new version of NumPy.
 
 For more info, you can have a look at the release notes in:
 
