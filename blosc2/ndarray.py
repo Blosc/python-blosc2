@@ -31,7 +31,7 @@ def process_key(key, shape):
 
 def get_ndarray_start_stop(ndim, key, shape):
     start = tuple(s.start if s.start is not None else 0 for s in key)
-    stop = tuple(s.stop if s.stop is not None else sh for s, sh in zip(key, shape))
+    stop = tuple(s.stop if s.stop is not None else sh for s, sh in zip(key, shape, strict=False))
     size = math.prod([stop[i] - start[i] for i in range(ndim)])
     return start, stop, size
 
@@ -119,7 +119,7 @@ class NDArray(blosc2_ext.NDArray):
         key, mask = process_key(key, self.shape)
         start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
-        shape = np.array([sp - st for st, sp in zip(start, stop)])
+        shape = np.array([sp - st for st, sp in zip(start, stop, strict=False)])
         shape = tuple(shape[[not m for m in mask]])
         # arr = np.zeros(shape, dtype=self.dtype)
         # Benchmarking shows that empty is faster than zeros
@@ -164,7 +164,7 @@ class NDArray(blosc2_ext.NDArray):
         key = (start, stop)
 
         if isinstance(value, (int, float, bool)):
-            shape = [sp - st for sp, st in zip(stop, start)]
+            shape = [sp - st for sp, st in zip(stop, start, strict=False)]
             value = np.full(shape, value, dtype=self.dtype)
         elif isinstance(value, NDArray):
             value = value[...]

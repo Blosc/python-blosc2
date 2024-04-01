@@ -107,7 +107,7 @@ def test_empty_minimal(shape, dtype):
     assert shape in (a.shape, a.shape[0])
     assert a.chunks is not None
     assert a.blocks is not None
-    assert all(c >= b for c, b in zip(a.chunks, a.blocks))
+    assert all(c >= b for c, b in zip(a.chunks, a.blocks, strict=False))
     assert a.dtype == dtype
     assert a.schunk.typesize == dtype.itemsize
 

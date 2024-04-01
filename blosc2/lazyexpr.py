@@ -388,7 +388,7 @@ def evaluate_slices(expression: str, operands: dict, _slice=None, **kwargs) -> b
         # Iterate over the operands and get the chunks
         chunk_operands = {}
         coords = info.coords
-        slice_ = [slice(c * s, (c + 1) * s) for c, s in zip(coords, chunks)]
+        slice_ = [slice(c * s, (c + 1) * s) for c, s in zip(coords, chunks, strict=False)]
         # Check whether current slice_ intersects with _slice
         if _slice is not None:
             intersects = do_slices_intersect(_slice, slice_)
@@ -440,7 +440,7 @@ def do_slices_intersect(slice1, slice2):
         slice2.append(slice(None))
 
     # Check each dimension for intersection
-    for s1, s2 in zip(slice1, slice2):
+    for s1, s2 in zip(slice1, slice2, strict=False):
         if s1.start is not None and s2.stop is not None and s1.start >= s2.stop:
             return False
         if s1.stop is not None and s2.start is not None and s1.stop <= s2.start:
