@@ -1136,12 +1136,10 @@ def get_chunksize(blocksize, l3_minimum=2**21, l3_maximum=2**25):
             chunksize = l2_cache_size
 
     # Ensure a minimum size
-    if chunksize < l3_minimum:
-        chunksize = l3_minimum
+    chunksize = max(chunksize, l3_minimum)
 
     # In Blosc2, the chunksize cannot be larger than 2 GB - BLOSC2_MAX_BUFFERSIZE
-    if chunksize > 2**31 - blosc2.MAX_OVERHEAD:
-        chunksize = 2**31 - blosc2.MAX_OVERHEAD
+    chunksize = min(chunksize, 2**31 - blosc2.MAX_OVERHEAD)
 
     return chunksize
 
