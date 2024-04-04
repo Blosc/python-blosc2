@@ -2,7 +2,8 @@
 
 ## Changes from 2.6.0 to 2.6.1
 
-XXX version-specific blurb XXX
+* Updated to latest C-Blosc2 2.14.1. This was necessary to be able to
+  load dynamics plugins on Windows.
 
 ## Changes from 2.5.1 to 2.6.0
 

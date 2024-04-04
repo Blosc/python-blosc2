@@ -1,15 +1,8 @@
-Announcing Python-Blosc2 2.6.0
+Announcing Python-Blosc2 2.6.1
 ==============================
 
-New evaluation engine (based on numexpr) for NDArray instances.  Now,
-you can evaluate expressions like `a + b + 1` where `a` and `b` are
-NDArray instances.  This is a powerful feature that allows for
-efficient computations on compressed data.  See this
-[example](https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/eval_expr.py)
-to see how this works.  Thanks to @omaech for her help in the `pow` function.
-
-Also, this is the first version supporting NumPy 2.0.0.  Please tell us
-if you find any issues with this new version of NumPy.
+Updated to latest C-Blosc2 2.14.1. This was necessary to be able to
+load dynamics plugins on Windows.
 
 For more info, you can have a look at the release notes in:
 
