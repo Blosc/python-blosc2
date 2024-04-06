@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 2.6.2 to 2.6.3
+
+XXX version-specific blurb XXX
+
 ## Changes from 2.6.1 to 2.6.2
 
 * Protection when platforms have just one CPU. This caused the
