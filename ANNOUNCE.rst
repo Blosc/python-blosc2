@@ -1,8 +1,10 @@
-Announcing Python-Blosc2 2.6.1
+Announcing Python-Blosc2 2.6.2
 ==============================
 
-Updated to latest C-Blosc2 2.14.1. This was necessary to be able to
-load dynamics plugins on Windows.
+Updated to latest C-Blosc2 2.14.3. This was necessary to fix
+several CVEs in the C-Blosc2 library.  Also, the new version adds
+protection when platforms have just one CPU. This caused the
+internal number of threads to be 0, producing a division by zero.
 
 For more info, you can have a look at the release notes in:
 

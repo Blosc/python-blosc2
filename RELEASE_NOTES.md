@@ -1,5 +1,12 @@
 # Release notes
 
+## Changes from 2.6.1 to 2.6.2
+
+* Protection when platforms have just one CPU. This caused the
+  internal number of threads to be 0, producing a division by zero.
+
+* Updated to latest C-Blosc2 2.14.3.
+
 ## Changes from 2.6.0 to 2.6.1
 
 * Updated to latest C-Blosc2 2.14.1. This was necessary to be able to
