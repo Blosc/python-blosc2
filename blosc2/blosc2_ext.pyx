@@ -1906,7 +1906,7 @@ def register_filter(id, forward, backward, filter_name):
     if forward and backward:
         blosc2.ufilters_registry[id] = (forward, backward)
 
-def _check_rc(rc, message):
+cdef _check_rc(rc, message):
     if rc < 0:
         raise RuntimeError(message)
 
