@@ -507,3 +507,36 @@ if __name__ == "__main__":
     np.testing.assert_allclose(res, nres)
     np.testing.assert_allclose(res2, nres)
     print("Everything is working fine")
+
+
+class NumbaExpr:
+    def __init__(self, func, inputs_tuple, schunk_dtype):
+        # Suposem que tots els operands tenen els mateix shape (ara per ara) i que són schunks, ja o
+        # canviarem més endavant
+        self.inputs_tuple = inputs_tuple  # Keep reference to evict lost reference
+        op1 = inputs_tuple[0][0]
+        cparams = {'typesize': np.dtype(schunk_dtype).itemsize, 'nthreads': 1}
+        self.nbytes = op1.size * cparams['typesize']
+        self.res = blosc2.SChunk(chunksize=self.nbytes, cparams=cparams)
+        self.res._set_aux_numba(func, id(inputs_tuple), schunk_dtype)
+        self.schunk_dtype = schunk_dtype  # Quan siga amb ndarray açò ja no caldrà
+        self.func = func
+
+    def eval(self):
+
+        chunksize = self.res.chunksize
+        written_nbytes = 0
+        while written_nbytes < self.nbytes:
+            chunk = np.zeros(chunksize // self.res.typesize, dtype=self.schunk_dtype)
+            self.res.append_data(chunk)
+            written_nbytes += chunksize
+            if (self.nbytes - written_nbytes) < self.res.chunksize:
+                chunksize = self.nbytes - written_nbytes
+
+        self.res.remove_prefilter(self.func.__name__)
+        return self.res
+
+
+# inputs_tuple = ( (operand, dtype), (operand2, dtype2), ... )
+def expr_from_udf(func, inputs_tuple, dtype):
+    return NumbaExpr(func, inputs_tuple, dtype)

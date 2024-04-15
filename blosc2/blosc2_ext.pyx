@@ -1453,6 +1453,36 @@ cdef class SChunk:
         if self.schunk.cctx == NULL:
             raise RuntimeError("Could not create compression context")
 
+
+    def _set_aux_numba(self, func, inputs_id, dtype_output):
+        if self.schunk.storage.cparams.nthreads > 1:
+            raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
+
+        func_id = func.__name__
+        blosc2.prefilter_funcs[func_id] = func
+        func_id = func_id.encode("utf-8") if isinstance(func_id, str) else func_id
+
+        # Set prefilter
+        cdef blosc2_cparams* cparams = self.schunk.storage.cparams
+        cparams.prefilter = <blosc2_prefilter_fn> general_numba
+
+        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
+        cdef filler_udata* fill_udata = <filler_udata *> malloc(sizeof(filler_udata))
+        fill_udata.py_func = <char *> malloc(strlen(func_id) + 1)
+        strcpy(fill_udata.py_func, func_id)
+        fill_udata.inputs_id = inputs_id
+        fill_udata.output_cdtype = np.dtype(dtype_output).num
+        fill_udata.chunkshape = self.schunk.chunksize // self.schunk.typesize
+
+        preparams.user_data = fill_udata
+        cparams.preparams = preparams
+        _check_cparams(cparams)
+
+        blosc2_free_ctx(self.schunk.cctx)
+        self.schunk.cctx = blosc2_create_cctx(dereference(cparams))
+        if self.schunk.cctx == NULL:
+            raise RuntimeError("Could not create compression context")
+
     def _set_prefilter(self, func, dtype_input, dtype_output=None):
         if self.schunk.storage.cparams.nthreads > 1:
             raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
@@ -1517,6 +1547,35 @@ cdef int general_postfilter(blosc2_postfilter_params *params):
 
 # filler
 cdef int general_filler(blosc2_prefilter_params *params):
+    cdef filler_udata *udata = <filler_udata *> params.user_data
+    cdef int nd = 1
+    cdef np.npy_intp dims = params.output_size // params.output_typesize
+
+    inputs_tuple = _ctypes.PyObj_FromPtr(udata.inputs_id)
+
+    output = np.PyArray_SimpleNewFromData(nd, &dims, udata.output_cdtype, <void*>params.output)
+    offset = params.nchunk * udata.chunkshape + params.output_offset // params.output_typesize
+
+    inputs = []
+    for obj, dtype in inputs_tuple:
+        if isinstance(obj, blosc2.SChunk):
+            out = np.empty(dims, dtype=dtype)
+            obj.get_slice(start=offset, stop=offset + dims, out=out)
+            inputs.append(out)
+        elif isinstance(obj, np.ndarray):
+            inputs.append(obj[offset : offset + dims])
+        elif isinstance(obj, (int, float, bool, complex)):
+            inputs.append(np.full(dims, obj, dtype=dtype))
+        else:
+            raise ValueError("Unsupported operand")
+
+    func_id = udata.py_func.decode("utf-8")
+    blosc2.prefilter_funcs[func_id](tuple(inputs), output, offset)
+
+    return 0
+
+
+cdef int general_numba(blosc2_prefilter_params *params):
     cdef filler_udata *udata = <filler_udata *> params.user_data
     cdef int nd = 1
     cdef np.npy_intp dims = params.output_size // params.output_typesize

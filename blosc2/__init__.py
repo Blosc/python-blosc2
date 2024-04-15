@@ -205,7 +205,7 @@ from .ndarray import (  # noqa: I001
     abs,
 )
 
-from .lazyexpr import LazyExpr
+from .lazyexpr import LazyExpr, expr_from_udf
 
 from .schunk import SChunk, open
 from .version import __version__
