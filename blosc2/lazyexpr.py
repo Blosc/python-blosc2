@@ -510,33 +510,29 @@ if __name__ == "__main__":
 
 
 class NumbaExpr:
-    def __init__(self, func, inputs_tuple, schunk_dtype):
-        # Suposem que tots els operands tenen els mateix shape (ara per ara) i que són schunks, ja o
-        # canviarem més endavant
+    def __init__(self, func, inputs_tuple, dtype, shape):
+        # Suposem que tots els operands tenen els mateix shape (ara per ara)
         self.inputs_tuple = inputs_tuple  # Keep reference to evict lost reference
-        op1 = inputs_tuple[0][0]
-        cparams = {'typesize': np.dtype(schunk_dtype).itemsize, 'nthreads': 1}
-        self.nbytes = op1.size * cparams['typesize']
-        self.res = blosc2.SChunk(chunksize=self.nbytes, cparams=cparams)
-        self.res._set_aux_numba(func, id(inputs_tuple), schunk_dtype)
-        self.schunk_dtype = schunk_dtype  # Quan siga amb ndarray açò ja no caldrà
+        if shape is None:
+            for obj, dtype in inputs_tuple:
+                if isinstance(obj, (np.ndarray, blosc2.NDArray)):
+                    # Get res shape
+                    self.shape = obj.shape
+                    break
+        cparams = {'nthreads': 1}
+        # canviar això de nthreads
+        self.res = blosc2.empty(self.shape, dtype, cparams=cparams, chunks=self.shape, blocks=self.shape)
+        self.res._set_aux_numba(func, id(inputs_tuple))
         self.func = func
 
     def eval(self):
+        aux = np.zeros(self.res.shape, self.res.dtype)
+        self.res[...] = aux
+        self.res.schunk.remove_prefilter(self.func.__name__)
 
-        chunksize = self.res.chunksize
-        written_nbytes = 0
-        while written_nbytes < self.nbytes:
-            chunk = np.zeros(chunksize // self.res.typesize, dtype=self.schunk_dtype)
-            self.res.append_data(chunk)
-            written_nbytes += chunksize
-            if (self.nbytes - written_nbytes) < self.res.chunksize:
-                chunksize = self.nbytes - written_nbytes
-
-        self.res.remove_prefilter(self.func.__name__)
         return self.res
 
 
 # inputs_tuple = ( (operand, dtype), (operand2, dtype2), ... )
-def expr_from_udf(func, inputs_tuple, dtype):
-    return NumbaExpr(func, inputs_tuple, dtype)
+def expr_from_udf(func, inputs_tuple, dtype, shape=None):
+    return NumbaExpr(func, inputs_tuple, dtype, shape)
