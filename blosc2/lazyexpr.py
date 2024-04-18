@@ -522,7 +522,8 @@ class NumbaExpr:
         cparams = {'nthreads': 1}
         # canviar això de nthreads
         chunks = [i // 2 for i in self.shape]
-        self.res = blosc2.empty(self.shape, dtype, cparams=cparams, chunks=chunks, blocks=chunks)
+        blocks = [i // 2 for i in chunks]
+        self.res = blosc2.empty(self.shape, dtype, cparams=cparams, chunks=chunks, blocks=blocks)
         self.res._set_aux_numba(func, id(inputs_tuple))
         self.func = func
 

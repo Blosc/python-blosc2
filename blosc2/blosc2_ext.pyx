@@ -1562,17 +1562,25 @@ cdef int general_numba(blosc2_prefilter_params *params):
     # off caldrà sumar-li blockshape també
     cdef int64_t offset = params.nchunk * udata.chunkshape + params.output_offset // params.output_typesize
     # shape normal, no extshape, revisar-ho quan hi haja padding
-    cdef int64_t offset_ndim[B2ND_MAX_DIM]
     cdef int64_t chunk_ndim[B2ND_MAX_DIM]
     cdef int64_t chunks_in_array[B2ND_MAX_DIM]
     for i in range(nd):
         # Canviar-ho a extshape i chunkshape normal
         chunks_in_array[i] = udata.shape[i] // udata.chunkshape_ndim[i]
-
     blosc2_unidim_to_multidim(nd, chunks_in_array, params.nchunk, chunk_ndim)
+    # print("nchunk ", params.nchunk)
+
+    cdef int64_t block_ndim[B2ND_MAX_DIM]
+    cdef int64_t blocks_in_chunk[B2ND_MAX_DIM]
     for i in range(nd):
-        offset_ndim[i] = chunk_ndim[i] * udata.chunkshape_ndim[i]
-        print("offset_ndim[", i, "] = ", offset_ndim[i])
+        # Canviar-ho a extshape i chunkshape normal
+        blocks_in_chunk[i] = udata.chunkshape_ndim[i] // udata.blockshape[i]
+    blosc2_unidim_to_multidim(nd, chunks_in_array, params.nblock, block_ndim)
+
+    cdef int64_t offset_ndim[B2ND_MAX_DIM]
+    for i in range(nd):
+        offset_ndim[i] = chunk_ndim[i] * udata.chunkshape_ndim[i] + block_ndim[i] * udata.blockshape[i]
+        # print("offset_ndim[", i, "] = ", offset_ndim[i])
 
     cdef np.npy_intp dims[B2ND_MAX_DIM]
     # params.output_size // params.output_typesize
