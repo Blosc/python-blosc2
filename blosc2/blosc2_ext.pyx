@@ -506,6 +506,7 @@ ctypedef struct numba_udata:
     int32_t chunkshape
     int ndim
     int32_t *blockshape
+    int32_t *chunkshape_ndim
     int64_t *shape
 
 MAX_TYPESIZE = BLOSC_MAX_TYPESIZE
@@ -1557,23 +1558,31 @@ cdef int general_filler(blosc2_prefilter_params *params):
 
 cdef int general_numba(blosc2_prefilter_params *params):
     cdef numba_udata *udata = <numba_udata *> params.user_data
-    cdef int nd = udata.ndim
-    # off = ??? segurament també caldrà canviar-ho
+    cdef uint8_t nd = udata.ndim
+    # off caldrà sumar-li blockshape també
     cdef int64_t offset = params.nchunk * udata.chunkshape + params.output_offset // params.output_typesize
-    print("out_offset: ", params.output_offset, " offset calculat ", offset)
-    #shape normal, no extshape, revisar-ho quan hi haja padding
+    # shape normal, no extshape, revisar-ho quan hi haja padding
     cdef int64_t offset_ndim[B2ND_MAX_DIM]
-    blosc2_unidim_to_multidim(nd, udata.shape, offset, offset_ndim)
-    cdef np.npy_intp dims[B2ND_MAX_DIM]
-    dims = udata.blockshape # Açò canviarà quan hi haja padding
-    # params.output_size // params.output_typesize
+    cdef int64_t chunk_ndim[B2ND_MAX_DIM]
+    cdef int64_t chunks_in_array[B2ND_MAX_DIM]
+    for i in range(nd):
+        # Canviar-ho a extshape i chunkshape normal
+        chunks_in_array[i] = udata.shape[i] // udata.chunkshape_ndim[i]
 
-    #output = np.PyArray_SimpleNewFromData(nd, dims, udata.output_cdtype, <void*>params.output)
+    blosc2_unidim_to_multidim(nd, chunks_in_array, params.nchunk, chunk_ndim)
+    for i in range(nd):
+        offset_ndim[i] = chunk_ndim[i] * udata.chunkshape_ndim[i]
+        print("offset_ndim[", i, "] = ", offset_ndim[i])
+
+    cdef np.npy_intp dims[B2ND_MAX_DIM]
+    # params.output_size // params.output_typesize
+    for i in range(nd):
+        dims[i] = udata.blockshape[i] # Açò canviarà quan hi haja padding
+    output = np.PyArray_SimpleNewFromData(nd, dims, udata.output_cdtype, <void*>params.output)
 
     inputs_tuple = _ctypes.PyObj_FromPtr(udata.inputs_id)
     inputs = []
     blockshape = [udata.blockshape[i] for i in range(nd)]
-
     if nd == 1:
         # Enviar-ho a fer la mà quan nd = 1 ? o ho puc suportar sense problemes??
         for obj, dtype in inputs_tuple:
@@ -1591,6 +1600,7 @@ cdef int general_numba(blosc2_prefilter_params *params):
         # Get tuple of slices
         l = []
         for i in range(nd):
+            # print("slice dim ", i, " = inici = ", offset_ndim[i], " final = ",  offset_ndim[i] + udata.blockshape[i])
             l.append(slice(offset_ndim[i], offset_ndim[i] + udata.blockshape[i]))
         slices = tuple(l)
         for obj, dtype in inputs_tuple:
@@ -1606,13 +1616,14 @@ cdef int general_numba(blosc2_prefilter_params *params):
                 raise ValueError("Unsupported operand")
 
     func_id = udata.py_func.decode("utf-8")
-    out = np.empty(blockshape, dtype)
-    blosc2.prefilter_funcs[func_id](tuple(inputs), out, offset)
+    # out = np.empty(blockshape, dtype)
+    blosc2.prefilter_funcs[func_id](tuple(inputs), output, offset)
 
-    cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-    PyObject_GetBuffer(out, buf, PyBUF_SIMPLE)
-    memcpy(params.output, buf.buf, buf.len)
-    PyBuffer_Release(buf)
+    # Tornarem a intentar-ho amb el capi ndarray sembla que les posicions no es formategen bé
+    # cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+    # PyObject_GetBuffer(out, buf, PyBUF_SIMPLE)
+    # memcpy(params.output, buf.buf, buf.len)
+    # PyBuffer_Release(buf)
 
     return 0
 
@@ -2262,6 +2273,7 @@ cdef class NDArray:
         pref_udata.ndim = self.ndim
         pref_udata.blockshape = self.array.blockshape
         pref_udata.shape = self.array.shape
+        pref_udata.chunkshape_ndim = self.array.chunkshape
 
         preparams.user_data = pref_udata
         cparams.preparams = preparams
