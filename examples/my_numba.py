@@ -1,7 +1,7 @@
 from concurrent.futures import ThreadPoolExecutor  # Import ThreadPoolExecutor for concurrent execution
 from time import time
 import numba as nb
-import numexpr
+import numexpr as ne
 import numpy as np
 from matplotlib import pyplot as plt
 import blosc2  # Import Blosc2 library for high-performance compression
@@ -27,7 +27,7 @@ def run_numba(num_threads, a, b, c):
 
 def run_lazy_expr(num_threads, a, b, c, cparams):
     blosc2.set_nthreads(num_threads)  # Set the number of threads for Blosc2 compression
-    numexpr.set_num_threads(num_threads)  # Set the number of threads for NumExpr evaluation
+    ne.set_num_threads(num_threads)  # Set the number of threads for NumExpr evaluation
     # Convert NumPy arrays to compressed arrays using Blosc2
     a1 = blosc2.asarray(a, cparams=cparams)  # Compressed array a
     b1 = blosc2.asarray(b, cparams=cparams)  # Compressed array b
@@ -39,6 +39,12 @@ def run_lazy_expr(num_threads, a, b, c, cparams):
     res = expr.evaluate(cparams=cparams)  # Evaluate the LazyExpr expression and get the result
     tt = time() - t  # Calculate elapsed time
     return tt
+def run_NumExpr(num_thread, a, b, c):
+    ne.set_num_threads(num_thread)
+    t = time()
+    d1 = ne.evaluate("a+b*c+2")
+    t1 = time() - t
+    return t1
 
 # Main program
 # Create NumPy arrays a, b, and c with size 3000x4000 and values generated using linspace
@@ -52,6 +58,7 @@ mega_bytes = (size // 8) // 1024 ** 2  # Total megabytes
 threads = [1, 2, 3, 4]  # Number of threads
 numba_times = []  # List to store Numba execution times
 lazy_expr_times = []  # List to store LazyExpr execution times
+numexpr_times = [] # List to store NumExpr execution times
 clevels = [0, 1, 5]  # Compression levels
 mean_expr = run_numba(1, a, b, c)  # Call run_numba to warm up Numba and ensure accurate timings
 speed = []  # List to store speeds for plotting
@@ -59,8 +66,11 @@ speed = []  # List to store speeds for plotting
 # Calculate execution times for Numba
 for num_thread in threads:
     numba = mega_bytes / run_numba(num_thread, a, b, c)
+    num_expr = mega_bytes / run_NumExpr(num_thread, a, b, c)
     numba_times.append(numba)
+    numexpr_times.append(num_expr)
     speed.append(numba)
+    speed.append(num_expr)
 
 # Calculate execution times for LazyExpr
 for clevel in clevels:
@@ -78,9 +88,10 @@ limit_y = max(speed) + 1  # Limit for y-axis
 
 # Graph Numba
 ax1.plot(threads, numba_times, marker='o', label='Numba')  # Plot Numba data
+ax1.plot(threads, numexpr_times, marker='o', label='NumExpr')  # Plot NumExpr data
 ax1.set_xlabel('Number of threads')  # Set x-axis label
 ax1.set_ylabel('Speed (MB/s)')  # Set y-axis label
-ax1.set_title('Execution Time (Numba) vs. Number of threads')  # Set title
+ax1.set_title('Execution Speed vs. Number of threads')  # Set title
 ax1.legend()  # Add legend
 ax1.set_ylim(0, limit_y)  # Set y-axis limit
 
