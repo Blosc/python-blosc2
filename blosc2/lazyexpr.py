@@ -510,7 +510,7 @@ if __name__ == "__main__":
 
 
 class NumbaExpr:
-    def __init__(self, func, inputs_tuple, dtype, shape):
+    def __init__(self, func, inputs_tuple, dtype, shape, **kwargs):
         # Suposem que tots els operands tenen els mateix shape (ara per ara)
         self.inputs_tuple = inputs_tuple  # Keep reference to evict lost reference
         if shape is None:
@@ -521,9 +521,7 @@ class NumbaExpr:
                     break
         cparams = {'nthreads': 1}
         # canviar això de nthreads
-        chunks = [i // 2 for i in self.shape]
-        blocks = [i // 2 for i in chunks]
-        self.res = blosc2.empty(self.shape, dtype, cparams=cparams, chunks=chunks, blocks=blocks)
+        self.res = blosc2.empty(self.shape, dtype, cparams=cparams, **kwargs)
         self.res._set_aux_numba(func, id(inputs_tuple))
         self.func = func
 
@@ -536,5 +534,5 @@ class NumbaExpr:
 
 
 # inputs_tuple = ( (operand, dtype), (operand2, dtype2), ... )
-def expr_from_udf(func, inputs_tuple, dtype, shape=None):
-    return NumbaExpr(func, inputs_tuple, dtype, shape)
+def expr_from_udf(func, inputs_tuple, dtype, shape=None, **kwargs):
+    return NumbaExpr(func, inputs_tuple, dtype, shape, **kwargs)
