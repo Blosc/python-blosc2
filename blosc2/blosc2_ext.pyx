@@ -1571,7 +1571,6 @@ cdef int general_numba(blosc2_prefilter_params *params):
     cdef int64_t start_ndim[B2ND_MAX_DIM]
     for i in range(nd):
         start_ndim[i] = chunk_ndim[i] * udata.array.chunkshape[i] + block_ndim[i] * udata.array.blockshape[i]
-        # print("start_ndim[", i, "] = ", start_ndim[i])
 
     padding = False
     blockshape = []
@@ -1606,7 +1605,7 @@ cdef int general_numba(blosc2_prefilter_params *params):
             elif isinstance(obj, np.ndarray):
                 inputs.append(obj[start_ndim[0] : start_ndim[0] + blockshape[0]])
             elif isinstance(obj, (int, float, bool, complex)):
-                inputs.append(np.full(blockshape[0], obj, dtype=dtype))
+                inputs.append(obj)
             else:
                 raise ValueError("Unsupported operand")
     else:
@@ -1614,7 +1613,6 @@ cdef int general_numba(blosc2_prefilter_params *params):
         l = []
         for i in range(nd):
             l.append(slice(start_ndim[i], start_ndim[i] + blockshape[i]))
-            # print("slice dim ", i, " = inici = ", start_ndim[i], " final = ",  start_ndim[i] + blockshape[i])
         slices = tuple(l)
         for obj, dtype in inputs_tuple:
             if isinstance(obj, blosc2.NDArray):
@@ -1622,7 +1620,7 @@ cdef int general_numba(blosc2_prefilter_params *params):
             elif isinstance(obj, np.ndarray):
                 inputs.append(obj[slices])
             elif isinstance(obj, (int, float, bool, complex)):
-                inputs.append(np.full(blockshape, obj, dtype=dtype))
+                inputs.append(obj)
             else:
                 raise ValueError("Unsupported operand")
 
