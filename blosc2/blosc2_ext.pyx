@@ -1566,27 +1566,24 @@ cdef int general_filler(blosc2_prefilter_params *params):
 
 cdef int general_numba(blosc2_prefilter_params *params):
     cdef numba_udata *udata = <numba_udata *> params.user_data
-    cdef uint8_t nd = udata.ndim
+    cdef uint8_t nd = udata.array.ndim
     # off caldrà sumar-li blockshape també
-    cdef int64_t offset = params.nchunk * udata.chunkshape + params.output_offset // params.output_typesize
-    # shape normal, no extshape, revisar-ho quan hi haja padding
+    cdef int64_t offset = params.nchunk * udata.array.sc.chunksize + params.output_offset // params.output_typesize
     cdef int64_t chunk_ndim[B2ND_MAX_DIM]
     cdef int64_t chunks_in_array[B2ND_MAX_DIM]
     for i in range(nd):
-        # Canviar-ho a extshape i chunkshape normal
-        chunks_in_array[i] = udata.ext_shape[i] // udata.chunkshape_ndim[i]
+        chunks_in_array[i] = udata.array.extshape[i] // udata.array.chunkshape[i]
     blosc2_unidim_to_multidim(nd, chunks_in_array, params.nchunk, chunk_ndim)
-    # print("nchunk ", params.nchunk)
 
     cdef int64_t block_ndim[B2ND_MAX_DIM]
     cdef int64_t blocks_in_chunk[B2ND_MAX_DIM]
     for i in range(nd):
-        blocks_in_chunk[i] = udata.chunkshape_ndim[i] // udata.blockshape[i]
-    blosc2_unidim_to_multidim(nd, chunks_in_array, params.nblock, block_ndim)
+        blocks_in_chunk[i] = udata.array.extchunkshape[i] // udata.array.blockshape[i]
+    blosc2_unidim_to_multidim(nd, blocks_in_chunk, params.nblock, block_ndim)
 
     cdef int64_t start_ndim[B2ND_MAX_DIM]
     for i in range(nd):
-        start_ndim[i] = chunk_ndim[i] * udata.chunkshape_ndim[i] + block_ndim[i] * udata.blockshape[i]
+        start_ndim[i] = chunk_ndim[i] * udata.array.chunkshape[i] + block_ndim[i] * udata.array.blockshape[i]
         # print("start_ndim[", i, "] = ", start_ndim[i])
 
     padding = False
@@ -1594,16 +1591,18 @@ cdef int general_numba(blosc2_prefilter_params *params):
     for i in range(nd):
         if start_ndim[i] + udata.blockshape[i] > udata.shape[i]:
             padding = True
-            blockshape.append(udata.shape[i] - start_ndim[i])
+            blockshape.append(udata.array.shape[i] - start_ndim[i])
+            if blockshape[i] <= 0:
+                # This block contains only padding, skip it
+                return 0
         else:
-            blockshape.append(udata.blockshape[i])
+            blockshape.append(udata.array.blockshape[i])
     cdef np.npy_intp dims[B2ND_MAX_DIM]
     for i in range(nd):
         dims[i] = blockshape[i]
 
     if padding:
-        output = np.empty(blockshape, udata.array.dtype)  # igual toca crear un py dtype
-        print(output.dtype)
+        output = np.empty(blockshape, udata.array.dtype)
     else:
         output = np.PyArray_SimpleNewFromData(nd, dims, udata.output_cdtype, <void*>params.output)
     inputs_tuple = _ctypes.PyObj_FromPtr(udata.inputs_id)
@@ -1612,13 +1611,13 @@ cdef int general_numba(blosc2_prefilter_params *params):
         # Enviar-ho a fer la mà quan nd = 1 ? o ho puc suportar sense problemes??
         for obj, dtype in inputs_tuple:
             if isinstance(obj, blosc2.SChunk):
-                out = np.empty(udata.blockshape[0], dtype=dtype)
+                out = np.empty(udata.array.blockshape[0], dtype=dtype)
                 obj.get_slice(start=offset, stop=offset + dims[0], out=out)
                 inputs.append(out)
             elif isinstance(obj, np.ndarray):
                 inputs.append(obj[offset : offset + dims[0]])
             elif isinstance(obj, (int, float, bool, complex)):
-                inputs.append(np.full(udata.blockshape[0], obj, dtype=dtype))
+                inputs.append(np.full(udata.array.blockshape[0], obj, dtype=dtype))
             else:
                 raise ValueError("Unsupported operand")
     else:
@@ -1652,10 +1651,10 @@ cdef int general_numba(blosc2_prefilter_params *params):
         for i in range(nd):
             start[i] = 0
             slice_shape[i] = blockshape[i]
-            blockshape_int64[i] = udata.blockshape[i]
+            blockshape_int64[i] = udata.array.blockshape[i]
         buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(output, buf, PyBUF_SIMPLE)
-        b2nd_copy_buffer(udata.ndim, params.output_typesize,
+        b2nd_copy_buffer(udata.array.ndim, params.output_typesize,
         buf.buf, slice_shape, start, slice_shape,
         params.output, blockshape_int64, start)
         PyBuffer_Release(buf)
