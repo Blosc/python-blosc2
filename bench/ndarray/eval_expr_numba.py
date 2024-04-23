@@ -86,8 +86,11 @@ expr = blosc2.expr_from_udf(udf_numba, ((npa, npa.dtype),), npa.dtype, chunks=ch
 # actual benchmark
 t0 = time()
 res = expr.eval()
-#res = expr[:]  # 1.6x slower with prefilters; will try with postfilters in the future
-print("Blosc2+numba took %.3f s" % (time() - t0))
+print("Blosc2+numba+eval took %.3f s" % (time() - t0))
+expr = blosc2.expr_from_udf(udf_numba, ((npa, npa.dtype),), npa.dtype, chunks=chunks, blocks=blocks)
+t0 = time()
+res = expr[:]  # 1.6x slower with prefilters; will try with postfilters in the future
+print("Blosc2+numba+getitem took %.3f s" % (time() - t0))
 # print(res.info)
 
 
