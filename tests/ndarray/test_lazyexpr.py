@@ -140,3 +140,107 @@ def test_expression_with_constants(array_fixture):
 
 
 # TODO: extend this to more expressions, but specially functions and dtypes
+# Parametrized fixture for testing comparison operators
+@pytest.fixture(params=['==', '!=', '>=', '>', '<=', '<'])
+def comparison_operator(request):
+    return request.param
+def test_comparison_operators(dtype_fixture, comparison_operator):
+    reshape = [30, 4]
+    nelems = np.prod(reshape)
+    cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
+    na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(reshape)
+    na2 = np.copy(na1)
+    a1 = blosc2.asarray(na1, cparams=cparams)
+    a2 = blosc2.asarray(na1, cparams=cparams)
+    # Construct the lazy expression
+    expr = blosc2.LazyExpr(new_op=(a1, comparison_operator, a2))
+    res_lazyexpr = expr.evaluate()
+    # Evaluate using NumExpr
+    expr_string = f"na1 {comparison_operator} na2"
+    res_numexpr = ne.evaluate(expr_string)
+    # Compare the results
+    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
+
+
+# Combined test function for sin, cos, tan, and sqrt functions
+@pytest.fixture(params=['sin', 'cos', 'tan', 'sqrt', 'sinh', 'cosh', 'tanh', 'arcsin', 'arccos', 'arctan', 'arcsinh', 'arccosh', 'arctanh', 'exp', 'expm1', 'log', 'log10', 'log1p', 'conj', 'real', 'imag'])
+def test_functions(request, dtype):
+    reshape = [30, 4]
+    nelems = np.prod(reshape)
+    cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
+    na1 = np.linspace(0, 10, nelems, dtype=dtype).reshape(reshape)
+    na2 = np.copy(na1)
+    a1 = blosc2.asarray(na1, cparams=cparams)
+    a2 = blosc2.asarray(na1, cparams=cparams)
+    # Get the function name from the parameter
+    function_name = request.param
+    # Construct the lazy expression based on the function name
+    expr = blosc2.LazyExpr(new_op=(a1, function_name, a2))
+    res_lazyexpr = expr.evaluate()
+    # Evaluate using NumExpr
+    expr_string = f"{function_name}(na1)"
+    res_numexpr = ne.evaluate(expr_string)
+    # Compare the results
+    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
+@pytest.fixture(params=['arctan2'])
+def test_arctan2(request, dtype):
+    reshape = [30, 4]
+    nelems = np.prod(reshape)
+    cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
+    na1 = np.linspace(0, 10, nelems, dtype=dtype).reshape(reshape)
+    na2 = np.linspace(0, 10, nelems, dtype=dtype).reshape(reshape)
+    a1 = blosc2.asarray(na1, cparams=cparams)
+    a2 = blosc2.asarray(na1, cparams=cparams)
+    # Get the function name from the parameter
+    function_name = request.param
+    # Construct the lazy expression based on the function name
+    expr = blosc2.LazyExpr(new_op=(a1, function_name, a2))
+    res_lazyexpr = expr.evaluate()
+    # Evaluate using NumExpr
+    expr_string = f"{na1} {function_name} {na2}"
+    res_numexpr = ne.evaluate(expr_string)
+    # Compare the results
+    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
+
+@pytest.fixture(params=['abs'])
+def test_abs(dtype):
+    reshape = [30, 4]
+    nelems = np.prod(reshape)
+    cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
+    na1 = np.linspace(-1, 1, nelems, dtype=dtype).reshape(reshape)
+    a1 = blosc2.asarray(na1, cparams=cparams)
+    expr = blosc2.LazyExpr(new_op=(a1, "abs", None))
+    res_lazyexpr = expr.evaluate()
+    res_np = np.abs(na1)
+    np.testing.assert_allclose(res_lazyexpr[:], res_np)
+
+
+#@pytest.fixture(params=[("NDArray", "str"), ("NDArray", "NDArray")])
+@pytest.fixture(params=[("NDArray", "NDArray")])
+def value_fixture(request):
+    return request.param
+def test_contains(value_fixture):
+    # Unpack the value fixture
+    value1, value2 = value_fixture
+    if value1 == 'NDArray':
+        a1 = np.array([b'abc', b'def', b'aterr', b'oot', b'zu', b'ab c'])
+        a1_blosc = blosc2.asarray(a1)
+        if value2 == "str":
+            value2 = b"test abc here"
+            # Construct the lazy expression
+            expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", value2))
+            # Evaluate using NumExpr
+            res_numexpr = ne.evaluate('contains(value2, a1)')
+        else:
+            a2 = np.array([b'abc', b'ab c', b' abc', b' abc ', b'\tabc', b'c h'])
+            a2_blosc = blosc2.asarray(a2)
+            # Construct the lazy expression
+            expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", a2_blosc))
+            # Evaluate using NumExpr
+            res_numexpr = ne.evaluate('contains(a2, a1)')
+    else:
+        raise ValueError("value should be a string or a NDArray!")
+
+    res_lazyexpr = expr_lazy.evaluate()
+    # Compare the results
+    np.testing.assert_array_equal(res_lazyexpr[:], res_numexpr)
