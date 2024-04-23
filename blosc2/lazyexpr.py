@@ -511,17 +511,33 @@ if __name__ == "__main__":
 
 class NumbaExpr:
     def __init__(self, func, inputs_tuple, dtype, shape, **kwargs):
-        # Suposem que tots els operands tenen els mateix shape (ara per ara)
         self.inputs_tuple = inputs_tuple  # Keep reference to evict lost reference
+        self.shape = None
         if shape is None:
-            for obj, dtype in inputs_tuple:
+            # Get res shape
+            for obj, _ in inputs_tuple:
                 if isinstance(obj, (np.ndarray, blosc2.NDArray)):
-                    # Get res shape
                     self.shape = obj.shape
                     break
-        cparams = {'nthreads': 1}
-        # canviar això de nthreads
-        self.res = blosc2.empty(self.shape, dtype, cparams=cparams, **kwargs)
+                elif isinstance(obj, blosc2.SChunk):
+                    self.shape = (len(obj), )
+                    break
+            if self.shape is None:
+                self.shape = (1, )
+        else:
+            self.shape = shape
+        # Cannot use multithreading when applying a prefilter, save nthreads to set them
+        # after the evaluation
+        cparams = kwargs.get("cparams", None)
+        if cparams is None:
+            cparams = {'nthreads': 1}
+            self._cnthreads = blosc2.cparams_dflts['nthreads']
+        else:
+            cparams['nthreads'] = 1
+            self._cnthreads = cparams.get('nthreads', blosc2.cparams_dflts['nthreads'])
+        kwargs['cparams'] = cparams
+
+        self.res = blosc2.empty(self.shape, dtype, **kwargs)
         self.res._set_aux_numba(func, id(inputs_tuple))
         self.func = func
 
@@ -529,6 +545,7 @@ class NumbaExpr:
         aux = np.zeros(self.res.shape, self.res.dtype)
         self.res[...] = aux
         self.res.schunk.remove_prefilter(self.func.__name__)
+        self.res.schunk.cparams['nthreads'] = self._cnthreads
 
         return self.res
 

@@ -40,8 +40,7 @@ def test_numba1p(shape, chunks, blocks):
     res = expr.eval()
 
     tol = 1e-5 if res.dtype is np.float32 else 1e-14
-    if res.dtype in (np.float32, np.float64):
-        np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
+    np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
 
 
 @nb.jit(nopython=True, parallel=True)
@@ -101,5 +100,33 @@ def test_numba1dim(shape, chunks, blocks):
     res = expr.eval()
 
     tol = 1e-5 if res.dtype is np.float32 else 1e-14
-    if res.dtype in (np.float32, np.float64):
-        np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
+    np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
+
+
+def test_numba_params():
+    shape = (23, )
+    npa = np.arange(start=0, stop=np.prod(shape)).reshape(shape)
+    py_scalar = np.e
+    a = blosc2.asarray(npa)
+    schunk = blosc2.SChunk(data=npa)
+
+    # Assert that shape is computed correctly
+    npc = npa + 1
+    cparams = {'nthreads': 4}
+    expr = blosc2.expr_from_udf(numba1p, ((schunk, npa.dtype), ), np.float64, cparams=cparams)
+    res = expr.eval()
+    tol = 1e-5 if res.dtype is np.float32 else 1e-14
+    np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
+    assert res.shape == npa.shape
+    assert res.schunk.cparams['nthreads'] == cparams['nthreads']
+
+    expr = blosc2.expr_from_udf(numba1p, ((py_scalar, np.float64), ), np.float64)
+    res = expr.eval()
+    npc = py_scalar + 1
+    np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
+
+    npc = np.full(shape, py_scalar, np.float64) + 1
+    expr = blosc2.expr_from_udf(numba1p, ((py_scalar, np.float64), ), np.float64, shape)
+    res = expr.eval()
+    np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
+    assert res.shape == npc.shape
