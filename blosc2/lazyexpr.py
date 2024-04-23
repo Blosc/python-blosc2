@@ -218,8 +218,6 @@ class LazyExpr:
     def __ipow__(self, value):
         return self.update_expr(new_op=(self, "**", value))
 
-
-
     def evaluate(self, item=None, **kwargs) -> blosc2.NDArray:
         """Evaluate the lazy expression in self.
 
@@ -514,23 +512,30 @@ class NumbaExpr:
         # Suposem que tots els operands tenen els mateix shape (ara per ara)
         self.inputs_tuple = inputs_tuple  # Keep reference to evict lost reference
         if shape is None:
-            for obj, dtype in inputs_tuple:
-                if isinstance(obj, (np.ndarray, blosc2.NDArray)):
+            for obj, _ in inputs_tuple:
+                if isinstance(obj, (np.ndarray | blosc2.NDArray)):
                     # Get res shape
                     self.shape = obj.shape
                     break
-        cparams = {'nthreads': 1}
+        cparams = {"nthreads": 1}
         # canviar això de nthreads
         self.res = blosc2.empty(self.shape, dtype, cparams=cparams, **kwargs)
         self.res._set_aux_numba(func, id(inputs_tuple))
         self.func = func
 
     def eval(self):
-        aux = np.zeros(self.res.shape, self.res.dtype)
+        aux = np.empty(self.res.shape, self.res.dtype)
         self.res[...] = aux
         self.res.schunk.remove_prefilter(self.func.__name__)
 
         return self.res
+
+    def __getitem__(self, item):
+        aux = np.empty(self.res.shape, self.res.dtype)
+        self.res[...] = aux
+        self.res.schunk.remove_prefilter(self.func.__name__)
+
+        return self.res[item]
 
 
 # inputs_tuple = ( (operand, dtype), (operand2, dtype2), ... )
