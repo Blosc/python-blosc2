@@ -505,7 +505,7 @@ ctypedef struct filler_udata:
     int output_cdtype
     int32_t chunkshape
 
-ctypedef struct numba_udata:
+ctypedef struct udf_prefilter_udata:
     char* py_func
     uintptr_t inputs_id
     int output_cdtype
@@ -1560,8 +1560,8 @@ cdef int general_filler(blosc2_prefilter_params *params):
     return 0
 
 
-cdef int general_numba(blosc2_prefilter_params *params):
-    cdef numba_udata *udata = <numba_udata *> params.user_data
+cdef int general_udf_prefilter(blosc2_prefilter_params *params):
+    cdef udf_prefilter_udata *udata = <udf_prefilter_udata *> params.user_data
 
     cdef uint8_t nd = udata.array.ndim
     cdef int64_t chunk_ndim[B2ND_MAX_DIM]
@@ -2270,7 +2270,7 @@ cdef class NDArray:
             self.array.ndim = 0
 
 
-    def _set_aux_numba(self, func, inputs_id):
+    def _set_pref_udf(self, func, inputs_id):
         if self.array.sc.storage.cparams.nthreads > 1:
             raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
 
@@ -2280,16 +2280,16 @@ cdef class NDArray:
 
         # Set prefilter
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
-        cparams.prefilter = <blosc2_prefilter_fn> general_numba
+        cparams.prefilter = <blosc2_prefilter_fn> general_udf_prefilter
 
         cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
-        cdef numba_udata* pref_udata = <numba_udata *> malloc(sizeof(numba_udata))
+        cdef udf_prefilter_udata* pref_udata = <udf_prefilter_udata *> malloc(sizeof(udf_prefilter_udata))
         pref_udata.py_func = <char *> malloc(strlen(func_id) + 1)
         strcpy(pref_udata.py_func, func_id)
         pref_udata.inputs_id = inputs_id
         pref_udata.output_cdtype = np.dtype(self.dtype).num
         pref_udata.array = self.array
-        # Save these in numba_udata to avoid computing them for each block
+        # Save these in udf_prefilter_udata to avoid computing them for each block
         for i in range(self.array.ndim):
             pref_udata.chunks_in_array[i] = pref_udata.array.extshape[i] // pref_udata.array.chunkshape[i]
             pref_udata.blocks_in_chunk[i] = pref_udata.array.extchunkshape[i] // pref_udata.array.blockshape[i]

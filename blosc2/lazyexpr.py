@@ -509,7 +509,7 @@ if __name__ == "__main__":
     print("Everything is working fine")
 
 
-class NumbaExpr:
+class LazyExprUDF:
     def __init__(self, func, inputs_tuple, dtype, shape, **kwargs):
         self.inputs_tuple = inputs_tuple  # Keep reference to evict lost reference
         self.shape = None
@@ -526,30 +526,37 @@ class NumbaExpr:
                 self.shape = (1, )
         else:
             self.shape = shape
+
+        self.kwargs = kwargs
+        self.dtype = dtype
+        self.func = func
+        self.res_eval = None
+
+    def eval(self):
+        if self.res_eval is not None:
+            return self.res_eval
         # Cannot use multithreading when applying a prefilter, save nthreads to set them
         # after the evaluation
-        cparams = kwargs.get("cparams", None)
+        cparams = self.kwargs.get("cparams", None)
         if cparams is None:
             cparams = {'nthreads': 1}
             self._cnthreads = blosc2.cparams_dflts['nthreads']
         else:
             cparams['nthreads'] = 1
             self._cnthreads = cparams.get('nthreads', blosc2.cparams_dflts['nthreads'])
-        kwargs['cparams'] = cparams
+        self.kwargs['cparams'] = cparams
 
-        self.res = blosc2.empty(self.shape, dtype, **kwargs)
-        self.res._set_aux_numba(func, id(inputs_tuple))
-        self.func = func
+        self.res_eval = blosc2.empty(self.shape, self.dtype, **self.kwargs)
+        self.res_eval._set_pref_udf(self.func, id(self.inputs_tuple))
 
-    def eval(self):
-        aux = np.zeros(self.res.shape, self.res.dtype)
-        self.res[...] = aux
-        self.res.schunk.remove_prefilter(self.func.__name__)
-        self.res.schunk.cparams['nthreads'] = self._cnthreads
+        aux = np.zeros(self.res_eval.shape, self.res_eval.dtype)
+        self.res_eval[...] = aux
+        self.res_eval.schunk.remove_prefilter(self.func.__name__)
+        self.res_eval.schunk.cparams['nthreads'] = self._cnthreads
 
-        return self.res
+        return self.res_eval
 
 
 # inputs_tuple = ( (operand, dtype), (operand2, dtype2), ... )
 def expr_from_udf(func, inputs_tuple, dtype, shape=None, **kwargs):
-    return NumbaExpr(func, inputs_tuple, dtype, shape, **kwargs)
+    return LazyExprUDF(func, inputs_tuple, dtype, shape, **kwargs)
