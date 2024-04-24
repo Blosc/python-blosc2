@@ -218,8 +218,6 @@ class LazyExpr:
     def __ipow__(self, value):
         return self.update_expr(new_op=(self, "**", value))
 
-
-
     def evaluate(self, item=None, **kwargs) -> blosc2.NDArray:
         """Evaluate the lazy expression in self.
 
@@ -549,12 +547,19 @@ class LazyExprUDF:
         self.res_eval = blosc2.empty(self.shape, self.dtype, **self.kwargs)
         self.res_eval._set_pref_udf(self.func, id(self.inputs_tuple))
 
-        aux = np.zeros(self.res_eval.shape, self.res_eval.dtype)
+        aux = np.empty(self.res_eval.shape, self.res_eval.dtype)
         self.res_eval[...] = aux
         self.res_eval.schunk.remove_prefilter(self.func.__name__)
         self.res_eval.schunk.cparams['nthreads'] = self._cnthreads
 
         return self.res_eval
+
+    def __getitem__(self, item):
+        aux = np.empty(self.res_eval.shape, self.res_eval.dtype)
+        self.res_eval[...] = aux
+        self.res_eval.schunk.remove_prefilter(self.func.__name__)
+
+        return self.res_eval[item]
 
 
 # inputs_tuple = ( (operand, dtype), (operand2, dtype2), ... )
