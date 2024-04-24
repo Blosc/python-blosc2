@@ -1428,15 +1428,25 @@ cdef class SChunk:
         if self.schunk.dctx == NULL:
             raise RuntimeError("Could not create decompression context")
 
-    def remove_postfilter(self, func_name):
-        del blosc2.postfilter_funcs[func_name]
-        self.schunk.storage.dparams.postfilter = NULL
+    cpdef remove_postfilter(self, func_name=None, new_ctx=True):
+        if func_name is not None:
+            del blosc2.postfilter_funcs[func_name]
+
+        cdef user_filters_udata* udata = <user_filters_udata * > self.schunk.storage.dparams.postparams.user_data
+        free(udata.py_func)
+        free(self.schunk.storage.dparams.postparams.user_data)
         free(self.schunk.storage.dparams.postparams)
+        self.schunk.storage.dparams.postparams = NULL
+        self.schunk.storage.dparams.postfilter = NULL
 
         blosc2_free_ctx(self.schunk.dctx)
-        self.schunk.dctx = blosc2_create_dctx(dereference(self.schunk.storage.dparams))
-        if self.schunk.dctx == NULL:
-            raise RuntimeError("Could not create decompression context")
+        if new_ctx:
+            self.schunk.dctx = blosc2_create_dctx(dereference(self.schunk.storage.dparams))
+            if self.schunk.dctx == NULL:
+                raise RuntimeError("Could not create decompression context")
+        else:
+            # Avoid creating new dctx when calling this from the __dealloc__
+            self.schunk.dctx = NULL
 
     def _set_filler(self, func, inputs_id, dtype_output):
         if self.schunk.storage.cparams.nthreads > 1:
@@ -1502,18 +1512,35 @@ cdef class SChunk:
         if self.schunk.cctx == NULL:
             raise RuntimeError("Could not create compression context")
 
-    def remove_prefilter(self, func_name):
-        del blosc2.prefilter_funcs[func_name]
-        self.schunk.storage.cparams.prefilter = NULL
+    cpdef remove_prefilter(self, func_name=None, new_ctx=True):
+        if func_name is not None:
+            del blosc2.prefilter_funcs[func_name]
+
+        # From Python the preparams->udata with always have the field py_func
+        cdef user_filters_udata * udata = <user_filters_udata *>self.schunk.storage.cparams.preparams.user_data
+        free(udata.py_func)
+        free(self.schunk.storage.cparams.preparams.user_data)
         free(self.schunk.storage.cparams.preparams)
+        self.schunk.storage.cparams.preparams = NULL
+        self.schunk.storage.cparams.prefilter = NULL
 
         blosc2_free_ctx(self.schunk.cctx)
-        self.schunk.cctx = blosc2_create_cctx(dereference(self.schunk.storage.cparams))
-        if self.schunk.cctx == NULL:
-            raise RuntimeError("Could not create compression context")
+        if new_ctx:
+            self.schunk.cctx = blosc2_create_cctx(dereference(self.schunk.storage.cparams))
+            if self.schunk.cctx == NULL:
+                raise RuntimeError("Could not create compression context")
+        else:
+            # Avoid creating new cctx when calling this from the __dealloc__
+            self.schunk.cctx = NULL
 
     def __dealloc__(self):
         if self.schunk != NULL and not self._is_view:
+            # Free prefilters and postfilters params
+            if self.schunk.storage.cparams.prefilter != NULL:
+                self.remove_prefilter(func_name=None, new_ctx=False)
+            if self.schunk.storage.dparams.postfilter != NULL:
+                self.remove_postfilter(func_name=None, new_ctx=False)
+
             blosc2_schunk_free(self.schunk)
 
 
