@@ -206,7 +206,7 @@ cdef extern from "blosc2.h":
         int64_t nchunk
         int32_t nblock
         int32_t tid
-        uint8_t * ttmp
+        uint8_t *ttmp
         size_t ttmp_nbytes
         blosc2_context *ctx
 
@@ -505,7 +505,7 @@ ctypedef struct filler_udata:
     int output_cdtype
     int32_t chunkshape
 
-ctypedef struct udf_prefilter_udata:
+ctypedef struct udf_udata:
     char* py_func
     uintptr_t inputs_id
     int output_cdtype
@@ -1588,7 +1588,7 @@ cdef int general_filler(blosc2_prefilter_params *params):
 
 
 cdef int general_udf_prefilter(blosc2_prefilter_params *params):
-    cdef udf_prefilter_udata *udata = <udf_prefilter_udata *> params.user_data
+    cdef udf_udata *udata = <udf_udata *> params.user_data
 
     cdef uint8_t nd = udata.array.ndim
     cdef int64_t chunk_ndim[B2ND_MAX_DIM]
@@ -1651,7 +1651,7 @@ cdef int general_udf_prefilter(blosc2_prefilter_params *params):
             else:
                 raise ValueError("Unsupported operand")
 
-    # Call numba function
+    # Call udf function
     func_id = udata.py_func.decode("utf-8")
     blosc2.prefilter_funcs[func_id](tuple(inputs), output, np.array(start_ndim))
 
@@ -1667,6 +1667,93 @@ cdef int general_udf_prefilter(blosc2_prefilter_params *params):
         buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(output, buf, PyBUF_SIMPLE)
         b2nd_copy_buffer(udata.array.ndim, params.output_typesize,
+        buf.buf, slice_shape, start, slice_shape,
+        params.output, blockshape_int64, start)
+        PyBuffer_Release(buf)
+
+    return 0
+
+
+cdef int general_udf_postfilter(blosc2_postfilter_params *params):
+    cdef udf_udata *udata = <udf_udata *> params.user_data
+
+    cdef uint8_t nd = udata.array.ndim
+    cdef int64_t chunk_ndim[B2ND_MAX_DIM]
+    blosc2_unidim_to_multidim(nd, udata.chunks_in_array, params.nchunk, chunk_ndim)
+    cdef int64_t block_ndim[B2ND_MAX_DIM]
+    blosc2_unidim_to_multidim(nd, udata.blocks_in_chunk, params.nblock, block_ndim)
+    cdef int64_t start_ndim[B2ND_MAX_DIM]
+    for i in range(nd):
+        start_ndim[i] = chunk_ndim[i] * udata.array.chunkshape[i] + block_ndim[i] * udata.array.blockshape[i]
+
+    padding = False
+    blockshape = []
+    for i in range(nd):
+        if start_ndim[i] + udata.array.blockshape[i] > udata.array.shape[i]:
+            padding = True
+            blockshape.append(udata.array.shape[i] - start_ndim[i])
+            if blockshape[i] <= 0:
+                # This block contains only padding, skip it
+                return 0
+        else:
+            blockshape.append(udata.array.blockshape[i])
+    cdef np.npy_intp dims[B2ND_MAX_DIM]
+    for i in range(nd):
+        dims[i] = blockshape[i]
+
+    if padding:
+        output = np.empty(blockshape, udata.array.dtype)
+    else:
+        output = np.PyArray_SimpleNewFromData(nd, dims, udata.output_cdtype, <void*>params.output)
+
+    inputs_tuple = _ctypes.PyObj_FromPtr(udata.inputs_id)
+    inputs = []
+    # Get slice of each operand
+    if nd == 1:
+        # When ndim == 1, schunks as operands are supported
+        for obj, dtype in inputs_tuple:
+            if isinstance(obj, blosc2.SChunk):
+                out = np.empty(blockshape[0], dtype=dtype)
+                obj.get_slice(start=start_ndim[0], stop=start_ndim[0] + blockshape[0], out=out)
+                inputs.append(out)
+            elif isinstance(obj, np.ndarray):
+                inputs.append(obj[start_ndim[0] : start_ndim[0] + blockshape[0]])
+            elif isinstance(obj, (int, float, bool, complex)):
+                inputs.append(obj)
+            else:
+                raise ValueError("Unsupported operand")
+    else:
+        # Get tuple of slices
+        l = []
+        for i in range(nd):
+            l.append(slice(start_ndim[i], start_ndim[i] + blockshape[i]))
+        slices = tuple(l)
+        for obj, dtype in inputs_tuple:
+            if isinstance(obj, blosc2.NDArray):
+                inputs.append(obj[slices])
+            elif isinstance(obj, np.ndarray):
+                inputs.append(obj[slices])
+            elif isinstance(obj, (int, float, bool, complex)):
+                inputs.append(obj)
+            else:
+                raise ValueError("Unsupported operand")
+
+    # Call udf function
+    func_id = udata.py_func.decode("utf-8")
+    blosc2.postfilter_funcs[func_id](tuple(inputs), output, np.array(start_ndim))
+
+    cdef int64_t start[B2ND_MAX_DIM]
+    cdef int64_t slice_shape[B2ND_MAX_DIM]
+    cdef int64_t blockshape_int64[B2ND_MAX_DIM]
+    cdef Py_buffer *buf
+    if padding:
+        for i in range(nd):
+            start[i] = 0
+            slice_shape[i] = blockshape[i]
+            blockshape_int64[i] = udata.array.blockshape[i]
+        buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+        PyObject_GetBuffer(output, buf, PyBUF_SIMPLE)
+        b2nd_copy_buffer(udata.array.ndim, params.typesize,
         buf.buf, slice_shape, start, slice_shape,
         params.output, blockshape_int64, start)
         PyBuffer_Release(buf)
@@ -2310,13 +2397,13 @@ cdef class NDArray:
         cparams.prefilter = <blosc2_prefilter_fn> general_udf_prefilter
 
         cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
-        cdef udf_prefilter_udata* pref_udata = <udf_prefilter_udata *> malloc(sizeof(udf_prefilter_udata))
+        cdef udf_udata* pref_udata = <udf_udata *> malloc(sizeof(udf_udata))
         pref_udata.py_func = <char *> malloc(strlen(func_id) + 1)
         strcpy(pref_udata.py_func, func_id)
         pref_udata.inputs_id = inputs_id
         pref_udata.output_cdtype = np.dtype(self.dtype).num
         pref_udata.array = self.array
-        # Save these in udf_prefilter_udata to avoid computing them for each block
+        # Save these in udf_udata to avoid computing them for each block
         for i in range(self.array.ndim):
             pref_udata.chunks_in_array[i] = pref_udata.array.extshape[i] // pref_udata.array.chunkshape[i]
             pref_udata.blocks_in_chunk[i] = pref_udata.array.extchunkshape[i] // pref_udata.array.blockshape[i]
@@ -2329,6 +2416,40 @@ cdef class NDArray:
         self.array.sc.cctx = blosc2_create_cctx(dereference(cparams))
         if self.array.sc.cctx == NULL:
             raise RuntimeError("Could not create compression context")
+
+    def _set_postf_udf(self, func, inputs_id):
+        if self.array.sc.storage.dparams.nthreads > 1:
+            raise AttributeError("decompress `nthreads` must be 1 when assigning a postfilter")
+
+        func_id = func.__name__
+        blosc2.postfilter_funcs[func_id] = func
+        func_id = func_id.encode("utf-8") if isinstance(func_id, str) else func_id
+
+        # Set postfilter
+        cdef blosc2_dparams *dparams = self.array.sc.storage.dparams
+        dparams.postfilter = <blosc2_postfilter_fn> general_udf_postfilter
+        # Fill postparams
+        cdef blosc2_postfilter_params *postparams = <blosc2_postfilter_params *> malloc(
+            sizeof(blosc2_postfilter_params))
+        cdef udf_udata * postf_udata = <udf_udata *> malloc(sizeof(udf_udata))
+        postf_udata.py_func = <char *> malloc(strlen(func_id) + 1)
+        strcpy(postf_udata.py_func, func_id)
+        postf_udata.inputs_id = inputs_id
+        postf_udata.output_cdtype = np.dtype(self.dtype).num
+        postf_udata.array = self.array
+        # Save these in udf_udata to avoid computing them for each block
+        for i in range(self.array.ndim):
+            postf_udata.chunks_in_array[i] = postf_udata.array.extshape[i] // postf_udata.array.chunkshape[i]
+            postf_udata.blocks_in_chunk[i] = postf_udata.array.extchunkshape[i] // postf_udata.array.blockshape[i]
+
+        postparams.user_data = postf_udata
+        dparams.postparams = postparams
+        _check_dparams(dparams, self.array.sc.storage.cparams)
+
+        blosc2_free_ctx(self.array.sc.dctx)
+        self.array.sc.dctx = blosc2_create_dctx(dereference(dparams))
+        if self.array.sc.dctx == NULL:
+            raise RuntimeError("Could not create decompression context")
 
     def __dealloc__(self):
         if self.array != NULL:

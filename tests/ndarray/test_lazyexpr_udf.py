@@ -32,7 +32,7 @@ def numba1p(inputs_tuple, output, offset):
         ((13, 13), (10, 10), (4, 4),),
     ],
 )
-def test_numba1p(shape, chunks, blocks):
+def test_lazyexpr_udf_1p(shape, chunks, blocks):
     npa = np.linspace(0, 1, np.prod(shape)).reshape(shape)
     npc = npa + 1
 
@@ -60,7 +60,7 @@ def numba2p(inputs_tuple, output, offset):
         ((13, 13), (10, 10), (5, 5),),
     ],
 )
-def test_numba2p(shape, chunks, blocks):
+def test_lazyexpr_udf_2p(shape, chunks, blocks):
     npa = np.arange(0, np.prod(shape)).reshape(shape)
     npb = np.arange(1, np.prod(shape) + 1).reshape(shape)
     npc = npa**2 + npb**2 + 2 * npa * npb + 1
@@ -88,7 +88,7 @@ def numba1dim(inputs_tuple, output, offset):
         ((23, ), (10, ), (3, ),),
     ],
 )
-def test_numba1dim(shape, chunks, blocks):
+def test_lazyexpr_udf_1dim(shape, chunks, blocks):
     npa = np.arange(start=0, stop=np.prod(shape)).reshape(shape)
     npb = np.arange(start=1, stop=np.prod(shape) + 1).reshape(shape)
     py_scalar = np.e
@@ -103,7 +103,7 @@ def test_numba1dim(shape, chunks, blocks):
     np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
 
 
-def test_numba_params():
+def test_lazyexpr_udf_params():
     shape = (23, )
     npa = np.arange(start=0, stop=np.prod(shape)).reshape(shape)
     py_scalar = np.e

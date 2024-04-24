@@ -8,6 +8,7 @@
 import ndindex
 import numexpr as ne
 import numpy as np
+import warnings
 
 import blosc2
 
@@ -529,6 +530,7 @@ class LazyExprUDF:
         self.dtype = dtype
         self.func = func
         self.res_eval = None
+        self.res_getitem = None
 
     def eval(self):
         if self.res_eval is not None:
@@ -555,11 +557,25 @@ class LazyExprUDF:
         return self.res_eval
 
     def __getitem__(self, item):
-        aux = np.empty(self.res_eval.shape, self.res_eval.dtype)
-        self.res_eval[...] = aux
-        self.res_eval.schunk.remove_prefilter(self.func.__name__)
+        if self.res_eval is not None:
+            return self.res_eval[item]
 
-        return self.res_eval[item]
+        if self.res_getitem is None:
+            kwargs_getitem = self.kwargs.copy()
+            kwargs_getitem.pop('urlpath', None)
+            kwargs_getitem.pop('contiguous', None)
+
+            # Cannot use multithreading when applying a postfilter, dparams['nthreads'] ignored
+            dparams = kwargs_getitem.get("dparams", None)
+            if dparams is None:
+                dparams = {'nthreads': 1}
+            else:
+                dparams['nthreads'] = 1
+            kwargs_getitem['dparams'] = dparams
+            self.res_getitem = blosc2.empty(self.shape, self.dtype, **kwargs_getitem)
+            self.res_getitem._set_postf_udf(self.func, id(self.inputs_tuple))
+
+        return self.res_getitem[item]
 
 
 # inputs_tuple = ( (operand, dtype), (operand2, dtype2), ... )
