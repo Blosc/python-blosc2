@@ -533,6 +533,20 @@ class LazyExprUDF:
         self.res_getitem = None
 
     def eval(self):
+        """
+        Get a :ref:`NDArray <NDArray>` containing the evaluation of the :ref:`LazyExprUDF <LazyExprUDF>`.
+
+        Returns
+        -------
+        out: :ref:`NDArray <NDArray>`
+            A :ref:`NDArray <NDArray>` containing the result of evaluating the :ref:`LazyExprUDF <LazyExprUDF>`.
+
+        Notes
+        -----
+        Because this calls a Python function when compressing, the `cparams[nthreads]` is set to
+        one during the evaluation. After it, the original `cparams[nthreads]` value is restored.
+
+        """
         if self.res_eval is not None:
             return self.res_eval
         # Cannot use multithreading when applying a prefilter, save nthreads to set them
@@ -557,6 +571,21 @@ class LazyExprUDF:
         return self.res_eval
 
     def __getitem__(self, item):
+        """
+        Evaluate a slice of the :ref:`LazyExprUDF <LazyExprUDF>`.
+
+        Parameters
+        ----------
+        item: slice
+            The slice of the :ref:`LazyExprUDF <LazyExprUDF>` to evaluate.
+
+        Returns
+        -------
+        out: NumPy.ndarray
+            The result of evaluating the slice of the :ref:`LazyExprUDF <LazyExprUDF>`
+            as a NumPy.ndarray.
+
+        """
         if self.res_eval is not None:
             return self.res_eval[item]
 
@@ -580,4 +609,35 @@ class LazyExprUDF:
 
 # inputs_tuple = ( (operand, dtype), (operand2, dtype2), ... )
 def expr_from_udf(func, inputs_tuple, dtype, shape=None, **kwargs):
+    """
+    Get a LazyExprUDF from a python user-defined function.
+
+    Parameters
+    ----------
+    func: Python function
+        Function to apply to each block.
+    inputs_tuple: tuple of tuples
+        Tuple which contains one two-element tuple for each operand containing the operand
+        instance and its dtype. The supported operands types are NumPy.ndarray, Python
+        scalars, :ref:`NDArray <NDArray>` and blosc2.SChunk (the last one only when the result's
+        ndim of evaluating the expression is 1).
+    dtype: np.dtype
+        The resulting ndarray dtype in NumPy format.
+    shape: tuple(int) or list(int)
+        The shape of the resulting evaluation. If it is None, it will be taken from the
+        operands.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: :ref:`LazyExprUDF <LazyExprUDF>`
+        A :ref:`LazyExprUDF <LazyExprUDF>` is returned.
+
+    Notes
+    -----
+    * If `urlpath` or `contiguous` are passed as kwargs,
+    * Since the
+
+    """
     return LazyExprUDF(func, inputs_tuple, dtype, shape, **kwargs)
