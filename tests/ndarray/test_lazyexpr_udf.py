@@ -79,7 +79,6 @@ def udf_1dim(inputs_tuple, output, offset):
     output[:] = x + y + z
 
 
-# Test with np.ndarray, blosc2.SChunk and python scalar operands
 @pytest.mark.parametrize(
     "shape, chunks, blocks",
     [
@@ -89,7 +88,7 @@ def udf_1dim(inputs_tuple, output, offset):
 )
 def test_lazyexpr_udf_1dim(shape, chunks, blocks):
     npa = np.arange(start=0, stop=np.prod(shape)).reshape(shape)
-    npb = np.arange(start=1, stop=np.prod(shape) + 1).reshape(shape)
+    npb = np.linspace(1, 2, np.prod(shape)).reshape(shape)
     py_scalar = np.e
     npc = npa + npb + py_scalar
 
@@ -106,7 +105,6 @@ def test_lazyexpr_udf_params():
     shape = (23, )
     npa = np.arange(start=0, stop=np.prod(shape)).reshape(shape)
     py_scalar = np.e
-    a = blosc2.asarray(npa)
     schunk = blosc2.SChunk(data=npa)
 
     # Assert that shape is computed correctly
@@ -129,3 +127,34 @@ def test_lazyexpr_udf_params():
     res = expr.eval()
     np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
     assert res.shape == npc.shape
+
+
+@pytest.mark.parametrize(
+    "shape, chunks, blocks, slices, urlpath, contiguous",
+    [
+        ((40, 20), (30, 10), (5, 5), (slice(0, 5), slice(5, 20)), "eval.b2nd", False),
+        ((13, 13, 10), (10, 10, 5), (5, 5, 3), (slice(0, 12), slice(3, 13), ...), "eval.b2nd", True),
+        ((13, 13), (10, 10), (5, 5), (slice(3, 8), slice(9, 12)), None, False),
+    ],
+)
+def test_lazyexpr_udf_getitem(shape, chunks, blocks, slices, urlpath, contiguous):
+    blosc2.remove_urlpath(urlpath)
+    npa = np.arange(0, np.prod(shape)).reshape(shape)
+    npb = np.arange(1, np.prod(shape) + 1).reshape(shape)
+    npc = npa**2 + npb**2 + 2 * npa * npb + 1
+
+    b = blosc2.asarray(npb)
+    expr = blosc2.expr_from_udf(numba2p, ((npa, npa.dtype), (b, b.dtype)), npa.dtype, chunks=chunks,
+                                blocks=blocks, urlpath=urlpath, contiguous=contiguous)
+    lazy_eval = expr[slices]
+    np.testing.assert_allclose(lazy_eval, npc[slices])
+
+    res = expr.eval()
+    np.testing.assert_allclose(res[...], npc)
+    assert res.schunk.urlpath == urlpath
+    assert res.schunk.contiguous == contiguous
+
+    lazy_eval = expr[slices]
+    np.testing.assert_allclose(lazy_eval, npc[slices])
+
+    blosc2.remove_urlpath(urlpath)
