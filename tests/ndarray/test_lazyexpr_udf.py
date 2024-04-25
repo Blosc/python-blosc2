@@ -72,8 +72,7 @@ def test_lazyexpr_udf_2p(shape, chunks, blocks):
     np.testing.assert_allclose(res[...], npc)
 
 
-@nb.jit(nopython=True, parallel=True)
-def numba1dim(inputs_tuple, output, offset):
+def udf_1dim(inputs_tuple, output, offset):
     x = inputs_tuple[0]
     y = inputs_tuple[1]
     z = inputs_tuple[2]
@@ -95,7 +94,7 @@ def test_lazyexpr_udf_1dim(shape, chunks, blocks):
     npc = npa + npb + py_scalar
 
     b = blosc2.SChunk(data=npb)
-    expr = blosc2.expr_from_udf(numba1dim, ((npa, npa.dtype), (b, npb.dtype), (py_scalar, np.float64)),
+    expr = blosc2.expr_from_udf(udf_1dim, ((npa, npa.dtype), (b, npb.dtype), (py_scalar, np.float64)),
                                 np.float64, chunks=chunks, blocks=blocks)
     res = expr.eval()
 

@@ -1587,14 +1587,14 @@ cdef int general_filler(blosc2_prefilter_params *params):
     return 0
 
 
-cdef int general_udf_prefilter(blosc2_prefilter_params *params):
-    cdef udf_udata *udata = <udf_udata *> params.user_data
-
+# Aux function for prefilter and postfilter udf
+cdef aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
+             is_postfilter, uint8_t *params_output, int32_t typesize):
     cdef uint8_t nd = udata.array.ndim
     cdef int64_t chunk_ndim[B2ND_MAX_DIM]
-    blosc2_unidim_to_multidim(nd, udata.chunks_in_array, params.nchunk, chunk_ndim)
+    blosc2_unidim_to_multidim(nd, udata.chunks_in_array, nchunk, chunk_ndim)
     cdef int64_t block_ndim[B2ND_MAX_DIM]
-    blosc2_unidim_to_multidim(nd, udata.blocks_in_chunk, params.nblock, block_ndim)
+    blosc2_unidim_to_multidim(nd, udata.blocks_in_chunk, nblock, block_ndim)
     cdef int64_t start_ndim[B2ND_MAX_DIM]
     for i in range(nd):
         start_ndim[i] = chunk_ndim[i] * udata.array.chunkshape[i] + block_ndim[i] * udata.array.blockshape[i]
@@ -1617,7 +1617,7 @@ cdef int general_udf_prefilter(blosc2_prefilter_params *params):
     if padding:
         output = np.empty(blockshape, udata.array.dtype)
     else:
-        output = np.PyArray_SimpleNewFromData(nd, dims, udata.output_cdtype, <void*>params.output)
+        output = np.PyArray_SimpleNewFromData(nd, dims, udata.output_cdtype, <void*>params_output)
 
     inputs_tuple = _ctypes.PyObj_FromPtr(udata.inputs_id)
     inputs = []
@@ -1653,7 +1653,10 @@ cdef int general_udf_prefilter(blosc2_prefilter_params *params):
 
     # Call udf function
     func_id = udata.py_func.decode("utf-8")
-    blosc2.prefilter_funcs[func_id](tuple(inputs), output, np.array(start_ndim))
+    if is_postfilter:
+        blosc2.postfilter_funcs[func_id](tuple(inputs), output, np.array(start_ndim))
+    else:
+        blosc2.prefilter_funcs[func_id](tuple(inputs), output, np.array(start_ndim))
 
     cdef int64_t start[B2ND_MAX_DIM]
     cdef int64_t slice_shape[B2ND_MAX_DIM]
@@ -1666,99 +1669,25 @@ cdef int general_udf_prefilter(blosc2_prefilter_params *params):
             blockshape_int64[i] = udata.array.blockshape[i]
         buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(output, buf, PyBUF_SIMPLE)
-        b2nd_copy_buffer(udata.array.ndim, params.output_typesize,
-        buf.buf, slice_shape, start, slice_shape,
-        params.output, blockshape_int64, start)
+        b2nd_copy_buffer(udata.array.ndim, typesize,
+                         buf.buf, slice_shape, start, slice_shape,
+                         params_output, blockshape_int64, start)
         PyBuffer_Release(buf)
+
+
+cdef int general_udf_prefilter(blosc2_prefilter_params *params):
+    cdef udf_udata *udata = <udf_udata *> params.user_data
+    aux_udf(udata, params.nchunk, params.nblock, False, params.output, params.output_typesize)
 
     return 0
 
 
 cdef int general_udf_postfilter(blosc2_postfilter_params *params):
     cdef udf_udata *udata = <udf_udata *> params.user_data
-
-    cdef uint8_t nd = udata.array.ndim
-    cdef int64_t chunk_ndim[B2ND_MAX_DIM]
-    blosc2_unidim_to_multidim(nd, udata.chunks_in_array, params.nchunk, chunk_ndim)
-    cdef int64_t block_ndim[B2ND_MAX_DIM]
-    blosc2_unidim_to_multidim(nd, udata.blocks_in_chunk, params.nblock, block_ndim)
-    cdef int64_t start_ndim[B2ND_MAX_DIM]
-    for i in range(nd):
-        start_ndim[i] = chunk_ndim[i] * udata.array.chunkshape[i] + block_ndim[i] * udata.array.blockshape[i]
-
-    padding = False
-    blockshape = []
-    for i in range(nd):
-        if start_ndim[i] + udata.array.blockshape[i] > udata.array.shape[i]:
-            padding = True
-            blockshape.append(udata.array.shape[i] - start_ndim[i])
-            if blockshape[i] <= 0:
-                # This block contains only padding, skip it
-                return 0
-        else:
-            blockshape.append(udata.array.blockshape[i])
-    cdef np.npy_intp dims[B2ND_MAX_DIM]
-    for i in range(nd):
-        dims[i] = blockshape[i]
-
-    if padding:
-        output = np.empty(blockshape, udata.array.dtype)
-    else:
-        output = np.PyArray_SimpleNewFromData(nd, dims, udata.output_cdtype, <void*>params.output)
-
-    inputs_tuple = _ctypes.PyObj_FromPtr(udata.inputs_id)
-    inputs = []
-    # Get slice of each operand
-    if nd == 1:
-        # When ndim == 1, schunks as operands are supported
-        for obj, dtype in inputs_tuple:
-            if isinstance(obj, blosc2.SChunk):
-                out = np.empty(blockshape[0], dtype=dtype)
-                obj.get_slice(start=start_ndim[0], stop=start_ndim[0] + blockshape[0], out=out)
-                inputs.append(out)
-            elif isinstance(obj, np.ndarray):
-                inputs.append(obj[start_ndim[0] : start_ndim[0] + blockshape[0]])
-            elif isinstance(obj, (int, float, bool, complex)):
-                inputs.append(obj)
-            else:
-                raise ValueError("Unsupported operand")
-    else:
-        # Get tuple of slices
-        l = []
-        for i in range(nd):
-            l.append(slice(start_ndim[i], start_ndim[i] + blockshape[i]))
-        slices = tuple(l)
-        for obj, dtype in inputs_tuple:
-            if isinstance(obj, blosc2.NDArray):
-                inputs.append(obj[slices])
-            elif isinstance(obj, np.ndarray):
-                inputs.append(obj[slices])
-            elif isinstance(obj, (int, float, bool, complex)):
-                inputs.append(obj)
-            else:
-                raise ValueError("Unsupported operand")
-
-    # Call udf function
-    func_id = udata.py_func.decode("utf-8")
-    blosc2.postfilter_funcs[func_id](tuple(inputs), output, np.array(start_ndim))
-
-    cdef int64_t start[B2ND_MAX_DIM]
-    cdef int64_t slice_shape[B2ND_MAX_DIM]
-    cdef int64_t blockshape_int64[B2ND_MAX_DIM]
-    cdef Py_buffer *buf
-    if padding:
-        for i in range(nd):
-            start[i] = 0
-            slice_shape[i] = blockshape[i]
-            blockshape_int64[i] = udata.array.blockshape[i]
-        buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-        PyObject_GetBuffer(output, buf, PyBUF_SIMPLE)
-        b2nd_copy_buffer(udata.array.ndim, params.typesize,
-        buf.buf, slice_shape, start, slice_shape,
-        params.output, blockshape_int64, start)
-        PyBuffer_Release(buf)
+    aux_udf(udata, params.nchunk, params.nblock, True, params.output, params.typesize)
 
     return 0
+
 
 def nelem_from_inputs(inputs_tuple, nelem=None):
     for obj, dtype in inputs_tuple:
