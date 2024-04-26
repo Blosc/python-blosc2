@@ -15,6 +15,7 @@ from time import time
 import numba as nb
 import numexpr as ne
 import numpy as np
+import os
 
 import blosc2
 
@@ -25,32 +26,28 @@ dtype = np.float64
 
 # Create a NDArray from a NumPy array
 npa = np.linspace(0, 1, np.prod(shape)).reshape(shape)
-npc = npa + 1
 
 t0 = time()
 npc = npa + 1
 print("NumPy took %.3f s" % (time() - t0))
 
-ne.set_num_threads(1)
-ne.evaluate("npa + 1", out=np.empty_like(npa))
+#ne.set_num_threads(1)
+#nb.set_num_threads(1)  # this does not work that well; better use the NUMBA_NUM_THREADS env var
 t0 = time()
 ne.evaluate("npa + 1", out=np.empty_like(npa))
 print("NumExpr took %.3f s" % (time() - t0))
 
-# a = blosc2.SChunk()
-# a.append_data(npa)
-
-blosc2.cparams_dflts["codec"] = blosc2.Codec.BLOSCLZ
-blosc2.cparams_dflts["clevel"] = 1
+blosc2.cparams_dflts["codec"] = blosc2.Codec.LZ4
+blosc2.cparams_dflts["clevel"] = 5
 a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
 
 # Get a LazyExpr instance
 c = a + 1
-# Evaluate!  Output is a NDArray
+# Warm-up
 d = c.evaluate()
 t0 = time()
 d = c.evaluate()
-print("Blosc2+numexpr took %.3f s" % (time() - t0))
+print("Blosc2+numexpr+eval took %.3f s" % (time() - t0))
 # Check
 assert np.allclose(d[:], npc)
 
@@ -65,6 +62,7 @@ def func_numba(x):
     return out
 
 
+nb.set_num_threads(1)
 nb_res = func_numba(npa)
 t0 = time()
 nb_res = func_numba(npa)
@@ -74,22 +72,27 @@ print("Numba took %.3f s" % (time() - t0))
 @nb.jit(nopython=True, parallel=True)
 def udf_numba(inputs_tuple, output, offset):
     x = inputs_tuple[0]
-    # output[:] = x + 1
+    #output[:] = x + 1
+    #return
     for i in nb.prange(x.shape[0]):
         for j in nb.prange(x.shape[1]):
             output[i, j] = x[i, j] + 1
 
+expr = blosc2.expr_from_udf(udf_numba, ((npa, npa.dtype),), npa.dtype,
+                            chunks=chunks, blocks=blocks)
 # warm up
-expr = blosc2.expr_from_udf(udf_numba, ((npa, npa.dtype),), npa.dtype, chunks=chunks, blocks=blocks)
 res = expr.eval()
-expr = blosc2.expr_from_udf(udf_numba, ((npa, npa.dtype),), npa.dtype, chunks=chunks, blocks=blocks)
+expr = blosc2.expr_from_udf(udf_numba, ((npa, npa.dtype),), npa.dtype,
+                            chunks=chunks, blocks=blocks)
 # actual benchmark
 t0 = time()
 res = expr.eval()
 print("Blosc2+numba+eval took %.3f s" % (time() - t0))
-expr = blosc2.expr_from_udf(udf_numba, ((npa, npa.dtype),), npa.dtype, chunks=chunks, blocks=blocks)
+expr = blosc2.expr_from_udf(udf_numba, ((npa, npa.dtype),), npa.dtype,
+                            chunks=chunks, blocks=blocks)
+# getitem uses the same compiled function but as a postfilter; no need to warm up
 t0 = time()
-res = expr[:]  # 1.6x slower with prefilters; will try with postfilters in the future
+res = expr[:]
 print("Blosc2+numba+getitem took %.3f s" % (time() - t0))
 # print(res.info)
 

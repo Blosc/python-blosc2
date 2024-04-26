@@ -5,10 +5,10 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+
 import ndindex
 import numexpr as ne
 import numpy as np
-import warnings
 
 import blosc2
 
@@ -515,14 +515,14 @@ class LazyExprUDF:
         if shape is None:
             # Get res shape
             for obj, _ in inputs_tuple:
-                if isinstance(obj, (np.ndarray, blosc2.NDArray)):
+                if isinstance(obj, np.ndarray | blosc2.NDArray):
                     self.shape = obj.shape
                     break
                 elif isinstance(obj, blosc2.SChunk):
-                    self.shape = (len(obj), )
+                    self.shape = (len(obj),)
                     break
             if self.shape is None:
-                self.shape = (1, )
+                self.shape = (1,)
         else:
             self.shape = shape
 
@@ -553,12 +553,15 @@ class LazyExprUDF:
         # after the evaluation
         cparams = self.kwargs.get("cparams", None)
         if cparams is None:
-            cparams = {'nthreads': 1}
-            self._cnthreads = blosc2.cparams_dflts['nthreads']
+            cparams = {"nthreads": 1}
+            self._cnthreads = blosc2.cparams_dflts["nthreads"]
+        elif isinstance(cparams, dict):
+            cparams["nthreads"] = 1
+            # TODO: self._cnthreads is always 1 below?  Marta?
+            self._cnthreads = cparams.get("nthreads", blosc2.cparams_dflts["nthreads"])
         else:
-            cparams['nthreads'] = 1
-            self._cnthreads = cparams.get('nthreads', blosc2.cparams_dflts['nthreads'])
-        self.kwargs['cparams'] = cparams
+            raise ValueError("cparams should be a dictionary")
+        self.kwargs["cparams"] = cparams
 
         self.res_eval = blosc2.empty(self.shape, self.dtype, **self.kwargs)
         self.res_eval._set_pref_udf(self.func, id(self.inputs_tuple))
@@ -566,7 +569,7 @@ class LazyExprUDF:
         aux = np.empty(self.res_eval.shape, self.res_eval.dtype)
         self.res_eval[...] = aux
         self.res_eval.schunk.remove_prefilter(self.func.__name__)
-        self.res_eval.schunk.cparams['nthreads'] = self._cnthreads
+        self.res_eval.schunk.cparams["nthreads"] = self._cnthreads
 
         return self.res_eval
 
@@ -591,16 +594,18 @@ class LazyExprUDF:
 
         if self.res_getitem is None:
             kwargs_getitem = self.kwargs.copy()
-            kwargs_getitem.pop('urlpath', None)
-            kwargs_getitem.pop('contiguous', None)
+            kwargs_getitem.pop("urlpath", None)
+            kwargs_getitem.pop("contiguous", None)
 
             # Cannot use multithreading when applying a postfilter, dparams['nthreads'] ignored
             dparams = kwargs_getitem.get("dparams", None)
             if dparams is None:
-                dparams = {'nthreads': 1}
+                dparams = {"nthreads": 1}
+            elif isinstance(dparams, dict):
+                dparams["nthreads"] = 1
             else:
-                dparams['nthreads'] = 1
-            kwargs_getitem['dparams'] = dparams
+                raise ValueError("dparams should be a dictionary")
+            kwargs_getitem["dparams"] = dparams
             self.res_getitem = blosc2.empty(self.shape, self.dtype, **kwargs_getitem)
             self.res_getitem._set_postf_udf(self.func, id(self.inputs_tuple))
 
