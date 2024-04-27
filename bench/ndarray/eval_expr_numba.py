@@ -49,12 +49,12 @@ t0 = time()
 d = c.evaluate()
 print("Blosc2+numexpr+eval took %.3f s" % (time() - t0))
 # Check
-assert np.allclose(d[:], npc)
+np.testing.assert_allclose(d[:], npc)
 t0 = time()
 d = c[:]
 print("Blosc2+numexpr+getitem took %.3f s" % (time() - t0))
 # Check
-assert np.allclose(d[:], npc)
+np.testing.assert_allclose(d[:], npc)
 
 
 @nb.jit(nopython=True, parallel=True)
@@ -103,7 +103,6 @@ print("Blosc2+numba+getitem took %.3f s" % (time() - t0))
 # print(res.info)
 
 
-# assert np.allclose(res[...], npc)
 tol = 1e-5 if dtype is np.float32 else 1e-14
 if dtype in (np.float32, np.float64):
     np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)

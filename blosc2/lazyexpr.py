@@ -274,12 +274,18 @@ def validate_inputs(inputs: dict) -> tuple:
     first_input = inputs[0]
     equal_chunks = True
     equal_blocks = True
+    if first_input.blocks[1:] != first_input.chunks[1:]:
+        # For some reason, the trailing dimensions not being the same is not supported in fast path
+        equal_blocks = False
     for input_ in inputs[1:]:
         if first_input.shape != input_.shape:
             raise ValueError("Inputs should have the same shape")
         if first_input.chunks != input_.chunks:
             equal_chunks = False
         if first_input.blocks != input_.blocks:
+            equal_blocks = False
+        if first_input.blocks[1:] != input_.chunks[1:]:
+            # For some reason, the trailing dimensions not being the same is not supported in fast path
             equal_blocks = False
     has_padding = False
     # Check if there is padding for more than 1-dim operands (1-dim is supported in getitem mode)
@@ -358,7 +364,7 @@ def evaluate_chunks(expression: str, operands: dict, **kwargs) -> blosc2.NDArray
                 slice(c * s, min((c + 1) * s, shape[i]))
                 for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
             )
-            chunks_ = [s.stop - s.start for s in slice_]
+            chunks_ = tuple(s.stop - s.start for s in slice_)
 
         for key, value in operands.items():
             lazychunk = value.schunk.get_lazychunk(info.nchunk)
@@ -368,11 +374,17 @@ def evaluate_chunks(expression: str, operands: dict, **kwargs) -> blosc2.NDArray
                 # print("Skipping chunk")
                 # continue
                 pass
-            buff = value.schunk.decompress_chunk(info.nchunk)
             if getitem:
-                bsize = value.dtype.itemsize * math.prod(chunks_)
-                npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
+                if chunks_ != chunks:
+                    # The chunk is not a full one, so we need to fetch the valid data
+                    npbuff = value[slice_]
+                else:
+                    # Fast path for full chunks
+                    buff = value.schunk.decompress_chunk(info.nchunk)
+                    bsize = value.dtype.itemsize * math.prod(chunks_)
+                    npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
             else:
+                buff = value.schunk.decompress_chunk(info.nchunk)
                 # We don't want to reshape the buffer (to better handle padding)
                 npbuff = np.frombuffer(buff, dtype=value.dtype)
             chunk_operands[key] = npbuff
