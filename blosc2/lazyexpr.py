@@ -5,8 +5,8 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+import math
 
-import ndindex
 import numexpr as ne
 import numpy as np
 
@@ -235,21 +235,29 @@ class LazyExpr:
         :ref:`NDArray`
             The output array.
         """
-        shape, dtype, equal_chunks, equal_blocks = validate_inputs(self.operands)
+        shape, dtype, equal_chunks, equal_blocks, has_padding = validate_inputs(self.operands)
         nelem = np.prod(shape)
         if item is not None and item != slice(None, None, None):
             return evaluate_slices(self.expression, self.operands, _slice=item, **kwargs)
         if nelem <= 10_000:  # somewhat arbitrary threshold
             out = evaluate_incache(self.expression, self.operands, **kwargs)
         elif equal_chunks and equal_blocks:
+            getitem = kwargs.get("_getitem", False)
+            if getitem and has_padding:
+                # We need to evaluate the expression via NDArray because the logic
+                # for NDim padding is in the NDArray object
+                kwargs.pop("_getitem")
             out = evaluate_chunks(self.expression, self.operands, **kwargs)
         else:
             out = evaluate_slices(self.expression, self.operands, **kwargs)
         return out
 
     def __getitem__(self, item):
-        ndarray = self.evaluate(item=item)
-        return ndarray[item] if item is not None else ndarray[:]
+        if item == Ellipsis:
+            item = slice(None, None, None)
+        ndarray = self.evaluate(item=item, **{"_getitem": True})
+        full_data = item is None or item == slice(None, None, None) or item == Ellipsis
+        return ndarray[item] if not full_data else ndarray[:]
 
     def __str__(self):
         expression = f"{self.expression}"
@@ -273,10 +281,15 @@ def validate_inputs(inputs: dict) -> tuple:
             equal_chunks = False
         if first_input.blocks != input_.blocks:
             equal_blocks = False
-    return first_input.shape, first_input.dtype, equal_chunks, equal_blocks
+    has_padding = False
+    # Check if there is padding for more than 1-dim operands (1-dim is supported in getitem mode)
+    if equal_blocks and equal_chunks and len(first_input.shape) > 1:
+        has_padding = any([c % b != 0 for c, b in zip(first_input.chunks, first_input.blocks, strict=True)])
+
+    return first_input.shape, first_input.dtype, equal_chunks, equal_blocks, has_padding
 
 
-def evaluate_incache(expression: str, operands: dict, **kwargs) -> blosc2.NDArray:
+def evaluate_incache(expression: str, operands: dict, **kwargs) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
     This can be used when operands fit in CPU cache.
@@ -299,6 +312,9 @@ def evaluate_incache(expression: str, operands: dict, **kwargs) -> blosc2.NDArra
     numpy_operands = {key: value[:] for key, value in operands.items()}
     # Evaluate the expression using numexpr
     result = ne.evaluate(expression, numpy_operands)
+    getitem = kwargs.pop("_getitem", False)
+    if getitem:
+        return result
     # Convert the resulting numpy array back to an NDArray
     return blosc2.asarray(result, **kwargs)
 
@@ -322,8 +338,10 @@ def evaluate_chunks(expression: str, operands: dict, **kwargs) -> blosc2.NDArray
     :ref:`NDArray`
         The output array.
     """
+    getitem = kwargs.pop("_getitem", False)
     operand = operands["o0"]
     shape = operand.shape
+    chunks = operand.chunks
     out = None
     for info in operands["o0"].iterchunks_info():
         # Iterate over the operands and get the chunks
@@ -341,18 +359,40 @@ def evaluate_chunks(expression: str, operands: dict, **kwargs) -> blosc2.NDArray
                 # continue
                 pass
             buff = value.schunk.decompress_chunk(info.nchunk)
-            # npbuff = np.frombuffer(buff, dtype=value.dtype).reshape(value.chunks)
-            # We don't need to reshape the buffer
-            npbuff = np.frombuffer(buff, dtype=value.dtype)
+            if getitem:
+                chunksize = math.prod(chunks)
+                bsize = value.dtype.itemsize * chunksize
+                npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks)
+            else:
+                # We don't want to reshape the buffer (to better handle padding)
+                npbuff = np.frombuffer(buff, dtype=value.dtype)
             chunk_operands[key] = npbuff
         # Evaluate the expression using chunks of operands
         result = ne.evaluate(expression, chunk_operands)
         if out is None:
-            # Due to padding, it is critical to have the same chunks and blocks as the operands
-            out = blosc2.empty(
-                shape, chunks=operand.chunks, blocks=operand.blocks, dtype=result.dtype, **kwargs
+            if getitem:
+                out = np.empty(shape, dtype=result.dtype)
+            else:
+                # Due to padding, it is critical to have the same chunks and blocks as the operands
+                out = blosc2.empty(
+                    shape, chunks=operand.chunks, blocks=operand.blocks, dtype=result.dtype, **kwargs
+                )
+        if getitem:
+            slice_ = tuple(
+                slice(c * s, min((c + 1) * s, shape[i]))
+                for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
             )
-        out.schunk.update_data(info.nchunk, result, copy=False)
+            # print(slice_)
+            # Calculate the size of the slice_
+            slice_size = [s.stop - s.start for s in slice_]
+
+            # Slice the result array to match the size of the slice_
+            reduced_result = result[tuple(slice(None, size) for size in slice_size)]
+
+            # Assign the reduced result to the output array
+            out[slice_] = reduced_result
+        else:
+            out.schunk.update_data(info.nchunk, result, copy=False)
     return out
 
 
@@ -379,6 +419,7 @@ def evaluate_slices(expression: str, operands: dict, _slice=None, **kwargs) -> b
     :ref:`NDArray`
         The output array.
     """
+    getitem = kwargs.pop("_getitem", False)
     operand = operands["o0"]
     shape = operand.shape
     chunks = operand.chunks
@@ -387,7 +428,7 @@ def evaluate_slices(expression: str, operands: dict, _slice=None, **kwargs) -> b
         # Iterate over the operands and get the chunks
         chunk_operands = {}
         coords = info.coords
-        slice_ = [slice(c * s, (c + 1) * s) for c, s in zip(coords, chunks, strict=False)]
+        slice_ = [slice(c * s, (c + 1) * s) for c, s in zip(coords, chunks, strict=True)]
         # Check whether current slice_ intersects with _slice
         if _slice is not None:
             intersects = do_slices_intersect(_slice, slice_)
@@ -396,7 +437,7 @@ def evaluate_slices(expression: str, operands: dict, _slice=None, **kwargs) -> b
         if len(slice_) == 1:
             slice_ = slice_[0]
         else:
-            slice_ = ndindex.Tuple(*slice_)
+            slice_ = tuple(slice_)
         # Get the slice of each operand
         for key, value in operands.items():
             chunk_operands[key] = value[slice_]
@@ -404,9 +445,13 @@ def evaluate_slices(expression: str, operands: dict, _slice=None, **kwargs) -> b
         # Evaluate the expression using chunks of operands
         result = ne.evaluate(expression, chunk_operands)
         if out is None:
-            # Let's use the same chunks as the first operand (it could have been any automatic too)
-            out = blosc2.empty(shape, chunks=chunks, dtype=result.dtype, **kwargs)
+            if getitem:
+                out = np.empty(shape, dtype=result.dtype)
+            else:
+                # Let's use the same chunks as the first operand (it could have been automatic too)
+                out = blosc2.empty(shape, chunks=chunks, dtype=result.dtype, **kwargs)
         out[slice_] = result
+
     return out
 
 
@@ -439,7 +484,7 @@ def do_slices_intersect(slice1, slice2):
         slice2.append(slice(None))
 
     # Check each dimension for intersection
-    for s1, s2 in zip(slice1, slice2, strict=False):
+    for s1, s2 in zip(slice1, slice2, strict=True):
         if s1.start is not None and s2.stop is not None and s1.start >= s2.stop:
             return False
         if s1.stop is not None and s2.start is not None and s1.stop <= s2.start:
@@ -539,7 +584,8 @@ class LazyExprUDF:
         Returns
         -------
         out: :ref:`NDArray <NDArray>`
-            A :ref:`NDArray <NDArray>` containing the result of evaluating the :ref:`LazyExprUDF <LazyExprUDF>`.
+            A :ref:`NDArray <NDArray>` containing the result of evaluating the
+            :ref:`LazyExprUDF <LazyExprUDF>`.
 
         Notes
         -----

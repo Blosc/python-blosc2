@@ -130,7 +130,6 @@ def test_complex_getitem_slice(array_fixture):
     np.testing.assert_allclose(res, nres[sl])
 
 
-# TODO: This stopped to work when we added chunks and blocks with padding
 def test_expression_with_constants(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     # Test with operands with same chunks and blocks

@@ -15,12 +15,12 @@ from time import time
 import numba as nb
 import numexpr as ne
 import numpy as np
-import os
 
 import blosc2
 
-shape = (4000, 10_000)
-chunks = [200, 10_000]
+
+shape = (5000, 10_000)
+chunks = [500, 10_000]
 blocks = [20, 10_000]
 dtype = np.float64
 
@@ -31,8 +31,8 @@ t0 = time()
 npc = npa + 1
 print("NumPy took %.3f s" % (time() - t0))
 
-#ne.set_num_threads(1)
-#nb.set_num_threads(1)  # this does not work that well; better use the NUMBA_NUM_THREADS env var
+# ne.set_num_threads(1)
+# nb.set_num_threads(1)  # this does not work that well; better use the NUMBA_NUM_THREADS env var
 t0 = time()
 ne.evaluate("npa + 1", out=np.empty_like(npa))
 print("NumExpr took %.3f s" % (time() - t0))
@@ -48,6 +48,11 @@ d = c.evaluate()
 t0 = time()
 d = c.evaluate()
 print("Blosc2+numexpr+eval took %.3f s" % (time() - t0))
+# Check
+assert np.allclose(d[:], npc)
+t0 = time()
+d = c[:]
+print("Blosc2+numexpr+getitem took %.3f s" % (time() - t0))
 # Check
 assert np.allclose(d[:], npc)
 
@@ -72,11 +77,12 @@ print("Numba took %.3f s" % (time() - t0))
 @nb.jit(nopython=True, parallel=True)
 def udf_numba(inputs_tuple, output, offset):
     x = inputs_tuple[0]
-    #output[:] = x + 1
-    #return
+    # output[:] = x + 1
+    # return
     for i in nb.prange(x.shape[0]):
         for j in nb.prange(x.shape[1]):
             output[i, j] = x[i, j] + 1
+
 
 expr = blosc2.expr_from_udf(udf_numba, ((npa, npa.dtype),), npa.dtype,
                             chunks=chunks, blocks=blocks)
