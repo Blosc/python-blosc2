@@ -22,7 +22,7 @@ import blosc2
 shape = (5000, 10_000)
 chunks = [500, 10_000]
 blocks = [20, 10_000]
-dtype = np.float64
+dtype = np.float32
 
 # Create a NDArray from a NumPy array
 npa = np.linspace(0, 1, np.prod(shape)).reshape(shape)

@@ -350,6 +350,16 @@ def evaluate_chunks(expression: str, operands: dict, **kwargs) -> blosc2.NDArray
         if is_special == blosc2.SpecialValue.ZERO:
             # print("Zero!")
             pass
+
+        slice_, chunks_ = None, None  # silence linter
+        if getitem:
+            # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
+            slice_ = tuple(
+                slice(c * s, min((c + 1) * s, shape[i]))
+                for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
+            )
+            chunks_ = [s.stop - s.start for s in slice_]
+
         for key, value in operands.items():
             lazychunk = value.schunk.get_lazychunk(info.nchunk)
             special = lazychunk[15] >> 4
@@ -360,38 +370,30 @@ def evaluate_chunks(expression: str, operands: dict, **kwargs) -> blosc2.NDArray
                 pass
             buff = value.schunk.decompress_chunk(info.nchunk)
             if getitem:
-                chunksize = math.prod(chunks)
-                bsize = value.dtype.itemsize * chunksize
-                npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks)
+                bsize = value.dtype.itemsize * math.prod(chunks_)
+                npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
             else:
                 # We don't want to reshape the buffer (to better handle padding)
                 npbuff = np.frombuffer(buff, dtype=value.dtype)
             chunk_operands[key] = npbuff
-        # Evaluate the expression using chunks of operands
-        result = ne.evaluate(expression, chunk_operands)
         if out is None:
+            # Evaluate the expression using chunks of operands
+            result = ne.evaluate(expression, chunk_operands)
             if getitem:
                 out = np.empty(shape, dtype=result.dtype)
+                out[slice_] = result
             else:
                 # Due to padding, it is critical to have the same chunks and blocks as the operands
                 out = blosc2.empty(
                     shape, chunks=operand.chunks, blocks=operand.blocks, dtype=result.dtype, **kwargs
                 )
-        if getitem:
-            slice_ = tuple(
-                slice(c * s, min((c + 1) * s, shape[i]))
-                for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
-            )
-            # print(slice_)
-            # Calculate the size of the slice_
-            slice_size = [s.stop - s.start for s in slice_]
-
-            # Slice the result array to match the size of the slice_
-            reduced_result = result[tuple(slice(None, size) for size in slice_size)]
-
-            # Assign the reduced result to the output array
-            out[slice_] = reduced_result
+                out.schunk.update_data(info.nchunk, result, copy=False)
+        elif getitem:
+            # Assign the result to the output array (avoiding a memory copy)
+            ne.evaluate(expression, chunk_operands, out=out[slice_])
         else:
+            # Update the output array with the result
+            result = ne.evaluate(expression, chunk_operands)
             out.schunk.update_data(info.nchunk, result, copy=False)
     return out
 
