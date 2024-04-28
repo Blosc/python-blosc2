@@ -44,7 +44,7 @@ a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
 # Get a LazyExpr instance
 c = a + 1
 t0 = time()
-d = c.evaluate()
+d = c.eval()
 print("Blosc2+numexpr+eval took %.3f s" % (time() - t0))
 # Check
 np.testing.assert_allclose(d[:], npc)

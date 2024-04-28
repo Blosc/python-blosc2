@@ -219,7 +219,7 @@ class LazyExpr:
     def __ipow__(self, value):
         return self.update_expr(new_op=(self, "**", value))
 
-    def evaluate(self, item=None, **kwargs) -> blosc2.NDArray:
+    def eval(self, item=None, **kwargs) -> blosc2.NDArray:
         """Evaluate the lazy expression in self.
 
         Parameters
@@ -255,7 +255,7 @@ class LazyExpr:
     def __getitem__(self, item):
         if item == Ellipsis:
             item = slice(None, None, None)
-        ndarray = self.evaluate(item=item, **{"_getitem": True})
+        ndarray = self.eval(item=item, **{"_getitem": True})
         full_data = item is None or item == slice(None, None, None) or item == Ellipsis
         return ndarray[item] if not full_data else ndarray[:]
 
@@ -533,7 +533,7 @@ if __name__ == "__main__":
     print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
-    res = expr.evaluate(item=sl)
+    res = expr.eval(item=sl)
     print(f"Elapsed time (evaluate): {time() - t0:.3f} s")
     res = res[sl] if sl is not None else res[:]
     t0 = time()
@@ -567,7 +567,7 @@ if __name__ == "__main__":
     print("Everything is working fine")
 
 
-class LazyExprUDF:
+class LazyUDF:
     def __init__(self, func, inputs_tuple, dtype, shape, **kwargs):
         self.inputs_tuple = inputs_tuple  # Keep reference to evict lost reference
         self.shape = None
@@ -705,4 +705,4 @@ def expr_from_udf(func, inputs_tuple, dtype, shape=None, **kwargs):
     * Since the
 
     """
-    return LazyExprUDF(func, inputs_tuple, dtype, shape, **kwargs)
+    return LazyUDF(func, inputs_tuple, dtype, shape, **kwargs)
