@@ -7,8 +7,8 @@
 #######################################################################
 
 # Benchmark to evaluate expressions with numba and NDArray instances as operands.
-# As numba takes a while to compile the first time, a warm-up is done before the
-# actual benchmark.
+# As numba takes a while to compile the first time, we use cached functions, so
+# make sure to run the script at least a couple of times.
 
 from time import time
 
@@ -43,8 +43,6 @@ a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
 
 # Get a LazyExpr instance
 c = a + 1
-# Warm-up
-d = c.evaluate()
 t0 = time()
 d = c.evaluate()
 print("Blosc2+numexpr+eval took %.3f s" % (time() - t0))
@@ -57,7 +55,7 @@ print("Blosc2+numexpr+getitem took %.3f s" % (time() - t0))
 np.testing.assert_allclose(d[:], npc)
 
 
-@nb.jit(nopython=True, parallel=True)
+@nb.jit(nopython=True, parallel=True, cache=True)
 def func_numba(x):
     # return x + 1
     out = np.empty(x.shape, x.dtype)
@@ -67,14 +65,13 @@ def func_numba(x):
     return out
 
 
-nb.set_num_threads(1)
-nb_res = func_numba(npa)
+# nb.set_num_threads(1)
 t0 = time()
 nb_res = func_numba(npa)
 print("Numba took %.3f s" % (time() - t0))
 
 
-@nb.jit(nopython=True, parallel=True)
+@nb.jit(nopython=True, parallel=True, cache=True)
 def udf_numba(inputs_tuple, output, offset):
     x = inputs_tuple[0]
     # output[:] = x + 1
@@ -86,23 +83,15 @@ def udf_numba(inputs_tuple, output, offset):
 
 expr = blosc2.expr_from_udf(udf_numba, ((npa, npa.dtype),), npa.dtype,
                             chunks=chunks, blocks=blocks)
-# warm up
-res = expr.eval()
-expr = blosc2.expr_from_udf(udf_numba, ((npa, npa.dtype),), npa.dtype,
-                            chunks=chunks, blocks=blocks)
 # actual benchmark
 t0 = time()
 res = expr.eval()
 print("Blosc2+numba+eval took %.3f s" % (time() - t0))
 expr = blosc2.expr_from_udf(udf_numba, ((npa, npa.dtype),), npa.dtype,
                             chunks=chunks, blocks=blocks)
-# getitem uses the same compiled function but as a postfilter; no need to warm up
+# getitem uses the same compiled function but as a postfilter
 t0 = time()
 res = expr[:]
 print("Blosc2+numba+getitem took %.3f s" % (time() - t0))
-# print(res.info)
 
-
-tol = 1e-5 if dtype is np.float32 else 1e-14
-if dtype in (np.float32, np.float64):
-    np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
+np.testing.assert_allclose(res[...], npc)
