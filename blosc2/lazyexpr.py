@@ -593,13 +593,13 @@ class LazyUDF:
 
     def eval(self):
         """
-        Get a :ref:`NDArray <NDArray>` containing the evaluation of the :ref:`LazyExprUDF <LazyExprUDF>`.
+        Get a :ref:`NDArray <NDArray>` containing the evaluation of the :ref:`LazyUDF <LazyUDF>`.
 
         Returns
         -------
         out: :ref:`NDArray <NDArray>`
             A :ref:`NDArray <NDArray>` containing the result of evaluating the
-            :ref:`LazyExprUDF <LazyExprUDF>`.
+            :ref:`LazyUDF <LazyUDF>`.
 
         Notes
         -----
@@ -635,17 +635,17 @@ class LazyUDF:
 
     def __getitem__(self, item):
         """
-        Evaluate a slice of the :ref:`LazyExprUDF <LazyExprUDF>`.
+        Evaluate a slice of the :ref:`LazyUDF <LazyUDF>`.
 
         Parameters
         ----------
         item: slice
-            The slice of the :ref:`LazyExprUDF <LazyExprUDF>` to evaluate.
+            The slice of the :ref:`LazyUDF <LazyUDF>` to evaluate.
 
         Returns
         -------
         out: NumPy.ndarray
-            The result of evaluating the slice of the :ref:`LazyExprUDF <LazyExprUDF>`
+            The result of evaluating the slice of the :ref:`LazyUDF <LazyUDF>`
             as a NumPy.ndarray.
 
         """
@@ -673,9 +673,9 @@ class LazyUDF:
 
 
 # inputs_tuple = ( (operand, dtype), (operand2, dtype2), ... )
-def expr_from_udf(func, inputs_tuple, dtype, shape=None, **kwargs):
+def lazyarray_from_udf(func, inputs_tuple, dtype, shape=None, **kwargs):
     """
-    Get a LazyExprUDF from a python user-defined function.
+    Get a LazyUDF from a python user-defined function.
 
     Parameters
     ----------
@@ -696,8 +696,8 @@ def expr_from_udf(func, inputs_tuple, dtype, shape=None, **kwargs):
 
     Returns
     -------
-    out: :ref:`LazyExprUDF <LazyExprUDF>`
-        A :ref:`LazyExprUDF <LazyExprUDF>` is returned.
+    out: :ref:`LazyUDF <LazyUDF>`
+        A :ref:`LazyUDF <LazyUDF>` is returned.
 
     Notes
     -----
