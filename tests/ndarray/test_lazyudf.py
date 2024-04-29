@@ -180,6 +180,13 @@ def test_params():
     np.testing.assert_allclose(res[...], npc)
     assert res.shape == npc.shape
 
+    # Pass list
+    l = [1, 2, 3, 4, 5]
+    expr = blosc2.lazyudf(numba1p, (l, ), np.float64)
+    res = expr.eval()
+    npc = np.array(l) + 1
+    np.testing.assert_allclose(res[...], npc)
+
 
 @pytest.mark.parametrize(
     "shape, chunks, blocks, slices, urlpath, contiguous",

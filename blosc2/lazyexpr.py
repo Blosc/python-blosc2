@@ -591,7 +591,7 @@ class LazyUDF:
         self.shape = None
         if shape is None:
             # Get res shape
-            for obj in inputs:
+            for obj in self.inputs:
                 if isinstance(obj, np.ndarray | blosc2.NDArray):
                     self.shape = obj.shape
                     break
