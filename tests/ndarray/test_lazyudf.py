@@ -169,17 +169,6 @@ def test_params():
     assert res.shape == npa.shape
     assert res.schunk.cparams["nthreads"] == cparams["nthreads"]
 
-    expr = blosc2.lazyudf(numba1p, (py_scalar,), np.float64)
-    res = expr.eval()
-    npc = py_scalar + 1
-    np.testing.assert_allclose(res[...], npc)
-
-    npc = np.full(shape, py_scalar, np.float64) + 1
-    expr = blosc2.lazyudf(numba1p, (py_scalar,), np.float64, shape)
-    res = expr.eval()
-    np.testing.assert_allclose(res[...], npc)
-    assert res.shape == npc.shape
-
     # Pass list
     l = [1, 2, 3, 4, 5]
     expr = blosc2.lazyudf(numba1p, (l, ), np.float64)

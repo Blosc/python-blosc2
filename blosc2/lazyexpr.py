@@ -10,8 +10,19 @@ import math
 import numexpr as ne
 import numpy as np
 import copy
+from abc import ABC, abstractmethod
 
 import blosc2
+
+
+class LazyArray(ABC):
+    @abstractmethod
+    def eval(self, **kwargs):
+        pass
+
+    @abstractmethod
+    def __getitem__(self, item):
+        pass
 
 
 def fuse_operands(operands1, operands2):
@@ -71,7 +82,7 @@ def fuse_expressions(expr, new_base, dup_op):
     return new_expr
 
 
-class LazyExpr:
+class LazyExpr(LazyArray):
     """Class for hosting lazy expressions.
 
     This is not meant to be called directly from user space.
@@ -569,7 +580,7 @@ if __name__ == "__main__":
     print("Everything is working fine")
 
 
-class LazyUDF:
+class LazyUDF(LazyArray):
     def _validate_inputs(self, inputs):
         inputs_ = []
         for obj in inputs:
@@ -585,20 +596,17 @@ class LazyUDF:
             inputs_.append(obj)
         return inputs_
 
-    def __init__(self, func, inputs, dtype, shape=None, **kwargs):
+    def __init__(self, func, inputs, dtype, **kwargs):
         # After this, all the inputs should be np.ndarray or NDArray objects
         self.inputs = self._validate_inputs(inputs)
         self.shape = None
-        if shape is None:
-            # Get res shape
-            for obj in self.inputs:
-                if isinstance(obj, np.ndarray | blosc2.NDArray):
-                    self.shape = obj.shape
-                    break
-            if self.shape is None:
-                self.shape = (1,)
-        else:
-            self.shape = shape
+        # Get res shape
+        for obj in self.inputs:
+            if isinstance(obj, np.ndarray | blosc2.NDArray):
+                self.shape = obj.shape
+                break
+        if self.shape is None:
+            raise NotImplementedError("If all operands are Python scalars, use python, numpy or numexpr")
 
         self.kwargs = kwargs
         self.dtype = dtype
@@ -606,7 +614,7 @@ class LazyUDF:
         self.res_eval = None
         self.res_getitem = None
 
-    def eval(self):
+    def eval(self, **kwargs):
         """
         Get a :ref:`NDArray <NDArray>` containing the evaluation of the :ref:`LazyUDF <LazyUDF>`.
 
@@ -688,7 +696,7 @@ class LazyUDF:
         return self.res_getitem[item]
 
 
-def lazyudf(func, inputs, dtype, shape=None, **kwargs):
+def lazyudf(func, inputs, dtype, **kwargs):
     """
     Get a LazyUDF from a python user-defined function.
 
@@ -700,9 +708,6 @@ def lazyudf(func, inputs, dtype, shape=None, **kwargs):
         The supported inputs are NumPy.ndarray, Python scalars, and :ref:`NDArray <NDArray>`.
     dtype: np.dtype
         The resulting ndarray dtype in NumPy format.
-    shape: tuple(int) or list(int)
-        The shape of the resulting evaluation. If it is None, it will be taken from the
-        operands.
     kwargs: dict, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
@@ -717,4 +722,4 @@ def lazyudf(func, inputs, dtype, shape=None, **kwargs):
     * Since the
 
     """
-    return LazyUDF(func, inputs, dtype, shape, **kwargs)
+    return LazyUDF(func, inputs, dtype, **kwargs)
