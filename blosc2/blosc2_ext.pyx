@@ -1620,28 +1620,28 @@ cdef aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
         output = np.PyArray_SimpleNewFromData(nd, dims, udata.output_cdtype, <void*>params_output)
 
     inputs_tuple = _ctypes.PyObj_FromPtr(udata.inputs_id)
-    inputs = []
+    inputs_slice = []
     # Get slice of each operand
     l = []
     for i in range(nd):
         l.append(slice(start_ndim[i], start_ndim[i] + blockshape[i]))
     slices = tuple(l)
-    for obj, dtype in inputs_tuple:
+    for obj in inputs_tuple:
         if isinstance(obj, blosc2.NDArray):
-            inputs.append(obj[slices])
+            inputs_slice.append(obj[slices])
         elif isinstance(obj, np.ndarray):
-            inputs.append(obj[slices])
+            inputs_slice.append(obj[slices])
         elif np.isscalar(obj):
-            inputs.append(obj)
+            inputs_slice.append(obj)
         else:
             raise ValueError("Unsupported operand")
 
     # Call udf function
     func_id = udata.py_func.decode("utf-8")
     if is_postfilter:
-        blosc2.postfilter_funcs[func_id](tuple(inputs), output, np.array(start_ndim))
+        blosc2.postfilter_funcs[func_id](tuple(inputs_slice), output, np.array(start_ndim))
     else:
-        blosc2.prefilter_funcs[func_id](tuple(inputs), output, np.array(start_ndim))
+        blosc2.prefilter_funcs[func_id](tuple(inputs_slice), output, np.array(start_ndim))
 
     cdef int64_t start[B2ND_MAX_DIM]
     cdef int64_t slice_shape[B2ND_MAX_DIM]

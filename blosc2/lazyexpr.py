@@ -9,6 +9,7 @@ import math
 
 import numexpr as ne
 import numpy as np
+import copy
 
 import blosc2
 
@@ -572,14 +573,12 @@ class LazyUDF:
     def _validate_inputs(self, inputs):
         inputs_ = []
         for obj in inputs:
-            if np.isscalar(obj):
-                obj = np.array(obj).reshape(1)
-            if not isinstance(obj, np.ndarray | blosc2.NDArray):
+            if not isinstance(obj, np.ndarray | blosc2.NDArray) and not np.isscalar(obj):
                 try:
                     obj = np.asarray(obj)
                 except:
                     print(
-                        "Inputs not being np.ndarray or NDArray objects"
+                        "Inputs not being np.ndarray, NDArray or Python scalar objects"
                         " should be convertible to np.ndarray."
                     )
                     raise
@@ -589,15 +588,15 @@ class LazyUDF:
     def __init__(self, func, inputs, dtype, shape=None, **kwargs):
         # After this, all the inputs should be np.ndarray or NDArray objects
         self.inputs = self._validate_inputs(inputs)
-        # Array inputs
-        self.inputs_tuple = tuple((obj, obj.dtype) for obj in self.inputs if obj.shape != ())
-        # Scalar inputs
-        self.inputs_tuple += tuple((obj[()], obj.dtype) for obj in self.inputs if obj.shape == ())
+        self.shape = None
         if shape is None:
             # Get res shape
-            for obj in self.inputs:
+            for obj in inputs:
                 if isinstance(obj, np.ndarray | blosc2.NDArray):
                     self.shape = obj.shape
+                    break
+            if self.shape is None:
+                self.shape = (1,)
         else:
             self.shape = shape
 
@@ -627,20 +626,20 @@ class LazyUDF:
             return self.res_eval
         # Cannot use multithreading when applying a prefilter, save nthreads to set them
         # after the evaluation
-        cparams = self.kwargs.get("cparams", None)
+        kwargs = copy.deepcopy(self.kwargs)  # Do copy to evict modifying the original parameters
+        cparams = kwargs.get("cparams", None)
         if cparams is None:
             cparams = {"nthreads": 1}
             self._cnthreads = blosc2.cparams_dflts["nthreads"]
         elif isinstance(cparams, dict):
-            cparams["nthreads"] = 1
-            # TODO: self._cnthreads is always 1 below?  Marta?
             self._cnthreads = cparams.get("nthreads", blosc2.cparams_dflts["nthreads"])
+            cparams["nthreads"] = 1
         else:
             raise ValueError("cparams should be a dictionary")
-        self.kwargs["cparams"] = cparams
+        kwargs["cparams"] = cparams
 
-        self.res_eval = blosc2.empty(self.shape, self.dtype, **self.kwargs)
-        self.res_eval._set_pref_udf(self.func, id(self.inputs_tuple))
+        self.res_eval = blosc2.empty(self.shape, self.dtype, **kwargs)
+        self.res_eval._set_pref_udf(self.func, id(self.inputs))
 
         aux = np.empty(self.res_eval.shape, self.res_eval.dtype)
         self.res_eval[...] = aux
@@ -669,7 +668,8 @@ class LazyUDF:
             return self.res_eval[item]
 
         if self.res_getitem is None:
-            kwargs_getitem = self.kwargs.copy()
+            # Deep copy the kwargs to evict modifying them
+            kwargs_getitem = copy.deepcopy(self.kwargs)
             kwargs_getitem.pop("urlpath", None)
             kwargs_getitem.pop("contiguous", None)
 
@@ -683,7 +683,7 @@ class LazyUDF:
                 raise ValueError("dparams should be a dictionary")
             kwargs_getitem["dparams"] = dparams
             self.res_getitem = blosc2.empty(self.shape, self.dtype, **kwargs_getitem)
-            self.res_getitem._set_postf_udf(self.func, id(self.inputs_tuple))
+            self.res_getitem._set_postf_udf(self.func, id(self.inputs))
 
         return self.res_getitem[item]
 

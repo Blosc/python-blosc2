@@ -174,12 +174,11 @@ def test_params():
     npc = py_scalar + 1
     np.testing.assert_allclose(res[...], npc)
 
-    # TODO: Fix this test
-    # npc = np.full(shape, py_scalar, np.float64) + 1
-    # expr = blosc2.lazyudf(numba1p, (py_scalar,), np.float64, shape)
-    # res = expr.eval()
-    # np.testing.assert_allclose(res[...], npc)
-    # assert res.shape == npc.shape
+    npc = np.full(shape, py_scalar, np.float64) + 1
+    expr = blosc2.lazyudf(numba1p, (py_scalar,), np.float64, shape)
+    res = expr.eval()
+    np.testing.assert_allclose(res[...], npc)
+    assert res.shape == npc.shape
 
 
 @pytest.mark.parametrize(
@@ -195,6 +194,7 @@ def test_getitem(shape, chunks, blocks, slices, urlpath, contiguous):
     npa = np.arange(0, np.prod(shape)).reshape(shape)
     npb = np.arange(1, np.prod(shape) + 1).reshape(shape)
     npc = npa**2 + npb**2 + 2 * npa * npb + 1
+    dparams = {'nthreads': 4}
 
     b = blosc2.asarray(npb)
     expr = blosc2.lazyudf(
@@ -205,6 +205,7 @@ def test_getitem(shape, chunks, blocks, slices, urlpath, contiguous):
         blocks=blocks,
         urlpath=urlpath,
         contiguous=contiguous,
+        dparams={'nthreads': 4}
     )
     lazy_eval = expr[slices]
     np.testing.assert_allclose(lazy_eval, npc[slices])
@@ -213,6 +214,8 @@ def test_getitem(shape, chunks, blocks, slices, urlpath, contiguous):
     np.testing.assert_allclose(res[...], npc)
     assert res.schunk.urlpath == urlpath
     assert res.schunk.contiguous == contiguous
+    # Check dparams after a getitem and an eval
+    assert res.schunk.dparams['nthreads'] == dparams['nthreads']
 
     lazy_eval = expr[slices]
     np.testing.assert_allclose(lazy_eval, npc[slices])
