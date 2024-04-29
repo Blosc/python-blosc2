@@ -45,7 +45,7 @@ def func_numba(inputs_tuple, output, offset):
 
 
 chunks = [10, 10]
-expr = blosc2.lazyarray_from_udf(func_numba, ((npa, npa.dtype),), npa.dtype, chunks=chunks, blocks=chunks)
+expr = blosc2.lazyudf(func_numba, ((npa, npa.dtype),), npa.dtype, chunks=chunks, blocks=chunks)
 res = expr.eval()
 print(res.info)
 np.testing.assert_allclose(res[...], npc)

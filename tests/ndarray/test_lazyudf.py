@@ -60,11 +60,11 @@ def numba1p(inputs_tuple, output, offset):
         ),
     ],
 )
-def test_lazyexpr_udf_1p(shape, chunks, blocks):
+def test_1p(shape, chunks, blocks):
     npa = np.linspace(0, 1, np.prod(shape)).reshape(shape)
     npc = npa + 1
 
-    expr = blosc2.lazyarray_from_udf(numba1p, ((npa, npa.dtype),), npa.dtype, chunks=chunks, blocks=blocks)
+    expr = blosc2.lazyudf(numba1p, (npa,), npa.dtype, chunks=chunks, blocks=blocks)
     res = expr.eval()
 
     tol = 1e-5 if res.dtype is np.float32 else 1e-14
@@ -100,15 +100,13 @@ def numba2p(inputs_tuple, output, offset):
         ),
     ],
 )
-def test_lazyexpr_udf_2p(shape, chunks, blocks):
+def test_2p(shape, chunks, blocks):
     npa = np.arange(0, np.prod(shape)).reshape(shape)
     npb = np.arange(1, np.prod(shape) + 1).reshape(shape)
     npc = npa**2 + npb**2 + 2 * npa * npb + 1
 
     b = blosc2.asarray(npb)
-    expr = blosc2.lazyarray_from_udf(
-        numba2p, ((npa, npa.dtype), (b, b.dtype)), npa.dtype, chunks=chunks, blocks=blocks
-    )
+    expr = blosc2.lazyudf(numba2p, (npa, b), npa.dtype, chunks=chunks, blocks=blocks)
     res = expr.eval()
 
     np.testing.assert_allclose(res[...], npc)
@@ -136,16 +134,16 @@ def udf_1dim(inputs_tuple, output, offset):
         ),
     ],
 )
-def test_lazyexpr_udf_1dim(shape, chunks, blocks):
+def test_1dim(shape, chunks, blocks):
     npa = np.arange(start=0, stop=np.prod(shape)).reshape(shape)
     npb = np.linspace(1, 2, np.prod(shape)).reshape(shape)
     py_scalar = np.e
     npc = npa + npb + py_scalar
 
-    b = blosc2.SChunk(data=npb)
-    expr = blosc2.lazyarray_from_udf(
+    b = blosc2.asarray(npb)
+    expr = blosc2.lazyudf(
         udf_1dim,
-        ((npa, npa.dtype), (b, npb.dtype), (py_scalar, np.float64)),
+        (npa, b, py_scalar),
         np.float64,
         chunks=chunks,
         blocks=blocks,
@@ -156,29 +154,29 @@ def test_lazyexpr_udf_1dim(shape, chunks, blocks):
     np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
 
 
-def test_lazyexpr_udf_params():
+def test_params():
     shape = (23,)
     npa = np.arange(start=0, stop=np.prod(shape)).reshape(shape)
     py_scalar = np.e
-    schunk = blosc2.SChunk(data=npa)
+    array = blosc2.asarray(npa)
 
     # Assert that shape is computed correctly
     npc = npa + 1
     cparams = {"nthreads": 4}
-    expr = blosc2.lazyarray_from_udf(numba1p, ((schunk, npa.dtype),), np.float64, cparams=cparams)
+    expr = blosc2.lazyudf(numba1p, (array,), np.float64, cparams=cparams)
     res = expr.eval()
     tol = 1e-5 if res.dtype is np.float32 else 1e-14
     np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
     assert res.shape == npa.shape
     assert res.schunk.cparams["nthreads"] == cparams["nthreads"]
 
-    expr = blosc2.lazyarray_from_udf(numba1p, ((py_scalar, np.float64),), np.float64)
+    expr = blosc2.lazyudf(numba1p, (py_scalar,), np.float64)
     res = expr.eval()
     npc = py_scalar + 1
     np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
 
     npc = np.full(shape, py_scalar, np.float64) + 1
-    expr = blosc2.lazyarray_from_udf(numba1p, ((py_scalar, np.float64),), np.float64, shape)
+    expr = blosc2.lazyudf(numba1p, (py_scalar,), np.float64, shape)
     res = expr.eval()
     np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
     assert res.shape == npc.shape
@@ -192,16 +190,16 @@ def test_lazyexpr_udf_params():
         ((13, 13), (10, 10), (5, 5), (slice(3, 8), slice(9, 12)), None, False),
     ],
 )
-def test_lazyexpr_udf_getitem(shape, chunks, blocks, slices, urlpath, contiguous):
+def test_getitem(shape, chunks, blocks, slices, urlpath, contiguous):
     blosc2.remove_urlpath(urlpath)
     npa = np.arange(0, np.prod(shape)).reshape(shape)
     npb = np.arange(1, np.prod(shape) + 1).reshape(shape)
     npc = npa**2 + npb**2 + 2 * npa * npb + 1
 
     b = blosc2.asarray(npb)
-    expr = blosc2.lazyarray_from_udf(
+    expr = blosc2.lazyudf(
         numba2p,
-        ((npa, npa.dtype), (b, b.dtype)),
+        (npa, b),
         npa.dtype,
         chunks=chunks,
         blocks=blocks,

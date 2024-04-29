@@ -284,6 +284,7 @@ def validate_inputs(inputs: dict) -> tuple:
             equal_chunks = False
         if first_input.blocks != input_.blocks:
             equal_blocks = False
+        # TODO: see why we need this constraint for avoiding the fast path
         if first_input.blocks[1:] != input_.chunks[1:]:
             # For some reason, the trailing dimensions not being the same is not supported in fast path
             equal_blocks = False
@@ -568,20 +569,30 @@ if __name__ == "__main__":
 
 
 class LazyUDF:
-    def __init__(self, func, inputs_tuple, dtype, shape, **kwargs):
-        self.inputs_tuple = inputs_tuple  # Keep reference to evict lost reference
-        self.shape = None
+    def _validate_inputs(self, inputs):
+        inputs_ = []
+        for obj in inputs:
+            if not isinstance(obj, np.ndarray | blosc2.NDArray) or not np.isscalar(obj):
+                try:
+                    obj = np.asarray(obj)
+                except:
+                    print(
+                        "Inputs not being np.ndarray or NDArray objects"
+                        " should be convertible to np.ndarray."
+                    )
+                    raise
+            inputs_.append(obj)
+        return inputs_
+
+    def __init__(self, func, inputs, dtype, shape=None, **kwargs):
+        # After this, all the inputs should be np.ndarray or NDArray objects
+        self.inputs = self._validate_inputs(inputs)
+        self.inputs_tuple = tuple((obj, obj.dtype) for obj in self.inputs)
         if shape is None:
             # Get res shape
-            for obj, _ in inputs_tuple:
+            for obj in inputs:
                 if isinstance(obj, np.ndarray | blosc2.NDArray):
                     self.shape = obj.shape
-                    break
-                elif isinstance(obj, blosc2.SChunk):
-                    self.shape = (len(obj),)
-                    break
-            if self.shape is None:
-                self.shape = (1,)
         else:
             self.shape = shape
 
@@ -672,20 +683,16 @@ class LazyUDF:
         return self.res_getitem[item]
 
 
-# inputs_tuple = ( (operand, dtype), (operand2, dtype2), ... )
-def lazyarray_from_udf(func, inputs_tuple, dtype, shape=None, **kwargs):
+def lazyudf(func, inputs, dtype, shape=None, **kwargs):
     """
     Get a LazyUDF from a python user-defined function.
 
     Parameters
     ----------
     func: Python function
-        Function to apply to each block.
-    inputs_tuple: tuple of tuples
-        Tuple which contains one two-element tuple for each operand containing the operand
-        instance and its dtype. The supported operands types are NumPy.ndarray, Python
-        scalars, :ref:`NDArray <NDArray>` and blosc2.SChunk (the last one only when the result's
-        ndim of evaluating the expression is 1).
+        User defined function to apply to each block.
+    inputs: Sequence of np.ndarray or :ref:`NDArray <NDArray>`
+        The supported inputs are NumPy.ndarray, Python scalars, and :ref:`NDArray <NDArray>`.
     dtype: np.dtype
         The resulting ndarray dtype in NumPy format.
     shape: tuple(int) or list(int)
@@ -705,4 +712,4 @@ def lazyarray_from_udf(func, inputs_tuple, dtype, shape=None, **kwargs):
     * Since the
 
     """
-    return LazyUDF(func, inputs_tuple, dtype, shape, **kwargs)
+    return LazyUDF(func, inputs, dtype, shape, **kwargs)

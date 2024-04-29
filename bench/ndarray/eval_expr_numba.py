@@ -81,14 +81,14 @@ def udf_numba(inputs_tuple, output, offset):
             output[i, j] = x[i, j] + 1
 
 
-expr = blosc2.lazyarray_from_udf(udf_numba, ((npa, npa.dtype),), npa.dtype,
-                                 chunks=chunks, blocks=blocks)
+expr = blosc2.lazyudf(udf_numba, ((npa, npa.dtype),), npa.dtype,
+                      chunks=chunks, blocks=blocks)
 # actual benchmark
 t0 = time()
 res = expr.eval()
 print("Blosc2+numba+eval took %.3f s" % (time() - t0))
-expr = blosc2.lazyarray_from_udf(udf_numba, ((npa, npa.dtype),), npa.dtype,
-                                 chunks=chunks, blocks=blocks)
+expr = blosc2.lazyudf(udf_numba, ((npa, npa.dtype),), npa.dtype,
+                      chunks=chunks, blocks=blocks)
 # getitem uses the same compiled function but as a postfilter
 t0 = time()
 res = expr[:]
