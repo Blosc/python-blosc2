@@ -572,7 +572,9 @@ class LazyUDF:
     def _validate_inputs(self, inputs):
         inputs_ = []
         for obj in inputs:
-            if not isinstance(obj, np.ndarray | blosc2.NDArray) or not np.isscalar(obj):
+            if np.isscalar(obj):
+                obj = np.array(obj).reshape(1)
+            if not isinstance(obj, np.ndarray | blosc2.NDArray):
                 try:
                     obj = np.asarray(obj)
                 except:
@@ -587,10 +589,13 @@ class LazyUDF:
     def __init__(self, func, inputs, dtype, shape=None, **kwargs):
         # After this, all the inputs should be np.ndarray or NDArray objects
         self.inputs = self._validate_inputs(inputs)
-        self.inputs_tuple = tuple((obj, obj.dtype) for obj in self.inputs)
+        # Array inputs
+        self.inputs_tuple = tuple((obj, obj.dtype) for obj in self.inputs if obj.shape != ())
+        # Scalar inputs
+        self.inputs_tuple += tuple((obj[()], obj.dtype) for obj in self.inputs if obj.shape == ())
         if shape is None:
             # Get res shape
-            for obj in inputs:
+            for obj in self.inputs:
                 if isinstance(obj, np.ndarray | blosc2.NDArray):
                     self.shape = obj.shape
         else:

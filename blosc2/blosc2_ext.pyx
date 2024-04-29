@@ -1622,34 +1622,19 @@ cdef aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
     inputs_tuple = _ctypes.PyObj_FromPtr(udata.inputs_id)
     inputs = []
     # Get slice of each operand
-    if nd == 1:
-        # When ndim == 1, schunks as operands are supported
-        for obj, dtype in inputs_tuple:
-            if isinstance(obj, blosc2.SChunk):
-                out = np.empty(blockshape[0], dtype=dtype)
-                obj.get_slice(start=start_ndim[0], stop=start_ndim[0] + blockshape[0], out=out)
-                inputs.append(out)
-            elif isinstance(obj, np.ndarray):
-                inputs.append(obj[start_ndim[0] : start_ndim[0] + blockshape[0]])
-            elif isinstance(obj, (int, float, bool, complex)):
-                inputs.append(obj)
-            else:
-                raise ValueError("Unsupported operand")
-    else:
-        # Get tuple of slices
-        l = []
-        for i in range(nd):
-            l.append(slice(start_ndim[i], start_ndim[i] + blockshape[i]))
-        slices = tuple(l)
-        for obj, dtype in inputs_tuple:
-            if isinstance(obj, blosc2.NDArray):
-                inputs.append(obj[slices])
-            elif isinstance(obj, np.ndarray):
-                inputs.append(obj[slices])
-            elif isinstance(obj, (int, float, bool, complex)):
-                inputs.append(obj)
-            else:
-                raise ValueError("Unsupported operand")
+    l = []
+    for i in range(nd):
+        l.append(slice(start_ndim[i], start_ndim[i] + blockshape[i]))
+    slices = tuple(l)
+    for obj, dtype in inputs_tuple:
+        if isinstance(obj, blosc2.NDArray):
+            inputs.append(obj[slices])
+        elif isinstance(obj, np.ndarray):
+            inputs.append(obj[slices])
+        elif np.isscalar(obj):
+            inputs.append(obj)
+        else:
+            raise ValueError("Unsupported operand")
 
     # Call udf function
     func_id = udata.py_func.decode("utf-8")
