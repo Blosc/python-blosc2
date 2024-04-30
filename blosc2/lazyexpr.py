@@ -611,7 +611,20 @@ class LazyUDF(LazyArray):
         self.kwargs = kwargs
         self.dtype = dtype
         self.func = func
-        self.res_getitem = None
+
+        # Prepare internal array for __getitem__
+
+        # Deep copy the kwargs to evict modifying them
+        kwargs_getitem = copy.deepcopy(self.kwargs)
+        # Cannot use multithreading when applying a postfilter, dparams['nthreads'] ignored
+        dparams = kwargs_getitem.get("dparams", {})
+        if isinstance(dparams, dict):
+            dparams["nthreads"] = 1
+        else:
+            raise ValueError("dparams should be a dictionary")
+        kwargs_getitem["dparams"] = dparams
+        self.res_getitem = blosc2.empty(self.shape, self.dtype, **kwargs_getitem)
+        self.res_getitem._set_postf_udf(self.func, id(self.inputs))
 
     def eval(self, **kwargs):
         """
@@ -684,19 +697,6 @@ class LazyUDF(LazyArray):
             as a NumPy.ndarray.
 
         """
-        if self.res_getitem is None:
-            # Deep copy the kwargs to evict modifying them
-            kwargs_getitem = copy.deepcopy(self.kwargs)
-
-            # Cannot use multithreading when applying a postfilter, dparams['nthreads'] ignored
-            dparams = kwargs_getitem.get("dparams", {})
-            if isinstance(dparams, dict):
-                dparams["nthreads"] = 1
-            else:
-                raise ValueError("dparams should be a dictionary")
-            kwargs_getitem["dparams"] = dparams
-            self.res_getitem = blosc2.empty(self.shape, self.dtype, **kwargs_getitem)
-            self.res_getitem._set_postf_udf(self.func, id(self.inputs))
 
         return self.res_getitem[item]
 
@@ -715,6 +715,8 @@ def lazyudf(func, inputs, dtype, **kwargs):
         The resulting ndarray dtype in NumPy format.
     kwargs: dict, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
+        These arguments will be used by the `__getitem__` and `eval` methods. The
+        last one will ignore the `urlpath` parameter to `lazyudf` if passed.
 
     Returns
     -------
