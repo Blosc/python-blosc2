@@ -944,7 +944,7 @@ def imag(ndarr: NDArray, /):
     return blosc2.LazyExpr(new_op=(ndarr, "imag", None))
 
 
-def contains(ndarr: NDArray, value: str | NDArray, /):
+def contains(ndarr: NDArray, value: str | bytes | NDArray, /):
     """
     Check if the array contains a string value.
 
