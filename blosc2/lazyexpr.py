@@ -414,23 +414,32 @@ class LazyExpr(LazyArray):
     def __init__(self, new_op):
         value1, op, value2 = new_op
         if value2 is None:
-            # ufunc
             if isinstance(value1, LazyExpr):
                 self.expression = f"{op}({self.expression})"
             else:
                 self.operands = {"o0": value1}
                 self.expression = "o0" if op is None else f"{op}(o0)"
             return
-        elif op in ("atan2", "pow"):
-            self.operands = {"o0": value1, "o1": value2}
-            self.expression = f"{op}(o0, o1)"
+        elif op in ("arctan2", "contains", "pow"):
+            if np.isscalar(value1) and np.isscalar(value2):
+                self.expression = f"{op}(o0, o1)"
+            elif np.isscalar(value2):
+                self.operands = {"o0": value1}
+                self.expression = f"{op}(o0, {value2})"
+            elif np.isscalar(value1):
+                self.operands = {"o0": value2}
+                self.expression = f"{op}({value1} , o0)"
+            else:
+                self.operands = {"o0": value1, "o1": value2}
+                self.expression = f"{op}(o0, o1)"
             return
-        if isinstance(value1, int | float) and isinstance(value2, int | float):
+
+        if np.isscalar(value1) and np.isscalar(value2):
             self.expression = f"({value1} {op} {value2})"
-        elif isinstance(value2, int | float):
+        elif np.isscalar(value2):
             self.operands = {"o0": value1}
             self.expression = f"(o0 {op} {value2})"
-        elif isinstance(value1, int | float):
+        elif np.isscalar(value1):
             self.operands = {"o0": value2}
             self.expression = f"({value1} {op} o0)"
         else:
@@ -450,6 +459,9 @@ class LazyExpr(LazyArray):
                 # that are not LazyExpr themselves
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"(o0 {op} o1)"
+
+
+
 
     def update_expr(self, new_op):
         # We use a lot the original NDArray.__eq__ as 'is', so deactivate the overloaded one

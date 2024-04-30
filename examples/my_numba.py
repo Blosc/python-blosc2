@@ -27,7 +27,6 @@ def run_numba(num_threads, a, b, c):
 
 def run_lazy_expr(num_threads, a, b, c, cparams):
     blosc2.set_nthreads(num_threads)  # Set the number of threads for Blosc2 compression
-    ne.set_num_threads(num_threads)  # Set the number of threads for NumExpr evaluation
     # Convert NumPy arrays to compressed arrays using Blosc2
     a1 = blosc2.asarray(a, cparams=cparams)  # Compressed array a
     b1 = blosc2.asarray(b, cparams=cparams)  # Compressed array b
@@ -71,6 +70,7 @@ for num_thread in threads:
     numexpr_times.append(num_expr)
     speed.append(numba)
     speed.append(num_expr)
+
 
 # Calculate execution times for LazyExpr
 for clevel in clevels:
