@@ -611,7 +611,6 @@ class LazyUDF(LazyArray):
         self.kwargs = kwargs
         self.dtype = dtype
         self.func = func
-        self.res_eval = None
         self.res_getitem = None
 
     def eval(self, **kwargs):
@@ -630,31 +629,44 @@ class LazyUDF(LazyArray):
         one during the evaluation. After it, the original `cparams[nthreads]` value is restored.
 
         """
-        if self.res_eval is not None:
-            return self.res_eval
+        # Get kwargs
+        if kwargs is None:
+            kwargs = {}
+        aux_kwargs = copy.deepcopy(self.kwargs)  # Do copy to evict modifying the original parameters
+        # Update is not recursive
+        cparams = aux_kwargs.get('cparams', {})
+        cparams.update(kwargs.get('cparams', {}))
+        aux_kwargs['cparams'] = cparams
+        dparams = aux_kwargs.get('dparams', {})
+        dparams.update(kwargs.get('dparams', {}))
+        aux_kwargs['dparams'] = dparams
+        _ = kwargs.pop('cparams', None)
+        _ = kwargs.pop('dparams', None)
+        urlpath = kwargs.get('urlpath', None)
+        if urlpath is not None and urlpath == aux_kwargs.get('urlpath', None):
+            raise ValueError("Cannot use same urlpath for LazyArray and eval NDArray")
+        _ = aux_kwargs.pop('urlpath', None)
+        aux_kwargs.update(kwargs)
+
         # Cannot use multithreading when applying a prefilter, save nthreads to set them
         # after the evaluation
-        kwargs = copy.deepcopy(self.kwargs)  # Do copy to evict modifying the original parameters
-        cparams = kwargs.get("cparams", None)
-        if cparams is None:
-            cparams = {"nthreads": 1}
-            self._cnthreads = blosc2.cparams_dflts["nthreads"]
-        elif isinstance(cparams, dict):
+        cparams = aux_kwargs.get("cparams", {})
+        if isinstance(cparams, dict):
             self._cnthreads = cparams.get("nthreads", blosc2.cparams_dflts["nthreads"])
             cparams["nthreads"] = 1
         else:
             raise ValueError("cparams should be a dictionary")
-        kwargs["cparams"] = cparams
+        aux_kwargs["cparams"] = cparams
 
-        self.res_eval = blosc2.empty(self.shape, self.dtype, **kwargs)
-        self.res_eval._set_pref_udf(self.func, id(self.inputs))
+        res_eval = blosc2.empty(self.shape, self.dtype, **aux_kwargs)
+        res_eval._set_pref_udf(self.func, id(self.inputs))
 
-        aux = np.empty(self.res_eval.shape, self.res_eval.dtype)
-        self.res_eval[...] = aux
-        self.res_eval.schunk.remove_prefilter(self.func.__name__)
-        self.res_eval.schunk.cparams["nthreads"] = self._cnthreads
+        aux = np.empty(res_eval.shape, res_eval.dtype)
+        res_eval[...] = aux
+        res_eval.schunk.remove_prefilter(self.func.__name__)
+        res_eval.schunk.cparams["nthreads"] = self._cnthreads
 
-        return self.res_eval
+        return res_eval
 
     def __getitem__(self, item):
         """
@@ -672,20 +684,13 @@ class LazyUDF(LazyArray):
             as a NumPy.ndarray.
 
         """
-        if self.res_eval is not None:
-            return self.res_eval[item]
-
         if self.res_getitem is None:
             # Deep copy the kwargs to evict modifying them
             kwargs_getitem = copy.deepcopy(self.kwargs)
-            kwargs_getitem.pop("urlpath", None)
-            kwargs_getitem.pop("contiguous", None)
 
             # Cannot use multithreading when applying a postfilter, dparams['nthreads'] ignored
-            dparams = kwargs_getitem.get("dparams", None)
-            if dparams is None:
-                dparams = {"nthreads": 1}
-            elif isinstance(dparams, dict):
+            dparams = kwargs_getitem.get("dparams", {})
+            if isinstance(dparams, dict):
                 dparams["nthreads"] = 1
             else:
                 raise ValueError("dparams should be a dictionary")

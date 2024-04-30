@@ -64,11 +64,17 @@ def test_1p(shape, chunks, blocks):
     npa = np.linspace(0, 1, np.prod(shape)).reshape(shape)
     npc = npa + 1
 
-    expr = blosc2.lazyudf(numba1p, (npa,), npa.dtype, chunks=chunks, blocks=blocks)
+    expr = blosc2.lazyudf(numba1p, (npa,), npa.dtype, chunks=chunks, blocks=blocks, dparams={})
     res = expr.eval()
+    assert res.shape == shape
+    assert res.chunks == chunks
+    assert res.blocks == blocks
+    assert res.dtype == npa.dtype
 
     tol = 1e-5 if res.dtype is np.float32 else 1e-14
     np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
+
+    np.testing.assert_allclose(expr[...], npc, rtol=tol, atol=tol)
 
 
 @nb.jit(nopython=True, parallel=True)
@@ -157,17 +163,33 @@ def test_1dim(shape, chunks, blocks):
 def test_params():
     shape = (23,)
     npa = np.arange(start=0, stop=np.prod(shape)).reshape(shape)
-    py_scalar = np.e
     array = blosc2.asarray(npa)
 
     # Assert that shape is computed correctly
     npc = npa + 1
     cparams = {"nthreads": 4}
-    expr = blosc2.lazyudf(numba1p, (array,), np.float64, cparams=cparams)
-    res = expr.eval()
+    urlpath = 'lazyarray.b2nd'
+    urlpath2 = "eval.b2nd"
+    blosc2.remove_urlpath(urlpath)
+    blosc2.remove_urlpath(urlpath2)
+
+    expr = blosc2.lazyudf(numba1p, (array,), np.float64, urlpath=urlpath, cparams=cparams)
+    with pytest.raises(ValueError):
+        _ = expr.eval(urlpath=urlpath)
+
+    res = expr.eval(urlpath=urlpath2, chunks=(10, ))
     np.testing.assert_allclose(res[...], npc)
     assert res.shape == npa.shape
     assert res.schunk.cparams["nthreads"] == cparams["nthreads"]
+    assert res.schunk.urlpath == urlpath2
+    assert res.chunks == (10, )
+
+    res = expr.eval()
+    np.testing.assert_allclose(res[...], npc)
+    assert res.schunk.urlpath is None
+
+    blosc2.remove_urlpath(urlpath)
+    blosc2.remove_urlpath(urlpath2)
 
     # Pass list
     l = [1, 2, 3, 4, 5]
@@ -208,7 +230,7 @@ def test_getitem(shape, chunks, blocks, slices, urlpath, contiguous):
 
     res = expr.eval()
     np.testing.assert_allclose(res[...], npc)
-    assert res.schunk.urlpath == urlpath
+    assert res.schunk.urlpath is None
     assert res.schunk.contiguous == contiguous
     # Check dparams after a getitem and an eval
     assert res.schunk.dparams['nthreads'] == dparams['nthreads']
