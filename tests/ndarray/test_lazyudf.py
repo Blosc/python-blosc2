@@ -19,6 +19,7 @@ def numba1p(inputs_tuple, output, offset):
     output[:] = x + 1
 
 
+@pytest.mark.parametrize("chunked_eval", [True, False])
 @pytest.mark.parametrize(
     "shape, chunks, blocks",
     [
@@ -60,12 +61,14 @@ def numba1p(inputs_tuple, output, offset):
         ),
     ],
 )
-def test_1p(shape, chunks, blocks):
+def test_1p(shape, chunks, blocks, chunked_eval):
     npa = np.linspace(0, 1, np.prod(shape)).reshape(shape)
     npc = npa + 1
 
-    expr = blosc2.lazyudf(numba1p, (npa,), npa.dtype, chunks=chunks, blocks=blocks, dparams={})
-    res = expr.eval()
+    expr = blosc2.lazyudf(
+        numba1p, (npa,), npa.dtype, chunked_eval=chunked_eval, chunks=chunks, blocks=blocks, dparams={}
+    )
+    res = expr.evaluate()
     assert res.shape == shape
     assert res.chunks == chunks
     assert res.blocks == blocks
@@ -86,6 +89,7 @@ def numba2p(inputs_tuple, output, offset):
             output[i, j] = x[i, j] ** 2 + y[i, j] ** 2 + 2 * x[i, j] * y[i, j] + 1
 
 
+@pytest.mark.parametrize("chunked_eval", [True, False])
 @pytest.mark.parametrize(
     "shape, chunks, blocks",
     [
@@ -106,14 +110,16 @@ def numba2p(inputs_tuple, output, offset):
         ),
     ],
 )
-def test_2p(shape, chunks, blocks):
+def test_2p(shape, chunks, blocks, chunked_eval):
     npa = np.arange(0, np.prod(shape)).reshape(shape)
     npb = np.arange(1, np.prod(shape) + 1).reshape(shape)
     npc = npa**2 + npb**2 + 2 * npa * npb + 1
 
     b = blosc2.asarray(npb)
-    expr = blosc2.lazyudf(numba2p, (npa, b), npa.dtype, chunks=chunks, blocks=blocks)
-    res = expr.eval()
+    expr = blosc2.lazyudf(
+        numba2p, (npa, b), npa.dtype, chunked_eval=chunked_eval, chunks=chunks, blocks=blocks
+    )
+    res = expr.evaluate()
 
     np.testing.assert_allclose(res[...], npc)
 
@@ -125,6 +131,7 @@ def udf_1dim(inputs_tuple, output, offset):
     output[:] = x + y + z
 
 
+@pytest.mark.parametrize("chunked_eval", [True, False])
 @pytest.mark.parametrize(
     "shape, chunks, blocks",
     [
@@ -140,7 +147,7 @@ def udf_1dim(inputs_tuple, output, offset):
         ),
     ],
 )
-def test_1dim(shape, chunks, blocks):
+def test_1dim(shape, chunks, blocks, chunked_eval):
     npa = np.arange(start=0, stop=np.prod(shape)).reshape(shape)
     npb = np.linspace(1, 2, np.prod(shape)).reshape(shape)
     py_scalar = np.e
@@ -151,16 +158,18 @@ def test_1dim(shape, chunks, blocks):
         udf_1dim,
         (npa, b, py_scalar),
         np.float64,
+        chunked_eval=chunked_eval,
         chunks=chunks,
         blocks=blocks,
     )
-    res = expr.eval()
+    res = expr.evaluate()
 
     tol = 1e-5 if res.dtype is np.float32 else 1e-14
     np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
 
 
-def test_params():
+@pytest.mark.parametrize("chunked_eval", [True, False])
+def test_params(chunked_eval):
     shape = (23,)
     npa = np.arange(start=0, stop=np.prod(shape)).reshape(shape)
     array = blosc2.asarray(npa)
@@ -168,23 +177,25 @@ def test_params():
     # Assert that shape is computed correctly
     npc = npa + 1
     cparams = {"nthreads": 4}
-    urlpath = 'lazyarray.b2nd'
+    urlpath = "lazyarray.b2nd"
     urlpath2 = "eval.b2nd"
     blosc2.remove_urlpath(urlpath)
     blosc2.remove_urlpath(urlpath2)
 
-    expr = blosc2.lazyudf(numba1p, (array,), np.float64, urlpath=urlpath, cparams=cparams)
+    expr = blosc2.lazyudf(
+        numba1p, (array,), np.float64, chunked_eval=chunked_eval, urlpath=urlpath, cparams=cparams
+    )
     with pytest.raises(ValueError):
-        _ = expr.eval(urlpath=urlpath)
+        _ = expr.evaluate(urlpath=urlpath)
 
-    res = expr.eval(urlpath=urlpath2, chunks=(10, ))
+    res = expr.evaluate(urlpath=urlpath2, chunks=(10,))
     np.testing.assert_allclose(res[...], npc)
     assert res.shape == npa.shape
     assert res.schunk.cparams["nthreads"] == cparams["nthreads"]
     assert res.schunk.urlpath == urlpath2
-    assert res.chunks == (10, )
+    assert res.chunks == (10,)
 
-    res = expr.eval()
+    res = expr.evaluate()
     np.testing.assert_allclose(res[...], npc)
     assert res.schunk.urlpath is None
 
@@ -192,13 +203,14 @@ def test_params():
     blosc2.remove_urlpath(urlpath2)
 
     # Pass list
-    l = [1, 2, 3, 4, 5]
-    expr = blosc2.lazyudf(numba1p, (l, ), np.float64)
-    res = expr.eval()
-    npc = np.array(l) + 1
+    lnumbers = [1, 2, 3, 4, 5]
+    expr = blosc2.lazyudf(numba1p, (lnumbers,), np.float64)
+    res = expr.evaluate()
+    npc = np.array(lnumbers) + 1
     np.testing.assert_allclose(res[...], npc)
 
 
+@pytest.mark.parametrize("chunked_eval", [True, False])
 @pytest.mark.parametrize(
     "shape, chunks, blocks, slices, urlpath, contiguous",
     [
@@ -207,33 +219,34 @@ def test_params():
         ((13, 13), (10, 10), (5, 5), (slice(3, 8), slice(9, 12)), None, False),
     ],
 )
-def test_getitem(shape, chunks, blocks, slices, urlpath, contiguous):
+def test_getitem(shape, chunks, blocks, slices, urlpath, contiguous, chunked_eval):
     blosc2.remove_urlpath(urlpath)
     npa = np.arange(0, np.prod(shape)).reshape(shape)
     npb = np.arange(1, np.prod(shape) + 1).reshape(shape)
     npc = npa**2 + npb**2 + 2 * npa * npb + 1
-    dparams = {'nthreads': 4}
+    dparams = {"nthreads": 4}
 
     b = blosc2.asarray(npb)
     expr = blosc2.lazyudf(
         numba2p,
         (npa, b),
         npa.dtype,
+        chunked_eval=chunked_eval,
         chunks=chunks,
         blocks=blocks,
         urlpath=urlpath,
         contiguous=contiguous,
-        dparams={'nthreads': 4}
+        dparams={"nthreads": 4},
     )
     lazy_eval = expr[slices]
     np.testing.assert_allclose(lazy_eval, npc[slices])
 
-    res = expr.eval()
+    res = expr.evaluate()
     np.testing.assert_allclose(res[...], npc)
     assert res.schunk.urlpath is None
     assert res.schunk.contiguous == contiguous
     # Check dparams after a getitem and an eval
-    assert res.schunk.dparams['nthreads'] == dparams['nthreads']
+    assert res.schunk.dparams["nthreads"] == dparams["nthreads"]
 
     lazy_eval = expr[slices]
     np.testing.assert_allclose(lazy_eval, npc[slices])

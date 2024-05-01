@@ -23,6 +23,8 @@ shape = (5000, 10_000)
 chunks = [500, 10_000]
 blocks = [20, 10_000]
 dtype = np.float32
+rtol = 1e-6 if dtype == np.float32 else 1e-17
+atol = 1e-6 if dtype == np.float32 else 1e-17
 
 # Expression to evaluate
 exprs = ("x + 1",
@@ -32,9 +34,9 @@ exprs = ("x + 1",
 
 
 # Create input arrays
-npx = np.linspace(0, 1, np.prod(shape)).reshape(shape)
-npy = np.linspace(-1, 1, np.prod(shape)).reshape(shape)
-npz = np.linspace(0, 10, np.prod(shape)).reshape(shape)
+npx = np.linspace(0, 1, np.prod(shape), dtype=dtype).reshape(shape)
+npy = np.linspace(-1, 1, np.prod(shape), dtype=dtype).reshape(shape)
+npz = np.linspace(0, 10, np.prod(shape), dtype=dtype).reshape(shape)
 vardict = {"x": npx, "y": npy, "z": npz, "np": np}
 x = blosc2.asarray(npx, chunks=chunks, blocks=blocks)
 y = blosc2.asarray(npy, chunks=chunks, blocks=blocks)
@@ -43,18 +45,18 @@ b2vardict = {"x": x, "y": y, "z": z, "blosc2": blosc2}
 
 # Define the functions to evaluate the expressions
 # First the pure numba+numpy version
-@nb.jit(nopython=True, parallel=True, cache=True)
-def func_numba(x, y, z, expr):
+@nb.jit(parallel=True, cache=True)
+def func_numba(x, y, z, n):
     output = np.empty(x.shape, x.dtype)
-    if expr == exprs[0]:
+    if n == 0:
         for i in nb.prange(x.shape[0]):
             for j in nb.prange(x.shape[1]):
                 output[i, j] = x[i, j] + 1
-    elif expr == exprs[1]:
+    elif n == 1:
         for i in nb.prange(x.shape[0]):
             for j in nb.prange(x.shape[1]):
                 output[i, j] = x[i, j]**2 + y[i, j]**2 + 2 * x[i, j] * y[i, j] + 1
-    elif expr == exprs[2]:
+    elif n == 2:
         for i in nb.prange(x.shape[0]):
             for j in nb.prange(x.shape[1]):
                 output[i, j] = np.sin(x[i, j])**3 + np.cos(y[i, j])**2 + np.cos(x[i, j]) * np.sin(y[i, j]) + z[i, j]
@@ -62,7 +64,7 @@ def func_numba(x, y, z, expr):
 
 
 # Now, the numba+blosc2 version using an udf
-@nb.jit(nopython=True, parallel=True, cache=True)
+@nb.jit(parallel=True, cache=True)
 def udf_numba(inputs, output, offset):
     icount = len(inputs)
     x = inputs[0]
@@ -83,7 +85,7 @@ def udf_numba(inputs, output, offset):
                 output[i, j] = np.sin(x[i, j])**3 + np.cos(y[i, j])**2 + np.cos(x[i, j]) * np.sin(y[i, j]) + z[i, j]
 
 
-for expr in exprs:
+for n, expr in enumerate(exprs):
     print(f"*** Evaluating expression: {expr} ...")
 
     # Evaluate the expression with NumPy/numexpr
@@ -103,39 +105,50 @@ for expr in exprs:
     b2expr = expr.replace("sin", "blosc2.sin").replace("cos", "blosc2.cos")
     c = eval(b2expr, b2vardict)
     t0 = time()
-    d = c.eval()
-    print("Blosc2+numexpr+eval took %.3f s" % (time() - t0))
+    d = c.evaluate()
+    print("Blosc2+numexpr+evaluate took %.3f s" % (time() - t0))
     # Check
-    np.testing.assert_allclose(d[:], npres)
+    np.testing.assert_allclose(d[:], npres, rtol=rtol, atol=atol)
     t0 = time()
     d = c[:]
     print("Blosc2+numexpr+getitem took %.3f s" % (time() - t0))
     # Check
-    np.testing.assert_allclose(d[:], npres)
+    np.testing.assert_allclose(d[:], npres, rtol=rtol, atol=atol)
 
     # nb.set_num_threads(1)
     t0 = time()
-    res = func_numba(npx, npy, npz, expr)
+    res = func_numba(npx, npy, npz, n)
     print("Numba took %.3f s" % (time() - t0))
-    np.testing.assert_allclose(res, npres)
+    np.testing.assert_allclose(res, npres, rtol=rtol, atol=atol)
 
-    if expr == exprs[0]:
-        inputs = (npx,)
-    elif expr == exprs[1]:
-        inputs = (npx, npy)
-    elif expr == exprs[2]:
-        inputs = (npx, npy, npz)
+    inputs = (x,)
+    if n == 1:
+        inputs = (x, y)
+    elif n == 2:
+        inputs = (x, y, z)
 
-    expr_ = blosc2.lazyudf(udf_numba, inputs, npx.dtype,
+    expr_ = blosc2.lazyudf(udf_numba, inputs, npx.dtype, chunked_eval=False,
                            chunks=chunks, blocks=blocks)
     # actual benchmark
     # eval() uses the udf function as a prefilter
     t0 = time()
-    res = expr_.eval()
-    print("Blosc2+numba+eval took %.3f s" % (time() - t0))
-    np.testing.assert_allclose(res[...], npres)
+    res = expr_.evaluate()
+    print("Blosc2+numba+evaluate took %.3f s" % (time() - t0))
+    np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)
     # getitem uses the same compiled function but as a postfilter
     t0 = time()
     res = expr_[:]
     print("Blosc2+numba+getitem took %.3f s" % (time() - t0))
-    np.testing.assert_allclose(res[...], npres)
+    np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)
+
+    expr_ = blosc2.lazyudf(udf_numba, inputs, npx.dtype, chunked_eval=True,
+                           chunks=chunks, blocks=blocks)
+    # getitem but using chunked evaluation
+    t0 = time()
+    res = expr_.evaluate()
+    print("Blosc2+numba+chunked_eval took %.3f s" % (time() - t0))
+    np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)
+    t0 = time()
+    res = expr_[:]
+    print("Blosc2+numba+getitem+chunked_eval took %.3f s" % (time() - t0))
+    np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)

@@ -13,7 +13,6 @@ import numpy as np
 
 import blosc2
 
-
 shape = (13, 13)
 dtype = np.float64
 
@@ -21,6 +20,7 @@ dtype = np.float64
 npa = np.linspace(0, 1, np.prod(shape)).reshape(shape)
 npc = npa + 1
 a = blosc2.asarray(npa)
+
 
 @nb.jit(nopython=True, parallel=True)
 def func_numba(inputs_tuple, output, offset):
@@ -30,6 +30,6 @@ def func_numba(inputs_tuple, output, offset):
 
 chunks = [10, 10]
 expr = blosc2.lazyudf(func_numba, (npa,), npa.dtype, chunks=chunks, blocks=chunks)
-res = expr.eval()
+res = expr.evaluate()
 print(res.info)
 np.testing.assert_allclose(res[...], npc)
