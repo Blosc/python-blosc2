@@ -18,11 +18,51 @@ import blosc2
 
 class LazyArray(ABC):
     @abstractmethod
-    def eval(self, **kwargs):
+    def eval(self, item, **kwargs):
+        """
+        Get a :ref:`NDArray <NDArray>` containing the evaluation of the :ref:`LazyUDF <LazyUDF>`
+        or :ref:`LazyExpr <LazyExpr>`.
+
+        Parameters
+        ----------
+        item: slice, list of slices, optional
+            If not None, only the chunks that intersect with the slices
+            in items will be evaluated. This parameter is only supported for
+            :ref:`LazyExpr <LazyExpr>`.
+
+        kwargs: dict, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
+            These arguments will be set in the resulting :ref:`NDArray <NDArray>`.
+
+        Returns
+        -------
+        out: :ref:`NDArray <NDArray>`
+            A :ref:`NDArray <NDArray>` containing the result of evaluating the
+            :ref:`LazyUDF <LazyUDF>` or :ref:`LazyExpr <LazyExpr>`.
+
+        Notes
+        -----
+        * If self is a LazyArray from an udf, the kwargs used to store the resulting
+          array will be the ones passed to the constructor in :func:`lazyudf` (except the
+          `urlpath`) updated with the kwargs passed when calling this method.
+        """
         pass
 
     @abstractmethod
     def __getitem__(self, item):
+        """
+        Get the result of evaluating a slice.
+
+        Parameters
+        ----------
+        item: int, slice or sequence of slices
+            The slice(s) to be retrieved. Note that step parameter is not honored yet.
+
+        Returns
+        -------
+        out: np.ndarray
+            An array with the data containing the slice evaluated.
+        """
         pass
 
 
@@ -553,21 +593,6 @@ class LazyExpr(LazyArray):
         return self.update_expr(new_op=(self, "**", value))
 
     def eval(self, item=None, **kwargs) -> blosc2.NDArray:
-        """Evaluate the lazy expression in self.
-
-        Parameters
-        ----------
-        item: slice, list of slices, optional
-            If not None, only the chunks that intersect with the slices
-            in items will be evaluated.
-        kwargs: dict, optional
-            Keyword arguments that are supported by the :func:`empty` constructor.
-
-        Returns
-        -------
-        :ref:`NDArray`
-            The output array.
-        """
         return chunked_eval(self.expression, self.operands, item, **kwargs)
 
     def __getitem__(self, item):
@@ -633,22 +658,11 @@ class LazyUDF(LazyArray):
         if chunked_eval:
             self.inputs_dict = {f"o{i}": obj for i, obj in enumerate(self.inputs)}
 
-    def eval(self, **kwargs):
-        """
-        Get a :ref:`NDArray <NDArray>` containing the evaluation of the :ref:`LazyUDF <LazyUDF>`.
+    def eval(self, item=None, **kwargs):
+        if item is not None:
+            raise NotImplementedError("Cannot get the result of evaluating a slice"
+                                      "comming from a udf as a NDArray")
 
-        Returns
-        -------
-        out: :ref:`NDArray <NDArray>`
-            A :ref:`NDArray <NDArray>` containing the result of evaluating the
-            :ref:`LazyUDF <LazyUDF>`.
-
-        Notes
-        -----
-        Because this calls a Python function when compressing, the `cparams[nthreads]` is set to
-        one during the evaluation. After that, the original `cparams[nthreads]` value is restored.
-
-        """
         # Get kwargs
         if kwargs is None:
             kwargs = {}
@@ -702,22 +716,6 @@ class LazyUDF(LazyArray):
         return res_eval
 
     def __getitem__(self, item):
-        """
-        Evaluate a slice of the :ref:`LazyUDF <LazyUDF>`.
-
-        Parameters
-        ----------
-        item: slice
-            The slice of the :ref:`LazyUDF <LazyUDF>` to evaluate.
-
-        Returns
-        -------
-        out: NumPy.ndarray
-            The result of evaluating the slice of the :ref:`LazyUDF <LazyUDF>`
-            as a NumPy.ndarray.
-
-        """
-
         if self.chunked_eval:
             output = np.empty(self.shape, self.dtype)
             try:
@@ -738,27 +736,29 @@ def lazyudf(func, inputs, dtype, chunked_eval=True, **kwargs):
     Parameters
     ----------
     func: Python function
-        User defined function to apply to each block.
-    inputs: Sequence of np.ndarray or :ref:`NDArray <NDArray>`
-        The supported inputs are NumPy.ndarray, Python scalars, and :ref:`NDArray <NDArray>`.
+        User defined function to apply to each block. This function will
+        always receive the same parameters: `inputs_tuple`, `output` and `offset`.
+        The first one will contain the corresponding slice for the block of each
+        input in :paramref:`inputs`. The second, the buffer to be filled as a multidimensional
+        numpy.ndarray. And the third one, the multidimensional offset corresponding
+        to the start of the block that it is being computed.
+    inputs: tuple or list
+        The sequence of inputs. The supported inputs are NumPy.ndarray,
+        Python scalars, and :ref:`NDArray <NDArray>`.
     dtype: np.dtype
         The resulting ndarray dtype in NumPy format.
     chunked_eval: bool, optional
         Whether to evaluate the expression in chunks or not (blocks).
     kwargs: dict, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
-        These arguments will be used by the `__getitem__` and `eval` methods. The
-        last one will ignore the `urlpath` parameter to `lazyudf` if passed.
+        These arguments will be used by the :meth:`LazyArray.__getitem__` and
+        :meth:`LazyArray.eval` methods. The
+        last one will ignore the `urlpath` parameter passed in this function.
 
     Returns
     -------
     out: :ref:`LazyUDF <LazyUDF>`
         A :ref:`LazyUDF <LazyUDF>` is returned.
-
-    Notes
-    -----
-    * If `urlpath` or `contiguous` are passed as kwargs,
-    * Since the
 
     """
     return LazyUDF(func, inputs, dtype, chunked_eval, **kwargs)
