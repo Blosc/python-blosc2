@@ -301,7 +301,7 @@ def test_contains(value_fixture):
             expr_numexpr = f"{'contains'}(a1, value2)"
             res_numexpr = ne.evaluate(expr_numexpr)
         else:  # ("NDArray", "NDArray")
-            a2 = np.array([b"abc", b"ab c", b" abc", b" abc ", b"\tabc", b"c h"])
+            a2 = np.array([b'abc', b'ab c', b' abc', b' abc ', b'\tabc', b'c h'])
             a2_blosc = blosc2.asarray(a2)
             # Construct the lazy expression
             expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", a2_blosc))

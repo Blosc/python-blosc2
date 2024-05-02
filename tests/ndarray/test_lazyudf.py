@@ -236,7 +236,7 @@ def test_getitem(shape, chunks, blocks, slices, urlpath, contiguous, chunked_eva
         blocks=blocks,
         urlpath=urlpath,
         contiguous=contiguous,
-        dparams={"nthreads": 4},
+        dparams=dparams,
     )
     lazy_eval = expr[slices]
     np.testing.assert_allclose(lazy_eval, npc[slices])
@@ -252,3 +252,54 @@ def test_getitem(shape, chunks, blocks, slices, urlpath, contiguous, chunked_eva
     np.testing.assert_allclose(lazy_eval, npc[slices])
 
     blosc2.remove_urlpath(urlpath)
+
+
+@pytest.mark.parametrize("chunked_eval", [True, False])
+@pytest.mark.parametrize(
+    "shape, chunks, blocks, slices, urlpath, contiguous",
+    [
+        ((40, 20), (30, 10), (5, 5), (slice(0, 5), slice(5, 20)), "slice_eval.b2nd", False),
+        ((13, 13, 10), (10, 10, 5), (5, 5, 3), (slice(0, 12), slice(3, 13), ...), "slice_eval.b2nd", True),
+        ((13, 13), (10, 10), (5, 5), (slice(3, 8), slice(9, 12)), None, False),
+    ],
+)
+def test_eval_slice(shape, chunks, blocks, slices, urlpath, contiguous, chunked_eval):
+    blosc2.remove_urlpath(urlpath)
+    npa = np.arange(0, np.prod(shape)).reshape(shape)
+    npb = np.arange(1, np.prod(shape) + 1).reshape(shape)
+    npc = npa ** 2 + npb ** 2 + 2 * npa * npb + 1
+    dparams = {"nthreads": 4}
+    b = blosc2.asarray(npb)
+    expr = blosc2.lazyudf(
+        numba2p,
+        (npa, b),
+        npa.dtype,
+        chunked_eval=chunked_eval,
+        chunks=chunks,
+        blocks=blocks,
+        urlpath=urlpath,
+        contiguous=contiguous,
+        dparams=dparams,
+    )
+    res = expr.eval(item=slices, chunks=None, blocks=None)
+    np.testing.assert_allclose(res[...], npc[slices])
+    assert res.schunk.urlpath is None
+    assert res.schunk.contiguous == contiguous
+    assert res.schunk.dparams["nthreads"] == dparams["nthreads"]
+    assert res.schunk.cparams["nthreads"] == blosc2.cparams_dflts["nthreads"]
+    assert res.shape == npc[slices].shape
+
+    cparams = {"nthreads": 6}
+    urlpath2 = "slice_eval2.b2nd"
+    blosc2.remove_urlpath(urlpath2)
+
+    res = expr.eval(item=slices, chunks=None, blocks=None, cparams=cparams, urlpath=urlpath2)
+    np.testing.assert_allclose(res[...], npc[slices])
+    assert res.schunk.urlpath == urlpath2
+    assert res.schunk.contiguous == contiguous
+    assert res.schunk.dparams["nthreads"] == dparams["nthreads"]
+    assert res.schunk.cparams["nthreads"] == cparams["nthreads"]
+    assert res.shape == npc[slices].shape
+
+    blosc2.remove_urlpath(urlpath)
+    blosc2.remove_urlpath(urlpath2)

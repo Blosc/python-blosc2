@@ -27,8 +27,7 @@ class LazyArray(ABC):
         ----------
         item: slice, list of slices, optional
             If not None, only the chunks that intersect with the slices
-            in items will be evaluated. This parameter is only supported for
-            :ref:`LazyExpr <LazyExpr>`.
+            in items will be evaluated.
 
         kwargs: dict, optional
             Keyword arguments that are supported by the :func:`empty` constructor.
@@ -668,10 +667,6 @@ class LazyUDF(LazyArray):
             self.inputs_dict = {f"o{i}": obj for i, obj in enumerate(self.inputs)}
 
     def eval(self, item=None, **kwargs):
-        if item is not None:
-            raise NotImplementedError("Cannot get the result of evaluating a slice"
-                                      "comming from a udf as a NDArray")
-
         # Get kwargs
         if kwargs is None:
             kwargs = {}
@@ -692,37 +687,45 @@ class LazyUDF(LazyArray):
         _ = aux_kwargs.pop("urlpath", None)
         aux_kwargs.update(kwargs)
 
-        if self.chunked_eval:
+        if item is None:
+            if self.chunked_eval:
+                res_eval = blosc2.empty(self.shape, self.dtype, **aux_kwargs)
+                try:
+                    failed = False
+                    chunked_eval(self.func, self.inputs_dict, None, _getitem=False, _output=res_eval)
+                except ValueError:
+                    # chunked_eval() does not support inputs that do not have at least one NDArray
+                    failed = True
+                if not failed:
+                    return res_eval
+
+            # Cannot use multithreading when applying a prefilter, save nthreads to set them
+            # after the evaluation
+            cparams = aux_kwargs.get("cparams", {})
+            if isinstance(cparams, dict):
+                self._cnthreads = cparams.get("nthreads", blosc2.cparams_dflts["nthreads"])
+                cparams["nthreads"] = 1
+            else:
+                raise ValueError("cparams should be a dictionary")
+            aux_kwargs["cparams"] = cparams
+
             res_eval = blosc2.empty(self.shape, self.dtype, **aux_kwargs)
-            try:
-                failed = False
-                chunked_eval(self.func, self.inputs_dict, None, _getitem=False, _output=res_eval)
-            except ValueError:
-                # chunked_eval() does not support inputs that do not have at least one NDArray
-                failed = True
-            if not failed:
-                return res_eval
+            # Register a prefilter for eval
+            res_eval._set_pref_udf(self.func, id(self.inputs))
 
-        # Cannot use multithreading when applying a prefilter, save nthreads to set them
-        # after the evaluation
-        cparams = aux_kwargs.get("cparams", {})
-        if isinstance(cparams, dict):
-            self._cnthreads = cparams.get("nthreads", blosc2.cparams_dflts["nthreads"])
-            cparams["nthreads"] = 1
+            aux = np.empty(res_eval.shape, res_eval.dtype)
+            res_eval[...] = aux
+            res_eval.schunk.remove_prefilter(self.func.__name__)
+            res_eval.schunk.cparams["nthreads"] = self._cnthreads
+
+            return res_eval
         else:
-            raise ValueError("cparams should be a dictionary")
-        aux_kwargs["cparams"] = cparams
-
-        res_eval = blosc2.empty(self.shape, self.dtype, **aux_kwargs)
-        # Register a prefilter for eval
-        res_eval._set_pref_udf(self.func, id(self.inputs))
-
-        aux = np.empty(res_eval.shape, res_eval.dtype)
-        res_eval[...] = aux
-        res_eval.schunk.remove_prefilter(self.func.__name__)
-        res_eval.schunk.cparams["nthreads"] = self._cnthreads
-
-        return res_eval
+            # Get only a slice
+            np_array = self.__getitem__(item)
+            if self.chunked_eval:
+                # When using this method the resulting array is not C-contiguous
+                np_array = np.ascontiguousarray(np_array)
+            return blosc2.asarray(np_array, **aux_kwargs)
 
     def __getitem__(self, item):
         if self.chunked_eval:
