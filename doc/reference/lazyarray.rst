@@ -18,6 +18,7 @@ Methods
     __getitem__
 
 
+.. _LazyExpr:
 
 LazyExpr Usage
 --------------
@@ -25,6 +26,7 @@ LazyExpr Usage
 For getting a LazyArray from a expression, you would proceed in a similar manner
 than with numexpr.
 
+.. _LazyUDF:
 
 LazyUDF Usage
 -------------
