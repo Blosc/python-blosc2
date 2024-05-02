@@ -68,7 +68,7 @@ def test_1p(shape, chunks, blocks, chunked_eval):
     expr = blosc2.lazyudf(
         numba1p, (npa,), npa.dtype, chunked_eval=chunked_eval, chunks=chunks, blocks=blocks, dparams={}
     )
-    res = expr.evaluate()
+    res = expr.eval()
     assert res.shape == shape
     assert res.chunks == chunks
     assert res.blocks == blocks
@@ -119,7 +119,7 @@ def test_2p(shape, chunks, blocks, chunked_eval):
     expr = blosc2.lazyudf(
         numba2p, (npa, b), npa.dtype, chunked_eval=chunked_eval, chunks=chunks, blocks=blocks
     )
-    res = expr.evaluate()
+    res = expr.eval()
 
     np.testing.assert_allclose(res[...], npc)
 
@@ -162,7 +162,7 @@ def test_1dim(shape, chunks, blocks, chunked_eval):
         chunks=chunks,
         blocks=blocks,
     )
-    res = expr.evaluate()
+    res = expr.eval()
 
     tol = 1e-5 if res.dtype is np.float32 else 1e-14
     np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
@@ -186,16 +186,16 @@ def test_params(chunked_eval):
         numba1p, (array,), np.float64, chunked_eval=chunked_eval, urlpath=urlpath, cparams=cparams
     )
     with pytest.raises(ValueError):
-        _ = expr.evaluate(urlpath=urlpath)
+        _ = expr.eval(urlpath=urlpath)
 
-    res = expr.evaluate(urlpath=urlpath2, chunks=(10,))
+    res = expr.eval(urlpath=urlpath2, chunks=(10,))
     np.testing.assert_allclose(res[...], npc)
     assert res.shape == npa.shape
     assert res.schunk.cparams["nthreads"] == cparams["nthreads"]
     assert res.schunk.urlpath == urlpath2
     assert res.chunks == (10,)
 
-    res = expr.evaluate()
+    res = expr.eval()
     np.testing.assert_allclose(res[...], npc)
     assert res.schunk.urlpath is None
 
@@ -205,7 +205,7 @@ def test_params(chunked_eval):
     # Pass list
     lnumbers = [1, 2, 3, 4, 5]
     expr = blosc2.lazyudf(numba1p, (lnumbers,), np.float64)
-    res = expr.evaluate()
+    res = expr.eval()
     npc = np.array(lnumbers) + 1
     np.testing.assert_allclose(res[...], npc)
 
@@ -241,7 +241,7 @@ def test_getitem(shape, chunks, blocks, slices, urlpath, contiguous, chunked_eva
     lazy_eval = expr[slices]
     np.testing.assert_allclose(lazy_eval, npc[slices])
 
-    res = expr.evaluate()
+    res = expr.eval()
     np.testing.assert_allclose(res[...], npc)
     assert res.schunk.urlpath is None
     assert res.schunk.contiguous == contiguous

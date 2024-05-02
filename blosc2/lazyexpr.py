@@ -18,7 +18,7 @@ import blosc2
 
 class LazyArray(ABC):
     @abstractmethod
-    def evaluate(self, **kwargs):
+    def eval(self, **kwargs):
         pass
 
     @abstractmethod
@@ -552,7 +552,7 @@ class LazyExpr(LazyArray):
     def __ipow__(self, value):
         return self.update_expr(new_op=(self, "**", value))
 
-    def evaluate(self, item=None, **kwargs) -> blosc2.NDArray:
+    def eval(self, item=None, **kwargs) -> blosc2.NDArray:
         """Evaluate the lazy expression in self.
 
         Parameters
@@ -599,7 +599,7 @@ def validate_inputs_udf(inputs):
 
 
 class LazyUDF(LazyArray):
-    def __init__(self, func, inputs, dtype, chunked_eval=False, **kwargs):
+    def __init__(self, func, inputs, dtype, chunked_eval=True, **kwargs):
         # After this, all the inputs should be np.ndarray or NDArray objects
         self.inputs = validate_inputs_udf(inputs)
         self.shape = None
@@ -633,7 +633,7 @@ class LazyUDF(LazyArray):
         if chunked_eval:
             self.inputs_dict = {f"o{i}": obj for i, obj in enumerate(self.inputs)}
 
-    def evaluate(self, **kwargs):
+    def eval(self, **kwargs):
         """
         Get a :ref:`NDArray <NDArray>` containing the evaluation of the :ref:`LazyUDF <LazyUDF>`.
 
@@ -790,7 +790,7 @@ if __name__ == "__main__":
     print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
-    res = expr.evaluate(item=sl)
+    res = expr.eval(item=sl)
     print(f"Elapsed time (evaluate): {time() - t0:.3f} s")
     res = res[sl] if sl is not None else res[:]
     t0 = time()

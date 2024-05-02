@@ -26,7 +26,7 @@ b = blosc2.asarray(npb)
 # Get a LazyExpr instance
 c = a**2 + b**2 + 2 * a * b + 1
 # Evaluate!  Output is a NDArray
-d = c.evaluate()
+d = c.eval()
 # Check
 assert isinstance(d, blosc2.NDArray)
 assert np.allclose(d[:], npc)

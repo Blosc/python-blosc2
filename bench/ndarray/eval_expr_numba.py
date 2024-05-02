@@ -105,13 +105,13 @@ for n, expr in enumerate(exprs):
     b2expr = expr.replace("sin", "blosc2.sin").replace("cos", "blosc2.cos")
     c = eval(b2expr, b2vardict)
     t0 = time()
-    d = c.evaluate()
-    print("Blosc2+numexpr+evaluate took %.3f s" % (time() - t0))
+    d = c.eval()
+    print("LazyExpr+eval took %.3f s" % (time() - t0))
     # Check
     np.testing.assert_allclose(d[:], npres, rtol=rtol, atol=atol)
     t0 = time()
     d = c[:]
-    print("Blosc2+numexpr+getitem took %.3f s" % (time() - t0))
+    print("LazyExpr+getitem took %.3f s" % (time() - t0))
     # Check
     np.testing.assert_allclose(d[:], npres, rtol=rtol, atol=atol)
 
@@ -132,23 +132,23 @@ for n, expr in enumerate(exprs):
     # actual benchmark
     # eval() uses the udf function as a prefilter
     t0 = time()
-    res = expr_.evaluate()
-    print("Blosc2+numba+evaluate took %.3f s" % (time() - t0))
+    res = expr_.eval()
+    print("LazyUDF+eval took %.3f s" % (time() - t0))
     np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)
     # getitem uses the same compiled function but as a postfilter
     t0 = time()
     res = expr_[:]
-    print("Blosc2+numba+getitem took %.3f s" % (time() - t0))
+    print("LazyUDF+getitem took %.3f s" % (time() - t0))
     np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)
 
     expr_ = blosc2.lazyudf(udf_numba, inputs, npx.dtype, chunked_eval=True,
                            chunks=chunks, blocks=blocks)
     # getitem but using chunked evaluation
     t0 = time()
-    res = expr_.evaluate()
-    print("Blosc2+numba+chunked_eval took %.3f s" % (time() - t0))
+    res = expr_.eval()
+    print("LazyUDF+chunked_eval took %.3f s" % (time() - t0))
     np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)
     t0 = time()
     res = expr_[:]
-    print("Blosc2+numba+getitem+chunked_eval took %.3f s" % (time() - t0))
+    print("LazyUDF+getitem+chunked_eval took %.3f s" % (time() - t0))
     np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)

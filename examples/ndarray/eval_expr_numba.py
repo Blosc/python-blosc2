@@ -30,6 +30,6 @@ def func_numba(inputs_tuple, output, offset):
 
 chunks = [10, 10]
 expr = blosc2.lazyudf(func_numba, (npa,), npa.dtype, chunks=chunks, blocks=chunks)
-res = expr.evaluate()
+res = expr.eval()
 print(res.info)
 np.testing.assert_allclose(res[...], npc)
