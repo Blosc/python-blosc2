@@ -8,37 +8,28 @@
 
 # This shows how to evaluate expressions with NDArray instances as operands.
 
+import numba as nb
 import numpy as np
 
 import blosc2
 
-shape = (50, 50)
+shape = (13, 13)
 dtype = np.float64
 
 # Create a NDArray from a NumPy array
 npa = np.linspace(0, 1, np.prod(shape)).reshape(shape)
-npb = np.linspace(1, 2, np.prod(shape)).reshape(shape)
-npc = npa**2 + npb**2 + 2 * npa * npb + 1
-
+npc = npa + 1
 a = blosc2.asarray(npa)
-b = blosc2.asarray(npb)
 
-# Get a LazyExpr instance
-c = a**2 + b**2 + 2 * a * b + 1
-# Evaluate!  Output is a NDArray
-d = c.eval()
-# Check
-assert isinstance(d, blosc2.NDArray)
-assert np.allclose(d[:], npc)
 
-# Evaluate an slice!  Output is a NumPy array
-npd = c[:]
-# Check
-assert isinstance(npd, np.ndarray)
-assert np.allclose(npd, npc)
+@nb.jit(nopython=True, parallel=True)
+def func_numba(inputs_tuple, output, offset):
+    x = inputs_tuple[0]
+    output[:] = x + 1
 
-# Evaluate an slice!  Output is a NumPy array
-npd = c[1:10]
-# Check
-assert isinstance(npd, np.ndarray)
-assert np.allclose(npd, npc[1:10])
+
+chunks = [10, 10]
+expr = blosc2.lazyudf(func_numba, (npa,), npa.dtype, chunks=chunks, blocks=chunks)
+res = expr.eval()
+print(res.info)
+np.testing.assert_allclose(res[...], npc)

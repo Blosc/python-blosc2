@@ -85,7 +85,7 @@ def test_simple_expression(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 - a3 * a4
     nres = ne.evaluate("na1 + na2 - na3 * na4")
-    res = expr.evaluate()
+    res = expr.eval()
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -97,7 +97,7 @@ def test_iXXX(array_fixture):
     expr *= 2  # __imul__
     expr /= 7  # __itruediv__
     expr **= 2.3  # __ipow__
-    res = expr.evaluate()
+    res = expr.eval()
     nres = ne.evaluate("(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7) ** 2.3")
     np.testing.assert_allclose(res[:], nres)
 
@@ -107,7 +107,7 @@ def test_complex_evaluate(array_fixture):
     expr = blosc2.tan(a1) * (blosc2.sin(a2) * blosc2.sin(a2) + blosc2.cos(a3)) + (blosc2.sqrt(a4) * 2)
     expr += 2
     nres = ne.evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
-    res = expr.evaluate()
+    res = expr.eval()
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -130,7 +130,6 @@ def test_complex_getitem_slice(array_fixture):
     np.testing.assert_allclose(res, nres[sl])
 
 
-# TODO: This stopped to work when we added chunks and blocks with padding
 def test_expression_with_constants(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     # Test with operands with same chunks and blocks

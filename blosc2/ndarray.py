@@ -478,8 +478,6 @@ class NDArray(blosc2_ext.NDArray):
         return blosc2.LazyExpr(new_op=(value, "**", self))
 
 
-
-
 def sin(ndarr: NDArray, /):
     """
     Trigonometric sine, element-wise.
