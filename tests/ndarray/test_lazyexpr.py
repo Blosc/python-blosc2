@@ -153,7 +153,7 @@ def test_comparison_operators(dtype_fixture, comparison_operator):
     a2 = blosc2.asarray(na1, cparams=cparams)
     # Construct the lazy expression
     expr = blosc2.LazyExpr(new_op=(a1, comparison_operator, a2))
-    res_lazyexpr = expr.evaluate()
+    res_lazyexpr = expr.eval()
     # Evaluate using NumExpr
     expr_string = f"na1 {comparison_operator} na2"
     res_numexpr = ne.evaluate(expr_string)
@@ -175,7 +175,7 @@ def test_functions(request, dtype):
     function_name = request.param
     # Construct the lazy expression based on the function name
     expr = blosc2.LazyExpr(new_op=(a1, function_name, a2))
-    res_lazyexpr = expr.evaluate()
+    res_lazyexpr = expr.eval()
     # Evaluate using NumExpr
     expr_string = f"{function_name}(na1)"
     res_numexpr = ne.evaluate(expr_string)
@@ -211,7 +211,7 @@ def test_arctan2_pow(dtype_fixture, function, value1, value2):
             a2 = blosc2.asarray(na1, cparams=cparams)
             # Construct the lazy expression based on the function name
             expr = blosc2.LazyExpr(new_op=(a1, function, a2))
-            res_lazyexpr = expr.evaluate()
+            res_lazyexpr = expr.eval()
             # Evaluate using NumExpr
             if function == '**':
                 res_numexpr = ne.evaluate('na1**na2')
@@ -222,7 +222,7 @@ def test_arctan2_pow(dtype_fixture, function, value1, value2):
             value2 = 3
             # Construct the lazy expression based on the function name
             expr = blosc2.LazyExpr(new_op=(a1, function, value2))
-            res_lazyexpr = expr.evaluate()
+            res_lazyexpr = expr.eval()
             # Evaluate using NumExpr
             if function == '**':
                 res_numexpr = ne.evaluate('na1**value2')
@@ -235,7 +235,7 @@ def test_arctan2_pow(dtype_fixture, function, value1, value2):
         a2 = blosc2.asarray(na2, cparams=cparams)
         # Construct the lazy expression based on the function name
         expr = blosc2.LazyExpr(new_op=(value1, function, a2))
-        res_lazyexpr = expr.evaluate()
+        res_lazyexpr = expr.eval()
         # Evaluate using NumExpr
         if function == '**':
             res_numexpr = ne.evaluate('value1**na2')
@@ -255,7 +255,7 @@ def test_abs(dtype):
     na1 = np.linspace(-1, 1, nelems, dtype=dtype).reshape(reshape)
     a1 = blosc2.asarray(na1, cparams=cparams)
     expr = blosc2.LazyExpr(new_op=(a1, "abs", None))
-    res_lazyexpr = expr.evaluate()
+    res_lazyexpr = expr.eval()
     res_np = np.abs(na1)
     np.testing.assert_allclose(res_lazyexpr[:], res_np)
 
@@ -291,6 +291,6 @@ def test_contains(value_fixture):
         expr_lazy = blosc2.LazyExpr(new_op=(value1, "contains", a2_blosc))
         # Evaluate using NumExpr
         res_numexpr = ne.evaluate('contains(value1, a2)')
-    res_lazyexpr = expr_lazy.evaluate()
+    res_lazyexpr = expr_lazy.eval()
     # Compare the results
     np.testing.assert_array_equal(res_lazyexpr[:], res_numexpr)
