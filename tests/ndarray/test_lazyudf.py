@@ -7,15 +7,12 @@
 #######################################################################
 import math
 
-import numba as nb
 import numpy as np
 import pytest
 
 import blosc2
 
 
-# We don't need numba to test the lazyudf function
-# @nb.jit(nopython=True, parallel=True)
 def udf1p(inputs_tuple, output, offset):
     x = inputs_tuple[0]
     output[:] = x + 1
@@ -82,13 +79,11 @@ def test_1p(shape, chunks, blocks, chunked_eval):
     np.testing.assert_allclose(expr[...], npc, rtol=tol, atol=tol)
 
 
-# We don't need numba to test the lazyudf function
-# @nb.jit(nopython=True, parallel=True)
 def udf2p(inputs_tuple, output, offset):
     x = inputs_tuple[0]
     y = inputs_tuple[1]
-    for i in nb.prange(x.shape[0]):
-        for j in nb.prange(x.shape[1]):
+    for i in range(x.shape[0]):
+        for j in range(x.shape[1]):
             output[i, j] = x[i, j] ** 2 + y[i, j] ** 2 + 2 * x[i, j] * y[i, j] + 1
 
 
