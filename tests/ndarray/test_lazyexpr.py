@@ -36,7 +36,7 @@ def chunks_blocks_fixture(request):
 def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
-    chunks = chunks1 = blocks = blocks1 = None
+    chunks = chunks1 = blocks = blocks1 = None  # silence linter
     same_chunks_blocks = chunks_blocks_fixture[0] and chunks_blocks_fixture[1]
     same_chunks = chunks_blocks_fixture[0]
     same_blocks = chunks_blocks_fixture[1]
@@ -138,12 +138,7 @@ def test_expression_with_constants(array_fixture):
     np.testing.assert_allclose(expr[:], nres)
 
 
-# Parametrized fixture for testing comparison operators
-@pytest.fixture(params=["==", "!=", ">=", ">", "<=", "<"])
-def comparison_operator(request):
-    return request.param
-
-
+@pytest.mark.parametrize("comparison_operator", ["==", "!=", ">=", ">", "<=", "<"])
 def test_comparison_operators(dtype_fixture, comparison_operator):
     reshape = [30, 4]
     nelems = np.prod(reshape)
@@ -162,9 +157,9 @@ def test_comparison_operators(dtype_fixture, comparison_operator):
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
 
 
-# Combined test function
-@pytest.fixture(
-    params=[
+@pytest.mark.parametrize(
+    "function",
+    [
         "sin",
         "cos",
         "tan",
@@ -186,22 +181,18 @@ def test_comparison_operators(dtype_fixture, comparison_operator):
         "conj",
         "real",
         "imag",
-    ]
+    ],
 )
-def test_functions(request, dtype):
-    shape = [30, 4]
-    nelems = np.prod(shape)
+def test_functions(function, dtype_fixture, shape_fixture):
+    nelems = np.prod(shape_fixture)
     cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
-    na1 = np.linspace(0, 10, nelems, dtype=dtype).reshape(shape)
+    na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     a1 = blosc2.asarray(na1, cparams=cparams)
-    a2 = blosc2.asarray(na1, cparams=cparams)
-    # Get the function name from the parameter
-    function_name = request.param
     # Construct the lazy expression based on the function name
-    expr = blosc2.LazyExpr(new_op=(a1, function_name, a2))
+    expr = blosc2.LazyExpr(new_op=(a1, function, None))
     res_lazyexpr = expr.eval()
     # Evaluate using NumExpr
-    expr_string = f"{function_name}(na1)"
+    expr_string = f"{function}(na1)"
     res_numexpr = ne.evaluate(expr_string)
     # Compare the results
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
@@ -220,16 +211,14 @@ def test_functions(request, dtype):
         # ("scalar", "scalar") # Not supported by LazyExpr
     ],
 )
-def test_arctan2_pow(dtype_fixture, function, value1, value2):
-    shape = [30, 4]
-    nelems = np.prod(shape)
-    cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
+def test_arctan2_pow(shape_fixture, dtype_fixture, function, value1, value2):
+    nelems = np.prod(shape_fixture)
     if value1 == "NDArray":  # ("NDArray", "scalar"), ("NDArray", "NDArray")
-        na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape)
-        a1 = blosc2.asarray(na1, cparams=cparams)
+        na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
+        a1 = blosc2.asarray(na1)
         if value2 == "NDArray":  # ("NDArray", "NDArray")
-            na2 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape)
-            a2 = blosc2.asarray(na1, cparams=cparams)
+            na2 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
+            a2 = blosc2.asarray(na1)
             # Construct the lazy expression based on the function name
             expr = blosc2.LazyExpr(new_op=(a1, function, a2))
             res_lazyexpr = expr.eval()
@@ -252,8 +241,8 @@ def test_arctan2_pow(dtype_fixture, function, value1, value2):
                 res_numexpr = ne.evaluate(expr_string)
     else:  # ("scalar", "NDArray")
         value1 = 12
-        na2 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape)
-        a2 = blosc2.asarray(na2, cparams=cparams)
+        na2 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
+        a2 = blosc2.asarray(na2)
         # Construct the lazy expression based on the function name
         expr = blosc2.LazyExpr(new_op=(value1, function, a2))
         res_lazyexpr = expr.eval()
@@ -268,27 +257,20 @@ def test_arctan2_pow(dtype_fixture, function, value1, value2):
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, atol=tolerancy, rtol=tolerancy)
 
 
-@pytest.fixture(params=["abs"])
-def test_abs(dtype):
-    shape = [30, 4]
-    nelems = np.prod(shape)
-    cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
-    na1 = np.linspace(-1, 1, nelems, dtype=dtype).reshape(shape)
-    a1 = blosc2.asarray(na1, cparams=cparams)
+def test_abs(shape_fixture, dtype_fixture):
+    nelems = np.prod(shape_fixture)
+    na1 = np.linspace(-1, 1, nelems, dtype=dtype_fixture).reshape(shape_fixture)
+    a1 = blosc2.asarray(na1)
     expr = blosc2.LazyExpr(new_op=(a1, "abs", None))
     res_lazyexpr = expr.eval()
     res_np = np.abs(na1)
     np.testing.assert_allclose(res_lazyexpr[:], res_np)
 
 
-@pytest.fixture(params=[("NDArray", "str"), ("NDArray", "NDArray"), ("str", "NDArray")])
-def value_fixture(request):
-    return request.param
-
-
-def test_contains(value_fixture):
+@pytest.mark.parametrize("values", [("NDArray", "str"), ("NDArray", "NDArray"), ("str", "NDArray")])
+def test_contains(values):
     # Unpack the value fixture
-    value1, value2 = value_fixture
+    value1, value2 = values
     if value1 == "NDArray":
         a1 = np.array([b"abc", b"def", b"aterr", b"oot", b"zu", b"ab c"])
         a1_blosc = blosc2.asarray(a1)
