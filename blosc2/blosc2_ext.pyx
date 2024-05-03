@@ -1638,10 +1638,11 @@ cdef aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
 
     # Call udf function
     func_id = udata.py_func.decode("utf-8")
+    offset = tuple(start_ndim[i] for i in range(nd))
     if is_postfilter:
-        blosc2.postfilter_funcs[func_id](tuple(inputs_slice), output, np.array(start_ndim))
+        blosc2.postfilter_funcs[func_id](tuple(inputs_slice), output, offset)
     else:
-        blosc2.prefilter_funcs[func_id](tuple(inputs_slice), output, np.array(start_ndim))
+        blosc2.prefilter_funcs[func_id](tuple(inputs_slice), output, offset)
 
     cdef int64_t start[B2ND_MAX_DIM]
     cdef int64_t slice_shape[B2ND_MAX_DIM]

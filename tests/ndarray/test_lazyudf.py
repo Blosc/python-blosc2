@@ -5,6 +5,7 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+import math
 
 import numba as nb
 import numpy as np
@@ -13,8 +14,9 @@ import pytest
 import blosc2
 
 
-@nb.jit(nopython=True, parallel=True)
-def numba1p(inputs_tuple, output, offset):
+# We don't need numba to test the lazyudf function
+# @nb.jit(nopython=True, parallel=True)
+def udf1p(inputs_tuple, output, offset):
     x = inputs_tuple[0]
     output[:] = x + 1
 
@@ -66,7 +68,7 @@ def test_1p(shape, chunks, blocks, chunked_eval):
     npc = npa + 1
 
     expr = blosc2.lazyudf(
-        numba1p, (npa,), npa.dtype, chunked_eval=chunked_eval, chunks=chunks, blocks=blocks, dparams={}
+        udf1p, (npa,), npa.dtype, chunked_eval=chunked_eval, chunks=chunks, blocks=blocks, dparams={}
     )
     res = expr.eval()
     assert res.shape == shape
@@ -80,8 +82,9 @@ def test_1p(shape, chunks, blocks, chunked_eval):
     np.testing.assert_allclose(expr[...], npc, rtol=tol, atol=tol)
 
 
-@nb.jit(nopython=True, parallel=True)
-def numba2p(inputs_tuple, output, offset):
+# We don't need numba to test the lazyudf function
+# @nb.jit(nopython=True, parallel=True)
+def udf2p(inputs_tuple, output, offset):
     x = inputs_tuple[0]
     y = inputs_tuple[1]
     for i in nb.prange(x.shape[0]):
@@ -117,7 +120,7 @@ def test_2p(shape, chunks, blocks, chunked_eval):
 
     b = blosc2.asarray(npb)
     expr = blosc2.lazyudf(
-        numba2p, (npa, b), npa.dtype, chunked_eval=chunked_eval, chunks=chunks, blocks=blocks
+        udf2p, (npa, b), npa.dtype, chunked_eval=chunked_eval, chunks=chunks, blocks=blocks
     )
     res = expr.eval()
 
@@ -183,7 +186,7 @@ def test_params(chunked_eval):
     blosc2.remove_urlpath(urlpath2)
 
     expr = blosc2.lazyudf(
-        numba1p, (array,), np.float64, chunked_eval=chunked_eval, urlpath=urlpath, cparams=cparams
+        udf1p, (array,), np.float64, chunked_eval=chunked_eval, urlpath=urlpath, cparams=cparams
     )
     with pytest.raises(ValueError):
         _ = expr.eval(urlpath=urlpath)
@@ -204,7 +207,7 @@ def test_params(chunked_eval):
 
     # Pass list
     lnumbers = [1, 2, 3, 4, 5]
-    expr = blosc2.lazyudf(numba1p, (lnumbers,), np.float64)
+    expr = blosc2.lazyudf(udf1p, (lnumbers,), np.float64)
     res = expr.eval()
     npc = np.array(lnumbers) + 1
     np.testing.assert_allclose(res[...], npc)
@@ -228,7 +231,7 @@ def test_getitem(shape, chunks, blocks, slices, urlpath, contiguous, chunked_eva
 
     b = blosc2.asarray(npb)
     expr = blosc2.lazyudf(
-        numba2p,
+        udf2p,
         (npa, b),
         npa.dtype,
         chunked_eval=chunked_eval,
@@ -267,11 +270,11 @@ def test_eval_slice(shape, chunks, blocks, slices, urlpath, contiguous, chunked_
     blosc2.remove_urlpath(urlpath)
     npa = np.arange(0, np.prod(shape)).reshape(shape)
     npb = np.arange(1, np.prod(shape) + 1).reshape(shape)
-    npc = npa ** 2 + npb ** 2 + 2 * npa * npb + 1
+    npc = npa**2 + npb**2 + 2 * npa * npb + 1
     dparams = {"nthreads": 4}
     b = blosc2.asarray(npb)
     expr = blosc2.lazyudf(
-        numba2p,
+        udf2p,
         (npa, b),
         npa.dtype,
         chunked_eval=chunked_eval,
@@ -303,3 +306,61 @@ def test_eval_slice(shape, chunks, blocks, slices, urlpath, contiguous, chunked_
 
     blosc2.remove_urlpath(urlpath)
     blosc2.remove_urlpath(urlpath2)
+
+
+def udf_offset(inputs_tuple, output, offset):
+    _ = inputs_tuple[0]
+    output[:] = sum(offset)
+
+
+@pytest.mark.parametrize("eval_mode", ["eval", "getitem"])
+@pytest.mark.parametrize("chunked_eval", [True, False])
+@pytest.mark.parametrize(
+    "shape, chunks, blocks, slices",
+    [
+        ((10,), (4,), (3,), (slice(None),)),
+        ((10,), (4,), (3,), (slice(5),)),
+        ((8, 8), (4, 4), (2, 2), (slice(None), slice(None))),
+        ((8, 8), (4, 4), (2, 2), (slice(0, 5), slice(5, 8))),
+        ((9, 8), (4, 4), (2, 3), (slice(None), slice(None))),
+        ((9, 8), (4, 4), (2, 3), (slice(0, 5), slice(5, 8))),
+        ((40, 20), (30, 10), (5, 5), (slice(0, 5), slice(5, 20))),
+        ((13, 13), (10, 10), (4, 3), (slice(None), slice(None))),
+        ((13, 13), (10, 10), (4, 3), (slice(3, 8), slice(9, 12))),
+        ((13, 13, 10), (10, 10, 5), (5, 5, 3), (slice(0, 12), slice(3, 13), ...)),
+    ],
+)
+def test_offset(shape, chunks, blocks, slices, chunked_eval, eval_mode):
+    x = np.zeros(shape)
+    bx = blosc2.asarray(x, chunks=chunks, blocks=blocks)
+
+    # Compute the desired output
+    out = np.zeros_like(x)
+    # Calculate the number of chunks in each dimension
+    if not chunked_eval:
+        # When using prefilters/postfilters, the computation is split in blocks, not chunks
+        chunks = blocks
+    nchunks = tuple(math.ceil(x.shape[i] / blocks[i]) for i in range(len(x.shape)))
+
+    # Iterate over the chunks for computing the output
+    for index in np.ndindex(nchunks):
+        # Calculate the offset for the current chunk
+        offset = [index[i] * chunks[i] for i in range(len(index))]
+        # Apply the offset to the chunk and store the result in the output array
+        out_slice = tuple(slice(index[i] * chunks[i], (index[i] + 1) * chunks[i]) for i in range(len(index)))
+        out[out_slice] = sum(offset)
+
+    expr = blosc2.lazyudf(
+        udf_offset,
+        (bx,),
+        bx.dtype,
+        chunked_eval=chunked_eval,
+        chunks=chunks,
+        blocks=blocks,
+    )
+    if eval_mode == "eval":
+        res = expr.eval(slices)
+        res = res[:]
+    else:
+        res = expr[slices]
+    np.testing.assert_allclose(res, out[slices])

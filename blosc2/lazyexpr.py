@@ -146,42 +146,6 @@ def do_slices_intersect(slice1, slice2):
     return True
 
 
-def evaluate_incache(expression: str | Callable, operands: dict, **kwargs) -> blosc2.NDArray | np.ndarray:
-    """Evaluate the expression in chunks of operands.
-
-    This can be used when operands fit in CPU cache.
-
-    Parameters
-    ----------
-    expression: str or callable
-        The expression or udf to evaluate.
-    operands: dict
-        A dictionary with the operands.
-    kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
-
-    Returns
-    -------
-    :ref:`NDArray` or np.ndarray
-        The output array.
-    """
-    # Convert NDArray objects to numpy arrays
-    numpy_operands = {key: value[:] for key, value in operands.items()}
-    if callable(expression):
-        # Call the udf directly
-        output = kwargs.pop("_output", None)
-        expression(tuple(numpy_operands.values()), output, offset=None)
-        result = output
-    else:
-        # Evaluate the expression using numexpr
-        result = ne.evaluate(expression, numpy_operands)
-    getitem = kwargs.pop("_getitem", False)
-    if getitem:
-        return result
-    # Convert the resulting numpy array back to an NDArray
-    return blosc2.asarray(result, **kwargs)
-
-
 def evaluate_chunks(expression: str | Callable, operands: dict, **kwargs) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
@@ -214,14 +178,13 @@ def evaluate_chunks(expression: str | Callable, operands: dict, **kwargs) -> blo
             # print("Zero!")
             pass
 
-        slice_, chunks_ = None, None  # silence linter
-        if getitem:
-            # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
-            slice_ = tuple(
-                slice(c * s, min((c + 1) * s, shape[i]))
-                for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
-            )
-            chunks_ = tuple(s.stop - s.start for s in slice_)
+        # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
+        slice_ = tuple(
+            slice(c * s, min((c + 1) * s, shape[i]))
+            for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
+        )
+        offset = tuple(s.start for s in slice_)  # offset for the udf
+        chunks_ = tuple(s.stop - s.start for s in slice_)
 
         for key, value in operands.items():
             if np.isscalar(value):
@@ -252,11 +215,11 @@ def evaluate_chunks(expression: str | Callable, operands: dict, **kwargs) -> blo
         if callable(expression):
             if getitem:
                 # Call the udf directly and use out as the output array
-                expression(tuple(chunk_operands.values()), out[slice_], offset=None)
+                expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
             else:
                 # TODO: this cannot work because chunk_operands are 1-dim arrays
                 result = np.empty_like(npbuff, dtype=out.dtype)
-                expression(tuple(chunk_operands.values()), result, offset=None)
+                expression(tuple(chunk_operands.values()), result, offset=offset)
                 out.schunk.update_data(info.nchunk, result, copy=False)
             continue
 
@@ -317,8 +280,12 @@ def evaluate_slices(
     for info in operand.iterchunks_info():
         # Iterate over the operands and get the chunks
         chunk_operands = {}
-        coords = info.coords
-        slice_ = [slice(c * s, (c + 1) * s) for c, s in zip(coords, chunks, strict=True)]
+        # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
+        slice_ = tuple(
+            slice(c * s, min((c + 1) * s, shape[i]))
+            for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
+        )
+        offset = tuple(s.start for s in slice_)  # offset for the udf
         # Check whether current slice_ intersects with _slice
         if _slice is not None:
             intersects = do_slices_intersect(_slice, slice_)
@@ -341,10 +308,10 @@ def evaluate_slices(
         if callable(expression):
             if getitem:
                 # Call the udf directly and use out as the output array
-                expression(tuple(chunk_operands.values()), out[slice_], offset=None)
+                expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
             else:
                 result = np.empty(slice_shape, dtype=out.dtype)
-                expression(tuple(chunk_operands.values()), result, offset=None)
+                expression(tuple(chunk_operands.values()), result, offset=offset)
                 out[slice_] = result
             continue
 
@@ -362,7 +329,6 @@ def evaluate_slices(
 
 def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs):
     shape, dtype_, equal_chunks, equal_blocks, has_padding = validate_inputs(operands)
-    nelem = np.prod(shape)
 
     if item is not None and item != slice(None, None, None):
         return evaluate_slices(expression, operands, _slice=item, **kwargs)
@@ -372,9 +338,7 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
         # TODO: fast code path (evaluate_chunks) for udf is still green
         return evaluate_slices(expression, operands, _slice=item, **kwargs)
 
-    if nelem <= 10_000:  # somewhat arbitrary threshold
-        out = evaluate_incache(expression, operands, **kwargs)
-    elif equal_chunks and equal_blocks:
+    if equal_chunks and equal_blocks:
         if getitem and has_padding:
             # We need to evaluate the expression via NDArray because the logic
             # for NDim padding is in the NDArray object
