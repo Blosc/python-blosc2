@@ -167,10 +167,10 @@ def evaluate_chunks(expression: str | Callable, operands: dict, **kwargs) -> blo
     """
     getitem = kwargs.pop("_getitem", False)
     out = kwargs.pop("_output", None)
-    operand = operands["o0"]
-    shape = operand.shape
-    chunks = operand.chunks
-    for info in operands["o0"].iterchunks_info():
+    basearr = operands["o0"] if not isinstance(out, blosc2.NDArray) else out
+    shape = basearr.shape
+    chunks = basearr.chunks
+    for info in basearr.iterchunks_info():
         # Iterate over the operands and get the chunks
         chunk_operands = {}
         is_special = info.special
@@ -190,6 +190,11 @@ def evaluate_chunks(expression: str | Callable, operands: dict, **kwargs) -> blo
             if np.isscalar(value):
                 chunk_operands[key] = np.full(shape, fill_value=value)
                 continue
+            if isinstance(value, np.ndarray):
+                npbuff = value[slice_]
+                chunk_operands[key] = npbuff
+                continue
+            # Get the chunk from the NDArray in an optimized way
             lazychunk = value.schunk.get_lazychunk(info.nchunk)
             special = lazychunk[15] >> 4
             if is_special == blosc2.SpecialValue.ZERO and special == blosc2.SpecialValue.ZERO:
@@ -210,6 +215,10 @@ def evaluate_chunks(expression: str | Callable, operands: dict, **kwargs) -> blo
                 buff = value.schunk.decompress_chunk(info.nchunk)
                 # We don't want to reshape the buffer (to better handle padding)
                 npbuff = np.frombuffer(buff, dtype=value.dtype)
+                if callable(expression):
+                    # This is a bit tricky because the udf should handle multidim
+                    # TODO: try to simplify this logic
+                    npbuff = npbuff.reshape(chunks_)
             chunk_operands[key] = npbuff
 
         if callable(expression):
@@ -217,7 +226,6 @@ def evaluate_chunks(expression: str | Callable, operands: dict, **kwargs) -> blo
                 # Call the udf directly and use out as the output array
                 expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
             else:
-                # TODO: this cannot work because chunk_operands are 1-dim arrays
                 result = np.empty_like(npbuff, dtype=out.dtype)
                 expression(tuple(chunk_operands.values()), result, offset=offset)
                 out.schunk.update_data(info.nchunk, result, copy=False)
@@ -232,7 +240,7 @@ def evaluate_chunks(expression: str | Callable, operands: dict, **kwargs) -> blo
             else:
                 # Due to padding, it is critical to have the same chunks and blocks as the operands
                 out = blosc2.empty(
-                    shape, chunks=operand.chunks, blocks=operand.blocks, dtype=result.dtype, **kwargs
+                    shape, chunks=basearr.chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs
                 )
                 out.schunk.update_data(info.nchunk, result, copy=False)
         elif getitem:
@@ -333,16 +341,7 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
     if item is not None and item != slice(None, None, None):
         return evaluate_slices(expression, operands, _slice=item, **kwargs)
 
-    getitem = kwargs.get("_getitem", False)
-    if callable(expression) and (not getitem or has_padding):
-        # TODO: fast code path (evaluate_chunks) for udf is still green
-        return evaluate_slices(expression, operands, _slice=item, **kwargs)
-
     if equal_chunks and equal_blocks:
-        if getitem and has_padding:
-            # We need to evaluate the expression via NDArray because the logic
-            # for NDim padding is in the NDArray object
-            kwargs.pop("_getitem")
         out = evaluate_chunks(expression, operands, **kwargs)
     else:
         out = evaluate_slices(expression, operands, **kwargs)
@@ -660,6 +659,8 @@ class LazyUDF(LazyArray):
                 except ValueError:
                     # chunked_eval() does not support inputs that do not have at least one NDArray
                     failed = True
+                    # Clean the urlpath from the empty array
+                    blosc2.remove_urlpath(urlpath)
                 if not failed:
                     return res_eval
 
