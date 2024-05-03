@@ -749,7 +749,7 @@ class SChunk(blosc2_ext.SChunk):
 
         return initialize
 
-    def remove_postfilter(self, func_name):
+    def remove_postfilter(self, func_name, _new_ctx=True):
         """Remove the postfilter from the `SChunk` instance.
 
         Parameters
@@ -909,7 +909,7 @@ class SChunk(blosc2_ext.SChunk):
 
         return initialize
 
-    def remove_prefilter(self, func_name):
+    def remove_prefilter(self, func_name, _new_ctx=True):
         """Remove the prefilter from the `SChunk` instance.
 
         Parameters

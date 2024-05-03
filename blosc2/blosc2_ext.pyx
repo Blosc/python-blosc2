@@ -1428,7 +1428,7 @@ cdef class SChunk:
         if self.schunk.dctx == NULL:
             raise RuntimeError("Could not create decompression context")
 
-    cpdef remove_postfilter(self, func_name=None, new_ctx=True):
+    cpdef remove_postfilter(self, func_name, new_ctx=True):
         if func_name is not None:
             del blosc2.postfilter_funcs[func_name]
 
@@ -1512,7 +1512,7 @@ cdef class SChunk:
         if self.schunk.cctx == NULL:
             raise RuntimeError("Could not create compression context")
 
-    cpdef remove_prefilter(self, func_name=None, new_ctx=True):
+    cpdef remove_prefilter(self, func_name, new_ctx=True):
         if func_name is not None:
             del blosc2.prefilter_funcs[func_name]
 
