@@ -146,10 +146,12 @@ def do_slices_intersect(slice1, slice2):
     return True
 
 
-def evaluate_chunks(expression: str | Callable, operands: dict, **kwargs) -> blosc2.NDArray | np.ndarray:
+def evaluate_chunks_getitem(
+    expression: str | Callable, operands: dict, **kwargs
+) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
-    This can be used when the expression is too big to fit in CPU cache.
+    This is used in the __getitem__ method of the LazyArray.
 
     Parameters
     ----------
@@ -165,7 +167,78 @@ def evaluate_chunks(expression: str | Callable, operands: dict, **kwargs) -> blo
     :ref:`NDArray` or np.ndarray
         The output array.
     """
-    getitem = kwargs.pop("_getitem", False)
+    out = kwargs.pop("_output", None)
+    basearr = operands["o0"] if not isinstance(out, blosc2.NDArray) else out
+    shape = basearr.shape
+    chunks = basearr.chunks
+    # Iterate over the operands and get the chunks
+    for info in basearr.iterchunks_info():
+        chunk_operands = {}
+        # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
+        slice_ = tuple(
+            slice(c * s, min((c + 1) * s, shape[i]))
+            for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
+        )
+        offset = tuple(s.start for s in slice_)  # offset for the udf
+        chunks_ = tuple(s.stop - s.start for s in slice_)
+
+        for key, value in operands.items():
+            if np.isscalar(value):
+                chunk_operands[key] = np.full(shape, fill_value=value)
+                continue
+            if isinstance(value, np.ndarray):
+                npbuff = value[slice_]
+                chunk_operands[key] = npbuff
+                continue
+
+            if chunks_ != chunks:
+                # The chunk is not a full one, so we need to fetch the valid data
+                npbuff = value[slice_]
+            else:
+                # Fast path for full chunks
+                buff = value.schunk.decompress_chunk(info.nchunk)
+                bsize = value.dtype.itemsize * math.prod(chunks_)
+                npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
+            chunk_operands[key] = npbuff
+
+        if callable(expression):
+            # Call the udf directly and use out as the output array
+            expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
+            continue
+
+        if out is None:
+            # Evaluate the expression using chunks of operands
+            result = ne.evaluate(expression, chunk_operands)
+            out = np.empty(shape, dtype=result.dtype)
+            out[slice_] = result
+        else:
+            # Assign the result to the output array (avoiding a memory copy)
+            ne.evaluate(expression, chunk_operands, out=out[slice_])
+
+    return out
+
+
+def evaluate_chunks_eval(
+    expression: str | Callable, operands: dict, **kwargs
+) -> blosc2.NDArray | np.ndarray:
+    """Evaluate the expression in chunks of operands.
+
+    This is used in the eval() method of the LazyArray.
+
+    Parameters
+    ----------
+    expression: str or callable
+        The expression or udf to evaluate.
+    operands: dict
+        A dictionary with the operands.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    :ref:`NDArray` or np.ndarray
+        The output array.
+    """
     out = kwargs.pop("_output", None)
     basearr = operands["o0"] if not isinstance(out, blosc2.NDArray) else out
     shape = basearr.shape
@@ -173,10 +246,11 @@ def evaluate_chunks(expression: str | Callable, operands: dict, **kwargs) -> blo
     for info in basearr.iterchunks_info():
         # Iterate over the operands and get the chunks
         chunk_operands = {}
-        is_special = info.special
-        if is_special == blosc2.SpecialValue.ZERO:
-            # print("Zero!")
-            pass
+        # TODO: try to optimize for the sparse case
+        # is_special = info.special
+        # if is_special == blosc2.SpecialValue.ZERO:
+        #     # print("Zero!")
+        #     pass
 
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
         slice_ = tuple(
@@ -194,62 +268,41 @@ def evaluate_chunks(expression: str | Callable, operands: dict, **kwargs) -> blo
                 npbuff = value[slice_]
                 chunk_operands[key] = npbuff
                 continue
-            # Get the chunk from the NDArray in an optimized way
-            lazychunk = value.schunk.get_lazychunk(info.nchunk)
-            special = lazychunk[15] >> 4
-            if is_special == blosc2.SpecialValue.ZERO and special == blosc2.SpecialValue.ZERO:
-                # TODO: If both are zeros, we can skip the computation under some conditions
-                # print("Skipping chunk")
-                # continue
-                pass
-            if getitem:
-                if chunks_ != chunks:
-                    # The chunk is not a full one, so we need to fetch the valid data
-                    npbuff = value[slice_]
-                else:
-                    # Fast path for full chunks
-                    buff = value.schunk.decompress_chunk(info.nchunk)
-                    bsize = value.dtype.itemsize * math.prod(chunks_)
-                    npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
-            else:
-                buff = value.schunk.decompress_chunk(info.nchunk)
-                # We don't want to reshape the buffer (to better handle padding)
-                npbuff = np.frombuffer(buff, dtype=value.dtype)
-                if callable(expression):
-                    # This is a bit tricky because the udf should handle multidim
-                    # TODO: try to simplify this logic
-                    npbuff = npbuff.reshape(chunks_)
+
+            # TODO: try to optimize for the sparse case
+            # # Get the chunk from the NDArray in an optimized way
+            # lazychunk = value.schunk.get_lazychunk(info.nchunk)
+            # special = lazychunk[15] >> 4
+            # if is_special == blosc2.SpecialValue.ZERO and special == blosc2.SpecialValue.ZERO:
+            #     # TODO: If both are zeros, we can skip the computation under some conditions
+            #     # print("Skipping chunk")
+            #     # continue
+            #     pass
+
+            buff = value.schunk.decompress_chunk(info.nchunk)
+            # We don't want to reshape the buffer (to better handle padding)
+            npbuff = np.frombuffer(buff, dtype=value.dtype)
+            if callable(expression):
+                # This is a bit tricky because the udf should handle multidim
+                # TODO: try to simplify this logic
+                npbuff = npbuff.reshape(chunks_)
             chunk_operands[key] = npbuff
 
         if callable(expression):
-            if getitem:
-                # Call the udf directly and use out as the output array
-                expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
-            else:
-                result = np.empty_like(npbuff, dtype=out.dtype)
-                expression(tuple(chunk_operands.values()), result, offset=offset)
-                out.schunk.update_data(info.nchunk, result, copy=False)
+            result = np.empty_like(npbuff, dtype=out.dtype)
+            expression(tuple(chunk_operands.values()), result, offset=offset)
+            out.schunk.update_data(info.nchunk, result, copy=False)
             continue
 
+        # Evaluate the expression using chunks of operands
+        result = ne.evaluate(expression, chunk_operands)
         if out is None:
-            # Evaluate the expression using chunks of operands
-            result = ne.evaluate(expression, chunk_operands)
-            if getitem:
-                out = np.empty(shape, dtype=result.dtype)
-                out[slice_] = result
-            else:
-                # Due to padding, it is critical to have the same chunks and blocks as the operands
-                out = blosc2.empty(
-                    shape, chunks=basearr.chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs
-                )
-                out.schunk.update_data(info.nchunk, result, copy=False)
-        elif getitem:
-            # Assign the result to the output array (avoiding a memory copy)
-            ne.evaluate(expression, chunk_operands, out=out[slice_])
-        else:
-            # Update the output array with the result
-            result = ne.evaluate(expression, chunk_operands)
-            out.schunk.update_data(info.nchunk, result, copy=False)
+            # Due to padding, it is critical to have the same chunks and blocks as the operands
+            out = blosc2.empty(
+                shape, chunks=basearr.chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs
+            )
+        # Update the output array with the result
+        out.schunk.update_data(info.nchunk, result, copy=False)
 
     return out
 
@@ -341,8 +394,12 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
     if item is not None and item != slice(None, None, None):
         return evaluate_slices(expression, operands, _slice=item, **kwargs)
 
+    getitem = kwargs.get("_getitem", False)
     if equal_chunks and equal_blocks:
-        out = evaluate_chunks(expression, operands, **kwargs)
+        if getitem:
+            out = evaluate_chunks_getitem(expression, operands, **kwargs)
+        else:
+            out = evaluate_chunks_eval(expression, operands, **kwargs)
     else:
         out = evaluate_slices(expression, operands, **kwargs)
     return out
@@ -790,7 +847,7 @@ if __name__ == "__main__":
     print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
-    res = expr.evaluate(sl)
+    res = expr.eval(sl)
     print(f"Elapsed time (evaluate): {time() - t0:.3f} s")
     res = res[sl] if sl is not None else res[:]
     t0 = time()
