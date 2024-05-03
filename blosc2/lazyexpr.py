@@ -147,7 +147,7 @@ def do_slices_intersect(slice1, slice2):
 
 
 def evaluate_chunks_getitem(
-    expression: str | Callable, operands: dict, **kwargs
+    expression: str | Callable, operands: dict, out: np.ndarray = None
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
@@ -159,15 +159,14 @@ def evaluate_chunks_getitem(
         The expression or udf to evaluate.
     operands: dict
         A dictionary with the operands.
-    kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+    out: ndarray, optional
+        NumPy array where the result will be stored and returned.
 
     Returns
     -------
     :ref:`NDArray` or np.ndarray
         The output array.
     """
-    out = kwargs.pop("_output", None)
     basearr = operands["o0"] if not isinstance(out, blosc2.NDArray) else out
     shape = basearr.shape
     chunks = basearr.chunks
@@ -394,10 +393,11 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
     if item is not None and item != slice(None, None, None):
         return evaluate_slices(expression, operands, _slice=item, **kwargs)
 
-    getitem = kwargs.get("_getitem", False)
     if equal_chunks and equal_blocks:
+        getitem = kwargs.get("_getitem", False)
         if getitem:
-            out = evaluate_chunks_getitem(expression, operands, **kwargs)
+            out = kwargs.pop("_output", None)
+            out = evaluate_chunks_getitem(expression, operands, out=out)
         else:
             out = evaluate_chunks_eval(expression, operands, **kwargs)
     else:
