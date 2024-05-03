@@ -21,7 +21,7 @@ import blosc2
 
 shape = (5000, 10_000)
 chunks = [500, 10_000]
-blocks = [20, 10_000]
+blocks = [5, 10_000]
 dtype = np.float32
 rtol = 1e-6 if dtype == np.float32 else 1e-17
 atol = 1e-6 if dtype == np.float32 else 1e-17
