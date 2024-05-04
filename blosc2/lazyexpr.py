@@ -620,6 +620,24 @@ class LazyExpr(LazyArray):
     def __ipow__(self, value):
         return self.update_expr(new_op=(self, "**", value))
 
+    def __lt__(self, value):
+        return self.update_expr(new_op=(self, "<", value))
+
+    def __le__(self, value):
+        return self.update_expr(new_op=(self, "<=", value))
+
+    def __eq__(self, value):
+        return self.update_expr(new_op=(self, "==", value))
+
+    def __ne__(self, value):
+        return self.update_expr(new_op=(self, "!=", value))
+
+    def __gt__(self, value):
+        return self.update_expr(new_op=(self, ">", value))
+
+    def __ge__(self, value):
+        return self.update_expr(new_op=(self, ">=", value))
+
     def eval(self, item=None, **kwargs) -> blosc2.NDArray:
         return chunked_eval(self.expression, self.operands, item, **kwargs)
 

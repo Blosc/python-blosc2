@@ -138,8 +138,9 @@ def test_expression_with_constants(array_fixture):
     np.testing.assert_allclose(expr[:], nres)
 
 
+@pytest.mark.parametrize("compare_expressions", [True, False])
 @pytest.mark.parametrize("comparison_operator", ["==", "!=", ">=", ">", "<=", "<"])
-def test_comparison_operators(dtype_fixture, comparison_operator):
+def test_comparison_operators(dtype_fixture, compare_expressions, comparison_operator):
     reshape = [30, 4]
     nelems = np.prod(reshape)
     cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
@@ -148,10 +149,14 @@ def test_comparison_operators(dtype_fixture, comparison_operator):
     a1 = blosc2.asarray(na1, cparams=cparams)
     a2 = blosc2.asarray(na1, cparams=cparams)
     # Construct the lazy expression
-    expr = blosc2.LazyExpr(new_op=(a1, comparison_operator, a2))
+    if compare_expressions:
+        expr = eval(f"a1 ** 2 {comparison_operator} (a1 + a2)", {"a1": a1, "a2": a2})
+        expr_string = f"na1 ** 2 {comparison_operator} (na1 + na2)"
+    else:
+        expr = eval(f"a1 {comparison_operator} a2", {"a1": a1, "a2": a2})
+        expr_string = f"na1 {comparison_operator} na2"
     res_lazyexpr = expr.eval()
     # Evaluate using NumExpr
-    expr_string = f"na1 {comparison_operator} na2"
     res_numexpr = ne.evaluate(expr_string)
     # Compare the results
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
