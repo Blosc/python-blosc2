@@ -520,7 +520,7 @@ class LazyExpr(LazyArray):
                 self.expression = f"(o0 {op} o1)"
 
     def update_expr(self, new_op):
-        # We use a lot the original NDArray.__eq__ as 'is', so deactivate the overloaded one
+        # We use a lot of the original NDArray.__eq__ as 'is', so deactivate the overloaded one
         blosc2._disable_overloaded_equal = True
         # One of the two operands are LazyExpr instances
         value1, op, value2 = new_op
