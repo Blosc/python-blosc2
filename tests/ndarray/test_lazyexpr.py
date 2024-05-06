@@ -304,3 +304,24 @@ def test_contains(values):
     res_lazyexpr = expr_lazy.eval()
     # Compare the results
     np.testing.assert_array_equal(res_lazyexpr[:], res_numexpr)
+
+def test_params(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1 + a2 - a3 * a4
+    nres = ne.evaluate("na1 + na2 - na3 * na4")
+
+    urlpath = "eval_expr.b2nd"
+    blosc2.remove_urlpath(urlpath)
+    cparams = {'nthreads': 2}
+    dparams = {'nthreads': 4}
+    chunks = tuple([i // 2 for i in nres.shape])
+    blocks = tuple([i // 4 for i in nres.shape])
+    res = expr.eval(urlpath=urlpath, cparams=cparams, dparams=dparams, chunks=chunks, blocks=blocks)
+    np.testing.assert_allclose(res[:], nres)
+    assert res.schunk.urlpath == urlpath
+    assert res.schunk.cparams['nthreads'] == cparams['nthreads']
+    assert res.schunk.dparams['nthreads'] == dparams['nthreads']
+    assert res.chunks == chunks
+    assert res.blocks == blocks
+
+    blosc2.remove_urlpath(urlpath)

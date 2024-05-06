@@ -380,8 +380,12 @@ def evaluate_slices(
             if getitem:
                 out = np.empty(shape, dtype=result.dtype)
             else:
-                # Let's use the same chunks as the first operand (it could have been automatic too)
-                out = blosc2.empty(shape, chunks=chunks, dtype=result.dtype, **kwargs)
+                if kwargs.get('chunks', None) is None:
+                    # Let's use the same chunks as the first operand (it could have been automatic too)
+                    out = blosc2.empty(shape, chunks=chunks, dtype=result.dtype, **kwargs)
+                else:
+                    out = blosc2.empty(shape, dtype=result.dtype, **kwargs)
+
         out[slice_] = result
 
     return out
@@ -397,12 +401,11 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
         getitem = kwargs.get("_getitem", False)
         if getitem:
             out = kwargs.pop("_output", None)
-            out = evaluate_chunks_getitem(expression, operands, out=out)
-        else:
-            out = evaluate_chunks_eval(expression, operands, **kwargs)
-    else:
-        out = evaluate_slices(expression, operands, **kwargs)
-    return out
+            return evaluate_chunks_getitem(expression, operands, out=out)
+        elif kwargs.get('chunks', None) is None and kwargs.get('blocks', None) is None:
+            return evaluate_chunks_eval(expression, operands, **kwargs)
+
+    return evaluate_slices(expression, operands, **kwargs)
 
 
 def fuse_operands(operands1, operands2):
