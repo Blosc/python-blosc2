@@ -1477,7 +1477,6 @@ cdef class SChunk:
         if self.schunk.cctx == NULL:
             raise RuntimeError("Could not create compression context")
 
-
     def _set_prefilter(self, func, dtype_input, dtype_output=None):
         if self.schunk.storage.cparams.nthreads > 1:
             raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
@@ -1491,7 +1490,6 @@ cdef class SChunk:
         if dtype_output.itemsize != dtype_input.itemsize:
             del blosc2.prefilter_funcs[func_id]
             raise ValueError("`dtype_input` and `dtype_output` must have the same size")
-
 
         cdef blosc2_cparams* cparams = self.schunk.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> general_prefilter
@@ -1588,20 +1586,19 @@ cdef int general_filler(blosc2_prefilter_params *params):
 
 
 # Aux function for prefilter and postfilter udf
-cdef aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
-             is_postfilter, uint8_t *params_output, int32_t typesize):
-    cdef uint8_t nd = udata.array.ndim
+cdef int aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
+                 c_bool is_postfilter, uint8_t *params_output, int32_t typesize):
     cdef int64_t chunk_ndim[B2ND_MAX_DIM]
-    blosc2_unidim_to_multidim(nd, udata.chunks_in_array, nchunk, chunk_ndim)
+    blosc2_unidim_to_multidim(udata.array.ndim, udata.chunks_in_array, nchunk, chunk_ndim)
     cdef int64_t block_ndim[B2ND_MAX_DIM]
-    blosc2_unidim_to_multidim(nd, udata.blocks_in_chunk, nblock, block_ndim)
+    blosc2_unidim_to_multidim(udata.array.ndim, udata.blocks_in_chunk, nblock, block_ndim)
     cdef int64_t start_ndim[B2ND_MAX_DIM]
-    for i in range(nd):
+    for i in range(udata.array.ndim):
         start_ndim[i] = chunk_ndim[i] * udata.array.chunkshape[i] + block_ndim[i] * udata.array.blockshape[i]
 
     padding = False
     blockshape = []
-    for i in range(nd):
+    for i in range(udata.array.ndim):
         if start_ndim[i] + udata.array.blockshape[i] > udata.array.shape[i]:
             padding = True
             blockshape.append(udata.array.shape[i] - start_ndim[i])
@@ -1611,19 +1608,19 @@ cdef aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
         else:
             blockshape.append(udata.array.blockshape[i])
     cdef np.npy_intp dims[B2ND_MAX_DIM]
-    for i in range(nd):
+    for i in range(udata.array.ndim):
         dims[i] = blockshape[i]
 
     if padding:
         output = np.empty(blockshape, udata.array.dtype)
     else:
-        output = np.PyArray_SimpleNewFromData(nd, dims, udata.output_cdtype, <void*>params_output)
+        output = np.PyArray_SimpleNewFromData(udata.array.ndim, dims, udata.output_cdtype, <void*>params_output)
 
     inputs_tuple = _ctypes.PyObj_FromPtr(udata.inputs_id)
     inputs_slice = []
     # Get slice of each operand
     l = []
-    for i in range(nd):
+    for i in range(udata.array.ndim):
         l.append(slice(start_ndim[i], start_ndim[i] + blockshape[i]))
     slices = tuple(l)
     for obj in inputs_tuple:
@@ -1638,7 +1635,7 @@ cdef aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
 
     # Call udf function
     func_id = udata.py_func.decode("utf-8")
-    offset = tuple(start_ndim[i] for i in range(nd))
+    offset = tuple(start_ndim[i] for i in range(udata.array.ndim))
     if is_postfilter:
         blosc2.postfilter_funcs[func_id](tuple(inputs_slice), output, offset)
     else:
@@ -1649,30 +1646,29 @@ cdef aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
     cdef int64_t blockshape_int64[B2ND_MAX_DIM]
     cdef Py_buffer *buf
     if padding:
-        for i in range(nd):
+        for i in range(udata.array.ndim):
             start[i] = 0
             slice_shape[i] = blockshape[i]
             blockshape_int64[i] = udata.array.blockshape[i]
         buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(output, buf, PyBUF_SIMPLE)
-        b2nd_copy_buffer(udata.array.ndim, typesize,
-                         buf.buf, slice_shape, start, slice_shape,
-                         params_output, blockshape_int64, start)
+        rc = b2nd_copy_buffer(udata.array.ndim, typesize,
+                              buf.buf, slice_shape, start, slice_shape,
+                              params_output, blockshape_int64, start)
         PyBuffer_Release(buf)
+        _check_rc(rc, "Could not copy the result into the buffer")
+
+    return 0
 
 
 cdef int general_udf_prefilter(blosc2_prefilter_params *params):
     cdef udf_udata *udata = <udf_udata *> params.user_data
-    aux_udf(udata, params.nchunk, params.nblock, False, params.output, params.output_typesize)
-
-    return 0
+    return aux_udf(udata, params.nchunk, params.nblock, False, params.output, params.output_typesize)
 
 
 cdef int general_udf_postfilter(blosc2_postfilter_params *params):
     cdef udf_udata *udata = <udf_udata *> params.user_data
-    aux_udf(udata, params.nchunk, params.nblock, True, params.output, params.typesize)
-
-    return 0
+    return aux_udf(udata, params.nchunk, params.nblock, True, params.output, params.typesize)
 
 
 def nelem_from_inputs(inputs_tuple, nelem=None):
@@ -2298,6 +2294,19 @@ cdef class NDArray:
         if self.array.shape[0] == 1 and self.ndim == 1:
             self.array.ndim = 0
 
+    cdef udf_udata *_fill_udf_udata(self, func_id, inputs_id):
+        cdef udf_udata *udata = <udf_udata *> malloc(sizeof(udf_udata))
+        udata.py_func = <char *> malloc(strlen(func_id) + 1)
+        strcpy(udata.py_func, func_id)
+        udata.inputs_id = inputs_id
+        udata.output_cdtype = np.dtype(self.dtype).num
+        udata.array = self.array
+        # Save these in udf_udata to avoid computing them for each block
+        for i in range(self.array.ndim):
+            udata.chunks_in_array[i] = udata.array.extshape[i] // udata.array.chunkshape[i]
+            udata.blocks_in_chunk[i] = udata.array.extchunkshape[i] // udata.array.blockshape[i]
+
+        return udata
 
     def _set_pref_udf(self, func, inputs_id):
         if self.array.sc.storage.cparams.nthreads > 1:
@@ -2312,18 +2321,7 @@ cdef class NDArray:
         cparams.prefilter = <blosc2_prefilter_fn> general_udf_prefilter
 
         cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
-        cdef udf_udata* pref_udata = <udf_udata *> malloc(sizeof(udf_udata))
-        pref_udata.py_func = <char *> malloc(strlen(func_id) + 1)
-        strcpy(pref_udata.py_func, func_id)
-        pref_udata.inputs_id = inputs_id
-        pref_udata.output_cdtype = np.dtype(self.dtype).num
-        pref_udata.array = self.array
-        # Save these in udf_udata to avoid computing them for each block
-        for i in range(self.array.ndim):
-            pref_udata.chunks_in_array[i] = pref_udata.array.extshape[i] // pref_udata.array.chunkshape[i]
-            pref_udata.blocks_in_chunk[i] = pref_udata.array.extchunkshape[i] // pref_udata.array.blockshape[i]
-
-        preparams.user_data = pref_udata
+        preparams.user_data = self._fill_udf_udata(func_id, inputs_id)
         cparams.preparams = preparams
         _check_cparams(cparams)
 
@@ -2346,18 +2344,7 @@ cdef class NDArray:
         # Fill postparams
         cdef blosc2_postfilter_params *postparams = <blosc2_postfilter_params *> malloc(
             sizeof(blosc2_postfilter_params))
-        cdef udf_udata * postf_udata = <udf_udata *> malloc(sizeof(udf_udata))
-        postf_udata.py_func = <char *> malloc(strlen(func_id) + 1)
-        strcpy(postf_udata.py_func, func_id)
-        postf_udata.inputs_id = inputs_id
-        postf_udata.output_cdtype = np.dtype(self.dtype).num
-        postf_udata.array = self.array
-        # Save these in udf_udata to avoid computing them for each block
-        for i in range(self.array.ndim):
-            postf_udata.chunks_in_array[i] = postf_udata.array.extshape[i] // postf_udata.array.chunkshape[i]
-            postf_udata.blocks_in_chunk[i] = postf_udata.array.extchunkshape[i] // postf_udata.array.blockshape[i]
-
-        postparams.user_data = postf_udata
+        postparams.user_data = self._fill_udf_udata(func_id,inputs_id)
         dparams.postparams = postparams
         _check_dparams(dparams, self.array.sc.storage.cparams)
 
