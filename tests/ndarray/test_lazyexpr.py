@@ -325,3 +325,109 @@ def test_params(array_fixture):
     assert res.blocks == blocks
 
     blosc2.remove_urlpath(urlpath)
+
+
+def test_save(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    ops = [a1, a2, a3, a4]
+    op_urlpaths = ["a1.b2nd", "a2.b2nd", "a3.b2nd", "a4.b2nd"]
+    for i in range(len(op_urlpaths)):
+        ops[i] = ops[i].copy(urlpath=op_urlpaths[i], mode="w")
+
+    expr = ops[0] + ops[1] - ops[2] * ops[3]
+    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    urlpath_save = "expr.b2nd"
+    expr.save(urlpath=urlpath_save, mode="w")
+
+    cparams = {'nthreads': 2}
+    dparams = {'nthreads': 4}
+    chunks = tuple([i // 2 for i in nres.shape])
+    blocks = tuple([i // 4 for i in nres.shape])
+    urlpath_eval = "eval_expr.b2nd"
+    res = expr.eval(urlpath=urlpath_eval, cparams=cparams, dparams=dparams, chunks=chunks, blocks=blocks, mode="w")
+    np.testing.assert_allclose(res[:], nres)
+
+    # Remove data in memory before opening on-disk LazyExpr
+    for op in ops:
+        del op
+    del expr
+
+    expr = blosc2.open(urlpath_save)
+    res = expr.eval()
+    np.testing.assert_allclose(res[:], nres)
+    # Test getitem
+    np.testing.assert_allclose(expr[:], nres)
+
+    urlpath_save2 = "expr_str.b2nd"
+    x = 3
+    expr = "a1 + a2 - a3 * a4**x"
+    var_dict = {'a1': ops[0], 'a2': ops[1], 'a3': ops[2], 'a4': ops[3], 'x': x}
+    lazy_expr = eval(expr, var_dict)
+    lazy_expr.save(urlpath=urlpath_save2, mode="w")
+    expr = blosc2.open(urlpath_save2, mode="w")
+    res = expr.eval()
+    nres = ne.evaluate("na1 + na2 - na3 * na4**3")
+    np.testing.assert_allclose(res[:], nres)
+    # Test getitem
+    np.testing.assert_allclose(expr[:], nres)
+
+    for urlpath in op_urlpaths + [urlpath_save, urlpath_eval, urlpath_save2]:
+        blosc2.remove_urlpath(urlpath)
+
+
+@pytest.mark.parametrize(
+    "function",
+    [
+        "sin",
+        # "sqrt",
+        # "cosh",
+        # "arctan",
+        # "arcsinh",
+        # "exp",
+        # "expm1",
+        # "log",
+        # "conj",
+        # "real",
+        # "imag",
+    ],
+)
+@pytest.mark.skip(reason="TODO: problems when supporting on-disk expressions with functions")
+def test_functions_save(function, dtype_fixture, shape_fixture):
+    nelems = np.prod(shape_fixture)
+    cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
+    na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
+    urlpath_op = "a1.b2nd"
+    a1 = blosc2.asarray(na1, cparams=cparams, urlpath=urlpath_op, mode="w")
+    urlpath_save = "expr.b2nd"
+
+    # Construct the lazy expression based on the function name
+    # This won't work when reopening it
+    # expr = blosc2.LazyExpr(new_op=(a1, function, None))
+    # expr.save(urlpath=urlpath_save, mode="w")
+    # del expr
+    # expr = blosc2.open(urlpath_save)
+    # res_lazyexpr = expr.eval()
+
+    # Evaluate using NumExpr
+    expr_string = f"{function}(na1)"
+    res_numexpr = ne.evaluate(expr_string)
+    # Compare the results
+    # np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
+
+    expr_string = f"blosc2.{function}(a1)"
+    print(expr_string)
+    expr = eval(expr_string, {'a1': a1, 'blosc2': blosc2})
+    print(type(expr))
+    print(expr)
+    print(expr.expression)
+    print(expr.operands)
+    expr.save(urlpath=urlpath_save, mode="w")
+    res_lazyexpr = expr.eval()
+    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
+
+    expr = blosc2.open(urlpath_save)
+    res_lazyexpr = expr.eval()
+    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
+
+    for urlpath in [urlpath_op, urlpath_save]:
+        blosc2.remove_urlpath(urlpath)

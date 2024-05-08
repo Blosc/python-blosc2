@@ -12,8 +12,18 @@ from collections.abc import Callable
 
 import numexpr as ne
 import numpy as np
+from enum import Enum
 
 import blosc2
+
+
+class LazyArrayEnum(Enum):
+    """
+    Available LazyArrays.
+    """
+
+    Expr = 0
+    UDF = 1
 
 
 class LazyArray(ABC):
@@ -61,6 +71,21 @@ class LazyArray(ABC):
         -------
         out: np.ndarray
             An array with the data containing the slice evaluated.
+        """
+        pass
+
+    def save(self, **kwargs):
+        # TODO: complete this when supported
+        """
+        Save the :ref:`LazyArray` on disk.
+
+        Parameters
+        ----------
+        kwargs: dict, optional
+
+        Returns
+        -------
+        out: None
         """
         pass
 
@@ -655,6 +680,32 @@ class LazyExpr(LazyArray):
         expression = f"{self.expression}"
         return expression
 
+    def save(self, **kwargs):
+        if kwargs.get("urlpath", None) is None:
+            raise ValueError("To save a LazyArray you must provide an urlpath")
+
+        meta = kwargs.get("meta", {})
+        meta["LazyArray"] = LazyArrayEnum.Expr.value
+        kwargs["meta"] = meta
+
+        # Create minimum size array with default dtype to save the LazyExpr on-disk
+        array = blosc2.empty(shape=(1, ), **kwargs)
+        operands = self.operands.copy()
+        for key, value in self.operands.items():
+            if isinstance(value, np.ndarray):
+                raise ValueError("Cannot save LazyArray with NumPy.ndarray operands")
+            if isinstance(value, blosc2.NDArray):
+                if value.schunk.urlpath is None:
+                    raise ValueError("To save a LazyArray, blosc2.NDArrays must be stored on disk")
+                operands[key] = value.schunk.urlpath
+            else:
+                # Probably this will never happen
+                operands[key] = value
+
+        array.schunk.vlmeta["_LazyArray"] = {"expression": self.expression,
+                                             "UDF": None,
+                                             "operands": operands}
+
 
 def validate_inputs_udf(inputs):
     inputs_ = []
@@ -700,6 +751,12 @@ class LazyUDF(LazyArray):
         else:
             raise ValueError("dparams should be a dictionary")
         kwargs_getitem["dparams"] = dparams
+
+        # WIP
+        meta = kwargs_getitem.get("meta", {})
+        meta["LazyArray"] = LazyArrayEnum.UDF.value
+        kwargs_getitem["meta"] = meta
+
         self.res_getitem = blosc2.empty(self.shape, self.dtype, **kwargs_getitem)
         # Register a postfilter for getitem
         self.res_getitem._set_postf_udf(self.func, id(self.inputs))
@@ -782,6 +839,76 @@ class LazyUDF(LazyArray):
             if not failed:
                 return output[item]
         return self.res_getitem[item]
+
+    def save(self, **kwargs):
+        # TODO: not finished yet
+        # Deep copy the kwargs to avoid modifying them
+        aux_kwargs = copy.deepcopy(self.kwargs)
+        # Update is not recursive
+        cparams = aux_kwargs.get("cparams", {})
+        cparams.update(kwargs.get("cparams", {}))
+        aux_kwargs["cparams"] = cparams
+        dparams = aux_kwargs.get("dparams", {})
+        dparams.update(kwargs.get("dparams", {}))
+        aux_kwargs["dparams"] = dparams
+        _ = kwargs.pop("cparams", None)
+        _ = kwargs.pop("dparams", None)
+        aux_kwargs.update(kwargs)
+
+        urlpath = aux_kwargs.get("urlpath", None)
+        if urlpath is None:
+            raise ValueError("To save a LazyArray you must provide an urlpath")
+        operands = {}
+        for i in range(len(self.inputs)):
+            op = self.inputs[i]
+            if isinstance(op, np.ndarray):
+                raise ValueError("Cannot save a LazyArray with a NumPy.ndarray operand")
+            if isinstance(op, blosc2.NDArray):
+                operands[str(i)] = op.schunk.urlpath
+            else:
+                # Only left case is Python scalar
+                operands[str(i)] = op
+
+        meta = kwargs.get("meta", {})
+        meta_init = self.kwargs.get("meta", {})
+        if urlpath == self.res_getitem.schunk.urlpath:
+            if meta == meta_init:
+                # No need to create another array
+                array = self.res_getitem
+                # També s'haurà de mirar com ****** guarde la funció
+                array.schunk.vlmeta["_LazyArray"] = {"expression": None,
+                                                     "UDF": self.func,
+                                                     "operands": operands}
+                return
+            else:
+                # TODO: support this case
+                return
+
+        meta = aux_kwargs.get("meta", {})
+        meta["LazyArray"] = LazyArrayEnum.UDF.value
+        aux_kwargs["meta"] = meta
+        array = blosc2.empty(self.shape, self.dtype, **aux_kwargs)
+
+
+def _get_lazyarray(array):
+    value = array.schunk.meta["LazyArray"]
+    if value == LazyArrayEnum.Expr.value:
+        # LazyExpr
+        lazyarray = array.schunk.vlmeta["_LazyArray"]
+        operands = lazyarray["operands"]
+        operands_dict = {}
+        for key, value in operands.items():
+            if isinstance(value, str):
+                op = blosc2.open(value)
+                operands_dict[key] = op
+            else:
+                operands_dict[key] = value  # en principi açò no cal perquè els escalars no els guarda i el nom tampoc...
+
+        expr = eval(lazyarray["expression"], operands_dict)
+        return expr
+    else:
+        # TODO: Support on-disk lazyudf
+        return -1
 
 
 def lazyudf(func, inputs, dtype, chunked_eval=True, **kwargs):

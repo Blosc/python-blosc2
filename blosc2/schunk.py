@@ -14,6 +14,7 @@ from collections.abc import Mapping, MutableMapping
 import numpy as np
 from msgpack import packb, unpackb
 
+import blosc2
 from blosc2 import SpecialValue, blosc2_ext
 
 
@@ -994,4 +995,9 @@ def open(urlpath, mode="a", offset=0, **kwargs):
         urlpath = str(urlpath)
     if not os.path.exists(urlpath):
         raise FileNotFoundError(f"No such file or directory: {urlpath}")
-    return blosc2_ext.open(urlpath, mode, offset, **kwargs)
+
+    res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
+    if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
+        return blosc2._get_lazyarray(res)
+    else:
+        return res
