@@ -31,10 +31,11 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
 ]
-requires-python = ">=3.10, <4"
+requires-python = ">=3.10"
+# Follow guidlines from https://scientific-python.org/specs/spec-0000/
 dependencies = [
-    "numpy>=1.20.3",
-    "ndindex>=1.4",
+    "numpy>=1.23.0",
+    "ndindex",
     "msgpack",
     "numexpr",
     "py-cpuinfo",
