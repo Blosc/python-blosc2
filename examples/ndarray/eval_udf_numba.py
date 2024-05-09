@@ -13,41 +13,22 @@ import numpy as np
 
 import blosc2
 
-shape = (13, 13)
-dtype = np.float64
 
-# Create a NDArray from a NumPy array
-npa = np.linspace(0, 1, np.prod(shape)).reshape(shape)
-npc = npa + 1
-a = blosc2.asarray(npa)
-
-
+# The UDF to be evaluated
 @nb.jit(nopython=True, parallel=True)
 def func_numba(inputs_tuple, output, offset):
     x = inputs_tuple[0]
     output[:] = x + 1
 
 
-chunks = [10, 10]
-expr = blosc2.lazyudf(func_numba, (npa,), npa.dtype, chunks=chunks, blocks=chunks)
+# Create a NDArray from a NumPy array
+shape = (13, 13)
+npa = np.linspace(0, 1, np.prod(shape)).reshape(shape)
+npc = npa + 1
+a = blosc2.asarray(npa)
+
+expr = blosc2.lazyudf(func_numba, (npa,), npa.dtype)
 res = expr.eval()
 print(res.info)
 np.testing.assert_allclose(res[...], npc)
-
-print(func_numba)
-print(func_numba.__name__)
-print(func_numba.__annotations__)
-print(func_numba.__code__)
-print(func_numba.__code__.co_code)
-print(func_numba.__code__.co_linetable)
-print(func_numba.__code__.co_lines())
-
-
-import inspect
-lines = inspect.getsource(func_numba)
-print(lines)
-print(type(lines))
-res.schunk.vlmeta["sb"] = lines
-print(res.schunk.vlmeta["sb"])
-
-
+print("Numba + NDArray expression evaluated correctly!")

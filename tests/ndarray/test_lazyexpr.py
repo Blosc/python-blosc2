@@ -429,7 +429,7 @@ def test_save():
         "imag",
     ],
 )
-def test_functions_save(function, dtype_fixture, shape_fixture):
+def test_save_functions(function, dtype_fixture, shape_fixture):
     nelems = np.prod(shape_fixture)
     cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
@@ -510,7 +510,7 @@ def test_save_contains(values):
         blosc2.remove_urlpath(path)
 
 
-def test_save_more_functions(dtype_fixture, shape_fixture):
+def test_save_many_functions(dtype_fixture, shape_fixture):
     rtol = 1e-6 if dtype_fixture == np.float32 else 1e-15
     atol = 1e-6 if dtype_fixture == np.float32 else 1e-15
     nelems = np.prod(shape_fixture)
@@ -542,6 +542,3 @@ def test_save_more_functions(dtype_fixture, shape_fixture):
 
     for urlpath in [urlpath_op, urlpath_op2, urlpath_save]:
         blosc2.remove_urlpath(urlpath)
-
-
-# End tests for save method

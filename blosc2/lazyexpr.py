@@ -498,31 +498,31 @@ def fuse_expressions(expr, new_base, dup_op):
 
 
 functions = [
-                "sin",
-                "cos",
-                "tan",
-                "sqrt",
-                "sinh",
-                "cosh",
-                "tanh",
-                "arcsin",
-                "arccos",
-                "arctan",
-                "arctan2",
-                "arcsinh",
-                "arccosh",
-                "arctanh",
-                "exp",
-                "expm1",
-                "log",
-                "log10",
-                "log1p",
-                "conj",
-                "real",
-                "imag",
-                "contains",
-                "abs",
-            ]
+    "sin",
+    "cos",
+    "tan",
+    "sqrt",
+    "sinh",
+    "cosh",
+    "tanh",
+    "arcsin",
+    "arccos",
+    "arctan",
+    "arctan2",
+    "arcsinh",
+    "arccosh",
+    "arctanh",
+    "exp",
+    "expm1",
+    "log",
+    "log10",
+    "log1p",
+    "conj",
+    "real",
+    "imag",
+    "contains",
+    "abs",
+]
 
 
 class LazyExpr(LazyArray):
@@ -737,9 +737,11 @@ class LazyExpr(LazyArray):
                 # Probably this will never happen
                 operands[key] = value
 
-        array.schunk.vlmeta["_LazyArray"] = {"expression": self.expression,
-                                             "UDF": None,
-                                             "operands": operands}
+        array.schunk.vlmeta["_LazyArray"] = {
+            "expression": self.expression,
+            "UDF": None,
+            "operands": operands,
+        }
 
 
 def validate_inputs_udf(inputs):
@@ -871,7 +873,7 @@ class LazyUDF(LazyArray):
         return self.res_getitem[item]
 
     def save(self, **kwargs):
-        raise NotImplementedError("For safety reasons this is not implemented for UDFs")
+        raise NotImplementedError("For safety reasons, this is not implemented for UDFs")
 
 
 def _get_lazyarray(array):
@@ -888,11 +890,12 @@ def _get_lazyarray(array):
             else:
                 raise ValueError("Error when retrieving the operands")
 
+        globals = {}
         for func in functions:
             if func in lazyarray["expression"]:
-                operands_dict[func] = getattr(blosc2, func)
+                globals[func] = getattr(blosc2, func)
 
-        return eval(lazyarray["expression"], operands_dict)
+        return eval(lazyarray["expression"], globals, operands_dict)
     else:
         raise NotImplementedError("For safety reasons, persistent UDFs are not supported")
 
