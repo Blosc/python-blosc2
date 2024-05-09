@@ -523,7 +523,7 @@ EXTENDED_HEADER_LENGTH = BLOSC_EXTENDED_HEADER_LENGTH
 DEFINED_CODECS_STOP = BLOSC2_DEFINED_CODECS_STOP
 DEFAULT_DTYPE_FORMAT = B2ND_DEFAULT_DTYPE_FORMAT
 
-def _check_comp_length(comp_name, comp_len):
+cdef _check_comp_length(comp_name, comp_len):
     if comp_len < BLOSC_MIN_HEADER_LENGTH:
         raise ValueError(f"{comp_name} cannot be less than {BLOSC_MIN_HEADER_LENGTH} bytes")
 

@@ -9,10 +9,10 @@ import copy
 import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable
+from enum import Enum
 
 import numexpr as ne
 import numpy as np
-from enum import Enum
 
 import blosc2
 
@@ -74,6 +74,7 @@ class LazyArray(ABC):
         """
         pass
 
+    @abstractmethod
     def save(self, **kwargs):
         # TODO: complete this when supported
         """
@@ -208,7 +209,7 @@ def evaluate_chunks_getitem(
 
         for key, value in operands.items():
             if np.isscalar(value):
-                chunk_operands[key] = np.full(shape, fill_value=value)
+                chunk_operands[key] = value
                 continue
             if isinstance(value, np.ndarray):
                 npbuff = value[slice_]
@@ -286,7 +287,7 @@ def evaluate_chunks_eval(
 
         for key, value in operands.items():
             if np.isscalar(value):
-                chunk_operands[key] = np.full(shape, fill_value=value)
+                chunk_operands[key] = value
                 continue
             if isinstance(value, np.ndarray):
                 npbuff = value[slice_]
@@ -384,7 +385,7 @@ def evaluate_slices(
         # Get the slice of each operand
         for key, value in operands.items():
             if np.isscalar(value):
-                chunk_operands[key] = np.full(slice_shape, fill_value=value)
+                chunk_operands[key] = value
                 continue
             chunk_operands[key] = value[slice_]
 
@@ -405,7 +406,7 @@ def evaluate_slices(
             if getitem:
                 out = np.empty(shape, dtype=result.dtype)
             else:
-                if kwargs.get('chunks', None) is None:
+                if kwargs.get("chunks", None) is None:
                     # Let's use the same chunks as the first operand (it could have been automatic too)
                     out = blosc2.empty(shape, chunks=chunks, dtype=result.dtype, **kwargs)
                 else:
@@ -427,7 +428,7 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
         if getitem:
             out = kwargs.pop("_output", None)
             return evaluate_chunks_getitem(expression, operands, out=out)
-        elif kwargs.get('chunks', None) is None and kwargs.get('blocks', None) is None:
+        elif kwargs.get("chunks", None) is None and kwargs.get("blocks", None) is None:
             return evaluate_chunks_eval(expression, operands, **kwargs)
 
     return evaluate_slices(expression, operands, **kwargs)
@@ -689,7 +690,7 @@ class LazyExpr(LazyArray):
         kwargs["meta"] = meta
 
         # Create minimum size array with default dtype to save the LazyExpr on-disk
-        array = blosc2.empty(shape=(1, ), **kwargs)
+        array = blosc2.empty(shape=(1,), **kwargs)
         operands = self.operands.copy()
         for key, value in self.operands.items():
             if isinstance(value, np.ndarray):
@@ -702,9 +703,11 @@ class LazyExpr(LazyArray):
                 # Probably this will never happen
                 operands[key] = value
 
-        array.schunk.vlmeta["_LazyArray"] = {"expression": self.expression,
-                                             "UDF": None,
-                                             "operands": operands}
+        array.schunk.vlmeta["_LazyArray"] = {
+            "expression": self.expression,
+            "UDF": None,
+            "operands": operands,
+        }
 
 
 def validate_inputs_udf(inputs):
@@ -876,9 +879,11 @@ class LazyUDF(LazyArray):
                 # No need to create another array
                 array = self.res_getitem
                 # També s'haurà de mirar com ****** guarde la funció
-                array.schunk.vlmeta["_LazyArray"] = {"expression": None,
-                                                     "UDF": self.func,
-                                                     "operands": operands}
+                array.schunk.vlmeta["_LazyArray"] = {
+                    "expression": None,
+                    "UDF": self.func,
+                    "operands": operands,
+                }
                 return
             else:
                 # TODO: support this case
@@ -902,7 +907,9 @@ def _get_lazyarray(array):
                 op = blosc2.open(value)
                 operands_dict[key] = op
             else:
-                operands_dict[key] = value  # en principi açò no cal perquè els escalars no els guarda i el nom tampoc...
+                operands_dict[key] = (
+                    value  # en principi açò no cal perquè els escalars no els guarda i el nom tampoc...
+                )
 
         expr = eval(lazyarray["expression"], operands_dict)
         return expr
