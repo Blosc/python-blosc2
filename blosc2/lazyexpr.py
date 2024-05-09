@@ -722,9 +722,12 @@ class LazyExpr(LazyArray):
         meta = kwargs.get("meta", {})
         meta["LazyArray"] = LazyArrayEnum.Expr.value
         kwargs["meta"] = meta
+        kwargs["mode"] = "w"  # always overwrite the file in urlpath
 
-        # Create minimum size array with default dtype to save the LazyExpr on-disk
-        array = blosc2.empty(shape=(1,), **kwargs)
+        shape, dtype_, equal_chunks, equal_blocks, has_padding = validate_inputs(self.operands)
+        # Create empty array to give an idea of the shape and dtype
+        array = blosc2.empty(shape=shape, dtype=dtype_, **kwargs)
+
         operands = self.operands.copy()
         for key, value in self.operands.items():
             if isinstance(value, np.ndarray):
@@ -878,26 +881,26 @@ class LazyUDF(LazyArray):
 
 def _get_lazyarray(array):
     value = array.schunk.meta["LazyArray"]
-    if value == LazyArrayEnum.Expr.value:
-        # LazyExpr
-        lazyarray = array.schunk.vlmeta["_LazyArray"]
-        operands = lazyarray["operands"]
-        operands_dict = {}
-        for key, value in operands.items():
-            if isinstance(value, str):
-                op = blosc2.open(value)
-                operands_dict[key] = op
-            else:
-                raise ValueError("Error when retrieving the operands")
-
-        globals = {}
-        for func in functions:
-            if func in lazyarray["expression"]:
-                globals[func] = getattr(blosc2, func)
-
-        return eval(lazyarray["expression"], globals, operands_dict)
-    else:
+    if value == LazyArrayEnum.UDF.value:
         raise NotImplementedError("For safety reasons, persistent UDFs are not supported")
+
+    # LazyExpr
+    lazyarray = array.schunk.vlmeta["_LazyArray"]
+    operands = lazyarray["operands"]
+    operands_dict = {}
+    for key, value in operands.items():
+        if isinstance(value, str):
+            op = blosc2.open(value)
+            operands_dict[key] = op
+        else:
+            raise ValueError("Error when retrieving the operands")
+
+    globals = {}
+    for func in functions:
+        if func in lazyarray["expression"]:
+            globals[func] = getattr(blosc2, func)
+
+    return eval(lazyarray["expression"], globals, operands_dict)
 
 
 def lazyudf(func, inputs, dtype, chunked_eval=True, **kwargs):

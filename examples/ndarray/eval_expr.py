@@ -42,3 +42,21 @@ npd = c[1:10]
 # Check
 assert isinstance(npd, np.ndarray)
 assert np.allclose(npd, npc[1:10])
+
+print("NDArray expression evaluated correctly in-memory!")
+
+# Now, evaluate the expression from operands in disk
+# TODO: when doing a copy, mode should be 'w' by default?
+da = a.copy(urlpath="a.b2nd", mode="w")
+db = b.copy(urlpath="b.b2nd", mode="w")
+
+# Get a LazyExpr instance
+(da**2 + db**2 + 2 * da * db + 1).save(urlpath="c.b2nd")
+dc = blosc2.open("c.b2nd")
+
+# Evaluate!  Output is a NDArray
+dc2 = dc.eval()
+# Check
+assert isinstance(dc2, blosc2.NDArray)
+assert np.allclose(dc2[:], npc)
+print("NDArray expression evaluated correctly on-disk!")
