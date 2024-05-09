@@ -958,7 +958,7 @@ def contains(ndarr: NDArray, value: str | bytes | NDArray, /):
     out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
     """
-    if not isinstance(value, str | NDArray):
+    if not isinstance(value, str | NDArray | bytes):
         raise ValueError("value should be a string or a NDArray!")
     return blosc2.LazyExpr(new_op=(ndarr, "contains", value))
 

@@ -76,17 +76,23 @@ class LazyArray(ABC):
 
     @abstractmethod
     def save(self, **kwargs):
-        # TODO: complete this when supported
         """
         Save the :ref:`LazyArray` on disk.
 
         Parameters
         ----------
         kwargs: dict, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
+            The `urlpath` must always be provided.
 
         Returns
         -------
         out: None
+
+        Notes
+        -----
+        * All the operands of the LazyArray must be Python scalars or on-disk stored :ref:`NDArray <NDArray>`.
+        * This is only supported for :ref:`LazyExpr <LazyExpr>`.
         """
         pass
 
@@ -491,6 +497,34 @@ def fuse_expressions(expr, new_base, dup_op):
     return new_expr
 
 
+functions = [
+                "sin",
+                "cos",
+                "tan",
+                "sqrt",
+                "sinh",
+                "cosh",
+                "tanh",
+                "arcsin",
+                "arccos",
+                "arctan",
+                "arctan2",
+                "arcsinh",
+                "arccosh",
+                "arctanh",
+                "exp",
+                "expm1",
+                "log",
+                "log10",
+                "log1p",
+                "conj",
+                "real",
+                "imag",
+                "contains",
+                "abs",
+            ]
+
+
 class LazyExpr(LazyArray):
     """Class for hosting lazy expressions.
 
@@ -703,11 +737,9 @@ class LazyExpr(LazyArray):
                 # Probably this will never happen
                 operands[key] = value
 
-        array.schunk.vlmeta["_LazyArray"] = {
-            "expression": self.expression,
-            "UDF": None,
-            "operands": operands,
-        }
+        array.schunk.vlmeta["_LazyArray"] = {"expression": self.expression,
+                                             "UDF": None,
+                                             "operands": operands}
 
 
 def validate_inputs_udf(inputs):
@@ -754,11 +786,6 @@ class LazyUDF(LazyArray):
         else:
             raise ValueError("dparams should be a dictionary")
         kwargs_getitem["dparams"] = dparams
-
-        # WIP
-        meta = kwargs_getitem.get("meta", {})
-        meta["LazyArray"] = LazyArrayEnum.UDF.value
-        kwargs_getitem["meta"] = meta
 
         self.res_getitem = blosc2.empty(self.shape, self.dtype, **kwargs_getitem)
         # Register a postfilter for getitem
@@ -844,55 +871,7 @@ class LazyUDF(LazyArray):
         return self.res_getitem[item]
 
     def save(self, **kwargs):
-        # TODO: not finished yet
-        # Deep copy the kwargs to avoid modifying them
-        aux_kwargs = copy.deepcopy(self.kwargs)
-        # Update is not recursive
-        cparams = aux_kwargs.get("cparams", {})
-        cparams.update(kwargs.get("cparams", {}))
-        aux_kwargs["cparams"] = cparams
-        dparams = aux_kwargs.get("dparams", {})
-        dparams.update(kwargs.get("dparams", {}))
-        aux_kwargs["dparams"] = dparams
-        _ = kwargs.pop("cparams", None)
-        _ = kwargs.pop("dparams", None)
-        aux_kwargs.update(kwargs)
-
-        urlpath = aux_kwargs.get("urlpath", None)
-        if urlpath is None:
-            raise ValueError("To save a LazyArray you must provide an urlpath")
-        operands = {}
-        for i in range(len(self.inputs)):
-            op = self.inputs[i]
-            if isinstance(op, np.ndarray):
-                raise ValueError("Cannot save a LazyArray with a NumPy.ndarray operand")
-            if isinstance(op, blosc2.NDArray):
-                operands[str(i)] = op.schunk.urlpath
-            else:
-                # Only left case is Python scalar
-                operands[str(i)] = op
-
-        meta = kwargs.get("meta", {})
-        meta_init = self.kwargs.get("meta", {})
-        if urlpath == self.res_getitem.schunk.urlpath:
-            if meta == meta_init:
-                # No need to create another array
-                array = self.res_getitem
-                # També s'haurà de mirar com ****** guarde la funció
-                array.schunk.vlmeta["_LazyArray"] = {
-                    "expression": None,
-                    "UDF": self.func,
-                    "operands": operands,
-                }
-                return
-            else:
-                # TODO: support this case
-                return
-
-        meta = aux_kwargs.get("meta", {})
-        meta["LazyArray"] = LazyArrayEnum.UDF.value
-        aux_kwargs["meta"] = meta
-        array = blosc2.empty(self.shape, self.dtype, **aux_kwargs)
+        raise NotImplementedError("For safety reasons this is not implemented for UDFs")
 
 
 def _get_lazyarray(array):
@@ -907,15 +886,15 @@ def _get_lazyarray(array):
                 op = blosc2.open(value)
                 operands_dict[key] = op
             else:
-                operands_dict[key] = (
-                    value  # en principi açò no cal perquè els escalars no els guarda i el nom tampoc...
-                )
+                raise ValueError("Error when retrieving the operands")
 
-        expr = eval(lazyarray["expression"], operands_dict)
-        return expr
+        for func in functions:
+            if func in lazyarray["expression"]:
+                operands_dict[func] = getattr(blosc2, func)
+
+        return eval(lazyarray["expression"], operands_dict)
     else:
-        # TODO: Support on-disk lazyudf
-        return -1
+        raise NotImplementedError("For safety reasons, persistent UDFs are not supported")
 
 
 def lazyudf(func, inputs, dtype, chunked_eval=True, **kwargs):

@@ -33,3 +33,21 @@ expr = blosc2.lazyudf(func_numba, (npa,), npa.dtype, chunks=chunks, blocks=chunk
 res = expr.eval()
 print(res.info)
 np.testing.assert_allclose(res[...], npc)
+
+print(func_numba)
+print(func_numba.__name__)
+print(func_numba.__annotations__)
+print(func_numba.__code__)
+print(func_numba.__code__.co_code)
+print(func_numba.__code__.co_linetable)
+print(func_numba.__code__.co_lines())
+
+
+import inspect
+lines = inspect.getsource(func_numba)
+print(lines)
+print(type(lines))
+res.schunk.vlmeta["sb"] = lines
+print(res.schunk.vlmeta["sb"])
+
+

@@ -16,6 +16,7 @@ Methods
 
     eval
     __getitem__
+    save
 
 
 .. _LazyExpr:
