@@ -100,6 +100,32 @@ class LazyArray(ABC):
 
     @property
     @abstractmethod
+    def dtype(self):
+        """
+        Get the data type of the :ref:`LazyArray`.
+
+        Returns
+        -------
+        out: np.dtype
+            The data type of the :ref:`LazyArray`.
+        """
+        pass
+
+    @property
+    @abstractmethod
+    def shape(self):
+        """
+        Get the shape of the :ref:`LazyArray`.
+
+        Returns
+        -------
+        out: tuple
+                The shape of the :ref:`LazyArray`.
+        """
+        pass
+
+    @property
+    @abstractmethod
     def info(self):
         """
         Get information about the :ref:`LazyArray`.
@@ -143,7 +169,6 @@ def validate_inputs(inputs: dict) -> tuple:
             raise ValueError("Inputs should have the same shape")
     equal_chunks = True
     equal_blocks = True
-    has_padding = False
 
     # More checks specific of NDArray inputs
     NDinputs = list(input for input in inputs if isinstance(input, blosc2.NDArray))
@@ -164,11 +189,7 @@ def validate_inputs(inputs: dict) -> tuple:
             # For some reason, the trailing dimensions not being the same is not supported in fast path
             equal_blocks = False
 
-    # Check if there is padding for more than 1-dim operands (1-dim is supported in getitem mode)
-    if equal_blocks and equal_chunks and len(first_input.shape) > 1:
-        has_padding = any([c % b != 0 for c, b in zip(first_input.chunks, first_input.blocks, strict=True)])
-
-    return first_input.shape, first_input.dtype, equal_chunks, equal_blocks, has_padding
+    return first_input.shape, first_input.dtype, equal_chunks, equal_blocks
 
 
 def do_slices_intersect(slice1, slice2):
@@ -457,7 +478,7 @@ def evaluate_slices(
 
 
 def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs):
-    shape, dtype_, equal_chunks, equal_blocks, has_padding = validate_inputs(operands)
+    shape, dtype_, equal_chunks, equal_blocks = validate_inputs(operands)
 
     if item is not None and item != slice(None, None, None):
         return evaluate_slices(expression, operands, _slice=item, **kwargs)
@@ -656,6 +677,30 @@ class LazyExpr(LazyArray):
         blosc2._disable_overloaded_equal = False
         return self
 
+    @property
+    def dtype(self):
+        # Updating the expression can change the dtype
+        # Infer the dtype by evaluating the scalar version of the expression
+        scalar_inputs = {}
+        for key, value in self.operands.items():
+            single_item = (0,) * len(value.shape)
+            scalar_inputs[key] = value[single_item]
+        # Evaluate the expression with scalar inputs (it is cheap)
+        return ne.evaluate(self.expression, scalar_inputs).dtype
+
+    @property
+    def shape(self):
+        if hasattr(self, "_shape"):
+            # Contrarily to dtype, shape cannot change after creation of the expression
+            return self._shape
+        shape, dtype_, equal_chunks, equal_blocks = validate_inputs(self.operands)
+        self._shape = shape
+        return shape
+
+    # TODO: add a test for this
+    def __neg__(self):
+        return self.update_expr(new_op=(self, "-", 0))
+
     def __add__(self, value):
         return self.update_expr(new_op=(self, "+", value))
 
@@ -780,8 +825,10 @@ class LazyExpr(LazyArray):
         kwargs["meta"] = meta
         kwargs["mode"] = "w"  # always overwrite the file in urlpath
 
-        shape, dtype_, equal_chunks, equal_blocks, has_padding = validate_inputs(self.operands)
+        # Create an empty array; useful for providing the shape and dtype of the outcome
+        array = blosc2.empty(shape=self.shape, dtype=self.dtype, **kwargs)
 
+        # Save the expression and operands in the metadata
         operands = {}
         for key, value in self.operands.items():
             if not isinstance(value, blosc2.NDArray):
@@ -789,41 +836,29 @@ class LazyExpr(LazyArray):
             if value.schunk.urlpath is None:
                 raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
             operands[key] = value.schunk.urlpath
-
-        # Infer the dtype by evaluating the scalar version of the expression
-        scalar_inputs = {}
-        for key, value in self.operands.items():
-            single_item = (0,) * len(value.shape)
-            scalar_inputs[key] = value[single_item]
-        # Evaluate the expression with scalar inputs (it is cheap)
-        dtype_ = ne.evaluate(self.expression, scalar_inputs).dtype
-
-        # Create an empty array; useful for providing the shape and dtype of the outcome
-        array = blosc2.empty(shape=shape, dtype=dtype_, **kwargs)
-
         array.schunk.vlmeta["_LazyArray"] = {
             "expression": self.expression,
             "UDF": None,
             "operands": operands,
         }
+        return
 
 
 class LazyUDF(LazyArray):
     def __init__(self, func, inputs, dtype, chunked_eval=True, **kwargs):
         # After this, all the inputs should be np.ndarray or NDArray objects
         self.inputs = convert_inputs(inputs)
-        self.shape = None
         self.chunked_eval = chunked_eval
         # Get res shape
         for obj in self.inputs:
             if isinstance(obj, np.ndarray | blosc2.NDArray):
-                self.shape = obj.shape
+                self._shape = obj.shape
                 break
         if self.shape is None:
             raise NotImplementedError("If all operands are Python scalars, use python, numpy or numexpr")
 
         self.kwargs = kwargs
-        self.dtype = dtype
+        self._dtype = dtype
         self.func = func
 
         # Prepare internal array for __getitem__
@@ -837,11 +872,19 @@ class LazyUDF(LazyArray):
             raise ValueError("dparams should be a dictionary")
         kwargs_getitem["dparams"] = dparams
 
-        self.res_getitem = blosc2.empty(self.shape, self.dtype, **kwargs_getitem)
+        self.res_getitem = blosc2.empty(self._shape, self._dtype, **kwargs_getitem)
         # Register a postfilter for getitem
         self.res_getitem._set_postf_udf(self.func, id(self.inputs))
 
         self.inputs_dict = {f"i{i}": obj for i, obj in enumerate(self.inputs)}
+
+    @property
+    def dtype(self):
+        return self._dtype
+
+    @property
+    def shape(self):
+        return self._shape
 
     @property
     def info(self):
