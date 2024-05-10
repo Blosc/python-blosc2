@@ -13,11 +13,10 @@ import numpy as np
 import blosc2
 
 shape = (50, 50)
-dtype = np.float64
 
 # Create a NDArray from a NumPy array
-npa = np.linspace(0, 1, np.prod(shape)).reshape(shape)
-npb = np.linspace(1, 2, np.prod(shape)).reshape(shape)
+npa = np.linspace(0, 1, np.prod(shape), dtype=np.float32).reshape(shape)
+npb = np.linspace(1, 2, np.prod(shape), dtype=np.float64).reshape(shape)
 npc = npa**2 + npb**2 + 2 * npa * npb + 1
 
 a = blosc2.asarray(npa)

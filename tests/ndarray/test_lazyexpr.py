@@ -237,7 +237,7 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
             # Construct the lazy expression based on the function name
             expr = blosc2.LazyExpr(new_op=(a1, function, a2))
             if urlpath is not None:
-                expr.save(urlpath=urlpath_save, mode="w")
+                expr.save(urlpath=urlpath_save)
                 expr = blosc2.open(urlpath_save)
             res_lazyexpr = expr.eval()
             # Evaluate using NumExpr
@@ -251,7 +251,7 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
             # Construct the lazy expression based on the function name
             expr = blosc2.LazyExpr(new_op=(a1, function, value2))
             if urlpath is not None:
-                expr.save(urlpath=urlpath_save, mode="w")
+                expr.save(urlpath=urlpath_save)
                 expr = blosc2.open(urlpath_save)
             res_lazyexpr = expr.eval()
             # Evaluate using NumExpr
@@ -267,7 +267,7 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
         # Construct the lazy expression based on the function name
         expr = blosc2.LazyExpr(new_op=(value1, function, a2))
         if urlpath is not None:
-            expr.save(urlpath=urlpath_save, mode="w")
+            expr.save(urlpath=urlpath_save)
             expr = blosc2.open(urlpath_save)
         res_lazyexpr = expr.eval()
         # Evaluate using NumExpr
@@ -355,8 +355,8 @@ def test_save():
     tol = 1e-17
     shape = (23, 23)
     nelems = np.prod(shape)
-    na1 = np.linspace(0, 10, nelems).reshape(shape)
-    na2 = np.linspace(10, 20, nelems).reshape(shape)
+    na1 = np.linspace(0, 10, nelems, dtype=np.float32).reshape(shape)
+    na2 = np.linspace(10, 20, nelems, dtype=np.float32).reshape(shape)
     na3 = np.linspace(0, 10, nelems).reshape(shape)
     na4 = np.linspace(0, 10, nelems).reshape(shape)
     a1 = blosc2.asarray(na1)
@@ -373,16 +373,14 @@ def test_save():
     expr = da1 / da2 + da2 - da3 * da4
     nres = ne.evaluate("na1 / na2 + na2 - na3 * na4")
     urlpath_save = "expr.b2nd"
-    expr.save(urlpath=urlpath_save, mode="w")
+    expr.save(urlpath=urlpath_save)
 
     cparams = {"nthreads": 2}
     dparams = {"nthreads": 4}
     chunks = tuple([i // 2 for i in nres.shape])
     blocks = tuple([i // 4 for i in nres.shape])
     urlpath_eval = "eval_expr.b2nd"
-    res = expr.eval(
-        urlpath=urlpath_eval, cparams=cparams, dparams=dparams, chunks=chunks, blocks=blocks, mode="w"
-    )
+    res = expr.eval(urlpath=urlpath_eval, cparams=cparams, dparams=dparams, chunks=chunks, blocks=blocks)
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
 
     # Remove data in memory before opening on-disk LazyExpr
@@ -391,7 +389,10 @@ def test_save():
     del expr
 
     expr = blosc2.open(urlpath_save)
+    # Check the dtype (should be upcasted to float64)
+    assert expr.array.dtype == np.float64
     res = expr.eval()
+    assert res.dtype == np.float64
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
     # Test getitem
     np.testing.assert_allclose(expr[:], nres, rtol=tol, atol=tol)
@@ -401,8 +402,9 @@ def test_save():
     expr = "a1  / a2 + a2 - a3 * a4**x"
     var_dict = {"a1": ops[0], "a2": ops[1], "a3": ops[2], "a4": ops[3], "x": x}
     lazy_expr = eval(expr, var_dict)
-    lazy_expr.save(urlpath=urlpath_save2, mode="w")
-    expr = blosc2.open(urlpath_save2, mode="w")
+    lazy_expr.save(urlpath=urlpath_save2)
+    expr = blosc2.open(urlpath_save2)
+    assert expr.array.dtype == np.float64
     res = expr.eval()
     nres = ne.evaluate("na1 / na2 + na2 - na3 * na4**3")
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
@@ -439,7 +441,7 @@ def test_save_functions(function, dtype_fixture, shape_fixture):
 
     # Construct the lazy expression based on the function name
     expr = blosc2.LazyExpr(new_op=(a1, function, None))
-    expr.save(urlpath=urlpath_save, mode="w")
+    expr.save(urlpath=urlpath_save)
     del expr
     expr = blosc2.open(urlpath_save)
     res_lazyexpr = expr.eval()
@@ -452,7 +454,7 @@ def test_save_functions(function, dtype_fixture, shape_fixture):
 
     expr_string = f"blosc2.{function}(a1)"
     expr = eval(expr_string, {"a1": a1, "blosc2": blosc2})
-    expr.save(urlpath=urlpath_save, mode="w")
+    expr.save(urlpath=urlpath_save)
     res_lazyexpr = expr.eval()
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
 
@@ -473,32 +475,32 @@ def test_save_contains(values):
     urlpath_save = "expr.b2nd"
     if value1 == "NDArray":
         a1 = np.array([b"abc(", b"def", b"aterr", b"oot", b"zu", b"ab c"])
-        a1_blosc = blosc2.asarray(a1, urlpath=urlpath, mode="w")
+        a1_blosc = blosc2.asarray(a1, urlpath=urlpath)
         if value2 == "str":  # ("NDArray", "str")
             value2 = b"test abc( here"
             # Construct the lazy expression
             expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", value2))
-            expr_lazy.save(urlpath=urlpath_save, mode="w")
+            expr_lazy.save(urlpath=urlpath_save)
             expr_lazy = blosc2.open(urlpath_save)
             # Evaluate using NumExpr
             expr_numexpr = f"{'contains'}(a1, value2)"
             res_numexpr = ne.evaluate(expr_numexpr)
         else:  # ("NDArray", "NDArray")
             a2 = np.array([b"abc(", b"ab c", b" abc", b" abc ", b"\tabc", b"c h"])
-            a2_blosc = blosc2.asarray(a2, urlpath=urlpath2, mode="w")
+            a2_blosc = blosc2.asarray(a2, urlpath=urlpath2)
             # Construct the lazy expression
             expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", a2_blosc))
-            expr_lazy.save(urlpath=urlpath_save, mode="w")
+            expr_lazy.save(urlpath=urlpath_save)
             expr_lazy = blosc2.open(urlpath_save)
             # Evaluate using NumExpr
             res_numexpr = ne.evaluate("contains(a2, a1)")
     else:  # ("str", "NDArray")
         value1 = b"abc"
         a2 = np.array([b"abc(", b"def", b"aterr", b"oot", b"zu", b"ab c"])
-        a2_blosc = blosc2.asarray(a2, urlpath=urlpath2, mode="w")
+        a2_blosc = blosc2.asarray(a2, urlpath=urlpath2)
         # Construct the lazy expression
         expr_lazy = blosc2.LazyExpr(new_op=(value1, "contains", a2_blosc))
-        expr_lazy.save(urlpath=urlpath_save, mode="w")
+        expr_lazy.save(urlpath=urlpath_save)
         expr_lazy = blosc2.open(urlpath_save)
         # Evaluate using NumExpr
         res_numexpr = ne.evaluate("contains(value1, a2)")
@@ -532,7 +534,7 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
         "blosc2.cos(x) * blosc2.arcsin(y) + blosc2.arcsinh(x) + blosc2.sinh(x)"
     )
     expr = eval(b2expr_string, {"x": a1, "y": a2, "blosc2": blosc2})
-    expr.save(urlpath=urlpath_save, mode="w")
+    expr.save(urlpath=urlpath_save)
     res_lazyexpr = expr.eval()
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol, atol=atol)
 

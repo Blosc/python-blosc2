@@ -112,12 +112,29 @@ class LazyArray(ABC):
         pass
 
 
+def convert_inputs(inputs):
+    inputs_ = []
+    for obj in inputs:
+        if not isinstance(obj, np.ndarray | blosc2.NDArray) and not np.isscalar(obj):
+            try:
+                obj = np.asarray(obj)
+            except:
+                print(
+                    "Inputs not being np.ndarray, NDArray or Python scalar objects"
+                    " should be convertible to np.ndarray."
+                )
+                raise
+        inputs_.append(obj)
+    return inputs_
+
+
 def validate_inputs(inputs: dict) -> tuple:
     """Validate the inputs for the expression."""
     if len(inputs) == 0:
         raise ValueError(
             "You need to pass at least one array.  Use blosc2.empty() if values are not really needed."
         )
+
     # All array inputs should have the same shape
     inputs = list(input for input in inputs.values() if isinstance(input, blosc2.NDArray | np.ndarray))
     first_input = inputs[0]
@@ -146,6 +163,7 @@ def validate_inputs(inputs: dict) -> tuple:
         if first_input.blocks[1:] != input_.chunks[1:]:
             # For some reason, the trailing dimensions not being the same is not supported in fast path
             equal_blocks = False
+
     # Check if there is padding for more than 1-dim operands (1-dim is supported in getitem mode)
     if equal_blocks and equal_chunks and len(first_input.shape) > 1:
         has_padding = any([c % b != 0 for c, b in zip(first_input.chunks, first_input.blocks, strict=True)])
@@ -763,20 +781,25 @@ class LazyExpr(LazyArray):
         kwargs["mode"] = "w"  # always overwrite the file in urlpath
 
         shape, dtype_, equal_chunks, equal_blocks, has_padding = validate_inputs(self.operands)
-        # Create empty array to give an idea of the shape and dtype
-        array = blosc2.empty(shape=shape, dtype=dtype_, **kwargs)
 
-        operands = self.operands.copy()
+        operands = {}
         for key, value in self.operands.items():
-            if isinstance(value, np.ndarray):
-                raise ValueError("Cannot save LazyArray with NumPy.ndarray operands")
-            if isinstance(value, blosc2.NDArray):
-                if value.schunk.urlpath is None:
-                    raise ValueError("To save a LazyArray, blosc2.NDArrays must be stored on disk")
-                operands[key] = value.schunk.urlpath
-            else:
-                # Probably this will never happen
-                operands[key] = value
+            if not isinstance(value, blosc2.NDArray):
+                raise ValueError("To save a LazyArray, all operands must be blosc2.NDArray objects")
+            if value.schunk.urlpath is None:
+                raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
+            operands[key] = value.schunk.urlpath
+
+        # Infer the dtype by evaluating the scalar version of the expression
+        scalar_inputs = {}
+        for key, value in self.operands.items():
+            single_item = (0,) * len(value.shape)
+            scalar_inputs[key] = value[single_item]
+        # Evaluate the expression with scalar inputs (it is cheap)
+        dtype_ = ne.evaluate(self.expression, scalar_inputs).dtype
+
+        # Create an empty array; useful for providing the shape and dtype of the outcome
+        array = blosc2.empty(shape=shape, dtype=dtype_, **kwargs)
 
         array.schunk.vlmeta["_LazyArray"] = {
             "expression": self.expression,
@@ -785,26 +808,10 @@ class LazyExpr(LazyArray):
         }
 
 
-def validate_inputs_udf(inputs):
-    inputs_ = []
-    for obj in inputs:
-        if not isinstance(obj, np.ndarray | blosc2.NDArray) and not np.isscalar(obj):
-            try:
-                obj = np.asarray(obj)
-            except:
-                print(
-                    "Inputs not being np.ndarray, NDArray or Python scalar objects"
-                    " should be convertible to np.ndarray."
-                )
-                raise
-        inputs_.append(obj)
-    return inputs_
-
-
 class LazyUDF(LazyArray):
     def __init__(self, func, inputs, dtype, chunked_eval=True, **kwargs):
         # After this, all the inputs should be np.ndarray or NDArray objects
-        self.inputs = validate_inputs_udf(inputs)
+        self.inputs = convert_inputs(inputs)
         self.shape = None
         self.chunked_eval = chunked_eval
         # Get res shape
