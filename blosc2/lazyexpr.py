@@ -875,7 +875,7 @@ class LazyUDF(LazyArray):
         # Register a postfilter for getitem
         self.res_getitem._set_postf_udf(self.func, id(self.inputs))
 
-        self.inputs_dict = {f"i{i}": obj for i, obj in enumerate(self.inputs)}
+        self.inputs_dict = {f"o{i}": obj for i, obj in enumerate(self.inputs)}
 
     @property
     def dtype(self):
