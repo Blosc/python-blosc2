@@ -184,10 +184,6 @@ def validate_inputs(inputs: dict) -> tuple:
             equal_chunks = False
         if first_input.blocks != input_.blocks:
             equal_blocks = False
-        # TODO: see why we need this constraint for avoiding the fast path
-        if first_input.blocks[1:] != input_.chunks[1:]:
-            # For some reason, the trailing dimensions not being the same is not supported in fast path
-            equal_blocks = False
 
     return first_input.shape, first_input.dtype, equal_chunks, equal_blocks
 
