@@ -801,13 +801,8 @@ class LazyExpr(LazyArray):
             for key, value in self.operands.items()
         }
         items += [("operands", opsinfo)]
-        # array is only available if the expression has been opened from disk
-        if hasattr(self, "array"):
-            array = self.array
-            items += [("shape", array.shape)]
-            items += [("chunks", array.chunks)]
-            items += [("blocks", array.blocks)]
-            items += [("dtype", array.dtype)]
+        items += [("shape", self.shape)]
+        items += [("dtype", self.dtype)]
         return items
 
     def save(self, **kwargs):
