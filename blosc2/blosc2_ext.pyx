@@ -206,7 +206,7 @@ cdef extern from "blosc2.h":
         int64_t nchunk
         int32_t nblock
         int32_t tid
-        uint8_t * ttmp
+        uint8_t *ttmp
         size_t ttmp_nbytes
         blosc2_context *ctx
 
@@ -484,6 +484,13 @@ cdef extern from "b2nd.h":
     int b2nd_copy(b2nd_context_t *ctx, b2nd_array_t *src, b2nd_array_t **array)
     int b2nd_from_schunk(blosc2_schunk *schunk, b2nd_array_t **array)
 
+    void blosc2_unidim_to_multidim(uint8_t ndim, int64_t *shape, int64_t i, int64_t *index)
+    int b2nd_copy_buffer(int8_t ndim,
+                         uint8_t itemsize,
+                         const void *src, const int64_t *src_pad_shape,
+                         const int64_t *src_start, const int64_t *src_stop,
+                         void *dst, const int64_t *dst_pad_shape,
+                         const int64_t *dst_start);
 
 
 ctypedef struct user_filters_udata:
@@ -498,6 +505,13 @@ ctypedef struct filler_udata:
     int output_cdtype
     int32_t chunkshape
 
+ctypedef struct udf_udata:
+    char* py_func
+    uintptr_t inputs_id
+    int output_cdtype
+    b2nd_array_t *array
+    int64_t chunks_in_array[B2ND_MAX_DIM]
+    int64_t blocks_in_chunk[B2ND_MAX_DIM]
 
 MAX_TYPESIZE = BLOSC_MAX_TYPESIZE
 MAX_BUFFERSIZE = BLOSC2_MAX_BUFFERSIZE
@@ -509,7 +523,7 @@ EXTENDED_HEADER_LENGTH = BLOSC_EXTENDED_HEADER_LENGTH
 DEFINED_CODECS_STOP = BLOSC2_DEFINED_CODECS_STOP
 DEFAULT_DTYPE_FORMAT = B2ND_DEFAULT_DTYPE_FORMAT
 
-def _check_comp_length(comp_name, comp_len):
+cdef _check_comp_length(comp_name, comp_len):
     if comp_len < BLOSC_MIN_HEADER_LENGTH:
         raise ValueError(f"{comp_name} cannot be less than {BLOSC_MIN_HEADER_LENGTH} bytes")
 
@@ -1414,15 +1428,25 @@ cdef class SChunk:
         if self.schunk.dctx == NULL:
             raise RuntimeError("Could not create decompression context")
 
-    def remove_postfilter(self, func_name):
-        del blosc2.postfilter_funcs[func_name]
-        self.schunk.storage.dparams.postfilter = NULL
+    cpdef remove_postfilter(self, func_name, new_ctx=True):
+        if func_name is not None:
+            del blosc2.postfilter_funcs[func_name]
+
+        cdef user_filters_udata* udata = <user_filters_udata * > self.schunk.storage.dparams.postparams.user_data
+        free(udata.py_func)
+        free(self.schunk.storage.dparams.postparams.user_data)
         free(self.schunk.storage.dparams.postparams)
+        self.schunk.storage.dparams.postparams = NULL
+        self.schunk.storage.dparams.postfilter = NULL
 
         blosc2_free_ctx(self.schunk.dctx)
-        self.schunk.dctx = blosc2_create_dctx(dereference(self.schunk.storage.dparams))
-        if self.schunk.dctx == NULL:
-            raise RuntimeError("Could not create decompression context")
+        if new_ctx:
+            self.schunk.dctx = blosc2_create_dctx(dereference(self.schunk.storage.dparams))
+            if self.schunk.dctx == NULL:
+                raise RuntimeError("Could not create decompression context")
+        else:
+            # Avoid creating new dctx when calling this from the __dealloc__
+            self.schunk.dctx = NULL
 
     def _set_filler(self, func, inputs_id, dtype_output):
         if self.schunk.storage.cparams.nthreads > 1:
@@ -1467,7 +1491,6 @@ cdef class SChunk:
             del blosc2.prefilter_funcs[func_id]
             raise ValueError("`dtype_input` and `dtype_output` must have the same size")
 
-
         cdef blosc2_cparams* cparams = self.schunk.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> general_prefilter
         cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
@@ -1487,18 +1510,35 @@ cdef class SChunk:
         if self.schunk.cctx == NULL:
             raise RuntimeError("Could not create compression context")
 
-    def remove_prefilter(self, func_name):
-        del blosc2.prefilter_funcs[func_name]
-        self.schunk.storage.cparams.prefilter = NULL
+    cpdef remove_prefilter(self, func_name, new_ctx=True):
+        if func_name is not None:
+            del blosc2.prefilter_funcs[func_name]
+
+        # From Python the preparams->udata with always have the field py_func
+        cdef user_filters_udata * udata = <user_filters_udata *>self.schunk.storage.cparams.preparams.user_data
+        free(udata.py_func)
+        free(self.schunk.storage.cparams.preparams.user_data)
         free(self.schunk.storage.cparams.preparams)
+        self.schunk.storage.cparams.preparams = NULL
+        self.schunk.storage.cparams.prefilter = NULL
 
         blosc2_free_ctx(self.schunk.cctx)
-        self.schunk.cctx = blosc2_create_cctx(dereference(self.schunk.storage.cparams))
-        if self.schunk.cctx == NULL:
-            raise RuntimeError("Could not create compression context")
+        if new_ctx:
+            self.schunk.cctx = blosc2_create_cctx(dereference(self.schunk.storage.cparams))
+            if self.schunk.cctx == NULL:
+                raise RuntimeError("Could not create compression context")
+        else:
+            # Avoid creating new cctx when calling this from the __dealloc__
+            self.schunk.cctx = NULL
 
     def __dealloc__(self):
         if self.schunk != NULL and not self._is_view:
+            # Free prefilters and postfilters params
+            if self.schunk.storage.cparams.prefilter != NULL:
+                self.remove_prefilter(func_name=None, new_ctx=False)
+            if self.schunk.storage.dparams.postfilter != NULL:
+                self.remove_postfilter(func_name=None, new_ctx=False)
+
             blosc2_schunk_free(self.schunk)
 
 
@@ -1543,6 +1583,93 @@ cdef int general_filler(blosc2_prefilter_params *params):
     blosc2.prefilter_funcs[func_id](tuple(inputs), output, offset)
 
     return 0
+
+
+# Aux function for prefilter and postfilter udf
+cdef int aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
+                 c_bool is_postfilter, uint8_t *params_output, int32_t typesize):
+    cdef int64_t chunk_ndim[B2ND_MAX_DIM]
+    blosc2_unidim_to_multidim(udata.array.ndim, udata.chunks_in_array, nchunk, chunk_ndim)
+    cdef int64_t block_ndim[B2ND_MAX_DIM]
+    blosc2_unidim_to_multidim(udata.array.ndim, udata.blocks_in_chunk, nblock, block_ndim)
+    cdef int64_t start_ndim[B2ND_MAX_DIM]
+    for i in range(udata.array.ndim):
+        start_ndim[i] = chunk_ndim[i] * udata.array.chunkshape[i] + block_ndim[i] * udata.array.blockshape[i]
+
+    padding = False
+    blockshape = []
+    for i in range(udata.array.ndim):
+        if start_ndim[i] + udata.array.blockshape[i] > udata.array.shape[i]:
+            padding = True
+            blockshape.append(udata.array.shape[i] - start_ndim[i])
+            if blockshape[i] <= 0:
+                # This block contains only padding, skip it
+                return 0
+        else:
+            blockshape.append(udata.array.blockshape[i])
+    cdef np.npy_intp dims[B2ND_MAX_DIM]
+    for i in range(udata.array.ndim):
+        dims[i] = blockshape[i]
+
+    if padding:
+        output = np.empty(blockshape, udata.array.dtype)
+    else:
+        output = np.PyArray_SimpleNewFromData(udata.array.ndim, dims, udata.output_cdtype, <void*>params_output)
+
+    inputs_tuple = _ctypes.PyObj_FromPtr(udata.inputs_id)
+    inputs_slice = []
+    # Get slice of each operand
+    l = []
+    for i in range(udata.array.ndim):
+        l.append(slice(start_ndim[i], start_ndim[i] + blockshape[i]))
+    slices = tuple(l)
+    for obj in inputs_tuple:
+        if isinstance(obj, blosc2.NDArray):
+            inputs_slice.append(obj[slices])
+        elif isinstance(obj, np.ndarray):
+            inputs_slice.append(obj[slices])
+        elif np.isscalar(obj):
+            inputs_slice.append(obj)
+        else:
+            raise ValueError("Unsupported operand")
+
+    # Call udf function
+    func_id = udata.py_func.decode("utf-8")
+    offset = tuple(start_ndim[i] for i in range(udata.array.ndim))
+    if is_postfilter:
+        blosc2.postfilter_funcs[func_id](tuple(inputs_slice), output, offset)
+    else:
+        blosc2.prefilter_funcs[func_id](tuple(inputs_slice), output, offset)
+
+    cdef int64_t start[B2ND_MAX_DIM]
+    cdef int64_t slice_shape[B2ND_MAX_DIM]
+    cdef int64_t blockshape_int64[B2ND_MAX_DIM]
+    cdef Py_buffer *buf
+    if padding:
+        for i in range(udata.array.ndim):
+            start[i] = 0
+            slice_shape[i] = blockshape[i]
+            blockshape_int64[i] = udata.array.blockshape[i]
+        buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+        PyObject_GetBuffer(output, buf, PyBUF_SIMPLE)
+        rc = b2nd_copy_buffer(udata.array.ndim, typesize,
+                              buf.buf, slice_shape, start, slice_shape,
+                              params_output, blockshape_int64, start)
+        PyBuffer_Release(buf)
+        _check_rc(rc, "Could not copy the result into the buffer")
+
+    return 0
+
+
+cdef int general_udf_prefilter(blosc2_prefilter_params *params):
+    cdef udf_udata *udata = <udf_udata *> params.user_data
+    return aux_udf(udata, params.nchunk, params.nblock, False, params.output, params.output_typesize)
+
+
+cdef int general_udf_postfilter(blosc2_postfilter_params *params):
+    cdef udf_udata *udata = <udf_udata *> params.user_data
+    return aux_udf(udata, params.nchunk, params.nblock, True, params.output, params.typesize)
+
 
 def nelem_from_inputs(inputs_tuple, nelem=None):
     for obj, dtype in inputs_tuple:
@@ -2166,6 +2293,65 @@ cdef class NDArray:
         _check_rc(b2nd_squeeze(self.array), "Error while performing the squeeze")
         if self.array.shape[0] == 1 and self.ndim == 1:
             self.array.ndim = 0
+
+    cdef udf_udata *_fill_udf_udata(self, func_id, inputs_id):
+        cdef udf_udata *udata = <udf_udata *> malloc(sizeof(udf_udata))
+        udata.py_func = <char *> malloc(strlen(func_id) + 1)
+        strcpy(udata.py_func, func_id)
+        udata.inputs_id = inputs_id
+        udata.output_cdtype = np.dtype(self.dtype).num
+        udata.array = self.array
+        # Save these in udf_udata to avoid computing them for each block
+        for i in range(self.array.ndim):
+            udata.chunks_in_array[i] = udata.array.extshape[i] // udata.array.chunkshape[i]
+            udata.blocks_in_chunk[i] = udata.array.extchunkshape[i] // udata.array.blockshape[i]
+
+        return udata
+
+    def _set_pref_udf(self, func, inputs_id):
+        if self.array.sc.storage.cparams.nthreads > 1:
+            raise AttributeError("compress `nthreads` must be 1 when assigning a prefilter")
+
+        func_id = func.__name__
+        blosc2.prefilter_funcs[func_id] = func
+        func_id = func_id.encode("utf-8") if isinstance(func_id, str) else func_id
+
+        # Set prefilter
+        cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
+        cparams.prefilter = <blosc2_prefilter_fn> general_udf_prefilter
+
+        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
+        preparams.user_data = self._fill_udf_udata(func_id, inputs_id)
+        cparams.preparams = preparams
+        _check_cparams(cparams)
+
+        blosc2_free_ctx(self.array.sc.cctx)
+        self.array.sc.cctx = blosc2_create_cctx(dereference(cparams))
+        if self.array.sc.cctx == NULL:
+            raise RuntimeError("Could not create compression context")
+
+    def _set_postf_udf(self, func, inputs_id):
+        if self.array.sc.storage.dparams.nthreads > 1:
+            raise AttributeError("decompress `nthreads` must be 1 when assigning a postfilter")
+
+        func_id = func.__name__
+        blosc2.postfilter_funcs[func_id] = func
+        func_id = func_id.encode("utf-8") if isinstance(func_id, str) else func_id
+
+        # Set postfilter
+        cdef blosc2_dparams *dparams = self.array.sc.storage.dparams
+        dparams.postfilter = <blosc2_postfilter_fn> general_udf_postfilter
+        # Fill postparams
+        cdef blosc2_postfilter_params *postparams = <blosc2_postfilter_params *> malloc(
+            sizeof(blosc2_postfilter_params))
+        postparams.user_data = self._fill_udf_udata(func_id,inputs_id)
+        dparams.postparams = postparams
+        _check_dparams(dparams, self.array.sc.storage.cparams)
+
+        blosc2_free_ctx(self.array.sc.dctx)
+        self.array.sc.dctx = blosc2_create_dctx(dereference(dparams))
+        if self.array.sc.dctx == NULL:
+            raise RuntimeError("Could not create decompression context")
 
     def __dealloc__(self):
         if self.array != NULL:

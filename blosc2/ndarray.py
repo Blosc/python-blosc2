@@ -382,6 +382,9 @@ class NDArray(blosc2_ext.NDArray):
         if not isinstance(value, int | float | bool | blosc2.LazyExpr | NDArray):
             raise RuntimeError("Expected bool, int, float, LazyExpr or NDArray instance")
 
+    def __neg__(self):
+        return blosc2.LazyExpr(new_op=(0, "-", self))
+
     def __and__(self, value: int | float | NDArray, /):
         self._check_allowed_dtypes(value, "numeric", "__and__")
         return blosc2.LazyExpr(new_op=(self, "&", value))
@@ -476,8 +479,6 @@ class NDArray(blosc2_ext.NDArray):
     def __rpow__(self, value: int | float | NDArray, /):
         self._check_allowed_dtypes(value, "numeric", "__rpow__")
         return blosc2.LazyExpr(new_op=(value, "**", self))
-
-
 
 
 def sin(ndarr: NDArray, /):
@@ -944,7 +945,7 @@ def imag(ndarr: NDArray, /):
     return blosc2.LazyExpr(new_op=(ndarr, "imag", None))
 
 
-def contains(ndarr: NDArray, value: str | NDArray, /):
+def contains(ndarr: NDArray, value: str | bytes | NDArray, /):
     """
     Check if the array contains a string value.
 
@@ -960,8 +961,8 @@ def contains(ndarr: NDArray, value: str | NDArray, /):
     out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
     """
-    if not isinstance(value, str | NDArray):
-        raise ValueError("value should be a string or a NDArray!")
+    if not isinstance(value, str | bytes | NDArray):
+        raise ValueError("value should be a string, bytes or a NDArray!")
     return blosc2.LazyExpr(new_op=(ndarr, "contains", value))
 
 

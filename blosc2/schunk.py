@@ -14,6 +14,7 @@ from collections.abc import Mapping, MutableMapping
 import numpy as np
 from msgpack import packb, unpackb
 
+import blosc2
 from blosc2 import SpecialValue, blosc2_ext
 
 
@@ -749,7 +750,7 @@ class SChunk(blosc2_ext.SChunk):
 
         return initialize
 
-    def remove_postfilter(self, func_name):
+    def remove_postfilter(self, func_name, _new_ctx=True):
         """Remove the postfilter from the `SChunk` instance.
 
         Parameters
@@ -909,7 +910,7 @@ class SChunk(blosc2_ext.SChunk):
 
         return initialize
 
-    def remove_prefilter(self, func_name):
+    def remove_prefilter(self, func_name, _new_ctx=True):
         """Remove the prefilter from the `SChunk` instance.
 
         Parameters
@@ -933,7 +934,7 @@ def open(urlpath, mode="a", offset=0, **kwargs):
 
     Parameters
     ----------
-    urlpath: str
+    urlpath: str | pathlib.Path
         The path where the :ref:`SChunk <SChunk>` (or :ref:`NDArray <NDArray>`)
         is stored.
     mode: str, optional
@@ -994,4 +995,9 @@ def open(urlpath, mode="a", offset=0, **kwargs):
         urlpath = str(urlpath)
     if not os.path.exists(urlpath):
         raise FileNotFoundError(f"No such file or directory: {urlpath}")
-    return blosc2_ext.open(urlpath, mode, offset, **kwargs)
+
+    res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
+    if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
+        return blosc2._open_lazyarray(res)
+    else:
+        return res
