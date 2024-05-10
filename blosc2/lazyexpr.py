@@ -16,6 +16,7 @@ import numexpr as ne
 import numpy as np
 
 import blosc2
+from blosc2.info import InfoReporter
 
 
 class LazyArrayEnum(Enum):
@@ -94,6 +95,19 @@ class LazyArray(ABC):
         -----
         * All the operands of the LazyArray must be Python scalars or on-disk stored :ref:`NDArray <NDArray>`.
         * This is only supported for :ref:`LazyExpr <LazyExpr>`.
+        """
+        pass
+
+    @property
+    @abstractmethod
+    def info(self):
+        """
+        Get information about the :ref:`LazyArray`.
+
+        Returns
+        -------
+        out: InfoReporter
+            A printable class with information about the :ref:`LazyArray`.
         """
         pass
 
@@ -716,6 +730,29 @@ class LazyExpr(LazyArray):
         expression = f"{self.expression}"
         return expression
 
+    @property
+    def info(self):
+        return InfoReporter(self)
+
+    @property
+    def info_items(self):
+        items = []
+        items += [("type", f"{self.__class__.__name__}")]
+        items += [("expression", self.expression)]
+        opsinfo = {
+            key: str(value) if value.schunk.urlpath is None else value.schunk.urlpath
+            for key, value in self.operands.items()
+        }
+        items += [("operands", opsinfo)]
+        # array is only available if the expression has been opened from disk
+        if hasattr(self, "array"):
+            array = self.array
+            items += [("shape", array.shape)]
+            items += [("chunks", array.chunks)]
+            items += [("blocks", array.blocks)]
+            items += [("dtype", array.dtype)]
+        return items
+
     def save(self, **kwargs):
         if kwargs.get("urlpath", None) is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
@@ -797,8 +834,26 @@ class LazyUDF(LazyArray):
         # Register a postfilter for getitem
         self.res_getitem._set_postf_udf(self.func, id(self.inputs))
 
-        if chunked_eval:
-            self.inputs_dict = {f"o{i}": obj for i, obj in enumerate(self.inputs)}
+        self.inputs_dict = {f"i{i}": obj for i, obj in enumerate(self.inputs)}
+
+    @property
+    def info(self):
+        return InfoReporter(self)
+
+    @property
+    def info_items(self):
+        items = []
+        items += [("type", f"{self.__class__.__name__}")]
+        inputs = {}
+        for key, value in self.inputs_dict.items():
+            if isinstance(value, np.ndarray | blosc2.NDArray):
+                inputs[key] = f"<{value.__class__.__name__}> {value.shape} {value.dtype}"
+            else:
+                inputs[key] = str(value)
+        items += [("inputs", inputs)]
+        items += [("shape", self.shape)]
+        items += [("dtype", self.dtype)]
+        return items
 
     def eval(self, item=None, **kwargs):
         # Get kwargs
@@ -903,7 +958,10 @@ def _open_lazyarray(array):
         if func in lazyarray["expression"]:
             globals[func] = getattr(blosc2, func)
 
-    return eval(lazyarray["expression"], globals, operands_dict)
+    expr = eval(lazyarray["expression"], globals, operands_dict)
+    # Make the array info available for the user (only available when opened from disk)
+    expr.array = array
+    return expr
 
 
 def lazyudf(func, inputs, dtype, chunked_eval=True, **kwargs):

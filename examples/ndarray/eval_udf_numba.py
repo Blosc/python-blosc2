@@ -27,8 +27,9 @@ npa = np.linspace(0, 1, np.prod(shape)).reshape(shape)
 npc = npa + 1
 a = blosc2.asarray(npa)
 
-expr = blosc2.lazyudf(func_numba, (npa,), npa.dtype)
-res = expr.eval()
+lazyarray = blosc2.lazyudf(func_numba, (npa,), npa.dtype)
+print(lazyarray.info)
+res = lazyarray.eval()
 print(res.info)
 np.testing.assert_allclose(res[...], npc)
-print("Numba + NDArray expression evaluated correctly!")
+print("Numba + LazyArray evaluated correctly!")
