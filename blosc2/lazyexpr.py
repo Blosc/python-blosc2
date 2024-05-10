@@ -249,7 +249,7 @@ def evaluate_chunks_getitem(
     :ref:`NDArray` or np.ndarray
         The output array.
     """
-    basearr = operands["o0"] if not isinstance(out, blosc2.NDArray) else out
+    basearr = operands["o0"]
     shape = basearr.shape
     chunks = basearr.chunks
     # Iterate over the operands and get the chunks
@@ -364,8 +364,7 @@ def evaluate_chunks_eval(
             # We don't want to reshape the buffer (to better handle padding)
             npbuff = np.frombuffer(buff, dtype=value.dtype)
             if callable(expression):
-                # This is a bit tricky because the udf should handle multidim
-                # TODO: try to simplify this logic
+                # The udf should handle multidim
                 npbuff = npbuff.reshape(chunks_)
             chunk_operands[key] = npbuff
 
