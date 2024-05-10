@@ -10,6 +10,7 @@ import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from enum import Enum
+from pathlib import Path
 
 import numexpr as ne
 import numpy as np
@@ -879,7 +880,7 @@ class LazyUDF(LazyArray):
         raise NotImplementedError("For safety reasons, this is not implemented for UDFs")
 
 
-def _get_lazyarray(array):
+def _open_lazyarray(array):
     value = array.schunk.meta["LazyArray"]
     if value == LazyArrayEnum.UDF.value:
         raise NotImplementedError("For safety reasons, persistent UDFs are not supported")
@@ -887,9 +888,11 @@ def _get_lazyarray(array):
     # LazyExpr
     lazyarray = array.schunk.vlmeta["_LazyArray"]
     operands = lazyarray["operands"]
+    parent_path = Path(array.schunk.urlpath).parent
     operands_dict = {}
     for key, value in operands.items():
         if isinstance(value, str):
+            value = parent_path / value
             op = blosc2.open(value)
             operands_dict[key] = op
         else:

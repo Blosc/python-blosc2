@@ -934,7 +934,7 @@ def open(urlpath, mode="a", offset=0, **kwargs):
 
     Parameters
     ----------
-    urlpath: str
+    urlpath: str | pathlib.Path
         The path where the :ref:`SChunk <SChunk>` (or :ref:`NDArray <NDArray>`)
         is stored.
     mode: str, optional
@@ -998,6 +998,6 @@ def open(urlpath, mode="a", offset=0, **kwargs):
 
     res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
     if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
-        return blosc2._get_lazyarray(res)
+        return blosc2._open_lazyarray(res)
     else:
         return res
