@@ -328,6 +328,24 @@ def test_contains(values):
     np.testing.assert_array_equal(res_lazyexpr[:], res_numexpr)
 
 
+def test_negate(dtype_fixture, shape_fixture):
+    nelems = np.prod(shape_fixture)
+    na1 = np.linspace(-1, 1, nelems, dtype=dtype_fixture).reshape(shape_fixture)
+    a1 = blosc2.asarray(na1)
+
+    # Test with a single NDArray
+    expr = -a1
+    res_lazyexpr = expr.eval()
+    res_np = -na1
+    np.testing.assert_allclose(res_lazyexpr[:], res_np)
+
+    # Test with a proper expression
+    expr = -(a1 + 2)
+    res_lazyexpr = expr.eval()
+    res_np = -(na1 + 2)
+    np.testing.assert_allclose(res_lazyexpr[:], res_np)
+
+
 def test_params(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 - a3 * a4

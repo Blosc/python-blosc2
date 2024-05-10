@@ -697,9 +697,8 @@ class LazyExpr(LazyArray):
         self._shape = shape
         return shape
 
-    # TODO: add a test for this
     def __neg__(self):
-        return self.update_expr(new_op=(self, "-", 0))
+        return self.update_expr(new_op=(0, "-", self))
 
     def __add__(self, value):
         return self.update_expr(new_op=(self, "+", value))
