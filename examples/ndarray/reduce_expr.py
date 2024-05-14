@@ -25,37 +25,22 @@ b = blosc2.asarray(npb)
 # Get a LazyExpr instance
 c = a**2 + b**2 + 2 * a * b + 1
 # Evaluate: output is a NDArray
-d = c.eval()
+# d = c.sum(axis=1)
+# d = blosc2.sum(c, axis=1)
+d = (blosc2.sum(c, axis=1) + blosc2.sum(a, axis=0)).eval()
 # Check
 assert isinstance(d, blosc2.NDArray)
-assert np.allclose(d[:], npc)
+sum = d[()]
+print(sum)
+# npsum = npc.sum(axis=1)
+# npsum = np.sum(npc, axis=1)
+npsum = np.sum(npc, axis=1) + np.sum(npa, axis=0)
+assert np.allclose(sum, npsum)
 
-# Evaluate the whole slice: output is a NumPy array
-npd = c[:]
-# Check
-assert isinstance(npd, np.ndarray)
-assert np.allclose(npd, npc)
-
-# Evaluate a partial slice: output is a NumPy array
-npd = c[1:10]
-# Check
-assert isinstance(npd, np.ndarray)
-assert np.allclose(npd, npc[1:10])
-
-print("NDArray expression evaluated correctly in-memory!")
-
-# Now, evaluate the expression from operands in disk
-# TODO: when doing a copy, mode should be 'w' by default?
-da = a.copy(urlpath="a.b2nd", mode="w")
-db = b.copy(urlpath="b.b2nd", mode="w")
-
-# Get a LazyExpr instance
-(da**2 + db**2 + 2 * da * db + 1).save(urlpath="c.b2nd")
-dc = blosc2.open("c.b2nd")
-
-# Evaluate: output is a NDArray
-dc2 = dc.eval()
-# Check
-assert isinstance(dc2, blosc2.NDArray)
-assert np.allclose(dc2[:], npc)
-print("NDArray expression evaluated correctly on-disk!")
+# # Evaluate a slice: output is a NumPy array
+# npd = c[:]
+# # Check
+# assert isinstance(npd, np.ndarray)
+# assert np.allclose(npd, npc)
+#
+# print("NDArray expression evaluated correctly in-memory!")

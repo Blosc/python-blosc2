@@ -179,6 +179,7 @@ from .ndarray import (  # noqa: I001
     uninit,
     zeros,
     get_slice_nchunks,
+    sum,
     sin,
     cos,
     tan,

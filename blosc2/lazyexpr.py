@@ -472,8 +472,112 @@ def evaluate_slices(
     return out
 
 
+def sum_slices(
+    expression: str | Callable, operands: dict, sum_args, _slice=None, **kwargs
+) -> blosc2.NDArray | np.ndarray:
+    """Evaluate the expression in chunks of operands.
+
+    This can be used when the operands in the expression have different chunk shapes.
+    Also, it can be used when only a slice of the output array is needed.
+
+    Parameters
+    ----------
+    expression: str or callable
+        The expression or udf to evaluate.
+    operands: dict
+        A dictionary with the operands.
+    sum_args: dict
+        A dictionary with the arguments to be passed to np.sum.
+    _slice: slice, list of slices, optional
+        If not None, only the chunks that intersect with this slice
+        will be evaluated.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    :ref:`NDArray` or np.ndarray
+        The output array.
+    """
+    getitem = kwargs.pop("_getitem", False)
+    out = kwargs.pop("_output", None)
+    axis = sum_args["axis"]
+    # Choose the first NDArray as the reference for shape and chunks
+    operand = [o for o in operands.values() if isinstance(o, blosc2.NDArray)][0]
+    shape = operand.shape
+    if axis is None:
+        axis = tuple(range(len(shape)))
+    elif not isinstance(axis, tuple):
+        axis = (axis,)
+    reduced_shape = tuple(s for i, s in enumerate(shape) if i not in axis)
+    chunks = operand.chunks
+    for info in operand.iterchunks_info():
+        # Iterate over the operands and get the chunks
+        chunk_operands = {}
+        # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
+        slice_ = tuple(
+            slice(c * s, min((c + 1) * s, shape[i]))
+            for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
+        )
+        reduced_slice = tuple(sl for i, sl in enumerate(slice_) if i not in axis)
+        offset = tuple(s.start for s in slice_)  # offset for the udf
+        # Check whether current slice_ intersects with _slice
+        if _slice is not None:
+            intersects = do_slices_intersect(_slice, slice_)
+            if not intersects:
+                continue
+        slice_shape = tuple(s.stop - s.start for s in slice_)
+        # reduced_slice_shape = tuple(s.stop - s.start for s in reduced_slice)
+        if len(slice_) == 1:
+            slice_ = slice_[0]
+        else:
+            slice_ = tuple(slice_)
+        if len(reduced_slice) == 1:
+            reduced_slice = reduced_slice[0]
+        else:
+            reduced_slice = tuple(reduced_slice)
+        # Get the slice of each operand
+        for key, value in operands.items():
+            if np.isscalar(value):
+                chunk_operands[key] = value
+                continue
+            chunk_operands[key] = value[slice_]
+
+        # Evaluate and reduce the expression using chunks of operands
+
+        if callable(expression):
+            result = np.empty(slice_shape, dtype=out.dtype)
+            expression(tuple(chunk_operands.values()), result, offset=offset)
+            # Reduce the result
+            result = np.sum(result, **sum_args)
+            # Update the output array with the result
+            out[reduced_slice] += result
+            continue
+
+        result = ne.evaluate(expression, chunk_operands)
+        dtype = sum_args["dtype"]
+        if dtype is None:
+            dtype = result.dtype
+        if out is None:
+            if getitem:
+                out = np.zeros(reduced_shape, dtype=dtype)
+            else:
+                out = blosc2.zeros(reduced_shape, dtype=dtype, **kwargs)
+        # Reduce the result
+        result = np.sum(result, **sum_args)
+        # Update the output array with the result
+        out[reduced_slice] += result
+
+    return out
+
+
 def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs):
     shape, dtype_, equal_chunks, equal_blocks = validate_inputs(operands)
+
+    sum_args = kwargs.pop("_sum_args", {})
+    if sum_args:
+        # Eval and reduce the expression in a single step
+        return sum_slices(expression, operands, sum_args=sum_args, _slice=item, **kwargs)
 
     if item is not None and item != slice(None, None, None):
         return evaluate_slices(expression, operands, _slice=item, **kwargs)
@@ -772,6 +876,18 @@ class LazyExpr(LazyArray):
 
     def __ge__(self, value):
         return self.update_expr(new_op=(self, ">=", value))
+
+    def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
+        # sum is a special case because it is a reduction operation
+        # we need to evaluate the expression and then call the sum method
+        # of the resulting array
+        sum_args = {
+            "axis": axis,
+            "dtype": dtype,
+            "keepdims": keepdims,
+        }
+        result = self.eval(_sum_args=sum_args, **kwargs)
+        return result
 
     def eval(self, item=None, **kwargs) -> blosc2.NDArray:
         return chunked_eval(self.expression, self.operands, item, **kwargs)

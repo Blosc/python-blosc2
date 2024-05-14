@@ -480,6 +480,74 @@ class NDArray(blosc2_ext.NDArray):
         self._check_allowed_dtypes(value, "numeric", "__rpow__")
         return blosc2.LazyExpr(new_op=(value, "**", self))
 
+    def sum(self, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
+        """
+        Sum of array elements over a given axis.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints, optional
+            Axis or axes along which a sum is performed. The default, axis=None,
+            will sum all the elements of the input array. If axis is negative
+            it counts from the last to the first axis.
+        dtype: np.dtype, optional
+            The type of the returned array and of the accumulator in which the
+            elements are summed. The dtype of a is used by default unless a has
+            an integer dtype of less precision than the default platform integer.
+        keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result
+            as dimensions with size one. With this option, the result will broadcast
+            correctly against the input array.
+        kwargs: dict, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
+
+        Returns
+        -------
+        sum_along_axis: :ref:`NDArray`
+            A NDArray with the sum of the elements along the axis.
+
+        References
+        ----------
+        `np.sum <https://numpy.org/doc/stable/reference/generated/numpy.sum.html>`_
+        """
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
+
+def sum(ndarr: NDArray, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
+    """
+    Sum of array elements over a given axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` | :ref:`LazyExpr`
+            The input array or expression.
+    axis: int or tuple of ints, optional
+            Axis or axes along which a sum is performed. The default, axis=None,
+            will sum all the elements of the input array. If axis is negative
+            it counts from the last to the first axis.
+    dtype: np.dtype, optional
+            The type of the returned array and of the accumulator in which the
+            elements are summed. The dtype of a is used by default unless a has
+            an integer dtype of less precision than the default platform integer.
+    keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result
+            as dimensions with size one. With this option, the result will broadcast
+            correctly against the input array.
+    kwargs: dict, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    sum_along_axis: :ref:`NDArray`
+            A NDArray with the sum of the elements along the axis.
+
+    References
+    ----------
+    `np.sum <https://numpy.org/doc/stable/reference/generated/numpy.sum.html>`_
+    """
+    return ndarr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
 
 def sin(ndarr: NDArray, /):
     """
