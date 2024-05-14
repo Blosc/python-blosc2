@@ -502,6 +502,7 @@ def sum_slices(
     getitem = kwargs.pop("_getitem", False)
     out = kwargs.pop("_output", None)
     axis = sum_args["axis"]
+    keepdims = sum_args["keepdims"]
     # Choose the first NDArray as the reference for shape and chunks
     operand = [o for o in operands.values() if isinstance(o, blosc2.NDArray)][0]
     shape = operand.shape
@@ -509,7 +510,10 @@ def sum_slices(
         axis = tuple(range(len(shape)))
     elif not isinstance(axis, tuple):
         axis = (axis,)
-    reduced_shape = tuple(s for i, s in enumerate(shape) if i not in axis)
+    if keepdims:
+        reduced_shape = tuple(1 if i in axis else s for i, s in enumerate(shape))
+    else:
+        reduced_shape = tuple(s for i, s in enumerate(shape) if i not in axis)
     chunks = operand.chunks
     for info in operand.iterchunks_info():
         # Iterate over the operands and get the chunks
@@ -519,7 +523,10 @@ def sum_slices(
             slice(c * s, min((c + 1) * s, shape[i]))
             for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
         )
-        reduced_slice = tuple(sl for i, sl in enumerate(slice_) if i not in axis)
+        if keepdims:
+            reduced_slice = tuple(slice(None) if i in axis else sl for i, sl in enumerate(slice_))
+        else:
+            reduced_slice = tuple(sl for i, sl in enumerate(slice_) if i not in axis)
         offset = tuple(s.start for s in slice_)  # offset for the udf
         # Check whether current slice_ intersects with _slice
         if _slice is not None:

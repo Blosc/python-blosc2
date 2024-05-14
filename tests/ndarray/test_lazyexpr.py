@@ -368,6 +368,46 @@ def test_params(array_fixture):
     blosc2.remove_urlpath(urlpath)
 
 
+def test_sum(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1 + a2 - a3 * a4
+    res = expr.sum()
+    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    tol = 1e-15 if a1.dtype == "float64" else 1e-6
+    np.testing.assert_allclose(res[()], nres.sum(), atol=tol, rtol=tol)
+
+
+# Tests related with sum method
+
+
+@pytest.mark.parametrize("axis", [0, 1, None])
+@pytest.mark.parametrize("keepdims", [True, False])
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_sum_params(array_fixture, axis, keepdims, dtype):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    if axis is not None and len(a1.shape) >= axis:
+        return
+    expr = a1 + a2 - a3 * a4
+    res = expr.sum(axis=axis, keepdims=keepdims, dtype=dtype)
+    nres = eval("na1 + na2 - na3 * na4")
+    nres = nres.sum(axis=axis, keepdims=keepdims, dtype=dtype)
+    tol = 1e-15 if dtype == "float64" else 1e-6
+    np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
+
+
+@pytest.mark.parametrize("axis", [0, 1, None])
+def test_sum_expr_arr(array_fixture, axis):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    if axis is not None and len(a1.shape) >= axis:
+        return
+    expr = a1 + a2 - a3 * a4
+    res = expr.sum(axis=axis) + a1.sum(axis=axis)
+    nres = eval("na1 + na2 - na3 * na4")
+    nres = nres.sum(axis=axis) + na1.sum(axis=axis)
+    tol = 1e-15 if a1.dtype == "float64" else 1e-6
+    np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
+
+
 # Tests related with save method
 def test_save():
     tol = 1e-17
