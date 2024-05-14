@@ -515,9 +515,10 @@ def sum_slices(
     else:
         reduced_shape = tuple(s for i, s in enumerate(shape) if i not in axis)
     chunks = operand.chunks
+
+    # Iterate over the operands and get the chunks
+    chunk_operands = {}
     for info in operand.iterchunks_info():
-        # Iterate over the operands and get the chunks
-        chunk_operands = {}
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
@@ -562,6 +563,8 @@ def sum_slices(
             continue
 
         result = ne.evaluate(expression, chunk_operands)
+        # Reduce the result
+        result = np.sum(result, **sum_args)
         dtype = sum_args["dtype"]
         if dtype is None:
             dtype = result.dtype
@@ -570,8 +573,6 @@ def sum_slices(
                 out = np.zeros(reduced_shape, dtype=dtype)
             else:
                 out = blosc2.zeros(reduced_shape, dtype=dtype, **kwargs)
-        # Reduce the result
-        result = np.sum(result, **sum_args)
         # Update the output array with the result
         out[reduced_slice] += result
 

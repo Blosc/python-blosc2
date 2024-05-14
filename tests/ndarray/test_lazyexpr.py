@@ -368,16 +368,16 @@ def test_params(array_fixture):
     blosc2.remove_urlpath(urlpath)
 
 
-def test_sum(array_fixture):
+# Tests related with sum method
+
+
+def test_sum_bool(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    expr = a1 + a2 - a3 * a4
+    expr = a1 + a2 > a3 * a4
     res = expr.sum()
-    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    nres = ne.evaluate("na1 + na2 > na3 * na4")
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
     np.testing.assert_allclose(res[()], nres.sum(), atol=tol, rtol=tol)
-
-
-# Tests related with sum method
 
 
 @pytest.mark.parametrize("axis", [0, 1, None])
