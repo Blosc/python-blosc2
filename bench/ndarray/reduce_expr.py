@@ -26,7 +26,7 @@ rtol = 1e-5 if dtype == np.float32 else 1e-16
 atol = 1e-5 if dtype == np.float32 else 1e-16
 
 # Axis to reduce
-laxis = (None, 0, 1, (0, 1))
+laxis = (None, 0, 1, 2, (0, 2))
 
 # cparams defaults
 blosc2.cparams_dflts["codec"] = blosc2.Codec.LZ4
@@ -42,7 +42,7 @@ y = blosc2.asarray(npy, chunks=chunks, blocks=blocks)
 z = blosc2.asarray(npz, chunks=chunks, blocks=blocks)
 b2vardict = {"x": x, "y": y, "z": z, "blosc2": blosc2}
 
-expr = "sin(x)**2 + cos(y)**2 < 1"
+expr = "(x**2 + y**2 * z** 2) < 1"
 
 
 for n, axis in enumerate(laxis):
