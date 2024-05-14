@@ -324,9 +324,9 @@ def evaluate_chunks_eval(
     basearr = operands["o0"] if not isinstance(out, blosc2.NDArray) else out
     shape = basearr.shape
     chunks = basearr.chunks
+    # Iterate over the operands and get the chunks
+    chunk_operands = {}
     for info in basearr.iterchunks_info():
-        # Iterate over the operands and get the chunks
-        chunk_operands = {}
         # TODO: try to optimize for the sparse case
         # is_special = info.special
         # if is_special == blosc2.SpecialValue.ZERO:
@@ -360,13 +360,17 @@ def evaluate_chunks_eval(
             #     # continue
             #     pass
 
-            buff = value.schunk.decompress_chunk(info.nchunk)
-            # We don't want to reshape the buffer (to better handle padding)
-            npbuff = np.frombuffer(buff, dtype=value.dtype)
-            if callable(expression):
-                # The udf should handle multidim
-                npbuff = npbuff.reshape(chunks_)
-            chunk_operands[key] = npbuff
+            if key in chunk_operands:
+                # We already have a buffer for this operand
+                value.schunk.decompress_chunk(info.nchunk, dst=chunk_operands[key])
+            else:
+                buff = value.schunk.decompress_chunk(info.nchunk)
+                # We don't want to reshape the buffer (to better handle padding)
+                npbuff = np.frombuffer(buff, dtype=value.dtype)
+                if callable(expression):
+                    # The udf should handle multidim
+                    npbuff = npbuff.reshape(chunks_)
+                chunk_operands[key] = npbuff
 
         if callable(expression):
             result = np.empty_like(npbuff, dtype=out.dtype)
