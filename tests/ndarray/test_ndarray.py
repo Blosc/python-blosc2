@@ -44,3 +44,13 @@ def test_ndarray_cframe(contiguous, urlpath, cparams, dparams, nchunks, copy):
     _ = str(cframe)
 
     blosc2.remove_urlpath(urlpath)
+
+
+# steps != 1 are not supported yet
+@pytest.mark.parametrize("steps", [0, 2, 3, 40])
+def test_ndarray_steps(steps):
+    data = np.arange(200 * 1000, dtype="int32")
+    ndarray = blosc2.asarray(data)
+
+    with pytest.raises(ValueError):
+        _ = ndarray[::steps]
