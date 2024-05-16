@@ -253,12 +253,15 @@ def evaluate_chunks_getitem(
     shape = basearr.shape
     chunks = basearr.chunks
     # Iterate over the operands and get the chunks
-    for info in basearr.iterchunks_info():
+    chunks_idx = np.array(basearr.ext_shape) // np.array(chunks)
+    # Iterate over the operands and get the chunks
+    for nchunk in range(basearr.schunk.nchunks):
+        coords = tuple(np.unravel_index(nchunk, chunks_idx))
         chunk_operands = {}
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
-            for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
+            for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
         offset = tuple(s.start for s in slice_)  # offset for the udf
         chunks_ = tuple(s.stop - s.start for s in slice_)
@@ -277,7 +280,7 @@ def evaluate_chunks_getitem(
                 npbuff = value[slice_]
             else:
                 # Fast path for full chunks
-                buff = value.schunk.decompress_chunk(info.nchunk)
+                buff = value.schunk.decompress_chunk(nchunk)
                 bsize = value.dtype.itemsize * math.prod(chunks_)
                 npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
             chunk_operands[key] = npbuff
@@ -326,7 +329,11 @@ def evaluate_chunks_eval(
     chunks = basearr.chunks
     # Iterate over the operands and get the chunks
     chunk_operands = {}
-    for info in basearr.iterchunks_info():
+    chunks_idx = np.array(basearr.ext_shape) // np.array(chunks)
+    # Iterate over the operands and get the chunks
+    for nchunk in range(basearr.schunk.nchunks):
+        coords = tuple(np.unravel_index(nchunk, chunks_idx))
+
         # TODO: try to optimize for the sparse case
         # is_special = info.special
         # if is_special == blosc2.SpecialValue.ZERO:
@@ -336,7 +343,7 @@ def evaluate_chunks_eval(
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
-            for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
+            for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
         offset = tuple(s.start for s in slice_)  # offset for the udf
         chunks_ = tuple(s.stop - s.start for s in slice_)
@@ -362,9 +369,9 @@ def evaluate_chunks_eval(
 
             if key in chunk_operands:
                 # We already have a buffer for this operand
-                value.schunk.decompress_chunk(info.nchunk, dst=chunk_operands[key])
+                value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
             else:
-                buff = value.schunk.decompress_chunk(info.nchunk)
+                buff = value.schunk.decompress_chunk(nchunk)
                 # We don't want to reshape the buffer (to better handle padding)
                 npbuff = np.frombuffer(buff, dtype=value.dtype)
                 if callable(expression):
@@ -375,7 +382,7 @@ def evaluate_chunks_eval(
         if callable(expression):
             result = np.empty_like(npbuff, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
-            out.schunk.update_data(info.nchunk, result, copy=False)
+            out.schunk.update_data(nchunk, result, copy=False)
             continue
 
         # Evaluate the expression using chunks of operands
@@ -386,7 +393,7 @@ def evaluate_chunks_eval(
                 shape, chunks=basearr.chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs
             )
         # Update the output array with the result
-        out.schunk.update_data(info.nchunk, result, copy=False)
+        out.schunk.update_data(nchunk, result, copy=False)
 
     return out
 
@@ -422,13 +429,15 @@ def evaluate_slices(
     operand = [o for o in operands.values() if isinstance(o, blosc2.NDArray)][0]
     shape = operand.shape
     chunks = operand.chunks
-    for info in operand.iterchunks_info():
-        # Iterate over the operands and get the chunks
+    chunks_idx = np.array(operand.ext_shape) // np.array(chunks)
+    # Iterate over the operands and get the chunks
+    for nchunk in range(operand.schunk.nchunks):
+        coords = tuple(np.unravel_index(nchunk, chunks_idx))
         chunk_operands = {}
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
-            for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
+            for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
         offset = tuple(s.start for s in slice_)  # offset for the udf
         # Check whether current slice_ intersects with _slice
@@ -522,11 +531,14 @@ def sum_slices(
 
     # Iterate over the operands and get the chunks
     chunk_operands = {}
-    for info in operand.iterchunks_info():
+    chunks_idx = np.array(operand.ext_shape) // np.array(chunks)
+    # Iterate over the operands and get the chunks
+    for nchunk in range(operand.schunk.nchunks):
+        coords = tuple(np.unravel_index(nchunk, chunks_idx))
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
-            for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
+            for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
         if keepdims:
             reduced_slice = tuple(slice(None) if i in axis else sl for i, sl in enumerate(slice_))
