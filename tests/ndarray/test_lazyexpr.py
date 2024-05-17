@@ -371,7 +371,7 @@ def test_params(array_fixture):
 # Tests related with sum method
 
 
-@pytest.mark.parametrize("reduce_op", ["sum", "min"])
+@pytest.mark.parametrize("reduce_op", ["sum", "min", "max"])
 def test_reduce_bool(array_fixture, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 > a3 * a4
@@ -382,7 +382,7 @@ def test_reduce_bool(array_fixture, reduce_op):
     np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
 
 
-@pytest.mark.parametrize("reduce_op", ["sum", "min"])
+@pytest.mark.parametrize("reduce_op", ["sum", "min", "max"])
 @pytest.mark.parametrize("axis", [0, 1, None])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize("dtype", [np.int16, np.float32, np.float64])
@@ -402,7 +402,7 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype, reduce_op):
     np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
 
 
-@pytest.mark.parametrize("reduce_op", ["sum", "min"])
+@pytest.mark.parametrize("reduce_op", ["sum", "min", "max"])
 @pytest.mark.parametrize("axis", [0, 1, None])
 def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture

@@ -25,12 +25,12 @@ class ReduceOp(Enum):
     """
 
     SUM = np.add
-    PROD = 1
-    MEAN = 2
-    MAX = 3
+    PROD = np.multiply
+    MEAN = np.mean
+    MAX = np.maximum
     MIN = np.minimum
-    ANY = 5
-    ALL = 6
+    ANY = np.any
+    ALL = np.all
 
 
 class LazyArrayEnum(Enum):
@@ -607,6 +607,11 @@ def reduce_slices(
                     out = blosc2.full(reduced_shape, np.iinfo(dtype).max, dtype=dtype, **kwargs)
                 else:
                     out = blosc2.full(reduced_shape, np.inf, dtype=dtype, **kwargs)
+            elif reduce_op == ReduceOp.MAX:
+                if np.issubdtype(dtype, np.integer):
+                    out = blosc2.full(reduced_shape, np.iinfo(dtype).min, dtype=dtype, **kwargs)
+                else:
+                    out = blosc2.full(reduced_shape, -np.inf, dtype=dtype, **kwargs)
         # Update the output array with the result
         out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
 
@@ -920,9 +925,7 @@ class LazyExpr(LazyArray):
         return self.update_expr(new_op=(self, ">=", value))
 
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
-        # sum is a special case because it is a reduction operation
-        # we need to evaluate the expression and then call the sum method
-        # of the resulting array
+        # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.SUM,
             "axis": axis,
@@ -933,7 +936,7 @@ class LazyExpr(LazyArray):
         return result
 
     def min(self, axis=None, keepdims=False, **kwargs):
-        # min is a reduction operation too. See sum method for more details.
+        # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.MIN,
             "axis": axis,
@@ -941,6 +944,18 @@ class LazyExpr(LazyArray):
         }
         if "dtype" in kwargs:
             raise ValueError("dtype is not supported for min method")
+        result = self.eval(_reduce_args=reduce_args, **kwargs)
+        return result
+
+    def max(self, axis=None, keepdims=False, **kwargs):
+        # Always evaluate the expression prior the reduction
+        reduce_args = {
+            "op": ReduceOp.MAX,
+            "axis": axis,
+            "keepdims": keepdims,
+        }
+        if "dtype" in kwargs:
+            raise ValueError("dtype is not supported for max method")
         result = self.eval(_reduce_args=reduce_args, **kwargs)
         return result
 

@@ -538,6 +538,31 @@ class NDArray(blosc2_ext.NDArray):
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.min(axis=axis, keepdims=keepdims, **kwargs)
 
+    def max(self, axis=None, keepdims=False, **kwargs):
+        """
+        Return the maximum along a given axis.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints, optional
+            Axis or axes along which to operate. By default, flattened input is used.
+        keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result
+            as dimensions with size one. With this option, the result will broadcast
+            correctly against the input array.
+
+        Returns
+        -------
+        max_along_axis: :ref:`NDArray`
+            A NDArray with the maximum of the elements along the axis.
+
+        References
+        ----------
+        `np.max <https://numpy.org/doc/stable/reference/generated/numpy.max.html>`_
+        """
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.max(axis=axis, keepdims=keepdims, **kwargs)
+
 
 def sum(ndarr: NDArray, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
     """
@@ -599,6 +624,33 @@ def min(ndarr: NDArray, axis=None, keepdims=False, **kwargs):
     `np.min <https://numpy.org/doc/stable/reference/generated/numpy.min.html>`_
     """
     return ndarr.min(axis=axis, keepdims=keepdims, **kwargs)
+
+
+def max(ndarr: NDArray, axis=None, keepdims=False, **kwargs):
+    """
+    Return the maximum along a given axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` | :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which to operate. By default, flattened input is used.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result as
+        dimensions with size one. With this option, the result will broadcast correctly
+        against the input array.
+
+    Returns
+    -------
+    max_along_axis: :ref:`NDArray`
+        A NDArray with the maximum of the elements along the axis.
+
+    References
+    ----------
+    `np.max <https://numpy.org/doc/stable/reference/generated/numpy.max.html>`_
+    """
+    return ndarr.max(axis=axis, keepdims=keepdims, **kwargs)
 
 
 def sin(ndarr: NDArray, /):
