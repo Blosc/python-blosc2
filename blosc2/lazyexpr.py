@@ -455,7 +455,7 @@ def evaluate_slices(
         )
         offset = tuple(s.start for s in slice_)  # offset for the udf
         # Check whether current slice_ intersects with _slice
-        if _slice is not None:
+        if _slice is not None and _slice != ():
             intersects = do_slices_intersect(_slice, slice_)
             if not intersects:
                 continue
@@ -950,6 +950,13 @@ class LazyExpr(LazyArray):
         }
         result = self.eval(_reduce_args=reduce_args, **kwargs)
         return result
+
+    def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
+        # Always evaluate the expression prior the reduction
+        total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+        num_elements = np.prod(self.shape) if axis is None else np.prod([self.shape[i] for i in axis])
+        print(total_sum, num_elements)
+        return total_sum / num_elements
 
     def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction

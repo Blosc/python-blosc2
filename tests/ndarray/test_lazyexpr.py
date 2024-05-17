@@ -402,7 +402,7 @@ def test_reduce_bool(array_fixture, reduce_op):
     np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
 
 
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all"])
+@pytest.mark.parametrize("reduce_op", ["sum", "prod", "mean", "min", "max", "any", "all"])
 @pytest.mark.parametrize("axis", [0, 1, None])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize("dtype", [np.int16, np.float32, np.float64])
@@ -417,7 +417,9 @@ def test_reduce_params(array_fixture_light, axis, keepdims, dtype, reduce_op):
     else:
         expr = a1 + a2 - a3 * a4
         nres = eval("na1 + na2 - na3 * na4")
-    if reduce_op in ("sum", "prod"):
+    if reduce_op in ("sum", "prod", "mean"):
+        if reduce_op == "mean" and dtype == np.int16:
+            dtype = np.float64
         res = getattr(expr, reduce_op)(axis=axis, keepdims=keepdims, dtype=dtype)
         nres = getattr(nres, reduce_op)(axis=axis, keepdims=keepdims, dtype=dtype)
     else:
