@@ -24,11 +24,11 @@ class ReduceOp(Enum):
     Available reduce operations.
     """
 
-    SUM = 0
+    SUM = np.add
     PROD = 1
     MEAN = 2
     MAX = 3
-    MIN = 4
+    MIN = np.minimum
     ANY = 5
     ALL = 6
 
@@ -584,28 +584,19 @@ def reduce_slices(
         # Evaluate and reduce the expression using chunks of operands
 
         if callable(expression):
+            # TODO: Implement the reductions for UDFs (and test them)
             result = np.empty(slice_shape, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
             # Reduce the result
-            if reduce_op == ReduceOp.SUM:
-                result = np.sum(result, **reduce_args)
-            elif reduce_op == ReduceOp.MIN:
-                result = np.min(result, **reduce_args)
+            result = reduce_op.value.reduce(result, **reduce_args)
             # Update the output array with the result
-            if reduce_op == ReduceOp.SUM:
-                out[reduced_slice] += result
-            elif reduce_op == ReduceOp.MIN:
-                out[reduced_slice] = np.minimum(out[reduced_slice], result)
+            out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
             continue
 
         result = ne.evaluate(expression, chunk_operands)
         # Reduce the result
-        dtype = None
-        if reduce_op == ReduceOp.SUM:
-            result = np.sum(result, **reduce_args)
-            dtype = reduce_args["dtype"]
-        elif reduce_op == ReduceOp.MIN:
-            result = np.min(result, **reduce_args)
+        result = reduce_op.value.reduce(result, **reduce_args)
+        dtype = reduce_args["dtype"] if reduce_op == ReduceOp.SUM else None
         if dtype is None:
             dtype = result.dtype
         if out is None:
@@ -617,10 +608,7 @@ def reduce_slices(
                 else:
                     out = blosc2.full(reduced_shape, np.inf, dtype=dtype, **kwargs)
         # Update the output array with the result
-        if reduce_op == ReduceOp.SUM:
-            out[reduced_slice] += result
-        elif reduce_op == ReduceOp.MIN:
-            out[reduced_slice] = np.minimum(out[reduced_slice], result)
+        out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
 
     return out
 
