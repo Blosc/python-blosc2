@@ -595,7 +595,12 @@ def reduce_slices(
 
         result = ne.evaluate(expression, chunk_operands)
         # Reduce the result
-        result = reduce_op.value.reduce(result, **reduce_args)
+        if reduce_op == ReduceOp.ANY:
+            result = np.any(result, **reduce_args)
+        elif reduce_op == ReduceOp.ALL:
+            result = np.all(result, **reduce_args)
+        else:
+            result = reduce_op.value.reduce(result, **reduce_args)
         dtype = reduce_args["dtype"] if reduce_op == ReduceOp.SUM else None
         if dtype is None:
             dtype = result.dtype
@@ -612,8 +617,17 @@ def reduce_slices(
                     out = blosc2.full(reduced_shape, np.iinfo(dtype).min, dtype=dtype, **kwargs)
                 else:
                     out = blosc2.full(reduced_shape, -np.inf, dtype=dtype, **kwargs)
+            elif reduce_op == ReduceOp.ANY:
+                out = blosc2.zeros(reduced_shape, dtype=np.bool_, **kwargs)
+            elif reduce_op == ReduceOp.ALL:
+                out = blosc2.full(reduced_shape, True, dtype=np.bool_, **kwargs)
         # Update the output array with the result
-        out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
+        if reduce_op == ReduceOp.ANY:
+            out[reduced_slice] += result
+        elif reduce_op == ReduceOp.ALL:
+            out[reduced_slice] *= result
+        else:
+            out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
 
     return out
 
@@ -956,6 +970,30 @@ class LazyExpr(LazyArray):
         }
         if "dtype" in kwargs:
             raise ValueError("dtype is not supported for max method")
+        result = self.eval(_reduce_args=reduce_args, **kwargs)
+        return result
+
+    def any(self, axis=None, keepdims=False, **kwargs):
+        # Always evaluate the expression prior the reduction
+        reduce_args = {
+            "op": ReduceOp.ANY,
+            "axis": axis,
+            "keepdims": keepdims,
+        }
+        if "dtype" in kwargs:
+            raise ValueError("dtype is not supported for any method")
+        result = self.eval(_reduce_args=reduce_args, **kwargs)
+        return result
+
+    def all(self, axis=None, keepdims=False, **kwargs):
+        # Always evaluate the expression prior the reduction
+        reduce_args = {
+            "op": ReduceOp.ALL,
+            "axis": axis,
+            "keepdims": keepdims,
+        }
+        if "dtype" in kwargs:
+            raise ValueError("dtype is not supported for all method")
         result = self.eval(_reduce_args=reduce_args, **kwargs)
         return result
 

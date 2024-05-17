@@ -563,6 +563,56 @@ class NDArray(blosc2_ext.NDArray):
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.max(axis=axis, keepdims=keepdims, **kwargs)
 
+    def any(self, axis=None, keepdims=False, **kwargs):
+        """
+        Test whether any array element along a given axis evaluates to True.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints, optional
+            Axis or axes along which to operate. By default, flattened input is used.
+        keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result as
+            dimensions with size one. With this option, the result will broadcast correctly
+            against the input array.
+
+        Returns
+        -------
+        any_along_axis: :ref:`NDArray`
+            A NDArray with the result of the evaluation along the axis.
+
+        References
+        ----------
+        `np.any <https://numpy.org/doc/stable/reference/generated/numpy.any.html>`_
+        """
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.any(axis=axis, keepdims=keepdims, **kwargs)
+
+    def all(self, axis=None, keepdims=False, **kwargs):
+        """
+        Test whether all array elements along a given axis evaluate to True.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints, optional
+            Axis or axes along which to operate. By default, flattened input is used.
+        keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result as
+            dimensions with size one. With this option, the result will broadcast correctly
+            against the input array.
+
+        Returns
+        -------
+        all_along_axis: :ref:`NDArray`
+            A NDArray with the result of the evaluation along the axis.
+
+        References
+        ----------
+        `np.all <https://numpy.org/doc/stable/reference/generated/numpy.all.html>`_
+        """
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.all(axis=axis, keepdims=keepdims, **kwargs)
+
 
 def sum(ndarr: NDArray, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
     """
@@ -651,6 +701,60 @@ def max(ndarr: NDArray, axis=None, keepdims=False, **kwargs):
     `np.max <https://numpy.org/doc/stable/reference/generated/numpy.max.html>`_
     """
     return ndarr.max(axis=axis, keepdims=keepdims, **kwargs)
+
+
+def any(ndarr: NDArray, axis=None, keepdims=False, **kwargs):
+    """
+    Test whether any array element along a given axis evaluates to True.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` | :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which to operate. By default, flattened input is used.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result as
+        dimensions with size one. With this option, the result will broadcast correctly
+        against the input array.
+
+    Returns
+    -------
+    any_along_axis: :ref:`NDArray`
+        A NDArray with the result of the evaluation along the axis.
+
+    References
+    ----------
+    `np.any <https://numpy.org/doc/stable/reference/generated/numpy.any.html>`_
+    """
+    return ndarr.any(axis=axis, keepdims=keepdims, **kwargs)
+
+
+def all(ndarr: NDArray, axis=None, keepdims=False, **kwargs):
+    """
+    Test whether all array elements along a given axis evaluate to True.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` | :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which to operate. By default, flattened input is used.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result as
+        dimensions with size one. With this option, the result will broadcast correctly
+        against the input array.
+
+    Returns
+    -------
+    all_along_axis: :ref:`NDArray`
+        A NDArray with the result of the evaluation along the axis.
+
+    References
+    ----------
+    `np.all <https://numpy.org/doc/stable/reference/generated/numpy.all.html>`_
+    """
+    return ndarr.all(axis=axis, keepdims=keepdims, **kwargs)
 
 
 def sin(ndarr: NDArray, /):

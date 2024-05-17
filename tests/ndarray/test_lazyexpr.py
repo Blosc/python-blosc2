@@ -391,7 +391,7 @@ def test_params(array_fixture):
 # Tests related with sum method
 
 
-@pytest.mark.parametrize("reduce_op", ["sum", "min", "max"])
+@pytest.mark.parametrize("reduce_op", ["sum", "min", "max", "any", "all"])
 def test_reduce_bool(array_fixture, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 > a3 * a4
@@ -402,7 +402,7 @@ def test_reduce_bool(array_fixture, reduce_op):
     np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
 
 
-@pytest.mark.parametrize("reduce_op", ["sum", "min", "max"])
+@pytest.mark.parametrize("reduce_op", ["sum", "min", "max", "any", "all"])
 @pytest.mark.parametrize("axis", [0, 1, None])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize("dtype", [np.int16, np.float32, np.float64])
@@ -422,6 +422,9 @@ def test_reduce_params(array_fixture_light, axis, keepdims, dtype, reduce_op):
     np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
 
 
+# TODO: "any" and "all" are not supported yet because:
+# ne.evaluate('(o0 + o1)', local_dict = {'o0': np.array(True), 'o1': np.array(True)})
+# is not supported by NumExpr
 @pytest.mark.parametrize("reduce_op", ["sum", "min", "max"])
 @pytest.mark.parametrize("axis", [0, 1, None])
 def test_reduce_expr_arr(array_fixture_light, axis, reduce_op):
@@ -431,9 +434,11 @@ def test_reduce_expr_arr(array_fixture_light, axis, reduce_op):
     expr = a1 + a2 - a3 * a4
     nres = eval("na1 + na2 - na3 * na4")
     res = getattr(expr, reduce_op)(axis=axis) + getattr(a1, reduce_op)(axis=axis)
+    print(f"res: {res}")
+    res = res[()]
     nres = getattr(nres, reduce_op)(axis=axis) + getattr(na1, reduce_op)(axis=axis)
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
-    np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
+    np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 
 # Tests related with save method
