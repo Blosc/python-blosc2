@@ -19,6 +19,20 @@ import blosc2
 from blosc2.info import InfoReporter
 
 
+class ReduceOp(Enum):
+    """
+    Available reduce operations.
+    """
+
+    SUM = 0
+    PROD = 1
+    MEAN = 2
+    MAX = 3
+    MIN = 4
+    ANY = 5
+    ALL = 6
+
+
 class LazyArrayEnum(Enum):
     """
     Available LazyArrays.
@@ -485,8 +499,8 @@ def evaluate_slices(
     return out
 
 
-def sum_slices(
-    expression: str | Callable, operands: dict, sum_args, _slice=None, **kwargs
+def reduce_slices(
+    expression: str | Callable, operands: dict, reduce_args, _slice=None, **kwargs
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
@@ -499,8 +513,8 @@ def sum_slices(
         The expression or udf to evaluate.
     operands: dict
         A dictionary with the operands.
-    sum_args: dict
-        A dictionary with the arguments to be passed to np.sum.
+    reduce_args: dict
+        A dictionary with some of the arguments to be passed to np.reduce.
     _slice: slice, list of slices, optional
         If not None, only the chunks that intersect with this slice
         will be evaluated.
@@ -512,10 +526,10 @@ def sum_slices(
     :ref:`NDArray` or np.ndarray
         The output array.
     """
-    getitem = kwargs.pop("_getitem", False)
     out = kwargs.pop("_output", None)
-    axis = sum_args["axis"]
-    keepdims = sum_args["keepdims"]
+    reduce_op = reduce_args.pop("op")
+    axis = reduce_args["axis"]
+    keepdims = reduce_args["keepdims"]
     # Choose the first NDArray as the reference for shape and chunks
     operand = [o for o in operands.values() if isinstance(o, blosc2.NDArray)][0]
     shape = operand.shape
@@ -573,24 +587,40 @@ def sum_slices(
             result = np.empty(slice_shape, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
             # Reduce the result
-            result = np.sum(result, **sum_args)
+            if reduce_op == ReduceOp.SUM:
+                result = np.sum(result, **reduce_args)
+            elif reduce_op == ReduceOp.MIN:
+                result = np.min(result, **reduce_args)
             # Update the output array with the result
-            out[reduced_slice] += result
+            if reduce_op == ReduceOp.SUM:
+                out[reduced_slice] += result
+            elif reduce_op == ReduceOp.MIN:
+                out[reduced_slice] = np.minimum(out[reduced_slice], result)
             continue
 
         result = ne.evaluate(expression, chunk_operands)
         # Reduce the result
-        result = np.sum(result, **sum_args)
-        dtype = sum_args["dtype"]
+        dtype = None
+        if reduce_op == ReduceOp.SUM:
+            result = np.sum(result, **reduce_args)
+            dtype = reduce_args["dtype"]
+        elif reduce_op == ReduceOp.MIN:
+            result = np.min(result, **reduce_args)
         if dtype is None:
             dtype = result.dtype
         if out is None:
-            if getitem:
-                out = np.zeros(reduced_shape, dtype=dtype)
-            else:
+            if reduce_op == ReduceOp.SUM:
                 out = blosc2.zeros(reduced_shape, dtype=dtype, **kwargs)
+            elif reduce_op == ReduceOp.MIN:
+                if np.issubdtype(dtype, np.integer):
+                    out = blosc2.full(reduced_shape, np.iinfo(dtype).max, dtype=dtype, **kwargs)
+                else:
+                    out = blosc2.full(reduced_shape, np.inf, dtype=dtype, **kwargs)
         # Update the output array with the result
-        out[reduced_slice] += result
+        if reduce_op == ReduceOp.SUM:
+            out[reduced_slice] += result
+        elif reduce_op == ReduceOp.MIN:
+            out[reduced_slice] = np.minimum(out[reduced_slice], result)
 
     return out
 
@@ -598,10 +628,10 @@ def sum_slices(
 def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs):
     shape, dtype_, equal_chunks, equal_blocks = validate_inputs(operands)
 
-    sum_args = kwargs.pop("_sum_args", {})
-    if sum_args:
+    reduce_args = kwargs.pop("_reduce_args", {})
+    if reduce_args:
         # Eval and reduce the expression in a single step
-        return sum_slices(expression, operands, sum_args=sum_args, _slice=item, **kwargs)
+        return reduce_slices(expression, operands, reduce_args=reduce_args, _slice=item, **kwargs)
 
     if item is not None and item != slice(None, None, None):
         return evaluate_slices(expression, operands, _slice=item, **kwargs)
@@ -905,12 +935,25 @@ class LazyExpr(LazyArray):
         # sum is a special case because it is a reduction operation
         # we need to evaluate the expression and then call the sum method
         # of the resulting array
-        sum_args = {
+        reduce_args = {
+            "op": ReduceOp.SUM,
             "axis": axis,
             "dtype": dtype,
             "keepdims": keepdims,
         }
-        result = self.eval(_sum_args=sum_args, **kwargs)
+        result = self.eval(_reduce_args=reduce_args, **kwargs)
+        return result
+
+    def min(self, axis=None, keepdims=False, **kwargs):
+        # min is a reduction operation too. See sum method for more details.
+        reduce_args = {
+            "op": ReduceOp.MIN,
+            "axis": axis,
+            "keepdims": keepdims,
+        }
+        if "dtype" in kwargs:
+            raise ValueError("dtype is not supported for min method")
+        result = self.eval(_reduce_args=reduce_args, **kwargs)
         return result
 
     def eval(self, item=None, **kwargs) -> blosc2.NDArray:

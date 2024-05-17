@@ -371,39 +371,47 @@ def test_params(array_fixture):
 # Tests related with sum method
 
 
-def test_sum_bool(array_fixture):
+@pytest.mark.parametrize("reduce_op", ["sum", "min"])
+def test_reduce_bool(array_fixture, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 > a3 * a4
-    res = expr.sum()
     nres = ne.evaluate("na1 + na2 > na3 * na4")
+    res = getattr(expr, reduce_op)()
+    nres = getattr(nres, reduce_op)()
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
-    np.testing.assert_allclose(res[()], nres.sum(), atol=tol, rtol=tol)
+    np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
 
 
+@pytest.mark.parametrize("reduce_op", ["sum", "min"])
 @pytest.mark.parametrize("axis", [0, 1, None])
 @pytest.mark.parametrize("keepdims", [True, False])
-@pytest.mark.parametrize("dtype", [np.float32, np.float64])
-def test_sum_params(array_fixture, axis, keepdims, dtype):
+@pytest.mark.parametrize("dtype", [np.int16, np.float32, np.float64])
+def test_reduce_params(array_fixture, axis, keepdims, dtype, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     if axis is not None and len(a1.shape) >= axis:
         return
     expr = a1 + a2 - a3 * a4
-    res = expr.sum(axis=axis, keepdims=keepdims, dtype=dtype)
     nres = eval("na1 + na2 - na3 * na4")
-    nres = nres.sum(axis=axis, keepdims=keepdims, dtype=dtype)
+    if reduce_op == "sum":
+        res = getattr(expr, reduce_op)(axis=axis, keepdims=keepdims, dtype=dtype)
+        nres = getattr(nres, reduce_op)(axis=axis, keepdims=keepdims, dtype=dtype)
+    else:
+        res = getattr(expr, reduce_op)(axis=axis, keepdims=keepdims)
+        nres = getattr(nres, reduce_op)(axis=axis, keepdims=keepdims)
     tol = 1e-15 if dtype == "float64" else 1e-6
     np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
 
 
+@pytest.mark.parametrize("reduce_op", ["sum", "min"])
 @pytest.mark.parametrize("axis", [0, 1, None])
-def test_sum_expr_arr(array_fixture, axis):
+def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     if axis is not None and len(a1.shape) >= axis:
         return
     expr = a1 + a2 - a3 * a4
-    res = expr.sum(axis=axis) + a1.sum(axis=axis)
     nres = eval("na1 + na2 - na3 * na4")
-    nres = nres.sum(axis=axis) + na1.sum(axis=axis)
+    res = getattr(expr, reduce_op)(axis=axis) + getattr(a1, reduce_op)(axis=axis)
+    nres = getattr(nres, reduce_op)(axis=axis) + getattr(na1, reduce_op)(axis=axis)
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
     np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
 

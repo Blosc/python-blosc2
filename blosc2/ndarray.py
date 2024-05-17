@@ -513,6 +513,31 @@ class NDArray(blosc2_ext.NDArray):
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
+    def min(self, axis=None, keepdims=False, **kwargs):
+        """
+        Return the minimum along a given axis.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints, optional
+            Axis or axes along which to operate. By default, flattened input is used.
+        keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result
+            as dimensions with size one. With this option, the result will broadcast
+            correctly against the input array.
+
+        Returns
+        -------
+        min_along_axis: :ref:`NDArray`
+            A NDArray with the minimum of the elements along the axis.
+
+        References
+        ----------
+        `np.min <https://numpy.org/doc/stable/reference/generated/numpy.min.html>`_
+        """
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.min(axis=axis, keepdims=keepdims, **kwargs)
+
 
 def sum(ndarr: NDArray, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
     """
@@ -521,21 +546,21 @@ def sum(ndarr: NDArray, axis=None, dtype=None, out=None, keepdims=False, **kwarg
     Parameters
     ----------
     ndarr: :ref:`NDArray` | :ref:`LazyExpr`
-            The input array or expression.
+        The input array or expression.
     axis: int or tuple of ints, optional
-            Axis or axes along which a sum is performed. The default, axis=None,
-            will sum all the elements of the input array. If axis is negative
-            it counts from the last to the first axis.
+        Axis or axes along which a sum is performed. The default, axis=None,
+        will sum all the elements of the input array. If axis is negative
+        it counts from the last to the first axis.
     dtype: np.dtype, optional
-            The type of the returned array and of the accumulator in which the
-            elements are summed. The dtype of a is used by default unless a has
-            an integer dtype of less precision than the default platform integer.
+        The type of the returned array and of the accumulator in which the
+        elements are summed. The dtype of a is used by default unless a has
+        an integer dtype of less precision than the default platform integer.
     keepdims: bool, optional
-            If this is set to True, the axes which are reduced are left in the result
-            as dimensions with size one. With this option, the result will broadcast
-            correctly against the input array.
+        If this is set to True, the axes which are reduced are left in the result
+        as dimensions with size one. With this option, the result will broadcast
+        correctly against the input array.
     kwargs: dict, optional
-            Keyword arguments that are supported by the :func:`empty` constructor.
+        Keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
@@ -547,6 +572,33 @@ def sum(ndarr: NDArray, axis=None, dtype=None, out=None, keepdims=False, **kwarg
     `np.sum <https://numpy.org/doc/stable/reference/generated/numpy.sum.html>`_
     """
     return ndarr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
+
+def min(ndarr: NDArray, axis=None, keepdims=False, **kwargs):
+    """
+    Return the minimum along a given axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` | :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which to operate. By default, flattened input is used.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result as
+        dimensions with size one. With this option, the result will broadcast correctly
+        against the input array.
+
+    Returns
+    -------
+    min_along_axis: :ref:`NDArray`
+        A NDArray with the minimum of the elements along the axis.
+
+    References
+    ----------
+    `np.min <https://numpy.org/doc/stable/reference/generated/numpy.min.html>`_
+    """
+    return ndarr.min(axis=axis, keepdims=keepdims, **kwargs)
 
 
 def sin(ndarr: NDArray, /):
@@ -1349,7 +1401,7 @@ def _check_ndarray_kwargs(**kwargs):
     for key in kwargs:
         if key not in supported_keys:
             raise KeyError(
-                f"Only {supported_keys} are supported as" f" keyword arguments" f", and you passed {key}"
+                f"Only {supported_keys} are supported as keyword arguments, and you passed '{key}'"
             )
     if "cparams" in kwargs and "chunks" in kwargs["cparams"]:
         raise ValueError("You cannot pass chunks in cparams, use `chunks` argument instead")
