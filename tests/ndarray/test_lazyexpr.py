@@ -71,6 +71,26 @@ def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
     return a1, a2, a3, a4, na1, na2, na3, na4
 
 
+@pytest.fixture
+def array_fixture_light(dtype_fixture, shape_fixture):
+    nelems = np.prod(shape_fixture)
+    na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
+    # For full generality, use different chunks and blocks
+    chunks = [c // 17 for c in na1.shape]
+    blocks = [c // 19 for c in na1.shape]
+    chunks1 = [c // 23 for c in na1.shape]
+    blocks1 = [c // 29 for c in na1.shape]
+    a1 = blosc2.asarray(na1, chunks=chunks, blocks=blocks)
+    na2 = np.copy(na1)
+    a2 = blosc2.asarray(na2, chunks=chunks, blocks=blocks)
+    na3 = np.copy(na1)
+    # Let other operands have chunks1 and blocks1
+    a3 = blosc2.asarray(na3, chunks=chunks1, blocks=blocks1)
+    na4 = np.copy(na1)
+    a4 = blosc2.asarray(na4, chunks=chunks1, blocks=blocks1)
+    return a1, a2, a3, a4, na1, na2, na3, na4
+
+
 def test_simple_getitem(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 - a3 * a4
@@ -386,8 +406,8 @@ def test_reduce_bool(array_fixture, reduce_op):
 @pytest.mark.parametrize("axis", [0, 1, None])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize("dtype", [np.int16, np.float32, np.float64])
-def test_reduce_params(array_fixture, axis, keepdims, dtype, reduce_op):
-    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+def test_reduce_params(array_fixture_light, axis, keepdims, dtype, reduce_op):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture_light
     if axis is not None and len(a1.shape) >= axis:
         return
     expr = a1 + a2 - a3 * a4
@@ -404,8 +424,8 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype, reduce_op):
 
 @pytest.mark.parametrize("reduce_op", ["sum", "min", "max"])
 @pytest.mark.parametrize("axis", [0, 1, None])
-def test_reduce_expr_arr(array_fixture, axis, reduce_op):
-    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+def test_reduce_expr_arr(array_fixture_light, axis, reduce_op):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture_light
     if axis is not None and len(a1.shape) >= axis:
         return
     expr = a1 + a2 - a3 * a4
