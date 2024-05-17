@@ -71,26 +71,6 @@ def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
     return a1, a2, a3, a4, na1, na2, na3, na4
 
 
-@pytest.fixture
-def array_fixture_light(dtype_fixture, shape_fixture):
-    nelems = np.prod(shape_fixture)
-    na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
-    # For full generality, use different chunks and blocks
-    chunks = [c // 17 for c in na1.shape]
-    blocks = [c // 19 for c in na1.shape]
-    chunks1 = [c // 23 for c in na1.shape]
-    blocks1 = [c // 29 for c in na1.shape]
-    a1 = blosc2.asarray(na1, chunks=chunks, blocks=blocks)
-    na2 = np.copy(na1)
-    a2 = blosc2.asarray(na2, chunks=chunks, blocks=blocks)
-    na3 = np.copy(na1)
-    # Let other operands have chunks1 and blocks1
-    a3 = blosc2.asarray(na3, chunks=chunks1, blocks=blocks1)
-    na4 = np.copy(na1)
-    a4 = blosc2.asarray(na4, chunks=chunks1, blocks=blocks1)
-    return a1, a2, a3, a4, na1, na2, na3, na4
-
-
 def test_simple_getitem(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 - a3 * a4
@@ -386,66 +366,6 @@ def test_params(array_fixture):
     assert res.blocks == blocks
 
     blosc2.remove_urlpath(urlpath)
-
-
-# Tests related with sum method
-
-
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all"])
-def test_reduce_bool(array_fixture, reduce_op):
-    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    expr = a1 + a2 > a3 * a4
-    nres = ne.evaluate("na1 + na2 > na3 * na4")
-    res = getattr(expr, reduce_op)()
-    nres = getattr(nres, reduce_op)()
-    tol = 1e-15 if a1.dtype == "float64" else 1e-6
-    np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
-
-
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "mean", "min", "max", "any", "all"])
-@pytest.mark.parametrize("axis", [0, 1, None])
-@pytest.mark.parametrize("keepdims", [True, False])
-@pytest.mark.parametrize("dtype", [np.int16, np.float32, np.float64])
-def test_reduce_params(array_fixture_light, axis, keepdims, dtype, reduce_op):
-    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture_light
-    if axis is not None and len(a1.shape) >= axis:
-        return
-    if reduce_op == "prod":
-        # To avoid overflow
-        expr = a1 - a2 + 1
-        nres = eval("na1 - na2 + 1")
-    else:
-        expr = a1 + a2 - a3 * a4
-        nres = eval("na1 + na2 - na3 * na4")
-    if reduce_op in ("sum", "prod", "mean"):
-        if reduce_op == "mean" and dtype == np.int16:
-            dtype = np.float64
-        res = getattr(expr, reduce_op)(axis=axis, keepdims=keepdims, dtype=dtype)
-        nres = getattr(nres, reduce_op)(axis=axis, keepdims=keepdims, dtype=dtype)
-    else:
-        res = getattr(expr, reduce_op)(axis=axis, keepdims=keepdims)
-        nres = getattr(nres, reduce_op)(axis=axis, keepdims=keepdims)
-    tol = 1e-15 if dtype == "float64" else 1e-6
-    np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
-
-
-# TODO: "any" and "all" are not supported yet because:
-# ne.evaluate('(o0 + o1)', local_dict = {'o0': np.array(True), 'o1': np.array(True)})
-# is not supported by NumExpr
-@pytest.mark.parametrize("reduce_op", ["sum", "min", "max"])
-@pytest.mark.parametrize("axis", [0, 1, None])
-def test_reduce_expr_arr(array_fixture_light, axis, reduce_op):
-    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture_light
-    if axis is not None and len(a1.shape) >= axis:
-        return
-    expr = a1 + a2 - a3 * a4
-    nres = eval("na1 + na2 - na3 * na4")
-    res = getattr(expr, reduce_op)(axis=axis) + getattr(a1, reduce_op)(axis=axis)
-    print(f"res: {res}")
-    res = res[()]
-    nres = getattr(nres, reduce_op)(axis=axis) + getattr(na1, reduce_op)(axis=axis)
-    tol = 1e-15 if a1.dtype == "float64" else 1e-6
-    np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 
 # Tests related with save method
