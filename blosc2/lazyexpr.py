@@ -601,12 +601,14 @@ def reduce_slices(
             result = np.all(result, **reduce_args)
         else:
             result = reduce_op.value.reduce(result, **reduce_args)
-        dtype = reduce_args["dtype"] if reduce_op == ReduceOp.SUM else None
+        dtype = reduce_args["dtype"] if reduce_op in (ReduceOp.SUM, ReduceOp.PROD) else None
         if dtype is None:
             dtype = result.dtype
         if out is None:
             if reduce_op == ReduceOp.SUM:
                 out = blosc2.zeros(reduced_shape, dtype=dtype, **kwargs)
+            elif reduce_op == ReduceOp.PROD:
+                out = blosc2.full(reduced_shape, 1, dtype=dtype, **kwargs)
             elif reduce_op == ReduceOp.MIN:
                 if np.issubdtype(dtype, np.integer):
                     out = blosc2.full(reduced_shape, np.iinfo(dtype).max, dtype=dtype, **kwargs)
@@ -942,6 +944,17 @@ class LazyExpr(LazyArray):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.SUM,
+            "axis": axis,
+            "dtype": dtype,
+            "keepdims": keepdims,
+        }
+        result = self.eval(_reduce_args=reduce_args, **kwargs)
+        return result
+
+    def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
+        # Always evaluate the expression prior the reduction
+        reduce_args = {
+            "op": ReduceOp.PROD,
             "axis": axis,
             "dtype": dtype,
             "keepdims": keepdims,

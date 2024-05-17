@@ -482,7 +482,7 @@ class NDArray(blosc2_ext.NDArray):
 
     def sum(self, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
         """
-        Sum of array elements over a given axis.
+        Return the sum of array elements over a given axis.
 
         Parameters
         ----------
@@ -512,6 +512,39 @@ class NDArray(blosc2_ext.NDArray):
         """
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
+    def prod(self, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
+        """
+        Return the product of array elements over a given axis.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints, optional
+            Axis or axes along which a product is performed. The default, axis=None,
+            will multiply all the elements of the input array. If axis is negative
+            it counts from the last to the first axis.
+        dtype: np.dtype, optional
+            The type of the returned array and of the accumulator in which the
+            elements are multiplied. The dtype of a is used by default unless a has
+            an integer dtype of less precision than the default platform integer.
+        keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result
+            as dimensions with size one. With this option, the result will broadcast
+            correctly against the input array.
+        kwargs: dict, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
+
+        Returns
+        -------
+        product_along_axis: :ref:`NDArray`
+            A NDArray with the product of the elements along the axis.
+
+        References
+        ----------
+        `np.prod <https://numpy.org/doc/stable/reference/generated/numpy.prod.html>`_
+        """
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.prod(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
     def min(self, axis=None, keepdims=False, **kwargs):
         """
@@ -614,9 +647,9 @@ class NDArray(blosc2_ext.NDArray):
         return expr.all(axis=axis, keepdims=keepdims, **kwargs)
 
 
-def sum(ndarr: NDArray, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
+def sum(ndarr: NDArray, axis=None, dtype=None, keepdims=False, **kwargs):
     """
-    Sum of array elements over a given axis.
+    Return the sum of array elements over a given axis.
 
     Parameters
     ----------
@@ -647,6 +680,41 @@ def sum(ndarr: NDArray, axis=None, dtype=None, out=None, keepdims=False, **kwarg
     `np.sum <https://numpy.org/doc/stable/reference/generated/numpy.sum.html>`_
     """
     return ndarr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
+
+def prod(ndarr: NDArray, axis=None, dtype=None, keepdims=False, **kwargs):
+    """
+    Return the product of array elements over a given axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` | :ref:`LazyExpr`
+            The input array or expression.
+    axis: int or tuple of ints, optional
+            Axis or axes along which a product is performed. The default, axis=None,
+            will multiply all the elements of the input array. If axis is negative
+            it counts from the last to the first axis.
+    dtype: np.dtype, optional
+            The type of the returned array and of the accumulator in which the
+            elements are multiplied. The dtype of a is used by default unless a has
+            an integer dtype of less precision than the default platform integer.
+    keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result
+            as dimensions with size one. With this option, the result will broadcast
+            correctly against the input array.
+    kwargs: dict, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    product_along_axis: :ref:`NDArray`
+            A NDArray with the product of the elements along the axis.
+
+    References
+    ----------
+    `np.prod <https://numpy.org/doc/stable/reference/generated/numpy.prod.html>`_
+    """
+    return ndarr.prod(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
 
 def min(ndarr: NDArray, axis=None, keepdims=False, **kwargs):
