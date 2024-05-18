@@ -975,8 +975,8 @@ class LazyExpr(LazyArray):
     def std(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
         # Always evaluate the expression prior the reduction
         if axis is None:
-            # Same shape, so we can use the mean directly
-            subtracted = self.eval() - self.mean(dtype=dtype)
+            # The mean is a scalar, so we can use it directly in a expression
+            subtracted = self - self.mean(dtype=dtype)
         else:
             # Shapes will be different, so we need to convert operands to numpy arrays
             # For avoiding this, we need to support general broadcasting in expressions
