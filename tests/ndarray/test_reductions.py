@@ -61,7 +61,7 @@ def test_reduce_bool(array_fixture, reduce_op):
     np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
 
 
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "mean", "min", "max", "any", "all"])
+@pytest.mark.parametrize("reduce_op", ["sum", "prod", "mean", "std", "min", "max", "any", "all"])
 @pytest.mark.parametrize("axis", [0, 1, (0, 1), None])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize("dtype_out", [np.int16, np.float64])
@@ -72,14 +72,19 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op):
     if type(axis) == tuple and len(a1.shape) < len(axis):
         return
     if reduce_op == "prod":
-        # To avoid overflow
-        expr = a1 - a2 + 1
-        nres = eval("na1 - na2 + 1")
+        # To avoid overflow, create a1 and a2 with small values
+        na1 = np.linspace(0, 0.1, np.prod(a1.shape), dtype=np.float32).reshape(a1.shape)
+        a1 = blosc2.asarray(na1)
+        na2 = np.linspace(0, 0.5, np.prod(a1.shape), dtype=np.float32).reshape(a1.shape)
+        a2 = blosc2.asarray(na2)
+        expr = a1 + a2 - 0.2
+        nres = eval("na1 + na2 - .2")
     else:
         expr = a1 + a2 - a3 * a4
         nres = eval("na1 + na2 - na3 * na4")
-    if reduce_op in ("sum", "prod", "mean"):
-        if reduce_op == "mean" and dtype_out == np.int16:
+    if reduce_op in ("sum", "prod", "mean", "std"):
+        if reduce_op in ("mean", "std") and dtype_out == np.int16:
+            # mean and std need float dtype as output
             dtype_out = np.float64
         res = getattr(expr, reduce_op)(axis=axis, keepdims=keepdims, dtype=dtype_out)
         nres = getattr(nres, reduce_op)(axis=axis, keepdims=keepdims, dtype=dtype_out)
@@ -93,7 +98,7 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op):
 # TODO: "any" and "all" are not supported yet because:
 # ne.evaluate('(o0 + o1)', local_dict = {'o0': np.array(True), 'o1': np.array(True)})
 # is not supported by NumExpr
-@pytest.mark.parametrize("reduce_op", ["sum", "min", "max"])
+@pytest.mark.parametrize("reduce_op", ["sum", "min", "max", "mean", "std"])
 @pytest.mark.parametrize("axis", [0, 1, None])
 def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
@@ -102,7 +107,7 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     expr = a1 + a2 - a3 * a4
     nres = eval("na1 + na2 - na3 * na4")
     res = getattr(expr, reduce_op)(axis=axis) + getattr(a1, reduce_op)(axis=axis)
-    print(f"res: {res}")
+    # print(f"res: {res}")
     res = res[()]
     nres = getattr(nres, reduce_op)(axis=axis) + getattr(na1, reduce_op)(axis=axis)
     tol = 1e-15 if a1.dtype == "float64" else 1e-6

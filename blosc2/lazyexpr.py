@@ -777,9 +777,15 @@ class LazyExpr(LazyArray):
         elif np.isscalar(value2):
             self.operands = {"o0": value1}
             self.expression = f"(o0 {op} {value2})"
+        elif hasattr(value2, "shape") and value2.shape == ():
+            self.operands = {"o0": value1}
+            self.expression = f"(o0 {op} {value2[()]})"
         elif np.isscalar(value1):
             self.operands = {"o0": value2}
             self.expression = f"({value1} {op} o0)"
+        elif hasattr(value1, "shape") and value1.shape == ():
+            self.operands = {"o0": value2}
+            self.expression = f"({value1[()]} {op} o0)"
         else:
             if value1 is value2:
                 self.operands = {"o0": value1}
@@ -814,8 +820,10 @@ class LazyExpr(LazyArray):
         elif isinstance(value1, LazyExpr):
             if op == "not":
                 self.expression = f"({op}{self.expression})"
-            elif isinstance(value2, int | float):
+            elif np.isscalar(value2):
                 self.expression = f"({self.expression} {op} {value2})"
+            elif hasattr(value2, "shape") and value2.shape == ():
+                self.expression = f"({self.expression} {op} {value2[()]})"
             else:
                 try:
                     op_name = list(value1.operands.keys())[list(value1.operands.values()).index(value2)]
@@ -824,8 +832,10 @@ class LazyExpr(LazyArray):
                     self.operands[op_name] = value2
                 self.expression = f"({self.expression} {op} {op_name})"
         else:
-            if isinstance(value1, int | float):
+            if np.isscalar(value1):
                 self.expression = f"({value1} {op} {self.expression})"
+            elif hasattr(value1, "shape") and value1.shape == ():
+                self.expression = f"({value1[()]} {op} {self.expression})"
             else:
                 try:
                     op_name = list(value2.operands.keys())[list(value2.operands.values()).index(value1)]
@@ -953,10 +963,33 @@ class LazyExpr(LazyArray):
 
     def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
-        total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+        total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims)
+        if np.isscalar(axis):
+            axis = (axis,)
         num_elements = np.prod(self.shape) if axis is None else np.prod([self.shape[i] for i in axis])
-        print(total_sum, num_elements)
-        return total_sum / num_elements
+        result = total_sum / num_elements
+        if np.isscalar(result):
+            return result
+        return result.eval()
+
+    def std(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
+        # Always evaluate the expression prior the reduction
+        if axis is None:
+            # Same shape, so we can use the mean directly
+            subtracted = self.eval() - self.mean(dtype=dtype)
+        else:
+            # Shapes will be different, so we need to convert operands to numpy arrays
+            # For avoiding this, we need to support general broadcasting in expressions
+            # and this is not going to happen anytime soon
+            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
+            subtracted = self[:] - mean_value[:]
+        squared = subtracted**2
+        mean_of_squares = squared.mean(axis=axis, dtype=dtype, keepdims=keepdims)
+        if ddof != 0:
+            num_elements = np.prod(self.shape) if axis is None else np.prod([self.shape[i] for i in axis])
+            return (mean_of_squares * num_elements / (num_elements - ddof)) ** 0.5
+        # ddof == 0
+        return mean_of_squares**0.5
 
     def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
