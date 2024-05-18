@@ -963,13 +963,11 @@ class LazyExpr(LazyArray):
 
     def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
-        total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims)
+        total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
         if np.isscalar(axis):
             axis = (axis,)
         num_elements = np.prod(self.shape) if axis is None else np.prod([self.shape[i] for i in axis])
         result = total_sum / num_elements
-        if np.isscalar(result):
-            return result
         return result.eval()
 
     def std(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
