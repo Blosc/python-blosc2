@@ -34,7 +34,7 @@ def get_ndarray_start_stop(ndim, key, shape):
     stop = tuple(s.stop if s.stop is not None else sh for s, sh in zip(key, shape, strict=False))
     step = tuple(s.step if s.step is not None else 1 for s in key)
     # Check if the steps are different from 1 (not supported yet)
-    if any(s != 1 for s in step):
+    if __builtins__["any"](s != 1 for s in step):
         raise ValueError("Step different than 1 is not supported yet")
     size = math.prod([stop[i] - start[i] for i in range(ndim)])
     return start, stop, size
