@@ -202,7 +202,7 @@ def compute_broadcast_shape(arrays):
     return tuple(result_shape)
 
 
-def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
+def _compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
     """
     Returns the slice of the smaller array that corresponds to the slice of the larger array.
     """
@@ -225,7 +225,10 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
 
 
 # A more compact version of the function above, albeit less readable
-def _compute_corresponding_slice(larger_shape, smaller_shape, larger_slice):
+def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
+    """
+    Returns the slice of the smaller array that corresponds to the slice of the larger array.
+    """
     diff_dims = len(larger_shape) - len(smaller_shape)
     smaller_slice = [
         larger_slice[i]
