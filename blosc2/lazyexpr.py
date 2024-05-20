@@ -316,7 +316,7 @@ def do_slices_intersect(slice1, slice2):
     return True
 
 
-def evaluate_chunks_getitem(
+def chunks_getitem(
     expression: str | Callable, operands: dict, out: np.ndarray = None
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
@@ -398,9 +398,7 @@ def evaluate_chunks_getitem(
     return out
 
 
-def evaluate_chunks_eval(
-    expression: str | Callable, operands: dict, **kwargs
-) -> blosc2.NDArray | np.ndarray:
+def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
     This is used in the eval() method of the LazyArray.
@@ -506,7 +504,7 @@ def evaluate_chunks_eval(
     return out
 
 
-def evaluate_slices(
+def slices_eval(
     expression: str | Callable, operands: dict, _slice=None, **kwargs
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
@@ -761,16 +759,16 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
         return reduce_slices(expression, operands, reduce_args=reduce_args, _slice=item, **kwargs)
 
     if item is not None and item != slice(None):
-        return evaluate_slices(expression, operands, _slice=item, **kwargs)
+        return slices_eval(expression, operands, _slice=item, **kwargs)
 
     if equal_chunks and equal_blocks:
         if getitem:
             out = kwargs.pop("_output", None)
-            return evaluate_chunks_getitem(expression, operands, out=out)
+            return chunks_getitem(expression, operands, out=out)
         elif kwargs.get("chunks", None) is None and kwargs.get("blocks", None) is None:
-            return evaluate_chunks_eval(expression, operands, **kwargs)
+            return chunks_eval(expression, operands, **kwargs)
 
-    return evaluate_slices(expression, operands, **kwargs)
+    return slices_eval(expression, operands, **kwargs)
 
 
 def fuse_operands(operands1, operands2):
