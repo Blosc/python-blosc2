@@ -1076,41 +1076,38 @@ class LazyExpr(LazyArray):
             "dtype": dtype,
             "keepdims": keepdims,
         }
-        result = self.eval(_reduce_args=reduce_args, **kwargs)
-        return result
+        return self.eval(_reduce_args=reduce_args, **kwargs)
 
     def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
-        total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+        total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims)
         if np.isscalar(axis):
             axis = (axis,)
         num_elements = np.prod(self.shape) if axis is None else np.prod([self.shape[i] for i in axis])
-        result = total_sum / num_elements
-        return result.eval()
+        mean_expr = total_sum / num_elements
+        return mean_expr.eval(**kwargs)
 
     def std(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
         # Always evaluate the expression prior the reduction
-        if axis is None:
-            # The mean is a scalar, so we can use it directly in a expression
-            mean_expr = (self - self.mean(dtype=dtype)) ** 2
-        else:
-            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
-            # Shapes will be different, and there should be a bug in LazyExpr broadcasting,
-            # because the following line makes some test fail
-            # (see test_reductions.py::test_broadcast_params)
-            # mean_expr = (self - mean_value) ** 2
-            # Meanwhile, use plain NumPy through this workaround
-            mean_expr = (self[:] - mean_value[:]) ** 2
-            # This additional step is needed to make this outcome part of expressions
-            mean_expr = blosc2.asarray(mean_expr)
-        mean_values = mean_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
+        mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
+        std_expr = (self - mean_value) ** 2
+        if len(mean_value.shape) > 0:
+            # This additional step is needed to allow broadcasting to work:
+            # values need to be consolidated before the next operation.
+            # The issue is that sub-expressions having different shapes
+            # (broadcast) cannot be mixed with reduction operations.
+            # When the mean value is a scalar, the broadcasting is not needed.
+            std_expr = std_expr.eval()
+        std_expr = std_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
         if ddof != 0:
             if axis is None:
                 num_elements = np.prod(self.shape)
             else:
                 num_elements = np.prod([self.shape[i] for i in axis])
-            return blosc2.sqrt(mean_values * num_elements / (num_elements - ddof))
-        return blosc2.sqrt(mean_values)
+            std_expr = blosc2.sqrt(std_expr * num_elements / (num_elements - ddof))
+        else:
+            std_expr = blosc2.sqrt(std_expr)
+        return std_expr.eval(**kwargs)
 
     def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
@@ -1120,8 +1117,7 @@ class LazyExpr(LazyArray):
             "dtype": dtype,
             "keepdims": keepdims,
         }
-        result = self.eval(_reduce_args=reduce_args, **kwargs)
-        return result
+        return self.eval(_reduce_args=reduce_args, **kwargs)
 
     def min(self, axis=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
@@ -1132,8 +1128,7 @@ class LazyExpr(LazyArray):
         }
         if "dtype" in kwargs:
             raise ValueError("dtype is not supported for min method")
-        result = self.eval(_reduce_args=reduce_args, **kwargs)
-        return result
+        return self.eval(_reduce_args=reduce_args, **kwargs)
 
     def max(self, axis=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
@@ -1144,8 +1139,7 @@ class LazyExpr(LazyArray):
         }
         if "dtype" in kwargs:
             raise ValueError("dtype is not supported for max method")
-        result = self.eval(_reduce_args=reduce_args, **kwargs)
-        return result
+        return self.eval(_reduce_args=reduce_args, **kwargs)
 
     def any(self, axis=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
@@ -1156,8 +1150,7 @@ class LazyExpr(LazyArray):
         }
         if "dtype" in kwargs:
             raise ValueError("dtype is not supported for any method")
-        result = self.eval(_reduce_args=reduce_args, **kwargs)
-        return result
+        return self.eval(_reduce_args=reduce_args, **kwargs)
 
     def all(self, axis=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
@@ -1168,8 +1161,7 @@ class LazyExpr(LazyArray):
         }
         if "dtype" in kwargs:
             raise ValueError("dtype is not supported for all method")
-        result = self.eval(_reduce_args=reduce_args, **kwargs)
-        return result
+        return self.eval(_reduce_args=reduce_args, **kwargs)
 
     def eval(self, item=None, **kwargs) -> blosc2.NDArray:
         return chunked_eval(self.expression, self.operands, item, **kwargs)

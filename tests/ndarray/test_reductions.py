@@ -123,7 +123,7 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     [
         ((5, 5, 5), (5, 5), (5,)),
         ((10, 10, 10), (10, 10), (10,)),
-        ((100, 100, 100), (100, 100), (100,)),  # TODO: not working yet for fast path in std()
+        ((100, 100, 100), (100, 100), (100,)),
     ],
 )
 def test_broadcast_params(axis, keepdims, reduce_op, shapes):
