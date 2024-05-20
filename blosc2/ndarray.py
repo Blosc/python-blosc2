@@ -383,8 +383,11 @@ class NDArray(blosc2_ext.NDArray):
         super().squeeze()
 
     def _check_allowed_dtypes(self, value: bool | int | float | NDArray, dtype_category: str, op: str):
-        if not isinstance(value, int | float | bool | blosc2.LazyExpr | NDArray):
-            raise RuntimeError("Expected bool, int, float, LazyExpr or NDArray instance")
+        if not (isinstance(value, blosc2.LazyExpr | NDArray | np.ndarray) or np.isscalar(value)):
+            raise RuntimeError(
+                "Expected LazyExpr, NDArray, np.ndarray or scalar instances"
+                f" and you provided a '{type(value)}' instance"
+            )
 
     def __neg__(self):
         return blosc2.LazyExpr(new_op=(0, "-", self))
@@ -483,6 +486,484 @@ class NDArray(blosc2_ext.NDArray):
     def __rpow__(self, value: int | float | NDArray, /):
         self._check_allowed_dtypes(value, "numeric", "__rpow__")
         return blosc2.LazyExpr(new_op=(value, "**", self))
+
+    def sum(self, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
+        """
+        Returns the sum of array elements over a given axis.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints, optional
+            Axis or axes along which a sum is performed. The default, axis=None,
+            will sum all the elements of the input array. If axis is negative
+            it counts from the last to the first axis.
+        dtype: np.dtype, optional
+            The type of the returned array and of the accumulator in which the
+            elements are summed. The dtype of a is used by default unless a has
+            an integer dtype of less precision than the default platform integer.
+        keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result
+            as dimensions with size one. With this option, the result will broadcast
+            correctly against the input array.
+        kwargs: dict, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
+
+        Returns
+        -------
+        sum_along_axis: :ref:`NDArray`
+            A NDArray with the sum of the elements along the axis.
+
+        References
+        ----------
+        `np.sum <https://numpy.org/doc/stable/reference/generated/numpy.sum.html>`_
+        """
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
+    def mean(self, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
+        """
+        Returns the arithmetic mean along the specified axis.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints, optional
+            Axis or axes along which the means are computed. The default is to compute
+            the mean of the flattened array.
+        dtype: np.dtype, optional
+            Type to use in computing the mean. For integer inputs, the default is
+            float32; for floating point inputs, it is the same as the input dtype.
+        keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result
+            as dimensions with size one. With this option, the result will broadcast
+            correctly against the input array.
+        kwargs: dict, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
+
+        Returns
+        -------
+        mean_along_axis: :ref:`NDArray`
+            A NDArray with the mean of the elements along the axis.
+
+        References
+        ----------
+        `np.mean <https://numpy.org/doc/stable/reference/generated/numpy.mean.html>`_
+        """
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
+    def std(self, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
+        """
+        Returns the standard deviation along the specified axis.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints, optional
+            Axis or axes along which the standard deviation is computed. The default is
+            to compute the standard deviation of the flattened array.
+        dtype: np.dtype, optional
+            Type to use in computing the standard deviation. For integer inputs, the
+            default is float32; for floating point inputs, it is the same as the input dtype.
+        ddof: int, optional
+            Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
+            where N represents the number of elements. By default ddof is zero.
+        keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result as
+            dimensions with size one. With this option, the result will broadcast correctly
+            against the input array.
+        kwargs: dict, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
+
+        Returns
+        -------
+        std_along_axis: :ref:`NDArray`
+            A NDArray with the standard deviation of the elements along the axis.
+
+        References
+        ----------
+        `np.std <https://numpy.org/doc/stable/reference/generated/numpy.std.html>`_
+        """
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.std(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
+
+    def prod(self, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
+        """
+        Returns the product of array elements over a given axis.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints, optional
+            Axis or axes along which a product is performed. The default, axis=None,
+            will multiply all the elements of the input array. If axis is negative
+            it counts from the last to the first axis.
+        dtype: np.dtype, optional
+            The type of the returned array and of the accumulator in which the
+            elements are multiplied. The dtype of a is used by default unless a has
+            an integer dtype of less precision than the default platform integer.
+        keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result
+            as dimensions with size one. With this option, the result will broadcast
+            correctly against the input array.
+        kwargs: dict, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
+
+        Returns
+        -------
+        product_along_axis: :ref:`NDArray`
+            A NDArray with the product of the elements along the axis.
+
+        References
+        ----------
+        `np.prod <https://numpy.org/doc/stable/reference/generated/numpy.prod.html>`_
+        """
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.prod(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
+    def min(self, axis=None, keepdims=False, **kwargs):
+        """
+        Returns the minimum along a given axis.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints, optional
+            Axis or axes along which to operate. By default, flattened input is used.
+        keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result
+            as dimensions with size one. With this option, the result will broadcast
+            correctly against the input array.
+
+        Returns
+        -------
+        min_along_axis: :ref:`NDArray`
+            A NDArray with the minimum of the elements along the axis.
+
+        References
+        ----------
+        `np.min <https://numpy.org/doc/stable/reference/generated/numpy.min.html>`_
+        """
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.min(axis=axis, keepdims=keepdims, **kwargs)
+
+    def max(self, axis=None, keepdims=False, **kwargs):
+        """
+        Returns the maximum along a given axis.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints, optional
+            Axis or axes along which to operate. By default, flattened input is used.
+        keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result
+            as dimensions with size one. With this option, the result will broadcast
+            correctly against the input array.
+
+        Returns
+        -------
+        max_along_axis: :ref:`NDArray`
+            A NDArray with the maximum of the elements along the axis.
+
+        References
+        ----------
+        `np.max <https://numpy.org/doc/stable/reference/generated/numpy.max.html>`_
+        """
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.max(axis=axis, keepdims=keepdims, **kwargs)
+
+    def any(self, axis=None, keepdims=False, **kwargs):
+        """
+        Test whether any array element along a given axis evaluates to True.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints, optional
+            Axis or axes along which to operate. By default, flattened input is used.
+        keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result as
+            dimensions with size one. With this option, the result will broadcast correctly
+            against the input array.
+
+        Returns
+        -------
+        any_along_axis: :ref:`NDArray`
+            A NDArray with the result of the evaluation along the axis.
+
+        References
+        ----------
+        `np.any <https://numpy.org/doc/stable/reference/generated/numpy.any.html>`_
+        """
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.any(axis=axis, keepdims=keepdims, **kwargs)
+
+    def all(self, axis=None, keepdims=False, **kwargs):
+        """
+        Test whether all array elements along a given axis evaluate to True.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints, optional
+            Axis or axes along which to operate. By default, flattened input is used.
+        keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result as
+            dimensions with size one. With this option, the result will broadcast correctly
+            against the input array.
+
+        Returns
+        -------
+        all_along_axis: :ref:`NDArray`
+            A NDArray with the result of the evaluation along the axis.
+
+        References
+        ----------
+        `np.all <https://numpy.org/doc/stable/reference/generated/numpy.all.html>`_
+        """
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.all(axis=axis, keepdims=keepdims, **kwargs)
+
+
+def sum(ndarr: NDArray, axis=None, dtype=None, keepdims=False, **kwargs):
+    """
+    Returns the sum of array elements over a given axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` | :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which a sum is performed. The default, axis=None,
+        will sum all the elements of the input array. If axis is negative
+        it counts from the last to the first axis.
+    dtype: np.dtype, optional
+        The type of the returned array and of the accumulator in which the
+        elements are summed. The dtype of a is used by default unless a has
+        an integer dtype of less precision than the default platform integer.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result
+        as dimensions with size one. With this option, the result will broadcast
+        correctly against the input array.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    sum_along_axis: :ref:`NDArray`
+            A NDArray with the sum of the elements along the axis.
+
+    References
+    ----------
+    `np.sum <https://numpy.org/doc/stable/reference/generated/numpy.sum.html>`_
+    """
+    return ndarr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
+
+def mean(ndarr: NDArray, axis=None, dtype=None, keepdims=False, **kwargs):
+    """
+    Returns the arithmetic mean along the specified axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` | :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which the means are computed. The default is to compute
+        the mean of the flattened array.
+    dtype: np.dtype, optional
+        Type to use in computing the mean. For integer inputs, the default is
+        float32; for floating point inputs, it is the same as the input dtype.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result
+        as dimensions with size one. With this option, the result will broadcast
+        correctly against the input array.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    mean_along_axis: :ref:`NDArray`
+        A NDArray with the mean of the elements along the axis.
+
+    References
+    ----------
+    `np.mean <https://numpy.org/doc/stable/reference/generated/numpy.mean.html>`_
+    """
+    return ndarr.mean(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
+
+def std(ndarr: NDArray, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
+    """
+    Returns the standard deviation along the specified axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` | :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which the standard deviation is computed. The default is
+        to compute the standard deviation of the flattened array.
+    dtype: np.dtype, optional
+        Type to use in computing the standard deviation. For integer inputs, the
+        default is float32; for floating point inputs, it is the same as the input dtype.
+    ddof: int, optional
+        Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
+        where N represents the number of elements. By default ddof is zero.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result as
+        dimensions with size one. With this option, the result will broadcast correctly
+        against the input array.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    std_along_axis: :ref:`NDArray`
+            A NDArray with the standard deviation of the elements along the axis.
+
+    References
+    ----------
+    `np.std <https://numpy.org/doc/stable/reference/generated/numpy.std.html>`_
+    """
+    return ndarr.std(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
+
+
+def prod(ndarr: NDArray, axis=None, dtype=None, keepdims=False, **kwargs):
+    """
+    Returns the product of array elements over a given axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` | :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which a product is performed. The default, axis=None,
+        will multiply all the elements of the input array. If axis is negative
+        it counts from the last to the first axis.
+    dtype: np.dtype, optional
+        The type of the returned array and of the accumulator in which the
+        elements are multiplied. The dtype of a is used by default unless a has
+        an integer dtype of less precision than the default platform integer.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result
+        as dimensions with size one. With this option, the result will broadcast
+        correctly against the input array.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    product_along_axis: :ref:`NDArray`
+        A NDArray with the product of the elements along the axis.
+
+    References
+    ----------
+    `np.prod <https://numpy.org/doc/stable/reference/generated/numpy.prod.html>`_
+    """
+    return ndarr.prod(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
+
+def min(ndarr: NDArray, axis=None, keepdims=False, **kwargs):
+    """
+    Returns the minimum along a given axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` | :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which to operate. By default, flattened input is used.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result as
+        dimensions with size one. With this option, the result will broadcast correctly
+        against the input array.
+
+    Returns
+    -------
+    min_along_axis: :ref:`NDArray`
+        A NDArray with the minimum of the elements along the axis.
+
+    References
+    ----------
+    `np.min <https://numpy.org/doc/stable/reference/generated/numpy.min.html>`_
+    """
+    return ndarr.min(axis=axis, keepdims=keepdims, **kwargs)
+
+
+def max(ndarr: NDArray, axis=None, keepdims=False, **kwargs):
+    """
+    Returns the maximum along a given axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` | :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which to operate. By default, flattened input is used.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result as
+        dimensions with size one. With this option, the result will broadcast correctly
+        against the input array.
+
+    Returns
+    -------
+    max_along_axis: :ref:`NDArray`
+        A NDArray with the maximum of the elements along the axis.
+
+    References
+    ----------
+    `np.max <https://numpy.org/doc/stable/reference/generated/numpy.max.html>`_
+    """
+    return ndarr.max(axis=axis, keepdims=keepdims, **kwargs)
+
+
+def any(ndarr: NDArray, axis=None, keepdims=False, **kwargs):
+    """
+    Test whether any array element along a given axis evaluates to True.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` | :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which to operate. By default, flattened input is used.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result as
+        dimensions with size one. With this option, the result will broadcast correctly
+        against the input array.
+
+    Returns
+    -------
+    any_along_axis: :ref:`NDArray`
+        A NDArray with the result of the evaluation along the axis.
+
+    References
+    ----------
+    `np.any <https://numpy.org/doc/stable/reference/generated/numpy.any.html>`_
+    """
+    return ndarr.any(axis=axis, keepdims=keepdims, **kwargs)
+
+
+def all(ndarr: NDArray, axis=None, keepdims=False, **kwargs):
+    """
+    Test whether all array elements along a given axis evaluate to True.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` | :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which to operate. By default, flattened input is used.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result as
+        dimensions with size one. With this option, the result will broadcast correctly
+        against the input array.
+
+    Returns
+    -------
+    all_along_axis: :ref:`NDArray`
+        A NDArray with the result of the evaluation along the axis.
+
+    References
+    ----------
+    `np.all <https://numpy.org/doc/stable/reference/generated/numpy.all.html>`_
+    """
+    return ndarr.all(axis=axis, keepdims=keepdims, **kwargs)
 
 
 def sin(ndarr: NDArray, /):
@@ -1285,7 +1766,7 @@ def _check_ndarray_kwargs(**kwargs):
     for key in kwargs:
         if key not in supported_keys:
             raise KeyError(
-                f"Only {supported_keys} are supported as" f" keyword arguments" f", and you passed {key}"
+                f"Only {supported_keys} are supported as keyword arguments, and you passed '{key}'"
             )
     if "cparams" in kwargs and "chunks" in kwargs["cparams"]:
         raise ValueError("You cannot pass chunks in cparams, use `chunks` argument instead")

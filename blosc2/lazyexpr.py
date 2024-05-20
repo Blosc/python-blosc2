@@ -19,6 +19,20 @@ import blosc2
 from blosc2.info import InfoReporter
 
 
+class ReduceOp(Enum):
+    """
+    Available reduce operations.
+    """
+
+    SUM = np.add
+    PROD = np.multiply
+    MEAN = np.mean
+    MAX = np.maximum
+    MIN = np.minimum
+    ANY = np.any
+    ALL = np.all
+
+
 class LazyArrayEnum(Enum):
     """
     Available LazyArrays.
@@ -154,21 +168,98 @@ def convert_inputs(inputs):
     return inputs_
 
 
-def validate_inputs(inputs: dict) -> tuple:
+def check_broadcast_compatible(arrays):
+    shapes = [arr.shape for arr in arrays]
+    max_len = max(map(len, shapes))
+    # Pad shorter shapes with 1s
+    shapes_ = [(1,) * (max_len - len(shape)) + shape for shape in shapes]
+    # Reverse the shapes to compare from last dimension
+    shapes_ = [shape[::-1] for shape in shapes_]
+    # Check
+    for dims in zip(*shapes_, strict=True):
+        max_dim = max(dims)
+        if not all((dim == max_dim) or (dim == 1) for dim in dims):
+            _shapes = " ".join(str(shape) for shape in shapes)
+            raise ValueError(f"operands could not be broadcast together with shapes {_shapes}")
+
+
+def compute_broadcast_shape(arrays):
+    """
+    Returns the shape of the outcome of an operation with the input arrays.
+    """
+    # When dealing with UDFs, one can arrive params that are not arrays
+    shapes = [np.array(arr.shape) for arr in arrays if hasattr(arr, "shape")]
+    max_len = max(map(len, shapes))
+
+    # Pad shorter shapes with 1s
+    shapes = np.array(
+        [np.concatenate([np.ones(max_len - len(shape), dtype=int), shape]) for shape in shapes], dtype=int
+    )
+
+    # Compare dimensions from last dimension, take maximum size
+    result_shape = np.max(shapes, axis=0)
+
+    return tuple(result_shape)
+
+
+def _compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
+    """
+    Returns the slice of the smaller array that corresponds to the slice of the larger array.
+    """
+    smaller_slice = []
+    diff_dims = len(larger_shape) - len(smaller_shape)
+
+    for i in range(len(larger_shape)):
+        if i < diff_dims:
+            # For leading dimensions of the larger array that the smaller array doesn't have,
+            # we don't add anything to the smaller slice
+            pass
+        else:
+            # For dimensions that both arrays have, the slice for the smaller array should be
+            # the same as the larger array unless the smaller array's size along that dimension
+            # is 1, in which case we don't add anything to the smaller slice
+            if smaller_shape[i - diff_dims] != 1:
+                smaller_slice.append(larger_slice[i])
+
+    return tuple(smaller_slice)
+
+
+# A more compact version of the function above, albeit less readable
+def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
+    """
+    Returns the slice of the smaller array that corresponds to the slice of the larger array.
+    """
+    diff_dims = len(larger_shape) - len(smaller_shape)
+    smaller_slice = [
+        larger_slice[i]
+        for i in range(len(larger_shape))
+        if i >= diff_dims and smaller_shape[i - diff_dims] != 1
+    ]
+    return tuple(smaller_slice)
+
+
+def validate_inputs(inputs: dict, getitem=False) -> tuple:
     """Validate the inputs for the expression."""
     if len(inputs) == 0:
         raise ValueError(
             "You need to pass at least one array.  Use blosc2.empty() if values are not really needed."
         )
 
-    # All array inputs should have the same shape
     inputs = list(input for input in inputs.values() if isinstance(input, blosc2.NDArray | np.ndarray))
-    first_input = inputs[0]
-    for input_ in inputs[1:]:
-        if first_input.shape != input_.shape:
-            raise ValueError("Inputs should have the same shape")
-    equal_chunks = True
-    equal_blocks = True
+
+    # All array inputs should have a compatible shape
+    if len(inputs) > 1:
+        check_broadcast_compatible(inputs)
+
+    equal_chunks, equal_blocks = True, True
+    # Check whether we can use the fast path for eval()
+    # We cannot use it if the computation involves broadcasting
+    # or if the inputs are NumPy arrays
+    # use_broadcast = any(len(input.shape) < len(inputs[0].shape) for input in inputs)
+    # if not getitem and (any(isinstance(input, np.ndarray) for input in inputs) or use_broadcast):
+    if not getitem and (any(isinstance(input, np.ndarray) for input in inputs)):
+        # Some inputs are NumPy arrays, and we cannot use the fast path for eval() yet
+        equal_chunks, equal_blocks = False, False
 
     # More checks specific of NDArray inputs
     NDinputs = list(input for input in inputs if isinstance(input, blosc2.NDArray))
@@ -228,7 +319,7 @@ def do_slices_intersect(slice1, slice2):
     return True
 
 
-def evaluate_chunks_getitem(
+def chunks_getitem(
     expression: str | Callable, operands: dict, out: np.ndarray = None
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
@@ -249,16 +340,22 @@ def evaluate_chunks_getitem(
     :ref:`NDArray` or np.ndarray
         The output array.
     """
-    basearr = operands["o0"]
+    # Choose the NDArray with the largest shape as the reference for shape and chunks
+    basearr = max(
+        (o for o in operands.values() if isinstance(o, blosc2.NDArray)), key=lambda x: len(x.shape)
+    )
     shape = basearr.shape
     chunks = basearr.chunks
     # Iterate over the operands and get the chunks
-    for info in basearr.iterchunks_info():
+    chunks_idx = np.array(basearr.ext_shape) // np.array(chunks)
+    # Iterate over the operands and get the chunks
+    for nchunk in range(basearr.schunk.nchunks):
+        coords = tuple(np.unravel_index(nchunk, chunks_idx))
         chunk_operands = {}
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
-            for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
+            for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
         offset = tuple(s.start for s in slice_)  # offset for the udf
         chunks_ = tuple(s.stop - s.start for s in slice_)
@@ -266,6 +363,11 @@ def evaluate_chunks_getitem(
         for key, value in operands.items():
             if np.isscalar(value):
                 chunk_operands[key] = value
+                continue
+            if value.shape != basearr.shape:
+                # We need to fetch the part of the value that broadcasts with the operand
+                smaller_slice = compute_smaller_slice(basearr.shape, value.shape, slice_)
+                chunk_operands[key] = value[smaller_slice]
                 continue
             if isinstance(value, np.ndarray):
                 npbuff = value[slice_]
@@ -277,7 +379,7 @@ def evaluate_chunks_getitem(
                 npbuff = value[slice_]
             else:
                 # Fast path for full chunks
-                buff = value.schunk.decompress_chunk(info.nchunk)
+                buff = value.schunk.decompress_chunk(nchunk)
                 bsize = value.dtype.itemsize * math.prod(chunks_)
                 npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
             chunk_operands[key] = npbuff
@@ -299,9 +401,7 @@ def evaluate_chunks_getitem(
     return out
 
 
-def evaluate_chunks_eval(
-    expression: str | Callable, operands: dict, **kwargs
-) -> blosc2.NDArray | np.ndarray:
+def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
     This is used in the eval() method of the LazyArray.
@@ -321,12 +421,21 @@ def evaluate_chunks_eval(
         The output array.
     """
     out = kwargs.pop("_output", None)
-    basearr = operands["o0"] if not isinstance(out, blosc2.NDArray) else out
+    basearr = out
+    if basearr is None:
+        # Choose the NDArray with the largest shape as the reference for shape and chunks
+        basearr = max(
+            (o for o in operands.values() if isinstance(o, blosc2.NDArray)), key=lambda x: len(x.shape)
+        )
     shape = basearr.shape
     chunks = basearr.chunks
-    for info in basearr.iterchunks_info():
-        # Iterate over the operands and get the chunks
-        chunk_operands = {}
+    # Iterate over the operands and get the chunks
+    chunk_operands = {}
+    chunks_idx = np.array(basearr.ext_shape) // np.array(chunks)
+    # Iterate over the operands and get the chunks
+    for nchunk in range(basearr.schunk.nchunks):
+        coords = tuple(np.unravel_index(nchunk, chunks_idx))
+
         # TODO: try to optimize for the sparse case
         # is_special = info.special
         # if is_special == blosc2.SpecialValue.ZERO:
@@ -336,7 +445,7 @@ def evaluate_chunks_eval(
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
-            for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
+            for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
         offset = tuple(s.start for s in slice_)  # offset for the udf
         chunks_ = tuple(s.stop - s.start for s in slice_)
@@ -345,10 +454,17 @@ def evaluate_chunks_eval(
             if np.isscalar(value):
                 chunk_operands[key] = value
                 continue
-            if isinstance(value, np.ndarray):
-                npbuff = value[slice_]
-                chunk_operands[key] = npbuff
-                continue
+            # TODO: try to use broacasting and NumPy arrays
+            #  The blocker is the "padding" of the chunks. See below.
+            # if value.shape != basearr.shape:
+            #     # We need to fetch the part of the value that broadcasts with the operand
+            #     smaller_slice = compute_corresponding_slice(basearr.shape, value.shape, slice_)
+            #     chunk_operands[key] = value[smaller_slice]
+            #     continue
+            # if isinstance(value, np.ndarray):
+            #     npbuff = value[slice_]
+            #     chunk_operands[key] = npbuff
+            #     continue
 
             # TODO: try to optimize for the sparse case
             # # Get the chunk from the NDArray in an optimized way
@@ -360,18 +476,22 @@ def evaluate_chunks_eval(
             #     # continue
             #     pass
 
-            buff = value.schunk.decompress_chunk(info.nchunk)
-            # We don't want to reshape the buffer (to better handle padding)
-            npbuff = np.frombuffer(buff, dtype=value.dtype)
-            if callable(expression):
-                # The udf should handle multidim
-                npbuff = npbuff.reshape(chunks_)
-            chunk_operands[key] = npbuff
+            if key in chunk_operands:
+                # We already have a buffer for this operand
+                value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
+            else:
+                buff = value.schunk.decompress_chunk(nchunk)
+                # We don't want to reshape the buffer (to better handle padding)
+                npbuff = np.frombuffer(buff, dtype=value.dtype)
+                if callable(expression):
+                    # The udf should handle multidim
+                    npbuff = npbuff.reshape(chunks_)
+                chunk_operands[key] = npbuff
 
         if callable(expression):
             result = np.empty_like(npbuff, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
-            out.schunk.update_data(info.nchunk, result, copy=False)
+            out.schunk.update_data(nchunk, result, copy=False)
             continue
 
         # Evaluate the expression using chunks of operands
@@ -382,18 +502,20 @@ def evaluate_chunks_eval(
                 shape, chunks=basearr.chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs
             )
         # Update the output array with the result
-        out.schunk.update_data(info.nchunk, result, copy=False)
+        out.schunk.update_data(nchunk, result, copy=False)
 
     return out
 
 
-def evaluate_slices(
+def slices_eval(
     expression: str | Callable, operands: dict, _slice=None, **kwargs
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
     This can be used when the operands in the expression have different chunk shapes.
     Also, it can be used when only a slice of the output array is needed.
+
+    This is also flexible enough to be used when the operands have different shapes.
 
     Parameters
     ----------
@@ -414,21 +536,32 @@ def evaluate_slices(
     """
     getitem = kwargs.pop("_getitem", False)
     out = kwargs.pop("_output", None)
-    # Choose the first NDArray as the reference for shape and chunks
-    operand = [o for o in operands.values() if isinstance(o, blosc2.NDArray)][0]
-    shape = operand.shape
+    if out is None:
+        # Compute the shape and chunks of the output array, including broadcasting
+        shape = compute_broadcast_shape(operands.values())
+        # operand will be a 'fake' NDArray just to get the necessary chunking information
+        operand = blosc2.empty(shape, dtype=np.uint8)
+    else:
+        # Typically, we enter here when using UDFs, and out is a NumPy array.
+        # Use operands to get the shape and chunks
+        operand = [o for o in operands.values() if isinstance(o, blosc2.NDArray)][0]
+        shape = operand.shape
     chunks = operand.chunks
-    for info in operand.iterchunks_info():
-        # Iterate over the operands and get the chunks
+    nchunks = operand.schunk.nchunks
+    chunks_idx = np.array(operand.ext_shape) // np.array(chunks)
+    del operand
+    # Iterate over the operands and get the chunks
+    for nchunk in range(nchunks):
+        coords = tuple(np.unravel_index(nchunk, chunks_idx))
         chunk_operands = {}
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
-            for i, (c, s) in enumerate(zip(info.coords, chunks, strict=True))
+            for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
         offset = tuple(s.start for s in slice_)  # offset for the udf
         # Check whether current slice_ intersects with _slice
-        if _slice is not None:
+        if _slice is not None and _slice != ():
             intersects = do_slices_intersect(_slice, slice_)
             if not intersects:
                 continue
@@ -441,6 +574,11 @@ def evaluate_slices(
         for key, value in operands.items():
             if np.isscalar(value):
                 chunk_operands[key] = value
+                continue
+            if len(value.shape) < len(shape):
+                # We need to fetch the part of the value that broadcasts with the operand
+                smaller_slice = compute_smaller_slice(shape, value.shape, slice_)
+                chunk_operands[key] = value[smaller_slice]
                 continue
             chunk_operands[key] = value[slice_]
 
@@ -472,21 +610,168 @@ def evaluate_slices(
     return out
 
 
-def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs):
-    shape, dtype_, equal_chunks, equal_blocks = validate_inputs(operands)
+def reduce_slices(
+    expression: str | Callable, operands: dict, reduce_args, _slice=None, **kwargs
+) -> blosc2.NDArray | np.ndarray:
+    """Evaluate the expression in chunks of operands.
 
-    if item is not None and item != slice(None, None, None):
-        return evaluate_slices(expression, operands, _slice=item, **kwargs)
+    This can be used when the operands in the expression have different chunk shapes.
+    Also, it can be used when only a slice of the output array is needed.
+
+    Parameters
+    ----------
+    expression: str or callable
+        The expression or udf to evaluate.
+    operands: dict
+        A dictionary with the operands.
+    reduce_args: dict
+        A dictionary with some of the arguments to be passed to np.reduce.
+    _slice: slice, list of slices, optional
+        If not None, only the chunks that intersect with this slice
+        will be evaluated.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    :ref:`NDArray` or np.ndarray
+        The output array.
+    """
+    out = kwargs.pop("_output", None)
+    reduce_op = reduce_args.pop("op")
+    axis = reduce_args["axis"]
+    keepdims = reduce_args["keepdims"]
+    # Choose the NDArray with the largest shape as the reference for shape and chunks
+    operand = max(
+        (o for o in operands.values() if isinstance(o, blosc2.NDArray)), key=lambda x: len(x.shape)
+    )
+    shape = operand.shape
+    if axis is None:
+        axis = tuple(range(len(shape)))
+    elif not isinstance(axis, tuple):
+        axis = (axis,)
+    if keepdims:
+        reduced_shape = tuple(1 if i in axis else s for i, s in enumerate(shape))
+    else:
+        reduced_shape = tuple(s for i, s in enumerate(shape) if i not in axis)
+    chunks = operand.chunks
+
+    # Iterate over the operands and get the chunks
+    chunk_operands = {}
+    chunks_idx = np.array(operand.ext_shape) // np.array(chunks)
+    # Iterate over the operands and get the chunks
+    for nchunk in range(operand.schunk.nchunks):
+        coords = tuple(np.unravel_index(nchunk, chunks_idx))
+        # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
+        slice_ = tuple(
+            slice(c * s, min((c + 1) * s, shape[i]))
+            for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
+        )
+        if keepdims:
+            reduced_slice = tuple(slice(None) if i in axis else sl for i, sl in enumerate(slice_))
+        else:
+            reduced_slice = tuple(sl for i, sl in enumerate(slice_) if i not in axis)
+        offset = tuple(s.start for s in slice_)  # offset for the udf
+        # Check whether current slice_ intersects with _slice
+        if _slice is not None:
+            intersects = do_slices_intersect(_slice, slice_)
+            if not intersects:
+                continue
+        slice_shape = tuple(s.stop - s.start for s in slice_)
+        # reduced_slice_shape = tuple(s.stop - s.start for s in reduced_slice)
+        if len(slice_) == 1:
+            slice_ = slice_[0]
+        else:
+            slice_ = tuple(slice_)
+        if len(reduced_slice) == 1:
+            reduced_slice = reduced_slice[0]
+        else:
+            reduced_slice = tuple(reduced_slice)
+        # Get the slice of each operand
+        for key, value in operands.items():
+            if np.isscalar(value):
+                chunk_operands[key] = value
+                continue
+            if len(value.shape) < len(operand.shape):
+                # We need to fetch the part of the value that broadcasts with the operand
+                smaller_slice = compute_smaller_slice(operand.shape, value.shape, slice_)
+                chunk_operands[key] = value[smaller_slice]
+                continue
+            chunk_operands[key] = value[slice_]
+
+        # Evaluate and reduce the expression using chunks of operands
+
+        if callable(expression):
+            # TODO: Implement the reductions for UDFs (and test them)
+            result = np.empty(slice_shape, dtype=out.dtype)
+            expression(tuple(chunk_operands.values()), result, offset=offset)
+            # Reduce the result
+            result = reduce_op.value.reduce(result, **reduce_args)
+            # Update the output array with the result
+            out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
+            continue
+
+        result = ne.evaluate(expression, chunk_operands)
+        # Reduce the result
+        if reduce_op == ReduceOp.ANY:
+            result = np.any(result, **reduce_args)
+        elif reduce_op == ReduceOp.ALL:
+            result = np.all(result, **reduce_args)
+        else:
+            result = reduce_op.value.reduce(result, **reduce_args)
+        dtype = reduce_args["dtype"] if reduce_op in (ReduceOp.SUM, ReduceOp.PROD) else None
+        if dtype is None:
+            dtype = result.dtype
+        if out is None:
+            if reduce_op == ReduceOp.SUM:
+                out = blosc2.zeros(reduced_shape, dtype=dtype, **kwargs)
+            elif reduce_op == ReduceOp.PROD:
+                out = blosc2.full(reduced_shape, 1, dtype=dtype, **kwargs)
+            elif reduce_op == ReduceOp.MIN:
+                if np.issubdtype(dtype, np.integer):
+                    out = blosc2.full(reduced_shape, np.iinfo(dtype).max, dtype=dtype, **kwargs)
+                else:
+                    out = blosc2.full(reduced_shape, np.inf, dtype=dtype, **kwargs)
+            elif reduce_op == ReduceOp.MAX:
+                if np.issubdtype(dtype, np.integer):
+                    out = blosc2.full(reduced_shape, np.iinfo(dtype).min, dtype=dtype, **kwargs)
+                else:
+                    out = blosc2.full(reduced_shape, -np.inf, dtype=dtype, **kwargs)
+            elif reduce_op == ReduceOp.ANY:
+                out = blosc2.zeros(reduced_shape, dtype=np.bool_, **kwargs)
+            elif reduce_op == ReduceOp.ALL:
+                out = blosc2.full(reduced_shape, True, dtype=np.bool_, **kwargs)
+        # Update the output array with the result
+        if reduce_op == ReduceOp.ANY:
+            out[reduced_slice] += result
+        elif reduce_op == ReduceOp.ALL:
+            out[reduced_slice] *= result
+        else:
+            out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
+
+    return out
+
+
+def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs):
+    getitem = kwargs.get("_getitem", False)
+    shape, dtype_, equal_chunks, equal_blocks = validate_inputs(operands, getitem)
+
+    reduce_args = kwargs.pop("_reduce_args", {})
+    if reduce_args:
+        # Eval and reduce the expression in a single step
+        return reduce_slices(expression, operands, reduce_args=reduce_args, _slice=item, **kwargs)
+
+    if item is not None and item != slice(None):
+        return slices_eval(expression, operands, _slice=item, **kwargs)
 
     if equal_chunks and equal_blocks:
-        getitem = kwargs.get("_getitem", False)
         if getitem:
             out = kwargs.pop("_output", None)
-            return evaluate_chunks_getitem(expression, operands, out=out)
+            return chunks_getitem(expression, operands, out=out)
         elif kwargs.get("chunks", None) is None and kwargs.get("blocks", None) is None:
-            return evaluate_chunks_eval(expression, operands, **kwargs)
+            return chunks_eval(expression, operands, **kwargs)
 
-    return evaluate_slices(expression, operands, **kwargs)
+    return slices_eval(expression, operands, **kwargs)
 
 
 def fuse_operands(operands1, operands2):
@@ -610,9 +895,15 @@ class LazyExpr(LazyArray):
         elif np.isscalar(value2):
             self.operands = {"o0": value1}
             self.expression = f"(o0 {op} {value2})"
+        elif hasattr(value2, "shape") and value2.shape == ():
+            self.operands = {"o0": value1}
+            self.expression = f"(o0 {op} {value2[()]})"
         elif np.isscalar(value1):
             self.operands = {"o0": value2}
             self.expression = f"({value1} {op} o0)"
+        elif hasattr(value1, "shape") and value1.shape == ():
+            self.operands = {"o0": value2}
+            self.expression = f"({value1[()]} {op} o0)"
         else:
             if value1 is value2:
                 self.operands = {"o0": value1}
@@ -647,8 +938,10 @@ class LazyExpr(LazyArray):
         elif isinstance(value1, LazyExpr):
             if op == "not":
                 self.expression = f"({op}{self.expression})"
-            elif isinstance(value2, int | float):
+            elif np.isscalar(value2):
                 self.expression = f"({self.expression} {op} {value2})"
+            elif hasattr(value2, "shape") and value2.shape == ():
+                self.expression = f"({self.expression} {op} {value2[()]})"
             else:
                 try:
                     op_name = list(value1.operands.keys())[list(value1.operands.values()).index(value2)]
@@ -657,8 +950,10 @@ class LazyExpr(LazyArray):
                     self.operands[op_name] = value2
                 self.expression = f"({self.expression} {op} {op_name})"
         else:
-            if isinstance(value1, int | float):
+            if np.isscalar(value1):
                 self.expression = f"({value1} {op} {self.expression})"
+            elif hasattr(value1, "shape") and value1.shape == ():
+                self.expression = f"({value1[()]} {op} {self.expression})"
             else:
                 try:
                     op_name = list(value2.operands.keys())[list(value2.operands.values()).index(value1)]
@@ -772,6 +1067,101 @@ class LazyExpr(LazyArray):
 
     def __ge__(self, value):
         return self.update_expr(new_op=(self, ">=", value))
+
+    def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
+        # Always evaluate the expression prior the reduction
+        reduce_args = {
+            "op": ReduceOp.SUM,
+            "axis": axis,
+            "dtype": dtype,
+            "keepdims": keepdims,
+        }
+        return self.eval(_reduce_args=reduce_args, **kwargs)
+
+    def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
+        # Always evaluate the expression prior the reduction
+        total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims)
+        if np.isscalar(axis):
+            axis = (axis,)
+        num_elements = np.prod(self.shape) if axis is None else np.prod([self.shape[i] for i in axis])
+        mean_expr = total_sum / num_elements
+        return mean_expr.eval(**kwargs)
+
+    def std(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
+        # Always evaluate the expression prior the reduction
+        mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
+        std_expr = (self - mean_value) ** 2
+        if len(mean_value.shape) > 0:
+            # This additional step is needed to allow broadcasting to work:
+            # values need to be consolidated before the next operation.
+            # The issue is that sub-expressions having different shapes
+            # (broadcast) cannot be mixed with reduction operations.
+            # When the mean value is a scalar, the broadcasting is not needed.
+            std_expr = std_expr.eval()
+        std_expr = std_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
+        if ddof != 0:
+            if axis is None:
+                num_elements = np.prod(self.shape)
+            else:
+                num_elements = np.prod([self.shape[i] for i in axis])
+            std_expr = blosc2.sqrt(std_expr * num_elements / (num_elements - ddof))
+        else:
+            std_expr = blosc2.sqrt(std_expr)
+        return std_expr.eval(**kwargs)
+
+    def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
+        # Always evaluate the expression prior the reduction
+        reduce_args = {
+            "op": ReduceOp.PROD,
+            "axis": axis,
+            "dtype": dtype,
+            "keepdims": keepdims,
+        }
+        return self.eval(_reduce_args=reduce_args, **kwargs)
+
+    def min(self, axis=None, keepdims=False, **kwargs):
+        # Always evaluate the expression prior the reduction
+        reduce_args = {
+            "op": ReduceOp.MIN,
+            "axis": axis,
+            "keepdims": keepdims,
+        }
+        if "dtype" in kwargs:
+            raise ValueError("dtype is not supported for min method")
+        return self.eval(_reduce_args=reduce_args, **kwargs)
+
+    def max(self, axis=None, keepdims=False, **kwargs):
+        # Always evaluate the expression prior the reduction
+        reduce_args = {
+            "op": ReduceOp.MAX,
+            "axis": axis,
+            "keepdims": keepdims,
+        }
+        if "dtype" in kwargs:
+            raise ValueError("dtype is not supported for max method")
+        return self.eval(_reduce_args=reduce_args, **kwargs)
+
+    def any(self, axis=None, keepdims=False, **kwargs):
+        # Always evaluate the expression prior the reduction
+        reduce_args = {
+            "op": ReduceOp.ANY,
+            "axis": axis,
+            "keepdims": keepdims,
+        }
+        if "dtype" in kwargs:
+            raise ValueError("dtype is not supported for any method")
+        return self.eval(_reduce_args=reduce_args, **kwargs)
+
+    def all(self, axis=None, keepdims=False, **kwargs):
+        # Always evaluate the expression prior the reduction
+        reduce_args = {
+            "op": ReduceOp.ALL,
+            "axis": axis,
+            "keepdims": keepdims,
+        }
+        if "dtype" in kwargs:
+            raise ValueError("dtype is not supported for all method")
+        return self.eval(_reduce_args=reduce_args, **kwargs)
 
     def eval(self, item=None, **kwargs) -> blosc2.NDArray:
         return chunked_eval(self.expression, self.operands, item, **kwargs)

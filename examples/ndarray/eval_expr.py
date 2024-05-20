@@ -24,19 +24,19 @@ b = blosc2.asarray(npb)
 
 # Get a LazyExpr instance
 c = a**2 + b**2 + 2 * a * b + 1
-# Evaluate!  Output is a NDArray
+# Evaluate: output is a NDArray
 d = c.eval()
 # Check
 assert isinstance(d, blosc2.NDArray)
 assert np.allclose(d[:], npc)
 
-# Evaluate an slice!  Output is a NumPy array
+# Evaluate the whole slice: output is a NumPy array
 npd = c[:]
 # Check
 assert isinstance(npd, np.ndarray)
 assert np.allclose(npd, npc)
 
-# Evaluate an slice!  Output is a NumPy array
+# Evaluate a partial slice: output is a NumPy array
 npd = c[1:10]
 # Check
 assert isinstance(npd, np.ndarray)
@@ -53,7 +53,7 @@ db = b.copy(urlpath="b.b2nd", mode="w")
 (da**2 + db**2 + 2 * da * db + 1).save(urlpath="c.b2nd")
 dc = blosc2.open("c.b2nd")
 
-# Evaluate!  Output is a NDArray
+# Evaluate: output is a NDArray
 dc2 = dc.eval()
 # Check
 assert isinstance(dc2, blosc2.NDArray)

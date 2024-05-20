@@ -179,30 +179,6 @@ from .ndarray import (  # noqa: I001
     uninit,
     zeros,
     get_slice_nchunks,
-    sin,
-    cos,
-    tan,
-    sinh,
-    cosh,
-    tanh,
-    arcsin,
-    arccos,
-    arctan,
-    arctan2,
-    arcsinh,
-    arccosh,
-    arctanh,
-    exp,
-    expm1,
-    log,
-    log10,
-    log1p,
-    sqrt,
-    conj,
-    real,
-    imag,
-    contains,
-    abs,
 )
 
 from .lazyexpr import LazyExpr, lazyudf, LazyArray, _open_lazyarray
@@ -292,6 +268,42 @@ Storage params defaults. This is meant only for :ref:`SChunk <SChunk>` or :ref:`
 """
 
 _disable_overloaded_equal = False
+
+# Delayed imports for avoiding overwriting of python builtins
+from .ndarray import (
+    abs,
+    all,
+    any,
+    arccos,
+    arccosh,
+    arcsin,
+    arcsinh,
+    arctan,
+    arctan2,
+    arctanh,
+    conj,
+    contains,
+    cos,
+    cosh,
+    exp,
+    expm1,
+    imag,
+    log,
+    log1p,
+    log10,
+    max,
+    mean,
+    min,
+    prod,
+    real,
+    sin,
+    sinh,
+    sqrt,
+    std,
+    sum,
+    tan,
+    tanh,
+)
 
 __all__ = [
     "__version__",

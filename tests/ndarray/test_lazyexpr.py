@@ -562,3 +562,49 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
 
     for urlpath in [urlpath_op, urlpath_op2, urlpath_save]:
         blosc2.remove_urlpath(urlpath)
+
+
+@pytest.fixture(
+    params=[
+        ((2, 5), (5,)),
+        ((2, 1), (5,)),
+        ((2, 5, 3), (5, 3)),
+        ((2, 5, 3), (5, 1)),
+        ((2, 1, 3), (5, 3)),
+        ((2, 5, 3, 2), (5, 3, 2)),
+        ((2, 5, 3, 2), (5, 3, 1)),
+        ((2, 5, 3, 2), (5, 1, 2)),
+        ((2, 1, 3, 2), (5, 3, 2)),
+        ((2, 1, 3, 2), (5, 1, 2)),
+        ((2, 5, 3, 2, 2), (5, 3, 2, 2)),
+        ((100, 100, 100), (100, 100)),
+    ]
+)
+def broadcast_shape(request):
+    return request.param
+
+
+# Test broadcasting
+@pytest.fixture
+def broadcast_fixture(dtype_fixture, broadcast_shape):
+    shape1, shape2 = broadcast_shape
+    na1 = np.linspace(0, 1, np.prod(shape1), dtype=dtype_fixture).reshape(shape1)
+    na2 = np.linspace(1, 2, np.prod(shape2), dtype=dtype_fixture).reshape(shape2)
+    a1 = blosc2.asarray(na1)
+    a2 = blosc2.asarray(na2)
+    return a1, a2, na1, na2
+
+
+def test_broadcasting(broadcast_fixture):
+    a1, a2, na1, na2 = broadcast_fixture
+    expr1 = a1 + a2
+    assert expr1.shape == a1.shape
+    expr2 = a1 * a2 + 1
+    assert expr2.shape == a1.shape
+    expr = expr1 - expr2
+    assert expr.shape == a1.shape
+    nres = ne.evaluate("na1 + na2 - (na1 * na2 + 1)")
+    res = expr.eval()
+    np.testing.assert_allclose(res[:], nres)
+    res = expr[:]
+    np.testing.assert_allclose(res, nres)

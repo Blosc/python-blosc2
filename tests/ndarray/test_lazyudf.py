@@ -75,7 +75,6 @@ def test_1p(shape, chunks, blocks, chunked_eval):
 
     tol = 1e-5 if res.dtype is np.float32 else 1e-14
     np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
-
     np.testing.assert_allclose(expr[...], npc, rtol=tol, atol=tol)
 
 
