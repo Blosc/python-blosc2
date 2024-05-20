@@ -130,6 +130,8 @@ The C-Blosc2 version's string."""
 
 cpu_info = cpuinfo.get_cpu_info()
 
+from .c2array import C2Array
+
 # Public API for container module
 from .core import (  # noqa: I001
     clib_info,

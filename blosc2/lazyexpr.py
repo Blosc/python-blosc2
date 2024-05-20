@@ -251,7 +251,7 @@ def validate_inputs(inputs: dict, getitem=False) -> tuple:
             "You need to pass at least one array.  Use blosc2.empty() if values are not really needed."
         )
 
-    inputs = list(input for input in inputs.values() if isinstance(input, blosc2.NDArray | np.ndarray))
+    inputs = list(input for input in inputs.values() if isinstance(input, blosc2.NDArray | np.ndarray | blosc2.C2Array))
 
     # All array inputs should have a compatible shape
     if len(inputs) > 1:
@@ -268,7 +268,7 @@ def validate_inputs(inputs: dict, getitem=False) -> tuple:
         equal_chunks, equal_blocks = False, False
 
     # More checks specific of NDArray inputs
-    NDinputs = list(input for input in inputs if isinstance(input, blosc2.NDArray))
+    NDinputs = list(input for input in inputs if isinstance(input, blosc2.NDArray | blosc2.C2Array))
     if len(NDinputs) == 0:
         raise ValueError("At least one input should be a NDArray")
 
@@ -550,7 +550,7 @@ def slices_eval(
     else:
         # Typically, we enter here when using UDFs, and out is a NumPy array.
         # Use operands to get the shape and chunks
-        operand = [o for o in operands.values() if isinstance(o, blosc2.NDArray)][0]
+        operand = [o for o in operands.values() if isinstance(o, blosc2.NDArray | blosc2.C2Array)][0]
         shape = operand.shape
     chunks = operand.chunks
     nchunks = operand.schunk.nchunks
