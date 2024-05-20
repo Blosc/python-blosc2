@@ -112,3 +112,36 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     nres = getattr(nres, reduce_op)(axis=axis) + getattr(na1, reduce_op)(axis=axis)
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
+
+
+# Test broadcasting
+@pytest.mark.parametrize("reduce_op", ["sum", "mean", "std", "min", "max"])
+@pytest.mark.parametrize("axis", [0, 1, (0, 1), None])
+@pytest.mark.parametrize("keepdims", [True, False])
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        ((5, 5, 5), (5, 5), (5,)),
+        ((10, 10, 10), (10, 10), (10,)),
+        ((100, 100, 100), (100, 100), (100,)),  # TODO: not working yet for fast path in std()
+    ],
+)
+def test_broadcast_params(axis, keepdims, reduce_op, shapes):
+    na1 = np.linspace(0, 1, np.prod(shapes[0])).reshape(shapes[0])
+    na2 = np.linspace(1, 2, np.prod(shapes[1])).reshape(shapes[1])
+    na3 = np.linspace(2, 3, np.prod(shapes[2])).reshape(shapes[2])
+    a1 = blosc2.asarray(na1)
+    a2 = blosc2.asarray(na2)
+    a3 = blosc2.asarray(na3)
+
+    expr1 = a1 + a2 - a3
+    assert expr1.shape == shapes[0]
+    expr2 = a1 * a2 + 1
+    assert expr2.shape == shapes[0]
+    res = expr1 - getattr(expr2, reduce_op)(axis=axis, keepdims=keepdims)
+    assert res.shape == shapes[0]
+    # print(f"res: {res.shape} expr1: {expr1.shape} expr2: {expr2.shape}")
+    nres = eval(f"na1 + na2 - na3 - (na1 * na2 + 1).{reduce_op}(axis={axis}, keepdims={keepdims})")
+
+    tol = 1e-14 if a1.dtype == "float64" else 1e-5
+    np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)

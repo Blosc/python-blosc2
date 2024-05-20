@@ -168,21 +168,95 @@ def convert_inputs(inputs):
     return inputs_
 
 
-def validate_inputs(inputs: dict) -> tuple:
+def check_broadcast_compatible(arrays):
+    shapes = [arr.shape for arr in arrays]
+    max_len = max(map(len, shapes))
+    # Pad shorter shapes with 1s
+    shapes_ = [(1,) * (max_len - len(shape)) + shape for shape in shapes]
+    # Reverse the shapes to compare from last dimension
+    shapes_ = [shape[::-1] for shape in shapes_]
+    # Check
+    for dims in zip(*shapes_, strict=True):
+        max_dim = max(dims)
+        if not all((dim == max_dim) or (dim == 1) for dim in dims):
+            _shapes = " ".join(str(shape) for shape in shapes)
+            raise ValueError(f"operands could not be broadcast together with shapes {_shapes}")
+
+
+def compute_broadcast_shape(arrays):
+    """
+    Returns the shape of the outcome of an operation with the input arrays.
+    """
+    # When dealing with UDFs, one can arrive params that are not arrays
+    shapes = [np.array(arr.shape) for arr in arrays if hasattr(arr, "shape")]
+    max_len = max(map(len, shapes))
+
+    # Pad shorter shapes with 1s
+    shapes = np.array(
+        [np.concatenate([np.ones(max_len - len(shape), dtype=int), shape]) for shape in shapes], dtype=int
+    )
+
+    # Compare dimensions from last dimension, take maximum size
+    result_shape = np.max(shapes, axis=0)
+
+    return tuple(result_shape)
+
+
+def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
+    """
+    Returns the slice of the smaller array that corresponds to the slice of the larger array.
+    """
+    smaller_slice = []
+    diff_dims = len(larger_shape) - len(smaller_shape)
+
+    for i in range(len(larger_shape)):
+        if i < diff_dims:
+            # For leading dimensions of the larger array that the smaller array doesn't have,
+            # we don't add anything to the smaller slice
+            pass
+        else:
+            # For dimensions that both arrays have, the slice for the smaller array should be
+            # the same as the larger array unless the smaller array's size along that dimension
+            # is 1, in which case we don't add anything to the smaller slice
+            if smaller_shape[i - diff_dims] != 1:
+                smaller_slice.append(larger_slice[i])
+
+    return tuple(smaller_slice)
+
+
+# A more compact version of the function above, albeit less readable
+def _compute_corresponding_slice(larger_shape, smaller_shape, larger_slice):
+    diff_dims = len(larger_shape) - len(smaller_shape)
+    smaller_slice = [
+        larger_slice[i]
+        for i in range(len(larger_shape))
+        if i >= diff_dims and smaller_shape[i - diff_dims] != 1
+    ]
+    return tuple(smaller_slice)
+
+
+def validate_inputs(inputs: dict, getitem=False) -> tuple:
     """Validate the inputs for the expression."""
     if len(inputs) == 0:
         raise ValueError(
             "You need to pass at least one array.  Use blosc2.empty() if values are not really needed."
         )
 
-    # All array inputs should have the same shape
     inputs = list(input for input in inputs.values() if isinstance(input, blosc2.NDArray | np.ndarray))
-    first_input = inputs[0]
-    for input_ in inputs[1:]:
-        if first_input.shape != input_.shape:
-            raise ValueError("Inputs should have the same shape")
-    equal_chunks = True
-    equal_blocks = True
+
+    # All array inputs should have a compatible shape
+    if len(inputs) > 1:
+        check_broadcast_compatible(inputs)
+
+    equal_chunks, equal_blocks = True, True
+    # Check whether we can use the fast path for eval()
+    # We cannot use it if the computation involves broadcasting
+    # or if the inputs are NumPy arrays
+    # use_broadcast = any(len(input.shape) < len(inputs[0].shape) for input in inputs)
+    # if not getitem and (any(isinstance(input, np.ndarray) for input in inputs) or use_broadcast):
+    if not getitem and (any(isinstance(input, np.ndarray) for input in inputs)):
+        # Some inputs are NumPy arrays, and we cannot use the fast path for eval() yet
+        equal_chunks, equal_blocks = False, False
 
     # More checks specific of NDArray inputs
     NDinputs = list(input for input in inputs if isinstance(input, blosc2.NDArray))
@@ -263,7 +337,10 @@ def evaluate_chunks_getitem(
     :ref:`NDArray` or np.ndarray
         The output array.
     """
-    basearr = operands["o0"]
+    # Choose the NDArray with the largest shape as the reference for shape and chunks
+    basearr = max(
+        (o for o in operands.values() if isinstance(o, blosc2.NDArray)), key=lambda x: len(x.shape)
+    )
     shape = basearr.shape
     chunks = basearr.chunks
     # Iterate over the operands and get the chunks
@@ -283,6 +360,11 @@ def evaluate_chunks_getitem(
         for key, value in operands.items():
             if np.isscalar(value):
                 chunk_operands[key] = value
+                continue
+            if value.shape != basearr.shape:
+                # We need to fetch the part of the value that broadcasts with the operand
+                smaller_slice = compute_smaller_slice(basearr.shape, value.shape, slice_)
+                chunk_operands[key] = value[smaller_slice]
                 continue
             if isinstance(value, np.ndarray):
                 npbuff = value[slice_]
@@ -338,7 +420,12 @@ def evaluate_chunks_eval(
         The output array.
     """
     out = kwargs.pop("_output", None)
-    basearr = operands["o0"] if not isinstance(out, blosc2.NDArray) else out
+    basearr = out
+    if basearr is None:
+        # Choose the NDArray with the largest shape as the reference for shape and chunks
+        basearr = max(
+            (o for o in operands.values() if isinstance(o, blosc2.NDArray)), key=lambda x: len(x.shape)
+        )
     shape = basearr.shape
     chunks = basearr.chunks
     # Iterate over the operands and get the chunks
@@ -366,10 +453,17 @@ def evaluate_chunks_eval(
             if np.isscalar(value):
                 chunk_operands[key] = value
                 continue
-            if isinstance(value, np.ndarray):
-                npbuff = value[slice_]
-                chunk_operands[key] = npbuff
-                continue
+            # TODO: try to use broacasting and NumPy arrays
+            #  The blocker is the "padding" of the chunks. See below.
+            # if value.shape != basearr.shape:
+            #     # We need to fetch the part of the value that broadcasts with the operand
+            #     smaller_slice = compute_corresponding_slice(basearr.shape, value.shape, slice_)
+            #     chunk_operands[key] = value[smaller_slice]
+            #     continue
+            # if isinstance(value, np.ndarray):
+            #     npbuff = value[slice_]
+            #     chunk_operands[key] = npbuff
+            #     continue
 
             # TODO: try to optimize for the sparse case
             # # Get the chunk from the NDArray in an optimized way
@@ -420,6 +514,8 @@ def evaluate_slices(
     This can be used when the operands in the expression have different chunk shapes.
     Also, it can be used when only a slice of the output array is needed.
 
+    This is also flexible enough to be used when the operands have different shapes.
+
     Parameters
     ----------
     expression: str or callable
@@ -439,13 +535,22 @@ def evaluate_slices(
     """
     getitem = kwargs.pop("_getitem", False)
     out = kwargs.pop("_output", None)
-    # Choose the first NDArray as the reference for shape and chunks
-    operand = [o for o in operands.values() if isinstance(o, blosc2.NDArray)][0]
-    shape = operand.shape
+    if out is None:
+        # Compute the shape and chunks of the output array, including broadcasting
+        shape = compute_broadcast_shape(operands.values())
+        # operand will be a 'fake' NDArray just to get the necessary chunking information
+        operand = blosc2.empty(shape, dtype=np.uint8)
+    else:
+        # Typically, we enter here when using UDFs, and out is a NumPy array.
+        # Use operands to get the shape and chunks
+        operand = [o for o in operands.values() if isinstance(o, blosc2.NDArray)][0]
+        shape = operand.shape
     chunks = operand.chunks
+    nchunks = operand.schunk.nchunks
     chunks_idx = np.array(operand.ext_shape) // np.array(chunks)
+    del operand
     # Iterate over the operands and get the chunks
-    for nchunk in range(operand.schunk.nchunks):
+    for nchunk in range(nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
         chunk_operands = {}
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
@@ -468,6 +573,11 @@ def evaluate_slices(
         for key, value in operands.items():
             if np.isscalar(value):
                 chunk_operands[key] = value
+                continue
+            if len(value.shape) < len(shape):
+                # We need to fetch the part of the value that broadcasts with the operand
+                smaller_slice = compute_smaller_slice(shape, value.shape, slice_)
+                chunk_operands[key] = value[smaller_slice]
                 continue
             chunk_operands[key] = value[slice_]
 
@@ -530,8 +640,10 @@ def reduce_slices(
     reduce_op = reduce_args.pop("op")
     axis = reduce_args["axis"]
     keepdims = reduce_args["keepdims"]
-    # Choose the first NDArray as the reference for shape and chunks
-    operand = [o for o in operands.values() if isinstance(o, blosc2.NDArray)][0]
+    # Choose the NDArray with the largest shape as the reference for shape and chunks
+    operand = max(
+        (o for o in operands.values() if isinstance(o, blosc2.NDArray)), key=lambda x: len(x.shape)
+    )
     shape = operand.shape
     if axis is None:
         axis = tuple(range(len(shape)))
@@ -578,6 +690,11 @@ def reduce_slices(
         for key, value in operands.items():
             if np.isscalar(value):
                 chunk_operands[key] = value
+                continue
+            if len(value.shape) < len(operand.shape):
+                # We need to fetch the part of the value that broadcasts with the operand
+                smaller_slice = compute_smaller_slice(operand.shape, value.shape, slice_)
+                chunk_operands[key] = value[smaller_slice]
                 continue
             chunk_operands[key] = value[slice_]
 
@@ -635,18 +752,18 @@ def reduce_slices(
 
 
 def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs):
-    shape, dtype_, equal_chunks, equal_blocks = validate_inputs(operands)
+    getitem = kwargs.get("_getitem", False)
+    shape, dtype_, equal_chunks, equal_blocks = validate_inputs(operands, getitem)
 
     reduce_args = kwargs.pop("_reduce_args", {})
     if reduce_args:
         # Eval and reduce the expression in a single step
         return reduce_slices(expression, operands, reduce_args=reduce_args, _slice=item, **kwargs)
 
-    if item is not None and item != slice(None, None, None):
+    if item is not None and item != slice(None):
         return evaluate_slices(expression, operands, _slice=item, **kwargs)
 
     if equal_chunks and equal_blocks:
-        getitem = kwargs.get("_getitem", False)
         if getitem:
             out = kwargs.pop("_output", None)
             return evaluate_chunks_getitem(expression, operands, out=out)
@@ -974,20 +1091,25 @@ class LazyExpr(LazyArray):
         # Always evaluate the expression prior the reduction
         if axis is None:
             # The mean is a scalar, so we can use it directly in a expression
-            subtracted = self - self.mean(dtype=dtype)
+            mean_expr = (self - self.mean(dtype=dtype)) ** 2
         else:
-            # Shapes will be different, so we need to convert operands to numpy arrays
-            # For avoiding this, we need to support general broadcasting in expressions
-            # and this is not going to happen anytime soon
             mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
-            subtracted = self[:] - mean_value[:]
-        squared = subtracted**2
-        mean_of_squares = squared.mean(axis=axis, dtype=dtype, keepdims=keepdims)
+            # Shapes will be different, and there should be a bug in LazyExpr broadcasting,
+            # because the following line makes some test fail
+            # (see test_reductions.py::test_broadcast_params)
+            # mean_expr = (self - mean_value) ** 2
+            # Meanwhile, use plain NumPy through this workaround
+            mean_expr = (self[:] - mean_value[:]) ** 2
+            # This additional step is needed to make this outcome part of expressions
+            mean_expr = blosc2.asarray(mean_expr)
+        mean_values = mean_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
         if ddof != 0:
-            num_elements = np.prod(self.shape) if axis is None else np.prod([self.shape[i] for i in axis])
-            return (mean_of_squares * num_elements / (num_elements - ddof)) ** 0.5
-        # ddof == 0
-        return mean_of_squares**0.5
+            if axis is None:
+                num_elements = np.prod(self.shape)
+            else:
+                num_elements = np.prod([self.shape[i] for i in axis])
+            return blosc2.sqrt(mean_values * num_elements / (num_elements - ddof))
+        return blosc2.sqrt(mean_values)
 
     def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
