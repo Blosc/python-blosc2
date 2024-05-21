@@ -520,7 +520,7 @@ class NDArray(blosc2_ext.NDArray):
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
-    def mean(self, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
+    def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
         """
         Returns the arithmetic mean along the specified axis.
 

@@ -27,6 +27,12 @@ class ReduceOp(Enum):
     SUM = np.add
     PROD = np.multiply
     MEAN = np.mean
+    # Computing a median from partial results is not straightforward because the median
+    # is a positional statistic, which means it depends on the relative ordering of all
+    # the data points. Unlike statistics such as the sum or mean, you can't compute a median
+    # from partial results without knowing the entire dataset, and this is way too expensive
+    # for arrays that cannot typically fit in-memory (e.g. disk-based NDArray).
+    # MEDIAN = np.median
     MAX = np.maximum
     MIN = np.minimum
     ANY = np.any
