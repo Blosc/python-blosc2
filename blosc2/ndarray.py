@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import math
 from collections import namedtuple
 from collections.abc import Sequence
 
@@ -33,11 +32,7 @@ def get_ndarray_start_stop(ndim, key, shape):
     start = tuple(s.start if s.start is not None else 0 for s in key)
     stop = tuple(s.stop if s.stop is not None else sh for s, sh in zip(key, shape, strict=False))
     step = tuple(s.step if s.step is not None else 1 for s in key)
-    # Check if the steps are different from 1 (not supported yet)
-    if __builtins__["any"](s != 1 for s in step):
-        raise ValueError("Step different than 1 is not supported yet")
-    size = math.prod([stop[i] - start[i] for i in range(ndim)])
-    return start, stop, size
+    return start, stop, step
 
 
 class NDArray(blosc2_ext.NDArray):
@@ -121,7 +116,7 @@ class NDArray(blosc2_ext.NDArray):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
         key, mask = process_key(key, self.shape)
-        start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
+        start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
         shape = np.array([sp - st for st, sp in zip(start, stop, strict=False)])
         shape = tuple(shape[[not m for m in mask]])
@@ -129,8 +124,14 @@ class NDArray(blosc2_ext.NDArray):
         # Benchmarking shows that empty is faster than zeros
         # (besides we don't need to fill padding with zeros)
         arr = np.empty(shape, dtype=self.dtype)
+        nparr = super().get_slice_numpy(arr, key)
+        if step != (1,) * self.ndim:
+            if len(step) == 1:
+                return nparr[:: step[0]]
+            slice_ = tuple(slice(None, None, st) for st in step)
+            return nparr[slice_]
 
-        return super().get_slice_numpy(arr, key)
+        return nparr
 
     def __setitem__(self, key, value):
         """Set a slice.
@@ -164,7 +165,9 @@ class NDArray(blosc2_ext.NDArray):
         """
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
         key, _ = process_key(key, self.shape)
-        start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
+        start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
+        if step != (1,) * self.ndim:
+            raise ValueError("Step parameter is not supported yet")
         key = (start, stop)
 
         if isinstance(value, int | float | bool):
@@ -360,7 +363,9 @@ class NDArray(blosc2_ext.NDArray):
         """
         _check_ndarray_kwargs(**kwargs)
         key, mask = process_key(key, self.shape)
-        start, stop, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
+        start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
+        if step != (1,) * self.ndim:
+            raise ValueError("Step parameter is not supported yet")
         key = (start, stop)
         return super().get_slice(key, mask, **kwargs)
 
@@ -1867,6 +1872,8 @@ def get_slice_nchunks(schunk, key):
         array = schunk
         key, _ = process_key(key, array.shape)
         start, stop, step = get_ndarray_start_stop(array.ndim, key, array.shape)
+        if step != (1,) * array.ndim:
+            raise IndexError("Step parameter is not supported yet")
         key = (start, stop)
         return blosc2_ext.array_get_slice_nchunks(array, key)
     else:

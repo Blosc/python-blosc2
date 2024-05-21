@@ -47,10 +47,22 @@ def test_ndarray_cframe(contiguous, urlpath, cparams, dparams, nchunks, copy):
 
 
 # steps != 1 are not supported yet
-@pytest.mark.parametrize("steps", [0, 2, 3, 40])
-def test_ndarray_steps(steps):
-    data = np.arange(200 * 1000, dtype="int32")
+@pytest.mark.parametrize(
+    "shape, steps",
+    [
+        ((200,), 1),
+        ((200,), 3),
+        ((200, 10), 1),
+        ((200, 10), 2),
+        ((200, 10, 10), 2),
+        ((200, 10, 10), 40),
+        ((200, 10, 10, 10), 9),
+    ],
+)
+def test_getitem_steps(shape, steps):
+    data = np.arange(np.prod(shape), dtype="int32").reshape(shape)
     ndarray = blosc2.asarray(data)
 
-    with pytest.raises(ValueError):
-        _ = ndarray[::steps]
+    steps_array = ndarray[::steps]
+    steps_data = data[::steps]
+    np.testing.assert_equal(steps_array[:], steps_data)
