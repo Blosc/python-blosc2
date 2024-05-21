@@ -35,7 +35,6 @@ def get(url, params=None, headers=None, timeout=5, model=None,
 
 
 def fetch_data(path, host, params, auth_cookie=None):
-    params['prefer_schunk'] = True
     response = _xget(f'http://{host}/api/fetch/{path}', params=params,
                      auth_cookie=auth_cookie)
     data = response.content
@@ -77,53 +76,31 @@ class C2Array:
                                   auth_cookie=self.auth_cookie)
 
     def __getitem__(self, slice_: int | slice | Sequence[slice]) -> np.ndarray:
-        data = self.fetch(slice_=slice_)
-        return data
-
-    def fetch(self, slice_=None, prefer_schunk=True):
-        """
-        Fetch a slice of a dataset.  Can specify transport serialization.
-
-        Similar to `__getitem__()` but this one lets specify whether to prefer using Blosc2
-        schunk serialization or pickle during data transport between the subscriber and the
-        client. See below.
-
-        Parameters
-        ----------
-        slice_ : int, slice, tuple of ints and slices, or None
-            The slice to fetch.
-        prefer_schunk : bool
-            Whether to prefer using Blosc2 schunk serialization during data transport.
-            If False, pickle will always be used instead. Default is True, so Blosc2
-            serialization will be used if Blosc2 is installed (and data payload is large
-            enough).
-
-        Returns
-        -------
-        numpy.ndarray
-            The slice of the dataset.
-        """
         slice_ = slice_to_string(slice_)
         data = fetch_data(self.path, self.host,
-                                    {'slice_': slice_, 'prefer_schunk': prefer_schunk},
-                                    auth_cookie=self.auth_cookie)
+                          {'slice_': slice_},
+                          auth_cookie=self.auth_cookie)
         return data
 
     @property
     def shape(self):
-        return self.meta['shape']
+        return tuple(self.meta['shape'])
 
     @property
     def chunks(self):
-        return self.meta['chunks']
+        return tuple(self.meta['chunks'])
 
     @property
     def blocks(self):
-        return self.meta['blocks']
+        return tuple(self.meta['blocks'])
 
     @property
     def dtype(self):
         return self.meta['dtype']
+
+    @property
+    def ext_shape(self):
+        return tuple(self.meta['ext_shape'])
 
     @property
     def nchunks(self):

@@ -161,7 +161,7 @@ class LazyArray(ABC):
 def convert_inputs(inputs):
     inputs_ = []
     for obj in inputs:
-        if not isinstance(obj, np.ndarray | blosc2.NDArray) and not np.isscalar(obj):
+        if not isinstance(obj, np.ndarray | blosc2.NDArray | blosc2.C2Array) and not np.isscalar(obj):
             try:
                 obj = np.asarray(obj)
             except:
@@ -348,14 +348,15 @@ def chunks_getitem(
     """
     # Choose the NDArray with the largest shape as the reference for shape and chunks
     basearr = max(
-        (o for o in operands.values() if isinstance(o, blosc2.NDArray)), key=lambda x: len(x.shape)
+        (o for o in operands.values() if isinstance(o, blosc2.NDArray | blosc2.C2Array)), key=lambda x: len(x.shape)
     )
     shape = basearr.shape
     chunks = basearr.chunks
     # Iterate over the operands and get the chunks
     chunks_idx = np.array(basearr.ext_shape) // np.array(chunks)
     # Iterate over the operands and get the chunks
-    for nchunk in range(basearr.schunk.nchunks):
+    nchunks = basearr.nchunks if isinstance(basearr, blosc2.C2Array) else basearr.schunk.nchunks
+    for nchunk in range(nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
         chunk_operands = {}
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
@@ -375,7 +376,7 @@ def chunks_getitem(
                 smaller_slice = compute_smaller_slice(basearr.shape, value.shape, slice_)
                 chunk_operands[key] = value[smaller_slice]
                 continue
-            if isinstance(value, np.ndarray):
+            if isinstance(value, np.ndarray | blosc2.C2Array):
                 npbuff = value[slice_]
                 chunk_operands[key] = npbuff
                 continue
@@ -431,15 +432,16 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
     if basearr is None:
         # Choose the NDArray with the largest shape as the reference for shape and chunks
         basearr = max(
-            (o for o in operands.values() if isinstance(o, blosc2.NDArray)), key=lambda x: len(x.shape)
+            (o for o in operands.values() if isinstance(o, blosc2.NDArray | blosc2.C2Array)), key=lambda x: len(x.shape)
         )
     shape = basearr.shape
     chunks = basearr.chunks
     # Iterate over the operands and get the chunks
     chunk_operands = {}
     chunks_idx = np.array(basearr.ext_shape) // np.array(chunks)
+    nchunks = basearr.nchunks if isinstance(basearr, blosc2.C2Array) else basearr.schunk.nchunks
     # Iterate over the operands and get the chunks
-    for nchunk in range(basearr.schunk.nchunks):
+    for nchunk in range(nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
 
         # TODO: try to optimize for the sparse case
@@ -481,7 +483,9 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
             #     # print("Skipping chunk")
             #     # continue
             #     pass
-
+            if isinstance(value, blosc2.C2Array):
+                chunk_operands[key] = value[slice_]
+                continue
             if key in chunk_operands:
                 # We already have a buffer for this operand
                 value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
@@ -508,6 +512,10 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
                 shape, chunks=basearr.chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs
             )
         # Update the output array with the result
+        if out.ext_chunks != result.shape:
+            # Needed when operands are C2Arrays
+            result.resize(out.ext_chunks)
+
         out.schunk.update_data(nchunk, result, copy=False)
 
     return out
@@ -553,7 +561,7 @@ def slices_eval(
         operand = [o for o in operands.values() if isinstance(o, blosc2.NDArray | blosc2.C2Array)][0]
         shape = operand.shape
     chunks = operand.chunks
-    nchunks = operand.schunk.nchunks
+    nchunks = operand.nchunks if isinstance(operand, blosc2.C2Array) else operand.schunk.nchunks
     chunks_idx = np.array(operand.ext_shape) // np.array(chunks)
     del operand
     # Iterate over the operands and get the chunks
@@ -649,7 +657,7 @@ def reduce_slices(
     keepdims = reduce_args["keepdims"]
     # Choose the NDArray with the largest shape as the reference for shape and chunks
     operand = max(
-        (o for o in operands.values() if isinstance(o, blosc2.NDArray)), key=lambda x: len(x.shape)
+        (o for o in operands.values() if isinstance(o, blosc2.NDArray | blosc2.C2Array)), key=lambda x: len(x.shape)
     )
     shape = operand.shape
     if axis is None:
@@ -1255,7 +1263,7 @@ class LazyUDF(LazyArray):
         self.chunked_eval = chunked_eval
         # Get res shape
         for obj in self.inputs:
-            if isinstance(obj, np.ndarray | blosc2.NDArray):
+            if isinstance(obj, np.ndarray | blosc2.NDArray | blosc2.C2Array):
                 self._shape = obj.shape
                 break
         if self.shape is None:
@@ -1300,7 +1308,7 @@ class LazyUDF(LazyArray):
         items += [("type", f"{self.__class__.__name__}")]
         inputs = {}
         for key, value in self.inputs_dict.items():
-            if isinstance(value, np.ndarray | blosc2.NDArray):
+            if isinstance(value, np.ndarray | blosc2.NDArray | blosc2.C2Array):
                 inputs[key] = f"<{value.__class__.__name__}> {value.shape} {value.dtype}"
             else:
                 inputs[key] = str(value)
