@@ -1109,6 +1109,25 @@ class LazyExpr(LazyArray):
             std_expr = blosc2.sqrt(std_expr)
         return std_expr.eval(**kwargs)
 
+    def var(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
+        # Always evaluate the expression prior the reduction
+        mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
+        var_expr = (self - mean_value) ** 2
+        if len(mean_value.shape) > 0:
+            # This additional step is needed to allow broadcasting to work. See std method.
+            var_expr = var_expr.eval()
+        if ddof != 0:
+            var_expr = var_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
+            if axis is None:
+                num_elements = np.prod(self.shape)
+            else:
+                num_elements = np.prod([self.shape[i] for i in axis])
+            var_expr = var_expr * num_elements / (num_elements - ddof)
+            var_values = var_expr.eval(**kwargs)
+        else:
+            var_values = var_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+        return var_values
+
     def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
         reduce_args = {

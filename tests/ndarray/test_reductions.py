@@ -61,7 +61,7 @@ def test_reduce_bool(array_fixture, reduce_op):
     np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
 
 
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "mean", "std", "min", "max", "any", "all"])
+@pytest.mark.parametrize("reduce_op", ["sum", "prod", "mean", "std", "var", "min", "max", "any", "all"])
 @pytest.mark.parametrize("axis", [0, 1, (0, 1), None])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize("dtype_out", [np.int16, np.float64])
@@ -98,7 +98,7 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op):
 # TODO: "any" and "all" are not supported yet because:
 # ne.evaluate('(o0 + o1)', local_dict = {'o0': np.array(True), 'o1': np.array(True)})
 # is not supported by NumExpr
-@pytest.mark.parametrize("reduce_op", ["sum", "min", "max", "mean", "std"])
+@pytest.mark.parametrize("reduce_op", ["sum", "min", "max", "mean", "std", "var"])
 @pytest.mark.parametrize("axis", [0, 1, None])
 def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
@@ -115,7 +115,7 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
 
 
 # Test broadcasting
-@pytest.mark.parametrize("reduce_op", ["sum", "mean", "std", "min", "max"])
+@pytest.mark.parametrize("reduce_op", ["sum", "mean", "std", "var", "min", "max", "any", "all"])
 @pytest.mark.parametrize("axis", [0, 1, (0, 1), None])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize(

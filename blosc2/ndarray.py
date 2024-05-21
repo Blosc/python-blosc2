@@ -585,6 +585,40 @@ class NDArray(blosc2_ext.NDArray):
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.std(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
 
+    def var(self, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
+        """
+        Returns the variance along the specified axis.
+
+        Parameters
+        ----------
+        axis: int or tuple of ints, optional
+            Axis or axes along which the variance is computed. The default is to compute
+            the variance of the flattened array.
+        dtype: np.dtype, optional
+            Type to use in computing the variance. For integer inputs, the default is
+            float32; for floating point inputs, it is the same as the input dtype.
+        ddof: int, optional
+            Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
+            where N represents the number of elements. By default ddof is zero.
+        keepdims: bool, optional
+            If this is set to True, the axes which are reduced are left in the result as
+            dimensions with size one. With this option, the result will broadcast correctly
+            against the input array.
+        kwargs: dict, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
+
+        Returns
+        -------
+        var_along_axis: :ref:`NDArray`
+            A NDArray with the variance of the elements along the axis.
+
+        References
+        ----------
+        `np.var <https://numpy.org/doc/stable/reference/generated/numpy.var.html>`_
+        """
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.var(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
+
     def prod(self, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
         """
         Returns the product of array elements over a given axis.
@@ -821,6 +855,42 @@ def std(ndarr: NDArray, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs)
     `np.std <https://numpy.org/doc/stable/reference/generated/numpy.std.html>`_
     """
     return ndarr.std(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
+
+
+def var(ndarr: NDArray, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
+    """
+    Returns the variance along the specified axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` | :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which the variance is computed. The default is to compute
+        the variance of the flattened array.
+    dtype: np.dtype, optional
+        Type to use in computing the variance. For integer inputs, the default is
+        float32; for floating point inputs, it is the same as the input dtype.
+    ddof: int, optional
+        Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
+        where N represents the number of elements. By default ddof is zero.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result as
+        dimensions with size one. With this option, the result will broadcast correctly
+        against the input array.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    var_along_axis: :ref:`NDArray`
+            A NDArray with the variance of the elements along the axis.
+
+    References
+    ----------
+    `np.var <https://numpy.org/doc/stable/reference/generated/numpy.var.html>`_
+    """
+    return ndarr.var(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
 
 
 def prod(ndarr: NDArray, axis=None, dtype=None, keepdims=False, **kwargs):
