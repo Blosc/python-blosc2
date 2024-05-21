@@ -114,10 +114,6 @@ class C2Array:
         return self.meta['shape']
 
     @property
-    def ext_shape(self):
-        return self.meta['ext_shape']
-
-    @property
     def chunks(self):
         return self.meta['chunks']
 
@@ -132,17 +128,6 @@ class C2Array:
     @property
     def nchunks(self):
         return self.meta['schunk']['nchunks']
-
-    def iterchunks_info(self):
-        ChunkInfoNDArray = namedtuple(
-            "ChunkInfoNDArray", ["nchunk", "coords", "cratio", "special", "repeated_value", "lazychunk"]
-        )
-        chunks_idx = np.array(self.ext_shape) // np.array(self.chunks)
-        for nchunk in range(self.nchunks):
-            cratio = special = repeated_value = lazychunk = 0
-            coords = tuple(np.unravel_index(nchunk, chunks_idx))
-
-            yield ChunkInfoNDArray(nchunk, coords, cratio, special, repeated_value, lazychunk)
 
     def __add__(self, value: int | float | blosc2.NDArray | C2Array, /):
         # self._check_allowed_dtypes(value, "numeric", "__add__")
