@@ -35,6 +35,15 @@ def get_ndarray_start_stop(ndim, key, shape):
     return start, stop, step
 
 
+# Meant for LazyArrays
+def _check_allowed_dtypes(value: bool | int | float | NDArray, dtype_category: str, op: str):
+    if not (isinstance(value, blosc2.LazyExpr | NDArray | blosc2.C2Array | np.ndarray) or np.isscalar(value)):
+        raise RuntimeError(
+            "Expected LazyExpr, NDArray, np.ndarray or scalar instances"
+            f" and you provided a '{type(value)}' instance"
+        )
+
+
 class NDArray(blosc2_ext.NDArray):
     def __init__(self, **kwargs):
         self._schunk = SChunk(_schunk=kwargs["_schunk"], _is_view=True)  # SChunk Python instance
@@ -387,42 +396,35 @@ class NDArray(blosc2_ext.NDArray):
         """
         super().squeeze()
 
-    def _check_allowed_dtypes(self, value: bool | int | float | NDArray, dtype_category: str, op: str):
-        if not (isinstance(value, blosc2.LazyExpr | NDArray | np.ndarray) or np.isscalar(value)):
-            raise RuntimeError(
-                "Expected LazyExpr, NDArray, np.ndarray or scalar instances"
-                f" and you provided a '{type(value)}' instance"
-            )
-
     def __neg__(self):
         return blosc2.LazyExpr(new_op=(0, "-", self))
 
     def __and__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__and__")
+        _check_allowed_dtypes(value, "numeric", "__and__")
         return blosc2.LazyExpr(new_op=(self, "&", value))
 
     def __add__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__add__")
+        _check_allowed_dtypes(value, "numeric", "__add__")
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
     def __iadd__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__iadd__")
+        _check_allowed_dtypes(value, "numeric", "__iadd__")
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
     def __radd__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__radd__")
+        _check_allowed_dtypes(value, "numeric", "__radd__")
         return blosc2.LazyExpr(new_op=(value, "+", self))
 
     def __sub__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__sub__")
+        _check_allowed_dtypes(value, "numeric", "__sub__")
         return blosc2.LazyExpr(new_op=(self, "-", value))
 
     def __isub__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__isub__")
+        _check_allowed_dtypes(value, "numeric", "__isub__")
         return blosc2.LazyExpr(new_op=(self, "-", value))
 
     def __rsub__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__rsub__")
+        _check_allowed_dtypes(value, "numeric", "__rsub__")
         return blosc2.LazyExpr(new_op=(value, "-", self))
 
     def __array_namespace__(self, *, api_version: str | None = None):
@@ -431,65 +433,65 @@ class NDArray(blosc2_ext.NDArray):
         return blosc2
 
     def __mul__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__mul__")
+        _check_allowed_dtypes(value, "numeric", "__mul__")
         return blosc2.LazyExpr(new_op=(self, "*", value))
 
     def __imul__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__imul__")
+        _check_allowed_dtypes(value, "numeric", "__imul__")
         return blosc2.LazyExpr(new_op=(self, "*", value))
 
     def __rmul__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__rmul__")
+        _check_allowed_dtypes(value, "numeric", "__rmul__")
         return blosc2.LazyExpr(new_op=(value, "*", self))
 
     def __truediv__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__truediv__")
+        _check_allowed_dtypes(value, "numeric", "__truediv__")
         return blosc2.LazyExpr(new_op=(self, "/", value))
 
     def __itruediv__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__itruediv__")
+        _check_allowed_dtypes(value, "numeric", "__itruediv__")
         return blosc2.LazyExpr(new_op=(self, "/", value))
 
     def __rtruediv__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__rtruediv__")
+        _check_allowed_dtypes(value, "numeric", "__rtruediv__")
         return blosc2.LazyExpr(new_op=(value, "/", self))
 
     def __lt__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__lt__")
+        _check_allowed_dtypes(value, "numeric", "__lt__")
         return blosc2.LazyExpr(new_op=(self, "<", value))
 
     def __le__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__le__")
+        _check_allowed_dtypes(value, "numeric", "__le__")
         return blosc2.LazyExpr(new_op=(self, "<=", value))
 
     def __gt__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__gt__")
+        _check_allowed_dtypes(value, "numeric", "__gt__")
         return blosc2.LazyExpr(new_op=(self, ">", value))
 
     def __ge__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__ge__")
+        _check_allowed_dtypes(value, "numeric", "__ge__")
         return blosc2.LazyExpr(new_op=(self, ">=", value))
 
     def __eq__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "all", "__eq__")
+        _check_allowed_dtypes(value, "all", "__eq__")
         if blosc2._disable_overloaded_equal:
             return self is value
         return blosc2.LazyExpr(new_op=(self, "==", value))
 
     def __ne__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "all", "__ne__")
+        _check_allowed_dtypes(value, "all", "__ne__")
         return blosc2.LazyExpr(new_op=(self, "!=", value))
 
     def __pow__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__pow__")
+        _check_allowed_dtypes(value, "numeric", "__pow__")
         return blosc2.LazyExpr(new_op=(self, "**", value))
 
     def __ipow__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__ipow__")
+        _check_allowed_dtypes(value, "numeric", "__ipow__")
         return blosc2.LazyExpr(new_op=(self, "**", value))
 
     def __rpow__(self, value: int | float | NDArray, /):
-        self._check_allowed_dtypes(value, "numeric", "__rpow__")
+        _check_allowed_dtypes(value, "numeric", "__rpow__")
         return blosc2.LazyExpr(new_op=(value, "**", self))
 
     def sum(self, axis=None, dtype=None, out=None, keepdims=False, **kwargs):

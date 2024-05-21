@@ -130,5 +130,5 @@ class C2Array:
         return self.meta['schunk']['nchunks']
 
     def __add__(self, value: int | float | blosc2.NDArray | C2Array, /):
-        # self._check_allowed_dtypes(value, "numeric", "__add__")
+        blosc2.ndarray._check_allowed_dtypes(value, "numeric", "__add__")
         return blosc2.LazyExpr(new_op=(self, "+", value))
