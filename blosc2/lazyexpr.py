@@ -269,8 +269,7 @@ def validate_inputs(inputs: dict, getitem=False) -> tuple:
         check_broadcast_compatible(inputs)
 
     equal_chunks, equal_blocks = True, True
-    # Check whether we can use the fast path for eval()
-    if not getitem and (any(isinstance(input, np.ndarray) for input in inputs)):
+    if any(isinstance(input, np.ndarray) for input in inputs):
         # Some inputs are NumPy arrays, and we cannot use the fast path for eval() yet
         equal_chunks, equal_blocks = False, False
 
