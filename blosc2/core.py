@@ -1201,6 +1201,8 @@ def compute_chunks_blocks(
     """
 
     if blocks:
+        if not isinstance(blocks, tuple | list):
+            blocks = [blocks]
         if len(blocks) != len(shape):
             raise ValueError("blocks should have the same length than shape")
         for i in range(len(blocks)):
@@ -1209,6 +1211,8 @@ def compute_chunks_blocks(
             if blocks[i] > shape[i]:
                 raise ValueError("blocks cannot be greater than shape")
     if chunks:
+        if not isinstance(chunks, tuple | list):
+            chunks = [chunks]
         if len(chunks) != len(shape):
             raise ValueError("chunks should have the same length than shape")
         for i in range(len(chunks)):

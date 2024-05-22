@@ -208,6 +208,20 @@ def compute_broadcast_shape(arrays):
     return tuple(result_shape)
 
 
+def check_smaller_shape(value, shape, slice_shape):
+    """Check whether the shape of the value is smaller than the shape of the array.
+
+    This follows the NumPy broadcasting rules.
+    """
+    is_smaller_shape = any(
+        s > (1 if i >= len(value.shape) else value.shape[i]) for i, s in enumerate(slice_shape)
+    )
+    if len(value.shape) < len(shape) or is_smaller_shape:
+        return True
+    else:
+        return False
+
+
 def _compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
     """
     Returns the slice of the smaller array that corresponds to the slice of the larger array.
@@ -223,25 +237,22 @@ def _compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
         else:
             # For dimensions that both arrays have, the slice for the smaller array should be
             # the same as the larger array unless the smaller array's size along that dimension
-            # is 1, in which case we don't add anything to the smaller slice
+            # is 1, in which case we use None to indicate the full slice
             if smaller_shape[i - diff_dims] != 1:
                 smaller_slice.append(larger_slice[i])
+            else:
+                smaller_slice.append(slice(None))
 
     return tuple(smaller_slice)
 
 
 # A more compact version of the function above, albeit less readable
 def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
-    """
-    Returns the slice of the smaller array that corresponds to the slice of the larger array.
-    """
     diff_dims = len(larger_shape) - len(smaller_shape)
-    smaller_slice = [
-        larger_slice[i]
-        for i in range(len(larger_shape))
-        if i >= diff_dims and smaller_shape[i - diff_dims] != 1
-    ]
-    return tuple(smaller_slice)
+    return tuple(
+        larger_slice[i] if smaller_shape[i - diff_dims] != 1 else slice(None)
+        for i in range(diff_dims, len(larger_shape))
+    )
 
 
 def validate_inputs(inputs: dict, getitem=False) -> tuple:
@@ -259,10 +270,6 @@ def validate_inputs(inputs: dict, getitem=False) -> tuple:
 
     equal_chunks, equal_blocks = True, True
     # Check whether we can use the fast path for eval()
-    # We cannot use it if the computation involves broadcasting
-    # or if the inputs are NumPy arrays
-    # use_broadcast = any(len(input.shape) < len(inputs[0].shape) for input in inputs)
-    # if not getitem and (any(isinstance(input, np.ndarray) for input in inputs) or use_broadcast):
     if not getitem and (any(isinstance(input, np.ndarray) for input in inputs)):
         # Some inputs are NumPy arrays, and we cannot use the fast path for eval() yet
         equal_chunks, equal_blocks = False, False
@@ -370,7 +377,8 @@ def chunks_getitem(
             if np.isscalar(value):
                 chunk_operands[key] = value
                 continue
-            if value.shape != basearr.shape:
+            slice_shape = tuple(s.stop - s.start for s in slice_)
+            if check_smaller_shape(value, shape, slice_shape):
                 # We need to fetch the part of the value that broadcasts with the operand
                 smaller_slice = compute_smaller_slice(basearr.shape, value.shape, slice_)
                 chunk_operands[key] = value[smaller_slice]
@@ -462,7 +470,8 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
                 continue
             # TODO: try to use broacasting and NumPy arrays
             #  The blocker is the "padding" of the chunks. See below.
-            # if value.shape != basearr.shape:
+            # slice_shape = tuple(s.stop - s.start for s in slice_)
+            # if check_smaller_shape(value, shape, slice_shape):
             #     # We need to fetch the part of the value that broadcasts with the operand
             #     smaller_slice = compute_corresponding_slice(basearr.shape, value.shape, slice_)
             #     chunk_operands[key] = value[smaller_slice]
@@ -546,7 +555,8 @@ def slices_eval(
         # Compute the shape and chunks of the output array, including broadcasting
         shape = compute_broadcast_shape(operands.values())
         # operand will be a 'fake' NDArray just to get the necessary chunking information
-        operand = blosc2.empty(shape, dtype=np.uint8)
+        chunks = kwargs.get("chunks", None)
+        operand = blosc2.empty(shape, dtype=np.uint8, chunks=chunks)
     else:
         # Typically, we enter here when using UDFs, and out is a NumPy array.
         # Use operands to get the shape and chunks
@@ -574,14 +584,12 @@ def slices_eval(
         slice_shape = tuple(s.stop - s.start for s in slice_)
         if len(slice_) == 1:
             slice_ = slice_[0]
-        else:
-            slice_ = tuple(slice_)
         # Get the slice of each operand
         for key, value in operands.items():
             if np.isscalar(value):
                 chunk_operands[key] = value
                 continue
-            if len(value.shape) < len(shape):
+            if check_smaller_shape(value, shape, slice_shape):
                 # We need to fetch the part of the value that broadcasts with the operand
                 smaller_slice = compute_smaller_slice(shape, value.shape, slice_)
                 chunk_operands[key] = value[smaller_slice]
@@ -687,18 +695,14 @@ def reduce_slices(
         # reduced_slice_shape = tuple(s.stop - s.start for s in reduced_slice)
         if len(slice_) == 1:
             slice_ = slice_[0]
-        else:
-            slice_ = tuple(slice_)
         if len(reduced_slice) == 1:
             reduced_slice = reduced_slice[0]
-        else:
-            reduced_slice = tuple(reduced_slice)
         # Get the slice of each operand
         for key, value in operands.items():
             if np.isscalar(value):
                 chunk_operands[key] = value
                 continue
-            if len(value.shape) < len(operand.shape):
+            if check_smaller_shape(value, shape, slice_shape):
                 # We need to fetch the part of the value that broadcasts with the operand
                 smaller_slice = compute_smaller_slice(operand.shape, value.shape, slice_)
                 chunk_operands[key] = value[smaller_slice]

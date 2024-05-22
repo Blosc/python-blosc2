@@ -566,6 +566,7 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
 
 @pytest.fixture(
     params=[
+        ((10, 1), (10,)),
         ((2, 5), (5,)),
         ((2, 1), (5,)),
         ((2, 5, 3), (5, 3)),
@@ -578,6 +579,7 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
         ((2, 1, 3, 2), (5, 1, 2)),
         ((2, 5, 3, 2, 2), (5, 3, 2, 2)),
         ((100, 100, 100), (100, 100)),
+        ((1_000, 1), (1_000,)),
     ]
 )
 def broadcast_shape(request):
