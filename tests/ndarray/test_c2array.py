@@ -325,3 +325,66 @@ def test_negate(dtype_fixture, shape_fixture):
 
 
 # TODO: Check broadcast...
+
+# TODO: Check broadcast...
+@pytest.fixture(
+    params=[
+        ((2, 5), (5,)),
+        ((2, 1), (5,)),
+        ((2, 5, 3), (5, 3)),
+        ((2, 5, 3), (5, 1)),
+        ((2, 1, 3), (5, 3)),
+        ((2, 5, 3, 2), (5, 3, 2)),
+        ((2, 5, 3, 2), (5, 3, 1)),
+        ((2, 5, 3, 2), (5, 1, 2)),
+        ((2, 1, 3, 2), (5, 3, 2)),
+        ((2, 1, 3, 2), (5, 1, 2)),
+        ((2, 5, 3, 2, 2), (5, 3, 2, 2)),
+        ((20, 20, 20), (20, 20)),
+    ]
+)
+def broadcast_shape(request):
+    return request.param
+
+
+# Test broadcasting
+
+# Generate datasets
+# @pytest.fixture
+# def broadcast_fixture(dtype_fixture, broadcast_shape):
+#     shape1, shape2 = broadcast_shape
+#     na1 = np.linspace(0, 1, np.prod(shape1), dtype=dtype_fixture).reshape(shape1)
+#     na2 = np.linspace(1, 2, np.prod(shape2), dtype=dtype_fixture).reshape(shape2)
+#     urlpath = f'ds-0-1-linspace-{dtype_fixture.__name__}-b1-{shape1}d.b2nd'
+#     b1 = blosc2.asarray(na1, urlpath=urlpath, mode="w")
+#     urlpath = f'ds-1-2-linspace-{dtype_fixture.__name__}-b2-{shape2}d.b2nd'
+#     b2 = blosc2.asarray(na2, urlpath=urlpath, mode="w")
+#
+#     return b1, b2, na1, na2
+
+@pytest.fixture
+def broadcast_fixture(dtype_fixture, broadcast_shape):
+    shape1, shape2 = broadcast_shape
+    na1 = np.linspace(0, 1, np.prod(shape1), dtype=dtype_fixture).reshape(shape1)
+    na2 = np.linspace(1, 2, np.prod(shape2), dtype=dtype_fixture).reshape(shape2)
+    urlpath = f'ds-0-1-linspace-{dtype_fixture.__name__}-b1-{shape1}d.b2nd'
+    b1 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    urlpath = f'ds-1-2-linspace-{dtype_fixture.__name__}-b2-{shape2}d.b2nd'
+    b2 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+
+    return b1, b2, na1, na2
+
+
+def test_broadcasting(broadcast_fixture):
+    a1, a2, na1, na2 = broadcast_fixture
+    expr1 = a1 + a2
+    assert expr1.shape == a1.shape
+    expr2 = a1 * a2 + 1
+    assert expr2.shape == a1.shape
+    expr = expr1 - expr2
+    assert expr.shape == a1.shape
+    nres = ne.evaluate("na1 + na2 - (na1 * na2 + 1)")
+    res = expr.eval()
+    np.testing.assert_allclose(res[:], nres)
+    res = expr[:]
+    np.testing.assert_allclose(res, nres)
