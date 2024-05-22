@@ -433,6 +433,35 @@ def test_save():
         blosc2.remove_urlpath(urlpath)
 
 
+def test_save_unsafe():
+    na = np.arange(1000)
+    nb = np.arange(1000)
+    a = blosc2.asarray(na, urlpath="a.b2nd", mode="w")
+    b = blosc2.asarray(nb, urlpath="b.b2nd", mode="w")
+    disk_arrays = ["a.b2nd", "b.b2nd"]
+    expr = a + b
+    urlpath = "expr.b2nd"
+    expr.save(urlpath=urlpath)
+    disk_arrays.append(urlpath)
+
+    expr = blosc2.open(urlpath)
+    # Replace expression by a (potentially) unsafe expression
+    expr.expression = "import os; os.system('touch /tmp/unsafe')"
+    with pytest.raises(Exception) as excinfo:
+        expr.eval()
+    assert expr.expression in str(excinfo.value)
+
+    # Check that an unvalid expression cannot be easily saved.
+    # As this can easily be workarounded, the best protection is
+    # during loading time (tested above).
+    with pytest.raises(Exception) as excinfo:
+        expr.save(urlpath=urlpath)
+    assert expr.expression in str(excinfo.value)
+
+    for urlpath in disk_arrays:
+        blosc2.remove_urlpath(urlpath)
+
+
 @pytest.mark.parametrize(
     "function",
     [

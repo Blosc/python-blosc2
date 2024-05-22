@@ -1244,6 +1244,8 @@ class LazyExpr(LazyArray):
             if value.schunk.urlpath is None:
                 raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
             operands[key] = value.schunk.urlpath
+        # Check that the expression is valid
+        ne.validate(self.expression, locals=operands)
         array.schunk.vlmeta["_LazyArray"] = {
             "expression": self.expression,
             "UDF": None,
@@ -1411,12 +1413,16 @@ def _open_lazyarray(array):
         else:
             raise ValueError("Error when retrieving the operands")
 
+    expr = lazyarray["expression"]
     globals = {}
     for func in functions:
-        if func in lazyarray["expression"]:
+        if func in expr:
             globals[func] = getattr(blosc2, func)
 
-    expr = eval(lazyarray["expression"], globals, operands_dict)
+    # Validate the expression (prevent security issues)
+    ne.validate(expr, globals, operands_dict)
+    # Create the expression as such
+    expr = eval(expr, globals, operands_dict)
     # Make the array info available for the user (only available when opened from disk)
     expr.array = array
     return expr
