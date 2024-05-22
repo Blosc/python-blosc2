@@ -28,13 +28,21 @@ def dtype_fixture(request):
     return request.param
 
 
-@pytest.fixture(params=[(NITEMS_SMALL,), (NITEMS,), (NITEMS // 100, 100)])
+@pytest.fixture(params=[
+                        (NITEMS_SMALL,),
+                        (NITEMS,),
+                        (NITEMS // 100, 100)
+                        ])
 def shape_fixture(request):
     return request.param
 
 
 # params: (same_chunks, same_blocks)
-@pytest.fixture(params=[(True, True), (True, False), (False, True), (False, False)])
+@pytest.fixture(params=[(True, True),
+                        (True, False),
+                        (False, True),
+                        (False, False)
+                        ])
 def chunks_blocks_fixture(request):
     return request.param
 
@@ -321,12 +329,38 @@ def test_negate(dtype_fixture, shape_fixture):
     res_np = -(na + 2)
     np.testing.assert_allclose(res_lazyexpr[:], res_np)
 
+
+# Test expr with remote & local operands
+def test_mix_operands(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    b1 = blosc2.asarray(na1, chunks=a1.chunks, blocks=a1.blocks)
+    assert isinstance(a1, blosc2.C2Array)
+    assert isinstance(na1, np.ndarray)
+    assert isinstance(b1, blosc2.NDArray)
+
+    # expr = a1 + b1
+    # nres = ne.evaluate("na1 + na1")
+    # np.testing.assert_allclose(expr[:], nres)
+    # np.testing.assert_allclose(expr.eval()[:], nres)
+
+    b3 = blosc2.asarray(na3, chunks=a3.chunks, blocks=a3.blocks)
+    # expr = a1 + b3
+    # nres = ne.evaluate("na1 + na3")
+    # np.testing.assert_allclose(expr[:], nres)
+    # np.testing.assert_allclose(expr.eval()[:], nres)
+
+    # TODO: support this
+    expr = a1 + na1 * b3
+    print(type(expr))
+    print("expression: ", expr.expression)
+    nres = ne.evaluate("na1 + na1 * na3")
+    np.testing.assert_allclose(expr[:], nres)
+    np.testing.assert_allclose(expr.eval()[:], nres)
+
+
 # TODO: support save method
 
 
-# TODO: Check broadcast...
-
-# TODO: Check broadcast...
 @pytest.fixture(
     params=[
         ((2, 5), (5,)),

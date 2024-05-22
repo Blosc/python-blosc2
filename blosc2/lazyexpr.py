@@ -457,7 +457,7 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
         )
         offset = tuple(s.start for s in slice_)  # offset for the udf
         chunks_ = tuple(s.stop - s.start for s in slice_)
-
+        c2arrays_operands = any([isinstance(obj, blosc2.C2Array) for obj in operands.values()])
         for key, value in operands.items():
             if np.isscalar(value):
                 chunk_operands[key] = value
@@ -483,7 +483,8 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
             #     # print("Skipping chunk")
             #     # continue
             #     pass
-            if isinstance(value, blosc2.C2Array):
+            if c2arrays_operands or isinstance(value, blosc2.C2Array):
+                # Due to padding, when mixing C2Array with NDArray both have to use __getitem__
                 chunk_operands[key] = value[slice_]
                 continue
             if key in chunk_operands:
