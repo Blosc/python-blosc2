@@ -442,6 +442,7 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
         )
     shape = basearr.shape
     chunks = basearr.chunks
+    has_padding = basearr.ext_shape != shape
     # Iterate over the operands and get the chunks
     chunk_operands = {}
     chunks_idx = np.array(basearr.ext_shape) // np.array(chunks)
@@ -477,21 +478,19 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
                 npbuff = value[slice_]
                 chunk_operands[key] = npbuff
                 continue
-            if chunks_ != chunks or basearr.ext_shape != shape:
-                # The chunk is not a full one, so we need to fetch the valid data
+            if chunks_ != chunks or has_padding:
+                # The chunk is not a full one, or has padding, so we need to fetch the valid data
                 npbuff = value[slice_]
                 chunk_operands[key] = npbuff
-            else:
-                # Fast path for full chunks
-                if key in chunk_operands:
-                    # We already have a buffer for this operand
-                    value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
-                    npbuff = chunk_operands[key]
-                else:
-                    buff = value.schunk.decompress_chunk(nchunk)
-                    bsize = value.dtype.itemsize * math.prod(chunks_)
-                    npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
-                    chunk_operands[key] = npbuff
+                continue
+            # Fast path for full chunks
+            if key in chunk_operands:
+                # We already have a buffer for this operand
+                value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
+                continue
+            # We don't have a buffer for this operand yet
+            npbuff = value[slice_]
+            chunk_operands[key] = npbuff
 
         if callable(expression):
             result = np.empty_like(npbuff, dtype=out.dtype)
@@ -500,16 +499,13 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
             # Evaluate the expression using chunks of operands
             result = ne.evaluate(expression, chunk_operands)
             if out is None:
-                # Due to padding, it is critical to have the same chunks and blocks as the operands
-                out = blosc2.empty(
-                    shape, chunks=basearr.chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs
-                )
+                out = blosc2.empty(shape, chunks=chunks, dtype=result.dtype, **kwargs)
 
         # Update the output array with the result
-        if basearr.ext_shape == shape:
-            out.schunk.update_data(nchunk, result, copy=False)
-        else:
+        if has_padding:
             out[slice_] = result
+        else:
+            out.schunk.update_data(nchunk, result, copy=False)
 
     return out
 
