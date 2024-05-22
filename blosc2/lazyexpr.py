@@ -360,11 +360,11 @@ def chunks_getitem(
     chunks = basearr.chunks
     has_padding = basearr.ext_shape != shape
     # Iterate over the operands and get the chunks
+    chunk_operands = {}
     chunks_idx = np.array(basearr.ext_shape) // np.array(chunks)
     # Iterate over the operands and get the chunks
     for nchunk in range(basearr.schunk.nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
-        chunk_operands = {}
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
