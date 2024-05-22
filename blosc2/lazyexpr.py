@@ -6,7 +6,6 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 import copy
-import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from enum import Enum
@@ -359,6 +358,7 @@ def chunks_getitem(
     )
     shape = basearr.shape
     chunks = basearr.chunks
+    has_padding = basearr.ext_shape != shape
     # Iterate over the operands and get the chunks
     chunks_idx = np.array(basearr.ext_shape) // np.array(chunks)
     # Iterate over the operands and get the chunks
@@ -387,14 +387,18 @@ def chunks_getitem(
                 npbuff = value[slice_]
                 chunk_operands[key] = npbuff
                 continue
-            if chunks_ != chunks:
-                # The chunk is not a full one, so we need to fetch the valid data
+            if chunks_ != chunks or has_padding:
+                # The chunk is not a full one, or has padding, so we need to fetch the valid data
                 npbuff = value[slice_]
-            else:
-                # Fast path for full chunks
-                buff = value.schunk.decompress_chunk(nchunk)
-                bsize = value.dtype.itemsize * math.prod(chunks_)
-                npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
+                chunk_operands[key] = npbuff
+                continue
+            # Fast path for full chunks
+            if key in chunk_operands:
+                # We already have a buffer for this operand
+                value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
+                continue
+            # We don't have a buffer for this operand yet
+            npbuff = value[slice_]
             chunk_operands[key] = npbuff
 
         if callable(expression):
@@ -408,7 +412,7 @@ def chunks_getitem(
             out = np.empty(shape, dtype=result.dtype)
             out[slice_] = result
         else:
-            # Assign the result to the output array (avoiding a memory copy)
+            # Consolidate the result in the output array (avoiding a memory copy)
             ne.evaluate(expression, chunk_operands, out=out[slice_])
 
     return out
@@ -499,7 +503,8 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
             # Evaluate the expression using chunks of operands
             result = ne.evaluate(expression, chunk_operands)
             if out is None:
-                out = blosc2.empty(shape, chunks=chunks, dtype=result.dtype, **kwargs)
+                # It is important to use the same chunks *and* blocks as the operands
+                out = blosc2.empty(shape, chunks=chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs)
 
         # Update the output array with the result
         if has_padding:
