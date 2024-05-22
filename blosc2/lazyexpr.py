@@ -556,7 +556,7 @@ def slices_eval(
         shape = compute_broadcast_shape(operands.values())
         # operand will be a 'fake' NDArray just to get the necessary chunking information
         chunks = kwargs.get("chunks", None)
-        operand = blosc2.empty(shape, dtype=np.uint8, chunks=chunks)
+        operand = blosc2.empty(shape, chunks=chunks)
     else:
         # Typically, we enter here when using UDFs, and out is a NumPy array.
         # Use operands to get the shape and chunks
