@@ -331,6 +331,43 @@ def do_slices_intersect(slice1, slice2):
     return True
 
 
+def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands):
+    """Get the chunk operands for the expression evaluation.
+
+    This function offers a fast path for full chunks and a slow path for the rest.
+    """
+    for key, value in operands.items():
+        if np.isscalar(value):
+            chunk_operands[key] = value
+            continue
+
+        slice_shape = tuple(s.stop - s.start for s in slice_)
+        if check_smaller_shape(value, shape, slice_shape):
+            # We need to fetch the part of the value that broadcasts with the operand
+            smaller_slice = compute_smaller_slice(shape, value.shape, slice_)
+            chunk_operands[key] = value[smaller_slice]
+            continue
+
+        if not full_chunk or isinstance(value, np.ndarray):
+            # The chunk is not a full one, or has padding, so we need to fetch the valid data
+            chunk_operands[key] = value[slice_]
+            continue
+
+        # Fast path for full chunks
+        if key in chunk_operands:
+            # We already have a buffer for this operand
+            value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
+            continue
+
+        # We don't have a buffer for this operand yet
+        # Decompress the whole chunk and store it
+        buff = value.schunk.decompress_chunk(nchunk)
+        bsize = value.dtype.itemsize * math.prod(chunks_)
+        chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
+
+    return None
+
+
 def chunks_getitem(
     expression: str | Callable, operands: dict, out: np.ndarray = None
 ) -> blosc2.NDArray | np.ndarray:
@@ -372,38 +409,8 @@ def chunks_getitem(
         )
         offset = tuple(s.start for s in slice_)  # offset for the udf
         chunks_ = tuple(s.stop - s.start for s in slice_)
-
-        for key, value in operands.items():
-            if np.isscalar(value):
-                chunk_operands[key] = value
-                continue
-            slice_shape = tuple(s.stop - s.start for s in slice_)
-            if check_smaller_shape(value, shape, slice_shape):
-                # We need to fetch the part of the value that broadcasts with the operand
-                smaller_slice = compute_smaller_slice(basearr.shape, value.shape, slice_)
-                chunk_operands[key] = value[smaller_slice]
-                continue
-            if isinstance(value, np.ndarray):
-                npbuff = value[slice_]
-                chunk_operands[key] = npbuff
-                continue
-            if chunks_ != chunks or has_padding:
-                # The chunk is not a full one, or has padding, so we need to fetch the valid data
-                npbuff = value[slice_]
-                chunk_operands[key] = npbuff
-                continue
-
-            # Fast path for full chunks
-            if key in chunk_operands:
-                # We already have a buffer for this operand
-                value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
-                continue
-            # We don't have a buffer for this operand yet
-            # Decompress the whole chunk and store it
-            buff = value.schunk.decompress_chunk(nchunk)
-            bsize = value.dtype.itemsize * math.prod(chunks_)
-            npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
-            chunk_operands[key] = npbuff
+        full_chunk = chunks_ == chunks and not has_padding
+        fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands)
 
         if callable(expression):
             # Call the udf directly and use out as the output array
@@ -471,40 +478,11 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
         )
         offset = tuple(s.start for s in slice_)  # offset for the udf
         chunks_ = tuple(s.stop - s.start for s in slice_)
-
-        for key, value in operands.items():
-            if np.isscalar(value):
-                chunk_operands[key] = value
-                continue
-            slice_shape = tuple(s.stop - s.start for s in slice_)
-            if check_smaller_shape(value, shape, slice_shape):
-                # We need to fetch the part of the value that broadcasts with the operand
-                smaller_slice = compute_smaller_slice(basearr.shape, value.shape, slice_)
-                chunk_operands[key] = value[smaller_slice]
-                continue
-            if isinstance(value, np.ndarray):
-                npbuff = value[slice_]
-                chunk_operands[key] = npbuff
-                continue
-            if chunks_ != chunks or has_padding:
-                # The chunk is not a full one, or has padding, so we need to fetch the valid data
-                npbuff = value[slice_]
-                chunk_operands[key] = npbuff
-                continue
-
-            # Fast path for full chunks
-            if key in chunk_operands:
-                # We already have a buffer for this operand
-                value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
-                continue
-            # We don't have a buffer for this operand yet
-            # Decompress the whole chunk and store it
-            buff = value.schunk.decompress_chunk(nchunk)
-            bsize = value.dtype.itemsize * math.prod(chunks_)
-            npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
-            chunk_operands[key] = npbuff
+        full_chunk = chunks_ == chunks and not has_padding
+        fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands)
 
         if callable(expression):
+            npbuff = chunk_operands["o0"]
             result = np.empty_like(npbuff, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
         else:
