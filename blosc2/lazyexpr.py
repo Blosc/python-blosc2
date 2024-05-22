@@ -6,6 +6,7 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 import copy
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from enum import Enum
@@ -392,13 +393,17 @@ def chunks_getitem(
                 npbuff = value[slice_]
                 chunk_operands[key] = npbuff
                 continue
+
             # Fast path for full chunks
             if key in chunk_operands:
                 # We already have a buffer for this operand
                 value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
                 continue
             # We don't have a buffer for this operand yet
-            npbuff = value[slice_]
+            # Decompress the whole chunk and store it
+            buff = value.schunk.decompress_chunk(nchunk)
+            bsize = value.dtype.itemsize * math.prod(chunks_)
+            npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
             chunk_operands[key] = npbuff
 
         if callable(expression):
@@ -487,13 +492,17 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
                 npbuff = value[slice_]
                 chunk_operands[key] = npbuff
                 continue
+
             # Fast path for full chunks
             if key in chunk_operands:
                 # We already have a buffer for this operand
                 value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
                 continue
             # We don't have a buffer for this operand yet
-            npbuff = value[slice_]
+            # Decompress the whole chunk and store it
+            buff = value.schunk.decompress_chunk(nchunk)
+            bsize = value.dtype.itemsize * math.prod(chunks_)
+            npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
             chunk_operands[key] = npbuff
 
         if callable(expression):
