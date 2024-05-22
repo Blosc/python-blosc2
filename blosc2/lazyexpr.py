@@ -387,7 +387,6 @@ def chunks_getitem(
                 npbuff = value[slice_]
                 chunk_operands[key] = npbuff
                 continue
-
             if chunks_ != chunks:
                 # The chunk is not a full one, so we need to fetch the valid data
                 npbuff = value[slice_]
@@ -468,56 +467,49 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
             if np.isscalar(value):
                 chunk_operands[key] = value
                 continue
-            # TODO: try to use broacasting and NumPy arrays
-            #  The blocker is the "padding" of the chunks. See below.
-            # slice_shape = tuple(s.stop - s.start for s in slice_)
-            # if check_smaller_shape(value, shape, slice_shape):
-            #     # We need to fetch the part of the value that broadcasts with the operand
-            #     smaller_slice = compute_corresponding_slice(basearr.shape, value.shape, slice_)
-            #     chunk_operands[key] = value[smaller_slice]
-            #     continue
-            # if isinstance(value, np.ndarray):
-            #     npbuff = value[slice_]
-            #     chunk_operands[key] = npbuff
-            #     continue
-
-            # TODO: try to optimize for the sparse case
-            # # Get the chunk from the NDArray in an optimized way
-            # lazychunk = value.schunk.get_lazychunk(info.nchunk)
-            # special = lazychunk[15] >> 4
-            # if is_special == blosc2.SpecialValue.ZERO and special == blosc2.SpecialValue.ZERO:
-            #     # TODO: If both are zeros, we can skip the computation under some conditions
-            #     # print("Skipping chunk")
-            #     # continue
-            #     pass
-
-            if key in chunk_operands:
-                # We already have a buffer for this operand
-                value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
-            else:
-                buff = value.schunk.decompress_chunk(nchunk)
-                # We don't want to reshape the buffer (to better handle padding)
-                npbuff = np.frombuffer(buff, dtype=value.dtype)
-                if callable(expression):
-                    # The udf should handle multidim
-                    npbuff = npbuff.reshape(chunks_)
+            slice_shape = tuple(s.stop - s.start for s in slice_)
+            if check_smaller_shape(value, shape, slice_shape):
+                # We need to fetch the part of the value that broadcasts with the operand
+                smaller_slice = compute_smaller_slice(basearr.shape, value.shape, slice_)
+                chunk_operands[key] = value[smaller_slice]
+                continue
+            if isinstance(value, np.ndarray):
+                npbuff = value[slice_]
                 chunk_operands[key] = npbuff
+                continue
+            if chunks_ != chunks or basearr.ext_shape != shape:
+                # The chunk is not a full one, so we need to fetch the valid data
+                npbuff = value[slice_]
+                chunk_operands[key] = npbuff
+            else:
+                # Fast path for full chunks
+                if key in chunk_operands:
+                    # We already have a buffer for this operand
+                    value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
+                    npbuff = chunk_operands[key]
+                else:
+                    buff = value.schunk.decompress_chunk(nchunk)
+                    bsize = value.dtype.itemsize * math.prod(chunks_)
+                    npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
+                    chunk_operands[key] = npbuff
 
         if callable(expression):
             result = np.empty_like(npbuff, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
-            out.schunk.update_data(nchunk, result, copy=False)
-            continue
+        else:
+            # Evaluate the expression using chunks of operands
+            result = ne.evaluate(expression, chunk_operands)
+            if out is None:
+                # Due to padding, it is critical to have the same chunks and blocks as the operands
+                out = blosc2.empty(
+                    shape, chunks=basearr.chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs
+                )
 
-        # Evaluate the expression using chunks of operands
-        result = ne.evaluate(expression, chunk_operands)
-        if out is None:
-            # Due to padding, it is critical to have the same chunks and blocks as the operands
-            out = blosc2.empty(
-                shape, chunks=basearr.chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs
-            )
         # Update the output array with the result
-        out.schunk.update_data(nchunk, result, copy=False)
+        if basearr.ext_shape == shape:
+            out.schunk.update_data(nchunk, result, copy=False)
+        else:
+            out[slice_] = result
 
     return out
 
