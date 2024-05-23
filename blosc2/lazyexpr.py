@@ -772,7 +772,9 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
         if getitem:
             out = kwargs.pop("_output", None)
             return chunks_getitem(expression, operands, out=out)
-        elif kwargs.get("chunks", None) is None and kwargs.get("blocks", None) is None:
+        elif (kwargs.get("chunks", None) is None and kwargs.get("blocks", None) is None) and (
+            out is None or isinstance(out, blosc2.NDArray)
+        ):
             return chunks_eval(expression, operands, **kwargs)
 
     return slices_eval(expression, operands, **kwargs)
@@ -1191,6 +1193,8 @@ class LazyExpr(LazyArray):
         return self.eval(_reduce_args=reduce_args, **kwargs)
 
     def eval(self, item=None, **kwargs) -> blosc2.NDArray:
+        if hasattr(self, "_output"):
+            kwargs["_output"] = self._output
         return chunked_eval(self.expression, self.operands, item, **kwargs)
 
     def __getitem__(self, item):
@@ -1252,12 +1256,13 @@ class LazyExpr(LazyArray):
         return
 
     @classmethod
-    def _new_expr(cls, expression, operands):
+    def _new_expr(cls, expression, operands, out=None):
         # Create a new LazyExpr object
         new_expr = cls(None)
         ne.validate(expression, locals=operands)
         new_expr.expression = expression
         new_expr.operands = operands
+        new_expr._output = out
         return new_expr
 
 
@@ -1470,7 +1475,7 @@ def lazyudf(func, inputs, dtype, chunked_eval=True, **kwargs):
     return LazyUDF(func, inputs, dtype, chunked_eval, **kwargs)
 
 
-def lazyexpr(expression, operands):
+def lazyexpr(expression, operands, out=None):
     """
     Get a LazyExpr from an expression.
 
@@ -1483,6 +1488,9 @@ def lazyexpr(expression, operands):
     operands: dict
         The dictionary with operands. Supported values are NumPy.ndarray,
         Python scalars, and :ref:`NDArray <NDArray>` instances.
+    out: NDArray or np.ndarray, optional
+        The output array where the result will be stored. If not provided,
+        a new array will be created.
 
     Returns
     -------
@@ -1493,7 +1501,7 @@ def lazyexpr(expression, operands):
     if isinstance(expression, LazyExpr):
         expression.operands.update(operands)
         return expression
-    return LazyExpr._new_expr(expression, operands)
+    return LazyExpr._new_expr(expression, operands, out=out)
 
 
 if __name__ == "__main__":
