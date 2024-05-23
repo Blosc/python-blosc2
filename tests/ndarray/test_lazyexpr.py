@@ -714,3 +714,11 @@ def test_lazyexpr_out(array_fixture, out_param, operand_mix):
         np.testing.assert_allclose(res[:], nres)
     else:
         np.testing.assert_allclose(na3, na4)
+
+    # Use an existing LazyExpr as expression
+    expr = blosc2.lazyexpr("a1 - a2", operands=operands)
+    operands = {"a1": a1, "a2": a2}
+    expr2 = blosc2.lazyexpr(expr, operands=operands, out=out)
+    assert expr2.eval() is out
+    nres = ne.evaluate("na1 - na2")
+    np.testing.assert_allclose(out[:], nres)

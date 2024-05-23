@@ -1500,6 +1500,8 @@ def lazyexpr(expression, operands, out=None):
     """
     if isinstance(expression, LazyExpr):
         expression.operands.update(operands)
+        if out is not None:
+            expression._output = out
         return expression
     return LazyExpr._new_expr(expression, operands, out=out)
 
