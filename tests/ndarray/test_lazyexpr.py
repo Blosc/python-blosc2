@@ -642,7 +642,7 @@ def test_broadcasting(broadcast_fixture):
 
 
 @pytest.mark.parametrize(
-    "operands",
+    "operand_mix",
     [
         ("NDArray", "numpy"),
         ("NDArray", "NDArray"),
@@ -650,13 +650,13 @@ def test_broadcasting(broadcast_fixture):
         ("numpy", "numpy"),
     ],
 )
-def test_lazyexpr(array_fixture, operands):
+def test_lazyexpr(array_fixture, operand_mix):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    if operands[0] == "NDArray" and operands[1] == "NDArray":
+    if operand_mix[0] == "NDArray" and operand_mix[1] == "NDArray":
         operands = {"a1": a1, "a2": a2, "a3": a3, "a4": a4}
-    elif operands[0] == "NDArray" and operands[1] == "numpy":
+    elif operand_mix[0] == "NDArray" and operand_mix[1] == "numpy":
         operands = {"a1": a1, "a2": na2, "a3": a3, "a4": na4}
-    elif operands[0] == "numpy" and operands[1] == "NDArray":
+    elif operand_mix[0] == "numpy" and operand_mix[1] == "NDArray":
         operands = {"a1": na1, "a2": a2, "a3": na3, "a4": a4}
     else:
         operands = {"a1": na1, "a2": na2, "a3": na3, "a4": na4}
@@ -679,12 +679,28 @@ def test_lazyexpr(array_fixture, operands):
 
 
 @pytest.mark.parametrize(
+    "operand_mix",
+    [
+        ("NDArray", "numpy"),
+        ("NDArray", "NDArray"),
+        ("numpy", "NDArray"),
+        # ("numpy", "numpy"),    # TODO: Add support for this case
+    ],
+)
+@pytest.mark.parametrize(
     "out_param",
     ["NDArray", "numpy"],
 )
-def test_lazyexpr_out(array_fixture, out_param):
+def test_lazyexpr_out(array_fixture, out_param, operand_mix):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    operands = {"a1": na1, "a2": a2}
+    if operand_mix[0] == "NDArray" and operand_mix[1] == "NDArray":
+        operands = {"a1": a1, "a2": a2}
+    elif operand_mix[0] == "NDArray" and operand_mix[1] == "numpy":
+        operands = {"a1": a1, "a2": na2}
+    elif operand_mix[0] == "numpy" and operand_mix[1] == "NDArray":
+        operands = {"a1": na1, "a2": a2}
+    else:
+        operands = {"a1": na1, "a2": na2}
     if out_param == "NDArray":
         out = a3
     else:

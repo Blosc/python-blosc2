@@ -551,7 +551,7 @@ def slices_eval(
         if len(operands_) == 0:
             # We do not support this case yet.
             # TODO: use ndarray.compute_chunks_blocks() to get the chunks and blocks for this case
-            raise ValueError("At least one of the operands should be a NDArray instance")
+            raise ValueError("This case requires at least one of the operands to be a NDArray instance")
         operand = operands_[0]
         shape = operand.shape
     chunks = operand.chunks
