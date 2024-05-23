@@ -12,6 +12,7 @@ from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
 
+import ndindex
 import numexpr as ne
 import numpy as np
 
@@ -271,7 +272,9 @@ def validate_inputs(inputs: dict, getitem=False, out=None) -> tuple:
     # More checks specific of NDArray inputs
     NDinputs = list(input for input in inputs if isinstance(input, blosc2.NDArray))
     if len(NDinputs) == 0:
-        raise ValueError("At least one input should be a NDArray")
+        # All inputs are NumPy arrays, so we cannot take the fast path
+        dtype = inputs[0].dtype if out is None else out.dtype
+        return inputs[0].shape, dtype, False
 
     # Check if we can take the fast path
     # For this we need that the chunks and blocks for all inputs (and a possible output)
@@ -307,9 +310,9 @@ def do_slices_intersect(slice1, slice2):
 
     Parameters
     ----------
-    slice1: slice, list of slices
+    slice1: list of slices
         The first slice
-    slice2: slice, list of slices
+    slice2: list of slices
         The second slice
 
     Returns
@@ -317,11 +320,6 @@ def do_slices_intersect(slice1, slice2):
     bool
         Whether the slices intersect
     """
-    # Ensure the slices are in list format
-    if not isinstance(slice1, list | tuple):
-        slice1 = [slice1]
-    if not isinstance(slice2, list | tuple):
-        slice2 = [slice2]
 
     # Pad the shorter slice list with full slices (:)
     while len(slice1) < len(slice2):
@@ -549,7 +547,12 @@ def slices_eval(
     else:
         # Typically, we enter here when using UDFs, and out is a NumPy array.
         # Use operands to get the shape and chunks
-        operand = [o for o in operands.values() if isinstance(o, blosc2.NDArray)][0]
+        operands_ = [o for o in operands.values() if isinstance(o, blosc2.NDArray)]
+        if len(operands_) == 0:
+            # We do not support this case yet.
+            # TODO: use ndarray.compute_chunks_blocks() to get the chunks and blocks for this case
+            raise ValueError("This case requires at least one of the operands to be a NDArray instance")
+        operand = operands_[0]
         shape = operand.shape
     chunks = operand.chunks
     nchunks = operand.schunk.nchunks
@@ -567,12 +570,13 @@ def slices_eval(
         offset = tuple(s.start for s in slice_)  # offset for the udf
         # Check whether current slice_ intersects with _slice
         if _slice is not None and _slice != ():
+            # Ensure that _slice is of type slice
+            key = ndindex.ndindex(_slice).expand(shape).raw
+            _slice = tuple(k if isinstance(k, slice) else slice(k, k + 1, None) for k in key)
             intersects = do_slices_intersect(_slice, slice_)
             if not intersects:
                 continue
         slice_shape = tuple(s.stop - s.start for s in slice_)
-        if len(slice_) == 1:
-            slice_ = slice_[0]
         # Get the slice of each operand
         for key, value in operands.items():
             if np.isscalar(value):
@@ -768,7 +772,9 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
         if getitem:
             out = kwargs.pop("_output", None)
             return chunks_getitem(expression, operands, out=out)
-        elif kwargs.get("chunks", None) is None and kwargs.get("blocks", None) is None:
+        elif (kwargs.get("chunks", None) is None and kwargs.get("blocks", None) is None) and (
+            out is None or isinstance(out, blosc2.NDArray)
+        ):
             return chunks_eval(expression, operands, **kwargs)
 
     return slices_eval(expression, operands, **kwargs)
@@ -868,6 +874,10 @@ class LazyExpr(LazyArray):
     """
 
     def __init__(self, new_op):
+        if new_op is None:
+            self.expression = ""
+            self.operands = {}
+            return
         value1, op, value2 = new_op
         if value2 is None:
             if isinstance(value1, LazyExpr):
@@ -1183,6 +1193,8 @@ class LazyExpr(LazyArray):
         return self.eval(_reduce_args=reduce_args, **kwargs)
 
     def eval(self, item=None, **kwargs) -> blosc2.NDArray:
+        if hasattr(self, "_output"):
+            kwargs["_output"] = self._output
         return chunked_eval(self.expression, self.operands, item, **kwargs)
 
     def __getitem__(self, item):
@@ -1242,6 +1254,16 @@ class LazyExpr(LazyArray):
             "operands": operands,
         }
         return
+
+    @classmethod
+    def _new_expr(cls, expression, operands, out=None):
+        # Create a new LazyExpr object
+        new_expr = cls(None)
+        ne.validate(expression, locals=operands)
+        new_expr.expression = expression
+        new_expr.operands = operands
+        new_expr._output = out
+        return new_expr
 
 
 class LazyUDF(LazyArray):
@@ -1451,6 +1473,37 @@ def lazyudf(func, inputs, dtype, chunked_eval=True, **kwargs):
 
     """
     return LazyUDF(func, inputs, dtype, chunked_eval, **kwargs)
+
+
+def lazyexpr(expression, operands, out=None):
+    """
+    Get a LazyExpr from an expression.
+
+    Parameters
+    ----------
+    expression: str or bytes or LazyExpr
+        The expression to evaluate. This can be any valid expression that can be
+        ingested by numexpr. If a LazyExpr is passed, the expression will be
+        updated with the new operands.
+    operands: dict
+        The dictionary with operands. Supported values are NumPy.ndarray,
+        Python scalars, and :ref:`NDArray <NDArray>` instances.
+    out: NDArray or np.ndarray, optional
+        The output array where the result will be stored. If not provided,
+        a new array will be created.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr <LazyExpr>`
+        A :ref:`LazyExpr <LazyExpr>` is returned.
+
+    """
+    if isinstance(expression, LazyExpr):
+        expression.operands.update(operands)
+        if out is not None:
+            expression._output = out
+        return expression
+    return LazyExpr._new_expr(expression, operands, out=out)
 
 
 if __name__ == "__main__":

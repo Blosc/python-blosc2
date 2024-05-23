@@ -639,3 +639,86 @@ def test_broadcasting(broadcast_fixture):
     np.testing.assert_allclose(res[:], nres)
     res = expr[:]
     np.testing.assert_allclose(res, nres)
+
+
+@pytest.mark.parametrize(
+    "operand_mix",
+    [
+        ("NDArray", "numpy"),
+        ("NDArray", "NDArray"),
+        ("numpy", "NDArray"),
+        ("numpy", "numpy"),
+    ],
+)
+def test_lazyexpr(array_fixture, operand_mix):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    if operand_mix[0] == "NDArray" and operand_mix[1] == "NDArray":
+        operands = {"a1": a1, "a2": a2, "a3": a3, "a4": a4}
+    elif operand_mix[0] == "NDArray" and operand_mix[1] == "numpy":
+        operands = {"a1": a1, "a2": na2, "a3": a3, "a4": na4}
+    elif operand_mix[0] == "numpy" and operand_mix[1] == "NDArray":
+        operands = {"a1": na1, "a2": a2, "a3": na3, "a4": a4}
+    else:
+        operands = {"a1": na1, "a2": na2, "a3": na3, "a4": na4}
+
+    # Check eval()
+    expr = blosc2.lazyexpr("a1 + a2 - a3 * a4", operands=operands)
+    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    res = expr.eval()
+    np.testing.assert_allclose(res[:], nres)
+
+    # Check getitem
+    res = expr[:]
+    np.testing.assert_allclose(res, nres)
+    res = expr[0]
+    np.testing.assert_allclose(res, nres[0])
+    res = expr[0:10]
+    np.testing.assert_allclose(res, nres[0:10])
+    res = expr[0:10:2]
+    np.testing.assert_allclose(res, nres[0:10:2])
+
+
+@pytest.mark.parametrize(
+    "operand_mix",
+    [
+        ("NDArray", "numpy"),
+        ("NDArray", "NDArray"),
+        ("numpy", "NDArray"),
+        # ("numpy", "numpy"),    # TODO: Add support for this case
+    ],
+)
+@pytest.mark.parametrize(
+    "out_param",
+    ["NDArray", "numpy"],
+)
+def test_lazyexpr_out(array_fixture, out_param, operand_mix):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    if operand_mix[0] == "NDArray" and operand_mix[1] == "NDArray":
+        operands = {"a1": a1, "a2": a2}
+    elif operand_mix[0] == "NDArray" and operand_mix[1] == "numpy":
+        operands = {"a1": a1, "a2": na2}
+    elif operand_mix[0] == "numpy" and operand_mix[1] == "NDArray":
+        operands = {"a1": na1, "a2": a2}
+    else:
+        operands = {"a1": na1, "a2": na2}
+    if out_param == "NDArray":
+        out = a3
+    else:
+        out = na3
+    expr = blosc2.lazyexpr("a1 + a2", operands=operands, out=out)
+    res = expr.eval()  # res should be equal to out
+    assert res is out
+    nres = ne.evaluate("na1 + na2", out=na4)
+    assert nres is na4
+    if out_param == "NDArray":
+        np.testing.assert_allclose(res[:], nres)
+    else:
+        np.testing.assert_allclose(na3, na4)
+
+    # Use an existing LazyExpr as expression
+    expr = blosc2.lazyexpr("a1 - a2", operands=operands)
+    operands = {"a1": a1, "a2": a2}
+    expr2 = blosc2.lazyexpr(expr, operands=operands, out=out)
+    assert expr2.eval() is out
+    nres = ne.evaluate("na1 - na2")
+    np.testing.assert_allclose(out[:], nres)
