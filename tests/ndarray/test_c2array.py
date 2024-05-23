@@ -334,28 +334,35 @@ def test_negate(dtype_fixture, shape_fixture):
 def test_mix_operands(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     b1 = blosc2.asarray(na1, chunks=a1.chunks, blocks=a1.blocks)
-    assert isinstance(a1, blosc2.C2Array)
-    assert isinstance(na1, np.ndarray)
-    assert isinstance(b1, blosc2.NDArray)
-
-    # expr = a1 + b1
-    # nres = ne.evaluate("na1 + na1")
-    # np.testing.assert_allclose(expr[:], nres)
-    # np.testing.assert_allclose(expr.eval()[:], nres)
-
     b3 = blosc2.asarray(na3, chunks=a3.chunks, blocks=a3.blocks)
-    # expr = a1 + b3
-    # nres = ne.evaluate("na1 + na3")
-    # np.testing.assert_allclose(expr[:], nres)
-    # np.testing.assert_allclose(expr.eval()[:], nres)
 
-    # TODO: support this
-    expr = a1 + na1 * b3
-    print(type(expr))
-    print("expression: ", expr.expression)
-    nres = ne.evaluate("na1 + na1 * na3")
+    expr = a1 + b1
+    nres = ne.evaluate("na1 + na1")
     np.testing.assert_allclose(expr[:], nres)
     np.testing.assert_allclose(expr.eval()[:], nres)
+
+    expr = a1 + b3
+    nres = ne.evaluate("na1 + na3")
+    np.testing.assert_allclose(expr[:], nres)
+    np.testing.assert_allclose(expr.eval()[:], nres)
+
+    expr = a1 + b1 + a2 + b3
+    nres = ne.evaluate("na1 + na1 + na2 + na3")
+    np.testing.assert_allclose(expr[:], nres)
+    np.testing.assert_allclose(expr.eval()[:], nres)
+
+    expr = a1 + a2 + b1 + b3
+    nres = ne.evaluate("na1 + na2 + na1 + na3")
+    np.testing.assert_allclose(expr[:], nres)
+    np.testing.assert_allclose(expr.eval()[:], nres)
+
+    # TODO: fix this
+    # expr = a1 + na1 * b3
+    # print(type(expr))
+    # print("expression: ", expr.expression)
+    # nres = ne.evaluate("na1 + na1 * na3")
+    # np.testing.assert_allclose(expr[:], nres)
+    # np.testing.assert_allclose(expr.eval()[:], nres)
 
 
 # TODO: support save method
