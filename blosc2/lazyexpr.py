@@ -255,7 +255,7 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
     )
 
 
-def validate_inputs(inputs: dict, getitem=False) -> tuple:
+def validate_inputs(inputs: dict, getitem=False, out=None) -> tuple:
     """Validate the inputs for the expression."""
     if len(inputs) == 0:
         raise ValueError(
@@ -268,28 +268,37 @@ def validate_inputs(inputs: dict, getitem=False) -> tuple:
     if len(inputs) > 1:
         check_broadcast_compatible(inputs)
 
-    equal_chunks, equal_blocks = True, True
-    # Check whether we can use the fast path for eval()
-    if not getitem and (any(isinstance(input, np.ndarray) for input in inputs)):
-        # Some inputs are NumPy arrays, and we cannot use the fast path for eval() yet
-        equal_chunks, equal_blocks = False, False
-
     # More checks specific of NDArray inputs
     NDinputs = list(input for input in inputs if isinstance(input, blosc2.NDArray))
     if len(NDinputs) == 0:
         raise ValueError("At least one input should be a NDArray")
 
+    # Check if we can take the fast path
+    # For this we need that the chunks and blocks for all inputs (and a possible output)
+    # are the same
+    equal_chunks, equal_blocks = True, True
     first_input = NDinputs[0]
-    if first_input.blocks[1:] != first_input.chunks[1:]:
-        # For some reason, the trailing dimensions not being the same is not supported in fast path
-        equal_blocks = False
-    for input_ in NDinputs[1:]:
+    # Check the out NDArray (if present) first
+    if isinstance(out, blosc2.NDArray):
+        if first_input.shape != out.shape:
+            raise ValueError("Output shape does not match the first input shape")
+        if first_input.blocks != out.blocks:
+            equal_blocks = False
+        if first_input.chunks != out.chunks:
+            equal_chunks = False
+    # Then, the rest of the operands
+    for input_ in NDinputs:
         if first_input.chunks != input_.chunks:
             equal_chunks = False
         if first_input.blocks != input_.blocks:
             equal_blocks = False
+        if input_.blocks[1:] != input_.chunks[1:]:
+            # For some reason, the trailing dimensions not being the same is not supported in fast path
+            equal_blocks = False
+    fast_path = equal_chunks and equal_blocks
 
-    return first_input.shape, first_input.dtype, equal_chunks, equal_blocks
+    dtype = first_input.dtype if out is None else out.dtype
+    return first_input.shape, dtype, fast_path
 
 
 def do_slices_intersect(slice1, slice2):
@@ -332,6 +341,43 @@ def do_slices_intersect(slice1, slice2):
     return True
 
 
+def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands):
+    """Get the chunk operands for the expression evaluation.
+
+    This function offers a fast path for full chunks and a slow path for the rest.
+    """
+    for key, value in operands.items():
+        if np.isscalar(value):
+            chunk_operands[key] = value
+            continue
+
+        slice_shape = tuple(s.stop - s.start for s in slice_)
+        if check_smaller_shape(value, shape, slice_shape):
+            # We need to fetch the part of the value that broadcasts with the operand
+            smaller_slice = compute_smaller_slice(shape, value.shape, slice_)
+            chunk_operands[key] = value[smaller_slice]
+            continue
+
+        if not full_chunk or isinstance(value, np.ndarray):
+            # The chunk is not a full one, or has padding, so we need to fetch the valid data
+            chunk_operands[key] = value[slice_]
+            continue
+
+        # Fast path for full chunks
+        if key in chunk_operands:
+            # We already have a buffer for this operand
+            value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
+            continue
+
+        # We don't have a buffer for this operand yet
+        # Decompress the whole chunk and store it
+        buff = value.schunk.decompress_chunk(nchunk)
+        bsize = value.dtype.itemsize * math.prod(chunks_)
+        chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
+
+    return None
+
+
 def chunks_getitem(
     expression: str | Callable, operands: dict, out: np.ndarray = None
 ) -> blosc2.NDArray | np.ndarray:
@@ -359,12 +405,13 @@ def chunks_getitem(
     )
     shape = basearr.shape
     chunks = basearr.chunks
+    has_padding = basearr.ext_shape != shape
     # Iterate over the operands and get the chunks
+    chunk_operands = {}
     chunks_idx = np.array(basearr.ext_shape) // np.array(chunks)
     # Iterate over the operands and get the chunks
     for nchunk in range(basearr.schunk.nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
-        chunk_operands = {}
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
@@ -372,31 +419,8 @@ def chunks_getitem(
         )
         offset = tuple(s.start for s in slice_)  # offset for the udf
         chunks_ = tuple(s.stop - s.start for s in slice_)
-
-        for key, value in operands.items():
-            if np.isscalar(value):
-                chunk_operands[key] = value
-                continue
-            slice_shape = tuple(s.stop - s.start for s in slice_)
-            if check_smaller_shape(value, shape, slice_shape):
-                # We need to fetch the part of the value that broadcasts with the operand
-                smaller_slice = compute_smaller_slice(basearr.shape, value.shape, slice_)
-                chunk_operands[key] = value[smaller_slice]
-                continue
-            if isinstance(value, np.ndarray):
-                npbuff = value[slice_]
-                chunk_operands[key] = npbuff
-                continue
-
-            if chunks_ != chunks:
-                # The chunk is not a full one, so we need to fetch the valid data
-                npbuff = value[slice_]
-            else:
-                # Fast path for full chunks
-                buff = value.schunk.decompress_chunk(nchunk)
-                bsize = value.dtype.itemsize * math.prod(chunks_)
-                npbuff = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
-            chunk_operands[key] = npbuff
+        full_chunk = chunks_ == chunks and not has_padding
+        fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands)
 
         if callable(expression):
             # Call the udf directly and use out as the output array
@@ -409,7 +433,7 @@ def chunks_getitem(
             out = np.empty(shape, dtype=result.dtype)
             out[slice_] = result
         else:
-            # Assign the result to the output array (avoiding a memory copy)
+            # Consolidate the result in the output array (avoiding a memory copy)
             ne.evaluate(expression, chunk_operands, out=out[slice_])
 
     return out
@@ -435,7 +459,7 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
         The output array.
     """
     out = kwargs.pop("_output", None)
-    basearr = out
+    basearr = out  # if output is there, let's use it as the basearr
     if basearr is None:
         # Choose the NDArray with the largest shape as the reference for shape and chunks
         basearr = max(
@@ -443,6 +467,7 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
         )
     shape = basearr.shape
     chunks = basearr.chunks
+    has_padding = basearr.ext_shape != shape
     # Iterate over the operands and get the chunks
     chunk_operands = {}
     chunks_idx = np.array(basearr.ext_shape) // np.array(chunks)
@@ -463,61 +488,25 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
         )
         offset = tuple(s.start for s in slice_)  # offset for the udf
         chunks_ = tuple(s.stop - s.start for s in slice_)
-
-        for key, value in operands.items():
-            if np.isscalar(value):
-                chunk_operands[key] = value
-                continue
-            # TODO: try to use broacasting and NumPy arrays
-            #  The blocker is the "padding" of the chunks. See below.
-            # slice_shape = tuple(s.stop - s.start for s in slice_)
-            # if check_smaller_shape(value, shape, slice_shape):
-            #     # We need to fetch the part of the value that broadcasts with the operand
-            #     smaller_slice = compute_corresponding_slice(basearr.shape, value.shape, slice_)
-            #     chunk_operands[key] = value[smaller_slice]
-            #     continue
-            # if isinstance(value, np.ndarray):
-            #     npbuff = value[slice_]
-            #     chunk_operands[key] = npbuff
-            #     continue
-
-            # TODO: try to optimize for the sparse case
-            # # Get the chunk from the NDArray in an optimized way
-            # lazychunk = value.schunk.get_lazychunk(info.nchunk)
-            # special = lazychunk[15] >> 4
-            # if is_special == blosc2.SpecialValue.ZERO and special == blosc2.SpecialValue.ZERO:
-            #     # TODO: If both are zeros, we can skip the computation under some conditions
-            #     # print("Skipping chunk")
-            #     # continue
-            #     pass
-
-            if key in chunk_operands:
-                # We already have a buffer for this operand
-                value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
-            else:
-                buff = value.schunk.decompress_chunk(nchunk)
-                # We don't want to reshape the buffer (to better handle padding)
-                npbuff = np.frombuffer(buff, dtype=value.dtype)
-                if callable(expression):
-                    # The udf should handle multidim
-                    npbuff = npbuff.reshape(chunks_)
-                chunk_operands[key] = npbuff
+        full_chunk = chunks_ == chunks and not has_padding
+        fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands)
 
         if callable(expression):
+            npbuff = chunk_operands["o0"]
             result = np.empty_like(npbuff, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
-            out.schunk.update_data(nchunk, result, copy=False)
-            continue
+        else:
+            # Evaluate the expression using chunks of operands
+            result = ne.evaluate(expression, chunk_operands)
+            if out is None:
+                # It is important to use the same chunks *and* blocks as the operands
+                out = blosc2.empty(shape, chunks=chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs)
 
-        # Evaluate the expression using chunks of operands
-        result = ne.evaluate(expression, chunk_operands)
-        if out is None:
-            # Due to padding, it is critical to have the same chunks and blocks as the operands
-            out = blosc2.empty(
-                shape, chunks=basearr.chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs
-            )
         # Update the output array with the result
-        out.schunk.update_data(nchunk, result, copy=False)
+        if has_padding:
+            out[slice_] = result
+        else:
+            out.schunk.update_data(nchunk, result, copy=False)
 
     return out
 
@@ -764,7 +753,8 @@ def reduce_slices(
 
 def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs):
     getitem = kwargs.get("_getitem", False)
-    shape, dtype_, equal_chunks, equal_blocks = validate_inputs(operands, getitem)
+    out = kwargs.get("_output", None)
+    shape, dtype_, fast_path = validate_inputs(operands, getitem, out)
 
     reduce_args = kwargs.pop("_reduce_args", {})
     if reduce_args:
@@ -774,7 +764,7 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
     if item is not None and item != slice(None):
         return slices_eval(expression, operands, _slice=item, **kwargs)
 
-    if equal_chunks and equal_blocks:
+    if fast_path:
         if getitem:
             out = kwargs.pop("_output", None)
             return chunks_getitem(expression, operands, out=out)
@@ -993,7 +983,7 @@ class LazyExpr(LazyArray):
         if hasattr(self, "_shape"):
             # Contrarily to dtype, shape cannot change after creation of the expression
             return self._shape
-        shape, dtype_, equal_chunks, equal_blocks = validate_inputs(self.operands)
+        shape, dtype_, fast_path = validate_inputs(self.operands)
         self._shape = shape
         return shape
 
