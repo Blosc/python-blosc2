@@ -181,7 +181,7 @@ from .ndarray import (  # noqa: I001
     get_slice_nchunks,
 )
 
-from .lazyexpr import LazyExpr, lazyudf, LazyArray, _open_lazyarray
+from .lazyexpr import LazyExpr, lazyudf, lazyexpr, LazyArray, _open_lazyarray
 
 from .schunk import SChunk, open
 from .version import __version__
@@ -347,4 +347,6 @@ __all__ = [
     "compute_chunks_blocks",
     "cpu_info",
     "get_slice_nchunks",
+    "lazyexpr",
+    "lazyudf",
 ]

@@ -639,3 +639,40 @@ def test_broadcasting(broadcast_fixture):
     np.testing.assert_allclose(res[:], nres)
     res = expr[:]
     np.testing.assert_allclose(res, nres)
+
+
+@pytest.mark.parametrize(
+    "operands",
+    [
+        ("NDArray", "numpy"),
+        ("NDArray", "NDArray"),
+        ("numpy", "NDArray"),
+        ("numpy", "numpy"),
+    ],
+)
+def test_lazyexpr(array_fixture, operands):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    if operands[0] == "NDArray" and operands[1] == "NDArray":
+        operands = {"a1": a1, "a2": a2, "a3": a3, "a4": a4}
+    elif operands[0] == "NDArray" and operands[1] == "numpy":
+        operands = {"a1": a1, "a2": na2, "a3": a3, "a4": na4}
+    elif operands[0] == "numpy" and operands[1] == "NDArray":
+        operands = {"a1": na1, "a2": a2, "a3": na3, "a4": a4}
+    else:
+        operands = {"a1": na1, "a2": na2, "a3": na3, "a4": na4}
+
+    # Check eval()
+    expr = blosc2.lazyexpr("a1 + a2 - a3 * a4", operands=operands)
+    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    res = expr.eval()
+    np.testing.assert_allclose(res[:], nres)
+
+    # Check getitem
+    res = expr[:]
+    np.testing.assert_allclose(res, nres)
+    res = expr[0]
+    np.testing.assert_allclose(res, nres[0])
+    res = expr[0:10]
+    np.testing.assert_allclose(res, nres[0:10])
+    res = expr[0:10:2]
+    np.testing.assert_allclose(res, nres[0:10:2])
