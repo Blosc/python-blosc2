@@ -349,12 +349,13 @@ def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, ch
             chunk_operands[key] = value
             continue
 
-        slice_shape = tuple(s.stop - s.start for s in slice_)
-        if check_smaller_shape(value, shape, slice_shape):
-            # We need to fetch the part of the value that broadcasts with the operand
-            smaller_slice = compute_smaller_slice(shape, value.shape, slice_)
-            chunk_operands[key] = value[smaller_slice]
-            continue
+        # TODO: broadcast is not in the fast path yet, so no need to check for it
+        # slice_shape = tuple(s.stop - s.start for s in slice_)
+        # if check_smaller_shape(value, shape, slice_shape):
+        #     # We need to fetch the part of the value that broadcasts with the operand
+        #     smaller_slice = compute_smaller_slice(shape, value.shape, slice_)
+        #     chunk_operands[key] = value[smaller_slice]
+        #     continue
 
         if not full_chunk or isinstance(value, np.ndarray):
             # The chunk is not a full one, or has padding, so we need to fetch the valid data
