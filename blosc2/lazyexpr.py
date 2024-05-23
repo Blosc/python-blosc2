@@ -255,7 +255,7 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
     )
 
 
-def validate_inputs(inputs: dict, getitem=False) -> tuple:
+def validate_inputs(inputs: dict, getitem=False, out=None) -> tuple:
     """Validate the inputs for the expression."""
     if len(inputs) == 0:
         raise ValueError(
@@ -268,27 +268,37 @@ def validate_inputs(inputs: dict, getitem=False) -> tuple:
     if len(inputs) > 1:
         check_broadcast_compatible(inputs)
 
-    equal_chunks, equal_blocks = True, True
-    if any(isinstance(input, np.ndarray) for input in inputs):
-        # Some inputs are NumPy arrays, and we cannot use the fast path for eval() yet
-        equal_chunks, equal_blocks = False, False
-
     # More checks specific of NDArray inputs
     NDinputs = list(input for input in inputs if isinstance(input, blosc2.NDArray))
     if len(NDinputs) == 0:
         raise ValueError("At least one input should be a NDArray")
 
+    # Check if we can take the fast path
+    # For this we need that the chunks and blocks for all inputs (and a possible output)
+    # are the same
+    equal_chunks, equal_blocks = True, True
     first_input = NDinputs[0]
-    if first_input.blocks[1:] != first_input.chunks[1:]:
-        # For some reason, the trailing dimensions not being the same is not supported in fast path
-        equal_blocks = False
-    for input_ in NDinputs[1:]:
+    # Check the out NDArray (if present) first
+    if isinstance(out, blosc2.NDArray):
+        if first_input.shape != out.shape:
+            raise ValueError("Output shape does not match the first input shape")
+        if first_input.blocks != out.blocks:
+            equal_blocks = False
+        if first_input.chunks != out.chunks:
+            equal_chunks = False
+    # Then, the rest of the operands
+    for input_ in NDinputs:
         if first_input.chunks != input_.chunks:
             equal_chunks = False
         if first_input.blocks != input_.blocks:
             equal_blocks = False
+        if input_.blocks[1:] != input_.chunks[1:]:
+            # For some reason, the trailing dimensions not being the same is not supported in fast path
+            equal_blocks = False
+    fast_path = equal_chunks and equal_blocks
 
-    return first_input.shape, first_input.dtype, equal_chunks, equal_blocks
+    dtype = first_input.dtype if out is None else out.dtype
+    return first_input.shape, dtype, fast_path
 
 
 def do_slices_intersect(slice1, slice2):
@@ -449,7 +459,7 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
         The output array.
     """
     out = kwargs.pop("_output", None)
-    basearr = out
+    basearr = out  # if output is there, let's use it as the basearr
     if basearr is None:
         # Choose the NDArray with the largest shape as the reference for shape and chunks
         basearr = max(
@@ -743,7 +753,8 @@ def reduce_slices(
 
 def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs):
     getitem = kwargs.get("_getitem", False)
-    shape, dtype_, equal_chunks, equal_blocks = validate_inputs(operands, getitem)
+    out = kwargs.get("_output", None)
+    shape, dtype_, fast_path = validate_inputs(operands, getitem, out)
 
     reduce_args = kwargs.pop("_reduce_args", {})
     if reduce_args:
@@ -753,7 +764,7 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
     if item is not None and item != slice(None):
         return slices_eval(expression, operands, _slice=item, **kwargs)
 
-    if equal_chunks and equal_blocks:
+    if fast_path:
         if getitem:
             out = kwargs.pop("_output", None)
             return chunks_getitem(expression, operands, out=out)
@@ -972,7 +983,7 @@ class LazyExpr(LazyArray):
         if hasattr(self, "_shape"):
             # Contrarily to dtype, shape cannot change after creation of the expression
             return self._shape
-        shape, dtype_, equal_chunks, equal_blocks = validate_inputs(self.operands)
+        shape, dtype_, fast_path = validate_inputs(self.operands)
         self._shape = shape
         return shape
 
