@@ -17,7 +17,6 @@ import numexpr as ne
 import numpy as np
 
 import blosc2
-from blosc2 import core
 from blosc2.info import InfoReporter
 
 
@@ -550,12 +549,11 @@ def slices_eval(
         # Typically, we enter here when using UDFs, and out is a NumPy array.
         # Use operands to get the shape and chunks
         operands_ = [o for o in operands.values() if isinstance(o, blosc2.NDArray)]
-        if len(operands_) == 0:
-            # If no operands are NDArrays, we need to use a 'fake' one to get the chunks
-            chunks, blocks = core.compute_chunks_blocks(out.shape, **kwargs)
-            operand = blosc2.empty(out.shape, chunks=chunks)
-        else:
+        if len(operands_) > 0:
             operand = operands_[0]
+        else:
+            # If no operands are NDArrays, we need to use a 'fake' one to get the chunks
+            operand = blosc2.empty(out.shape)
         shape = operand.shape
     chunks = operand.chunks
     nchunks = operand.schunk.nchunks
