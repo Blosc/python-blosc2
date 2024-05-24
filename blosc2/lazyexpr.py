@@ -1354,16 +1354,8 @@ class LazyUDF(LazyArray):
         if item is None:
             if self.chunked_eval:
                 res_eval = blosc2.empty(self.shape, self.dtype, **aux_kwargs)
-                try:
-                    failed = False
-                    chunked_eval(self.func, self.inputs_dict, None, _getitem=False, _output=res_eval)
-                except ValueError:
-                    # chunked_eval() does not support inputs that do not have at least one NDArray
-                    failed = True
-                    # Clean the urlpath from the empty array
-                    blosc2.remove_urlpath(urlpath)
-                if not failed:
-                    return res_eval
+                chunked_eval(self.func, self.inputs_dict, None, _getitem=False, _output=res_eval)
+                return res_eval
 
             # Cannot use multithreading when applying a prefilter, save nthreads to set them
             # after the evaluation
@@ -1396,14 +1388,8 @@ class LazyUDF(LazyArray):
     def __getitem__(self, item):
         if self.chunked_eval:
             output = np.empty(self.shape, self.dtype)
-            try:
-                failed = False
-                chunked_eval(self.func, self.inputs_dict, item, _getitem=True, _output=output)
-            except ValueError:
-                # chunked_eval() does not support inputs that do not have at least one NDArray
-                failed = True
-            if not failed:
-                return output[item]
+            chunked_eval(self.func, self.inputs_dict, item, _getitem=True, _output=output)
+            return output[item]
         return self.res_getitem[item]
 
     def save(self, **kwargs):
