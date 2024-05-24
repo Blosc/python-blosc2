@@ -684,7 +684,7 @@ def test_lazyexpr(array_fixture, operand_mix):
         ("NDArray", "numpy"),
         ("NDArray", "NDArray"),
         ("numpy", "NDArray"),
-        # ("numpy", "numpy"),    # TODO: Add support for this case
+        ("numpy", "numpy"),
     ],
 )
 @pytest.mark.parametrize(

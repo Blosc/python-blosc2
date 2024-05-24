@@ -17,6 +17,7 @@ import numexpr as ne
 import numpy as np
 
 import blosc2
+from blosc2 import core
 from blosc2.info import InfoReporter
 
 
@@ -550,10 +551,11 @@ def slices_eval(
         # Use operands to get the shape and chunks
         operands_ = [o for o in operands.values() if isinstance(o, blosc2.NDArray)]
         if len(operands_) == 0:
-            # We do not support this case yet.
-            # TODO: use ndarray.compute_chunks_blocks() to get the chunks and blocks for this case
-            raise ValueError("This case requires at least one of the operands to be a NDArray instance")
-        operand = operands_[0]
+            # If no operands are NDArrays, we need to use a 'fake' one to get the chunks
+            chunks, blocks = core.compute_chunks_blocks(out.shape, **kwargs)
+            operand = blosc2.empty(out.shape, chunks=chunks)
+        else:
+            operand = operands_[0]
         shape = operand.shape
     chunks = operand.chunks
     nchunks = operand.schunk.nchunks
