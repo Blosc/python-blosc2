@@ -1380,9 +1380,6 @@ class LazyUDF(LazyArray):
         else:
             # Get only a slice
             np_array = self.__getitem__(item)
-            if self.chunked_eval:
-                # When using this method the resulting array is not C-contiguous
-                np_array = np.ascontiguousarray(np_array)
             return blosc2.asarray(np_array, **aux_kwargs)
 
     def __getitem__(self, item):
