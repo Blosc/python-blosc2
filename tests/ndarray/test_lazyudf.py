@@ -312,6 +312,8 @@ def udf_offset(inputs_tuple, output, offset):
 @pytest.mark.parametrize(
     "shape, chunks, blocks, slices",
     [
+        ((10,), (4,), (3,), ()),
+        # ((10,), (4,), (3,), None),  # TODO: make this work (None is equivalent to newaxis)
         ((10,), (4,), (3,), (slice(None),)),
         ((10,), (4,), (3,), (slice(5),)),
         ((8, 8), (4, 4), (2, 2), (slice(None), slice(None))),

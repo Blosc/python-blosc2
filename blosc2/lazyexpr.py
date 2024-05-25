@@ -539,22 +539,17 @@ def slices_eval(
     """
     getitem = kwargs.pop("_getitem", False)
     out = kwargs.pop("_output", None)
-    if out is None:
-        # Compute the shape and chunks of the output array, including broadcasting
-        shape = compute_broadcast_shape(operands.values())
+    chunks = kwargs.get("chunks", None)
+    # Compute the shape and chunks of the output array, including broadcasting
+    shape = compute_broadcast_shape(operands.values())
+    operands_ = [o for o in operands.values() if isinstance(o, blosc2.NDArray)]
+    if out is None or len(operands_) == 0:
         # operand will be a 'fake' NDArray just to get the necessary chunking information
-        chunks = kwargs.get("chunks", None)
         operand = blosc2.empty(shape, chunks=chunks)
     else:
         # Typically, we enter here when using UDFs, and out is a NumPy array.
         # Use operands to get the shape and chunks
-        operands_ = [o for o in operands.values() if isinstance(o, blosc2.NDArray)]
-        if len(operands_) > 0:
-            operand = operands_[0]
-        else:
-            # If no operands are NDArrays, we need to use a 'fake' one to get the chunks
-            operand = blosc2.empty(out.shape)
-        shape = operand.shape
+        operand = operands_[0]
     chunks = operand.chunks
     nchunks = operand.schunk.nchunks
     chunks_idx = np.array(operand.ext_shape) // np.array(chunks)
@@ -1273,12 +1268,9 @@ class LazyUDF(LazyArray):
         self.inputs = convert_inputs(inputs)
         self.chunked_eval = chunked_eval
         # Get res shape
-        for obj in self.inputs:
-            if isinstance(obj, np.ndarray | blosc2.NDArray):
-                self._shape = obj.shape
-                break
-        if self.shape is None:
-            raise NotImplementedError("If all operands are Python scalars, use python, numpy or numexpr")
+        self._shape = compute_broadcast_shape(self.inputs)
+        if self._shape is None:
+            raise NotImplementedError("If all operands are scalars, use python, numpy or numexpr")
 
         self.kwargs = kwargs
         self._dtype = dtype
