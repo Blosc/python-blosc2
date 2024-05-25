@@ -542,7 +542,9 @@ def slices_eval(
     chunks = kwargs.get("chunks", None)
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
-    operands_ = [o for o in operands.values() if isinstance(o, blosc2.NDArray)]
+
+    # Any operand with chunks attrs will be used to get the chunks
+    operands_ = [o for o in operands.values() if hasattr(o, "chunks")]
     if out is None or len(operands_) == 0:
         # operand will be a 'fake' NDArray just to get the necessary chunking information
         operand = blosc2.empty(shape, chunks=chunks)
@@ -551,9 +553,11 @@ def slices_eval(
         # Use operands to get the shape and chunks
         operand = operands_[0]
     chunks = operand.chunks
-    nchunks = operand.schunk.nchunks
-    chunks_idx = np.array(operand.ext_shape) // np.array(chunks)
+
+    chunks_idx = tuple(math.ceil(s / c) for s, c in zip(shape, chunks, strict=True))
+    nchunks = math.prod(chunks_idx)
     del operand
+
     # Iterate over the operands and get the chunks
     for nchunk in range(nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
@@ -644,11 +648,9 @@ def reduce_slices(
     reduce_op = reduce_args.pop("op")
     axis = reduce_args["axis"]
     keepdims = reduce_args["keepdims"]
-    # Choose the NDArray with the largest shape as the reference for shape and chunks
-    operand = max(
-        (o for o in operands.values() if isinstance(o, blosc2.NDArray)), key=lambda x: len(x.shape)
-    )
-    shape = operand.shape
+
+    # Compute the shape and chunks of the output array, including broadcasting
+    shape = compute_broadcast_shape(operands.values())
     if axis is None:
         axis = tuple(range(len(shape)))
     elif not isinstance(axis, tuple):
@@ -657,13 +659,17 @@ def reduce_slices(
         reduced_shape = tuple(1 if i in axis else s for i, s in enumerate(shape))
     else:
         reduced_shape = tuple(s for i, s in enumerate(shape) if i not in axis)
+
+    # Choose the array with the largest shape as the reference for chunks
+    operand = max((o for o in operands.values() if hasattr(o, "chunks")), key=lambda x: len(x.shape))
     chunks = operand.chunks
 
     # Iterate over the operands and get the chunks
     chunk_operands = {}
-    chunks_idx = np.array(operand.ext_shape) // np.array(chunks)
+    chunks_idx = tuple(math.ceil(s / c) for s, c in zip(shape, chunks, strict=True))
+    nchunks = math.prod(chunks_idx)
     # Iterate over the operands and get the chunks
-    for nchunk in range(operand.schunk.nchunks):
+    for nchunk in range(nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
         slice_ = tuple(
