@@ -16,12 +16,15 @@ from msgpack import packb, unpackb
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
+from blosc2.helpers import _inherit_doc_parameter
 
 
 class vlmeta(MutableMapping, blosc2_ext.vlmeta):
-    def __init__(self, schunk, urlpath, mode):
+    def __init__(self, schunk, urlpath, mode, mmap_mode, initial_mapping_size):
         self.urlpath = urlpath
         self.mode = mode
+        self.mmap_mode = mmap_mode
+        self.initial_mapping_size = initial_mapping_size
         super().__init__(schunk)
 
     def __setitem__(self, name, content):
@@ -143,7 +146,7 @@ class SChunk(blosc2_ext.SChunk):
 
         Parameters
         ----------
-        chunksize: int
+        chunksize: int, optional
             The size, in bytes, of the chunks from the super-chunk. If not provided,
             it is set automatically to a reasonable value.
 
@@ -156,11 +159,11 @@ class SChunk(blosc2_ext.SChunk):
         kwargs: dict, optional
             Keyword arguments supported:
 
-                contiguous: bool
+                contiguous: bool, optional
                     If the chunks are stored contiguously or not.
                     Default is True when :paramref:`urlpath` is not None;
                     False otherwise.
-                urlpath: String
+                urlpath: str | pathlib.Path, optional
                     If the storage is persistent, the name of the file (when
                     `contiguous = True`) or the directory (if `contiguous = False`).
                     If the storage is in-memory, then this field is `None`.
@@ -168,6 +171,59 @@ class SChunk(blosc2_ext.SChunk):
                     Persistence mode: ‘r’ means read only (must exist);
                     ‘a’ means read/write (create if it doesn’t exist);
                     ‘w’ means create (overwrite if it exists).
+                mmap_mode: str, optional
+                    If set, the file will be memory-mapped instead of using the default I/O functions and the `mode`
+                    argument will be ignored. The memory-mapping modes are similar as used by the
+                    `numpy.memmap <https://numpy.org/doc/stable/reference/generated/numpy.memmap.html>`_ function but it
+                    is possible to extend the file:
+
+                    .. list-table::
+                        :widths: 10 90
+                        :header-rows: 1
+
+                        * - mode
+                          - description
+                        * - 'r'
+                          - Open an existing file for reading only.
+                        * - 'r+'
+                          - Open an existing file for reading and writing. Use this mode if you want to append data to
+                            an existing schunk file.
+                        * - 'w+'
+                          - Create or overwrite an existing file for reading and writing. Use this mode if you want to
+                            create a new schunk.
+                        * - 'c'
+                          - Open an existing file in copy-on-write mode: all changes affect the data in memory but
+                            changes are not saved to disk. The file on disk is read-only. On Windows, the size of the
+                            mapping cannot change.
+
+                    Only contiguous storage can be memory-mapped. Hence, `urlpath` must point to a file (and not a
+                    directory).
+
+                    .. note::
+                        Memory-mapped files are opened once and the file contents remain in (virtual) memory for the
+                        lifetime of the schunk. Using memory-mapped I/O can be faster than using the default I/O
+                        functions. This is especially true when operating with network file systems (like NFS).
+
+                        This is currently a beta feature and we recommend trying it out and reporting any issues you may
+                        encounter. In one of the future versions of Blosc2, we plan to make memory-mapped files the
+                        default mode of operation.
+
+                initial_mapping_size: int, optional
+                    The initial size of the mapping for the memory-mapped file when writes are allowed (r+ w+, or c
+                    mode). Once a file is memory-mapped and extended beyond the initial mapping size, the file must be
+                    remapped which may be expensive. This parameter allows to decouple the mapping size from the actual
+                    file size to early reserve memory for future writes and avoid remappings. The memory is only
+                    reserved virtually and does not occupy physical memory unless actual writes happen. Since the
+                    virtual address space is large enough, it is ok to be generous with this parameter (with special
+                    consideration on Windows, see note below). For best performance, set this to the maximum expected
+                    size of the compressed data. The size is in bytes.
+
+                    Default: 1 GiB.
+
+                    .. note::
+                        On Windows, the size of the mapping is directly coupled to the file size. When the schunk gets
+                        destroyed, the file size will be truncated to the actual size of the schunk.
+
                 cparams: dict
                     A dictionary with the compression parameters, which are the same
                     as those can be used in the :func:`~blosc2.compress2` function.
@@ -198,6 +254,8 @@ class SChunk(blosc2_ext.SChunk):
             "_schunk",
             "meta",
             "mode",
+            "mmap_mode",
+            "initial_mapping_size",
             "_is_view",
         ]
         for kwarg in kwargs:
@@ -236,7 +294,9 @@ class SChunk(blosc2_ext.SChunk):
                 chunksize = 2**28
 
         super().__init__(_schunk=sc, chunksize=chunksize, data=data, **kwargs)
-        self.vlmeta = vlmeta(super().c_schunk, self.urlpath, self.mode)
+        self.vlmeta = vlmeta(
+            super().c_schunk, self.urlpath, self.mode, self.mmap_mode, self.initial_mapping_size
+        )
         self._cparams = super().get_cparams()
         self._dparams = super().get_dparams()
 
@@ -691,12 +751,11 @@ class SChunk(blosc2_ext.SChunk):
         """Decorator to set a function as a postfilter.
 
         The postfilter function will be executed each time after decompressing
-        blocks of data.
-        It will receive three parameters:
+        blocks of data. It will receive three parameters:
+
         * the input `ndarray` to be read from
         * the output `ndarray` to be filled out
-        * the offset inside the `SChunk` instance where the corresponding block begins
-          (see example below).
+        * the offset inside the `SChunk` instance where the corresponding block begins (see example below).
 
         Parameters
         ----------
@@ -849,12 +908,11 @@ class SChunk(blosc2_ext.SChunk):
     def prefilter(self, input_dtype, output_dtype=None):
         """Decorator to set a function as a prefilter.
 
-        This function will be executed each time before compressing the data.
-        It will receive three parameters:
+        This function will be executed each time before compressing the data. It will receive three parameters:
+
         * the actual data as a `ndarray` from which to read,
         * the `ndarray` to be filled
-        * the offset inside the `SChunk` instance where the corresponding block begins
-          (see example below).
+        * the offset inside the `SChunk` instance where the corresponding block begins (see example below).
 
         Parameters
         ----------
@@ -929,7 +987,9 @@ class SChunk(blosc2_ext.SChunk):
         super().__dealloc__()
 
 
-def open(urlpath, mode="a", offset=0, **kwargs):
+@_inherit_doc_parameter(SChunk.__init__, "mmap_mode:", {r"\* - 'w\+'[^*]+": ""})
+@_inherit_doc_parameter(SChunk.__init__, "initial_mapping_size:", {r"r\+ w\+, or c": "r+ or c"})
+def open(urlpath, mode="a", mmap_mode=None, initial_mapping_size=None, offset=0, **kwargs):
     """Open a persistent :ref:`SChunk <SChunk>` (or :ref:`NDArray <NDArray>`).
 
     Parameters
@@ -939,6 +999,8 @@ def open(urlpath, mode="a", offset=0, **kwargs):
         is stored.
     mode: str, optional
         The open mode.
+    mmap_mode:
+    initial_mapping_size:
     offset: int, optional
         An offset in the file where super-chunk or array data is located
         (e.g. in a file containing several such objects).
@@ -947,13 +1009,14 @@ def open(urlpath, mode="a", offset=0, **kwargs):
     ----------------
     kwargs: dict, optional
         Keyword arguments supported:
-        cparams: dict
-            A dictionary with the compression parameters, which are the same that can be
-            used in the :func:`~blosc2.compress2` function.
-            Typesize and blocksize cannot be changed.
-        dparams: dict
-            A dictionary with the decompression parameters, which are the same that can
-            be used in the :func:`~blosc2.decompress2` function.
+
+            cparams: dict
+                A dictionary with the compression parameters, which are the same that can be
+                used in the :func:`~blosc2.compress2` function.
+                Typesize and blocksize cannot be changed.
+            dparams: dict
+                A dictionary with the decompression parameters, which are the same that can
+                be used in the :func:`~blosc2.decompress2` function.
 
     Notes
     -----
@@ -996,7 +1059,20 @@ def open(urlpath, mode="a", offset=0, **kwargs):
     if not os.path.exists(urlpath):
         raise FileNotFoundError(f"No such file or directory: {urlpath}")
 
-    res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
+    if mmap_mode is not None:
+        if mmap_mode == "w+":
+            raise ValueError("w+ mmap_mode cannot be used to open an existing file")
+        else:
+            mode = blosc2_ext.mode_from_mmap_mode(mmap_mode)
+
+    if initial_mapping_size is not None:
+        if mmap_mode is None:
+            raise ValueError("initial_mapping_size can only be used with mmap_mode")
+
+        if mmap_mode == "r":
+            raise ValueError("initial_mapping_size can only be used with writing modes (r+, c)")
+
+    res = blosc2_ext.open(urlpath, mode, mmap_mode, initial_mapping_size, offset, **kwargs)
     if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
         return blosc2._open_lazyarray(res)
     else:
