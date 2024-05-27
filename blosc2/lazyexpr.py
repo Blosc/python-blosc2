@@ -405,9 +405,9 @@ def fast_eval(
     :ref:`NDArray` or np.ndarray
         The output array.
     """
-    # If 'out' has been passed, use it as the base array
     out = kwargs.pop("_output", None)
     if isinstance(out, blosc2.NDArray):
+        # If 'out' has been passed, and is a NDArray, use it as the base array
         basearr = out
     else:
         # Otherwise, find the operand with the 'chunks' attribute and the longest shape
@@ -430,7 +430,7 @@ def fast_eval(
         )
         offset = tuple(s.start for s in slice_)
         chunks_ = tuple(s.stop - s.start for s in slice_)
-        full_chunk = chunks_ == chunks and not has_padding
+        full_chunk = (chunks_ == chunks) and not has_padding
         fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands)
 
         if callable(expression):
