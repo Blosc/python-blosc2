@@ -378,6 +378,12 @@ def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, ch
     return None
 
 
+def get_chunks_idx(shape, chunks):
+    chunks_idx = tuple(math.ceil(s / c) for s, c in zip(shape, chunks, strict=True))
+    nchunks = math.prod(chunks_idx)
+    return chunks_idx, nchunks
+
+
 def fast_eval(
     expression: str | Callable, operands: dict, getitem: bool, **kwargs
 ) -> blosc2.NDArray | np.ndarray:
@@ -413,10 +419,10 @@ def fast_eval(
     chunks = basearr.chunks
     has_padding = basearr.ext_shape != shape
     chunk_operands = {}
-    chunks_idx = np.array(basearr.ext_shape) // np.array(chunks)
+    chunks_idx, nchunks = get_chunks_idx(shape, chunks)
 
     # Iterate over the chunks and evaluate the expression
-    for nchunk in range(basearr.schunk.nchunks):
+    for nchunk in range(nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
@@ -494,8 +500,7 @@ def slices_eval(
         operand = operands_[0]
     chunks = operand.chunks
 
-    chunks_idx = tuple(math.ceil(s / c) for s, c in zip(shape, chunks, strict=True))
-    nchunks = math.prod(chunks_idx)
+    chunks_idx, nchunks = get_chunks_idx(shape, chunks)
     del operand
 
     # Iterate over the operands and get the chunks
@@ -606,8 +611,8 @@ def reduce_slices(
 
     # Iterate over the operands and get the chunks
     chunk_operands = {}
-    chunks_idx = tuple(math.ceil(s / c) for s, c in zip(shape, chunks, strict=True))
-    nchunks = math.prod(chunks_idx)
+    chunks_idx, nchunks = get_chunks_idx(shape, chunks)
+
     # Iterate over the operands and get the chunks
     for nchunk in range(nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
