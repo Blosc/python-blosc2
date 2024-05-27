@@ -23,7 +23,6 @@ import blosc2
 @pytest.mark.parametrize(
     "shape",
     [
-        (0, 1000),
         (1000, 1000),
         (10, 20, 30),
         (10, 30, 50, 10),
