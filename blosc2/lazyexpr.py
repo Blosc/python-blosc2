@@ -7,6 +7,7 @@
 #######################################################################
 import copy
 import math
+import pathlib
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from enum import Enum
@@ -1245,7 +1246,7 @@ class LazyExpr(LazyArray):
         operands = {}
         for key, value in self.operands.items():
             if isinstance(value, blosc2.C2Array):
-                operands[key] = {'name': value.name, 'root': value.root, 'host': value.host}
+                operands[key] = {'path': str(value.path), 'sub_url': value.sub_url, 'auth_cookie': value.auth_cookie}
                 continue
             if not isinstance(value, blosc2.NDArray):
                 raise ValueError("To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects")
@@ -1418,7 +1419,7 @@ def _open_lazyarray(array):
             operands_dict[key] = op
         elif isinstance(value, dict):
             # C2Array
-            operands_dict[key] = blosc2.C2Array(value['name'], value['root'], value['host'])
+            operands_dict[key] = blosc2.C2Array(pathlib.Path(value['path']), sub_url=value['sub_url'], auth_cookie=value['auth_cookie'])
         else:
             raise ValueError("Error when retrieving the operands")
 

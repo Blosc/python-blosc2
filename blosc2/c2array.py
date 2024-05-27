@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from collections import namedtuple
 
 import numpy as np
 import blosc2
@@ -34,8 +33,8 @@ def get(url, params=None, headers=None, timeout=5, model=None,
     return json if model is None else model(**json)
 
 
-def fetch_data(path, host, params, auth_cookie=None):
-    response = _xget(f'http://{host}/api/fetch/{path}', params=params,
+def fetch_data(path, sub_url, params, auth_cookie=None):
+    response = _xget(f'{sub_url}api/fetch/{path}', params=params,
                      auth_cookie=auth_cookie)
     data = response.content
     try:
@@ -66,18 +65,16 @@ def slice_to_string(slice_):
 
 
 class C2Array:
-    def __init__(self, name, root, host, auth_cookie=None):
-        self.root = root
-        self.name = name
-        self.host = host
-        self.path = pathlib.Path(f'{self.root}/{self.name}')
+    def __init__(self, path, /,  sub_url, auth_cookie=None):
+        self.path = path
+        self.sub_url = sub_url
         self.auth_cookie = auth_cookie
-        self.meta = get(f'http://{host}/api/info/{self.path}',
-                                  auth_cookie=self.auth_cookie)
+        self.meta = get(f'{sub_url}api/info/{self.path}',
+                        auth_cookie=self.auth_cookie)
 
     def __getitem__(self, slice_: int | slice | Sequence[slice]) -> np.ndarray:
         slice_ = slice_to_string(slice_)
-        data = fetch_data(self.path, self.host,
+        data = fetch_data(self.path, self.sub_url,
                           {'slice_': slice_},
                           auth_cookie=self.auth_cookie)
         return data

@@ -5,6 +5,7 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+import pathlib
 
 import numexpr as ne
 import numpy as np
@@ -15,13 +16,17 @@ import blosc2
 NITEMS_SMALL = 1_000
 NITEMS = 50_000
 
-HOST = 'localhost:8002'
+SUB_URL = 'http://localhost:8002/'
 ROOT = 'foo'
 DIR = 'operands/'
+# TODO: Uncomment this when all needed changes are merged and
+#  the server runs with the latest version
+# SUB_URL = 'https://demo.caterva2.net/'
+# ROOT = 'b2tests'
+# DIR = 'expr/'
 
 
 @pytest.fixture(params=[
-                        # np.float32,
                         np.float64
                         ])
 def dtype_fixture(request):
@@ -109,14 +114,18 @@ def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a1-{shape_fixture}d.b2nd'
-    a1 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    a1 = blosc2.C2Array(path, sub_url=SUB_URL)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a2-{shape_fixture}d.b2nd'
-    a2 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    a2 = blosc2.C2Array(path, sub_url=SUB_URL)
     # Let other operands have chunks1 and blocks1
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a3-{shape_fixture}d.b2nd'
-    a3 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    a3 = blosc2.C2Array(path, sub_url=SUB_URL)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a4-{shape_fixture}d.b2nd'
-    a4 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    a4 = blosc2.C2Array(path, sub_url=SUB_URL)
     assert isinstance(a1, blosc2.C2Array)
     assert isinstance(a2, blosc2.C2Array)
     assert isinstance(a3, blosc2.C2Array)
@@ -202,9 +211,11 @@ def test_comparison_operators(dtype_fixture, compare_expressions, comparison_ope
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     na2 = np.copy(na1)  # noqa: F841
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-(True, False)-a1-{shape_fixture}d.b2nd'
-    a1 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    a1 = blosc2.C2Array(path, sub_url=SUB_URL)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-(True, False)-a2-{shape_fixture}d.b2nd'
-    a2 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    a2 = blosc2.C2Array(path, sub_url=SUB_URL)
     # Construct the lazy expression
     if compare_expressions:
         expr = eval(f"a1 ** 2 {comparison_operator} (a1 + a2)", {"a1": a1, "a2": a2})
@@ -249,7 +260,8 @@ def test_functions(function, dtype_fixture, shape_fixture):
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{(True, False)}-a1-{shape_fixture}d.b2nd'
-    a1 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    a1 = blosc2.C2Array(path, sub_url=SUB_URL)
     # Construct the lazy expression based on the function name
     expr = blosc2.LazyExpr(new_op=(a1, function, None))
     res_lazyexpr = expr.eval()
@@ -268,7 +280,8 @@ def test_abs(shape_fixture, dtype_fixture):
     nelems = np.prod(shape_fixture)
     na = np.linspace(-1, 1, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     urlpath = f'ds--1-1-linspace-{dtype_fixture.__name__}-a5-{shape_fixture}d.b2nd'
-    a = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    a = blosc2.C2Array(path, sub_url=SUB_URL)
     expr = blosc2.LazyExpr(new_op=(a, "abs", None))
     res_lazyexpr = expr.eval()
     res_np = np.abs(na)
@@ -281,7 +294,8 @@ def test_contains(values):
     value1, value2 = values
     if value1 == "NDArray":
         urlpath = f'ds-str-a6.b2nd'
-        a1_blosc = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+        path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+        a1_blosc = blosc2.C2Array(path, sub_url=SUB_URL)
         a1 = a1_blosc[:]
         if value2 == "str":  # ("NDArray", "str")
             value2 = b"test abc here"
@@ -292,7 +306,8 @@ def test_contains(values):
             res_numexpr = ne.evaluate(expr_numexpr)
         else:  # ("NDArray", "NDArray")
             urlpath = f'ds-str-a7.b2nd'
-            a2_blosc = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+            path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+            a2_blosc = blosc2.C2Array(path, sub_url=SUB_URL)
             a2 = a2_blosc[:]
             # Construct the lazy expression
             expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", a2_blosc))
@@ -301,7 +316,8 @@ def test_contains(values):
     else:  # ("str", "NDArray")
         value1 = b"abc"
         urlpath = f'ds-str-a6.b2nd'
-        a2_blosc = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+        path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+        a2_blosc = blosc2.C2Array(path, sub_url=SUB_URL)
         a2 = a2_blosc[:]
         # Construct the lazy expression
         expr_lazy = blosc2.LazyExpr(new_op=(value1, "contains", a2_blosc))
@@ -314,7 +330,8 @@ def test_contains(values):
 
 def test_negate(dtype_fixture, shape_fixture):
     urlpath = f'ds--1-1-linspace-{dtype_fixture.__name__}-a5-{shape_fixture}d.b2nd'
-    a = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    a = blosc2.C2Array(path, sub_url=SUB_URL)
     na = a[:]
 
     # Test with a single NDArray
@@ -372,14 +389,18 @@ def test_save(dtype_fixture, shape_fixture):
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a1-{shape_fixture}d.b2nd'
-    a1 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    a1 = blosc2.C2Array(path, sub_url=SUB_URL)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a2-{shape_fixture}d.b2nd'
-    a2 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    a2 = blosc2.C2Array(path, sub_url=SUB_URL)
     # Let other operands have chunks1 and blocks1
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a3-{shape_fixture}d.b2nd'
-    a3 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    a3 = blosc2.C2Array(path, sub_url=SUB_URL)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a4-{shape_fixture}d.b2nd'
-    a4 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    a4 = blosc2.C2Array(path, sub_url=SUB_URL)
     na2 = na1.copy()
     na3 = na1.copy()
     na4 = na1.copy()
@@ -448,9 +469,11 @@ def broadcast_fixture(dtype_fixture, broadcast_shape):
     na1 = np.linspace(0, 1, np.prod(shape1), dtype=dtype_fixture).reshape(shape1)
     na2 = np.linspace(1, 2, np.prod(shape2), dtype=dtype_fixture).reshape(shape2)
     urlpath = f'ds-0-1-linspace-{dtype_fixture.__name__}-b1-{shape1}d.b2nd'
-    b1 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    b1 = blosc2.C2Array(path, sub_url=SUB_URL)
     urlpath = f'ds-1-2-linspace-{dtype_fixture.__name__}-b2-{shape2}d.b2nd'
-    b2 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    b2 = blosc2.C2Array(path, sub_url=SUB_URL)
 
     return b1, b2, na1, na2
 
