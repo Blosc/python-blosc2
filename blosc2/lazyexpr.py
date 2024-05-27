@@ -1244,8 +1244,11 @@ class LazyExpr(LazyArray):
         # Save the expression and operands in the metadata
         operands = {}
         for key, value in self.operands.items():
+            if isinstance(value, blosc2.C2Array):
+                operands[key] = {'name': value.name, 'root': value.root, 'host': value.host}
+                continue
             if not isinstance(value, blosc2.NDArray):
-                raise ValueError("To save a LazyArray, all operands must be blosc2.NDArray objects")
+                raise ValueError("To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects")
             if value.schunk.urlpath is None:
                 raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
             operands[key] = value.schunk.urlpath
@@ -1413,6 +1416,9 @@ def _open_lazyarray(array):
             value = parent_path / value
             op = blosc2.open(value)
             operands_dict[key] = op
+        elif isinstance(value, dict):
+            # C2Array
+            operands_dict[key] = blosc2.C2Array(value['name'], value['root'], value['host'])
         else:
             raise ValueError("Error when retrieving the operands")
 

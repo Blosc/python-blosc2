@@ -365,7 +365,46 @@ def test_mix_operands(array_fixture):
     # np.testing.assert_allclose(expr.eval()[:], nres)
 
 
-# TODO: support save method
+# Tests related with save method
+def test_save(dtype_fixture, shape_fixture):
+    tol = 1e-17
+    chunks_blocks_fixture = (False, False)
+    nelems = np.prod(shape_fixture)
+    na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
+    urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a1-{shape_fixture}d.b2nd'
+    a1 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a2-{shape_fixture}d.b2nd'
+    a2 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    # Let other operands have chunks1 and blocks1
+    urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a3-{shape_fixture}d.b2nd'
+    a3 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a4-{shape_fixture}d.b2nd'
+    a4 = blosc2.C2Array(DIR + urlpath, ROOT, HOST)
+    na2 = na1.copy()
+    na3 = na1.copy()
+    na4 = na1.copy()
+
+    expr = a1 * a2 + a3 - a4 * 3
+    nres = ne.evaluate('na1 * na2 + na3 - na4 * 3')
+
+    res = expr.eval()
+    assert res.dtype == np.float64
+    np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
+
+    urlpath = "expr.b2nd"
+    expr.save(urlpath=urlpath, mode="w")
+    ops = [a1, a2, a3, a4]
+    for op in ops:
+        del op
+    del expr
+    expr = blosc2.open(urlpath)
+    res = expr.eval()
+    assert res.dtype == np.float64
+    np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
+    # Test getitem
+    np.testing.assert_allclose(expr[:], nres, rtol=tol, atol=tol)
+
+    blosc2.remove_urlpath(urlpath)
 
 
 @pytest.fixture(
