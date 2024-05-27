@@ -67,7 +67,7 @@ def test_getitem_steps(shape, steps):
     np.testing.assert_equal(steps_array[:], steps_data)
 
 
-@pytest.mark.parametrize("shape", [(0,), (0, 0), (0, 0), (0, 0, 0)])
+@pytest.mark.parametrize("shape", [(0,), (0, 0), (0, 1), (0, 0, 0), (0, 1, 0)])
 def test_shape_with_zeros(shape):
     data = np.zeros(shape, dtype="int32")
     ndarray = blosc2.asarray(data)
