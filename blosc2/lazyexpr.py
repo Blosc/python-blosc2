@@ -407,7 +407,7 @@ def fast_eval(
     """
     # If 'out' has been passed, use it as the base array
     out = kwargs.pop("_output", None)
-    if out is not None:
+    if isinstance(out, blosc2.NDArray):
         basearr = out
     else:
         # Otherwise, find the operand with the 'chunks' attribute and the longest shape
@@ -440,8 +440,13 @@ def fast_eval(
         else:
             result = ne.evaluate(expression, chunk_operands)
             if out is None:
-                # We can enter here when using both eval() and __getitem__() methods
-                out = blosc2.empty(shape, chunks=chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs)
+                # We can enter here when using any of the eval() or __getitem__() methods
+                if getitem:
+                    out = np.empty(shape, dtype=result.dtype)
+                else:
+                    out = blosc2.empty(
+                        shape, chunks=chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs
+                    )
 
         # Store the result in the output array
         if getitem:
@@ -1149,9 +1154,10 @@ class LazyExpr(LazyArray):
     def __getitem__(self, item):
         if item == Ellipsis:
             item = slice(None, None, None)
-        ndarray = chunked_eval(self.expression, self.operands, item, _getitem=True)
-        full_data = item is None or item == slice(None, None, None) or item == Ellipsis
-        return ndarray[item] if not full_data else ndarray[:]
+        array = chunked_eval(self.expression, self.operands, item, _getitem=True)
+        full_array = item is None or item == slice(None, None, None) or item == Ellipsis
+        # When not the full slice is requested, only the data delimited by item is filled
+        return array[item] if not full_array else array
 
     def __str__(self):
         expression = f"{self.expression}"
