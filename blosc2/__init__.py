@@ -171,6 +171,7 @@ from .core import (  # noqa: I001
 
 from .ndarray import (  # noqa: I001
     NDArray,
+    NDField,
     asarray,
     copy,
     empty,
