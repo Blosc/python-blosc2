@@ -452,10 +452,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> shape = (10,)
         >>> dtype = np.dtype([('a', np.int32), ('b', np.float64)])
         >>> # Create a structured array
-        >>> a = blosc2.empty(shape, dtype=dtype)
-        >>> # Access the fields
-        >>> a.fields
-        {'a': NDField, 'b': NDField}
+        >>> sa = blosc2.zeros(shape, dtype=dtype)
+        >>> # Evaluate if the fields are equal
+        >>> np.all((sa.fields['a'] == sa.fields['b'])[:])
+        True
+
         """
         return self._fields
 
