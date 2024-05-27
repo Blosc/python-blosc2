@@ -263,14 +263,14 @@ def validate_inputs(inputs: dict, getitem=False, out=None) -> tuple:
             "You need to pass at least one array.  Use blosc2.empty() if values are not really needed."
         )
 
-    inputs = list(input for input in inputs.values() if isinstance(input, blosc2.NDArray | np.ndarray))
+    inputs = list(input for input in inputs.values() if hasattr(input, "shape"))
 
     # All array inputs should have a compatible shape
     if len(inputs) > 1:
         check_broadcast_compatible(inputs)
 
     # More checks specific of NDArray inputs
-    NDinputs = list(input for input in inputs if isinstance(input, blosc2.NDArray))
+    NDinputs = list(input for input in inputs if hasattr(input, "chunks"))
     if len(NDinputs) == 0:
         # All inputs are NumPy arrays, so we cannot take the fast path
         dtype = inputs[0].dtype if out is None else out.dtype
@@ -357,8 +357,9 @@ def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, ch
         #     chunk_operands[key] = value[smaller_slice]
         #     continue
 
-        if not full_chunk or isinstance(value, np.ndarray):
-            # The chunk is not a full one, or has padding, so we need to fetch the valid data
+        if not full_chunk or not isinstance(value, blosc2.NDArray):
+            # The chunk is not a full one, or has padding, or is not a blosc2.NDArray,
+            # so we need to go the slow path
             chunk_operands[key] = value[slice_]
             continue
 
@@ -399,9 +400,7 @@ def chunks_getitem(
         The output array.
     """
     # Choose the NDArray with the largest shape as the reference for shape and chunks
-    basearr = max(
-        (o for o in operands.values() if isinstance(o, blosc2.NDArray)), key=lambda x: len(x.shape)
-    )
+    basearr = max((o for o in operands.values() if hasattr(o, "chunks")), key=lambda x: len(x.shape))
     shape = basearr.shape
     chunks = basearr.chunks
     has_padding = basearr.ext_shape != shape
@@ -461,9 +460,7 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
     basearr = out  # if output is there, let's use it as the basearr
     if basearr is None:
         # Choose the NDArray with the largest shape as the reference for shape and chunks
-        basearr = max(
-            (o for o in operands.values() if isinstance(o, blosc2.NDArray)), key=lambda x: len(x.shape)
-        )
+        basearr = max((o for o in operands.values() if hasattr(o, "chunks")), key=lambda x: len(x.shape))
     shape = basearr.shape
     chunks = basearr.chunks
     has_padding = basearr.ext_shape != shape
