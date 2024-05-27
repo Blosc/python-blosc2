@@ -434,11 +434,20 @@ def fast_eval(
         fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands)
 
         if callable(expression):
-            npbuff = chunk_operands["o0"]
-            result = np.empty_like(npbuff, dtype=out.dtype)
-            expression(tuple(chunk_operands.values()), result, offset=offset)
+            if isinstance(out, np.ndarray):
+                # Consolidate the result in the output array (avoiding a memory copy)
+                expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
+                continue
+            else:
+                result = np.empty(chunks_, dtype=out.dtype)
+                expression(tuple(chunk_operands.values()), result, offset=offset)
         else:
-            result = ne.evaluate(expression, chunk_operands)
+            if isinstance(out, np.ndarray):
+                # Consolidate the result in the output array (avoiding a memory copy)
+                ne.evaluate(expression, chunk_operands, out=out[slice_])
+                continue
+            else:
+                result = ne.evaluate(expression, chunk_operands)
             if out is None:
                 # We can enter here when using any of the eval() or __getitem__() methods
                 if getitem:
