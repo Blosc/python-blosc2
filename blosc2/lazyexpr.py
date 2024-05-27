@@ -378,12 +378,10 @@ def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, ch
     return None
 
 
-def chunks_getitem(
-    expression: str | Callable, operands: dict, out: np.ndarray = None
+def fast_eval(
+    expression: str | Callable, operands: dict, getitem: bool, **kwargs
 ) -> blosc2.NDArray | np.ndarray:
-    """Evaluate the expression in chunks of operands.
-
-    This is used in the __getitem__ method of the LazyArray.
+    """Evaluate the expression in chunks of operands using a fast path.
 
     Parameters
     ----------
@@ -391,63 +389,8 @@ def chunks_getitem(
         The expression or udf to evaluate.
     operands: dict
         A dictionary with the operands.
-    out: ndarray, optional
-        NumPy array where the result will be stored and returned.
-
-    Returns
-    -------
-    :ref:`NDArray` or np.ndarray
-        The output array.
-    """
-    # Choose the NDArray with the largest shape as the reference for shape and chunks
-    basearr = max((o for o in operands.values() if hasattr(o, "chunks")), key=lambda x: len(x.shape))
-    shape = basearr.shape
-    chunks = basearr.chunks
-    has_padding = basearr.ext_shape != shape
-    # Iterate over the operands and get the chunks
-    chunk_operands = {}
-    chunks_idx = np.array(basearr.ext_shape) // np.array(chunks)
-    # Iterate over the operands and get the chunks
-    for nchunk in range(basearr.schunk.nchunks):
-        coords = tuple(np.unravel_index(nchunk, chunks_idx))
-        # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
-        slice_ = tuple(
-            slice(c * s, min((c + 1) * s, shape[i]))
-            for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
-        )
-        offset = tuple(s.start for s in slice_)  # offset for the udf
-        chunks_ = tuple(s.stop - s.start for s in slice_)
-        full_chunk = chunks_ == chunks and not has_padding
-        fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands)
-
-        if callable(expression):
-            # Call the udf directly and use out as the output array
-            expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
-            continue
-
-        if out is None:
-            # Evaluate the expression using chunks of operands
-            result = ne.evaluate(expression, chunk_operands)
-            out = np.empty(shape, dtype=result.dtype)
-            out[slice_] = result
-        else:
-            # Consolidate the result in the output array (avoiding a memory copy)
-            ne.evaluate(expression, chunk_operands, out=out[slice_])
-
-    return out
-
-
-def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.NDArray | np.ndarray:
-    """Evaluate the expression in chunks of operands.
-
-    This is used in the eval() method of the LazyArray.
-
-    Parameters
-    ----------
-    expression: str or callable
-        The expression or udf to evaluate.
-    operands: dict
-        A dictionary with the operands.
+    getitem: bool, optional
+        Whether the expression is being evaluated for a getitem operation or eval().
     kwargs: dict, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
@@ -456,33 +399,30 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
     :ref:`NDArray` or np.ndarray
         The output array.
     """
+    # If 'out' has been passed, use it as the base array
     out = kwargs.pop("_output", None)
-    basearr = out  # if output is there, let's use it as the basearr
-    if basearr is None:
-        # Choose the NDArray with the largest shape as the reference for shape and chunks
-        basearr = max((o for o in operands.values() if hasattr(o, "chunks")), key=lambda x: len(x.shape))
+    if out is not None:
+        basearr = out
+    else:
+        # Otherwise, find the operand with the 'chunks' attribute and the longest shape
+        operands_with_chunks = [o for o in operands.values() if hasattr(o, "chunks")]
+        basearr = max(operands_with_chunks, key=lambda x: len(x.shape))
+
+    # Get the shape of the base array
     shape = basearr.shape
     chunks = basearr.chunks
     has_padding = basearr.ext_shape != shape
-    # Iterate over the operands and get the chunks
     chunk_operands = {}
     chunks_idx = np.array(basearr.ext_shape) // np.array(chunks)
-    # Iterate over the operands and get the chunks
+
+    # Iterate over the chunks and evaluate the expression
     for nchunk in range(basearr.schunk.nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
-
-        # TODO: try to optimize for the sparse case
-        # is_special = info.special
-        # if is_special == blosc2.SpecialValue.ZERO:
-        #     # print("Zero!")
-        #     pass
-
-        # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
             for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
-        offset = tuple(s.start for s in slice_)  # offset for the udf
+        offset = tuple(s.start for s in slice_)
         chunks_ = tuple(s.stop - s.start for s in slice_)
         full_chunk = chunks_ == chunks and not has_padding
         fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands)
@@ -492,23 +432,25 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
             result = np.empty_like(npbuff, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
         else:
-            # Evaluate the expression using chunks of operands
             result = ne.evaluate(expression, chunk_operands)
             if out is None:
-                # It is important to use the same chunks *and* blocks as the operands
+                # We can enter here when using both eval() and __getitem__() methods
                 out = blosc2.empty(shape, chunks=chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs)
 
-        # Update the output array with the result
-        if has_padding:
+        # Store the result in the output array
+        if getitem:
             out[slice_] = result
         else:
-            out.schunk.update_data(nchunk, result, copy=False)
+            if has_padding:
+                out[slice_] = result
+            else:
+                out.schunk.update_data(nchunk, result, copy=False)
 
     return out
 
 
 def slices_eval(
-    expression: str | Callable, operands: dict, _slice=None, **kwargs
+    expression: str | Callable, operands: dict, getitem: bool, _slice=None, **kwargs
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
@@ -523,6 +465,8 @@ def slices_eval(
         The expression or udf to evaluate.
     operands: dict
         A dictionary with the operands.
+    getitem: bool, optional
+        Whether the expression is being evaluated for a getitem operation.
     _slice: slice, list of slices, optional
         If not None, only the chunks that intersect with this slice
         will be evaluated.
@@ -534,7 +478,6 @@ def slices_eval(
     :ref:`NDArray` or np.ndarray
         The output array.
     """
-    getitem = kwargs.pop("_getitem", False)
     out = kwargs.pop("_output", None)
     chunks = kwargs.get("chunks", None)
     # Compute the shape and chunks of the output array, including broadcasting
@@ -755,7 +698,7 @@ def reduce_slices(
 
 
 def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs):
-    getitem = kwargs.get("_getitem", False)
+    getitem = kwargs.pop("_getitem", False)
     out = kwargs.get("_output", None)
     shape, dtype_, fast_path = validate_inputs(operands, getitem, out)
 
@@ -765,18 +708,20 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
         return reduce_slices(expression, operands, reduce_args=reduce_args, _slice=item, **kwargs)
 
     if item is not None and item != slice(None):
-        return slices_eval(expression, operands, _slice=item, **kwargs)
+        return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
 
     if fast_path:
         if getitem:
-            out = kwargs.pop("_output", None)
-            return chunks_getitem(expression, operands, out=out)
+            # When using getitem, taking the fast path is always possible
+            return fast_eval(expression, operands, getitem=True, **kwargs)
         elif (kwargs.get("chunks", None) is None and kwargs.get("blocks", None) is None) and (
             out is None or isinstance(out, blosc2.NDArray)
         ):
-            return chunks_eval(expression, operands, **kwargs)
+            # If not, the conditions to use the fast path are a bit more restrictive
+            # e.g. the user cannot specify chunks or blocks, or an output that is not a blosc2.NDArray
+            return fast_eval(expression, operands, getitem=False, **kwargs)
 
-    return slices_eval(expression, operands, **kwargs)
+    return slices_eval(expression, operands, getitem=getitem, **kwargs)
 
 
 def fuse_operands(operands1, operands2):
