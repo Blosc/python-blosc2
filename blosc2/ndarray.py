@@ -519,19 +519,22 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return self._schunk.blocksize
 
-    def __getitem__(self, key: int | slice | Sequence[slice]) -> np.ndarray:
+    def __getitem__(self, key: int | slice | Sequence[slice] | blosc2.LazyExpr | str) -> np.ndarray:
         """Get a (multidimensional) slice as specified in key.
 
         Parameters
         ----------
-        key: int, slice or sequence of slices
+        key: int, slice, sequence of slices or LazyExpr
             The slice(s) to be retrieved. Note that step parameter is not honored yet
-            in slices.
+            in slices. If a LazyExpr is provided, the expression is supposed to be of boolean
+            type and the result will be the values of this array where the expression is True.
+            If the key is a string, it will be converted to a LazyExpr, and will search for the
+            operands in the fields of this structured array.
 
         Returns
         -------
-        out: np.ndarray
-            An array with the requested data.
+        out: np.ndarray | blosc2.LazyExpr
+            An array (or LazyExpr) with the requested data.
 
         Examples
         --------
@@ -547,6 +550,16 @@ class NDArray(blosc2_ext.NDArray, Operand):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
+        # If the key is a LazyExpr, decorate with ``where`` and return it
+        if isinstance(key, blosc2.LazyExpr):
+            return key.where(self)
+
+        if isinstance(key, str):
+            if self.dtype.fields is None:
+                raise ValueError("The array is not structured (its dtype does not have fields)")
+            expr = blosc2.LazyExpr._new_expr(key, self.fields)
+            return expr.where(self)
+
         inmutable_key = None
         if self._keep_last_read:
             inmutable_key = make_key_hashable(key)
