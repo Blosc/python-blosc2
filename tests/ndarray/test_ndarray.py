@@ -46,7 +46,6 @@ def test_ndarray_cframe(contiguous, urlpath, cparams, dparams, nchunks, copy):
     blosc2.remove_urlpath(urlpath)
 
 
-# steps != 1 are not supported yet
 @pytest.mark.parametrize(
     "shape, steps",
     [
@@ -66,3 +65,17 @@ def test_getitem_steps(shape, steps):
     steps_array = ndarray[::steps]
     steps_data = data[::steps]
     np.testing.assert_equal(steps_array[:], steps_data)
+
+
+@pytest.mark.parametrize("shape", [(0,), (0, 0), (0, 1), (0, 0, 0), (0, 1, 0)])
+@pytest.mark.parametrize("urlpath", [None, "test.b2nd"])
+def test_shape_with_zeros(shape, urlpath):
+    data = np.zeros(shape, dtype="int32")
+    ndarray = blosc2.asarray(data, urlpath=urlpath, mode="w")
+    if urlpath is not None:
+        ndarray = blosc2.open(urlpath)
+    assert isinstance(ndarray, blosc2.NDArray)
+    assert ndarray.shape == shape
+    assert ndarray.size == 0
+    np.testing.assert_allclose(data[()], ndarray[()])
+    np.testing.assert_allclose(data[:], ndarray[:])

@@ -504,6 +504,35 @@ def test_save():
         blosc2.remove_urlpath(urlpath)
 
 
+def test_save_unsafe():
+    na = np.arange(1000)
+    nb = np.arange(1000)
+    a = blosc2.asarray(na, urlpath="a.b2nd", mode="w")
+    b = blosc2.asarray(nb, urlpath="b.b2nd", mode="w")
+    disk_arrays = ["a.b2nd", "b.b2nd"]
+    expr = a + b
+    urlpath = "expr.b2nd"
+    expr.save(urlpath=urlpath)
+    disk_arrays.append(urlpath)
+
+    expr = blosc2.open(urlpath)
+    # Replace expression by a (potentially) unsafe expression
+    expr.expression = "import os; os.system('touch /tmp/unsafe')"
+    with pytest.raises(Exception) as excinfo:
+        expr.eval()
+    assert expr.expression in str(excinfo.value)
+
+    # Check that an unvalid expression cannot be easily saved.
+    # As this can easily be workarounded, the best protection is
+    # during loading time (tested above).
+    with pytest.raises(Exception) as excinfo:
+        expr.save(urlpath=urlpath)
+    assert expr.expression in str(excinfo.value)
+
+    for urlpath in disk_arrays:
+        blosc2.remove_urlpath(urlpath)
+
+
 @pytest.mark.parametrize(
     "function",
     [
@@ -637,6 +666,7 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
 
 @pytest.fixture(
     params=[
+        ((10, 1), (10,)),
         ((2, 5), (5,)),
         ((2, 1), (5,)),
         ((2, 5, 3), (5, 3)),
@@ -649,6 +679,7 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
         ((2, 1, 3, 2), (5, 1, 2)),
         ((2, 5, 3, 2, 2), (5, 3, 2, 2)),
         ((100, 100, 100), (100, 100)),
+        ((1_000, 1), (1_000,)),
     ]
 )
 def broadcast_shape(request):
@@ -679,3 +710,86 @@ def test_broadcasting(broadcast_fixture):
     np.testing.assert_allclose(res[:], nres)
     res = expr[:]
     np.testing.assert_allclose(res, nres)
+
+
+@pytest.mark.parametrize(
+    "operand_mix",
+    [
+        ("NDArray", "numpy"),
+        ("NDArray", "NDArray"),
+        ("numpy", "NDArray"),
+        ("numpy", "numpy"),
+    ],
+)
+def test_lazyexpr(array_fixture, operand_mix):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    if operand_mix[0] == "NDArray" and operand_mix[1] == "NDArray":
+        operands = {"a1": a1, "a2": a2, "a3": a3, "a4": a4}
+    elif operand_mix[0] == "NDArray" and operand_mix[1] == "numpy":
+        operands = {"a1": a1, "a2": na2, "a3": a3, "a4": na4}
+    elif operand_mix[0] == "numpy" and operand_mix[1] == "NDArray":
+        operands = {"a1": na1, "a2": a2, "a3": na3, "a4": a4}
+    else:
+        operands = {"a1": na1, "a2": na2, "a3": na3, "a4": na4}
+
+    # Check eval()
+    expr = blosc2.lazyexpr("a1 + a2 - a3 * a4", operands=operands)
+    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    res = expr.eval()
+    np.testing.assert_allclose(res[:], nres)
+
+    # Check getitem
+    res = expr[:]
+    np.testing.assert_allclose(res, nres)
+    res = expr[0]
+    np.testing.assert_allclose(res, nres[0])
+    res = expr[0:10]
+    np.testing.assert_allclose(res, nres[0:10])
+    res = expr[0:10:2]
+    np.testing.assert_allclose(res, nres[0:10:2])
+
+
+@pytest.mark.parametrize(
+    "operand_mix",
+    [
+        ("NDArray", "numpy"),
+        ("NDArray", "NDArray"),
+        ("numpy", "NDArray"),
+        ("numpy", "numpy"),
+    ],
+)
+@pytest.mark.parametrize(
+    "out_param",
+    ["NDArray", "numpy"],
+)
+def test_lazyexpr_out(array_fixture, out_param, operand_mix):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    if operand_mix[0] == "NDArray" and operand_mix[1] == "NDArray":
+        operands = {"a1": a1, "a2": a2}
+    elif operand_mix[0] == "NDArray" and operand_mix[1] == "numpy":
+        operands = {"a1": a1, "a2": na2}
+    elif operand_mix[0] == "numpy" and operand_mix[1] == "NDArray":
+        operands = {"a1": na1, "a2": a2}
+    else:
+        operands = {"a1": na1, "a2": na2}
+    if out_param == "NDArray":
+        out = a3
+    else:
+        out = na3
+    expr = blosc2.lazyexpr("a1 + a2", operands=operands, out=out)
+    res = expr.eval()  # res should be equal to out
+    assert res is out
+    nres = ne.evaluate("na1 + na2", out=na4)
+    assert nres is na4
+    if out_param == "NDArray":
+        np.testing.assert_allclose(res[:], nres)
+    else:
+        np.testing.assert_allclose(na3, na4)
+
+    # Use an existing LazyExpr as expression
+    expr = blosc2.lazyexpr("a1 - a2", operands=operands)
+    operands = {"a1": a1, "a2": a2}
+    expr2 = blosc2.lazyexpr(expr, operands=operands, out=out)
+    assert expr2.eval() is out
+    nres = ne.evaluate("na1 - na2")
+    np.testing.assert_allclose(out[:], nres)

@@ -1826,6 +1826,12 @@ def asarray(array: np.ndarray, **kwargs: dict) -> NDArray:
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, array.dtype, **kwargs)
+    if not isinstance(array, np.ndarray):
+        array = np.array(array)
+    if not array.flags.c_contiguous:
+        # A contiguous array is needed
+        array = np.ascontiguousarray(array)
+
     return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
 
 

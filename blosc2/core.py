@@ -1200,7 +1200,13 @@ def compute_chunks_blocks(
         A (chunks, blocks) tuple with the computed guesses for chunks and blocks.
     """
 
+    # Return an arbitrary value for chunks and blocks when shape has any 0 dim
+    if 0 in shape:
+        return (1,) * len(shape), (1,) * len(shape)
+
     if blocks:
+        if not isinstance(blocks, tuple | list):
+            blocks = [blocks]
         if len(blocks) != len(shape):
             raise ValueError("blocks should have the same length than shape")
         for i in range(len(blocks)):
@@ -1209,6 +1215,8 @@ def compute_chunks_blocks(
             if blocks[i] > shape[i]:
                 raise ValueError("blocks cannot be greater than shape")
     if chunks:
+        if not isinstance(chunks, tuple | list):
+            chunks = [chunks]
         if len(chunks) != len(shape):
             raise ValueError("chunks should have the same length than shape")
         for i in range(len(chunks)):
