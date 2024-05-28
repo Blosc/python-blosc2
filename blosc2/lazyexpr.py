@@ -581,17 +581,21 @@ def slices_eval(
                 out[slice_] = result
             continue
 
-        result = ne.evaluate(expression, chunk_operands)
-
-        if where is not None:
-            if result.dtype != np.bool_:
-                raise ValueError("The result of the expression must be a boolean array")
+        if where is None:
+            result = ne.evaluate(expression, chunk_operands)
+        else:
+            # if result.dtype != np.bool_:
+            #     raise ValueError("The result of the expression must be a boolean array")
             # Apply the where condition (in result)
             if len(where) == 2:
-                x = chunk_operands["_where_x"]
-                y = chunk_operands["_where_y"]
-                result = np.where(result, x, y)
+                # x = chunk_operands["_where_x"]
+                # y = chunk_operands["_where_y"]
+                # result = np.where(result, x, y)
+                # numexpr is a bit faster than np.where, and we can fuse operations in this case
+                new_expr = f"where({expression}, _where_x, _where_y)"
+                result = ne.evaluate(new_expr, chunk_operands)
             elif len(where) == 1:
+                result = ne.evaluate(expression, chunk_operands)
                 x = chunk_operands["_where_x"]
                 result = x[result]
             else:
