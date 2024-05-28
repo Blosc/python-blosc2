@@ -47,3 +47,8 @@ assert isinstance(npd, np.ndarray)
 assert np.allclose(npd, npc[1:10])
 
 print("NDArray expression evaluated correctly!")
+
+# Test where() method
+npd = c.where(0, 1)
+print(npd[:])
+assert np.allclose(npd[:], np.where(npc, 0, 1))

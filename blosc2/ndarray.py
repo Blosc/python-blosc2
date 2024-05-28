@@ -1615,6 +1615,30 @@ def abs(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "abs", None))
 
 
+def where(
+    condition: blosc2.LazyExpr,
+    x: NDArray | NDField | np.ndarray | int | float | complex | bool | str | bytes | None = None,
+    y: NDArray | NDField | np.ndarray | int | float | complex | bool | str | bytes | None = None,
+):
+    """
+    Return elements chosen from `x` or `y` depending on `condition`.
+
+    Parameters
+    ----------
+    condition: :ref:`LazyExpr`
+        Where True, yield `x`, otherwise yield `y`.
+    x: :ref:`NDArray` or :ref:`NDField` or np.ndarray or scalar
+        Values from which to choose when `condition` is True.
+    y: :ref:`NDArray` or :ref:`NDField` or np.ndarray or scalar
+        Values from which to choose when `condition` is False.
+
+    References
+    ----------
+    `np.where <https://numpy.org/doc/stable/reference/generated/numpy.where.html>`_
+    """
+    return condition.where(x, y)
+
+
 def _check_shape(shape):
     if isinstance(shape, int):
         shape = (shape,)
