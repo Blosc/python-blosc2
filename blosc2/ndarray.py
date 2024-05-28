@@ -1843,6 +1843,8 @@ def _check_ndarray_kwargs(**kwargs):
         "urlpath",
         "contiguous",
         "mode",
+        "mmap_mode",
+        "initial_mapping_size",
     ]
     for key in kwargs:
         if key not in supported_keys:

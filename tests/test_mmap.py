@@ -7,11 +7,12 @@ import blosc2
 
 
 @pytest.mark.parametrize("initial_mapping_size", [None, 1000])
-def test_open_offset(tmp_path, monkeypatch, capfd, initial_mapping_size):
+def test_initial_mapping_size(tmp_path, monkeypatch, capfd, initial_mapping_size):
     monkeypatch.setenv("BLOSC_INFO", "true")
     expected_mapping_size = 1073741824 if initial_mapping_size is None else initial_mapping_size
-
     urlpath = tmp_path / "schunk.b2frame"
+
+    # Writing via SChunk
     storage = {"contiguous": True, "urlpath": urlpath}
     chunk_nitems = 10
     nchunks = 2
@@ -39,6 +40,7 @@ def test_open_offset(tmp_path, monkeypatch, capfd, initial_mapping_size):
         is not None
     ), captured.err
 
+    # Reading via open
     for mmap_mode in ["r", "r+", "c"]:
         open_mapping_size = None if mmap_mode == "r" else initial_mapping_size
         schunk_open = blosc2.open(urlpath, mmap_mode=mmap_mode, initial_mapping_size=open_mapping_size)
@@ -61,6 +63,23 @@ def test_open_offset(tmp_path, monkeypatch, capfd, initial_mapping_size):
             is not None
         ), captured.err
 
+    # Writing via asarray
+    nparray = np.arange(3, dtype=np.float32)
+    a = blosc2.asarray(nparray, urlpath=urlpath, mmap_mode="w+", initial_mapping_size=initial_mapping_size)
+    assert a == nparray
+    np.testing.assert_almost_equal(a[...], nparray)
+
+    captured = capfd.readouterr()
+    assert (
+        re.search(
+            r"Opened memory-mapped file .*schunk\.b2frame in mode w\+ with an mapping size of "
+            + str(expected_mapping_size),
+            captured.err,
+        )
+        is not None
+    ), captured.err
+
+    # Error handling
     with pytest.raises(ValueError, match=r"w\+ mmap_mode cannot be used to open an existing file"):
         blosc2.open(urlpath, mmap_mode="w+")
 

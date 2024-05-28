@@ -886,8 +886,10 @@ cdef create_storage(blosc2_storage *storage, kwargs):
         # sizeof(BLOSC2_STDIO_MMAP_DEFAULTS) yields the size of the full struct as defined in the C header
         mmap_file = <blosc2_stdio_mmap *>malloc(sizeof(BLOSC2_STDIO_MMAP_DEFAULTS))
         memcpy(mmap_file, &BLOSC2_STDIO_MMAP_DEFAULTS, sizeof(BLOSC2_STDIO_MMAP_DEFAULTS))
-        mmap_mode_ = mmap_mode.encode("utf-8")
-        mmap_file.mode = mmap_mode_
+
+        # The storage for the bytes for the mmap_mode parameter need to be available even after this function
+        kwargs["_mmap_mode_bytes"] = kwargs["mmap_mode"].encode("utf-8")
+        mmap_file.mode = kwargs["_mmap_mode_bytes"]
         mmap_file.needs_free = True
         if initial_mapping_size is not None:
             mmap_file.initial_mapping_size = initial_mapping_size
@@ -2472,6 +2474,9 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
             urlpath = str(urlpath)
         _urlpath = urlpath.encode() if isinstance(urlpath, str) else urlpath
         kwargs["urlpath"] = _urlpath
+
+    if kwargs.get("mmap_mode") is not None:
+        kwargs["mode"] = mode_from_mmap_mode(kwargs["mmap_mode"])
 
     mode = kwargs.get("mode", "a")
     if kwargs is not None:
