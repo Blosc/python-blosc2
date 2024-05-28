@@ -1665,7 +1665,7 @@ def lazywhere(value1=None, value2=None):
 
 
 def _check_shape(shape):
-    if isinstance(shape, int):
+    if isinstance(shape, int | np.integer):
         shape = (shape,)
     elif not isinstance(shape, tuple | list):
         raise ValueError("shape should be a tuple or a list!")
