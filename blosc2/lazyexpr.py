@@ -304,6 +304,19 @@ def validate_inputs(inputs: dict, getitem=False, out=None) -> tuple:
     return first_input.shape, dtype, fast_path
 
 
+def is_full_slice(item):
+    """Check whether the slice represented by item is a full slice."""
+    if item is None:
+        # This is the case when the user does not pass any slice in eval() method
+        return True
+    if isinstance(item, tuple):
+        return all((isinstance(i, slice) and i == slice(None, None, None)) or i == Ellipsis for i in item)
+    elif isinstance(item, int | bool):
+        return False
+    else:
+        return item == slice(None, None, None) or item == Ellipsis
+
+
 def do_slices_intersect(slice1, slice2):
     """
     Check whether two slices intersect.
@@ -433,21 +446,19 @@ def fast_eval(
         full_chunk = (chunks_ == chunks) and not has_padding
         fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands)
 
-        if callable(expression):
-            if isinstance(out, np.ndarray):
-                # Consolidate the result in the output array (avoiding a memory copy)
+        if isinstance(out, np.ndarray):
+            # Fast path: put the result straight in the output array (avoiding a memory copy)
+            if callable(expression):
                 expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
-                continue
             else:
-                result = np.empty(chunks_, dtype=out.dtype)
-                expression(tuple(chunk_operands.values()), result, offset=offset)
-        else:
-            if isinstance(out, np.ndarray):
-                # Consolidate the result in the output array (avoiding a memory copy)
                 ne.evaluate(expression, chunk_operands, out=out[slice_])
-                continue
-            else:
-                result = ne.evaluate(expression, chunk_operands)
+            continue
+
+        if callable(expression):
+            result = np.empty(chunks_, dtype=out.dtype)
+            expression(tuple(chunk_operands.values()), result, offset=offset)
+        else:
+            result = ne.evaluate(expression, chunk_operands)
             if out is None:
                 # We can enter here when using any of the eval() or __getitem__() methods
                 if getitem:
@@ -565,7 +576,7 @@ def slices_eval(
             if getitem:
                 out = np.empty(shape, dtype=result.dtype)
             else:
-                if kwargs.get("chunks", None) is None:
+                if "chunks" not in kwargs:
                     # Let's use the same chunks as the first operand (it could have been automatic too)
                     out = blosc2.empty(shape, chunks=chunks, dtype=result.dtype, **kwargs)
                 else:
@@ -726,7 +737,8 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
         # Eval and reduce the expression in a single step
         return reduce_slices(expression, operands, reduce_args=reduce_args, _slice=item, **kwargs)
 
-    if item is not None and item != slice(None):
+    if not is_full_slice(item):
+        # The fast path is not possible when using partial slices
         return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
 
     if fast_path:
@@ -1161,12 +1173,10 @@ class LazyExpr(LazyArray):
         return chunked_eval(self.expression, self.operands, item, **kwargs)
 
     def __getitem__(self, item):
-        if item == Ellipsis:
-            item = slice(None, None, None)
         array = chunked_eval(self.expression, self.operands, item, _getitem=True)
-        full_array = item is None or item == slice(None, None, None) or item == Ellipsis
-        # When not the full slice is requested, only the data delimited by item is filled
-        return array[item] if not full_array else array
+        full_slice = is_full_slice(item)
+        # When a partial slice is requested, only the data delimited by item is filled
+        return array[item] if not full_slice else array
 
     def __str__(self):
         expression = f"{self.expression}"
