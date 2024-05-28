@@ -13,6 +13,8 @@ import numpy as np
 import blosc2
 
 shape = (50, 50)
+chunks = (10, 10)
+blocks = (5, 5)
 
 # Create a structured NumPy array
 npa = np.linspace(0, 1, np.prod(shape), dtype=np.float32).reshape(shape)
@@ -22,7 +24,7 @@ nps = np.empty(shape, dtype=[("a", npa.dtype), ("b", npb.dtype)])
 nps["a"] = npa
 nps["b"] = npb
 
-s = blosc2.asarray(nps)
+s = blosc2.asarray(nps, chunks=chunks, blocks=blocks)
 a = blosc2.NDField(s, "a")
 b = blosc2.NDField(s, "b")
 
@@ -30,7 +32,7 @@ b = blosc2.NDField(s, "b")
 c = a**2 + b**2 > 2 * a * b + 1
 
 
-# Test where() method
+# Simple where() method
 d = c.where(0, 1)
 # print(d[:])
 np.testing.assert_allclose(d[:], np.where(npc, 0, 1))
@@ -54,7 +56,7 @@ d = myexpr(a, b)
 # print(d[:])
 np.testing.assert_allclose(d[:], np.where(npc, 0, 1))
 
-# Test with only an `x` parameter (not directly supported by NumPy)
+# where accepts only a single `x` parameter (not directly supported by NumPy)
 d = c.where(s)
 npd = d[:]
 # print(npd)
@@ -70,7 +72,7 @@ def myexpr2(a, b):
 
 d = myexpr2(a, b)
 npd = d[:]
-print(npd)
+# print(npd)
 np.testing.assert_allclose(npd["a"], nps[npc]["a"])
 np.testing.assert_allclose(npd["b"], nps[npc]["b"])
 
@@ -80,5 +82,18 @@ np.testing.assert_allclose(npd["b"], nps[npc]["b"])
 # print(d[:])
 # np.testing.assert_allclose(d[:], npc.nonzero())
 
+# NDArray.__getitem__ with LazyExpr (converted into c.where(s) behind the scenes)
+d = s[a**2 + b**2 > 2 * a * b + 1]
+npd = d[:]
+# print(npd)
+np.testing.assert_allclose(npd["a"], nps[npc]["a"])
+np.testing.assert_allclose(npd["b"], nps[npc]["b"])
 
 print("blosc2.where is working correctly!")
+
+# NDArray.__getitem__ with a string expression
+d = s["a**2 + b**2 > 2 * a * b + 1"]
+npd = d[:]
+print(npd)
+np.testing.assert_allclose(npd["a"], nps[npc]["a"])
+np.testing.assert_allclose(npd["b"], nps[npc]["b"])
