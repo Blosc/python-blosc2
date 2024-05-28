@@ -419,6 +419,7 @@ def fast_eval(
         The output array.
     """
     out = kwargs.pop("_output", None)
+    where: dict = kwargs.pop("_where_args", {})
     if isinstance(out, blosc2.NDArray):
         # If 'out' has been passed, and is a NDArray, use it as the base array
         basearr = out
@@ -446,7 +447,7 @@ def fast_eval(
         full_chunk = (chunks_ == chunks) and not has_padding
         fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands)
 
-        if isinstance(out, np.ndarray):
+        if isinstance(out, np.ndarray) and not where:
             # Fast path: put the result straight in the output array (avoiding a memory copy)
             if callable(expression):
                 expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
@@ -459,6 +460,11 @@ def fast_eval(
             expression(tuple(chunk_operands.values()), result, offset=offset)
         else:
             result = ne.evaluate(expression, chunk_operands)
+            if where:
+                # Apply the where condition (in result)
+                x = chunk_operands["_where_x"]
+                y = chunk_operands["_where_y"]
+                result = np.where(result, x, y)
             if out is None:
                 # We can enter here when using any of the eval() or __getitem__() methods
                 if getitem:
@@ -511,6 +517,7 @@ def slices_eval(
     """
     out = kwargs.pop("_output", None)
     chunks = kwargs.get("chunks", None)
+    where: dict = kwargs.pop("_where_args", {})
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
 
@@ -572,6 +579,11 @@ def slices_eval(
             continue
 
         result = ne.evaluate(expression, chunk_operands)
+        if where:
+            # Apply the where condition (in result)
+            x = chunk_operands["_where_x"]
+            y = chunk_operands["_where_y"]
+            result = np.where(result, x, y)
         if out is None:
             if getitem:
                 out = np.empty(shape, dtype=result.dtype)
@@ -730,6 +742,10 @@ def reduce_slices(
 def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs):
     getitem = kwargs.pop("_getitem", False)
     out = kwargs.get("_output", None)
+    where: dict = kwargs.get("_where_args", {})
+    if where:
+        # Make the where arguments part of the operands
+        operands = {**operands, **where}
     shape, dtype_, fast_path = validate_inputs(operands, getitem, out)
 
     reduce_args = kwargs.pop("_reduce_args", {})
@@ -1052,6 +1068,10 @@ class LazyExpr(LazyArray):
 
     def __ge__(self, value):
         return self.update_expr(new_op=(self, ">=", value))
+
+    def where(self, value1, value2):
+        args = dict(_where_x=value1, _where_y=value2)
+        return self.eval(_where_args=args)
 
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
