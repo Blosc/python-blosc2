@@ -345,16 +345,12 @@ def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, ch
 
     This function offers a fast path for full chunks and a slow path for the rest.
     """
-    c2arrays_operands = any([isinstance(obj, blosc2.C2Array) for obj in operands])
     for key, value in operands.items():
         if np.isscalar(value):
             chunk_operands[key] = value
             continue
 
-        if c2arrays_operands or isinstance(value, np.ndarray | blosc2.C2Array):
-            # TODO: en principi c2arrays_operands or isinstance(value, blosc2.C2Array)
-            #  només s'usa en chunks_eval, realment cal també en chunks_getitem??
-            # Due to padding, when mixing C2Array with NDArray both have to use __getitem__
+        if isinstance(value, np.ndarray | blosc2.C2Array):
             chunk_operands[key] = value[slice_]
             continue
 
