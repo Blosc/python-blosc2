@@ -304,6 +304,7 @@ from .ndarray import (
     sum,
     tan,
     tanh,
+    where,
 )
 
 __all__ = [
