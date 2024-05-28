@@ -289,6 +289,7 @@ from .ndarray import (
     exp,
     expm1,
     imag,
+    lazywhere,
     log,
     log1p,
     log10,
@@ -351,4 +352,5 @@ __all__ = [
     "get_slice_nchunks",
     "lazyexpr",
     "lazyudf",
+    "lazywhere",
 ]
