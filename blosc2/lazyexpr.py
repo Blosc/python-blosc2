@@ -461,6 +461,8 @@ def fast_eval(
         else:
             result = ne.evaluate(expression, chunk_operands)
             if where:
+                if result.dtype != np.bool_:
+                    raise ValueError("The result of the expression must be a boolean array")
                 # Apply the where condition (in result)
                 x = chunk_operands["_where_x"]
                 y = chunk_operands["_where_y"]
@@ -580,6 +582,8 @@ def slices_eval(
 
         result = ne.evaluate(expression, chunk_operands)
         if where:
+            if result.dtype != np.bool_:
+                raise ValueError("The result of the expression must be a boolean array")
             # Apply the where condition (in result)
             x = chunk_operands["_where_x"]
             y = chunk_operands["_where_y"]
@@ -1069,9 +1073,12 @@ class LazyExpr(LazyArray):
     def __ge__(self, value):
         return self.update_expr(new_op=(self, ">=", value))
 
-    def where(self, value1, value2):
+    def where(self, value1=None, value2=None):
+        # This just acts as a 'decorator' for the existing expression
+        # TODO: would it be a good idea to implement an actual decorator too?
         args = dict(_where_x=value1, _where_y=value2)
-        return self.eval(_where_args=args)
+        self._where_args = args
+        return self
 
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
@@ -1190,10 +1197,17 @@ class LazyExpr(LazyArray):
     def eval(self, item=None, **kwargs) -> blosc2.NDArray:
         if hasattr(self, "_output"):
             kwargs["_output"] = self._output
+        if hasattr(self, "_where_args"):
+            kwargs["_where_args"] = self._where_args
         return chunked_eval(self.expression, self.operands, item, **kwargs)
 
     def __getitem__(self, item):
-        array = chunked_eval(self.expression, self.operands, item, _getitem=True)
+        kwargs = {"_getitem": True}
+        if hasattr(self, "_output"):
+            kwargs["_output"] = self._output
+        if hasattr(self, "_where_args"):
+            kwargs["_where_args"] = self._where_args
+        array = chunked_eval(self.expression, self.operands, item, **kwargs)
         full_slice = is_full_slice(item)
         # When a partial slice is requested, only the data delimited by item is filled
         return array[item] if not full_slice else array
@@ -1250,13 +1264,14 @@ class LazyExpr(LazyArray):
         return
 
     @classmethod
-    def _new_expr(cls, expression, operands, out=None):
+    def _new_expr(cls, expression, operands, out=None, where=None):
         # Create a new LazyExpr object
         new_expr = cls(None)
         ne.validate(expression, locals=operands)
         new_expr.expression = expression
         new_expr.operands = operands
         new_expr._output = out
+        new_expr._where_args = where
         return new_expr
 
 
@@ -1449,7 +1464,7 @@ def lazyudf(func, inputs, dtype, chunked_eval=True, **kwargs):
     return LazyUDF(func, inputs, dtype, chunked_eval, **kwargs)
 
 
-def lazyexpr(expression, operands, out=None):
+def lazyexpr(expression, operands=None, out=None, where=None):
     """
     Get a LazyExpr from an expression.
 
@@ -1465,6 +1480,9 @@ def lazyexpr(expression, operands, out=None):
     out: NDArray or np.ndarray, optional
         The output array where the result will be stored. If not provided,
         a new array will be created.
+    where: tuple, list, optional
+        A sequence with the where arguments. This is useful when the expression
+        contains a where clause. The where arguments should be provided as a sequence.
 
     Returns
     -------
@@ -1473,11 +1491,17 @@ def lazyexpr(expression, operands, out=None):
 
     """
     if isinstance(expression, LazyExpr):
-        expression.operands.update(operands)
+        if operands is not None:
+            expression.operands.update(operands)
         if out is not None:
             expression._output = out
+        if where is not None:
+            where_args = dict(_where_x=where[0], _where_y=where[1])
+            expression._where_args = where_args
         return expression
-    return LazyExpr._new_expr(expression, operands, out=out)
+    if operands is None:
+        raise ValueError("`operands` must be provided for a string expression")
+    return LazyExpr._new_expr(expression, operands, out=out, where=where)
 
 
 if __name__ == "__main__":

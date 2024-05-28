@@ -28,6 +28,7 @@ b = blosc2.NDField(s, "b")
 
 # Get a LazyExpr instance
 c = a**2 + b**2 > 2 * a * b + 1
+
 # Evaluate: output is a NDArray
 d = c.eval()
 # Check
@@ -46,9 +47,19 @@ npd = c[1:10]
 assert isinstance(npd, np.ndarray)
 assert np.allclose(npd, npc[1:10])
 
-print("NDArray expression evaluated correctly!")
+print("Expression with NDField operands evaluated correctly!")
 
 # Test where() method
 npd = c.where(0, 1)
+# print(npd[:])
+np.testing.assert_allclose(npd[:], np.where(npc, 0, 1))
+
+npd = blosc2.where(c, 0, 1)
+# print(npd[:])
+np.testing.assert_allclose(npd[:], np.where(npc, 0, 1))
+
+npd = blosc2.lazyexpr(c, where=(0, 1))
 print(npd[:])
-assert np.allclose(npd[:], np.where(npc, 0, 1))
+np.testing.assert_allclose(npd[:], np.where(npc, 0, 1))
+
+print("blosc2.where is working correctly!")
