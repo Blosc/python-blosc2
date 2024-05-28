@@ -48,29 +48,3 @@ assert isinstance(npd, np.ndarray)
 assert np.allclose(npd, npc[1:10])
 
 print("Expression with NDField operands evaluated correctly!")
-
-# Test where() method
-npd = c.where(0, 1)
-# print(npd[:])
-np.testing.assert_allclose(npd[:], np.where(npc, 0, 1))
-
-npd = blosc2.where(c, 0, 1)
-# print(npd[:])
-np.testing.assert_allclose(npd[:], np.where(npc, 0, 1))
-
-npd = blosc2.lazyexpr(c, where=(0, 1))
-# print(npd[:])
-np.testing.assert_allclose(npd[:], np.where(npc, 0, 1))
-
-
-# Not sure if a decorator like this is a good idea, but it works
-@blosc2.lazywhere(0, 1)
-def myexpr(a, b):
-    return a**2 + b**2 > 2 * a * b + 1
-
-
-npd = myexpr(a, b)
-print(npd[:])
-np.testing.assert_allclose(npd[:], np.where(npc, 0, 1))
-
-print("blosc2.where is working correctly!")

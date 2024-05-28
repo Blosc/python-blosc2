@@ -419,7 +419,7 @@ def fast_eval(
         The output array.
     """
     out = kwargs.pop("_output", None)
-    where: dict = kwargs.pop("_where_args", {})
+    where: dict | None = kwargs.pop("_where_args", None)
     if isinstance(out, blosc2.NDArray):
         # If 'out' has been passed, and is a NDArray, use it as the base array
         basearr = out
@@ -519,7 +519,7 @@ def slices_eval(
     """
     out = kwargs.pop("_output", None)
     chunks = kwargs.get("chunks", None)
-    where: dict = kwargs.pop("_where_args", {})
+    where: dict | None = kwargs.pop("_where_args", None)
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
 
@@ -538,6 +538,7 @@ def slices_eval(
     del operand
 
     # Iterate over the operands and get the chunks
+    lenout = 0
     for nchunk in range(nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
         chunk_operands = {}
@@ -581,25 +582,45 @@ def slices_eval(
             continue
 
         result = ne.evaluate(expression, chunk_operands)
-        if where:
+
+        if where is not None:
             if result.dtype != np.bool_:
                 raise ValueError("The result of the expression must be a boolean array")
             # Apply the where condition (in result)
-            x = chunk_operands["_where_x"]
-            y = chunk_operands["_where_y"]
-            result = np.where(result, x, y)
+            if len(where) == 2:
+                x = chunk_operands["_where_x"]
+                y = chunk_operands["_where_y"]
+                result = np.where(result, x, y)
+            elif len(where) == 1:
+                x = chunk_operands["_where_x"]
+                result = x[result]
+            else:
+                # result = np.asarray(result).nonzero()
+                raise ValueError("The where condition must be a tuple with one or two elements")
+
         if out is None:
+            shape_ = shape
+            if where is not None and len(where) < 2:
+                # The result is a linear array
+                shape_ = math.prod(shape)
             if getitem:
-                out = np.empty(shape, dtype=result.dtype)
+                out = np.empty(shape_, dtype=result.dtype)
             else:
                 if "chunks" not in kwargs:
                     # Let's use the same chunks as the first operand (it could have been automatic too)
-                    out = blosc2.empty(shape, chunks=chunks, dtype=result.dtype, **kwargs)
+                    out = blosc2.empty(shape_, chunks=chunks, dtype=result.dtype, **kwargs)
                 else:
-                    out = blosc2.empty(shape, dtype=result.dtype, **kwargs)
+                    out = blosc2.empty(shape_, dtype=result.dtype, **kwargs)
 
-        out[slice_] = result
+        if where is None:
+            out[slice_] = result
+        else:
+            lenres = len(result)
+            out[lenout : lenout + lenres] = result
+            lenout += lenres
 
+    if where is not None:
+        out = out[:lenout]
     return out
 
 
@@ -746,7 +767,7 @@ def reduce_slices(
 def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs):
     getitem = kwargs.pop("_getitem", False)
     out = kwargs.get("_output", None)
-    where: dict = kwargs.get("_where_args", {})
+    where: dict | None = kwargs.get("_where_args", None)
     if where:
         # Make the where arguments part of the operands
         operands = {**operands, **where}
@@ -757,8 +778,9 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
         # Eval and reduce the expression in a single step
         return reduce_slices(expression, operands, reduce_args=reduce_args, _slice=item, **kwargs)
 
-    if not is_full_slice(item):
-        # The fast path is not possible when using partial slices
+    if not is_full_slice(item) or (where is not None and len(where) < 2):
+        # The fast path is not possible when using partial slices or where returning
+        # a variable number of elements
         return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
 
     if fast_path:
@@ -1075,8 +1097,14 @@ class LazyExpr(LazyArray):
 
     def where(self, value1=None, value2=None):
         # This just acts as a 'decorator' for the existing expression
-        # TODO: would it be a good idea to implement an actual decorator too?
-        args = dict(_where_x=value1, _where_y=value2)
+        if value1 is not None and value2 is not None:
+            args = dict(_where_x=value1, _where_y=value2)
+        elif value1 is not None:
+            args = dict(_where_x=value1)
+        elif value2 is not None:
+            raise ValueError("where() requires value1 when using value2")
+        else:
+            args = {}
         self._where_args = args
         return self
 
