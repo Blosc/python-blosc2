@@ -7,6 +7,7 @@
 #######################################################################
 import pathlib
 
+import httpx
 import numexpr as ne
 import numpy as np
 import pytest
@@ -25,19 +26,24 @@ DIR = 'operands/'
 # ROOT = 'b2tests'
 # DIR = 'expr/'
 
+resp = httpx.post(f'{SUB_URL}auth/jwt/login',
+                  data=dict(username='user@example.com', password='foobar'))
+resp.raise_for_status()
+AUTH_COOKIE = '='.join(list(resp.cookies.items())[0])
+
 
 @pytest.fixture(params=[
-                        np.float64
-                        ])
+    np.float64
+])
 def dtype_fixture(request):
     return request.param
 
 
 @pytest.fixture(params=[
-                        (NITEMS_SMALL,),
-                        (NITEMS,),
-                        (NITEMS // 100, 100)
-                        ])
+    (NITEMS_SMALL,),
+    (NITEMS,),
+    (NITEMS // 100, 100)
+])
 def shape_fixture(request):
     return request.param
 
@@ -49,6 +55,14 @@ def shape_fixture(request):
                         (False, False)
                         ])
 def chunks_blocks_fixture(request):
+    return request.param
+
+
+@pytest.fixture(params=[
+    # None,
+    AUTH_COOKIE,
+])
+def auth_cookie(request):
     return request.param
 
 
@@ -110,22 +124,22 @@ def chunks_blocks_fixture(request):
 
 
 @pytest.fixture
-def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
+def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture, auth_cookie):
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a1-{shape_fixture}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-    a1 = blosc2.C2Array(path, sub_url=SUB_URL)
+    a1 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a2-{shape_fixture}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-    a2 = blosc2.C2Array(path, sub_url=SUB_URL)
+    a2 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     # Let other operands have chunks1 and blocks1
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a3-{shape_fixture}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-    a3 = blosc2.C2Array(path, sub_url=SUB_URL)
+    a3 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a4-{shape_fixture}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-    a4 = blosc2.C2Array(path, sub_url=SUB_URL)
+    a4 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     assert isinstance(a1, blosc2.C2Array)
     assert isinstance(a2, blosc2.C2Array)
     assert isinstance(a3, blosc2.C2Array)
@@ -163,7 +177,7 @@ def test_simple_getitem(array_fixture):
 # Add more test functions to test different aspects of the code
 def test_ixxx(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    expr = a1**3 + a2**2 + a3**3 - a4 + 3
+    expr = a1 ** 3 + a2 ** 2 + a3 ** 3 - a4 + 3
     expr += 5  # __iadd__
     expr -= 15  # __isub__
     expr *= 2  # __imul__
@@ -205,17 +219,17 @@ def test_expression_with_constants(array_fixture):
 
 @pytest.mark.parametrize("compare_expressions", [True, False])
 @pytest.mark.parametrize("comparison_operator", ["==", "!=", ">=", ">", "<=", "<"])
-def test_comparison_operators(dtype_fixture, compare_expressions, comparison_operator):
+def test_comparison_operators(dtype_fixture, compare_expressions, comparison_operator, auth_cookie):
     shape_fixture = (NITEMS_SMALL,)
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     na2 = np.copy(na1)  # noqa: F841
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-(True, False)-a1-{shape_fixture}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-    a1 = blosc2.C2Array(path, sub_url=SUB_URL)
+    a1 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-(True, False)-a2-{shape_fixture}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-    a2 = blosc2.C2Array(path, sub_url=SUB_URL)
+    a2 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     # Construct the lazy expression
     if compare_expressions:
         expr = eval(f"a1 ** 2 {comparison_operator} (a1 + a2)", {"a1": a1, "a2": a2})
@@ -256,12 +270,12 @@ def test_comparison_operators(dtype_fixture, compare_expressions, comparison_ope
         "imag",
     ],
 )
-def test_functions(function, dtype_fixture, shape_fixture):
+def test_functions(function, dtype_fixture, shape_fixture, auth_cookie):
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{(True, False)}-a1-{shape_fixture}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-    a1 = blosc2.C2Array(path, sub_url=SUB_URL)
+    a1 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     # Construct the lazy expression based on the function name
     expr = blosc2.LazyExpr(new_op=(a1, function, None))
     res_lazyexpr = expr.eval()
@@ -275,13 +289,12 @@ def test_functions(function, dtype_fixture, shape_fixture):
 # TODO: support save
 
 
-
-def test_abs(shape_fixture, dtype_fixture):
+def test_abs(shape_fixture, dtype_fixture, auth_cookie):
     nelems = np.prod(shape_fixture)
     na = np.linspace(-1, 1, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     urlpath = f'ds--1-1-linspace-{dtype_fixture.__name__}-a5-{shape_fixture}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-    a = blosc2.C2Array(path, sub_url=SUB_URL)
+    a = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     expr = blosc2.LazyExpr(new_op=(a, "abs", None))
     res_lazyexpr = expr.eval()
     res_np = np.abs(na)
@@ -289,13 +302,13 @@ def test_abs(shape_fixture, dtype_fixture):
 
 
 @pytest.mark.parametrize("values", [("NDArray", "str"), ("NDArray", "NDArray"), ("str", "NDArray")])
-def test_contains(values):
+def test_contains(values, auth_cookie):
     # Unpack the value fixture
     value1, value2 = values
     if value1 == "NDArray":
         urlpath = f'ds-str-a6.b2nd'
         path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-        a1_blosc = blosc2.C2Array(path, sub_url=SUB_URL)
+        a1_blosc = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
         a1 = a1_blosc[:]
         if value2 == "str":  # ("NDArray", "str")
             value2 = b"test abc here"
@@ -307,7 +320,7 @@ def test_contains(values):
         else:  # ("NDArray", "NDArray")
             urlpath = f'ds-str-a7.b2nd'
             path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-            a2_blosc = blosc2.C2Array(path, sub_url=SUB_URL)
+            a2_blosc = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
             a2 = a2_blosc[:]
             # Construct the lazy expression
             expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", a2_blosc))
@@ -317,7 +330,7 @@ def test_contains(values):
         value1 = b"abc"
         urlpath = f'ds-str-a6.b2nd'
         path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-        a2_blosc = blosc2.C2Array(path, sub_url=SUB_URL)
+        a2_blosc = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
         a2 = a2_blosc[:]
         # Construct the lazy expression
         expr_lazy = blosc2.LazyExpr(new_op=(value1, "contains", a2_blosc))
@@ -328,10 +341,10 @@ def test_contains(values):
     np.testing.assert_array_equal(res_lazyexpr[:], res_numexpr)
 
 
-def test_negate(dtype_fixture, shape_fixture):
+def test_negate(dtype_fixture, shape_fixture, auth_cookie):
     urlpath = f'ds--1-1-linspace-{dtype_fixture.__name__}-a5-{shape_fixture}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-    a = blosc2.C2Array(path, sub_url=SUB_URL)
+    a = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     na = a[:]
 
     # Test with a single NDArray
@@ -383,24 +396,24 @@ def test_mix_operands(array_fixture):
 
 
 # Tests related with save method
-def test_save(dtype_fixture, shape_fixture):
+def test_save(dtype_fixture, shape_fixture, auth_cookie):
     tol = 1e-17
     chunks_blocks_fixture = (False, False)
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a1-{shape_fixture}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-    a1 = blosc2.C2Array(path, sub_url=SUB_URL)
+    a1 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a2-{shape_fixture}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-    a2 = blosc2.C2Array(path, sub_url=SUB_URL)
+    a2 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     # Let other operands have chunks1 and blocks1
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a3-{shape_fixture}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-    a3 = blosc2.C2Array(path, sub_url=SUB_URL)
+    a3 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a4-{shape_fixture}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-    a4 = blosc2.C2Array(path, sub_url=SUB_URL)
+    a4 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     na2 = na1.copy()
     na3 = na1.copy()
     na4 = na1.copy()
@@ -464,16 +477,16 @@ def broadcast_shape(request):
 #     return b1, b2, na1, na2
 
 @pytest.fixture
-def broadcast_fixture(dtype_fixture, broadcast_shape):
+def broadcast_fixture(dtype_fixture, broadcast_shape, auth_cookie):
     shape1, shape2 = broadcast_shape
     na1 = np.linspace(0, 1, np.prod(shape1), dtype=dtype_fixture).reshape(shape1)
     na2 = np.linspace(1, 2, np.prod(shape2), dtype=dtype_fixture).reshape(shape2)
     urlpath = f'ds-0-1-linspace-{dtype_fixture.__name__}-b1-{shape1}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-    b1 = blosc2.C2Array(path, sub_url=SUB_URL)
+    b1 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     urlpath = f'ds-1-2-linspace-{dtype_fixture.__name__}-b2-{shape2}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
-    b2 = blosc2.C2Array(path, sub_url=SUB_URL)
+    b2 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
 
     return b1, b2, na1, na2
 
