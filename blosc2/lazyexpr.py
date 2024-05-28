@@ -606,20 +606,29 @@ def slices_eval(
             if getitem:
                 out = np.empty(shape_, dtype=result.dtype)
             else:
-                if "chunks" not in kwargs:
+                if "chunks" not in kwargs and (where is None or len(where) == 2):
                     # Let's use the same chunks as the first operand (it could have been automatic too)
                     out = blosc2.empty(shape_, chunks=chunks, dtype=result.dtype, **kwargs)
+                elif "chunks" in kwargs and (where is not None and len(where) < 2 and len(shape_) > 1):
+                    # Remove the chunks argument if the where condition is not a tuple with two elements
+                    kwargs.pop("chunks")
+                    out = blosc2.empty(shape_, dtype=result.dtype, **kwargs)
                 else:
                     out = blosc2.empty(shape_, dtype=result.dtype, **kwargs)
 
         if where is None:
             out[slice_] = result
         else:
-            lenres = len(result)
-            out[lenout : lenout + lenres] = result
-            lenout += lenres
+            if len(where) == 2:
+                out[slice_] = result
+            elif len(where) == 1:
+                lenres = len(result)
+                out[lenout : lenout + lenres] = result
+                lenout += lenres
+            else:
+                raise ValueError("The where condition must be a tuple with one or two elements")
 
-    if where is not None:
+    if where is not None and len(where) < 2:
         out = out[:lenout]
     return out
 
