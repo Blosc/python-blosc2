@@ -1639,6 +1639,18 @@ def where(
     return condition.where(x, y)
 
 
+def lazywhere(value1=None, value2=None):
+    """Decorator to apply a where condition to a LazyExpr."""
+
+    def inner_decorator(func):
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs).where(value1, value2)
+
+        return wrapper
+
+    return inner_decorator
+
+
 def _check_shape(shape):
     if isinstance(shape, int):
         shape = (shape,)
