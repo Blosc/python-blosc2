@@ -89,11 +89,11 @@ npd = d[:]
 np.testing.assert_allclose(npd["a"], nps[npc]["a"])
 np.testing.assert_allclose(npd["b"], nps[npc]["b"])
 
-print("blosc2.where is working correctly!")
-
 # NDArray.__getitem__ with a string expression
 d = s["a**2 + b**2 > 2 * a * b + 1"]
 npd = d[:]
 print(npd)
 np.testing.assert_allclose(npd["a"], nps[npc]["a"])
 np.testing.assert_allclose(npd["b"], nps[npc]["b"])
+
+print("blosc2.where is working correctly!")
