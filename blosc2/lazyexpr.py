@@ -295,6 +295,9 @@ def validate_inputs(inputs: dict, getitem=False, out=None) -> tuple:
             equal_chunks = False
         if first_input.blocks != input_.blocks:
             equal_blocks = False
+        if input_.blocks[1:] != input_.chunks[1:]:
+            # For some reason, the trailing dimensions not being the same is not supported in fast path
+            equal_blocks = False
     fast_path = equal_chunks and equal_blocks
 
     dtype = first_input.dtype if out is None else out.dtype
@@ -428,8 +431,7 @@ def fast_eval(
     # Get the shape of the base array
     shape = basearr.shape
     chunks = basearr.chunks
-    # For some reason, the trailing dimensions not being the same is not supported in fast reads
-    has_padding = basearr.ext_shape != shape or basearr.blocks[1:] != basearr.chunks[1:]
+    has_padding = basearr.ext_shape != shape
     chunk_operands = {}
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
 
