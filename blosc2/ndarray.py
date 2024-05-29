@@ -2047,6 +2047,13 @@ class NDField(Operand):
         return self.ndarr.schunk
 
     def __getitem__(self, key):
+        # If the key is a LazyExpr, decorate with ``where`` and return it
+        if isinstance(key, blosc2.LazyExpr):
+            return key.where(self)
+
+        if isinstance(key, str):
+            raise ValueError("This array is an NDField; use a structured NDArray for bool expressions")
+
         # Check if the key is in the last read cache
         inmutable_key = make_key_hashable(key)
         if inmutable_key in self.ndarr._last_read:
