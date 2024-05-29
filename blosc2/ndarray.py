@@ -90,11 +90,6 @@ class Operand:
         _check_allowed_dtypes(value, "numeric", "__rsub__")
         return blosc2.LazyExpr(new_op=(value, "-", self))
 
-    def __array_namespace__(self, *, api_version: str | None = None):
-        if api_version is not None and not api_version.startswith("2021."):
-            raise ValueError(f"Unrecognized array API version: {api_version!r}")
-        return blosc2
-
     def __mul__(self, value: int | float | NDArray | NDField, /):
         _check_allowed_dtypes(value, "numeric", "__mul__")
         return blosc2.LazyExpr(new_op=(self, "*", value))
