@@ -295,9 +295,6 @@ def validate_inputs(inputs: dict, getitem=False, out=None) -> tuple:
             equal_chunks = False
         if first_input.blocks != input_.blocks:
             equal_blocks = False
-        if input_.blocks[1:] != input_.chunks[1:]:
-            # For some reason, the trailing dimensions not being the same is not supported in fast path
-            equal_blocks = False
     fast_path = equal_chunks and equal_blocks
 
     dtype = first_input.dtype if out is None else out.dtype
@@ -431,7 +428,8 @@ def fast_eval(
     # Get the shape of the base array
     shape = basearr.shape
     chunks = basearr.chunks
-    has_padding = basearr.ext_shape != shape
+    # For some reason, the trailing dimensions not being the same is not supported in fast reads
+    has_padding = basearr.ext_shape != shape or basearr.blocks[1:] != basearr.chunks[1:]
     chunk_operands = {}
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
 
@@ -459,14 +457,17 @@ def fast_eval(
             result = np.empty(chunks_, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
         else:
-            result = ne.evaluate(expression, chunk_operands)
-            if where:
-                if result.dtype != np.bool_:
-                    raise ValueError("The result of the expression must be a boolean array")
+            if where is None:
+                result = ne.evaluate(expression, chunk_operands)
+            else:
                 # Apply the where condition (in result)
-                x = chunk_operands["_where_x"]
-                y = chunk_operands["_where_y"]
-                result = np.where(result, x, y)
+                if len(where) == 2:
+                    new_expr = f"where({expression}, _where_x, _where_y)"
+                    result = ne.evaluate(new_expr, chunk_operands)
+                else:
+                    # We do not support one or zero operands in the fast path yet
+                    raise ValueError("The where condition must be a tuple with one or two elements")
+
             if out is None:
                 # We can enter here when using any of the eval() or __getitem__() methods
                 if getitem:
@@ -584,8 +585,6 @@ def slices_eval(
         if where is None:
             result = ne.evaluate(expression, chunk_operands)
         else:
-            # if result.dtype != np.bool_:
-            #     raise ValueError("The result of the expression must be a boolean array")
             # Apply the where condition (in result)
             if len(where) == 2:
                 # x = chunk_operands["_where_x"]
