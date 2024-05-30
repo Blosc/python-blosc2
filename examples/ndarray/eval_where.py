@@ -96,4 +96,9 @@ print(npd)
 np.testing.assert_allclose(npd["a"], nps[npc]["a"])
 np.testing.assert_allclose(npd["b"], nps[npc]["b"])
 
+# Combined with reductions
+d = blosc2.where(c, 0, 1).sum(axis=1)
+print(d[...])
+np.testing.assert_allclose(d[...], np.where(npc, 0, 1).sum(axis=1))
+
 print("blosc2.where is working correctly!")
