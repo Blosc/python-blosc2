@@ -92,14 +92,11 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op):
         res = getattr(expr, reduce_op)(axis=axis, keepdims=keepdims)
         nres = getattr(nres, reduce_op)(axis=axis, keepdims=keepdims)
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
-    # TODO: the [()] should not be needed, because it should be a NumPy array
-    np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
+    np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 
-# TODO: "any" and "all" are not supported yet because:
-# ne.evaluate('(o0 + o1)', local_dict = {'o0': np.array(True), 'o1': np.array(True)})
-# is not supported by NumExpr
-@pytest.mark.parametrize("reduce_op", ["sum", "min", "max", "mean", "std", "var"])
+# TODO: "prod" is not supported here because it overflows with current values
+@pytest.mark.parametrize("reduce_op", ["sum", "min", "max", "mean", "std", "var", "any", "all"])
 @pytest.mark.parametrize("axis", [0, 1, None])
 def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
@@ -108,11 +105,9 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     expr = a1 + a2 - a3 * a4
     nres = eval("na1 + na2 - na3 * na4")
     res = getattr(expr, reduce_op)(axis=axis) + getattr(a1, reduce_op)(axis=axis)
-    # print(f"res: {res}")
     nres = getattr(nres, reduce_op)(axis=axis) + getattr(na1, reduce_op)(axis=axis)
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
-    # TODO: the [()] should not be needed, because it should be a NumPy array
-    np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
+    np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 
 # Test broadcasting
@@ -145,5 +140,4 @@ def test_broadcast_params(axis, keepdims, reduce_op, shapes):
     nres = eval(f"na1 + na2 - na3 - (na1 * na2 + 1).{reduce_op}(axis={axis}, keepdims={keepdims})")
 
     tol = 1e-14 if a1.dtype == "float64" else 1e-5
-    # TODO: the [()] should not be needed, because it should be a NumPy array
-    np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
+    np.testing.assert_allclose(res[:], nres, atol=tol, rtol=tol)

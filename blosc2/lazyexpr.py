@@ -269,6 +269,11 @@ def validate_inputs(inputs: dict, getitem=False, out=None) -> tuple:
     if len(inputs) > 1:
         check_broadcast_compatible(inputs)
 
+    ref = inputs[0]
+    if not all(np.array_equal(ref.shape, input.shape) for input in inputs):
+        # If inputs have different shapes, we cannot take the fast path
+        return ref.shape, ref.dtype, False
+
     # More checks specific of NDArray inputs
     NDinputs = list(input for input in inputs if hasattr(input, "chunks"))
     if len(NDinputs) == 0:
@@ -1176,9 +1181,9 @@ class LazyExpr(LazyArray):
                 num_elements = np.prod(self.shape)
             else:
                 num_elements = np.prod([self.shape[i] for i in axis])
-            std_expr = blosc2.sqrt(std_expr * num_elements / (num_elements - ddof))
+            std_expr = np.sqrt(std_expr * num_elements / (num_elements - ddof))
         else:
-            std_expr = blosc2.sqrt(std_expr)
+            std_expr = np.sqrt(std_expr)
         return std_expr
 
     def var(self, axis=None, dtype=None, keepdims=False, ddof=0):
