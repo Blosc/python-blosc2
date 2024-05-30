@@ -1624,9 +1624,7 @@ cdef int aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
         l.append(slice(start_ndim[i], start_ndim[i] + blockshape[i]))
     slices = tuple(l)
     for obj in inputs_tuple:
-        if isinstance(obj, blosc2.NDArray):
-            inputs_slice.append(obj[slices])
-        elif isinstance(obj, np.ndarray):
+        if isinstance(obj, blosc2.NDArray | np.ndarray | blosc2.C2Array):
             inputs_slice.append(obj[slices])
         elif np.isscalar(obj):
             inputs_slice.append(obj)

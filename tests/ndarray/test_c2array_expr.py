@@ -66,63 +66,6 @@ def auth_cookie(request):
     return request.param
 
 
-# @pytest.fixture
-# def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
-#     nelems = np.prod(shape_fixture)
-#     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
-#
-#     chunks = chunks1 = blocks = blocks1 = None  # silence linter
-#     same_chunks_blocks = chunks_blocks_fixture[0] and chunks_blocks_fixture[1]
-#     same_chunks = chunks_blocks_fixture[0]
-#     same_blocks = chunks_blocks_fixture[1]
-#     if same_chunks_blocks:
-#         # For full generality, use partitions with padding
-#         chunks = chunks1 = [c // 11 for c in na1.shape]
-#         blocks = blocks1 = [c // 71 for c in na1.shape]
-#     elif same_chunks:
-#         chunks = [c // 11 for c in na1.shape]
-#         blocks = [c // 71 for c in na1.shape]
-#         chunks1 = [c // 11 for c in na1.shape]
-#         blocks1 = [c // 51 for c in na1.shape]
-#     elif same_blocks:
-#         chunks = [c // 11 for c in na1.shape]
-#         blocks = [c // 71 for c in na1.shape]
-#         chunks1 = [c // 23 for c in na1.shape]
-#         blocks1 = [c // 71 for c in na1.shape]
-#     else:
-#         # Different chunks and blocks
-#         chunks = [c // 17 for c in na1.shape]
-#         blocks = [c // 19 for c in na1.shape]
-#         chunks1 = [c // 23 for c in na1.shape]
-#         blocks1 = [c // 29 for c in na1.shape]
-#
-#     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a1-{shape_fixture}d.b2nd'
-#     a1 = blosc2.asarray(na1, chunks=chunks, blocks=blocks, urlpath=urlpath, mode="w")
-#     na2 = np.copy(na1)
-#     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a2-{shape_fixture}d.b2nd'
-#     a2 = blosc2.asarray(na2, chunks=chunks, blocks=blocks, urlpath=urlpath, mode="w")
-#     na3 = np.copy(na1)
-#     # Let other operands have chunks1 and blocks1
-#     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a3-{shape_fixture}d.b2nd'
-#     a3 = blosc2.asarray(na3, chunks=chunks1, blocks=blocks1, urlpath=urlpath, mode="w")
-#     na4 = np.copy(na1)
-#     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a4-{shape_fixture}d.b2nd'
-#     a4 = blosc2.asarray(na4, chunks=chunks1, blocks=blocks1, urlpath=urlpath, mode="w")
-#
-#     na = np.linspace(-1, 1, nelems, dtype=dtype_fixture).reshape(shape_fixture)
-#     urlpath = f'ds--1-1-linspace-{dtype_fixture.__name__}-a5-{shape_fixture}d.b2nd'
-#     _ = blosc2.asarray(na, urlpath=urlpath, mode="w")
-#
-#     na = np.array([b"abc", b"def", b"aterr", b"oot", b"zu", b"ab c"])
-#     urlpath = f'ds-str-a6.b2nd'
-#     _ = blosc2.asarray(na, urlpath=urlpath, mode="w")
-#     na = np.array([b"abc", b"ab c", b" abc", b" abc ", b"\tabc", b"c h"])
-#     urlpath = f'ds-str-a7.b2nd'
-#     _ = blosc2.asarray(na, urlpath=urlpath, mode="w")
-#
-#     return a1, a2, a3, a4, na1, np.copy(na1), np.copy(na1), np.copy(na1)
-
-
 @pytest.fixture
 def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture, auth_cookie):
     nelems = np.prod(shape_fixture)
@@ -284,9 +227,6 @@ def test_functions(function, dtype_fixture, shape_fixture, auth_cookie):
     res_numexpr = ne.evaluate(expr_string)
     # Compare the results
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
-
-
-# TODO: support save
 
 
 def test_abs(shape_fixture, dtype_fixture, auth_cookie):
@@ -460,21 +400,6 @@ def test_save(dtype_fixture, shape_fixture, auth_cookie):
 def broadcast_shape(request):
     return request.param
 
-
-# Test broadcasting
-
-# Generate datasets
-# @pytest.fixture
-# def broadcast_fixture(dtype_fixture, broadcast_shape):
-#     shape1, shape2 = broadcast_shape
-#     na1 = np.linspace(0, 1, np.prod(shape1), dtype=dtype_fixture).reshape(shape1)
-#     na2 = np.linspace(1, 2, np.prod(shape2), dtype=dtype_fixture).reshape(shape2)
-#     urlpath = f'ds-0-1-linspace-{dtype_fixture.__name__}-b1-{shape1}d.b2nd'
-#     b1 = blosc2.asarray(na1, urlpath=urlpath, mode="w")
-#     urlpath = f'ds-1-2-linspace-{dtype_fixture.__name__}-b2-{shape2}d.b2nd'
-#     b2 = blosc2.asarray(na2, urlpath=urlpath, mode="w")
-#
-#     return b1, b2, na1, na2
 
 @pytest.fixture
 def broadcast_fixture(dtype_fixture, broadcast_shape, auth_cookie):

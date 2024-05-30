@@ -425,8 +425,8 @@ def fast_eval(
     """
     out = kwargs.pop("_output", None)
     where: dict | None = kwargs.pop("_where_args", None)
-    if isinstance(out, blosc2.NDArray | blosc2.C2Array):
-        # If 'out' has been passed, and is a NDArray or C2Array, use it as the base array
+    if isinstance(out, blosc2.NDArray):
+        # If 'out' has been passed, and is a NDArray, use it as the base array
         basearr = out
     else:
         # Otherwise, find the operand with the 'chunks' attribute and the longest shape
@@ -517,8 +517,8 @@ def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.
     """
     out = kwargs.pop("_output", None)
     where: dict | None = kwargs.pop("_where_args", None)
-    if isinstance(out, blosc2.NDArray | blosc2.C2Array):
-        # If 'out' has been passed, and is a NDArray or C2Array, use it as the base array
+    if isinstance(out, blosc2.NDArray):
+        # If 'out' has been passed, and is a NDArray, use it as the base array
         basearr = out
     else:
         # Otherwise, find the operand with the 'chunks' attribute and the longest shape
