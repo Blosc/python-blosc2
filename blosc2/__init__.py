@@ -130,8 +130,6 @@ The C-Blosc2 version's string."""
 
 cpu_info = cpuinfo.get_cpu_info()
 
-from .c2array import C2Array
-
 # Public API for container module
 from .core import (  # noqa: I001
     clib_info,
@@ -174,6 +172,7 @@ from .core import (  # noqa: I001
 from .ndarray import (  # noqa: I001
     NDArray,
     NDField,
+    Operand,
     asarray,
     copy,
     empty,
@@ -183,6 +182,8 @@ from .ndarray import (  # noqa: I001
     zeros,
     get_slice_nchunks,
 )
+
+from .c2array import C2Array
 
 from .lazyexpr import LazyExpr, lazyudf, lazyexpr, LazyArray, _open_lazyarray
 

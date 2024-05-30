@@ -154,7 +154,7 @@ class Operand:
         _check_allowed_dtypes(value, "numeric", "__rpow__")
         return blosc2.LazyExpr(new_op=(value, "**", self))
 
-    def sum(self, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
+    def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         """
         Returns the sum of array elements over a given axis.
 
@@ -232,7 +232,7 @@ class Operand:
             default is float32; for floating point inputs, it is the same as the input dtype.
         ddof: int, optional
             Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
-            where N represents the number of elements. By default ddof is zero.
+            where N represents the number of elements. By default, ddof is zero.
         keepdims: bool, optional
             If this is set to True, the axes which are reduced are left in the result as
             dimensions with size one. With this option, the result will broadcast correctly
