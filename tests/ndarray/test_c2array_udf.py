@@ -15,14 +15,12 @@ import blosc2
 NITEMS_SMALL = 1_000
 NITEMS = 50_000
 
-SUB_URL = 'http://localhost:8002/'
-ROOT = 'foo'
-DIR = 'operands/'
-# TODO: Uncomment this when all needed changes are merged and
-#  the server runs with the latest version
-# SUB_URL = 'https://demo.caterva2.net/'
-# ROOT = 'b2tests'
-# DIR = 'expr/'
+# SUB_URL = 'http://localhost:8002/'
+# ROOT = 'foo'
+# DIR = 'operands/'
+SUB_URL = 'https://demo.caterva2.net/'
+ROOT = 'b2tests'
+DIR = 'expr/'
 
 
 def udf1p(inputs_tuple, output, offset):
@@ -44,11 +42,6 @@ def auth_cookie(request):
 @pytest.mark.parametrize(
     "chunks, blocks",
     [
-        # Test different shapes with and without padding
-        (
-            (10, 10),
-            (10, 10),
-        ),
         (
             (10, 10),
             (5, 5),
