@@ -26,10 +26,10 @@ DIR = 'operands/'
 # ROOT = 'b2tests'
 # DIR = 'expr/'
 
-resp = httpx.post(f'{SUB_URL}auth/jwt/login',
-                  data=dict(username='user@example.com', password='foobar'))
-resp.raise_for_status()
-AUTH_COOKIE = '='.join(list(resp.cookies.items())[0])
+# resp = httpx.post(f'{SUB_URL}auth/jwt/login',
+#                   data=dict(username='user@example.com', password='foobar'))
+# resp.raise_for_status()
+# AUTH_COOKIE = '='.join(list(resp.cookies.items())[0])
 
 
 @pytest.fixture(params=[
@@ -59,8 +59,8 @@ def chunks_blocks_fixture(request):
 
 
 @pytest.fixture(params=[
-    # None,
-    AUTH_COOKIE,
+    None,
+    # AUTH_COOKIE,
 ])
 def auth_cookie(request):
     return request.param
