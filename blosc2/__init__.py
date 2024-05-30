@@ -173,6 +173,7 @@ from .core import (  # noqa: I001
 
 from .ndarray import (  # noqa: I001
     NDArray,
+    NDField,
     asarray,
     copy,
     empty,
@@ -290,6 +291,7 @@ from .ndarray import (
     exp,
     expm1,
     imag,
+    lazywhere,
     log,
     log1p,
     log10,
@@ -305,6 +307,7 @@ from .ndarray import (
     sum,
     tan,
     tanh,
+    where,
 )
 
 __all__ = [
@@ -351,4 +354,5 @@ __all__ = [
     "get_slice_nchunks",
     "lazyexpr",
     "lazyudf",
+    "lazywhere",
 ]

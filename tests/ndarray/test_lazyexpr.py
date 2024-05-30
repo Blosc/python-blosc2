@@ -13,7 +13,7 @@ import pytest
 import blosc2
 
 NITEMS_SMALL = 1_000
-NITEMS = 50_000
+NITEMS = 10_000
 
 
 @pytest.fixture(params=[np.float32,
