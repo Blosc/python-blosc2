@@ -666,6 +666,7 @@ def reduce_slices(
         The output array.
     """
     out = kwargs.pop("_output", None)
+    where: dict | None = kwargs.pop("_where_args", None)
     reduce_op = reduce_args.pop("op")
     axis = reduce_args["axis"]
     keepdims = reduce_args["keepdims"]
@@ -737,7 +738,23 @@ def reduce_slices(
             out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
             continue
 
-        result = ne.evaluate(expression, chunk_operands)
+        if where is None:
+            result = ne.evaluate(expression, chunk_operands)
+        else:
+            # Apply the where condition (in result)
+            if len(where) == 2:
+                # x = chunk_operands["_where_x"]
+                # y = chunk_operands["_where_y"]
+                # result = np.where(result, x, y)
+                # numexpr is a bit faster than np.where, and we can fuse operations in this case
+                new_expr = f"where({expression}, _where_x, _where_y)"
+                result = ne.evaluate(new_expr, chunk_operands)
+            else:
+                raise ValueError(
+                    "A where condition with less than 2 params is not supported"
+                    " yet in combination with reductions"
+                )
+
         # Reduce the result
         if reduce_op == ReduceOp.ANY:
             result = np.any(result, **reduce_args)
@@ -748,6 +765,7 @@ def reduce_slices(
         dtype = reduce_args["dtype"] if reduce_op in (ReduceOp.SUM, ReduceOp.PROD) else None
         if dtype is None:
             dtype = result.dtype
+
         if out is None:
             if reduce_op == ReduceOp.SUM:
                 out = blosc2.zeros(reduced_shape, dtype=dtype, **kwargs)
@@ -767,6 +785,7 @@ def reduce_slices(
                 out = blosc2.zeros(reduced_shape, dtype=np.bool_, **kwargs)
             elif reduce_op == ReduceOp.ALL:
                 out = blosc2.full(reduced_shape, True, dtype=np.bool_, **kwargs)
+
         # Update the output array with the result
         if reduce_op == ReduceOp.ANY:
             out[reduced_slice] += result
