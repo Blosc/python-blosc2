@@ -58,7 +58,7 @@ def test_reduce_bool(array_fixture, reduce_op):
     res = getattr(expr, reduce_op)()
     nres = getattr(nres, reduce_op)()
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
-    np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
+    np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 
 @pytest.mark.parametrize("reduce_op", ["sum", "prod", "mean", "std", "var", "min", "max", "any", "all"])
@@ -92,6 +92,7 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op):
         res = getattr(expr, reduce_op)(axis=axis, keepdims=keepdims)
         nres = getattr(nres, reduce_op)(axis=axis, keepdims=keepdims)
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
+    # TODO: the [()] should not be needed, because it should be a NumPy array
     np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
 
 
@@ -108,10 +109,10 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     nres = eval("na1 + na2 - na3 * na4")
     res = getattr(expr, reduce_op)(axis=axis) + getattr(a1, reduce_op)(axis=axis)
     # print(f"res: {res}")
-    res = res[()]
     nres = getattr(nres, reduce_op)(axis=axis) + getattr(na1, reduce_op)(axis=axis)
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
-    np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
+    # TODO: the [()] should not be needed, because it should be a NumPy array
+    np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
 
 
 # Test broadcasting
@@ -144,4 +145,5 @@ def test_broadcast_params(axis, keepdims, reduce_op, shapes):
     nres = eval(f"na1 + na2 - na3 - (na1 * na2 + 1).{reduce_op}(axis={axis}, keepdims={keepdims})")
 
     tol = 1e-14 if a1.dtype == "float64" else 1e-5
+    # TODO: the [()] should not be needed, because it should be a NumPy array
     np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)

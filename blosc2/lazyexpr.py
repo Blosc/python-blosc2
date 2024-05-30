@@ -767,24 +767,27 @@ def reduce_slices(
             dtype = result.dtype
 
         if out is None:
+            # out will be a proper numpy.ndarray
             if reduce_op == ReduceOp.SUM:
-                out = blosc2.zeros(reduced_shape, dtype=dtype, **kwargs)
+                out = np.zeros(reduced_shape, dtype=dtype)
             elif reduce_op == ReduceOp.PROD:
-                out = blosc2.full(reduced_shape, 1, dtype=dtype, **kwargs)
+                out = np.ones(reduced_shape, dtype=dtype)
             elif reduce_op == ReduceOp.MIN:
                 if np.issubdtype(dtype, np.integer):
-                    out = blosc2.full(reduced_shape, np.iinfo(dtype).max, dtype=dtype, **kwargs)
+                    out = np.iinfo(dtype).max * np.ones(reduced_shape, dtype=dtype)
                 else:
-                    out = blosc2.full(reduced_shape, np.inf, dtype=dtype, **kwargs)
+                    out = np.inf * np.ones(reduced_shape, dtype=dtype)
             elif reduce_op == ReduceOp.MAX:
                 if np.issubdtype(dtype, np.integer):
-                    out = blosc2.full(reduced_shape, np.iinfo(dtype).min, dtype=dtype, **kwargs)
+                    out = np.iinfo(dtype).min * np.ones(reduced_shape, dtype=dtype)
                 else:
-                    out = blosc2.full(reduced_shape, -np.inf, dtype=dtype, **kwargs)
+                    out = -np.inf * np.ones(reduced_shape, dtype=dtype)
             elif reduce_op == ReduceOp.ANY:
-                out = blosc2.zeros(reduced_shape, dtype=np.bool_, **kwargs)
+                # out = blosc2.zeros(reduced_shape, dtype=np.bool_, **kwargs)
+                out = np.zeros(reduced_shape, dtype=np.bool_)
             elif reduce_op == ReduceOp.ALL:
-                out = blosc2.full(reduced_shape, True, dtype=np.bool_, **kwargs)
+                # out = blosc2.full(reduced_shape, True, dtype=np.bool_, **kwargs)
+                out = np.ones(reduced_shape, dtype=np.bool_)
 
         # Update the output array with the result
         if reduce_op == ReduceOp.ANY:
@@ -792,7 +795,10 @@ def reduce_slices(
         elif reduce_op == ReduceOp.ALL:
             out[reduced_slice] *= result
         else:
-            out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
+            if reduced_slice == ():
+                out = reduce_op.value(out, result)
+            else:
+                out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
 
     return out
 
@@ -1141,7 +1147,7 @@ class LazyExpr(LazyArray):
         self._where_args = args
         return self
 
-    def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
+    def sum(self, axis=None, dtype=None, keepdims=False):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.SUM,
@@ -1149,28 +1155,21 @@ class LazyExpr(LazyArray):
             "dtype": dtype,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.eval(_reduce_args=reduce_args)
 
-    def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
+    def mean(self, axis=None, dtype=None, keepdims=False):
         # Always evaluate the expression prior the reduction
         total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims)
         if np.isscalar(axis):
             axis = (axis,)
         num_elements = np.prod(self.shape) if axis is None else np.prod([self.shape[i] for i in axis])
         mean_expr = total_sum / num_elements
-        return mean_expr.eval(**kwargs)
+        return mean_expr
 
-    def std(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
+    def std(self, axis=None, dtype=None, keepdims=False, ddof=0):
         # Always evaluate the expression prior the reduction
         mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
         std_expr = (self - mean_value) ** 2
-        if len(mean_value.shape) > 0:
-            # This additional step is needed to allow broadcasting to work:
-            # values need to be consolidated before the next operation.
-            # The issue is that sub-expressions having different shapes
-            # (broadcast) cannot be mixed with reduction operations.
-            # When the mean value is a scalar, the broadcasting is not needed.
-            std_expr = std_expr.eval()
         std_expr = std_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
         if ddof != 0:
             if axis is None:
@@ -1180,28 +1179,24 @@ class LazyExpr(LazyArray):
             std_expr = blosc2.sqrt(std_expr * num_elements / (num_elements - ddof))
         else:
             std_expr = blosc2.sqrt(std_expr)
-        return std_expr.eval(**kwargs)
+        return std_expr
 
-    def var(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
+    def var(self, axis=None, dtype=None, keepdims=False, ddof=0):
         # Always evaluate the expression prior the reduction
         mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
         var_expr = (self - mean_value) ** 2
-        if len(mean_value.shape) > 0:
-            # This additional step is needed to allow broadcasting to work. See std method.
-            var_expr = var_expr.eval()
         if ddof != 0:
             var_expr = var_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
             if axis is None:
                 num_elements = np.prod(self.shape)
             else:
                 num_elements = np.prod([self.shape[i] for i in axis])
-            var_expr = var_expr * num_elements / (num_elements - ddof)
-            var_values = var_expr.eval(**kwargs)
+            var_values = var_expr * num_elements / (num_elements - ddof)
         else:
-            var_values = var_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+            var_values = var_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
         return var_values
 
-    def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
+    def prod(self, axis=None, dtype=None, keepdims=False):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.PROD,
@@ -1209,51 +1204,43 @@ class LazyExpr(LazyArray):
             "dtype": dtype,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.eval(_reduce_args=reduce_args)
 
-    def min(self, axis=None, keepdims=False, **kwargs):
+    def min(self, axis=None, keepdims=False):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.MIN,
             "axis": axis,
             "keepdims": keepdims,
         }
-        if "dtype" in kwargs:
-            raise ValueError("dtype is not supported for min method")
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.eval(_reduce_args=reduce_args)
 
-    def max(self, axis=None, keepdims=False, **kwargs):
+    def max(self, axis=None, keepdims=False):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.MAX,
             "axis": axis,
             "keepdims": keepdims,
         }
-        if "dtype" in kwargs:
-            raise ValueError("dtype is not supported for max method")
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.eval(_reduce_args=reduce_args)
 
-    def any(self, axis=None, keepdims=False, **kwargs):
+    def any(self, axis=None, keepdims=False):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.ANY,
             "axis": axis,
             "keepdims": keepdims,
         }
-        if "dtype" in kwargs:
-            raise ValueError("dtype is not supported for any method")
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.eval(_reduce_args=reduce_args)
 
-    def all(self, axis=None, keepdims=False, **kwargs):
+    def all(self, axis=None, keepdims=False):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.ALL,
             "axis": axis,
             "keepdims": keepdims,
         }
-        if "dtype" in kwargs:
-            raise ValueError("dtype is not supported for all method")
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.eval(_reduce_args=reduce_args)
 
     def eval(self, item=None, **kwargs) -> blosc2.NDArray:
         if hasattr(self, "_output"):
