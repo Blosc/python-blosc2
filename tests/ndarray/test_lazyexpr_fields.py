@@ -230,9 +230,7 @@ def test_where_getitem_field(array_fixture):
 def test_where_reduction(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
-    # Test with eval only, as reduction always returns an NDArray
     axis = None if sa1.ndim == 1 else 1
     res = expr.where(0, 1).sum(axis=axis)
-    assert isinstance(res, blosc2.NDArray)
     nres = ne.evaluate("where(na1**2 + na2**2 > 2 * na1 * na2 + 1, 0, 1)").sum(axis=axis)
-    np.testing.assert_allclose(res[()], nres)
+    np.testing.assert_allclose(res, nres)
