@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import builtins
 from collections import namedtuple
 from collections.abc import Sequence
 
@@ -42,8 +43,14 @@ def process_key(key, shape):
 
 
 def get_ndarray_start_stop(ndim, key, shape):
-    start = tuple(s.start if s.start is not None else 0 for s in key)
-    stop = tuple(s.stop if s.stop is not None else sh for s, sh in zip(key, shape, strict=False))
+    start = [s.start if s.start is not None else 0 for s in key]
+    stop = [s.stop if s.stop is not None else sh for s, sh in zip(key, shape, strict=False)]
+    # Check that start and stop values do not exceed the shape
+    for i in range(ndim):
+        if start[i] > shape[i]:
+            start[i] = shape[i]
+        if stop[i] > shape[i]:
+            stop[i] = shape[i]
     step = tuple(s.step if s.step is not None else 1 for s in key)
     return start, stop, step
 
@@ -545,29 +552,31 @@ class NDArray(blosc2_ext.NDArray, Operand):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
-        # If the key is a LazyExpr, decorate with ``where`` and return it
-        if isinstance(key, blosc2.LazyExpr):
-            return key.where(self)
+        # Get the shape of the slice
+        if isinstance(key, tuple) and (
+            builtins.sum(isinstance(k, builtins.slice) for k in key) == self.ndim
+        ):
+            # process_key() is expensive, so take a fast path for the most common case
+            start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
+            shape = np.array([sp - st for st, sp in zip(start, stop, strict=False)])
+        else:
+            # The more general case
+            # If the key is a LazyExpr, decorate with ``where`` and return it
+            if isinstance(key, blosc2.LazyExpr):
+                return key.where(self)
+            if isinstance(key, str):
+                if self.dtype.fields is None:
+                    raise ValueError("The array is not structured (its dtype does not have fields)")
+                expr = blosc2.LazyExpr._new_expr(key, self.fields)
+                return expr.where(self)
+            key_, mask = process_key(key, self.shape)
+            start, stop, step = get_ndarray_start_stop(self.ndim, key_, self.shape)
+            shape = np.array([sp - st for st, sp in zip(start, stop, strict=False)])
+            shape = tuple(shape[[not m for m in mask]])
 
-        if isinstance(key, str):
-            if self.dtype.fields is None:
-                raise ValueError("The array is not structured (its dtype does not have fields)")
-            expr = blosc2.LazyExpr._new_expr(key, self.fields)
-            return expr.where(self)
-
-        inmutable_key = None
-        if self._keep_last_read:
-            inmutable_key = make_key_hashable(key)
-        key, mask = process_key(key, self.shape)
-        start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
-        key = (start, stop)
-        shape = np.array([sp - st for st, sp in zip(start, stop, strict=False)])
-        shape = tuple(shape[[not m for m in mask]])
-        # arr = np.zeros(shape, dtype=self.dtype)
-        # Benchmarking shows that empty is faster than zeros
-        # (besides we don't need to fill padding with zeros)
+        # Create the array to store the result
         arr = np.empty(shape, dtype=self.dtype)
-        nparr = super().get_slice_numpy(arr, key)
+        nparr = super().get_slice_numpy(arr, (start, stop))
         if step != (1,) * self.ndim:
             if len(step) == 1:
                 return nparr[:: step[0]]
@@ -576,7 +585,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         if self._keep_last_read:
             self._last_read.clear()
+            inmutable_key = make_key_hashable(key)
             self._last_read[inmutable_key] = nparr
+
         return nparr
 
     def __setitem__(self, key, value):
