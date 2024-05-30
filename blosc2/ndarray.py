@@ -47,8 +47,12 @@ def get_ndarray_start_stop(ndim, key, shape):
     stop = [s.stop if s.stop is not None else sh for s, sh in zip(key, shape, strict=False)]
     # Check that start and stop values do not exceed the shape
     for i in range(ndim):
+        if start[i] < 0:
+            start[i] = shape[i] + start[i]
         if start[i] > shape[i]:
             start[i] = shape[i]
+        if stop[i] < 0:
+            stop[i] = shape[i] + stop[i]
         if stop[i] > shape[i]:
             stop[i] = shape[i]
     step = tuple(s.step if s.step is not None else 1 for s in key)
