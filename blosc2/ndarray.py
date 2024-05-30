@@ -842,7 +842,7 @@ def sum(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdi
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` | :ref:`LazyExpr`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which a sum is performed. The default, axis=None,
@@ -871,13 +871,13 @@ def sum(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdi
     return ndarr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
 
-def mean(ndarr: NDArray | NDField, axis=None, dtype=None, keepdims=False, **kwargs):
+def mean(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdims=False, **kwargs):
     """
     Returns the arithmetic mean along the specified axis.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` | :ref:`LazyExpr`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which the means are computed. The default is to compute
@@ -904,13 +904,13 @@ def mean(ndarr: NDArray | NDField, axis=None, dtype=None, keepdims=False, **kwar
     return ndarr.mean(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
 
-def std(ndarr: NDArray | NDField, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
+def std(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
     """
     Returns the standard deviation along the specified axis.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` | :ref:`LazyExpr`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which the standard deviation is computed. The default is
@@ -940,13 +940,13 @@ def std(ndarr: NDArray | NDField, axis=None, dtype=None, ddof=0, keepdims=False,
     return ndarr.std(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
 
 
-def var(ndarr: NDArray | NDField, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
+def var(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
     """
     Returns the variance along the specified axis.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` | :ref:`LazyExpr`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which the variance is computed. The default is to compute
@@ -976,13 +976,13 @@ def var(ndarr: NDArray | NDField, axis=None, dtype=None, ddof=0, keepdims=False,
     return ndarr.var(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
 
 
-def prod(ndarr: NDArray | NDField, axis=None, dtype=None, keepdims=False, **kwargs):
+def prod(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdims=False, **kwargs):
     """
     Returns the product of array elements over a given axis.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` | :ref:`LazyExpr`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which a product is performed. The default, axis=None,
@@ -1011,13 +1011,13 @@ def prod(ndarr: NDArray | NDField, axis=None, dtype=None, keepdims=False, **kwar
     return ndarr.prod(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
 
-def min(ndarr: NDArray | NDField, axis=None, keepdims=False, **kwargs):
+def min(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
     """
     Returns the minimum along a given axis.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` | :ref:`LazyExpr`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which to operate. By default, flattened input is used.
@@ -1038,13 +1038,13 @@ def min(ndarr: NDArray | NDField, axis=None, keepdims=False, **kwargs):
     return ndarr.min(axis=axis, keepdims=keepdims, **kwargs)
 
 
-def max(ndarr: NDArray | NDField, axis=None, keepdims=False, **kwargs):
+def max(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
     """
     Returns the maximum along a given axis.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` | :ref:`LazyExpr`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which to operate. By default, flattened input is used.
@@ -1065,13 +1065,13 @@ def max(ndarr: NDArray | NDField, axis=None, keepdims=False, **kwargs):
     return ndarr.max(axis=axis, keepdims=keepdims, **kwargs)
 
 
-def any(ndarr: NDArray | NDField, axis=None, keepdims=False, **kwargs):
+def any(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
     """
     Test whether any array element along a given axis evaluates to True.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` | :ref:`LazyExpr`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which to operate. By default, flattened input is used.
@@ -1092,13 +1092,13 @@ def any(ndarr: NDArray | NDField, axis=None, keepdims=False, **kwargs):
     return ndarr.any(axis=axis, keepdims=keepdims, **kwargs)
 
 
-def all(ndarr: NDArray | NDField, axis=None, keepdims=False, **kwargs):
+def all(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
     """
     Test whether all array elements along a given axis evaluate to True.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` | :ref:`LazyExpr`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which to operate. By default, flattened input is used.
@@ -1119,13 +1119,13 @@ def all(ndarr: NDArray | NDField, axis=None, keepdims=False, **kwargs):
     return ndarr.all(axis=axis, keepdims=keepdims, **kwargs)
 
 
-def sin(ndarr: NDArray | NDField, /):
+def sin(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Trigonometric sine, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
         Angle, in radians.
 
     Returns
@@ -1140,13 +1140,13 @@ def sin(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "sin", None))
 
 
-def cos(ndarr: NDArray | NDField, /):
+def cos(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Trigonometric cosine, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
         Angle, in radians.
 
     Returns
@@ -1161,13 +1161,13 @@ def cos(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "cos", None))
 
 
-def tan(ndarr: NDArray | NDField, /):
+def tan(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Trigonometric tangent, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
             Angle, in radians.
 
     Returns
@@ -1182,13 +1182,13 @@ def tan(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "tan", None))
 
 
-def sqrt(ndarr: NDArray | NDField, /):
+def sqrt(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Return the non-negative square-root of an array, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
             The input array.
 
     Returns
@@ -1203,13 +1203,13 @@ def sqrt(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "sqrt", None))
 
 
-def sinh(ndarr: NDArray | NDField, /):
+def sinh(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Hyperbolic sine, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
             The input array.
 
     Returns
@@ -1224,13 +1224,13 @@ def sinh(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "sinh", None))
 
 
-def cosh(ndarr: NDArray | NDField, /):
+def cosh(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Hyperbolic cosine, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
             The input array.
 
     Returns
@@ -1245,13 +1245,13 @@ def cosh(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "cosh", None))
 
 
-def tanh(ndarr: NDArray | NDField, /):
+def tanh(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Hyperbolic tangent, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
             The input array.
 
     Returns
@@ -1266,13 +1266,13 @@ def tanh(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "tanh", None))
 
 
-def arcsin(ndarr: NDArray | NDField, /):
+def arcsin(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Inverse sine, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
             The input array.
 
     Returns
@@ -1287,13 +1287,13 @@ def arcsin(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "arcsin", None))
 
 
-def arccos(ndarr: NDArray | NDField, /):
+def arccos(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Trigonometric inverse cosine, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
             The input array.
 
     Returns
@@ -1308,13 +1308,13 @@ def arccos(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "arccos", None))
 
 
-def arctan(ndarr: NDArray | NDField, /):
+def arctan(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Trigonometric inverse tangent, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
             The input array.
 
     Returns
@@ -1329,15 +1329,15 @@ def arctan(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "arctan", None))
 
 
-def arctan2(ndarr1: NDArray | NDField, ndarr2: NDArray | NDField, /):
+def arctan2(ndarr1: NDArray | NDField, ndarr2: NDArray | NDField | blosc2.C2Array, /):
     """
     Element-wise arc tangent of ``ndarr1 / ndarr2`` choosing the quadrant correctly.
 
     Parameters
     ----------
-    ndarr1: :ref:`NDArray` or :ref:`NDField`
+    ndarr1: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
             The input array.
-    ndarr2: :ref:`NDArray` or :ref:`NDField`
+    ndarr2: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
             The input array.
 
     Returns
@@ -1352,13 +1352,13 @@ def arctan2(ndarr1: NDArray | NDField, ndarr2: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr1, "arctan2", ndarr2))
 
 
-def arcsinh(ndarr: NDArray | NDField, /):
+def arcsinh(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Inverse hyperbolic sine, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
             The input array.
 
     Returns
@@ -1373,13 +1373,13 @@ def arcsinh(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "arcsinh", None))
 
 
-def arccosh(ndarr: NDArray | NDField, /):
+def arccosh(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Inverse hyperbolic cosine, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
         The input array.
 
     Returns
@@ -1394,13 +1394,13 @@ def arccosh(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "arccosh", None))
 
 
-def arctanh(ndarr: NDArray | NDField, /):
+def arctanh(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Inverse hyperbolic tangent, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
         The input array.
 
     Returns
@@ -1415,13 +1415,13 @@ def arctanh(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "arctanh", None))
 
 
-def exp(ndarr: NDArray | NDField, /):
+def exp(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Calculate the exponential of all elements in the input array.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
             The input array.
 
     Returns
@@ -1436,13 +1436,13 @@ def exp(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "exp", None))
 
 
-def expm1(ndarr: NDArray | NDField, /):
+def expm1(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Calculate ``exp(ndarr) - 1`` for all elements in the array.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
             The input array.
 
     Returns
@@ -1457,13 +1457,13 @@ def expm1(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "expm1", None))
 
 
-def log(ndarr: NDArray | NDField, /):
+def log(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Natural logarithm, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
         The input array.
 
     Returns
@@ -1478,13 +1478,13 @@ def log(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "log", None))
 
 
-def log10(ndarr: NDArray | NDField, /):
+def log10(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Return the base 10 logarithm of the input array, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
         The input array.
 
     Returns
@@ -1499,13 +1499,13 @@ def log10(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "log10", None))
 
 
-def log1p(ndarr: NDArray | NDField, /):
+def log1p(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Return the natural logarithm of one plus the input array, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
         The input array.
 
     Returns
@@ -1520,13 +1520,13 @@ def log1p(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "log1p", None))
 
 
-def conj(ndarr: NDArray | NDField, /):
+def conj(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Return the complex conjugate, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
         The input array.
 
     Returns
@@ -1541,13 +1541,13 @@ def conj(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "conj", None))
 
 
-def real(ndarr: NDArray | NDField, /):
+def real(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Return the real part of the complex array, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
             The input array.
 
     Returns
@@ -1562,13 +1562,13 @@ def real(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "real", None))
 
 
-def imag(ndarr: NDArray | NDField, /):
+def imag(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Return the imaginary part of the complex array, element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
         The input array.
 
     Returns
@@ -1583,13 +1583,13 @@ def imag(ndarr: NDArray | NDField, /):
     return blosc2.LazyExpr(new_op=(ndarr, "imag", None))
 
 
-def contains(ndarr: NDArray | NDField, value: str | bytes | NDArray, /):
+def contains(ndarr: NDArray | NDField | blosc2.C2Array, value: str | bytes | NDArray, /):
     """
     Check if the array contains a string value.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
         The input array.
     value: str or :ref:`NDArray` or :ref:`NDField`
         The value to be checked.
@@ -1604,13 +1604,13 @@ def contains(ndarr: NDArray | NDField, value: str | bytes | NDArray, /):
     return blosc2.LazyExpr(new_op=(ndarr, "contains", value))
 
 
-def abs(ndarr: NDArray | NDField, /):
+def abs(ndarr: NDArray | NDField | blosc2.C2Array, /):
     """
     Calculate the absolute value element-wise.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or ref:`C2Array`
         The input array.
 
     Returns

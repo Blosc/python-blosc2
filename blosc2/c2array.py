@@ -65,6 +65,22 @@ def slice_to_string(slice_):
 
 class C2Array(blosc2.Operand):
     def __init__(self, path, /,  sub_url, auth_cookie=None):
+        """Create an instance of a remote NDArray.
+
+        Parameters
+        ----------
+        path: pathlib.Path
+            The path to the remote NDArray file (root + file name).
+        sub_url: str
+            The base URL (slash-terminated) of the subscriber to query.
+        auth_cookie: str
+            An optional cookie to authorize requests via HTTP.
+
+        Returns
+        -------
+        out: C2Array
+
+        """
         self.path = path
         self.sub_url = sub_url
         self.auth_cookie = auth_cookie
@@ -72,6 +88,19 @@ class C2Array(blosc2.Operand):
                         auth_cookie=self.auth_cookie)
 
     def __getitem__(self, slice_: int | slice | Sequence[slice]) -> np.ndarray:
+        """
+        Get a slice of the array.
+
+        Parameters
+        ----------
+        slice_ : int, slice, tuple of ints and slices, or None
+            The slice to fetch.
+
+        Returns
+        -------
+        out: numpy.ndarray
+            A numpy.ndarray containing the data slice.
+        """
         slice_ = slice_to_string(slice_)
         data = fetch_data(self.path, self.sub_url,
                           {'slice_': slice_},
@@ -80,24 +109,25 @@ class C2Array(blosc2.Operand):
 
     @property
     def shape(self):
+        """The shape of the remote array"""
         return tuple(self.meta['shape'])
 
     @property
     def chunks(self):
+        """The chunks of the remote array"""
         return tuple(self.meta['chunks'])
 
     @property
     def blocks(self):
+        """The blocks of the remote array"""
         return tuple(self.meta['blocks'])
 
     @property
     def dtype(self):
+        """The dtype of the remote array"""
         return self.meta['dtype']
 
     @property
     def ext_shape(self):
+        """The ext_shape of the remote array"""
         return tuple(self.meta['ext_shape'])
-
-    @property
-    def nchunks(self):
-        return self.meta['schunk']['nchunks']

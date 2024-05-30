@@ -8,3 +8,4 @@ API Reference
     schunk_api
     ndarray_api
     lazyarray
+    c2array
