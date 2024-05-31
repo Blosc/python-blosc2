@@ -366,6 +366,9 @@ def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, ch
         if np.isscalar(value):
             chunk_operands[key] = value
             continue
+        if value.shape == ():
+            chunk_operands[key] = value[()]
+            continue
 
         # TODO: broadcast is not in the fast path yet, so no need to check for it
         # slice_shape = tuple(s.stop - s.start for s in slice_)
@@ -570,6 +573,9 @@ def slices_eval(
             if np.isscalar(value):
                 chunk_operands[key] = value
                 continue
+            if value.shape == ():
+                chunk_operands[key] = value[()]
+                continue
             if check_smaller_shape(value, shape, slice_shape):
                 # We need to fetch the part of the value that broadcasts with the operand
                 smaller_slice = compute_smaller_slice(shape, value.shape, slice_)
@@ -723,6 +729,9 @@ def reduce_slices(
         for key, value in operands.items():
             if np.isscalar(value):
                 chunk_operands[key] = value
+                continue
+            if value.shape == ():
+                chunk_operands[key] = value[()]
                 continue
             if check_smaller_shape(value, shape, slice_shape):
                 # We need to fetch the part of the value that broadcasts with the operand
@@ -986,7 +995,9 @@ class LazyExpr(LazyArray):
                 else:
                     self.expression = value2.expression
                     self.operands = {"o0": value1}
-                self.update_expr(new_op)
+                newexpr = self.update_expr(new_op)
+                self.expression = newexpr.expression
+                self.operands = newexpr.operands
             else:
                 # This is the very first time that a LazyExpr is formed from two operands
                 # that are not LazyExpr themselves
@@ -998,6 +1009,9 @@ class LazyExpr(LazyArray):
         blosc2._disable_overloaded_equal = True
         # One of the two operands are LazyExpr instances
         value1, op, value2 = new_op
+        # The new expression and operands
+        expression = None
+        new_operands = {}
         # where() handling requires evaluating the expression prior to merge.
         # This is different from reductions, where the expression is evaluated
         # and returned an NumPy array (for usability convenience).
@@ -1011,49 +1025,48 @@ class LazyExpr(LazyArray):
             value2 = value2.eval()
         if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
             # We converted some of the operands to NDArray (where() handling above)
-            self.operands = {"o0": value1, "o1": value2}
-            self.expression = f"(o0 {op} o1)"
-            # Clean up the where arguments
-            self._where_args = None
+            new_operands = {"o0": value1, "o1": value2}
+            expression = f"(o0 {op} o1)"
         elif isinstance(value1, LazyExpr) and isinstance(value2, LazyExpr):
             # Expression fusion
             # Fuse operands in expressions and detect duplicates
-            new_op, dup_op = fuse_operands(value1.operands, value2.operands)
+            new_operands, dup_op = fuse_operands(value1.operands, value2.operands)
             # Take expression 2 and rebase the operands while removing duplicates
             new_expr = fuse_expressions(value2.expression, len(value1.operands), dup_op)
-            self.expression = f"({self.expression} {op} {new_expr})"
-            self.operands.update(new_op)
+            expression = f"({self.expression} {op} {new_expr})"
         elif isinstance(value1, LazyExpr):
             if op == "not":
-                self.expression = f"({op}{self.expression})"
+                expression = f"({op}{self.expression})"
             elif np.isscalar(value2):
-                self.expression = f"({self.expression} {op} {value2})"
+                expression = f"({self.expression} {op} {value2})"
             elif hasattr(value2, "shape") and value2.shape == ():
-                self.expression = f"({self.expression} {op} {value2[()]})"
+                expression = f"({self.expression} {op} {value2[()]})"
             else:
                 try:
                     op_name = list(value1.operands.keys())[list(value1.operands.values()).index(value2)]
                 except ValueError:
                     op_name = f"o{len(self.operands)}"
-                    self.operands[op_name] = value2
-                self.expression = f"({self.expression} {op} {op_name})"
+                    new_operands = {op_name: value2}
+                expression = f"({self.expression} {op} {op_name})"
         else:
             if np.isscalar(value1):
-                self.expression = f"({value1} {op} {self.expression})"
+                expression = f"({value1} {op} {self.expression})"
             elif hasattr(value1, "shape") and value1.shape == ():
-                self.expression = f"({value1[()]} {op} {self.expression})"
+                expression = f"({value1[()]} {op} {self.expression})"
             else:
                 try:
                     op_name = list(value2.operands.keys())[list(value2.operands.values()).index(value1)]
                 except ValueError:
                     op_name = f"o{len(self.operands)}"
-                    self.operands[op_name] = value1
+                    new_operands = {op_name: value1}
                 if op == "[]":  # syntactic sugar for slicing
-                    self.expression = f"({op_name}[{self.expression}])"
+                    expression = f"({op_name}[{self.expression}])"
                 else:
-                    self.expression = f"({op_name} {op} {self.expression})"
+                    expression = f"({op_name} {op} {self.expression})"
         blosc2._disable_overloaded_equal = False
-        return self
+        # Return a new expression
+        operands = self.operands | new_operands
+        return self._new_expr(expression, operands, out=None, where=None)
 
     @property
     def dtype(self):
@@ -1157,6 +1170,8 @@ class LazyExpr(LazyArray):
         return self.update_expr(new_op=(self, ">=", value))
 
     def where(self, value1=None, value2=None):
+        if self.dtype != np.bool_:
+            raise ValueError("where() can only be used with boolean expressions")
         # This just acts as a 'decorator' for the existing expression
         if value1 is not None and value2 is not None:
             args = dict(_where_x=value1, _where_y=value2)
@@ -1340,8 +1355,10 @@ class LazyExpr(LazyArray):
         ne.validate(expression, locals=operands)
         new_expr.expression = expression
         new_expr.operands = operands
-        new_expr._output = out
-        new_expr._where_args = where
+        if out is not None:
+            new_expr._output = out
+        if where is not None:
+            new_expr._where_args = where
         return new_expr
 
 
