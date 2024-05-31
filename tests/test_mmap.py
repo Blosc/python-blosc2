@@ -9,7 +9,7 @@ import blosc2
 @pytest.mark.parametrize("initial_mapping_size", [None, 1000])
 def test_initial_mapping_size(tmp_path, monkeypatch, capfd, initial_mapping_size):
     monkeypatch.setenv("BLOSC_INFO", "true")
-    expected_mapping_size = 1073741824 if initial_mapping_size is None else initial_mapping_size
+    expected_mapping_size = 2**30 if initial_mapping_size is None else initial_mapping_size
     urlpath = tmp_path / "schunk.b2frame"
 
     # Writing via SChunk

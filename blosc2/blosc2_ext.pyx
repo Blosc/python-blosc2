@@ -1871,11 +1871,26 @@ def meta_keys(self):
     return keys
 
 
-def open(urlpath, mode, mmap_mode, initial_mapping_size, offset, **kwargs):
+def open(urlpath, mode, offset, **kwargs):
     urlpath_ = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
     cdef blosc2_schunk* schunk
     cdef blosc2_stdio_mmap* mmap_file
     cdef blosc2_io* io
+
+    mmap_mode = kwargs.get("mmap_mode")
+    if mmap_mode is not None:
+        if mmap_mode == "w+":
+            raise ValueError("w+ mmap_mode cannot be used to open an existing file")
+        else:
+            mode = mode_from_mmap_mode(mmap_mode)
+
+    initial_mapping_size = kwargs.get("initial_mapping_size")
+    if initial_mapping_size is not None:
+        if mmap_mode is None:
+            raise ValueError("initial_mapping_size can only be used with mmap_mode")
+
+        if mmap_mode == "r":
+            raise ValueError("initial_mapping_size can only be used with writing modes (r+, c)")
 
     if mmap_mode is None:
         schunk = blosc2_schunk_open_offset(urlpath_, offset)
@@ -1927,7 +1942,7 @@ def open(urlpath, mode, mmap_mode, initial_mapping_size, offset, **kwargs):
         res.schunk.mode = mode
     else:
         res = blosc2.SChunk(_schunk=PyCapsule_New(schunk, <char *> "blosc2_schunk*", NULL),
-                            mode=mode, mmap_mode=mmap_mode, initial_mapping_size=initial_mapping_size, **kwargs)
+                            mode=mode, **kwargs)
         if cparams is not None:
             res.cparams = cparams
         if dparams is not None:

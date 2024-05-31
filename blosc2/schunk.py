@@ -216,7 +216,8 @@ class SChunk(blosc2_ext.SChunk):
                     reserved virtually and does not occupy physical memory unless actual writes happen. Since the
                     virtual address space is large enough, it is ok to be generous with this parameter (with special
                     consideration on Windows, see note below). For best performance, set this to the maximum expected
-                    size of the compressed data. The size is in bytes.
+                    size of the compressed data (see example in :obj:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`).
+                    The size is in bytes.
 
                     Default: 1 GiB.
 
@@ -244,6 +245,41 @@ class SChunk(blosc2_ext.SChunk):
         >>> import blosc2
         >>> storage = {"contiguous": True, "cparams": {}, "dparams": {}}
         >>> schunk = blosc2.SChunk(**storage)
+
+        In the following, we will write and read a super-chunk to and from disk via memory-mapped files.
+
+        >>> a = np.arange(3, dtype=np.int64)
+        >>> chunksize = a.size * a.itemsize
+        >>> n_chunks = 2
+        >>> urlpath = getfixture('tmp_path') / "schunk.b2frame"
+
+        Optional: we intend to write 2 chunks of 24 bytes each and we expect the compressed size to be smaller than the
+        original size. Hence, we (generously) set the initial size of the mapping to 48 bytes effectively avoiding
+        remappings.
+
+        >>> initial_mapping_size = chunksize * n_chunks
+        >>> schunk_mmap = blosc2.SChunk(
+        ...     chunksize=chunksize,
+        ...     mmap_mode="w+",
+        ...     initial_mapping_size=initial_mapping_size,
+        ...     urlpath=urlpath,
+        ... )
+        >>> schunk_mmap.append_data(a)
+        1
+        >>> schunk_mmap.append_data(a * 2)
+        2
+
+        Optional: explicitly close the file and free the mapping.
+
+        >>> del schunk_mmap
+
+        Reading the data back again via memory-mapped files:
+
+        >>> schunk_mmap = blosc2.open(urlpath, mmap_mode="r")
+        >>> np.frombuffer(schunk_mmap.decompress_chunk(0), dtype=np.int64)
+        array([0, 1, 2])
+        >>> np.frombuffer(schunk_mmap.decompress_chunk(1), dtype=np.int64)
+        array([0, 2, 4])
         """
         # Check only allowed kwarg are passed
         allowed_kwargs = [
@@ -989,7 +1025,7 @@ class SChunk(blosc2_ext.SChunk):
 
 @_inherit_doc_parameter(SChunk.__init__, "mmap_mode:", {r"\* - 'w\+'[^*]+": ""})
 @_inherit_doc_parameter(SChunk.__init__, "initial_mapping_size:", {r"r\+ w\+, or c": "r+ or c"})
-def open(urlpath, mode="a", mmap_mode=None, initial_mapping_size=None, offset=0, **kwargs):
+def open(urlpath, mode="a", offset=0, **kwargs):
     """Open a persistent :ref:`SChunk <SChunk>` (or :ref:`NDArray <NDArray>`).
 
     Parameters
@@ -999,8 +1035,6 @@ def open(urlpath, mode="a", mmap_mode=None, initial_mapping_size=None, offset=0,
         is stored.
     mode: str, optional
         The open mode.
-    mmap_mode:
-    initial_mapping_size:
     offset: int, optional
         An offset in the file where super-chunk or array data is located
         (e.g. in a file containing several such objects).
@@ -1009,7 +1043,8 @@ def open(urlpath, mode="a", mmap_mode=None, initial_mapping_size=None, offset=0,
     ----------------
     kwargs: dict, optional
         Keyword arguments supported:
-
+            mmap_mode:
+            initial_mapping_size:
             cparams: dict
                 A dictionary with the compression parameters, which are the same that can be
                 used in the :func:`~blosc2.compress2` function.
@@ -1032,7 +1067,7 @@ def open(urlpath, mode="a", mmap_mode=None, initial_mapping_size=None, offset=0,
     --------
     >>> import blosc2
     >>> import numpy as np
-    >>> storage = {"contiguous": True, "urlpath": "b2frame", "mode": "w"}
+    >>> storage = {"contiguous": True, "urlpath": getfixture('tmp_path') / "b2frame", "mode": "w"}
     >>> nelem = 20 * 1000
     >>> nchunks = 5
     >>> chunksize = nelem * 4 // nchunks
@@ -1053,26 +1088,20 @@ def open(urlpath, mode="a", mmap_mode=None, initial_mapping_size=None, offset=0,
     True
     True
 
+    To open the same schunk memory-mapped, we simply need to pass the `mmap_mode` parameter:
+
+    >>> sc_open_mmap = blosc2.open(urlpath=storage["urlpath"], mmap_mode="r")
+    >>> sc_open.nchunks == sc_open_mmap.nchunks
+    True
+    >>> all(sc_open.decompress_chunk(i, dest1) == sc_open_mmap.decompress_chunk(i, dest1) for i in range(nchunks))
+    True
     """
     if isinstance(urlpath, pathlib.PurePath):
         urlpath = str(urlpath)
     if not os.path.exists(urlpath):
         raise FileNotFoundError(f"No such file or directory: {urlpath}")
 
-    if mmap_mode is not None:
-        if mmap_mode == "w+":
-            raise ValueError("w+ mmap_mode cannot be used to open an existing file")
-        else:
-            mode = blosc2_ext.mode_from_mmap_mode(mmap_mode)
-
-    if initial_mapping_size is not None:
-        if mmap_mode is None:
-            raise ValueError("initial_mapping_size can only be used with mmap_mode")
-
-        if mmap_mode == "r":
-            raise ValueError("initial_mapping_size can only be used with writing modes (r+, c)")
-
-    res = blosc2_ext.open(urlpath, mode, mmap_mode, initial_mapping_size, offset, **kwargs)
+    res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
     if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
         return blosc2._open_lazyarray(res)
     else:

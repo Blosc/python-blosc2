@@ -129,14 +129,14 @@ def test_open_offset(offset, urlpath, mode, mmap_mode):
         schunk_file.write(schunk_temp_data)
     blosc2.remove_urlpath(urlpath_temp)
 
-    schunk_data = blosc2.open(urlpath, mode, mmap_mode, offset=offset)[:]
+    schunk_data = blosc2.open(urlpath, mode, mmap_mode=mmap_mode, offset=offset)[:]
     assert np.array_equal(schunk_data, data.tobytes())
 
     with pytest.raises(RuntimeError):
-        blosc2.open(urlpath, mode, mmap_mode, offset=offset + 1)
+        blosc2.open(urlpath, mode, mmap_mode=mmap_mode, offset=offset + 1)
 
     if offset > 0:
         with pytest.raises(RuntimeError):
-            blosc2.open(urlpath, mode, mmap_mode)
+            blosc2.open(urlpath, mode, mmap_mode=mmap_mode)
 
     blosc2.remove_urlpath(urlpath)
