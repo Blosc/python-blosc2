@@ -398,13 +398,10 @@ def test_save():
     chunks = tuple([i // 2 for i in nres.shape])
     blocks = tuple([i // 4 for i in nres.shape])
     urlpath_eval = "eval_expr.b2nd"
-    res = expr.eval(urlpath=urlpath_eval, cparams=cparams, dparams=dparams, chunks=chunks, blocks=blocks)
+    res = expr.eval(
+        urlpath=urlpath_eval, cparams=cparams, dparams=dparams, mode="w", chunks=chunks, blocks=blocks
+    )
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
-
-    # Remove data in memory before opening on-disk LazyExpr
-    for op in ops:
-        del op
-    del expr
 
     expr = blosc2.open(urlpath_save)
     # Check the dtype (should be upcasted to float64)
@@ -417,7 +414,7 @@ def test_save():
 
     urlpath_save2 = "expr_str.b2nd"
     x = 3
-    expr = "a1  / a2 + a2 - a3 * a4**x"
+    expr = "a1 / a2 + a2 - a3 * a4**x"
     var_dict = {"a1": ops[0], "a2": ops[1], "a3": ops[2], "a4": ops[3], "x": x}
     lazy_expr = eval(expr, var_dict)
     lazy_expr.save(urlpath=urlpath_save2)

@@ -230,9 +230,50 @@ def test_where_getitem_field(array_fixture):
 def test_where_reduction(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
-    # Test with eval only, as reduction always returns an NDArray
     axis = None if sa1.ndim == 1 else 1
     res = expr.where(0, 1).sum(axis=axis)
-    assert isinstance(res, blosc2.NDArray)
     nres = ne.evaluate("where(na1**2 + na2**2 > 2 * na1 * na2 + 1, 0, 1)").sum(axis=axis)
-    np.testing.assert_allclose(res[()], nres)
+    np.testing.assert_allclose(res, nres)
+
+
+# This is a more complex case with where() calls combined with reductions,
+# broadcasting, reusing the result in another expression and other
+# funny stuff that is not working yet.
+def test_where_fusion(array_fixture):
+    sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
+    npexpr = na1**2 + na2**2 > 2 * na1 * na2 + 1
+
+    # Two where() calls
+    res = expr.where(0, 1) + expr.where(0, 1)
+    nres = np.where(npexpr, 0, 1) + np.where(npexpr, 0, 1)
+    np.testing.assert_allclose(res[:], nres)
+
+    # Two where() calls with a reduction (and using broadcasting)
+    axis = None if sa1.ndim == 1 else 1
+    res = expr.where(0, 1) + expr.where(0, 1).sum(axis=axis)
+    nres = np.where(npexpr, 0, 1) + np.where(npexpr, 0, 1).sum(axis=axis)
+    np.testing.assert_allclose(res[:], nres)
+
+    # Reuse the result in another expression
+    res = expr.where(0, 1) + res.sum()
+    nres = np.where(npexpr, 0, 1) + nres.sum()
+    np.testing.assert_allclose(res[:], nres)
+
+    # Reuse the result in another expression twice
+    res = 2 * res + 4 * res
+    nres = 2 * nres + 4 * nres
+    print(res[:], nres)
+    np.testing.assert_allclose(res[:], nres)
+
+    # TODO: this is not working yet
+    # Reuse the result in another expression twice II
+    # res = 2 * res + blosc2.sqrt(res)
+    # nres = 2 * nres + nres.sqrt()
+    # np.testing.assert_allclose(res[:], nres)
+
+    # TODO: this is not working yet
+    # Reuse the result in another expression twice III
+    # res = expr.where(0, 1) + res
+    # nres = np.where(npexpr, 0, 1) + nres
+    # np.testing.assert_allclose(res[:], nres)

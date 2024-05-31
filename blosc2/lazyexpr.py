@@ -269,6 +269,11 @@ def validate_inputs(inputs: dict, getitem=False, out=None) -> tuple:
     if len(inputs) > 1:
         check_broadcast_compatible(inputs)
 
+    ref = inputs[0]
+    if not all(np.array_equal(ref.shape, input.shape) for input in inputs):
+        # If inputs have different shapes, we cannot take the fast path
+        return ref.shape, ref.dtype, False
+
     # More checks specific of NDArray inputs
     NDinputs = list(input for input in inputs if hasattr(input, "chunks"))
     if len(NDinputs) == 0:
@@ -360,6 +365,9 @@ def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, ch
     for key, value in operands.items():
         if np.isscalar(value):
             chunk_operands[key] = value
+            continue
+        if value.shape == ():
+            chunk_operands[key] = value[()]
             continue
 
         # TODO: broadcast is not in the fast path yet, so no need to check for it
@@ -565,6 +573,9 @@ def slices_eval(
             if np.isscalar(value):
                 chunk_operands[key] = value
                 continue
+            if value.shape == ():
+                chunk_operands[key] = value[()]
+                continue
             if check_smaller_shape(value, shape, slice_shape):
                 # We need to fetch the part of the value that broadcasts with the operand
                 smaller_slice = compute_smaller_slice(shape, value.shape, slice_)
@@ -719,6 +730,9 @@ def reduce_slices(
             if np.isscalar(value):
                 chunk_operands[key] = value
                 continue
+            if value.shape == ():
+                chunk_operands[key] = value[()]
+                continue
             if check_smaller_shape(value, shape, slice_shape):
                 # We need to fetch the part of the value that broadcasts with the operand
                 smaller_slice = compute_smaller_slice(operand.shape, value.shape, slice_)
@@ -767,24 +781,27 @@ def reduce_slices(
             dtype = result.dtype
 
         if out is None:
+            # out will be a proper numpy.ndarray
             if reduce_op == ReduceOp.SUM:
-                out = blosc2.zeros(reduced_shape, dtype=dtype, **kwargs)
+                out = np.zeros(reduced_shape, dtype=dtype)
             elif reduce_op == ReduceOp.PROD:
-                out = blosc2.full(reduced_shape, 1, dtype=dtype, **kwargs)
+                out = np.ones(reduced_shape, dtype=dtype)
             elif reduce_op == ReduceOp.MIN:
                 if np.issubdtype(dtype, np.integer):
-                    out = blosc2.full(reduced_shape, np.iinfo(dtype).max, dtype=dtype, **kwargs)
+                    out = np.iinfo(dtype).max * np.ones(reduced_shape, dtype=dtype)
                 else:
-                    out = blosc2.full(reduced_shape, np.inf, dtype=dtype, **kwargs)
+                    out = np.inf * np.ones(reduced_shape, dtype=dtype)
             elif reduce_op == ReduceOp.MAX:
                 if np.issubdtype(dtype, np.integer):
-                    out = blosc2.full(reduced_shape, np.iinfo(dtype).min, dtype=dtype, **kwargs)
+                    out = np.iinfo(dtype).min * np.ones(reduced_shape, dtype=dtype)
                 else:
-                    out = blosc2.full(reduced_shape, -np.inf, dtype=dtype, **kwargs)
+                    out = -np.inf * np.ones(reduced_shape, dtype=dtype)
             elif reduce_op == ReduceOp.ANY:
-                out = blosc2.zeros(reduced_shape, dtype=np.bool_, **kwargs)
+                # out = blosc2.zeros(reduced_shape, dtype=np.bool_, **kwargs)
+                out = np.zeros(reduced_shape, dtype=np.bool_)
             elif reduce_op == ReduceOp.ALL:
-                out = blosc2.full(reduced_shape, True, dtype=np.bool_, **kwargs)
+                # out = blosc2.full(reduced_shape, True, dtype=np.bool_, **kwargs)
+                out = np.ones(reduced_shape, dtype=np.bool_)
 
         # Update the output array with the result
         if reduce_op == ReduceOp.ANY:
@@ -792,7 +809,10 @@ def reduce_slices(
         elif reduce_op == ReduceOp.ALL:
             out[reduced_slice] *= result
         else:
-            out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
+            if reduced_slice == ():
+                out = reduce_op.value(out, result)
+            else:
+                out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
 
     return out
 
@@ -975,7 +995,9 @@ class LazyExpr(LazyArray):
                 else:
                     self.expression = value2.expression
                     self.operands = {"o0": value1}
-                self.update_expr(new_op)
+                newexpr = self.update_expr(new_op)
+                self.expression = newexpr.expression
+                self.operands = newexpr.operands
             else:
                 # This is the very first time that a LazyExpr is formed from two operands
                 # that are not LazyExpr themselves
@@ -987,45 +1009,64 @@ class LazyExpr(LazyArray):
         blosc2._disable_overloaded_equal = True
         # One of the two operands are LazyExpr instances
         value1, op, value2 = new_op
-        if isinstance(value1, LazyExpr) and isinstance(value2, LazyExpr):
+        # The new expression and operands
+        expression = None
+        new_operands = {}
+        # where() handling requires evaluating the expression prior to merge.
+        # This is different from reductions, where the expression is evaluated
+        # and returned an NumPy array (for usability convenience).
+        # We do things like this to enable the fusion of operations like
+        # `a.where(0, 1).sum()`.
+        # Another possibility would have been to always evaluate where() and produce
+        # an NDArray, but that would have been less efficient for the case above.
+        if hasattr(value1, "_where_args"):
+            value1 = value1.eval()
+        if hasattr(value2, "_where_args"):
+            value2 = value2.eval()
+        if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
+            # We converted some of the operands to NDArray (where() handling above)
+            new_operands = {"o0": value1, "o1": value2}
+            expression = f"(o0 {op} o1)"
+        elif isinstance(value1, LazyExpr) and isinstance(value2, LazyExpr):
             # Expression fusion
             # Fuse operands in expressions and detect duplicates
-            new_op, dup_op = fuse_operands(value1.operands, value2.operands)
+            new_operands, dup_op = fuse_operands(value1.operands, value2.operands)
             # Take expression 2 and rebase the operands while removing duplicates
             new_expr = fuse_expressions(value2.expression, len(value1.operands), dup_op)
-            self.expression = f"({self.expression} {op} {new_expr})"
-            self.operands.update(new_op)
+            expression = f"({self.expression} {op} {new_expr})"
         elif isinstance(value1, LazyExpr):
             if op == "not":
-                self.expression = f"({op}{self.expression})"
+                expression = f"({op}{self.expression})"
             elif np.isscalar(value2):
-                self.expression = f"({self.expression} {op} {value2})"
+                expression = f"({self.expression} {op} {value2})"
             elif hasattr(value2, "shape") and value2.shape == ():
-                self.expression = f"({self.expression} {op} {value2[()]})"
+                expression = f"({self.expression} {op} {value2[()]})"
             else:
                 try:
                     op_name = list(value1.operands.keys())[list(value1.operands.values()).index(value2)]
                 except ValueError:
                     op_name = f"o{len(self.operands)}"
-                    self.operands[op_name] = value2
-                self.expression = f"({self.expression} {op} {op_name})"
+                    new_operands = {op_name: value2}
+                expression = f"({self.expression} {op} {op_name})"
         else:
             if np.isscalar(value1):
-                self.expression = f"({value1} {op} {self.expression})"
+                expression = f"({value1} {op} {self.expression})"
             elif hasattr(value1, "shape") and value1.shape == ():
-                self.expression = f"({value1[()]} {op} {self.expression})"
+                expression = f"({value1[()]} {op} {self.expression})"
             else:
                 try:
                     op_name = list(value2.operands.keys())[list(value2.operands.values()).index(value1)]
                 except ValueError:
                     op_name = f"o{len(self.operands)}"
-                    self.operands[op_name] = value1
+                    new_operands = {op_name: value1}
                 if op == "[]":  # syntactic sugar for slicing
-                    self.expression = f"({op_name}[{self.expression}])"
+                    expression = f"({op_name}[{self.expression}])"
                 else:
-                    self.expression = f"({op_name} {op} {self.expression})"
+                    expression = f"({op_name} {op} {self.expression})"
         blosc2._disable_overloaded_equal = False
-        return self
+        # Return a new expression
+        operands = self.operands | new_operands
+        return self._new_expr(expression, operands, out=None, where=None)
 
     @property
     def dtype(self):
@@ -1129,6 +1170,8 @@ class LazyExpr(LazyArray):
         return self.update_expr(new_op=(self, ">=", value))
 
     def where(self, value1=None, value2=None):
+        if self.dtype != np.bool_:
+            raise ValueError("where() can only be used with boolean expressions")
         # This just acts as a 'decorator' for the existing expression
         if value1 is not None and value2 is not None:
             args = dict(_where_x=value1, _where_y=value2)
@@ -1141,7 +1184,7 @@ class LazyExpr(LazyArray):
         self._where_args = args
         return self
 
-    def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
+    def sum(self, axis=None, dtype=None, keepdims=False):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.SUM,
@@ -1149,59 +1192,48 @@ class LazyExpr(LazyArray):
             "dtype": dtype,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.eval(_reduce_args=reduce_args)
 
-    def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
+    def mean(self, axis=None, dtype=None, keepdims=False):
         # Always evaluate the expression prior the reduction
         total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims)
         if np.isscalar(axis):
             axis = (axis,)
         num_elements = np.prod(self.shape) if axis is None else np.prod([self.shape[i] for i in axis])
         mean_expr = total_sum / num_elements
-        return mean_expr.eval(**kwargs)
+        return mean_expr
 
-    def std(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
+    def std(self, axis=None, dtype=None, keepdims=False, ddof=0):
         # Always evaluate the expression prior the reduction
         mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
         std_expr = (self - mean_value) ** 2
-        if len(mean_value.shape) > 0:
-            # This additional step is needed to allow broadcasting to work:
-            # values need to be consolidated before the next operation.
-            # The issue is that sub-expressions having different shapes
-            # (broadcast) cannot be mixed with reduction operations.
-            # When the mean value is a scalar, the broadcasting is not needed.
-            std_expr = std_expr.eval()
         std_expr = std_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
         if ddof != 0:
             if axis is None:
                 num_elements = np.prod(self.shape)
             else:
                 num_elements = np.prod([self.shape[i] for i in axis])
-            std_expr = blosc2.sqrt(std_expr * num_elements / (num_elements - ddof))
+            std_expr = np.sqrt(std_expr * num_elements / (num_elements - ddof))
         else:
-            std_expr = blosc2.sqrt(std_expr)
-        return std_expr.eval(**kwargs)
+            std_expr = np.sqrt(std_expr)
+        return std_expr
 
-    def var(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
+    def var(self, axis=None, dtype=None, keepdims=False, ddof=0):
         # Always evaluate the expression prior the reduction
         mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
         var_expr = (self - mean_value) ** 2
-        if len(mean_value.shape) > 0:
-            # This additional step is needed to allow broadcasting to work. See std method.
-            var_expr = var_expr.eval()
         if ddof != 0:
             var_expr = var_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
             if axis is None:
                 num_elements = np.prod(self.shape)
             else:
                 num_elements = np.prod([self.shape[i] for i in axis])
-            var_expr = var_expr * num_elements / (num_elements - ddof)
-            var_values = var_expr.eval(**kwargs)
+            var_values = var_expr * num_elements / (num_elements - ddof)
         else:
-            var_values = var_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+            var_values = var_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
         return var_values
 
-    def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
+    def prod(self, axis=None, dtype=None, keepdims=False):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.PROD,
@@ -1209,51 +1241,43 @@ class LazyExpr(LazyArray):
             "dtype": dtype,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.eval(_reduce_args=reduce_args)
 
-    def min(self, axis=None, keepdims=False, **kwargs):
+    def min(self, axis=None, keepdims=False):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.MIN,
             "axis": axis,
             "keepdims": keepdims,
         }
-        if "dtype" in kwargs:
-            raise ValueError("dtype is not supported for min method")
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.eval(_reduce_args=reduce_args)
 
-    def max(self, axis=None, keepdims=False, **kwargs):
+    def max(self, axis=None, keepdims=False):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.MAX,
             "axis": axis,
             "keepdims": keepdims,
         }
-        if "dtype" in kwargs:
-            raise ValueError("dtype is not supported for max method")
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.eval(_reduce_args=reduce_args)
 
-    def any(self, axis=None, keepdims=False, **kwargs):
+    def any(self, axis=None, keepdims=False):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.ANY,
             "axis": axis,
             "keepdims": keepdims,
         }
-        if "dtype" in kwargs:
-            raise ValueError("dtype is not supported for any method")
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.eval(_reduce_args=reduce_args)
 
-    def all(self, axis=None, keepdims=False, **kwargs):
+    def all(self, axis=None, keepdims=False):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.ALL,
             "axis": axis,
             "keepdims": keepdims,
         }
-        if "dtype" in kwargs:
-            raise ValueError("dtype is not supported for all method")
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.eval(_reduce_args=reduce_args)
 
     def eval(self, item=None, **kwargs) -> blosc2.NDArray:
         if hasattr(self, "_output"):
@@ -1331,8 +1355,10 @@ class LazyExpr(LazyArray):
         ne.validate(expression, locals=operands)
         new_expr.expression = expression
         new_expr.operands = operands
-        new_expr._output = out
-        new_expr._where_args = where
+        if out is not None:
+            new_expr._output = out
+        if where is not None:
+            new_expr._where_args = where
         return new_expr
 
 
