@@ -998,7 +998,24 @@ class LazyExpr(LazyArray):
         blosc2._disable_overloaded_equal = True
         # One of the two operands are LazyExpr instances
         value1, op, value2 = new_op
-        if isinstance(value1, LazyExpr) and isinstance(value2, LazyExpr):
+        # where() handling requires evaluating the expression prior to merge.
+        # This is different from reductions, where the expression is evaluated
+        # and returned an NumPy array (for usability convenience).
+        # We do things like this to enable the fusion of operations like
+        # `a.where(0, 1).sum()`.
+        # Another possibility would have been to always evaluate where() and produce
+        # an NDArray, but that would have been less efficient for the case above.
+        if hasattr(value1, "_where_args"):
+            value1 = value1.eval()
+        if hasattr(value2, "_where_args"):
+            value2 = value2.eval()
+        if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
+            # We converted some of the operands to NDArray (where() handling above)
+            self.operands = {"o0": value1, "o1": value2}
+            self.expression = f"(o0 {op} o1)"
+            # Clean up the where arguments
+            self._where_args = None
+        elif isinstance(value1, LazyExpr) and isinstance(value2, LazyExpr):
             # Expression fusion
             # Fuse operands in expressions and detect duplicates
             new_op, dup_op = fuse_operands(value1.operands, value2.operands)

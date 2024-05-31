@@ -234,3 +234,15 @@ def test_where_reduction(array_fixture):
     res = expr.where(0, 1).sum(axis=axis)
     nres = ne.evaluate("where(na1**2 + na2**2 > 2 * na1 * na2 + 1, 0, 1)").sum(axis=axis)
     np.testing.assert_allclose(res, nres)
+
+
+# Test an expression with where() and a reduction
+# This is a more complex case with two where() calls
+def test_where_reduction2(array_fixture):
+    sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
+    npexpr = na1**2 + na2**2 > 2 * na1 * na2 + 1
+    axis = None if sa1.ndim == 1 else 1
+    res = expr.where(0, 1) + expr.where(0, 1).sum(axis=axis)
+    nres = np.where(npexpr, 0, 1) + np.where(npexpr, 0, 1).sum(axis=axis)
+    np.testing.assert_allclose(res[:], nres)
