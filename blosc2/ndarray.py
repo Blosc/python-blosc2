@@ -556,15 +556,20 @@ class NDArray(blosc2_ext.NDArray, Operand):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
-        # Get the shape of the slice
-        if isinstance(key, tuple) and (
+        # First try some fast paths for common cases
+        if isinstance(key, np.integer):
+            # Massage the key to a tuple and go the fast path
+            key_ = (slice(key, key + 1), *(slice(None),) * (self.ndim - 1))
+            start, stop, step = get_ndarray_start_stop(self.ndim, key_, self.shape)
+            shape = tuple(sp - st for st, sp in zip(start, stop, strict=True))
+        elif isinstance(key, tuple) and (
             builtins.sum(isinstance(k, builtins.slice) for k in key) == self.ndim
         ):
-            # process_key() is expensive, so take a fast path for the most common case
+            # This can be processed in a fast way already
             start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
-            shape = np.array([sp - st for st, sp in zip(start, stop, strict=False)])
+            shape = tuple(sp - st for st, sp in zip(start, stop, strict=True))
         else:
-            # The more general case
+            # The more general case (this is quite slow)
             # If the key is a LazyExpr, decorate with ``where`` and return it
             if isinstance(key, blosc2.LazyExpr):
                 return key.where(self)
@@ -575,7 +580,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 return expr.where(self)
             key_, mask = process_key(key, self.shape)
             start, stop, step = get_ndarray_start_stop(self.ndim, key_, self.shape)
-            shape = np.array([sp - st for st, sp in zip(start, stop, strict=False)])
+            shape = np.array([sp - st for st, sp in zip(start, stop, strict=True)])
             shape = tuple(shape[[not m for m in mask]])
 
         # Create the array to store the result
