@@ -276,10 +276,10 @@ class SChunk(blosc2_ext.SChunk):
         Reading the data back again via memory-mapped files:
 
         >>> schunk_mmap = blosc2.open(urlpath, mmap_mode="r")
-        >>> np.frombuffer(schunk_mmap.decompress_chunk(0), dtype=np.int64)
-        array([0, 1, 2])
-        >>> np.frombuffer(schunk_mmap.decompress_chunk(1), dtype=np.int64)
-        array([0, 2, 4])
+        >>> np.frombuffer(schunk_mmap.decompress_chunk(0), dtype=np.int64).tolist()
+        [0, 1, 2]
+        >>> np.frombuffer(schunk_mmap.decompress_chunk(1), dtype=np.int64).tolist()
+        [0, 2, 4]
         """
         # Check only allowed kwarg are passed
         allowed_kwargs = [

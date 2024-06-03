@@ -6,6 +6,7 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+import os
 import random
 
 import numpy as np
@@ -39,6 +40,9 @@ import blosc2
     ],
 )
 def test_open(contiguous, urlpath, cparams, dparams, nchunks, chunk_nitems, dtype, mode, mmap_mode):
+    if os.name == "nt" and mmap_mode == "c":
+        pytest.skip("Cannot test mmap_mode 'c' on Windows")
+
     storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     blosc2.remove_urlpath(urlpath)
     dtype = np.dtype(dtype)

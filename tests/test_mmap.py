@@ -65,14 +65,19 @@ def test_initial_mapping_size(tmp_path, monkeypatch, capfd, initial_mapping_size
 
     # Writing via asarray
     nparray = np.arange(3, dtype=np.float32)
-    a = blosc2.asarray(nparray, urlpath=urlpath, mmap_mode="w+", initial_mapping_size=initial_mapping_size)
+    a = blosc2.asarray(
+        nparray,
+        urlpath=tmp_path / "schunk2.b2frame",
+        mmap_mode="w+",
+        initial_mapping_size=initial_mapping_size,
+    )
     assert a == nparray
     np.testing.assert_almost_equal(a[...], nparray)
 
     captured = capfd.readouterr()
     assert (
         re.search(
-            r"Opened memory-mapped file .*schunk\.b2frame in mode w\+ with an mapping size of "
+            r"Opened memory-mapped file .*schunk2\.b2frame in mode w\+ with an mapping size of "
             + str(expected_mapping_size),
             captured.err,
         )

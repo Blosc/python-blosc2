@@ -54,11 +54,10 @@ argvalues = [
 @pytest.mark.parametrize("mode, mmap_mode", [("w", None), (None, "w+")])
 @pytest.mark.parametrize(argnames, argvalues)
 def test_ndarray_pathlib(tmp_path, mode, mmap_mode, shape, chunks, blocks, slices, dtype):
-    urlpath = tmp_path / "test.b2nd"
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
     a = blosc2.asarray(
-        nparray, chunks=chunks, blocks=blocks, urlpath=urlpath, mode=mode, mmap_mode=mmap_mode
+        nparray, chunks=chunks, blocks=blocks, urlpath=tmp_path / "test.b2nd", mode=mode, mmap_mode=mmap_mode
     )
     b = a.slice(slices)
     np_slice = a[slices]
@@ -66,17 +65,21 @@ def test_ndarray_pathlib(tmp_path, mode, mmap_mode, shape, chunks, blocks, slice
     np.testing.assert_almost_equal(b[...], np_slice)
 
     b = blosc2.open(
-        urlpath, mode="a" if mmap_mode is None else None, mmap_mode="r+" if mode is None else None
+        tmp_path / "test.b2nd",
+        mode="a" if mmap_mode is None else None,
+        mmap_mode="r+" if mode is None else None,
     )
     np.testing.assert_almost_equal(b[...], nparray)
 
-    a = blosc2.zeros(shape, dtype, urlpath=urlpath, mode=mode, mmap_mode=mmap_mode)
+    a = blosc2.zeros(shape, dtype, urlpath=tmp_path / "test2.b2nd", mode=mode, mmap_mode=mmap_mode)
     b = np.zeros(shape, dtype)
     np.testing.assert_almost_equal(b[...], a[...])
 
-    a = blosc2.full(shape, 3, urlpath=urlpath, mode=mode, mmap_mode=mmap_mode)
+    a = blosc2.full(shape, 3, urlpath=tmp_path / "test3.b2nd", mode=mode, mmap_mode=mmap_mode)
     b = np.full(shape, 3)
     np.testing.assert_almost_equal(b[...], a[...])
 
-    a = blosc2.frombuffer(bytes(nparray), shape, dtype, urlpath=urlpath, mode=mode, mmap_mode=mmap_mode)
+    a = blosc2.frombuffer(
+        bytes(nparray), shape, dtype, urlpath=tmp_path / "test4.b2nd", mode=mode, mmap_mode=mmap_mode
+    )
     np.testing.assert_almost_equal(nparray[...], a[...])
