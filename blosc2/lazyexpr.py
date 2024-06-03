@@ -496,98 +496,6 @@ def fast_eval(
     return out
 
 
-def chunks_eval(expression: str | Callable, operands: dict, **kwargs) -> blosc2.NDArray | np.ndarray:
-    """Evaluate the expression in chunks of operands using a fast path.
-
-    Parameters
-    ----------
-    expression: str or callable
-        The expression or udf to evaluate.
-    operands: dict
-        A dictionary with the operands.
-    getitem: bool, optional
-        Whether the expression is being evaluated for a getitem operation or eval().
-    kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
-
-    Returns
-    -------
-    :ref:`NDArray` or np.ndarray
-        The output array.
-    """
-    out = kwargs.pop("_output", None)
-    where: dict | None = kwargs.pop("_where_args", None)
-    if isinstance(out, blosc2.NDArray):
-        # If 'out' has been passed, and is a NDArray, use it as the base array
-        basearr = out
-    else:
-        # Otherwise, find the operand with the 'chunks' attribute and the longest shape
-        operands_with_chunks = [o for o in operands.values() if hasattr(o, "chunks")]
-        basearr = max(operands_with_chunks, key=lambda x: len(x.shape))
-
-    # Get the shape of the base array
-    shape = basearr.shape
-    chunks = basearr.chunks
-    has_padding = basearr.ext_shape != shape
-    chunk_operands = {}
-    chunks_idx, nchunks = get_chunks_idx(shape, chunks)
-
-    # Iterate over the chunks and evaluate the expression
-    for nchunk in range(nchunks):
-        coords = tuple(np.unravel_index(nchunk, chunks_idx))
-        slice_ = tuple(
-            slice(c * s, min((c + 1) * s, shape[i]))
-            for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
-        )
-        offset = tuple(s.start for s in slice_)
-        chunks_ = tuple(s.stop - s.start for s in slice_)
-        full_chunk = (chunks_ == chunks) and not has_padding
-        fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands)
-
-        if isinstance(out, np.ndarray) and not where:
-            # Fast path: put the result straight in the output array (avoiding a memory copy)
-            if callable(expression):
-                expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
-            else:
-                ne.evaluate(expression, chunk_operands, out=out[slice_])
-            continue
-
-        if callable(expression):
-            result = np.empty(chunks_, dtype=out.dtype)
-            expression(tuple(chunk_operands.values()), result, offset=offset)
-        else:
-            if where is None:
-                result = ne.evaluate(expression, chunk_operands)
-            else:
-                # Apply the where condition (in result)
-                if len(where) == 2:
-                    new_expr = f"where({expression}, _where_x, _where_y)"
-                    result = ne.evaluate(new_expr, chunk_operands)
-                else:
-                    # We do not support one or zero operands in the fast path yet
-                    raise ValueError("The where condition must be a tuple with one or two elements")
-
-            if out is None:
-                # We can enter here when using any of the eval() or __getitem__() methods
-                if getitem:
-                    out = np.empty(shape, dtype=result.dtype)
-                else:
-                    out = blosc2.empty(
-                        shape, chunks=chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs
-                    )
-
-        # Store the result in the output array
-        if getitem:
-            out[slice_] = result
-        else:
-            if has_padding:
-                out[slice_] = result
-            else:
-                out.schunk.update_data(nchunk, result, copy=False)
-
-    return out
-
-
 def slices_eval(
     expression: str | Callable, operands: dict, getitem: bool, _slice=None, **kwargs
 ) -> blosc2.NDArray | np.ndarray:
@@ -1390,10 +1298,16 @@ class LazyExpr(LazyArray):
         operands = {}
         for key, value in self.operands.items():
             if isinstance(value, blosc2.C2Array):
-                operands[key] = {'path': str(value.path), 'sub_url': value.sub_url, 'auth_cookie': value.auth_cookie}
+                operands[key] = {
+                    "path": str(value.path),
+                    "sub_url": value.sub_url,
+                    "auth_cookie": value.auth_cookie,
+                }
                 continue
             if not isinstance(value, blosc2.NDArray):
-                raise ValueError("To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects")
+                raise ValueError(
+                    "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
+                )
             if value.schunk.urlpath is None:
                 raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
             operands[key] = value.schunk.urlpath
@@ -1556,7 +1470,9 @@ def _open_lazyarray(array):
             operands_dict[key] = op
         elif isinstance(value, dict):
             # C2Array
-            operands_dict[key] = blosc2.C2Array(pathlib.Path(value['path']), sub_url=value['sub_url'], auth_cookie=value['auth_cookie'])
+            operands_dict[key] = blosc2.C2Array(
+                pathlib.Path(value["path"]), sub_url=value["sub_url"], auth_cookie=value["auth_cookie"]
+            )
         else:
             raise ValueError("Error when retrieving the operands")
 
