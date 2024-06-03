@@ -17,15 +17,15 @@ NITEMS = 10_000
 
 
 @pytest.fixture(params=[np.float32,
-                        # np.float64
+                        np.float64
                         ])
 def dtype_fixture(request):
     return request.param
 
 
 @pytest.fixture(params=[(NITEMS_SMALL,),
-                        # (NITEMS,),
-                        # (NITEMS // 100, 100)
+                        (NITEMS,),
+                        (NITEMS // 100, 100)
                         ])
 def shape_fixture(request):
     return request.param
@@ -33,9 +33,9 @@ def shape_fixture(request):
 
 # params: (same_chunks, same_blocks)
 @pytest.fixture(params=[(True, True),
-                        # (True, False),
-                        # (False, True),
-                        # (False, False)
+                        (True, False),
+                        (False, True),
+                        (False, False)
                         ])
 def chunks_blocks_fixture(request):
     return request.param
