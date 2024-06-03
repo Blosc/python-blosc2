@@ -202,11 +202,13 @@ class SChunk(blosc2_ext.SChunk):
                     .. note::
                         Memory-mapped files are opened once and the file contents remain in (virtual) memory for the
                         lifetime of the schunk. Using memory-mapped I/O can be faster than using the default I/O
-                        functions. This is especially true when operating with network file systems (like NFS).
+                        functions depending on the use case. Whereas reading performance is generally better, writing
+                        performance may also be slower in some cases on certain systems. In any case, memory-mapped
+                        files can be especially beneficial when operating with network file systems (like NFS).
 
-                        This is currently a beta feature and we recommend trying it out and reporting any issues you may
-                        encounter. In one of the future versions of Blosc2, we plan to make memory-mapped files the
-                        default mode of operation.
+                        This is currently a beta feature (especially write operations) and we recommend trying it out
+                        and reporting any issues you may encounter. In one of the future versions of Blosc2, we plan to
+                        make (reading) memory-mapped files the default mode of operation.
 
                 initial_mapping_size: int, optional
                     The initial size of the mapping for the memory-mapped file when writes are allowed (r+ w+, or c

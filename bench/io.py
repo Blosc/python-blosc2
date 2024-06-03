@@ -22,6 +22,12 @@ class MmapBenchmarking:
         self.mmap_mode_read = "r" if self.io_type == "io_mmap" else None
         self.urlpath = "array.b2nd"
         self.n_chunks = 1000
+        self.shape = (self.n_chunks, 64, 64, 64)
+        self.chunks = (1, 64, 64, 64)
+        self.blocks = (1, 16, 64, 64)
+        self.dtype = np.dtype(np.float32)
+        self.size = np.prod(self.shape) * self.dtype.itemsize
+        self.cparams = dict(typesize=self.dtype.itemsize, clevel=0)
 
     def __enter__(self):
         blosc2.remove_urlpath(self.urlpath)
@@ -32,11 +38,14 @@ class MmapBenchmarking:
         blosc2.remove_urlpath(self.urlpath)
 
     def benchmark_writes(self) -> float:
-        array = np.random.randn(self.n_chunks, 64, 64, 64).astype(np.float32)
+        array = np.random.randn(self.n_chunks, 64, 64, 64).astype(self.dtype)
 
         if self.blosc_mode == "schunk":
             chunksize = array[0].size * array.itemsize
-            schunk = blosc2.SChunk(chunksize=chunksize, mmap_mode=self.mmap_mode_write, urlpath=self.urlpath)
+            cparams = self.cparams | dict(blocksize=np.prod(self.blocks) * array.itemsize)
+            schunk = blosc2.SChunk(chunksize=chunksize, cparams=cparams,
+                                   mode="w", mmap_mode=self.mmap_mode_write,
+                                   urlpath=self.urlpath)
 
             t0 = time()
             for c in range(self.n_chunks):
@@ -44,7 +53,9 @@ class MmapBenchmarking:
             t1 = time()
         elif self.blosc_mode == "ndarray":
             t0 = time()
-            blosc2.asarray(array, chunks=(1, 64, 64, 64), urlpath=self.urlpath, mmap_mode=self.mmap_mode_write)
+            blosc2.asarray(array, chunks=self.chunks, blocks=self.blocks,
+                           cparams=self.cparams, mode="w",
+                           mmap_mode=self.mmap_mode_write, urlpath=self.urlpath)
             t1 = time()
         else:
             raise ValueError(f"Unknown Blosc mode: {self.blosc_mode}")
@@ -105,11 +116,16 @@ if __name__ == "__main__":
         for i in range(args.runs):
             print(f"Run {i+1}/{args.runs}", end="\r")
             times_write.append(bench.benchmark_writes())
-        print(f"Time for writing the data with {args.io_type}: {min(times_write):.3f}s")
+        min_time = min(times_write)
+        speed = bench.size / min_time / 2**30
+        print(f"Time for writing the data with {args.io_type}: {min_time:.3f} s ({speed:.3f} GB/s)")
 
         for read_order in ["sequential", "random"]:
             times_read = []
             for i in range(args.runs):
                 print(f"Run {i+1}/{args.runs}", end="\r")
                 times_read.append(bench.benchmark_reads(read_order=read_order))
-            print(f"Time for reading the data with {args.io_type} in {read_order} order: {min(times_read):.3f}s")
+            min_time = min(times_read)
+            speed = bench.size / min_time / 2**30
+            print(f"Time for reading the data with {args.io_type} in {read_order} order: {min_time:.3f} s"
+                  f" ({speed:.3f} GB/s)")
