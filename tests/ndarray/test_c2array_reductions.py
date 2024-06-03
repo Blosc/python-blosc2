@@ -54,17 +54,17 @@ def array_fixture(dtype_fixture, shape_fixture, auth_cookie):
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a1-{shape_fixture}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    path = pathlib.PosixPath(f'{ROOT}/{DIR + urlpath}')
     a1 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a2-{shape_fixture}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    path = pathlib.PosixPath(f'{ROOT}/{DIR + urlpath}')
     a2 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     # Let other operands have chunks1 and blocks1
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a3-{shape_fixture}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    path = pathlib.PosixPath(f'{ROOT}/{DIR + urlpath}')
     a3 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     urlpath = f'ds-0-10-linspace-{dtype_fixture.__name__}-{chunks_blocks_fixture}-a4-{shape_fixture}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    path = pathlib.PosixPath(f'{ROOT}/{DIR + urlpath}')
     a4 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
 
     return a1, a2, a3, a4, na1, np.copy(na1), np.copy(na1), np.copy(na1)

@@ -56,7 +56,7 @@ def test_1p(chunks, blocks, chunked_eval, auth_cookie):
     dtype = np.float64
     shape_fixture = (NITEMS // 100, 100)
     urlpath = f'ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape_fixture}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}')
+    path = pathlib.PosixPath(f'{ROOT}/{DIR + urlpath}')
     a = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     npa = a[:]
     npc = npa + 1
@@ -96,11 +96,11 @@ def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, auth
     blosc2.remove_urlpath(urlpath)
 
     urlpath_a = f'ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape_fixture}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath_a}')
+    path = pathlib.PosixPath(f'{ROOT}/{DIR + urlpath_a}')
     a = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
 
     urlpath_b = f'ds-0-10-linspace-{dtype.__name__}-(False, False)-a3-{shape_fixture}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath_b}')
+    path = pathlib.PosixPath(f'{ROOT}/{DIR + urlpath_b}')
     b = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     npa = a[:]
     npb = b[:]
