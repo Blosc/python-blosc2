@@ -68,3 +68,12 @@ def test_getitem_shapes():
     assert b2a[3:, 4].shape == npa[3:, 4].shape
     assert b2a[3, 4:].shape == npa[3, 4:].shape
     assert b2a[3:, 4:].shape == npa[3:, 4:].shape
+
+    # Negative values for start
+    assert b2a[-1, -1].shape == npa[-1, -1].shape
+    assert b2a[-1:, -2].shape == npa[-1:, -2].shape
+    assert b2a[-2, -3:].shape == npa[-2, -3:].shape
+    # Negative values for stop
+    assert b2a[1:-1, 1].shape == npa[1:-1, 1].shape
+    assert b2a[1, :-2].shape == npa[1, :-2].shape
+    assert b2a[1:-2, 2:-3].shape == npa[1:-2, 2:-3].shape

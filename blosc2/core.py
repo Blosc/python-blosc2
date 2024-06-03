@@ -1135,6 +1135,11 @@ def get_chunksize(blocksize, l3_minimum=2**21, l3_maximum=2**25):
         if isinstance(l2_cache_size, int) and l2_cache_size > chunksize:
             chunksize = l2_cache_size
 
+    # When evaluating expressions, it is convenient to keep chunks for all operands in L3 cache,
+    # so let's divide by 4 (3 operands + result is a typical situation for moderately complex
+    # expressions)
+    chunksize //= 4
+
     # Ensure a minimum size
     if chunksize < l3_minimum:
         chunksize = l3_minimum
@@ -1255,6 +1260,11 @@ def compute_chunks_blocks(
         cparams2["tuner"] = blosc2.Tuner.STUNE
         src = blosc2.compress2(np.zeros(nitems, dtype=f"V{itemsize}"), **cparams2)
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
+        # Experiments show that it is not a good idea to exceed 256 KB for the blocksize.
+        # Even Intel/AMD machines with 1MB/2MB usually have better performance with 256 KB
+        # when evaluating expressions and other operations.
+        if blocksize > 2**18:
+            blocksize = 2**18
         cparams2["tuner"] = aux_tuner
         # Starting point for the guess
         if chunks is None:
