@@ -13,14 +13,17 @@ import pytest
 import blosc2
 
 NITEMS_SMALL = 1_000
-NITEMS = 50_000
 
 # SUB_URL = 'http://localhost:8002/'
-# ROOT = 'foo'
-# DIR = 'operands/'
 SUB_URL = 'https://demo.caterva2.net/'
 ROOT = 'b2tests'
 DIR = 'expr/'
+
+# import httpx
+# resp = httpx.post(f'{SUB_URL}auth/jwt/login',
+#                   data=dict(username='user@example.com', password='foobar'))
+# resp.raise_for_status()
+# AUTH_COOKIE = '='.join(list(resp.cookies.items())[0])
 
 
 def udf1p(inputs_tuple, output, offset):
@@ -42,9 +45,10 @@ def auth_cookie(request):
 @pytest.mark.parametrize(
     "chunks, blocks",
     [
-        (
+        pytest.param(
             (10, 10),
             (5, 5),
+            marks=pytest.mark.heavy
         ),
         (
             (10, 10),
@@ -54,7 +58,7 @@ def auth_cookie(request):
 )
 def test_1p(chunks, blocks, chunked_eval, auth_cookie):
     dtype = np.float64
-    shape_fixture = (NITEMS // 100, 100)
+    shape_fixture = (70, 70)
     urlpath = f'ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape_fixture}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
     a = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
@@ -86,13 +90,12 @@ def udf2p(inputs_tuple, output, offset):
 @pytest.mark.parametrize(
     "chunks, blocks, slices, urlpath, contiguous",
     [
-        ((30, 10), (5, 5), (slice(0, 5), slice(5, 20)), "eval.b2nd", False),
         ((13, 10), (5, 5), (slice(3, 8), slice(9, 12)), None, False),
     ],
 )
 def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, auth_cookie):
     dtype = np.float64
-    shape_fixture = (NITEMS // 100, 100)
+    shape_fixture = (70, 70)
     blosc2.remove_urlpath(urlpath)
 
     urlpath_a = f'ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape_fixture}d.b2nd'

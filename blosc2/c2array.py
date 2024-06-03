@@ -16,7 +16,7 @@ import blosc2
 import httpx
 
 
-def _xget(url, params=None, headers=None, timeout=5, auth_cookie=None):
+def _xget(url, params=None, headers=None, timeout=15, auth_cookie=None):
     if auth_cookie:
         headers = headers.copy() if headers else {}
         headers['Cookie'] = auth_cookie
@@ -25,7 +25,7 @@ def _xget(url, params=None, headers=None, timeout=5, auth_cookie=None):
     return response
 
 
-def get(url, params=None, headers=None, timeout=5, model=None,
+def get(url, params=None, headers=None, timeout=15, model=None,
         auth_cookie=None):
     response = _xget(url, params, headers, timeout, auth_cookie)
     json = response.json()
