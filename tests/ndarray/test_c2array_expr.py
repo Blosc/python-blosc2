@@ -119,8 +119,9 @@ def test_ixxx(chunks_blocks, auth_cookie):
 
 
 def test_complex(auth_cookie):
-    shape = (70, 70)
-    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, (True, False), auth_cookie)
+    shape = (NITEMS_SMALL,)
+    chunks_blocks = 'default'
+    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
     expr = blosc2.tan(a1) * (blosc2.sin(a2) + blosc2.cos(a3)) + (blosc2.sqrt(a4) * 2)
     expr += 2
     nres = ne.evaluate("tan(na1) * (sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
@@ -140,9 +141,9 @@ def test_complex(auth_cookie):
 @pytest.mark.parametrize(
     "chunks_blocks",
     [
-        (True, True),
+        pytest.param((True, True), marks=pytest.mark.heavy),
         (True, False),
-        (False, True),
+        pytest.param((False, True), marks=pytest.mark.heavy),
         (False, False),
     ],
 )
@@ -213,12 +214,12 @@ def test_save(auth_cookie):
 @pytest.fixture(
     params=[
         ((2, 5), (5,)),
-        ((2, 1), (5,)),
-        ((2, 5, 3), (5, 1)),
+        pytest.param(((2, 1), (5,)), marks=pytest.mark.heavy),
+        pytest.param(((2, 5, 3), (5, 1)), marks=pytest.mark.heavy),
         ((2, 1, 3), (5, 3)),
-        ((2, 5, 3, 2), (5, 3, 1)),
+        pytest.param(((2, 5, 3, 2), (5, 3, 1)), marks=pytest.mark.heavy),
         ((2, 5, 3, 2), (5, 1, 2)),
-        ((2, 5, 3, 2, 2), (5, 3, 2, 2)),
+        pytest.param(((2, 5, 3, 2, 2), (5, 3, 2, 2)), marks=pytest.mark.heavy),
     ]
 )
 def broadcast_shape(request):

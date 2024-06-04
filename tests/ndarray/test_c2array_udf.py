@@ -51,8 +51,8 @@ def auth_cookie(request):
             marks=pytest.mark.heavy
         ),
         (
-            (10, 10),
-            (4, 4),
+            (50, 50),
+            (30, 30),
         ),
     ],
 )
@@ -90,7 +90,7 @@ def udf2p(inputs_tuple, output, offset):
 @pytest.mark.parametrize(
     "chunks, blocks, slices, urlpath, contiguous",
     [
-        ((13, 10), (5, 5), (slice(3, 8), slice(9, 12)), None, False),
+        pytest.param((53, 20), (10, 13), (slice(3, 8), slice(9, 12)), None, False, marks=pytest.mark.heavy),
     ],
 )
 def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, auth_cookie):

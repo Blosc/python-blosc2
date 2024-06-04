@@ -59,7 +59,7 @@ def get_arrays(shape, chunks_blocks, auth_cookie):
     return a1, a2, a3, a4, na1, np.copy(na1), np.copy(na1), np.copy(na1)
 
 
-@pytest.mark.parametrize("reduce_op", ["sum", "all"])
+@pytest.mark.parametrize("reduce_op", ["sum", pytest.param("all", marks=pytest.mark.heavy)])
 def test_reduce_bool(reduce_op, auth_cookie):
     shape = (NITEMS_SMALL, )
     chunks_blocks = 'default'
@@ -81,7 +81,10 @@ def test_reduce_bool(reduce_op, auth_cookie):
         (False, False),
     ],
 )
-@pytest.mark.parametrize("reduce_op", ["prod", "min", "any"])
+@pytest.mark.parametrize("reduce_op", [pytest.param("prod", marks=pytest.mark.heavy),
+                                       "min",
+                                       pytest.param("any", marks=pytest.mark.heavy)
+                                       ])
 @pytest.mark.parametrize("axis", [1])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize("dtype_out", [np.int16])
@@ -122,13 +125,16 @@ def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op, auth
 @pytest.mark.parametrize(
     "chunks_blocks",
     [
-        (True, True),
+        pytest.param((True, True), marks=pytest.mark.heavy),
         (True, False),
         (False, True),
         (False, False),
     ],
 )
-@pytest.mark.parametrize("reduce_op", ["max", "mean", "var"])
+@pytest.mark.parametrize("reduce_op", [pytest.param("max", marks=pytest.mark.heavy),
+                                       "mean",
+                                       pytest.param("var", marks=pytest.mark.heavy),
+                                       ])
 @pytest.mark.parametrize("axis", [0])
 def test_reduce_expr_arr(chunks_blocks, axis, reduce_op, auth_cookie):
     shape = (70, 70)
