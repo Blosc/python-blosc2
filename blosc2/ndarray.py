@@ -117,7 +117,10 @@ def get_chunks_idx(shape, chunks):
 
 
 def _check_allowed_dtypes(value: bool | int | float | str | NDArray | blosc2.C2Array | NDField):
-    if not (isinstance(value, blosc2.LazyExpr | NDArray | NDField | blosc2.C2Array | np.ndarray) or np.isscalar(value)):
+    if not (
+        isinstance(value, blosc2.LazyExpr | NDArray | NDField | blosc2.C2Array | np.ndarray)
+        or np.isscalar(value)
+    ):
         raise RuntimeError(
             "Expected LazyExpr, NDArray, NDField, C2Array, np.ndarray or scalar instances"
             f" and you provided a '{type(value)}' instance"
@@ -2047,10 +2050,9 @@ def asarray(array: np.ndarray, **kwargs: dict | list) -> NDArray:
             # Ensure the array slice is contiguous
             array_slice = np.ascontiguousarray(array[slice_])
             # ndarr[slice_] = array_slice  # a bit slow
-            # All components of the slice are computed, so this fastpath is safe
-            starts = tuple(s.start for s in slice_)
-            stops = tuple(s.stop for s in slice_)
-            ndarr.set_slice((starts, stops), array_slice)
+            # The whole chunk is to be updated, so this fastpath is safe
+            ndarr.schunk.update_data(nchunk, array_slice, copy=False)
+
         return ndarr
 
     # Go the slow (and possibly memory-intensive) path
