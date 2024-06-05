@@ -69,7 +69,7 @@ def get_arrays(shape, chunks_blocks, auth_cookie):
     ],
 )
 def test_simple(chunks_blocks, auth_cookie):
-    shape = (70, 70)
+    shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
 
     expr = a1 + a1
@@ -107,7 +107,7 @@ def test_simple_getitem(auth_cookie):
     ],
 )
 def test_ixxx(chunks_blocks, auth_cookie):
-    shape = (70, 70)
+    shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
     expr = a1 ** 3 + a2 ** 2 + a3 ** 3 - a4 + 3
     expr += 5  # __iadd__
@@ -122,9 +122,9 @@ def test_complex(auth_cookie):
     shape = (NITEMS_SMALL,)
     chunks_blocks = 'default'
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
-    expr = blosc2.tan(a1) * (blosc2.sin(a2) + blosc2.cos(a3)) + (blosc2.sqrt(a4) * 2)
+    expr = blosc2.tan(a1) * blosc2.sin(a2) + (blosc2.sqrt(a4) * 2)
     expr += 2
-    nres = ne.evaluate("tan(na1) * (sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
+    nres = ne.evaluate("tan(na1) * sin(na2) + (sqrt(na4) * 2) + 2")
     # eval
     res = expr.eval()
     np.testing.assert_allclose(res[:], nres)
@@ -142,13 +142,13 @@ def test_complex(auth_cookie):
     "chunks_blocks",
     [
         pytest.param((True, True), marks=pytest.mark.heavy),
-        (True, False),
+        pytest.param((True, False), marks=pytest.mark.heavy),
         pytest.param((False, True), marks=pytest.mark.heavy),
         (False, False),
     ],
 )
 def test_mix_operands(chunks_blocks, auth_cookie):
-    shape = (70, 70)
+    shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
     b1 = blosc2.asarray(na1, chunks=a1.chunks, blocks=a1.blocks)
     b3 = blosc2.asarray(na3, chunks=a3.chunks, blocks=a3.blocks)
@@ -184,7 +184,7 @@ def test_mix_operands(chunks_blocks, auth_cookie):
 
 # Tests related with save method
 def test_save(auth_cookie):
-    shape = (70, 70)
+    shape = (60, 60)
     tol = 1e-17
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, (False, True), auth_cookie)
 

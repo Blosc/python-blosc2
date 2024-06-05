@@ -1516,7 +1516,7 @@ def _open_lazyarray(array):
         elif isinstance(value, dict):
             # C2Array
             operands_dict[key] = blosc2.C2Array(
-                pathlib.Path(value["path"]), sub_url=value["sub_url"], auth_cookie=value["auth_cookie"]
+                pathlib.Path(value["path"]).as_posix(), sub_url=value["sub_url"], auth_cookie=value["auth_cookie"]
             )
         else:
             raise ValueError("Error when retrieving the operands")

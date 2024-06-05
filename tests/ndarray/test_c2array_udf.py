@@ -52,14 +52,14 @@ def auth_cookie(request):
         ),
         (
             (50, 50),
-            (30, 30),
+            (30, 50),
         ),
     ],
 )
 def test_1p(chunks, blocks, chunked_eval, auth_cookie):
     dtype = np.float64
-    shape_fixture = (70, 70)
-    urlpath = f'ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape_fixture}d.b2nd'
+    shape = (60, 60)
+    urlpath = f'ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
     a = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     npa = a[:]
@@ -95,14 +95,14 @@ def udf2p(inputs_tuple, output, offset):
 )
 def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, auth_cookie):
     dtype = np.float64
-    shape_fixture = (70, 70)
+    shape = (60, 60)
     blosc2.remove_urlpath(urlpath)
 
-    urlpath_a = f'ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape_fixture}d.b2nd'
+    urlpath_a = f'ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath_a}').as_posix()
     a = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
 
-    urlpath_b = f'ds-0-10-linspace-{dtype.__name__}-(False, False)-a3-{shape_fixture}d.b2nd'
+    urlpath_b = f'ds-0-10-linspace-{dtype.__name__}-(False, False)-a3-{shape}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath_b}').as_posix()
     b = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     npa = a[:]

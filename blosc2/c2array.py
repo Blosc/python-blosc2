@@ -69,8 +69,9 @@ class C2Array(blosc2.Operand):
 
         Parameters
         ----------
-        path: pathlib.Path
-            The path to the remote NDArray file (root + file name).
+        path: str
+            The path to the remote NDArray file (root + file name) as
+            a posix path.
         sub_url: str
             The base URL (slash-terminated) of the subscriber to query.
         auth_cookie: str

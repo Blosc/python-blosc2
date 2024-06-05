@@ -89,7 +89,7 @@ def test_reduce_bool(reduce_op, auth_cookie):
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize("dtype_out", [np.int16])
 def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op, auth_cookie):
-    shape = (70, 70)
+    shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
     if axis is not None and np.isscalar(axis) and len(a1.shape) >= axis:
         return
@@ -137,7 +137,7 @@ def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op, auth
                                        ])
 @pytest.mark.parametrize("axis", [0])
 def test_reduce_expr_arr(chunks_blocks, axis, reduce_op, auth_cookie):
-    shape = (70, 70)
+    shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
     if axis is not None and len(a1.shape) >= axis:
         return
