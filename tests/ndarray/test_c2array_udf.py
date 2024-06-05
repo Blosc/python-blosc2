@@ -46,8 +46,8 @@ def auth_cookie(request):
     "chunks, blocks",
     [
         pytest.param(
-            (10, 10),
-            (5, 5),
+            (30, 30),
+            (30, 30),
             marks=pytest.mark.heavy
         ),
         (

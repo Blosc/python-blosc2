@@ -117,7 +117,7 @@ def get_chunks_idx(shape, chunks):
 
 
 def _check_allowed_dtypes(value: bool | int | float | str | NDArray | blosc2.C2Array | NDField):
-    if not (isinstance(value, blosc2.LazyExpr | NDArray | NDField | np.ndarray) or np.isscalar(value)):
+    if not (isinstance(value, blosc2.LazyExpr | NDArray | NDField | blosc2.C2Array | np.ndarray) or np.isscalar(value)):
         raise RuntimeError(
             "Expected LazyExpr, NDArray, NDField, C2Array, np.ndarray or scalar instances"
             f" and you provided a '{type(value)}' instance"
@@ -131,93 +131,93 @@ class Operand:
         return blosc2.LazyExpr(new_op=(0, "-", self))
 
     def __and__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__and__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "&", value))
 
     def __add__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__add__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
     def __iadd__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__iadd__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
     def __radd__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__radd__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "+", self))
 
     def __sub__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__sub__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "-", value))
 
     def __isub__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__isub__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "-", value))
 
     def __rsub__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__rsub__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "-", self))
 
     def __mul__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__mul__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "*", value))
 
     def __imul__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__imul__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "*", value))
 
     def __rmul__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__rmul__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "*", self))
 
     def __truediv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__truediv__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "/", value))
 
     def __itruediv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__itruediv__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "/", value))
 
     def __rtruediv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__rtruediv__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "/", self))
 
     def __lt__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__lt__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "<", value))
 
     def __le__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__le__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "<=", value))
 
     def __gt__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__gt__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, ">", value))
 
     def __ge__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__ge__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, ">=", value))
 
     def __eq__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "all", "__eq__")
+        _check_allowed_dtypes(value)
         if blosc2._disable_overloaded_equal:
             return self is value
         return blosc2.LazyExpr(new_op=(self, "==", value))
 
     def __ne__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "all", "__ne__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "!=", value))
 
     def __pow__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__pow__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "**", value))
 
     def __ipow__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__ipow__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "**", value))
 
     def __rpow__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
-        _check_allowed_dtypes(value, "numeric", "__rpow__")
+        _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "**", self))
 
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
