@@ -534,21 +534,23 @@ def slices_eval(
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
 
-    # Any operand with chunks attrs will be used to get the chunks
-    operands_ = [o for o in operands.values() if hasattr(o, "chunks")]
-    if out is None or len(operands_) == 0:
-        # operand will be a 'fake' NDArray just to get the necessary chunking information
-        operand = blosc2.empty(shape, chunks=chunks)
-    else:
-        # Typically, we enter here when using UDFs, and out is a NumPy array.
-        # Use operands to get the shape and chunks
-        operand = operands_[0]
-    chunks = operand.chunks
-
-    chunks_idx, nchunks = get_chunks_idx(shape, chunks)
-    del operand
+    if chunks is None:
+        # Any out or operand with `chunks` will be used to get the chunks
+        operands_ = [o for o in operands.values() if hasattr(o, "chunks")]
+        if out is not None and hasattr(out, "chunks"):
+            chunks = out.chunks
+        elif out is None or len(operands_) == 0:
+            # operand will be a 'fake' NDArray just to get the necessary chunking information
+            temp = blosc2.empty(shape)
+            chunks = temp.chunks
+            del temp
+        else:
+            # Typically, we enter here when using UDFs, and out is a NumPy array.
+            # Use operands to get the shape and chunks
+            chunks = operands_[0].chunks
 
     # Iterate over the operands and get the chunks
+    chunks_idx, nchunks = get_chunks_idx(shape, chunks)
     lenout = 0
     for nchunk in range(nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
@@ -586,13 +588,13 @@ def slices_eval(
         # Evaluate the expression using chunks of operands
 
         if callable(expression):
+            result = np.empty(slice_shape, dtype=out.dtype)
             if getitem:
-                # Call the udf directly and use out as the output array
-                expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
-            else:
-                result = np.empty(slice_shape, dtype=out.dtype)
+                # Call the udf directly and use result as the output array
                 expression(tuple(chunk_operands.values()), result, offset=offset)
-                out[slice_] = result
+            else:
+                expression(tuple(chunk_operands.values()), result, offset=offset)
+            out[slice_] = result
             continue
 
         if where is None:
@@ -848,7 +850,7 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
             # e.g. the user cannot specify chunks or blocks, or an output that is not a blosc2.NDArray
             return fast_eval(expression, operands, getitem=False, **kwargs)
 
-    return slices_eval(expression, operands, getitem=getitem, **kwargs)
+    return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
 
 
 def fuse_operands(operands1, operands2):
@@ -1484,7 +1486,10 @@ class LazyUDF(LazyArray):
 
     def __getitem__(self, item):
         if self.chunked_eval:
-            output = np.empty(self.shape, self.dtype)
+            # Remove urlpath from kwargs because we don't want to save the temporary output here
+            kwargs = copy.deepcopy(self.kwargs)
+            _ = kwargs.pop("urlpath", None)
+            output = blosc2.empty(self.shape, self.dtype, **kwargs)
             chunked_eval(self.func, self.inputs_dict, item, _getitem=True, _output=output)
             return output[item]
         return self.res_getitem[item]
@@ -1511,7 +1516,9 @@ def _open_lazyarray(array):
         elif isinstance(value, dict):
             # C2Array
             operands_dict[key] = blosc2.C2Array(
-                pathlib.Path(value["path"]).as_posix(), sub_url=value["sub_url"], auth_cookie=value["auth_cookie"]
+                pathlib.Path(value["path"]).as_posix(),
+                sub_url=value["sub_url"],
+                auth_cookie=value["auth_cookie"],
             )
         else:
             raise ValueError("Error when retrieving the operands")

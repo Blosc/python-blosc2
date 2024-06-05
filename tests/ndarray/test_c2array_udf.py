@@ -12,12 +12,10 @@ import pytest
 
 import blosc2
 
-NITEMS_SMALL = 1_000
-
 # SUB_URL = 'http://localhost:8002/'
-SUB_URL = 'https://demo.caterva2.net/'
-ROOT = 'b2tests'
-DIR = 'expr/'
+SUB_URL = "https://demo.caterva2.net/"
+ROOT = "b2tests"
+DIR = "expr/"
 
 # import httpx
 # resp = httpx.post(f'{SUB_URL}auth/jwt/login',
@@ -31,25 +29,21 @@ def udf1p(inputs_tuple, output, offset):
     output[:] = x + 1
 
 
-@pytest.fixture(params=[
-    None,
-    # AUTH_COOKIE,
-])
+@pytest.fixture(
+    params=[
+        None,
+        # AUTH_COOKIE,
+    ]
+)
 def auth_cookie(request):
     return request.param
 
 
-@pytest.mark.parametrize("chunked_eval", [True,
-                                          False
-                                          ])
+@pytest.mark.parametrize("chunked_eval", [True, False])
 @pytest.mark.parametrize(
     "chunks, blocks",
     [
-        pytest.param(
-            (30, 30),
-            (30, 30),
-            marks=pytest.mark.heavy
-        ),
+        pytest.param((30, 30), (30, 30), marks=pytest.mark.heavy),
         (
             (50, 50),
             (30, 50),
@@ -59,8 +53,8 @@ def auth_cookie(request):
 def test_1p(chunks, blocks, chunked_eval, auth_cookie):
     dtype = np.float64
     shape = (60, 60)
-    urlpath = f'ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
+    urlpath = f"ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape}d.b2nd"
+    path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
     a = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     npa = a[:]
     npc = npa + 1
@@ -98,12 +92,12 @@ def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, auth
     shape = (60, 60)
     blosc2.remove_urlpath(urlpath)
 
-    urlpath_a = f'ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath_a}').as_posix()
+    urlpath_a = f"ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape}d.b2nd"
+    path = pathlib.Path(f"{ROOT}/{DIR + urlpath_a}").as_posix()
     a = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
 
-    urlpath_b = f'ds-0-10-linspace-{dtype.__name__}-(False, False)-a3-{shape}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath_b}').as_posix()
+    urlpath_b = f"ds-0-10-linspace-{dtype.__name__}-(False, False)-a3-{shape}d.b2nd"
+    path = pathlib.Path(f"{ROOT}/{DIR + urlpath_b}").as_posix()
     b = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
     npa = a[:]
     npb = b[:]
