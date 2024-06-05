@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import builtins
+import math
 from collections import namedtuple
 from collections.abc import Sequence
 
@@ -17,9 +18,8 @@ import numpy as np
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext, compute_chunks_blocks
-
-from .info import InfoReporter
-from .schunk import SChunk
+from blosc2.info import InfoReporter
+from blosc2.schunk import SChunk
 
 
 def make_key_hashable(key):
@@ -59,10 +59,65 @@ def get_ndarray_start_stop(ndim, key, shape):
     return start, stop, step
 
 
-def _check_allowed_dtypes(value: bool | int | float | str | NDArray | blosc2.C2Array | NDField,
-                          dtype_category: str, op: str):
-    if not (isinstance(value, blosc2.LazyExpr | NDArray | NDField | blosc2.C2Array | np.ndarray)
-            or np.isscalar(value)):
+def are_partitions_behaved(shape, chunks, blocks):
+    """
+    Check if the partitions defined by chunks and blocks are well-behaved with shape.
+
+    This makes two checks:
+
+    1. The shape is aligned with the chunks and the chunks are aligned with the blocks.
+    2. The partitions are C-contiguous with respect the outer container.
+
+    This is useful for taking fast paths in code.
+
+    Returns
+    -------
+    bool
+        True if the partitions are well-behaved, False otherwise.
+
+    """
+    # Check alignment
+    alignment_shape_chunks = builtins.all(s % c == 0 for s, c in zip(shape, chunks, strict=True))
+    if not alignment_shape_chunks:
+        return False
+    alignment_chunks_blocks = builtins.all(c % b == 0 for c, b in zip(chunks, blocks, strict=True))
+    if not alignment_chunks_blocks:
+        return False
+
+    # Check C-contiguity among partitions
+    def check_contiguity(shape, part):
+        ndims = len(shape)
+        inner_dim = ndims - 1
+        for i, size, unit in zip(reversed(range(ndims)), reversed(shape), reversed(part), strict=True):
+            if size > unit:
+                if i < inner_dim:
+                    if size % unit != 0:
+                        return False
+                else:
+                    if size != unit:
+                        return False
+                inner_dim = i
+        return True
+
+    # Check C-contiguity for blocks inside chunks
+    if not check_contiguity(chunks, blocks):
+        return False
+
+    # Check C-contiguity for chunks inside shape
+    if not check_contiguity(shape, chunks):
+        return False
+
+    return True
+
+
+def get_chunks_idx(shape, chunks):
+    chunks_idx = tuple(math.ceil(s / c) for s, c in zip(shape, chunks, strict=True))
+    nchunks = math.prod(chunks_idx)
+    return chunks_idx, nchunks
+
+
+def _check_allowed_dtypes(value: bool | int | float | str | NDArray | blosc2.C2Array | NDField):
+    if not (isinstance(value, blosc2.LazyExpr | NDArray | NDField | np.ndarray) or np.isscalar(value)):
         raise RuntimeError(
             "Expected LazyExpr, NDArray, NDField, C2Array, np.ndarray or scalar instances"
             f" and you provided a '{type(value)}' instance"
@@ -558,15 +613,20 @@ class NDArray(blosc2_ext.NDArray, Operand):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
-        # Get the shape of the slice
-        if isinstance(key, tuple) and (
+        # First try some fast paths for common cases
+        if isinstance(key, np.integer):
+            # Massage the key to a tuple and go the fast path
+            key_ = (slice(key, key + 1), *(slice(None),) * (self.ndim - 1))
+            start, stop, step = get_ndarray_start_stop(self.ndim, key_, self.shape)
+            shape = tuple(sp - st for st, sp in zip(start, stop, strict=True))
+        elif isinstance(key, tuple) and (
             builtins.sum(isinstance(k, builtins.slice) for k in key) == self.ndim
         ):
-            # process_key() is expensive, so take a fast path for the most common case
+            # This can be processed in a fast way already
             start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
-            shape = np.array([sp - st for st, sp in zip(start, stop, strict=False)])
+            shape = tuple(sp - st for st, sp in zip(start, stop, strict=True))
         else:
-            # The more general case
+            # The more general case (this is quite slow)
             # If the key is a LazyExpr, decorate with ``where`` and return it
             if isinstance(key, blosc2.LazyExpr):
                 return key.where(self)
@@ -577,7 +637,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 return expr.where(self)
             key_, mask = process_key(key, self.shape)
             start, stop, step = get_ndarray_start_stop(self.ndim, key_, self.shape)
-            shape = np.array([sp - st for st, sp in zip(start, stop, strict=False)])
+            shape = np.array([sp - st for st, sp in zip(start, stop, strict=True)])
             shape = tuple(shape[[not m for m in mask]])
 
         # Create the array to store the result
@@ -1939,6 +1999,14 @@ def asarray(array: np.ndarray, **kwargs: dict | list) -> NDArray:
     out: :ref:`NDArray <NDArray>`
         An new NDArray made of :paramref:`array`.
 
+    Note
+    ----
+    If the provided chunks and blocks are well-behaved (that is, they are aligned with the
+    shape of the array, and follow a C-contiguous schema; see :ref:`are_partitions_behaved`),
+    the NDArray will be created chunk-by-chunk directly from the array, without the need to
+    create a contiguous NumPy array internally.  This can be used for ingesting e.g.
+    disk-based arrays very effectively.
+
     Examples
     --------
     >>> import blosc2
@@ -1953,11 +2021,43 @@ def asarray(array: np.ndarray, **kwargs: dict | list) -> NDArray:
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, array.dtype, **kwargs)
+    shape = array.shape
+
+    if are_partitions_behaved(shape, chunks, blocks):
+        # We can take a shortcut and create the NDArray directly.
+        # This path also has the advantage of not requiring creating a contiguous NumPy array
+        # as a whole.  Thus, we can create NDArrays from NumPy arrays that are not contiguous,
+        # without the need to convert them in-memory. Or even from objects that are not in
+        # memory (e.g. on-disk or network, like HDF5, Zarr...); they only need to expose the
+        # `__getitem__()` method.
+
+        # Create the empty array
+        ndarr = empty(shape, array.dtype, chunks=chunks, blocks=blocks, **kwargs)
+
+        # Get the coordinates of the chunks
+        chunks_idx, nchunks = get_chunks_idx(shape, chunks)
+        # Iterate over the chunks and evaluate the expression
+        for nchunk in range(nchunks):
+            # Compute current slice coordinates
+            coords = tuple(np.unravel_index(nchunk, chunks_idx))
+            slice_ = tuple(
+                slice(c * s, builtins.min((c + 1) * s, shape[i]))
+                for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
+            )
+            # Ensure the array slice is contiguous
+            array_slice = np.ascontiguousarray(array[slice_])
+            # ndarr[slice_] = array_slice  # a bit slow
+            # All components of the slice are computed, so this fastpath is safe
+            starts = tuple(s.start for s in slice_)
+            stops = tuple(s.stop for s in slice_)
+            ndarr.set_slice((starts, stops), array_slice)
+        return ndarr
+
+    # Go the slow (and possibly memory-intensive) path
     if not isinstance(array, np.ndarray):
         array = np.array(array)
-    if not array.flags.c_contiguous:
-        # A contiguous array is needed
-        array = np.ascontiguousarray(array)
+    # A contiguous array is needed
+    array = np.ascontiguousarray(array)
 
     return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
 
@@ -1972,6 +2072,8 @@ def _check_ndarray_kwargs(**kwargs):
         "urlpath",
         "contiguous",
         "mode",
+        "mmap_mode",
+        "initial_mapping_size",
     ]
     for key in kwargs:
         if key not in supported_keys:

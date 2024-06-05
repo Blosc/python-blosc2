@@ -19,6 +19,7 @@ import numpy as np
 
 import blosc2
 from blosc2.info import InfoReporter
+from blosc2.ndarray import get_chunks_idx
 
 
 class ReduceOp(Enum):
@@ -402,12 +403,6 @@ def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, ch
         chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
 
     return None
-
-
-def get_chunks_idx(shape, chunks):
-    chunks_idx = tuple(math.ceil(s / c) for s, c in zip(shape, chunks, strict=True))
-    nchunks = math.prod(chunks_idx)
-    return chunks_idx, nchunks
 
 
 def fast_eval(

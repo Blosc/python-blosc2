@@ -173,6 +173,7 @@ from .ndarray import (  # noqa: I001
     NDArray,
     NDField,
     Operand,
+    are_partitions_behaved,
     asarray,
     copy,
     empty,
