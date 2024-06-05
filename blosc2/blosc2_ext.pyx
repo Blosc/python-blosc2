@@ -127,6 +127,12 @@ cdef extern from "blosc2.h":
         BLOSC2_USER_REGISTERED_CODECS_START
         BLOSC2_USER_REGISTERED_CODECS_STOP
 
+    ctypedef enum:
+        BLOSC2_IO_FILESYSTEM
+        BLOSC2_IO_FILESYSTEM_MMAP
+        BLOSC_IO_LAST_BLOSC_DEFINED
+        BLOSC_IO_LAST_REGISTERED
+
     cdef int INT_MAX
 
     void blosc2_init()
@@ -302,8 +308,15 @@ cdef extern from "blosc2.h":
 
     ctypedef struct blosc2_io:
         uint8_t id
+        const char *name
         void* params
 
+    ctypedef struct blosc2_stdio_mmap:
+        const char* mode
+        int64_t initial_mapping_size
+        c_bool needs_free
+
+    cdef const blosc2_stdio_mmap BLOSC2_STDIO_MMAP_DEFAULTS
 
     ctypedef struct blosc2_schunk:
         uint8_t version
@@ -339,6 +352,7 @@ cdef extern from "blosc2.h":
     blosc2_schunk *blosc2_schunk_copy(blosc2_schunk *schunk, blosc2_storage *storage)
     blosc2_schunk *blosc2_schunk_from_buffer(uint8_t *cframe, int64_t len, c_bool copy)
     blosc2_schunk *blosc2_schunk_open_offset(const char* urlpath, int64_t offset)
+    blosc2_schunk* blosc2_schunk_open_offset_udio(const char* urlpath, int64_t offset, const blosc2_io *udio)
 
     int64_t blosc2_schunk_to_buffer(blosc2_schunk* schunk, uint8_t** cframe, c_bool* needs_free)
     void blosc2_schunk_avoid_cframe_free(blosc2_schunk *schunk, c_bool avoid_cframe_free)
@@ -859,9 +873,33 @@ cdef create_storage(blosc2_storage *storage, kwargs):
     create_cparams_from_kwargs(storage.cparams, kwargs.get('cparams', {}))
     create_dparams_from_kwargs(storage.dparams, kwargs.get('dparams', {}), storage.cparams)
 
-    storage.io = NULL
-    # TODO: support the next ones in the future
-    #storage.io = kwargs.get('io', blosc2.storage_dflts['io'])
+    cdef blosc2_io* io
+    cdef blosc2_stdio_mmap* mmap_file
+    mmap_mode = kwargs.get("mmap_mode")
+    initial_mapping_size = kwargs.get("initial_mapping_size")
+    if mmap_mode is not None:
+        if urlpath is None:
+            raise ValueError("urlpath must be set when using mmap_mode")
+        if not contiguous:
+            raise ValueError("Only contiguous storage is supported for memory-mapped files")
+
+        # sizeof(BLOSC2_STDIO_MMAP_DEFAULTS) yields the size of the full struct as defined in the C header
+        mmap_file = <blosc2_stdio_mmap *>malloc(sizeof(BLOSC2_STDIO_MMAP_DEFAULTS))
+        memcpy(mmap_file, &BLOSC2_STDIO_MMAP_DEFAULTS, sizeof(BLOSC2_STDIO_MMAP_DEFAULTS))
+
+        # The storage for the bytes for the mmap_mode parameter need to be available even after this function
+        kwargs["_mmap_mode_bytes"] = kwargs["mmap_mode"].encode("utf-8")
+        mmap_file.mode = kwargs["_mmap_mode_bytes"]
+        mmap_file.needs_free = True
+        if initial_mapping_size is not None:
+            mmap_file.initial_mapping_size = initial_mapping_size
+
+        io = <blosc2_io *>malloc(sizeof(blosc2_io))
+        io.id = BLOSC2_IO_FILESYSTEM_MMAP
+        io.params = mmap_file
+        storage.io = io
+    else:
+        storage.io = NULL
 
 
 cdef class SChunk:
@@ -877,21 +915,33 @@ cdef class SChunk:
                 urlpath = str(urlpath)
             self._urlpath = urlpath.encode() if isinstance(urlpath, str) else urlpath
             kwargs["urlpath"] = self._urlpath
-        self.mode = mode = kwargs.get("mode", "a")
+
+        self.mode = kwargs.get("mode", "a")
+        self.mmap_mode = kwargs.get("mmap_mode")
+        self.initial_mapping_size = kwargs.get("initial_mapping_size")
+        if self.mmap_mode is not None:
+            self.mode = mode_from_mmap_mode(self.mmap_mode)
+        if self.initial_mapping_size is not None:
+            if self.mmap_mode is None:
+                raise ValueError("initial_mapping_size can only be used with mmap_mode")
+
+            if self.mmap_mode == "r":
+                raise ValueError("initial_mapping_size can only be used with writing modes (r+, w+, c)")
+
         # `_is_view` indicates if a free should be done on this instance
         self._is_view = kwargs.get("_is_view", False)
 
         if _schunk is not None:
             self.schunk = <blosc2_schunk *> PyCapsule_GetPointer(_schunk, <char *> "blosc2_schunk*")
-            if mode == "w" and urlpath is not None:
+            if self.mode == "w" and urlpath is not None:
                 blosc2.remove_urlpath(urlpath)
                 self.schunk = blosc2_schunk_new(self.schunk.storage)
             return
 
         if kwargs is not None:
-            if mode == "w":
+            if self.mode == "w":
                 blosc2.remove_urlpath(urlpath)
-            elif mode == "r" and urlpath is not None:
+            elif self.mode == "r" and urlpath is not None:
                 raise ValueError("SChunk must already exist")
 
         cdef blosc2_storage storage
@@ -907,6 +957,8 @@ cdef class SChunk:
 
         self.schunk = blosc2_schunk_new(&storage)
         if self.schunk == NULL:
+            if self.mmap_mode is not None:
+                free(storage.io)
             raise RuntimeError("Could not create the Schunk")
 
         # Add metalayers
@@ -1821,8 +1873,45 @@ def meta_keys(self):
 
 def open(urlpath, mode, offset, **kwargs):
     urlpath_ = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
-    cdef blosc2_schunk* schunk = blosc2_schunk_open_offset(urlpath_, offset)
+    cdef blosc2_schunk* schunk
+    cdef blosc2_stdio_mmap* mmap_file
+    cdef blosc2_io* io
+
+    mmap_mode = kwargs.get("mmap_mode")
+    if mmap_mode is not None:
+        if mmap_mode == "w+":
+            raise ValueError("w+ mmap_mode cannot be used to open an existing file")
+        else:
+            mode = mode_from_mmap_mode(mmap_mode)
+
+    initial_mapping_size = kwargs.get("initial_mapping_size")
+    if initial_mapping_size is not None:
+        if mmap_mode is None:
+            raise ValueError("initial_mapping_size can only be used with mmap_mode")
+
+        if mmap_mode == "r":
+            raise ValueError("initial_mapping_size can only be used with writing modes (r+, c)")
+
+    if mmap_mode is None:
+        schunk = blosc2_schunk_open_offset(urlpath_, offset)
+    else:
+        mmap_file = <blosc2_stdio_mmap *>malloc(sizeof(BLOSC2_STDIO_MMAP_DEFAULTS))
+        memcpy(mmap_file, &BLOSC2_STDIO_MMAP_DEFAULTS, sizeof(BLOSC2_STDIO_MMAP_DEFAULTS))
+
+        mmap_mode_ = mmap_mode.encode("utf-8")
+        mmap_file.mode = mmap_mode_
+        mmap_file.needs_free = True
+        if initial_mapping_size is not None:
+            mmap_file.initial_mapping_size = initial_mapping_size
+
+        io = <blosc2_io *>malloc(sizeof(blosc2_io))
+        io.id = BLOSC2_IO_FILESYSTEM_MMAP
+        io.params = mmap_file
+        schunk = blosc2_schunk_open_offset_udio(urlpath_, offset, io)
+
     if schunk == NULL:
+        if mmap_mode is not None:
+            free(io)
         raise RuntimeError(f'blosc2_schunk_open_offset({urlpath!r}, {offset!r}) returned NULL')
 
     meta1 = "b2nd"
@@ -1865,6 +1954,24 @@ def open(urlpath, mode, offset, **kwargs):
 def check_access_mode(urlpath, mode):
     if urlpath is not None and mode == "r":
         raise ValueError("Cannot do this action with reading mode")
+
+
+def mode_from_mmap_mode(mmap_mode):
+    # We ignore the user-supplied mode with mmap files and use a fixed mapping instead
+    if mmap_mode == "r":
+        mode = "r"
+    elif mmap_mode == "r+":
+        mode = "a"
+    elif mmap_mode == "w+":
+        mode = "w"
+    elif mmap_mode == "c":
+        # In terms of (internal) blosc, it is allowed to modify the file contents
+        # The actual file is opened in read-only mode
+        mode = "a"
+    else:
+        raise ValueError(f"Invalid mmap_mode: {mmap_mode}")
+
+    return mode
 
 
 cdef check_schunk_params(blosc2_schunk* schunk, kwargs):
@@ -2382,6 +2489,9 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
             urlpath = str(urlpath)
         _urlpath = urlpath.encode() if isinstance(urlpath, str) else urlpath
         kwargs["urlpath"] = _urlpath
+
+    if kwargs.get("mmap_mode") is not None:
+        kwargs["mode"] = mode_from_mmap_mode(kwargs["mmap_mode"])
 
     mode = kwargs.get("mode", "a")
     if kwargs is not None:
