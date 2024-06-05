@@ -7,6 +7,7 @@
 #######################################################################
 import copy
 import math
+import pathlib
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from enum import Enum
@@ -163,7 +164,7 @@ class LazyArray(ABC):
 def convert_inputs(inputs):
     inputs_ = []
     for obj in inputs:
-        if not isinstance(obj, np.ndarray | blosc2.NDArray) and not np.isscalar(obj):
+        if not isinstance(obj, np.ndarray | blosc2.NDArray | blosc2.C2Array) and not np.isscalar(obj):
             try:
                 obj = np.asarray(obj)
             except:
@@ -371,6 +372,10 @@ def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, ch
             chunk_operands[key] = value[()]
             continue
 
+        if isinstance(value, np.ndarray | blosc2.C2Array):
+            chunk_operands[key] = value[slice_]
+            continue
+
         # TODO: broadcast is not in the fast path yet, so no need to check for it
         # slice_shape = tuple(s.stop - s.start for s in slice_)
         # if check_smaller_shape(value, shape, slice_shape):
@@ -435,6 +440,7 @@ def fast_eval(
     shape = basearr.shape
     chunks = basearr.chunks
     has_padding = basearr.ext_shape != shape
+
     chunk_operands = {}
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
 
@@ -445,8 +451,9 @@ def fast_eval(
             slice(c * s, min((c + 1) * s, shape[i]))
             for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
-        offset = tuple(s.start for s in slice_)
+        offset = tuple(s.start for s in slice_)  # offset for the udf
         chunks_ = tuple(s.stop - s.start for s in slice_)
+
         full_chunk = (chunks_ == chunks) and not has_padding
         fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands)
 
@@ -457,7 +464,6 @@ def fast_eval(
             else:
                 ne.evaluate(expression, chunk_operands, out=out[slice_])
             continue
-
         if callable(expression):
             result = np.empty(chunks_, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
@@ -481,7 +487,6 @@ def fast_eval(
                     out = blosc2.empty(
                         shape, chunks=chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs
                     )
-
         # Store the result in the output array
         if getitem:
             out[slice_] = result
@@ -679,6 +684,7 @@ def reduce_slices(
 
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
+
     if axis is None:
         axis = tuple(range(len(shape)))
     elif not isinstance(axis, tuple):
@@ -1329,8 +1335,17 @@ class LazyExpr(LazyArray):
         # Save the expression and operands in the metadata
         operands = {}
         for key, value in self.operands.items():
+            if isinstance(value, blosc2.C2Array):
+                operands[key] = {
+                    "path": str(value.path),
+                    "sub_url": value.sub_url,
+                    "auth_cookie": value.auth_cookie,
+                }
+                continue
             if not isinstance(value, blosc2.NDArray):
-                raise ValueError("To save a LazyArray, all operands must be blosc2.NDArray objects")
+                raise ValueError(
+                    "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
+                )
             if value.schunk.urlpath is None:
                 raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
             operands[key] = value.schunk.urlpath
@@ -1406,7 +1421,7 @@ class LazyUDF(LazyArray):
         items += [("type", f"{self.__class__.__name__}")]
         inputs = {}
         for key, value in self.inputs_dict.items():
-            if isinstance(value, np.ndarray | blosc2.NDArray):
+            if isinstance(value, np.ndarray | blosc2.NDArray | blosc2.C2Array):
                 inputs[key] = f"<{value.__class__.__name__}> {value.shape} {value.dtype}"
             else:
                 inputs[key] = str(value)
@@ -1493,6 +1508,11 @@ def _open_lazyarray(array):
             value = parent_path / value
             op = blosc2.open(value)
             operands_dict[key] = op
+        elif isinstance(value, dict):
+            # C2Array
+            operands_dict[key] = blosc2.C2Array(
+                pathlib.Path(value["path"]).as_posix(), sub_url=value["sub_url"], auth_cookie=value["auth_cookie"]
+            )
         else:
             raise ValueError("Error when retrieving the operands")
 

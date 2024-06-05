@@ -1,3 +1,4 @@
+httpx
 msgpack
 numexpr
 ndindex>=1.4

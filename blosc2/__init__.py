@@ -172,6 +172,7 @@ from .core import (  # noqa: I001
 from .ndarray import (  # noqa: I001
     NDArray,
     NDField,
+    Operand,
     are_partitions_behaved,
     asarray,
     copy,
@@ -182,6 +183,8 @@ from .ndarray import (  # noqa: I001
     zeros,
     get_slice_nchunks,
 )
+
+from .c2array import C2Array
 
 from .lazyexpr import LazyExpr, lazyudf, lazyexpr, LazyArray, _open_lazyarray
 
