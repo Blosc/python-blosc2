@@ -11,3 +11,17 @@ As the config files are already there, this essentially boils down to:
 ```
 
 You are done!
+
+## Testing
+
+We are using pytest for testing.  You can run the tests by executing
+
+``` bash
+  python -m pytest
+```
+
+If you want to run a lightweight version of the tests, you can use the following command:
+
+``` bash
+  python -m pytest -m "not heavy"
+```
