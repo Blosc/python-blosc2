@@ -2039,7 +2039,7 @@ def asarray(array: np.ndarray, **kwargs: dict | list) -> NDArray:
 
         # Get the coordinates of the chunks
         chunks_idx, nchunks = get_chunks_idx(shape, chunks)
-        # Iterate over the chunks and evaluate the expression
+        # Iterate over the chunks and update the empty array
         for nchunk in range(nchunks):
             # Compute current slice coordinates
             coords = tuple(np.unravel_index(nchunk, chunks_idx))
