@@ -31,8 +31,8 @@ def get(url, params=None, headers=None, timeout=15, model=None, auth_cookie=None
     return json if model is None else model(**json)
 
 
-def fetch_data(path, sub_url, params, auth_cookie=None):
-    response = _xget(f"{sub_url}api/fetch/{path}", params=params, auth_cookie=auth_cookie)
+def fetch_data(path, urlbase, params, auth_cookie=None):
+    response = _xget(f"{urlbase}api/fetch/{path}", params=params, auth_cookie=auth_cookie)
     data = response.content
     try:
         data = blosc2.decompress2(data)
@@ -62,7 +62,7 @@ def slice_to_string(slice_):
 
 
 class C2Array(blosc2.Operand):
-    def __init__(self, path, /, sub_url, auth_cookie=None):
+    def __init__(self, path, /, urlbase, auth_cookie=None):
         """Create an instance of a remote NDArray.
 
         Parameters
@@ -70,7 +70,7 @@ class C2Array(blosc2.Operand):
         path: str
             The path to the remote NDArray file (root + file name) as
             a posix path.
-        sub_url: str
+        urlbase: str
             The base URL (slash-terminated) of the subscriber to query.
         auth_cookie: str
             An optional cookie to authorize requests via HTTP.
@@ -81,9 +81,9 @@ class C2Array(blosc2.Operand):
 
         """
         self.path = path
-        self.sub_url = sub_url
+        self.urlbase = urlbase
         self.auth_cookie = auth_cookie
-        self.meta = get(f"{sub_url}api/info/{self.path}", auth_cookie=self.auth_cookie)
+        self.meta = get(f"{urlbase}api/info/{self.path}", auth_cookie=self.auth_cookie)
 
     def __getitem__(self, slice_: int | slice | Sequence[slice]) -> np.ndarray:
         """
@@ -100,7 +100,7 @@ class C2Array(blosc2.Operand):
             A numpy.ndarray containing the data slice.
         """
         slice_ = slice_to_string(slice_)
-        data = fetch_data(self.path, self.sub_url, {"slice_": slice_}, auth_cookie=self.auth_cookie)
+        data = fetch_data(self.path, self.urlbase, {"slice_": slice_}, auth_cookie=self.auth_cookie)
         return data
 
     @property

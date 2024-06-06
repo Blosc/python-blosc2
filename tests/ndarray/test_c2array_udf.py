@@ -12,13 +12,13 @@ import pytest
 
 import blosc2
 
-# SUB_URL = 'http://localhost:8002/'
-SUB_URL = "https://demo.caterva2.net/"
+# URLBASE = 'http://localhost:8002/'
+URLBASE = "https://demo.caterva2.net/"
 ROOT = "b2tests"
 DIR = "expr/"
 
 # import httpx
-# resp = httpx.post(f'{SUB_URL}auth/jwt/login',
+# resp = httpx.post(f'{URLBASE}auth/jwt/login',
 #                   data=dict(username='user@example.com', password='foobar'))
 # resp.raise_for_status()
 # AUTH_COOKIE = '='.join(list(resp.cookies.items())[0])
@@ -55,7 +55,7 @@ def test_1p(chunks, blocks, chunked_eval, auth_cookie):
     shape = (60, 60)
     urlpath = f"ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
-    a = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
+    a = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
     npa = a[:]
     npc = npa + 1
 
@@ -94,11 +94,11 @@ def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, auth
 
     urlpath_a = f"ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath_a}").as_posix()
-    a = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
+    a = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
 
     urlpath_b = f"ds-0-10-linspace-{dtype.__name__}-(False, False)-a3-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath_b}").as_posix()
-    b = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
+    b = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
     npa = a[:]
     npb = b[:]
     npc = npa**2 + npb**2 + 2 * npa * npb + 1

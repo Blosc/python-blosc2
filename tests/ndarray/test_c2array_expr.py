@@ -15,13 +15,13 @@ import blosc2
 
 NITEMS_SMALL = 1_000
 
-# SUB_URL = 'http://localhost:8002/'
-SUB_URL = "https://demo.caterva2.net/"
+# URLBASE = 'http://localhost:8002/'
+URLBASE = "https://demo.caterva2.net/"
 ROOT = "b2tests"
 DIR = "expr/"
 
 # import httpx
-# resp = httpx.post(f'{SUB_URL}auth/jwt/login',
+# resp = httpx.post(f'{URLBASE}auth/jwt/login',
 #                   data=dict(username='user@example.com', password='foobar'))
 # resp.raise_for_status()
 # AUTH_COOKIE = '='.join(list(resp.cookies.items())[0])
@@ -43,10 +43,10 @@ def get_arrays(shape, chunks_blocks, auth_cookie):
     na1 = np.linspace(0, 10, nelems, dtype=dtype).reshape(shape)
     urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
-    a1 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
+    a1 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
     urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a2-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
-    a2 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
+    a2 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
     # Let other operands be local, on-disk NDArray copies
     urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a3-{shape}d.b2nd"
     a3 = blosc2.asarray(a2, urlpath=urlpath, mode="w")
@@ -234,10 +234,10 @@ def broadcast_fixture(broadcast_shape, auth_cookie):
     na2 = np.linspace(1, 2, np.prod(shape2), dtype=dtype).reshape(shape2)
     urlpath = f"ds-0-1-linspace-{dtype.__name__}-b1-{shape1}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
-    b1 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
+    b1 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
     urlpath = f"ds-1-2-linspace-{dtype.__name__}-b2-{shape2}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
-    b2 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
+    b2 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
 
     return b1, b2, na1, na2
 

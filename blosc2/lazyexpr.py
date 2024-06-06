@@ -1340,7 +1340,7 @@ class LazyExpr(LazyArray):
             if isinstance(value, blosc2.C2Array):
                 operands[key] = {
                     "path": str(value.path),
-                    "sub_url": value.sub_url,
+                    "urlbase": value.urlbase,
                     "auth_cookie": value.auth_cookie,
                 }
                 continue
@@ -1515,7 +1515,7 @@ def _open_lazyarray(array):
             # C2Array
             operands_dict[key] = blosc2.C2Array(
                 pathlib.Path(value["path"]).as_posix(),
-                sub_url=value["sub_url"],
+                urlbase=value["urlbase"],
                 auth_cookie=value["auth_cookie"],
             )
         else:
