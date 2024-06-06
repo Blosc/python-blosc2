@@ -1486,11 +1486,9 @@ class LazyUDF(LazyArray):
 
     def __getitem__(self, item):
         if self.chunked_eval:
-            # Remove urlpath from kwargs because we don't want to save the temporary output here
-            kwargs = copy.deepcopy(self.kwargs)
-            _ = kwargs.pop("urlpath", None)
-            output = blosc2.empty(self.shape, self.dtype, **kwargs)
-            chunked_eval(self.func, self.inputs_dict, item, _getitem=True, _output=output)
+            output = np.empty(self.shape, self.dtype)
+            # It is important to pass kwargs here, because chunks can be used internally
+            chunked_eval(self.func, self.inputs_dict, item, _getitem=True, _output=output, **self.kwargs)
             return output[item]
         return self.res_getitem[item]
 
