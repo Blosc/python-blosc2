@@ -1344,7 +1344,7 @@ class LazyExpr(LazyArray):
                     "auth_cookie": value.auth_cookie,
                 }
                 continue
-            if not isinstance(value, blosc2.NDArray):
+            if not hasattr(value, "schunk"):
                 raise ValueError(
                     "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
                 )

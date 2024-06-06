@@ -16,9 +16,9 @@ import blosc2
 NITEMS_SMALL = 1_000
 
 # SUB_URL = 'http://localhost:8002/'
-SUB_URL = 'https://demo.caterva2.net/'
-ROOT = 'b2tests'
-DIR = 'expr/'
+SUB_URL = "https://demo.caterva2.net/"
+ROOT = "b2tests"
+DIR = "expr/"
 
 # import httpx
 # resp = httpx.post(f'{SUB_URL}auth/jwt/login',
@@ -27,10 +27,12 @@ DIR = 'expr/'
 # AUTH_COOKIE = '='.join(list(resp.cookies.items())[0])
 
 
-@pytest.fixture(params=[
-    None,
-    # AUTH_COOKIE,
-])
+@pytest.fixture(
+    params=[
+        None,
+        # AUTH_COOKIE,
+    ]
+)
 def auth_cookie(request):
     return request.param
 
@@ -39,23 +41,21 @@ def get_arrays(shape, chunks_blocks, auth_cookie):
     dtype = np.float64
     nelems = np.prod(shape)
     na1 = np.linspace(0, 10, nelems, dtype=dtype).reshape(shape)
-    urlpath = f'ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
+    urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd"
+    path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
     a1 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
-    urlpath = f'ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a2-{shape}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
+    urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a2-{shape}d.b2nd"
+    path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
     a2 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
-    # Let other operands have chunks1 and blocks1
-    urlpath = f'ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a3-{shape}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
-    a3 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
-    urlpath = f'ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a4-{shape}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
-    a4 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
+    # Let other operands be local, on-disk NDArray copies
+    urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a3-{shape}d.b2nd"
+    a3 = blosc2.asarray(a2, urlpath=urlpath, mode="w")
+    urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a4-{shape}d.b2nd"
+    a4 = a3.copy(urlpath=urlpath, mode="w")
     assert isinstance(a1, blosc2.C2Array)
     assert isinstance(a2, blosc2.C2Array)
-    assert isinstance(a3, blosc2.C2Array)
-    assert isinstance(a4, blosc2.C2Array)
+    assert isinstance(a3, blosc2.NDArray)
+    assert isinstance(a4, blosc2.NDArray)
     return a1, a2, a3, a4, na1, np.copy(na1), np.copy(na1), np.copy(na1)
 
 
@@ -85,7 +85,7 @@ def test_simple(chunks_blocks, auth_cookie):
 
 def test_simple_getitem(auth_cookie):
     shape = (NITEMS_SMALL,)
-    chunks_blocks = 'default'
+    chunks_blocks = "default"
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
     expr = a1 + a2 - a3 * a4
     nres = ne.evaluate("na1 + na2 - na3 * na4")
@@ -109,7 +109,7 @@ def test_simple_getitem(auth_cookie):
 def test_ixxx(chunks_blocks, auth_cookie):
     shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
-    expr = a1 ** 3 + a2 ** 2 + a3 ** 3 - a4 + 3
+    expr = a1**3 + a2**2 + a3**3 - a4 + 3
     expr += 5  # __iadd__
     expr /= 7  # __itruediv__
     expr **= 2.3  # __ipow__
@@ -120,7 +120,7 @@ def test_ixxx(chunks_blocks, auth_cookie):
 
 def test_complex(auth_cookie):
     shape = (NITEMS_SMALL,)
-    chunks_blocks = 'default'
+    chunks_blocks = "default"
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
     expr = blosc2.tan(a1) * blosc2.sin(a2) + (blosc2.sqrt(a4) * 2)
     expr += 2
@@ -189,7 +189,7 @@ def test_save(auth_cookie):
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, (False, True), auth_cookie)
 
     expr = a1 * a2 + a3 - a4 * 3
-    nres = ne.evaluate('na1 * na2 + na3 - na4 * 3')
+    nres = ne.evaluate("na1 * na2 + na3 - na4 * 3")
 
     res = expr.eval()
     assert res.dtype == np.float64
@@ -232,11 +232,11 @@ def broadcast_fixture(broadcast_shape, auth_cookie):
     dtype = np.float64
     na1 = np.linspace(0, 1, np.prod(shape1), dtype=dtype).reshape(shape1)
     na2 = np.linspace(1, 2, np.prod(shape2), dtype=dtype).reshape(shape2)
-    urlpath = f'ds-0-1-linspace-{dtype.__name__}-b1-{shape1}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
+    urlpath = f"ds-0-1-linspace-{dtype.__name__}-b1-{shape1}d.b2nd"
+    path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
     b1 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
-    urlpath = f'ds-1-2-linspace-{dtype.__name__}-b2-{shape2}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
+    urlpath = f"ds-1-2-linspace-{dtype.__name__}-b2-{shape2}d.b2nd"
+    path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
     b2 = blosc2.C2Array(path, sub_url=SUB_URL, auth_cookie=auth_cookie)
 
     return b1, b2, na1, na2

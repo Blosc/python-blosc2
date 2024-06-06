@@ -1984,7 +1984,7 @@ def copy(array, dtype=None, **kwargs):
     return arr
 
 
-def asarray(array: np.ndarray, **kwargs: dict | list) -> NDArray:
+def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: dict | list) -> NDArray:
     """Convert the `array` to an `NDArray`.
 
     Parameters
@@ -2023,6 +2023,11 @@ def asarray(array: np.ndarray, **kwargs: dict | list) -> NDArray:
     _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
+    # Use the chunks and blocks from the array if they are not passed
+    if chunks is None and hasattr(array, "chunks"):
+        chunks = array.chunks
+    if blocks is None and hasattr(array, "blocks"):
+        blocks = array.blocks
     chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, array.dtype, **kwargs)
     shape = array.shape
 
@@ -2057,7 +2062,11 @@ def asarray(array: np.ndarray, **kwargs: dict | list) -> NDArray:
 
     # Go the slow (and possibly memory-intensive) path
     if not isinstance(array, np.ndarray):
-        array = np.array(array)
+        if hasattr(array, "chunks"):
+            # A getitem operation should be enough to get a numpy array
+            array = array[:]
+        else:
+            array = np.array(array, copy=False)
     # A contiguous array is needed
     array = np.ascontiguousarray(array)
 
