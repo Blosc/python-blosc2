@@ -7,6 +7,7 @@
 #######################################################################
 
 import os
+import pathlib
 import random
 
 import numpy as np
@@ -144,3 +145,51 @@ def test_open_offset(offset, urlpath, mode, mmap_mode):
             blosc2.open(urlpath, mode, mmap_mode=mmap_mode)
 
     blosc2.remove_urlpath(urlpath)
+
+
+NITEMS_SMALL = 1_000
+
+# URLBASE = 'http://localhost:8002/'
+URLBASE = "https://demo.caterva2.net/"
+ROOT = "b2tests"
+DIR = "expr/"
+
+
+# import httpx
+# resp = httpx.post(f'{URLBASE}auth/jwt/login',
+#                   data=dict(username='user@example.com', password='foobar'))
+# resp.raise_for_status()
+# AUTH_COOKIE = '='.join(list(resp.cookies.items())[0])
+
+
+@pytest.fixture(
+    params=[
+        None,
+        # AUTH_COOKIE,
+    ]
+)
+def auth_cookie(request):
+    return request.param
+
+
+def test_open_c2array(auth_cookie):
+    dtype = np.float64
+    shape = (NITEMS_SMALL,)
+    chunks_blocks = "default"
+    path = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd"
+    path = pathlib.Path(f"{ROOT}/{DIR + path}").as_posix()
+    a1 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    urlpath = blosc2.URLPath(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    a_open = blosc2.open(urlpath, mode="r", offset=0)
+    np.testing.assert_allclose(a1[:], a_open[:])
+
+    a_open = blosc2.open(urlpath, mode="r")
+    np.testing.assert_allclose(a1[:], a_open[:])
+
+    with pytest.raises(NotImplementedError):
+        _ = blosc2.open(urlpath)
+
+    with pytest.raises(NotImplementedError):
+        _ = blosc2.open(urlpath, mode="r", offset=0, cparams={})
+
+

@@ -28,3 +28,15 @@ Attributes
     chunks
     blocks
     dtype
+
+.. _URLPath:
+
+URLPath class
+-------------
+
+.. currentmodule:: blosc2.URLPath
+
+.. autosummary::
+    :toctree: autofiles/URLPath
+
+    __init__

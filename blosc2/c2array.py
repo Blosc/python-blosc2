@@ -35,10 +35,11 @@ def fetch_data(path, urlbase, params, auth_cookie=None):
     response = _xget(f"{urlbase}api/fetch/{path}", params=params, auth_cookie=auth_cookie)
     data = response.content
     try:
-        data = blosc2.decompress2(data)
-    except (ValueError, RuntimeError):
         data = blosc2.ndarray_from_cframe(data)
         data = data[:] if data.ndim == 1 else data[()]
+    except RuntimeError:
+        data = blosc2.schunk_from_cframe(data)
+        data = data[:]
     return data
 
 
@@ -127,3 +128,17 @@ class C2Array(blosc2.Operand):
     def ext_shape(self):
         """The ext_shape of the remote array"""
         return tuple(self.meta["ext_shape"])
+
+
+class URLPath:
+    def __init__(self, path, /, urlbase, auth_cookie=None):
+        """
+        Create an instance of a remote data file (aka :ref:`C2Array <C2Array>`) urlpath.
+        This is meant to be used in the :func:`blosc2.open` function.
+
+        The parameters are the same as for the :meth:`C2Array.__init__`.
+
+        """
+        self.path = path
+        self.urlbase = urlbase
+        self.auth_cookie = auth_cookie

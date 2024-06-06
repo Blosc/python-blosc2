@@ -1028,13 +1028,14 @@ class SChunk(blosc2_ext.SChunk):
 @_inherit_doc_parameter(SChunk.__init__, "mmap_mode:", {r"\* - 'w\+'[^*]+": ""})
 @_inherit_doc_parameter(SChunk.__init__, "initial_mapping_size:", {r"r\+ w\+, or c": "r+ or c"})
 def open(urlpath, mode="a", offset=0, **kwargs):
-    """Open a persistent :ref:`SChunk <SChunk>` (or :ref:`NDArray <NDArray>`).
+    """Open a persistent :ref:`SChunk <SChunk>` (or :ref:`NDArray <NDArray>`)
+    or a remote :ref:`C2Array <C2Array>`.
 
     Parameters
     ----------
-    urlpath: str | pathlib.Path
+    urlpath: str | pathlib.Path | :ref:`blosc2.URLPath`
         The path where the :ref:`SChunk <SChunk>` (or :ref:`NDArray <NDArray>`)
-        is stored.
+        is stored. In case it is a remote array, a :ref:`blosc2.URLPath` must be passed.
     mode: str, optional
         The open mode.
     offset: int, optional
@@ -1057,13 +1058,17 @@ def open(urlpath, mode="a", offset=0, **kwargs):
 
     Notes
     -----
-    This is just a 'logical' open, so no there is not a `close()` counterpart because
-    currently there is no need for it.
+    * This is just a 'logical' open, so no there is not a `close()` counterpart because
+      currently there is no need for it.
+
+    * In case :paramref:`urlpath` is a :ref:`blosc2.URLPath` instance, :paramref:`mode`
+      must be 'r', :paramref:`offset` must be 0, and kwargs cannot be passed.
 
     Returns
     -------
-    out: :ref:`SChunk <SChunk>` or :ref:`NDArray <NDArray>`
-        The SChunk or NDArray (in case there is a "b2nd" metalayer").
+    out: :ref:`SChunk <SChunk>`, :ref:`NDArray <NDArray>` or :ref:`C2Array <C2Array>`
+        The SChunk or NDArray (in case there is a "b2nd" metalayer")
+        or the C2Array if :paramref:`urlpath` is a :ref:`URLPath <URLPath>` instance.
 
     Examples
     --------
@@ -1098,6 +1103,12 @@ def open(urlpath, mode="a", offset=0, **kwargs):
     >>> all(sc_open.decompress_chunk(i, dest1) == sc_open_mmap.decompress_chunk(i, dest1) for i in range(nchunks))
     True
     """
+    if isinstance(urlpath, blosc2.URLPath):
+        if mode != "r" or offset != 0 or kwargs != {}:
+            raise NotImplementedError("Cannot open a C2Array with mode != 'r', "
+                                      "or offset != 0 or some kwargs")
+        return blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_cookie=urlpath.auth_cookie)
+
     if isinstance(urlpath, pathlib.PurePath):
         urlpath = str(urlpath)
     if not os.path.exists(urlpath):

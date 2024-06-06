@@ -184,7 +184,7 @@ from .ndarray import (  # noqa: I001
     get_slice_nchunks,
 )
 
-from .c2array import C2Array
+from .c2array import C2Array, URLPath
 
 from .lazyexpr import LazyExpr, lazyudf, lazyexpr, LazyArray, _open_lazyarray
 
