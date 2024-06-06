@@ -71,11 +71,12 @@ def test_compute_chunks(shape: tuple, blocks: tuple):
 @pytest.mark.parametrize(
     "shape, blocks",
     [
-        ((10, 10), (100, 100)),
+        # The commented out ones are supported now
+        # ((10, 10), (100, 100)),
         ((1000, 1000), (0, 10)),
-        ((10, 20, 30), (1, 2, 31)),
+        # ((10, 20, 30), (1, 2, 31)),
         ((10, 20, 30), (1, 2)),
-        ((1000, 10, 20, 100, 10), (100, 11, 10, 90, 10)),
+        # ((1000, 10, 20, 100, 10), (100, 11, 10, 90, 10)),
     ],
 )
 def test_compute_chunks_except(shape: tuple, blocks: tuple):
