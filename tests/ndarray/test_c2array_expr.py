@@ -73,13 +73,15 @@ def test_simple(chunks_blocks, auth_cookie):
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
 
     # Slice
-    sl = slice(100)
+    sl = slice(10)
     expr = a1 + a3
     nres = ne.evaluate("na1 + na3")
-    np.testing.assert_allclose(expr.eval(item=sl)[:], nres)
+    res = expr.eval(item=sl)
+    np.testing.assert_allclose(res[:], nres[sl])
 
     # All
-    np.testing.assert_allclose(expr.eval()[:], nres)
+    res = expr.eval()
+    np.testing.assert_allclose(res[:], nres)
 
 
 def test_simple_getitem(auth_cookie):
@@ -90,7 +92,7 @@ def test_simple_getitem(auth_cookie):
     nres = ne.evaluate("na1 + na2 - na3 * na4")
 
     # slice
-    sl = slice(100)
+    sl = slice(10)
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
     # all
@@ -132,7 +134,7 @@ def test_complex(auth_cookie):
     res = expr[:]
     np.testing.assert_allclose(res, nres)
     # slice
-    sl = slice(100)
+    sl = slice(10)
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
 

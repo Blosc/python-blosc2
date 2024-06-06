@@ -534,6 +534,9 @@ def slices_eval(
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
 
+    # We need to keep the original _slice arg, for allowing a final getitem (if necessary
+    orig_slice = _slice
+
     if chunks is None:
         # Any out or operand with `chunks` will be used to get the chunks
         operands_ = [o for o in operands.values() if hasattr(o, "chunks")]
@@ -646,8 +649,17 @@ def slices_eval(
             else:
                 raise ValueError("The where condition must be a tuple with one or two elements")
 
+    if orig_slice is not None:
+        if isinstance(out, np.ndarray):
+            out = out[orig_slice]
+        elif isinstance(out, blosc2.NDArray):
+            out = out.slice(orig_slice)
+        else:
+            raise ValueError("The output array is not a NumPy array or a NDArray")
+
     if where is not None and len(where) < 2:
         out = out[:lenout]
+
     return out
 
 
@@ -1295,10 +1307,7 @@ class LazyExpr(LazyArray):
             kwargs["_output"] = self._output
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
-        array = chunked_eval(self.expression, self.operands, item, **kwargs)
-        full_slice = is_full_slice(item)
-        # When a partial slice is requested, only the data delimited by item is filled
-        return array[item] if not full_slice else array
+        return chunked_eval(self.expression, self.operands, item, **kwargs)
 
     def __str__(self):
         expression = f"{self.expression}"

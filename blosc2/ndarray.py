@@ -890,10 +890,21 @@ class NDArray(blosc2_ext.NDArray, Operand):
         _check_ndarray_kwargs(**kwargs)
         key, mask = process_key(key, self.shape)
         start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
-        if step != (1,) * self.ndim:
-            raise ValueError("Step parameter is not supported yet")
         key = (start, stop)
-        return super().get_slice(key, mask, **kwargs)
+        ndslice = super().get_slice(key, mask, **kwargs)
+
+        # This is memory intensive, but we have not a better way to do it yet
+        # TODO: perhaps add a step param in the get_slice method in the future?
+        if step != (1,) * self.ndim:
+            nparr = ndslice[...]
+            if len(step) == 1:
+                nparr = nparr[:: step[0]]
+            else:
+                slice_ = tuple(slice(None, None, st) for st in step)
+                nparr = nparr[slice_]
+            return asarray(nparr, **kwargs)
+
+        return ndslice
 
     def squeeze(self):
         """Remove the 1's in array's shape.

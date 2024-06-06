@@ -16,27 +16,18 @@ NITEMS_SMALL = 1_000
 NITEMS = 10_000
 
 
-@pytest.fixture(params=[np.float32,
-                        np.float64
-                        ])
+@pytest.fixture(params=[np.float32, np.float64])
 def dtype_fixture(request):
     return request.param
 
 
-@pytest.fixture(params=[(NITEMS_SMALL,),
-                        (NITEMS,),
-                        (NITEMS // 100, 100)
-                        ])
+@pytest.fixture(params=[(NITEMS_SMALL,), (NITEMS,), (NITEMS // 100, 100)])
 def shape_fixture(request):
     return request.param
 
 
 # params: (same_chunks, same_blocks)
-@pytest.fixture(params=[(True, True),
-                        (True, False),
-                        (False, True),
-                        (False, False)
-                        ])
+@pytest.fixture(params=[(True, True), (True, False), (False, True), (False, False)])
 def chunks_blocks_fixture(request):
     return request.param
 
@@ -129,7 +120,7 @@ def test_mix_operands(array_fixture):
     np.testing.assert_allclose(expr[:], nres)
     np.testing.assert_allclose(expr.eval()[:], nres)
 
-    expr = blosc2.LazyExpr(new_op=(na2, '*', a3))
+    expr = blosc2.LazyExpr(new_op=(na2, "*", a3))
     nres = ne.evaluate("na2 * na3")
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
@@ -162,7 +153,7 @@ def test_simple_expression(array_fixture):
 
 def test_iXXX(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    expr = a1 ** 3 + a2 ** 2 + a3 ** 3 - a4 + 3
+    expr = a1**3 + a2**2 + a3**3 - a4 + 3
     expr += 5  # __iadd__
     expr -= 15  # __isub__
     expr *= 2  # __imul__
@@ -734,10 +725,18 @@ def test_lazyexpr(array_fixture, operand_mix):
     nres = ne.evaluate("na1 + na2 - na3 * na4")
     res = expr.eval()
     np.testing.assert_allclose(res[:], nres)
+    # With selections
+    res = expr.eval(item=0)
+    np.testing.assert_allclose(res[()], nres[0])
+    res = expr.eval(item=slice(10))
+    np.testing.assert_allclose(res[()], nres[:10])
+    res = expr.eval(item=slice(0, 10, 2))
+    np.testing.assert_allclose(res[()], nres[0:10:2])
 
     # Check getitem
     res = expr[:]
     np.testing.assert_allclose(res, nres)
+    # With selections
     res = expr[0]
     np.testing.assert_allclose(res, nres[0])
     res = expr[0:10]
