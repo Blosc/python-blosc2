@@ -2004,11 +2004,10 @@ def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: dict | list) -> NDArra
 
     Note
     ----
-    If the provided chunks and blocks are well-behaved (that is, they are aligned with the
-    shape of the array, and follow a C-contiguous schema; see :ref:`are_partitions_behaved`),
-    the NDArray will be created chunk-by-chunk directly from the array, without the need to
-    create a contiguous NumPy array internally.  This can be used for ingesting e.g.
-    disk-based arrays very effectively.
+    This will create the NDArray chunk-by-chunk directly from the input array,
+    without the need to create a contiguous NumPy array internally.  This can
+    be used for ingesting e.g. disk or network based arrays very effectively
+    and without consuming lots of memory.
 
     Examples
     --------
@@ -2029,48 +2028,44 @@ def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: dict | list) -> NDArra
     if blocks is None and hasattr(array, "blocks"):
         blocks = array.blocks
     chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, array.dtype, **kwargs)
+
+    # Fast path for small arrays. This is not too expensive in terms of memory consumption.
     shape = array.shape
+    small_size = 2**24  # 16 MB
+    array_nbytes = np.prod(shape) * array.dtype.itemsize
+    if array_nbytes < small_size:
+        if not isinstance(array, np.ndarray):
+            if hasattr(array, "chunks"):
+                # A getitem operation should be enough to get a numpy array
+                array = array[:]
+        else:
+            array = np.ascontiguousarray(array)
+        return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
 
-    if are_partitions_behaved(shape, chunks, blocks):
-        # We can take a shortcut and create the NDArray directly.
-        # This path also has the advantage of not requiring creating a contiguous NumPy array
-        # as a whole.  Thus, we can create NDArrays from NumPy arrays that are not contiguous,
-        # without the need to convert them in-memory. Or even from objects that are not in
-        # memory (e.g. on-disk or network, like HDF5, Zarr...); they only need to expose the
-        # `__getitem__()` method.
+    # Create the empty array
+    ndarr = empty(shape, array.dtype, chunks=chunks, blocks=blocks, **kwargs)
+    behaved = are_partitions_behaved(shape, chunks, blocks)
 
-        # Create the empty array
-        ndarr = empty(shape, array.dtype, chunks=chunks, blocks=blocks, **kwargs)
+    # Get the coordinates of the chunks
+    chunks_idx, nchunks = get_chunks_idx(shape, chunks)
 
-        # Get the coordinates of the chunks
-        chunks_idx, nchunks = get_chunks_idx(shape, chunks)
-        # Iterate over the chunks and update the empty array
-        for nchunk in range(nchunks):
-            # Compute current slice coordinates
-            coords = tuple(np.unravel_index(nchunk, chunks_idx))
-            slice_ = tuple(
-                slice(c * s, builtins.min((c + 1) * s, shape[i]))
-                for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
-            )
-            # Ensure the array slice is contiguous
-            array_slice = np.ascontiguousarray(array[slice_])
-            # ndarr[slice_] = array_slice  # a bit slow
+    # Iterate over the chunks and update the empty array
+    for nchunk in range(nchunks):
+        # Compute current slice coordinates
+        coords = tuple(np.unravel_index(nchunk, chunks_idx))
+        slice_ = tuple(
+            slice(c * s, builtins.min((c + 1) * s, shape[i]))
+            for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
+        )
+        # Ensure the array slice is contiguous
+        array_slice = np.ascontiguousarray(array[slice_])
+        if behaved:
             # The whole chunk is to be updated, so this fastpath is safe
             ndarr.schunk.update_data(nchunk, array_slice, copy=False)
-
-        return ndarr
-
-    # Go the slow (and possibly memory-intensive) path
-    if not isinstance(array, np.ndarray):
-        if hasattr(array, "chunks"):
-            # A getitem operation should be enough to get a numpy array
-            array = array[:]
         else:
-            array = np.array(array, copy=False)
-    # A contiguous array is needed
-    array = np.ascontiguousarray(array)
+            ndarr[slice_] = array_slice
 
-    return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
+    return ndarr
 
 
 def _check_ndarray_kwargs(**kwargs):
