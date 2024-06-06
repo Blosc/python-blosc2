@@ -84,7 +84,7 @@ def udf2p(inputs_tuple, output, offset):
 @pytest.mark.parametrize(
     "chunks, blocks, slices, urlpath, contiguous",
     [
-        pytest.param((53, 20), (10, 13), (slice(3, 8), slice(9, 12)), None, False, marks=pytest.mark.heavy),
+        pytest.param((53, 20), (10, 13), (slice(3, 8), slice(9, 12)), None, False),
     ],
 )
 def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, auth_cookie):
@@ -118,14 +118,11 @@ def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, auth
     lazy_eval = expr[slices]
     np.testing.assert_allclose(lazy_eval, npc[slices])
 
-    res = expr.eval()
-    np.testing.assert_allclose(res[...], npc)
+    res = expr.eval(item=slices)
+    np.testing.assert_allclose(res[...], npc[slices])
     assert res.schunk.urlpath is None
     assert res.schunk.contiguous == contiguous
     # Check dparams after a getitem and an eval
     assert res.schunk.dparams["nthreads"] == dparams["nthreads"]
-
-    lazy_eval = expr[slices]
-    np.testing.assert_allclose(lazy_eval, npc[slices])
 
     blosc2.remove_urlpath(urlpath)

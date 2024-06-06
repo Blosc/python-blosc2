@@ -1217,8 +1217,8 @@ def compute_chunks_blocks(
         for i in range(len(blocks)):
             if blocks[i] == 0:
                 raise ValueError("blocks cannot contain 0 dimension")
-            if blocks[i] > shape[i]:
-                raise ValueError("blocks cannot be greater than shape")
+            if shape[i] == 1 and blocks[i] > shape[i]:
+                raise ValueError("blocks cannot be greater than shape if it is 1")
     if chunks:
         if not isinstance(chunks, tuple | list):
             chunks = [chunks]
