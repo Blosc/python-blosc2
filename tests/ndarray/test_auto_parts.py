@@ -52,11 +52,14 @@ def test_compute_chunks_blocks(clevel, codec, shape: tuple, dtype):
     "shape, blocks",
     [
         ((1000, 1000), (10, 10)),
+        ((10, 10), (100, 100)),  # blocks can exceed shape if user wants to
         ((10, 20, 30), (1, 2, 3)),
+        ((10, 20, 30), (1, 2, 31)), # ditto, but even more weird blocks
         ((10, 30, 50, 10), (10, 30, 50, 10)),
         ((10, 10, 10, 10, 10), (10, 10, 10, 9, 10)),
         ((100, 10, 20, 100, 10), (10, 10, 10, 9, 10)),
         ((1000, 10, 20, 100, 10), (100, 10, 10, 90, 10)),
+        ((1000, 10, 20, 100, 10), (100, 11, 10, 90, 10)),
     ],
 )
 def test_compute_chunks(shape: tuple, blocks: tuple):
@@ -71,12 +74,8 @@ def test_compute_chunks(shape: tuple, blocks: tuple):
 @pytest.mark.parametrize(
     "shape, blocks",
     [
-        # The commented out ones are supported now
-        # ((10, 10), (100, 100)),
-        ((1000, 1000), (0, 10)),
-        # ((10, 20, 30), (1, 2, 31)),
-        ((10, 20, 30), (1, 2)),
-        # ((1000, 10, 20, 100, 10), (100, 11, 10, 90, 10)),
+        ((1000, 1000), (0, 10)),  # zeros are not allowed
+        ((10, 20, 30), (1, 2)),  # blocks need to have the same length as shape
     ],
 )
 def test_compute_chunks_except(shape: tuple, blocks: tuple):

@@ -25,13 +25,18 @@ class MmapBenchmarking:
         self.shape = (self.n_chunks, 64, 64, 64)
         self.chunks = (1, 64, 64, 64)
         self.blocks = (1, 16, 64, 64)
+        # For enabling automatic chunks and blocks computation, uncomment the next line
+        # self.chunks, self.blocks = None, None
         self.dtype = np.dtype(np.float32)
         self.size = np.prod(self.shape)
         self.nbytes = self.size * self.dtype.itemsize
         self.array = np.arange(self.size, dtype=self.dtype).reshape(self.shape)
         self.cparams = dict(typesize=self.dtype.itemsize, clevel=0)
+        # For checking with compression, uncomment the next line
+        # self.cparams = dict(typesize=self.dtype.itemsize, clevel=5, codec=blosc2.Codec.BLOSCLZ)
         self.cdata = blosc2.asarray(self.array, chunks=self.chunks, blocks=self.blocks,
                                     cparams=self.cparams)
+        # print(f"shape: {self.cdata.shape}, chunks: {self.cdata.chunks}, blocks: {self.cdata.blocks}")
 
     def __enter__(self):
         blosc2.remove_urlpath(self.urlpath)

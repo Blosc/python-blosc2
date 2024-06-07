@@ -1109,7 +1109,7 @@ def get_cbuffer_sizes(src):
 
 
 # Compute a decent value for chunksize based on L3 and/or heuristics
-def get_chunksize(blocksize, l3_minimum=2**21, l3_maximum=2**25):
+def get_chunksize(blocksize, l3_minimum=2**20, l3_maximum=2**25):
     # Find a decent default when L3 cannot be detected by cpuinfo
     # Based mainly in heuristics
     chunksize = blocksize
@@ -1118,7 +1118,6 @@ def get_chunksize(blocksize, l3_minimum=2**21, l3_maximum=2**25):
     # Refine with L2/L3 measurements (not always possible)
     cpu_info = blosc2.cpu_info
     if "l3_cache_size" in cpu_info:
-        # In general, is a good idea to set the chunksize equal to L3
         l3_cache_size = cpu_info["l3_cache_size"]
         # cpuinfo sometimes returns cache sizes as strings (like,
         # "4096 KB"), so refuse the temptation to guess and use the
@@ -1152,29 +1151,28 @@ def get_chunksize(blocksize, l3_minimum=2**21, l3_maximum=2**25):
 
 
 # Compute chunks and blocks partitions
-def compute_partition(nitems, parts, maxs, blocks=False):
-    if 0 in maxs:
+def compute_partition(nitems, maxshape, minpart=None):
+    if 0 in maxshape:
         raise ValueError("shapes with 0 dims are not supported")
     if nitems == 0:
-        raise ValueError("partitions with 0 dims are not supported")
-    parts = list(parts)
-    while math.prod(parts) < nitems:
-        nitems_prev = math.prod(parts)
-        # Increase dims starting from the latest
-        for i in reversed(range(len(parts))):
-            if blocks and parts[i] > maxs[i]:
-                raise ValueError(
-                    "blocks should be smaller than chunks or shape in any dim!"
-                    " If you do want this blocks, please specify a chunks too."
-                )
-            new_part = min(parts[i] * 2, maxs[i])
-            if math.prod(parts) // parts[i] * new_part <= nitems:
-                parts[i] = new_part
-        nitems_new = math.prod(parts)
-        if nitems_new == nitems_prev:
-            # Not progressing anymore
+        raise ValueError("zero-sized partitions are not supported")
+
+    # Increase dims starting from the latest
+    max_items = nitems
+    if minpart is None:
+        minpart = [1] * len(maxshape)
+    partition = [1] * len(maxshape)
+    for i, (size, minsize) in enumerate(zip(reversed(maxshape), reversed(minpart), strict=True)):
+        if max_items == 0:
             break
-    return parts
+        rsize = max(size, minsize)
+        if rsize <= max_items:
+            partition[-(i + 1)] = rsize
+        else:
+            partition[-(i + 1)] = max(max_items, minsize)
+        max_items //= rsize
+
+    return partition
 
 
 def compute_chunks_blocks(
@@ -1266,25 +1264,21 @@ def compute_chunks_blocks(
         if blocksize > 2**18:
             blocksize = 2**18
         cparams2["tuner"] = aux_tuner
-        # Starting point for the guess
-        if chunks is None:
-            blocks = [1 if shape[i] == 1 else 2 for i in range(len(shape))]
-        else:
-            blocks = [1 if chunks[i] == 1 else 2 for i in range(len(shape))]
     else:
         blocksize = math.prod(blocks) * itemsize
-    # Logic here is complex.  We normalize blocksize, even if user specify it.
-    # We do that in order to compute saner automatic chunks later.
-    if chunks is None:
-        maxs = shape
-    else:
-        maxs = [min(els) for els in zip(chunks, shape, strict=False)]
-    blocks = compute_partition(blocksize // itemsize, blocks, maxs, blocks=True)
 
+    # Now that a sensible blocksize has been computed, let's compute the blocks
+    if chunks is None:
+        maxshape = shape
+    else:
+        maxshape = [min(els) for els in zip(chunks, shape, strict=True)]
+    blocks = compute_partition(blocksize // itemsize, maxshape)
+
+    # Finally, the chunks
     if chunks is None:
         blocksize = math.prod(blocks) * itemsize
         chunksize = get_chunksize(blocksize)
-        chunks = compute_partition(chunksize // itemsize, blocks, shape)
+        chunks = compute_partition(chunksize // itemsize, shape, blocks)
 
     return tuple(chunks), tuple(blocks)
 
