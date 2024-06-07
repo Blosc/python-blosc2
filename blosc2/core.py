@@ -1261,7 +1261,9 @@ def compute_chunks_blocks(
         # Experiments show that it is not a good idea to exceed 256 KB for the blocksize.
         # Even Intel/AMD machines with 1MB/2MB usually have better performance with 256 KB
         # when evaluating expressions and other operations.
-        if blocksize > 2**18:
+        # Also, use 256 KB when no compression is used, as it is a good tradeoff for most cases.
+        clevel = cparams2["clevel"]
+        if clevel == 0 or blocksize > 2**18:
             blocksize = 2**18
         cparams2["tuner"] = aux_tuner
     else:
