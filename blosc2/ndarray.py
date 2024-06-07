@@ -2050,7 +2050,8 @@ def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: dict | list) -> NDArra
                 # A getitem operation should be enough to get a numpy array
                 array = array[:]
         else:
-            array = np.ascontiguousarray(array)
+            if not array.flags.contiguous:
+                array = np.ascontiguousarray(array)
         return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
 
     # Create the empty array
