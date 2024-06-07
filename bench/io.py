@@ -52,7 +52,7 @@ class MmapBenchmarking:
 
         if self.blosc_mode == "schunk":
             chunksize = array[0].nbytes
-            cparams = self.cparams | dict(blocksize=np.prod(self.blocks) * array.itemsize)
+            cparams = self.cparams | dict(blocksize=np.prod(self.cdata.blocks) * array.itemsize)
             schunk = blosc2.SChunk(chunksize=chunksize, cparams=cparams,
                                    mode="w", mmap_mode=self.mmap_mode_write,
                                    urlpath=urlpath)
