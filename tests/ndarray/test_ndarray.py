@@ -79,3 +79,17 @@ def test_shape_with_zeros(shape, urlpath):
     assert ndarray.size == 0
     np.testing.assert_allclose(data[()], ndarray[()])
     np.testing.assert_allclose(data[:], ndarray[:])
+
+
+@pytest.mark.parametrize("a",
+                         [np.linspace(0, 10),
+                          np.linspace(0, 10)[0],
+                          np.linspace(0, 10, 1),
+                          np.array(3.14),
+                          ])
+def test_asarray(a):
+    b = blosc2.asarray(a)
+    if a.shape == ():
+        np.testing.assert_allclose(a[()], b[()])
+    else:
+        np.testing.assert_allclose(a, b[:])

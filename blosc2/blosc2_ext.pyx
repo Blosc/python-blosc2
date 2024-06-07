@@ -2630,6 +2630,8 @@ def asarray(ndarray, chunks, blocks, **kwargs):
     if dtype.startswith("|V") and "descr" in interface:
         # Structured dtype
         dtype = interface["descr"]
+    if chunks == () or blocks == ():
+        shape = ()
     cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
     if ctx == NULL:
         raise RuntimeError("Error while creating the context")
