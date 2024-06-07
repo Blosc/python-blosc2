@@ -81,7 +81,7 @@ class C2Array(blosc2.Operand):
         Parameters
         ----------
         path: str
-            The path to the remote NDArray file (root + file name) as
+            The path to the remote NDArray file (root + file path) as
             a posix path.
         urlbase: str
             The base URL (slash-terminated) of the subscriber to query.
@@ -93,7 +93,11 @@ class C2Array(blosc2.Operand):
         out: C2Array
 
         """
+        if path.startswith('/'):
+            raise ValueError("The path should start with a root name, not a slash")
         self.path = path
+        if not urlbase.endswith('/'):
+            urlbase += '/'
         self.urlbase = urlbase
         self.auth_cookie = auth_cookie
         try:
