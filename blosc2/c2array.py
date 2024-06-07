@@ -16,7 +16,7 @@ import numpy as np
 import blosc2
 
 
-def _xget(url, params=None, headers=None, timeout=15, auth_cookie=None):
+def _xget(url, params=None, headers=None, auth_cookie=None, timeout=15):
     if auth_cookie:
         headers = headers.copy() if headers else {}
         headers["Cookie"] = auth_cookie
@@ -24,11 +24,21 @@ def _xget(url, params=None, headers=None, timeout=15, auth_cookie=None):
     response.raise_for_status()
     return response
 
+def _xpost(url, json=None, auth_cookie=None, timeout=15):
+    headers = {'Cookie': auth_cookie} if auth_cookie else None
+    response = httpx.post(url, json=json, headers=headers, timeout=timeout)
+    response.raise_for_status()
+    return response.json()
 
-def get(url, params=None, headers=None, timeout=15, model=None, auth_cookie=None):
-    response = _xget(url, params, headers, timeout, auth_cookie)
+
+def get(url, params=None, headers=None, model=None, auth_cookie=None):
+    response = _xget(url, params, headers, auth_cookie)
     json = response.json()
     return json if model is None else model(**json)
+
+
+def subscribe(root, urlbase, auth_cookie):
+    return _xpost(f'{urlbase}api/subscribe/{root}',  auth_cookie=auth_cookie)
 
 
 def fetch_data(path, urlbase, params, auth_cookie=None):
@@ -60,18 +70,6 @@ def slice_to_string(slice_):
             # step = index.step or ''
             slice_parts.append(f"{start}:{stop}")
     return ", ".join(slice_parts)
-
-
-def post(url, json=None, auth_cookie=None):
-    headers = {'Cookie': auth_cookie} if auth_cookie else None
-    response = httpx.post(url, json=json, headers=headers)
-    response.raise_for_status()
-    return response.json()
-
-
-def subscribe(root, urlbase, auth_cookie):
-    return post(f'{urlbase}api/subscribe/{root}',
-                auth_cookie=auth_cookie)
 
 
 class C2Array(blosc2.Operand):
