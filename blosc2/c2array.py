@@ -24,6 +24,7 @@ def _xget(url, params=None, headers=None, auth_cookie=None, timeout=15):
     response.raise_for_status()
     return response
 
+
 def _xpost(url, json=None, auth_cookie=None, timeout=15):
     headers = {'Cookie': auth_cookie} if auth_cookie else None
     response = httpx.post(url, json=json, headers=headers, timeout=timeout)
@@ -38,7 +39,7 @@ def get(url, params=None, headers=None, model=None, auth_cookie=None):
 
 
 def subscribe(root, urlbase, auth_cookie):
-    return _xpost(f'{urlbase}api/subscribe/{root}',  auth_cookie=auth_cookie)
+    return _xpost(f'{urlbase}api/subscribe/{root}', auth_cookie=auth_cookie)
 
 
 def fetch_data(path, urlbase, params, auth_cookie=None):
@@ -94,17 +95,26 @@ class C2Array(blosc2.Operand):
         if path.startswith('/'):
             raise ValueError("The path should start with a root name, not a slash")
         self.path = path
+        self.root, self.filepath = path.split('/', 1)
+
         if not urlbase.endswith('/'):
             urlbase += '/'
         self.urlbase = urlbase
         self.auth_cookie = auth_cookie
+
+        # Try to 'open' the remote path
+        urlpath = f"{urlbase}api/info/{self.path}"
         try:
-            self.meta = get(f"{urlbase}api/info/{self.path}", auth_cookie=self.auth_cookie)
+            self.meta = get(urlpath, auth_cookie=self.auth_cookie)
         except httpx.HTTPStatusError:
-            # Subscribe first to the root
-            root = self.path.split('/')[0]
-            subscribe(root, self.urlbase, self.auth_cookie)
-            self.meta = get(f"{urlbase}api/info/{self.path}", auth_cookie=self.auth_cookie)
+            # Subscribe to root and try again. It is less latency to subscribe directly
+            # than to check for the subscription.
+            subscribe(self.root, self.urlbase, self.auth_cookie)
+            try:
+                self.meta = get(urlpath, auth_cookie=self.auth_cookie)
+            except httpx.HTTPStatusError as err:
+                raise FileNotFoundError(f"Remote path not found: {path}.\n"
+                                        f"Error was: {err}") from err
 
     def __getitem__(self, slice_: int | slice | Sequence[slice]) -> np.ndarray:
         """
