@@ -14,6 +14,8 @@ import numpy as np
 import blosc2
 
 
+CUBE_SIDE = 128
+
 class MmapBenchmarking:
     def __init__(self, io_type: str, blosc_mode: str) -> None:
         self.io_type = io_type
@@ -21,10 +23,10 @@ class MmapBenchmarking:
         self.mmap_mode_write = "w+" if self.io_type == "io_mmap" else None
         self.mmap_mode_read = "r" if self.io_type == "io_mmap" else None
         self.urlpath = "array.b2nd"
-        self.n_chunks = 1000
-        self.shape = (self.n_chunks, 64, 64, 64)
-        self.chunks = (1, 64, 64, 64)
-        self.blocks = (1, 16, 64, 64)
+        self.n_chunks = 100
+        self.shape = (self.n_chunks, CUBE_SIDE, CUBE_SIDE, CUBE_SIDE)
+        self.chunks = (1, CUBE_SIDE, CUBE_SIDE, CUBE_SIDE)
+        self.blocks = (1, CUBE_SIDE // 32, CUBE_SIDE, CUBE_SIDE)
         # For disabling automatic chunks and blocks computation, comment the next line
         self.chunks, self.blocks = None, None
         self.dtype = np.dtype(np.float32)
