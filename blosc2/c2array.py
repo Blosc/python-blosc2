@@ -26,6 +26,8 @@ def subscriber_auth_cookie(auth_cookie):
     """
     Context manager that adds the `auth_cookie` to subscriber requests.
 
+    Please note that this manager is reentrant but not concurrency-safe.
+
     Parameters
     ----------
     auth_cookie: str
