@@ -25,7 +25,7 @@ blocks = [4, 10_000]
 # Comment out the next line to force chunks and blocks above
 chunks, blocks = None, None
 # Check with fast compression
-cparams = dict(clevel=5, codec=blosc2.Codec.BLOSCLZ)
+cparams = dict(clevel=1, codec=blosc2.Codec.BLOSCLZ)
 
 dtype = np.float32
 rtol = 1e-6 if dtype == np.float32 else 1e-17
@@ -135,7 +135,7 @@ for n, expr in enumerate(exprs):
         inputs = (x, y, z)
 
     expr_ = blosc2.lazyudf(udf_numba, inputs, npx.dtype, chunked_eval=False,
-                           chunks=chunks, blocks=blocks)
+                           chunks=chunks, blocks=blocks, cparams=cparams)
     # actual benchmark
     # eval() uses the udf function as a prefilter
     t0 = time()
@@ -149,7 +149,7 @@ for n, expr in enumerate(exprs):
     np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)
 
     expr_ = blosc2.lazyudf(udf_numba, inputs, npx.dtype, chunked_eval=True,
-                           chunks=chunks, blocks=blocks)
+                           chunks=chunks, blocks=blocks, cparams=cparams)
     # getitem but using chunked evaluation
     t0 = time()
     res = expr_.eval()
