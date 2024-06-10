@@ -22,6 +22,11 @@ import blosc2
 shape = (5000, 10_000)
 chunks = [500, 10_000]
 blocks = [4, 10_000]
+# Comment out the next line to force chunks and blocks above
+chunks, blocks = None, None
+# Check with fast compression
+cparams = dict(clevel=5, codec=blosc2.Codec.BLOSCLZ)
+
 dtype = np.float32
 rtol = 1e-6 if dtype == np.float32 else 1e-17
 atol = 1e-6 if dtype == np.float32 else 1e-17
@@ -38,10 +43,12 @@ npx = np.linspace(0, 1, np.prod(shape), dtype=dtype).reshape(shape)
 npy = np.linspace(-1, 1, np.prod(shape), dtype=dtype).reshape(shape)
 npz = np.linspace(0, 10, np.prod(shape), dtype=dtype).reshape(shape)
 vardict = {"x": npx, "y": npy, "z": npz, "np": np}
-x = blosc2.asarray(npx, chunks=chunks, blocks=blocks)
-y = blosc2.asarray(npy, chunks=chunks, blocks=blocks)
-z = blosc2.asarray(npz, chunks=chunks, blocks=blocks)
+x = blosc2.asarray(npx, chunks=chunks, blocks=blocks, cparams=cparams)
+y = blosc2.asarray(npy, chunks=chunks, blocks=blocks, cparams=cparams)
+z = blosc2.asarray(npz, chunks=chunks, blocks=blocks, cparams=cparams)
 b2vardict = {"x": x, "y": y, "z": z, "blosc2": blosc2}
+
+print(f"shape: {x.shape}, chunks: {x.chunks}, blocks: {x.blocks}, cratio: {x.schunk.cratio:.2f}")
 
 # Define the functions to evaluate the expressions
 # First the pure numba+numpy version

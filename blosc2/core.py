@@ -1150,6 +1150,23 @@ def get_chunksize(blocksize, l3_minimum=2**20, l3_maximum=2**25):
     return chunksize
 
 
+def nearest_divisor(a, b):
+    if a > 1_000_000:
+        # When `a` is largish, use a faster algorithm that only goes downwards
+        # Start from b and go downwards
+        for i in range(b, 0, -1):
+            if a % i == 0:
+                return i
+
+    # When `a` is small, use a more general algorithm that can find forwards and backwards
+    # Get all divisors of a; use a generator to avoid creating a list
+    divisors = (i for i in range(1, a + 1) if a % i == 0)
+    # Find the divisor nearest to b
+    nearest = min(divisors, key=lambda x: abs(x - b))
+
+    return nearest
+
+
 # Compute chunks and blocks partitions
 def compute_partition(nitems, maxshape, minpart=None):
     if 0 in maxshape:
@@ -1167,9 +1184,12 @@ def compute_partition(nitems, maxshape, minpart=None):
             break
         rsize = max(size, minsize)
         if rsize <= max_items:
+            rsize = nearest_divisor(size, rsize)
             partition[-(i + 1)] = rsize
         else:
-            partition[-(i + 1)] = max(max_items, minsize)
+            rsize = max(max_items, minsize)
+            rsize = nearest_divisor(size, rsize)
+            partition[-(i + 1)] = rsize
         max_items //= rsize
 
     return partition

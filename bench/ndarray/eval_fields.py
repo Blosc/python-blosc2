@@ -13,13 +13,13 @@ from time import time
 
 import numexpr as ne
 
-shape = (2_000, 5_000)
+shape = (4_000, 5_000)
+chunks = (10, 5_000)
+blocks = (1, 1000)
+# Comment out the next line to force chunks and blocks above
 chunks, blocks = None, None
-# chunks = (10, 5_000)
-# blocks = (1, 1000)
-cparams = blosc2.cparams_dflts.copy()
-cparams['clevel'] = 1
-cparams['codec'] = blosc2.Codec.LZ4
+# Check with fast compression
+cparams = dict(clevel=1, codec=blosc2.Codec.BLOSCLZ)
 
 # Create a structured NumPy array
 npa_ = np.linspace(0, 1, np.prod(shape), dtype=np.float32).reshape(shape)
@@ -40,7 +40,7 @@ t = time() - t0
 print(f"Time to evaluate field expression (NumExpr): {t:.3f} s; {nps.nbytes/2**30/t:.2f} GB/s")
 
 s = blosc2.asarray(nps, chunks=chunks, blocks=blocks, cparams=cparams)
-# print(f"shape: {s.shape}, chunks: {s.chunks}, blocks: {s.blocks}")
+print(f"shape: {s.shape}, chunks: {s.chunks}, blocks: {s.blocks}, cratio: {s.schunk.cratio:.2f}")
 a = s.fields['a']
 # a = s['a']  # TODO: implement this (should be an expression)
 b = s.fields['b']
