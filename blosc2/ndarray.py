@@ -2171,10 +2171,6 @@ class NDField(Operand):
         return self.ndarr.shape
 
     @property
-    def ext_shape(self):
-        return self.ndarr.ext_shape
-
-    @property
     def schunk(self):
         return self.ndarr.schunk
 

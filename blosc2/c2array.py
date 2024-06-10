@@ -26,7 +26,7 @@ def _xget(url, params=None, headers=None, auth_cookie=None, timeout=15):
 
 
 def _xpost(url, json=None, auth_cookie=None, timeout=15):
-    headers = {'Cookie': auth_cookie} if auth_cookie else None
+    headers = {"Cookie": auth_cookie} if auth_cookie else None
     response = httpx.post(url, json=json, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response.json()
@@ -39,7 +39,7 @@ def get(url, params=None, headers=None, model=None, auth_cookie=None):
 
 
 def subscribe(root, urlbase, auth_cookie):
-    return _xpost(f'{urlbase}api/subscribe/{root}', auth_cookie=auth_cookie)
+    return _xpost(f"{urlbase}api/subscribe/{root}", auth_cookie=auth_cookie)
 
 
 def fetch_data(path, urlbase, params, auth_cookie=None):
@@ -92,13 +92,13 @@ class C2Array(blosc2.Operand):
         out: C2Array
 
         """
-        if path.startswith('/'):
+        if path.startswith("/"):
             raise ValueError("The path should start with a root name, not a slash")
         self.path = path
-        self.root, self.filepath = path.split('/', 1)
+        self.root, self.filepath = path.split("/", 1)
 
-        if not urlbase.endswith('/'):
-            urlbase += '/'
+        if not urlbase.endswith("/"):
+            urlbase += "/"
         self.urlbase = urlbase
         self.auth_cookie = auth_cookie
 
@@ -113,8 +113,7 @@ class C2Array(blosc2.Operand):
             try:
                 self.meta = get(urlpath, auth_cookie=self.auth_cookie)
             except httpx.HTTPStatusError as err:
-                raise FileNotFoundError(f"Remote path not found: {path}.\n"
-                                        f"Error was: {err}") from err
+                raise FileNotFoundError(f"Remote path not found: {path}.\n" f"Error was: {err}") from err
 
     def __getitem__(self, slice_: int | slice | Sequence[slice]) -> np.ndarray:
         """
@@ -153,11 +152,6 @@ class C2Array(blosc2.Operand):
     def dtype(self):
         """The dtype of the remote array"""
         return np.dtype(self.meta["dtype"])
-
-    @property
-    def ext_shape(self):
-        """The ext_shape of the remote array"""
-        return tuple(self.meta["ext_shape"])
 
 
 class URLPath:
