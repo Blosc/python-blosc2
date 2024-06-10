@@ -32,26 +32,28 @@ DIR = 'expr/'
     # AUTH_COOKIE,
 ])
 def auth_cookie(request):
-    return request.param
+    cookie = request.param
+    with blosc2.c2array.subscriber_auth_cookie(cookie):
+        yield cookie
 
 
-def get_arrays(shape, chunks_blocks, auth_cookie):
+def get_arrays(shape, chunks_blocks):
     dtype = np.float64
     nelems = np.prod(shape)
     na1 = np.linspace(0, 10, nelems, dtype=dtype).reshape(shape)
     urlpath = f'ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
-    a1 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    a1 = blosc2.C2Array(path, urlbase=URLBASE)
     urlpath = f'ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a2-{shape}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
-    a2 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    a2 = blosc2.C2Array(path, urlbase=URLBASE)
     # Let other operands have chunks1 and blocks1
     urlpath = f'ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a3-{shape}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
-    a3 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    a3 = blosc2.C2Array(path, urlbase=URLBASE)
     urlpath = f'ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a4-{shape}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
-    a4 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    a4 = blosc2.C2Array(path, urlbase=URLBASE)
     assert isinstance(a1, blosc2.C2Array)
     assert isinstance(a2, blosc2.C2Array)
     assert isinstance(a3, blosc2.C2Array)
@@ -63,7 +65,7 @@ def get_arrays(shape, chunks_blocks, auth_cookie):
 def test_reduce_bool(reduce_op, auth_cookie):
     shape = (NITEMS_SMALL, )
     chunks_blocks = 'default'
-    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
+    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     expr = a1 + a2 > a3 * a4
     nres = ne.evaluate("na1 + na2 > na3 * na4")
     res = getattr(expr, reduce_op)()
@@ -90,7 +92,7 @@ def test_reduce_bool(reduce_op, auth_cookie):
 @pytest.mark.parametrize("dtype_out", [np.int16])
 def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op, auth_cookie):
     shape = (60, 60)
-    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
+    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     if axis is not None and np.isscalar(axis) and len(a1.shape) >= axis:
         return
     if type(axis) == tuple and len(a1.shape) < len(axis):
@@ -138,7 +140,7 @@ def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op, auth
 @pytest.mark.parametrize("axis", [0])
 def test_reduce_expr_arr(chunks_blocks, axis, reduce_op, auth_cookie):
     shape = (60, 60)
-    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
+    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     if axis is not None and len(a1.shape) >= axis:
         return
     expr = a1 + a2 - a3 * a4
