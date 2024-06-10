@@ -1158,7 +1158,7 @@ def get_chunksize(blocksize, l3_minimum=2**20, l3_maximum=2**26):
         # value only when it is an actual int.
         # Also, sometimes cpuinfo does not return a correct L3 size;
         # so in general, enforcing L3 > L2 is a good sanity check.
-        if isinstance(l3_cache_size, int):
+        if isinstance(l3_cache_size, int) and l3_cache_size > 0:
             l2_cache_size = cpu_info.get("l2_cache_size", "Not found")
             if isinstance(l2_cache_size, int) and l3_cache_size > l2_cache_size:
                 chunksize = l3_cache_size
@@ -1213,7 +1213,7 @@ def compute_partition(nitems, maxshape, minpart=None):
         minpart = [1] * len(maxshape)
     partition = [1] * len(maxshape)
     for i, (size, minsize) in enumerate(zip(reversed(maxshape), reversed(minpart), strict=True)):
-        if max_items == 0:
+        if max_items <= 1:
             break
         rsize = max(size, minsize)
         if rsize <= max_items:
@@ -1221,7 +1221,10 @@ def compute_partition(nitems, maxshape, minpart=None):
             partition[-(i + 1)] = rsize
         else:
             rsize = max(max_items, minsize)
-            rsize = nearest_divisor(size, rsize)
+            new_rsize = nearest_divisor(size, rsize)
+            # If the new rsize is not too far from the original rsize, use it
+            if rsize // 2 < new_rsize < rsize * 2:
+                rsize = new_rsize
             partition[-(i + 1)] = rsize
         max_items //= rsize
 
