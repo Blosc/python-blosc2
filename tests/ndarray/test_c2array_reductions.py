@@ -31,7 +31,7 @@ DIR = 'expr/'
     None,
     # AUTH_COOKIE,
 ])
-def auth_cookie(request):
+def sub_auth_ctxt(request):
     cookie = request.param
     with blosc2.c2array.subscriber_auth_cookie(cookie):
         yield cookie
@@ -62,7 +62,7 @@ def get_arrays(shape, chunks_blocks):
 
 
 @pytest.mark.parametrize("reduce_op", ["sum", pytest.param("all", marks=pytest.mark.heavy)])
-def test_reduce_bool(reduce_op, auth_cookie):
+def test_reduce_bool(reduce_op, sub_auth_ctxt):
     shape = (NITEMS_SMALL, )
     chunks_blocks = 'default'
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
@@ -90,7 +90,7 @@ def test_reduce_bool(reduce_op, auth_cookie):
 @pytest.mark.parametrize("axis", [1])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize("dtype_out", [np.int16])
-def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op, auth_cookie):
+def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op, sub_auth_ctxt):
     shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     if axis is not None and np.isscalar(axis) and len(a1.shape) >= axis:
@@ -138,7 +138,7 @@ def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op, auth
                                        pytest.param("var", marks=pytest.mark.heavy),
                                        ])
 @pytest.mark.parametrize("axis", [0])
-def test_reduce_expr_arr(chunks_blocks, axis, reduce_op, auth_cookie):
+def test_reduce_expr_arr(chunks_blocks, axis, reduce_op, sub_auth_ctxt):
     shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     if axis is not None and len(a1.shape) >= axis:

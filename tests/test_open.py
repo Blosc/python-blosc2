@@ -168,13 +168,13 @@ DIR = "expr/"
         # AUTH_COOKIE,
     ]
 )
-def auth_cookie(request):
+def sub_auth_ctxt(request):
     cookie = request.param
     with blosc2.c2array.subscriber_auth_cookie(cookie):
         yield cookie
 
 
-def test_open_c2array(auth_cookie):
+def test_open_c2array(sub_auth_ctxt):
     dtype = np.float64
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
