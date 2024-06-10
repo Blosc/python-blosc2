@@ -36,7 +36,9 @@ def udf1p(inputs_tuple, output, offset):
     ]
 )
 def auth_cookie(request):
-    return request.param
+    cookie = request.param
+    with blosc2.c2array.subscriber_auth_cookie(cookie):
+        yield cookie
 
 
 @pytest.mark.parametrize("chunked_eval", [True, False])
@@ -55,7 +57,7 @@ def test_1p(chunks, blocks, chunked_eval, auth_cookie):
     shape = (60, 60)
     urlpath = f"ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
-    a = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    a = blosc2.C2Array(path, urlbase=URLBASE)
     npa = a[:]
     npc = npa + 1
 
@@ -94,11 +96,11 @@ def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, auth
 
     urlpath_a = f"ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath_a}").as_posix()
-    a = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    a = blosc2.C2Array(path, urlbase=URLBASE)
 
     urlpath_b = f"ds-0-10-linspace-{dtype.__name__}-(False, False)-a3-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath_b}").as_posix()
-    b = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    b = blosc2.C2Array(path, urlbase=URLBASE)
     npa = a[:]
     npb = b[:]
     npc = npa**2 + npb**2 + 2 * npa * npb + 1
