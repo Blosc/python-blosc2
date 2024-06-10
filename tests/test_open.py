@@ -169,7 +169,9 @@ DIR = "expr/"
     ]
 )
 def auth_cookie(request):
-    return request.param
+    cookie = request.param
+    with blosc2.c2array.subscriber_auth_cookie(cookie):
+        yield cookie
 
 
 def test_open_c2array(auth_cookie):
@@ -178,8 +180,8 @@ def test_open_c2array(auth_cookie):
     chunks_blocks = "default"
     path = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + path}").as_posix()
-    a1 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
-    urlpath = blosc2.URLPath(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    a1 = blosc2.C2Array(path, urlbase=URLBASE)
+    urlpath = blosc2.URLPath(path, urlbase=URLBASE)
     a_open = blosc2.open(urlpath, mode="r", offset=0)
     np.testing.assert_allclose(a1[:], a_open[:])
 
