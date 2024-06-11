@@ -1184,15 +1184,14 @@ def get_chunksize(blocksize, l3_minimum=2**20, l3_maximum=2**26):
 
 
 def nearest_divisor(a, b):
-    if a > 1_000_000:
+    if a > 100_000:
         # When `a` is largish, use a faster algorithm that only goes downwards
-        # Start from b and go downwards
         for i in range(b, 0, -1):
             if a % i == 0:
                 return i
 
-    # When `a` is small, use a more general algorithm that can find forwards and backwards
-    # Get all divisors of a; use a generator to avoid creating a list
+    # When `a` is smallish, use a more general algorithm that can find forwards and backwards
+    # Get all divisors of `a`; use a generator to avoid creating a list
     divisors = (i for i in range(1, a + 1) if a % i == 0)
     # Find the divisor nearest to b
     nearest = min(divisors, key=lambda x: abs(x - b))
