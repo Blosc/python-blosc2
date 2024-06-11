@@ -14,12 +14,12 @@ from time import time
 import numexpr as ne
 
 shape = (4_000, 5_000)
+chunks = (10, 5_000)
+blocks = (1, 1000)
+# Comment out the next line to force chunks and blocks above
 chunks, blocks = None, None
-# chunks = (10, 5_000)
-# blocks = (1, 1000)
-cparams = {}
-cparams['clevel'] = 1
-cparams['codec'] = blosc2.Codec.BLOSCLZ
+# Check with fast compression
+cparams = dict(clevel=1, codec=blosc2.Codec.BLOSCLZ)
 
 # Create a structured NumPy array
 npa_ = np.linspace(0, 1, np.prod(shape), dtype=np.float32).reshape(shape)
@@ -41,7 +41,7 @@ t = time() - t0
 print(f"Time to evaluate where expression (NumExpr): {t:.3f} s; {nps.nbytes/2**30/t:.3f} GB/s")
 
 s = blosc2.asarray(nps, chunks=chunks, blocks=blocks, cparams=cparams)
-# print(f"shape: {s.shape}, chunks: {s.chunks}, blocks: {s.blocks}")
+print(f"shape: {s.shape}, chunks: {s.chunks}, blocks: {s.blocks}")
 a = s.fields['a']
 b = s.fields['b']
 

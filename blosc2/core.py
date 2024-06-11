@@ -6,12 +6,16 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 import copy
+import ctypes
+import ctypes.util
 import math
 import os
 import pathlib
 import pickle
+import platform
 import sys
 
+import cpuinfo
 import numpy as np
 
 import blosc2
@@ -1077,6 +1081,36 @@ def print_versions():
     print("-=" * 38)
 
 
+def apple_silicon_cache_size(cache_level: int):
+    """Get the data cache_level size in bytes for Apple Silicon in MacOS.
+
+    Apple Silicon has two clusters, Performance (0) and Efficiency (1).
+    This function returns the data cache size for the Performance cluster.
+    """
+    libc = ctypes.CDLL(ctypes.util.find_library("c"))
+    size = ctypes.c_size_t()
+    if cache_level == 1:
+        # We are interested in the L1 *data* cache size
+        hwcachesize = 'hw.perflevel0.l1dcachesize'
+    else:
+        hwcachesize = f'hw.perflevel0.l{cache_level}cachesize'
+    hwcachesize = hwcachesize.encode('ascii')
+    libc.sysctlbyname(
+            hwcachesize, ctypes.byref(size), ctypes.byref(ctypes.c_size_t(8)), None, 0
+    )
+    return size.value
+
+
+def get_cpu_info():
+    cpu_info = cpuinfo.get_cpu_info()
+    # cpuinfo does not correctly retrieve the cache sizes for Apple Silicon, so do it manually
+    if platform.system() == "Darwin":
+        cpu_info["l1_cache_size"] = apple_silicon_cache_size(1)
+        cpu_info["l2_cache_size"] = apple_silicon_cache_size(2)
+        cpu_info["l3_cache_size"] = apple_silicon_cache_size(3)
+    return cpu_info
+
+
 def get_blocksize():
     """Get the internal blocksize to be used during compression.
 
@@ -1109,12 +1143,12 @@ def get_cbuffer_sizes(src):
 
 
 # Compute a decent value for chunksize based on L3 and/or heuristics
-def get_chunksize(blocksize, l3_minimum=2**20, l3_maximum=2**25):
+def get_chunksize(blocksize, l3_minimum=2**20, l3_maximum=2**26):
     # Find a decent default when L3 cannot be detected by cpuinfo
     # Based mainly in heuristics
     chunksize = blocksize
-    if blocksize * 16 < l3_maximum:
-        chunksize = blocksize * 16
+    if blocksize * 32 < l3_maximum:
+        chunksize = blocksize * 32
     # Refine with L2/L3 measurements (not always possible)
     cpu_info = blosc2.cpu_info
     if "l3_cache_size" in cpu_info:
@@ -1124,15 +1158,14 @@ def get_chunksize(blocksize, l3_minimum=2**20, l3_maximum=2**25):
         # value only when it is an actual int.
         # Also, sometimes cpuinfo does not return a correct L3 size;
         # so in general, enforcing L3 > L2 is a good sanity check.
-        if isinstance(l3_cache_size, int):
+        if isinstance(l3_cache_size, int) and l3_cache_size > 0:
             l2_cache_size = cpu_info.get("l2_cache_size", "Not found")
             if isinstance(l2_cache_size, int) and l3_cache_size > l2_cache_size:
                 chunksize = l3_cache_size
-    else:
-        # Chunksize should be at least the size of L2
-        l2_cache_size = cpu_info.get("l2_cache_size", "Not found")
-        if isinstance(l2_cache_size, int) and l2_cache_size > chunksize:
-            chunksize = l2_cache_size
+    # Chunksize should be at least the size of L2
+    l2_cache_size = cpu_info.get("l2_cache_size", "Not found")
+    if isinstance(l2_cache_size, int) and l2_cache_size > chunksize:
+        chunksize = l2_cache_size
 
     # When evaluating expressions, it is convenient to keep chunks for all operands in L3 cache,
     # so let's divide by 4 (3 operands + result is a typical situation for moderately complex
@@ -1150,6 +1183,22 @@ def get_chunksize(blocksize, l3_minimum=2**20, l3_maximum=2**25):
     return chunksize
 
 
+def nearest_divisor(a, b):
+    if a > 100_000:
+        # When `a` is largish, use a faster algorithm that only goes downwards
+        for i in range(b, 0, -1):
+            if a % i == 0:
+                return i
+
+    # When `a` is smallish, use a more general algorithm that can find forwards and backwards
+    # Get all divisors of `a`; use a generator to avoid creating a list
+    divisors = (i for i in range(1, a + 1) if a % i == 0)
+    # Find the divisor nearest to b
+    nearest = min(divisors, key=lambda x: abs(x - b))
+
+    return nearest
+
+
 # Compute chunks and blocks partitions
 def compute_partition(nitems, maxshape, minpart=None):
     if 0 in maxshape:
@@ -1163,13 +1212,19 @@ def compute_partition(nitems, maxshape, minpart=None):
         minpart = [1] * len(maxshape)
     partition = [1] * len(maxshape)
     for i, (size, minsize) in enumerate(zip(reversed(maxshape), reversed(minpart), strict=True)):
-        if max_items == 0:
+        if max_items <= 1:
             break
         rsize = max(size, minsize)
         if rsize <= max_items:
+            rsize = nearest_divisor(size, rsize)
             partition[-(i + 1)] = rsize
         else:
-            partition[-(i + 1)] = max(max_items, minsize)
+            rsize = max(max_items, minsize)
+            new_rsize = nearest_divisor(size, rsize)
+            # If the new rsize is not too far from the original rsize, use it
+            if rsize // 2 < new_rsize < rsize * 2:
+                rsize = new_rsize
+            partition[-(i + 1)] = rsize
         max_items //= rsize
 
     return partition
@@ -1264,6 +1319,10 @@ def compute_chunks_blocks(
         # Also, use 256 KB when no compression is used, as it is a good tradeoff for most cases.
         if blocksize > 2**18:
             blocksize = 2**18
+        # For Apple Silicon, experiments say to use half of the L1 cache size
+        if platform.system() == 'Darwin' and 'arm' in platform.machine():
+            blocksize = blosc2.cpu_info["l1_cache_size"] // 2
+
         cparams2["tuner"] = aux_tuner
     else:
         blocksize = math.prod(blocks) * itemsize

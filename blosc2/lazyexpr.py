@@ -19,7 +19,7 @@ import numpy as np
 
 import blosc2
 from blosc2.info import InfoReporter
-from blosc2.ndarray import get_chunks_idx
+from blosc2.ndarray import are_partitions_behaved, get_chunks_idx
 
 
 class ReduceOp(Enum):
@@ -258,7 +258,7 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
     )
 
 
-def validate_inputs(inputs: dict, getitem=False, out=None) -> tuple:
+def validate_inputs(inputs: dict, out=None) -> tuple:
     """Validate the inputs for the expression."""
     if len(inputs) == 0:
         raise ValueError(
@@ -274,41 +274,35 @@ def validate_inputs(inputs: dict, getitem=False, out=None) -> tuple:
     ref = inputs[0]
     if not all(np.array_equal(ref.shape, input.shape) for input in inputs):
         # If inputs have different shapes, we cannot take the fast path
-        return ref.shape, ref.dtype, False
+        return ref.shape, False
 
     # More checks specific of NDArray inputs
     NDinputs = list(input for input in inputs if hasattr(input, "chunks"))
     if len(NDinputs) == 0:
         # All inputs are NumPy arrays, so we cannot take the fast path
-        dtype = inputs[0].dtype if out is None else out.dtype
-        return inputs[0].shape, dtype, False
+        return inputs[0].shape, False
 
     # Check if we can take the fast path
     # For this we need that the chunks and blocks for all inputs (and a possible output)
     # are the same
-    equal_chunks, equal_blocks = True, True
+    fast_path = True
     first_input = NDinputs[0]
     # Check the out NDArray (if present) first
     if isinstance(out, blosc2.NDArray):
         if first_input.shape != out.shape:
             raise ValueError("Output shape does not match the first input shape")
         if first_input.blocks != out.blocks:
-            equal_blocks = False
+            fast_path = False
         if first_input.chunks != out.chunks:
-            equal_chunks = False
+            fast_path = False
     # Then, the rest of the operands
     for input_ in NDinputs:
         if first_input.chunks != input_.chunks:
-            equal_chunks = False
+            fast_path = False
         if first_input.blocks != input_.blocks:
-            equal_blocks = False
-        if input_.blocks[1:] != input_.chunks[1:]:
-            # For some reason, the trailing dimensions not being the same is not supported in fast path
-            equal_blocks = False
-    fast_path = equal_chunks and equal_blocks
+            fast_path = False
 
-    dtype = first_input.dtype if out is None else out.dtype
-    return first_input.shape, dtype, fast_path
+    return first_input.shape, fast_path
 
 
 def is_full_slice(item):
@@ -439,7 +433,8 @@ def fast_eval(
     # Get the shape of the base array
     shape = basearr.shape
     chunks = basearr.chunks
-    has_padding = basearr.ext_shape != shape
+    # Check if the partitions are well-behaved (i.e. no padding)
+    behaved = are_partitions_behaved(shape, chunks, basearr.blocks)
 
     chunk_operands = {}
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
@@ -454,7 +449,7 @@ def fast_eval(
         offset = tuple(s.start for s in slice_)  # offset for the udf
         chunks_ = tuple(s.stop - s.start for s in slice_)
 
-        full_chunk = (chunks_ == chunks) and not has_padding
+        full_chunk = (chunks_ == chunks) and behaved
         fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands)
 
         if isinstance(out, np.ndarray) and not where:
@@ -487,14 +482,16 @@ def fast_eval(
                     out = blosc2.empty(
                         shape, chunks=chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs
                     )
+
         # Store the result in the output array
         if getitem:
             out[slice_] = result
         else:
-            if has_padding:
-                out[slice_] = result
-            else:
+            if behaved:
+                # Fast path
                 out.schunk.update_data(nchunk, result, copy=False)
+            else:
+                out[slice_] = result
 
     return out
 
@@ -833,36 +830,74 @@ def reduce_slices(
 
 
 def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs):
-    getitem = kwargs.pop("_getitem", False)
-    out = kwargs.get("_output", None)
-    where: dict | None = kwargs.get("_where_args", None)
-    if where:
-        # Make the where arguments part of the operands
-        operands = {**operands, **where}
-    shape, dtype_, fast_path = validate_inputs(operands, getitem, out)
+    """
+    Evaluate the expression in chunks of operands.
 
-    reduce_args = kwargs.pop("_reduce_args", {})
-    if reduce_args:
-        # Eval and reduce the expression in a single step
-        return reduce_slices(expression, operands, reduce_args=reduce_args, _slice=item, **kwargs)
+    This chooses the best algorithm exploring different paths depending on the input operands.
 
-    if not is_full_slice(item) or (where is not None and len(where) < 2):
-        # The fast path is not possible when using partial slices or where returning
-        # a variable number of elements
-        return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
+    Parameters
+    ----------
+    expression: str or callable
+        The expression or udf to evaluate.
+    operands: dict
+        A dictionary with the operands.
+    item: int, slice or sequence of slices, optional
+        The slice(s) to be retrieved. Note that step parameter is not honored yet.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.  In addition,
+        the following keyword arguments are supported:
+        _getitem: bool, optional
+            Whether the expression is being evaluated for a getitem operation.
+        _output: NDArray or np.ndarray, optional
+            The output array.
+        _where_args: dict, optional
+            The where condition.
+    """
+    try:
+        getitem = kwargs.pop("_getitem", False)
+        out = kwargs.get("_output", None)
+        where: dict | None = kwargs.get("_where_args", None)
+        if where:
+            # Make the where arguments part of the operands
+            operands = {**operands, **where}
+        shape, fast_path = validate_inputs(operands, out)
 
-    if fast_path:
-        if getitem:
-            # When using getitem, taking the fast path is always possible
-            return fast_eval(expression, operands, getitem=True, **kwargs)
-        elif (kwargs.get("chunks", None) is None and kwargs.get("blocks", None) is None) and (
-            out is None or isinstance(out, blosc2.NDArray)
-        ):
-            # If not, the conditions to use the fast path are a bit more restrictive
-            # e.g. the user cannot specify chunks or blocks, or an output that is not a blosc2.NDArray
-            return fast_eval(expression, operands, getitem=False, **kwargs)
+        # Activate last read cache for NDField instances
+        for op in operands:
+            if isinstance(operands[op], blosc2.NDField):
+                operands[op].ndarr.keep_last_read = True
 
-    return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
+        reduce_args = kwargs.pop("_reduce_args", {})
+        if reduce_args:
+            # Eval and reduce the expression in a single step
+            return reduce_slices(expression, operands, reduce_args=reduce_args, _slice=item, **kwargs)
+
+        if not is_full_slice(item) or (where is not None and len(where) < 2):
+            # The fast path is not possible when using partial slices or where returning
+            # a variable number of elements
+            return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
+
+        if fast_path:
+            if getitem:
+                # When using getitem, taking the fast path is always possible
+                return fast_eval(expression, operands, getitem=True, **kwargs)
+            elif (kwargs.get("chunks", None) is None and kwargs.get("blocks", None) is None) and (
+                out is None or isinstance(out, blosc2.NDArray)
+            ):
+                # If not, the conditions to use the fast path are a bit more restrictive
+                # e.g. the user cannot specify chunks or blocks, or an output that is not
+                # a blosc2.NDArray
+                return fast_eval(expression, operands, getitem=False, **kwargs)
+
+        res = slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
+
+    finally:
+        # Deactivate cache for NDField instances
+        for op in operands:
+            if isinstance(operands[op], blosc2.NDField):
+                operands[op].ndarr.keep_last_read = False
+
+    return res
 
 
 def fuse_operands(operands1, operands2):
@@ -1099,7 +1134,7 @@ class LazyExpr(LazyArray):
         if hasattr(self, "_shape"):
             # Contrarily to dtype, shape cannot change after creation of the expression
             return self._shape
-        shape, dtype_, fast_path = validate_inputs(self.operands)
+        shape, fast_path = validate_inputs(self.operands)
         self._shape = shape
         return shape
 

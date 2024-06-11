@@ -528,10 +528,15 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
     @property
     def keep_last_read(self):
+        """Indicates whether the last read data should be kept in memory."""
         return self._keep_last_read
 
     @keep_last_read.setter
     def keep_last_read(self, value: bool):
+        """Set whether the last read data should be kept in memory.
+
+        This always clear the last read data (if any).
+        """
         if not isinstance(value, bool):
             raise ValueError("keep_last_read should be a boolean")
         # Reset last read data
@@ -2160,8 +2165,6 @@ class NDField(Operand):
         self.field = field
         self.dtype = ndarr.dtype.fields[field][0]
         self.offset = ndarr.dtype.fields[field][1]
-        # Activate the last read cache in parent NDArray
-        self.ndarr.keep_last_read = True
 
     def __repr__(self):
         return f"NDField({self.ndarr}, {self.field})"
@@ -2169,10 +2172,6 @@ class NDField(Operand):
     @property
     def shape(self):
         return self.ndarr.shape
-
-    @property
-    def ext_shape(self):
-        return self.ndarr.ext_shape
 
     @property
     def schunk(self):
@@ -2190,6 +2189,8 @@ class NDField(Operand):
         inmutable_key = make_key_hashable(key)
         if inmutable_key in self.ndarr._last_read:
             return self.ndarr._last_read[inmutable_key][self.field]
-        npbuf = self.ndarr[key]
-        # Get the field from the buffer
-        return npbuf[self.field]
+
+        # Do the actual read in the parent NDArray
+        nparr = self.ndarr[key]
+        # And return the field
+        return nparr[self.field]

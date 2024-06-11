@@ -97,7 +97,7 @@ def _xget(url, params=None, headers=None, auth_cookie=None, timeout=15):
 
 def _xpost(url, json=None, auth_cookie=None, timeout=15):
     auth_cookie = auth_cookie or _subscriber_data['auth_cookie']
-    headers = {'Cookie': auth_cookie} if auth_cookie else None
+    headers = {"Cookie": auth_cookie} if auth_cookie else None
     response = httpx.post(url, json=json, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response.json()
@@ -176,12 +176,12 @@ class C2Array(blosc2.Operand):
         out: C2Array
 
         """
-        if path.startswith('/'):
+        if path.startswith("/"):
             raise ValueError("The path should start with a root name, not a slash")
         self.path = path
 
-        if urlbase and not urlbase.endswith('/'):
-            urlbase += '/'
+        if urlbase and not urlbase.endswith("/"):
+            urlbase += "/"
         self.urlbase = urlbase
 
         self.auth_cookie = auth_cookie
@@ -193,14 +193,13 @@ class C2Array(blosc2.Operand):
         except httpx.HTTPStatusError:
             # Subscribe to root and try again. It is less latency to subscribe directly
             # than to check for the subscription.
-            root, _ = self.path.split('/', 1)
+            root, _ = self.path.split("/", 1)
             subscribe(root, self.urlbase, self.auth_cookie)
             try:
                 self.meta = info(self.path, self.urlbase,
                                  auth_cookie=self.auth_cookie)
             except httpx.HTTPStatusError as err:
-                raise FileNotFoundError(f"Remote path not found: {path}.\n"
-                                        f"Error was: {err}") from err
+                raise FileNotFoundError(f"Remote path not found: {path}.\n" f"Error was: {err}") from err
 
     def __getitem__(self, slice_: int | slice | Sequence[slice]) -> np.ndarray:
         """
@@ -239,11 +238,6 @@ class C2Array(blosc2.Operand):
     def dtype(self):
         """The dtype of the remote array"""
         return np.dtype(self.meta["dtype"])
-
-    @property
-    def ext_shape(self):
-        """The ext_shape of the remote array"""
-        return tuple(self.meta["ext_shape"])
 
 
 class URLPath:

@@ -12,8 +12,6 @@
 
 from enum import Enum
 
-import cpuinfo
-
 
 class Codec(Enum):
     """
@@ -128,8 +126,6 @@ VERSION_STRING = VERSION_STRING
 """
 The C-Blosc2 version's string."""
 
-cpu_info = cpuinfo.get_cpu_info()
-
 # Public API for container module
 from .core import (  # noqa: I001
     clib_info,
@@ -145,6 +141,7 @@ from .core import (  # noqa: I001
     get_cbuffer_sizes,
     get_clib,
     get_compressor,
+    get_cpu_info,
     load_array,
     load_tensor,
     ndarray_from_cframe,
@@ -168,6 +165,10 @@ from .core import (  # noqa: I001
     unpack_array2,
     unpack_tensor,
 )
+
+# Get CPU info
+cpu_info = get_cpu_info()
+
 
 from .ndarray import (  # noqa: I001
     NDArray,
@@ -223,13 +224,13 @@ blosclib_version = f"{VERSION_STRING} ({VERSION_DATE})"
 The blosc2 version + date.
 """
 # Internal Blosc threading
-nthreads = ncores = detect_number_of_cores()
-if ncores > 1:
-    nthreads = ncores // 2
+nthreads = ncores = cpu_info["count"] if "count" in cpu_info else 1
 """Number of threads to be used in compression/decompression.
 """
 # Protection against too many threads
-nthreads = min(nthreads, 16)
+nthreads = min(nthreads, 32)
+# Experiments say that, when using a large number of threads, it is better to not use them all
+nthreads -= nthreads // 8
 set_nthreads(nthreads)
 
 # Defaults for compression params
