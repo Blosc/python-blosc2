@@ -17,7 +17,7 @@ import numpy as np
 import blosc2
 
 
-_subscriber_data = {}
+_subscriber_data = {'auth_cookie': None}
 """Caterva2 subscriber data saved by context manager."""
 
 
@@ -31,8 +31,8 @@ def c2subscriber_auth_cookie(auth_cookie):
     Parameters
     ----------
     auth_cookie: str
-        A cookie that takes precedence over authorization cookies set in
-        individual C2Array instances.
+        A cookie that will be used when an individual C2Array instance has no
+        authorization cookie set.
 
     Yields
     ------
@@ -49,7 +49,7 @@ def c2subscriber_auth_cookie(auth_cookie):
 
 
 def _xget(url, params=None, headers=None, auth_cookie=None, timeout=15):
-    auth_cookie = _subscriber_data.get('auth_cookie', auth_cookie)
+    auth_cookie = auth_cookie or _subscriber_data['auth_cookie']
     if auth_cookie:
         headers = headers.copy() if headers else {}
         headers["Cookie"] = auth_cookie
@@ -59,7 +59,7 @@ def _xget(url, params=None, headers=None, auth_cookie=None, timeout=15):
 
 
 def _xpost(url, json=None, auth_cookie=None, timeout=15):
-    auth_cookie = _subscriber_data.get('auth_cookie', auth_cookie)
+    auth_cookie = auth_cookie or _subscriber_data['auth_cookie']
     headers = {'Cookie': auth_cookie} if auth_cookie else None
     response = httpx.post(url, json=json, headers=headers, timeout=timeout)
     response.raise_for_status()
