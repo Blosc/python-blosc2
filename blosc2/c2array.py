@@ -21,7 +21,10 @@ import blosc2
 C2SUB_DEFBASE_ENVVAR = 'CATERVA2_SUBSCRIBER_URL'
 """Environment variable with a default Caterva2 subscriber URL base."""
 
-_subscriber_data = {'auth_cookie': None}
+_subscriber_data = {
+    'urlbase': None,
+    'auth_cookie': None,
+}
 """Caterva2 subscriber data saved by context manager."""
 
 
@@ -55,6 +58,36 @@ def c2subscriber_auth_cookie(auth_cookie: str | None):
         _subscriber_data = old_sub_data
 
 
+@contextmanager
+def c2subscriber_urlbase(urlbase: str | None):
+    """
+    Context manager that adds `urlbase` to Caterva2 subscriber requests.
+
+    Please note that this manager is reentrant but not concurrency-safe.
+
+    Parameters
+    ----------
+    urlbase: str | None
+        A URL base that will be used when an individual C2Array instance has
+        no subscriber URL base set.  Use ``None`` to disable the base set by a
+        previous context manager.
+
+    Yields
+    ------
+    out: None
+
+    """
+    global _subscriber_data
+    try:
+        old_sub_data = _subscriber_data
+        new_sub_data = old_sub_data.copy()  # inherit old values
+        new_sub_data['urlbase'] = urlbase
+        _subscriber_data = new_sub_data
+        yield
+    finally:
+        _subscriber_data = old_sub_data
+
+
 def _xget(url, params=None, headers=None, auth_cookie=None, timeout=15):
     auth_cookie = auth_cookie or _subscriber_data['auth_cookie']
     if auth_cookie:
@@ -75,7 +108,8 @@ def _xpost(url, json=None, auth_cookie=None, timeout=15):
 
 def _sub_api_url(urlbase, apipath):
     try:
-        urlbase = urlbase or os.environ[C2SUB_DEFBASE_ENVVAR]
+        urlbase = (urlbase or _subscriber_data['urlbase']
+                   or os.environ[C2SUB_DEFBASE_ENVVAR])
     except KeyError as ke:
         raise RuntimeError("No default Caterva2 subscriber set") from ke
     return (f"{urlbase}api/{apipath}" if urlbase.endswith("/")
