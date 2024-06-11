@@ -174,13 +174,13 @@ def sub_auth_cookie(request):
 
 @pytest.fixture
 def sub_auth_ctxt(sub_auth_cookie):
-    with blosc2.c2array.c2subscriber_auth_cookie(sub_auth_cookie):
+    with blosc2.c2array.c2sub_auth_cookie(sub_auth_cookie):
         yield sub_auth_cookie
 
 
 @pytest.fixture
 def sub_urlbase_ctxt():
-    with blosc2.c2array.c2subscriber_urlbase(URLBASE):
+    with blosc2.c2array.c2sub_urlbase(URLBASE):
         yield URLBASE
 
 
@@ -212,8 +212,8 @@ def test_open_c2array_args(sub_auth_cookie):  # instance args prevail
     path = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + path}").as_posix()
 
-    with blosc2.c2array.c2subscriber_urlbase('https://wrong.example.com/'):
-        with blosc2.c2array.c2subscriber_auth_cookie('wrong-cookie'):
+    with blosc2.c2array.c2sub_urlbase('https://wrong.example.com/'):
+        with blosc2.c2array.c2sub_auth_cookie('wrong-cookie'):
             a1 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=sub_auth_cookie)
             urlpath = blosc2.URLPath(path, urlbase=URLBASE, auth_cookie=sub_auth_cookie)
             a_open = blosc2.open(urlpath, mode="r", offset=0)

@@ -41,7 +41,7 @@ def _sub_param_ctxmgr(param, value):
 
 
 @contextmanager
-def c2subscriber_auth_cookie(auth_cookie: str | None):
+def c2sub_auth_cookie(auth_cookie: str | None):
     """
     Context manager that adds `auth_cookie` to Caterva2 subscriber requests.
 
@@ -63,7 +63,7 @@ def c2subscriber_auth_cookie(auth_cookie: str | None):
 
 
 @contextmanager
-def c2subscriber_urlbase(urlbase: str | None):
+def c2sub_urlbase(urlbase: str | None):
     """
     Context manager that adds `urlbase` to Caterva2 subscriber requests.
 

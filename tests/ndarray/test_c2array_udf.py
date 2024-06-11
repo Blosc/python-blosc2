@@ -37,13 +37,13 @@ def udf1p(inputs_tuple, output, offset):
 )
 def sub_auth_ctxt(request):
     cookie = request.param
-    with blosc2.c2array.c2subscriber_auth_cookie(cookie):
+    with blosc2.c2array.c2sub_auth_cookie(cookie):
         yield cookie
 
 
 @pytest.fixture
 def sub_urlbase_ctxt():
-    with blosc2.c2array.c2subscriber_urlbase(URLBASE):
+    with blosc2.c2array.c2sub_urlbase(URLBASE):
         yield URLBASE
 
 
