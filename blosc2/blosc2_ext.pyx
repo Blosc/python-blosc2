@@ -966,7 +966,7 @@ cdef class SChunk:
             if kwargs is not None:
                 check_schunk_params(self.schunk, kwargs)
             if schunk_is_ndarray(self.schunk):
-                raise ValueError("Cannot open an ndarray as a SChunk")
+                raise ValueError("Cannot open an ndarray as a SChunk. Please use blosc2.open instead")
         else:
             self.schunk = blosc2_schunk_new(&storage)
 
