@@ -18,7 +18,7 @@ import numpy as np
 import blosc2
 
 
-C2SUB_DEFBASE_ENVVAR = 'CATERVA2_SUBSCRIBER_URL'
+C2SUB_URLBASE_ENVVAR = 'CATERVA2_SUBSCRIBER_URL'
 """Environment variable with a default Caterva2 subscriber URL base."""
 
 _subscriber_data = {
@@ -108,7 +108,7 @@ def _xpost(url, json=None, auth_cookie=None, timeout=15):
 def _sub_api_url(urlbase, apipath):
     try:
         urlbase = (urlbase or _subscriber_data['urlbase']
-                   or os.environ[C2SUB_DEFBASE_ENVVAR])
+                   or os.environ[C2SUB_URLBASE_ENVVAR])
     except KeyError as ke:
         raise RuntimeError("No default Caterva2 subscriber set") from ke
     return (f"{urlbase}api/{apipath}" if urlbase.endswith("/")
