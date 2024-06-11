@@ -10,12 +10,16 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from contextlib import contextmanager
+import os
 
 import httpx
 import numpy as np
 
 import blosc2
 
+
+C2SUB_DEFBASE_ENVVAR = 'CATERVA2_SUBSCRIBER_URL'
+"""Environment variable with a default Caterva2 subscriber URL base."""
 
 _subscriber_data = {'auth_cookie': None}
 """Caterva2 subscriber data saved by context manager."""
@@ -69,18 +73,30 @@ def _xpost(url, json=None, auth_cookie=None, timeout=15):
     return response.json()
 
 
+def _sub_api_url(urlbase, apipath):
+    try:
+        urlbase = urlbase or os.environ[C2SUB_DEFBASE_ENVVAR]
+    except KeyError as ke:
+        raise RuntimeError("No default Caterva2 subscriber set") from ke
+    return (f"{urlbase}api/{apipath}" if urlbase.endswith("/")
+            else f"{urlbase}/api/{apipath}")
+
+
 def info(path, urlbase, params=None, headers=None, model=None, auth_cookie=None):
-    response = _xget(f"{urlbase}api/info/{path}", params, headers, auth_cookie)
+    url = _sub_api_url(urlbase, f"info/{path}")
+    response = _xget(url, params, headers, auth_cookie)
     json = response.json()
     return json if model is None else model(**json)
 
 
 def subscribe(root, urlbase, auth_cookie):
-    return _xpost(f'{urlbase}api/subscribe/{root}', auth_cookie=auth_cookie)
+    url = _sub_api_url(urlbase, f"subscribe/{root}")
+    return _xpost(url, auth_cookie=auth_cookie)
 
 
 def fetch_data(path, urlbase, params, auth_cookie=None):
-    response = _xget(f"{urlbase}api/fetch/{path}", params=params, auth_cookie=auth_cookie)
+    url = _sub_api_url(urlbase, f"fetch/{path}")
+    response = _xget(url, params=params, auth_cookie=auth_cookie)
     data = response.content
     try:
         data = blosc2.ndarray_from_cframe(data)
