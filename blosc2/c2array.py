@@ -42,7 +42,9 @@ def c2subscriber_auth_cookie(auth_cookie):
     global _subscriber_data
     try:
         old_sub_data = _subscriber_data
-        _subscriber_data = {'auth_cookie': auth_cookie}
+        new_sub_data = old_sub_data.copy()  # inherit old values
+        new_sub_data['auth_cookie'] = auth_cookie
+        _subscriber_data = new_sub_data
         yield
     finally:
         _subscriber_data = old_sub_data
