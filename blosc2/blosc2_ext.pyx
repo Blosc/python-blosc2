@@ -941,8 +941,6 @@ cdef class SChunk:
         if kwargs is not None:
             if self.mode == "w":
                 blosc2.remove_urlpath(urlpath)
-            elif self.mode == "r" and urlpath is not None:
-                raise ValueError("SChunk must already exist")
 
         cdef blosc2_storage storage
         # Create space for cparams and dparams in the stack
