@@ -22,7 +22,7 @@ _subscriber_data = {'auth_cookie': None}
 
 
 @contextmanager
-def c2subscriber_auth_cookie(auth_cookie):
+def c2subscriber_auth_cookie(auth_cookie: str | None):
     """
     Context manager that adds `auth_cookie` to Caterva2 subscriber requests.
 
@@ -30,9 +30,10 @@ def c2subscriber_auth_cookie(auth_cookie):
 
     Parameters
     ----------
-    auth_cookie: str
+    auth_cookie: str | None
         A cookie that will be used when an individual C2Array instance has no
-        authorization cookie set.
+        authorization cookie set.  Use ``None`` to disable the cookie set by a
+        previous context manager.
 
     Yields
     ------
