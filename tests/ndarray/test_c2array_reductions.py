@@ -37,23 +37,29 @@ def sub_auth_ctxt(request):
         yield cookie
 
 
+@pytest.fixture
+def sub_urlbase_ctxt():
+    with blosc2.c2array.c2subscriber_urlbase(URLBASE):
+        yield URLBASE
+
+
 def get_arrays(shape, chunks_blocks):
     dtype = np.float64
     nelems = np.prod(shape)
     na1 = np.linspace(0, 10, nelems, dtype=dtype).reshape(shape)
     urlpath = f'ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
-    a1 = blosc2.C2Array(path, urlbase=URLBASE)
+    a1 = blosc2.C2Array(path)
     urlpath = f'ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a2-{shape}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
-    a2 = blosc2.C2Array(path, urlbase=URLBASE)
+    a2 = blosc2.C2Array(path)
     # Let other operands have chunks1 and blocks1
     urlpath = f'ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a3-{shape}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
-    a3 = blosc2.C2Array(path, urlbase=URLBASE)
+    a3 = blosc2.C2Array(path)
     urlpath = f'ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a4-{shape}d.b2nd'
     path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
-    a4 = blosc2.C2Array(path, urlbase=URLBASE)
+    a4 = blosc2.C2Array(path)
     assert isinstance(a1, blosc2.C2Array)
     assert isinstance(a2, blosc2.C2Array)
     assert isinstance(a3, blosc2.C2Array)
@@ -62,7 +68,7 @@ def get_arrays(shape, chunks_blocks):
 
 
 @pytest.mark.parametrize("reduce_op", ["sum", pytest.param("all", marks=pytest.mark.heavy)])
-def test_reduce_bool(reduce_op, sub_auth_ctxt):
+def test_reduce_bool(reduce_op, sub_urlbase_ctxt, sub_auth_ctxt):
     shape = (NITEMS_SMALL, )
     chunks_blocks = 'default'
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
@@ -90,7 +96,8 @@ def test_reduce_bool(reduce_op, sub_auth_ctxt):
 @pytest.mark.parametrize("axis", [1])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize("dtype_out", [np.int16])
-def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op, sub_auth_ctxt):
+def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op,
+                       sub_urlbase_ctxt, sub_auth_ctxt):
     shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     if axis is not None and np.isscalar(axis) and len(a1.shape) >= axis:
@@ -138,7 +145,8 @@ def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op, sub_
                                        pytest.param("var", marks=pytest.mark.heavy),
                                        ])
 @pytest.mark.parametrize("axis", [0])
-def test_reduce_expr_arr(chunks_blocks, axis, reduce_op, sub_auth_ctxt):
+def test_reduce_expr_arr(chunks_blocks, axis, reduce_op,
+                         sub_urlbase_ctxt, sub_auth_ctxt):
     shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     if axis is not None and len(a1.shape) >= axis:

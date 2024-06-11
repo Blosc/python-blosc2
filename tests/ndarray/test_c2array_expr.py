@@ -39,16 +39,22 @@ def sub_auth_ctxt(request):
         yield cookie
 
 
+@pytest.fixture
+def sub_urlbase_ctxt():
+    with blosc2.c2array.c2subscriber_urlbase(URLBASE):
+        yield URLBASE
+
+
 def get_arrays(shape, chunks_blocks):
     dtype = np.float64
     nelems = np.prod(shape)
     na1 = np.linspace(0, 10, nelems, dtype=dtype).reshape(shape)
     urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
-    a1 = blosc2.C2Array(path, urlbase=URLBASE)
+    a1 = blosc2.C2Array(path)
     urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a2-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
-    a2 = blosc2.C2Array(path, urlbase=URLBASE)
+    a2 = blosc2.C2Array(path)
     # Let other operands be local, on-disk NDArray copies
     urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a3-{shape}d.b2nd"
     a3 = blosc2.asarray(a2, urlpath=urlpath, mode="w")
@@ -70,7 +76,7 @@ def get_arrays(shape, chunks_blocks):
         (False, False),
     ],
 )
-def test_simple(chunks_blocks, sub_auth_ctxt):
+def test_simple(chunks_blocks, sub_urlbase_ctxt, sub_auth_ctxt):
     shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
 
@@ -86,7 +92,7 @@ def test_simple(chunks_blocks, sub_auth_ctxt):
     np.testing.assert_allclose(res[:], nres)
 
 
-def test_simple_getitem(sub_auth_ctxt):
+def test_simple_getitem(sub_urlbase_ctxt, sub_auth_ctxt):
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
@@ -110,7 +116,7 @@ def test_simple_getitem(sub_auth_ctxt):
         (False, False),
     ],
 )
-def test_ixxx(chunks_blocks, sub_auth_ctxt):
+def test_ixxx(chunks_blocks, sub_urlbase_ctxt, sub_auth_ctxt):
     shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     expr = a1**3 + a2**2 + a3**3 - a4 + 3
@@ -122,7 +128,7 @@ def test_ixxx(chunks_blocks, sub_auth_ctxt):
     np.testing.assert_allclose(res[:], nres)
 
 
-def test_complex(sub_auth_ctxt):
+def test_complex(sub_urlbase_ctxt, sub_auth_ctxt):
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
@@ -151,7 +157,7 @@ def test_complex(sub_auth_ctxt):
         (False, False),
     ],
 )
-def test_mix_operands(chunks_blocks, sub_auth_ctxt):
+def test_mix_operands(chunks_blocks, sub_urlbase_ctxt, sub_auth_ctxt):
     shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     b1 = blosc2.asarray(na1, chunks=a1.chunks, blocks=a1.blocks)
@@ -187,7 +193,7 @@ def test_mix_operands(chunks_blocks, sub_auth_ctxt):
 
 
 # Tests related with save method
-def test_save(sub_auth_ctxt):
+def test_save(sub_urlbase_ctxt, sub_auth_ctxt):
     shape = (60, 60)
     tol = 1e-17
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, (False, True))
@@ -231,17 +237,17 @@ def broadcast_shape(request):
 
 
 @pytest.fixture
-def broadcast_fixture(broadcast_shape, sub_auth_ctxt):
+def broadcast_fixture(broadcast_shape, sub_urlbase_ctxt, sub_auth_ctxt):
     shape1, shape2 = broadcast_shape
     dtype = np.float64
     na1 = np.linspace(0, 1, np.prod(shape1), dtype=dtype).reshape(shape1)
     na2 = np.linspace(1, 2, np.prod(shape2), dtype=dtype).reshape(shape2)
     urlpath = f"ds-0-1-linspace-{dtype.__name__}-b1-{shape1}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
-    b1 = blosc2.C2Array(path, urlbase=URLBASE)
+    b1 = blosc2.C2Array(path)
     urlpath = f"ds-1-2-linspace-{dtype.__name__}-b2-{shape2}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
-    b2 = blosc2.C2Array(path, urlbase=URLBASE)
+    b2 = blosc2.C2Array(path)
 
     return b1, b2, na1, na2
 
