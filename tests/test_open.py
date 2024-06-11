@@ -199,15 +199,17 @@ def test_open_c2array(sub_auth_ctxt):
         _ = blosc2.open(urlpath, mode="r", offset=0, cparams={})
 
 
-def test_open_c2array_cookie(sub_auth_cookie):
+def test_open_c2array_cookie(sub_auth_cookie):  # instance cookie prevails
     dtype = np.float64
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
     path = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + path}").as_posix()
-    urlpath = blosc2.URLPath(path, urlbase=URLBASE, auth_cookie=sub_auth_cookie)
 
     with blosc2.c2array.c2subscriber_auth_cookie('wrong-cookie'):
-        _ = blosc2.open(urlpath, mode="r", offset=0)  # instance cookie prevails
+        a1 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=sub_auth_cookie)
+        urlpath = blosc2.URLPath(path, urlbase=URLBASE, auth_cookie=sub_auth_cookie)
+        a_open = blosc2.open(urlpath, mode="r", offset=0)
+        np.testing.assert_allclose(a1[:], a_open[:])
 
 
