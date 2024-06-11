@@ -35,7 +35,7 @@ DIR = "expr/"
 )
 def sub_auth_ctxt(request):
     cookie = request.param
-    with blosc2.c2array.subscriber_auth_cookie(cookie):
+    with blosc2.c2array.c2subscriber_auth_cookie(cookie):
         yield cookie
 
 

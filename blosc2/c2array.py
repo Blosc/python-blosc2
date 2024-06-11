@@ -22,9 +22,9 @@ _subscriber_data = {}
 
 
 @contextmanager
-def subscriber_auth_cookie(auth_cookie):
+def c2subscriber_auth_cookie(auth_cookie):
     """
-    Context manager that adds the `auth_cookie` to subscriber requests.
+    Context manager that adds `auth_cookie` to Caterva2 subscriber requests.
 
     Please note that this manager is reentrant but not concurrency-safe.
 
