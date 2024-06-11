@@ -5,6 +5,8 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+import warnings
+
 import ndindex
 import numexpr as ne
 import numpy as np
@@ -218,8 +220,6 @@ class LazyExpr:
     def __ipow__(self, value):
         return self.update_expr(new_op=(self, "**", value))
 
-
-
     def evaluate(self, item=None, **kwargs) -> blosc2.NDArray:
         """Evaluate the lazy expression in self.
 
@@ -235,6 +235,43 @@ class LazyExpr:
         -------
         :ref:`NDArray`
             The output array.
+
+        Note
+        ----
+
+        This is a deprecated method.  Use the new evaluation engine in Python-Blosc2 3.x.
+        """
+        warnings.warn(
+            "The `evaluate` method is deprecated as of Python-Blosc2 2.7.0 and is"
+            " actually removed in Python-Blosc2 3.x series. Use `LazyExpr.eval()` instead. "
+            "If you are interested in computing expressions involving NDArray instances, "
+            "please use the new, much improved, evaluation engine in Python-Blosc2 3.x series. "
+            "For more information, please check the documentation at: <New 3.x documentation URL>",
+            stacklevel=2,
+            category=DeprecationWarning,
+        )
+        return self.eval(item=item, **kwargs)
+
+    def eval(self, item=None, **kwargs) -> blosc2.NDArray:
+        """Evaluate the lazy expression in self.
+
+        Parameters
+        ----------
+        item: slice, list of slices, optional
+            If not None, only the chunks that intersect with the slices
+            in items will be evaluated.
+        kwargs: dict, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
+
+        Returns
+        -------
+        :ref:`NDArray`
+            The output array.
+
+        Note
+        ----
+
+        This is a deprecated method.  Use the new evaluation engine in Python-Blosc2 3.x.
         """
         shape, dtype, equal_chunks, equal_blocks = validate_inputs(self.operands)
         nelem = np.prod(shape)
@@ -249,7 +286,7 @@ class LazyExpr:
         return out
 
     def __getitem__(self, item):
-        ndarray = self.evaluate(item=item)
+        ndarray = self.eval(item=item)
         return ndarray[item] if item is not None else ndarray[:]
 
     def __str__(self):
@@ -475,7 +512,7 @@ if __name__ == "__main__":
     print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
-    res = expr.evaluate(item=sl)
+    res = expr.eval(item=sl)
     print(f"Elapsed time (evaluate): {time() - t0:.3f} s")
     res = res[sl] if sl is not None else res[:]
     t0 = time()
@@ -498,7 +535,7 @@ if __name__ == "__main__":
     print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
-    res = expr.evaluate(sl)
+    res = expr.eval(sl)
     print(f"Elapsed time (evaluate): {time() - t0:.3f} s")
     res = res[sl] if sl is not None else res[:]
     t0 = time()
