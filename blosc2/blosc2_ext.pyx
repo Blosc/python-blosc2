@@ -942,8 +942,14 @@ cdef class SChunk:
         if kwargs is not None:
             if self.mode == "w":
                 blosc2.remove_urlpath(urlpath)
-            elif self.mode == "r" and (urlpath is None or not os.path.exists(urlpath)):
-                raise ValueError("SChunk must already exist")
+            elif self.mode == "r":
+                if urlpath is None:
+                    raise ValueError("Cannot open the SChunk in reading mode (mode or mmap_mode is 'r') because you "
+                                     "did not specify a urlpath pointing to an existing file on-disk")
+                if not os.path.exists(urlpath):
+                    raise ValueError("Cannot open the SChunk in reading mode (mode or mmap_mode is 'r') because the "
+                                     f"file {urlpath} does not exist. Please use a writing mode if you want to create "
+                                     "a new SChunk")
 
         cdef blosc2_storage storage
         # Create space for cparams and dparams in the stack
@@ -966,7 +972,7 @@ cdef class SChunk:
             if kwargs is not None:
                 check_schunk_params(self.schunk, kwargs)
             if schunk_is_ndarray(self.schunk):
-                raise ValueError("Cannot open an ndarray as a SChunk. Please use blosc2.open instead")
+                raise ValueError("Cannot open an NDArray as a SChunk. Please use blosc2.open instead")
         else:
             self.schunk = blosc2_schunk_new(&storage)
 
@@ -1994,11 +2000,9 @@ cdef check_schunk_params(blosc2_schunk* schunk, kwargs):
 
 
 cdef schunk_is_ndarray(blosc2_schunk* schunk):
-    meta1 = "b2nd"
-    meta1 = meta1.encode("utf-8") if isinstance(meta1, str) else meta1
-    meta2 = "caterva"
-    meta2 = meta2.encode("utf-8") if isinstance(meta2, str) else meta2
-    return blosc2_meta_exists(schunk, meta1) >= 0 or blosc2_meta_exists(schunk, meta2) >= 0
+    meta = "b2nd"
+    meta = meta.encode("utf-8") if isinstance(meta, str) else meta
+    return blosc2_meta_exists(schunk, meta) >= 0
 
 
 def schunk_from_cframe(cframe, copy=False):

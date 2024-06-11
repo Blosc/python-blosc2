@@ -51,7 +51,9 @@ def test_schunk_numpy(contiguous, urlpath, mode, mmap_mode, cparams, dparams, nc
     if mode != "r":
         schunk = blosc2.SChunk(chunksize=chunk_len * 4, mode=mode, mmap_mode=mmap_mode, **storage)
     else:
-        with pytest.raises(ValueError, match="SChunk must already exist"):
+        with pytest.raises(
+            ValueError, match="not specify a urlpath" if urlpath is None else "does not exist"
+        ):
             blosc2.SChunk(chunksize=chunk_len * 4, mode=mode, mmap_mode=mmap_mode, **storage)
 
         # Create a schunk which we can read later
@@ -113,7 +115,7 @@ def test_schunk_ndarray(tmp_path, mode_write, mode_read, mmap_mode_write, mmap_m
 
     data = np.arange(2 * 10, dtype="int32")
     blosc2.asarray(data, urlpath=urlpath, mode=mode_write, mmap_mode=mmap_mode_write)
-    with pytest.raises(ValueError, match="Cannot open an ndarray as a SChunk"):
+    with pytest.raises(ValueError, match="Cannot open an NDArray as a SChunk"):
         blosc2.SChunk(mode=mode_read, mmap_mode=mmap_mode_read, urlpath=urlpath)
 
 
