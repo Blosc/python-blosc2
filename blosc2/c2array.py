@@ -28,6 +28,18 @@ _subscriber_data = {
 """Caterva2 subscriber data saved by context manager."""
 
 
+def _sub_param_ctxmgr(param, value):
+    global _subscriber_data
+    try:
+        old_sub_data = _subscriber_data
+        new_sub_data = old_sub_data.copy()  # inherit old values
+        new_sub_data[param] = value
+        _subscriber_data = new_sub_data
+        yield
+    finally:
+        _subscriber_data = old_sub_data
+
+
 @contextmanager
 def c2subscriber_auth_cookie(auth_cookie: str | None):
     """
@@ -47,15 +59,7 @@ def c2subscriber_auth_cookie(auth_cookie: str | None):
     out: None
 
     """
-    global _subscriber_data
-    try:
-        old_sub_data = _subscriber_data
-        new_sub_data = old_sub_data.copy()  # inherit old values
-        new_sub_data['auth_cookie'] = auth_cookie
-        _subscriber_data = new_sub_data
-        yield
-    finally:
-        _subscriber_data = old_sub_data
+    return _sub_param_ctxmgr('auth_cookie', auth_cookie)
 
 
 @contextmanager
@@ -77,15 +81,7 @@ def c2subscriber_urlbase(urlbase: str | None):
     out: None
 
     """
-    global _subscriber_data
-    try:
-        old_sub_data = _subscriber_data
-        new_sub_data = old_sub_data.copy()  # inherit old values
-        new_sub_data['urlbase'] = urlbase
-        _subscriber_data = new_sub_data
-        yield
-    finally:
-        _subscriber_data = old_sub_data
+    return _sub_param_ctxmgr('urlbase', urlbase)
 
 
 def _xget(url, params=None, headers=None, auth_cookie=None, timeout=15):
