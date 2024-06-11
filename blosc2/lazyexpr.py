@@ -830,36 +830,74 @@ def reduce_slices(
 
 
 def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs):
-    getitem = kwargs.pop("_getitem", False)
-    out = kwargs.get("_output", None)
-    where: dict | None = kwargs.get("_where_args", None)
-    if where:
-        # Make the where arguments part of the operands
-        operands = {**operands, **where}
-    shape, fast_path = validate_inputs(operands, out)
+    """
+    Evaluate the expression in chunks of operands.
 
-    reduce_args = kwargs.pop("_reduce_args", {})
-    if reduce_args:
-        # Eval and reduce the expression in a single step
-        return reduce_slices(expression, operands, reduce_args=reduce_args, _slice=item, **kwargs)
+    This chooses the best algorithm exploring different paths depending on the input operands.
 
-    if not is_full_slice(item) or (where is not None and len(where) < 2):
-        # The fast path is not possible when using partial slices or where returning
-        # a variable number of elements
-        return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
+    Parameters
+    ----------
+    expression: str or callable
+        The expression or udf to evaluate.
+    operands: dict
+        A dictionary with the operands.
+    item: int, slice or sequence of slices, optional
+        The slice(s) to be retrieved. Note that step parameter is not honored yet.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.  In addition,
+        the following keyword arguments are supported:
+        _getitem: bool, optional
+            Whether the expression is being evaluated for a getitem operation.
+        _output: NDArray or np.ndarray, optional
+            The output array.
+        _where_args: dict, optional
+            The where condition.
+    """
+    try:
+        getitem = kwargs.pop("_getitem", False)
+        out = kwargs.get("_output", None)
+        where: dict | None = kwargs.get("_where_args", None)
+        if where:
+            # Make the where arguments part of the operands
+            operands = {**operands, **where}
+        shape, fast_path = validate_inputs(operands, out)
 
-    if fast_path:
-        if getitem:
-            # When using getitem, taking the fast path is always possible
-            return fast_eval(expression, operands, getitem=True, **kwargs)
-        elif (kwargs.get("chunks", None) is None and kwargs.get("blocks", None) is None) and (
-            out is None or isinstance(out, blosc2.NDArray)
-        ):
-            # If not, the conditions to use the fast path are a bit more restrictive
-            # e.g. the user cannot specify chunks or blocks, or an output that is not a blosc2.NDArray
-            return fast_eval(expression, operands, getitem=False, **kwargs)
+        # Activate last read cache for NDField instances
+        for op in operands:
+            if isinstance(operands[op], blosc2.NDField):
+                operands[op].ndarr.keep_last_read = True
 
-    return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
+        reduce_args = kwargs.pop("_reduce_args", {})
+        if reduce_args:
+            # Eval and reduce the expression in a single step
+            return reduce_slices(expression, operands, reduce_args=reduce_args, _slice=item, **kwargs)
+
+        if not is_full_slice(item) or (where is not None and len(where) < 2):
+            # The fast path is not possible when using partial slices or where returning
+            # a variable number of elements
+            return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
+
+        if fast_path:
+            if getitem:
+                # When using getitem, taking the fast path is always possible
+                return fast_eval(expression, operands, getitem=True, **kwargs)
+            elif (kwargs.get("chunks", None) is None and kwargs.get("blocks", None) is None) and (
+                out is None or isinstance(out, blosc2.NDArray)
+            ):
+                # If not, the conditions to use the fast path are a bit more restrictive
+                # e.g. the user cannot specify chunks or blocks, or an output that is not
+                # a blosc2.NDArray
+                return fast_eval(expression, operands, getitem=False, **kwargs)
+
+        res = slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
+
+    finally:
+        # Deactivate cache for NDField instances
+        for op in operands:
+            if isinstance(operands[op], blosc2.NDField):
+                operands[op].ndarr.keep_last_read = False
+
+    return res
 
 
 def fuse_operands(operands1, operands2):
