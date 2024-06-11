@@ -45,6 +45,8 @@ def c2sub_auth_cookie(auth_cookie: str | None):
     """
     Context manager that adds `auth_cookie` to Caterva2 subscriber requests.
 
+    The cookie should have been previously obtained from the subscriber.
+
     Please note that this manager is reentrant but not concurrency-safe.
 
     Parameters
