@@ -47,43 +47,74 @@ def test_schunk_numpy(contiguous, urlpath, mode, mmap_mode, cparams, dparams, nc
     storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     blosc2.remove_urlpath(urlpath)
 
-    if mode != "r" or urlpath is None:
-        chunk_len = 200 * 1000
+    chunk_len = 200 * 1000
+    if mode != "r":
         schunk = blosc2.SChunk(chunksize=chunk_len * 4, mode=mode, mmap_mode=mmap_mode, **storage)
-        assert schunk.urlpath == urlpath
-        assert schunk.contiguous == contiguous
+    else:
+        with pytest.raises(ValueError, match="SChunk must already exist"):
+            blosc2.SChunk(chunksize=chunk_len * 4, mode=mode, mmap_mode=mmap_mode, **storage)
 
-        for i in range(nchunks):
-            buffer = i * np.arange(chunk_len, dtype="int32")
-            nchunks_ = schunk.append_data(buffer)
-            assert nchunks_ == (i + 1)
+        # Create a schunk which we can read later
+        schunk = blosc2.SChunk(
+            chunksize=chunk_len * 4,
+            mode="w" if mmap_mode is None else None,
+            mmap_mode="w+" if mmap_mode is not None else None,
+            **storage,
+        )
 
-        for i in range(nchunks):
-            buffer = i * np.arange(chunk_len, dtype="int32")
-            bytes_obj = buffer.tobytes()
-            res = schunk.decompress_chunk(i)
-            assert res == bytes_obj
+    assert schunk.urlpath == urlpath
+    assert schunk.contiguous == contiguous
 
-            dest = np.empty(buffer.shape, buffer.dtype)
-            schunk.decompress_chunk(i, dest)
-            assert np.array_equal(buffer, dest)
+    for i in range(nchunks):
+        buffer = i * np.arange(chunk_len, dtype="int32")
+        nchunks_ = schunk.append_data(buffer)
+        assert nchunks_ == (i + 1)
 
-            schunk.decompress_chunk(i, memoryview(dest))
-            assert np.array_equal(buffer, dest)
+    if mode == "r":
+        if urlpath is not None:
+            schunk = blosc2.SChunk(chunksize=chunk_len * 4, mode=mode, mmap_mode=mmap_mode, **storage)
+        else:
+            return
 
-            dest = bytearray(buffer)
-            schunk.decompress_chunk(i, dest)
-            assert dest == bytes_obj
+    for i in range(nchunks):
+        buffer = i * np.arange(chunk_len, dtype="int32")
+        bytes_obj = buffer.tobytes()
+        res = schunk.decompress_chunk(i)
+        assert res == bytes_obj
 
-        for i in range(nchunks):
-            schunk.get_chunk(i)
+        dest = np.empty(buffer.shape, buffer.dtype)
+        schunk.decompress_chunk(i, dest)
+        assert np.array_equal(buffer, dest)
 
-        if nchunks >= 2:
-            assert schunk.cratio > 1
-            assert schunk.cratio == schunk.nbytes / schunk.cbytes
-        assert schunk.nbytes >= nchunks * chunk_len * 4
+        schunk.decompress_chunk(i, memoryview(dest))
+        assert np.array_equal(buffer, dest)
 
-        blosc2.remove_urlpath(urlpath)
+        dest = bytearray(buffer)
+        schunk.decompress_chunk(i, dest)
+        assert dest == bytes_obj
+
+    for i in range(nchunks):
+        schunk.get_chunk(i)
+
+    if nchunks >= 2:
+        assert schunk.cratio > 1
+        assert schunk.cratio == schunk.nbytes / schunk.cbytes
+    assert schunk.nbytes >= nchunks * chunk_len * 4
+
+    blosc2.remove_urlpath(urlpath)
+
+
+@pytest.mark.parametrize(
+    "mode_write, mode_read, mmap_mode_write, mmap_mode_read",
+    [("w", "r", None, None), (None, None, "w+", "r")],
+)
+def test_schunk_ndarray(tmp_path, mode_write, mode_read, mmap_mode_write, mmap_mode_read):
+    urlpath = tmp_path / "test.b2nd"
+
+    data = np.arange(2 * 10, dtype="int32")
+    blosc2.asarray(data, urlpath=urlpath, mode=mode_write, mmap_mode=mmap_mode_write)
+    with pytest.raises(ValueError, match="Cannot open an ndarray as a SChunk"):
+        blosc2.SChunk(mode=mode_read, mmap_mode=mmap_mode_read, urlpath=urlpath)
 
 
 @pytest.mark.parametrize(
