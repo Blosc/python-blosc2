@@ -69,8 +69,8 @@ def _xpost(url, json=None, auth_cookie=None, timeout=15):
     return response.json()
 
 
-def get(url, params=None, headers=None, model=None, auth_cookie=None):
-    response = _xget(url, params, headers, auth_cookie)
+def info(path, urlbase, params=None, headers=None, model=None, auth_cookie=None):
+    response = _xget(f"{urlbase}api/info/{path}", params, headers, auth_cookie)
     json = response.json()
     return json if model is None else model(**json)
 
@@ -140,15 +140,16 @@ class C2Array(blosc2.Operand):
         self.auth_cookie = auth_cookie
 
         # Try to 'open' the remote path
-        urlpath = f"{urlbase}api/info/{self.path}"
         try:
-            self.meta = get(urlpath, auth_cookie=self.auth_cookie)
+            self.meta = info(self.path, self.urlbase,
+                             auth_cookie=self.auth_cookie)
         except httpx.HTTPStatusError:
             # Subscribe to root and try again. It is less latency to subscribe directly
             # than to check for the subscription.
             subscribe(root, self.urlbase, self.auth_cookie)
             try:
-                self.meta = get(urlpath, auth_cookie=self.auth_cookie)
+                self.meta = info(self.path, self.urlbase,
+                                 auth_cookie=self.auth_cookie)
             except httpx.HTTPStatusError as err:
                 raise FileNotFoundError(f"Remote path not found: {path}.\n"
                                         f"Error was: {err}") from err
