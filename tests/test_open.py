@@ -168,10 +168,14 @@ DIR = "expr/"
         # AUTH_COOKIE,
     ]
 )
-def sub_auth_ctxt(request):
-    cookie = request.param
-    with blosc2.c2array.c2subscriber_auth_cookie(cookie):
-        yield cookie
+def sub_auth_cookie(request):
+    return request.param
+
+
+@pytest.fixture
+def sub_auth_ctxt(sub_auth_cookie):
+    with blosc2.c2array.c2subscriber_auth_cookie(sub_auth_cookie):
+        yield sub_auth_cookie
 
 
 def test_open_c2array(sub_auth_ctxt):
@@ -193,5 +197,17 @@ def test_open_c2array(sub_auth_ctxt):
 
     with pytest.raises(NotImplementedError):
         _ = blosc2.open(urlpath, mode="r", offset=0, cparams={})
+
+
+def test_open_c2array_cookie(sub_auth_cookie):
+    dtype = np.float64
+    shape = (NITEMS_SMALL,)
+    chunks_blocks = "default"
+    path = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd"
+    path = pathlib.Path(f"{ROOT}/{DIR + path}").as_posix()
+    urlpath = blosc2.URLPath(path, urlbase=URLBASE, auth_cookie=sub_auth_cookie)
+
+    with blosc2.c2array.c2subscriber_auth_cookie('wrong-cookie'):
+        _ = blosc2.open(urlpath, mode="r", offset=0)  # instance cookie prevails
 
 
