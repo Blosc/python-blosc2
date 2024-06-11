@@ -127,7 +127,7 @@ def slice_to_string(slice_):
 
 
 class C2Array(blosc2.Operand):
-    def __init__(self, path, /, urlbase, auth_cookie=None):
+    def __init__(self, path, /, urlbase=None, auth_cookie=None):
         """Create an instance of a remote NDArray.
 
         Parameters
@@ -149,9 +149,10 @@ class C2Array(blosc2.Operand):
             raise ValueError("The path should start with a root name, not a slash")
         self.path = path
 
-        if not urlbase.endswith('/'):
+        if urlbase and not urlbase.endswith('/'):
             urlbase += '/'
         self.urlbase = urlbase
+
         self.auth_cookie = auth_cookie
 
         # Try to 'open' the remote path
@@ -215,7 +216,7 @@ class C2Array(blosc2.Operand):
 
 
 class URLPath:
-    def __init__(self, path, /, urlbase, auth_cookie=None):
+    def __init__(self, path, /, urlbase=None, auth_cookie=None):
         """
         Create an instance of a remote data file (aka :ref:`C2Array <C2Array>`) urlpath.
         This is meant to be used in the :func:`blosc2.open` function.
