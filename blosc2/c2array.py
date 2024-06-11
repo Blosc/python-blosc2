@@ -74,7 +74,8 @@ def c2subscriber_urlbase(urlbase: str | None):
     urlbase: str | None
         A URL base that will be used when an individual C2Array instance has
         no subscriber URL base set.  Use ``None`` to disable the base set by a
-        previous context manager.
+        previous context manager (and default to the value in the
+        ``CATERVA2_SUBSCRIBER_URL`` environment variable, if set).
 
     Yields
     ------
