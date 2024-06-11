@@ -129,7 +129,7 @@ class C2Array(blosc2.Operand):
         if path.startswith('/'):
             raise ValueError("The path should start with a root name, not a slash")
         self.path = path
-        self.root, self.filepath = path.split('/', 1)
+        root, _ = path.split('/', 1)
 
         if not urlbase.endswith('/'):
             urlbase += '/'
@@ -143,7 +143,7 @@ class C2Array(blosc2.Operand):
         except httpx.HTTPStatusError:
             # Subscribe to root and try again. It is less latency to subscribe directly
             # than to check for the subscription.
-            subscribe(self.root, self.urlbase, self.auth_cookie)
+            subscribe(root, self.urlbase, self.auth_cookie)
             try:
                 self.meta = get(urlpath, auth_cookie=self.auth_cookie)
             except httpx.HTTPStatusError as err:
