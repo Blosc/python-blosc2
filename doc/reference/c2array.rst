@@ -40,3 +40,13 @@ URLPath class
     :toctree: autofiles/URLPath
 
     __init__
+
+Context managers
+----------------
+
+.. currentmodule:: blosc2
+
+.. autosummary::
+    :toctree: autofiles/c2array
+
+    c2context

@@ -1385,7 +1385,6 @@ class LazyExpr(LazyArray):
                 operands[key] = {
                     "path": str(value.path),
                     "urlbase": value.urlbase,
-                    "auth_cookie": value.auth_cookie,
                 }
                 continue
             if not hasattr(value, "schunk"):
@@ -1560,7 +1559,6 @@ def _open_lazyarray(array):
             operands_dict[key] = blosc2.C2Array(
                 pathlib.Path(value["path"]).as_posix(),
                 urlbase=value["urlbase"],
-                auth_cookie=value["auth_cookie"],
             )
         else:
             raise ValueError("Error when retrieving the operands")

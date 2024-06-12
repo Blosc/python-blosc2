@@ -9,6 +9,8 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from contextlib import contextmanager
+import os
 
 import httpx
 import numpy as np
@@ -16,7 +18,61 @@ import numpy as np
 import blosc2
 
 
+C2SUB_URLBASE_ENVVAR = 'BLOSC_C2URLBASE'
+"""Environment variable with a default Caterva2 subscriber URL base."""
+
+_subscriber_data = {
+    'urlbase': None,
+    'auth_cookie': None,
+}
+"""Caterva2 subscriber data saved by context manager."""
+
+
+@contextmanager
+def c2context(*, urlbase: (str | None) = None,
+              auth_cookie: (str | None) = None):
+    """
+    Context manager that sets parameters in Caterva2 subscriber requests.
+
+    Parameters not specified or set to ``None`` simply inherit the value set
+    by the previous context manager, if any.
+
+    Please note that this manager is reentrant but not concurrency-safe.
+
+    Parameters
+    ----------
+    urlbase: str | None
+        A URL base that will be used when an individual C2Array instance has
+        no subscriber URL base set.  Use ``None`` to disable the base set by a
+        previous context manager (and default to the value in the
+        ``BLOSC_C2URLBASE`` environment variable, if set).
+    auth_cookie: str | None
+        A cookie that will be used when an individual C2Array instance has no
+        authorization cookie set.  It should have been previously obtained
+        from the subscriber.  Use ``None`` to disable the cookie set by a
+        previous context manager.
+
+    Yields
+    ------
+    out: None
+
+    """
+    global _subscriber_data
+    try:
+        old_sub_data = _subscriber_data
+        new_sub_data = old_sub_data.copy()  # inherit old values
+        if urlbase is not None:
+            new_sub_data['urlbase'] = urlbase
+        if auth_cookie is not None:
+            new_sub_data['auth_cookie'] = auth_cookie
+        _subscriber_data = new_sub_data
+        yield
+    finally:
+        _subscriber_data = old_sub_data
+
+
 def _xget(url, params=None, headers=None, auth_cookie=None, timeout=15):
+    auth_cookie = auth_cookie or _subscriber_data['auth_cookie']
     if auth_cookie:
         headers = headers.copy() if headers else {}
         headers["Cookie"] = auth_cookie
@@ -26,24 +82,38 @@ def _xget(url, params=None, headers=None, auth_cookie=None, timeout=15):
 
 
 def _xpost(url, json=None, auth_cookie=None, timeout=15):
+    auth_cookie = auth_cookie or _subscriber_data['auth_cookie']
     headers = {"Cookie": auth_cookie} if auth_cookie else None
     response = httpx.post(url, json=json, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response.json()
 
 
-def get(url, params=None, headers=None, model=None, auth_cookie=None):
+def _sub_api_url(urlbase, apipath):
+    try:
+        urlbase = (urlbase or _subscriber_data['urlbase']
+                   or os.environ[C2SUB_URLBASE_ENVVAR])
+    except KeyError as ke:
+        raise RuntimeError("No default Caterva2 subscriber set") from ke
+    return (f"{urlbase}api/{apipath}" if urlbase.endswith("/")
+            else f"{urlbase}/api/{apipath}")
+
+
+def info(path, urlbase, params=None, headers=None, model=None, auth_cookie=None):
+    url = _sub_api_url(urlbase, f"info/{path}")
     response = _xget(url, params, headers, auth_cookie)
     json = response.json()
     return json if model is None else model(**json)
 
 
 def subscribe(root, urlbase, auth_cookie):
-    return _xpost(f"{urlbase}api/subscribe/{root}", auth_cookie=auth_cookie)
+    url = _sub_api_url(urlbase, f"subscribe/{root}")
+    return _xpost(url, auth_cookie=auth_cookie)
 
 
 def fetch_data(path, urlbase, params, auth_cookie=None):
-    response = _xget(f"{urlbase}api/fetch/{path}", params=params, auth_cookie=auth_cookie)
+    url = _sub_api_url(urlbase, f"fetch/{path}")
+    response = _xget(url, params=params, auth_cookie=auth_cookie)
     data = response.content
     try:
         data = blosc2.ndarray_from_cframe(data)
@@ -74,7 +144,7 @@ def slice_to_string(slice_):
 
 
 class C2Array(blosc2.Operand):
-    def __init__(self, path, /, urlbase, auth_cookie=None):
+    def __init__(self, path, /, urlbase=None, auth_cookie=None):
         """Create an instance of a remote NDArray.
 
         Parameters
@@ -95,23 +165,25 @@ class C2Array(blosc2.Operand):
         if path.startswith("/"):
             raise ValueError("The path should start with a root name, not a slash")
         self.path = path
-        self.root, self.filepath = path.split("/", 1)
 
-        if not urlbase.endswith("/"):
+        if urlbase and not urlbase.endswith("/"):
             urlbase += "/"
         self.urlbase = urlbase
+
         self.auth_cookie = auth_cookie
 
         # Try to 'open' the remote path
-        urlpath = f"{urlbase}api/info/{self.path}"
         try:
-            self.meta = get(urlpath, auth_cookie=self.auth_cookie)
+            self.meta = info(self.path, self.urlbase,
+                             auth_cookie=self.auth_cookie)
         except httpx.HTTPStatusError:
             # Subscribe to root and try again. It is less latency to subscribe directly
             # than to check for the subscription.
-            subscribe(self.root, self.urlbase, self.auth_cookie)
+            root, _ = self.path.split("/", 1)
+            subscribe(root, self.urlbase, self.auth_cookie)
             try:
-                self.meta = get(urlpath, auth_cookie=self.auth_cookie)
+                self.meta = info(self.path, self.urlbase,
+                                 auth_cookie=self.auth_cookie)
             except httpx.HTTPStatusError as err:
                 raise FileNotFoundError(f"Remote path not found: {path}.\n" f"Error was: {err}") from err
 
@@ -155,7 +227,7 @@ class C2Array(blosc2.Operand):
 
 
 class URLPath:
-    def __init__(self, path, /, urlbase, auth_cookie=None):
+    def __init__(self, path, /, urlbase=None, auth_cookie=None):
         """
         Create an instance of a remote data file (aka :ref:`C2Array <C2Array>`) urlpath.
         This is meant to be used in the :func:`blosc2.open` function.

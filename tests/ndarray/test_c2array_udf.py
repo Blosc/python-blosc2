@@ -35,8 +35,11 @@ def udf1p(inputs_tuple, output, offset):
         # AUTH_COOKIE,
     ]
 )
-def auth_cookie(request):
-    return request.param
+def sub_context(request):
+    cookie = request.param
+    c2params = dict(urlbase=URLBASE, auth_cookie=cookie)
+    with blosc2.c2context(**c2params):
+        yield c2params
 
 
 @pytest.mark.parametrize("chunked_eval", [True, False])
@@ -50,12 +53,12 @@ def auth_cookie(request):
         ),
     ],
 )
-def test_1p(chunks, blocks, chunked_eval, auth_cookie):
+def test_1p(chunks, blocks, chunked_eval, sub_context):
     dtype = np.float64
     shape = (60, 60)
     urlpath = f"ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
-    a = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    a = blosc2.C2Array(path)
     npa = a[:]
     npc = npa + 1
 
@@ -87,18 +90,18 @@ def udf2p(inputs_tuple, output, offset):
         pytest.param((53, 20), (10, 13), (slice(3, 8), slice(9, 12)), None, False),
     ],
 )
-def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, auth_cookie):
+def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, sub_context):
     dtype = np.float64
     shape = (60, 60)
     blosc2.remove_urlpath(urlpath)
 
     urlpath_a = f"ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath_a}").as_posix()
-    a = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    a = blosc2.C2Array(path)
 
     urlpath_b = f"ds-0-10-linspace-{dtype.__name__}-(False, False)-a3-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath_b}").as_posix()
-    b = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    b = blosc2.C2Array(path)
     npa = a[:]
     npb = b[:]
     npc = npa**2 + npb**2 + 2 * npa * npb + 1

@@ -33,20 +33,23 @@ DIR = "expr/"
         # AUTH_COOKIE,
     ]
 )
-def auth_cookie(request):
-    return request.param
+def sub_context(request):
+    cookie = request.param
+    c2params = dict(urlbase=URLBASE, auth_cookie=cookie)
+    with blosc2.c2context(**c2params):
+        yield c2params
 
 
-def get_arrays(shape, chunks_blocks, auth_cookie):
+def get_arrays(shape, chunks_blocks):
     dtype = np.float64
     nelems = np.prod(shape)
     na1 = np.linspace(0, 10, nelems, dtype=dtype).reshape(shape)
     urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
-    a1 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    a1 = blosc2.C2Array(path)
     urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a2-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
-    a2 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    a2 = blosc2.C2Array(path)
     # Let other operands be local, on-disk NDArray copies
     urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a3-{shape}d.b2nd"
     a3 = blosc2.asarray(a2, urlpath=urlpath, mode="w")
@@ -68,9 +71,9 @@ def get_arrays(shape, chunks_blocks, auth_cookie):
         (False, False),
     ],
 )
-def test_simple(chunks_blocks, auth_cookie):
+def test_simple(chunks_blocks, sub_context):
     shape = (60, 60)
-    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
+    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
 
     # Slice
     sl = slice(10)
@@ -84,10 +87,10 @@ def test_simple(chunks_blocks, auth_cookie):
     np.testing.assert_allclose(res[:], nres)
 
 
-def test_simple_getitem(auth_cookie):
+def test_simple_getitem(sub_context):
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
-    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
+    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     expr = a1 + a2 - a3 * a4
     nres = ne.evaluate("na1 + na2 - na3 * na4")
 
@@ -108,9 +111,9 @@ def test_simple_getitem(auth_cookie):
         (False, False),
     ],
 )
-def test_ixxx(chunks_blocks, auth_cookie):
+def test_ixxx(chunks_blocks, sub_context):
     shape = (60, 60)
-    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
+    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     expr = a1**3 + a2**2 + a3**3 - a4 + 3
     expr += 5  # __iadd__
     expr /= 7  # __itruediv__
@@ -120,10 +123,10 @@ def test_ixxx(chunks_blocks, auth_cookie):
     np.testing.assert_allclose(res[:], nres)
 
 
-def test_complex(auth_cookie):
+def test_complex(sub_context):
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
-    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
+    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     expr = blosc2.tan(a1) * blosc2.sin(a2) + (blosc2.sqrt(a4) * 2)
     expr += 2
     nres = ne.evaluate("tan(na1) * sin(na2) + (sqrt(na4) * 2) + 2")
@@ -149,9 +152,9 @@ def test_complex(auth_cookie):
         (False, False),
     ],
 )
-def test_mix_operands(chunks_blocks, auth_cookie):
+def test_mix_operands(chunks_blocks, sub_context):
     shape = (60, 60)
-    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks, auth_cookie)
+    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     b1 = blosc2.asarray(na1, chunks=a1.chunks, blocks=a1.blocks)
     b3 = blosc2.asarray(na3, chunks=a3.chunks, blocks=a3.blocks)
 
@@ -185,10 +188,10 @@ def test_mix_operands(chunks_blocks, auth_cookie):
 
 
 # Tests related with save method
-def test_save(auth_cookie):
+def test_save(sub_context):
     shape = (60, 60)
     tol = 1e-17
-    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, (False, True), auth_cookie)
+    a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, (False, True))
 
     expr = a1 * a2 + a3 - a4 * 3
     nres = ne.evaluate("na1 * na2 + na3 - na4 * 3")
@@ -229,17 +232,17 @@ def broadcast_shape(request):
 
 
 @pytest.fixture
-def broadcast_fixture(broadcast_shape, auth_cookie):
+def broadcast_fixture(broadcast_shape, sub_context):
     shape1, shape2 = broadcast_shape
     dtype = np.float64
     na1 = np.linspace(0, 1, np.prod(shape1), dtype=dtype).reshape(shape1)
     na2 = np.linspace(1, 2, np.prod(shape2), dtype=dtype).reshape(shape2)
     urlpath = f"ds-0-1-linspace-{dtype.__name__}-b1-{shape1}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
-    b1 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    b1 = blosc2.C2Array(path)
     urlpath = f"ds-1-2-linspace-{dtype.__name__}-b2-{shape2}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
-    b2 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=auth_cookie)
+    b2 = blosc2.C2Array(path)
 
     return b1, b2, na1, na2
 
