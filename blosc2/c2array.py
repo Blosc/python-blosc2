@@ -18,7 +18,7 @@ import numpy as np
 import blosc2
 
 
-C2SUB_URLBASE_ENVVAR = 'CATERVA2_SUBSCRIBER_URL'
+C2SUB_URLBASE_ENVVAR = 'BLOSC_C2URLBASE'
 """Environment variable with a default Caterva2 subscriber URL base."""
 
 _subscriber_data = {
@@ -77,7 +77,7 @@ def c2sub_urlbase(urlbase: str | None):
         A URL base that will be used when an individual C2Array instance has
         no subscriber URL base set.  Use ``None`` to disable the base set by a
         previous context manager (and default to the value in the
-        ``CATERVA2_SUBSCRIBER_URL`` environment variable, if set).
+        ``BLOSC_C2URLBASE`` environment variable, if set).
 
     Yields
     ------
