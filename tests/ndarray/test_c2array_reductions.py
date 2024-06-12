@@ -31,16 +31,11 @@ DIR = 'expr/'
     None,
     # AUTH_COOKIE,
 ])
-def sub_auth_ctxt(request):
+def sub_context(request):
     cookie = request.param
-    with blosc2.c2sub_auth_cookie(cookie):
-        yield cookie
-
-
-@pytest.fixture
-def sub_urlbase_ctxt():
-    with blosc2.c2sub_urlbase(URLBASE):
-        yield URLBASE
+    c2params = dict(urlbase=URLBASE, auth_cookie=cookie)
+    with blosc2.c2context(**c2params):
+        yield c2params
 
 
 def get_arrays(shape, chunks_blocks):
@@ -68,7 +63,7 @@ def get_arrays(shape, chunks_blocks):
 
 
 @pytest.mark.parametrize("reduce_op", ["sum", pytest.param("all", marks=pytest.mark.heavy)])
-def test_reduce_bool(reduce_op, sub_urlbase_ctxt, sub_auth_ctxt):
+def test_reduce_bool(reduce_op, sub_context):
     shape = (NITEMS_SMALL, )
     chunks_blocks = 'default'
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
@@ -96,8 +91,7 @@ def test_reduce_bool(reduce_op, sub_urlbase_ctxt, sub_auth_ctxt):
 @pytest.mark.parametrize("axis", [1])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize("dtype_out", [np.int16])
-def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op,
-                       sub_urlbase_ctxt, sub_auth_ctxt):
+def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op, sub_context):
     shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     if axis is not None and np.isscalar(axis) and len(a1.shape) >= axis:
@@ -145,8 +139,7 @@ def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op,
                                        pytest.param("var", marks=pytest.mark.heavy),
                                        ])
 @pytest.mark.parametrize("axis", [0])
-def test_reduce_expr_arr(chunks_blocks, axis, reduce_op,
-                         sub_urlbase_ctxt, sub_auth_ctxt):
+def test_reduce_expr_arr(chunks_blocks, axis, reduce_op, sub_context):
     shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     if axis is not None and len(a1.shape) >= axis:

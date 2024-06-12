@@ -28,46 +28,11 @@ _subscriber_data = {
 """Caterva2 subscriber data saved by context manager."""
 
 
-def _sub_param_ctxmgr(param, value):
-    global _subscriber_data
-    try:
-        old_sub_data = _subscriber_data
-        new_sub_data = old_sub_data.copy()  # inherit old values
-        new_sub_data[param] = value
-        _subscriber_data = new_sub_data
-        yield
-    finally:
-        _subscriber_data = old_sub_data
-
-
 @contextmanager
-def c2sub_auth_cookie(auth_cookie: str | None):
+def c2context(*, urlbase: (str | None) = None,
+              auth_cookie: (str | None) = None):
     """
-    Context manager that adds `auth_cookie` to Caterva2 subscriber requests.
-
-    The cookie should have been previously obtained from the subscriber.
-
-    Please note that this manager is reentrant but not concurrency-safe.
-
-    Parameters
-    ----------
-    auth_cookie: str | None
-        A cookie that will be used when an individual C2Array instance has no
-        authorization cookie set.  Use ``None`` to disable the cookie set by a
-        previous context manager.
-
-    Yields
-    ------
-    out: None
-
-    """
-    return _sub_param_ctxmgr('auth_cookie', auth_cookie)
-
-
-@contextmanager
-def c2sub_urlbase(urlbase: str | None):
-    """
-    Context manager that adds `urlbase` to Caterva2 subscriber requests.
+    Context manager that sets parameters in Caterva2 subscriber requests.
 
     Please note that this manager is reentrant but not concurrency-safe.
 
@@ -78,13 +43,29 @@ def c2sub_urlbase(urlbase: str | None):
         no subscriber URL base set.  Use ``None`` to disable the base set by a
         previous context manager (and default to the value in the
         ``BLOSC_C2URLBASE`` environment variable, if set).
+    auth_cookie: str | None
+        A cookie that will be used when an individual C2Array instance has no
+        authorization cookie set.  It should have been previously obtained
+        from the subscriber.  Use ``None`` to disable the cookie set by a
+        previous context manager.
 
     Yields
     ------
     out: None
 
     """
-    return _sub_param_ctxmgr('urlbase', urlbase)
+    global _subscriber_data
+    try:
+        old_sub_data = _subscriber_data
+        new_sub_data = old_sub_data.copy()  # inherit old values
+        if urlbase is not None:
+            new_sub_data['urlbase'] = urlbase
+        if auth_cookie is not None:
+            new_sub_data['auth_cookie'] = auth_cookie
+        _subscriber_data = new_sub_data
+        yield
+    finally:
+        _subscriber_data = old_sub_data
 
 
 def _xget(url, params=None, headers=None, auth_cookie=None, timeout=15):

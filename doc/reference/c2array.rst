@@ -49,5 +49,4 @@ Context managers
 .. autosummary::
     :toctree: autofiles/c2array
 
-    c2sub_urlbase
-    c2sub_auth_cookie
+    c2context

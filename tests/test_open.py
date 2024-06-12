@@ -173,18 +173,13 @@ def sub_auth_cookie(request):
 
 
 @pytest.fixture
-def sub_auth_ctxt(sub_auth_cookie):
-    with blosc2.c2sub_auth_cookie(sub_auth_cookie):
-        yield sub_auth_cookie
+def sub_context(sub_auth_cookie):
+    c2params = dict(urlbase=URLBASE, auth_cookie=sub_auth_cookie)
+    with blosc2.c2context(**c2params):
+        yield c2params
 
 
-@pytest.fixture
-def sub_urlbase_ctxt():
-    with blosc2.c2sub_urlbase(URLBASE):
-        yield URLBASE
-
-
-def test_open_c2array(sub_urlbase_ctxt, sub_auth_ctxt):
+def test_open_c2array(sub_context):
     dtype = np.float64
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
@@ -212,11 +207,11 @@ def test_open_c2array_args(sub_auth_cookie):  # instance args prevail
     path = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + path}").as_posix()
 
-    with blosc2.c2sub_urlbase('https://wrong.example.com/'):
-        with blosc2.c2sub_auth_cookie('wrong-cookie'):
-            a1 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=sub_auth_cookie)
-            urlpath = blosc2.URLPath(path, urlbase=URLBASE, auth_cookie=sub_auth_cookie)
-            a_open = blosc2.open(urlpath, mode="r", offset=0)
-            np.testing.assert_allclose(a1[:], a_open[:])
+    with blosc2.c2context(urlbase='https://wrong.example.com/',
+                          auth_cookie='wrong-cookie'):
+        a1 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=sub_auth_cookie)
+        urlpath = blosc2.URLPath(path, urlbase=URLBASE, auth_cookie=sub_auth_cookie)
+        a_open = blosc2.open(urlpath, mode="r", offset=0)
+        np.testing.assert_allclose(a1[:], a_open[:])
 
 
