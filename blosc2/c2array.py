@@ -34,6 +34,9 @@ def c2context(*, urlbase: (str | None) = None,
     """
     Context manager that sets parameters in Caterva2 subscriber requests.
 
+    Parameters not specified or set to ``None`` simply inherit the value set
+    by the previous context manager, if any.
+
     Please note that this manager is reentrant but not concurrency-safe.
 
     Parameters
