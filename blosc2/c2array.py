@@ -30,6 +30,8 @@ _subscriber_data = {
 
 @contextmanager
 def c2context(*, urlbase: (str | None) = None,
+              username: (str | None) = None,
+              password: (str | None) = None,
               auth_token: (str | None) = None):
     """
     Context manager that sets parameters in Caterva2 subscriber requests.
@@ -58,6 +60,14 @@ def c2context(*, urlbase: (str | None) = None,
 
     """
     global _subscriber_data
+
+    # Perform login to get an authorization token.
+    if username or password:
+        if auth_token:
+            raise ValueError(
+                "Either provide a username/password or an authorizaton token")
+        auth_token = login(username, password, urlbase)
+
     try:
         old_sub_data = _subscriber_data
         new_sub_data = old_sub_data.copy()  # inherit old values
@@ -89,14 +99,26 @@ def _xpost(url, json=None, auth_token=None, timeout=15):
     return response.json()
 
 
-def _sub_api_url(urlbase, apipath):
+def _sub_url(urlbase, path):
     try:
         urlbase = (urlbase or _subscriber_data['urlbase']
                    or os.environ[C2SUB_URLBASE_ENVVAR])
     except KeyError as ke:
         raise RuntimeError("No default Caterva2 subscriber set") from ke
-    return (f"{urlbase}api/{apipath}" if urlbase.endswith("/")
-            else f"{urlbase}/api/{apipath}")
+    return (f"{urlbase}{path}" if urlbase.endswith("/")
+            else f"{urlbase}/{path}")
+
+
+def _sub_api_url(urlbase, apipath):
+    return _sub_url(urlbase, f"api/{apipath}")
+
+
+def login(username, password, urlbase):
+    url = _sub_url(urlbase, "auth/jwt/login")
+    creds = dict(username=username, password=password)
+    resp = httpx.post(url, data=creds, timeout=15)
+    resp.raise_for_status()
+    return '='.join(list(resp.cookies.items())[0])
 
 
 def info(path, urlbase, params=None, headers=None, model=None, auth_token=None):
