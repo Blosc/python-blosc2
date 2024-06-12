@@ -24,16 +24,16 @@ DIR = 'expr/'
 # resp = httpx.post(f'{URLBASE}auth/jwt/login',
 #                   data=dict(username='user@example.com', password='foobar'))
 # resp.raise_for_status()
-# AUTH_COOKIE = '='.join(list(resp.cookies.items())[0])
+# AUTH_TOKEN = '='.join(list(resp.cookies.items())[0])
 
 
 @pytest.fixture(params=[
     None,
-    # AUTH_COOKIE,
+    # AUTH_TOKEN,
 ])
 def sub_context(request):
-    cookie = request.param
-    c2params = dict(urlbase=URLBASE, auth_cookie=cookie)
+    token = request.param
+    c2params = dict(urlbase=URLBASE, auth_token=token)
     with blosc2.c2context(**c2params):
         yield c2params
 

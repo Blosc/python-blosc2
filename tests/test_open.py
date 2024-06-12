@@ -159,22 +159,22 @@ DIR = "expr/"
 # resp = httpx.post(f'{URLBASE}auth/jwt/login',
 #                   data=dict(username='user@example.com', password='foobar'))
 # resp.raise_for_status()
-# AUTH_COOKIE = '='.join(list(resp.cookies.items())[0])
+# AUTH_TOKEN = '='.join(list(resp.cookies.items())[0])
 
 
 @pytest.fixture(
     params=[
         None,
-        # AUTH_COOKIE,
+        # AUTH_TOKEN,
     ]
 )
-def sub_auth_cookie(request):
+def sub_auth_token(request):
     return request.param
 
 
 @pytest.fixture
-def sub_context(sub_auth_cookie):
-    c2params = dict(urlbase=URLBASE, auth_cookie=sub_auth_cookie)
+def sub_context(sub_auth_token):
+    c2params = dict(urlbase=URLBASE, auth_token=sub_auth_token)
     with blosc2.c2context(**c2params):
         yield c2params
 
@@ -200,7 +200,7 @@ def test_open_c2array(sub_context):
         _ = blosc2.open(urlpath, mode="r", offset=0, cparams={})
 
 
-def test_open_c2array_args(sub_auth_cookie):  # instance args prevail
+def test_open_c2array_args(sub_auth_token):  # instance args prevail
     dtype = np.float64
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
@@ -208,9 +208,9 @@ def test_open_c2array_args(sub_auth_cookie):  # instance args prevail
     path = pathlib.Path(f"{ROOT}/{DIR + path}").as_posix()
 
     with blosc2.c2context(urlbase='https://wrong.example.com/',
-                          auth_cookie='wrong-cookie'):
-        a1 = blosc2.C2Array(path, urlbase=URLBASE, auth_cookie=sub_auth_cookie)
-        urlpath = blosc2.URLPath(path, urlbase=URLBASE, auth_cookie=sub_auth_cookie)
+                          auth_token='wrong-token'):
+        a1 = blosc2.C2Array(path, urlbase=URLBASE, auth_token=sub_auth_token)
+        urlpath = blosc2.URLPath(path, urlbase=URLBASE, auth_token=sub_auth_token)
         a_open = blosc2.open(urlpath, mode="r", offset=0)
         np.testing.assert_allclose(a1[:], a_open[:])
 
