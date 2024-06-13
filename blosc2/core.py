@@ -1216,11 +1216,11 @@ def compute_partition(nitems, maxshape, minpart=None):
             break
         rsize = max(size, minsize)
         if rsize <= max_items:
-            rsize = nearest_divisor(size, rsize)
+            rsize = rsize if size % rsize == 0 else nearest_divisor(size, rsize)
             partition[-(i + 1)] = rsize
         else:
             rsize = max(max_items, minsize)
-            new_rsize = nearest_divisor(size, rsize)
+            new_rsize = rsize if size % rsize == 0 else nearest_divisor(size, rsize)
             # If the new rsize is not too far from the original rsize, use it
             if rsize // 2 < new_rsize < rsize * 2:
                 rsize = new_rsize
