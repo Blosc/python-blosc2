@@ -148,16 +148,8 @@ def test_open_offset(offset, urlpath, mode, mmap_mode):
 
 
 NITEMS_SMALL = 1_000
-
-C2PARAMS = dict(urlbase="https://demo.caterva2.net/", username=None, password=None)
 ROOT = "b2tests"
 DIR = "expr/"
-
-
-@pytest.fixture(scope="session")
-def sub_context():
-    with blosc2.c2context(**C2PARAMS):
-        yield C2PARAMS
 
 
 def test_open_c2array(sub_context):

@@ -14,16 +14,8 @@ import pytest
 import blosc2
 
 NITEMS_SMALL = 1_000
-
-C2PARAMS = dict(urlbase="https://demo.caterva2.net/", username=None, password=None)
 ROOT = "b2tests"
 DIR = "expr/"
-
-
-@pytest.fixture(scope="session")
-def sub_context():
-    with blosc2.c2context(**C2PARAMS):
-        yield C2PARAMS
 
 
 def get_arrays(shape, chunks_blocks):
