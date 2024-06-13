@@ -8,6 +8,7 @@
 
 #cython: language_level=3
 
+import os
 import ast
 import atexit
 import pathlib
@@ -941,6 +942,14 @@ cdef class SChunk:
         if kwargs is not None:
             if self.mode == "w":
                 blosc2.remove_urlpath(urlpath)
+            elif self.mode == "r":
+                if urlpath is None:
+                    raise ValueError("Cannot open the SChunk in reading mode (mode or mmap_mode is 'r') because you "
+                                     "did not specify a urlpath pointing to an existing file on-disk")
+                if not os.path.exists(urlpath):
+                    raise ValueError("Cannot open the SChunk in reading mode (mode or mmap_mode is 'r') because the "
+                                     f"file {urlpath} does not exist. Please use a writing mode if you want to create "
+                                     "a new SChunk")
 
         cdef blosc2_storage storage
         # Create space for cparams and dparams in the stack
@@ -953,7 +962,20 @@ cdef class SChunk:
         else:
             create_storage(&storage, kwargs)
 
-        self.schunk = blosc2_schunk_new(&storage)
+        if self.mode == "r":
+            offset = 0
+            if self.mmap_mode is not None:
+                self.schunk = blosc2_schunk_open_offset_udio(storage.urlpath, offset, storage.io)
+            else:
+                self.schunk = blosc2_schunk_open_offset(storage.urlpath, offset)
+
+            if kwargs is not None:
+                check_schunk_params(self.schunk, kwargs)
+            if schunk_is_ndarray(self.schunk):
+                raise ValueError("Cannot open an NDArray as a SChunk. Please use blosc2.open instead")
+        else:
+            self.schunk = blosc2_schunk_new(&storage)
+
         if self.schunk == NULL:
             if self.mmap_mode is not None:
                 free(storage.io)
@@ -1910,11 +1932,7 @@ def open(urlpath, mode, offset, **kwargs):
             free(io)
         raise RuntimeError(f'blosc2_schunk_open_offset({urlpath!r}, {offset!r}) returned NULL')
 
-    meta1 = "b2nd"
-    meta1 = meta1.encode("utf-8") if isinstance(meta1, str) else meta1
-    meta2 = "caterva"
-    meta2 = meta2.encode("utf-8") if isinstance(meta2, str) else meta2
-    is_ndarray = blosc2_meta_exists(schunk, meta1) >= 0 or blosc2_meta_exists(schunk, meta2) >= 0
+    is_ndarray = schunk_is_ndarray(schunk)
 
     cdef b2nd_array_t *array
     if is_ndarray:
@@ -1979,6 +1997,12 @@ cdef check_schunk_params(blosc2_schunk* schunk, kwargs):
         typesize = kwargs.get("typesize", schunk.typesize)
         if typesize != schunk.typesize:
             raise ValueError("Cannot change typesize with this mode")
+
+
+cdef schunk_is_ndarray(blosc2_schunk* schunk):
+    meta = "b2nd"
+    meta = meta.encode("utf-8") if isinstance(meta, str) else meta
+    return blosc2_meta_exists(schunk, meta) >= 0
 
 
 def schunk_from_cframe(cframe, copy=False):

@@ -7,8 +7,6 @@
 #######################################################################
 
 
-import os
-
 import numpy as np
 import pytest
 
@@ -44,26 +42,3 @@ def test_persistency(shape, chunks, blocks, urlpath, contiguous, dtype):
     np.testing.assert_almost_equal(nparray, nparray2)
 
     blosc2.remove_urlpath(urlpath)
-
-
-def test_persistency_caterva():
-    urlpath = os.path.join(os.path.dirname(__file__), "persistency.cat")
-    shape = (32,)
-    chunks = (16,)
-    blocks = (8,)
-
-    b = blosc2.open(urlpath)
-
-    assert b.shape == shape
-    assert b.chunks == chunks
-    assert b.blocks == blocks
-
-    assert "caterva" in b.schunk.meta
-    assert "b2nd" not in b.schunk.meta
-
-    dtype = np.dtype(np.complex128)
-    assert b.dtype == np.dtype(f"S{dtype.itemsize}")
-    nparray = np.arange(int(np.prod(shape)), dtype=dtype).reshape(shape)
-    bc = b[:]
-    nparray2 = np.asarray(bc).view(dtype)
-    np.testing.assert_almost_equal(nparray, nparray2)
