@@ -142,7 +142,7 @@ class Meta(Mapping):
 
 class SChunk(blosc2_ext.SChunk):
     def __init__(self, chunksize=None, data=None, **kwargs):
-        """Create a new super-chunk.
+        """Create a new super-chunk, or open an existing one.
 
         Parameters
         ----------
@@ -172,10 +172,11 @@ class SChunk(blosc2_ext.SChunk):
                     ‘a’ means read/write (create if it doesn’t exist);
                     ‘w’ means create (overwrite if it exists).
                 mmap_mode: str, optional
-                    If set, the file will be memory-mapped instead of using the default I/O functions and the `mode`
-                    argument will be ignored. The memory-mapping modes are similar as used by the
-                    `numpy.memmap <https://numpy.org/doc/stable/reference/generated/numpy.memmap.html>`_ function but it
-                    is possible to extend the file:
+                    If set, the file will be memory-mapped instead of using the default
+                    I/O functions and the `mode` argument will be ignored. The memory-mapping
+                    modes are similar as used by the
+                    `numpy.memmap <https://numpy.org/doc/stable/reference/generated/numpy.memmap.html>`_
+                    function, but it is possible to extend the file:
 
                     .. list-table::
                         :widths: 10 90
@@ -186,46 +187,50 @@ class SChunk(blosc2_ext.SChunk):
                         * - 'r'
                           - Open an existing file for reading only.
                         * - 'r+'
-                          - Open an existing file for reading and writing. Use this mode if you want to append data to
-                            an existing schunk file.
+                          - Open an existing file for reading and writing. Use this mode if you want
+                            to append data to an existing schunk file.
                         * - 'w+'
-                          - Create or overwrite an existing file for reading and writing. Use this mode if you want to
-                            create a new schunk.
+                          - Create or overwrite an existing file for reading and writing. Use this
+                            mode if you want to create a new schunk.
                         * - 'c'
-                          - Open an existing file in copy-on-write mode: all changes affect the data in memory but
-                            changes are not saved to disk. The file on disk is read-only. On Windows, the size of the
-                            mapping cannot change.
+                          - Open an existing file in copy-on-write mode: all changes affect the data
+                            in memory but changes are not saved to disk. The file on disk is
+                            read-only. On Windows, the size of the mapping cannot change.
 
-                    Only contiguous storage can be memory-mapped. Hence, `urlpath` must point to a file (and not a
-                    directory).
+                    Only contiguous storage can be memory-mapped. Hence, `urlpath` must point to a
+                    file (and not a directory).
 
                     .. note::
-                        Memory-mapped files are opened once and the file contents remain in (virtual) memory for the
-                        lifetime of the schunk. Using memory-mapped I/O can be faster than using the default I/O
-                        functions depending on the use case. Whereas reading performance is generally better, writing
-                        performance may also be slower in some cases on certain systems. In any case, memory-mapped
-                        files can be especially beneficial when operating with network file systems (like NFS).
+                        Memory-mapped files are opened once and the file contents remain in (virtual)
+                        memory for the lifetime of the schunk. Using memory-mapped I/O can be faster
+                        than using the default I/O functions depending on the use case. Whereas
+                        reading performance is generally better, writing performance may also be
+                        slower in some cases on certain systems. In any case, memory-mapped files
+                        can be especially beneficial when operating with network file systems
+                        (like NFS).
 
-                        This is currently a beta feature (especially write operations) and we recommend trying it out
-                        and reporting any issues you may encounter. In one of the future versions of Blosc2, we plan to
-                        make (reading) memory-mapped files the default mode of operation.
+                        This is currently a beta feature (especially write operations) and we
+                        recommend trying it out and reporting any issues you may encounter.
 
                 initial_mapping_size: int, optional
-                    The initial size of the mapping for the memory-mapped file when writes are allowed (r+ w+, or c
-                    mode). Once a file is memory-mapped and extended beyond the initial mapping size, the file must be
-                    remapped which may be expensive. This parameter allows to decouple the mapping size from the actual
-                    file size to early reserve memory for future writes and avoid remappings. The memory is only
-                    reserved virtually and does not occupy physical memory unless actual writes happen. Since the
-                    virtual address space is large enough, it is ok to be generous with this parameter (with special
-                    consideration on Windows, see note below). For best performance, set this to the maximum expected
-                    size of the compressed data (see example in :obj:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`).
+                    The initial size of the mapping for the memory-mapped file when writes are
+                    allowed (r+ w+, or c mode). Once a file is memory-mapped and extended beyond the
+                    initial mapping size, the file must be remapped which may be expensive. This
+                    parameter allows to decouple the mapping size from the actual file size to early
+                    reserve memory for future writes and avoid remappings. The memory is only
+                    reserved virtually and does not occupy physical memory unless actual writes
+                    happen. Since the virtual address space is large enough, it is ok to be generous
+                    with this parameter (with special consideration on Windows, see note below).
+                    For best performance, set this to the maximum expected size of the compressed
+                    data (see example in :obj:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`).
                     The size is in bytes.
 
                     Default: 1 GiB.
 
                     .. note::
-                        On Windows, the size of the mapping is directly coupled to the file size. When the schunk gets
-                        destroyed, the file size will be truncated to the actual size of the schunk.
+                        On Windows, the size of the mapping is directly coupled to the file size.
+                        When the schunk gets destroyed, the file size will be truncated to the
+                        actual size of the schunk.
 
                 cparams: dict
                     A dictionary with the compression parameters, which are the same
@@ -248,16 +253,18 @@ class SChunk(blosc2_ext.SChunk):
         >>> storage = {"contiguous": True, "cparams": {}, "dparams": {}}
         >>> schunk = blosc2.SChunk(**storage)
 
-        In the following, we will write and read a super-chunk to and from disk via memory-mapped files.
+        In the following, we will write and read a super-chunk to and from disk
+        via memory-mapped files.
 
         >>> a = np.arange(3, dtype=np.int64)
         >>> chunksize = a.size * a.itemsize
         >>> n_chunks = 2
         >>> urlpath = getfixture('tmp_path') / "schunk.b2frame"
 
-        Optional: we intend to write 2 chunks of 24 bytes each and we expect the compressed size to be smaller than the
-        original size. Hence, we (generously) set the initial size of the mapping to 48 bytes effectively avoiding
-        remappings.
+        Optional: we intend to write 2 chunks of 24 bytes each, and we expect
+        the compressed size to be smaller than the original size. Hence, we
+        (generously) set the initial size of the mapping to 48 bytes
+        effectively avoiding remappings.
 
         >>> initial_mapping_size = chunksize * n_chunks
         >>> schunk_mmap = blosc2.SChunk(
@@ -1105,8 +1112,9 @@ def open(urlpath, mode="a", offset=0, **kwargs):
     """
     if isinstance(urlpath, blosc2.URLPath):
         if mode != "r" or offset != 0 or kwargs != {}:
-            raise NotImplementedError("Cannot open a C2Array with mode != 'r', "
-                                      "or offset != 0 or some kwargs")
+            raise NotImplementedError(
+                "Cannot open a C2Array with mode != 'r', " "or offset != 0 or some kwargs"
+            )
         return blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
 
     if isinstance(urlpath, pathlib.PurePath):
