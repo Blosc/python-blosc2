@@ -16,3 +16,13 @@ def setup_session():
     # This code will be executed before the test suite
     print()
     blosc2.print_versions()
+
+
+@pytest.fixture(scope="session")
+def c2sub_context():
+    # You may use the URL and credentials for an already existing user
+    # in a different Caterva2 subscriber.
+    c2params = dict(urlbase="https://demo.caterva2.net/",
+                    username=None, password=None)
+    with blosc2.c2context(**c2params):
+        yield c2params

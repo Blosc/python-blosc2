@@ -14,28 +14,8 @@ import pytest
 import blosc2
 
 NITEMS_SMALL = 1_000
-
-# URLBASE = 'http://localhost:8002/'
-URLBASE = 'https://demo.caterva2.net/'
 ROOT = 'b2tests'
 DIR = 'expr/'
-
-# import httpx
-# resp = httpx.post(f'{URLBASE}auth/jwt/login',
-#                   data=dict(username='user@example.com', password='foobar'))
-# resp.raise_for_status()
-# AUTH_TOKEN = '='.join(list(resp.cookies.items())[0])
-
-
-@pytest.fixture(params=[
-    None,
-    # AUTH_TOKEN,
-])
-def sub_context(request):
-    token = request.param
-    c2params = dict(urlbase=URLBASE, auth_token=token)
-    with blosc2.c2context(**c2params):
-        yield c2params
 
 
 def get_arrays(shape, chunks_blocks):
@@ -63,7 +43,7 @@ def get_arrays(shape, chunks_blocks):
 
 
 @pytest.mark.parametrize("reduce_op", ["sum", pytest.param("all", marks=pytest.mark.heavy)])
-def test_reduce_bool(reduce_op, sub_context):
+def test_reduce_bool(reduce_op, c2sub_context):
     shape = (NITEMS_SMALL, )
     chunks_blocks = 'default'
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
@@ -91,7 +71,7 @@ def test_reduce_bool(reduce_op, sub_context):
 @pytest.mark.parametrize("axis", [1])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize("dtype_out", [np.int16])
-def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op, sub_context):
+def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op, c2sub_context):
     shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     if axis is not None and np.isscalar(axis) and len(a1.shape) >= axis:
@@ -139,7 +119,7 @@ def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op, sub_
                                        pytest.param("var", marks=pytest.mark.heavy),
                                        ])
 @pytest.mark.parametrize("axis", [0])
-def test_reduce_expr_arr(chunks_blocks, axis, reduce_op, sub_context):
+def test_reduce_expr_arr(chunks_blocks, axis, reduce_op, c2sub_context):
     shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     if axis is not None and len(a1.shape) >= axis:

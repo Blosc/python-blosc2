@@ -21,36 +21,57 @@ import blosc2
 C2SUB_URLBASE_ENVVAR = 'BLOSC_C2URLBASE'
 """Environment variable with a default Caterva2 subscriber URL base."""
 
+C2SUB_USERNAME_ENVVAR = 'BLOSC_C2USERNAME'
+"""Environment variable with a default Caterva2 subscriber user name."""
+
+C2SUB_PASSWORD_ENVVAR = 'BLOSC_C2PASSWORD'
+"""Environment variable with a default Caterva2 subscriber password."""
+
 _subscriber_data = {
-    'urlbase': None,
-    'auth_token': None,
+    'urlbase': os.environ.get(C2SUB_URLBASE_ENVVAR),
+    'auth_token': '',
 }
 """Caterva2 subscriber data saved by context manager."""
 
 
 @contextmanager
 def c2context(*, urlbase: (str | None) = None,
+              username: (str | None) = None,
+              password: (str | None) = None,
               auth_token: (str | None) = None):
     """
     Context manager that sets parameters in Caterva2 subscriber requests.
 
-    Parameters not specified or set to ``None`` simply inherit the value set
-    by the previous context manager, if any.
+    A parameter not specified or set to ``None`` inherits the value set by the
+    previous context manager, defaulting to an environment variable (see
+    below) if supported by that parameter.  Parameters set to the empty string
+    are not to be used in requests (with no default either).
+
+    If the subscriber requires authorization for requests, you may either
+    provide `auth_token` (which you should have obtained previously from the
+    subscriber), or both `username` and `password` to get that token by first
+    logging in to the subscriber.  The token will be reused until explicitly
+    reset or requested again in a latter context manager invocation.
 
     Please note that this manager is reentrant but not concurrency-safe.
 
     Parameters
     ----------
-    urlbase: str | None
+    urlbase : str | None
         A URL base that will be used when an individual C2Array instance has
-        no subscriber URL base set.  Use ``None`` to disable the base set by a
-        previous context manager (and default to the value in the
-        ``BLOSC_C2URLBASE`` environment variable, if set).
-    auth_token: str | None
+        no subscriber URL base set.  Use the ``BLOSC_C2URLBASE`` environment
+        variable if set as a last resort default.
+    username : str | None
+        A name to be used in credentials to login to the subscriber and get an
+        authorization token from it.  Use the ``BLOSC_C2USERNAME`` environment
+        variable if set as a last resort default.
+    password : str | None
+        A secret to be used in credentials to login to the subscriber and get
+        an authorization token from it.  Use the ``BLOSC_C2PASSWORD``
+        environment variable if set as a last resort default.
+    auth_token : str | None
         A token that will be used when an individual C2Array instance has no
-        authorization token set.  It should have been previously obtained from
-        the subscriber.  Use ``None`` to disable the token set by a previous
-        context manager.
+        authorization token set.
 
     Yields
     ------
@@ -58,11 +79,25 @@ def c2context(*, urlbase: (str | None) = None,
 
     """
     global _subscriber_data
+
+    # Perform login to get an authorization token.
+    if not auth_token:
+        username = username or os.environ.get(C2SUB_USERNAME_ENVVAR)
+        password = password or os.environ.get(C2SUB_PASSWORD_ENVVAR)
+    if username or password:
+        if auth_token:
+            raise ValueError(
+                "Either provide a username/password or an authorizaton token")
+        auth_token = login(username, password, urlbase)
+
     try:
         old_sub_data = _subscriber_data
         new_sub_data = old_sub_data.copy()  # inherit old values
         if urlbase is not None:
             new_sub_data['urlbase'] = urlbase
+        elif old_sub_data['urlbase'] is None:
+            # The variable may have gotten a value after program start.
+            new_sub_data['urlbase'] = os.environ.get(C2SUB_URLBASE_ENVVAR)
         if auth_token is not None:
             new_sub_data['auth_token'] = auth_token
         _subscriber_data = new_sub_data
@@ -89,30 +124,36 @@ def _xpost(url, json=None, auth_token=None, timeout=15):
     return response.json()
 
 
-def _sub_api_url(urlbase, apipath):
-    try:
-        urlbase = (urlbase or _subscriber_data['urlbase']
-                   or os.environ[C2SUB_URLBASE_ENVVAR])
-    except KeyError as ke:
-        raise RuntimeError("No default Caterva2 subscriber set") from ke
-    return (f"{urlbase}api/{apipath}" if urlbase.endswith("/")
-            else f"{urlbase}/api/{apipath}")
+def _sub_url(urlbase, path):
+    urlbase = urlbase or _subscriber_data['urlbase']
+    if not urlbase:
+        raise RuntimeError("No default Caterva2 subscriber set")
+    return (f"{urlbase}{path}" if urlbase.endswith("/")
+            else f"{urlbase}/{path}")
+
+
+def login(username, password, urlbase):
+    url = _sub_url(urlbase, "auth/jwt/login")
+    creds = dict(username=username, password=password)
+    resp = httpx.post(url, data=creds, timeout=15)
+    resp.raise_for_status()
+    return '='.join(list(resp.cookies.items())[0])
 
 
 def info(path, urlbase, params=None, headers=None, model=None, auth_token=None):
-    url = _sub_api_url(urlbase, f"info/{path}")
+    url = _sub_url(urlbase, f"api/info/{path}")
     response = _xget(url, params, headers, auth_token)
     json = response.json()
     return json if model is None else model(**json)
 
 
 def subscribe(root, urlbase, auth_token):
-    url = _sub_api_url(urlbase, f"subscribe/{root}")
+    url = _sub_url(urlbase, f"api/subscribe/{root}")
     return _xpost(url, auth_token=auth_token)
 
 
 def fetch_data(path, urlbase, params, auth_token=None):
-    url = _sub_api_url(urlbase, f"fetch/{path}")
+    url = _sub_url(urlbase, f"api/fetch/{path}")
     response = _xget(url, params=params, auth_token=auth_token)
     data = response.content
     try:

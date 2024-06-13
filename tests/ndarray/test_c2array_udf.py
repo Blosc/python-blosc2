@@ -12,34 +12,13 @@ import pytest
 
 import blosc2
 
-# URLBASE = 'http://localhost:8002/'
-URLBASE = "https://demo.caterva2.net/"
 ROOT = "b2tests"
 DIR = "expr/"
-
-# import httpx
-# resp = httpx.post(f'{URLBASE}auth/jwt/login',
-#                   data=dict(username='user@example.com', password='foobar'))
-# resp.raise_for_status()
-# AUTH_TOKEN = '='.join(list(resp.cookies.items())[0])
 
 
 def udf1p(inputs_tuple, output, offset):
     x = inputs_tuple[0]
     output[:] = x + 1
-
-
-@pytest.fixture(
-    params=[
-        None,
-        # AUTH_TOKEN,
-    ]
-)
-def sub_context(request):
-    token = request.param
-    c2params = dict(urlbase=URLBASE, auth_token=token)
-    with blosc2.c2context(**c2params):
-        yield c2params
 
 
 @pytest.mark.parametrize("chunked_eval", [True, False])
@@ -53,7 +32,7 @@ def sub_context(request):
         ),
     ],
 )
-def test_1p(chunks, blocks, chunked_eval, sub_context):
+def test_1p(chunks, blocks, chunked_eval, c2sub_context):
     dtype = np.float64
     shape = (60, 60)
     urlpath = f"ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape}d.b2nd"
@@ -90,7 +69,7 @@ def udf2p(inputs_tuple, output, offset):
         pytest.param((53, 20), (10, 13), (slice(3, 8), slice(9, 12)), None, False),
     ],
 )
-def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, sub_context):
+def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, c2sub_context):
     dtype = np.float64
     shape = (60, 60)
     blosc2.remove_urlpath(urlpath)

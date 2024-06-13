@@ -14,30 +14,8 @@ import pytest
 import blosc2
 
 NITEMS_SMALL = 1_000
-
-# URLBASE = 'http://localhost:8002/'
-URLBASE = "https://demo.caterva2.net/"
 ROOT = "b2tests"
 DIR = "expr/"
-
-# import httpx
-# resp = httpx.post(f'{URLBASE}auth/jwt/login',
-#                   data=dict(username='user@example.com', password='foobar'))
-# resp.raise_for_status()
-# AUTH_TOKEN = '='.join(list(resp.cookies.items())[0])
-
-
-@pytest.fixture(
-    params=[
-        None,
-        # AUTH_TOKEN,
-    ]
-)
-def sub_context(request):
-    token = request.param
-    c2params = dict(urlbase=URLBASE, auth_token=token)
-    with blosc2.c2context(**c2params):
-        yield c2params
 
 
 def get_arrays(shape, chunks_blocks):
@@ -71,7 +49,7 @@ def get_arrays(shape, chunks_blocks):
         (False, False),
     ],
 )
-def test_simple(chunks_blocks, sub_context):
+def test_simple(chunks_blocks, c2sub_context):
     shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
 
@@ -87,7 +65,7 @@ def test_simple(chunks_blocks, sub_context):
     np.testing.assert_allclose(res[:], nres)
 
 
-def test_simple_getitem(sub_context):
+def test_simple_getitem(c2sub_context):
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
@@ -111,7 +89,7 @@ def test_simple_getitem(sub_context):
         (False, False),
     ],
 )
-def test_ixxx(chunks_blocks, sub_context):
+def test_ixxx(chunks_blocks, c2sub_context):
     shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     expr = a1**3 + a2**2 + a3**3 - a4 + 3
@@ -123,7 +101,7 @@ def test_ixxx(chunks_blocks, sub_context):
     np.testing.assert_allclose(res[:], nres)
 
 
-def test_complex(sub_context):
+def test_complex(c2sub_context):
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
@@ -152,7 +130,7 @@ def test_complex(sub_context):
         (False, False),
     ],
 )
-def test_mix_operands(chunks_blocks, sub_context):
+def test_mix_operands(chunks_blocks, c2sub_context):
     shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     b1 = blosc2.asarray(na1, chunks=a1.chunks, blocks=a1.blocks)
@@ -188,7 +166,7 @@ def test_mix_operands(chunks_blocks, sub_context):
 
 
 # Tests related with save method
-def test_save(sub_context):
+def test_save(c2sub_context):
     shape = (60, 60)
     tol = 1e-17
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, (False, True))
@@ -232,7 +210,7 @@ def broadcast_shape(request):
 
 
 @pytest.fixture
-def broadcast_fixture(broadcast_shape, sub_context):
+def broadcast_fixture(broadcast_shape, c2sub_context):
     shape1, shape2 = broadcast_shape
     dtype = np.float64
     na1 = np.linspace(0, 1, np.prod(shape1), dtype=dtype).reshape(shape1)
