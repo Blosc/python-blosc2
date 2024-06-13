@@ -200,9 +200,13 @@ def c2sub_user():
     username = "user+%x@example.com" % rand32()
     password = hex(rand32())
 
-    resp = httpx.post(f"{urlbase}auth/register",
-                      json={'email': username, 'password': password},
-                      timeout=15)
+    for _ in range(3):
+        resp = httpx.post(f"{urlbase}auth/register",
+                          json={'email': username, 'password': password},
+                          timeout=15)
+        if resp.status_code != 400:
+            break
+        # Retry on possible username collision.
     resp.raise_for_status()
 
     c2params = dict(urlbase=urlbase, username=username, password=password)
