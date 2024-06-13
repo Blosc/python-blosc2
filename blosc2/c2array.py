@@ -8,37 +8,39 @@
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from contextlib import contextmanager
-import os
 
 import httpx
 import numpy as np
 
 import blosc2
 
-
-C2SUB_URLBASE_ENVVAR = 'BLOSC_C2URLBASE'
+C2SUB_URLBASE_ENVVAR = "BLOSC_C2URLBASE"
 """Environment variable with a default Caterva2 subscriber URL base."""
 
-C2SUB_USERNAME_ENVVAR = 'BLOSC_C2USERNAME'
+C2SUB_USERNAME_ENVVAR = "BLOSC_C2USERNAME"
 """Environment variable with a default Caterva2 subscriber user name."""
 
-C2SUB_PASSWORD_ENVVAR = 'BLOSC_C2PASSWORD'
+C2SUB_PASSWORD_ENVVAR = "BLOSC_C2PASSWORD"
 """Environment variable with a default Caterva2 subscriber password."""
 
 _subscriber_data = {
-    'urlbase': os.environ.get(C2SUB_URLBASE_ENVVAR),
-    'auth_token': '',
+    "urlbase": os.environ.get(C2SUB_URLBASE_ENVVAR),
+    "auth_token": "",
 }
 """Caterva2 subscriber data saved by context manager."""
 
 
 @contextmanager
-def c2context(*, urlbase: (str | None) = None,
-              username: (str | None) = None,
-              password: (str | None) = None,
-              auth_token: (str | None) = None):
+def c2context(
+    *,
+    urlbase: (str | None) = None,
+    username: (str | None) = None,
+    password: (str | None) = None,
+    auth_token: (str | None) = None,
+):
     """
     Context manager that sets parameters in Caterva2 subscriber requests.
 
@@ -86,20 +88,19 @@ def c2context(*, urlbase: (str | None) = None,
         password = password or os.environ.get(C2SUB_PASSWORD_ENVVAR)
     if username or password:
         if auth_token:
-            raise ValueError(
-                "Either provide a username/password or an authorizaton token")
+            raise ValueError("Either provide a username/password or an authorizaton token")
         auth_token = login(username, password, urlbase)
 
     try:
         old_sub_data = _subscriber_data
         new_sub_data = old_sub_data.copy()  # inherit old values
         if urlbase is not None:
-            new_sub_data['urlbase'] = urlbase
-        elif old_sub_data['urlbase'] is None:
+            new_sub_data["urlbase"] = urlbase
+        elif old_sub_data["urlbase"] is None:
             # The variable may have gotten a value after program start.
-            new_sub_data['urlbase'] = os.environ.get(C2SUB_URLBASE_ENVVAR)
+            new_sub_data["urlbase"] = os.environ.get(C2SUB_URLBASE_ENVVAR)
         if auth_token is not None:
-            new_sub_data['auth_token'] = auth_token
+            new_sub_data["auth_token"] = auth_token
         _subscriber_data = new_sub_data
         yield
     finally:
@@ -107,7 +108,7 @@ def c2context(*, urlbase: (str | None) = None,
 
 
 def _xget(url, params=None, headers=None, auth_token=None, timeout=15):
-    auth_token = auth_token or _subscriber_data['auth_token']
+    auth_token = auth_token or _subscriber_data["auth_token"]
     if auth_token:
         headers = headers.copy() if headers else {}
         headers["Cookie"] = auth_token
@@ -117,7 +118,7 @@ def _xget(url, params=None, headers=None, auth_token=None, timeout=15):
 
 
 def _xpost(url, json=None, auth_token=None, timeout=15):
-    auth_token = auth_token or _subscriber_data['auth_token']
+    auth_token = auth_token or _subscriber_data["auth_token"]
     headers = {"Cookie": auth_token} if auth_token else None
     response = httpx.post(url, json=json, headers=headers, timeout=timeout)
     response.raise_for_status()
@@ -125,11 +126,10 @@ def _xpost(url, json=None, auth_token=None, timeout=15):
 
 
 def _sub_url(urlbase, path):
-    urlbase = urlbase or _subscriber_data['urlbase']
+    urlbase = urlbase or _subscriber_data["urlbase"]
     if not urlbase:
         raise RuntimeError("No default Caterva2 subscriber set")
-    return (f"{urlbase}{path}" if urlbase.endswith("/")
-            else f"{urlbase}/{path}")
+    return f"{urlbase}{path}" if urlbase.endswith("/") else f"{urlbase}/{path}"
 
 
 def login(username, password, urlbase):
@@ -137,7 +137,7 @@ def login(username, password, urlbase):
     creds = dict(username=username, password=password)
     resp = httpx.post(url, data=creds, timeout=15)
     resp.raise_for_status()
-    return '='.join(list(resp.cookies.items())[0])
+    return "=".join(list(resp.cookies.items())[0])
 
 
 def info(path, urlbase, params=None, headers=None, model=None, auth_token=None):
@@ -216,16 +216,14 @@ class C2Array(blosc2.Operand):
 
         # Try to 'open' the remote path
         try:
-            self.meta = info(self.path, self.urlbase,
-                             auth_token=self.auth_token)
+            self.meta = info(self.path, self.urlbase, auth_token=self.auth_token)
         except httpx.HTTPStatusError:
             # Subscribe to root and try again. It is less latency to subscribe directly
             # than to check for the subscription.
             root, _ = self.path.split("/", 1)
             subscribe(root, self.urlbase, self.auth_token)
             try:
-                self.meta = info(self.path, self.urlbase,
-                                 auth_token=self.auth_token)
+                self.meta = info(self.path, self.urlbase, auth_token=self.auth_token)
             except httpx.HTTPStatusError as err:
                 raise FileNotFoundError(f"Remote path not found: {path}.\n" f"Error was: {err}") from err
 

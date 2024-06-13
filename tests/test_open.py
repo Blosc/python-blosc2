@@ -10,11 +10,11 @@ import os
 import pathlib
 import random
 
+import httpx
 import numpy as np
 import pytest
 
 import blosc2
-import httpx
 
 
 @pytest.mark.parametrize("urlpath", ["schunk.b2frame"])
@@ -181,11 +181,9 @@ def test_open_c2array_args(c2sub_context):  # instance args prevail
     path = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + path}").as_posix()
 
-    with blosc2.c2context(urlbase='https://wrong.example.com/',
-                          auth_token='wrong-token'):
-        urlbase = c2sub_context['urlbase']
-        auth_token = (blosc2.c2array.login(**c2sub_context)
-                      if c2sub_context['username'] else None)
+    with blosc2.c2context(urlbase="https://wrong.example.com/", auth_token="wrong-token"):
+        urlbase = c2sub_context["urlbase"]
+        auth_token = blosc2.c2array.login(**c2sub_context) if c2sub_context["username"] else None
         a1 = blosc2.C2Array(path, urlbase=urlbase, auth_token=auth_token)
         urlpath = blosc2.URLPath(path, urlbase=urlbase, auth_token=auth_token)
         a_open = blosc2.open(urlpath, mode="r", offset=0)
@@ -195,15 +193,16 @@ def test_open_c2array_args(c2sub_context):  # instance args prevail
 @pytest.fixture(scope="session")
 def c2sub_user():
     def rand32():
-        return random.randint(0, 0x7fffffff)
+        return random.randint(0, 0x7FFFFFFF)
+
     urlbase = "https://demo-auth.caterva2.net/"
     username = "user+%x@example.com" % rand32()
     password = hex(rand32())
 
     for _ in range(3):
-        resp = httpx.post(f"{urlbase}auth/register",
-                          json={'email': username, 'password': password},
-                          timeout=15)
+        resp = httpx.post(
+            f"{urlbase}auth/register", json={"email": username, "password": password}, timeout=15
+        )
         if resp.status_code != 400:
             break
         # Retry on possible username collision.
@@ -224,5 +223,3 @@ def test_open_c2array_auth(c2sub_user):
         a1 = blosc2.C2Array(path)
         assert a1.dtype == dtype
         assert a1.shape == shape
-
-
