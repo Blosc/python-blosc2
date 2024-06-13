@@ -41,6 +41,12 @@ def c2context(*, urlbase: (str | None) = None,
     below) if supported by that parameter.  Parameters set to the empty string
     are not to be used in requests (with no default either).
 
+    If the subscriber requires authorization for requests, you may either
+    provide `auth_token` (which you should have obtained previously from the
+    subscriber), or both `username` and `password` to get that token by first
+    logging in to the subscriber.  The token will be reused until explicitly
+    reset or requested again in a latter context manager invocation.
+
     Please note that this manager is reentrant but not concurrency-safe.
 
     Parameters
@@ -49,10 +55,15 @@ def c2context(*, urlbase: (str | None) = None,
         A URL base that will be used when an individual C2Array instance has
         no subscriber URL base set.  Use the ``BLOSC_C2URLBASE`` environment
         variable if set as a last resort default.
+    username : str | None
+        A name to be used in credentials to login to the subscriber and get an
+        authorization token from it.
+    password : str | None
+        A secret to be used in credentials to login to the subscriber and get
+        an authorization token from it.
     auth_token : str | None
         A token that will be used when an individual C2Array instance has no
-        authorization token set.  It should have been previously obtained from
-        the subscriber.
+        authorization token set.
 
     Yields
     ------
