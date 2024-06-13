@@ -21,6 +21,12 @@ import blosc2
 C2SUB_URLBASE_ENVVAR = 'BLOSC_C2URLBASE'
 """Environment variable with a default Caterva2 subscriber URL base."""
 
+C2SUB_USERNAME_ENVVAR = 'BLOSC_C2USERNAME'
+"""Environment variable with a default Caterva2 subscriber user name."""
+
+C2SUB_PASSWORD_ENVVAR = 'BLOSC_C2PASSWORD'
+"""Environment variable with a default Caterva2 subscriber password."""
+
 _subscriber_data = {
     'urlbase': os.environ.get(C2SUB_URLBASE_ENVVAR),
     'auth_token': '',
@@ -57,10 +63,12 @@ def c2context(*, urlbase: (str | None) = None,
         variable if set as a last resort default.
     username : str | None
         A name to be used in credentials to login to the subscriber and get an
-        authorization token from it.
+        authorization token from it.  Use the ``BLOSC_C2USERNAME`` environment
+        variable if set as a last resort default.
     password : str | None
         A secret to be used in credentials to login to the subscriber and get
-        an authorization token from it.
+        an authorization token from it.  Use the ``BLOSC_C2PASSWORD``
+        environment variable if set as a last resort default.
     auth_token : str | None
         A token that will be used when an individual C2Array instance has no
         authorization token set.
@@ -73,6 +81,9 @@ def c2context(*, urlbase: (str | None) = None,
     global _subscriber_data
 
     # Perform login to get an authorization token.
+    if not auth_token:
+        username = username or os.environ.get(C2SUB_USERNAME_ENVVAR)
+        password = password or os.environ.get(C2SUB_PASSWORD_ENVVAR)
     if username or password:
         if auth_token:
             raise ValueError(
