@@ -109,10 +109,6 @@ def _sub_url(urlbase, path):
             else f"{urlbase}/{path}")
 
 
-def _sub_api_url(urlbase, apipath):
-    return _sub_url(urlbase, f"api/{apipath}")
-
-
 def login(username, password, urlbase):
     url = _sub_url(urlbase, "auth/jwt/login")
     creds = dict(username=username, password=password)
@@ -122,19 +118,19 @@ def login(username, password, urlbase):
 
 
 def info(path, urlbase, params=None, headers=None, model=None, auth_token=None):
-    url = _sub_api_url(urlbase, f"info/{path}")
+    url = _sub_url(urlbase, f"api/info/{path}")
     response = _xget(url, params, headers, auth_token)
     json = response.json()
     return json if model is None else model(**json)
 
 
 def subscribe(root, urlbase, auth_token):
-    url = _sub_api_url(urlbase, f"subscribe/{root}")
+    url = _sub_url(urlbase, f"api/subscribe/{root}")
     return _xpost(url, auth_token=auth_token)
 
 
 def fetch_data(path, urlbase, params, auth_token=None):
-    url = _sub_api_url(urlbase, f"fetch/{path}")
+    url = _sub_url(urlbase, f"api/fetch/{path}")
     response = _xget(url, params=params, auth_token=auth_token)
     data = response.content
     try:
