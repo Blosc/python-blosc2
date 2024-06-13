@@ -19,7 +19,7 @@ def setup_session():
 
 
 @pytest.fixture(scope="session")
-def sub_context():
+def c2sub_context():
     # You may use the URL and credentials for an already existing user
     # in a different Caterva2 subscriber.
     c2params = dict(urlbase="https://demo.caterva2.net/",

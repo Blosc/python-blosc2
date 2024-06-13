@@ -152,7 +152,7 @@ ROOT = "b2tests"
 DIR = "expr/"
 
 
-def test_open_c2array(sub_context):
+def test_open_c2array(c2sub_context):
     dtype = np.float64
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
@@ -173,7 +173,7 @@ def test_open_c2array(sub_context):
         _ = blosc2.open(urlpath, mode="r", offset=0, cparams={})
 
 
-def test_open_c2array_args(sub_context):  # instance args prevail
+def test_open_c2array_args(c2sub_context):  # instance args prevail
     dtype = np.float64
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
@@ -182,9 +182,9 @@ def test_open_c2array_args(sub_context):  # instance args prevail
 
     with blosc2.c2context(urlbase='https://wrong.example.com/',
                           auth_token='wrong-token'):
-        urlbase = sub_context['urlbase']
-        auth_token = (blosc2.c2array.login(**sub_context)
-                      if sub_context['username'] else None)
+        urlbase = c2sub_context['urlbase']
+        auth_token = (blosc2.c2array.login(**c2sub_context)
+                      if c2sub_context['username'] else None)
         a1 = blosc2.C2Array(path, urlbase=urlbase, auth_token=auth_token)
         urlpath = blosc2.URLPath(path, urlbase=urlbase, auth_token=auth_token)
         a_open = blosc2.open(urlpath, mode="r", offset=0)
