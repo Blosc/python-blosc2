@@ -15,27 +15,15 @@ import blosc2
 
 NITEMS_SMALL = 1_000
 
-# URLBASE = 'http://localhost:8002/'
-URLBASE = 'https://demo.caterva2.net/'
+C2PARAMS = dict(urlbase="https://demo.caterva2.net/", username=None, password=None)
 ROOT = 'b2tests'
 DIR = 'expr/'
 
-# import httpx
-# resp = httpx.post(f'{URLBASE}auth/jwt/login',
-#                   data=dict(username='user@example.com', password='foobar'))
-# resp.raise_for_status()
-# AUTH_TOKEN = '='.join(list(resp.cookies.items())[0])
 
-
-@pytest.fixture(params=[
-    None,
-    # AUTH_TOKEN,
-])
-def sub_context(request):
-    token = request.param
-    c2params = dict(urlbase=URLBASE, auth_token=token)
-    with blosc2.c2context(**c2params):
-        yield c2params
+@pytest.fixture(scope="session")
+def sub_context():
+    with blosc2.c2context(**C2PARAMS):
+        yield C2PARAMS
 
 
 def get_arrays(shape, chunks_blocks):

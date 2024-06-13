@@ -149,34 +149,15 @@ def test_open_offset(offset, urlpath, mode, mmap_mode):
 
 NITEMS_SMALL = 1_000
 
-# URLBASE = 'http://localhost:8002/'
-URLBASE = "https://demo.caterva2.net/"
+C2PARAMS = dict(urlbase="https://demo.caterva2.net/", username=None, password=None)
 ROOT = "b2tests"
 DIR = "expr/"
 
 
-# import httpx
-# resp = httpx.post(f'{URLBASE}auth/jwt/login',
-#                   data=dict(username='user@example.com', password='foobar'))
-# resp.raise_for_status()
-# AUTH_TOKEN = '='.join(list(resp.cookies.items())[0])
-
-
-@pytest.fixture(
-    params=[
-        None,
-        # AUTH_TOKEN,
-    ]
-)
-def sub_auth_token(request):
-    return request.param
-
-
-@pytest.fixture
-def sub_context(sub_auth_token):
-    c2params = dict(urlbase=URLBASE, auth_token=sub_auth_token)
-    with blosc2.c2context(**c2params):
-        yield c2params
+@pytest.fixture(scope="session")
+def sub_context():
+    with blosc2.c2context(**C2PARAMS):
+        yield C2PARAMS
 
 
 def test_open_c2array(sub_context):
@@ -200,7 +181,7 @@ def test_open_c2array(sub_context):
         _ = blosc2.open(urlpath, mode="r", offset=0, cparams={})
 
 
-def test_open_c2array_args(sub_auth_token):  # instance args prevail
+def test_open_c2array_args(sub_context):  # instance args prevail
     dtype = np.float64
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
@@ -209,8 +190,11 @@ def test_open_c2array_args(sub_auth_token):  # instance args prevail
 
     with blosc2.c2context(urlbase='https://wrong.example.com/',
                           auth_token='wrong-token'):
-        a1 = blosc2.C2Array(path, urlbase=URLBASE, auth_token=sub_auth_token)
-        urlpath = blosc2.URLPath(path, urlbase=URLBASE, auth_token=sub_auth_token)
+        urlbase = sub_context['urlbase']
+        auth_token = (blosc2.c2array.login(**sub_context)
+                      if sub_context['username'] else None)
+        a1 = blosc2.C2Array(path, urlbase=urlbase, auth_token=auth_token)
+        urlpath = blosc2.URLPath(path, urlbase=urlbase, auth_token=auth_token)
         a_open = blosc2.open(urlpath, mode="r", offset=0)
         np.testing.assert_allclose(a1[:], a_open[:])
 
