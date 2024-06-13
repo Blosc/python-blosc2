@@ -45,11 +45,11 @@ def c2context(*, urlbase: (str | None) = None,
 
     Parameters
     ----------
-    urlbase: str | None
+    urlbase : str | None
         A URL base that will be used when an individual C2Array instance has
         no subscriber URL base set.  Use the ``BLOSC_C2URLBASE`` environment
         variable if set as a last resort default.
-    auth_token: str | None
+    auth_token : str | None
         A token that will be used when an individual C2Array instance has no
         authorization token set.  It should have been previously obtained from
         the subscriber.
