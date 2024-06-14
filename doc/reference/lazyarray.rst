@@ -36,6 +36,8 @@ LazyExpr Usage
 For getting a LazyArray-compliant object from an expression (à la numexpr), you can use the
 lazyexpr constructor.
 
+.. currentmodule:: blosc2
+
 .. autosummary::
     :toctree: autofiles/lazyarray
     :nosignatures:
@@ -50,7 +52,6 @@ LazyUDF Usage
 For getting a LazyArray-compliant object from a user-defined Python function, you can use the
 lazyudf constructor.
 
-.. currentmodule:: blosc2
 
 
 .. autosummary::

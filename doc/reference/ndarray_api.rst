@@ -39,6 +39,7 @@ Attributes
     blocksize
     chunksize
     dtype
+    fields
     info
     schunk
     size
@@ -61,35 +62,3 @@ Constructors
     ndarray_from_cframe
     uninit
     zeros
-
-Functions
----------
-
-.. autosummary::
-    :toctree: autofiles/ndarray
-    :nosignatures:
-
-    sin
-    cos
-    tan
-    sinh
-    cosh
-    tanh
-    arcsin
-    arccos
-    arctan
-    arctan2
-    arcsinh
-    arccosh
-    arctanh
-    exp
-    expm1
-    log
-    log10
-    log1p
-    sqrt
-    conj
-    real
-    imag
-    contains
-    abs

@@ -196,7 +196,7 @@ class C2Array(blosc2.Operand):
         urlbase: str
             The base URL (slash-terminated) of the subscriber to query.
         auth_token: str
-            An optional token to authorize requests via HTTP.  Currently it
+            An optional token to authorize requests via HTTP.  Currently, it
             will be sent as an HTTP cookie.
 
         Returns

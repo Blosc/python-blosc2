@@ -24,7 +24,6 @@ Attributes
     :toctree: autofiles/c2array
 
     shape
-    ext_shape
     chunks
     blocks
     dtype
