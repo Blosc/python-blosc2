@@ -533,21 +533,16 @@ def save_array(arr, urlpath, chunksize=None, **kwargs):
     return pack_tensor(arr, chunksize=chunksize, urlpath=urlpath, **kwargs)
 
 
-def load_array(urlpath, **kwargs):
+def load_array(urlpath, dparams=None):
     """Load a serialized NumPy array in urlpath.
 
     Parameters
     ----------
     urlpath : str
         The file where the array is to be loaded.
-
-    Other parameters
-    ----------------
-    kwargs: dict, optional
-        Keyword arguments supported:
-        dparams: dict
-            A dictionary with the decompression parameters, which are the same that can
-            be used in the :func:`~blosc2.decompress2` function.
+    dparams: dict, optional
+        A dictionary with the decompression parameters, which are the same that can
+        be used in the :func:`~blosc2.decompress2` function.
 
     Returns
     -------
@@ -580,7 +575,7 @@ def load_array(urlpath, **kwargs):
     :func:`~blosc2.pack_tensor`
     """
     # May we raise a DeprecationWarning here in the future?
-    return load_tensor(urlpath, **kwargs)
+    return load_tensor(urlpath, dparams=dparams)
 
 
 def pack_tensor(tensor, chunksize=None, **kwargs):
@@ -753,7 +748,7 @@ def save_tensor(tensor, urlpath, chunksize=None, **kwargs):
     return pack_tensor(tensor, chunksize=chunksize, urlpath=urlpath, **kwargs)
 
 
-def load_tensor(urlpath, **kwargs):
+def load_tensor(urlpath, dparams=None):
     """Load a serialized PyTorch / TensorFlow  tensor or NumPy array in `urlpath`.
 
     Parameters
@@ -763,11 +758,9 @@ def load_tensor(urlpath, **kwargs):
 
     Other parameters
     ----------------
-    kwargs: dict, optional
-        Keyword arguments supported:
-        dparams: dict
-            A dictionary with the decompression parameters, which are the same that can
-            be used in the :func:`~blosc2.decompress2` function.
+    dparams: dict, optional
+        A dictionary with the decompression parameters, which are the same that can
+        be used in the :func:`~blosc2.decompress2` function.
 
     Returns
     -------
@@ -798,7 +791,7 @@ def load_tensor(urlpath, **kwargs):
     :func:`~blosc2.save_tensor`
     :func:`~blosc2.pack_tensor`
     """
-    schunk = blosc2.open(urlpath, **kwargs)
+    schunk = blosc2.open(urlpath, dparams=dparams)
     return _unpack_tensor(schunk)
 
 
@@ -1248,9 +1241,9 @@ def compute_chunks_blocks(
         and heuristics.
     dtype: np.dtype
         The dtype of the array.
-
-    The other keyword arguments supported are the same as for the
-    :obj:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>` constructor.
+    kwargs: dict
+        Other keyword arguments supported by the
+        :obj:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>` constructor.
 
     Returns
     -------
