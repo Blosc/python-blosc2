@@ -25,3 +25,13 @@ If you want to run a lightweight version of the tests, you can use the following
 ``` bash
   python -m pytest -m "not heavy"
 ```
+
+## Documentation
+
+We are using Sphinx for documentation.  You can build the documentation by executing
+
+``` bash
+  python -m sphinx doc html
+```
+
+You will find the documentation in the `html` directory.
