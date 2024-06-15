@@ -1001,7 +1001,8 @@ class LazyExpr(LazyArray):
         value1, op, value2 = new_op
         if value2 is None:
             if isinstance(value1, LazyExpr):
-                self.expression = f"{op}({self.expression})"
+                self.expression = f"{op}({value1.expression})"
+                self.operands = value1.operands
             else:
                 self.operands = {"o0": value1}
                 self.expression = "o0" if op is None else f"{op}(o0)"

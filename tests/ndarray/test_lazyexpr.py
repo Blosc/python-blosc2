@@ -191,6 +191,13 @@ def test_complex_getitem_slice(array_fixture):
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
 
+def test_func_expression(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = (a1 + a2) * a3 - a4
+    expr = blosc2.sin(expr) + blosc2.cos(expr)
+    nres = ne.evaluate("sin((na1 + na2) * na3 - na4) + cos((na1 + na2) * na3 - na4)")
+    res = expr.eval()
+    np.testing.assert_allclose(res[:], nres)
 
 def test_expression_with_constants(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
