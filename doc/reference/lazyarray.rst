@@ -1,7 +1,7 @@
 .. _LazyArray:
 
-LazyArray API
-=============
+LazyArray
+=========
 
 This is an interface for evaluating an expression or a Python user defined function.
 
@@ -30,8 +30,8 @@ Methods
 
 .. _LazyExpr:
 
-LazyExpr Usage
---------------
+LazyExpr
+--------
 
 For getting a LazyArray-compliant object from an expression (à la numexpr), you can use the
 lazyexpr constructor.
@@ -46,13 +46,11 @@ lazyexpr constructor.
 
 .. _LazyUDF:
 
-LazyUDF Usage
--------------
+LazyUDF
+-------
 
 For getting a LazyArray-compliant object from a user-defined Python function, you can use the
 lazyudf constructor.
-
-
 
 .. autosummary::
     :toctree: autofiles/lazyarray

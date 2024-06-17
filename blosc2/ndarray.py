@@ -522,7 +522,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         See Also
         --------
-        :ref:`NDField <NDField>`
+        :ref:`NDField`
 
         Examples
         --------
@@ -578,7 +578,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
     @property
     def schunk(self):
         """
-        The :ref:`SChunk <SChunk>` reference of the :ref:`NDArray <NDArray>`.
+        The :ref:`SChunk <SChunk>` reference of the :ref:`NDArray`.
         All the attributes from the :ref:`SChunk <SChunk>` can be accessed through
         this instance as `self.schunk`.
 
@@ -773,12 +773,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return super().tobytes()
 
     def to_cframe(self):
-        """Get a bytes object containing the serialized :ref:`NDArray <NDArray>` instance.
+        """Get a bytes object containing the serialized :ref:`NDArray` instance.
 
         Returns
         -------
         out: bytes
-            The buffer containing the serialized :ref:`NDArray <NDArray>` instance.
+            The buffer containing the serialized :ref:`NDArray` instance.
 
         See Also
         --------
@@ -804,8 +804,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         Returns
         -------
-        out: :ref:`NDArray <NDArray>`
-            A :ref:`NDArray <NDArray>` with a copy of the data.
+        out: :ref:`NDArray`
+            A :ref:`NDArray` with a copy of the data.
 
         See Also
         --------
@@ -872,7 +872,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return super().resize(newshape)
 
     def slice(self, key, **kwargs):
-        """Get a (multidimensional) slice as a new :ref:`NDArray <NDArray>`.
+        """Get a (multidimensional) slice as a new :ref:`NDArray`.
 
         Parameters
         ----------
@@ -887,7 +887,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         Returns
         -------
-        out: :ref:`NDArray <NDArray>`
+        out: :ref:`NDArray`
             An array with the requested data. The dtype will be the same as `self`.
 
         Examples
@@ -948,7 +948,7 @@ def sum(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdi
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
             The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which a sum is performed. The default, axis=None,
@@ -983,7 +983,7 @@ def mean(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepd
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which the means are computed. The default is to compute
@@ -1016,7 +1016,7 @@ def std(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which the standard deviation is computed. The default is
@@ -1052,7 +1052,7 @@ def var(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which the variance is computed. The default is to compute
@@ -1088,7 +1088,7 @@ def prod(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepd
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which a product is performed. The default, axis=None,
@@ -1123,7 +1123,7 @@ def min(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which to operate. By default, flattened input is used.
@@ -1150,7 +1150,7 @@ def max(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which to operate. By default, flattened input is used.
@@ -1177,7 +1177,7 @@ def any(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which to operate. By default, flattened input is used.
@@ -1204,7 +1204,7 @@ def all(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which to operate. By default, flattened input is used.
@@ -1231,12 +1231,12 @@ def sin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         Angle, in radians.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1252,12 +1252,12 @@ def cos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         Angle, in radians.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1273,12 +1273,12 @@ def tan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
             Angle, in radians.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1294,12 +1294,12 @@ def sqrt(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
             The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1315,12 +1315,12 @@ def sinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
             The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1336,12 +1336,12 @@ def cosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
             The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1357,12 +1357,12 @@ def tanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
             The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1378,12 +1378,12 @@ def arcsin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
             The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1399,12 +1399,12 @@ def arccos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
             The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1420,12 +1420,12 @@ def arctan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
             The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1441,14 +1441,14 @@ def arctan2(ndarr1: NDArray | NDField, ndarr2: NDArray | NDField | blosc2.C2Arra
 
     Parameters
     ----------
-    ndarr1: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>`
+    ndarr1: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
             The input array.
-    ndarr2: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>`
+    ndarr2: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
             The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1464,12 +1464,12 @@ def arcsinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
             The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1485,12 +1485,12 @@ def arccosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1506,12 +1506,12 @@ def arctanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1527,12 +1527,12 @@ def exp(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
             The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1548,12 +1548,12 @@ def expm1(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
             The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1569,12 +1569,12 @@ def log(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1590,12 +1590,12 @@ def log10(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1611,12 +1611,12 @@ def log1p(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1632,12 +1632,12 @@ def conj(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1653,12 +1653,12 @@ def real(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
             The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
             A lazy expression that can be evaluated.
 
     References
@@ -1674,12 +1674,12 @@ def imag(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1697,14 +1697,14 @@ def contains(
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
         The input array.
-    value: str or :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>`
+    value: str or :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
         The value to be checked.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
     """
     if not isinstance(value, str | bytes | NDArray):
@@ -1718,12 +1718,12 @@ def abs(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray <NDArray>` or :ref:`NDField <NDField>` or :ref:`C2Array <C2Array>` or :ref:`LazyExpr <LazyExpr>`
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array.
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
+    out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
 
     References
@@ -1806,8 +1806,8 @@ def empty(shape, dtype=np.uint8, **kwargs):
 
     Returns
     -------
-    out: :ref:`NDArray <NDArray>`
-        A :ref:`NDArray <NDArray>` is returned.
+    out: :ref:`NDArray`
+        A :ref:`NDArray` is returned.
 
     Examples
     --------
@@ -1839,8 +1839,8 @@ def uninit(shape, dtype=np.uint8, **kwargs):
 
     Returns
     -------
-    out: :ref:`NDArray <NDArray>`
-        A :ref:`NDArray <NDArray>` is returned.
+    out: :ref:`NDArray`
+        A :ref:`NDArray` is returned.
 
     Examples
     --------
@@ -1874,8 +1874,8 @@ def zeros(shape, dtype=np.uint8, **kwargs):
 
     Returns
     -------
-    out: :ref:`NDArray <NDArray>`
-        A :ref:`NDArray <NDArray>` is returned.
+    out: :ref:`NDArray`
+        A :ref:`NDArray` is returned.
 
     Examples
     --------
@@ -1930,8 +1930,8 @@ def full(shape, fill_value, dtype=None, **kwargs):
 
     Returns
     -------
-    out: :ref:`NDArray <NDArray>`
-        A :ref:`NDArray <NDArray>` is returned.
+    out: :ref:`NDArray`
+        A :ref:`NDArray` is returned.
 
     Examples
     --------
@@ -1981,8 +1981,8 @@ def frombuffer(
 
     Returns
     -------
-    out: :ref:`NDArray <NDArray>`
-        A :ref:`NDArray <NDArray>` is returned.
+    out: :ref:`NDArray`
+        A :ref:`NDArray` is returned.
 
     Examples
     --------
@@ -2029,7 +2029,7 @@ def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: dict | list) -> NDArra
 
     Returns
     -------
-    out: :ref:`NDArray <NDArray>`
+    out: :ref:`NDArray`
         An new NDArray made of :paramref:`array`.
 
     Note
@@ -2126,11 +2126,11 @@ def _check_ndarray_kwargs(**kwargs):
 def get_slice_nchunks(schunk, key):
     """
     Get the unidimensional chunk indexes needed to get a
-    slice of a :ref:`SChunk <SChunk>` or a :ref:`NDArray <NDArray>`.
+    slice of a :ref:`SChunk <SChunk>` or a :ref:`NDArray`.
 
     Parameters
     ----------
-    schunk: :ref:`SChunk <SChunk>` or :ref:`NDArray <NDArray>`
+    schunk: :ref:`SChunk <SChunk>` or :ref:`NDArray`
         The super-chunk or ndarray container.
     key: tuple(int, int), int, slice or sequence of slices
         If it is a super-chunk, a tuple with the start and stop of the slice, an integer,
@@ -2169,15 +2169,15 @@ class NDField(Operand):
 
         Parameters
         ----------
-        ndarr: :ref:`NDArray <NDArray>`
+        ndarr: :ref:`NDArray`
             The NDArray to which assign the field.
         field: str
             The field's name.
 
         Returns
         -------
-        out: :ref:`NDField <NDField>`
-            The corresponding :ref:`NDField <NDField>`.
+        out: :ref:`NDField`
+            The corresponding :ref:`NDField`.
         """
         if not isinstance(ndarr, NDArray):
             raise ValueError("ndarr should be a NDArray!")
@@ -2207,7 +2207,7 @@ class NDField(Operand):
 
     @property
     def shape(self):
-        """The shape of the associated :ref:`NDArray <NDArray>`."""
+        """The shape of the associated :ref:`NDArray`."""
         return self.ndarr.shape
 
     @property

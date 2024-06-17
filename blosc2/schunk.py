@@ -62,8 +62,8 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
 
 class Meta(Mapping):
     """
-    Class providing access to user meta on a :ref:`SChunk <SChunk>`.
-    It will be available via the `.meta` property of a :ref:`SChunk <SChunk>`.
+    Class providing access to user meta on a :ref:`SChunk`.
+    It will be available via the `.meta` property of a :ref:`SChunk`.
     """
 
     def get(self, key, default=None):
@@ -728,12 +728,12 @@ class SChunk(blosc2_ext.SChunk):
         return super().set_slice(start=key.start, stop=key.stop, value=value)
 
     def to_cframe(self):
-        """Get a bytes object containing the serialized :ref:`SChunk <SChunk>` instance.
+        """Get a bytes object containing the serialized :ref:`SChunk` instance.
 
         Returns
         -------
         out: bytes
-            The buffer containing the serialized :ref:`SChunk <SChunk>` instance.
+            The buffer containing the serialized :ref:`SChunk` instance.
 
         See Also
         --------
@@ -883,7 +883,7 @@ class SChunk(blosc2_ext.SChunk):
         inputs_tuple: tuple of tuples
             Tuple which will contain a tuple for each argument that the function will
             receive with their corresponding np.dtype.
-            The supported operand types are :ref:`SChunk <SChunk>`, `ndarray` and
+            The supported operand types are :ref:`SChunk`, `ndarray` and
             Python scalars.
         schunk_dtype: np.dtype
             The data type to use to fill :paramref:`self`.
@@ -1035,13 +1035,12 @@ class SChunk(blosc2_ext.SChunk):
 @_inherit_doc_parameter(SChunk.__init__, "mmap_mode:", {r"\* - 'w\+'[^*]+": ""})
 @_inherit_doc_parameter(SChunk.__init__, "initial_mapping_size:", {r"r\+ w\+, or c": "r+ or c"})
 def open(urlpath, mode="a", offset=0, **kwargs):
-    """Open a persistent :ref:`SChunk <SChunk>` (or :ref:`NDArray <NDArray>`)
-    or a remote :ref:`C2Array <C2Array>`.
+    """Open a persistent :ref:`SChunk` or :ref:`NDArray` or a remote :ref:`C2Array`.
 
     Parameters
     ----------
     urlpath: str | pathlib.Path | :ref:`URLPath`
-        The path where the :ref:`SChunk <SChunk>` (or :ref:`NDArray <NDArray>`)
+        The path where the :ref:`SChunk` (or :ref:`NDArray`)
         is stored. In case it is a remote array, a :ref:`URLPath` must be passed.
     mode: str, optional
         The open mode.
@@ -1073,7 +1072,7 @@ def open(urlpath, mode="a", offset=0, **kwargs):
 
     Returns
     -------
-    out: :ref:`SChunk <SChunk>`, :ref:`NDArray <NDArray>` or :ref:`C2Array <C2Array>`
+    out: :ref:`SChunk`, :ref:`NDArray` or :ref:`C2Array`
         The SChunk or NDArray (in case there is a "b2nd" metalayer")
         or the C2Array if :paramref:`urlpath` is a :ref:`blosc2.URLPath <URLPath>` instance.
 

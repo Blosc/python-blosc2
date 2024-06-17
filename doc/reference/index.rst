@@ -5,8 +5,8 @@ API Reference
     :maxdepth: 2
 
     top_level
-    schunk_api
-    ndarray_api
+    schunk
+    ndarray
     ndfield
     lazyarray
     c2array

@@ -1,7 +1,7 @@
 .. _C2Array:
 
-C2Array API
-===========
+C2Array
+=======
 
 This is a class for remote arrays. This kind of array can also work as operand on a LazyExpr, LazyUDF or reduction.
 

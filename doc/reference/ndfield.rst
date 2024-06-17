@@ -1,7 +1,7 @@
 .. _NDField:
 
-NDField API
-===========
+NDField
+=======
 
 This class is used to represent fields of a structured :ref:`NDArray <NDArray>`.
 
@@ -22,7 +22,6 @@ Methods
 
     __init__
     __getitem__
-    __repr__
 
 Attributes
 ----------
