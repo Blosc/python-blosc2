@@ -115,7 +115,7 @@ class LazyArray(ABC):
 
         Notes
         -----
-        * All the operands of the LazyArray must be Python scalars or on-disk stored :ref:`NDArray`.
+        * All the operands of the LazyArray must be Python scalars, :ref:`NDArray` or :ref:`C2Array`.
         * This is currently only supported for :ref:`LazyExpr`.
         """
         pass
