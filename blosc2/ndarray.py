@@ -225,7 +225,7 @@ class Operand:
 
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         """
-        Returns the sum of array elements over a given axis.
+        Return the sum of array elements over a given axis.
 
         Parameters
         ----------
@@ -247,7 +247,7 @@ class Operand:
         Returns
         -------
         sum_along_axis: np.ndarray or :ref:`NDArray` or scalar
-            A array with the sum of the elements along the axis.
+            The sum of the elements along the axis.
 
         References
         ----------
@@ -258,7 +258,7 @@ class Operand:
 
     def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
         """
-        Returns the arithmetic mean along the specified axis.
+        Return the arithmetic mean along the specified axis.
 
         Parameters
         ----------
@@ -289,7 +289,7 @@ class Operand:
 
     def std(self, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
         """
-        Returns the standard deviation along the specified axis.
+        Return the standard deviation along the specified axis.
 
         Parameters
         ----------
@@ -323,7 +323,7 @@ class Operand:
 
     def var(self, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
         """
-        Returns the variance along the specified axis.
+        Return the variance along the specified axis.
 
         Parameters
         ----------
@@ -357,7 +357,7 @@ class Operand:
 
     def prod(self, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
         """
-        Returns the product of array elements over a given axis.
+        Return the product of array elements over a given axis.
 
         Parameters
         ----------
@@ -390,7 +390,7 @@ class Operand:
 
     def min(self, axis=None, keepdims=False, **kwargs):
         """
-        Returns the minimum along a given axis.
+        Return the minimum along a given axis.
 
         Parameters
         ----------
@@ -417,7 +417,7 @@ class Operand:
 
     def max(self, axis=None, keepdims=False, **kwargs):
         """
-        Returns the maximum along a given axis.
+        Return the maximum along a given axis.
 
         Parameters
         ----------
@@ -944,7 +944,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
 def sum(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdims=False, **kwargs):
     """
-    Returns the sum of array elements over a given axis.
+    Return the sum of array elements over a given axis.
 
     Parameters
     ----------
@@ -979,7 +979,7 @@ def sum(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdi
 
 def mean(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdims=False, **kwargs):
     """
-    Returns the arithmetic mean along the specified axis.
+    Return the arithmetic mean along the specified axis.
 
     Parameters
     ----------
@@ -1012,7 +1012,7 @@ def mean(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepd
 
 def std(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
     """
-    Returns the standard deviation along the specified axis.
+    Return the standard deviation along the specified axis.
 
     Parameters
     ----------
@@ -1048,7 +1048,7 @@ def std(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
 
 def var(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
     """
-    Returns the variance along the specified axis.
+    Return the variance along the specified axis.
 
     Parameters
     ----------
@@ -1084,7 +1084,7 @@ def var(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
 
 def prod(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdims=False, **kwargs):
     """
-    Returns the product of array elements over a given axis.
+    Return the product of array elements over a given axis.
 
     Parameters
     ----------
@@ -1119,7 +1119,7 @@ def prod(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepd
 
 def min(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
     """
-    Returns the minimum along a given axis.
+    Return the minimum along a given axis.
 
     Parameters
     ----------
@@ -1146,7 +1146,7 @@ def min(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
 
 def max(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
     """
-    Returns the maximum along a given axis.
+    Return the maximum along a given axis.
 
     Parameters
     ----------

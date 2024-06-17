@@ -1239,7 +1239,6 @@ class LazyExpr(LazyArray):
         return self
 
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
-        # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.SUM,
             "axis": axis,
@@ -1249,7 +1248,6 @@ class LazyExpr(LazyArray):
         return self.eval(_reduce_args=reduce_args, **kwargs)
 
     def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
-        # Always evaluate the expression prior the reduction
         total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims)
         if np.isscalar(axis):
             axis = (axis,)
@@ -1260,7 +1258,6 @@ class LazyExpr(LazyArray):
         return out
 
     def std(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
-        # Always evaluate the expression prior the reduction
         mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
         expr = (self - mean_value) ** 2
         out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
@@ -1277,7 +1274,6 @@ class LazyExpr(LazyArray):
         return out
 
     def var(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
-        # Always evaluate the expression prior the reduction
         mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
         expr = (self - mean_value) ** 2
         if ddof != 0:
@@ -1294,7 +1290,6 @@ class LazyExpr(LazyArray):
         return out
 
     def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
-        # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.PROD,
             "axis": axis,
@@ -1304,7 +1299,6 @@ class LazyExpr(LazyArray):
         return self.eval(_reduce_args=reduce_args, **kwargs)
 
     def min(self, axis=None, keepdims=False, **kwargs):
-        # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.MIN,
             "axis": axis,
@@ -1313,7 +1307,6 @@ class LazyExpr(LazyArray):
         return self.eval(_reduce_args=reduce_args, **kwargs)
 
     def max(self, axis=None, keepdims=False, **kwargs):
-        # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.MAX,
             "axis": axis,
@@ -1322,7 +1315,6 @@ class LazyExpr(LazyArray):
         return self.eval(_reduce_args=reduce_args, **kwargs)
 
     def any(self, axis=None, keepdims=False, **kwargs):
-        # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.ANY,
             "axis": axis,
@@ -1331,7 +1323,6 @@ class LazyExpr(LazyArray):
         return self.eval(_reduce_args=reduce_args, **kwargs)
 
     def all(self, axis=None, keepdims=False, **kwargs):
-        # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.ALL,
             "axis": axis,
