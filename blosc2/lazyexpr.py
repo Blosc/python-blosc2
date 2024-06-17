@@ -777,8 +777,8 @@ def reduce_slices(
                 result = ne.evaluate(new_expr, chunk_operands)
             else:
                 raise ValueError(
-                    "A where condition with less than 2 params is not supported"
-                    " yet in combination with reductions"
+                    "A where condition with less than 2 params in combination with reductions"
+                    " is not supported yet"
                 )
 
         # Reduce the result
@@ -826,6 +826,9 @@ def reduce_slices(
             else:
                 out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
 
+    # Check if the output array needs to be converted to a blosc2.NDArray
+    if kwargs != {} and not np.isscalar(out):
+        out = blosc2.asarray(out, **kwargs)
     return out
 
 
@@ -1235,7 +1238,7 @@ class LazyExpr(LazyArray):
         self._where_args = args
         return self
 
-    def sum(self, axis=None, dtype=None, keepdims=False):
+    def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.SUM,
@@ -1243,48 +1246,54 @@ class LazyExpr(LazyArray):
             "dtype": dtype,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args)
+        return self.eval(_reduce_args=reduce_args, **kwargs)
 
-    def mean(self, axis=None, dtype=None, keepdims=False):
+    def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
         total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims)
         if np.isscalar(axis):
             axis = (axis,)
         num_elements = np.prod(self.shape) if axis is None else np.prod([self.shape[i] for i in axis])
-        mean_expr = total_sum / num_elements
-        return mean_expr
+        out = total_sum / num_elements
+        if kwargs != {} and not np.isscalar(out):
+            out = blosc2.asarray(out, **kwargs)
+        return out
 
-    def std(self, axis=None, dtype=None, keepdims=False, ddof=0):
+    def std(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
         # Always evaluate the expression prior the reduction
         mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
-        std_expr = (self - mean_value) ** 2
-        std_expr = std_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
+        expr = (self - mean_value) ** 2
+        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
         if ddof != 0:
             if axis is None:
                 num_elements = np.prod(self.shape)
             else:
                 num_elements = np.prod([self.shape[i] for i in axis])
-            std_expr = np.sqrt(std_expr * num_elements / (num_elements - ddof))
+            out = np.sqrt(out * num_elements / (num_elements - ddof))
         else:
-            std_expr = np.sqrt(std_expr)
-        return std_expr
+            out = np.sqrt(out)
+        if kwargs != {} and not np.isscalar(out):
+            out = blosc2.asarray(out, **kwargs)
+        return out
 
-    def var(self, axis=None, dtype=None, keepdims=False, ddof=0):
+    def var(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
         # Always evaluate the expression prior the reduction
         mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
-        var_expr = (self - mean_value) ** 2
+        expr = (self - mean_value) ** 2
         if ddof != 0:
-            var_expr = var_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
+            out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
             if axis is None:
                 num_elements = np.prod(self.shape)
             else:
                 num_elements = np.prod([self.shape[i] for i in axis])
-            var_values = var_expr * num_elements / (num_elements - ddof)
+            out = out * num_elements / (num_elements - ddof)
         else:
-            var_values = var_expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
-        return var_values
+            out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
+        if kwargs != {} and not np.isscalar(out):
+            out = blosc2.asarray(out, **kwargs)
+        return out
 
-    def prod(self, axis=None, dtype=None, keepdims=False):
+    def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.PROD,
@@ -1292,43 +1301,43 @@ class LazyExpr(LazyArray):
             "dtype": dtype,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args)
+        return self.eval(_reduce_args=reduce_args, **kwargs)
 
-    def min(self, axis=None, keepdims=False):
+    def min(self, axis=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.MIN,
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args)
+        return self.eval(_reduce_args=reduce_args, **kwargs)
 
-    def max(self, axis=None, keepdims=False):
+    def max(self, axis=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.MAX,
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args)
+        return self.eval(_reduce_args=reduce_args, **kwargs)
 
-    def any(self, axis=None, keepdims=False):
+    def any(self, axis=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.ANY,
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args)
+        return self.eval(_reduce_args=reduce_args, **kwargs)
 
-    def all(self, axis=None, keepdims=False):
+    def all(self, axis=None, keepdims=False, **kwargs):
         # Always evaluate the expression prior the reduction
         reduce_args = {
             "op": ReduceOp.ALL,
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args)
+        return self.eval(_reduce_args=reduce_args, **kwargs)
 
     def eval(self, item=None, **kwargs) -> blosc2.NDArray:
         if hasattr(self, "_output"):

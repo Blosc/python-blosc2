@@ -65,7 +65,8 @@ def test_reduce_bool(array_fixture, reduce_op):
 @pytest.mark.parametrize("axis", [0, 1, (0, 1), None])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize("dtype_out", [np.int16, np.float64])
-def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op):
+@pytest.mark.parametrize("kwargs", [{}, {"cparams": dict(clevel=1, shuffle=blosc2.Filter.BITSHUFFLE)}])
+def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwargs):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     if axis is not None and np.isscalar(axis) and len(a1.shape) >= axis:
         return
@@ -86,13 +87,18 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op):
         if reduce_op in ("mean", "std") and dtype_out == np.int16:
             # mean and std need float dtype as output
             dtype_out = np.float64
-        res = getattr(expr, reduce_op)(axis=axis, keepdims=keepdims, dtype=dtype_out)
+        res = getattr(expr, reduce_op)(axis=axis, keepdims=keepdims, dtype=dtype_out, **kwargs)
         nres = getattr(nres, reduce_op)(axis=axis, keepdims=keepdims, dtype=dtype_out)
     else:
-        res = getattr(expr, reduce_op)(axis=axis, keepdims=keepdims)
+        res = getattr(expr, reduce_op)(axis=axis, keepdims=keepdims, **kwargs)
         nres = getattr(nres, reduce_op)(axis=axis, keepdims=keepdims)
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
-    np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
+    if kwargs != {}:
+        if not np.isscalar(res):
+            assert isinstance(res, blosc2.NDArray)
+        np.testing.assert_allclose(res[()], nres, atol=tol, rtol=tol)
+    else:
+        np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 
 # TODO: "prod" is not supported here because it overflows with current values

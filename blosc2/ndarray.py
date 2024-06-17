@@ -246,8 +246,8 @@ class Operand:
 
         Returns
         -------
-        sum_along_axis: :ref:`NDArray` or :ref:`NDField`
-            A NDArray with the sum of the elements along the axis.
+        sum_along_axis: np.ndarray or :ref:`NDArray` or scalar
+            A array with the sum of the elements along the axis.
 
         References
         ----------
@@ -277,8 +277,8 @@ class Operand:
 
         Returns
         -------
-        mean_along_axis: :ref:`NDArray` or :ref:`NDField`
-            A NDArray with the mean of the elements along the axis.
+        mean_along_axis: np.ndarray or :ref:`NDArray` or scalar
+            The mean of the elements along the axis.
 
         References
         ----------
@@ -311,8 +311,8 @@ class Operand:
 
         Returns
         -------
-        std_along_axis: :ref:`NDArray` or :ref:`NDField`
-            A NDArray with the standard deviation of the elements along the axis.
+        std_along_axis: np.ndarray or :ref:`NDArray` or scalar
+            The standard deviation of the elements along the axis.
 
         References
         ----------
@@ -345,8 +345,8 @@ class Operand:
 
         Returns
         -------
-        var_along_axis: :ref:`NDArray` or :ref:`NDField`
-            A NDArray with the variance of the elements along the axis.
+        var_along_axis: np.ndarray or :ref:`NDArray` or scalar
+            The variance of the elements along the axis.
 
         References
         ----------
@@ -378,8 +378,8 @@ class Operand:
 
         Returns
         -------
-        product_along_axis: :ref:`NDArray` or :ref:`NDField`
-            A NDArray with the product of the elements along the axis.
+        product_along_axis: np.ndarray or :ref:`NDArray` or scalar
+            The product of the elements along the axis.
 
         References
         ----------
@@ -400,11 +400,13 @@ class Operand:
             If this is set to True, the axes which are reduced are left in the result
             as dimensions with size one. With this option, the result will broadcast
             correctly against the input array.
+        kwargs: dict, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
 
         Returns
         -------
-        min_along_axis: :ref:`NDArray` or :ref:`NDField`
-            A NDArray with the minimum of the elements along the axis.
+        min_along_axis: np.ndarray or :ref:`NDArray` or scalar
+            The minimum of the elements along the axis.
 
         References
         ----------
@@ -425,11 +427,13 @@ class Operand:
             If this is set to True, the axes which are reduced are left in the result
             as dimensions with size one. With this option, the result will broadcast
             correctly against the input array.
+        kwargs: dict, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
 
         Returns
         -------
-        max_along_axis: :ref:`NDArray` or :ref:`NDField`
-            A NDArray with the maximum of the elements along the axis.
+        max_along_axis: np.ndarray or :ref:`NDArray` or scalar
+            The maximum of the elements along the axis.
 
         References
         ----------
@@ -450,11 +454,13 @@ class Operand:
             If this is set to True, the axes which are reduced are left in the result as
             dimensions with size one. With this option, the result will broadcast correctly
             against the input array.
+        kwargs: dict, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
 
         Returns
         -------
-        any_along_axis: :ref:`NDArray` or :ref:`NDField`
-            A NDArray with the result of the evaluation along the axis.
+        any_along_axis: np.ndarray or :ref:`NDArray` or scalar
+            The result of the evaluation along the axis.
 
         References
         ----------
@@ -475,11 +481,13 @@ class Operand:
             If this is set to True, the axes which are reduced are left in the result as
             dimensions with size one. With this option, the result will broadcast correctly
             against the input array.
+        kwargs: dict, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
 
         Returns
         -------
-        all_along_axis: :ref:`NDArray` or :ref:`NDField`
-            A NDArray with the result of the evaluation along the axis.
+        all_along_axis: np.ndarray or :ref:`NDArray` or scalar
+            The result of the evaluation along the axis.
 
         References
         ----------
@@ -959,8 +967,8 @@ def sum(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdi
 
     Returns
     -------
-    sum_along_axis: :ref:`NDArray` or :ref:`NDField`
-            A NDArray with the sum of the elements along the axis.
+    sum_along_axis: np.ndarray or :ref:`NDArray` or scalar
+            The sum of the elements along the axis.
 
     References
     ----------
@@ -992,8 +1000,8 @@ def mean(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepd
 
     Returns
     -------
-    mean_along_axis: :ref:`NDArray` or :ref:`NDField`
-        A NDArray with the mean of the elements along the axis.
+    mean_along_axis: np.ndarray or :ref:`NDArray` or scalar
+        The mean of the elements along the axis.
 
     References
     ----------
@@ -1028,8 +1036,8 @@ def std(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
 
     Returns
     -------
-    std_along_axis: :ref:`NDArray` or :ref:`NDField`
-            A NDArray with the standard deviation of the elements along the axis.
+    std_along_axis: np.ndarray or :ref:`NDArray` or scalar
+            The standard deviation of the elements along the axis.
 
     References
     ----------
@@ -1064,8 +1072,8 @@ def var(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
 
     Returns
     -------
-    var_along_axis: :ref:`NDArray` or :ref:`NDField`
-            A NDArray with the variance of the elements along the axis.
+    var_along_axis: np.ndarray or :ref:`NDArray` or scalar
+            The variance of the elements along the axis.
 
     References
     ----------
@@ -1099,8 +1107,8 @@ def prod(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepd
 
     Returns
     -------
-    product_along_axis: :ref:`NDArray` or :ref:`NDField`
-        A NDArray with the product of the elements along the axis.
+    product_along_axis: np.ndarray or :ref:`NDArray` or scalar
+        The product of the elements along the axis.
 
     References
     ----------
@@ -1126,8 +1134,8 @@ def min(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
 
     Returns
     -------
-    min_along_axis: :ref:`NDArray` or :ref:`NDField`
-        A NDArray with the minimum of the elements along the axis.
+    min_along_axis: np.ndarray or :ref:`NDArray` or scalar
+        The minimum of the elements along the axis.
 
     References
     ----------
@@ -1153,8 +1161,8 @@ def max(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
 
     Returns
     -------
-    max_along_axis: :ref:`NDArray` or :ref:`NDField`
-        A NDArray with the maximum of the elements along the axis.
+    max_along_axis: np.ndarray or :ref:`NDArray` or scalar
+        The maximum of the elements along the axis.
 
     References
     ----------
@@ -1180,8 +1188,8 @@ def any(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
 
     Returns
     -------
-    any_along_axis: :ref:`NDArray` or :ref:`NDField`
-        A NDArray with the result of the evaluation along the axis.
+    any_along_axis: np.ndarray or :ref:`NDArray` or scalar
+        The result of the evaluation along the axis.
 
     References
     ----------
@@ -1207,8 +1215,8 @@ def all(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
 
     Returns
     -------
-    all_along_axis: :ref:`NDArray` or :ref:`NDField`
-        A NDArray with the result of the evaluation along the axis.
+    all_along_axis: np.ndarray or :ref:`NDArray` or scalar
+        The result of the evaluation along the axis.
 
     References
     ----------
@@ -1681,8 +1689,9 @@ def imag(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "imag", None))
 
 
-def contains(ndarr: NDArray | NDField | blosc2.C2Array,
-             value: str | bytes | NDArray | NDField | blosc2.C2Array, /):
+def contains(
+    ndarr: NDArray | NDField | blosc2.C2Array, value: str | bytes | NDArray | NDField | blosc2.C2Array, /
+):
     """
     Check if the array contains a string value.
 
