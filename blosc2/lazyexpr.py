@@ -1090,7 +1090,7 @@ class LazyExpr(LazyArray):
             new_expr = fuse_expressions(value2.expression, len(value1.operands), dup_op)
             expression = f"({self.expression} {op} {new_expr})"
         elif isinstance(value1, LazyExpr):
-            if op == "not":
+            if op == "~":
                 expression = f"({op}{self.expression})"
             elif np.isscalar(value2):
                 expression = f"({self.expression} {op} {value2})"
@@ -1183,19 +1183,19 @@ class LazyExpr(LazyArray):
         return self.update_expr(new_op=(value, "/", self))
 
     def __and__(self, value):
-        return self.update_expr(new_op=(self, "and", value))
+        return self.update_expr(new_op=(self, "&", value))
 
     def __rand__(self, value):
-        return self.update_expr(new_op=(value, "and", self))
+        return self.update_expr(new_op=(value, "&", self))
 
     def __or__(self, value):
-        return self.update_expr(new_op=(self, "or", value))
+        return self.update_expr(new_op=(self, "|", value))
 
     def __ror__(self, value):
-        return self.update_expr(new_op=(value, "or", self))
+        return self.update_expr(new_op=(value, "|", self))
 
     def __invert__(self):
-        return self.update_expr(new_op=(self, "not", None))
+        return self.update_expr(new_op=(self, "~", None))
 
     def __pow__(self, value):
         return self.update_expr(new_op=(self, "**", value))

@@ -214,15 +214,16 @@ def test_where_getitem(array_fixture):
 
 
 # Test where indirectly via a condition in getitem in a NDField
+# Test boolean operators here too
 def test_where_getitem_field(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     # Test with eval
-    res = a1[a1**2 + a2**2 > 2 * a1 * a2 + 1].eval()
-    nres = na1[na1**2 + na2**2 > 2 * na1 * na2 + 1]
+    res = a1[((a1**2 > a2**2) & ~(a1 * a2 > 1)) | (a1 < 0)].eval()
+    nres = na1[((na1**2 > na2**2) & ~(na1 * na2 > 1)) | (na1 < 0)]
     np.testing.assert_allclose(res[:], nres)
     # Test with getitem
     sl = slice(100)
-    res = a1[a1**2 + a2**2 > 2 * a1 * a2 + 1][sl]
+    res = a1[((a1**2 > a2**2) & ~(a1 * a2 > 1)) | (a1 < 0)][sl]
     np.testing.assert_allclose(res, nres[sl])
 
 
