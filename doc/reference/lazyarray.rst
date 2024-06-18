@@ -7,9 +7,9 @@ This is an interface for evaluating an expression or a Python user defined funct
 
 You can get an object following the LazyArray API with any of the following ways:
 
-* Any expression that involves one or more NDArray objects. e.g. ``a + b``, where `a` and `b` are NDArray objects (see "Computing with NDArray objects" tutorial at the :ref:`getting_started/tutorials` section).
+* Any expression that involves one or more NDArray objects. e.g. ``a + b``, where `a` and `b` are NDArray objects (see  `a tutorial <../getting_started/tutorials/03.lazyarray-expressions.html>`_).
 * Using the `lazyexpr` constructor.
-* Using the `lazyudf` constructor.
+* Using the `lazyudf` constructor (see  `its tutorial <../getting_started/tutorials/03.LazyArray-UDF.html>`_).
 
 See the `LazyExpr`_ and `LazyUDF`_ sections for more information.
 
