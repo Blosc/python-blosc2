@@ -55,8 +55,7 @@ class LazyArray(ABC):
     @abstractmethod
     def eval(self, item, **kwargs):
         """
-        Get a :ref:`NDArray <NDArray>` containing the evaluation of the :ref:`LazyUDF <LazyUDF>`
-        or :ref:`LazyExpr <LazyExpr>`.
+        Return a :ref:`NDArray` containing the evaluation of the :ref:`LazyArray`.
 
         Parameters
         ----------
@@ -66,13 +65,13 @@ class LazyArray(ABC):
 
         kwargs: dict, optional
             Keyword arguments that are supported by the :func:`empty` constructor.
-            These arguments will be set in the resulting :ref:`NDArray <NDArray>`.
+            These arguments will be set in the resulting :ref:`NDArray`.
 
         Returns
         -------
-        out: :ref:`NDArray <NDArray>`
-            A :ref:`NDArray <NDArray>` containing the result of evaluating the
-            :ref:`LazyUDF <LazyUDF>` or :ref:`LazyExpr <LazyExpr>`.
+        out: :ref:`NDArray`
+            A :ref:`NDArray` containing the result of evaluating the
+            :ref:`LazyUDF` or :ref:`LazyExpr`.
 
         Notes
         -----
@@ -85,7 +84,7 @@ class LazyArray(ABC):
     @abstractmethod
     def __getitem__(self, item):
         """
-        Get the result of evaluating a slice.
+        Return a NumPy.ndarray containing the evaluation of the :ref:`LazyArray`.
 
         Parameters
         ----------
@@ -116,8 +115,8 @@ class LazyArray(ABC):
 
         Notes
         -----
-        * All the operands of the LazyArray must be Python scalars or on-disk stored :ref:`NDArray <NDArray>`.
-        * This is only supported for :ref:`LazyExpr <LazyExpr>`.
+        * All the operands of the LazyArray must be Python scalars, :ref:`NDArray` or :ref:`C2Array`.
+        * This is currently only supported for :ref:`LazyExpr`.
         """
         pass
 
@@ -164,12 +163,14 @@ class LazyArray(ABC):
 def convert_inputs(inputs):
     inputs_ = []
     for obj in inputs:
-        if not isinstance(obj, np.ndarray | blosc2.NDArray | blosc2.C2Array) and not np.isscalar(obj):
+        if not isinstance(
+            obj, np.ndarray | blosc2.NDArray | blosc2.NDField | blosc2.C2Array
+        ) and not np.isscalar(obj):
             try:
                 obj = np.asarray(obj)
             except:
                 print(
-                    "Inputs not being np.ndarray, NDArray or Python scalar objects"
+                    "Inputs not being np.ndarray, NDArray, NDField, C2Array or Python scalar objects"
                     " should be convertible to np.ndarray."
                 )
                 raise
@@ -1089,7 +1090,7 @@ class LazyExpr(LazyArray):
             new_expr = fuse_expressions(value2.expression, len(value1.operands), dup_op)
             expression = f"({self.expression} {op} {new_expr})"
         elif isinstance(value1, LazyExpr):
-            if op == "not":
+            if op == "~":
                 expression = f"({op}{self.expression})"
             elif np.isscalar(value2):
                 expression = f"({self.expression} {op} {value2})"
@@ -1182,19 +1183,19 @@ class LazyExpr(LazyArray):
         return self.update_expr(new_op=(value, "/", self))
 
     def __and__(self, value):
-        return self.update_expr(new_op=(self, "and", value))
+        return self.update_expr(new_op=(self, "&", value))
 
     def __rand__(self, value):
-        return self.update_expr(new_op=(value, "and", self))
+        return self.update_expr(new_op=(value, "&", self))
 
     def __or__(self, value):
-        return self.update_expr(new_op=(self, "or", value))
+        return self.update_expr(new_op=(self, "|", value))
 
     def __ror__(self, value):
-        return self.update_expr(new_op=(value, "or", self))
+        return self.update_expr(new_op=(value, "|", self))
 
     def __invert__(self):
-        return self.update_expr(new_op=(self, "not", None))
+        return self.update_expr(new_op=(self, "~", None))
 
     def __pow__(self, value):
         return self.update_expr(new_op=(self, "**", value))
@@ -1594,7 +1595,7 @@ def lazyudf(func, inputs, dtype, chunked_eval=True, **kwargs):
         to the start of the block that it is being computed.
     inputs: tuple or list
         The sequence of inputs. The supported inputs are NumPy.ndarray,
-        Python scalars, and :ref:`NDArray <NDArray>`.
+        Python scalars, :ref:`NDArray`, :ref:`NDField` or :ref:`C2Array`.
     dtype: np.dtype
         The resulting ndarray dtype in NumPy format.
     chunked_eval: bool, optional
@@ -1607,8 +1608,8 @@ def lazyudf(func, inputs, dtype, chunked_eval=True, **kwargs):
 
     Returns
     -------
-    out: :ref:`LazyUDF <LazyUDF>`
-        A :ref:`LazyUDF <LazyUDF>` is returned.
+    out: :ref:`LazyUDF`
+        A :ref:`LazyUDF` is returned.
 
     """
     return LazyUDF(func, inputs, dtype, chunked_eval, **kwargs)
@@ -1626,7 +1627,7 @@ def lazyexpr(expression, operands=None, out=None, where=None):
         updated with the new operands.
     operands: dict
         The dictionary with operands. Supported values are NumPy.ndarray,
-        Python scalars, and :ref:`NDArray <NDArray>` instances.
+        Python scalars, :ref:`NDArray`, :ref:`NDField` or :ref:`C2Array` instances.
     out: NDArray or np.ndarray, optional
         The output array where the result will be stored. If not provided,
         a new array will be created.
@@ -1636,8 +1637,8 @@ def lazyexpr(expression, operands=None, out=None, where=None):
 
     Returns
     -------
-    out: :ref:`LazyExpr <LazyExpr>`
-        A :ref:`LazyExpr <LazyExpr>` is returned.
+    out: :ref:`LazyExpr`
+        A :ref:`LazyExpr` is returned.
 
     """
     if isinstance(expression, LazyExpr):

@@ -4,8 +4,8 @@ Operations with arrays
 Functions
 ---------
 
-This section includes the Python-Blosc2 functions which can be used
-for :ref:`NDArray <NDArray>`, :ref:`C2Array <C2Array>` and :ref:`NDField <NDField>` as parameters.
+The next functions can be used for computing any of :ref:`NDArray <NDArray>`, :ref:`C2Array <C2Array>`, :ref:`NDField <NDField>` and :ref:`LazyExpr <LazyExpr>`.
+The result is always a :ref:`LazyExpr` instance, which can be evaluated to get the result.
 
 .. currentmodule:: blosc2
 

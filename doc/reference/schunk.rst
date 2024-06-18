@@ -1,7 +1,9 @@
 .. _SChunk:
 
-SChunk API
-==========
+SChunk
+======
+
+The basic compressed data container (aka super-chunk). This class consists of a set of useful parameters and methods that allow not only to create compressed data, and decompress it, but also to manage the data in a more sophisticated way. For example, it is possible to append new data, update existing data, delete data, etc.
 
 .. currentmodule:: blosc2.schunk
 
