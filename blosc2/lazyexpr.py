@@ -553,6 +553,7 @@ def slices_eval(
     # Iterate over the operands and get the chunks
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
     lenout = 0
+    behaved = False
     for nchunk in range(nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
         chunk_operands = {}
@@ -634,18 +635,22 @@ def slices_eval(
                     out = blosc2.empty(shape_, dtype=result.dtype, **kwargs)
                 else:
                     out = blosc2.empty(shape_, dtype=result.dtype, **kwargs)
+                # Check if the in out partitions are well-behaved (i.e. no padding)
+                behaved = are_partitions_behaved(out.shape, out.chunks, out.blocks)
+                print(f"Behaved: {behaved}")
 
-        if where is None:
-            out[slice_] = result
-        else:
-            if len(where) == 2:
-                out[slice_] = result
-            elif len(where) == 1:
-                lenres = len(result)
-                out[lenout : lenout + lenres] = result
-                lenout += lenres
+        if where is None or len(where) == 2:
+            if behaved:
+                # Fast path
+                out.schunk.update_data(nchunk, result, copy=False)
             else:
-                raise ValueError("The where condition must be a tuple with one or two elements")
+                out[slice_] = result
+        elif len(where) == 1:
+            lenres = len(result)
+            out[lenout : lenout + lenres] = result
+            lenout += lenres
+        else:
+            raise ValueError("The where condition must be a tuple with one or two elements")
 
     if orig_slice is not None:
         if isinstance(out, np.ndarray):
