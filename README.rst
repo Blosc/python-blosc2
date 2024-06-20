@@ -117,12 +117,16 @@ that you can reach when the operands fit comfortably in-memory:
 
 In this case, performance is a bit far from top-level libraries like Numexpr or Numba, but
 it is still pretty nice (and probably using CPUs with more cores than M2 would allow closing the
-performance gap even further).
+performance gap even further). One important thing to know is that the memory consumption when
+using the `LazyArray.eval()` method is very low, because the output is an `NDArray` object that
+is compressed and in-memory by default.  On its hand `LazyArray.__getitem__()` method returns
+an actual NumPy array, so it is not recommended to use it for large datasets, as it will consume
+quite a bit of memory (but it can still be convenient for small outputs).
 
 It is important to note that the `NDArray` object can use memory-mapped files as well, and the
 benchmark above is actually using a memory-mapped file as the storage for the operands.
-Memory-mapped files are very useful when the operands do not fit in-memory, and the performance
-is still very good.  Thanks to Jan Sellner for his implementation in Blosc2.
+Memory-mapped files are very useful when the operands do not fit in-memory, while keeping good
+performance.  Thanks to Jan Sellner for his implementation in Blosc2.
 
 And here it is the performance when the operands do not fit well in-memory:
 
