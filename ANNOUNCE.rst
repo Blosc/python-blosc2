@@ -2,7 +2,8 @@ Announcing Python-Blosc2 2.7.0
 ==============================
 
 Updated to latest C-Blosc2 2.15.0. Also, `LazyExpr.evaluate()`
-is marked as deprecated and some other fixes have been done
+is marked as deprecated (LazyExpr.eval() is replacing it) and some other fixes
+have been carried out.
 
 For more info, you can have a look at the release notes in:
 

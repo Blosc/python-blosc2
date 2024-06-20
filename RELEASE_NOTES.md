@@ -6,7 +6,7 @@
 
 * Deprecated `LazyExpr.evaluate()`.
 
-* Fixed `_chech_rc` function. See https://github.com/Blosc/python-blosc2/issues/187.
+* Fixed `_check_rc` function. See https://github.com/Blosc/python-blosc2/issues/187.
 
 
 ## Changes from 2.6.1 to 2.6.2
