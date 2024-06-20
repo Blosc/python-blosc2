@@ -31,11 +31,12 @@ What it is
 both the C-Blosc1 API and its in-memory format. Python-Blosc2 is a Python package
 that wraps C-Blosc2, the newest version of the Blosc compressor.
 
-Currently Python-Blosc2 already reproduces the API of
-`Python-Blosc <https://github.com/Blosc/python-blosc>`_, so it can be
-used as a drop-in replacement.  However, there are a `few exceptions
-for a full compatibility.
-<https://github.com/Blosc/python-blosc2/blob/main/RELEASE_NOTES.md#changes-from-python-blosc-to-python-blosc2>`_
+Starting with version 3.0.0, Python-Blosc2 is including a powerful computing engine
+that can operate on compressed data that can be either in-memory, on-disk or on the network.
+This engine also supports advanced features like reductions, filters, user-defined functions
+and broadcasting (still in beta).  You can read our tutorial on how to use this new feature at:
+https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/03.lazyarray-expressions.ipynb and
+https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/03.lazyarray-udf.ipynb
 
 In addition, Python-Blosc2 aims to leverage the full C-Blosc2 functionality to support
 super-chunks (`SChunk <https://www.blosc.org/python-blosc2/reference/schunk_api.html>`_),
@@ -43,66 +44,17 @@ multi-dimensional arrays
 (`NDArray <https://www.blosc.org/python-blosc2/reference/ndarray_api.html>`_),
 metadata, serialization and other bells and whistles introduced in C-Blosc2.
 
-**Note:** Python-Blosc2 is meant to be backward compatible with Python-Blosc data.
-That means that it can read data generated with Python-Blosc, but the opposite
+**Note:** Blosc2 is meant to be backward compatible with Blosc(1) data.
+That means that it can read data generated with Blosc, but the opposite
 is not true (i.e. there is no *forward* compatibility).
-
-SChunk: a 64-bit compressed store
-=================================
-
-A `SChunk <https://www.blosc.org/python-blosc2/reference/schunk_api.html>`_ is a simple data
-container that handles setting, expanding and getting
-data and metadata. Contrarily to chunks, a super-chunk can update and resize the data
-that it contains, supports user metadata, and it does not have the 2 GB storage limitation.
-
-Additionally, you can convert a SChunk into a contiguous, serialized buffer (aka
-`cframe <https://github.com/Blosc/c-blosc2/blob/main/README_CFRAME_FORMAT.rst>`_)
-and vice-versa; as a bonus, the serialization/deserialization process also works with NumPy
-arrays and PyTorch/TensorFlow tensors at a blazing speed:
-
-.. |compress| image:: https://github.com/Blosc/python-blosc2/blob/main/images/linspace-compress.png?raw=true
-  :width: 100%
-  :alt: Compression speed for different codecs
-
-.. |decompress| image:: https://github.com/Blosc/python-blosc2/blob/main/images/linspace-decompress.png?raw=true
-  :width: 100%
-  :alt: Decompression speed for different codecs
-
-+----------------+---------------+
-| |compress|     | |decompress|  |
-+----------------+---------------+
-
-while reaching excellent compression ratios:
-
-.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/pack-array-cratios.png?raw=true
-  :width: 75%
-  :align: center
-  :alt: Compression ratio for different codecs
-
-Also, if you are a Mac M1/M2 owner, make you a favor and use its native arm64 arch (yes, we are
-distributing Mac arm64 wheels too; you are welcome ;-):
-
-.. |pack_arm| image:: https://github.com/Blosc/python-blosc2/blob/main/images/M1-i386-vs-arm64-pack.png?raw=true
-  :width: 100%
-  :alt: Compression speed for different codecs on Apple M1
-
-.. |unpack_arm| image:: https://github.com/Blosc/python-blosc2/blob/main/images/M1-i386-vs-arm64-unpack.png?raw=true
-  :width: 100%
-  :alt: Decompression speed for different codecs on Apple M1
-
-+------------+--------------+
-| |pack_arm| | |unpack_arm| |
-+------------+--------------+
-
-Read more about `SChunk` features in our blog entry at: https://www.blosc.org/posts/python-blosc2-improvements
 
 NDArray: an N-Dimensional store
 ===============================
 
-One of the latest and more exciting additions in Python-Blosc2 is the
+One of the more useful abstractions in Python-Blosc2 is the
 `NDArray <https://www.blosc.org/python-blosc2/reference/ndarray_api.html>`_ object.
 It can write and read n-dimensional datasets in an extremely efficient way thanks
-to a n-dim 2-level partitioning, allowing to slice and dice arbitrary large and
+to a n-dimensional 2-level partitioning, allowing to slice and dice arbitrary large and
 compressed data in a more fine-grained way:
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/b2nd-2level-parts.png?raw=true
@@ -123,6 +75,68 @@ is useful <https://www.youtube.com/watch?v=LvP9zxMGBng>`_:
   :width: 50%
   :alt: Slicing a dataset in pineapple-style
   :target: https://www.youtube.com/watch?v=LvP9zxMGBng
+
+Operating with NDArrays
+=======================
+
+The `NDArray` objects can be operated with very easily inside Python-Blosc2.
+Here it is a simple example:
+
+.. code-block:: python
+
+    import numpy as np
+    import blosc2
+
+    N = 10_000
+    na = np.linspace(0, 1, N * N, dtype=np.float32).reshape(N, N)
+    nb = np.linspace(1, 2, N * N).reshape(N, N)
+    nc = np.linspace(-10, 10, N * N).reshape(N, N)
+
+    # Convert to blosc2
+    a = blosc2.asarray(na)
+    b = blosc2.asarray(nb)
+    c = blosc2.asarray(nc)
+
+    # Expression
+    expr = ((a ** 3 + blosc2.sin(c * 2)) < b) & (c > 0)
+
+    # Evaluate and get a NDArray as result
+    out = expr.eval()
+    print(out.info)
+
+As you can see, the `NDArray` instances are very similar to NumPy arrays, but behind the scenes
+it holds compressed data that can be operated in a very efficient way with the new computing
+engine that is included in Python-Blosc2.
+
+So as to whet your appetite, here it is the performance (with a MacBook Air M2 with 24 GB of RAM)
+that you can reach when the operands fit comfortably in-memory:
+
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/eval-expr-full-mem-M2.png?raw=true
+  :width: 100%
+  :alt: Performance when operands fit in-memory
+
+In this case, performance is a bit far from top-level libraries like Numexpr or Numba, but
+it is still pretty nice (and probably using CPUs with more cores than M2 would allow closing the
+performance gap even further).
+
+It is important to note that the `NDArray` object can use memory-mapped files as well, and the
+benchmark above is actually using a memory-mapped file as the storage for the operands.
+Memory-mapped files are very useful when the operands do not fit in-memory, and the performance
+is still very good.  Thanks to Jan Sellner for his implementation in Blosc2.
+
+And here it is the performance when the operands do not fit well in-memory:
+
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/eval-expr-scarce-mem-M2.png?raw=true
+  :width: 100%
+  :alt: Performance when operands do not fit in-memory
+
+In the latter case, the memory consumption lines look a bit crazy, but this is because what
+is displayed is the real memory consumption, not the virtual one (so, during the evaluation
+the OS has to swap out some memory to disk).  In this case, the performance when compared with
+top-level libraries like Numexpr or Numba is very competitive.
+
+You can find the benchmark for the above examples at:
+https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr.ipynb
 
 Installing
 ==========
@@ -198,10 +212,11 @@ blosc@googlegroups.com
 
 https://groups.google.es/group/blosc
 
-Twitter
-=======
+Mastodon
+========
 
-Please follow `@Blosc2 <https://twitter.com/Blosc2>`_ to get informed about the latest developments.
+Please follow `@Blosc2 <https://fosstodon.org/@Blosc2>`_ to get informed about the latest
+developments.  We lately moved from Twitter to Mastodon.
 
 Citing Blosc
 ============
@@ -213,11 +228,11 @@ You can cite our work on the different libraries under the Blosc umbrella as:
   @ONLINE{blosc,
     author = {{Blosc Development Team}},
     title = "{A fast, compressed and persistent data store library}",
-    year = {2009-2023},
+    year = {2009-2024},
     note = {https://blosc.org}
   }
 
 
 ----
 
-  **Enjoy!**
+  **Make compression better!**
