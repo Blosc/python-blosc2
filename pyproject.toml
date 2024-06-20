@@ -17,7 +17,7 @@ authors = [{name = "Blosc Development Team", email = "blosc@blosc.org"}]
 maintainers = [{ name = "Blosc Development Team", email = "blosc@blosc.org"}]
 license = {text = "BSD-3-Clause"}
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Intended Audience :: Information Technology",
     "Intended Audience :: Science/Research",
@@ -48,6 +48,9 @@ documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 
 [tool.cibuildwheel]
 skip = "cp36-* cp37-* pp37-* cp38-* pp38-* cp39-* pp39-* *-manylinux_i686 *_ppc64le *_s390x"
+# Let's use a more recent version of the manylinux image for more modern compilers
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
 
 [tool.ruff]
 line-length = 109
