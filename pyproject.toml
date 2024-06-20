@@ -39,6 +39,7 @@ dependencies = [
     "msgpack",
     "numexpr",
     "py-cpuinfo",
+    "httpx",
 ]
 dynamic = ["version"]
 
