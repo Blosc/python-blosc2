@@ -264,7 +264,6 @@ def test_where_fusion(array_fixture):
     # Reuse the result in another expression twice
     res = 2 * res + 4 * res
     nres = 2 * nres + 4 * nres
-    print(res[:], nres)
     np.testing.assert_allclose(res[:], nres)
 
     # TODO: this is not working yet
