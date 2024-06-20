@@ -637,7 +637,6 @@ def slices_eval(
                     out = blosc2.empty(shape_, dtype=result.dtype, **kwargs)
                 # Check if the in out partitions are well-behaved (i.e. no padding)
                 behaved = are_partitions_behaved(out.shape, out.chunks, out.blocks)
-                print(f"Behaved: {behaved}")
 
         if where is None or len(where) == 2:
             if behaved:
