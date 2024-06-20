@@ -126,7 +126,7 @@ quite a bit of memory (but it can still be convenient for small outputs).
 It is important to note that the `NDArray` object can use memory-mapped files as well, and the
 benchmark above is actually using a memory-mapped file as the storage for the operands.
 Memory-mapped files are very useful when the operands do not fit in-memory, while keeping good
-performance.  Thanks to Jan Sellner for his implementation in Blosc2.
+performance.
 
 And here it is the performance when the operands do not fit well in-memory:
 

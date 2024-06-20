@@ -1,10 +1,18 @@
-Announcing Python-Blosc2 2.6.2
-==============================
+Announcing Python-Blosc2 3.0.0-beta.1
+=====================================
 
-Updated to latest C-Blosc2 2.14.3. This was necessary to fix
-several CVEs in the C-Blosc2 library.  Also, the new version adds
-protection when platforms have just one CPU. This caused the
-internal number of threads to be 0, producing a division by zero.
+New evaluation engine (based on numexpr) for NDArray instances.
+Now, you can evaluate expressions like `a + b + 1` where `a` and `b`
+are NDArray instances.  This is a powerful feature that allows for
+efficient computations on compressed data, and supports advanced features like reductions,
+filters, user-defined functions and broadcasting (still in beta).  See this
+[example](https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/eval_expr.py).
+
+Also, we have added support for memory mapping in `SChunk` and `NDArray` instances.
+This allows to map super-chunks stored in disk and access them as if they were in memory.
+
+Last, but not least, we have added support for NumPy 2.0.0.  This means that our wheels
+are built against this version of NumPy, so you will need to use NumPy 1.23.0 or later.
 
 For more info, you can have a look at the release notes in:
 
