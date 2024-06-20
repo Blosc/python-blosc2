@@ -1,8 +1,13 @@
 # Release notes
 
-## Changes from 2.6.2 to 2.6.3
+## Changes from 2.6.2 to 2.7.0
 
-XXX version-specific blurb XXX
+* Updated to latest C-Blosc2 2.15.0.
+
+* Deprecated `LazyExpr.evaluate()`.
+
+* Fixed `_chech_rc` function. See https://github.com/Blosc/python-blosc2/issues/187.
+
 
 ## Changes from 2.6.1 to 2.6.2
 

@@ -1,10 +1,8 @@
-Announcing Python-Blosc2 2.6.2
+Announcing Python-Blosc2 2.7.0
 ==============================
 
-Updated to latest C-Blosc2 2.14.3. This was necessary to fix
-several CVEs in the C-Blosc2 library.  Also, the new version adds
-protection when platforms have just one CPU. This caused the
-internal number of threads to be 0, producing a division by zero.
+Updated to latest C-Blosc2 2.15.0. Also, `LazyExpr.evaluate()`
+is marked as deprecated and some other fixes have been done
 
 For more info, you can have a look at the release notes in:
 
