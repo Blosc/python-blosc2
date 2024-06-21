@@ -16,10 +16,11 @@ env:
   CIBW_TEST_REQUIRES: pytest psutil
   CIBW_TEST_COMMAND: python -m pytest -m "not heavy" {project}/tests
   # Running the tests on the next platforms takes too much time.
-  CIBW_TEST_SKIP: "*macosx*x86_64* *linux*aarch64*"
+  CIBW_TEST_SKIP: "*linux*aarch64*"
   # Building for musllinux and aarch64 takes way too much time.
   # NumPy is adding musllinux for just x86_64 too, so this is not too bad.
-  CIBW_SKIP: "*musllinux*aarch64*"
+  # For some reason, we need to disable the cp*-win32 builds here too (and not only in pyproject.toml).
+  CIBW_SKIP: "*musllinux*aarch64* cp*-win32"
 
 jobs:
 
