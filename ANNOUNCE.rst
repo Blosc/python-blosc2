@@ -11,8 +11,16 @@ filters, user-defined functions and broadcasting (still in beta).  See this
 Also, we have added support for memory mapping in `SChunk` and `NDArray` instances.
 This allows to map super-chunks stored in disk and access them as if they were in memory.
 
-Last, but not least, we have added support for NumPy 2.0.0.  This means that our wheels
-are built against this version of NumPy, so you will need to use NumPy 1.23.0 or later.
+Last, but not least, we are using NumPy 2.x as the default for testing procedures and builds.
+This means that our wheels are built against this version of NumPy, so you will need to use
+NumPy 1.23.0 or later.
+
+We are in the process of releasing 3.0.0 soon, so we would appreciate your feedback
+on this beta release.  We are providing binary wheels that you can install with:
+
+```
+pip install blosc2==3.0.0b1
+```
 
 For more info, you can have a look at the release notes in:
 
@@ -25,18 +33,30 @@ https://www.blosc.org/python-blosc2/python-blosc2.html
 What is it?
 -----------
 
-Python-Blosc2 is a Python package that wraps C-Blosc2, the newest version of
-the Blosc compressor.  Currently Python-Blosc2 already reproduces the API of
-Python-Blosc (https://github.com/Blosc/python-blosc), so the former can be
-used as a drop-in replacement for the later. However, there are a few
-exceptions for full compatibility:
-https://github.com/Blosc/python-blosc2/blob/main/RELEASE_NOTES.md#changes-from-python-blosc-to-python-blosc2
+`C-Blosc2 <https://github.com/Blosc/c-blosc2>`_ is the new major version of
+`C-Blosc <https://github.com/Blosc/c-blosc>`_, and is backward compatible with
+both the C-Blosc1 API and its in-memory format. Python-Blosc2 is a Python package
+that wraps C-Blosc2, the newest version of the Blosc compressor.
 
-Python-Blosc2 comes with NDArray support, which is a new Python class that
-allows to create multi-dimensional arrays of compressed data.  NDArray
-follows the same (or very similar) API as NumPy arrays, so it can be used
-as a drop-in replacement.  See the documentation for more details:
-https://www.blosc.org/python-blosc2/reference/ndarray_api.html
+Starting with version 3.0.0, Python-Blosc2 is including a powerful computing engine
+that can operate on compressed data that can be either in-memory, on-disk or on the
+network. This engine also supports advanced features like reductions, filters,
+user-defined functions and broadcasting (still in beta).
+
+You can read our tutorial on how to peform advanced computations at:
+
+* https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/03.lazyarray-expressions.ipynb
+* https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/03.lazyarray-udf.ipynb
+
+In addition, Python-Blosc2 aims to leverage the full C-Blosc2 functionality to support
+super-chunks (`SChunk <https://www.blosc.org/python-blosc2/reference/schunk_api.html>`_),
+multi-dimensional arrays
+(`NDArray <https://www.blosc.org/python-blosc2/reference/ndarray_api.html>`_),
+metadata, serialization and other bells and whistles introduced in C-Blosc2.
+
+**Note:** Blosc2 is meant to be backward compatible with Blosc(1) data.
+That means that it can read data generated with Blosc, but the opposite
+is not true (i.e. there is no *forward* compatibility).
 
 Sources repository
 ------------------

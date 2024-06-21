@@ -32,11 +32,15 @@ both the C-Blosc1 API and its in-memory format. Python-Blosc2 is a Python packag
 that wraps C-Blosc2, the newest version of the Blosc compressor.
 
 Starting with version 3.0.0, Python-Blosc2 is including a powerful computing engine
-that can operate on compressed data that can be either in-memory, on-disk or on the network.
-This engine also supports advanced features like reductions, filters, user-defined functions
-and broadcasting (still in beta).  You can read our tutorial on how to use this new feature at:
-https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/03.lazyarray-expressions.ipynb and
-https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/03.lazyarray-udf.ipynb
+that can operate on compressed data that can be either in-memory, on-disk or on the
+network. This engine also supports advanced features like reductions, filters,
+user-defined functions and broadcasting (still in beta).
+
+You can read our tutorial on how to peform advanced computations at:
+
+* https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/03.lazyarray-expressions.ipynb
+* https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/03.lazyarray-udf.ipynb
+
 
 In addition, Python-Blosc2 aims to leverage the full C-Blosc2 functionality to support
 super-chunks (`SChunk <https://www.blosc.org/python-blosc2/reference/schunk_api.html>`_),
@@ -145,12 +149,20 @@ https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr.ip
 Installing
 ==========
 
-Blosc is now offering Python wheels for the main OS (Win, Mac and Linux) and platforms.
+Blosc2 is now offering Python wheels for the main OS (Win, Mac and Linux) and platforms.
 You can install binary packages from PyPi using ``pip``:
 
 .. code-block:: console
 
     pip install blosc2
+
+We are in the process of releasing 3.0.0, and we will be releasing wheels for different
+beta versions.  For example, to install the first beta version, you can do:
+
+.. code-block:: console
+
+    pip install blosc2==3.0.0b1
+
 
 Documentation
 =============
