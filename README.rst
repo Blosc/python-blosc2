@@ -36,7 +36,7 @@ that can operate on compressed data that can be either in-memory, on-disk or on 
 network. This engine also supports advanced features like reductions, filters,
 user-defined functions and broadcasting (still in beta).
 
-You can read some of our tutorials on how to peform advanced computations at:
+You can read some of our tutorials on how to perform advanced computations at:
 
 * https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/03.lazyarray-expressions.ipynb
 * https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/03.lazyarray-udf.ipynb

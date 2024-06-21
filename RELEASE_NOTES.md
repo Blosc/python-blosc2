@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.0.0-beta.1 to 3.0.0-beta.2
+
+XXX version-specific blurb XXX
+
 ## Changes from 2.6.2 to 3.0.0-beta.1
 
 * New evaluation engine (based on numexpr) for NDArray instances.  Now, you can evaluate expressions like `a + b + 1` where `a` and `b` are NDArray instances.  This is a powerful feature that allows for efficient computations on compressed data, and supports advanced features like reductions, filters, user-defined functions and broadcasting (still in beta).  See this [example](https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/eval_expr.py).

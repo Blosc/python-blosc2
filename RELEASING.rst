@@ -80,7 +80,6 @@ Checking packaging
 * Do an actual release in github by visiting:
   https://github.com/Blosc/python-blosc2/releases/new
   Add the notes specific for this release
-  (you may want to remove newlines for aesthetics).
   This will upload the wheels to PyPI too.
 
 
