@@ -24,6 +24,9 @@
 
 * Internal C-Blosc2 updated to 2.15.0.
 
+* 32-bit platforms are officially unsupported now.  If you need support for 32-bit platforms,
+  please use python-blosc 1.x series.
+
 ## Changes from 2.6.1 to 2.6.2
 
 * Protection when platforms have just one CPU. This caused the
