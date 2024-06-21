@@ -527,13 +527,13 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Examples
         --------
         >>> import blosc2
+        >>> import numpy as np
         >>> shape = (10,)
         >>> dtype = np.dtype([('a', np.int32), ('b', np.float64)])
         >>> # Create a structured array
         >>> sa = blosc2.zeros(shape, dtype=dtype)
-        >>> # Evaluate if the fields are equal
-        >>> np.all((sa.fields['a'] == sa.fields['b'])[:])
-        True
+        >>> # Check that fields are equal
+        >>> assert sa.fields['a'] == sa.fields['b']
 
         """
         return self._fields
