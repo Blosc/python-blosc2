@@ -10,21 +10,20 @@ Now, you can evaluate expressions like `a + sin(b) + 1` where `a` and `b`
 are NDArray instances.  This is a powerful feature that allows for
 efficient computations on compressed data, and supports advanced features
 like reductions, filters, user-defined functions and broadcasting (still
-in beta).  See this
- `example <https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/eval_expr.py>`_.
+in beta).  See this `example <https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/eval_expr.py>`_.
 
 Also, we have added support for memory mapping in `SChunk` and `NDArray` instances.
 This allows to map super-chunks stored in disk and access them as if they were in
 memory.  When combined with the evaluation engine, this feature allows for very
-good performance when working with large datasets.  See this
- `benchmark <https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr.ipynb>`_
+good performance when working with large datasets.  See this `benchmark <https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr.ipynb>`_
 (as it is a Jupyter notebook, you can easily run it in your own computer).
 
 Last, but not least, we are using NumPy 2.x as the default for testing procedures
 and builds. This means that our wheels are built against NumPy 2, so in case you want
 to use NumPy 1.x, you will need to use NumPy 1.23.0 or later.
 
-We are providing binary wheels that you can easily install from PyPI with::
+We are providing binary wheels that you can easily install from PyPI with:
+
     pip install blosc2==3.0.0b1
 
 For more info, you can have a look at the release notes in:
