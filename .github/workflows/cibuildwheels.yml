@@ -18,13 +18,14 @@ env:
   CIBW_TEST_SKIP: "*macosx*arm64*"
   # Building for musllinux and aarch64 takes way too much time.
   # NumPy is adding musllinux for just x86_64 too, so this is not too bad.
-  CIBW_SKIP: "*musllinux*aarch64*"
+  # Deactivate the win32 builds, as 32-bit platforms are not supported anymore.
+  CIBW_SKIP: "*musllinux*aarch64* cp*-win32"
 
 jobs:
 
   build_wheels:
     # Only build wheels when tagging (typically a release)
-    if: startsWith(github.event.ref, 'refs/tags')
+    # if: startsWith(github.event.ref, 'refs/tags')
     name: Build wheels on ${{ matrix.os }} for ${{ matrix.arch }} - ${{ matrix.p_ver }}
     runs-on: ${{ matrix.os }}
     permissions:
@@ -68,9 +69,6 @@ jobs:
       - name: Build wheels
         run: |
           python -m cibuildwheel --output-dir wheelhouse
-        # Starting with C-Blosc2 2.11.3, we should not need to deactivate AVX512
-        #env:
-          # CIBW_CONFIG_SETTINGS: "--build-option=-DDEACTIVATE_AVX512:BOOL=YES"
 
       - name: Upload wheels
         uses: actions/upload-artifact@v3
@@ -119,8 +117,6 @@ jobs:
           cd ./dist
           tar -xzf blosc2-*.tar.gz
           cd ./blosc2-*/
-          # Starting with C-Blosc2 2.11.3, we should not need to deactivate AVX512
-          # python setup.py build_ext --inplace -DDEACTIVATE_AVX512:BOOL=YES
           python setup.py build_ext --inplace
 
       - name: Test sdist package with pytest
