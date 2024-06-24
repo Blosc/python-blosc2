@@ -829,9 +829,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         kwargs["dparams"] = kwargs.get("dparams", self.schunk.dparams).copy()
         if "meta" not in kwargs:
             # Copy metalayers as well
-            meta_dict = {}
-            for meta in self.schunk.meta.keys():
-                meta_dict[meta] = self.schunk.meta[meta]
+            meta_dict = {meta: self.schunk.meta[meta] for meta in self.schunk.meta}
             kwargs["meta"] = meta_dict
         _check_ndarray_kwargs(**kwargs)
 
