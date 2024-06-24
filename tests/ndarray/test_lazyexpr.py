@@ -448,8 +448,8 @@ def test_save_unsafe():
         expr.eval()
     assert expr.expression in str(excinfo.value)
 
-    # Check that an unvalid expression cannot be easily saved.
-    # As this can easily be workarounded, the best protection is
+    # Check that an invalid expression cannot be easily saved.
+    # As this can easily be worked around, the best protection is
     # during loading time (tested above).
     with pytest.raises(Exception) as excinfo:
         expr.save(urlpath=urlpath)
