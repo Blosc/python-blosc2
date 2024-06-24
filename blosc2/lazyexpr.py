@@ -220,10 +220,7 @@ def check_smaller_shape(value, shape, slice_shape):
     is_smaller_shape = any(
         s > (1 if i >= len(value.shape) else value.shape[i]) for i, s in enumerate(slice_shape)
     )
-    if len(value.shape) < len(shape) or is_smaller_shape:
-        return True
-    else:
-        return False
+    return len(value.shape) < len(shape) or is_smaller_shape
 
 
 def _compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
