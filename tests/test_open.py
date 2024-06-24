@@ -196,7 +196,7 @@ def c2sub_user():
         return random.randint(0, 0x7FFFFFFF)
 
     urlbase = "https://demo-auth.caterva2.net/"
-    username = "user+%x@example.com" % rand32()
+    username = f"user+{rand32():x}@example.com"
     password = hex(rand32())
 
     for _ in range(3):
