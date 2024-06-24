@@ -35,7 +35,7 @@ def make_key_hashable(key):
 
 def process_key(key, shape):
     key = ndindex.ndindex(key).expand(shape).raw
-    mask = tuple(True if isinstance(k, int) else False for k in key)
+    mask = tuple(isinstance(k, int) for k in key)
     key = tuple(k if isinstance(k, slice) else slice(k, k + 1, None) for k in key)
     return key, mask
 
