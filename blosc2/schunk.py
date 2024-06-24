@@ -309,7 +309,7 @@ class SChunk(blosc2_ext.SChunk):
         urlpath = kwargs.get("urlpath")
         if "contiguous" not in kwargs:
             # Make contiguous true for disk, else sparse (for in-memory performance)
-            kwargs["contiguous"] = False if urlpath is None else True
+            kwargs["contiguous"] = urlpath is not None
 
         # This a private param to get an SChunk from a blosc2_schunk*
         sc = kwargs.pop("_schunk", None)
