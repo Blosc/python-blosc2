@@ -25,9 +25,7 @@ from blosc2.schunk import SChunk
 def make_key_hashable(key):
     if isinstance(key, slice):
         return (key.start, key.stop, key.step)
-    elif isinstance(key, tuple):
-        return tuple(make_key_hashable(k) for k in key)
-    elif isinstance(key, list):
+    elif isinstance(key, tuple | list):
         return tuple(make_key_hashable(k) for k in key)
     elif isinstance(key, np.ndarray):
         return tuple(key.tolist())
