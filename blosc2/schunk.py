@@ -69,7 +69,7 @@ class Meta(Mapping):
     def get(self, key, default=None):
         """Return the value for `key` if `key` is in the dictionary, else `default`.
         If `default` is not given, it defaults to ``None``."""
-        return self[key] if key in self else default
+        return self.get(key, default)
 
     def __del__(self):
         pass
