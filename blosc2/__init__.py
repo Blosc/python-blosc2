@@ -127,7 +127,7 @@ VERSION_STRING = VERSION_STRING
 The C-Blosc2 version's string."""
 
 # Public API for container module
-from .core import (  # noqa: I001
+from .core import (
     clib_info,
     compress,
     compress2,
