@@ -62,5 +62,9 @@ extend-exclude = ["bench"]
 extend-select = [
     "B",
     "I",
+    "SIM",
     "UP",
+]
+ignore = [
+    "SIM108",
 ]

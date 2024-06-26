@@ -25,9 +25,7 @@ from blosc2.schunk import SChunk
 def make_key_hashable(key):
     if isinstance(key, slice):
         return (key.start, key.stop, key.step)
-    elif isinstance(key, tuple):
-        return tuple(make_key_hashable(k) for k in key)
-    elif isinstance(key, list):
+    elif isinstance(key, tuple | list):
         return tuple(make_key_hashable(k) for k in key)
     elif isinstance(key, np.ndarray):
         return tuple(key.tolist())
@@ -37,7 +35,7 @@ def make_key_hashable(key):
 
 def process_key(key, shape):
     key = ndindex.ndindex(key).expand(shape).raw
-    mask = tuple(True if isinstance(k, int) else False for k in key)
+    mask = tuple(isinstance(k, int) for k in key)
     key = tuple(k if isinstance(k, slice) else slice(k, k + 1, None) for k in key)
     return key, mask
 
@@ -831,9 +829,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         kwargs["dparams"] = kwargs.get("dparams", self.schunk.dparams).copy()
         if "meta" not in kwargs:
             # Copy metalayers as well
-            meta_dict = {}
-            for meta in self.schunk.meta.keys():
-                meta_dict[meta] = self.schunk.meta[meta]
+            meta_dict = {meta: self.schunk.meta[meta] for meta in self.schunk.meta}
             kwargs["meta"] = meta_dict
         _check_ndarray_kwargs(**kwargs)
 

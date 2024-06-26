@@ -63,9 +63,12 @@ def test_ufilters(contiguous, urlpath, nchunks, filters, filters_meta, dtype):
     id = filters[0]
     if id not in blosc2.ufilters_registry:
         blosc2.register_filter(id, forward, backward)
-    if len(filters) == 2 and not isinstance(filters[1], blosc2.Filter):
-        if filters[1] not in blosc2.ufilters_registry:
-            blosc2.register_filter(filters[1], forward2, backward2)
+    if (
+        len(filters) == 2
+        and not isinstance(filters[1], blosc2.Filter)
+        and filters[1] not in blosc2.ufilters_registry
+    ):
+        blosc2.register_filter(filters[1], forward2, backward2)
 
     if "f" in dtype.str:
         data = np.linspace(0, 50, chunk_len * nchunks, dtype=dtype)

@@ -9,9 +9,11 @@
 from skbuild import setup
 
 # Blosc version
-VERSION = open("VERSION").read().strip()
+with open("VERSION") as f:
+    VERSION = f.read().strip()
 # Create the version.py file
-open("blosc2/version.py", "w").write(f'__version__ = "{VERSION}"\n')
+with open("blosc2/version.py", "w") as f:
+    f.write(f'__version__ = "{VERSION}"\n')
 
 
 def exclude_pkgconfig(cmake_manifest):

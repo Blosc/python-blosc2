@@ -1280,9 +1280,7 @@ def compute_chunks_blocks(
                 raise ValueError("blocks cannot be greater than chunks")
         return chunks, blocks
 
-    cparams = kwargs["cparams"] if "cparams" in kwargs else {}
-    if not cparams:
-        cparams = copy.deepcopy(blosc2.cparams_dflts)
+    cparams = kwargs.get("cparams") or copy.deepcopy(blosc2.cparams_dflts)
     # Typesize in dtype always has preference over typesize in cparams
     itemsize = cparams["typesize"] = np.dtype(dtype).itemsize
 
@@ -1302,7 +1300,7 @@ def compute_chunks_blocks(
         else:
             cparams2 = cparams
         # Force STUNE to get a hint on the blocksize
-        aux_tuner = cparams2["tuner"] if "tuner" in cparams2 else blosc2.Tuner.STUNE
+        aux_tuner = cparams2.get("tuner", blosc2.Tuner.STUNE)
         cparams2["tuner"] = blosc2.Tuner.STUNE
         src = blosc2.compress2(np.zeros(nitems, dtype=f"V{itemsize}"), **cparams2)
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
