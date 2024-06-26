@@ -188,7 +188,7 @@ def check_broadcast_compatible(arrays):
     # Check
     for dims in zip(*shapes_, strict=True):
         max_dim = max(dims)
-        if not all((dim == max_dim) or (dim == 1) for dim in dims):
+        if not all(dim in (max_dim, 1) for dim in dims):
             _shapes = " ".join(str(shape) for shape in shapes)
             raise ValueError(f"operands could not be broadcast together with shapes {_shapes}")
 
