@@ -524,7 +524,7 @@ def slices_eval(
         The output array.
     """
     out = kwargs.pop("_output", None)
-    chunks = kwargs.get("chunks", None)
+    chunks = kwargs.get("chunks")
     where: dict | None = kwargs.pop("_where_args", None)
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
@@ -860,8 +860,8 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
     """
     try:
         getitem = kwargs.pop("_getitem", False)
-        out = kwargs.get("_output", None)
-        where: dict | None = kwargs.get("_where_args", None)
+        out = kwargs.get("_output")
+        where: dict | None = kwargs.get("_where_args")
         if where:
             # Make the where arguments part of the operands
             operands = {**operands, **where}
@@ -886,7 +886,7 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
             if getitem:
                 # When using getitem, taking the fast path is always possible
                 return fast_eval(expression, operands, getitem=True, **kwargs)
-            elif (kwargs.get("chunks", None) is None and kwargs.get("blocks", None) is None) and (
+            elif (kwargs.get("chunks") is None and kwargs.get("blocks") is None) and (
                 out is None or isinstance(out, blosc2.NDArray)
             ):
                 # If not, the conditions to use the fast path are a bit more restrictive
@@ -1370,7 +1370,7 @@ class LazyExpr(LazyArray):
         return items
 
     def save(self, **kwargs):
-        if kwargs.get("urlpath", None) is None:
+        if kwargs.get("urlpath") is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
 
         meta = kwargs.get("meta", {})
@@ -1493,8 +1493,8 @@ class LazyUDF(LazyArray):
         aux_kwargs["dparams"] = dparams
         _ = kwargs.pop("cparams", None)
         _ = kwargs.pop("dparams", None)
-        urlpath = kwargs.get("urlpath", None)
-        if urlpath is not None and urlpath == aux_kwargs.get("urlpath", None):
+        urlpath = kwargs.get("urlpath")
+        if urlpath is not None and urlpath == aux_kwargs.get("urlpath",):
             raise ValueError("Cannot use the same urlpath for LazyArray and eval NDArray")
         _ = aux_kwargs.pop("urlpath", None)
         aux_kwargs.update(kwargs)
