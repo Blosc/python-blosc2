@@ -168,7 +168,7 @@ def convert_inputs(inputs):
         ) and not np.isscalar(obj):
             try:
                 obj = np.asarray(obj)
-            except:
+            except Exception:
                 print(
                     "Inputs not being np.ndarray, NDArray, NDField, C2Array or Python scalar objects"
                     " should be convertible to np.ndarray."
