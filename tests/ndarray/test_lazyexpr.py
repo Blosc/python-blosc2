@@ -452,8 +452,8 @@ def test_save():
     a4 = blosc2.asarray(na4)
     ops = [a1, a2, a3, a4]
     op_urlpaths = ["a1.b2nd", "a2.b2nd", "a3.b2nd", "a4.b2nd"]
-    for i in range(len(op_urlpaths)):
-        ops[i] = ops[i].copy(urlpath=op_urlpaths[i], mode="w")
+    for i, urlpath in enumerate(op_urlpaths):
+        ops[i] = ops[i].copy(urlpath=urlpath, mode="w")
 
     # Construct the lazy expression with the on-disk operands
     da1, da2, da3, da4 = ops

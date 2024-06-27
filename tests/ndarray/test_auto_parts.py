@@ -43,8 +43,8 @@ def test_compute_chunks_blocks(clevel, codec, shape: tuple, dtype):
     else:
         chunks, blocks = blosc2.compute_chunks_blocks(shape, **cparams)
     # print(chunks, blocks)
-    for i in range(len(shape)):
-        assert shape[i] >= chunks[i]
+    for i, d in enumerate(shape):
+        assert d >= chunks[i]
         assert chunks[i] >= blocks[i]
 
 
@@ -65,8 +65,8 @@ def test_compute_chunks_blocks(clevel, codec, shape: tuple, dtype):
 def test_compute_chunks(shape: tuple, blocks: tuple):
     chunks, blocks = blosc2.compute_chunks_blocks(shape, blocks=blocks)
     # print(chunks, blocks)
-    for i in range(len(shape)):
-        assert shape[i] >= chunks[i]
+    for i, d in enumerate(shape):
+        assert d >= chunks[i]
         assert chunks[i] >= blocks[i]
 
 
