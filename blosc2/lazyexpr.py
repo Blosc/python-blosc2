@@ -394,8 +394,6 @@ def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, ch
         bsize = value.dtype.itemsize * math.prod(chunks_)
         chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
 
-    return None
-
 
 def fast_eval(
     expression: str | Callable, operands: dict, getitem: bool, **kwargs
@@ -1404,7 +1402,6 @@ class LazyExpr(LazyArray):
             "UDF": None,
             "operands": operands,
         }
-        return
 
     @classmethod
     def _new_expr(cls, expression, operands, out=None, where=None):
