@@ -1093,6 +1093,19 @@ def apple_silicon_cache_size(cache_level: int):
     )
     return size.value
 
+def linux_cache_size(cache_level: int):
+    """Get the data cache_level size in bytes for Linux."""
+    cache_size = 0
+    try:
+        with open(f"/sys/devices/system/cpu/cpu0/cache/index{cache_level}/size") as f:
+            size = f.read()
+            if size.endswith("K\n"):
+                cache_size = int(size[:-2]) * 1024
+            elif size.endswith("M\n"):
+                cache_size = int(size[:-2]) * 1024 * 1024
+    except FileNotFoundError:
+        pass
+    return cache_size
 
 def get_cpu_info():
     cpu_info = cpuinfo.get_cpu_info()
@@ -1101,6 +1114,10 @@ def get_cpu_info():
         cpu_info["l1_cache_size"] = apple_silicon_cache_size(1)
         cpu_info["l2_cache_size"] = apple_silicon_cache_size(2)
         cpu_info["l3_cache_size"] = apple_silicon_cache_size(3)
+    if platform.system() == "Linux":
+        cpu_info["l1_cache_size"] = linux_cache_size(1)
+        cpu_info["l2_cache_size"] = linux_cache_size(2)
+        cpu_info["l3_cache_size"] = linux_cache_size(3)
     return cpu_info
 
 
