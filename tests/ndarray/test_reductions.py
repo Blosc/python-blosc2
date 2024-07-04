@@ -70,7 +70,7 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwar
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     if axis is not None and np.isscalar(axis) and len(a1.shape) >= axis:
         return
-    if type(axis) == tuple and len(a1.shape) < len(axis):
+    if isinstance(axis, tuple) and len(a1.shape) < len(axis):
         return
     if reduce_op == "prod":
         # To avoid overflow, create a1 and a2 with small values
