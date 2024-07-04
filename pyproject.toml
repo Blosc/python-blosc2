@@ -62,9 +62,12 @@ extend-exclude = ["bench"]
 extend-select = [
     "B",
     "I",
+    "RET",
     "SIM",
     "UP",
 ]
 ignore = [
+    "RET505",
+    "RET508",
     "SIM108",
 ]
