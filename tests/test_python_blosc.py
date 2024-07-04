@@ -44,14 +44,14 @@ class TestCodec(unittest.TestCase):
         s = b"0123456789"
         c = blosc2.compress(s, typesize=1)
         d = blosc2.decompress(c)
-        self.assertEqual(s, d)
+        assert s == d
 
     def test_all_compressors(self):
         s = b"0123456789" * 100
         for codec in blosc2.compressor_list():
             c = blosc2.compress(s, typesize=1, codec=codec)
             d = blosc2.decompress(c)
-            self.assertEqual(s, d)
+            assert s == d
 
     def test_all_filters(self):
         s = b"0123456789" * 100
@@ -59,7 +59,7 @@ class TestCodec(unittest.TestCase):
         for filter_ in filters:
             c = blosc2.compress(s, typesize=1, filter=filter_)
             d = blosc2.decompress(c)
-            self.assertEqual(s, d)
+            assert s == d
 
     def test_set_nthreads_exceptions(self):
         self.assertRaises(ValueError, blosc2.set_nthreads, 2**31)
@@ -71,10 +71,10 @@ class TestCodec(unittest.TestCase):
         expected = blosc2.compress(b"0123456789", typesize=1)
 
         # now for all the things that support the buffer interface
-        self.assertEqual(expected, blosc2.compress(memoryview(b"0123456789"), typesize=1))
+        assert expected == blosc2.compress(memoryview(b"0123456789"), typesize=1)
 
-        self.assertEqual(expected, blosc2.compress(bytearray(b"0123456789"), typesize=1))
-        self.assertEqual(expected, blosc2.compress(np.array([b"0123456789"]), typesize=1))
+        assert expected == blosc2.compress(bytearray(b"0123456789"), typesize=1)
+        assert expected == blosc2.compress(np.array([b"0123456789"]), typesize=1)
 
     def test_decompress_input_types(self):
         import numpy as np
@@ -84,11 +84,11 @@ class TestCodec(unittest.TestCase):
         compressed = blosc2.compress(expected, typesize=1)
 
         # now for all the things that support the buffer interface
-        self.assertEqual(expected, blosc2.decompress(compressed))
-        self.assertEqual(expected, blosc2.decompress(memoryview(compressed)))
+        assert expected == blosc2.decompress(compressed)
+        assert expected == blosc2.decompress(memoryview(compressed))
 
-        self.assertEqual(expected, blosc2.decompress(bytearray(compressed)))
-        self.assertEqual(expected, blosc2.decompress(np.array([compressed])))
+        assert expected == blosc2.decompress(bytearray(compressed))
+        assert expected == blosc2.decompress(np.array([compressed]))
 
     def test_decompress_releasegil(self):
         import numpy as np
@@ -99,11 +99,11 @@ class TestCodec(unittest.TestCase):
         compressed = blosc2.compress(expected, typesize=1)
 
         # now for all the things that support the buffer interface
-        self.assertEqual(expected, blosc2.decompress(compressed))
-        self.assertEqual(expected, blosc2.decompress(memoryview(compressed)))
+        assert expected == blosc2.decompress(compressed)
+        assert expected == blosc2.decompress(memoryview(compressed))
 
-        self.assertEqual(expected, blosc2.decompress(bytearray(compressed)))
-        self.assertEqual(expected, blosc2.decompress(np.array([compressed])))
+        assert expected == blosc2.decompress(bytearray(compressed))
+        assert expected == blosc2.decompress(np.array([compressed]))
         blosc2.set_releasegil(False)
 
     def test_decompress_input_types_as_bytearray(self):
@@ -114,11 +114,11 @@ class TestCodec(unittest.TestCase):
         compressed = blosc2.compress(expected, typesize=1)
 
         # now for all the things that support the buffer interface
-        self.assertEqual(expected, blosc2.decompress(compressed, as_bytearray=True))
-        self.assertEqual(expected, blosc2.decompress(memoryview(compressed), as_bytearray=True))
+        assert expected == blosc2.decompress(compressed, as_bytearray=True)
+        assert expected == blosc2.decompress(memoryview(compressed), as_bytearray=True)
 
-        self.assertEqual(expected, blosc2.decompress(bytearray(compressed), as_bytearray=True))
-        self.assertEqual(expected, blosc2.decompress(np.array([compressed]), as_bytearray=True))
+        assert expected == blosc2.decompress(bytearray(compressed), as_bytearray=True)
+        assert expected == blosc2.decompress(np.array([compressed]), as_bytearray=True)
 
     def test_compress_exceptions(self):
         s = b"0123456789"
@@ -205,15 +205,15 @@ class TestCodec(unittest.TestCase):
             cx = blosc2.compress(array, typesize, clevel=1)
             blosc2.decompress(cx)
 
-        self.assertFalse(leaks(compress), msg="compress leaks memory")
-        self.assertFalse(leaks(decompress), msg="decompress leaks memory")
+        assert not leaks(compress), "compress leaks memory"
+        assert not leaks(decompress), "decompress leaks memory"
 
     def test_get_blocksize(self):
         s = b"0123456789" * 1000
         blosc2.set_blocksize(2**14)
         blosc2.compress(s, typesize=1)
         d = blosc2.get_blocksize()
-        self.assertEqual(d, 2**14)
+        assert d == 2 ** 14
 
     def test_bitshuffle_not_multiple(self):
         # Check the fix for #133
@@ -222,7 +222,7 @@ class TestCodec(unittest.TestCase):
         self.assertRaises(ValueError, blosc2.compress, xx, typesize=8, filter=blosc2.Filter.BITSHUFFLE)
         zxx = blosc2.compress(xx, filter=blosc2.Filter.BITSHUFFLE)
         last_xx = blosc2.decompress(zxx)[-3:]
-        self.assertEqual(last_xx, b"\x01\x01\x01")
+        assert last_xx == b"\x01\x01\x01"
 
     def test_bitshuffle_leftovers(self):
         # Test for https://github.com/blosc2/c-blosc22/pull/100
@@ -232,7 +232,7 @@ class TestCodec(unittest.TestCase):
         )
         cbuffer = blosc2.compress(buffer, filter=blosc2.Filter.BITSHUFFLE, clevel=1)
         dbuffer = blosc2.decompress(cbuffer)
-        self.assertTrue(buffer == dbuffer)
+        assert buffer == dbuffer
 
 
 def run(verbosity=2):
