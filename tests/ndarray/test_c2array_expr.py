@@ -209,7 +209,7 @@ def broadcast_shape(request):
     return request.param
 
 
-@pytest.fixture
+@pytest.fixture()
 def broadcast_fixture(broadcast_shape, c2sub_context):
     shape1, shape2 = broadcast_shape
     dtype = np.float64
