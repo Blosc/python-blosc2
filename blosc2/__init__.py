@@ -224,7 +224,7 @@ blosclib_version = f"{VERSION_STRING} ({VERSION_DATE})"
 The blosc2 version + date.
 """
 # Internal Blosc threading
-nthreads = ncores = cpu_info["count"] if "count" in cpu_info else 1
+nthreads = ncores = cpu_info.get("count", 1)
 """Number of threads to be used in compression/decompression.
 """
 # Protection against too many threads
