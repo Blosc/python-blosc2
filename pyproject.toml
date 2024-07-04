@@ -63,6 +63,7 @@ extend-select = [
     "B",
     "I",
     "SIM",
+    "TCH",
     "UP",
 ]
 ignore = [
