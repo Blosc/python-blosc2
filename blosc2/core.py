@@ -252,7 +252,7 @@ def pack(obj, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ
     # The object to be compressed is pickled_object, and not obj
     len_src = len(pickled_object)
     _check_input_length("pickled object", len_src, itemsize, _ignore_multiple_size=True)
-    packed_object = compress(
+    return compress(
         pickled_object,
         typesize=itemsize,
         clevel=clevel,
@@ -260,7 +260,6 @@ def pack(obj, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ
         codec=codec,
         _ignore_multiple_size=True,
     )
-    return packed_object
 
 
 def unpack(packed_object, **kwargs):
@@ -1204,9 +1203,8 @@ def nearest_divisor(a, b):
     # Get all divisors of `a`; use a generator to avoid creating a list
     divisors = (i for i in range(1, a + 1) if a % i == 0)
     # Find the divisor nearest to b
-    nearest = min(divisors, key=lambda x: abs(x - b))
+    return min(divisors, key=lambda x: abs(x - b))
 
-    return nearest
 
 
 # Compute chunks and blocks partitions

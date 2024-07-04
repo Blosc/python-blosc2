@@ -1346,8 +1346,7 @@ class LazyExpr(LazyArray):
         return chunked_eval(self.expression, self.operands, item, **kwargs)
 
     def __str__(self):
-        expression = f"{self.expression}"
-        return expression
+        return f"{self.expression}"
 
     @property
     def info(self):
