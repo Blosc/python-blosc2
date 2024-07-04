@@ -136,9 +136,9 @@ class TestCodec(unittest.TestCase):
         with pytest.raises(ValueError):
             blosc2.compress(s, typesize=1, clevel=10)
 
-        with pytest.raises(ValueError):
+        with pytest.raises(TypeError):
             blosc2.compress(1.0, 1)
-        with pytest.raises(ValueError):
+        with pytest.raises(TypeError):
             blosc2.compress(["abc"], 1)
 
         # Create a simple mock to avoid having to create a buffer of 2 GB

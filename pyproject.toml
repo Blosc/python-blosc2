@@ -63,12 +63,15 @@ extend-select = [
     "B",
     "I",
     "NPY",
+    "PT",
     "RET",
     "SIM",
     "TCH",
     "UP",
 ]
 ignore = [
+    "PT006",
+    "PT011",
     "RET505",
     "RET508",
     "SIM108",
