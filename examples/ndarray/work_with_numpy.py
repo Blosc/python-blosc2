@@ -17,7 +17,8 @@ chunks = (253, 23)
 dtype = bool
 
 # Create a buffer
-nparray = np.random.choice(a=[True, False], size=np.prod(shape)).reshape(shape)
+random = np.random.default_rng()
+nparray = random.choice(a=[True, False], size=np.prod(shape)).reshape(shape)
 
 # Create a NDArray from a NumPy array
 a = blosc2.asarray(nparray, chunks=chunks)

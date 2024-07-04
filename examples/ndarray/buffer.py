@@ -18,7 +18,8 @@ dtype = np.dtype("|S8")
 typesize = dtype.itemsize
 
 # Create a NDArray from a buffer
-buffer = bytes(np.random.normal(0, 1, np.prod(shape)) * typesize)
+random = np.random.default_rng()
+buffer = bytes(random.normal(0, 1, np.prod(shape)) * typesize)
 a = blosc2.frombuffer(buffer, shape, chunks=chunks, dtype=dtype)
 print("compression ratio:", a.schunk.cratio)
 

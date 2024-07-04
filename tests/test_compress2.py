@@ -12,12 +12,14 @@ import pytest
 
 import blosc2
 
+random = np.random.default_rng()
+
 
 @pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
     "obj, cparams, dparams",
     [
-        (np.random.randint(0, 10, 10), {"codec": blosc2.Codec.LZ4, "clevel": 6}, {}),
+        (random.integers(0, 10, 10), {"codec": blosc2.Codec.LZ4, "clevel": 6}, {}),
         (
             np.arange(10, dtype="float32"),
             # Select an absolute precision of 10 bits in mantissa
@@ -39,7 +41,7 @@ import blosc2
             {"nthreads": 4},
         ),
         (
-            np.random.randint(0, 1000 + 1, 1000),
+            random.integers(0, 1000, 1000, endpoint=True),
             {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4},
             {},
         ),
@@ -73,7 +75,7 @@ def test_compress2_numpy(obj, cparams, dparams, gil):
     "obj, cparams, dparams",
     [
         (
-            np.random.randint(0, 10, 10, dtype=np.int64),
+            random.integers(0, 10, 10, dtype=np.int64),
             {"codec": blosc2.Codec.LZ4, "clevel": 6, "filters_meta": [-50]},
             {},
         ),
