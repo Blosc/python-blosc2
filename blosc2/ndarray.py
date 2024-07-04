@@ -548,7 +548,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         This always clear the last read data (if any).
         """
         if not isinstance(value, bool):
-            raise ValueError("keep_last_read should be a boolean")
+            raise TypeError("keep_last_read should be a boolean")
         # Reset last read data
         self._last_read.clear()
         self._keep_last_read = value
@@ -1704,7 +1704,7 @@ def contains(
         A lazy expression that can be evaluated.
     """
     if not isinstance(value, str | bytes | NDArray):
-        raise ValueError("value should be a string, bytes or a NDArray!")
+        raise TypeError("value should be a string, bytes or a NDArray!")
     return blosc2.LazyExpr(new_op=(ndarr, "contains", value))
 
 
@@ -1769,7 +1769,7 @@ def _check_shape(shape):
     if isinstance(shape, int | np.integer):
         shape = (shape,)
     elif not isinstance(shape, tuple | list):
-        raise ValueError("shape should be a tuple or a list!")
+        raise TypeError("shape should be a tuple or a list!")
     return shape
 
 
@@ -2176,13 +2176,13 @@ class NDField(Operand):
             The corresponding :ref:`NDField`.
         """
         if not isinstance(ndarr, NDArray):
-            raise ValueError("ndarr should be a NDArray!")
+            raise TypeError("ndarr should be a NDArray!")
         if not isinstance(field, str):
-            raise ValueError("field should be a string!")
+            raise TypeError("field should be a string!")
         if ndarr.dtype.fields is None:
-            raise ValueError("NDArray does not have a structured dtype!")
+            raise TypeError("NDArray does not have a structured dtype!")
         if field not in ndarr.dtype.fields:
-            raise ValueError(f"Field {field} not found in the dtype of the NDArray")
+            raise TypeError(f"Field {field} not found in the dtype of the NDArray")
         # Store immutable properties
         self.ndarr = ndarr
         self.chunks = ndarr.chunks
@@ -2231,7 +2231,7 @@ class NDField(Operand):
             return key.where(self)
 
         if isinstance(key, str):
-            raise ValueError("This array is an NDField; use a structured NDArray for bool expressions")
+            raise TypeError("This array is an NDField; use a structured NDArray for bool expressions")
 
         # Check if the key is in the last read cache
         inmutable_key = make_key_hashable(key)
