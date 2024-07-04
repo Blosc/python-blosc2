@@ -11,7 +11,10 @@ from __future__ import annotations
 import builtins
 import math
 from collections import namedtuple
-from collections.abc import Sequence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 import ndindex
 import numpy as np

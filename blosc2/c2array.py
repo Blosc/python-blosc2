@@ -9,8 +9,11 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 import httpx
 import numpy as np
