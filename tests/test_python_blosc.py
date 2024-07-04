@@ -14,6 +14,8 @@ import gc
 import os
 import unittest
 
+import pytest
+
 import blosc2
 
 try:
@@ -62,7 +64,8 @@ class TestCodec(unittest.TestCase):
             assert s == d
 
     def test_set_nthreads_exceptions(self):
-        self.assertRaises(ValueError, blosc2.set_nthreads, 2**31)
+        with pytest.raises(ValueError):
+            blosc2.set_nthreads(2**31)
 
     def test_compress_input_types(self):
         import numpy as np
@@ -123,35 +126,48 @@ class TestCodec(unittest.TestCase):
     def test_compress_exceptions(self):
         s = b"0123456789"
 
-        self.assertRaises(ValueError, blosc2.compress, s, typesize=0)
-        self.assertRaises(ValueError, blosc2.compress, s, typesize=blosc2.MAX_TYPESIZE + 1)
+        with pytest.raises(ValueError):
+            blosc2.compress(s, typesize=0)
+        with pytest.raises(ValueError):
+            blosc2.compress(s, typesize=blosc2.MAX_TYPESIZE + 1)
 
-        self.assertRaises(ValueError, blosc2.compress, s, typesize=1, clevel=-1)
-        self.assertRaises(ValueError, blosc2.compress, s, typesize=1, clevel=10)
+        with pytest.raises(ValueError):
+            blosc2.compress(s, typesize=1, clevel=-1)
+        with pytest.raises(ValueError):
+            blosc2.compress(s, typesize=1, clevel=10)
 
-        self.assertRaises(TypeError, blosc2.compress, 1.0, 1)
-        self.assertRaises(TypeError, blosc2.compress, ["abc"], 1)
+        with pytest.raises(ValueError):
+            blosc2.compress(1.0, 1)
+        with pytest.raises(ValueError):
+            blosc2.compress(["abc"], 1)
 
         # Create a simple mock to avoid having to create a buffer of 2 GB
         class LenMock:
             def __len__(self):
                 return blosc2.MAX_BUFFERSIZE + 1
 
-        self.assertRaises(ValueError, blosc2.compress, LenMock(), typesize=1)
+        with pytest.raises(ValueError):
+            blosc2.compress(LenMock(), typesize=1)
 
     def test_decompress_exceptions(self):
-        self.assertRaises(TypeError, blosc2.decompress, 1.0)
-        self.assertRaises(TypeError, blosc2.decompress, ["abc"])
+        with pytest.raises(TypeError):
+            blosc2.decompress(1.0)
+        with pytest.raises(TypeError):
+            blosc2.decompress(["abc"])
 
     @unittest.skipIf(not has_numpy, "Numpy not available")
     def test_pack_array_exceptions(self):
-        self.assertRaises(AttributeError, blosc2.pack_array, "abc")
-        self.assertRaises(AttributeError, blosc2.pack_array, 1.0)
+        with pytest.raises(AttributeError):
+            blosc2.pack_array("abc")
+        with pytest.raises(AttributeError):
+            blosc2.pack_array(1.0)
 
         # items = (blosc2.MAX_BUFFERSIZE // 8) + 1
         one = np.ones(1, dtype=np.int64)
-        self.assertRaises(ValueError, blosc2.pack_array, one, clevel=-1)
-        self.assertRaises(ValueError, blosc2.pack_array, one, clevel=10)
+        with pytest.raises(ValueError):
+            blosc2.pack_array(one, clevel=-1)
+        with pytest.raises(ValueError):
+            blosc2.pack_array(one, clevel=10)
 
         # use stride trick to make an array that looks like a huge one
         # ones = np.lib.stride_tricks.as_strided(one, shape=(1, items), strides=(8, 0))[0]
@@ -168,7 +184,8 @@ class TestCodec(unittest.TestCase):
         np.testing.assert_array_equal(input_array, blosc2.unpack_array(packed_array, encoding="UTF-8"))
 
     def test_unpack_array_with_from_py27_exceptions(self):
-        self.assertRaises(UnicodeDecodeError, blosc2.unpack_array, self.PY_27_INPUT)
+        with pytest.raises(UnicodeDecodeError):
+            blosc2.unpack_array(self.PY_27_INPUT)
 
     def test_unpack_array_with_unicode_characters_from_py27(self):
         import numpy as np
@@ -177,7 +194,8 @@ class TestCodec(unittest.TestCase):
         np.testing.assert_array_equal(out_array, blosc2.unpack_array(self.PY_27_INPUT, encoding="bytes"))
 
     def test_unpack_array_exceptions(self):
-        self.assertRaises(TypeError, blosc2.unpack_array, 1.0)
+        with pytest.raises(TypeError):
+            blosc2.unpack_array(1.0)
 
     @unittest.skipIf(not psutil, "psutil not available, cannot test for leaks")
     def test_no_leaks(self):
@@ -219,7 +237,8 @@ class TestCodec(unittest.TestCase):
         # Check the fix for #133
         x = np.ones(27266, dtype="uint8")
         xx = x.tobytes()
-        self.assertRaises(ValueError, blosc2.compress, xx, typesize=8, filter=blosc2.Filter.BITSHUFFLE)
+        with pytest.raises(ValueError):
+            blosc2.compress(xx, typesize=8, filter=blosc2.Filter.BITSHUFFLE)
         zxx = blosc2.compress(xx, filter=blosc2.Filter.BITSHUFFLE)
         last_xx = blosc2.decompress(zxx)[-3:]
         assert last_xx == b"\x01\x01\x01"
@@ -227,9 +246,8 @@ class TestCodec(unittest.TestCase):
     def test_bitshuffle_leftovers(self):
         # Test for https://github.com/blosc2/c-blosc22/pull/100
         buffer = b" " * 641091  # a buffer that is not divisible by 8
-        self.assertRaises(
-            ValueError, blosc2.compress, buffer, typesize=8, filter=blosc2.Filter.BITSHUFFLE, clevel=1
-        )
+        with pytest.raises(ValueError):
+            blosc2.compress(buffer, typesize=8, filter=blosc2.Filter.BITSHUFFLE, clevel=1)
         cbuffer = blosc2.compress(buffer, filter=blosc2.Filter.BITSHUFFLE, clevel=1)
         dbuffer = blosc2.decompress(cbuffer)
         assert buffer == dbuffer
