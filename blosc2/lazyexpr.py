@@ -53,6 +53,7 @@ class LazyArrayEnum(Enum):
 
     Expr = 0
     UDF = 1
+    CacheSChunk = 2
 
 
 class LazyArray(ABC):
@@ -65,7 +66,7 @@ class LazyArray(ABC):
         ----------
         item: slice, list of slices, optional
             If not None, only the chunks that intersect with the slices
-            in items will be evaluated.
+            in items will be fetched/cached/evaluated.
 
         kwargs: dict, optional
             Keyword arguments that are supported by the :func:`empty` constructor.
@@ -1727,6 +1728,57 @@ def lazyexpr(expression, operands=None, out=None, where=None):
     if operands is None:
         raise ValueError("`operands` must be provided for a string expression")
     return LazyExpr._new_expr(expression, operands, out=out, where=where)
+
+
+class CacheSChunk(LazyArray):
+    """Class for hosting a cache of a super-chunk in urlpath.
+
+    This follows the LazyArray interface, and can be used to cache chunks of a regular SChunk
+    in urlpath.
+    """
+    def __init__(self, master_schunk, urlpath=None):
+        self.master_schunk = master_schunk
+        self.urlpath = urlpath
+        # Get metadata
+        self.schunk = blosc2.open(self.master_schunk)
+        if isinstance(self.schunk, blosc2.C2Array | blosc2.NDArray):
+            self._shape = self.schunk.shape
+            self._dtype = self.schunk.dtype
+            self._urlpath = urlpath
+            self._cache = blosc2.empty(self._shape, self._dtype, urlpath=urlpath)
+        else:
+            self._shape = len(self.schunk)
+            self._dtype = self.schunk.dtype
+            self._cache = blosc2.SChunk(urlpath)
+
+    def eval(self, item=None, **kwargs):
+        if item is None:
+            # Full realization
+            if isinstance(self.schunk, blosc2.C2Array | blosc2.NDArray):
+                # TODO: optimize this
+                self._cache[...] = self.schunk[...]
+            else:
+                for chunk in self.schunk.iterchunks():
+                    self._cache.append_data(chunk)
+        else:
+            # Get only a slice
+            # TODO: optimize this
+            self._cache[item] = self.schunk[item]
+        return self._cache
+
+    def __getitem__(self, item):
+        # Populate the cache
+        self.eval(item)
+        return self._cache[item]
+
+    def dtype(self):
+        return self._dtype
+
+    def shape(self):
+        return self._shape
+
+    def __str__(self):
+        return f"CacheSChunk({self.master_schunk}, urlpath={self.urlpath})"
 
 
 if __name__ == "__main__":
