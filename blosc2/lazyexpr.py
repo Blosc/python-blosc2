@@ -1736,25 +1736,25 @@ class CacheSChunk(LazyArray):
     This follows the LazyArray interface, and can be used to cache chunks of a regular SChunk
     in urlpath.
     """
-    def __init__(self, master_schunk, urlpath=None):
-        self.master_schunk = master_schunk
+    def __init__(self, master_container, urlpath=None):
         self.urlpath = urlpath
+        self.master_container = master_container
         # Get metadata
-        self.schunk = blosc2.open(self.master_schunk)
-        if isinstance(self.schunk, blosc2.C2Array | blosc2.NDArray):
-            self._shape = self.schunk.shape
-            self._dtype = self.schunk.dtype
-            self._urlpath = urlpath
-            self._cache = blosc2.empty(self._shape, self._dtype, urlpath=urlpath)
+        if isinstance(self.master_container, blosc2.C2Array | blosc2.NDArray):
+            self._shape = self.master_container.shape
+            self._dtype = self.master_container.dtype
+            self._cache = blosc2.empty(self._shape, self._dtype, chunks=self.master_container.chunks,
+                                       blocks=self.master_container.blocks, urlpath=urlpath)
         else:
-            self._shape = len(self.schunk)
-            self._dtype = self.schunk.dtype
-            self._cache = blosc2.SChunk(urlpath)
+            self._shape = len(self.master_container)
+            self._dtype = None
+            self._cache = blosc2.SChunk(urlpath, chunksize=self.master_container.chunksize)
+            self._cache.fill_special(self._shape, blosc2.SpecialValue.UNINIT)
 
     def eval(self, item=None, **kwargs):
         if item is None:
             # Full realization
-            if isinstance(self.schunk, blosc2.C2Array | blosc2.NDArray):
+            if isinstance(self._cache, blosc2.C2Array | blosc2.NDArray):
                 # TODO: optimize this
                 self._cache[...] = self.schunk[...]
             else:
@@ -1762,8 +1762,27 @@ class CacheSChunk(LazyArray):
                     self._cache.append_data(chunk)
         else:
             # Get only a slice
-            # TODO: optimize this
-            self._cache[item] = self.schunk[item]
+            nchunks = blosc2.get_slice_nchunks(self._cache, item)
+            if isinstance(self._cache, blosc2.SChunk | blosc2.NDArray):
+                schunk = self.master_container if isinstance(self.master_container, blosc2.SChunk) \
+                    else self.master_container.schunk
+                schunk_cache = self._cache if isinstance(self._cache, blosc2.SChunk) else self._cache.schunk
+                for info in schunk_cache.iterchunks_info():
+                    if info.nchunk in nchunks:
+                        if info.special != blosc2.SpecialValue.NOT_SPECIAL:
+                            chunk = schunk.get_chunk(info.nchunk)
+                            schunk_cache.update_chunk(info.nchunk, chunk)
+            else:
+                # We do not have access to the SChunk of a C2Array
+                for info in self._cache.iterchunks_info():
+                    if info.nchunk in nchunks:
+                        if info.special != blosc2.SpecialValue.NOT_SPECIAL:
+                            chunk_slice = [info.coords[i] * self._cache.chunks[i] for i in range(self._cache.ndim)]
+                            slice_ = tuple(slice(chunk_slice[i], chunk_slice[i] + self._cache.chunks[i]) for i in range(self._cache.ndim))
+                            arr = self.master_container.slice(slice_)
+                            chunk = arr.schunk.get_chunk(0)
+                            self._cache.schunk.update_chunk(info.nchunk, chunk)
+
         return self._cache
 
     def __getitem__(self, item):

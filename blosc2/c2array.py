@@ -155,16 +155,18 @@ def subscribe(root, urlbase, auth_token):
     return _xpost(url, auth_token=auth_token)
 
 
-def fetch_data(path, urlbase, params, auth_token=None):
+def fetch_data(path, urlbase, params, compressed=False, auth_token=None):
     url = _sub_url(urlbase, f"api/fetch/{path}")
     response = _xget(url, params=params, auth_token=auth_token)
     data = response.content
     try:
         data = blosc2.ndarray_from_cframe(data)
-        data = data[:] if data.ndim == 1 else data[()]
+        if not compressed:
+            data = data[:] if data.ndim == 1 else data[()]
     except RuntimeError:
         data = blosc2.schunk_from_cframe(data)
-        data = data[:]
+        if not compressed:
+            data = data[:]
     return data
 
 
@@ -246,6 +248,24 @@ class C2Array(blosc2.Operand):
         """
         slice_ = slice_to_string(slice_)
         return fetch_data(self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token)
+
+    def slice(self, slice_: int | slice | Sequence[slice]) -> blosc2.NDArray:
+        """
+        Get a slice of the array.
+
+        Parameters
+        ----------
+        slice_ : int, slice, tuple of ints and slices, or None
+            The slice to fetch.
+
+        Returns
+        -------
+        out: :ref:`NDArray`
+            An array with the requested data. The dtype will be the same as `self`.
+        """
+        slice_ = slice_to_string(slice_)
+        data = fetch_data(self.path, self.urlbase, {"slice_": slice_}, compressed=True, auth_token=self.auth_token)
+        return data
 
     @property
     def shape(self):
