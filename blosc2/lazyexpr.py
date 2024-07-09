@@ -1730,42 +1730,51 @@ def lazyexpr(expression, operands=None, out=None, where=None):
     return LazyExpr._new_expr(expression, operands, out=out, where=where)
 
 
-class CacheSChunk(LazyArray):
+class CacheSChunk:
     """Class for hosting a cache of a super-chunk in urlpath.
 
     This follows the LazyArray interface, and can be used to cache chunks of a regular SChunk
     in urlpath.
     """
-    def __init__(self, master_container, urlpath=None):
-        self.urlpath = urlpath
-        self.master_container = master_container
+    def __init__(self, src, urlpath=None):
+        self.src = src
         # Get metadata
-        if isinstance(self.master_container, blosc2.C2Array | blosc2.NDArray):
-            self._shape = self.master_container.shape
-            self._dtype = self.master_container.dtype
-            self._cache = blosc2.empty(self._shape, self._dtype, chunks=self.master_container.chunks,
-                                       blocks=self.master_container.blocks, urlpath=urlpath)
+        if isinstance(self.src, blosc2.C2Array | blosc2.NDArray):
+            self._shape = self.src.shape
+            self._dtype = self.src.dtype
+            self._cache = blosc2.empty(self._shape, self._dtype, chunks=self.src.chunks,
+                                       blocks=self.src.blocks, urlpath=urlpath)
         else:
-            self._shape = len(self.master_container)
+            self._shape = len(self.src)
             self._dtype = None
-            self._cache = blosc2.SChunk(urlpath, chunksize=self.master_container.chunksize)
+            self._cache = blosc2.SChunk(chunksize=self.src.chunksize, urlpath=urlpath,
+                                        cparams={'typesize': self.src.typesize})
             self._cache.fill_special(self._shape, blosc2.SpecialValue.UNINIT)
 
     def eval(self, item=None, **kwargs):
         if item is None:
             # Full realization
-            if isinstance(self._cache, blosc2.C2Array | blosc2.NDArray):
-                # TODO: optimize this
-                self._cache[...] = self.schunk[...]
+            if isinstance(self._cache, blosc2.SChunk | blosc2.NDArray):
+                schunk = self.src if isinstance(self.src, blosc2.SChunk) else self.src.schunk
+                schunk_cache = self._cache if isinstance(self._cache, blosc2.SChunk) else self._cache.schunk
+                for info in schunk_cache.iterchunks_info():
+                    if info.special != blosc2.SpecialValue.NOT_SPECIAL:
+                        chunk = schunk.get_chunk(info.nchunk)
+                        schunk_cache.update_chunk(info.nchunk, chunk)
             else:
-                for chunk in self.schunk.iterchunks():
-                    self._cache.append_data(chunk)
+                for info in self._cache.iterchunks_info():
+                    if info.special != blosc2.SpecialValue.NOT_SPECIAL:
+                        chunk_slice = [info.coords[i] * self._cache.chunks[i] for i in range(self._cache.ndim)]
+                        slice_ = tuple(slice(chunk_slice[i], chunk_slice[i] + self._cache.chunks[i]) for i in range(self._cache.ndim))
+                        arr = self.src.slice(slice_)
+                        chunk = arr.schunk.get_chunk(0)
+                        self._cache.schunk.update_chunk(info.nchunk, chunk)
+
         else:
             # Get only a slice
             nchunks = blosc2.get_slice_nchunks(self._cache, item)
             if isinstance(self._cache, blosc2.SChunk | blosc2.NDArray):
-                schunk = self.master_container if isinstance(self.master_container, blosc2.SChunk) \
-                    else self.master_container.schunk
+                schunk = self.src if isinstance(self.src, blosc2.SChunk) else self.src.schunk
                 schunk_cache = self._cache if isinstance(self._cache, blosc2.SChunk) else self._cache.schunk
                 for info in schunk_cache.iterchunks_info():
                     if info.nchunk in nchunks:
@@ -1779,7 +1788,7 @@ class CacheSChunk(LazyArray):
                         if info.special != blosc2.SpecialValue.NOT_SPECIAL:
                             chunk_slice = [info.coords[i] * self._cache.chunks[i] for i in range(self._cache.ndim)]
                             slice_ = tuple(slice(chunk_slice[i], chunk_slice[i] + self._cache.chunks[i]) for i in range(self._cache.ndim))
-                            arr = self.master_container.slice(slice_)
+                            arr = self.src.slice(slice_)
                             chunk = arr.schunk.get_chunk(0)
                             self._cache.schunk.update_chunk(info.nchunk, chunk)
 
@@ -1797,7 +1806,7 @@ class CacheSChunk(LazyArray):
         return self._shape
 
     def __str__(self):
-        return f"CacheSChunk({self.master_schunk}, urlpath={self.urlpath})"
+        return f"CacheSChunk({self.src}, urlpath={self.urlpath})"
 
 
 if __name__ == "__main__":
