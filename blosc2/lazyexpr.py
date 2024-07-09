@@ -1754,7 +1754,7 @@ class CacheSChunk:
     def eval(self, item=None, **kwargs):
         if item is None:
             # Full realization
-            if isinstance(self._cache, blosc2.SChunk | blosc2.NDArray):
+            if isinstance(self.src, blosc2.SChunk | blosc2.NDArray):
                 schunk = self.src if isinstance(self.src, blosc2.SChunk) else self.src.schunk
                 schunk_cache = self._cache if isinstance(self._cache, blosc2.SChunk) else self._cache.schunk
                 for info in schunk_cache.iterchunks_info():
@@ -1773,7 +1773,7 @@ class CacheSChunk:
         else:
             # Get only a slice
             nchunks = blosc2.get_slice_nchunks(self._cache, item)
-            if isinstance(self._cache, blosc2.SChunk | blosc2.NDArray):
+            if isinstance(self.src, blosc2.SChunk | blosc2.NDArray):
                 schunk = self.src if isinstance(self.src, blosc2.SChunk) else self.src.schunk
                 schunk_cache = self._cache if isinstance(self._cache, blosc2.SChunk) else self._cache.schunk
                 for info in schunk_cache.iterchunks_info():
