@@ -28,7 +28,7 @@ def test_schunk_cache(contiguous, urlpath, chunksize, nchunks, start, stop):
     data = np.arange(num_elem, dtype="int32")
     schunk = blosc2.SChunk(chunksize=chunksize, data=data, **storage)
     bytes_obj = data.tobytes()
-    cache = blosc2.CacheSChunk(schunk)
+    cache = blosc2.SChunkProxy(schunk)
 
     cache_slice = cache[slice(start, stop)]
     assert cache_slice == bytes_obj[start * data.dtype.itemsize:stop * data.dtype.itemsize]

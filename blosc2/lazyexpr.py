@@ -53,7 +53,7 @@ class LazyArrayEnum(Enum):
 
     Expr = 0
     UDF = 1
-    CacheSChunk = 2
+    SChunkProxy = 2
 
 
 class LazyArray(ABC):
@@ -1730,14 +1730,15 @@ def lazyexpr(expression, operands=None, out=None, where=None):
     return LazyExpr._new_expr(expression, operands, out=out, where=where)
 
 
-class CacheSChunk:
-    """Class for hosting a cache of a super-chunk in urlpath.
+class SChunkProxy:
+    """Class that implements a proxy (with cache support) of a super-chunk.
 
-    This follows the LazyArray interface, and can be used to cache chunks of a regular SChunk
-    in urlpath.
+    This follows the LazyArray interface, and can be used to cache chunks of
+    a regular SChunk in urlpath.
     """
     def __init__(self, src, urlpath=None):
         self.src = src
+        self.urlpath = urlpath
         # Get metadata
         if isinstance(self.src, blosc2.C2Array | blosc2.NDArray):
             self._shape = self.src.shape
@@ -1806,7 +1807,7 @@ class CacheSChunk:
         return self._shape
 
     def __str__(self):
-        return f"CacheSChunk({self.src}, urlpath={self.urlpath})"
+        return f"SChunkProxy({self.src}, urlpath={self.urlpath})"
 
 
 if __name__ == "__main__":
