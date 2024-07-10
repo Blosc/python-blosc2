@@ -53,7 +53,7 @@ class LazyArrayEnum(Enum):
 
     Expr = 0
     UDF = 1
-    SChunkProxy = 2
+    ProxySChunk = 2
 
 
 class LazyArray(ABC):
@@ -1799,7 +1799,7 @@ class ProxySChunk:
         return self._shape
 
     def __str__(self):
-        return f"SChunkProxy({self.src}, urlpath={self.urlpath})"
+        return f"ProxySChunk({self.src}, urlpath={self.urlpath})"
 
 
 if __name__ == "__main__":
