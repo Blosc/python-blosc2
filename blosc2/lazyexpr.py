@@ -1730,7 +1730,7 @@ def lazyexpr(expression, operands=None, out=None, where=None):
     return LazyExpr._new_expr(expression, operands, out=out, where=where)
 
 
-class SChunkProxy:
+class ProxySChunk:
     """Class that implements a proxy (with cache support) of a super-chunk.
 
     This follows the LazyArray interface, and can be used to cache chunks of

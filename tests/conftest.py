@@ -6,9 +6,11 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 import os
+
 import pytest
 
 import blosc2
+
 
 # This still needs to pass the '-s' flag to pytest to see the output but anyways
 @pytest.fixture(scope="session", autouse=True)

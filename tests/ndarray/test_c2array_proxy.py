@@ -46,7 +46,7 @@ def get_array(shape, chunks_blocks):
 def test_simple(chunks_blocks, c2sub_context, slices):
     shape = (60, 60)
     a = get_array(shape, chunks_blocks)
-    b = blosc2.SChunkProxy(a)
+    b = blosc2.ProxySChunk(a)
 
     np.testing.assert_allclose(b[slices], a[slices])
 
@@ -61,7 +61,7 @@ def test_small(c2sub_context):
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
     a = get_array(shape, chunks_blocks)
-    b = blosc2.SChunkProxy(a)
+    b = blosc2.ProxySChunk(a)
 
     np.testing.assert_allclose(b[0:100], a[0:100])
 

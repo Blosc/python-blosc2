@@ -24,7 +24,7 @@ def test_ndarray(shape, chunks, blocks, slices, dtype):
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
     a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks)
-    b = blosc2.SChunkProxy(a)
+    b = blosc2.ProxySChunk(a)
 
     np_slice = a[slices]
     cache_slice = b[slices]
