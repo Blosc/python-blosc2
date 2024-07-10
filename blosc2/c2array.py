@@ -267,6 +267,13 @@ class C2Array(blosc2.Operand):
         data = fetch_data(self.path, self.urlbase, {"slice_": slice_}, compressed=True, auth_token=self.auth_token)
         return data
 
+    def get_chunk(self, nchunk):
+        url = _sub_url(self.urlbase, f"api/chunk/{self.path}")
+        params = {'nchunk': nchunk}
+        response = _xget(url, params=params, auth_token=self.auth_token)
+        data = response.content
+        return data
+
     @property
     def shape(self):
         """The shape of the remote array"""
