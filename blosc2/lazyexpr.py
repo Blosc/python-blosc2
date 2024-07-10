@@ -1765,10 +1765,7 @@ class SChunkProxy:
             else:
                 for info in self._cache.iterchunks_info():
                     if info.special != blosc2.SpecialValue.NOT_SPECIAL:
-                        chunk_slice = [info.coords[i] * self._cache.chunks[i] for i in range(self._cache.ndim)]
-                        slice_ = tuple(slice(chunk_slice[i], chunk_slice[i] + self._cache.chunks[i]) for i in range(self._cache.ndim))
-                        arr = self.src.slice(slice_)
-                        chunk = arr.schunk.get_chunk(0)
+                        chunk = self.src.get_chunk(info.nchunk)
                         self._cache.schunk.update_chunk(info.nchunk, chunk)
 
         else:
@@ -1785,12 +1782,7 @@ class SChunkProxy:
                 # We do not have access to the SChunk of a C2Array
                 for info in self._cache.iterchunks_info():
                     if info.nchunk in nchunks and info.special != blosc2.SpecialValue.NOT_SPECIAL:
-                        chunk_slice = [info.coords[i] * self._cache.chunks[i]
-                                       for i in range(self._cache.ndim)]
-                        slice_ = tuple(slice(chunk_slice[i], chunk_slice[i] + self._cache.chunks[i])
-                                       for i in range(self._cache.ndim))
-                        arr = self.src.slice(slice_)
-                        chunk = arr.schunk.get_chunk(0)
+                        chunk = self.src.get_chunk(info.nchunk)
                         self._cache.schunk.update_chunk(info.nchunk, chunk)
 
         return self._cache
