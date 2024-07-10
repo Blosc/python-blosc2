@@ -1777,20 +1777,20 @@ class CacheSChunk:
                 schunk = self.src if isinstance(self.src, blosc2.SChunk) else self.src.schunk
                 schunk_cache = self._cache if isinstance(self._cache, blosc2.SChunk) else self._cache.schunk
                 for info in schunk_cache.iterchunks_info():
-                    if info.nchunk in nchunks:
-                        if info.special != blosc2.SpecialValue.NOT_SPECIAL:
-                            chunk = schunk.get_chunk(info.nchunk)
-                            schunk_cache.update_chunk(info.nchunk, chunk)
+                    if info.nchunk in nchunks and info.special != blosc2.SpecialValue.NOT_SPECIAL:
+                        chunk = schunk.get_chunk(info.nchunk)
+                        schunk_cache.update_chunk(info.nchunk, chunk)
             else:
                 # We do not have access to the SChunk of a C2Array
                 for info in self._cache.iterchunks_info():
-                    if info.nchunk in nchunks:
-                        if info.special != blosc2.SpecialValue.NOT_SPECIAL:
-                            chunk_slice = [info.coords[i] * self._cache.chunks[i] for i in range(self._cache.ndim)]
-                            slice_ = tuple(slice(chunk_slice[i], chunk_slice[i] + self._cache.chunks[i]) for i in range(self._cache.ndim))
-                            arr = self.src.slice(slice_)
-                            chunk = arr.schunk.get_chunk(0)
-                            self._cache.schunk.update_chunk(info.nchunk, chunk)
+                    if info.nchunk in nchunks and info.special != blosc2.SpecialValue.NOT_SPECIAL:
+                        chunk_slice = [info.coords[i] * self._cache.chunks[i]
+                                       for i in range(self._cache.ndim)]
+                        slice_ = tuple(slice(chunk_slice[i], chunk_slice[i] + self._cache.chunks[i])
+                                       for i in range(self._cache.ndim))
+                        arr = self.src.slice(slice_)
+                        chunk = arr.schunk.get_chunk(0)
+                        self._cache.schunk.update_chunk(info.nchunk, chunk)
 
         return self._cache
 
