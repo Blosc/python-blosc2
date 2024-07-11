@@ -66,7 +66,7 @@ class LazyArray(ABC):
         ----------
         item: slice, list of slices, optional
             If not None, only the chunks that intersect with the slices
-            in items will be fetched/cached/evaluated.
+            in items will be evaluated.
 
         kwargs: dict, optional
             Keyword arguments that are supported by the :func:`empty` constructor.

@@ -730,12 +730,19 @@ class NDArray(blosc2_ext.NDArray, Operand):
         ------
         info: namedtuple
             A namedtuple with the following fields:
-            nchunk: the index of the chunk (int).
-            coords: the coordinates of the chunk, in chunk units (tuple).
-            cratio: the compression ratio of the chunk (float).
-            special: the special value enum of the chunk; if 0, the chunk is not special (SpecialValue).
-            repeated_value: the repeated value for the chunk; if not SpecialValue.VALUE, it is None.
-            lazychunk: a buffer with the complete lazy chunk (bytes).
+
+                nchunk: int
+                    The index of the chunk.
+                coords: tuple
+                    The coordinates of the chunk, in chunk units.
+                cratio: float
+                    The compression ratio of the chunk.
+                special: :class:`SpecialValue`
+                    The special value enum of the chunk; if 0, the chunk is not special.
+                repeated_value: :attr:`self.dtype` or None
+                    The repeated value for the chunk; if not SpecialValue.VALUE, it is None.
+                lazychunk: bytes
+                    A buffer with the complete lazy chunk.
         """
         ChunkInfoNDArray = namedtuple(
             "ChunkInfoNDArray", ["nchunk", "coords", "cratio", "special", "repeated_value", "lazychunk"]

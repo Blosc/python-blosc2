@@ -770,11 +770,17 @@ class SChunk(blosc2_ext.SChunk):
         ------
         info: namedtuple
             A namedtuple with the following fields:
-            nchunk: the index of the chunk (int).
-            cratio: the compression ratio of the chunk (float).
-            special: the special value enum of the chunk; if 0, the chunk is not special (SpecialValue).
-            repeated_value: the repeated value for the chunk; if not SpecialValue.VALUE, it is None.
-            lazychunk: a buffer with the complete lazy chunk (bytes).
+
+                nchunk: int
+                    The index of the chunk.
+                cratio: float
+                    The compression ratio of the chunk.
+                special: :class:`~blosc2.SpecialValue`
+                    The special value enum of the chunk; if 0, the chunk is not special.
+                repeated_value: bytes or None
+                    The repeated value for the chunk; if not SpecialValue.VALUE, it is None.
+                lazychunk: bytes
+                    A buffer with the complete lazy chunk.
         """
         ChunkInfo = namedtuple("ChunkInfo", ["nchunk", "cratio", "special", "repeated_value", "lazychunk"])
         for nchunk in range(self.nchunks):
