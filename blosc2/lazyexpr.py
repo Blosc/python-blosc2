@@ -1778,37 +1778,26 @@ class ProxySChunk:
         out: :ref:`NDArray` or :ref:`SChunk`
             The local container used to cache the already requested data.
         """
+        if isinstance(self.src, blosc2.SChunk | blosc2.NDArray):
+            container = self.src if isinstance(self.src, blosc2.SChunk) else self.src.schunk
+            schunk_cache = self._cache if isinstance(self._cache, blosc2.SChunk) else self._cache.schunk
+        else:
+            container = self.src
+            schunk_cache = self._cache.schunk
+
         if item is None:
             # Full realization
-            if isinstance(self.src, blosc2.SChunk | blosc2.NDArray):
-                schunk = self.src if isinstance(self.src, blosc2.SChunk) else self.src.schunk
-                schunk_cache = self._cache if isinstance(self._cache, blosc2.SChunk) else self._cache.schunk
-                for info in schunk_cache.iterchunks_info():
-                    if info.special != blosc2.SpecialValue.NOT_SPECIAL:
-                        chunk = schunk.get_chunk(info.nchunk)
-                        schunk_cache.update_chunk(info.nchunk, chunk)
-            else:
-                for info in self._cache.iterchunks_info():
-                    if info.special != blosc2.SpecialValue.NOT_SPECIAL:
-                        chunk = self.src.get_chunk(info.nchunk)
-                        self._cache.schunk.update_chunk(info.nchunk, chunk)
-
+            for info in schunk_cache.iterchunks_info():
+                if info.special != blosc2.SpecialValue.NOT_SPECIAL:
+                    chunk = container.get_chunk(info.nchunk)
+                    schunk_cache.update_chunk(info.nchunk, chunk)
         else:
             # Get only a slice
             nchunks = blosc2.get_slice_nchunks(self._cache, item)
-            if isinstance(self.src, blosc2.SChunk | blosc2.NDArray):
-                schunk = self.src if isinstance(self.src, blosc2.SChunk) else self.src.schunk
-                schunk_cache = self._cache if isinstance(self._cache, blosc2.SChunk) else self._cache.schunk
-                for info in schunk_cache.iterchunks_info():
-                    if info.nchunk in nchunks and info.special != blosc2.SpecialValue.NOT_SPECIAL:
-                        chunk = schunk.get_chunk(info.nchunk)
-                        schunk_cache.update_chunk(info.nchunk, chunk)
-            else:
-                # We do not have access to the SChunk of a C2Array
-                for info in self._cache.iterchunks_info():
-                    if info.nchunk in nchunks and info.special != blosc2.SpecialValue.NOT_SPECIAL:
-                        chunk = self.src.get_chunk(info.nchunk)
-                        self._cache.schunk.update_chunk(info.nchunk, chunk)
+            for info in schunk_cache.iterchunks_info():
+                if info.nchunk in nchunks and info.special != blosc2.SpecialValue.NOT_SPECIAL:
+                    chunk = container.get_chunk(info.nchunk)
+                    schunk_cache.update_chunk(info.nchunk, chunk)
 
         return self._cache
 
