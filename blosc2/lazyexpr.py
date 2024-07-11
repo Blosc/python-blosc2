@@ -1731,12 +1731,23 @@ def lazyexpr(expression, operands=None, out=None, where=None):
 
 
 class ProxySChunk:
-    """Class that implements a proxy (with cache support) of a super-chunk.
+    """Class that implements a proxy (with cache support) of a Python-Blosc2 container.
 
-    This follows the LazyArray interface, and can be used to cache chunks of
-    a regular SChunk in urlpath.
+    This can be used to cache chunks of
+    a regular SChunk, NDArray or C2Array in an urlpath.
     """
     def __init__(self, src, urlpath=None):
+        """
+        Create a new :ref:`ProxySChunk` to serve like a cache to save accessed
+        chunks locally.
+
+        Parameters
+        ----------
+        src: :ref:`SChunk`, :ref:`NDArray` or :ref:`C2Array`
+            The original container
+        urlpath: str, optional
+            The urlpath where to save the container that will work as a cache.
+        """
         self.src = src
         self.urlpath = urlpath
         # Get metadata
@@ -1752,7 +1763,21 @@ class ProxySChunk:
                                         cparams={'typesize': self.src.typesize})
             self._cache.fill_special(self._shape, blosc2.SpecialValue.UNINIT)
 
-    def eval(self, item=None, **kwargs):
+    def eval(self, item=None):
+        """
+        Get the container used as cache with the requested data updated.
+
+        Parameters
+        ----------
+        item: slice or list of slices, optional
+            If not None, only the chunks that intersect with the slices
+            in items will be retrieved if they have not been already.
+
+        Returns
+        -------
+        out: :ref:`NDArray` or :ref:`SChunk`
+            The local container used to cache the already requested data.
+        """
         if item is None:
             # Full realization
             if isinstance(self.src, blosc2.SChunk | blosc2.NDArray):
@@ -1788,14 +1813,31 @@ class ProxySChunk:
         return self._cache
 
     def __getitem__(self, item):
+        """
+        Get a slice as a numpy.ndarray using the :ref:`ProxySChunk`.
+
+        Parameters
+        ----------
+        item: slice or list of slices
+            The slice of the desired data.
+
+        Returns
+        -------
+        out: numpy.ndarray
+            An array with the data slice.
+        """
         # Populate the cache
         self.eval(item)
         return self._cache[item]
 
+    @property
     def dtype(self):
+        """The dtype of :paramref:`self` or None if it comes from a :ref:`SChunk`"""
         return self._dtype
 
+    @property
     def shape(self):
+        """The shape of :paramref:`self`"""
         return self._shape
 
     def __str__(self):

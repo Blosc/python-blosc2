@@ -239,7 +239,20 @@ class C2Array(blosc2.Operand):
         slice_ = slice_to_string(slice_)
         return fetch_data(self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token)
 
-    def get_chunk(self, nchunk):
+    def get_chunk(self, nchunk: int):
+        """
+        Get the compressed unidimensional chunk of a :ref:`C2Array`.
+
+        Parameters
+        ----------
+        nchunk: int
+            The unidimensional chunk index.
+
+        Returns
+        -------
+        out: bytes
+            The requested compressed chunk.
+        """
         url = _sub_url(self.urlbase, f"api/chunk/{self.path}")
         params = {'nchunk': nchunk}
         response = _xget(url, params=params, auth_token=self.auth_token)
