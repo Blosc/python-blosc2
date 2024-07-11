@@ -35,26 +35,31 @@ def get_array(shape, chunks_blocks):
     ],
 )
 @pytest.mark.parametrize(
-    "slices",
+    "urlpath, slices",
     [
-        (slice(0, 23), slice(None)),
-        (slice(None), slice(None)),
-        (slice(0, 5), slice(0, 60)),
-        (slice(37, 53), slice(19, 233)),
+        (None, (slice(0, 23), slice(None))),
+        ("proxy", (slice(None), slice(None))),
+        (None, (slice(0, 5), slice(0, 60))),
+        ("proxy", (slice(37, 53), slice(19, 233))),
     ],
 )
-def test_simple(chunks_blocks, c2sub_context, slices):
+def test_simple(chunks_blocks, c2sub_context, urlpath, slices):
+    blosc2.remove_urlpath(urlpath)
     shape = (60, 60)
     a = get_array(shape, chunks_blocks)
-    b = blosc2.ProxySChunk(a)
+    b = blosc2.ProxySChunk(a, urlpath=urlpath)
 
     np.testing.assert_allclose(b[slices], a[slices])
 
     cache_slice = b.eval(slices)
+    assert cache_slice.schunk.urlpath == urlpath
     np.testing.assert_allclose(cache_slice[slices], a[slices])
 
     cache = b.eval()
+    assert cache.schunk.urlpath == urlpath
     np.testing.assert_allclose(cache[...], a[...])
+
+    blosc2.remove_urlpath(urlpath)
 
 
 def test_small(c2sub_context):

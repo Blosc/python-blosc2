@@ -22,23 +22,25 @@ import blosc2
     ],
 )
 def test_schunk_cache(contiguous, urlpath, chunksize, nchunks, start, stop):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": {'typesize': 4}}
+    storage = {"contiguous": contiguous, "cparams": {'typesize': 4}}
     blosc2.remove_urlpath(urlpath)
     num_elem = chunksize // 4 * nchunks
     data = np.arange(num_elem, dtype="int32")
     schunk = blosc2.SChunk(chunksize=chunksize, data=data, **storage)
     bytes_obj = data.tobytes()
-    cache = blosc2.ProxySChunk(schunk)
+    cache = blosc2.ProxySChunk(schunk, urlpath=urlpath)
 
     cache_slice = cache[slice(start, stop)]
     assert cache_slice == bytes_obj[start * data.dtype.itemsize:stop * data.dtype.itemsize]
 
     cache_slice = cache.eval(slice(start, stop))
+    assert cache_slice.urlpath == urlpath
     out = np.empty(stop - start, data.dtype)
     cache_slice.get_slice(start, stop, out)
     assert np.array_equal(out, data[start:stop])
 
     cache_eval = cache.eval()
+    assert cache_eval.urlpath == urlpath
     out = np.empty(data.shape, data.dtype)
     cache_eval.get_slice(0, None, out)
     assert np.array_equal(out, data)
