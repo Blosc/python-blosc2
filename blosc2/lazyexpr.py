@@ -1751,13 +1751,13 @@ class ProxySChunk:
         self.src = src
         self.urlpath = urlpath
         # Get metadata
-        if isinstance(self.src, blosc2.C2Array | blosc2.NDArray):
+        if hasattr(self.src, "shape"):
             self._shape = self.src.shape
             self._dtype = self.src.dtype
             self._cache = blosc2.empty(self._shape, self._dtype, chunks=self.src.chunks,
                                        blocks=self.src.blocks, urlpath=urlpath)
         else:
-            self._shape = len(self.src)
+            self._shape = self.src.nbytes // self.src.typesize
             self._dtype = None
             self._cache = blosc2.SChunk(chunksize=self.src.chunksize, urlpath=urlpath,
                                         cparams={'typesize': self.src.typesize})
@@ -1778,12 +1778,11 @@ class ProxySChunk:
         out: :ref:`NDArray` or :ref:`SChunk`
             The local container used to cache the already requested data.
         """
-        if isinstance(self.src, blosc2.SChunk | blosc2.NDArray):
-            container = self.src if isinstance(self.src, blosc2.SChunk) else self.src.schunk
-            schunk_cache = self._cache if isinstance(self._cache, blosc2.SChunk) else self._cache.schunk
+        if isinstance(self.src, blosc2.NDArray):
+            container = self.src.schunk
         else:
             container = self.src
-            schunk_cache = self._cache.schunk
+        schunk_cache = self._cache.schunk if hasattr(self._cache, "schunk") else self._cache
 
         if item is None:
             # Full realization
