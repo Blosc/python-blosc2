@@ -1736,7 +1736,7 @@ class ProxySChunk:
     This can be used to cache chunks of
     a regular SChunk, NDArray or C2Array in an urlpath.
     """
-    def __init__(self, src, urlpath=None):
+    def __init__(self, src, urlpath=None, **kwargs):
         """
         Create a new :ref:`ProxySChunk` to serve like a cache to save accessed
         chunks locally.
@@ -1750,18 +1750,18 @@ class ProxySChunk:
         """
         self.src = src
         self.urlpath = urlpath
-        # Get metadata
-        if hasattr(self.src, "shape"):
-            self._shape = self.src.shape
-            self._dtype = self.src.dtype
-            self._cache = blosc2.empty(self._shape, self._dtype, chunks=self.src.chunks,
-                                       blocks=self.src.blocks, urlpath=urlpath)
-        else:
-            self._shape = self.src.nbytes // self.src.typesize
-            self._dtype = None
-            self._cache = blosc2.SChunk(chunksize=self.src.chunksize, urlpath=urlpath,
-                                        cparams={'typesize': self.src.typesize})
-            self._cache.fill_special(self._shape, blosc2.SpecialValue.UNINIT)
+        if kwargs is None:
+            kwargs = {}
+        self._cache = kwargs.pop('_cache', None)
+
+        if self._cache is None:
+            if hasattr(self.src, "shape"):
+                self._cache = blosc2.empty(self.src.shape, self.src.dtype, chunks=self.src.chunks,
+                                           blocks=self.src.blocks, urlpath=urlpath)
+            else:
+                self._cache = blosc2.SChunk(chunksize=self.src.chunksize, urlpath=urlpath,
+                                            cparams={'typesize': self.src.typesize})
+                self._cache.fill_special(self.src.nbytes // self.src.typesize, blosc2.SpecialValue.UNINIT)
 
     def eval(self, item=None):
         """
@@ -1821,12 +1821,12 @@ class ProxySChunk:
     @property
     def dtype(self):
         """The dtype of :paramref:`self` or None if it comes from a :ref:`SChunk`"""
-        return self._dtype
+        return self._cache.dtype if isinstance(self._cache, blosc2.NDArray) else None
 
     @property
     def shape(self):
         """The shape of :paramref:`self`"""
-        return self._shape
+        return self._cache.shape if isinstance(self._cache, blosc2.NDArray) else len(self._cache)
 
     def __str__(self):
         return f"ProxySChunk({self.src}, urlpath={self.urlpath})"
