@@ -1321,11 +1321,12 @@ def compute_chunks_blocks(
         cparams2["tuner"] = blosc2.Tuner.STUNE
         src = blosc2.compress2(np.zeros(nitems, dtype=f"V{itemsize}"), **cparams2)
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
-        # Experiments show that it is not a good idea to exceed 128 KB for the blocksize.
+        # Experiments show that, when no compression is used, it is not a good idea
+        # to exceed 128 KB for the blocksize.
         # Even Intel/AMD machines with 1MB/2MB usually have better performance with 128 KB
         # when evaluating expressions and other operations.
-        # Also, use 128 KB when no compression is used, as it is a good tradeoff for most cases.
-        blocksize = 2**17
+        if cparams['clevel'] == 0:
+            blocksize = 2**17
         # For Apple Silicon, experiments say to use half of the L1 cache size
         if platform.system() == 'Darwin' and 'arm' in platform.machine():
             blocksize = blosc2.cpu_info["l1_cache_size"] // 2
