@@ -1325,7 +1325,7 @@ def compute_chunks_blocks(
         # to exceed 128 KB for the blocksize.
         # Even Intel/AMD machines with 1MB/2MB usually have better performance with 128 KB
         # when evaluating expressions and other operations.
-        if cparams['clevel'] == 0:
+        if 'clevel' in cparams and cparams['clevel'] == 0:
             blocksize = 2**17
         # For Apple Silicon, experiments say to use half of the L1 cache size
         if platform.system() == 'Darwin' and 'arm' in platform.machine():
