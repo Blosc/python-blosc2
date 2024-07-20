@@ -426,7 +426,9 @@ def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, ch
         # Run the asynchronous file reading function from a synchronous context
         chunks = next(iter_chunks)
         for i, (key, value) in enumerate(operands.items()):
-            if key in chunk_operands:
+            if 0 and key in chunk_operands:
+                # Disabling this optimization, as sometimes it gives a segfault
+                # TODO: investigate why
                 # We already have a buffer for this operand
                 blosc2.decompress2(chunks[i], dst=chunk_operands[key])
             else:
