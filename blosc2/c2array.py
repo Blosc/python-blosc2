@@ -225,7 +225,7 @@ class C2Array(blosc2.Operand):
             try:
                 self.meta = info(self.path, self.urlbase, auth_token=self.auth_token)
             except httpx.HTTPStatusError as err:
-                raise FileNotFoundError(f"Remote path not found: {path}.\n" f"Error was: {err}") from err
+                raise FileNotFoundError(f"Remote path not found: {path}.\nError was: {err}") from err
 
     def __getitem__(self, slice_: int | slice | Sequence[slice]) -> np.ndarray:
         """
