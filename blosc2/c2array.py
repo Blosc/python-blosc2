@@ -225,7 +225,7 @@ class C2Array(blosc2.Operand):
             try:
                 self.meta = info(self.path, self.urlbase, auth_token=self.auth_token)
             except httpx.HTTPStatusError as err:
-                raise FileNotFoundError(f"Remote path not found: {path}.\n" f"Error was: {err}") from err
+                raise FileNotFoundError(f"Remote path not found: {path}.\nError was: {err}") from err
 
     def __getitem__(self, slice_: int | slice | Sequence[slice]) -> np.ndarray:
         """
@@ -242,8 +242,7 @@ class C2Array(blosc2.Operand):
             A numpy.ndarray containing the data slice.
         """
         slice_ = slice_to_string(slice_)
-        data = fetch_data(self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token)
-        return data
+        return fetch_data(self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token)
 
     @property
     def shape(self):

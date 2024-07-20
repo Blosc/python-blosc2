@@ -252,7 +252,7 @@ def pack(obj, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ
     # The object to be compressed is pickled_object, and not obj
     len_src = len(pickled_object)
     _check_input_length("pickled object", len_src, itemsize, _ignore_multiple_size=True)
-    packed_object = compress(
+    return compress(
         pickled_object,
         typesize=itemsize,
         clevel=clevel,
@@ -260,7 +260,6 @@ def pack(obj, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ
         codec=codec,
         _ignore_multiple_size=True,
     )
-    return packed_object
 
 
 def unpack(packed_object, **kwargs):
@@ -1204,9 +1203,8 @@ def nearest_divisor(a, b):
     # Get all divisors of `a`; use a generator to avoid creating a list
     divisors = (i for i in range(1, a + 1) if a % i == 0)
     # Find the divisor nearest to b
-    nearest = min(divisors, key=lambda x: abs(x - b))
+    return min(divisors, key=lambda x: abs(x - b))
 
-    return nearest
 
 
 # Compute chunks and blocks partitions
@@ -1321,12 +1319,11 @@ def compute_chunks_blocks(
         cparams2["tuner"] = blosc2.Tuner.STUNE
         src = blosc2.compress2(np.zeros(nitems, dtype=f"V{itemsize}"), **cparams2)
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
-        # Experiments show that it is not a good idea to exceed 256 KB for the blocksize.
-        # Even Intel/AMD machines with 1MB/2MB usually have better performance with 256 KB
+        # Experiments show that it is not a good idea to exceed 128 KB for the blocksize.
+        # Even Intel/AMD machines with 1MB/2MB usually have better performance with 128 KB
         # when evaluating expressions and other operations.
-        # Also, use 256 KB when no compression is used, as it is a good tradeoff for most cases.
-        if blocksize > 2**18:
-            blocksize = 2**18
+        # Also, use 128 KB when no compression is used, as it is a good tradeoff for most cases.
+        blocksize = 2**17
         # For Apple Silicon, experiments say to use half of the L1 cache size
         if platform.system() == 'Darwin' and 'arm' in platform.machine():
             blocksize = blosc2.cpu_info["l1_cache_size"] // 2

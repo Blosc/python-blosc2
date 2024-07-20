@@ -1112,7 +1112,7 @@ def open(urlpath, mode="a", offset=0, **kwargs):
     if isinstance(urlpath, blosc2.URLPath):
         if mode != "r" or offset != 0 or kwargs != {}:
             raise NotImplementedError(
-                "Cannot open a C2Array with mode != 'r', " "or offset != 0 or some kwargs"
+                "Cannot open a C2Array with mode != 'r', or offset != 0 or some kwargs"
             )
         return blosc2.C2Array(urlpath.path, urlbase=urlpath.urlbase, auth_token=urlpath.auth_token)
 
