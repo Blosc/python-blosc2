@@ -12,14 +12,15 @@ import pytest
 
 import blosc2
 
+random = np.random.default_rng()
 
 @pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
     "object, codec",
     [
-        (np.random.randint(0, 10, 10), blosc2.Codec.LZ4),
+        (random.integers(0, 10, 10), blosc2.Codec.LZ4),
         (np.arange(10), blosc2.Codec.BLOSCLZ),
-        (np.random.randint(0, 1000 + 1, 1000), blosc2.Codec.LZ4HC),
+        (random.integers(0, 1000, 1000, endpoint=True), blosc2.Codec.LZ4HC),
         (np.arange(45, dtype=np.float64), blosc2.Codec.ZLIB),
         (np.arange(50, dtype=np.int64), blosc2.Codec.ZSTD),
     ],
