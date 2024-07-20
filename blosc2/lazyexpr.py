@@ -1438,7 +1438,7 @@ class LazyUDF(LazyArray):
         if isinstance(dparams, dict):
             dparams["nthreads"] = 1
         else:
-            raise ValueError("dparams should be a dictionary")
+            raise TypeError("dparams should be a dictionary")
         kwargs_getitem["dparams"] = dparams
 
         self.res_getitem = blosc2.empty(self._shape, self._dtype, **kwargs_getitem)
@@ -1560,7 +1560,7 @@ def _open_lazyarray(array):
                 urlbase=value["urlbase"],
             )
         else:
-            raise ValueError("Error when retrieving the operands")
+            raise TypeError("Error when retrieving the operands")
 
     expr = lazyarray["expression"]
     globals = {}

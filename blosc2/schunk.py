@@ -428,7 +428,7 @@ class SChunk(blosc2_ext.SChunk):
 
         """
         if not isinstance(special_value, SpecialValue):
-            raise ValueError("special_value must be a SpecialValue instance")
+            raise TypeError("special_value must be a SpecialValue instance")
         nchunks = super().fill_special(nitems, special_value.value)
         if nchunks < 0:
             raise RuntimeError("Unable to fill with special values")
