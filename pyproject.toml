@@ -65,6 +65,7 @@ extend-select = [
     "NPY",
     "RET",
     "SIM",
+    "TCH",
     "UP",
 ]
 ignore = [
