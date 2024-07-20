@@ -242,8 +242,7 @@ class C2Array(blosc2.Operand):
             A numpy.ndarray containing the data slice.
         """
         slice_ = slice_to_string(slice_)
-        data = fetch_data(self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token)
-        return data
+        return fetch_data(self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token)
 
     @property
     def shape(self):

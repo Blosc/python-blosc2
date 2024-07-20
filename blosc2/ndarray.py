@@ -1820,8 +1820,7 @@ def empty(shape, dtype=np.uint8, **kwargs):
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
-    arr = blosc2_ext.empty(shape, chunks, blocks, dtype, **kwargs)
-    return arr
+    return blosc2_ext.empty(shape, chunks, blocks, dtype, **kwargs)
 
 
 def uninit(shape, dtype=np.uint8, **kwargs):
@@ -1854,8 +1853,7 @@ def uninit(shape, dtype=np.uint8, **kwargs):
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
-    arr = blosc2_ext.uninit(shape, chunks, blocks, dtype, **kwargs)
-    return arr
+    return blosc2_ext.uninit(shape, chunks, blocks, dtype, **kwargs)
 
 
 def zeros(shape, dtype=np.uint8, **kwargs):
@@ -1894,8 +1892,7 @@ def zeros(shape, dtype=np.uint8, **kwargs):
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
-    arr = blosc2_ext.zeros(shape, chunks, blocks, dtype, **kwargs)
-    return arr
+    return blosc2_ext.zeros(shape, chunks, blocks, dtype, **kwargs)
 
 
 def full(shape, fill_value, dtype=None, **kwargs):
@@ -1947,8 +1944,7 @@ def full(shape, fill_value, dtype=None, **kwargs):
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
-    arr = blosc2_ext.full(shape, chunks, blocks, fill_value, dtype, **kwargs)
-    return arr
+    return blosc2_ext.full(shape, chunks, blocks, fill_value, dtype, **kwargs)
 
 
 def frombuffer(
@@ -1995,16 +1991,14 @@ def frombuffer(
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
-    arr = blosc2_ext.from_buffer(buffer, shape, chunks, blocks, dtype, **kwargs)
-    return arr
+    return blosc2_ext.from_buffer(buffer, shape, chunks, blocks, dtype, **kwargs)
 
 
 def copy(array, dtype=None, **kwargs):
     """
     This is equivalent to :meth:`NDArray.copy`
     """
-    arr = array.copy(dtype, **kwargs)
-    return arr
+    return array.copy(dtype, **kwargs)
 
 
 def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: dict | list) -> NDArray:
