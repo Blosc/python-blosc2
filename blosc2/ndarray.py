@@ -102,10 +102,7 @@ def are_partitions_behaved(shape, chunks, blocks):
         return False
 
     # Check C-contiguity for chunks inside shape
-    if not check_contiguity(shape, chunks):
-        return False
-
-    return True
+    return check_contiguity(shape, chunks)
 
 
 def get_chunks_idx(shape, chunks):
