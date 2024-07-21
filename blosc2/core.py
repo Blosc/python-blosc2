@@ -1324,16 +1324,16 @@ def compute_chunks_blocks(
         # Maximum blocksize calculation
         max_blocksize = blocksize
         if platform.machine() == 'x86_64':
-            # For modern Intel archs, experiments say to use half of the L2 cache size
+            # For modern Intel/AMD archs, experiments say to use half of the L2 cache size
             max_blocksize = blosc2.cpu_info["l2_cache_size"] // 2
         elif platform.system() == 'Darwin' and 'arm' in platform.machine():
             # For Apple Silicon, experiments say to use half of the L1 cache size
             max_blocksize = blosc2.cpu_info["l1_cache_size"] // 2
         if 'clevel' in cparams and cparams['clevel'] == 0:
             # Experiments show that, when no compression is used, it is not a good idea
-            # to exceed 128 KB for the blocksize because speed suffers too much during
+            # to exceed 256 KB for the blocksize because speed suffers too much during
             # evaluations.
-            blocksize = 2**17
+            blocksize = 2**18
         elif blocksize > max_blocksize:
             blocksize = max_blocksize
 
