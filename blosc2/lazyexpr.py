@@ -586,11 +586,8 @@ def slices_eval(
 
         if callable(expression):
             result = np.empty(slice_shape, dtype=out.dtype)
-            if getitem:
-                # Call the udf directly and use result as the output array
-                expression(tuple(chunk_operands.values()), result, offset=offset)
-            else:
-                expression(tuple(chunk_operands.values()), result, offset=offset)
+            # Call the udf directly and use result as the output array
+            expression(tuple(chunk_operands.values()), result, offset=offset)
             out[slice_] = result
             continue
 
