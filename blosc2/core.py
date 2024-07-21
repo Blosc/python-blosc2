@@ -1331,9 +1331,9 @@ def compute_chunks_blocks(
             max_blocksize = blosc2.cpu_info["l1_cache_size"] // 2
         if 'clevel' in cparams and cparams['clevel'] == 0:
             # Experiments show that, when no compression is used, it is not a good idea
-            # to exceed 256 KB for the blocksize because speed suffers too much during
-            # evaluations.
-            blocksize = 2**18
+            # to exceed half of L2 for the blocksize because speed suffers too much
+            # during evaluations.
+            blocksize = blosc2.cpu_info["l2_cache_size"] // 2
         elif blocksize > max_blocksize:
             blocksize = max_blocksize
 
