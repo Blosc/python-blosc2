@@ -12,6 +12,8 @@
 
 from enum import Enum
 
+import numexpr
+
 
 class Codec(Enum):
     """
@@ -232,6 +234,9 @@ nthreads = min(nthreads, 32)
 # Experiments say that, when using a large number of threads, it is better to not use them all
 nthreads -= nthreads // 8
 set_nthreads(nthreads)
+
+# Set the number of threads for NumExpr
+numexpr.set_num_threads(nthreads)
 
 # Defaults for compression params
 cparams_dflts = {

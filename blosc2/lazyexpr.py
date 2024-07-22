@@ -5,13 +5,17 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+import asyncio
+import concurrent.futures
 import copy
 import math
 import pathlib
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from enum import Enum
 from pathlib import Path
+from queue import Empty, Queue
 
 import ndindex
 import numexpr as ne
@@ -351,11 +355,88 @@ def do_slices_intersect(slice1, slice2):
     return True
 
 
+async def async_read_chunks(arrs, queue):
+    loop = asyncio.get_event_loop()
+    nchunks = arrs[0].schunk.nchunks
+
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        for nchunk in range(nchunks):
+            futures = [
+                (index, loop.run_in_executor(executor, arr.schunk.get_chunk, nchunk))
+                for index, arr in enumerate(arrs)
+            ]
+            chunks = await asyncio.gather(*(future for index, future in futures))
+            chunks_sorted = [chunk for index, chunk in
+                             sorted(zip([index for index, _ in futures], chunks, strict=True))]
+            queue.put((nchunk, chunks_sorted))  # Use non-async queue.put()
+            # print(f"Length of the queue: {queue.qsize()}, nchunk: {nchunk}")
+            assert queue.qsize() <= 5  # Check that the queue size is bounded
+
+    queue.put(None)  # Signal the end of the chunks
+
+
+def async_read_chunks_thread(arrs, queue):
+    asyncio.run(async_read_chunks(arrs, queue))
+
+def sync_read_chunks(arrs):
+    queue_size = 3  # maximum number of chunks in the queue
+    queue = Queue(maxsize=queue_size)
+
+    # Start the async file reading in a separate thread
+    thread = threading.Thread(target=async_read_chunks_thread, args=(arrs, queue))
+    thread.start()
+
+    # Read the chunks synchronously from the queue
+    while True:
+        try:
+            chunks = queue.get(timeout=1)  # Wait for the next chunk
+            # print(f"chunks: {len(chunks)} {chunks[0]}")
+            if chunks is None:  # End of chunks
+                break
+            yield chunks
+        except Empty:
+            continue
+
+def read_nchunk(arrs):
+    for nchunk_, chunks in sync_read_chunks(arrs):
+        yield chunks
+
+iter_chunks = None
+
 def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands):
     """Get the chunk operands for the expression evaluation.
 
     This function offers a fast path for full chunks and a slow path for the rest.
     """
+    global iter_chunks
+
+    # Check that all operands are NDArray for fast path
+    all_ndarray = all(isinstance(value, blosc2.NDArray) and value.shape != ()
+                      for value in operands.values())
+    # Check that there is some NDArray that is persisted in the disk
+    any_persisted = any((isinstance(value, blosc2.NDArray) and
+                         value.shape != () and
+                         value.schunk.urlpath is not None)
+                        for value in operands.values())
+    if all_ndarray and any_persisted:
+        # print("fast path")
+        if nchunk == 0:
+            # Initialize the iterator for reading the chunks
+            iter_chunks = read_nchunk(list(value for value in operands.values()))
+        # Run the asynchronous file reading function from a synchronous context
+        chunks = next(iter_chunks)
+        for i, (key, value) in enumerate(operands.items()):
+            if 0 and key in chunk_operands:
+                # Disabling this optimization, as sometimes it gives a segfault
+                # TODO: investigate why
+                # We already have a buffer for this operand
+                blosc2.decompress2(chunks[i], dst=chunk_operands[key])
+            else:
+                buff = blosc2.decompress2(chunks[i])
+                bsize = value.dtype.itemsize * math.prod(chunks_)
+                chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
+        return
+
     for key, value in operands.items():
         if np.isscalar(value):
             chunk_operands[key] = value
