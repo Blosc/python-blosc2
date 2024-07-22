@@ -1755,12 +1755,20 @@ class ProxySChunk:
         self._cache = kwargs.pop('_cache', None)
 
         if self._cache is None:
+            # TODO: decide whether to keep caterva2_env or not, since it does not seem to be useful
+            meta_val = {'local_abspath': None, 'urlpath': None, 'caterva2_env': kwargs.pop('caterva2_env', False)}
+            container = getattr(self.src, 'schunk', self.src)
+            if hasattr(container, 'urlpath'):
+                meta_val['local_abspath'] = container.urlpath
+            elif isinstance(self.src, blosc2.C2Array):
+                meta_val['urlpath'] = (self.src.path, self.src.urlbase, self.src.auth_token)
+            meta = {'proxy': meta_val}
             if hasattr(self.src, "shape"):
                 self._cache = blosc2.empty(self.src.shape, self.src.dtype, chunks=self.src.chunks,
-                                           blocks=self.src.blocks, urlpath=urlpath)
+                                           blocks=self.src.blocks, urlpath=urlpath, meta=meta)
             else:
                 self._cache = blosc2.SChunk(chunksize=self.src.chunksize, urlpath=urlpath,
-                                            cparams={'typesize': self.src.typesize})
+                                            cparams={'typesize': self.src.typesize}, meta=meta)
                 self._cache.fill_special(self.src.nbytes // self.src.typesize, blosc2.SpecialValue.UNINIT)
         self._schunk_cache = getattr(self._cache, 'schunk', self._cache)
         vlmeta = kwargs.get('vlmeta', None)
