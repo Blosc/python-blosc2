@@ -370,7 +370,6 @@ async def async_read_chunks(arrs, queue):
                              sorted(zip([index for index, _ in futures], chunks, strict=True))]
             queue.put((nchunk, chunks_sorted))  # Use non-async queue.put()
             # print(f"Length of the queue: {queue.qsize()}, nchunk: {nchunk}")
-            assert queue.qsize() <= 5  # Check that the queue size is bounded
 
     queue.put(None)  # Signal the end of the chunks
 
@@ -379,7 +378,7 @@ def async_read_chunks_thread(arrs, queue):
     asyncio.run(async_read_chunks(arrs, queue))
 
 def sync_read_chunks(arrs):
-    queue_size = 3  # maximum number of chunks in the queue
+    queue_size = 2  # maximum number of chunks in the queue
     queue = Queue(maxsize=queue_size)
 
     # Start the async file reading in a separate thread
