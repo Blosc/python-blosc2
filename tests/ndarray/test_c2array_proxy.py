@@ -75,3 +75,21 @@ def test_small(c2sub_context):
 
     cache = b.fetch()
     np.testing.assert_allclose(cache[...], a[...])
+
+
+def test_open(c2sub_context):
+    urlpath = "proxy.b2nd"
+    blosc2.remove_urlpath(urlpath)
+    shape = (NITEMS_SMALL,)
+    chunks_blocks = "default"
+    a = get_array(shape, chunks_blocks)
+    b = blosc2.ProxySChunk(a, urlpath=urlpath)
+    del a
+    del b
+
+    b = blosc2.open(urlpath)
+    a = get_array(shape, chunks_blocks)
+
+    np.testing.assert_allclose(b[...], a[...])
+
+    blosc2.remove_urlpath(urlpath)

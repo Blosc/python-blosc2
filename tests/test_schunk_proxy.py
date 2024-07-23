@@ -21,7 +21,7 @@ import blosc2
         (False, "b2frame", 40_000, 15, 40_000 // 4, 40_000 // 4 * 2),
     ],
 )
-def test_schunk_cache(contiguous, urlpath, chunksize, nchunks, start, stop):
+def test_schunk_proxy(contiguous, urlpath, chunksize, nchunks, start, stop):
     storage = {"contiguous": contiguous, "cparams": {'typesize': 4}}
     blosc2.remove_urlpath(urlpath)
     num_elem = chunksize // 4 * nchunks
@@ -46,3 +46,35 @@ def test_schunk_cache(contiguous, urlpath, chunksize, nchunks, start, stop):
     assert np.array_equal(out, data)
 
     blosc2.remove_urlpath(urlpath)
+
+
+@pytest.mark.parametrize(
+    "urlpath, chunksize, nchunks",
+    [
+        (None, 40_000, 10),
+        ("b2frame", 20_000, 5),
+        (None, 20_000, 20),
+        ("b2frame", 40_000, 15),
+    ],
+)
+def test_open(urlpath, chunksize, nchunks):
+    storage = {"urlpath": urlpath, "cparams": {'typesize': 4}}
+    proxy_urlpath = "proxy.b2frame"
+    blosc2.remove_urlpath(urlpath)
+    blosc2.remove_urlpath(proxy_urlpath)
+    num_elem = chunksize // 4 * nchunks
+    data = np.arange(num_elem, dtype="int32")
+    schunk = blosc2.SChunk(chunksize=chunksize, data=data, **storage)
+    bytes_obj = data.tobytes()
+    proxy = blosc2.ProxySChunk(schunk, urlpath=proxy_urlpath)
+    del proxy
+    del schunk
+    if urlpath is None:
+        with pytest.raises(RuntimeError):
+            _ = blosc2.open(proxy_urlpath)
+    else:
+        proxy = blosc2.open(proxy_urlpath)
+        assert proxy[0:len(data) * 4] == bytes_obj
+
+    blosc2.remove_urlpath(urlpath)
+    blosc2.remove_urlpath(proxy_urlpath)
