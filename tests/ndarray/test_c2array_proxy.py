@@ -51,11 +51,11 @@ def test_simple(chunks_blocks, c2sub_context, urlpath, slices):
 
     np.testing.assert_allclose(b[slices], a[slices])
 
-    cache_slice = b.eval(slices)
+    cache_slice = b.fetch(slices)
     assert cache_slice.schunk.urlpath == urlpath
     np.testing.assert_allclose(cache_slice[slices], a[slices])
 
-    cache = b.eval()
+    cache = b.fetch()
     assert cache.schunk.urlpath == urlpath
     np.testing.assert_allclose(cache[...], a[...])
 
@@ -70,8 +70,8 @@ def test_small(c2sub_context):
 
     np.testing.assert_allclose(b[0:100], a[0:100])
 
-    cache_slice = b.eval(slice(0, 100))
+    cache_slice = b.fetch(slice(0, 100))
     np.testing.assert_allclose(cache_slice[0:100], a[0:100])
 
-    cache = b.eval()
+    cache = b.fetch()
     np.testing.assert_allclose(cache[...], a[...])

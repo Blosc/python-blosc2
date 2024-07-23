@@ -33,12 +33,12 @@ def test_ndarray(urlpath, shape, chunks, blocks, slices, dtype):
     np.testing.assert_almost_equal(cache_slice, np_slice)
 
     a_slice = a.slice(slices)
-    cache_slice = b.eval(slices)
+    cache_slice = b.fetch(slices)
     assert cache_slice.shape == a.shape
     assert cache_slice.schunk.urlpath == urlpath
     np.testing.assert_almost_equal(cache_slice[slices], a_slice[...])
 
-    cache_arr = b.eval()
+    cache_arr = b.fetch()
     assert cache_arr.schunk.urlpath == urlpath
     np.testing.assert_almost_equal(cache_arr[...], a[...])
 

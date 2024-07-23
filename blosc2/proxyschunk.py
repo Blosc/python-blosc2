@@ -40,7 +40,7 @@ class ProxySChunk:
                 meta_val['local_abspath'] = container.urlpath
             elif isinstance(self.src, blosc2.C2Array):
                 meta_val['urlpath'] = (self.src.path, self.src.urlbase, self.src.auth_token)
-            meta = {'proxy': meta_val}
+            meta = {'proxy-source': meta_val}
             if hasattr(self.src, "shape"):
                 self._cache = blosc2.empty(self.src.shape, self.src.dtype, chunks=self.src.chunks,
                                            blocks=self.src.blocks, urlpath=urlpath, meta=meta)
@@ -54,7 +54,7 @@ class ProxySChunk:
             for key in vlmeta:
                 self._schunk_cache.vlmeta[key] = vlmeta[key]
 
-    def eval(self, item=None):
+    def fetch(self, item=None):
         """
         Get the container used as cache with the requested data updated.
 
@@ -100,7 +100,7 @@ class ProxySChunk:
             An array with the data slice.
         """
         # Populate the cache
-        self.eval(item)
+        self.fetch(item)
         return self._cache[item]
 
     @property

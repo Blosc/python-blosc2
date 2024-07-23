@@ -33,13 +33,13 @@ def test_schunk_cache(contiguous, urlpath, chunksize, nchunks, start, stop):
     cache_slice = cache[slice(start, stop)]
     assert cache_slice == bytes_obj[start * data.dtype.itemsize:stop * data.dtype.itemsize]
 
-    cache_slice = cache.eval(slice(start, stop))
+    cache_slice = cache.fetch(slice(start, stop))
     assert cache_slice.urlpath == urlpath
     out = np.empty(stop - start, data.dtype)
     cache_slice.get_slice(start, stop, out)
     assert np.array_equal(out, data[start:stop])
 
-    cache_eval = cache.eval()
+    cache_eval = cache.fetch()
     assert cache_eval.urlpath == urlpath
     out = np.empty(data.shape, data.dtype)
     cache_eval.get_slice(0, None, out)
