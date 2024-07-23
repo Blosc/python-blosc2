@@ -1134,11 +1134,12 @@ def open(urlpath, mode="a", offset=0, **kwargs):
         proxy_src = meta['proxy-source']
         if proxy_src['local_abspath'] is not None:
             src = blosc2.open(proxy_src['local_abspath'])
+            return blosc2.ProxySChunk(src, _cache=res)
         elif proxy_src['urlpath'] is not None:
             src = blosc2.C2Array(proxy_src['urlpath'][0], proxy_src['urlpath'][1], proxy_src['urlpath'][2])
-        else:
+            return blosc2.ProxySChunk(src, _cache=res)
+        elif not proxy_src['caterva2_env']:
             raise RuntimeError("Could not find the source when opening a ProxySChunk")
-        return blosc2.ProxySChunk(src, _cache=res)
 
     if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
         return blosc2._open_lazyarray(res)
