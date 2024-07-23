@@ -722,6 +722,16 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return super().set_slice(key, value)
 
+    def get_chunk(self, nchunk):
+        """Shortcut to :meth:`SChunk.get_chunk <blosc2.schunk.SChunk.get_chunk>`. This can be accessed
+        through the :attr:`schunk` attribute as well.
+
+        See Also
+        --------
+        :attr:`schunk`
+        """
+        return self.schunk.get_chunk(nchunk)
+
     def iterchunks_info(self):
         """
         Iterate over :paramref:`self` chunks, providing info on index and special values.
