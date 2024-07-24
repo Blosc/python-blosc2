@@ -6,6 +6,22 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 import blosc2
+from abc import ABC, abstractmethod
+
+
+class ProxySource(ABC):
+    """
+    Base interface for all supported sources in :ref:`ProxySChunk`.
+    In case the source is multidimensional, the attributes `shape`, `chunks`,
+    `blocks` and `dtype` are also required when creating the :ref:`ProxySChunk`.
+    In case the source is unidimensional, the attributes `chunksize`, `typesize`
+     and `nbytes` are required as well when creating the :ref:`ProxySChunk`.
+    These attributes do not need to be available when opening an already
+     existing :ref:`ProxySChunk`.
+    """
+    @abstractmethod
+    def get_chunk(self, nchunk):
+        pass
 
 
 class ProxySChunk:
@@ -33,8 +49,8 @@ class ProxySChunk:
         self._cache = kwargs.pop('_cache', None)
 
         if self._cache is None:
-            # TODO: decide whether to keep caterva2_env or not, since it does not seem to be useful
-            meta_val = {'local_abspath': None, 'urlpath': None, 'caterva2_env': kwargs.pop('caterva2_env', False)}
+            meta_val = {'local_abspath': None, 'urlpath': None,
+                        'caterva2_env': kwargs.pop('caterva2_env', False)}
             container = getattr(self.src, 'schunk', self.src)
             if hasattr(container, 'urlpath'):
                 meta_val['local_abspath'] = container.urlpath
