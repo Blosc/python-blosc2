@@ -6,7 +6,7 @@ ProxySChunk
 Class that implements a proxy (with cache support) of a Python-Blosc2 container.
 
 This can be used to cache chunks of
-a regular SChunk, NDArray or C2Array in an urlpath.
+a regular data container which follows the :ref:`ProxySource` interface in an urlpath.
 
 .. currentmodule:: blosc2.ProxySChunk
 
@@ -19,7 +19,7 @@ Methods
 
     __init__
     __getitem__
-    eval
+    fetch
 
 Attributes
 ----------

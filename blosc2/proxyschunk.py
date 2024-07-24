@@ -21,6 +21,19 @@ class ProxySource(ABC):
     """
     @abstractmethod
     def get_chunk(self, nchunk):
+        """
+        Return the compressed chunk in :paramref:`self`.
+
+        Parameters
+        ----------
+        nchunk: int
+            The unidimensional index of the chunk to retrieve.
+
+        Returns
+        -------
+        out: bytes object
+            The compressed chunk.
+        """
         pass
 
 
@@ -28,7 +41,7 @@ class ProxySChunk:
     """Class that implements a proxy (with cache support) of a Python-Blosc2 container.
 
     This can be used to cache chunks of
-    a regular SChunk, NDArray or C2Array in an urlpath.
+    a regular data container which follows the :ref:`ProxySource` interface in an urlpath.
     """
     def __init__(self, src, urlpath=None, **kwargs):
         """
@@ -37,10 +50,24 @@ class ProxySChunk:
 
         Parameters
         ----------
-        src: :ref:`SChunk`, :ref:`NDArray` or :ref:`C2Array`
+        src: :ref:`ProxySource`
             The original container
         urlpath: str, optional
             The urlpath where to save the container that will work as a cache.
+
+        Other parameters
+        ----------------
+        kwargs: dict, optional
+            Keyword arguments supported:
+
+                vlmeta: dict or None
+                    A dictionary with different variable length metalayers.  One entry per metalayer:
+
+                        key: bytes or str
+                            The name of the metalayer.
+                        value: object
+                            The metalayer object that will be serialized using msgpack.
+
         """
         self.src = src
         self.urlpath = urlpath
@@ -121,7 +148,7 @@ class ProxySChunk:
 
     @property
     def dtype(self):
-        """The dtype of :paramref:`self` or None if it comes from a :ref:`SChunk`"""
+        """The dtype of :paramref:`self` or None if the data is unidimensional"""
         return self._cache.dtype if isinstance(self._cache, blosc2.NDArray) else None
 
     @property
@@ -132,5 +159,13 @@ class ProxySChunk:
     def __str__(self):
         return f"ProxySChunk({self.src}, urlpath={self.urlpath})"
 
+    @property
     def vlmeta(self):
+        """
+        Get the vlmeta of the cache.
+
+        See Also
+        --------
+        :attr:`SChunk.vlmeta <SChunk.vlmeta>`
+        """
         return self._schunk_cache.vlmeta
