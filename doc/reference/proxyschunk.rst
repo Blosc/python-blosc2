@@ -20,6 +20,7 @@ Methods
     __init__
     __getitem__
     fetch
+    afetch
 
 Attributes
 ----------

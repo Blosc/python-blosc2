@@ -146,6 +146,45 @@ class ProxySChunk:
         self.fetch(item)
         return self._cache[item]
 
+    async def afetch(self, item=None):
+        """
+        Get the container used as cache with the requested data updated
+        in an asynchronous way.
+
+        Parameters
+        ----------
+        item: slice or list of slices, optional
+            If not None, only the chunks that intersect with the slices
+            in items will be retrieved if they have not been already.
+
+        Returns
+        -------
+        out: :ref:`NDArray` or :ref:`SChunk`
+            The local container used to cache the already requested data.
+
+        Notes
+        -----
+        This method is only available if the :ref:`ProxySource` has an
+        async `aget_chunk` method.
+        """
+        if not callable(getattr(self.src, 'aget_chunk', None)):
+            raise NotImplementedError("afetch is only available if the source has an aget_chunk method")
+        if item is None:
+            # Full realization
+            for info in self._schunk_cache.iterchunks_info():
+                if info.special != blosc2.SpecialValue.NOT_SPECIAL:
+                    chunk = await self.src.aget_chunk(info.nchunk)
+                    self._schunk_cache.update_chunk(info.nchunk, chunk)
+        else:
+            # Get only a slice
+            nchunks = blosc2.get_slice_nchunks(self._cache, item)
+            for info in self._schunk_cache.iterchunks_info():
+                if info.nchunk in nchunks and info.special != blosc2.SpecialValue.NOT_SPECIAL:
+                    chunk = await self.src.aget_chunk(info.nchunk)
+                    self._schunk_cache.update_chunk(info.nchunk, chunk)
+
+        return self._cache
+
     @property
     def dtype(self):
         """The dtype of :paramref:`self` or None if the data is unidimensional"""
