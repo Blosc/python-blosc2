@@ -30,3 +30,4 @@ Attributes
 
     shape
     dtype
+    vlmeta

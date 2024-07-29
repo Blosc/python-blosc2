@@ -12,8 +12,10 @@ from abc import ABC, abstractmethod
 class ProxySource(ABC):
     """
     Base interface for all supported sources in :ref:`ProxySChunk`.
+
     In case the source is multidimensional, the attributes `shape`, `chunks`,
     `blocks` and `dtype` are also required when creating the :ref:`ProxySChunk`.
+
     In case the source is unidimensional, the attributes `chunksize`, `typesize`
      and `nbytes` are required as well when creating the :ref:`ProxySChunk`.
     These attributes do not need to be available when opening an already
@@ -38,7 +40,8 @@ class ProxySource(ABC):
 
 
 class ProxySChunk:
-    """Class that implements a proxy (with cache support) of a Python-Blosc2 container.
+    """Class that implements a proxy (with cache support) of an object which
+    follows the :ref:`ProxySource` interface.
 
     This can be used to cache chunks of
     a regular data container which follows the :ref:`ProxySource` interface in an urlpath.
@@ -205,6 +208,6 @@ class ProxySChunk:
 
         See Also
         --------
-        :attr:`SChunk.vlmeta <SChunk.vlmeta>`
+        :ref:`SChunk.vlmeta`
         """
         return self._schunk_cache.vlmeta
