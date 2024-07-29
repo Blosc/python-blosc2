@@ -25,7 +25,7 @@ def test_ndarray(urlpath, shape, chunks, blocks, slices, dtype):
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
     a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks)
-    b = blosc2.ProxySChunk(a, urlpath=urlpath)
+    b = blosc2.Proxy(a, urlpath=urlpath)
 
     np_slice = a[slices]
     cache_slice = b[slices]
@@ -53,7 +53,7 @@ def test_open(urlpath, shape, chunks, blocks, slices, dtype):
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
     a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks, urlpath=urlpath)
-    b = blosc2.ProxySChunk(a, urlpath=proxy_urlpath)
+    b = blosc2.Proxy(a, urlpath=proxy_urlpath)
     del a
     del b
     if urlpath is None:

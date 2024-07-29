@@ -11,15 +11,15 @@ from abc import ABC, abstractmethod
 
 class ProxySource(ABC):
     """
-    Base interface for all supported sources in :ref:`ProxySChunk`.
+    Base interface for all supported sources in :ref:`Proxy`.
 
     In case the source is multidimensional, the attributes `shape`, `chunks`,
-    `blocks` and `dtype` are also required when creating the :ref:`ProxySChunk`.
+    `blocks` and `dtype` are also required when creating the :ref:`Proxy`.
 
     In case the source is unidimensional, the attributes `chunksize`, `typesize`
-     and `nbytes` are required as well when creating the :ref:`ProxySChunk`.
+     and `nbytes` are required as well when creating the :ref:`Proxy`.
     These attributes do not need to be available when opening an already
-     existing :ref:`ProxySChunk`.
+     existing :ref:`Proxy`.
     """
     @abstractmethod
     def get_chunk(self, nchunk):
@@ -39,7 +39,7 @@ class ProxySource(ABC):
         pass
 
 
-class ProxySChunk:
+class Proxy:
     """Class that implements a proxy (with cache support) of an object which
     follows the :ref:`ProxySource` interface.
 
@@ -48,7 +48,7 @@ class ProxySChunk:
     """
     def __init__(self, src, urlpath=None, **kwargs):
         """
-        Create a new :ref:`ProxySChunk` to serve like a cache to save accessed
+        Create a new :ref:`Proxy` to serve like a cache to save accessed
         chunks locally.
 
         Parameters
@@ -133,7 +133,7 @@ class ProxySChunk:
 
     def __getitem__(self, item):
         """
-        Get a slice as a numpy.ndarray using the :ref:`ProxySChunk`.
+        Get a slice as a numpy.ndarray using the :ref:`Proxy`.
 
         Parameters
         ----------
@@ -199,7 +199,7 @@ class ProxySChunk:
         return self._cache.shape if isinstance(self._cache, blosc2.NDArray) else len(self._cache)
 
     def __str__(self):
-        return f"ProxySChunk({self.src}, urlpath={self.urlpath})"
+        return f"Proxy({self.src}, urlpath={self.urlpath})"
 
     @property
     def vlmeta(self):

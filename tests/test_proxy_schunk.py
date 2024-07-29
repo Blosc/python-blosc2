@@ -28,7 +28,7 @@ def test_schunk_proxy(contiguous, urlpath, chunksize, nchunks, start, stop):
     data = np.arange(num_elem, dtype="int32")
     schunk = blosc2.SChunk(chunksize=chunksize, data=data, **storage)
     bytes_obj = data.tobytes()
-    cache = blosc2.ProxySChunk(schunk, urlpath=urlpath)
+    cache = blosc2.Proxy(schunk, urlpath=urlpath)
 
     cache_slice = cache[slice(start, stop)]
     assert cache_slice == bytes_obj[start * data.dtype.itemsize:stop * data.dtype.itemsize]
@@ -66,7 +66,7 @@ def test_open(urlpath, chunksize, nchunks):
     data = np.arange(num_elem, dtype="int32")
     schunk = blosc2.SChunk(chunksize=chunksize, data=data, **storage)
     bytes_obj = data.tobytes()
-    proxy = blosc2.ProxySChunk(schunk, urlpath=proxy_urlpath)
+    proxy = blosc2.Proxy(schunk, urlpath=proxy_urlpath)
     del proxy
     del schunk
     if urlpath is None:

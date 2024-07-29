@@ -1,20 +1,20 @@
-.. _ProxySChunk:
+.. _Proxy:
 
-ProxySChunk
-===========
+Proxy
+=====
 
 Class that implements a proxy (with cache support) of a Python-Blosc2 container.
 
 This can be used to cache chunks of
 a regular data container which follows the :ref:`ProxySource` interface in an urlpath.
 
-.. currentmodule:: blosc2.ProxySChunk
+.. currentmodule:: blosc2.Proxy
 
 Methods
 -------
 
 .. autosummary::
-    :toctree: autofiles/proxyschunk
+    :toctree: autofiles/proxy
     :nosignatures:
 
     __init__
@@ -26,7 +26,7 @@ Attributes
 ----------
 
 .. autosummary::
-    :toctree: autofiles/proxyschunk
+    :toctree: autofiles/proxy
 
     shape
     dtype
