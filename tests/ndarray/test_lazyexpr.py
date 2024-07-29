@@ -79,6 +79,17 @@ def test_simple_getitem(array_fixture):
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
 
+# Mix Proxy and NDArray operands
+def test_proxy_simple_getitem(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    a1 = blosc2.Proxy(a1)
+    a2 = blosc2.Proxy(a2)
+    expr = a1 + a2 - a3 * a4
+    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    sl = slice(100)
+    res = expr[sl]
+    np.testing.assert_allclose(res, nres[sl])
+
 
 def test_mix_operands(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
@@ -145,6 +156,16 @@ def test_mix_operands(array_fixture):
 # Add more test functions to test different aspects of the code
 def test_simple_expression(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1 + a2 - a3 * a4
+    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    res = expr.eval()
+    np.testing.assert_allclose(res[:], nres)
+
+# Mix Proxy and NDArray operands
+def test_proxy_simple_expression(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    a1 = blosc2.Proxy(a1)
+    a3 = blosc2.Proxy(a3)
     expr = a1 + a2 - a3 * a4
     nres = ne.evaluate("na1 + na2 - na3 * na4")
     res = expr.eval()

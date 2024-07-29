@@ -39,12 +39,11 @@ class ProxySource(ABC):
         pass
 
 
-class Proxy:
-    """Class that implements a proxy (with cache support) of an object which
-    follows the :ref:`ProxySource` interface.
+class Proxy(blosc2.Operand):
+    """Proxy (with cache support) of an object following the :ref:`ProxySource` interface.
 
-    This can be used to cache chunks of
-    a regular data container which follows the :ref:`ProxySource` interface in an urlpath.
+    This can be used to cache chunks of a regular data container
+    which follows the :ref:`ProxySource` interface in an urlpath.
     """
     def __init__(self, src, urlpath=None, **kwargs):
         """

@@ -114,9 +114,11 @@ def get_chunks_idx(shape, chunks):
     return chunks_idx, nchunks
 
 
-def _check_allowed_dtypes(value: bool | int | float | str | NDArray | blosc2.C2Array | NDField):
+def _check_allowed_dtypes(value: bool | int | float | str | NDArray | NDField |
+                                 blosc2.C2Array | blosc2.Proxy):
     if not (
-        isinstance(value, blosc2.LazyExpr | NDArray | NDField | blosc2.C2Array | np.ndarray)
+        isinstance(value, blosc2.LazyExpr | NDArray | NDField |
+                          blosc2.C2Array | blosc2.Proxy | np.ndarray)
         or np.isscalar(value)
     ):
         raise RuntimeError(
@@ -2237,12 +2239,12 @@ class NDField(Operand):
             A NumPy array with the data slice.
 
         """
-        # If the key is a LazyExpr, decorate with ``where`` and return it
+        # If key is a LazyExpr, decorate it with ``where`` and return it
         if isinstance(key, blosc2.LazyExpr):
             return key.where(self)
 
         if isinstance(key, str):
-            raise TypeError("This array is an NDField; use a structured NDArray for bool expressions")
+            raise TypeError("This array is a NDField; use a structured NDArray for bool expressions")
 
         # Check if the key is in the last read cache
         inmutable_key = make_key_hashable(key)
