@@ -2,7 +2,8 @@
 
 ## Changes from 2.7.0 to 2.7.1
 
-XXX version-specific blurb XXX
+* Updated to latest C-Blosc2 2.15.1.
+  Fixes SIGKILL issues when using the `blosc2` library in old Intel CPUs.
 
 
 ## Changes from 2.6.2 to 2.7.0

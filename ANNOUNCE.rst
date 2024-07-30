@@ -1,4 +1,4 @@
-Announcing Python-Blosc2 2.7.0
+Announcing Python-Blosc2 2.7.1
 ==============================
 
 Updated to latest C-Blosc2 2.15.0. Also, `LazyExpr.evaluate()`
