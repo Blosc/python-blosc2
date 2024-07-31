@@ -1,5 +1,5 @@
 add_cython_target(blosc2_ext blosc2_ext.pyx)
-add_library(blosc2_ext MODULE ${blosc2_ext})
+python_add_library(blosc2_ext MODULE WITH_SOABI ${blosc2_ext})
 
 if(USE_SYSTEM_BLOSC2)
     set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
