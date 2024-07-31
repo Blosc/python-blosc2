@@ -1,9 +1,8 @@
 Announcing Python-Blosc2 2.7.1
 ==============================
 
-Updated to latest C-Blosc2 2.15.0. Also, `LazyExpr.evaluate()`
-is marked as deprecated (LazyExpr.eval() is replacing it) and some other fixes
-have been carried out.
+Updated to latest C-Blosc2 2.15.1. This is to fix a bug in C-Blosc2
+that was causing SIGKILL errors in Intel CPUs without AVX2 support.
 
 For more info, you can have a look at the release notes in:
 
