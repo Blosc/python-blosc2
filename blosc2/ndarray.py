@@ -478,8 +478,6 @@ class NDArray(blosc2_ext.NDArray):
         return blosc2.LazyExpr(new_op=(value, "**", self))
 
 
-
-
 def sin(ndarr: NDArray, /):
     """
     Trigonometric sine, element-wise.
@@ -1079,6 +1077,40 @@ def uninit(shape, dtype=np.uint8, **kwargs):
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
     arr = blosc2_ext.uninit(shape, chunks, blocks, dtype, **kwargs)
+    return arr
+
+
+def nans(shape, dtype=np.float64, **kwargs):
+    """Create an array with NaNs values.
+
+    The parameters and keyword arguments are the same as for the
+    :func:`empty` constructor.
+
+    Returns
+    -------
+    out: :ref:`NDArray <NDArray>`
+        A :ref:`NDArray <NDArray>` is returned.
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> shape = [8, 8]
+    >>> chunks = [6, 5]
+    >>> # Create an array of NaNs
+    >>> array = blosc2.nans(shape, dtype='f8', chunks=chunks)
+    >>> array.shape
+    (8, 8)
+    >>> array.chunks
+    (6, 5)
+    >>> array.dtype
+    dtype('float64')
+    """
+    shape = _check_shape(shape)
+    _check_ndarray_kwargs(**kwargs)
+    chunks = kwargs.pop("chunks", None)
+    blocks = kwargs.pop("blocks", None)
+    chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
+    arr = blosc2_ext.nans(shape, chunks, blocks, dtype, **kwargs)
     return arr
 
 

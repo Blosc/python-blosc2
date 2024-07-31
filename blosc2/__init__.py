@@ -176,6 +176,7 @@ from .ndarray import (  # noqa: I001
     empty,
     frombuffer,
     full,
+    nans,
     uninit,
     zeros,
     get_slice_nchunks,

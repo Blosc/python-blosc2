@@ -459,7 +459,10 @@ cdef extern from "b2nd.h":
                                     int8_t dtype_format, blosc2_metalayer *metalayers, int32_t nmetalayers)
     int b2nd_free_ctx(b2nd_context_t *ctx)
 
-    int b2nd_uninit(b2nd_context_t *ctx, b2nd_array_t **array)
+    int b2nd_uninit(b2nd_context_t *ctx, b2nd_array_t ** array)
+
+    int b2nd_nans(b2nd_context_t * ctx, b2nd_array_t ** array)
+
     int b2nd_empty(b2nd_context_t *ctx, b2nd_array_t **array)
     int b2nd_zeros(b2nd_context_t *ctx, b2nd_array_t **array)
     int b2nd_full(b2nd_context_t *ctx, b2nd_array_t ** array, void *fill_value)
@@ -2250,6 +2253,21 @@ def uninit(shape, chunks, blocks, dtype, **kwargs):
 
     cdef b2nd_array_t *array
     _check_rc(b2nd_uninit(ctx, &array), "Could not build uninit array")
+    _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
+    ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
+                             _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
+    ndarray.schunk.mode = kwargs.get("mode", "a")
+
+    return ndarray
+
+
+def nans(shape, chunks, blocks, dtype, **kwargs):
+    cdef b2nd_context_t *ctx = create_b2nd_context(shape, chunks, blocks, dtype, kwargs)
+    if ctx == NULL:
+        raise RuntimeError("Error while creating the context")
+
+    cdef b2nd_array_t *array
+    _check_rc(b2nd_nans(ctx, &array), "Could not build nans array")
     _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))

@@ -58,6 +58,7 @@ Constructors
     empty
     frombuffer
     full
+    nans
     ndarray_from_cframe
     uninit
     zeros
