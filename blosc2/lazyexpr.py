@@ -119,7 +119,10 @@ class LazyArray(ABC):
 
         Notes
         -----
-        * All the operands of the LazyArray must be Python scalars, :ref:`NDArray` or :ref:`C2Array`.
+        * All the operands of the LazyArray must be Python scalars, :ref:`NDArray`, :ref:`C2Array` or :ref:`Proxy`.
+        * If an operand is a :ref:`Proxy`, keep in mind that Python-Blosc2 will only be able to reopen it as such
+          if its source is a :ref:`SChunk`, :ref:`NDArray` or a :ref:`C2Array` (see :func:`blosc2.open` notes
+          section for more info).
         * This is currently only supported for :ref:`LazyExpr`.
         """
         pass
@@ -1464,6 +1467,9 @@ class LazyExpr(LazyArray):
                     "urlbase": value.urlbase,
                 }
                 continue
+            if isinstance(value, blosc2.Proxy):
+                # Take the required info from the Proxy._cache container
+                value = value._cache
             if not hasattr(value, "schunk"):
                 raise ValueError(
                     "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
