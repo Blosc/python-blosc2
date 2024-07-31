@@ -195,7 +195,7 @@ from .lazyexpr import LazyExpr, lazyudf, lazyexpr, LazyArray, _open_lazyarray
 from .schunk import SChunk, open
 from .version import __version__
 
-__version__ = __version__
+__version__ = "3.0.0-beta.2.dev0"
 """
 Python-Blosc2 version.
 """

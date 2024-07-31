@@ -4,7 +4,8 @@ python-blosc2 release procedure
 Preliminaries
 -------------
 
-* Check that ``VERSION`` file contains the correct number.
+* Check that version values in blosc2/__init__.py *and* pyproject.toml contain the
+  correct info.
 
 * Make sure that the c-blosc2 submodule is updated to the latest version (or a specific
   version that will be documented in the ``RELEASE_NOTES.md``)::
@@ -24,8 +25,8 @@ Preliminaries
 
   is printing the correct versions.
 
-* Make sure that ``RELEASE_NOTES.md`` and ``ANNOUNCE.rst`` are up to date with the latest news
-  in the release.
+* Make sure that ``RELEASE_NOTES.md`` and ``ANNOUNCE.rst`` are up to date with the
+  latest news in the release.
 
 * Commit the changes::
 
