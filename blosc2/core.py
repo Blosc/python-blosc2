@@ -1111,12 +1111,12 @@ def get_cpu_info():
     cpu_info = cpuinfo.get_cpu_info()
     # cpuinfo does not correctly retrieve the cache sizes for Apple Silicon, so do it manually
     if platform.system() == "Darwin":
-        cpu_info["l1_cache_size"] = apple_silicon_cache_size(1)
+        cpu_info["l1_data_cache_size"] = apple_silicon_cache_size(1)
         cpu_info["l2_cache_size"] = apple_silicon_cache_size(2)
         cpu_info["l3_cache_size"] = apple_silicon_cache_size(3)
     # cpuinfo does not correctly retrieve the cache sizes for all CPUs on Linux, so ask the kernel
     if platform.system() == "Linux":
-        cpu_info["l1_cache_size"] = linux_cache_size(1, cpu_info["l1_cache_size"])
+        cpu_info["l1_data_cache_size"] = linux_cache_size(1, cpu_info["l1_data_cache_size"])
         cpu_info["l2_cache_size"] = linux_cache_size(2, cpu_info["l2_cache_size"])
         cpu_info["l3_cache_size"] = linux_cache_size(3, cpu_info["l3_cache_size"])
     return cpu_info
@@ -1327,7 +1327,7 @@ def compute_chunks_blocks(
             max_blocksize = blosc2.cpu_info["l2_cache_size"] // 2
         elif platform.system() == "Darwin" and "arm" in platform.machine():
             # For Apple Silicon, experiments say to use half of the L1 cache size
-            max_blocksize = blosc2.cpu_info["l1_cache_size"] // 2
+            max_blocksize = blosc2.cpu_info["l1_data_cache_size"] // 2
         if "clevel" in cparams and cparams["clevel"] == 0:
             # Experiments show that, when no compression is used, it is not a good idea
             # to exceed half of private cache for the blocksize because speed suffers
