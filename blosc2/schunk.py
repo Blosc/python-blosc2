@@ -1078,10 +1078,10 @@ def open(urlpath, mode="a", offset=0, **kwargs):
       must be 'r', :paramref:`offset` must be 0, and kwargs cannot be passed.
 
     * In case the original object saved in :paramref:`urlpath` was a :ref:`Proxy`, this function
-      will only return a :ref:`Proxy` if its source was a local :ref:`SChunk`, :ref:`NDArray`
-      or :ref:`C2Array`. Otherwise, it will return the Python-Blosc2 container used to cache the data which
-      can be a :ref:`SChunk` or a :ref:`NDArray` and may not have all the data initialized (if the user
-      has not accessed it).
+      will only return a :ref:`Proxy` if its source is a local :ref:`SChunk`, :ref:`NDArray`
+      or a remote :ref:`C2Array`. Otherwise, it will return the Python-Blosc2 container used to cache the data which
+      can be a :ref:`SChunk` or a :ref:`NDArray` and may not have all the data initialized (e.g. if the user
+      has not accessed it yet).
 
     * When opening a :ref:`LazyExpr` keep in mind the later note regarding the operands.
 
