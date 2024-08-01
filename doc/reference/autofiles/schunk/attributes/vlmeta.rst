@@ -1,4 +1,6 @@
-﻿SChunk.vlmeta
+﻿.. _SChunk.vlmeta:
+
+SChunk.vlmeta
 =============
 
 .. currentmodule:: blosc2.schunk

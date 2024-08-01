@@ -191,6 +191,7 @@ from .ndarray import (  # noqa: I001
 from .c2array import c2context, C2Array, URLPath
 
 from .lazyexpr import LazyExpr, lazyudf, lazyexpr, LazyArray, _open_lazyarray
+from .proxy import Proxy, ProxySource
 
 from .schunk import SChunk, open
 from .version import __version__

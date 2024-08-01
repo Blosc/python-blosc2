@@ -277,3 +277,5 @@ def test_where_fusion(array_fixture):
     # res = expr.where(0, 1) + res
     # nres = np.where(npexpr, 0, 1) + nres
     # np.testing.assert_allclose(res[:], nres)
+
+# TODO: add support for NDFields in Proxy objects
