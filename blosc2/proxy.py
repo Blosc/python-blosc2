@@ -210,3 +210,19 @@ class Proxy(blosc2.Operand):
         :ref:`SChunk.vlmeta`
         """
         return self._schunk_cache.vlmeta
+
+    @property
+    def fields(self):
+        """
+        Dictionary with the fields of :paramref:`self`.
+
+        Returns
+        -------
+        fields: dict
+            A dictionary with the fields of the :ref:`Proxy`.
+
+        See Also
+        --------
+        :ref:`NDField`
+        """
+        return getattr(self._cache, 'fields', None)
