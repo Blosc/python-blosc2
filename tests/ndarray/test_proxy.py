@@ -52,7 +52,6 @@ def test_ndarray(urlpath, shape, chunks, blocks, slices, dtype):
             np.testing.assert_almost_equal(cache_slice[field], np_slice[field])
 
     a_slice = a.slice(slices)
-    # TODO: try to implement a way to fetch fields automatically
     cache_slice = b.fetch(slices)
     assert cache_slice.shape == a.shape
     assert cache_slice.schunk.urlpath == urlpath
@@ -64,7 +63,6 @@ def test_ndarray(urlpath, shape, chunks, blocks, slices, dtype):
         for field in cache_slice.fields:
             np.testing.assert_almost_equal(cache_slice.fields[field][slices], a_slice.fields[field][...])
 
-    # TODO: try to implement a way to fetch fields automatically
     cache_arr = b.fetch()
     assert cache_arr.schunk.urlpath == urlpath
     if not struct_dtype:
@@ -98,8 +96,6 @@ def test_open(urlpath, shape, chunks, blocks, slices, dtype):
             _ = blosc2.open(proxy_urlpath)
     else:
         b = blosc2.open(proxy_urlpath)
-        # TODO: try to implement a way to fetch fields automatically
-        _ = b.fetch()
         a = blosc2.open(urlpath)
         if not struct_dtype:
             np.testing.assert_almost_equal(b[...], a[...])

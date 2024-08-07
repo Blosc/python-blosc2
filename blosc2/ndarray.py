@@ -114,11 +114,20 @@ def get_chunks_idx(shape, chunks):
     return chunks_idx, nchunks
 
 
-def _check_allowed_dtypes(value: bool | int | float | str | NDArray | NDField |
-                                 blosc2.C2Array | blosc2.Proxy):
+def _check_allowed_dtypes(
+    value: bool | int | float | str | NDArray | NDField | blosc2.C2Array | blosc2.Proxy,
+):
     if not (
-        isinstance(value, blosc2.LazyExpr | NDArray | NDField |
-                          blosc2.C2Array | blosc2.Proxy | np.ndarray)
+        isinstance(
+            value,
+            blosc2.LazyExpr
+            | NDArray
+            | NDField
+            | blosc2.C2Array
+            | blosc2.Proxy
+            | blosc2.ProxyNDField
+            | np.ndarray,
+        )
         or np.isscalar(value)
     ):
         raise RuntimeError(

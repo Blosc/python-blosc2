@@ -5,8 +5,9 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
-import blosc2
 from abc import ABC, abstractmethod
+
+import blosc2
 
 
 class ProxySource(ABC):
@@ -21,6 +22,7 @@ class ProxySource(ABC):
     These attributes do not need to be available when opening an already
      existing :ref:`Proxy`.
     """
+
     @abstractmethod
     def get_chunk(self, nchunk):
         """
@@ -45,6 +47,7 @@ class Proxy(blosc2.Operand):
     This can be used to cache chunks of a regular data container
     which follows the :ref:`ProxySource` interface in an urlpath.
     """
+
     def __init__(self, src, urlpath=None, **kwargs):
         """
         Create a new :ref:`Proxy` to serve like a cache to save accessed
@@ -75,26 +78,39 @@ class Proxy(blosc2.Operand):
         self.urlpath = urlpath
         if kwargs is None:
             kwargs = {}
-        self._cache = kwargs.pop('_cache', None)
+        self._cache = kwargs.pop("_cache", None)
 
         if self._cache is None:
-            meta_val = {'local_abspath': None, 'urlpath': None,
-                        'caterva2_env': kwargs.pop('caterva2_env', False)}
-            container = getattr(self.src, 'schunk', self.src)
-            if hasattr(container, 'urlpath'):
-                meta_val['local_abspath'] = container.urlpath
+            meta_val = {
+                "local_abspath": None,
+                "urlpath": None,
+                "caterva2_env": kwargs.pop("caterva2_env", False),
+            }
+            container = getattr(self.src, "schunk", self.src)
+            if hasattr(container, "urlpath"):
+                meta_val["local_abspath"] = container.urlpath
             elif isinstance(self.src, blosc2.C2Array):
-                meta_val['urlpath'] = (self.src.path, self.src.urlbase, self.src.auth_token)
-            meta = {'proxy-source': meta_val}
+                meta_val["urlpath"] = (self.src.path, self.src.urlbase, self.src.auth_token)
+            meta = {"proxy-source": meta_val}
             if hasattr(self.src, "shape"):
-                self._cache = blosc2.empty(self.src.shape, self.src.dtype, chunks=self.src.chunks,
-                                           blocks=self.src.blocks, urlpath=urlpath, meta=meta)
+                self._cache = blosc2.empty(
+                    self.src.shape,
+                    self.src.dtype,
+                    chunks=self.src.chunks,
+                    blocks=self.src.blocks,
+                    urlpath=urlpath,
+                    meta=meta,
+                )
             else:
-                self._cache = blosc2.SChunk(chunksize=self.src.chunksize, urlpath=urlpath,
-                                            cparams={'typesize': self.src.typesize}, meta=meta)
+                self._cache = blosc2.SChunk(
+                    chunksize=self.src.chunksize,
+                    urlpath=urlpath,
+                    cparams={"typesize": self.src.typesize},
+                    meta=meta,
+                )
                 self._cache.fill_special(self.src.nbytes // self.src.typesize, blosc2.SpecialValue.UNINIT)
-        self._schunk_cache = getattr(self._cache, 'schunk', self._cache)
-        vlmeta = kwargs.get('vlmeta', None)
+        self._schunk_cache = getattr(self._cache, "schunk", self._cache)
+        vlmeta = kwargs.get("vlmeta", None)
         if vlmeta:
             for key in vlmeta:
                 self._schunk_cache.vlmeta[key] = vlmeta[key]
@@ -130,24 +146,6 @@ class Proxy(blosc2.Operand):
 
         return self._cache
 
-    def __getitem__(self, item):
-        """
-        Get a slice as a numpy.ndarray using the :ref:`Proxy`.
-
-        Parameters
-        ----------
-        item: slice or list of slices
-            The slice of the desired data.
-
-        Returns
-        -------
-        out: numpy.ndarray
-            An array with the data slice.
-        """
-        # Populate the cache
-        self.fetch(item)
-        return self._cache[item]
-
     async def afetch(self, item=None):
         """
         Get the container used as cache with the requested data updated
@@ -169,7 +167,7 @@ class Proxy(blosc2.Operand):
         This method is only available if the :ref:`ProxySource` has an
         async `aget_chunk` method.
         """
-        if not callable(getattr(self.src, 'aget_chunk', None)):
+        if not callable(getattr(self.src, "aget_chunk", None)):
             raise NotImplementedError("afetch is only available if the source has an aget_chunk method")
         if item is None:
             # Full realization
@@ -186,6 +184,24 @@ class Proxy(blosc2.Operand):
                     self._schunk_cache.update_chunk(info.nchunk, chunk)
 
         return self._cache
+
+    def __getitem__(self, item):
+        """
+        Get a slice as a numpy.ndarray using the :ref:`Proxy`.
+
+        Parameters
+        ----------
+        item: slice or list of slices
+            The slice of the desired data.
+
+        Returns
+        -------
+        out: numpy.ndarray
+            An array with the data slice.
+        """
+        # Populate the cache
+        self.fetch(item)
+        return self._cache[item]
 
     @property
     def dtype(self):
@@ -225,4 +241,33 @@ class Proxy(blosc2.Operand):
         --------
         :ref:`NDField`
         """
-        return getattr(self._cache, 'fields', None)
+        _fields = getattr(self._cache, "fields", None)
+        if _fields is None:
+            return None
+        return {key: ProxyNDField(self, key) for key in _fields}
+
+
+class ProxyNDField(blosc2.Operand):
+    def __init__(self, proxy: Proxy, field: str):
+        self.proxy = proxy
+        self.field = field
+        self.shape = proxy.shape
+        self.dtype = proxy.dtype
+
+    def __getitem__(self, item: slice):
+        """
+        Get a slice as a numpy.ndarray using the `field` in `proxy`.
+
+        Parameters
+        ----------
+        item: slice or list of slices
+            The slice of the desired data.
+
+        Returns
+        -------
+        out: numpy.ndarray
+            An array with the data slice.
+        """
+        # Get the data and return the corresponding field
+        nparr = self.proxy[item]
+        return nparr[self.field]
