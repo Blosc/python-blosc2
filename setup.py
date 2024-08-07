@@ -8,13 +8,6 @@
 
 from skbuild import setup
 
-# Blosc version
-with open("VERSION") as f:
-    VERSION = f.read().strip()
-# Create the version.py file
-with open("blosc2/version.py", "w") as f:
-    f.write(f'__version__ = "{VERSION}"\n')
-
 
 def exclude_pkgconfig(cmake_manifest):
     """remove pkgconfig file from installation: gh-110."""
@@ -24,7 +17,6 @@ def exclude_pkgconfig(cmake_manifest):
 # These keywords need to be in setup()
 # https://scikit-build.readthedocs.io/en/latest/usage.html#setuptools-options
 setup(
-    version=VERSION,
     packages=["blosc2"],
     package_dir={"blosc2": "blosc2"},
     include_package_data=True,

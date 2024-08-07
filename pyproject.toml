@@ -1,16 +1,17 @@
 [build-system]
 requires = [
     "setuptools",
-    "scikit-build",
+    "scikit-build-core",
     "cython>=3",
     "cmake",
     "ninja",
     "numpy>=2.0.0",
 ]
-build-backend = "setuptools.build_meta"
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "blosc2"
+version = "3.0.0-beta.2.dev0"
 description = "Python wrapper for the C-Blosc2 library"
 readme = "README.rst"
 authors = [{name = "Blosc Development Team", email = "blosc@blosc.org"}]
@@ -41,7 +42,8 @@ dependencies = [
     "py-cpuinfo",
     "httpx",
 ]
-dynamic = ["version"]
+# Seems this is not supported by the current version of scikit-build-core
+#dynamic = ["version"]
 
 [project.urls]
 homepage = "https://github.com/Blosc/python-blosc2"
