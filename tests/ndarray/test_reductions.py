@@ -147,3 +147,21 @@ def test_broadcast_params(axis, keepdims, reduce_op, shapes):
 
     tol = 1e-14 if a1.dtype == "float64" else 1e-5
     np.testing.assert_allclose(res[:], nres, atol=tol, rtol=tol)
+
+# Test reductions with item parameter
+@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all"])
+# TODO: try to fix the test for "mean", "std", "var"
+#@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
+def test_reduce_item(reduce_op):
+    na = np.linspace(0, 1, num=10000, dtype=np.float64).reshape((100, 100))
+    a = blosc2.asarray(na)
+    stripe_len = 10
+    for i in range(0, a.shape[0], stripe_len):
+        slice_r = (slice(i, i + stripe_len), slice(None))
+        slice_c = (slice(None), slice(i, i + stripe_len))
+        res = getattr(a, reduce_op)(item=slice_r)
+        nres = getattr(na[slice_r], reduce_op)()
+        np.testing.assert_allclose(res, nres)
+        res = getattr(a, reduce_op)(item=slice_c)
+        nres = getattr(na[slice_c], reduce_op)()
+        np.testing.assert_allclose(res, nres)

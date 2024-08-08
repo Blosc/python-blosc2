@@ -323,7 +323,7 @@ def is_full_slice(item):
         return item == slice(None, None, None) or item == Ellipsis
 
 
-def do_slices_intersect(slice1, slice2):
+def do_slices_intersect(slice1: list|tuple, slice2: list|tuple) -> bool:
     """
     Check whether two slices intersect.
 
@@ -350,9 +350,9 @@ def do_slices_intersect(slice1, slice2):
     for s1, s2 in zip(slice1, slice2, strict=True):
         if s1 is Ellipsis or s2 is Ellipsis:
             return True
-        if s1.start is not None and s2.stop is not None and s1.start >= s2.stop:
+        if s1.start >= s2.stop:
             return False
-        if s1.stop is not None and s2.start is not None and s1.stop <= s2.start:
+        if s1.stop <= s2.start:
             return False
 
     return True
@@ -646,9 +646,17 @@ def slices_eval(
             # Ensure that _slice is of type slice
             key = ndindex.ndindex(_slice).expand(shape).raw
             _slice = tuple(k if isinstance(k, slice) else slice(k, k + 1, None) for k in key)
+            # Ensure that slices do not have any None as start or stop
+            _slice = tuple(slice(s.start or 0, s.stop or shape[i], s.step)
+                           for i, s in enumerate(_slice))
+            slice_ = tuple(slice(s.start or 0, s.stop or shape[i], s.step)
+                           for i, s in enumerate(slice_))
             intersects = do_slices_intersect(_slice, slice_)
             if not intersects:
                 continue
+            # Compute the part of the slice_ that intersects with _slice
+            slice_ = tuple(slice(max(s1.start, s2.start), min(s1.stop, s2.stop))
+                           for s1, s2 in zip(slice_, _slice, strict=True))
         slice_shape = tuple(s.stop - s.start for s in slice_)
         # Get the slice of each operand
         for key, value in operands.items():
@@ -808,9 +816,18 @@ def reduce_slices(
         offset = tuple(s.start for s in slice_)  # offset for the udf
         # Check whether current slice_ intersects with _slice
         if _slice is not None:
+            # Ensure that slices do not have any None as start or stop
+            _slice = tuple(slice(s.start or 0, s.stop or shape[i], s.step)
+                           for i, s in enumerate(_slice))
+            slice_ = tuple(slice(s.start or 0, s.stop or shape[i], s.step)
+                           for i, s in enumerate(slice_))
             intersects = do_slices_intersect(_slice, slice_)
             if not intersects:
                 continue
+            # Compute the part of the slice_ that intersects with _slice
+            slice_ = tuple(slice(max(s1.start, s2.start), min(s1.stop, s2.stop))
+                           for s1, s2 in zip(slice_, _slice, strict=True))
+
         slice_shape = tuple(s.stop - s.start for s in slice_)
         # reduced_slice_shape = tuple(s.stop - s.start for s in reduced_slice)
         if len(slice_) == 1:

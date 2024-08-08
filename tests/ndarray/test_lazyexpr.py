@@ -817,3 +817,16 @@ def test_lazyexpr_out(array_fixture, out_param, operand_mix):
     assert expr2.eval() is out
     nres = ne.evaluate("na1 - na2")
     np.testing.assert_allclose(out[:], nres)
+
+
+# Test eval with an item parameter
+def test_eval_item(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = blosc2.lazyexpr("a1 + a2 - a3 * a4", operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4})
+    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    res = expr.eval(item=0)
+    np.testing.assert_allclose(res[()], nres[0])
+    res = expr.eval(item=slice(10))
+    np.testing.assert_allclose(res[()], nres[:10])
+    res = expr.eval(item=slice(0, 10, 2))
+    np.testing.assert_allclose(res[()], nres[0:10:2])
