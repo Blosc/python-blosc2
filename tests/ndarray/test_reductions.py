@@ -149,19 +149,31 @@ def test_broadcast_params(axis, keepdims, reduce_op, shapes):
     np.testing.assert_allclose(res[:], nres, atol=tol, rtol=tol)
 
 # Test reductions with item parameter
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all"])
-# TODO: try to fix the test for "mean", "std", "var"
-#@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
-def test_reduce_item(reduce_op):
-    na = np.linspace(0, 1, num=10000, dtype=np.float64).reshape((100, 100))
-    a = blosc2.asarray(na)
-    stripe_len = 10
+@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("stripes", ["rows", "columns"])
+@pytest.mark.parametrize("stripe_len", [2, 10, 15, 100])
+@pytest.mark.parametrize("shape", [(10, 30), (30, 10), (50, 50)])
+@pytest.mark.parametrize("chunks", [None, (10, 15), (20, 30)])
+def test_reduce_item(reduce_op, dtype, stripes, stripe_len, shape, chunks):
+    na = np.linspace(0, 1, num=np.prod(shape), dtype=dtype).reshape(shape)
+    a = blosc2.asarray(na, chunks=chunks)
+    tol = 1e-6 if dtype == np.float32 else 1e-15
     for i in range(0, a.shape[0], stripe_len):
-        slice_r = (slice(i, i + stripe_len), slice(None))
-        slice_c = (slice(None), slice(i, i + stripe_len))
-        res = getattr(a, reduce_op)(item=slice_r)
-        nres = getattr(na[slice_r], reduce_op)()
-        np.testing.assert_allclose(res, nres)
-        res = getattr(a, reduce_op)(item=slice_c)
-        nres = getattr(na[slice_c], reduce_op)()
-        np.testing.assert_allclose(res, nres)
+        if stripes == "rows":
+            _slice = (slice(i, i + stripe_len), slice(None))
+        else:
+            _slice = (slice(None), slice(i, i + stripe_len))
+        slice_ = na[_slice]
+        if slice_.size == 0 and reduce_op not in ("sum", "prod"):
+            # For mean, std, and var, numpy just raises a warning, so don't check
+            if reduce_op in ("min", "max"):
+                # Check that a ValueError is raised when the slice is empty
+                with pytest.raises(ValueError):
+                    getattr(a, reduce_op)(item=_slice)
+                with pytest.raises(ValueError):
+                    getattr(na[_slice], reduce_op)()
+        else:
+            res = getattr(a, reduce_op)(item=_slice)
+            nres = getattr(na[_slice], reduce_op)()
+            np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)

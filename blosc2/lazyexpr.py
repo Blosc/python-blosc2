@@ -34,6 +34,8 @@ class ReduceOp(Enum):
     SUM = np.add
     PROD = np.multiply
     MEAN = np.mean
+    STD = np.std
+    VAR = np.var
     # Computing a median from partial results is not straightforward because the median
     # is a positional statistic, which means it depends on the relative ordering of all
     # the data points. Unlike statistics such as the sum or mean, you can't compute a median
@@ -780,6 +782,7 @@ def reduce_slices(
     reduce_op = reduce_args.pop("op")
     axis = reduce_args["axis"]
     keepdims = reduce_args["keepdims"]
+    dtype = reduce_args["dtype"] if reduce_op in (ReduceOp.SUM, ReduceOp.PROD) else None
 
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
@@ -815,7 +818,7 @@ def reduce_slices(
             reduced_slice = tuple(sl for i, sl in enumerate(slice_) if i not in axis)
         offset = tuple(s.start for s in slice_)  # offset for the udf
         # Check whether current slice_ intersects with _slice
-        if _slice is not None:
+        if _slice is not None and _slice != ():
             # Ensure that slices do not have any None as start or stop
             _slice = tuple(slice(s.start or 0, s.stop or shape[i], s.step)
                            for i, s in enumerate(_slice))
@@ -885,32 +888,11 @@ def reduce_slices(
             result = np.all(result, **reduce_args)
         else:
             result = reduce_op.value.reduce(result, **reduce_args)
-        dtype = reduce_args["dtype"] if reduce_op in (ReduceOp.SUM, ReduceOp.PROD) else None
-        if dtype is None:
-            dtype = result.dtype
 
         if out is None:
-            # out will be a proper numpy.ndarray
-            if reduce_op == ReduceOp.SUM:
-                out = np.zeros(reduced_shape, dtype=dtype)
-            elif reduce_op == ReduceOp.PROD:
-                out = np.ones(reduced_shape, dtype=dtype)
-            elif reduce_op == ReduceOp.MIN:
-                if np.issubdtype(dtype, np.integer):
-                    out = np.iinfo(dtype).max * np.ones(reduced_shape, dtype=dtype)
-                else:
-                    out = np.inf * np.ones(reduced_shape, dtype=dtype)
-            elif reduce_op == ReduceOp.MAX:
-                if np.issubdtype(dtype, np.integer):
-                    out = np.iinfo(dtype).min * np.ones(reduced_shape, dtype=dtype)
-                else:
-                    out = -np.inf * np.ones(reduced_shape, dtype=dtype)
-            elif reduce_op == ReduceOp.ANY:
-                # out = blosc2.zeros(reduced_shape, dtype=np.bool_, **kwargs)
-                out = np.zeros(reduced_shape, dtype=np.bool_)
-            elif reduce_op == ReduceOp.ALL:
-                # out = blosc2.full(reduced_shape, True, dtype=np.bool_, **kwargs)
-                out = np.ones(reduced_shape, dtype=np.bool_)
+            if dtype is None:
+                dtype = result.dtype
+            out = convert_none_out(dtype, reduce_op, reduced_shape)
 
         # Update the output array with the result
         if reduce_op == ReduceOp.ANY:
@@ -923,9 +905,40 @@ def reduce_slices(
             else:
                 out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
 
+    if out is None:
+        if reduce_op in (ReduceOp.MIN, ReduceOp.MAX):
+            raise ValueError("zero-size array in min/max reduction operation is not supported")
+        if dtype is None:
+            # We have no hint here, so choose a default dtype
+            dtype = np.float64
+        out = convert_none_out(dtype, reduce_op, reduced_shape)
+
     # Check if the output array needs to be converted to a blosc2.NDArray
     if kwargs != {} and not np.isscalar(out):
         out = blosc2.asarray(out, **kwargs)
+    return out
+
+
+def convert_none_out(dtype, reduce_op, reduced_shape):
+    # out will be a proper numpy.ndarray
+    if reduce_op == ReduceOp.SUM:
+        out = np.zeros(reduced_shape, dtype=dtype)
+    elif reduce_op == ReduceOp.PROD:
+        out = np.ones(reduced_shape, dtype=dtype)
+    elif reduce_op == ReduceOp.MIN:
+        if np.issubdtype(dtype, np.integer):
+            out = np.iinfo(dtype).max * np.ones(reduced_shape, dtype=dtype)
+        else:
+            out = np.inf * np.ones(reduced_shape, dtype=dtype)
+    elif reduce_op == ReduceOp.MAX:
+        if np.issubdtype(dtype, np.integer):
+            out = np.iinfo(dtype).min * np.ones(reduced_shape, dtype=dtype)
+        else:
+            out = -np.inf * np.ones(reduced_shape, dtype=dtype)
+    elif reduce_op == ReduceOp.ANY:
+        out = np.zeros(reduced_shape, dtype=np.bool_)
+    elif reduce_op == ReduceOp.ALL:
+        out = np.ones(reduced_shape, dtype=np.bool_)
     return out
 
 
@@ -1344,25 +1357,46 @@ class LazyExpr(LazyArray):
         }
         return self.eval(_reduce_args=reduce_args, **kwargs)
 
-    def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
-        total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims)
+    def get_num_elements(self, axis, item):
         if np.isscalar(axis):
             axis = (axis,)
-        num_elements = np.prod(self.shape) if axis is None else np.prod([self.shape[i] for i in axis])
+        # Compute the number of elements in the array
+        shape = self.shape
+        if item is not None:
+            # Compute the shape of the slice
+            if not isinstance(item, tuple):
+                item = (item,)
+            # Ensure that the limits in item slices are not None
+            item = tuple(slice(s.start or 0, s.stop or self.shape[i], s.step)
+                         for i, s in enumerate(item))
+            # Compute the intersection of the slice with the shape
+            item = tuple(slice(s1.start, min(s1.stop, s2))
+                         for s1, s2 in zip(item, shape, strict=True))
+            if axis is None:
+                shape = [s.stop - s.start for s in item]
+            else:
+                shape = [s.stop - s.start for i, s in enumerate(item) if i in axis]
+        num_elements = np.prod(shape) if axis is None else np.prod([shape[i] for i in axis])
+        return num_elements
+
+    def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
+        item = kwargs.pop("item", None)
+        total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims, item=item)
+        num_elements = self.get_num_elements(axis, item)
+        if num_elements == 0:
+            raise ValueError("mean of an empty array is not defined")
         out = total_sum / num_elements
         if kwargs != {} and not np.isscalar(out):
             out = blosc2.asarray(out, **kwargs)
         return out
 
     def std(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
-        mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
+        item = kwargs.pop("item", None)
+        mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, item=item)
         expr = (self - mean_value) ** 2
-        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
+        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, item=item)
         if ddof != 0:
-            if axis is None:
-                num_elements = np.prod(self.shape)
-            else:
-                num_elements = np.prod([self.shape[i] for i in axis])
+            num_elements = self.get_num_elements(axis, item)
             out = np.sqrt(out * num_elements / (num_elements - ddof))
         else:
             out = np.sqrt(out)
@@ -1371,17 +1405,15 @@ class LazyExpr(LazyArray):
         return out
 
     def var(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
-        mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
+        item = kwargs.pop("item", None)
+        mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, item=item)
         expr = (self - mean_value) ** 2
         if ddof != 0:
-            out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
-            if axis is None:
-                num_elements = np.prod(self.shape)
-            else:
-                num_elements = np.prod([self.shape[i] for i in axis])
+            out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, item=item)
+            num_elements = self.get_num_elements(axis, item)
             out = out * num_elements / (num_elements - ddof)
         else:
-            out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
+            out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, item=item)
         if kwargs != {} and not np.isscalar(out):
             out = blosc2.asarray(out, **kwargs)
         return out
