@@ -22,6 +22,7 @@ import numexpr as ne
 import numpy as np
 
 import blosc2
+from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
 from blosc2.ndarray import are_partitions_behaved, get_chunks_idx
 
@@ -740,6 +741,8 @@ def slices_eval(
         if isinstance(out, np.ndarray):
             out = out[orig_slice]
         elif isinstance(out, blosc2.NDArray):
+            # It *seems* better to choose an automatic chunks and blocks for the output array
+            # out = out.slice(orig_slice, chunks=out.chunks, blocks=out.blocks)
             out = out.slice(orig_slice)
         else:
             raise ValueError("The output array is not a NumPy array or a NDArray")
@@ -1168,6 +1171,30 @@ class LazyExpr(LazyArray):
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"(o0 {op} o1)"
 
+    def get_chunk(self, nchunk):
+        """Get the `nchunk` of the expression, evaluating only that one."""
+        # Create an empty array with the same shape and dtype; this is fast
+        out = blosc2.empty(shape=self.shape, dtype=self.dtype,
+                             chunks=self.chunks, blocks=self.blocks)
+        shape = out.shape
+        chunks = out.chunks
+        # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
+        chunks_idx, nchunks = get_chunks_idx(shape, chunks)
+        coords = tuple(np.unravel_index(nchunk, chunks_idx))
+        slice_ = tuple(
+            slice(c * s, min((c + 1) * s, shape[i]))
+            for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
+        )
+        # TODO: we need more metadata for treating reductions
+        # We want to fill a single chunk, so we need to evaluate the expression on out
+        expr = lazyexpr(self, out=out)
+        # The evals below produce arrays with different chunks and blocks;
+        # we choose the ones for LazyExpr main class
+        expr.eval(item=slice_)
+        # out = expr.eval(item=slice_)
+        return out.schunk.get_chunk(nchunk)
+
+
     def update_expr(self, new_op):
         # We use a lot of the original NDArray.__eq__ as 'is', so deactivate the overloaded one
         blosc2._disable_overloaded_equal = True
@@ -1251,6 +1278,22 @@ class LazyExpr(LazyArray):
         shape, fast_path = validate_inputs(self.operands)
         self._shape = shape
         return shape
+
+    @property
+    def chunks(self):
+        if hasattr(self, "_chunks"):
+            return self._chunks
+        self._chunks, self._blocks = compute_chunks_blocks(
+            self.shape, None, None, dtype=self.dtype)
+        return self._chunks
+
+    @property
+    def blocks(self):
+        if hasattr(self, "_blocks"):
+            return self._blocks
+        self._chunks, self._blocks = compute_chunks_blocks(
+            self.shape, None, None, dtype=self.dtype)
+        return self._blocks
 
     def __neg__(self):
         return self.update_expr(new_op=(0, "-", self))

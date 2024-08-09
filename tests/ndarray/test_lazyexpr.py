@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.ndarray import get_chunks_idx
 
 NITEMS_SMALL = 1_000
 NITEMS = 10_000
@@ -830,3 +831,20 @@ def test_eval_item(array_fixture):
     np.testing.assert_allclose(res[()], nres[:10])
     res = expr.eval(item=slice(0, 10, 2))
     np.testing.assert_allclose(res[()], nres[0:10:2])
+
+
+# Test get_chunk method
+def test_get_chunk(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = blosc2.lazyexpr("a1 + a2 - a3 * a4",
+                           operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4},
+                           )
+    chunksize = np.prod(expr.chunks) * expr.dtype.itemsize
+    blocksize = np.prod(expr.blocks) * expr.dtype.itemsize
+    _, nchunks = get_chunks_idx(expr.shape, expr.chunks)
+    for nchunk in range(nchunks):
+        chunk = expr.get_chunk(nchunk)
+        chunksize_ = int.from_bytes(chunk[4:8], byteorder='little')
+        blocksize_ = int.from_bytes(chunk[8:12], byteorder='little')
+        np.testing.assert_allclose(chunksize, chunksize_)
+        np.testing.assert_allclose(blocksize, blocksize_)
