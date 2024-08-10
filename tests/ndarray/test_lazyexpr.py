@@ -839,12 +839,17 @@ def test_get_chunk(array_fixture):
     expr = blosc2.lazyexpr("a1 + a2 - a3 * a4",
                            operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4},
                            )
+    nres = ne.evaluate("na1 + na2 - na3 * na4")
     chunksize = np.prod(expr.chunks) * expr.dtype.itemsize
     blocksize = np.prod(expr.blocks) * expr.dtype.itemsize
     _, nchunks = get_chunks_idx(expr.shape, expr.chunks)
+    out = blosc2.empty(expr.shape, dtype=expr.dtype, chunks=expr.chunks, blocks=expr.blocks)
     for nchunk in range(nchunks):
         chunk = expr.get_chunk(nchunk)
+        out.schunk.update_chunk(nchunk, chunk)
         chunksize_ = int.from_bytes(chunk[4:8], byteorder='little')
         blocksize_ = int.from_bytes(chunk[8:12], byteorder='little')
-        np.testing.assert_allclose(chunksize, chunksize_)
-        np.testing.assert_allclose(blocksize, blocksize_)
+        # Sometimes the actual chunksize is smaller than the expected chunks due to padding
+        assert chunksize <= chunksize_
+        assert blocksize == blocksize_
+    np.testing.assert_allclose(out[:], nres)

@@ -299,9 +299,9 @@ def validate_inputs(inputs: dict, out=None) -> tuple:
     if isinstance(out, blosc2.NDArray):
         if first_input.shape != out.shape:
             raise ValueError("Output shape does not match the first input shape")
-        if first_input.blocks != out.blocks:
-            fast_path = False
         if first_input.chunks != out.chunks:
+            fast_path = False
+        if first_input.blocks != out.blocks:
             fast_path = False
     # Then, the rest of the operands
     for input_ in NDinputs:
@@ -310,7 +310,7 @@ def validate_inputs(inputs: dict, out=None) -> tuple:
         if first_input.blocks != input_.blocks:
             fast_path = False
 
-    return first_input.shape, fast_path
+    return first_input.shape, first_input.chunks, first_input.blocks, fast_path
 
 
 def is_full_slice(item):
@@ -395,7 +395,6 @@ def sync_read_chunks(arrs):
     while True:
         try:
             chunks = queue.get(timeout=1)  # Wait for the next chunk
-            # print(f"chunks: {len(chunks)} {chunks[0]}")
             if chunks is None:  # End of chunks
                 break
             yield chunks
@@ -424,7 +423,6 @@ def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, ch
                          value.schunk.urlpath is not None)
                         for value in operands.values())
     if all_ndarray and any_persisted:
-        # print("fast path")
         if nchunk == 0:
             # Initialize the iterator for reading the chunks
             iter_chunks = read_nchunk(list(value for value in operands.values()))
@@ -976,7 +974,7 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
         if where:
             # Make the where arguments part of the operands
             operands = {**operands, **where}
-        shape, fast_path = validate_inputs(operands, out)
+        shape, _, _, fast_path = validate_inputs(operands, out)
 
         # Activate last read cache for NDField instances
         for op in operands:
@@ -1275,24 +1273,33 @@ class LazyExpr(LazyArray):
         if hasattr(self, "_shape"):
             # Contrarily to dtype, shape cannot change after creation of the expression
             return self._shape
-        shape, fast_path = validate_inputs(self.operands)
-        self._shape = shape
-        return shape
+        self._shape, chunks, blocks, fast_path = validate_inputs(self.operands)
+        if fast_path:
+            # fast_path ensure that all the operands have the same partitions
+            self._chunks = chunks
+            self._blocks = blocks
+        return self._shape
 
     @property
     def chunks(self):
         if hasattr(self, "_chunks"):
             return self._chunks
-        self._chunks, self._blocks = compute_chunks_blocks(
-            self.shape, None, None, dtype=self.dtype)
+        self._shape, self._chunks, self._blocks, fast_path = validate_inputs(self.operands)
+        if not fast_path:
+            # Not using the fast path, so we need to compute the chunks/blocks automatically
+            self._chunks, self._blocks = compute_chunks_blocks(
+                self.shape, None, None, dtype=self.dtype)
         return self._chunks
 
     @property
     def blocks(self):
         if hasattr(self, "_blocks"):
             return self._blocks
-        self._chunks, self._blocks = compute_chunks_blocks(
-            self.shape, None, None, dtype=self.dtype)
+        self._shape, self._chunks, self._blocks, fast_path = validate_inputs(self.operands)
+        if not fast_path:
+            # Not using the fast path, so we need to compute the chunks/blocks automatically
+            self._chunks, self._blocks = compute_chunks_blocks(
+                self.shape, None, None, dtype=self.dtype)
         return self._blocks
 
     def __neg__(self):
