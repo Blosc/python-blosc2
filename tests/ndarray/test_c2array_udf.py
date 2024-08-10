@@ -15,6 +15,7 @@ import blosc2
 ROOT = "b2tests"
 DIR = "expr/"
 
+pytestmark = pytest.mark.network
 
 def udf1p(inputs_tuple, output, offset):
     x = inputs_tuple[0]

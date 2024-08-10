@@ -13,6 +13,8 @@ import pytest
 
 import blosc2
 
+pytestmark = pytest.mark.network
+
 ROOT = "b2tests"
 DIR = "expr/"
 
