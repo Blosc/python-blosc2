@@ -282,13 +282,13 @@ def validate_inputs(inputs: dict, out=None) -> tuple:
     ref = inputs[0]
     if not all(np.array_equal(ref.shape, input.shape) for input in inputs):
         # If inputs have different shapes, we cannot take the fast path
-        return ref.shape, False
+        return ref.shape, None, None, False
 
     # More checks specific of NDArray inputs
     NDinputs = list(input for input in inputs if hasattr(input, "chunks"))
     if len(NDinputs) == 0:
         # All inputs are NumPy arrays, so we cannot take the fast path
-        return inputs[0].shape, False
+        return inputs[0].shape, None, None, False
 
     # Check if we can take the fast path
     # For this we need that the chunks and blocks for all inputs (and a possible output)
