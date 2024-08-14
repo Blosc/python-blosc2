@@ -802,7 +802,6 @@ def reduce_slices(
     chunks = operand.chunks
 
     # Iterate over the operands and get the chunks
-    chunk_operands = {}
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
 
     # Iterate over the operands and get the chunks
@@ -839,6 +838,8 @@ def reduce_slices(
         if len(reduced_slice) == 1:
             reduced_slice = reduced_slice[0]
         # Get the slice of each operand
+        chunk_operands = {}
+
         for key, value in operands.items():
             if np.isscalar(value):
                 chunk_operands[key] = value
@@ -866,7 +867,11 @@ def reduce_slices(
             continue
 
         if where is None:
-            result = ne.evaluate(expression, chunk_operands)
+            if expression == "o0":
+                # We don't have an actual expression, so avoid a copy
+                result = chunk_operands["o0"]
+            else:
+                result = ne.evaluate(expression, chunk_operands)
         else:
             # Apply the where condition (in result)
             if len(where) == 2:
