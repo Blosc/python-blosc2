@@ -853,3 +853,35 @@ def test_get_chunk(array_fixture):
         assert chunksize <= chunksize_
         assert blocksize == blocksize_
     np.testing.assert_allclose(out[:], nres)
+
+@pytest.mark.parametrize(
+    "chunks, blocks",
+    [
+        ((10, 100), (5, 100)),  # behaved
+        ((15, 100), (5, 100)),  # not behaved
+        ((15, 15), (5, 5)),     # not behaved
+        ((10, 10), (5, 5)),     # not behaved
+    ],
+)
+def test_fill_disk_operands(chunks, blocks):
+    N = 100
+
+    a_ = blosc2.full((N, N), 1., urlpath='a.b2nd', mode='w', chunks=chunks, blocks=blocks)
+    b_ = blosc2.full((N, N), .2, urlpath='b.b2nd', mode='w', chunks=chunks, blocks=blocks)
+    c_ = blosc2.full((N, N), .3, urlpath='c.b2nd', mode='w', chunks=chunks, blocks=blocks)
+
+    a = blosc2.open('a.b2nd')
+    b = blosc2.open('b.b2nd')
+    c = blosc2.open('c.b2nd')
+
+    expr = ((a ** 3 + blosc2.sin(c * 2)) < b) & (c > 0)
+
+    out = expr.eval()
+    assert out.shape == (N, N)
+    assert out.dtype == np.bool_
+    assert out.schunk.urlpath is None
+    np.testing.assert_allclose(out[:], ((a[:] ** 3 + np.sin(c[:] * 2)) < b[:]) & (c[:] > 0))
+
+    blosc2.remove_urlpath('a.b2nd')
+    blosc2.remove_urlpath('b.b2nd')
+    blosc2.remove_urlpath('c.b2nd')

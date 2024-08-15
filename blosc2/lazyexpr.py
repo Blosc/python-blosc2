@@ -407,7 +407,7 @@ def read_nchunk(arrs):
 
 iter_chunks = None
 
-def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands):
+def fill_chunk_operands(operands, slice_, chunks_, full_chunk, nchunk, chunk_operands):
     """Get the chunk operands for the expression evaluation.
 
     This function offers a fast path for full chunks and a slow path for the rest.
@@ -429,9 +429,7 @@ def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, ch
         # Run the asynchronous file reading function from a synchronous context
         chunks = next(iter_chunks)
         for i, (key, value) in enumerate(operands.items()):
-            if 0 and key in chunk_operands:
-                # Disabling this optimization, as sometimes it gives a segfault
-                # TODO: investigate why
+            if full_chunk and key in chunk_operands and chunks_ == chunk_operands[key].shape:
                 # We already have a buffer for this operand
                 blosc2.decompress2(chunks[i], dst=chunk_operands[key])
             else:
@@ -530,7 +528,7 @@ def fast_eval(
         chunks_ = tuple(s.stop - s.start for s in slice_)
 
         full_chunk = (chunks_ == chunks) and behaved
-        fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands)
+        fill_chunk_operands(operands, slice_, chunks_, full_chunk, nchunk, chunk_operands)
 
         if isinstance(out, np.ndarray) and not where:
             # Fast path: put the result straight in the output array (avoiding a memory copy)
