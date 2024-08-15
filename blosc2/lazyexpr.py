@@ -429,13 +429,9 @@ def fill_chunk_operands(operands, slice_, chunks_, full_chunk, nchunk, chunk_ope
         # Run the asynchronous file reading function from a synchronous context
         chunks = next(iter_chunks)
         for i, (key, value) in enumerate(operands.items()):
-            if full_chunk and key in chunk_operands and chunks_ == chunk_operands[key].shape:
-                # We already have a buffer for this operand
-                blosc2.decompress2(chunks[i], dst=chunk_operands[key])
-            else:
-                buff = blosc2.decompress2(chunks[i])
-                bsize = value.dtype.itemsize * math.prod(chunks_)
-                chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
+            buff = blosc2.decompress2(chunks[i])
+            bsize = value.dtype.itemsize * math.prod(chunks_)
+            chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
         return
 
     for key, value in operands.items():
@@ -464,17 +460,12 @@ def fill_chunk_operands(operands, slice_, chunks_, full_chunk, nchunk, chunk_ope
             chunk_operands[key] = value[slice_]
             continue
 
-        # Fast path for full chunks
-        if key in chunk_operands:
-            # We already have a buffer for this operand
-            value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
-            continue
-
-        # We don't have a buffer for this operand yet
         # Decompress the whole chunk and store it
         buff = value.schunk.decompress_chunk(nchunk)
         bsize = value.dtype.itemsize * math.prod(chunks_)
         chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
+
+    return
 
 
 def fast_eval(
@@ -528,6 +519,8 @@ def fast_eval(
         chunks_ = tuple(s.stop - s.start for s in slice_)
 
         full_chunk = (chunks_ == chunks) and behaved
+        # To avoid overbooking memory, we need to clear the chunk_operands dict
+        chunk_operands.clear()
         fill_chunk_operands(operands, slice_, chunks_, full_chunk, nchunk, chunk_operands)
 
         if isinstance(out, np.ndarray) and not where:
