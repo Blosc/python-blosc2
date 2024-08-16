@@ -852,7 +852,7 @@ def reduce_slices(
 
         # To avoid overbooking memory, we need to clear the chunk_operands dict
         chunk_operands.clear()
-        if _slice is None and same_shape and same_chunks and same_blocks:
+        if _slice in (None, ()) and same_shape and same_chunks and same_blocks:
             # Fast path
             full_chunk = (chunks_ == chunks) and behaved
             fill_chunk_operands(operands, slice_, chunks_, full_chunk, nchunk, iter_safe, chunk_operands)
