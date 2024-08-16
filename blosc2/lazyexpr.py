@@ -797,19 +797,19 @@ def reduce_slices(
 
     # Check if the partitions are well-behaved (i.e. all operands have the same shape,
     # chunks and blocks, and have no padding). This will allow us to take the fast path.
-    same_shape = all(np.array_equal(operand.shape, o.shape) for o in operands.values())
+    same_shape = all(operand.shape == o.shape for o in operands.values() if hasattr(o, "shape"))
     same_chunks = all(operand.chunks == o.chunks for o in operands.values() if hasattr(o, "chunks"))
     same_blocks = all(operand.blocks == o.blocks for o in operands.values() if hasattr(o, "blocks"))
-    # Check that all operands are NDArray for fast path
-    all_ndarray = all(isinstance(value, blosc2.NDArray) and value.shape != ()
-                      for value in operands.values())
-    # Check that there is some NDArray that is persisted in the disk
-    any_persisted = any((isinstance(value, blosc2.NDArray) and
-                         value.shape != () and
-                         value.schunk.urlpath is not None)
-                        for value in operands.values())
     behaved, iter_safe = False, False
     if same_shape and same_chunks and same_blocks:
+        # Check that all operands are NDArray for fast path
+        all_ndarray = all(isinstance(value, blosc2.NDArray) and value.shape != ()
+                          for value in operands.values())
+        # Check that there is some NDArray that is persisted in the disk
+        any_persisted = any((isinstance(value, blosc2.NDArray) and
+                             value.shape != () and
+                             value.schunk.urlpath is not None)
+                            for value in operands.values())
         iter_safe = all_ndarray and any_persisted
         behaved = are_partitions_behaved(shape, chunks, operand.blocks)
 
