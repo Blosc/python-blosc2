@@ -407,22 +407,15 @@ def read_nchunk(arrs):
 
 iter_chunks = None
 
-def fill_chunk_operands(operands, slice_, chunks_, full_chunk, nchunk, chunk_operands):
+def fill_chunk_operands(operands, slice_, chunks_, full_chunk, nchunk, iter_safe,
+                        chunk_operands):
     """Get the chunk operands for the expression evaluation.
 
     This function offers a fast path for full chunks and a slow path for the rest.
     """
     global iter_chunks
 
-    # Check that all operands are NDArray for fast path
-    all_ndarray = all(isinstance(value, blosc2.NDArray) and value.shape != ()
-                      for value in operands.values())
-    # Check that there is some NDArray that is persisted in the disk
-    any_persisted = any((isinstance(value, blosc2.NDArray) and
-                         value.shape != () and
-                         value.schunk.urlpath is not None)
-                        for value in operands.values())
-    if full_chunk and all_ndarray and any_persisted:
+    if iter_safe:
         if nchunk == 0:
             # Initialize the iterator for reading the chunks
             iter_chunks = read_nchunk(list(value for value in operands.values()))
@@ -505,6 +498,16 @@ def fast_eval(
     # Check if the partitions are well-behaved (i.e. no padding)
     behaved = are_partitions_behaved(shape, chunks, basearr.blocks)
 
+    # Check that all operands are NDArray for fast path
+    all_ndarray = all(isinstance(value, blosc2.NDArray) and value.shape != ()
+                      for value in operands.values())
+    # Check that there is some NDArray that is persisted in the disk
+    any_persisted = any((isinstance(value, blosc2.NDArray) and
+                         value.shape != () and
+                         value.schunk.urlpath is not None)
+                        for value in operands.values())
+    iter_safe = all_ndarray and any_persisted
+
     chunk_operands = {}
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
 
@@ -521,7 +524,7 @@ def fast_eval(
         full_chunk = (chunks_ == chunks) and behaved
         # To avoid overbooking memory, we need to clear the chunk_operands dict
         chunk_operands.clear()
-        fill_chunk_operands(operands, slice_, chunks_, full_chunk, nchunk, chunk_operands)
+        fill_chunk_operands(operands, slice_, chunks_, full_chunk, nchunk, iter_safe, chunk_operands)
 
         if isinstance(out, np.ndarray) and not where:
             # Fast path: put the result straight in the output array (avoiding a memory copy)
@@ -792,8 +795,27 @@ def reduce_slices(
     operand = max((o for o in operands.values() if hasattr(o, "chunks")), key=lambda x: len(x.shape))
     chunks = operand.chunks
 
+    # Check if the partitions are well-behaved (i.e. all operands have the same shape,
+    # chunks and blocks, and have no padding). This will allow us to take the fast path.
+    same_shape = all(np.array_equal(operand.shape, o.shape) for o in operands.values())
+    same_chunks = all(operand.chunks == o.chunks for o in operands.values() if hasattr(o, "chunks"))
+    same_blocks = all(operand.blocks == o.blocks for o in operands.values() if hasattr(o, "blocks"))
+    # Check that all operands are NDArray for fast path
+    all_ndarray = all(isinstance(value, blosc2.NDArray) and value.shape != ()
+                      for value in operands.values())
+    # Check that there is some NDArray that is persisted in the disk
+    any_persisted = any((isinstance(value, blosc2.NDArray) and
+                         value.shape != () and
+                         value.schunk.urlpath is not None)
+                        for value in operands.values())
+    behaved, iter_safe = False, False
+    if same_shape and same_chunks and same_blocks:
+        iter_safe = all_ndarray and any_persisted
+        behaved = are_partitions_behaved(shape, chunks, operand.blocks)
+
     # Iterate over the operands and get the chunks
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
+    chunk_operands = {}
 
     # Iterate over the operands and get the chunks
     for nchunk in range(nchunks):
@@ -822,34 +844,41 @@ def reduce_slices(
             slice_ = tuple(slice(max(s1.start, s2.start), min(s1.stop, s2.stop))
                            for s1, s2 in zip(slice_, _slice, strict=True))
 
-        slice_shape = tuple(s.stop - s.start for s in slice_)
-        # reduced_slice_shape = tuple(s.stop - s.start for s in reduced_slice)
+        chunks_ = tuple(s.stop - s.start for s in slice_)
         if len(slice_) == 1:
             slice_ = slice_[0]
         if len(reduced_slice) == 1:
             reduced_slice = reduced_slice[0]
-        # Get the slice of each operand
-        chunk_operands = {}
 
-        for key, value in operands.items():
-            if np.isscalar(value):
-                chunk_operands[key] = value
-                continue
-            if value.shape == ():
-                chunk_operands[key] = value[()]
-                continue
-            if check_smaller_shape(value, shape, slice_shape):
-                # We need to fetch the part of the value that broadcasts with the operand
-                smaller_slice = compute_smaller_slice(operand.shape, value.shape, slice_)
-                chunk_operands[key] = value[smaller_slice]
-                continue
-            chunk_operands[key] = value[slice_]
+        # To avoid overbooking memory, we need to clear the chunk_operands dict
+        chunk_operands.clear()
+        if _slice is None and same_shape and same_chunks and same_blocks:
+            # Fast path
+            full_chunk = (chunks_ == chunks) and behaved
+            fill_chunk_operands(operands, slice_, chunks_, full_chunk, nchunk, iter_safe, chunk_operands)
+        else:
+            # Get the slice of each operand
+            chunk_operands = {}
+
+            for key, value in operands.items():
+                if np.isscalar(value):
+                    chunk_operands[key] = value
+                    continue
+                if value.shape == ():
+                    chunk_operands[key] = value[()]
+                    continue
+                if check_smaller_shape(value, shape, chunks_):
+                    # We need to fetch the part of the value that broadcasts with the operand
+                    smaller_slice = compute_smaller_slice(operand.shape, value.shape, slice_)
+                    chunk_operands[key] = value[smaller_slice]
+                    continue
+                chunk_operands[key] = value[slice_]
 
         # Evaluate and reduce the expression using chunks of operands
 
         if callable(expression):
             # TODO: Implement the reductions for UDFs (and test them)
-            result = np.empty(slice_shape, dtype=out.dtype)
+            result = np.empty(chunks_, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
             # Reduce the result
             result = reduce_op.value.reduce(result, **reduce_args)

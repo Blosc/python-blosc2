@@ -177,3 +177,26 @@ def test_reduce_item(reduce_op, dtype, stripes, stripe_len, shape, chunks):
             res = getattr(a, reduce_op)(item=_slice)
             nres = getattr(na[_slice], reduce_op)()
             np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
+
+# Test fast path for reductions
+@pytest.mark.parametrize(
+    "chunks, blocks",
+    [
+        ((100, 100, 100), (50, 100, 100)),
+        ((50, 200, 300), (50, 100, 150)),
+        ((50, 200, 100), (45, 100, 50)),
+        ((55, 200, 75), (50, 100, 50)),
+        ((100, 200, 300), (50, 100, 150)),
+    ],
+)
+@pytest.mark.parametrize("disk", [True, False])
+def test_fast_path(chunks, blocks, disk):
+    shape = (100, 200, 300)
+    if disk:
+        blosc2.full(shape, 1, chunks=chunks, blocks=blocks, urlpath='a1.b2nd', mode='w')
+        a1 = blosc2.open('a1.b2nd')
+    else:
+        a1 = blosc2.full(shape, 1, chunks=chunks, blocks=blocks)
+    a = np.full(shape, 1, dtype=a1.dtype)
+
+    assert np.allclose(a1.sum(), np.sum(a))

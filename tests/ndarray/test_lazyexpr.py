@@ -857,7 +857,7 @@ def test_get_chunk(array_fixture):
 @pytest.mark.parametrize(
     "chunks, blocks",
     [
-        ((10, 100), (5, 100)),  # behaved
+        ((10, 100), (6, 100)),  # behaved
         ((15, 100), (5, 100)),  # not behaved
         ((15, 15), (5, 5)),     # not behaved
         ((10, 10), (5, 5)),     # not behaved
