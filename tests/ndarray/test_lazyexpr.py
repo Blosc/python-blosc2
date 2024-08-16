@@ -863,16 +863,24 @@ def test_get_chunk(array_fixture):
         ((10, 10), (5, 5)),     # not behaved
     ],
 )
-def test_fill_disk_operands(chunks, blocks):
+@pytest.mark.parametrize(
+    "disk", [True, False],
+)
+def test_fill_disk_operands(chunks, blocks, disk):
     N = 100
 
-    a_ = blosc2.full((N, N), 1., urlpath='a.b2nd', mode='w', chunks=chunks, blocks=blocks)
-    b_ = blosc2.full((N, N), .2, urlpath='b.b2nd', mode='w', chunks=chunks, blocks=blocks)
-    c_ = blosc2.full((N, N), .3, urlpath='c.b2nd', mode='w', chunks=chunks, blocks=blocks)
+    if disk:
+        blosc2.full((N, N), 1., urlpath='a.b2nd', mode='w', chunks=chunks, blocks=blocks)
+        blosc2.full((N, N), .2, urlpath='b.b2nd', mode='w', chunks=chunks, blocks=blocks)
+        blosc2.full((N, N), .3, urlpath='c.b2nd', mode='w', chunks=chunks, blocks=blocks)
+        a = blosc2.open('a.b2nd')
+        b = blosc2.open('b.b2nd')
+        c = blosc2.open('c.b2nd')
+    else:
+        a = blosc2.full((N, N), 1., chunks=chunks, blocks=blocks)
+        b = blosc2.full((N, N), .2, chunks=chunks, blocks=blocks)
+        c = blosc2.full((N, N), .3, chunks=chunks, blocks=blocks)
 
-    a = blosc2.open('a.b2nd')
-    b = blosc2.open('b.b2nd')
-    c = blosc2.open('c.b2nd')
 
     expr = ((a ** 3 + blosc2.sin(c * 2)) < b) & (c > 0)
 

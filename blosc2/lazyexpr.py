@@ -422,7 +422,7 @@ def fill_chunk_operands(operands, slice_, chunks_, full_chunk, nchunk, chunk_ope
                          value.shape != () and
                          value.schunk.urlpath is not None)
                         for value in operands.values())
-    if all_ndarray and any_persisted:
+    if full_chunk and all_ndarray and any_persisted:
         if nchunk == 0:
             # Initialize the iterator for reading the chunks
             iter_chunks = read_nchunk(list(value for value in operands.values()))
