@@ -863,24 +863,28 @@ def test_get_chunk(array_fixture):
         ((10, 10), (5, 5)),     # not behaved
     ],
 )
-@pytest.mark.parametrize(
-    "disk", [True, False],
-)
-def test_fill_disk_operands(chunks, blocks, disk):
+@pytest.mark.parametrize("disk", [True, False],)
+@pytest.mark.parametrize("fill_value", [0, 1, np.nan])
+def test_fill_disk_operands(chunks, blocks, disk, fill_value):
     N = 100
 
+    apath = bpath = cpath = None
     if disk:
-        blosc2.full((N, N), 1., urlpath='a.b2nd', mode='w', chunks=chunks, blocks=blocks)
-        blosc2.full((N, N), .2, urlpath='b.b2nd', mode='w', chunks=chunks, blocks=blocks)
-        blosc2.full((N, N), .3, urlpath='c.b2nd', mode='w', chunks=chunks, blocks=blocks)
+        apath = 'a.b2nd'
+        bpath = 'b.b2nd'
+        cpath = 'c.b2nd'
+    if fill_value != 0:
+        a = blosc2.full((N, N), fill_value, urlpath=apath, mode='w', chunks=chunks, blocks=blocks)
+        b = blosc2.full((N, N), fill_value, urlpath=bpath, mode='w', chunks=chunks, blocks=blocks)
+        c = blosc2.full((N, N), fill_value, urlpath=cpath, mode='w', chunks=chunks, blocks=blocks)
+    else:
+        a = blosc2.zeros((N, N), urlpath=apath, mode='w', chunks=chunks, blocks=blocks)
+        b = blosc2.zeros((N, N), urlpath=bpath, mode='w', chunks=chunks, blocks=blocks)
+        c = blosc2.zeros((N, N), urlpath=cpath, mode='w', chunks=chunks, blocks=blocks)
+    if disk:
         a = blosc2.open('a.b2nd')
         b = blosc2.open('b.b2nd')
         c = blosc2.open('c.b2nd')
-    else:
-        a = blosc2.full((N, N), 1., chunks=chunks, blocks=blocks)
-        b = blosc2.full((N, N), .2, chunks=chunks, blocks=blocks)
-        c = blosc2.full((N, N), .3, chunks=chunks, blocks=blocks)
-
 
     expr = ((a ** 3 + blosc2.sin(c * 2)) < b) & (c > 0)
 
@@ -890,6 +894,7 @@ def test_fill_disk_operands(chunks, blocks, disk):
     assert out.schunk.urlpath is None
     np.testing.assert_allclose(out[:], ((a[:] ** 3 + np.sin(c[:] * 2)) < b[:]) & (c[:] > 0))
 
-    blosc2.remove_urlpath('a.b2nd')
-    blosc2.remove_urlpath('b.b2nd')
-    blosc2.remove_urlpath('c.b2nd')
+    if disk:
+        blosc2.remove_urlpath('a.b2nd')
+        blosc2.remove_urlpath('b.b2nd')
+        blosc2.remove_urlpath('c.b2nd')

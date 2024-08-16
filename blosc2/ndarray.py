@@ -722,14 +722,16 @@ class NDArray(blosc2_ext.NDArray, Operand):
             raise ValueError("Step parameter is not supported yet")
         key = (start, stop)
 
+        shape = [sp - st for sp, st in zip(stop, start, strict=False)]
         if isinstance(value, int | float | bool):
-            shape = [sp - st for sp, st in zip(stop, start, strict=False)]
             value = np.full(shape, value, dtype=self.dtype)
-        elif isinstance(value, NDArray):
-            value = value[...]
         elif isinstance(value, np.ndarray):
             if value.dtype != self.dtype:
                 raise ValueError("The dtype of the value should be the same as the array")
+            if value.shape == ():
+                value = np.full(shape, value, dtype=self.dtype)
+        elif isinstance(value, NDArray):
+            value = value[...]
 
         return super().set_slice(key, value)
 

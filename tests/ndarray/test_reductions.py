@@ -190,13 +190,16 @@ def test_reduce_item(reduce_op, dtype, stripes, stripe_len, shape, chunks):
     ],
 )
 @pytest.mark.parametrize("disk", [True, False])
-def test_fast_path(chunks, blocks, disk):
+@pytest.mark.parametrize("fill_value", [0, 1, 1.32])
+def test_fast_path(chunks, blocks, disk, fill_value):
     shape = (100, 200, 300)
-    if disk:
-        blosc2.full(shape, 1, chunks=chunks, blocks=blocks, urlpath='a1.b2nd', mode='w')
-        a1 = blosc2.open('a1.b2nd')
+    urlpath = "a1.b2nd" if disk else None
+    if fill_value != 0:
+        a1 = blosc2.full(shape, fill_value, chunks=chunks, blocks=blocks, urlpath=urlpath, mode='w')
     else:
-        a1 = blosc2.full(shape, 1, chunks=chunks, blocks=blocks)
-    a = np.full(shape, 1, dtype=a1.dtype)
+        a1 = blosc2.zeros(shape, dtype=np.float64, chunks=chunks, blocks=blocks, urlpath=urlpath, mode='w')
+    if disk:
+        a1 = blosc2.open(urlpath)
+    a = a1[:]
 
     assert np.allclose(a1.sum(), np.sum(a))

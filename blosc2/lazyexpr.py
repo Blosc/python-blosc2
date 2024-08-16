@@ -422,7 +422,17 @@ def fill_chunk_operands(operands, slice_, chunks_, full_chunk, nchunk, iter_safe
         # Run the asynchronous file reading function from a synchronous context
         chunks = next(iter_chunks)
         for i, (key, value) in enumerate(operands.items()):
-            buff = blosc2.decompress2(chunks[i])
+            chunk = chunks[i]
+            # Blosc2 flags are encoded at the end of the header
+            # (see https://github.com/Blosc/c-blosc2/blob/main/README_CHUNK_FORMAT.rst)
+            special = blosc2.SpecialValue((chunk[31] & 0x70) >> 4)
+            if special == blosc2.SpecialValue.ZERO:
+                # We can encode the zero chunk in an efficient way by treating it as a scalar
+                # This will be handled out later on
+                chunk_operands[key] = np.zeros((), dtype=value.dtype)
+                continue
+
+            buff = blosc2.decompress2(chunk)
             bsize = value.dtype.itemsize * math.prod(chunks_)
             chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
         return
@@ -908,6 +918,9 @@ def reduce_slices(
                 )
 
         # Reduce the result
+        if reduce_op == ReduceOp.SUM and result.shape == () and result[()] == 0:
+            # Avoid a copy if the is scalar and zero. Faster for sparse data.
+            continue
         if reduce_op == ReduceOp.ANY:
             result = np.any(result, **reduce_args)
         elif reduce_op == ReduceOp.ALL:
