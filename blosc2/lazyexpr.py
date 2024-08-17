@@ -371,13 +371,18 @@ async def async_read_chunks(arrs, queue):
                 (index, loop.run_in_executor(executor, arr.schunk.get_chunk, nchunk))
                 for index, arr in enumerate(arrs)
             ]
-            chunks = await asyncio.gather(*(future for index, future in futures))
-            chunks_sorted = [chunk for index, chunk in
-                             sorted(zip([index for index, _ in futures], chunks, strict=True))]
-            queue.put((nchunk, chunks_sorted))  # Use non-async queue.put()
-            # print(f"Length of the queue: {queue.qsize()}, nchunk: {nchunk}")
+            chunks = await asyncio.gather(*(future for index, future in futures), return_exceptions=True)
+            chunks_sorted = []
+            for chunk in chunks:
+                if isinstance(chunk, Exception):
+                    # Handle the exception (e.g., log it, raise a custom exception, etc.)
+                    print(f"Exception occurred: {chunk}")
+                    # Optionally, you can re-raise the exception or handle it as needed
+                    raise chunk
+                chunks_sorted.append(chunk)
+            queue.put((nchunk, chunks_sorted))  # use non-async queue.put()
 
-    queue.put(None)  # Signal the end of the chunks
+    queue.put(None)  # signal the end of the chunks
 
 
 def async_read_chunks_thread(arrs, queue):
