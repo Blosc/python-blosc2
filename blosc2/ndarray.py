@@ -60,22 +60,17 @@ def get_ndarray_start_stop(ndim, key, shape):
     return start, stop, step
 
 
-def are_partitions_behaved(shape, chunks, blocks):
+def are_partitions_aligned(shape, chunks, blocks):
     """
-    Check if the partitions defined by chunks and blocks are well-behaved with shape.
+    Check whether the partitions defined by chunks and blocks are aligned with shape.
 
-    This makes two checks:
-
-    1. The shape is aligned with the chunks and the chunks are aligned with the blocks.
-    2. The partitions are C-contiguous with respect the outer container.
-
-    This is useful for taking fast paths in code.
+    This checks that shape is aligned with the chunks and the chunks are aligned
+    with the blocks.
 
     Returns
     -------
     bool
-        True if the partitions are well-behaved, False otherwise.
-
+        True if the partitions are aligned, False otherwise.
     """
     # Check alignment
     alignment_shape_chunks = builtins.all(s % c == 0 for s, c in zip(shape, chunks, strict=True))
@@ -84,7 +79,20 @@ def are_partitions_behaved(shape, chunks, blocks):
     alignment_chunks_blocks = builtins.all(c % b == 0 for c, b in zip(chunks, blocks, strict=True))
     if not alignment_chunks_blocks:
         return False
+    return True
 
+
+def are_partitions_behaved(shape, chunks, blocks):
+    """
+    Check whether the partitions defined by chunks and blocks are well-behaved with shape.
+
+    This checks that partitions are C-contiguous with respect the outer container.
+
+    Returns
+    -------
+    bool
+        True if the partitions are well-behaved, False otherwise.
+    """
     # Check C-contiguity among partitions
     def check_contiguity(shape, part):
         ndims = len(shape)
