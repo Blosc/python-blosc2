@@ -942,7 +942,7 @@ def reduce_slices(
 
         # Reduce the result
         if reduce_op == ReduceOp.SUM and result.shape == () and result[()] == 0:
-            # Avoid a copy if the is scalar and zero. Faster for sparse data.
+            # Avoid a reduction when result is a zero scalar. Faster for sparse data.
             continue
         if reduce_op == ReduceOp.ANY:
             result = np.any(result, **reduce_args)

@@ -190,16 +190,20 @@ def test_reduce_item(reduce_op, dtype, stripes, stripe_len, shape, chunks):
     ],
 )
 @pytest.mark.parametrize("disk", [True, False])
-@pytest.mark.parametrize("fill_value", [0, 1, 1.32])
-def test_fast_path(chunks, blocks, disk, fill_value):
+@pytest.mark.parametrize("fill_value", [0, 1, .32])
+@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
+def test_fast_path(chunks, blocks, disk, fill_value, reduce_op):
     shape = (100, 200, 300)
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
-        a1 = blosc2.full(shape, fill_value, chunks=chunks, blocks=blocks, urlpath=urlpath, mode='w')
+        a = blosc2.full(shape, fill_value, chunks=chunks, blocks=blocks, urlpath=urlpath, mode='w')
     else:
-        a1 = blosc2.zeros(shape, dtype=np.float64, chunks=chunks, blocks=blocks, urlpath=urlpath, mode='w')
+        a = blosc2.zeros(shape, dtype=np.float64, chunks=chunks, blocks=blocks, urlpath=urlpath, mode='w')
     if disk:
-        a1 = blosc2.open(urlpath)
-    a = a1[:]
+        a = blosc2.open(urlpath)
+    na = a[:]
 
-    assert np.allclose(a1.sum(), np.sum(a))
+    res = getattr(a, reduce_op)()
+    nres = getattr(na[:], reduce_op)()
+
+    assert np.allclose(res, nres)
