@@ -182,18 +182,19 @@ def test_reduce_item(reduce_op, dtype, stripes, stripe_len, shape, chunks):
 @pytest.mark.parametrize(
     "chunks, blocks",
     [
-        ((100, 100, 100), (50, 100, 100)),
-        ((50, 200, 300), (50, 100, 150)),
-        ((50, 200, 100), (45, 100, 50)),
-        ((55, 200, 75), (50, 100, 50)),
-        ((100, 200, 300), (50, 100, 150)),
+        ((20, 50, 100), (10, 50, 100)),
+        ((10, 25, 70), (10, 25, 50)),
+        ((10, 50, 100), (6, 25, 75)),
+        ((15, 30, 75), (7, 20, 50)),
+        ((20, 50, 100), (10, 50, 60)),
     ],
 )
 @pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize("fill_value", [0, 1, .32])
 @pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
-def test_fast_path(chunks, blocks, disk, fill_value, reduce_op):
-    shape = (100, 200, 300)
+@pytest.mark.parametrize("axis", [0, 1, (0, 1), None])
+def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
+    shape = (20, 50, 100)
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
         a = blosc2.full(shape, fill_value, chunks=chunks, blocks=blocks, urlpath=urlpath, mode='w')
@@ -203,7 +204,7 @@ def test_fast_path(chunks, blocks, disk, fill_value, reduce_op):
         a = blosc2.open(urlpath)
     na = a[:]
 
-    res = getattr(a, reduce_op)()
-    nres = getattr(na[:], reduce_op)()
+    res = getattr(a, reduce_op)(axis=axis)
+    nres = getattr(na[:], reduce_op)(axis=axis)
 
     assert np.allclose(res, nres)

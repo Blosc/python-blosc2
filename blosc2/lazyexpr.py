@@ -941,9 +941,12 @@ def reduce_slices(
                 )
 
         # Reduce the result
-        if reduce_op == ReduceOp.SUM and result.shape == () and result[()] == 0:
-            # Avoid a reduction when result is a zero scalar. Faster for sparse data.
-            continue
+        if result.shape == ():
+            if reduce_op == ReduceOp.SUM and result[()] == 0:
+                # Avoid a reduction when result is a zero scalar. Faster for sparse data.
+                continue
+            chunks_ = tuple(s.stop - s.start for s in slice_)
+            result = np.full(chunks_, result[()])
         if reduce_op == ReduceOp.ANY:
             result = np.any(result, **reduce_args)
         elif reduce_op == ReduceOp.ALL:
