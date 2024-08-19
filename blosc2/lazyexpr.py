@@ -9,6 +9,7 @@ import asyncio
 import concurrent.futures
 import copy
 import math
+import os
 import pathlib
 import threading
 from abc import ABC, abstractmethod
@@ -362,9 +363,16 @@ def do_slices_intersect(slice1: list | tuple, slice2: list | tuple) -> bool:
 
 
 def get_chunk(arr, info, nchunk):
+    reduc, aligned, low_mem, chunks_idx = info
+
+    if low_mem:
+        # We don't want to uncompress the chunk, so keep it compressed and
+        # decompress it just before execution.  This is normally slower, but
+        # can be useful in scarce memory situations.
+        return arr.schunk.get_chunk(nchunk)
+
     # First check if the chunk is a special zero chunk.
     # Using lazychunks is very effective here because we only need to read the header.
-    reduc, aligned, chunks_idx = info
     if reduc:
         # Reductions can treat zero scalars as zero chunks
         chunk = arr.schunk.get_lazychunk(nchunk)
@@ -382,7 +390,7 @@ def get_chunk(arr, info, nchunk):
     chunks_ = tuple(s.stop - s.start for s in slice_)
 
     if aligned:
-        # Decompress the whole chunk and store it
+        # Decompress the whole chunk and return it
         buff = arr.schunk.decompress_chunk(nchunk)
         bsize = arr.dtype.itemsize * math.prod(chunks_)
         return np.frombuffer(buff[:bsize], dtype=arr.dtype).reshape(chunks_)
@@ -455,18 +463,36 @@ def fill_chunk_operands(
     global iter_chunks
 
     if iter_disk:
+        # Use an environment variable to control the memory usage
+        low_mem = os.environ.get("BLOSC2_LOW_MEM", False)
         # This method is only useful when all operands are NDArray and shows better
         # performance only when at least one of them is persisted on disk
         if nchunk == 0:
             # Initialize the iterator for reading the chunks
             arr = operands["o0"]
             chunks_idx, nchunks = get_chunks_idx(arr.shape, arr.chunks)
-            info = (reduc, aligned, chunks_idx)
+            info = (reduc, aligned, low_mem, chunks_idx)
             iter_chunks = read_nchunk(list(value for value in operands.values()), info)
         # Run the asynchronous file reading function from a synchronous context
         chunks = next(iter_chunks)
-        for i, key in enumerate(operands):
-            chunk_operands[key] = chunks[i]
+
+        for i, (key, value) in enumerate(operands.items()):
+            # The chunks are already decompressed, so we can use them directly
+            if not low_mem:
+                chunk_operands[key] = chunks[i]
+                continue
+            # Otherwise, we need to decompress the chunks
+            special = blosc2.SpecialValue((chunks[i][31] & 0x70) >> 4)
+            if special == blosc2.SpecialValue.ZERO:
+                # The chunk is a special zero chunk, so we can treat it as a scalar
+                chunk_operands[key] = np.zeros((), dtype=value.dtype)
+                continue
+            if aligned:
+                buff = blosc2.decompress2(chunks[i])
+                bsize = value.dtype.itemsize * math.prod(chunks_)
+                chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
+            else:
+                chunk_operands[key] = value[slice_]
         return
 
     for key, value in operands.items():
