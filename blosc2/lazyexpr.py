@@ -464,7 +464,7 @@ def fill_chunk_operands(
 
     if iter_disk:
         # Use an environment variable to control the memory usage
-        low_mem = os.environ.get("BLOSC2_LOW_MEM", False)
+        low_mem = os.environ.get("BLOSC_LOW_MEM", False)
         # This method is only useful when all operands are NDArray and shows better
         # performance only when at least one of them is persisted on disk
         if nchunk == 0:
