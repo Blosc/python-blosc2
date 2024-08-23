@@ -53,8 +53,11 @@ documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 # Skip unsupported python versions as well as 32-bit platforms, which are not supported anymore.
 skip = "cp36-* cp37-* pp37-* cp38-* pp38-* cp39-* pp39-* *-manylinux_i686  cp*-win32 *_ppc64le *_s390x"
 # Let's use a more recent version of the manylinux image for more modern compilers
-manylinux-x86_64-image = "manylinux_2_28"
-manylinux-aarch64-image = "manylinux_2_28"
+# Looks like this creates a "ABI because of the presence of too-recent versioned symbols" error
+# when trying to import the built module in the aarch64 manylinux image
+# Let's go back to the default (2014) for now
+# manylinux-x86_64-image = "manylinux_2_28"
+# manylinux-aarch64-image = "manylinux_2_28"
 
 [tool.ruff]
 line-length = 109
