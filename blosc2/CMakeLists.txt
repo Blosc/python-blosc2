@@ -1,5 +1,12 @@
-add_cython_target(blosc2_ext blosc2_ext.pyx)
-python_add_library(blosc2_ext MODULE WITH_SOABI ${blosc2_ext})
+# Compile the Cython extension manually...
+add_custom_command(
+  OUTPUT blosc2_ext.c
+  COMMAND Python::Interpreter -m cython
+          "${CMAKE_CURRENT_SOURCE_DIR}/blosc2_ext.pyx" --output-file blosc2_ext.c
+  DEPENDS blosc2_ext.pyx
+  VERBATIM)
+# ...and add it to the target
+Python_add_library(blosc2_ext MODULE blosc2_ext.c WITH_SOABI)
 
 if(USE_SYSTEM_BLOSC2)
     set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
@@ -18,12 +25,8 @@ else()
     set(BLOSC_INSTALL ON)
     add_subdirectory(c-blosc2)
     include_directories("${CMAKE_CURRENT_SOURCE_DIR}/c-blosc2/include")
-    target_link_libraries(blosc2_ext blosc2_static)
+    target_link_libraries(blosc2_ext PRIVATE blosc2_static)
 endif()
-
-include_directories("${Python_NumPy_INCLUDE_DIRS}")
-
-python_extension_module(blosc2_ext)
 
 add_custom_command(
     TARGET blosc2_ext POST_BUILD

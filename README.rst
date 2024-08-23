@@ -183,11 +183,9 @@ Building from sources
 
 .. code-block:: console
 
-    git clone https://github.com/Blosc/python-blosc2/
+    git clone --recursive https://github.com/Blosc/python-blosc2/
     cd python-blosc2
-    git submodule update --init --recursive
-    python -m pip install -r requirements-build.txt
-    python setup.py build_ext --inplace
+    pip install .   # add -e for editable mode
 
 That's all. You can proceed with testing section now.
 
