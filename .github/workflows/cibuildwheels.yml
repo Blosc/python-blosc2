@@ -75,7 +75,7 @@ jobs:
           clang -v
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2
+        uses: pypa/cibuildwheel@v2.20.0
 
       - name: Upload wheels
         uses: actions/upload-artifact@v3
