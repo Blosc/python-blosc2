@@ -18,7 +18,10 @@ env:
   # Building for musllinux and aarch64 takes way too much time.
   # NumPy is adding musllinux for just x86_64 too, so this is not too bad.
   # For some reason, we need to disable the cp*-win32 builds here too (and not only in pyproject.toml).
-  CIBW_SKIP: "*musllinux*aarch64* cp*-win32"
+  # CIBW_SKIP: "*musllinux*aarch64* cp*-win32"
+  # Apparently we need to disable musllinux for x86_64 too because it does not contain libc.
+  # https://peps.python.org/pep-0656/#motivation
+  CIBW_SKIP: "*musllinux* cp*-win32"
 
 jobs:
 
