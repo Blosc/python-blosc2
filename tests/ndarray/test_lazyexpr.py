@@ -80,6 +80,7 @@ def test_simple_getitem(array_fixture):
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
 
+
 # Mix Proxy and NDArray operands
 def test_proxy_simple_getitem(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
@@ -162,6 +163,7 @@ def test_simple_expression(array_fixture):
     res = expr.eval()
     np.testing.assert_allclose(res[:], nres)
 
+
 # Mix Proxy and NDArray operands
 def test_proxy_simple_expression(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
@@ -213,6 +215,7 @@ def test_complex_getitem_slice(array_fixture):
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
 
+
 def test_func_expression(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = (a1 + a2) * a3 - a4
@@ -220,6 +223,7 @@ def test_func_expression(array_fixture):
     nres = ne.evaluate("sin((na1 + na2) * na3 - na4) + cos((na1 + na2) * na3 - na4)")
     res = expr.eval()
     np.testing.assert_allclose(res[:], nres)
+
 
 def test_expression_with_constants(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
@@ -836,9 +840,10 @@ def test_eval_item(array_fixture):
 # Test get_chunk method
 def test_get_chunk(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    expr = blosc2.lazyexpr("a1 + a2 - a3 * a4",
-                           operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4},
-                           )
+    expr = blosc2.lazyexpr(
+        "a1 + a2 - a3 * a4",
+        operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4},
+    )
     nres = ne.evaluate("na1 + na2 - na3 * na4")
     chunksize = np.prod(expr.chunks) * expr.dtype.itemsize
     blocksize = np.prod(expr.blocks) * expr.dtype.itemsize
@@ -847,46 +852,50 @@ def test_get_chunk(array_fixture):
     for nchunk in range(nchunks):
         chunk = expr.get_chunk(nchunk)
         out.schunk.update_chunk(nchunk, chunk)
-        chunksize_ = int.from_bytes(chunk[4:8], byteorder='little')
-        blocksize_ = int.from_bytes(chunk[8:12], byteorder='little')
+        chunksize_ = int.from_bytes(chunk[4:8], byteorder="little")
+        blocksize_ = int.from_bytes(chunk[8:12], byteorder="little")
         # Sometimes the actual chunksize is smaller than the expected chunks due to padding
         assert chunksize <= chunksize_
         assert blocksize == blocksize_
     np.testing.assert_allclose(out[:], nres)
+
 
 @pytest.mark.parametrize(
     "chunks, blocks",
     [
         ((10, 100), (6, 100)),  # behaved
         ((15, 100), (5, 100)),  # not behaved
-        ((15, 15), (5, 5)),     # not behaved
-        ((10, 10), (5, 5)),     # not behaved
+        ((15, 15), (5, 5)),  # not behaved
+        ((10, 10), (5, 5)),  # not behaved
     ],
 )
-@pytest.mark.parametrize("disk", [True, False],)
+@pytest.mark.parametrize(
+    "disk",
+    [True, False],
+)
 @pytest.mark.parametrize("fill_value", [0, 1, np.nan])
 def test_fill_disk_operands(chunks, blocks, disk, fill_value):
     N = 100
 
     apath = bpath = cpath = None
     if disk:
-        apath = 'a.b2nd'
-        bpath = 'b.b2nd'
-        cpath = 'c.b2nd'
+        apath = "a.b2nd"
+        bpath = "b.b2nd"
+        cpath = "c.b2nd"
     if fill_value != 0:
-        a = blosc2.full((N, N), fill_value, urlpath=apath, mode='w', chunks=chunks, blocks=blocks)
-        b = blosc2.full((N, N), fill_value, urlpath=bpath, mode='w', chunks=chunks, blocks=blocks)
-        c = blosc2.full((N, N), fill_value, urlpath=cpath, mode='w', chunks=chunks, blocks=blocks)
+        a = blosc2.full((N, N), fill_value, urlpath=apath, mode="w", chunks=chunks, blocks=blocks)
+        b = blosc2.full((N, N), fill_value, urlpath=bpath, mode="w", chunks=chunks, blocks=blocks)
+        c = blosc2.full((N, N), fill_value, urlpath=cpath, mode="w", chunks=chunks, blocks=blocks)
     else:
-        a = blosc2.zeros((N, N), urlpath=apath, mode='w', chunks=chunks, blocks=blocks)
-        b = blosc2.zeros((N, N), urlpath=bpath, mode='w', chunks=chunks, blocks=blocks)
-        c = blosc2.zeros((N, N), urlpath=cpath, mode='w', chunks=chunks, blocks=blocks)
+        a = blosc2.zeros((N, N), urlpath=apath, mode="w", chunks=chunks, blocks=blocks)
+        b = blosc2.zeros((N, N), urlpath=bpath, mode="w", chunks=chunks, blocks=blocks)
+        c = blosc2.zeros((N, N), urlpath=cpath, mode="w", chunks=chunks, blocks=blocks)
     if disk:
-        a = blosc2.open('a.b2nd')
-        b = blosc2.open('b.b2nd')
-        c = blosc2.open('c.b2nd')
+        a = blosc2.open("a.b2nd")
+        b = blosc2.open("b.b2nd")
+        c = blosc2.open("c.b2nd")
 
-    expr = ((a ** 3 + blosc2.sin(c * 2)) < b) & (c > 0)
+    expr = ((a**3 + blosc2.sin(c * 2)) < b) & (c > 0)
 
     out = expr.eval()
     assert out.shape == (N, N)
@@ -895,6 +904,6 @@ def test_fill_disk_operands(chunks, blocks, disk, fill_value):
     np.testing.assert_allclose(out[:], ((a[:] ** 3 + np.sin(c[:] * 2)) < b[:]) & (c[:] > 0))
 
     if disk:
-        blosc2.remove_urlpath('a.b2nd')
-        blosc2.remove_urlpath('b.b2nd')
-        blosc2.remove_urlpath('c.b2nd')
+        blosc2.remove_urlpath("a.b2nd")
+        blosc2.remove_urlpath("b.b2nd")
+        blosc2.remove_urlpath("c.b2nd")

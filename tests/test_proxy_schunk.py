@@ -22,7 +22,7 @@ import blosc2
     ],
 )
 def test_schunk_proxy(contiguous, urlpath, chunksize, nchunks, start, stop):
-    storage = {"contiguous": contiguous, "cparams": {'typesize': 4}}
+    storage = {"contiguous": contiguous, "cparams": {"typesize": 4}}
     blosc2.remove_urlpath(urlpath)
     num_elem = chunksize // 4 * nchunks
     data = np.arange(num_elem, dtype="int32")
@@ -31,7 +31,7 @@ def test_schunk_proxy(contiguous, urlpath, chunksize, nchunks, start, stop):
     cache = blosc2.Proxy(schunk, urlpath=urlpath)
 
     cache_slice = cache[slice(start, stop)]
-    assert cache_slice == bytes_obj[start * data.dtype.itemsize:stop * data.dtype.itemsize]
+    assert cache_slice == bytes_obj[start * data.dtype.itemsize : stop * data.dtype.itemsize]
 
     cache_slice = cache.fetch(slice(start, stop))
     assert cache_slice.urlpath == urlpath
@@ -58,7 +58,7 @@ def test_schunk_proxy(contiguous, urlpath, chunksize, nchunks, start, stop):
     ],
 )
 def test_open(urlpath, chunksize, nchunks):
-    storage = {"urlpath": urlpath, "cparams": {'typesize': 4}}
+    storage = {"urlpath": urlpath, "cparams": {"typesize": 4}}
     proxy_urlpath = "proxy.b2frame"
     blosc2.remove_urlpath(urlpath)
     blosc2.remove_urlpath(proxy_urlpath)
@@ -74,7 +74,7 @@ def test_open(urlpath, chunksize, nchunks):
             _ = blosc2.open(proxy_urlpath)
     else:
         proxy = blosc2.open(proxy_urlpath)
-        assert proxy[0:len(data) * 4] == bytes_obj
+        assert proxy[0 : len(data) * 4] == bytes_obj
 
     blosc2.remove_urlpath(urlpath)
     blosc2.remove_urlpath(proxy_urlpath)

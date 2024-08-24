@@ -231,7 +231,7 @@ class TestCodec(unittest.TestCase):
         blosc2.set_blocksize(2**14)
         blosc2.compress(s, typesize=1)
         d = blosc2.get_blocksize()
-        assert d == 2 ** 14
+        assert d == 2**14
 
     def test_bitshuffle_not_multiple(self):
         # Check the fix for #133

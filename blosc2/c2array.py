@@ -254,7 +254,7 @@ class C2Array(blosc2.Operand):
             The requested compressed chunk.
         """
         url = _sub_url(self.urlbase, f"api/chunk/{self.path}")
-        params = {'nchunk': nchunk}
+        params = {"nchunk": nchunk}
         response = _xget(url, params=params, auth_token=self.auth_token)
         return response.content
 

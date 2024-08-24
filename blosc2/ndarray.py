@@ -90,6 +90,7 @@ def are_partitions_behaved(shape, chunks, blocks):
     bool
         True if the partitions are well-behaved, False otherwise.
     """
+
     # Check C-contiguity among partitions
     def check_contiguity(shape, part):
         ndims = len(shape)

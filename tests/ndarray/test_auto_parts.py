@@ -54,7 +54,7 @@ def test_compute_chunks_blocks(clevel, codec, shape: tuple, dtype):
         ((1000, 1000), (10, 10)),
         ((10, 10), (100, 100)),  # blocks can exceed shape if user wants to
         ((10, 20, 30), (1, 2, 3)),
-        ((10, 20, 30), (1, 2, 31)), # ditto, but even more weird blocks
+        ((10, 20, 30), (1, 2, 31)),  # ditto, but even more weird blocks
         ((10, 30, 50, 10), (10, 30, 50, 10)),
         ((10, 10, 10, 10, 10), (10, 10, 10, 9, 10)),
         ((100, 10, 20, 100, 10), (10, 10, 10, 9, 10)),
