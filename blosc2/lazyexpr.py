@@ -1033,7 +1033,7 @@ def reduce_slices(
             dtype = np.float64
         out = convert_none_out(dtype, reduce_op, reduced_shape)
 
-    # Check if the output array needs to be converted to a blosc2.NDArray
+    # Check if the output array needs to be converted into a blosc2.NDArray
     if kwargs != {} and not np.isscalar(out):
         out = blosc2.asarray(out, **kwargs)
     return out

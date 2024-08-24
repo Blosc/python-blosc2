@@ -983,7 +983,7 @@ def sum(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdi
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-            The input array or expression.
+        The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which a sum is performed. The default, axis=None,
         will sum all the elements of the input array. If axis is negative
@@ -1002,7 +1002,7 @@ def sum(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdi
     Returns
     -------
     sum_along_axis: np.ndarray or :ref:`NDArray` or scalar
-            The sum of the elements along the axis.
+        The sum of the elements along the axis.
 
     References
     ----------
@@ -1071,7 +1071,7 @@ def std(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
     Returns
     -------
     std_along_axis: np.ndarray or :ref:`NDArray` or scalar
-            The standard deviation of the elements along the axis.
+        The standard deviation of the elements along the axis.
 
     References
     ----------
@@ -1107,7 +1107,7 @@ def var(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
     Returns
     -------
     var_along_axis: np.ndarray or :ref:`NDArray` or scalar
-            The variance of the elements along the axis.
+        The variance of the elements along the axis.
 
     References
     ----------

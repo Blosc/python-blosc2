@@ -318,6 +318,7 @@ from .ndarray import (
     sum,
     tan,
     tanh,
+    var,
     where,
 )
 
