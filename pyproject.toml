@@ -1,10 +1,7 @@
 [build-system]
 requires = [
-    "setuptools",
     "scikit-build-core",
     "cython>=3",
-    "cmake",
-    "ninja",
     "numpy>=2.0.0",
 ]
 build-backend = "scikit_build_core.build"
