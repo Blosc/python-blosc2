@@ -23,8 +23,7 @@ def get_array(shape, chunks_blocks):
     dtype = np.float64
     urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd"
     path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
-    a1 = blosc2.C2Array(path)
-    return a1
+    return blosc2.C2Array(path)
 
 
 @pytest.mark.parametrize(

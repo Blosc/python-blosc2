@@ -26,7 +26,7 @@ def shape_fixture(request):
     return request.param
 
 
-@pytest.fixture()
+@pytest.fixture
 def array_fixture(dtype_fixture, shape_fixture):
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
@@ -148,6 +148,7 @@ def test_broadcast_params(axis, keepdims, reduce_op, shapes):
     tol = 1e-14 if a1.dtype == "float64" else 1e-5
     np.testing.assert_allclose(res[:], nres, atol=tol, rtol=tol)
 
+
 # Test reductions with item parameter
 @pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
@@ -178,6 +179,7 @@ def test_reduce_item(reduce_op, dtype, stripes, stripe_len, shape, chunks):
             nres = getattr(na[_slice], reduce_op)()
             np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
+
 # Test fast path for reductions
 @pytest.mark.parametrize(
     "chunks, blocks",
@@ -190,16 +192,16 @@ def test_reduce_item(reduce_op, dtype, stripes, stripe_len, shape, chunks):
     ],
 )
 @pytest.mark.parametrize("disk", [True, False])
-@pytest.mark.parametrize("fill_value", [0, 1, .32])
+@pytest.mark.parametrize("fill_value", [0, 1, 0.32])
 @pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
 @pytest.mark.parametrize("axis", [0, 1, (0, 1), None])
 def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     shape = (20, 50, 100)
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
-        a = blosc2.full(shape, fill_value, chunks=chunks, blocks=blocks, urlpath=urlpath, mode='w')
+        a = blosc2.full(shape, fill_value, chunks=chunks, blocks=blocks, urlpath=urlpath, mode="w")
     else:
-        a = blosc2.zeros(shape, dtype=np.float64, chunks=chunks, blocks=blocks, urlpath=urlpath, mode='w')
+        a = blosc2.zeros(shape, dtype=np.float64, chunks=chunks, blocks=blocks, urlpath=urlpath, mode="w")
     if disk:
         a = blosc2.open(urlpath)
     na = a[:]

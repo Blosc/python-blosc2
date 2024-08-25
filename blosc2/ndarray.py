@@ -76,10 +76,7 @@ def are_partitions_aligned(shape, chunks, blocks):
     alignment_shape_chunks = builtins.all(s % c == 0 for s, c in zip(shape, chunks, strict=True))
     if not alignment_shape_chunks:
         return False
-    alignment_chunks_blocks = builtins.all(c % b == 0 for c, b in zip(chunks, blocks, strict=True))
-    if not alignment_chunks_blocks:
-        return False
-    return True
+    return builtins.all(c % b == 0 for c, b in zip(chunks, blocks, strict=True))
 
 
 def are_partitions_behaved(shape, chunks, blocks):
@@ -93,6 +90,7 @@ def are_partitions_behaved(shape, chunks, blocks):
     bool
         True if the partitions are well-behaved, False otherwise.
     """
+
     # Check C-contiguity among partitions
     def check_contiguity(shape, part):
         ndims = len(shape)

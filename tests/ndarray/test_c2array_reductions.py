@@ -16,26 +16,26 @@ import blosc2
 pytestmark = pytest.mark.network
 
 NITEMS_SMALL = 1_000
-ROOT = 'b2tests'
-DIR = 'expr/'
+ROOT = "b2tests"
+DIR = "expr/"
 
 
 def get_arrays(shape, chunks_blocks):
     dtype = np.float64
     nelems = np.prod(shape)
     na1 = np.linspace(0, 10, nelems, dtype=dtype).reshape(shape)
-    urlpath = f'ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
+    urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a1-{shape}d.b2nd"
+    path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
     a1 = blosc2.C2Array(path)
-    urlpath = f'ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a2-{shape}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
+    urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a2-{shape}d.b2nd"
+    path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
     a2 = blosc2.C2Array(path)
     # Let other operands have chunks1 and blocks1
-    urlpath = f'ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a3-{shape}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
+    urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a3-{shape}d.b2nd"
+    path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
     a3 = blosc2.C2Array(path)
-    urlpath = f'ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a4-{shape}d.b2nd'
-    path = pathlib.Path(f'{ROOT}/{DIR + urlpath}').as_posix()
+    urlpath = f"ds-0-10-linspace-{dtype.__name__}-{chunks_blocks}-a4-{shape}d.b2nd"
+    path = pathlib.Path(f"{ROOT}/{DIR + urlpath}").as_posix()
     a4 = blosc2.C2Array(path)
     assert isinstance(a1, blosc2.C2Array)
     assert isinstance(a2, blosc2.C2Array)
@@ -46,8 +46,8 @@ def get_arrays(shape, chunks_blocks):
 
 @pytest.mark.parametrize("reduce_op", ["sum", pytest.param("all", marks=pytest.mark.heavy)])
 def test_reduce_bool(reduce_op, c2sub_context):
-    shape = (NITEMS_SMALL, )
-    chunks_blocks = 'default'
+    shape = (NITEMS_SMALL,)
+    chunks_blocks = "default"
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     expr = a1 + a2 > a3 * a4
     nres = ne.evaluate("na1 + na2 > na3 * na4")
@@ -66,10 +66,10 @@ def test_reduce_bool(reduce_op, c2sub_context):
         (False, False),
     ],
 )
-@pytest.mark.parametrize("reduce_op", [pytest.param("prod", marks=pytest.mark.heavy),
-                                       "min",
-                                       pytest.param("any", marks=pytest.mark.heavy)
-                                       ])
+@pytest.mark.parametrize(
+    "reduce_op",
+    [pytest.param("prod", marks=pytest.mark.heavy), "min", pytest.param("any", marks=pytest.mark.heavy)],
+)
 @pytest.mark.parametrize("axis", [1])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize("dtype_out", [np.int16])
@@ -116,10 +116,14 @@ def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op, c2su
         (False, False),
     ],
 )
-@pytest.mark.parametrize("reduce_op", [pytest.param("max", marks=pytest.mark.heavy),
-                                       "mean",
-                                       pytest.param("var", marks=pytest.mark.heavy),
-                                       ])
+@pytest.mark.parametrize(
+    "reduce_op",
+    [
+        pytest.param("max", marks=pytest.mark.heavy),
+        "mean",
+        pytest.param("var", marks=pytest.mark.heavy),
+    ],
+)
 @pytest.mark.parametrize("axis", [0])
 def test_reduce_expr_arr(chunks_blocks, axis, reduce_op, c2sub_context):
     shape = (60, 60)

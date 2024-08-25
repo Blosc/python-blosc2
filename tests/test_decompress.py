@@ -14,6 +14,7 @@ import blosc2
 
 random = np.random.default_rng()
 
+
 @pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
     "object, codec",
