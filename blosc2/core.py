@@ -1083,18 +1083,17 @@ def apple_silicon_cache_size(cache_level: int):
     size = ctypes.c_size_t()
     if cache_level == 1:
         # We are interested in the L1 *data* cache size
-        hwcachesize = 'hw.perflevel0.l1dcachesize'
+        hwcachesize = "hw.perflevel0.l1dcachesize"
     else:
-        hwcachesize = f'hw.perflevel0.l{cache_level}cachesize'
-    hwcachesize = hwcachesize.encode('ascii')
-    libc.sysctlbyname(
-            hwcachesize, ctypes.byref(size), ctypes.byref(ctypes.c_size_t(8)), None, 0
-    )
+        hwcachesize = f"hw.perflevel0.l{cache_level}cachesize"
+    hwcachesize = hwcachesize.encode("ascii")
+    libc.sysctlbyname(hwcachesize, ctypes.byref(size), ctypes.byref(ctypes.c_size_t(8)), None, 0)
     return size.value
 
-def linux_cache_size(cache_level: int):
+
+def linux_cache_size(cache_level: int, default_size: int) -> int:
     """Get the data cache_level size in bytes for Linux."""
-    cache_size = 0
+    cache_size = default_size
     try:
         with open(f"/sys/devices/system/cpu/cpu0/cache/index{cache_level}/size") as f:
             size = f.read()
@@ -1103,20 +1102,26 @@ def linux_cache_size(cache_level: int):
             elif size.endswith("M\n"):
                 cache_size = int(size[:-2]) * 1024 * 1024
     except FileNotFoundError:
+        # If the cache size cannot be read, return the default size
         pass
     return cache_size
+
 
 def get_cpu_info():
     cpu_info = cpuinfo.get_cpu_info()
     # cpuinfo does not correctly retrieve the cache sizes for Apple Silicon, so do it manually
     if platform.system() == "Darwin":
-        cpu_info["l1_cache_size"] = apple_silicon_cache_size(1)
+        cpu_info["l1_data_cache_size"] = apple_silicon_cache_size(1)
         cpu_info["l2_cache_size"] = apple_silicon_cache_size(2)
         cpu_info["l3_cache_size"] = apple_silicon_cache_size(3)
+    # cpuinfo does not correctly retrieve the cache sizes for all CPUs on Linux, so ask the kernel
     if platform.system() == "Linux":
-        cpu_info["l1_cache_size"] = linux_cache_size(1)
-        cpu_info["l2_cache_size"] = linux_cache_size(2)
-        cpu_info["l3_cache_size"] = linux_cache_size(3)
+        l1_data_cache_size = cpu_info.get("l1_data_cache_size", 32 * 1024)
+        cpu_info["l1_data_cache_size"] = linux_cache_size(1, l1_data_cache_size)
+        l2_cache_size = cpu_info.get("l2_cache_size", 256 * 1024)
+        cpu_info["l2_cache_size"] = linux_cache_size(2, l2_cache_size)
+        l3_cache_size = cpu_info.get("l3_cache_size", 1024 * 1024)
+        cpu_info["l3_cache_size"] = linux_cache_size(3, l3_cache_size)
     return cpu_info
 
 
@@ -1204,7 +1209,6 @@ def nearest_divisor(a, b):
     divisors = (i for i in range(1, a + 1) if a % i == 0)
     # Find the divisor nearest to b
     return min(divisors, key=lambda x: abs(x - b))
-
 
 
 # Compute chunks and blocks partitions
@@ -1321,13 +1325,13 @@ def compute_chunks_blocks(
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
         # Maximum blocksize calculation
         max_blocksize = blocksize
-        if platform.machine() == 'x86_64':
+        if platform.machine() == "x86_64":
             # For modern Intel/AMD archs, experiments say to use half of the L2 cache size
             max_blocksize = blosc2.cpu_info["l2_cache_size"] // 2
-        elif platform.system() == 'Darwin' and 'arm' in platform.machine():
+        elif platform.system() == "Darwin" and "arm" in platform.machine():
             # For Apple Silicon, experiments say to use half of the L1 cache size
-            max_blocksize = blosc2.cpu_info["l1_cache_size"] // 2
-        if 'clevel' in cparams and cparams['clevel'] == 0:
+            max_blocksize = blosc2.cpu_info["l1_data_cache_size"] // 2
+        if "clevel" in cparams and cparams["clevel"] == 0:
             # Experiments show that, when no compression is used, it is not a good idea
             # to exceed half of private cache for the blocksize because speed suffers
             # too much during evaluations.

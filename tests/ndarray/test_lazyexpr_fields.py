@@ -39,7 +39,7 @@ def chunks_blocks_fixture(request):
     return request.param
 
 
-@pytest.fixture()
+@pytest.fixture
 def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
     nelems = np.prod(shape_fixture)
     dt1, dt2 = dtype_fixture
@@ -94,9 +94,33 @@ def test_simple_getitem(array_fixture):
     np.testing.assert_allclose(res, nres[sl])
 
 
+def test_simple_getitem_proxy(array_fixture):
+    sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    sa1 = blosc2.Proxy(sa1)
+    a1 = sa1.fields["a"]
+    a2 = sa1.fields["b"]
+    expr = a1 + a2 - a3 * a4
+    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    sl = slice(100)
+    res = expr[sl]
+    np.testing.assert_allclose(res, nres[sl])
+
+
 # Add more test functions to test different aspects of the code
 def test_simple_expression(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1 + a2 - a3 * a4
+    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    res = expr.eval()
+    np.testing.assert_allclose(res[:], nres)
+
+
+def test_simple_expression_proxy(array_fixture):
+    sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    sa1 = blosc2.Proxy(sa1)
+    a1 = sa1.fields["a"]
+    sa2 = blosc2.Proxy(sa2)
+    a4 = sa2.fields["b"]
     expr = a1 + a2 - a3 * a4
     nres = ne.evaluate("na1 + na2 - na3 * na4")
     res = expr.eval()

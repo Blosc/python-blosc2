@@ -60,30 +60,36 @@ def get_ndarray_start_stop(ndim, key, shape):
     return start, stop, step
 
 
-def are_partitions_behaved(shape, chunks, blocks):
+def are_partitions_aligned(shape, chunks, blocks):
     """
-    Check if the partitions defined by chunks and blocks are well-behaved with shape.
+    Check whether the partitions defined by chunks and blocks are aligned with shape.
 
-    This makes two checks:
-
-    1. The shape is aligned with the chunks and the chunks are aligned with the blocks.
-    2. The partitions are C-contiguous with respect the outer container.
-
-    This is useful for taking fast paths in code.
+    This checks that shape is aligned with the chunks and the chunks are aligned
+    with the blocks.
 
     Returns
     -------
     bool
-        True if the partitions are well-behaved, False otherwise.
-
+        True if the partitions are aligned, False otherwise.
     """
     # Check alignment
     alignment_shape_chunks = builtins.all(s % c == 0 for s, c in zip(shape, chunks, strict=True))
     if not alignment_shape_chunks:
         return False
-    alignment_chunks_blocks = builtins.all(c % b == 0 for c, b in zip(chunks, blocks, strict=True))
-    if not alignment_chunks_blocks:
-        return False
+    return builtins.all(c % b == 0 for c, b in zip(chunks, blocks, strict=True))
+
+
+def are_partitions_behaved(shape, chunks, blocks):
+    """
+    Check whether the partitions defined by chunks and blocks are well-behaved with shape.
+
+    This checks that partitions are C-contiguous with respect the outer container.
+
+    Returns
+    -------
+    bool
+        True if the partitions are well-behaved, False otherwise.
+    """
 
     # Check C-contiguity among partitions
     def check_contiguity(shape, part):
@@ -114,9 +120,20 @@ def get_chunks_idx(shape, chunks):
     return chunks_idx, nchunks
 
 
-def _check_allowed_dtypes(value: bool | int | float | str | NDArray | blosc2.C2Array | NDField):
+def _check_allowed_dtypes(
+    value: bool | int | float | str | NDArray | NDField | blosc2.C2Array | blosc2.Proxy,
+):
     if not (
-        isinstance(value, blosc2.LazyExpr | NDArray | NDField | blosc2.C2Array | np.ndarray)
+        isinstance(
+            value,
+            blosc2.LazyExpr
+            | NDArray
+            | NDField
+            | blosc2.C2Array
+            | blosc2.Proxy
+            | blosc2.ProxyNDField
+            | np.ndarray,
+        )
         or np.isscalar(value)
     ):
         raise RuntimeError(
@@ -711,16 +728,28 @@ class NDArray(blosc2_ext.NDArray, Operand):
             raise ValueError("Step parameter is not supported yet")
         key = (start, stop)
 
+        shape = [sp - st for sp, st in zip(stop, start, strict=False)]
         if isinstance(value, int | float | bool):
-            shape = [sp - st for sp, st in zip(stop, start, strict=False)]
             value = np.full(shape, value, dtype=self.dtype)
-        elif isinstance(value, NDArray):
-            value = value[...]
         elif isinstance(value, np.ndarray):
             if value.dtype != self.dtype:
                 raise ValueError("The dtype of the value should be the same as the array")
+            if value.shape == ():
+                value = np.full(shape, value, dtype=self.dtype)
+        elif isinstance(value, NDArray):
+            value = value[...]
 
         return super().set_slice(key, value)
+
+    def get_chunk(self, nchunk):
+        """Shortcut to :meth:`SChunk.get_chunk <blosc2.schunk.SChunk.get_chunk>`. This can be accessed
+        through the :attr:`schunk` attribute as well.
+
+        See Also
+        --------
+        :attr:`schunk`
+        """
+        return self.schunk.get_chunk(nchunk)
 
     def iterchunks_info(self):
         """
@@ -730,12 +759,19 @@ class NDArray(blosc2_ext.NDArray, Operand):
         ------
         info: namedtuple
             A namedtuple with the following fields:
-            nchunk: the index of the chunk (int).
-            coords: the coordinates of the chunk, in chunk units (tuple).
-            cratio: the compression ratio of the chunk (float).
-            special: the special value enum of the chunk; if 0, the chunk is not special (SpecialValue).
-            repeated_value: the repeated value for the chunk; if not SpecialValue.VALUE, it is None.
-            lazychunk: a buffer with the complete lazy chunk (bytes).
+
+                nchunk: int
+                    The index of the chunk.
+                coords: tuple
+                    The coordinates of the chunk, in chunk units.
+                cratio: float
+                    The compression ratio of the chunk.
+                special: :class:`SpecialValue`
+                    The special value enum of the chunk; if 0, the chunk is not special.
+                repeated_value: :attr:`self.dtype` or None
+                    The repeated value for the chunk; if not SpecialValue.VALUE, it is None.
+                lazychunk: bytes
+                    A buffer with the complete lazy chunk.
         """
         ChunkInfoNDArray = namedtuple(
             "ChunkInfoNDArray", ["nchunk", "coords", "cratio", "special", "repeated_value", "lazychunk"]
@@ -945,7 +981,7 @@ def sum(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdi
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-            The input array or expression.
+        The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which a sum is performed. The default, axis=None,
         will sum all the elements of the input array. If axis is negative
@@ -964,7 +1000,7 @@ def sum(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdi
     Returns
     -------
     sum_along_axis: np.ndarray or :ref:`NDArray` or scalar
-            The sum of the elements along the axis.
+        The sum of the elements along the axis.
 
     References
     ----------
@@ -1033,7 +1069,7 @@ def std(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
     Returns
     -------
     std_along_axis: np.ndarray or :ref:`NDArray` or scalar
-            The standard deviation of the elements along the axis.
+        The standard deviation of the elements along the axis.
 
     References
     ----------
@@ -1069,7 +1105,7 @@ def var(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
     Returns
     -------
     var_along_axis: np.ndarray or :ref:`NDArray` or scalar
-            The variance of the elements along the axis.
+        The variance of the elements along the axis.
 
     References
     ----------
@@ -2253,12 +2289,12 @@ class NDField(Operand):
             A NumPy array with the data slice.
 
         """
-        # If the key is a LazyExpr, decorate with ``where`` and return it
+        # If key is a LazyExpr, decorate it with ``where`` and return it
         if isinstance(key, blosc2.LazyExpr):
             return key.where(self)
 
         if isinstance(key, str):
-            raise TypeError("This array is an NDField; use a structured NDArray for bool expressions")
+            raise TypeError("This array is a NDField; use a structured NDArray for bool expressions")
 
         # Check if the key is in the last read cache
         inmutable_key = make_key_hashable(key)

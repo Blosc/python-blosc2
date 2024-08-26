@@ -6,4 +6,4 @@ API Reference
 
     top_level
     classes
-    operations_with_arrays
+    array_operations

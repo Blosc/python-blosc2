@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.ndarray import get_chunks_idx
 
 NITEMS_SMALL = 1_000
 NITEMS = 10_000
@@ -32,7 +33,7 @@ def chunks_blocks_fixture(request):
     return request.param
 
 
-@pytest.fixture()
+@pytest.fixture
 def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
@@ -73,6 +74,18 @@ def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
 
 def test_simple_getitem(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1 + a2 - a3 * a4
+    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    sl = slice(100)
+    res = expr[sl]
+    np.testing.assert_allclose(res, nres[sl])
+
+
+# Mix Proxy and NDArray operands
+def test_proxy_simple_getitem(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    a1 = blosc2.Proxy(a1)
+    a2 = blosc2.Proxy(a2)
     expr = a1 + a2 - a3 * a4
     nres = ne.evaluate("na1 + na2 - na3 * na4")
     sl = slice(100)
@@ -151,6 +164,17 @@ def test_simple_expression(array_fixture):
     np.testing.assert_allclose(res[:], nres)
 
 
+# Mix Proxy and NDArray operands
+def test_proxy_simple_expression(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    a1 = blosc2.Proxy(a1)
+    a3 = blosc2.Proxy(a3)
+    expr = a1 + a2 - a3 * a4
+    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    res = expr.eval()
+    np.testing.assert_allclose(res[:], nres)
+
+
 def test_iXXX(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1**3 + a2**2 + a3**3 - a4 + 3
@@ -191,6 +215,7 @@ def test_complex_getitem_slice(array_fixture):
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
 
+
 def test_func_expression(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = (a1 + a2) * a3 - a4
@@ -198,6 +223,7 @@ def test_func_expression(array_fixture):
     nres = ne.evaluate("sin((na1 + na2) * na3 - na4) + cos((na1 + na2) * na3 - na4)")
     res = expr.eval()
     np.testing.assert_allclose(res[:], nres)
+
 
 def test_expression_with_constants(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
@@ -682,7 +708,7 @@ def broadcast_shape(request):
 
 
 # Test broadcasting
-@pytest.fixture()
+@pytest.fixture
 def broadcast_fixture(dtype_fixture, broadcast_shape):
     shape1, shape2 = broadcast_shape
     na1 = np.linspace(0, 1, np.prod(shape1), dtype=dtype_fixture).reshape(shape1)
@@ -796,3 +822,88 @@ def test_lazyexpr_out(array_fixture, out_param, operand_mix):
     assert expr2.eval() is out
     nres = ne.evaluate("na1 - na2")
     np.testing.assert_allclose(out[:], nres)
+
+
+# Test eval with an item parameter
+def test_eval_item(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = blosc2.lazyexpr("a1 + a2 - a3 * a4", operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4})
+    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    res = expr.eval(item=0)
+    np.testing.assert_allclose(res[()], nres[0])
+    res = expr.eval(item=slice(10))
+    np.testing.assert_allclose(res[()], nres[:10])
+    res = expr.eval(item=slice(0, 10, 2))
+    np.testing.assert_allclose(res[()], nres[0:10:2])
+
+
+# Test get_chunk method
+def test_get_chunk(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = blosc2.lazyexpr(
+        "a1 + a2 - a3 * a4",
+        operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4},
+    )
+    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    chunksize = np.prod(expr.chunks) * expr.dtype.itemsize
+    blocksize = np.prod(expr.blocks) * expr.dtype.itemsize
+    _, nchunks = get_chunks_idx(expr.shape, expr.chunks)
+    out = blosc2.empty(expr.shape, dtype=expr.dtype, chunks=expr.chunks, blocks=expr.blocks)
+    for nchunk in range(nchunks):
+        chunk = expr.get_chunk(nchunk)
+        out.schunk.update_chunk(nchunk, chunk)
+        chunksize_ = int.from_bytes(chunk[4:8], byteorder="little")
+        blocksize_ = int.from_bytes(chunk[8:12], byteorder="little")
+        # Sometimes the actual chunksize is smaller than the expected chunks due to padding
+        assert chunksize <= chunksize_
+        assert blocksize == blocksize_
+    np.testing.assert_allclose(out[:], nres)
+
+
+@pytest.mark.parametrize(
+    "chunks, blocks",
+    [
+        ((10, 100), (6, 100)),  # behaved
+        ((15, 100), (5, 100)),  # not behaved
+        ((15, 15), (5, 5)),  # not behaved
+        ((10, 10), (5, 5)),  # not behaved
+    ],
+)
+@pytest.mark.parametrize(
+    "disk",
+    [True, False],
+)
+@pytest.mark.parametrize("fill_value", [0, 1, np.nan])
+def test_fill_disk_operands(chunks, blocks, disk, fill_value):
+    N = 100
+
+    apath = bpath = cpath = None
+    if disk:
+        apath = "a.b2nd"
+        bpath = "b.b2nd"
+        cpath = "c.b2nd"
+    if fill_value != 0:
+        a = blosc2.full((N, N), fill_value, urlpath=apath, mode="w", chunks=chunks, blocks=blocks)
+        b = blosc2.full((N, N), fill_value, urlpath=bpath, mode="w", chunks=chunks, blocks=blocks)
+        c = blosc2.full((N, N), fill_value, urlpath=cpath, mode="w", chunks=chunks, blocks=blocks)
+    else:
+        a = blosc2.zeros((N, N), urlpath=apath, mode="w", chunks=chunks, blocks=blocks)
+        b = blosc2.zeros((N, N), urlpath=bpath, mode="w", chunks=chunks, blocks=blocks)
+        c = blosc2.zeros((N, N), urlpath=cpath, mode="w", chunks=chunks, blocks=blocks)
+    if disk:
+        a = blosc2.open("a.b2nd")
+        b = blosc2.open("b.b2nd")
+        c = blosc2.open("c.b2nd")
+
+    expr = ((a**3 + blosc2.sin(c * 2)) < b) & (c > 0)
+
+    out = expr.eval()
+    assert out.shape == (N, N)
+    assert out.dtype == np.bool_
+    assert out.schunk.urlpath is None
+    np.testing.assert_allclose(out[:], ((a[:] ** 3 + np.sin(c[:] * 2)) < b[:]) & (c[:] > 0))
+
+    if disk:
+        blosc2.remove_urlpath("a.b2nd")
+        blosc2.remove_urlpath("b.b2nd")
+        blosc2.remove_urlpath("c.b2nd")

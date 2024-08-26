@@ -9,3 +9,5 @@ Main Classes
     ndfield
     lazyarray
     c2array
+    proxy
+    proxysource

@@ -20,17 +20,8 @@ import numpy as np
 
 import blosc2
 
-C2SUB_URLBASE_ENVVAR = "BLOSC_C2URLBASE"
-"""Environment variable with a default Caterva2 subscriber URL base."""
-
-C2SUB_USERNAME_ENVVAR = "BLOSC_C2USERNAME"
-"""Environment variable with a default Caterva2 subscriber user name."""
-
-C2SUB_PASSWORD_ENVVAR = "BLOSC_C2PASSWORD"
-"""Environment variable with a default Caterva2 subscriber password."""
-
 _subscriber_data = {
-    "urlbase": os.environ.get(C2SUB_URLBASE_ENVVAR),
+    "urlbase": os.environ.get("BLOSC_C2URLBASE"),
     "auth_token": "",
 }
 """Caterva2 subscriber data saved by context manager."""
@@ -84,11 +75,12 @@ def c2context(
 
     """
     global _subscriber_data
+    print("_subscriber_data", _subscriber_data)
 
     # Perform login to get an authorization token.
     if not auth_token:
-        username = username or os.environ.get(C2SUB_USERNAME_ENVVAR)
-        password = password or os.environ.get(C2SUB_PASSWORD_ENVVAR)
+        username = username or os.environ.get("BLOSC_C2USERNAME")
+        password = password or os.environ.get("BLOSC_C2PASSWORD")
     if username or password:
         if auth_token:
             raise ValueError("Either provide a username/password or an authorizaton token")
@@ -101,7 +93,7 @@ def c2context(
             new_sub_data["urlbase"] = urlbase
         elif old_sub_data["urlbase"] is None:
             # The variable may have gotten a value after program start.
-            new_sub_data["urlbase"] = os.environ.get(C2SUB_URLBASE_ENVVAR)
+            new_sub_data["urlbase"] = os.environ.get("BLOSC_C2URLBASE")
         if auth_token is not None:
             new_sub_data["auth_token"] = auth_token
         _subscriber_data = new_sub_data
@@ -246,6 +238,25 @@ class C2Array(blosc2.Operand):
         """
         slice_ = slice_to_string(slice_)
         return fetch_data(self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token)
+
+    def get_chunk(self, nchunk: int):
+        """
+        Get the compressed unidimensional chunk of a :ref:`C2Array`.
+
+        Parameters
+        ----------
+        nchunk: int
+            The unidimensional chunk index.
+
+        Returns
+        -------
+        out: bytes
+            The requested compressed chunk.
+        """
+        url = _sub_url(self.urlbase, f"api/chunk/{self.path}")
+        params = {"nchunk": nchunk}
+        response = _xget(url, params=params, auth_token=self.auth_token)
+        return response.content
 
     @property
     def shape(self):

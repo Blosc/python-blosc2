@@ -9,6 +9,7 @@ import asyncio
 import concurrent.futures
 import copy
 import math
+import os
 import pathlib
 import threading
 from abc import ABC, abstractmethod
@@ -22,8 +23,9 @@ import numexpr as ne
 import numpy as np
 
 import blosc2
+from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
-from blosc2.ndarray import are_partitions_behaved, get_chunks_idx
+from blosc2.ndarray import get_chunks_idx
 
 
 class ReduceOp(Enum):
@@ -34,6 +36,8 @@ class ReduceOp(Enum):
     SUM = np.add
     PROD = np.multiply
     MEAN = np.mean
+    STD = np.std
+    VAR = np.var
     # Computing a median from partial results is not straightforward because the median
     # is a positional statistic, which means it depends on the relative ordering of all
     # the data points. Unlike statistics such as the sum or mean, you can't compute a median
@@ -119,7 +123,10 @@ class LazyArray(ABC):
 
         Notes
         -----
-        * All the operands of the LazyArray must be Python scalars, :ref:`NDArray` or :ref:`C2Array`.
+        * All the operands of the LazyArray must be Python scalars, :ref:`NDArray`, :ref:`C2Array` or :ref:`Proxy`.
+        * If an operand is a :ref:`Proxy`, keep in mind that Python-Blosc2 will only be able to reopen it as such
+          if its source is a :ref:`SChunk`, :ref:`NDArray` or a :ref:`C2Array` (see :func:`blosc2.open` notes
+          section for more info).
         * This is currently only supported for :ref:`LazyExpr`.
         """
         pass
@@ -276,13 +283,13 @@ def validate_inputs(inputs: dict, out=None) -> tuple:
     ref = inputs[0]
     if not all(np.array_equal(ref.shape, input.shape) for input in inputs):
         # If inputs have different shapes, we cannot take the fast path
-        return ref.shape, False
+        return ref.shape, None, None, False
 
     # More checks specific of NDArray inputs
     NDinputs = list(input for input in inputs if hasattr(input, "chunks"))
     if len(NDinputs) == 0:
         # All inputs are NumPy arrays, so we cannot take the fast path
-        return inputs[0].shape, False
+        return inputs[0].shape, None, None, False
 
     # Check if we can take the fast path
     # For this we need that the chunks and blocks for all inputs (and a possible output)
@@ -293,9 +300,9 @@ def validate_inputs(inputs: dict, out=None) -> tuple:
     if isinstance(out, blosc2.NDArray):
         if first_input.shape != out.shape:
             raise ValueError("Output shape does not match the first input shape")
-        if first_input.blocks != out.blocks:
-            fast_path = False
         if first_input.chunks != out.chunks:
+            fast_path = False
+        if first_input.blocks != out.blocks:
             fast_path = False
     # Then, the rest of the operands
     for input_ in NDinputs:
@@ -304,7 +311,7 @@ def validate_inputs(inputs: dict, out=None) -> tuple:
         if first_input.blocks != input_.blocks:
             fast_path = False
 
-    return first_input.shape, fast_path
+    return first_input.shape, first_input.chunks, first_input.blocks, fast_path
 
 
 def is_full_slice(item):
@@ -320,7 +327,7 @@ def is_full_slice(item):
         return item == slice(None, None, None) or item == Ellipsis
 
 
-def do_slices_intersect(slice1, slice2):
+def do_slices_intersect(slice1: list | tuple, slice2: list | tuple) -> bool:
     """
     Check whether two slices intersect.
 
@@ -347,93 +354,145 @@ def do_slices_intersect(slice1, slice2):
     for s1, s2 in zip(slice1, slice2, strict=True):
         if s1 is Ellipsis or s2 is Ellipsis:
             return True
-        if s1.start is not None and s2.stop is not None and s1.start >= s2.stop:
+        if s1.start >= s2.stop:
             return False
-        if s1.stop is not None and s2.start is not None and s1.stop <= s2.start:
+        if s1.stop <= s2.start:
             return False
 
     return True
 
 
-async def async_read_chunks(arrs, queue):
+def get_chunk(arr, info, nchunk):
+    reduc, aligned, low_mem, chunks_idx = info
+
+    if low_mem:
+        # We don't want to uncompress the chunk, so keep it compressed and
+        # decompress it just before execution.  This is normally slower, but
+        # can be useful in scarce memory situations.
+        return arr.schunk.get_chunk(nchunk)
+
+    # First check if the chunk is a special zero chunk.
+    # Using lazychunks is very effective here because we only need to read the header.
+    if reduc:
+        # Reductions can treat zero scalars as zero chunks
+        chunk = arr.schunk.get_lazychunk(nchunk)
+        special = blosc2.SpecialValue((chunk[31] & 0x70) >> 4)
+        if special == blosc2.SpecialValue.ZERO:
+            return np.zeros((), dtype=arr.dtype)
+
+    shape, chunks = arr.shape, arr.chunks
+    coords = tuple(np.unravel_index(nchunk, chunks_idx))
+    slice_ = tuple(
+        # slice(c * s, min((c + 1) * s, shape))  # uncomment to make code hang here
+        slice(c * s, min((c + 1) * s, shape[i]))
+        for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
+    )
+    chunks_ = tuple(s.stop - s.start for s in slice_)
+
+    if aligned:
+        # Decompress the whole chunk and return it
+        buff = arr.schunk.decompress_chunk(nchunk)
+        bsize = arr.dtype.itemsize * math.prod(chunks_)
+        return np.frombuffer(buff[:bsize], dtype=arr.dtype).reshape(chunks_)
+
+    return arr[slice_]
+
+
+async def async_read_chunks(arrs, info, queue):
     loop = asyncio.get_event_loop()
     nchunks = arrs[0].schunk.nchunks
 
     with concurrent.futures.ThreadPoolExecutor() as executor:
         for nchunk in range(nchunks):
             futures = [
-                (index, loop.run_in_executor(executor, arr.schunk.get_chunk, nchunk))
+                (index, loop.run_in_executor(executor, get_chunk, arr, info, nchunk))
                 for index, arr in enumerate(arrs)
             ]
-            chunks = await asyncio.gather(*(future for index, future in futures))
-            chunks_sorted = [chunk for index, chunk in
-                             sorted(zip([index for index, _ in futures], chunks, strict=True))]
-            queue.put((nchunk, chunks_sorted))  # Use non-async queue.put()
-            # print(f"Length of the queue: {queue.qsize()}, nchunk: {nchunk}")
+            chunks = await asyncio.gather(*(future for index, future in futures), return_exceptions=True)
+            chunks_sorted = []
+            for chunk in chunks:
+                if isinstance(chunk, Exception):
+                    # Handle the exception (e.g., log it, raise a custom exception, etc.)
+                    print(f"Exception occurred: {chunk}")
+                    # Optionally, you can re-raise the exception or handle it as needed
+                    raise chunk
+                chunks_sorted.append(chunk)
+            queue.put((nchunk, chunks_sorted))  # use non-async queue.put()
 
-    queue.put(None)  # Signal the end of the chunks
+    queue.put(None)  # signal the end of the chunks
 
 
-def async_read_chunks_thread(arrs, queue):
-    asyncio.run(async_read_chunks(arrs, queue))
+def async_read_chunks_thread(arrs, info, queue):
+    asyncio.run(async_read_chunks(arrs, info, queue))
 
-def sync_read_chunks(arrs):
+
+def sync_read_chunks(arrs, info):
     queue_size = 2  # maximum number of chunks in the queue
     queue = Queue(maxsize=queue_size)
 
     # Start the async file reading in a separate thread
-    thread = threading.Thread(target=async_read_chunks_thread, args=(arrs, queue))
+    thread = threading.Thread(target=async_read_chunks_thread, args=(arrs, info, queue))
     thread.start()
 
     # Read the chunks synchronously from the queue
     while True:
         try:
             chunks = queue.get(timeout=1)  # Wait for the next chunk
-            # print(f"chunks: {len(chunks)} {chunks[0]}")
             if chunks is None:  # End of chunks
                 break
             yield chunks
         except Empty:
             continue
 
-def read_nchunk(arrs):
-    for nchunk_, chunks in sync_read_chunks(arrs):
+
+def read_nchunk(arrs, info):
+    for _, chunks in sync_read_chunks(arrs, info):
         yield chunks
+
 
 iter_chunks = None
 
-def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands):
+
+def fill_chunk_operands(
+    operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands, reduc=False
+):
     """Get the chunk operands for the expression evaluation.
 
     This function offers a fast path for full chunks and a slow path for the rest.
     """
     global iter_chunks
 
-    # Check that all operands are NDArray for fast path
-    all_ndarray = all(isinstance(value, blosc2.NDArray) and value.shape != ()
-                      for value in operands.values())
-    # Check that there is some NDArray that is persisted in the disk
-    any_persisted = any((isinstance(value, blosc2.NDArray) and
-                         value.shape != () and
-                         value.schunk.urlpath is not None)
-                        for value in operands.values())
-    if all_ndarray and any_persisted:
-        # print("fast path")
+    if iter_disk:
+        # Use an environment variable to control the memory usage
+        low_mem = os.environ.get("BLOSC_LOW_MEM", False)
+        # This method is only useful when all operands are NDArray and shows better
+        # performance only when at least one of them is persisted on disk
         if nchunk == 0:
             # Initialize the iterator for reading the chunks
-            iter_chunks = read_nchunk(list(value for value in operands.values()))
+            arr = operands["o0"]
+            chunks_idx, nchunks = get_chunks_idx(arr.shape, arr.chunks)
+            info = (reduc, aligned, low_mem, chunks_idx)
+            iter_chunks = read_nchunk(list(value for value in operands.values()), info)
         # Run the asynchronous file reading function from a synchronous context
         chunks = next(iter_chunks)
+
         for i, (key, value) in enumerate(operands.items()):
-            if 0 and key in chunk_operands:
-                # Disabling this optimization, as sometimes it gives a segfault
-                # TODO: investigate why
-                # We already have a buffer for this operand
-                blosc2.decompress2(chunks[i], dst=chunk_operands[key])
-            else:
+            # The chunks are already decompressed, so we can use them directly
+            if not low_mem:
+                chunk_operands[key] = chunks[i]
+                continue
+            # Otherwise, we need to decompress the chunks
+            special = blosc2.SpecialValue((chunks[i][31] & 0x70) >> 4)
+            if special == blosc2.SpecialValue.ZERO:
+                # The chunk is a special zero chunk, so we can treat it as a scalar
+                chunk_operands[key] = np.zeros((), dtype=value.dtype)
+                continue
+            if aligned:
                 buff = blosc2.decompress2(chunks[i])
                 bsize = value.dtype.itemsize * math.prod(chunks_)
                 chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
+            else:
+                chunk_operands[key] = value[slice_]
         return
 
     for key, value in operands.items():
@@ -462,17 +521,23 @@ def fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, ch
             chunk_operands[key] = value[slice_]
             continue
 
-        # Fast path for full chunks
-        if key in chunk_operands:
-            # We already have a buffer for this operand
-            value.schunk.decompress_chunk(nchunk, dst=chunk_operands[key])
+        # First check if the chunk is a special zero chunk.
+        # Using lazychunks is very effective here because we only need to read the header.
+        chunk = value.schunk.get_lazychunk(nchunk)
+        special = blosc2.SpecialValue((chunk[31] & 0x70) >> 4)
+        if special == blosc2.SpecialValue.ZERO:
+            # The chunk is a special zero chunk, so we can treat it as a scalar
+            chunk_operands[key] = np.zeros((), dtype=value.dtype)
             continue
+        if aligned:
+            # Decompress the whole chunk and store it
+            buff = value.schunk.decompress_chunk(nchunk)
+            bsize = value.dtype.itemsize * math.prod(chunks_)
+            chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
+        else:
+            chunk_operands[key] = value[slice_]
 
-        # We don't have a buffer for this operand yet
-        # Decompress the whole chunk and store it
-        buff = value.schunk.decompress_chunk(nchunk)
-        bsize = value.dtype.itemsize * math.prod(chunks_)
-        chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
+    return
 
 
 def fast_eval(
@@ -509,8 +574,18 @@ def fast_eval(
     # Get the shape of the base array
     shape = basearr.shape
     chunks = basearr.chunks
-    # Check if the partitions are well-behaved (i.e. no padding)
-    behaved = are_partitions_behaved(shape, chunks, basearr.blocks)
+    # Check whether the partitions are aligned and behaved
+    aligned = blosc2.are_partitions_aligned(shape, chunks, basearr.blocks)
+    behaved = blosc2.are_partitions_behaved(shape, chunks, basearr.blocks)
+
+    # Check that all operands are NDArray for fast path
+    all_ndarray = all(isinstance(value, blosc2.NDArray) and value.shape != () for value in operands.values())
+    # Check that there is some NDArray that is persisted in the disk
+    any_persisted = any(
+        (isinstance(value, blosc2.NDArray) and value.shape != () and value.schunk.urlpath is not None)
+        for value in operands.values()
+    )
+    iter_disk = all_ndarray and any_persisted
 
     chunk_operands = {}
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
@@ -525,8 +600,12 @@ def fast_eval(
         offset = tuple(s.start for s in slice_)  # offset for the udf
         chunks_ = tuple(s.stop - s.start for s in slice_)
 
-        full_chunk = (chunks_ == chunks) and behaved
-        fill_chunk_operands(operands, shape, slice_, chunks_, full_chunk, nchunk, chunk_operands)
+        full_chunk = chunks_ == chunks
+        # To avoid overbooking memory, we need to clear the chunk_operands dict
+        chunk_operands.clear()
+        fill_chunk_operands(
+            operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands
+        )
 
         if isinstance(out, np.ndarray) and not where:
             # Fast path: put the result straight in the output array (avoiding a memory copy)
@@ -563,8 +642,8 @@ def fast_eval(
         if getitem:
             out[slice_] = result
         else:
-            if behaved:
-                # Fast path
+            if behaved and result.shape == chunks_:
+                # Fast path only works for results that are full chunks
                 out.schunk.update_data(nchunk, result, copy=False)
             else:
                 out[slice_] = result
@@ -643,9 +722,17 @@ def slices_eval(
             # Ensure that _slice is of type slice
             key = ndindex.ndindex(_slice).expand(shape).raw
             _slice = tuple(k if isinstance(k, slice) else slice(k, k + 1, None) for k in key)
+            # Ensure that slices do not have any None as start or stop
+            _slice = tuple(slice(s.start or 0, s.stop or shape[i], s.step) for i, s in enumerate(_slice))
+            slice_ = tuple(slice(s.start or 0, s.stop or shape[i], s.step) for i, s in enumerate(slice_))
             intersects = do_slices_intersect(_slice, slice_)
             if not intersects:
                 continue
+            # Compute the part of the slice_ that intersects with _slice
+            slice_ = tuple(
+                slice(max(s1.start, s2.start), min(s1.stop, s2.stop))
+                for s1, s2 in zip(slice_, _slice, strict=True)
+            )
         slice_shape = tuple(s.stop - s.start for s in slice_)
         # Get the slice of each operand
         for key, value in operands.items():
@@ -708,7 +795,7 @@ def slices_eval(
                 else:
                     out = blosc2.empty(shape_, dtype=result.dtype, **kwargs)
                 # Check if the in out partitions are well-behaved (i.e. no padding)
-                behaved = are_partitions_behaved(out.shape, out.chunks, out.blocks)
+                behaved = blosc2.are_partitions_behaved(out.shape, out.chunks, out.blocks)
 
         if where is None or len(where) == 2:
             if behaved:
@@ -727,6 +814,8 @@ def slices_eval(
         if isinstance(out, np.ndarray):
             out = out[orig_slice]
         elif isinstance(out, blosc2.NDArray):
+            # It *seems* better to choose an automatic chunks and blocks for the output array
+            # out = out.slice(orig_slice, chunks=out.chunks, blocks=out.blocks)
             out = out.slice(orig_slice)
         else:
             raise ValueError("The output array is not a NumPy array or a NDArray")
@@ -769,6 +858,7 @@ def reduce_slices(
     reduce_op = reduce_args.pop("op")
     axis = reduce_args["axis"]
     keepdims = reduce_args["keepdims"]
+    dtype = reduce_args["dtype"] if reduce_op in (ReduceOp.SUM, ReduceOp.PROD) else None
 
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
@@ -786,9 +876,32 @@ def reduce_slices(
     operand = max((o for o in operands.values() if hasattr(o, "chunks")), key=lambda x: len(x.shape))
     chunks = operand.chunks
 
+    # Check if the partitions are aligned (i.e. all operands have the same shape,
+    # chunks and blocks, and have no padding). This will allow us to take the fast path.
+    same_shape = all(operand.shape == o.shape for o in operands.values() if hasattr(o, "shape"))
+    same_chunks = all(operand.chunks == o.chunks for o in operands.values() if hasattr(o, "chunks"))
+    same_blocks = all(operand.blocks == o.blocks for o in operands.values() if hasattr(o, "blocks"))
+    fast_path = same_shape and same_chunks and same_blocks
+    aligned, iter_disk = False, False
+    if fast_path:
+        # Check that all operands are NDArray for fast path
+        all_ndarray = all(
+            isinstance(value, blosc2.NDArray) and value.shape != () for value in operands.values()
+        )
+        # Check that there is some NDArray that is persisted in the disk
+        # any_persisted = any(
+        #     (isinstance(value, blosc2.NDArray) and value.shape != () and value.schunk.urlpath is not None)
+        #     for value in operands.values()
+        # )
+        # iter_disk = all_ndarray and any_persisted
+        # Experiments say that iter_disk is faster than the regular path for reductions
+        # even when all operands are in memory, so no need to check any_persisted
+        iter_disk = all_ndarray
+        aligned = blosc2.are_partitions_aligned(shape, chunks, operand.blocks)
+
     # Iterate over the operands and get the chunks
-    chunk_operands = {}
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
+    chunk_operands = {}
 
     # Iterate over the operands and get the chunks
     for nchunk in range(nchunks):
@@ -804,36 +917,56 @@ def reduce_slices(
             reduced_slice = tuple(sl for i, sl in enumerate(slice_) if i not in axis)
         offset = tuple(s.start for s in slice_)  # offset for the udf
         # Check whether current slice_ intersects with _slice
-        if _slice is not None:
+        if _slice is not None and _slice != ():
+            # Ensure that slices do not have any None as start or stop
+            _slice = tuple(slice(s.start or 0, s.stop or shape[i], s.step) for i, s in enumerate(_slice))
+            slice_ = tuple(slice(s.start or 0, s.stop or shape[i], s.step) for i, s in enumerate(slice_))
             intersects = do_slices_intersect(_slice, slice_)
             if not intersects:
                 continue
-        slice_shape = tuple(s.stop - s.start for s in slice_)
-        # reduced_slice_shape = tuple(s.stop - s.start for s in reduced_slice)
+            # Compute the part of the slice_ that intersects with _slice
+            slice_ = tuple(
+                slice(max(s1.start, s2.start), min(s1.stop, s2.stop))
+                for s1, s2 in zip(slice_, _slice, strict=True)
+            )
+
+        chunks_ = tuple(s.stop - s.start for s in slice_)
         if len(slice_) == 1:
             slice_ = slice_[0]
         if len(reduced_slice) == 1:
             reduced_slice = reduced_slice[0]
-        # Get the slice of each operand
-        for key, value in operands.items():
-            if np.isscalar(value):
-                chunk_operands[key] = value
-                continue
-            if value.shape == ():
-                chunk_operands[key] = value[()]
-                continue
-            if check_smaller_shape(value, shape, slice_shape):
-                # We need to fetch the part of the value that broadcasts with the operand
-                smaller_slice = compute_smaller_slice(operand.shape, value.shape, slice_)
-                chunk_operands[key] = value[smaller_slice]
-                continue
-            chunk_operands[key] = value[slice_]
+
+        # To avoid overbooking memory, we need to clear the chunk_operands dict
+        chunk_operands.clear()
+        if _slice in (None, ()) and fast_path:
+            # Fast path
+            full_chunk = chunks_ == chunks
+            fill_chunk_operands(
+                operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands, reduc=True
+            )
+        else:
+            # Get the slice of each operand
+            chunk_operands = {}
+
+            for key, value in operands.items():
+                if np.isscalar(value):
+                    chunk_operands[key] = value
+                    continue
+                if value.shape == ():
+                    chunk_operands[key] = value[()]
+                    continue
+                if check_smaller_shape(value, shape, chunks_):
+                    # We need to fetch the part of the value that broadcasts with the operand
+                    smaller_slice = compute_smaller_slice(operand.shape, value.shape, slice_)
+                    chunk_operands[key] = value[smaller_slice]
+                    continue
+                chunk_operands[key] = value[slice_]
 
         # Evaluate and reduce the expression using chunks of operands
 
         if callable(expression):
             # TODO: Implement the reductions for UDFs (and test them)
-            result = np.empty(slice_shape, dtype=out.dtype)
+            result = np.empty(chunks_, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
             # Reduce the result
             result = reduce_op.value.reduce(result, **reduce_args)
@@ -842,7 +975,11 @@ def reduce_slices(
             continue
 
         if where is None:
-            result = ne.evaluate(expression, chunk_operands)
+            if expression == "o0":
+                # We don't have an actual expression, so avoid a copy
+                result = chunk_operands["o0"]
+            else:
+                result = ne.evaluate(expression, chunk_operands)
         else:
             # Apply the where condition (in result)
             if len(where) == 2:
@@ -859,38 +996,23 @@ def reduce_slices(
                 )
 
         # Reduce the result
+        if result.shape == ():
+            if reduce_op == ReduceOp.SUM and result[()] == 0:
+                # Avoid a reduction when result is a zero scalar. Faster for sparse data.
+                continue
+            chunks_ = tuple(s.stop - s.start for s in slice_)
+            result = np.full(chunks_, result[()])
         if reduce_op == ReduceOp.ANY:
             result = np.any(result, **reduce_args)
         elif reduce_op == ReduceOp.ALL:
             result = np.all(result, **reduce_args)
         else:
             result = reduce_op.value.reduce(result, **reduce_args)
-        dtype = reduce_args["dtype"] if reduce_op in (ReduceOp.SUM, ReduceOp.PROD) else None
-        if dtype is None:
-            dtype = result.dtype
 
         if out is None:
-            # out will be a proper numpy.ndarray
-            if reduce_op == ReduceOp.SUM:
-                out = np.zeros(reduced_shape, dtype=dtype)
-            elif reduce_op == ReduceOp.PROD:
-                out = np.ones(reduced_shape, dtype=dtype)
-            elif reduce_op == ReduceOp.MIN:
-                if np.issubdtype(dtype, np.integer):
-                    out = np.iinfo(dtype).max * np.ones(reduced_shape, dtype=dtype)
-                else:
-                    out = np.inf * np.ones(reduced_shape, dtype=dtype)
-            elif reduce_op == ReduceOp.MAX:
-                if np.issubdtype(dtype, np.integer):
-                    out = np.iinfo(dtype).min * np.ones(reduced_shape, dtype=dtype)
-                else:
-                    out = -np.inf * np.ones(reduced_shape, dtype=dtype)
-            elif reduce_op == ReduceOp.ANY:
-                # out = blosc2.zeros(reduced_shape, dtype=np.bool_, **kwargs)
-                out = np.zeros(reduced_shape, dtype=np.bool_)
-            elif reduce_op == ReduceOp.ALL:
-                # out = blosc2.full(reduced_shape, True, dtype=np.bool_, **kwargs)
-                out = np.ones(reduced_shape, dtype=np.bool_)
+            if dtype is None:
+                dtype = result.dtype
+            out = convert_none_out(dtype, reduce_op, reduced_shape)
 
         # Update the output array with the result
         if reduce_op == ReduceOp.ANY:
@@ -903,9 +1025,40 @@ def reduce_slices(
             else:
                 out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
 
-    # Check if the output array needs to be converted to a blosc2.NDArray
+    if out is None:
+        if reduce_op in (ReduceOp.MIN, ReduceOp.MAX):
+            raise ValueError("zero-size array in min/max reduction operation is not supported")
+        if dtype is None:
+            # We have no hint here, so choose a default dtype
+            dtype = np.float64
+        out = convert_none_out(dtype, reduce_op, reduced_shape)
+
+    # Check if the output array needs to be converted into a blosc2.NDArray
     if kwargs != {} and not np.isscalar(out):
         out = blosc2.asarray(out, **kwargs)
+    return out
+
+
+def convert_none_out(dtype, reduce_op, reduced_shape):
+    # out will be a proper numpy.ndarray
+    if reduce_op == ReduceOp.SUM:
+        out = np.zeros(reduced_shape, dtype=dtype)
+    elif reduce_op == ReduceOp.PROD:
+        out = np.ones(reduced_shape, dtype=dtype)
+    elif reduce_op == ReduceOp.MIN:
+        if np.issubdtype(dtype, np.integer):
+            out = np.iinfo(dtype).max * np.ones(reduced_shape, dtype=dtype)
+        else:
+            out = np.inf * np.ones(reduced_shape, dtype=dtype)
+    elif reduce_op == ReduceOp.MAX:
+        if np.issubdtype(dtype, np.integer):
+            out = np.iinfo(dtype).min * np.ones(reduced_shape, dtype=dtype)
+        else:
+            out = -np.inf * np.ones(reduced_shape, dtype=dtype)
+    elif reduce_op == ReduceOp.ANY:
+        out = np.zeros(reduced_shape, dtype=np.bool_)
+    elif reduce_op == ReduceOp.ALL:
+        out = np.ones(reduced_shape, dtype=np.bool_)
     return out
 
 
@@ -940,7 +1093,7 @@ def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs
         if where:
             # Make the where arguments part of the operands
             operands = {**operands, **where}
-        shape, fast_path = validate_inputs(operands, out)
+        shape, _, _, fast_path = validate_inputs(operands, out)
 
         # Activate last read cache for NDField instances
         for op in operands:
@@ -1135,6 +1288,28 @@ class LazyExpr(LazyArray):
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"(o0 {op} o1)"
 
+    def get_chunk(self, nchunk):
+        """Get the `nchunk` of the expression, evaluating only that one."""
+        # Create an empty array with the same shape and dtype; this is fast
+        out = blosc2.empty(shape=self.shape, dtype=self.dtype, chunks=self.chunks, blocks=self.blocks)
+        shape = out.shape
+        chunks = out.chunks
+        # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
+        chunks_idx, nchunks = get_chunks_idx(shape, chunks)
+        coords = tuple(np.unravel_index(nchunk, chunks_idx))
+        slice_ = tuple(
+            slice(c * s, min((c + 1) * s, shape[i]))
+            for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
+        )
+        # TODO: we need more metadata for treating reductions
+        # We want to fill a single chunk, so we need to evaluate the expression on out
+        expr = lazyexpr(self, out=out)
+        # The evals below produce arrays with different chunks and blocks;
+        # we choose the ones for LazyExpr main class
+        expr.eval(item=slice_)
+        # out = expr.eval(item=slice_)
+        return out.schunk.get_chunk(nchunk)
+
     def update_expr(self, new_op):
         # We use a lot of the original NDArray.__eq__ as 'is', so deactivate the overloaded one
         blosc2._disable_overloaded_equal = True
@@ -1215,9 +1390,32 @@ class LazyExpr(LazyArray):
         if hasattr(self, "_shape"):
             # Contrarily to dtype, shape cannot change after creation of the expression
             return self._shape
-        shape, fast_path = validate_inputs(self.operands)
-        self._shape = shape
-        return shape
+        self._shape, chunks, blocks, fast_path = validate_inputs(self.operands)
+        if fast_path:
+            # fast_path ensure that all the operands have the same partitions
+            self._chunks = chunks
+            self._blocks = blocks
+        return self._shape
+
+    @property
+    def chunks(self):
+        if hasattr(self, "_chunks"):
+            return self._chunks
+        self._shape, self._chunks, self._blocks, fast_path = validate_inputs(self.operands)
+        if not fast_path:
+            # Not using the fast path, so we need to compute the chunks/blocks automatically
+            self._chunks, self._blocks = compute_chunks_blocks(self.shape, None, None, dtype=self.dtype)
+        return self._chunks
+
+    @property
+    def blocks(self):
+        if hasattr(self, "_blocks"):
+            return self._blocks
+        self._shape, self._chunks, self._blocks, fast_path = validate_inputs(self.operands)
+        if not fast_path:
+            # Not using the fast path, so we need to compute the chunks/blocks automatically
+            self._chunks, self._blocks = compute_chunks_blocks(self.shape, None, None, dtype=self.dtype)
+        return self._blocks
 
     def __neg__(self):
         return self.update_expr(new_op=(0, "-", self))
@@ -1324,25 +1522,43 @@ class LazyExpr(LazyArray):
         }
         return self.eval(_reduce_args=reduce_args, **kwargs)
 
-    def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
-        total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims)
+    def get_num_elements(self, axis, item):
         if np.isscalar(axis):
             axis = (axis,)
-        num_elements = np.prod(self.shape) if axis is None else np.prod([self.shape[i] for i in axis])
+        # Compute the number of elements in the array
+        shape = self.shape
+        if item is not None:
+            # Compute the shape of the slice
+            if not isinstance(item, tuple):
+                item = (item,)
+            # Ensure that the limits in item slices are not None
+            item = tuple(slice(s.start or 0, s.stop or self.shape[i], s.step) for i, s in enumerate(item))
+            # Compute the intersection of the slice with the shape
+            item = tuple(slice(s1.start, min(s1.stop, s2)) for s1, s2 in zip(item, shape, strict=True))
+            if axis is None:
+                shape = [s.stop - s.start for s in item]
+            else:
+                shape = [s.stop - s.start for i, s in enumerate(item) if i in axis]
+        return np.prod(shape) if axis is None else np.prod([shape[i] for i in axis])
+
+    def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
+        item = kwargs.pop("item", None)
+        total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims, item=item)
+        num_elements = self.get_num_elements(axis, item)
+        if num_elements == 0:
+            raise ValueError("mean of an empty array is not defined")
         out = total_sum / num_elements
         if kwargs != {} and not np.isscalar(out):
             out = blosc2.asarray(out, **kwargs)
         return out
 
     def std(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
-        mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
+        item = kwargs.pop("item", None)
+        mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, item=item)
         expr = (self - mean_value) ** 2
-        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
+        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, item=item)
         if ddof != 0:
-            if axis is None:
-                num_elements = np.prod(self.shape)
-            else:
-                num_elements = np.prod([self.shape[i] for i in axis])
+            num_elements = self.get_num_elements(axis, item)
             out = np.sqrt(out * num_elements / (num_elements - ddof))
         else:
             out = np.sqrt(out)
@@ -1351,17 +1567,15 @@ class LazyExpr(LazyArray):
         return out
 
     def var(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
-        mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
+        item = kwargs.pop("item", None)
+        mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, item=item)
         expr = (self - mean_value) ** 2
         if ddof != 0:
-            out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
-            if axis is None:
-                num_elements = np.prod(self.shape)
-            else:
-                num_elements = np.prod([self.shape[i] for i in axis])
+            out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, item=item)
+            num_elements = self.get_num_elements(axis, item)
             out = out * num_elements / (num_elements - ddof)
         else:
-            out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
+            out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, item=item)
         if kwargs != {} and not np.isscalar(out):
             out = blosc2.asarray(out, **kwargs)
         return out
@@ -1464,6 +1678,9 @@ class LazyExpr(LazyArray):
                     "urlbase": value.urlbase,
                 }
                 continue
+            if isinstance(value, blosc2.Proxy):
+                # Take the required info from the Proxy._cache container
+                value = value._cache
             if not hasattr(value, "schunk"):
                 raise ValueError(
                     "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
@@ -1567,7 +1784,9 @@ class LazyUDF(LazyArray):
         _ = kwargs.pop("cparams", None)
         _ = kwargs.pop("dparams", None)
         urlpath = kwargs.get("urlpath")
-        if urlpath is not None and urlpath == aux_kwargs.get("urlpath",):
+        if urlpath is not None and urlpath == aux_kwargs.get(
+            "urlpath",
+        ):
             raise ValueError("Cannot use the same urlpath for LazyArray and eval NDArray")
         _ = aux_kwargs.pop("urlpath", None)
         aux_kwargs.update(kwargs)

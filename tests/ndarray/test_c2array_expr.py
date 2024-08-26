@@ -13,6 +13,8 @@ import pytest
 
 import blosc2
 
+pytestmark = pytest.mark.network
+
 NITEMS_SMALL = 1_000
 ROOT = "b2tests"
 DIR = "expr/"
@@ -209,7 +211,7 @@ def broadcast_shape(request):
     return request.param
 
 
-@pytest.fixture()
+@pytest.fixture
 def broadcast_fixture(broadcast_shape, c2sub_context):
     shape1, shape2 = broadcast_shape
     dtype = np.float64

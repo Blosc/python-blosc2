@@ -16,6 +16,7 @@ Methods
 
     __init__
     __getitem__
+    get_chunk
 
 Attributes
 ----------

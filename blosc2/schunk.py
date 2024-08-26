@@ -770,11 +770,17 @@ class SChunk(blosc2_ext.SChunk):
         ------
         info: namedtuple
             A namedtuple with the following fields:
-            nchunk: the index of the chunk (int).
-            cratio: the compression ratio of the chunk (float).
-            special: the special value enum of the chunk; if 0, the chunk is not special (SpecialValue).
-            repeated_value: the repeated value for the chunk; if not SpecialValue.VALUE, it is None.
-            lazychunk: a buffer with the complete lazy chunk (bytes).
+
+                nchunk: int
+                    The index of the chunk.
+                cratio: float
+                    The compression ratio of the chunk.
+                special: :class:`~blosc2.SpecialValue`
+                    The special value enum of the chunk; if 0, the chunk is not special.
+                repeated_value: bytes or None
+                    The repeated value for the chunk; if not SpecialValue.VALUE, it is None.
+                lazychunk: bytes
+                    A buffer with the complete lazy chunk.
         """
         ChunkInfo = namedtuple("ChunkInfo", ["nchunk", "cratio", "special", "repeated_value", "lazychunk"])
         for nchunk in range(self.nchunks):
@@ -1035,7 +1041,8 @@ class SChunk(blosc2_ext.SChunk):
 @_inherit_doc_parameter(SChunk.__init__, "mmap_mode:", {r"\* - 'w\+'[^*]+": ""})
 @_inherit_doc_parameter(SChunk.__init__, "initial_mapping_size:", {r"r\+ w\+, or c": "r+ or c"})
 def open(urlpath, mode="a", offset=0, **kwargs):
-    """Open a persistent :ref:`SChunk` or :ref:`NDArray` or a remote :ref:`C2Array`.
+    """Open a persistent :ref:`SChunk` or :ref:`NDArray` or a remote :ref:`C2Array`
+    or a :ref:`Proxy` (see the `Notes` section for more info on the latter case).
 
     Parameters
     ----------
@@ -1064,11 +1071,19 @@ def open(urlpath, mode="a", offset=0, **kwargs):
 
     Notes
     -----
-    * This is just a 'logical' open, so no there is not a `close()` counterpart because
+    * This is just a 'logical' open, so there is not a `close()` counterpart because
       currently there is no need for it.
 
     * In case :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
       must be 'r', :paramref:`offset` must be 0, and kwargs cannot be passed.
+
+    * In case the original object saved in :paramref:`urlpath` was a :ref:`Proxy`, this function
+      will only return a :ref:`Proxy` if its source is a local :ref:`SChunk`, :ref:`NDArray`
+      or a remote :ref:`C2Array`. Otherwise, it will return the Python-Blosc2 container used to cache the data which
+      can be a :ref:`SChunk` or a :ref:`NDArray` and may not have all the data initialized (e.g. if the user
+      has not accessed it yet).
+
+    * When opening a :ref:`LazyExpr` keep in mind the later note regarding the operands.
 
     Returns
     -------
@@ -1122,6 +1137,19 @@ def open(urlpath, mode="a", offset=0, **kwargs):
         raise FileNotFoundError(f"No such file or directory: {urlpath}")
 
     res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
+
+    meta = getattr(res, "schunk", res).meta
+    if "proxy-source" in meta:
+        proxy_src = meta["proxy-source"]
+        if proxy_src["local_abspath"] is not None:
+            src = blosc2.open(proxy_src["local_abspath"])
+            return blosc2.Proxy(src, _cache=res)
+        elif proxy_src["urlpath"] is not None:
+            src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
+            return blosc2.Proxy(src, _cache=res)
+        elif not proxy_src["caterva2_env"]:
+            raise RuntimeError("Could not find the source when opening a Proxy")
+
     if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
         return blosc2._open_lazyarray(res)
     else:

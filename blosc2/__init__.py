@@ -181,6 +181,7 @@ from .ndarray import (  # noqa: I001
     NDArray,
     NDField,
     Operand,
+    are_partitions_aligned,
     are_partitions_behaved,
     asarray,
     copy,
@@ -196,6 +197,7 @@ from .ndarray import (  # noqa: I001
 from .c2array import c2context, C2Array, URLPath
 
 from .lazyexpr import LazyExpr, lazyudf, lazyexpr, LazyArray, _open_lazyarray
+from .proxy import Proxy, ProxySource, ProxyNDField
 
 from .schunk import SChunk, open
 
@@ -315,6 +317,7 @@ from .ndarray import (
     sum,
     tan,
     tanh,
+    var,
     where,
 )
 
