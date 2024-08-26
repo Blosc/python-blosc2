@@ -15,11 +15,9 @@ Source code
 
 .. code-block:: console
 
-    git clone https://github.com/Blosc/python-blosc2/
+    git clone --recursive https://github.com/Blosc/python-blosc2/
     cd python-blosc2
-    git submodule update --init --recursive
-    python -m pip install -r requirements-build.txt
-    python setup.py build_ext --inplace
+    pip install -e .[test]
 
 That's all. You can proceed with testing section now.
 
@@ -31,7 +29,6 @@ running the tests:
 
 .. code-block:: console
 
-    python -m pip install -r requirements-tests.txt
     python -m pytest  (add -v for verbose mode)
 
 Benchmarking

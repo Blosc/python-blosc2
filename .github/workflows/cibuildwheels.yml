@@ -11,17 +11,8 @@ on:
 
 env:
   CIBW_BUILD_VERBOSITY: 1
-  CIBW_TEST_REQUIRES: pytest psutil
-  CIBW_TEST_COMMAND: python -m pytest -m "not heavy and not network" {project}/tests
-  # Running the tests on the next platforms takes too much time.
+  # Skip aarch64 for now, as it is emulated on GitHub Actions and takes too long
   CIBW_TEST_SKIP: "*linux*aarch64*"
-  # Building for musllinux and aarch64 takes way too much time.
-  # NumPy is adding musllinux for just x86_64 too, so this is not too bad.
-  # For some reason, we need to disable the cp*-win32 builds here too (and not only in pyproject.toml).
-  # CIBW_SKIP: "*musllinux*aarch64* cp*-win32"
-  # Apparently we need to disable musllinux for x86_64 too because it does not contain libc.
-  # https://peps.python.org/pep-0656/#motivation
-  CIBW_SKIP: "*musllinux* cp*-win32"
 
 jobs:
 
@@ -73,12 +64,6 @@ jobs:
         with:
           arch: amd64
 
-#      - name: Update Clang
-#        if: ${{ matrix.os == 'macos-latest' && matrix.arch == 'arm64' }}
-#        run: |
-#          sudo xcode-select -s /Applications/Xcode_15.0.app/Contents/Developer
-#          clang -v
-
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.20
 
@@ -117,14 +102,12 @@ jobs:
           # python -m pip install -r requirements-build.txt
 
       - name: Build sdist
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements-build.txt
-          python -m build --sdist
+        run: pipx run build --sdist
 
       - name: Upload sdist package
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
+          name: cibw-sdist
           path: dist/*.tar.gz
 
       - name: Build building extension from sdist package
@@ -132,13 +115,11 @@ jobs:
           cd ./dist
           tar -xzf blosc2-*.tar.gz
           cd ./blosc2-*/
-          python setup.py build_ext --inplace
+          pip install -e .[test]
 
       - name: Test sdist package with pytest
         run: |
           cd ./dist/blosc2-*/
-          python -m pip install -r requirements-tests.txt
-          python -m pip install -r requirements-runtime.txt
           # Do a 'light' test
           python -m pytest -m "not heavy and not network"
 
