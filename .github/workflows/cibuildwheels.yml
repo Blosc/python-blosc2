@@ -114,8 +114,7 @@ jobs:
       - name: Test sdist package with pytest
         run: |
           cd ./dist/blosc2-*/
-          # Do a 'light' test
-          python -m pytest -m "not heavy"
+          pytest
 
   upload_pypi:
     needs: [ build_wheels, build_sdist ]  # last but not least

@@ -17,13 +17,19 @@ You are done!
 We are using pytest for testing.  You can run the tests by executing
 
 ``` bash
-  python -m pytest
+  pytest
 ```
 
-If you want to run a lightweight version of the tests, you can use the following command:
+If you want to run a heavyweight version of the tests, you can use the following command:
 
 ``` bash
-  python -m pytest -m "not heavy"
+  pytest -m "heavy"
+```
+
+If you want to run the network tests, you can use the following command:
+
+``` bash
+  pytest -m "network"
 ```
 
 ## Documentation
