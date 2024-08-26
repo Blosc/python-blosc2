@@ -5,6 +5,5 @@ project(python-blosc2)
 # does not include a python symbolic link to python3.
 #find_package(Python 3.10 COMPONENTS Interpreter NumPy Development.Module REQUIRED)
 find_package(Python COMPONENTS Interpreter NumPy Development.Module REQUIRED)
-target_link_libraries(blosc2_ext PRIVATE Python::Numpy)
 
 add_subdirectory(blosc2)

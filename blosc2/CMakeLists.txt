@@ -25,7 +25,7 @@ else()
     set(BLOSC_INSTALL ON)
     add_subdirectory(c-blosc2)
     include_directories("${CMAKE_CURRENT_SOURCE_DIR}/c-blosc2/include")
-    target_link_libraries(blosc2_ext PRIVATE blosc2_static)
+    target_link_libraries(blosc2_ext PRIVATE blosc2_static Python::Numpy)
 endif()
 
 add_custom_command(
