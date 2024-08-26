@@ -1,4 +1,5 @@
 scikit-build
+scikit-build-core
 cython>=3
 numpy>=2
 sphinx
