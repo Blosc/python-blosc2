@@ -49,7 +49,8 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          # Use the most recent released python
+          python-version: '3.x'
 
       - name: Set up QEMU
         if: ${{ matrix.arch == 'aarch64' }}

@@ -7,6 +7,8 @@ add_custom_command(
   VERBATIM)
 # ...and add it to the target
 Python_add_library(blosc2_ext MODULE blosc2_ext.c WITH_SOABI)
+# We need to link against NumPy
+target_link_libraries(blosc2_ext PRIVATE Python::NumPy)
 
 if(USE_SYSTEM_BLOSC2)
     set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
@@ -25,7 +27,7 @@ else()
     set(BLOSC_INSTALL ON)
     add_subdirectory(c-blosc2)
     include_directories("${CMAKE_CURRENT_SOURCE_DIR}/c-blosc2/include")
-    target_link_libraries(blosc2_ext PRIVATE blosc2_static Python::Numpy)
+    target_link_libraries(blosc2_ext PRIVATE blosc2_static)
 endif()
 
 add_custom_command(
