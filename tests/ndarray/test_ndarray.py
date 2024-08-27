@@ -79,6 +79,7 @@ def test_shape_with_zeros(shape, urlpath):
     assert ndarray.size == 0
     np.testing.assert_allclose(data[()], ndarray[()])
     np.testing.assert_allclose(data[:], ndarray[:])
+    blosc2.remove_urlpath(urlpath)
 
 
 @pytest.mark.parametrize(
