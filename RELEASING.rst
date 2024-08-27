@@ -4,8 +4,9 @@ python-blosc2 release procedure
 Preliminaries
 -------------
 
-* Check that version values in blosc2/__init__.py *and* pyproject.toml contain the
-  correct info.
+* Do not worry about the version number.  setuptools_scm in scikit-build-core has machinery
+  to figure it out based on git tags:
+  https://scikit-build-core.readthedocs.io/en/latest/configuration.html#dynamic-metadata
 
 * Make sure that the c-blosc2 submodule is updated to the latest version (or a specific
   version that will be documented in the ``RELEASE_NOTES.md``)::

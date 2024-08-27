@@ -14,7 +14,9 @@ from enum import Enum
 
 import numexpr
 
-__version__ = "3.0.0-beta.2.dev0"
+from ._version import __version__
+
+__version__ = __version__
 """
 Python-Blosc2 version.
 """
@@ -200,6 +202,7 @@ from .lazyexpr import LazyExpr, lazyudf, lazyexpr, LazyArray, _open_lazyarray
 from .proxy import Proxy, ProxySource, ProxyNDField
 
 from .schunk import SChunk, open
+
 
 # Registry for postfilters
 postfilter_funcs = {}
