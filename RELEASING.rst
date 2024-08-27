@@ -108,9 +108,6 @@ Post-release actions
 
     XXX version-specific blurb XXX
 
-* Edit ``VERSION`` in master to increment the version to the next
-  patch one (i.e. X.Y.Z --> X.Y.(Z+1).dev0).
-
 * Commit your changes with::
 
     git commit -a -m "Post X.Y.Z release actions done"
