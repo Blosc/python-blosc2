@@ -45,6 +45,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: 'recursive'
+          # Fetch all history for all branches and tags
+          # (important for guessing the correct version with setuptools_scm)
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
