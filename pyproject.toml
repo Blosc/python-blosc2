@@ -46,6 +46,16 @@ test = [
     "pytest",
     "psutil",
  ]
+doc = [
+    "sphinx",
+    "pydata-sphinx-theme",
+    "numpydoc",
+    "myst-parser",
+    "sphinx-paramlinks",
+    "nbsphinx",
+    "sphinx-panels",
+    "pandoc",
+]
 
 [project.urls]
 homepage = "https://github.com/Blosc/python-blosc2"

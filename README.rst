@@ -197,8 +197,8 @@ running the tests:
 
 .. code-block:: console
 
-    python -m pip install -r requirements-tests.txt
-    python -m pytest  (add -v for verbose mode)
+    pip install .[test]
+    pytest  (add -v for verbose mode)
 
 Benchmarking
 ============
@@ -209,7 +209,7 @@ your Blosc build:
 
 .. code-block:: console
 
-     PYTHONPATH=. python bench/pack_compress.py
+     python bench/pack_compress.py
 
 License
 =======

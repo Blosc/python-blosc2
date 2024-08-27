@@ -11,3 +11,4 @@ pandas
 pyarrow
 plotly
 matplotlib
+jupyterlab

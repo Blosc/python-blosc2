@@ -1,8 +1,0 @@
-setuptools
-scikit-build
-scikit-build-core
-cython>=3
-cmake
-numpy>=2
-ninja
-build
