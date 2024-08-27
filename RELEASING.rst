@@ -4,7 +4,9 @@ python-blosc2 release procedure
 Preliminaries
 -------------
 
-* Check that ``VERSION`` file contains the correct number.
+* Do not worry about the version number.  setuptools_scm in scikit-build-core has machinery
+  to figure it out based on git tags:
+  https://scikit-build-core.readthedocs.io/en/latest/configuration.html#dynamic-metadata
 
 * Make sure that the c-blosc2 submodule is updated to the latest version (or a specific
   version that will be documented in the ``RELEASE_NOTES.md``)::
@@ -24,8 +26,8 @@ Preliminaries
 
   is printing the correct versions.
 
-* Make sure that ``RELEASE_NOTES.md`` and ``ANNOUNCE.rst`` are up to date with the latest news
-  in the release.
+* Make sure that ``RELEASE_NOTES.md`` and ``ANNOUNCE.rst`` are up to date with the
+  latest news in the release.
 
 * Commit the changes::
 
@@ -105,9 +107,6 @@ Post-release actions
     ## Changes from X.Y.Z to X.Y.(Z+1)
 
     XXX version-specific blurb XXX
-
-* Edit ``VERSION`` in master to increment the version to the next
-  patch one (i.e. X.Y.Z --> X.Y.(Z+1).dev0).
 
 * Commit your changes with::
 

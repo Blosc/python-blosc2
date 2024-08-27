@@ -14,6 +14,13 @@ from enum import Enum
 
 import numexpr
 
+from ._version import __version__
+
+__version__ = __version__
+"""
+Python-Blosc2 version.
+"""
+
 
 class Codec(Enum):
     """
@@ -195,12 +202,7 @@ from .lazyexpr import LazyExpr, lazyudf, lazyexpr, LazyArray, _open_lazyarray
 from .proxy import Proxy, ProxySource, ProxyNDField
 
 from .schunk import SChunk, open
-from .version import __version__
 
-__version__ = __version__
-"""
-Python-Blosc2 version.
-"""
 
 # Registry for postfilters
 postfilter_funcs = {}

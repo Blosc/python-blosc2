@@ -1,13 +1,10 @@
 [build-system]
 requires = [
-    "setuptools",
-    "scikit-build",
+    "scikit-build-core",
     "cython>=3",
-    "cmake",
-    "ninja",
     "numpy>=2.0.0",
 ]
-build-backend = "setuptools.build_meta"
+build-backend = "scikit_build_core.build"
 
 [project]
 name = "blosc2"
@@ -43,16 +40,33 @@ dependencies = [
 ]
 dynamic = ["version"]
 
+
+[project.optional-dependencies]
+test = [
+    "pytest",
+    "psutil",
+ ]
+
 [project.urls]
 homepage = "https://github.com/Blosc/python-blosc2"
 documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 
 [tool.cibuildwheel]
+build-verbosity = 1
 # Skip unsupported python versions as well as 32-bit platforms, which are not supported anymore.
-skip = "cp36-* cp37-* pp37-* cp38-* pp38-* cp39-* pp39-* *-manylinux_i686  cp*-win32 *_ppc64le *_s390x"
-# Let's use a more recent version of the manylinux image for more modern compilers
-manylinux-x86_64-image = "manylinux_2_28"
-manylinux-aarch64-image = "manylinux_2_28"
+skip = "*-manylinux_i686 cp*-win32 *_ppc64le *_s390x *musllinux*"
+test-requires = "pytest psutil"
+test-command = "pytest {project}/tests"
+# Manylinux 2014 will be the default for x86_64 and aarch64
+manylinux-x86_64-image = "manylinux2014"
+manylinux-aarch64-image = "manylinux2014"
+
+[tool.scikit-build]
+metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
+sdist.include = ["src/blosc2/_version.py"]
+
+[tool.setuptools_scm]
+write_to = "src/blosc2/_version.py"
 
 [tool.ruff]
 line-length = 109
