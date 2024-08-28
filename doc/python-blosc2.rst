@@ -18,25 +18,24 @@
     **Binary data optimization**
 
 
-    Blosc2 is designed to optimize binary data (integers, floats, bools), enhancing
-    compression, and accelerating processing, making it ideal for high-performance numerical
-    applications.
+    Blosc2 is designed to enhance compression for binary data (integers, floats, bools),
+    making it ideal for high-performance numerical applications.
 
     ---
 
     **Flexible storage**
 
 
-    Blosc2 offers storage in memory, disk, or network, adapting to your needs and
-    facilitating integration into various systems.
+    Blosc2 offers storage in memory, disk, or `network <https://ironarray.io/caterva2>`_,
+    adapting to your needs and facilitating integration into various systems.
 
     ---
 
     **N-dimensional, compressed arrays**
 
 
-    Blosc2 supports NDArray objects for the efficient storage and manipulation of
-    multidimensional data, making it ideal for complex data sets.
+    Blosc2 supports `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/02.ndarray-basics.html>`_
+    for efficient storage and manipulation of multidimensional data, making it ideal for complex data sets.
 
     ---
 
@@ -44,7 +43,7 @@
 
 
     Blosc2 employs two-level partitions to optimize CPU cache, enhancing data access and
-    performance in computational tasks.
+    performance in computational tasks.  Tailored for modern multi-core processors.
 
     ---
 
@@ -52,7 +51,7 @@
 
 
     Blosc2 accelerates complex mathematical operations and data processing with an
-    optimized compute engine.
+    optimized compute engine. Ideal for high-performance computing and data analysis.
 
 .. raw:: html
 
