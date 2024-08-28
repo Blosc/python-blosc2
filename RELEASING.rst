@@ -11,18 +11,18 @@ Preliminaries
 * Make sure that the c-blosc2 submodule is updated to the latest version (or a specific
   version that will be documented in the ``RELEASE_NOTES.md``)::
 
-    cd blosc2/c-blosc2
+    cd c-blosc2
     git pull
     git checkout <desired tag>
     cd ../..
-    git commit -m "Update C-Blosc2 sources to <desired tag>" blosc2/c-blosc2
+    git commit -m "Update C-Blosc2 sources to <desired tag>" c-blosc2
     git push
 
 * Make sure that the current main branch is passing the tests in continuous integration.
 
 * Build the package and make sure that::
 
-    PYTHONPATH=. python -c "import blosc2; blosc2.print_versions()"
+    python -c "import blosc2; blosc2.print_versions()"
 
   is printing the correct versions.
 

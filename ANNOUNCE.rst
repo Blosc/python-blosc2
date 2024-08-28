@@ -1,10 +1,12 @@
-Announcing Python-Blosc2 3.0.0-beta.1
+Announcing Python-Blosc2 3.0.0-beta.2
 =====================================
 
-The Blosc development team is pleased to announce the first beta release of
-Python-Blosc2 3.0.0.  We have been working hard to provide a new evaluation
-engine (based on numexpr) for NDArray instances, and we would like to get
-feedback from the community before the final release.
+The Blosc development team is pleased to announce the second beta release of
+Python-Blosc2 3.0.0.  Here, we have fine tuned the performance of the new
+evaluation engine, and extended it to operate with other instances than NDArray,
+like the `C2Array` class and the new one `Proxy` (access to remote data with caching).
+Documentation has been improved and we have added more examples and tutorials.
+As always, we would like to get feedback from the community before the final release.
 
 Now, you can evaluate expressions like `a + sin(b) + 1` where `a` and `b`
 are NDArray instances.  This is a powerful feature that allows for

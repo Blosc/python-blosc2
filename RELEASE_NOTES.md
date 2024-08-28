@@ -2,7 +2,24 @@
 
 ## Changes from 3.0.0-beta.1 to 3.0.0-beta.2
 
-XXX version-specific blurb XXX
+* Revamped documentation.  Now, the documentation is more complete and has a better structure. See [here](https://www.blosc.org/python-blosc2/index.html).  Thanks to Oumaima Ech Chdig (@omaech), our newcomer to the Blosc team.  Also, thanks to NumFOCUS for the support in this task.
+
+* New `Proxy` class to access other arrays, while providing caching. This is useful for example when you have a big array, and you want to access a small part of it, but you want to cache the accessed data for later use.  See [its doc](https://www.blosc.org/python-blosc2/reference/proxy.html).
+
+* Lazy expressions can accept proxies as operands. 
+
+* Read-ahead support for reading super-chunks from disk.  This allows for overlapping reads and computations, which can be a big performance boost for some workloads.
+
+* New BLOSC_LOW_MEM envar for keeping memory under a minimum while evaluating expressions.  This makes it possible to evaluate expressions on very large arrays, even if the memory is limited (at the expense of performance).
+
+* Fine tune block sizes for the internal compute engine.
+
+* Better CPU cache size guessing for linux and macOS.
+
+* Build tooling has been modernized and now uses `pyproject.toml` and `scikit-build-core` for managing dependencies and building the package.  Thanks to @LecrisUT for the excellent guidance in this area.
+
+* Many code cleanup and syntax improvements in code.  Thanks to @DimitriPapadopoulos.
+
 
 ## Changes from 2.6.2 to 3.0.0-beta.1
 
