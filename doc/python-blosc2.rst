@@ -1,14 +1,68 @@
-Python-Blosc2 documentation
-============================
+.. raw:: html
 
-Python-Blosc2 is a Python package for handling large NDim and plain datasets stored in a compressed state either in-memory or on-disk.
-Under the hood, it uses [C-Blosc2](https://www.blosc.org/c-blosc2/c-blosc2.html), a fast, compressed and persistent data store library
-for C.
+    <h1 class="text-center">Python-Blosc2: Compress Better, Compute Bigger</h1>
 
+.. panels::
+    :card: intro-card text-center no-border
+    :column: col-lg-4 col-md-6 col-sm-12 mb-4
+    :container: + gap-3
+
+    **Excellent compression capabilities**
+
+
+    Blosc2 uses advanced codecs and filters for efficient compression, reducing storage
+    space while maintaining high performance.
+
+    ---
+
+    **Binary data optimization**
+
+
+    Blosc2 is designed to optimize binary data (integers, floats, bools), enhancing
+    compression, and accelerating processing, making it ideal for high-performance numerical
+    applications.
+
+    ---
+
+    **Flexible storage**
+
+
+    Blosc2 offers storage in memory, disk, or network, adapting to your needs and
+    facilitating integration into various systems.
+
+    ---
+
+    **N-dimensional, compressed arrays**
+
+
+    Blosc2 supports NDArray objects for the efficient storage and manipulation of
+    multidimensional data, making it ideal for complex data sets.
+
+    ---
+
+    **Two-level partitions**
+
+
+    Blosc2 employs two-level partitions to optimize CPU cache, enhancing data access and
+    performance in computational tasks.
+
+    ---
+
+    **Optimized compute engine**
+
+
+    Blosc2 accelerates complex mathematical operations and data processing with an
+    optimized compute engine.
+
+.. raw:: html
+
+    <h1 class="text-center">Documentation</h1>
 
 .. panels::
     :card: + intro-card text-center
     :column: col-lg-6 col-md-12 col-sm-12 col-xs-12 d-flex
+    :container: + gap-3
+
 
     ---
 
@@ -35,6 +89,7 @@ for C.
     be used.
 
     +++
+
 
     .. link-button:: reference/index
             :type: ref
@@ -73,6 +128,7 @@ for C.
             :classes: btn-info
 
 
+
 ..  toctree::
     :maxdepth: 1
     :hidden:
@@ -81,3 +137,4 @@ for C.
     API Reference <reference/index>
     Development <development/index>
     Release Notes <release_notes/index>
+
