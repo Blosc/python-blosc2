@@ -10,39 +10,40 @@
     **Excellent compression capabilities**
 
 
-    Blosc2 uses advanced codecs and filters for efficient compression, reducing storage
-    space while maintaining high performance.
+    Blosc2 combines advanced codecs and filters for efficient compression,
+    reducing storage space while maintaining high performance.
 
     ---
 
     **Binary data optimization**
 
 
-    Blosc2 is designed to enhance compression for binary data (integers, floats, bools),
-    making it ideal for high-performance numerical applications.
+    Designed to enhance compression for binary data (integers, floats, bools),
+    Blosc2 is specially meant for high-performance numerical applications.
 
     ---
 
     **Flexible storage**
 
 
-    Blosc2 offers storage in memory, disk, or `network <https://ironarray.io/caterva2>`_,
-    adapting to your needs and facilitating integration into various systems.
+    By offering storage in memory, disk, or `network <https://ironarray.io/caterva2>`_,
+    Blosc2 adapts to your needs and facilitates integration into various systems.
 
     ---
 
     **N-dimensional, compressed arrays**
 
 
-    Blosc2 supports `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/02.ndarray-basics.html>`_
-    for efficient storage and manipulation of multidimensional data, making it ideal for complex data sets.
+    `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/02.ndarray-basics.html>`_
+    allow for efficient storage and manipulation of multidimensional data, making it easy
+    to work with complex data sets.
 
     ---
 
     **Two-level partitions**
 
 
-    Blosc2 employs two-level partitions to optimize CPU cache, enhancing data access and
+    Two-level partitions leverages multi-level CPU caches, enhancing data access and
     performance in computational tasks.  Tailored for modern multi-core processors.
 
     ---
@@ -50,8 +51,9 @@
     **Optimized compute engine**
 
 
-    Blosc2 accelerates complex mathematical operations and data processing with an
-    optimized compute engine. Ideal for high-performance computing and data analysis.
+    Blosc2 accelerates complex mathematical operations and reductions with an
+    `optimized compute engine <https://www.blosc.org/posts/ndim-reductions/>`_,
+    achieving high-performance for computing and data analysis.
 
 .. raw:: html
 
