@@ -40,7 +40,6 @@ else()
         GIT_TAG b179abf1132dfa5a263b2ebceb6ef7a3c2890c64
     )
     FetchContent_MakeAvailable(blosc2)
-    FetchContent_GetProperties(blosc2)
     include_directories("${blosc2_SOURCE_DIR}/include")
     target_link_libraries(blosc2_ext PRIVATE blosc2_static)
 endif()
