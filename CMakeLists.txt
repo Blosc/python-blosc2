@@ -34,8 +34,14 @@ else()
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
     # we want the binaries of the C-Blosc2 library to go into the wheels
     set(BLOSC_INSTALL ON)
-    add_subdirectory(${PROJECT_SOURCE_DIR}/c-blosc2)
-    include_directories("${PROJECT_SOURCE_DIR}/c-blosc2/include")
+    include(FetchContent)
+    FetchContent_Declare(blosc2
+        GIT_REPOSITORY https://github.com/Blosc/c-blosc2
+        GIT_TAG b179abf1132dfa5a263b2ebceb6ef7a3c2890c64
+    )
+    FetchContent_MakeAvailable(blosc2)
+    FetchContent_GetProperties(blosc2)
+    include_directories("${blosc2_SOURCE_DIR}/include")
     target_link_libraries(blosc2_ext PRIVATE blosc2_static)
 endif()
 
