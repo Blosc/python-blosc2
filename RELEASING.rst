@@ -9,7 +9,7 @@ Preliminaries
   https://scikit-build-core.readthedocs.io/en/latest/configuration.html#dynamic-metadata
 
 * Make sure that the c-blosc2 repository is updated to the latest version (or a specific
-  version that will be documented in the ``RELEASE_NOTES.md``). In `CMakeLists.txt` edit::
+  version that will be documented in the ``RELEASE_NOTES.md``). In ``CMakeLists.txt`` edit::
 
     FetchContent_Declare(blosc2
         GIT_REPOSITORY https://github.com/Blosc/c-blosc2
