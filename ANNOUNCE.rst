@@ -1,4 +1,4 @@
-Announcing Python-Blosc2 3.0.0-beta.2
+Announcing Python-Blosc2 3.0.0-beta.3
 =====================================
 
 The Blosc development team is pleased to announce the second beta release of

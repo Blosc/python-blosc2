@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.0.0-beta.3 to 3.0.0-beta.4
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.0.0-beta.1 to 3.0.0-beta.3
 
 * Revamped documentation.  Now, the documentation is more complete and has a better structure. See [here](https://www.blosc.org/python-blosc2/index.html).  Thanks to Oumaima Ech Chdig (@omaech), our newcomer to the Blosc team.  Also, thanks to NumFOCUS for the support in this task.

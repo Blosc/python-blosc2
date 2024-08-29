@@ -73,7 +73,7 @@ Checking packaging
 
 * Check that the packages and wheels are sane::
 
-    python -m pip install blosc2[test] -U
+    pip install blosc2[test] -U
     python -c "import blosc2; blosc2.print_versions()"
     pytest
 
