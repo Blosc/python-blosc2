@@ -15,7 +15,7 @@ Source code
 
 .. code-block:: console
 
-    git clone --recursive https://github.com/Blosc/python-blosc2/
+    git clone https://github.com/Blosc/python-blosc2/
     cd python-blosc2
     pip install -e .[test]
 
