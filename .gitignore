@@ -20,12 +20,14 @@ parts/
 sdist/
 var/
 wheels/
+wheelhouse/
 pip-wheel-metadata/
 share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
 MANIFEST
+src/blosc2/_version.py
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
