@@ -8,15 +8,15 @@ Preliminaries
   to figure it out based on git tags:
   https://scikit-build-core.readthedocs.io/en/latest/configuration.html#dynamic-metadata
 
-* Make sure that the c-blosc2 submodule is updated to the latest version (or a specific
-  version that will be documented in the ``RELEASE_NOTES.md``)::
+* Make sure that the c-blosc2 repository is updated to the latest version (or a specific
+  version that will be documented in the ``RELEASE_NOTES.md``). In `CMakeLists.txt` edit::
 
-    cd c-blosc2
-    git pull
-    git checkout <desired tag>
-    cd ../..
-    git commit -m "Update C-Blosc2 sources to <desired tag>" c-blosc2
-    git push
+    FetchContent_Declare(blosc2
+        GIT_REPOSITORY https://github.com/Blosc/c-blosc2
+        GIT_TAG b179abf1132dfa5a263b2ebceb6ef7a3c2890c64
+    )
+
+  to point to the desired commit/tag in the c-blosc2 repo.
 
 * Make sure that the current main branch is passing the tests in continuous integration.
 
