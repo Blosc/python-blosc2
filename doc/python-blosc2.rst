@@ -10,16 +10,14 @@
     **Excellent compression capabilities**
 
 
-    Blosc2 combines `advanced codecs and filters <https://www.blosc.org/posts/bytedelta-enhance-compression-toolset/>`_
-    for efficient compression, reducing storage space while maintaining high performance.
+    Blosc2 combines `advanced codecs and filters <https://www.blosc.org/posts/bytedelta-enhance-compression-toolset/>`_ for efficient compression, reducing storage space while maintaining high performance.
 
     ---
 
     **Binary data optimization**
 
 
-    Designed to enhance compression for binary data (integers, floats, bools),
-    Blosc2 is specially meant for
+    Designed to enhance compression for binary data (integers, floats, bools), Blosc2 is specially meant for
     `high-performance numerical applications <https://nbviewer.org/github/Blosc/python-blosc2/blob/main/bench/lazyarray-expr-small-dask.ipynb>`_.
 
     ---
@@ -27,27 +25,21 @@
     **Flexible storage**
 
 
-    By offering storage in memory, disk, or `network <https://ironarray.io/caterva2>`_,
-    Blosc2 adapts to your needs and facilitates integration into various systems.
+    By offering storage in memory, disk, or `network <https://ironarray.io/caterva2>`_, Blosc2 adapts to your needs and facilitates integration into various systems.
 
     ---
 
     **N-dimensional, compressed arrays**
 
 
-    `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/02.ndarray-basics.html>`_
-    allow for efficient storage and manipulation of multidimensional data, making it easy
-    to work with complex data sets.
+    `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/02.ndarray-basics.html>`_ allow for efficient storage and manipulation of multidimensional data, making it easy to work with complex data sets.
 
     ---
 
     **Two-level partitions**
 
 
-    Leverages multi-level CPU caches,
-    `enhancing data access <https://www.blosc.org/posts/blosc2-ndim-intro/>`_ and
-    performance in computational tasks.
-    Tailored for modern multi-core processors.
+    Leverages multi-level CPU caches, `enhancing data access <https://www.blosc.org/posts/blosc2-ndim-intro/>`_ and performance in computational tasks. Tailored for modern multi-core processors.
 
     ---
 
@@ -57,6 +49,15 @@
     Blosc2 accelerates complex mathematical operations and reductions with an
     `optimized compute engine <https://www.blosc.org/posts/ndim-reductions/>`_,
     achieving high-performance for computing and data analysis.
+
+.. raw:: html
+
+    <p style="text-align: center;  background-color: black; color: white;">
+        <a href="https://github.com/Blosc/python-blosc2/blob/main/RELEASE_NOTES.md"
+           style="font-size: 1.5em;">Python-Blosc2 3.0.0 beta3 released!</a>
+        <span style="display: inline-block; width: 20px;"></span>
+        <span style="font-family: monospace;">pip install blosc2==3.0.0b3</span>
+    </p>
 
 .. raw:: html
 
