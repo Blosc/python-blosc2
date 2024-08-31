@@ -25,7 +25,7 @@
     **Flexible storage**
 
 
-    By offering storage in memory, disk, or `network <https://ironarray.io/caterva2>`_, Blosc2 adapts to your needs and facilitates integration into various systems.
+    By offering storage in `memory, disk <https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/02.ndarray-basics.ipynb>`_, or `network <https://ironarray.io/caterva2>`_, Blosc2 adapts to your needs and facilitates integration into various systems.
 
     ---
 
