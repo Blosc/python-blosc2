@@ -10,8 +10,8 @@
     **Excellent compression capabilities**
 
 
-    Blosc2 combines advanced codecs and filters for efficient compression,
-    reducing storage space while maintaining high performance.
+    Blosc2 combines `advanced codecs and filters <https://www.blosc.org/posts/bytedelta-enhance-compression-toolset/>`_
+    for efficient compression, reducing storage space while maintaining high performance.
 
     ---
 
@@ -19,7 +19,8 @@
 
 
     Designed to enhance compression for binary data (integers, floats, bools),
-    Blosc2 is specially meant for high-performance numerical applications.
+    Blosc2 is specially meant for
+    `high-performance numerical applications <https://nbviewer.org/github/Blosc/python-blosc2/blob/main/bench/lazyarray-expr-small-dask.ipynb>`_.
 
     ---
 
@@ -43,8 +44,10 @@
     **Two-level partitions**
 
 
-    Two-level partitions leverages multi-level CPU caches, enhancing data access and
-    performance in computational tasks.  Tailored for modern multi-core processors.
+    Leverages multi-level CPU caches,
+    `enhancing data access <https://www.blosc.org/posts/blosc2-ndim-intro/>`_ and
+    performance in computational tasks.
+    Tailored for modern multi-core processors.
 
     ---
 
