@@ -1,3 +1,16 @@
+.. _title:
+
+.. title:: Python-Blosc2 Documentation
+
+.. raw:: html
+
+    <p style="text-align: center;  background-color: #e6a909;">
+        <a href="https://github.com/Blosc/python-blosc2/blob/main/RELEASE_NOTES.md"
+           style="font-size: 1.5em;">Version 3.0.0 beta3 released!</a>
+        <span style="display: inline-block; width: 20px;"></span>
+        <span style="font-family: monospace;">pip install blosc2==3.0.0b3</span>
+    </p>
+
 .. raw:: html
 
     <h1 class="text-center">Python-Blosc2: Compress Better, Compute Bigger</h1>
@@ -49,15 +62,6 @@
     Blosc2 accelerates complex mathematical operations and reductions with an
     `optimized compute engine <https://www.blosc.org/posts/ndim-reductions/>`_,
     achieving high-performance for computing and data analysis.
-
-.. raw:: html
-
-    <p style="text-align: center;  background-color: black; color: white;">
-        <a href="https://github.com/Blosc/python-blosc2/blob/main/RELEASE_NOTES.md"
-           style="font-size: 1.5em;">Python-Blosc2 3.0.0 beta3 released!</a>
-        <span style="display: inline-block; width: 20px;"></span>
-        <span style="font-family: monospace;">pip install blosc2==3.0.0b3</span>
-    </p>
 
 .. raw:: html
 
