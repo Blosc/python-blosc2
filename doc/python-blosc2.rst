@@ -13,7 +13,11 @@
 
 .. raw:: html
 
-    <h1 class="text-center">Python-Blosc2: Compress Better, Compute Bigger</h1>
+    <h1 class="text-center">Python-Blosc2: <em>Compress Better, Compute Bigger</em></h1>
+
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/b2nd-2level-parts.png?raw=true
+  :width: 25%
+  :align: center
 
 .. panels::
     :card: intro-card text-center no-border
