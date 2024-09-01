@@ -4,7 +4,7 @@
 
 .. raw:: html
 
-    <p style="text-align: center;  background-color: #e6a909;">
+    <p style="text-align: center; color: black; background-color: rgba(230, 169, 9, 0.65);">
         <a href="https://github.com/Blosc/python-blosc2/blob/main/RELEASE_NOTES.md"
            style="font-size: 1.5em;">Version 3.0.0 beta3 released!</a>
         <span style="display: inline-block; width: 20px;"></span>
@@ -15,9 +15,13 @@
 
     <h1 class="text-center">Python-Blosc2: <em>Compress Better, Compute Bigger</em></h1>
 
-.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/b2nd-2level-parts.png?raw=true
-  :width: 25%
-  :align: center
+.. raw:: html
+
+    <!-- Does not look good on phones
+    .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/b2nd-2level-parts.png?raw=true
+      :width: 25%
+      :align: center
+    -->
 
 .. panels::
     :card: intro-card text-center no-border
