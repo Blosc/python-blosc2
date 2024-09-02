@@ -41,6 +41,7 @@ Attributes
     chunksize
     dtype
     fields
+    keep_last_read
     info
     schunk
     size
