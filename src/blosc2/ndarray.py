@@ -574,6 +574,24 @@ class NDArray(blosc2_ext.NDArray, Operand):
     def info(self):
         """
         Print information about this array.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> my_array = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        >>> print(np.info(my_array))
+        class:  ndarray
+        shape:  (10,)
+        strides:  (8,)
+        itemsize:  8
+        aligned:  True
+        contiguous:  True
+        fortran:  True
+        data pointer: 0x600001510000
+        byteorder:  little
+        byteswap:  False
+        type: int64
+        None
         """
         return InfoReporter(self)
 
@@ -614,6 +632,15 @@ class NDArray(blosc2_ext.NDArray, Operand):
         See Also
         --------
         :attr:`schunk`
+
+        Examples
+        --------
+
+        >>> import blosc2
+        >>> storage = {"contiguous": True, "cparams": {"typesize": 4, "blocksize": 1024}, "dparams": {}}
+        >>> schunk = blosc2.SChunk(chunksize=1024,  **storage) # Create a SChunk object
+        >>> print("Block size of the container:", schunk.blocksize)
+        Block size of the SChunk: 1024
         """
         return self._schunk.blocksize
 
@@ -745,9 +772,45 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """Shortcut to :meth:`SChunk.get_chunk <blosc2.schunk.SChunk.get_chunk>`. This can be accessed
         through the :attr:`schunk` attribute as well.
 
+        Parameters
+        ----------
+        nchunk : int
+        The index of the chunk to retrieve.
+
+        Returns
+        -------
+        chunk : array-like
+            The chunk data at the specified index. The type of this data depends on how the chunks are stored and
+            represented in the `SChunk` object.
+
         See Also
         --------
         :attr:`schunk`
+            The attribute that provides access to the underlying `SChunk` object.
+
+
+         Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> # Create an SChunk with some data
+        >>> data = np.arange(100)
+        >>> schunk = blosc2.SChunk(data=data)
+        >>> # Get a specific chunk from the SChunk object
+        >>> chunk = schunk.get_chunk(0)
+        >>> # Decompress the chunk to convert it into a numpy array
+        >>> decompressed_chunk = blosc2.decompress(chunk)
+        >>> np_array_chunk = np.frombuffer(decompressed_chunk, dtype=np.int64)
+        >>> # Verify the content of the chunk
+        >>> if isinstance(np_array_chunk, np.ndarray):
+        >>>         print(np_array_chunk)
+        >>>         print(np_array_chunk.shape) # Assuming chunk is a list or numpy array
+        [ 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
+        24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47
+        48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71
+        72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95
+        96 97 98 99]
+        (100,)
         """
         return self.schunk.get_chunk(nchunk)
 
@@ -772,6 +835,21 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     The repeated value for the chunk; if not SpecialValue.VALUE, it is None.
                 lazychunk: bytes
                     A buffer with the complete lazy chunk.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> a = blosc2.full(shape=(1000,) * 3, fill_value=9, chunks=(500,) * 3, dtype="f4")
+        >>> for info in a.iterchunks_info():
+        ...     print(info.coords)
+        (0, 0, 0)
+        (0, 0, 1)
+        (0, 1, 0)
+        (0, 1, 1)
+        (1, 0, 0)
+        (1, 0, 1)
+        (1, 1, 0)
+        (1, 1, 1)
         """
         ChunkInfoNDArray = namedtuple(
             "ChunkInfoNDArray", ["nchunk", "coords", "cratio", "special", "repeated_value", "lazychunk"]
@@ -783,6 +861,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             if cinfo.special == SpecialValue.VALUE:
                 repeated_value = np.frombuffer(cinfo.repeated_value, dtype=self.dtype)[0]
             yield ChunkInfoNDArray(nchunk, coords, cratio, special, repeated_value, lazychunk)
+
 
     def tobytes(self):
         """Returns a buffer with the data contents.
@@ -817,7 +896,17 @@ class NDArray(blosc2_ext.NDArray, Operand):
         See Also
         --------
         :func:`~blosc2.ndarray_from_cframe`
+            This function can be used to reconstruct an NDArray from the serialized bytes.
 
+        Examples
+        --------
+        >>> import blosc2
+        >>> a = blosc2.full(shape=(1000, 1000), fill_value=9, dtype='i4')
+        >>> # Get the bytes object containing the serialized instance
+        >>> cframe_bytes = a.to_cframe()
+        >>> # Verify the type of the returned object
+        >>> isinstance(cframe_bytes, bytes)
+            True
         """
         return super().to_cframe()
 
@@ -1005,6 +1094,20 @@ def sum(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdi
     References
     ----------
     `np.sum <https://numpy.org/doc/stable/reference/generated/numpy.sum.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> # Example array
+    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
+    >>> # Sum all elements in the array (axis=None)
+    >>> total_sum = array.sum()
+    >>> print("Sum of all elements:", total_sum)
+    21
+    >>> # Sum along axis 0 (columns)
+    >>> sum_axis_0 = array.sum(axis=0)
+    >>> print("Sum along axis 0 (columns):", sum_axis_0)
+    [5 7 9]
     """
     return ndarr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
@@ -1038,6 +1141,16 @@ def mean(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepd
     References
     ----------
     `np.mean <https://numpy.org/doc/stable/reference/generated/numpy.mean.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> # Example array
+    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
+    >>> # Compute the mean of all elements in the array (axis=None)
+    >>> overall_mean = array.mean()
+    >>> print("Mean of all elements:", overall_mean)
+    Mean of all elements: 3.5
     """
     return ndarr.mean(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
@@ -1074,6 +1187,20 @@ def std(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
     References
     ----------
     `np.std <https://numpy.org/doc/stable/reference/generated/numpy.std.html>`_
+
+     Examples
+    --------
+    >>> import numpy as np
+    >>> # Create an instance of NDArray with some data
+    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
+    >>> # Compute the standard deviation of the entire array
+    >>> std_all = array.std()
+    >>> print("Standard deviation of the entire array:", std_all)
+    Standard deviation of the entire array: 1.707825127659933
+    >>> # Compute the standard deviation along axis 0 (columns)
+    >>> std_axis0 = array.std(axis=0)
+    >>> print("Standard deviation along axis 0:", std_axis0)
+    Standard deviation along axis 0: [1.5 1.5 1.5]
     """
     return ndarr.std(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
 
@@ -1110,6 +1237,21 @@ def var(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
     References
     ----------
     `np.var <https://numpy.org/doc/stable/reference/generated/numpy.var.html>`_
+
+
+     Examples
+    --------
+    >>> import numpy as np
+    >>> # Create an instance of NDArray with some data
+    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
+    >>> # Compute the variance of the entire array
+    >>> var_all = array.var()
+    >>> print("Variance of the entire array:", var_all)
+    Variance of the entire array: 2.9166666666666665
+    >>> # Compute the variance along axis 0 (columns)
+    >>> var_axis0 = array.var(axis=0)
+    >>> print("Variance along axis 0:", var_axis0)
+    Variance along axis 0: [2.25 2.25 2.25]
     """
     return ndarr.var(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
 
@@ -1145,6 +1287,20 @@ def prod(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepd
     References
     ----------
     `np.prod <https://numpy.org/doc/stable/reference/generated/numpy.prod.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> # Create an instance of NDArray with some data
+    >>> array = np.array([[11, 22, 33], [4, 15, 36]])
+    >>> # Compute the product of all elements in the array
+    >>> prod_all = array.prod()
+    >>> print("Product of all elements in the array:", prod_all)
+    Product of all elements in the array: 17249760
+    >>> # Compute the product along axis 1 (rows)
+    >>> prod_axis1 = array.prod(axis=1)
+    >>> print("Product along axis 1:", prod_axis1)
+    Product along axis 1: [7986 2160]
     """
     return ndarr.prod(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
@@ -1172,6 +1328,18 @@ def min(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
     References
     ----------
     `np.min <https://numpy.org/doc/stable/reference/generated/numpy.min.html>`_
+
+      Examples
+    --------
+    >>> import numpy as np
+    >>> array = np.array([7, 8, 9], [4, 5, 6])
+    >>> min_all = array.min()
+    >>> print("Minimum of all elements in the array:", min_all)
+    Minimum of all elements in the array: 4
+    >>> # Compute the minimum along axis 0 with keepdims=True
+    >>> min_keepdims = array.min(axis=0, keepdims=True)
+    >>> print("Minimum along axis 0 with keepdims=True:", min_keepdims)
+    Minimum along axis 0 with keepdims=True: [[4 5 6]]
     """
     return ndarr.min(axis=axis, keepdims=keepdims, **kwargs)
 
@@ -1199,6 +1367,26 @@ def max(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
     References
     ----------
     `np.max <https://numpy.org/doc/stable/reference/generated/numpy.max.html>`_
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> data = np.array([[11, 2, 36, 24, 5, 69], [73, 81, 49, 6, 73, 0]])
+    >>> ndarray = blosc2.asarray(data)
+    >>> print("Original data:", data)
+    Original data:  [[11  2 36 24  5 69]
+                    [73 81 49  6 73  0]]
+    >>> # Compute the maximum along axis 0 and 1
+    >>> max_along_axis_0 = blosc2.max(axis=0)
+    >>> print("Maximum along axis 0:", max_along_axis_0)
+    Maximum along axis 0: [73 81 49 24 73 69]
+    >>> max_along_axis_1 = blosc2.max(axis=1)
+    >>> print("Maximum along axis 1:", max_along_axis_1)
+    Maximum along axis 1: [69 81]
+    >>> max_flattened = blosc2.max()
+    >>> print("Maximum of the flattened array:", max_flattened)
+    Maximum of the flattened array: 81
     """
     return ndarr.max(axis=axis, keepdims=keepdims, **kwargs)
 
@@ -1226,6 +1414,22 @@ def any(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
     References
     ----------
     `np.any <https://numpy.org/doc/stable/reference/generated/numpy.any.html>`_
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> data = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 0]])
+    >>> # Convert the NumPy array to a Blosc2 NDArray
+    >>> ndarray = blosc2.asarray(data)
+    >>> print("Original data:", data)
+    Original data: [[1 0 0] [0 1 0] [0 0 0]]
+    >>> any_along_axis_0 = blosc2.any(ndarr=ndarr, axis=0)
+    >>> print("Any along axis 0:", any_along_axis_0)
+    Any along axis 0: [True True False]
+    >>> any_flattened = blosc2.any(ndarr=ndarr)
+    >>> print("Any in the flattened array:", any_flattened)
+    Any in the flattened array: True
     """
     return ndarr.any(axis=axis, keepdims=keepdims, **kwargs)
 
@@ -1253,6 +1457,16 @@ def all(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
     References
     ----------
     `np.all <https://numpy.org/doc/stable/reference/generated/numpy.all.html>`_
+
+    Examples
+    --------
+
+    >>> import numpy as np
+    >>> data = np.array([True, True, False, True, True, True])
+    >>> # Test if all elements are True along the default axis (flattened array)
+    >>> result_flat = all(data)
+    >>> print("All elements are True (flattened):", result_flat)
+    All elements are True (flattened): False
     """
     return ndarr.all(axis=axis, keepdims=keepdims, **kwargs)
 
@@ -1274,6 +1488,15 @@ def sin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.sin <https://numpy.org/doc/stable/reference/generated/numpy.sin.html>`_
+
+    Examples
+    --------
+
+    >>> import numpy as np
+    >>> angles = np.array([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
+    >>> print("Angles (radians):", np.sin(angles))
+    Angles (radians): [ 0.0000000e+00  1.0000000e+00  1.2246468e-16 -1.0000000e+00
+    -2.4492936e-16]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "sin", None))
 
@@ -1295,6 +1518,15 @@ def cos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.cos <https://numpy.org/doc/stable/reference/generated/numpy.cos.html>`_
+
+    Examples
+    --------
+
+    >>> import numpy as np
+    >>> angles = np.array([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
+    >>> print("Angles (radians):", np.cos(angles))
+    Angles (radians): [ 1.0000000e+00  6.1232340e-17 -1.0000000e+00 -1.8369702e-16
+    1.0000000e+00]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "cos", None))
 
@@ -1316,6 +1548,15 @@ def tan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.tan <https://numpy.org/doc/stable/reference/generated/numpy.tan.html>`_
+
+     Examples
+    --------
+
+    >>> import numpy as np
+    >>> angles = np.array([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
+    >>> print("Angles (radians):", np.tan(angles))
+    Angles (radians): [ 0.00000000e+00  1.63312394e+16 -1.22464680e-16  5.44374645e+15
+    -2.44929360e-16]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "tan", None))
 
@@ -1337,6 +1578,13 @@ def sqrt(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.sqrt <https://numpy.org/doc/stable/reference/generated/numpy.sqrt.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> data = np.array([1, 4, 9, 16, 25])
+    >>> print("Square root of the data:", np.sqrt(data))
+    Angles (radians): [1. 2. 3. 4. 5.]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "sqrt", None))
 
@@ -2069,6 +2317,19 @@ def frombuffer(
 def copy(array, dtype=None, **kwargs):
     """
     This is equivalent to :meth:`NDArray.copy`
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> # Create an instance of MyNDArray with some data
+    >>> original_array = np.array([[1.1, 2.2, 3.3], [4.4, 5.5, 6.6]])
+    >>> # Create a copy of the array without changing dtype
+    >>> copied_array = original_array.copy()
+    >>> print("Copied array (default dtype):")
+    >>> print(copied_array)
+    Copied array (default dtype):
+    [[1.1 2.2 3.3]
+    [4.4 5.5 6.6]]
     """
     return array.copy(dtype, **kwargs)
 
