@@ -24,6 +24,12 @@ from blosc2 import SpecialValue, blosc2_ext, compute_chunks_blocks
 from blosc2.info import InfoReporter
 from blosc2.schunk import SChunk
 
+def is_documented_by(original):
+    def wrapper(target):
+        target.__doc__ = original.__doc__
+        return target
+
+    return wrapper
 
 def make_key_hashable(key):
     if isinstance(key, slice):
@@ -142,6 +148,423 @@ def _check_allowed_dtypes(
         )
 
 
+def sum(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdims=False, **kwargs):
+    """
+    Return the sum of array elements over a given axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which a sum is performed. The default, axis=None,
+        will sum all the elements of the input array. If axis is negative
+        it counts from the last to the first axis.
+    dtype: np.dtype, optional
+        The type of the returned array and of the accumulator in which the
+        elements are summed. The dtype of :paramref:`ndarr` is used by default unless it has
+        an integer dtype of less precision than the default platform integer.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result
+        as dimensions with size one. With this option, the result will broadcast
+        correctly against the input array.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    sum_along_axis: np.ndarray or :ref:`NDArray` or scalar
+        The sum of the elements along the axis.
+
+    References
+    ----------
+    `np.sum <https://numpy.org/doc/stable/reference/generated/numpy.sum.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> # Example array
+    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
+    >>> # Sum all elements in the array (axis=None)
+    >>> total_sum = blosc2.sum(array)
+    >>> print("Sum of all elements:", total_sum)
+    21
+    >>> # Sum along axis 0 (columns)
+    >>> sum_axis_0 = blosc2.sum(array, axis=0)
+    >>> print("Sum along axis 0 (columns):", sum_axis_0)
+    Sum along axis 0 (columns): [5 7 9]
+    """
+    return ndarr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
+
+def mean(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdims=False, **kwargs):
+    """
+    Return the arithmetic mean along the specified axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which the means are computed. The default is to compute
+        the mean of the flattened array.
+    dtype: np.dtype, optional
+        Type to use in computing the mean. For integer inputs, the default is
+        float32; for floating point inputs, it is the same as the input dtype.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result
+        as dimensions with size one. With this option, the result will broadcast
+        correctly against the input array.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    mean_along_axis: np.ndarray or :ref:`NDArray` or scalar
+        The mean of the elements along the axis.
+
+    References
+    ----------
+    `np.mean <https://numpy.org/doc/stable/reference/generated/numpy.mean.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> # Example array
+    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
+    >>> # Compute the mean of all elements in the array (axis=None)
+    >>> overall_mean = blosc2.mean(array)
+    >>> print("Mean of all elements:", overall_mean)
+    Mean of all elements: 3.5
+    """
+    return ndarr.mean(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
+
+def std(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
+    """
+    Return the standard deviation along the specified axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which the standard deviation is computed. The default is
+        to compute the standard deviation of the flattened array.
+    dtype: np.dtype, optional
+        Type to use in computing the standard deviation. For integer inputs, the
+        default is float32; for floating point inputs, it is the same as the input dtype.
+    ddof: int, optional
+        Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
+        where N represents the number of elements. By default ddof is zero.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result as
+        dimensions with size one. With this option, the result will broadcast correctly
+        against the input array.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    std_along_axis: np.ndarray or :ref:`NDArray` or scalar
+        The standard deviation of the elements along the axis.
+
+    References
+    ----------
+    `np.std <https://numpy.org/doc/stable/reference/generated/numpy.std.html>`_
+
+     Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> # Create an instance of NDArray with some data
+    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
+    >>> # Compute the standard deviation of the entire array
+    >>> std_all = blosc2.std(array)
+    >>> print("Standard deviation of the entire array:", std_all)
+    Standard deviation of the entire array: 1.707825127659933
+    >>> # Compute the standard deviation along axis 0 (columns)
+    >>> std_axis0 = blosc2.std(array, axis=0)
+    >>> print("Standard deviation along axis 0:", std_axis0)
+    Standard deviation along axis 0: [1.5 1.5 1.5]
+    """
+    return ndarr.std(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
+
+
+def var(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
+    """
+    Return the variance along the specified axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which the variance is computed. The default is to compute
+        the variance of the flattened array.
+    dtype: np.dtype, optional
+        Type to use in computing the variance. For integer inputs, the default is
+        float32; for floating point inputs, it is the same as the input dtype.
+    ddof: int, optional
+        Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
+        where N represents the number of elements. By default ddof is zero.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result as
+        dimensions with size one. With this option, the result will broadcast correctly
+        against the input array.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    var_along_axis: np.ndarray or :ref:`NDArray` or scalar
+        The variance of the elements along the axis.
+
+    References
+    ----------
+    `np.var <https://numpy.org/doc/stable/reference/generated/numpy.var.html>`_
+
+
+     Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> # Create an instance of NDArray with some data
+    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
+    >>> # Compute the variance of the entire array
+    >>> var_all = blosc2.var(array)
+    >>> print("Variance of the entire array:", var_all)
+    Variance of the entire array: 2.9166666666666665
+    >>> # Compute the variance along axis 0 (columns)
+    >>> var_axis0 = blosc2.var(array, axis=0)
+    >>> print("Variance along axis 0:", var_axis0)
+    Variance along axis 0: [2.25 2.25 2.25]
+    """
+    return ndarr.var(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
+
+
+def prod(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdims=False, **kwargs):
+    """
+    Return the product of array elements over a given axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which a product is performed. The default, axis=None,
+        will multiply all the elements of the input array. If axis is negative
+        it counts from the last to the first axis.
+    dtype: np.dtype, optional
+        The type of the returned array and of the accumulator in which the
+        elements are multiplied. The dtype of a is used by default unless a has
+        an integer dtype of less precision than the default platform integer.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result
+        as dimensions with size one. With this option, the result will broadcast
+        correctly against the input array.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    product_along_axis: np.ndarray or :ref:`NDArray` or scalar
+        The product of the elements along the axis.
+
+    References
+    ----------
+    `np.prod <https://numpy.org/doc/stable/reference/generated/numpy.prod.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> # Create an instance of NDArray with some data
+    >>> array = np.array([[11, 22, 33], [4, 15, 36]])
+    >>> # Compute the product of all elements in the array
+    >>> prod_all = blosc2.prod(array)
+    >>> print("Product of all elements in the array:", prod_all)
+    Product of all elements in the array: 17249760
+    >>> # Compute the product along axis 1 (rows)
+    >>> prod_axis1 = blosc2.prod(array, axis=1)
+    >>> print("Product along axis 1:", prod_axis1)
+    Product along axis 1: [7986 2160]
+    """
+    return ndarr.prod(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
+
+def min(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
+    """
+    Return the minimum along a given axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which to operate. By default, flattened input is used.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result as
+        dimensions with size one. With this option, the result will broadcast correctly
+        against the input array.
+
+    Returns
+    -------
+    min_along_axis: np.ndarray or :ref:`NDArray` or scalar
+        The minimum of the elements along the axis.
+
+    References
+    ----------
+    `np.min <https://numpy.org/doc/stable/reference/generated/numpy.min.html>`_
+
+      Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> array = np.array([1, 3, 7, 8, 9, 31])
+    >>> min_all = blosc2.min(array)
+    >>> print("Minimum of all elements in the array:", min_all)
+    Minimum of all elements in the array: 1
+    >>> # Compute the minimum along axis 0 with keepdims=True
+    >>> min_keepdims = blosc2.min(array, axis=0, keepdims=True)
+    >>> print("Minimum along axis 0 with keepdims=True:", min_keepdims)
+    Minimum along axis 0 with keepdims=True:  [1]
+    """
+    return ndarr.min(axis=axis, keepdims=keepdims, **kwargs)
+
+
+def max(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
+    """
+    Return the maximum along a given axis.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which to operate. By default, flattened input is used.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result as
+        dimensions with size one. With this option, the result will broadcast correctly
+        against the input array.
+
+    Returns
+    -------
+    max_along_axis: np.ndarray or :ref:`NDArray` or scalar
+        The maximum of the elements along the axis.
+
+    References
+    ----------
+    `np.max <https://numpy.org/doc/stable/reference/generated/numpy.max.html>`_
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> data = np.array([[11, 2, 36, 24, 5, 69], [73, 81, 49, 6, 73, 0]])
+    >>> ndarray = blosc2.asarray(data)
+    >>> print("Original data:", data)
+    Original data:  [[11  2 36 24  5 69]
+                    [73 81 49  6 73  0]]
+    >>> # Compute the maximum along axis 0 and 1
+    >>> max_along_axis_0 = blosc2.max(axis=0)
+    >>> print("Maximum along axis 0:", max_along_axis_0)
+    Maximum along axis 0: [73 81 49 24 73 69]
+    >>> max_along_axis_1 = blosc2.max(axis=1)
+    >>> print("Maximum along axis 1:", max_along_axis_1)
+    Maximum along axis 1: [69 81]
+    >>> max_flattened = blosc2.max()
+    >>> print("Maximum of the flattened array:", max_flattened)
+    Maximum of the flattened array: 81
+    """
+    return ndarr.max(axis=axis, keepdims=keepdims, **kwargs)
+
+
+def any(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
+    """
+    Test whether any array element along a given axis evaluates to True.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which to operate. By default, flattened input is used.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result as
+        dimensions with size one. With this option, the result will broadcast correctly
+        against the input array.
+
+    Returns
+    -------
+    any_along_axis: np.ndarray or :ref:`NDArray` or scalar
+        The result of the evaluation along the axis.
+
+    References
+    ----------
+    `np.any <https://numpy.org/doc/stable/reference/generated/numpy.any.html>`_
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> data = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 0]])
+    >>> # Convert the NumPy array to a Blosc2 NDArray
+    >>> ndarray = blosc2.asarray(data)
+    >>> print("Original data:", data)
+    Original data: [[1 0 0]
+                    [0 1 0]
+                    [0 0 0]]
+    >>> any_along_axis_0 = blosc2.any(ndarr=ndarray, axis=0)
+    >>> print("Any along axis 0:", any_along_axis_0)
+    Any along axis 0: [True True False]
+    >>> any_flattened = blosc2.any(ndarr=ndarray)
+    >>> print("Any in the flattened array:", any_flattened)
+    Any in the flattened array: True
+    """
+    return ndarr.any(axis=axis, keepdims=keepdims, **kwargs)
+
+
+def all(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
+    """
+    Test whether all array elements along a given axis evaluate to True.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array or expression.
+    axis: int or tuple of ints, optional
+        Axis or axes along which to operate. By default, flattened input is used.
+    keepdims: bool, optional
+        If this is set to True, the axes which are reduced are left in the result as
+        dimensions with size one. With this option, the result will broadcast correctly
+        against the input array.
+
+    Returns
+    -------
+    all_along_axis: np.ndarray or :ref:`NDArray` or scalar
+        The result of the evaluation along the axis.
+
+    References
+    ----------
+    `np.all <https://numpy.org/doc/stable/reference/generated/numpy.all.html>`_
+
+    Examples
+    --------
+
+    >>> import numpy as np
+    >>> import blosc2
+    >>> data = np.array([True, True, False, True, True, True])
+    >>> # Test if all elements are True along the default axis (flattened array)
+    >>> result_flat = blosc2.all(data)
+    >>> print("All elements are True (flattened):", result_flat)
+    All elements are True (flattened): False
+    """
+    return ndarr.all(axis=axis, keepdims=keepdims, **kwargs)
+
+
 class Operand:
     """Base class for all operands in expressions."""
 
@@ -238,276 +661,48 @@ class Operand:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "**", self))
 
+    @is_documented_by(sum)
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
-        """
-        Return the sum of array elements over a given axis.
-
-        Parameters
-        ----------
-        axis: int or tuple of ints, optional
-            Axis or axes along which a sum is performed. The default, axis=None,
-            will sum all the elements of the input array. If axis is negative
-            it counts from the last to the first axis.
-        dtype: np.dtype, optional
-            The type of the returned array and of the accumulator in which the
-            elements are summed. The dtype of a is used by default unless a has
-            an integer dtype of less precision than the default platform integer.
-        keepdims: bool, optional
-            If this is set to True, the axes which are reduced are left in the result
-            as dimensions with size one. With this option, the result will broadcast
-            correctly against the input array.
-        kwargs: dict, optional
-            Keyword arguments that are supported by the :func:`empty` constructor.
-
-        Returns
-        -------
-        sum_along_axis: np.ndarray or :ref:`NDArray` or scalar
-            The sum of the elements along the axis.
-
-        References
-        ----------
-        `np.sum <https://numpy.org/doc/stable/reference/generated/numpy.sum.html>`_
-        """
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
+    @is_documented_by(mean)
     def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
-        """
-        Return the arithmetic mean along the specified axis.
-
-        Parameters
-        ----------
-        axis: int or tuple of ints, optional
-            Axis or axes along which the means are computed. The default is to compute
-            the mean of the flattened array.
-        dtype: np.dtype, optional
-            Type to use in computing the mean. For integer inputs, the default is
-            float32; for floating point inputs, it is the same as the input dtype.
-        keepdims: bool, optional
-            If this is set to True, the axes which are reduced are left in the result
-            as dimensions with size one. With this option, the result will broadcast
-            correctly against the input array.
-        kwargs: dict, optional
-            Keyword arguments that are supported by the :func:`empty` constructor.
-
-        Returns
-        -------
-        mean_along_axis: np.ndarray or :ref:`NDArray` or scalar
-            The mean of the elements along the axis.
-
-        References
-        ----------
-        `np.mean <https://numpy.org/doc/stable/reference/generated/numpy.mean.html>`_
-        """
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
+    @is_documented_by(std)
     def std(self, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
-        """
-        Return the standard deviation along the specified axis.
-
-        Parameters
-        ----------
-        axis: int or tuple of ints, optional
-            Axis or axes along which the standard deviation is computed. The default is
-            to compute the standard deviation of the flattened array.
-        dtype: np.dtype, optional
-            Type to use in computing the standard deviation. For integer inputs, the
-            default is float32; for floating point inputs, it is the same as the input dtype.
-        ddof: int, optional
-            Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
-            where N represents the number of elements. By default, ddof is zero.
-        keepdims: bool, optional
-            If this is set to True, the axes which are reduced are left in the result as
-            dimensions with size one. With this option, the result will broadcast correctly
-            against the input array.
-        kwargs: dict, optional
-            Keyword arguments that are supported by the :func:`empty` constructor.
-
-        Returns
-        -------
-        std_along_axis: np.ndarray or :ref:`NDArray` or scalar
-            The standard deviation of the elements along the axis.
-
-        References
-        ----------
-        `np.std <https://numpy.org/doc/stable/reference/generated/numpy.std.html>`_
-        """
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.std(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
 
+    @is_documented_by(var)
     def var(self, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
-        """
-        Return the variance along the specified axis.
-
-        Parameters
-        ----------
-        axis: int or tuple of ints, optional
-            Axis or axes along which the variance is computed. The default is to compute
-            the variance of the flattened array.
-        dtype: np.dtype, optional
-            Type to use in computing the variance. For integer inputs, the default is
-            float32; for floating point inputs, it is the same as the input dtype.
-        ddof: int, optional
-            Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
-            where N represents the number of elements. By default ddof is zero.
-        keepdims: bool, optional
-            If this is set to True, the axes which are reduced are left in the result as
-            dimensions with size one. With this option, the result will broadcast correctly
-            against the input array.
-        kwargs: dict, optional
-            Keyword arguments that are supported by the :func:`empty` constructor.
-
-        Returns
-        -------
-        var_along_axis: np.ndarray or :ref:`NDArray` or scalar
-            The variance of the elements along the axis.
-
-        References
-        ----------
-        `np.var <https://numpy.org/doc/stable/reference/generated/numpy.var.html>`_
-        """
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.var(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
 
+    @is_documented_by(prod)
     def prod(self, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
-        """
-        Return the product of array elements over a given axis.
-
-        Parameters
-        ----------
-        axis: int or tuple of ints, optional
-            Axis or axes along which a product is performed. The default, axis=None,
-            will multiply all the elements of the input array. If axis is negative
-            it counts from the last to the first axis.
-        dtype: np.dtype, optional
-            The type of the returned array and of the accumulator in which the
-            elements are multiplied. The dtype of a is used by default unless a has
-            an integer dtype of less precision than the default platform integer.
-        keepdims: bool, optional
-            If this is set to True, the axes which are reduced are left in the result
-            as dimensions with size one. With this option, the result will broadcast
-            correctly against the input array.
-        kwargs: dict, optional
-            Keyword arguments that are supported by the :func:`empty` constructor.
-
-        Returns
-        -------
-        product_along_axis: np.ndarray or :ref:`NDArray` or scalar
-            The product of the elements along the axis.
-
-        References
-        ----------
-        `np.prod <https://numpy.org/doc/stable/reference/generated/numpy.prod.html>`_
-        """
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.prod(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
+    @is_documented_by(min)
     def min(self, axis=None, keepdims=False, **kwargs):
-        """
-        Return the minimum along a given axis.
-
-        Parameters
-        ----------
-        axis: int or tuple of ints, optional
-            Axis or axes along which to operate. By default, flattened input is used.
-        keepdims: bool, optional
-            If this is set to True, the axes which are reduced are left in the result
-            as dimensions with size one. With this option, the result will broadcast
-            correctly against the input array.
-        kwargs: dict, optional
-            Keyword arguments that are supported by the :func:`empty` constructor.
-
-        Returns
-        -------
-        min_along_axis: np.ndarray or :ref:`NDArray` or scalar
-            The minimum of the elements along the axis.
-
-        References
-        ----------
-        `np.min <https://numpy.org/doc/stable/reference/generated/numpy.min.html>`_
-        """
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.min(axis=axis, keepdims=keepdims, **kwargs)
 
+    @is_documented_by(max)
     def max(self, axis=None, keepdims=False, **kwargs):
-        """
-        Return the maximum along a given axis.
-
-        Parameters
-        ----------
-        axis: int or tuple of ints, optional
-            Axis or axes along which to operate. By default, flattened input is used.
-        keepdims: bool, optional
-            If this is set to True, the axes which are reduced are left in the result
-            as dimensions with size one. With this option, the result will broadcast
-            correctly against the input array.
-        kwargs: dict, optional
-            Keyword arguments that are supported by the :func:`empty` constructor.
-
-        Returns
-        -------
-        max_along_axis: np.ndarray or :ref:`NDArray` or scalar
-            The maximum of the elements along the axis.
-
-        References
-        ----------
-        `np.max <https://numpy.org/doc/stable/reference/generated/numpy.max.html>`_
-        """
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.max(axis=axis, keepdims=keepdims, **kwargs)
 
+    @is_documented_by(any)
     def any(self, axis=None, keepdims=False, **kwargs):
-        """
-        Test whether any array element along a given axis evaluates to True.
-
-        Parameters
-        ----------
-        axis: int or tuple of ints, optional
-            Axis or axes along which to operate. By default, flattened input is used.
-        keepdims: bool, optional
-            If this is set to True, the axes which are reduced are left in the result as
-            dimensions with size one. With this option, the result will broadcast correctly
-            against the input array.
-        kwargs: dict, optional
-            Keyword arguments that are supported by the :func:`empty` constructor.
-
-        Returns
-        -------
-        any_along_axis: np.ndarray or :ref:`NDArray` or scalar
-            The result of the evaluation along the axis.
-
-        References
-        ----------
-        `np.any <https://numpy.org/doc/stable/reference/generated/numpy.any.html>`_
-        """
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.any(axis=axis, keepdims=keepdims, **kwargs)
 
+    @is_documented_by(all)
     def all(self, axis=None, keepdims=False, **kwargs):
-        """
-        Test whether all array elements along a given axis evaluate to True.
-
-        Parameters
-        ----------
-        axis: int or tuple of ints, optional
-            Axis or axes along which to operate. By default, flattened input is used.
-        keepdims: bool, optional
-            If this is set to True, the axes which are reduced are left in the result as
-            dimensions with size one. With this option, the result will broadcast correctly
-            against the input array.
-        kwargs: dict, optional
-            Keyword arguments that are supported by the :func:`empty` constructor.
-
-        Returns
-        -------
-        all_along_axis: np.ndarray or :ref:`NDArray` or scalar
-            The result of the evaluation along the axis.
-
-        References
-        ----------
-        `np.all <https://numpy.org/doc/stable/reference/generated/numpy.all.html>`_
-        """
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.all(axis=axis, keepdims=keepdims, **kwargs)
 
@@ -578,20 +773,32 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Examples
         --------
         >>> import numpy as np
+        >>> import blosc2
         >>> my_array = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
-        >>> print(np.info(my_array))
-        class:  ndarray
-        shape:  (10,)
-        strides:  (8,)
-        itemsize:  8
-        aligned:  True
-        contiguous:  True
-        fortran:  True
-        data pointer: 0x600001510000
-        byteorder:  little
-        byteswap:  False
-        type: int64
-        None
+        >>> array = blosc2.asarray(my_array)
+        >>> print(array.info)
+        type    : NDArray
+        shape   : (10,)
+        chunks  : (10,)
+        blocks  : (10,)
+        dtype   : int64
+        cratio  : 0.73
+        cparams : {'blocksize': 80,
+        'clevel': 1,
+        'codec': <Codec.ZSTD: 5>,
+        'codec_meta': 0,
+        'filters': [<Filter.NOFILTER: 0>,
+                <Filter.NOFILTER: 0>,
+                <Filter.NOFILTER: 0>,
+                <Filter.NOFILTER: 0>,
+                <Filter.NOFILTER: 0>,
+                <Filter.SHUFFLE: 1>],
+        'filters_meta': [0, 0, 0, 0, 0, 0],
+        'nthreads': 4,
+        'splitmode': <SplitMode.ALWAYS_SPLIT: 1>,
+        'typesize': 8,
+        'use_dict': 0}
+        dparams : {'nthreads': 4}
         """
         return InfoReporter(self)
 
@@ -779,22 +986,20 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         Returns
         -------
-        chunk : array-like
-            The chunk data at the specified index. The type of this data depends on how the chunks are stored and
-            represented in the `SChunk` object.
+        chunk : bytes
+            The chunk data at the specified index.
 
         See Also
         --------
         :attr:`schunk`
             The attribute that provides access to the underlying `SChunk` object.
 
-
          Examples
         --------
         >>> import blosc2
         >>> import numpy as np
         >>> # Create an SChunk with some data
-        >>> data = np.arange(100)
+        >>> data = np.arange(10)
         >>> schunk = blosc2.SChunk(data=data)
         >>> # Get a specific chunk from the SChunk object
         >>> chunk = schunk.get_chunk(0)
@@ -805,12 +1010,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> if isinstance(np_array_chunk, np.ndarray):
         >>>         print(np_array_chunk)
         >>>         print(np_array_chunk.shape) # Assuming chunk is a list or numpy array
-        [ 0  1  2  3  4  5  6  7  8  9 10 11 12 13 14 15 16 17 18 19 20 21 22 23
-        24 25 26 27 28 29 30 31 32 33 34 35 36 37 38 39 40 41 42 43 44 45 46 47
-        48 49 50 51 52 53 54 55 56 57 58 59 60 61 62 63 64 65 66 67 68 69 70 71
-        72 73 74 75 76 77 78 79 80 81 82 83 84 85 86 87 88 89 90 91 92 93 94 95
-        96 97 98 99]
-        (100,)
+        [ 0  1  2  3  4  5  6  7  8  9]
+        (10,)
         """
         return self.schunk.get_chunk(nchunk)
 
@@ -896,7 +1097,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         See Also
         --------
         :func:`~blosc2.ndarray_from_cframe`
-            This function can be used to reconstruct an NDArray from the serialized bytes.
+            This function can be used to reconstruct a NDArray from the serialized bytes.
 
         Examples
         --------
@@ -904,9 +1105,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> a = blosc2.full(shape=(1000, 1000), fill_value=9, dtype='i4')
         >>> # Get the bytes object containing the serialized instance
         >>> cframe_bytes = a.to_cframe()
-        >>> # Verify the type of the returned object
-        >>> isinstance(cframe_bytes, bytes)
-            True
+        >>> blosc_array = blosc2.ndarray_from_cframe(cframe_bytes)
+        >>> print("Shape of the NDArray:", blosc_array.shape)
+        >>> print("Data type of the NDArray:", blosc_array.dtype)
+        Shape of the NDArray: (1000, 1000)
+        Data type of the NDArray: int32
         """
         return super().to_cframe()
 
@@ -1063,414 +1266,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
         super().squeeze()
 
 
-def sum(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdims=False, **kwargs):
-    """
-    Return the sum of array elements over a given axis.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which a sum is performed. The default, axis=None,
-        will sum all the elements of the input array. If axis is negative
-        it counts from the last to the first axis.
-    dtype: np.dtype, optional
-        The type of the returned array and of the accumulator in which the
-        elements are summed. The dtype of :paramref:`ndarr` is used by default unless it has
-        an integer dtype of less precision than the default platform integer.
-    keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result
-        as dimensions with size one. With this option, the result will broadcast
-        correctly against the input array.
-    kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
-
-    Returns
-    -------
-    sum_along_axis: np.ndarray or :ref:`NDArray` or scalar
-        The sum of the elements along the axis.
-
-    References
-    ----------
-    `np.sum <https://numpy.org/doc/stable/reference/generated/numpy.sum.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> # Example array
-    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
-    >>> # Sum all elements in the array (axis=None)
-    >>> total_sum = array.sum()
-    >>> print("Sum of all elements:", total_sum)
-    21
-    >>> # Sum along axis 0 (columns)
-    >>> sum_axis_0 = array.sum(axis=0)
-    >>> print("Sum along axis 0 (columns):", sum_axis_0)
-    [5 7 9]
-    """
-    return ndarr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
-
-
-def mean(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdims=False, **kwargs):
-    """
-    Return the arithmetic mean along the specified axis.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which the means are computed. The default is to compute
-        the mean of the flattened array.
-    dtype: np.dtype, optional
-        Type to use in computing the mean. For integer inputs, the default is
-        float32; for floating point inputs, it is the same as the input dtype.
-    keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result
-        as dimensions with size one. With this option, the result will broadcast
-        correctly against the input array.
-    kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
-
-    Returns
-    -------
-    mean_along_axis: np.ndarray or :ref:`NDArray` or scalar
-        The mean of the elements along the axis.
-
-    References
-    ----------
-    `np.mean <https://numpy.org/doc/stable/reference/generated/numpy.mean.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> # Example array
-    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
-    >>> # Compute the mean of all elements in the array (axis=None)
-    >>> overall_mean = array.mean()
-    >>> print("Mean of all elements:", overall_mean)
-    Mean of all elements: 3.5
-    """
-    return ndarr.mean(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
-
-
-def std(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
-    """
-    Return the standard deviation along the specified axis.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which the standard deviation is computed. The default is
-        to compute the standard deviation of the flattened array.
-    dtype: np.dtype, optional
-        Type to use in computing the standard deviation. For integer inputs, the
-        default is float32; for floating point inputs, it is the same as the input dtype.
-    ddof: int, optional
-        Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
-        where N represents the number of elements. By default ddof is zero.
-    keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result as
-        dimensions with size one. With this option, the result will broadcast correctly
-        against the input array.
-    kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
-
-    Returns
-    -------
-    std_along_axis: np.ndarray or :ref:`NDArray` or scalar
-        The standard deviation of the elements along the axis.
-
-    References
-    ----------
-    `np.std <https://numpy.org/doc/stable/reference/generated/numpy.std.html>`_
-
-     Examples
-    --------
-    >>> import numpy as np
-    >>> # Create an instance of NDArray with some data
-    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
-    >>> # Compute the standard deviation of the entire array
-    >>> std_all = array.std()
-    >>> print("Standard deviation of the entire array:", std_all)
-    Standard deviation of the entire array: 1.707825127659933
-    >>> # Compute the standard deviation along axis 0 (columns)
-    >>> std_axis0 = array.std(axis=0)
-    >>> print("Standard deviation along axis 0:", std_axis0)
-    Standard deviation along axis 0: [1.5 1.5 1.5]
-    """
-    return ndarr.std(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
-
-
-def var(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
-    """
-    Return the variance along the specified axis.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which the variance is computed. The default is to compute
-        the variance of the flattened array.
-    dtype: np.dtype, optional
-        Type to use in computing the variance. For integer inputs, the default is
-        float32; for floating point inputs, it is the same as the input dtype.
-    ddof: int, optional
-        Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
-        where N represents the number of elements. By default ddof is zero.
-    keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result as
-        dimensions with size one. With this option, the result will broadcast correctly
-        against the input array.
-    kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
-
-    Returns
-    -------
-    var_along_axis: np.ndarray or :ref:`NDArray` or scalar
-        The variance of the elements along the axis.
-
-    References
-    ----------
-    `np.var <https://numpy.org/doc/stable/reference/generated/numpy.var.html>`_
-
-
-     Examples
-    --------
-    >>> import numpy as np
-    >>> # Create an instance of NDArray with some data
-    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
-    >>> # Compute the variance of the entire array
-    >>> var_all = array.var()
-    >>> print("Variance of the entire array:", var_all)
-    Variance of the entire array: 2.9166666666666665
-    >>> # Compute the variance along axis 0 (columns)
-    >>> var_axis0 = array.var(axis=0)
-    >>> print("Variance along axis 0:", var_axis0)
-    Variance along axis 0: [2.25 2.25 2.25]
-    """
-    return ndarr.var(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
-
-
-def prod(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdims=False, **kwargs):
-    """
-    Return the product of array elements over a given axis.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which a product is performed. The default, axis=None,
-        will multiply all the elements of the input array. If axis is negative
-        it counts from the last to the first axis.
-    dtype: np.dtype, optional
-        The type of the returned array and of the accumulator in which the
-        elements are multiplied. The dtype of a is used by default unless a has
-        an integer dtype of less precision than the default platform integer.
-    keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result
-        as dimensions with size one. With this option, the result will broadcast
-        correctly against the input array.
-    kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
-
-    Returns
-    -------
-    product_along_axis: np.ndarray or :ref:`NDArray` or scalar
-        The product of the elements along the axis.
-
-    References
-    ----------
-    `np.prod <https://numpy.org/doc/stable/reference/generated/numpy.prod.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> # Create an instance of NDArray with some data
-    >>> array = np.array([[11, 22, 33], [4, 15, 36]])
-    >>> # Compute the product of all elements in the array
-    >>> prod_all = array.prod()
-    >>> print("Product of all elements in the array:", prod_all)
-    Product of all elements in the array: 17249760
-    >>> # Compute the product along axis 1 (rows)
-    >>> prod_axis1 = array.prod(axis=1)
-    >>> print("Product along axis 1:", prod_axis1)
-    Product along axis 1: [7986 2160]
-    """
-    return ndarr.prod(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
-
-
-def min(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
-    """
-    Return the minimum along a given axis.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which to operate. By default, flattened input is used.
-    keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result as
-        dimensions with size one. With this option, the result will broadcast correctly
-        against the input array.
-
-    Returns
-    -------
-    min_along_axis: np.ndarray or :ref:`NDArray` or scalar
-        The minimum of the elements along the axis.
-
-    References
-    ----------
-    `np.min <https://numpy.org/doc/stable/reference/generated/numpy.min.html>`_
-
-      Examples
-    --------
-    >>> import numpy as np
-    >>> array = np.array([7, 8, 9], [4, 5, 6])
-    >>> min_all = array.min()
-    >>> print("Minimum of all elements in the array:", min_all)
-    Minimum of all elements in the array: 4
-    >>> # Compute the minimum along axis 0 with keepdims=True
-    >>> min_keepdims = array.min(axis=0, keepdims=True)
-    >>> print("Minimum along axis 0 with keepdims=True:", min_keepdims)
-    Minimum along axis 0 with keepdims=True: [[4 5 6]]
-    """
-    return ndarr.min(axis=axis, keepdims=keepdims, **kwargs)
-
-
-def max(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
-    """
-    Return the maximum along a given axis.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which to operate. By default, flattened input is used.
-    keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result as
-        dimensions with size one. With this option, the result will broadcast correctly
-        against the input array.
-
-    Returns
-    -------
-    max_along_axis: np.ndarray or :ref:`NDArray` or scalar
-        The maximum of the elements along the axis.
-
-    References
-    ----------
-    `np.max <https://numpy.org/doc/stable/reference/generated/numpy.max.html>`_
-
-    Examples
-    --------
-    >>> import blosc2
-    >>> import numpy as np
-    >>> data = np.array([[11, 2, 36, 24, 5, 69], [73, 81, 49, 6, 73, 0]])
-    >>> ndarray = blosc2.asarray(data)
-    >>> print("Original data:", data)
-    Original data:  [[11  2 36 24  5 69]
-                    [73 81 49  6 73  0]]
-    >>> # Compute the maximum along axis 0 and 1
-    >>> max_along_axis_0 = blosc2.max(axis=0)
-    >>> print("Maximum along axis 0:", max_along_axis_0)
-    Maximum along axis 0: [73 81 49 24 73 69]
-    >>> max_along_axis_1 = blosc2.max(axis=1)
-    >>> print("Maximum along axis 1:", max_along_axis_1)
-    Maximum along axis 1: [69 81]
-    >>> max_flattened = blosc2.max()
-    >>> print("Maximum of the flattened array:", max_flattened)
-    Maximum of the flattened array: 81
-    """
-    return ndarr.max(axis=axis, keepdims=keepdims, **kwargs)
-
-
-def any(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
-    """
-    Test whether any array element along a given axis evaluates to True.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which to operate. By default, flattened input is used.
-    keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result as
-        dimensions with size one. With this option, the result will broadcast correctly
-        against the input array.
-
-    Returns
-    -------
-    any_along_axis: np.ndarray or :ref:`NDArray` or scalar
-        The result of the evaluation along the axis.
-
-    References
-    ----------
-    `np.any <https://numpy.org/doc/stable/reference/generated/numpy.any.html>`_
-
-    Examples
-    --------
-    >>> import blosc2
-    >>> import numpy as np
-    >>> data = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 0]])
-    >>> # Convert the NumPy array to a Blosc2 NDArray
-    >>> ndarray = blosc2.asarray(data)
-    >>> print("Original data:", data)
-    Original data: [[1 0 0] [0 1 0] [0 0 0]]
-    >>> any_along_axis_0 = blosc2.any(ndarr=ndarr, axis=0)
-    >>> print("Any along axis 0:", any_along_axis_0)
-    Any along axis 0: [True True False]
-    >>> any_flattened = blosc2.any(ndarr=ndarr)
-    >>> print("Any in the flattened array:", any_flattened)
-    Any in the flattened array: True
-    """
-    return ndarr.any(axis=axis, keepdims=keepdims, **kwargs)
-
-
-def all(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
-    """
-    Test whether all array elements along a given axis evaluate to True.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which to operate. By default, flattened input is used.
-    keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result as
-        dimensions with size one. With this option, the result will broadcast correctly
-        against the input array.
-
-    Returns
-    -------
-    all_along_axis: np.ndarray or :ref:`NDArray` or scalar
-        The result of the evaluation along the axis.
-
-    References
-    ----------
-    `np.all <https://numpy.org/doc/stable/reference/generated/numpy.all.html>`_
-
-    Examples
-    --------
-
-    >>> import numpy as np
-    >>> data = np.array([True, True, False, True, True, True])
-    >>> # Test if all elements are True along the default axis (flattened array)
-    >>> result_flat = all(data)
-    >>> print("All elements are True (flattened):", result_flat)
-    All elements are True (flattened): False
-    """
-    return ndarr.all(axis=axis, keepdims=keepdims, **kwargs)
-
-
 def sin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     """
     Trigonometric sine, element-wise.
@@ -1493,10 +1288,17 @@ def sin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     --------
 
     >>> import numpy as np
-    >>> angles = np.array([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
-    >>> print("Angles (radians):", np.sin(angles))
-    Angles (radians): [ 0.0000000e+00  1.0000000e+00  1.2246468e-16 -1.0000000e+00
-    -2.4492936e-16]
+    >>> import blosc2
+    >>> angles = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
+    >>> buffer = angles.tobytes()
+    >>> blosc_array = blosc2.asarray(angles)
+    >>> result_ = blosc2.sin(blosc_array)
+    >>> result = result_[:]
+    >>> print("Angles in radians:", angles)
+    Angles in radians: [0.         0.52359878 0.78539816 1.57079633 3.14159265]
+    >>> print("Sine of the angles:", result)
+    Sine of the angles: [0.00000000e+00 5.00000000e-01 7.07106781e-01 1.00000000e+00
+    1.22464680e-16]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "sin", None))
 
@@ -1523,9 +1325,16 @@ def cos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     --------
 
     >>> import numpy as np
-    >>> angles = np.array([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
-    >>> print("Angles (radians):", np.cos(angles))
-    Angles (radians): [ 1.0000000e+00  6.1232340e-17 -1.0000000e+00 -1.8369702e-16
+    >>> import blosc2
+    >>> angles = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
+    >>> buffer = angles.tobytes()
+    >>> blosc_array = blosc2.asarray(angles)
+    >>> result_ = blosc2.cos(blosc_array)
+    >>> result = result_[:]
+    >>> print("Angles in radians:", angles)
+    Angles in radians: [0.         1.57079633 3.14159265 4.71238898 6.28318531]
+    >>> print("Sine of the angles:", result)
+    Sine of the angles: [ 1.0000000e+00  6.1232340e-17 -1.0000000e+00 -1.8369702e-16
     1.0000000e+00]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "cos", None))
@@ -1553,9 +1362,16 @@ def tan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     --------
 
     >>> import numpy as np
-    >>> angles = np.array([0, np.pi / 2, np.pi, 3 * np.pi / 2, 2 * np.pi])
-    >>> print("Angles (radians):", np.tan(angles))
-    Angles (radians): [ 0.00000000e+00  1.63312394e+16 -1.22464680e-16  5.44374645e+15
+    >>> import blosc2
+    >>> angles = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
+    >>> buffer = angles.tobytes()
+    >>> blosc_array = blosc2.asarray(angles)
+    >>> result_ = blosc2.tan(blosc_array)
+    >>> result = result_[:]
+    >>> print("Angles in radians:", angles)
+    Angles in radians: [0.         1.57079633 3.14159265 4.71238898 6.28318531]
+    >>> print("Sine of the angles:", result)
+    Sine of the angles: [ 0.00000000e+00  1.63312394e+16 -1.22464680e-16  5.44374645e+15
     -2.44929360e-16]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "tan", None))
@@ -1582,9 +1398,16 @@ def sqrt(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     Examples
     --------
     >>> import numpy as np
-    >>> data = np.array([1, 4, 9, 16, 25])
-    >>> print("Square root of the data:", np.sqrt(data))
-    Angles (radians): [1. 2. 3. 4. 5.]
+    >>> import blosc2
+    >>> data = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
+    >>> buffer = data.tobytes()
+    >>> blosc_array = blosc2.asarray(data)
+    >>> result_ = blosc2.sqrt(blosc_array)
+    >>> result = result_[:]
+    >>> print("Original numbers:", data)
+    Original numbers: [ 0  1  4  9 16 25]
+    >>> print("Square roots:", result)
+    Square roots: [0. 1. 2. 3. 4. 5.]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "sqrt", None))
 
@@ -1606,6 +1429,20 @@ def sinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.sinh <https://numpy.org/doc/stable/reference/generated/numpy.sinh.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> numbers = np.array([-2, -1, 0, 1, 2])
+    >>> buffer = numbers.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=numbers.dtype, shape=numbers.shape)
+    >>> result_lazy = blosc2.sinh(blosc_array)
+    >>> result = result_lazy[:]
+    >>> print("Original numbers:", numbers)
+    Original numbers: [-2 -1  0  1  2]
+    >>> print("Hyperbolic sine:", result)
+    Hyperbolic sine: [-3.62686041 -1.17520119  0.          1.17520119  3.62686041]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "sinh", None))
 
@@ -1627,6 +1464,20 @@ def cosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.cosh <https://numpy.org/doc/stable/reference/generated/numpy.cosh.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> numbers = np.array([-2, -1, 0, 1, 2])
+    >>> buffer = numbers.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=numbers.dtype, shape=numbers.shape)
+    >>> result_lazy = blosc2.cosh(blosc_array)
+    >>> result = result_lazy[:]
+    >>> print("Original numbers:", numbers)
+    Original numbers: [-2 -1  0  1  2]
+    >>> print("Hyperbolic cosine:", result)
+    Hyperbolic cosine: [3.76219569 1.54308063 1.         1.54308063 3.76219569]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "cosh", None))
 
@@ -1648,6 +1499,20 @@ def tanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.tanh <https://numpy.org/doc/stable/reference/generated/numpy.tanh.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> numbers = np.array([-2, -1, 0, 1, 2])
+    >>> buffer = numbers.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=numbers.dtype, shape=numbers.shape)
+    >>> result_lazy = blosc2.tanh(blosc_array)
+    >>> result = result_lazy[:]
+    >>> print("Original numbers:", numbers)
+    Original numbers: [-2 -1  0  1  2]
+    >>> print("Hyperbolic tangent:", result)
+    Hyperbolic tangent: [-0.96402758 -0.76159416  0.          0.76159416  0.96402758]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "tanh", None))
 
@@ -1669,6 +1534,20 @@ def arcsin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.arcsin <https://numpy.org/doc/stable/reference/generated/numpy.arcsin.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> numbers = np.array([-1, -0.5, 0, 0.5, 1])
+    >>> buffer = numbers.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=numbers.dtype, shape=numbers.shape)
+    >>> result_lazy = blosc2.arcsin(blosc_array)
+    >>> result = result_lazy[:]
+    >>> print("Original numbers:", numbers)
+    Original numbers: [-1.  -0.5  0.   0.5  1. ]
+    >>> print("Arcsin:", result)
+    Arcsin: [-1.57079633 -0.52359878  0.          0.52359878  1.57079633]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "arcsin", None))
 
@@ -1690,6 +1569,20 @@ def arccos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.arccos <https://numpy.org/doc/stable/reference/generated/numpy.arccos.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> numbers = np.array([-1, -0.5, 0, 0.5, 1])
+    >>> buffer = numbers.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=numbers.dtype, shape=numbers.shape)
+    >>> result_lazy = blosc2.arccos(blosc_array)
+    >>> result = result_lazy[:]
+    >>> print("Original numbers:", numbers)
+    Original numbers: [-1.  -0.5  0.   0.5  1. ]
+    >>> print("Arccos:", result)
+    Arccos: [3.14159265 2.0943951  1.57079633 1.04719755 0.        ]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "arccos", None))
 
@@ -1711,6 +1604,20 @@ def arctan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.arctan <https://numpy.org/doc/stable/reference/generated/numpy.arctan.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> numbers = np.array([-1, -0.5, 0, 0.5, 1])
+    >>> buffer = numbers.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=numbers.dtype, shape=numbers.shape)
+    >>> result_lazy = blosc2.arctan(blosc_array)
+    >>> result = result_lazy[:]
+    >>> print("Original numbers:", numbers)
+    Original numbers: [-1.  -0.5  0.   0.5  1. ]
+    >>> print("Arctan:", result)
+    Arctan: [-0.78539816 -0.46364761  0.          0.46364761  0.78539816]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "arctan", None))
 
@@ -1734,6 +1641,25 @@ def arctan2(ndarr1: NDArray | NDField, ndarr2: NDArray | NDField | blosc2.C2Arra
     References
     ----------
     `np.arctan2 <https://numpy.org/doc/stable/reference/generated/numpy.arctan2.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> y = np.array([0, 1, 0, -1, 1])
+    >>> x = np.array([1, 1, -1, -1, 0])
+    >>> buffer_y = y.tobytes()
+    >>> buffer_x = x.tobytes()
+    >>> blosc_array_y = blosc2.frombuffer(buffer_y, dtype=y.dtype, shape=y.shape)
+    >>> blosc_array_x = blosc2.frombuffer(buffer_x, dtype=x.dtype, shape=x.shape)
+    >>> result_lazy = blosc2.arctan2(blosc_array_y, blosc_array_x)
+    >>> result = result_lazy[:]
+    >>> print("y:", y)
+    y: [ 0  1  0 -1  1]
+    >>> print("x:", x)
+    x: [ 1  1 -1 -1  0]
+    >>> print("Arctan2(y, x):", result)
+    Arctan2(y, x): [ 0.          0.78539816  3.14159265 -2.35619449  1.57079633]
     """
     return blosc2.LazyExpr(new_op=(ndarr1, "arctan2", ndarr2))
 
@@ -1755,6 +1681,20 @@ def arcsinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.arcsinh <https://numpy.org/doc/stable/reference/generated/numpy.arcsinh.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([-2, -1, 0, 1, 2])
+    >>> buffer = values.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
+    >>> result_lazy = blosc2.arcsinh(blosc_array)
+    >>> result = result_lazy[:]
+    >>> print("Original values:", values)
+    Original values: [-2 -1  0  1  2]
+    >>> print("Arcsinh:", result)
+    Arcsinh: [-1.44363548 -0.88137359  0.          0.88137359  1.44363548]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "arcsinh", None))
 
@@ -1776,6 +1716,20 @@ def arccosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.arccosh <https://numpy.org/doc/stable/reference/generated/numpy.arccosh.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([1, 2, 3, 4, 5])
+    >>> buffer = values.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
+    >>> result_lazy = blosc2.arccosh(blosc_array)
+    >>> result = result_lazy[:]
+    >>> print("Original values:", values)
+    Original values: [1 2 3 4 5]
+    >>> print("Arccosh:", result)
+    Arccosh: [0.         1.3169579  1.76274717 2.06343707 2.29243167]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "arccosh", None))
 
@@ -1797,6 +1751,20 @@ def arctanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.arctanh <https://numpy.org/doc/stable/reference/generated/numpy.arctanh.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([-0.9, -0.5, 0, 0.5, 0.9])
+    >>> buffer = values.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
+    >>> result_lazy = blosc2.arctanh(blosc_array)
+    >>> result = result_lazy[:]
+    >>> print("Original values:", values)
+    Original values: [-0.9 -0.5  0.   0.5  0.9]
+    >>> print("Arctanh:", result)
+    Arctanh: [-1.47221949 -0.54930614  0.          0.54930614  1.47221949]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "arctanh", None))
 
@@ -1818,6 +1786,20 @@ def exp(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.exp <https://numpy.org/doc/stable/reference/generated/numpy.exp.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([0, 1, 2, 3, 4])
+    >>> buffer = values.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
+    >>> result_lazy = blosc2.exp(blosc_array)
+    >>> result = result_lazy[:]
+    >>> print("Original values:", values)
+    Original values: [0 1 2 3 4]
+    >>> print("Exponential:", result)
+    Exponential: [ 1.          2.71828183  7.3890561  20.08553692 54.59815003]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "exp", None))
 
@@ -1839,6 +1821,20 @@ def expm1(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.expm1 <https://numpy.org/doc/stable/reference/generated/numpy.expm1.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([-1, -0.5, 0, 0.5, 1])
+    >>> buffer = values.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
+    >>> result_lazy = blosc2.expm1(blosc_array)
+    >>> result = result_lazy[:]
+    >>> print("Original values:", values)
+    Original values: [-1.  -0.5  0.   0.5  1. ]
+    >>> print("Expm1:", result)
+    Expm1: [-0.63212056 -0.39346934  0.          0.64872127  1.71828183]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "expm1", None))
 
@@ -1860,6 +1856,20 @@ def log(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.log <https://numpy.org/doc/stable/reference/generated/numpy.log.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([1, 2, 3, 4, 5])
+    >>> buffer = values.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
+    >>> result_lazy = blosc2.log(blosc_array)
+    >>> result = result_lazy[:]
+    >>> print("Original values:", values)
+    Original values: [1 2 3 4 5]
+    >>> print("Logarithm (base e):", result)
+    Logarithm (base e): [0.         0.69314718 1.09861229 1.38629436 1.60943791]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "log", None))
 
@@ -1881,6 +1891,20 @@ def log10(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.log10 <https://numpy.org/doc/stable/reference/generated/numpy.log10.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([1, 10, 100, 1000, 10000])
+    >>> buffer = values.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
+    >>> result_lazy = blosc2.log10(blosc_array)
+    >>> result = result_lazy[:]
+    >>> print("Original values:", values)
+    Original values: [    1    10   100  1000 10000]
+    >>> print("Logarithm (base 10):", result)
+    Logarithm (base 10): [0. 1. 2. 3. 4.]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "log10", None))
 
@@ -1902,6 +1926,20 @@ def log1p(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.log1p <https://numpy.org/doc/stable/reference/generated/numpy.log1p.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([-0.9, -0.5, 0, 0.5, 0.9])
+    >>> buffer = values.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
+    >>> result_lazy = blosc2.log1p(blosc_array)
+    >>> result = result_lazy[:]
+    >>> print("Original values:", values)
+    Original values: [-0.9 -0.5  0.   0.5  0.9]
+    >>> print("Log1p (log(1 + x)):", result)
+    Log1p (log(1 + x)): [-2.30258509 -0.69314718  0.          0.40546511  0.64185389]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "log1p", None))
 
@@ -1923,6 +1961,21 @@ def conj(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.conj <https://numpy.org/doc/stable/reference/generated/numpy.conj.html>`_
+
+    Examples
+    --------
+
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([1+2j, 3-4j, -5+6j, 7-8j])
+    >>> buffer = values.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
+    >>> result_ = blosc2.conj(blosc_array)
+    >>> result = result_[:]
+    >>> print("Original values:", values)
+    Original values: [ 1.+2.j  3.-4.j -5.+6.j  7.-8.j]
+    >>> print("Complex conjugates:", result)
+    Complex conjugates: [ 1.-2.j  3.+4.j -5.-6.j  7.+8.j]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "conj", None))
 
@@ -1944,6 +1997,21 @@ def real(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.real <https://numpy.org/doc/stable/reference/generated/numpy.real.html>`_
+
+    Examples
+    --------
+
+    >>> import numpy as np
+    >>> import blosc2
+    >>> complex_values = np.array([1+2j, 3-4j, -5+6j, 7-8j])
+    >>> buffer = complex_values.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=complex_values.dtype, shape=complex_values.shape)
+    >>> result_ = blosc2.real(blosc_array)
+    >>> result = result_[:]
+    >>> print("Original complex values:", complex_values)
+    Original values: [ 1.+2.j  3.-4.j -5.+6.j  7.-8.j]
+    >>> print("Real parts:", result)
+    Real parts: [ 1.  3. -5.  7.]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "real", None))
 
@@ -1965,6 +2033,21 @@ def imag(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.imag <https://numpy.org/doc/stable/reference/generated/numpy.imag.html>`_
+
+    Examples
+    --------
+
+    >>> import numpy as np
+    >>> import blosc2
+    >>> complex_values = np.array([2+3j, -1+4j, 0-2j, 5+6j])
+    >>> buffer = complex_values.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=complex_values.dtype, shape=complex_values.shape)
+    >>> result_ = blosc2.imag(blosc_array)
+    >>> result = result_[:]
+    >>> print("Original complex values:", complex_values)
+    Original complex values: [ 2.+3.j -1.+4.j  0.-2.j  5.+6.j]
+    >>> print("Imaginary parts:", result)
+    Imaginary parts: [ 3.  4. -2.  6.]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "imag", None))
 
@@ -1986,6 +2069,19 @@ def contains(
     -------
     out: :ref:`LazyExpr`
         A lazy expression that can be evaluated.
+
+    Examples
+    --------
+
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([b"apple", b"xxbananaxxx", b"cherry", b"date"])
+    >>> text_values = blosc2.asarray(values)
+    >>> value_to_check = b"banana"
+    >>> expr = blosc2.contains(text_values, value_to_check)
+    >>> result = expr.eval()
+    >>> print("Contains 'banana':", result[:])
+    Contains 'banana': [False  True False False]
     """
     if not isinstance(value, str | bytes | NDArray):
         raise TypeError("value should be a string, bytes or a NDArray!")
@@ -2009,6 +2105,21 @@ def abs(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     References
     ----------
     `np.abs <https://numpy.org/doc/stable/reference/generated/numpy.abs.html>`_
+
+    Examples
+    --------
+
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([-5, -3, 0, 2, 4])
+    >>> buffer = values.tobytes()
+    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
+    >>> result_ = blosc2.abs(blosc_array)
+    >>> result = result_[:]
+    >>> print("Original values:", values)
+    Original values: [-5 -3  0  2  4]
+    >>> print("Absolute values:", result)
+    Absolute values: [5. 3. 0. 2. 4.]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "abs", None))
 
@@ -2321,10 +2432,11 @@ def copy(array, dtype=None, **kwargs):
     Examples
     --------
     >>> import numpy as np
+    >>> import blosc2
     >>> # Create an instance of MyNDArray with some data
     >>> original_array = np.array([[1.1, 2.2, 3.3], [4.4, 5.5, 6.6]])
     >>> # Create a copy of the array without changing dtype
-    >>> copied_array = original_array.copy()
+    >>> copied_array = blosc2.copy(original_array)
     >>> print("Copied array (default dtype):")
     >>> print(copied_array)
     Copied array (default dtype):
