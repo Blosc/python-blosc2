@@ -186,12 +186,13 @@ def sum(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdi
     >>> import blosc2
     >>> # Example array
     >>> array = np.array([[1, 2, 3], [4, 5, 6]])
+    >>> nd_array = blosc2.asarray(array)
     >>> # Sum all elements in the array (axis=None)
-    >>> total_sum = blosc2.sum(array)
+    >>> total_sum = blosc2.sum(nd_array)
     >>> print("Sum of all elements:", total_sum)
     21
     >>> # Sum along axis 0 (columns)
-    >>> sum_axis_0 = blosc2.sum(array, axis=0)
+    >>> sum_axis_0 = blosc2.sum(nd_array, axis=0)
     >>> print("Sum along axis 0 (columns):", sum_axis_0)
     Sum along axis 0 (columns): [5 7 9]
     """
@@ -233,9 +234,10 @@ def mean(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepd
     >>> import numpy as np
     >>> import blosc2
     >>> # Example array
-    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
+    >>> array = np.array([[1, 2, 3], [4, 5, 6]]
+    >>> nd_array = blosc2.asarray(array)
     >>> # Compute the mean of all elements in the array (axis=None)
-    >>> overall_mean = blosc2.mean(array)
+    >>> overall_mean = blosc2.mean(nd_array)
     >>> print("Mean of all elements:", overall_mean)
     Mean of all elements: 3.5
     """
@@ -281,12 +283,13 @@ def std(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
     >>> import blosc2
     >>> # Create an instance of NDArray with some data
     >>> array = np.array([[1, 2, 3], [4, 5, 6]])
+    >>> nd_array = blosc2.asarray(array)
     >>> # Compute the standard deviation of the entire array
-    >>> std_all = blosc2.std(array)
+    >>> std_all = blosc2.std(nd_array)
     >>> print("Standard deviation of the entire array:", std_all)
     Standard deviation of the entire array: 1.707825127659933
     >>> # Compute the standard deviation along axis 0 (columns)
-    >>> std_axis0 = blosc2.std(array, axis=0)
+    >>> std_axis0 = blosc2.std(nd_array, axis=0)
     >>> print("Standard deviation along axis 0:", std_axis0)
     Standard deviation along axis 0: [1.5 1.5 1.5]
     """
@@ -333,12 +336,13 @@ def var(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
     >>> import blosc2
     >>> # Create an instance of NDArray with some data
     >>> array = np.array([[1, 2, 3], [4, 5, 6]])
+    >>> nd_array = blosc2.asarray(array)
     >>> # Compute the variance of the entire array
-    >>> var_all = blosc2.var(array)
+    >>> var_all = blosc2.var(nd_array)
     >>> print("Variance of the entire array:", var_all)
     Variance of the entire array: 2.9166666666666665
     >>> # Compute the variance along axis 0 (columns)
-    >>> var_axis0 = blosc2.var(array, axis=0)
+    >>> var_axis0 = blosc2.var(nd_array, axis=0)
     >>> print("Variance along axis 0:", var_axis0)
     Variance along axis 0: [2.25 2.25 2.25]
     """
@@ -383,12 +387,13 @@ def prod(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepd
     >>> import blosc2
     >>> # Create an instance of NDArray with some data
     >>> array = np.array([[11, 22, 33], [4, 15, 36]])
+    >>> nd_array = blosc2.asarray(array)
     >>> # Compute the product of all elements in the array
-    >>> prod_all = blosc2.prod(array)
+    >>> prod_all = blosc2.prod(nd_array)
     >>> print("Product of all elements in the array:", prod_all)
     Product of all elements in the array: 17249760
     >>> # Compute the product along axis 1 (rows)
-    >>> prod_axis1 = blosc2.prod(array, axis=1)
+    >>> prod_axis1 = blosc2.prod(nd_array, axis=1)
     >>> print("Product along axis 1:", prod_axis1)
     Product along axis 1: [7986 2160]
     """
@@ -424,11 +429,12 @@ def min(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
     >>> import numpy as np
     >>> import blosc2
     >>> array = np.array([1, 3, 7, 8, 9, 31])
-    >>> min_all = blosc2.min(array)
+    >>> nd_array = blosc2.asarray(array)
+    >>> min_all = blosc2.min(nd_array)
     >>> print("Minimum of all elements in the array:", min_all)
     Minimum of all elements in the array: 1
     >>> # Compute the minimum along axis 0 with keepdims=True
-    >>> min_keepdims = blosc2.min(array, axis=0, keepdims=True)
+    >>> min_keepdims = blosc2.min(nd_array, axis=0, keepdims=True)
     >>> print("Minimum along axis 0 with keepdims=True:", min_keepdims)
     Minimum along axis 0 with keepdims=True:  [1]
     """
@@ -469,13 +475,13 @@ def max(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
     Original data:  [[11  2 36 24  5 69]
                     [73 81 49  6 73  0]]
     >>> # Compute the maximum along axis 0 and 1
-    >>> max_along_axis_0 = blosc2.max(axis=0)
+    >>> max_along_axis_0 = blosc2.max(ndarr=ndarray, axis=0)
     >>> print("Maximum along axis 0:", max_along_axis_0)
     Maximum along axis 0: [73 81 49 24 73 69]
-    >>> max_along_axis_1 = blosc2.max(axis=1)
+    >>> max_along_axis_1 = blosc2.max(ndarr=ndarray, axis=1)
     >>> print("Maximum along axis 1:", max_along_axis_1)
     Maximum along axis 1: [69 81]
-    >>> max_flattened = blosc2.max()
+    >>> max_flattened = blosc2.max(ndarr=ndarray)
     >>> print("Maximum of the flattened array:", max_flattened)
     Maximum of the flattened array: 81
     """
@@ -557,8 +563,9 @@ def all(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
     >>> import numpy as np
     >>> import blosc2
     >>> data = np.array([True, True, False, True, True, True])
+    >>> ndarray = blosc2.asarray(data)
     >>> # Test if all elements are True along the default axis (flattened array)
-    >>> result_flat = blosc2.all(data)
+    >>> result_flat = blosc2.all(ndarr=ndarray)
     >>> print("All elements are True (flattened):", result_flat)
     All elements are True (flattened): False
     """
