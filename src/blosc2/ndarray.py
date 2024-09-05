@@ -277,7 +277,7 @@ def std(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
     ----------
     `np.std <https://numpy.org/doc/stable/reference/generated/numpy.std.html>`_
 
-     Examples
+    Examples
     --------
     >>> import numpy as np
     >>> import blosc2
@@ -330,7 +330,7 @@ def var(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
     `np.var <https://numpy.org/doc/stable/reference/generated/numpy.var.html>`_
 
 
-     Examples
+    Examples
     --------
     >>> import numpy as np
     >>> import blosc2
@@ -424,7 +424,7 @@ def min(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
     ----------
     `np.min <https://numpy.org/doc/stable/reference/generated/numpy.min.html>`_
 
-      Examples
+    Examples
     --------
     >>> import numpy as np
     >>> import blosc2
@@ -471,17 +471,17 @@ def max(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
     >>> import numpy as np
     >>> data = np.array([[11, 2, 36, 24, 5, 69], [73, 81, 49, 6, 73, 0]])
     >>> ndarray = blosc2.asarray(data)
-    >>> print("Original data:", data)
-    Original data:  [[11  2 36 24  5 69]
+    >>> print("NDArray data:", ndarray[:])
+    NDArray data:  [[11  2 36 24  5 69]
                     [73 81 49  6 73  0]]
     >>> # Compute the maximum along axis 0 and 1
-    >>> max_along_axis_0 = blosc2.max(ndarr=ndarray, axis=0)
+    >>> max_along_axis_0 = blosc2.max(ndarray, axis=0)
     >>> print("Maximum along axis 0:", max_along_axis_0)
     Maximum along axis 0: [73 81 49 24 73 69]
-    >>> max_along_axis_1 = blosc2.max(ndarr=ndarray, axis=1)
+    >>> max_along_axis_1 = blosc2.max(ndarray, axis=1)
     >>> print("Maximum along axis 1:", max_along_axis_1)
     Maximum along axis 1: [69 81]
-    >>> max_flattened = blosc2.max(ndarr=ndarray)
+    >>> max_flattened = blosc2.max(ndarray)
     >>> print("Maximum of the flattened array:", max_flattened)
     Maximum of the flattened array: 81
     """
@@ -519,14 +519,14 @@ def any(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
     >>> data = np.array([[1, 0, 0], [0, 1, 0], [0, 0, 0]])
     >>> # Convert the NumPy array to a Blosc2 NDArray
     >>> ndarray = blosc2.asarray(data)
-    >>> print("Original data:", data)
-    Original data: [[1 0 0]
+    >>> print("NDArray data:", ndarray[:])
+    NDArray data: [[1 0 0]
                     [0 1 0]
                     [0 0 0]]
-    >>> any_along_axis_0 = blosc2.any(ndarr=ndarray, axis=0)
+    >>> any_along_axis_0 = blosc2.any(ndarray, axis=0)
     >>> print("Any along axis 0:", any_along_axis_0)
     Any along axis 0: [True True False]
-    >>> any_flattened = blosc2.any(ndarr=ndarray)
+    >>> any_flattened = blosc2.any(ndarray)
     >>> print("Any in the flattened array:", any_flattened)
     Any in the flattened array: True
     """
@@ -559,13 +559,12 @@ def all(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
 
     Examples
     --------
-
     >>> import numpy as np
     >>> import blosc2
     >>> data = np.array([True, True, False, True, True, True])
     >>> ndarray = blosc2.asarray(data)
     >>> # Test if all elements are True along the default axis (flattened array)
-    >>> result_flat = blosc2.all(ndarr=ndarray)
+    >>> result_flat = blosc2.all(ndarray)
     >>> print("All elements are True (flattened):", result_flat)
     All elements are True (flattened): False
     """
@@ -751,7 +750,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> sa = blosc2.zeros(shape, dtype=dtype)
         >>> # Check that fields are equal
         >>> assert sa.fields['a'] == sa.fields['b']
-
         """
         return self._fields
 
@@ -849,12 +847,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         Examples
         --------
-
         >>> import blosc2
-        >>> storage = {"contiguous": True, "cparams": {"typesize": 4, "blocksize": 1024}, "dparams": {}}
-        >>> schunk = blosc2.SChunk(chunksize=1024,  **storage) # Create a SChunk object
-        >>> print("Block size of the container:", schunk.blocksize)
-        Block size of the SChunk: 1024
+        >>> import numpy as np
+        >>> array = np.array([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+        >>> ndarray = blosc2.asarray(array)
+        >>> print("Block size:", ndarray.blocksize)
+        Block size: 80
         """
         return self._schunk.blocksize
 
@@ -1001,15 +999,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
         :attr:`schunk`
             The attribute that provides access to the underlying `SChunk` object.
 
-         Examples
+        Examples
         --------
         >>> import blosc2
         >>> import numpy as np
         >>> # Create an SChunk with some data
-        >>> data = np.arange(10)
-        >>> schunk = blosc2.SChunk(data=data)
-        >>> # Get a specific chunk from the SChunk object
-        >>> chunk = schunk.get_chunk(0)
+        >>> array = np.arange(10)
+        >>> ndarray = blosc2.asarray(array)
+        >>> chunk = ndarray.get_chunk(0)
         >>> # Decompress the chunk to convert it into a numpy array
         >>> decompressed_chunk = blosc2.decompress(chunk)
         >>> np_array_chunk = np.frombuffer(decompressed_chunk, dtype=np.int64)
@@ -1232,8 +1229,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> slices = (slice(3, 7), slice(1, 11))
         >>> # Get a slice as a new NDArray
         >>> c = b.slice(slices)
-        >>> c.shape
+        >>> print(c.shape)
         (4, 10)
+        >>> print(type(c))
+        <class 'blosc2.ndarray.NDArray'>
         """
         _check_ndarray_kwargs(**kwargs)
         key, mask = process_key(key, self.shape)
@@ -1293,13 +1292,11 @@ def sin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Examples
     --------
-
     >>> import numpy as np
     >>> import blosc2
     >>> angles = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
-    >>> buffer = angles.tobytes()
-    >>> blosc_array = blosc2.asarray(angles)
-    >>> result_ = blosc2.sin(blosc_array)
+    >>> nd_array = blosc2.asarray(angles)
+    >>> result_ = blosc2.sin(nd_array)
     >>> result = result_[:]
     >>> print("Angles in radians:", angles)
     Angles in radians: [0.         0.52359878 0.78539816 1.57079633 3.14159265]
@@ -1330,19 +1327,17 @@ def cos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Examples
     --------
-
     >>> import numpy as np
     >>> import blosc2
     >>> angles = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
-    >>> buffer = angles.tobytes()
-    >>> blosc_array = blosc2.asarray(angles)
-    >>> result_ = blosc2.cos(blosc_array)
+    >>> nd_array = blosc2.asarray(angles)
+    >>> result_ = blosc2.cos(nd_array)
     >>> result = result_[:]
     >>> print("Angles in radians:", angles)
-    Angles in radians: [0.         1.57079633 3.14159265 4.71238898 6.28318531]
-    >>> print("Sine of the angles:", result)
-    Sine of the angles: [ 1.0000000e+00  6.1232340e-17 -1.0000000e+00 -1.8369702e-16
-    1.0000000e+00]
+    Angles in radians: [0.         0.52359878 0.78539816 1.57079633 3.14159265]
+    >>> print("Cosine of the angles:", result)
+    Cosine of the angles: [ 1.00000000e+00  8.66025404e-01  7.07106781e-01  6.12323400e-17
+    -1.00000000e+00]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "cos", None))
 
@@ -1365,21 +1360,19 @@ def tan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     ----------
     `np.tan <https://numpy.org/doc/stable/reference/generated/numpy.tan.html>`_
 
-     Examples
+    Examples
     --------
-
     >>> import numpy as np
     >>> import blosc2
     >>> angles = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
-    >>> buffer = angles.tobytes()
-    >>> blosc_array = blosc2.asarray(angles)
-    >>> result_ = blosc2.tan(blosc_array)
+    >>> nd_array = blosc2.asarray(angles)
+    >>> result_ = blosc2.tan(nd_array)
     >>> result = result_[:]
     >>> print("Angles in radians:", angles)
-    Angles in radians: [0.         1.57079633 3.14159265 4.71238898 6.28318531]
-    >>> print("Sine of the angles:", result)
-    Sine of the angles: [ 0.00000000e+00  1.63312394e+16 -1.22464680e-16  5.44374645e+15
-    -2.44929360e-16]
+    Angles in radians: [0.         0.52359878 0.78539816 1.57079633 3.14159265]
+    >>> print("Tangent of the angles:", result)
+    Tangent of the angles: [ 0.00000000e+00  5.77350269e-01  1.00000000e+00  1.63312394e+16
+    -1.22464680e-16]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "tan", None))
 
@@ -1407,9 +1400,8 @@ def sqrt(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     >>> import numpy as np
     >>> import blosc2
     >>> data = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
-    >>> buffer = data.tobytes()
-    >>> blosc_array = blosc2.asarray(data)
-    >>> result_ = blosc2.sqrt(blosc_array)
+    >>> nd_array = blosc2.asarray(data)
+    >>> result_ = blosc2.sqrt(nd_array)
     >>> result = result_[:]
     >>> print("Original numbers:", data)
     Original numbers: [ 0  1  4  9 16 25]
@@ -1442,9 +1434,8 @@ def sinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     >>> import numpy as np
     >>> import blosc2
     >>> numbers = np.array([-2, -1, 0, 1, 2])
-    >>> buffer = numbers.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=numbers.dtype, shape=numbers.shape)
-    >>> result_lazy = blosc2.sinh(blosc_array)
+    >>> ndarray = blosc2.asarray(numbers)
+    >>> result_lazy = blosc2.sinh(ndarray)
     >>> result = result_lazy[:]
     >>> print("Original numbers:", numbers)
     Original numbers: [-2 -1  0  1  2]
@@ -1477,9 +1468,8 @@ def cosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     >>> import numpy as np
     >>> import blosc2
     >>> numbers = np.array([-2, -1, 0, 1, 2])
-    >>> buffer = numbers.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=numbers.dtype, shape=numbers.shape)
-    >>> result_lazy = blosc2.cosh(blosc_array)
+    >>> ndarray = blosc2.asarray(numbers)
+    >>> result_lazy = blosc2.cosh(ndarray)
     >>> result = result_lazy[:]
     >>> print("Original numbers:", numbers)
     Original numbers: [-2 -1  0  1  2]
@@ -1512,9 +1502,8 @@ def tanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     >>> import numpy as np
     >>> import blosc2
     >>> numbers = np.array([-2, -1, 0, 1, 2])
-    >>> buffer = numbers.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=numbers.dtype, shape=numbers.shape)
-    >>> result_lazy = blosc2.tanh(blosc_array)
+    >>> ndarray = blosc2.asarray(numbers)
+    >>> result_lazy = blosc2.tanh(ndarray)
     >>> result = result_lazy[:]
     >>> print("Original numbers:", numbers)
     Original numbers: [-2 -1  0  1  2]
@@ -1547,9 +1536,8 @@ def arcsin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     >>> import numpy as np
     >>> import blosc2
     >>> numbers = np.array([-1, -0.5, 0, 0.5, 1])
-    >>> buffer = numbers.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=numbers.dtype, shape=numbers.shape)
-    >>> result_lazy = blosc2.arcsin(blosc_array)
+    >>> ndarray = blosc2.asarray(numbers)
+    >>> result_lazy = blosc2.arcsin(ndarray)
     >>> result = result_lazy[:]
     >>> print("Original numbers:", numbers)
     Original numbers: [-1.  -0.5  0.   0.5  1. ]
@@ -1582,9 +1570,8 @@ def arccos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     >>> import numpy as np
     >>> import blosc2
     >>> numbers = np.array([-1, -0.5, 0, 0.5, 1])
-    >>> buffer = numbers.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=numbers.dtype, shape=numbers.shape)
-    >>> result_lazy = blosc2.arccos(blosc_array)
+    >>> ndarray = blosc2.asarray(numbers)
+    >>> result_lazy = blosc2.arccos(ndarray)
     >>> result = result_lazy[:]
     >>> print("Original numbers:", numbers)
     Original numbers: [-1.  -0.5  0.   0.5  1. ]
@@ -1617,9 +1604,8 @@ def arctan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     >>> import numpy as np
     >>> import blosc2
     >>> numbers = np.array([-1, -0.5, 0, 0.5, 1])
-    >>> buffer = numbers.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=numbers.dtype, shape=numbers.shape)
-    >>> result_lazy = blosc2.arctan(blosc_array)
+    >>> ndarray = blosc2.asarray(numbers)
+    >>> result_lazy = blosc2.arctan(ndarray)
     >>> result = result_lazy[:]
     >>> print("Original numbers:", numbers)
     Original numbers: [-1.  -0.5  0.   0.5  1. ]
@@ -1655,11 +1641,9 @@ def arctan2(ndarr1: NDArray | NDField, ndarr2: NDArray | NDField | blosc2.C2Arra
     >>> import blosc2
     >>> y = np.array([0, 1, 0, -1, 1])
     >>> x = np.array([1, 1, -1, -1, 0])
-    >>> buffer_y = y.tobytes()
-    >>> buffer_x = x.tobytes()
-    >>> blosc_array_y = blosc2.frombuffer(buffer_y, dtype=y.dtype, shape=y.shape)
-    >>> blosc_array_x = blosc2.frombuffer(buffer_x, dtype=x.dtype, shape=x.shape)
-    >>> result_lazy = blosc2.arctan2(blosc_array_y, blosc_array_x)
+    >>> ndarray_y = blosc2.asarray(y)
+    >>> ndarray_x = blosc2.asarray(x)
+    >>> result_lazy = blosc2.arctan2(ndarray_y, ndarray_x)
     >>> result = result_lazy[:]
     >>> print("y:", y)
     y: [ 0  1  0 -1  1]
@@ -1694,9 +1678,8 @@ def arcsinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     >>> import numpy as np
     >>> import blosc2
     >>> values = np.array([-2, -1, 0, 1, 2])
-    >>> buffer = values.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
-    >>> result_lazy = blosc2.arcsinh(blosc_array)
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_lazy = blosc2.arcsinh(ndarray)
     >>> result = result_lazy[:]
     >>> print("Original values:", values)
     Original values: [-2 -1  0  1  2]
@@ -1729,9 +1712,8 @@ def arccosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     >>> import numpy as np
     >>> import blosc2
     >>> values = np.array([1, 2, 3, 4, 5])
-    >>> buffer = values.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
-    >>> result_lazy = blosc2.arccosh(blosc_array)
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_lazy = blosc2.arccosh(ndarray)
     >>> result = result_lazy[:]
     >>> print("Original values:", values)
     Original values: [1 2 3 4 5]
@@ -1764,9 +1746,8 @@ def arctanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     >>> import numpy as np
     >>> import blosc2
     >>> values = np.array([-0.9, -0.5, 0, 0.5, 0.9])
-    >>> buffer = values.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
-    >>> result_lazy = blosc2.arctanh(blosc_array)
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_lazy = blosc2.arctanh(ndarray)
     >>> result = result_lazy[:]
     >>> print("Original values:", values)
     Original values: [-0.9 -0.5  0.   0.5  0.9]
@@ -1799,9 +1780,8 @@ def exp(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     >>> import numpy as np
     >>> import blosc2
     >>> values = np.array([0, 1, 2, 3, 4])
-    >>> buffer = values.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
-    >>> result_lazy = blosc2.exp(blosc_array)
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_lazy = blosc2.exp(ndarray)
     >>> result = result_lazy[:]
     >>> print("Original values:", values)
     Original values: [0 1 2 3 4]
@@ -1834,9 +1814,8 @@ def expm1(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     >>> import numpy as np
     >>> import blosc2
     >>> values = np.array([-1, -0.5, 0, 0.5, 1])
-    >>> buffer = values.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
-    >>> result_lazy = blosc2.expm1(blosc_array)
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_lazy = blosc2.expm1(ndarray)
     >>> result = result_lazy[:]
     >>> print("Original values:", values)
     Original values: [-1.  -0.5  0.   0.5  1. ]
@@ -1869,9 +1848,8 @@ def log(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     >>> import numpy as np
     >>> import blosc2
     >>> values = np.array([1, 2, 3, 4, 5])
-    >>> buffer = values.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
-    >>> result_lazy = blosc2.log(blosc_array)
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_lazy = blosc2.log(ndarray)
     >>> result = result_lazy[:]
     >>> print("Original values:", values)
     Original values: [1 2 3 4 5]
@@ -1904,9 +1882,8 @@ def log10(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     >>> import numpy as np
     >>> import blosc2
     >>> values = np.array([1, 10, 100, 1000, 10000])
-    >>> buffer = values.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
-    >>> result_lazy = blosc2.log10(blosc_array)
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_lazy = blosc2.log10(ndarray)
     >>> result = result_lazy[:]
     >>> print("Original values:", values)
     Original values: [    1    10   100  1000 10000]
@@ -1939,9 +1916,8 @@ def log1p(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     >>> import numpy as np
     >>> import blosc2
     >>> values = np.array([-0.9, -0.5, 0, 0.5, 0.9])
-    >>> buffer = values.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
-    >>> result_lazy = blosc2.log1p(blosc_array)
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_lazy = blosc2.log1p(ndarray)
     >>> result = result_lazy[:]
     >>> print("Original values:", values)
     Original values: [-0.9 -0.5  0.   0.5  0.9]
@@ -1971,13 +1947,11 @@ def conj(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Examples
     --------
-
     >>> import numpy as np
     >>> import blosc2
     >>> values = np.array([1+2j, 3-4j, -5+6j, 7-8j])
-    >>> buffer = values.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
-    >>> result_ = blosc2.conj(blosc_array)
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_ = blosc2.conj(ndarray)
     >>> result = result_[:]
     >>> print("Original values:", values)
     Original values: [ 1.+2.j  3.-4.j -5.+6.j  7.-8.j]
@@ -2007,13 +1981,11 @@ def real(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Examples
     --------
-
     >>> import numpy as np
     >>> import blosc2
     >>> complex_values = np.array([1+2j, 3-4j, -5+6j, 7-8j])
-    >>> buffer = complex_values.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=complex_values.dtype, shape=complex_values.shape)
-    >>> result_ = blosc2.real(blosc_array)
+    >>> ndarray = blosc2.asarray(complex_values)
+    >>> result_ = blosc2.real(ndarray)
     >>> result = result_[:]
     >>> print("Original complex values:", complex_values)
     Original values: [ 1.+2.j  3.-4.j -5.+6.j  7.-8.j]
@@ -2043,13 +2015,11 @@ def imag(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Examples
     --------
-
     >>> import numpy as np
     >>> import blosc2
     >>> complex_values = np.array([2+3j, -1+4j, 0-2j, 5+6j])
-    >>> buffer = complex_values.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=complex_values.dtype, shape=complex_values.shape)
-    >>> result_ = blosc2.imag(blosc_array)
+    >>> ndarray = blosc2.asarray(complex_values)
+    >>> result_ = blosc2.imag(ndarray)
     >>> result = result_[:]
     >>> print("Original complex values:", complex_values)
     Original complex values: [ 2.+3.j -1.+4.j  0.-2.j  5.+6.j]
@@ -2079,7 +2049,6 @@ def contains(
 
     Examples
     --------
-
     >>> import numpy as np
     >>> import blosc2
     >>> values = np.array([b"apple", b"xxbananaxxx", b"cherry", b"date"])
@@ -2115,13 +2084,11 @@ def abs(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     Examples
     --------
-
     >>> import numpy as np
     >>> import blosc2
     >>> values = np.array([-5, -3, 0, 2, 4])
-    >>> buffer = values.tobytes()
-    >>> blosc_array = blosc2.frombuffer(buffer, dtype=values.dtype, shape=values.shape)
-    >>> result_ = blosc2.abs(blosc_array)
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_ = blosc2.abs(ndarray)
     >>> result = result_[:]
     >>> print("Original values:", values)
     Original values: [-5 -3  0  2  4]
