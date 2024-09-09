@@ -2080,7 +2080,7 @@ def abs(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
     References
     ----------
-    `np.abs <https://numpy.org/doc/stable/reference/generated/numpy.abs.html>`_
+    `np.abs <https://numpy.org/doc/stable/reference/generated/numpy.absolute.html#numpy.absolute>`_
 
     Examples
     --------
