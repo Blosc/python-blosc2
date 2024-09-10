@@ -684,6 +684,10 @@ class SChunk(blosc2_ext.SChunk):
         :func:`get_slice`
 
         """
+        if isinstance(item, int):
+            if item == -1:
+                return self.get_slice(item)
+            return self.get_slice(item, item + 1)
         if item.step is not None and item.step != 1:
             raise IndexError("`step` must be 1")
         return self.get_slice(item.start, item.stop)

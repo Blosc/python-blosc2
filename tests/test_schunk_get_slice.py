@@ -67,6 +67,31 @@ def test_schunk_get_slice(contiguous, urlpath, mode, cparams, dparams, nchunks, 
     blosc2.remove_urlpath(urlpath)
 
 
+@pytest.mark.parametrize(
+    "cparams, nchunks, elem",
+    [
+        ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, 10, 0),
+        ({"typesize": 4}, 1, 7),
+        (
+            {"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4},
+            5,
+            21,
+        ),
+        ({"blocksize": 200 * 100, "typesize": 4}, 5, -1),
+        ({"blocksize": 100 * 100, "typesize": 4}, 2, -200 * 100 + 234),
+    ],
+)
+def test_schunk_getitem_int(cparams, nchunks, elem):
+    storage = {"cparams": cparams}
+
+    data = np.arange(200 * 100 * nchunks, dtype="int32")
+    schunk = blosc2.SChunk(chunksize=200 * 100 * 4, data=data, **storage)
+
+    sl = data[elem]
+    res = schunk[elem]
+    assert res == sl.tobytes()
+
+
 def test_schunk_get_slice_raises():
     storage = {"contiguous": True, "urlpath": "schunk.b2frame", "cparams": {"typesize": 4}, "dparams": {}}
     blosc2.remove_urlpath(storage["urlpath"])
