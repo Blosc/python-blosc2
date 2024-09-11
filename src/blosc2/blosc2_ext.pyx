@@ -380,6 +380,9 @@ cdef extern from "blosc2.h":
     int blosc2_schunk_reorder_offsets(blosc2_schunk *schunk, int64_t *offsets_order)
     int64_t blosc2_schunk_frame_len(blosc2_schunk* schunk)
 
+    int blosc2_chunk_repeatval(blosc2_cparams cparams, const int32_t nbytes,
+                               void *dest, int32_t destsize, const void *repeatval)
+
     int blosc2_meta_exists(blosc2_schunk *schunk, const char *name)
     int blosc2_meta_add(blosc2_schunk *schunk, const char *name, uint8_t *content,
                         int32_t content_len)
@@ -906,6 +909,15 @@ cdef create_storage(blosc2_storage *storage, kwargs):
         storage.io = NULL
 
 
+cdef get_chunk_repeatval(blosc2_cparams cparams, const int32_t nbytes,
+                        void *dest, int32_t destsize, Py_buffer *repeatval):
+    if blosc2_chunk_repeatval(cparams, nbytes, dest, destsize, repeatval.buf) < 0:
+        free(dest)
+        PyBuffer_Release(repeatval)
+        free(repeatval)
+        raise RuntimeError("Problems when creating the repeated values chunk")
+
+
 cdef class SChunk:
     cdef blosc2_schunk *schunk
     cdef c_bool _is_view
@@ -1207,8 +1219,55 @@ cdef class SChunk:
             raise RuntimeError("Could not append the buffer")
         return rc
 
-    def fill_special(self, nitems, special_value):
-        return blosc2_schunk_fill_special(self.schunk, nitems, special_value, self.chunksize)
+    def fill_special(self, nitems, special_value, value):
+        if value is None:
+            return blosc2_schunk_fill_special(self.schunk, nitems, special_value, self.chunksize)
+
+        if nitems == 0:
+            return 0
+        if nitems * self.typesize / self.chunksize > INT_MAX:
+            raise RuntimeError("nitems is too large.  Try increasing the chunksize")
+        if self.nbytes > 0 or self.cbytes > 0:
+            raise RuntimeError("Filling with special values only works on empty SChunks")
+
+        array = np.array([value])
+        if array.dtype.itemsize != self.typesize:
+            if isinstance(value, int):
+                dtype = np.dtype('i'+ str(self.typesize))
+            elif isinstance(value, float):
+                dtype = np.dtype('f' + str(self.typesize))
+            else:
+                raise ValueError("value size in bytes must match with typesize")
+            array = np.array([value], dtype=dtype)
+        cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
+        PyObject_GetBuffer(array, buf, PyBUF_SIMPLE)
+
+        nchunks = nitems // self.chunkshape
+        cdef blosc2_schunk *c_schunk = <blosc2_schunk *> self.c_schunk
+        cdef blosc2_cparams *cparams = self.schunk.storage.cparams
+        chunksize = BLOSC_EXTENDED_HEADER_LENGTH + self.typesize
+        cdef void *chunk = malloc(chunksize)
+        get_chunk_repeatval(dereference(cparams), self.chunksize, chunk, chunksize, buf)
+
+        for i in range(nchunks):
+            if blosc2_schunk_append_chunk(self.schunk, <uint8_t *>chunk, True) < 0:
+                free(chunk)
+                PyBuffer_Release(buf)
+                free(buf)
+                raise RuntimeError("Error while appending the chunk")
+
+        last_nitems = nitems % self.chunkshape
+        rc = 0
+        if last_nitems != 0:
+            get_chunk_repeatval(dereference(cparams), last_nitems * self.typesize, chunk, chunksize, buf)
+            rc = blosc2_schunk_append_chunk(self.schunk, <uint8_t *>chunk, True)
+        free(chunk)
+        PyBuffer_Release(buf)
+        free(buf)
+        if rc < 0:
+            raise RuntimeError("Error while appending the chunk")
+
+        return self.nchunks
 
     def decompress_chunk(self, nchunk, dst=None):
         cdef uint8_t *chunk
