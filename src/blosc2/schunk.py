@@ -406,7 +406,7 @@ class SChunk(blosc2_ext.SChunk):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().append_data(data)
 
-    def fill_special(self, nitems, special_value):
+    def fill_special(self, nitems, special_value, value=None):
         """Fill the SChunk with a special value.  SChunk must be empty.
 
         Parameters
@@ -415,6 +415,9 @@ class SChunk(blosc2_ext.SChunk):
             The number of items to fill with the special value.
         special_value: SpecialValue
             The special value to be used for filling the SChunk.
+        value: bytes, int, float or bool (optional)
+            The value to fill the SChunk. This parameter is only supported if
+            :paramref:`special_value` is ``blosc2.SpecialValue.VALUE``.
 
         Returns
         -------
@@ -427,9 +430,12 @@ class SChunk(blosc2_ext.SChunk):
             If the SChunk could not be filled with the special value.
 
         """
-        if not isinstance(special_value, SpecialValue):
-            raise TypeError("special_value must be a SpecialValue instance")
-        nchunks = super().fill_special(nitems, special_value.value)
+        if not isinstance(special_value, SpecialValue) or special_value == SpecialValue.NOT_SPECIAL:
+            raise TypeError("special_value must be a SpecialValue instance other than NOT_SPECIAL")
+        if special_value == SpecialValue.VALUE and value is None:
+            raise ValueError("value cannot be None when special_value is VALUE")
+
+        nchunks = super().fill_special(nitems, special_value.value, value)
         if nchunks < 0:
             raise RuntimeError("Unable to fill with special values")
         return nchunks
