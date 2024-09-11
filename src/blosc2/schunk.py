@@ -400,7 +400,7 @@ class SChunk(blosc2_ext.SChunk):
         >>> import numpy as np
         >>> schunk = blosc2.SChunk(chunksize=200*1000*4)
         >>> data = np.arange(200 * 1000, dtype='int32')
-        >>> print(schunk.append_data(data))
+        >>> schunk.append_data(data)
         1
         """
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
@@ -443,8 +443,8 @@ class SChunk(blosc2_ext.SChunk):
         >>> nchunks = schunk.fill_special(nitems, special_value)
         >>> print(f"Number of chunks filled: {nchunks}")
         Number of chunks filled: 1
-        >>> print(f"Number of chunks after fill_special: {len(schunk)}")
-        Number of chunks after fill_special: 200000
+        >>> print(f"Number of chunks after fill_special: {schunk.nchunks}")
+        Number of chunks after fill_special: 1
         """
         if not isinstance(special_value, SpecialValue) or special_value == SpecialValue.NOT_SPECIAL:
             raise TypeError("special_value must be a SpecialValue instance other than NOT_SPECIAL")
@@ -530,8 +530,8 @@ class SChunk(blosc2_ext.SChunk):
         >>> # Check the type and length of the compressed chunk
         >>> print(type(chunk))
         <class 'bytes'>
-        >>> print(len(chunk) > 0)
-        True
+        >>> print(len(chunk))
+        3742 # The compressed size is smaller than the chunk size (200*1000*4)
         """
         return super().get_chunk(nchunk)
 
@@ -602,7 +602,7 @@ class SChunk(blosc2_ext.SChunk):
         >>> schunk = blosc2.SChunk(chunksize=200*1000*4, data=data, cparams={"typesize": 4})
         >>> # Get a compressed chunk from the SChunk
         >>> chunk = schunk.get_chunk(0)
-        >>> # Insert the chunk at a different position (in this case, at index 1)
+        >>> # Insert a chunk in the second position (index 1)"
         >>> schunk.insert_chunk(1, chunk)
         >>> # Verify the total number of chunks after insertion
         >>> print(schunk.nchunks)
@@ -640,8 +640,7 @@ class SChunk(blosc2_ext.SChunk):
         >>> # Create an SChunk with 2 chunks
         >>> data = np.arange(400 * 1000, dtype=np.int32)
         >>> schunk = blosc2.SChunk(chunksize=200*1000*4, data=data, cparams={"typesize": 4})
-        >>> # New data; create a NumPy array containing 200,000 sequential integers, starting from 0 up to 199,999.
-        >>> # Each element in the array is of type int32.
+        >>> # Create a new array to insert into the second chunk of the SChunk
         >>> new_data = np.arange(200 * 1000, dtype=np.int32)
         >>> # Insert the new data at position 1, compressing it
         >>> schunk.insert_data(1, new_data, copy=True)
@@ -680,18 +679,16 @@ class SChunk(blosc2_ext.SChunk):
         >>> chunk_size = 200 * 1000 * 4
         >>> data = np.arange(nchunks * chunk_size // 4, dtype=np.int32)
         >>> schunk = blosc2.SChunk(chunksize=chunk_size, data=data, cparams={"typesize": 4})
-        >>> initial_nchunks = schunk.nchunks
-        >>> print(f"Initial number of chunks: {initial_nchunks}")
+        >>> print(f"Initial number of chunks: {schunk.nchunks}")
         Initial number of chunks: 5
-        >>> chunk_index = 1
-        >>> new_data = np.full(chunk_size // 4, fill_value=chunk_index, dtype=np.int32).tobytes()
-        >>> compressed_data = blosc2.compress(new_data, typesize=4)
+        >>> c_index = 1
+        >>> new_data = np.full(chunk_size // 4, fill_value=c_index, dtype=np.int32).tobytes()
+        >>> compressed_data = blosc2.compress2(new_data, typesize=4)
         >>> # Update the 2nd chunk (index 1) with new data
-        >>> nchunks = schunk.update_chunk(chunk_index, compressed_data)
+        >>> nchunks = schunk.update_chunk(c_index, compressed_data)
         >>> print(f"Number of chunks after update: {nchunks}")
         Number of chunks after update: 5
         """
-
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().update_chunk(nchunk, chunk)
 
@@ -725,14 +722,12 @@ class SChunk(blosc2_ext.SChunk):
         >>> chunk_size = 200 * 1000 * 4
         >>> data = np.arange(nchunks * chunk_size // 4, dtype=np.int32)
         >>> schunk = blosc2.SChunk(chunksize=chunk_size, data=data, cparams={"typesize": 4})
-        >>> initial_nchunks = schunk.nchunks
-        >>> print(f"Initial number of chunks: {initial_nchunks}")
+        >>> print(f"Initial number of chunks: {schunk.nchunks}")
         Initial number of chunks: 4
-        >>> chunk_index = 1 # Update the 2nd chunk (index 1)
-        >>> new_data = np.full(chunk_size // 4, fill_value=chunk_index, dtype=np.int32).tobytes()
-        >>> nchunks = schunk.update_data(chunk_index, new_data, copy=True)
-        >>> final_nchunks = schunk.nchunks
-        >>> print(f"Number of chunks after update: {final_nchunks}")
+        >>> c_index = 1 # Update the 2nd chunk (index 1)
+        >>> new_data = np.full(chunk_size // 4, fill_value=c_index, dtype=np.int32).tobytes()
+        >>> nchunks = schunk.update_data(c_index, new_data, copy=True)
+        >>> print(f"Number of chunks after update: {schunk.nchunks}")
         Number of chunks after update: 4
         """
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
@@ -791,16 +786,12 @@ class SChunk(blosc2_ext.SChunk):
         >>> slice_size = stop_index - start_index
         >>> out_buffer = bytearray(slice_size * 4)  # Ensure the buffer is large enough
         >>> result = schunk.get_slice(start=start_index, stop=stop_index, out=out_buffer)
-        >>> # Check if `result` is None and if the output buffer was filled
-        >>> if result is None:
-        >>>     print(f"Data slice obtained successfully. Length of slice: {len(out_buffer)}")
-        Data slice obtained successfully. Length of slice: 400000
-        >>>     # Convert bytearray to NumPy array for easier inspection
-        >>>     slice_array = np.frombuffer(out_buffer, dtype=np.int32)
-        >>>     print(f"Slice data: {slice_array[:10]} ...")  # Print the first 10 elements
+        >>> # Assert that the output buffer matches the expected slice from the original data
+        >>> assert out_buffer == data[start_index:stop_index].tobytes(), "Slice data does not match expected values."
+        >>> # Convert bytearray to NumPy array for easier inspection
+        >>> slice_array = np.frombuffer(out_buffer, dtype=np.int32)
+        >>> print(f"Slice data: {slice_array[:10]} ...")  # Print the first 10 elements
         Slice data: [100000 100001 100002 100003 100004 100005 100006 100007 100008 100009] ...
-        >>> else:
-        >>>     print("Data slice obtained successfully.")
         """
         return super().get_slice(start, stop, out)
 
@@ -839,13 +830,15 @@ class SChunk(blosc2_ext.SChunk):
         >>> chunk_size = 200 * 1000 * 4
         >>> data = np.arange(nchunks * chunk_size // 4, dtype=np.int32)
         >>> schunk = blosc2.SChunk(chunksize=chunk_size, data=data, cparams={"typesize": 4})
-        >>> # Define a slice of the data array that we want to compare with the result from SChunk
+        >>> # Define a slice of the original data array to compare with the result from __getitem__
         >>> sl = data[150:155]
-        >>> # Use the get_slice method of SChunk to get the data from the same slice range
-        >>> res = schunk.get_slice(150, 155)
-        >>> # Check if the retrieved slice from SChunk matches the original slice
-        >>> # Convert the original slice to bytes and compare with the result from SChunk
-        >>> assert res == sl.tobytes()
+        >>> # Use __getitem__ to retrieve the same slice of data from the SChunk
+        >>> res = schunk[150:155]
+        >>> # Compare the result of __getitem__ with the original slice converted to bytes
+        >>> assert res == sl.tobytes(), "The result from __getitem__ does not match the original data."
+        >>> # Display the first few elements of the retrieved slice
+        >>> print(f"Slice data: {np.frombuffer(res, dtype=np.int32)}")
+        Slice data: [150 151 152 153 154]
         """
         if isinstance(item, int):
             if item == -1:
@@ -900,10 +893,12 @@ class SChunk(blosc2_ext.SChunk):
         >>> start_ = 1000
         >>> stop = 2000
         >>> new_values = np.arange(start_, stop, dtype=np.int32) * 2
-        >>> schunk.__setitem__(slice(start_, stop), new_values)
-        >>> sl = schunk[start_:stop]
-        >>> res = schunk.get_slice(start_, stop)
-        >>> assert res == sl
+        >>> # Use __setitem__ by the slicing syntax to update the chunk
+        >>> schunk[start_:stop] = new_values
+        >>> # Retrieve the updated slice using the slicing syntax
+        >>> retrieved_slice = np.frombuffer(schunk[start_:stop], dtype=np.int32)
+        >>> # Compare the retrieved slice with the new values to ensure they match
+        >>> assert np.array_equal(retrieved_slice, new_values), "The updated slice does not match the new values."
         >>> print("The slice comparison is successful!")
         The slice comparison is successful!
         """
@@ -1134,6 +1129,10 @@ class SChunk(blosc2_ext.SChunk):
         >>> print("Data slice with postfilter applied (first 8 elements):", out[:8])
         Data slice with postfilter applied (first 8 elements): [ 0  2  4  6  8 10 12 14]
         >>> schunk.remove_postfilter('postfilter')
+        >>> retrieved_data = np.empty(data.size, dtype=dtype)
+        >>> schunk.get_slice(out=retrieved_data)
+        >>> # Compare the retrieved data to the original data
+        >>> assert np.array_equal(retrieved_data, data), "The data without postfilter does not match the original data."
         >>> print("Original data (first 8 elements):", data[:8])
         Original data (first 8 elements): [0 1 2 3 4 5 6 7]
         """
@@ -1303,6 +1302,7 @@ class SChunk(blosc2_ext.SChunk):
         >>> chunk_size = 20_000 * dtype.itemsize
         >>> cparams = {"typesize": dtype.itemsize, "nthreads": 1}
         >>> data = np.arange(1000, dtype=np.int32)
+        >>> output_dtype = np.float32
         >>> schunk = blosc2.SChunk(chunksize=chunk_size, cparams=cparams)
         >>> # Define the prefilter function
         >>> @schunk.prefilter(input_dtype, output_dtype)
@@ -1310,16 +1310,22 @@ class SChunk(blosc2_ext.SChunk):
         >>>     output[:] = input - np.pi
         >>> schunk[:1000] = data
         >>> # Retrieve compressed data with prefilter applied
-        >>> compressed_data_with_filter = schunk[0:5]
+        >>> compressed_data_with_filter = schunk.get_slice()
         >>> # Convert the bytes to NumPy array for comparison
         >>> compressed_array_with_filter = np.frombuffer(compressed_data_with_filter, dtype=output_dtype)
-        >>> print("Compressed data with prefilter applied:", compressed_array_with_filter)
-        Compressed data with prefilter applied: [-3.1415927  -2.1415927  -1.1415927  -0.14159274  0.85840726]
+        >>> print("Compressed data with prefilter applied (first 8 elements):", compressed_array_with_filter[:8])
+        Compressed data with prefilter applied (first 8 elements): [-3.1415927  -2.1415927  -1.1415926  -0.14159265  0.8584073   1.8584074
+         2.8584073   3.8584073 ]
         >>> schunk.remove_prefilter('prefilter')
         >>> schunk[:1000] = data
-        >>> compressed_data_without_filter = schunk[0:5]
-        >>> compressed_array_without_filter = np.frombuffer(schunk[0:5], dtype=output_dtype)
-        >>> print("Compressed data without prefilter:", compressed_array_without_filter)
+        >>> compressed_data_without_filter = schunk.get_slice()
+        >>> compressed_array_without_filter = np.frombuffer(compressed_data_without_filter, dtype=output_dtype)
+        >>> print("Compressed data without prefilter (first 8 elements):", compressed_array_without_filter[:8])
+        Compressed data without prefilter (first 8 elements): [0. 1. 2. 3. 4. 5. 6. 7.]
+        >>> # Compare the decompressed data to the original data
+        >>> assert np.array_equal(compressed_array_without_filter, data), "The data without prefilter does not match the original data."
+        >>> print("The slice comparison is successful!")
+        The slice comparison is successful!
         """
         return super().remove_prefilter(func_name)
 
