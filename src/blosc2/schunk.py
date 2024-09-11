@@ -400,7 +400,7 @@ class SChunk(blosc2_ext.SChunk):
         >>> import numpy as np
         >>> schunk = blosc2.SChunk(chunksize=200*1000*4)
         >>> data = np.arange(200 * 1000, dtype='int32')
-        >>> schunk.append_data(data)
+        >>> print(schunk.append_data(data))
         1
         """
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
@@ -429,6 +429,22 @@ class SChunk(blosc2_ext.SChunk):
         RunTimeError
             If the SChunk could not be filled with the special value.
 
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> schunk = blosc2.SChunk(chunksize=200*1000*4)
+        >>> # Fill the SChunk with the special value
+        >>> nitems = 200 * 1000
+        >>> print(f"Initial number of chunks: {len(schunk)}")
+        Initial number of chunks: 0
+        >>> special_value = blosc2.SpecialValue.ZERO
+        >>> # Fill the SChunk with the special value
+        >>> nchunks = schunk.fill_special(nitems, special_value)
+        >>> print(f"Number of chunks filled: {nchunks}")
+        Number of chunks filled: 1
+        >>> print(f"Number of chunks after fill_special: {len(schunk)}")
+        Number of chunks after fill_special: 200000
         """
         if not isinstance(special_value, SpecialValue) or special_value == SpecialValue.NOT_SPECIAL:
             raise TypeError("special_value must be a SpecialValue instance other than NOT_SPECIAL")
@@ -469,17 +485,16 @@ class SChunk(blosc2_ext.SChunk):
         Examples
         --------
         >>> import blosc2
-        >>> cparams = {'typesize': 1}
-        >>> storage = {'cparams': cparams}
-        >>> schunk = blosc2.SChunk(chunksize=11, **storage)
+        >>> schunk = blosc2.SChunk(chunksize=11, cparams = {'typesize': 1})
         >>> buffer = b"wermqeoir23"
-        >>> schunk.append_data(buffer)
+        >>> print(schunk.append_data(buffer))
         1
-        >>> schunk.decompress_chunk(0)
+        >>> print(schunk.decompress_chunk(0))
         b'wermqeoir23'
+        >>> # Construct a mutable bytearray object
         >>> bytes_obj = bytearray(len(buffer))
         >>> schunk.decompress_chunk(0, dst=bytes_obj)
-        >>> bytes_obj == buffer
+        >>> print(bytes_obj == buffer)
         True
         """
         return super().decompress_chunk(nchunk, dst)
@@ -501,6 +516,22 @@ class SChunk(blosc2_ext.SChunk):
         ------
         RunTimeError
             If some problem is detected.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> # Create an SChunk with 3 chunks
+        >>> nchunks = 3
+        >>> data = np.arange(200 * 1000 * nchunks, dtype=np.int32)
+        >>> schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, data=data, cparams={"typesize": 4})
+        >>> # Retrieve the first chunk (index 0)
+        >>> chunk = schunk.get_chunk(0)
+        >>> # Check the type and length of the compressed chunk
+        >>> print(type(chunk))
+        <class 'bytes'>
+        >>> print(len(chunk) > 0)
+        True
         """
         return super().get_chunk(nchunk)
 
@@ -521,6 +552,23 @@ class SChunk(blosc2_ext.SChunk):
         ------
         RunTimeError
             If some problem was detected.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> # Create an SChunk with 3 chunks
+        >>> nchunks = 3
+        >>> data = np.arange(200 * 1000 * nchunks, dtype=np.int32)
+        >>> schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, data=data, cparams={"typesize": 4})
+        >>> # Check the number of chunks before deletion
+        >>> print(schunk.nchunks)
+        3
+        >>>  # Delete the second chunk (index 1)
+        >>> schunk.delete_chunk(1)
+        >>>  # Check the number of chunks after deletion
+        >>> print(schunk.nchunks)
+        2
         """
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().delete_chunk(nchunk)
@@ -544,6 +592,21 @@ class SChunk(blosc2_ext.SChunk):
         ------
         RunTimeError
             If some problem was detected.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> # Create an SChunk with 2 chunks
+        >>> data = np.arange(400 * 1000, dtype=np.int32)
+        >>> schunk = blosc2.SChunk(chunksize=200*1000*4, data=data, cparams={"typesize": 4})
+        >>> # Get a compressed chunk from the SChunk
+        >>> chunk = schunk.get_chunk(0)
+        >>> # Insert the chunk at a different position (in this case, at index 1)
+        >>> schunk.insert_chunk(1, chunk)
+        >>> # Verify the total number of chunks after insertion
+        >>> print(schunk.nchunks)
+        3
         """
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().insert_chunk(nchunk, chunk)
@@ -569,6 +632,22 @@ class SChunk(blosc2_ext.SChunk):
         ------
         RunTimeError
             If some problem was detected.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> # Create an SChunk with 2 chunks
+        >>> data = np.arange(400 * 1000, dtype=np.int32)
+        >>> schunk = blosc2.SChunk(chunksize=200*1000*4, data=data, cparams={"typesize": 4})
+        >>> # New data; create a NumPy array containing 200,000 sequential integers, starting from 0 up to 199,999.
+        >>> # Each element in the array is of type int32.
+        >>> new_data = np.arange(200 * 1000, dtype=np.int32)
+        >>> # Insert the new data at position 1, compressing it
+        >>> schunk.insert_data(1, new_data, copy=True)
+        >>> # Verify the total number of chunks after insertion
+        >>> print(schunk.nchunks)
+        3
         """
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().insert_data(nchunk, data, copy)
@@ -592,7 +671,27 @@ class SChunk(blosc2_ext.SChunk):
         ------
         RunTimeError
             If some problem was detected.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> nchunks = 5
+        >>> chunk_size = 200 * 1000 * 4
+        >>> data = np.arange(nchunks * chunk_size // 4, dtype=np.int32)
+        >>> schunk = blosc2.SChunk(chunksize=chunk_size, data=data, cparams={"typesize": 4})
+        >>> initial_nchunks = schunk.nchunks
+        >>> print(f"Initial number of chunks: {initial_nchunks}")
+        Initial number of chunks: 5
+        >>> chunk_index = 1
+        >>> new_data = np.full(chunk_size // 4, fill_value=chunk_index, dtype=np.int32).tobytes()
+        >>> compressed_data = blosc2.compress(new_data, typesize=4)
+        >>> # Update the 2nd chunk (index 1) with new data
+        >>> nchunks = schunk.update_chunk(chunk_index, compressed_data)
+        >>> print(f"Number of chunks after update: {nchunks}")
+        Number of chunks after update: 5
         """
+
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().update_chunk(nchunk, chunk)
 
@@ -617,6 +716,24 @@ class SChunk(blosc2_ext.SChunk):
         ------
         RunTimeError
             If some problem was detected.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> nchunks = 4
+        >>> chunk_size = 200 * 1000 * 4
+        >>> data = np.arange(nchunks * chunk_size // 4, dtype=np.int32)
+        >>> schunk = blosc2.SChunk(chunksize=chunk_size, data=data, cparams={"typesize": 4})
+        >>> initial_nchunks = schunk.nchunks
+        >>> print(f"Initial number of chunks: {initial_nchunks}")
+        Initial number of chunks: 4
+        >>> chunk_index = 1 # Update the 2nd chunk (index 1)
+        >>> new_data = np.full(chunk_size // 4, fill_value=chunk_index, dtype=np.int32).tobytes()
+        >>> nchunks = schunk.update_data(chunk_index, new_data, copy=True)
+        >>> final_nchunks = schunk.nchunks
+        >>> print(f"Number of chunks after update: {final_nchunks}")
+        Number of chunks after update: 4
         """
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().update_data(nchunk, data, copy)
@@ -659,6 +776,31 @@ class SChunk(blosc2_ext.SChunk):
         --------
         :func:`__getitem__`
 
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> nchunks = 4
+        >>> chunk_size = 200 * 1000 * 4
+        >>> data = np.arange(nchunks * chunk_size // 4, dtype=np.int32)
+        >>> schunk = blosc2.SChunk(chunksize=chunk_size, data=data, cparams={"typesize": 4})
+        >>> # Define the slice parameters
+        >>> start_index = 200 * 1000
+        >>> stop_index = 2 * 200 * 1000
+        >>> # Prepare an output buffer
+        >>> slice_size = stop_index - start_index
+        >>> out_buffer = bytearray(slice_size * 4)  # Ensure the buffer is large enough
+        >>> result = schunk.get_slice(start=start_index, stop=stop_index, out=out_buffer)
+        >>> # Check if `result` is None and if the output buffer was filled
+        >>> if result is None:
+        >>>     print(f"Data slice obtained successfully. Length of slice: {len(out_buffer)}")
+        Data slice obtained successfully. Length of slice: 400000
+        >>>     # Convert bytearray to NumPy array for easier inspection
+        >>>     slice_array = np.frombuffer(out_buffer, dtype=np.int32)
+        >>>     print(f"Slice data: {slice_array[:10]} ...")  # Print the first 10 elements
+        Slice data: [100000 100001 100002 100003 100004 100005 100006 100007 100008 100009] ...
+        >>> else:
+        >>>     print("Data slice obtained successfully.")
         """
         return super().get_slice(start, stop, out)
 
@@ -689,6 +831,21 @@ class SChunk(blosc2_ext.SChunk):
         --------
         :func:`get_slice`
 
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> nchunks = 4
+        >>> chunk_size = 200 * 1000 * 4
+        >>> data = np.arange(nchunks * chunk_size // 4, dtype=np.int32)
+        >>> schunk = blosc2.SChunk(chunksize=chunk_size, data=data, cparams={"typesize": 4})
+        >>> # Define a slice of the data array that we want to compare with the result from SChunk
+        >>> sl = data[150:155]
+        >>> # Use the get_slice method of SChunk to get the data from the same slice range
+        >>> res = schunk.get_slice(150, 155)
+        >>> # Check if the retrieved slice from SChunk matches the original slice
+        >>> # Convert the original slice to bytes and compare with the result from SChunk
+        >>> assert res == sl.tobytes()
         """
         if isinstance(item, int):
             if item == -1:
@@ -731,6 +888,24 @@ class SChunk(blosc2_ext.SChunk):
         This method can also be used to append new data if :paramref:`key`.stop
         is greater than the SChunk nitems.
 
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> nchunks = 4
+        >>> chunk_size = 200 * 1000 * 4
+        >>> data = np.arange(nchunks * chunk_size // 4, dtype=np.int32)
+        >>> schunk = blosc2.SChunk(chunksize=chunk_size, data=data, cparams={"typesize": 4})
+        >>> # Create a new array of values to update the slice (values from 1000 to 1999 multiplied by 2)
+        >>> start_ = 1000
+        >>> stop = 2000
+        >>> new_values = np.arange(start_, stop, dtype=np.int32) * 2
+        >>> schunk.__setitem__(slice(start_, stop), new_values)
+        >>> sl = schunk[start_:stop]
+        >>> res = schunk.get_slice(start_, stop)
+        >>> assert res == sl
+        >>> print("The slice comparison is successful!")
+        The slice comparison is successful!
         """
         if key.step is not None and key.step != 1:
             raise IndexError("`step` must be 1")
@@ -749,6 +924,26 @@ class SChunk(blosc2_ext.SChunk):
         --------
         :func:`~blosc2.schunk_from_cframe`
 
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> nchunks = 4
+        >>> chunk_size = 200 * 1000 * 4
+        >>> data = np.arange(nchunks * chunk_size // 4, dtype=np.int32)
+        >>> schunk = blosc2.SChunk(chunksize=chunk_size, data=data, cparams={"typesize": 4})
+        >>> # Serialize the SChunk instance to a bytes object
+        >>> serialized_schunk = schunk.to_cframe()
+        >>> print(f"Serialized SChunk length: {len(serialized_schunk)} bytes")
+        Serialized SChunk length: 15545 bytes
+        >>> # Create a new SChunk from the serialized data
+        >>> deserialized_schunk = blosc2.schunk_from_cframe(serialized_schunk)
+        >>> # Print a slice of the deserialized SChunk to verify
+        >>> start = 1000
+        >>> stop = 1005
+        >>> sl = deserialized_schunk[start:stop]
+        >>> res = schunk.get_slice(start, stop)
+        >>> assert res == sl
         """
         return super().to_cframe()
 
@@ -766,6 +961,22 @@ class SChunk(blosc2_ext.SChunk):
         chunk: NumPy ndarray
            The decompressed chunk.
 
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> # Create sample data and an SChunk
+        >>> nchunks = 2     # Total data for 2 chunks
+        >>> data = np.arange(400 * 1000, dtype=np.int32)
+        >>> schunk = blosc2.SChunk(chunksize=200*1000*4, data=data, cparams={"typesize": 4})
+        >>> # Iterate over chunks using the iterchunks method
+        >>> for chunk in schunk.iterchunks(dtype=np.int32):
+        >>>     print("Chunk shape:", chunk.shape)
+        >>>     print("First 5 elements of chunk:", chunk[:5])
+        Chunk shape: (200000,)
+        First 5 elements of chunk: [0 1 2 3 4]
+        Chunk shape: (200000,)
+        First 5 elements of chunk: [200000 200001 200002 200003 200004]
         """
         out = np.empty(self.chunkshape, dtype)
         for i in range(0, len(self), self.chunkshape):
@@ -791,6 +1002,29 @@ class SChunk(blosc2_ext.SChunk):
                     The repeated value for the chunk; if not SpecialValue.VALUE, it is None.
                 lazychunk: bytes
                     A buffer with the complete lazy chunk.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> # Create sample data and an SChunk
+        >>> data = np.arange(400 * 1000, dtype=np.int32)
+        >>> nchunks = 2 # Total data for 2 chunks
+        >>> schunk = blosc2.SChunk(chunksize=200*1000*4, data=data, cparams={"typesize": 4})
+        >>> # Iterate over chunks and print detailed information
+        >>> for chunk_info in schunk.iterchunks_info():
+        >>>     print(f"Chunk index: {chunk_info.nchunk}")
+        >>>     print(f"Compression ratio: {chunk_info.cratio:.2f}")
+        >>>     print(f"Special value: {chunk_info.special.name}")
+        >>>     print(f"Repeated value: {chunk_info.repeated_value[:10] if chunk_info.repeated_value else None}")
+        Chunk index: 0
+        Compression ratio: 213.79
+        Special value: NOT_SPECIAL
+        Repeated value: None
+        Chunk index: 1
+        Compression ratio: 206.88
+        Special value: NOT_SPECIAL
+        Repeated value: None
         """
         ChunkInfo = namedtuple("ChunkInfo", ["nchunk", "cratio", "special", "repeated_value", "lazychunk"])
         for nchunk in range(self.nchunks):
@@ -882,6 +1116,26 @@ class SChunk(blosc2_ext.SChunk):
         -------
         out: None
 
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> dtype = np.dtype(np.int32)
+        >>> chunk_size = 20_000 * input_dtype.itemsize
+        >>> storage = {"cparams": {"typesize": input_dtype.itemsize}, "dparams": {"nthreads": 1}}
+        >>> data = np.arange(500, dtype=np.int32)
+        >>> schunk = blosc2.SChunk(chunksize=chunk_size, data=data, **storage)
+        >>> # Define the postfilter function
+        >>> @schunk.postfilter(input_dtype)
+        >>> def postfilter(input, output, offset):
+        >>>     output[:] = input + offset + np.arange(input.size)
+        >>> out = np.empty(data.size, dtype=dtype)
+        >>> schunk.get_slice(out=out)
+        >>> print("Data slice with postfilter applied (first 8 elements):", out[:8])
+        Data slice with postfilter applied (first 8 elements): [ 0  2  4  6  8 10 12 14]
+        >>> schunk.remove_postfilter('postfilter')
+        >>> print("Original data (first 8 elements):", data[:8])
+        Original data (first 8 elements): [0 1 2 3 4 5 6 7]
         """
         return super().remove_postfilter(func_name)
 
@@ -1041,6 +1295,31 @@ class SChunk(blosc2_ext.SChunk):
         -------
         out: None
 
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> dtype = np.dtype(np.int32)
+        >>> chunk_size = 20_000 * dtype.itemsize
+        >>> cparams = {"typesize": dtype.itemsize, "nthreads": 1}
+        >>> data = np.arange(1000, dtype=np.int32)
+        >>> schunk = blosc2.SChunk(chunksize=chunk_size, cparams=cparams)
+        >>> # Define the prefilter function
+        >>> @schunk.prefilter(input_dtype, output_dtype)
+        >>> def prefilter(input, output, offset):
+        >>>     output[:] = input - np.pi
+        >>> schunk[:1000] = data
+        >>> # Retrieve compressed data with prefilter applied
+        >>> compressed_data_with_filter = schunk[0:5]
+        >>> # Convert the bytes to NumPy array for comparison
+        >>> compressed_array_with_filter = np.frombuffer(compressed_data_with_filter, dtype=output_dtype)
+        >>> print("Compressed data with prefilter applied:", compressed_array_with_filter)
+        Compressed data with prefilter applied: [-3.1415927  -2.1415927  -1.1415927  -0.14159274  0.85840726]
+        >>> schunk.remove_prefilter('prefilter')
+        >>> schunk[:1000] = data
+        >>> compressed_data_without_filter = schunk[0:5]
+        >>> compressed_array_without_filter = np.frombuffer(schunk[0:5], dtype=output_dtype)
+        >>> print("Compressed data without prefilter:", compressed_array_without_filter)
         """
         return super().remove_prefilter(func_name)
 
