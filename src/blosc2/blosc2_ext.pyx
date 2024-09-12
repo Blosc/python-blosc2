@@ -1450,7 +1450,7 @@ cdef class SChunk:
         if start > nitems:
             raise ValueError("`start` cannot be greater than the SChunk nitems")
 
-        cdef int nbytes = (stop - start) * self.schunk.typesize
+        cdef int64_t nbytes = (stop - start) * self.schunk.typesize
 
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(value, buf, PyBUF_SIMPLE)
