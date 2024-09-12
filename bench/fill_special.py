@@ -14,9 +14,9 @@ import numpy as np
 import blosc2
 
 # Dimensions, type and persistence properties for the arrays
-nelem = 2_000_000_000
+nelem = 1_00_000_000
 dtype = np.dtype(np.float64)
-print(f"Filling a SChunk with {nelem / 1e9} Gelements of {dtype=}")
+print(f"Filling a SChunk with {nelem / 1e6} Melements of {dtype=}")
 
 persistent = bool(sys.argv[1]) if len(sys.argv) > 1 else False
 if persistent:
