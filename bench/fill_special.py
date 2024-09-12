@@ -14,47 +14,39 @@ import numpy as np
 import blosc2
 
 # Dimensions, type and persistence properties for the arrays
-shape = 1_000 * 1_000
-chunksize = 10_000
-blocksize = 1_000
+nelem = 2_000_000_000
+dtype = np.dtype(np.float64)
+print(f"Filling a SChunk with {nelem / 1e9} Gelements of {dtype=}")
 
-dtype = np.float64
-
-nchunks = shape // chunksize
-# Set the compression and decompression parameters
-cparams = {"codec": blosc2.Codec.BLOSCLZ, "typesize": 8, "blocksize": blocksize * 8}
-dparams = {}
-contiguous = True
 persistent = bool(sys.argv[1]) if len(sys.argv) > 1 else False
-
 if persistent:
     urlpath = "bench_fill_special.b2frame"
+    print(f"Writing output to {urlpath}...")
 else:
     urlpath = None
 
 
 def create_schunk(data=None):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     blosc2.remove_urlpath(urlpath)
     # Create the empty SChunk
-    return blosc2.SChunk(chunksize=chunksize * cparams["typesize"], data=data, **storage)
+    return blosc2.SChunk(data=data, urlpath=urlpath, cparams={"typesize": dtype.itemsize})
 
 t0 = time()
-schunk = create_schunk(data=np.full(shape, np.pi, dtype))
-t1 = time()
-print("Time for filling the schunk with `data` argument in the constructor: {:.3f}s".format(t1 - t0))
-
-schunk = create_schunk()
-t0 = time()
-schunk.fill_special(shape, blosc2.SpecialValue.UNINIT)
-schunk[:] = np.full(shape, np.pi, dtype)
-t1 = time()
-print("Time for filling the schunk without passing directly the value: {:.3f}s".format(t1 - t0))
+schunk = create_schunk(data=np.full(nelem, np.pi, dtype))
+t = (time() - t0) * 1000.
+print(f"Time with `data` argument in constructor: {t:19.3f} ms")
 
 schunk = create_schunk()
 t0 = time()
-schunk.fill_special(shape, blosc2.SpecialValue.VALUE, np.pi)
-t1 = time()
-print("Time for filling the schunk passing directly the value to `fill_special`: {:.3f}s".format(t1 - t0))
+schunk.fill_special(nelem, blosc2.SpecialValue.UNINIT)
+schunk[:] = np.full(nelem, np.pi, dtype)
+t = (time() - t0) * 1000.
+print(f"Time without passing directly the value: {t:20.3f} ms")
+
+schunk = create_schunk()
+t0 = time()
+schunk.fill_special(nelem, blosc2.SpecialValue.VALUE, np.pi)
+t = (time() - t0) * 1000.
+print(f"Time passing directly the value to `fill_special`: {t:10.3f} ms")
 
 blosc2.remove_urlpath(urlpath)
