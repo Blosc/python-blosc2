@@ -1058,13 +1058,6 @@ cdef class SChunk:
     @property
     def blocksize(self):
         """The block size (in bytes).
-
-        Examples
-        --------
-        >>> import blosc2
-        >>> schunk = blosc2.SChunk(cparams={'blocksize': 100})
-        >>> print(schunk.blocksize)
-        100
         """
         return self.schunk.blocksize
 
