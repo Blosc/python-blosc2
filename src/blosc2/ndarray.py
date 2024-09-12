@@ -148,7 +148,9 @@ def _check_allowed_dtypes(
         )
 
 
-def sum(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdims=False, **kwargs):
+def sum(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
+        dtype: np.dtype = None, keepdims: bool = False, **kwargs: dict
+        ) -> np.ndarray | NDArray | int | float | complex | bool:
     """
     Return the sum of array elements over a given axis.
 
@@ -199,7 +201,9 @@ def sum(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdi
     return ndarr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
 
-def mean(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdims=False, **kwargs):
+def mean(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
+         dtype: np.dtype = None, keepdims: bool = False, **kwargs: dict
+         ) -> np.ndarray | NDArray | int | float | complex | bool:
     """
     Return the arithmetic mean along the specified axis.
 
@@ -244,7 +248,9 @@ def mean(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepd
     return ndarr.mean(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
 
-def std(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
+def std(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
+        dtype: np.dtype = None, ddof: int = 0, keepdims: bool = False, **kwargs: dict
+        ) -> np.ndarray | NDArray | int | float | bool:
     """
     Return the standard deviation along the specified axis.
 
@@ -260,7 +266,7 @@ def std(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
         default is float32; for floating point inputs, it is the same as the input dtype.
     ddof: int, optional
         Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
-        where N represents the number of elements. By default ddof is zero.
+        where N represents the number of elements. By default, ddof is zero.
     keepdims: bool, optional
         If this is set to True, the axes which are reduced are left in the result as
         dimensions with size one. With this option, the result will broadcast correctly
@@ -296,7 +302,9 @@ def std(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
     return ndarr.std(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
 
 
-def var(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0, keepdims=False, **kwargs):
+def var(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
+        dtype: np.dtype = None, ddof: int = 0, keepdims: bool = False, **kwargs: dict
+        ) -> np.ndarray | NDArray | int | float | bool:
     """
     Return the variance along the specified axis.
 
@@ -312,7 +320,7 @@ def var(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
         float32; for floating point inputs, it is the same as the input dtype.
     ddof: int, optional
         Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
-        where N represents the number of elements. By default ddof is zero.
+        where N represents the number of elements. By default, ddof is zero.
     keepdims: bool, optional
         If this is set to True, the axes which are reduced are left in the result as
         dimensions with size one. With this option, the result will broadcast correctly
@@ -349,7 +357,9 @@ def var(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, ddof=0
     return ndarr.var(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
 
 
-def prod(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepdims=False, **kwargs):
+def prod(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
+        dtype: np.dtype = None, keepdims: bool = False, **kwargs: dict
+         ) -> np.ndarray | NDArray | int | float | complex | bool:
     """
     Return the product of array elements over a given axis.
 
@@ -363,8 +373,9 @@ def prod(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepd
         it counts from the last to the first axis.
     dtype: np.dtype, optional
         The type of the returned array and of the accumulator in which the
-        elements are multiplied. The dtype of a is used by default unless a has
-        an integer dtype of less precision than the default platform integer.
+        elements are multiplied. The dtype of :paramref:`ndarr` is used by default unless
+        :paramref:`ndarr` has an integer dtype of less precision than the
+        default platform integer.
     keepdims: bool, optional
         If this is set to True, the axes which are reduced are left in the result
         as dimensions with size one. With this option, the result will broadcast
@@ -400,7 +411,9 @@ def prod(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, dtype=None, keepd
     return ndarr.prod(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
 
-def min(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
+def min(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
+        keepdims: bool = False, **kwargs: dict
+        ) -> np.ndarray | NDArray | int | float | complex | bool:
     """
     Return the minimum along a given axis.
 
@@ -414,6 +427,8 @@ def min(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
         If this is set to True, the axes which are reduced are left in the result as
         dimensions with size one. With this option, the result will broadcast correctly
         against the input array.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
@@ -441,7 +456,9 @@ def min(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
     return ndarr.min(axis=axis, keepdims=keepdims, **kwargs)
 
 
-def max(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
+def max(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
+        keepdims: bool = False, **kwargs: dict
+        ) -> np.ndarray | NDArray | int | float | complex | bool:
     """
     Return the maximum along a given axis.
 
@@ -455,6 +472,8 @@ def max(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
         If this is set to True, the axes which are reduced are left in the result as
         dimensions with size one. With this option, the result will broadcast correctly
         against the input array.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
@@ -488,7 +507,9 @@ def max(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
     return ndarr.max(axis=axis, keepdims=keepdims, **kwargs)
 
 
-def any(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
+def any(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
+        keepdims: bool = False, **kwargs: dict
+        ) -> np.ndarray | NDArray | bool:
     """
     Test whether any array element along a given axis evaluates to True.
 
@@ -502,6 +523,8 @@ def any(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
         If this is set to True, the axes which are reduced are left in the result as
         dimensions with size one. With this option, the result will broadcast correctly
         against the input array.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
@@ -533,7 +556,9 @@ def any(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
     return ndarr.any(axis=axis, keepdims=keepdims, **kwargs)
 
 
-def all(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **kwargs):
+def all(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
+        keepdims: bool = False, **kwargs: dict
+        ) -> np.ndarray | NDArray | bool:
     """
     Test whether all array elements along a given axis evaluate to True.
 
@@ -547,6 +572,8 @@ def all(ndarr: NDArray | NDField | blosc2.C2Array, axis=None, keepdims=False, **
         If this is set to True, the axes which are reduced are left in the result as
         dimensions with size one. With this option, the result will broadcast correctly
         against the input array.
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
@@ -856,7 +883,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return self._schunk.blocksize
 
-    def __getitem__(self, key: int | slice | Sequence[slice] | blosc2.LazyExpr | str) -> np.ndarray:
+    def __getitem__(self, key: int | slice | Sequence[slice] | blosc2.LazyExpr) -> np.ndarray | blosc2.LazyExpr:
         """Get a (multidimensional) slice as specified in key.
 
         Parameters
@@ -930,7 +957,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return nparr
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: int | slice | Sequence[slice], value: object):
         """Set a slice.
 
         Parameters
@@ -980,18 +1007,18 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return super().set_slice(key, value)
 
-    def get_chunk(self, nchunk):
+    def get_chunk(self, nchunk: int) -> bytes:
         """Shortcut to :meth:`SChunk.get_chunk <blosc2.schunk.SChunk.get_chunk>`. This can be accessed
         through the :attr:`schunk` attribute as well.
 
         Parameters
         ----------
-        nchunk : int
-        The index of the chunk to retrieve.
+        nchunk: int
+            The index of the chunk to retrieve.
 
         Returns
         -------
-        chunk : bytes
+        chunk: bytes
             The chunk data at the specified index.
 
         See Also
@@ -1044,7 +1071,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Examples
         --------
         >>> import blosc2
-        >>> a = blosc2.full(shape=(1000,) * 3, fill_value=9, chunks=(500,) * 3, dtype="f4")
+        >>> a = blosc2.full(shape=(1000, ) * 3, fill_value=9, chunks=(500, ) * 3, dtype="f4")
         >>> for info in a.iterchunks_info():
         ...     print(info.coords)
         (0, 0, 0)
@@ -1068,7 +1095,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             yield ChunkInfoNDArray(nchunk, coords, cratio, special, repeated_value, lazychunk)
 
 
-    def tobytes(self):
+    def tobytes(self) -> bytes:
         """Returns a buffer with the data contents.
 
         Returns
@@ -1090,7 +1117,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return super().tobytes()
 
-    def to_cframe(self):
+    def to_cframe(self) -> bytes:
         """Get a bytes object containing the serialized :ref:`NDArray` instance.
 
         Returns
@@ -1117,7 +1144,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return super().to_cframe()
 
-    def copy(self, dtype=None, **kwargs):
+    def copy(self, dtype: np.dtype = None, **kwargs: dict):
         """Create a copy of an array with same parameters.
 
         Parameters
@@ -1167,7 +1194,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return super().copy(dtype, **kwargs)
 
-    def resize(self, newshape):
+    def resize(self, newshape: tuple | list):
         """Change the shape of the array by growing or shrinking one or more dimensions.
 
         Parameters
@@ -1199,7 +1226,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
         return super().resize(newshape)
 
-    def slice(self, key, **kwargs):
+    def slice(self, key: int | slice | Sequence[slice], **kwargs: dict) -> NDArray:
         """Get a (multidimensional) slice as a new :ref:`NDArray`.
 
         Parameters
@@ -1272,7 +1299,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         super().squeeze()
 
 
-def sin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def sin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Trigonometric sine, element-wise.
 
@@ -1307,7 +1334,7 @@ def sin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "sin", None))
 
 
-def cos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def cos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Trigonometric cosine, element-wise.
 
@@ -1342,7 +1369,7 @@ def cos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "cos", None))
 
 
-def tan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def tan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Trigonometric tangent, element-wise.
 
@@ -1377,7 +1404,7 @@ def tan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "tan", None))
 
 
-def sqrt(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def sqrt(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Return the non-negative square-root of an array, element-wise.
 
@@ -1411,7 +1438,7 @@ def sqrt(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "sqrt", None))
 
 
-def sinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def sinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Hyperbolic sine, element-wise.
 
@@ -1445,14 +1472,14 @@ def sinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "sinh", None))
 
 
-def cosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def cosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Hyperbolic cosine, element-wise.
 
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-            The input array.
+        The input array.
 
     Returns
     -------
@@ -1479,7 +1506,7 @@ def cosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "cosh", None))
 
 
-def tanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def tanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Hyperbolic tangent, element-wise.
 
@@ -1513,14 +1540,14 @@ def tanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "tanh", None))
 
 
-def arcsin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def arcsin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Inverse sine, element-wise.
 
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-            The input array.
+        The input array.
 
     Returns
     -------
@@ -1547,14 +1574,14 @@ def arcsin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "arcsin", None))
 
 
-def arccos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def arccos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Trigonometric inverse cosine, element-wise.
 
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-            The input array.
+        The input array.
 
     Returns
     -------
@@ -1581,14 +1608,14 @@ def arccos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "arccos", None))
 
 
-def arctan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def arctan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Trigonometric inverse tangent, element-wise.
 
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-            The input array.
+        The input array.
 
     Returns
     -------
@@ -1615,16 +1642,17 @@ def arctan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "arctan", None))
 
 
-def arctan2(ndarr1: NDArray | NDField, ndarr2: NDArray | NDField | blosc2.C2Array, /):
+def arctan2(ndarr1: NDArray | NDField | blosc2.C2Array,
+            ndarr2: NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
     """
     Element-wise arc tangent of ``ndarr1 / ndarr2`` choosing the quadrant correctly.
 
     Parameters
     ----------
     ndarr1: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
-            The input array.
+        The input array.
     ndarr2: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
-            The input array.
+        The input array.
 
     Returns
     -------
@@ -1655,14 +1683,14 @@ def arctan2(ndarr1: NDArray | NDField, ndarr2: NDArray | NDField | blosc2.C2Arra
     return blosc2.LazyExpr(new_op=(ndarr1, "arctan2", ndarr2))
 
 
-def arcsinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def arcsinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Inverse hyperbolic sine, element-wise.
 
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-            The input array.
+        The input array.
 
     Returns
     -------
@@ -1689,7 +1717,7 @@ def arcsinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "arcsinh", None))
 
 
-def arccosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def arccosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Inverse hyperbolic cosine, element-wise.
 
@@ -1723,7 +1751,7 @@ def arccosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "arccosh", None))
 
 
-def arctanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def arctanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Inverse hyperbolic tangent, element-wise.
 
@@ -1757,14 +1785,14 @@ def arctanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "arctanh", None))
 
 
-def exp(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def exp(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Calculate the exponential of all elements in the input array.
 
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-            The input array.
+        The input array.
 
     Returns
     -------
@@ -1791,14 +1819,14 @@ def exp(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "exp", None))
 
 
-def expm1(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def expm1(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Calculate ``exp(ndarr) - 1`` for all elements in the array.
 
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-            The input array.
+        The input array.
 
     Returns
     -------
@@ -1825,7 +1853,7 @@ def expm1(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "expm1", None))
 
 
-def log(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def log(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Natural logarithm, element-wise.
 
@@ -1859,7 +1887,7 @@ def log(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "log", None))
 
 
-def log10(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def log10(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Return the base 10 logarithm of the input array, element-wise.
 
@@ -1893,7 +1921,7 @@ def log10(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "log10", None))
 
 
-def log1p(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def log1p(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Return the natural logarithm of one plus the input array, element-wise.
 
@@ -1927,7 +1955,7 @@ def log1p(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "log1p", None))
 
 
-def conj(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def conj(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Return the complex conjugate, element-wise.
 
@@ -1961,14 +1989,14 @@ def conj(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "conj", None))
 
 
-def real(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def real(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Return the real part of the complex array, element-wise.
 
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-            The input array.
+        The input array.
 
     Returns
     -------
@@ -1995,7 +2023,7 @@ def real(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
     return blosc2.LazyExpr(new_op=(ndarr, "real", None))
 
 
-def imag(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def imag(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Return the imaginary part of the complex array, element-wise.
 
@@ -2031,7 +2059,7 @@ def imag(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
 
 def contains(
     ndarr: NDArray | NDField | blosc2.C2Array, value: str | bytes | NDArray | NDField | blosc2.C2Array, /
-):
+) -> blosc2.LazyExpr:
     """
     Check if the array contains a string value.
 
@@ -2039,7 +2067,7 @@ def contains(
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
         The input array.
-    value: str or :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
+    value: str or bytes or :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
         The value to be checked.
 
     Returns
@@ -2064,7 +2092,7 @@ def contains(
     return blosc2.LazyExpr(new_op=(ndarr, "contains", value))
 
 
-def abs(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /):
+def abs(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Calculate the absolute value element-wise.
 
@@ -2102,7 +2130,7 @@ def where(
     condition: blosc2.LazyExpr,
     x: NDArray | NDField | np.ndarray | int | float | complex | bool | str | bytes | None = None,
     y: NDArray | NDField | np.ndarray | int | float | complex | bool | str | bytes | None = None,
-):
+) -> blosc2.LazyExpr:
     """
     Return elements chosen from `x` or `y` depending on `condition`.
 
@@ -2110,9 +2138,9 @@ def where(
     ----------
     condition: :ref:`LazyExpr`
         Where True, yield `x`, otherwise yield `y`.
-    x: :ref:`NDArray` or :ref:`NDField` or np.ndarray or scalar
+    x: :ref:`NDArray` or :ref:`NDField` or np.ndarray or scalar or bytes
         Values from which to choose when `condition` is True.
-    y: :ref:`NDArray` or :ref:`NDField` or np.ndarray or scalar
+    y: :ref:`NDArray` or :ref:`NDField` or np.ndarray or scalar or bytes
         Values from which to choose when `condition` is False.
 
     References
@@ -2142,7 +2170,7 @@ def _check_shape(shape):
     return shape
 
 
-def empty(shape, dtype=np.uint8, **kwargs):
+def empty(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict) -> NDArray:
     """Create an empty array.
 
     Parameters
@@ -2195,7 +2223,7 @@ def empty(shape, dtype=np.uint8, **kwargs):
     return blosc2_ext.empty(shape, chunks, blocks, dtype, **kwargs)
 
 
-def uninit(shape, dtype=np.uint8, **kwargs):
+def uninit(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict) -> NDArray:
     """Create an array with uninitialized values.
 
     The parameters and keyword arguments are the same as for the
@@ -2228,7 +2256,7 @@ def uninit(shape, dtype=np.uint8, **kwargs):
     return blosc2_ext.uninit(shape, chunks, blocks, dtype, **kwargs)
 
 
-def nans(shape, dtype=np.float64, **kwargs):
+def nans(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: dict) -> NDArray:
     """Create an array with NaNs values.
 
     The parameters and keyword arguments are the same as for the
@@ -2261,7 +2289,7 @@ def nans(shape, dtype=np.float64, **kwargs):
     return blosc2_ext.nans(shape, chunks, blocks, dtype, **kwargs)
 
 
-def zeros(shape, dtype=np.uint8, **kwargs):
+def zeros(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict) -> NDArray:
     """Create an array, with zero being used as the default value
     for uninitialized portions of the array.
 
@@ -2300,7 +2328,8 @@ def zeros(shape, dtype=np.uint8, **kwargs):
     return blosc2_ext.zeros(shape, chunks, blocks, dtype, **kwargs)
 
 
-def full(shape, fill_value, dtype=None, **kwargs):
+def full(shape: int | tuple | list, fill_value: bytes | int | float | bool, dtype: np.dtype = None,
+         **kwargs: dict) -> NDArray:
     """Create an array, with :paramref:`fill_value` being used as the default value
     for uninitialized portions of the array.
 
@@ -2313,10 +2342,10 @@ def full(shape, fill_value, dtype=None, **kwargs):
         Its size will override the `typesize`
         in the cparams in case they are passed.
     dtype: np.dtype
-         The ndarray dtype in NumPy format. By default, this will
-         be taken from the :paramref:`fill_value`.
-         This will override the `typesize`
-         in the cparams in case they are passed.
+        The ndarray dtype in NumPy format. By default, this will
+        be taken from the :paramref:`fill_value`.
+        This will override the `typesize`
+        in the cparams in case they are passed.
 
     Other Parameters
     ----------------
@@ -2399,7 +2428,7 @@ def frombuffer(
     return blosc2_ext.from_buffer(buffer, shape, chunks, blocks, dtype, **kwargs)
 
 
-def copy(array, dtype=None, **kwargs):
+def copy(array: NDArray, dtype: np.dtype = None, **kwargs: dict) -> NDArray:
     """
     This is equivalent to :meth:`NDArray.copy`
 
@@ -2529,7 +2558,9 @@ def _check_ndarray_kwargs(**kwargs):
         raise ValueError("You cannot pass chunks in cparams, use `blocks` argument instead")
 
 
-def get_slice_nchunks(schunk, key):
+def get_slice_nchunks(schunk: blosc2.SChunk,
+                      key: tuple[(int, int)] | int | slice | Sequence[slice]
+                      ) -> np.ndarray:
     """
     Get the unidimensional chunk indexes needed to get a
     slice of a :ref:`SChunk <SChunk>` or a :ref:`NDArray`.
@@ -2621,7 +2652,7 @@ class NDField(Operand):
         """The associated :ref:`SChunk <SChunk>`."""
         return self.ndarr.schunk
 
-    def __getitem__(self, key: int | slice | Sequence[slice]):
+    def __getitem__(self, key: int | slice | Sequence[slice]) -> np.ndarray:
         """
         Get a slice of :paramref:`self`.
 
