@@ -36,7 +36,9 @@ class Codec(Enum):
     ZFP_ACC = 33
     ZFP_PREC = 34
     ZFP_RATE = 35
+    #: Needs to be installed with ``pip install blosc2-openhtj2k``
     OPENHTJ2K = 36
+    #: Needs to be installed with ``pip install blosc2-grok``
     GROK = 37
 
 
@@ -87,12 +89,15 @@ class Tuner(Enum):
     #: A 'simple' tuner. This is the default in the Blosc2 library
     STUNE = 0
     #: A more sophisticated tuner that can select different codecs/filters for different chunks
-    #: (more info `here <https://github.com/Blosc/blosc2_btune/>`_).
+    #: (more info `here <https://github.com/Blosc/blosc2_btune/>`_); Needs to be installed with
+    #: ``pip install blosc2-btune``
     BTUNE = 32
 
 
 from .blosc2_ext import (
     DEFINED_CODECS_STOP,
+    GLOBAL_REGISTERED_CODECS_STOP,
+    USER_REGISTERED_CODECS_STOP,
     EXTENDED_HEADER_LENGTH,
     MAX_BUFFERSIZE,
     MAX_OVERHEAD,
@@ -105,6 +110,14 @@ from .blosc2_ext import (
 DEFINED_CODECS_STOP = DEFINED_CODECS_STOP
 """
 Maximum possible Blosc2-defined codec id."""
+
+GLOBAL_REGISTERED_CODECS_STOP = GLOBAL_REGISTERED_CODECS_STOP
+"""
+Maximum possible Blosc2 global registered codec id."""
+
+USER_REGISTERED_CODECS_STOP = USER_REGISTERED_CODECS_STOP
+"""
+Maximum possible Blosc2 user registered codec id."""
 
 EXTENDED_HEADER_LENGTH = EXTENDED_HEADER_LENGTH
 """

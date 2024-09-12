@@ -908,7 +908,7 @@ def compressor_list(plugins=False):
     :func:`~blosc2.set_compressor`
 
     """
-    cap = 255 if plugins else blosc2.DEFINED_CODECS_STOP
+    cap = blosc2.GLOBAL_REGISTERED_CODECS_STOP if plugins else blosc2.DEFINED_CODECS_STOP
     return list(key for key in blosc2.Codec if key.value <= cap)
 
 
