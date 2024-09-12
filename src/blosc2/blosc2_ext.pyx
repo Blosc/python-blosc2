@@ -1229,7 +1229,7 @@ cdef class SChunk:
             raise RuntimeError("nitems is too large.  Try increasing the chunksize")
         if self.nbytes > 0 or self.cbytes > 0:
             raise RuntimeError("Filling with special values only works on empty SChunks")
-
+        # Get a void pointer to the value
         array = np.array([value])
         if array.dtype.itemsize != self.typesize:
             if isinstance(value, int):
@@ -1241,7 +1241,7 @@ cdef class SChunk:
             array = np.array([value], dtype=dtype)
         cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(array, buf, PyBUF_SIMPLE)
-
+        # Create chunk with repeated values
         nchunks = nitems // self.chunkshape
         cdef blosc2_schunk *c_schunk = <blosc2_schunk *> self.c_schunk
         cdef blosc2_cparams *cparams = self.schunk.storage.cparams
@@ -1255,11 +1255,11 @@ cdef class SChunk:
                 PyBuffer_Release(buf)
                 free(buf)
                 raise RuntimeError("Error while appending the chunk")
-
-        last_nitems = nitems % self.chunkshape
+        # Create and append last chunk if it is smaller than chunkshape
+        remainder = nitems % self.chunkshape
         rc = 0
-        if last_nitems != 0:
-            get_chunk_repeatval(dereference(cparams), last_nitems * self.typesize, chunk, chunksize, buf)
+        if remainder != 0:
+            get_chunk_repeatval(dereference(cparams), remainder * self.typesize, chunk, chunksize, buf)
             rc = blosc2_schunk_append_chunk(self.schunk, <uint8_t *>chunk, True)
         free(chunk)
         PyBuffer_Release(buf)
