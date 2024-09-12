@@ -415,7 +415,7 @@ class SChunk(blosc2_ext.SChunk):
             The number of items to fill with the special value.
         special_value: SpecialValue
             The special value to be used for filling the SChunk.
-        value: bytes, int, float or bool (optional)
+        value: bytes, int, float, bool (optional)
             The value to fill the SChunk. This parameter is only supported if
             :paramref:`special_value` is ``blosc2.SpecialValue.VALUE``.
 
