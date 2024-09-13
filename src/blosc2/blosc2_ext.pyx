@@ -2486,7 +2486,6 @@ cdef class NDArray:
             new_shape_[i] = s
         _check_rc(b2nd_resize(self.array, new_shape_, NULL),
                   "Error while resizing the array")
-        return self
 
     def squeeze(self):
         _check_rc(b2nd_squeeze(self.array), "Error while performing the squeeze")
