@@ -883,12 +883,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return self._schunk.blocksize
 
-    def __getitem__(self, key: int | slice | Sequence[slice] | blosc2.LazyExpr) -> np.ndarray | blosc2.LazyExpr:
+    def __getitem__(self, key: int | slice | Sequence[slice] | blosc2.LazyExpr | str) -> np.ndarray | blosc2.LazyExpr:
         """Get a (multidimensional) slice as specified in key.
 
         Parameters
         ----------
-        key: int, slice, sequence of slices or LazyExpr
+        key: int, slice, sequence of slices, LazyExpr or str
             The slice(s) to be retrieved. Note that step parameter is not honored yet
             in slices. If a LazyExpr is provided, the expression is supposed to be of boolean
             type and the result will be the values of this array where the expression is True.
@@ -1144,7 +1144,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return super().to_cframe()
 
-    def copy(self, dtype: np.dtype = None, **kwargs: dict):
+    def copy(self, dtype: np.dtype = None, **kwargs: dict) -> NDArray:
         """Create a copy of an array with same parameters.
 
         Parameters
@@ -1376,7 +1376,7 @@ def tan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-            Angle, in radians.
+        Angle, in radians.
 
     Returns
     -------
@@ -1411,7 +1411,7 @@ def sqrt(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-            The input array.
+        The input array.
 
     Returns
     -------
@@ -1445,7 +1445,7 @@ def sinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-            The input array.
+        The input array.
 
     Returns
     -------
@@ -1513,7 +1513,7 @@ def tanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-            The input array.
+        The input array.
 
     Returns
     -------
@@ -2001,7 +2001,7 @@ def real(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     Returns
     -------
     out: :ref:`LazyExpr`
-            A lazy expression that can be evaluated.
+        A lazy expression that can be evaluated.
 
     References
     ----------
