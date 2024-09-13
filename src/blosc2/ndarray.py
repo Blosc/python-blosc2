@@ -601,74 +601,74 @@ def all(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int |
 class Operand:
     """Base class for all operands in expressions."""
 
-    def __neg__(self):
+    def __neg__(self) -> blosc2.LazyExpr:
         return blosc2.LazyExpr(new_op=(0, "-", self))
 
-    def __and__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __and__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "&", value))
 
-    def __add__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __add__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
-    def __iadd__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __iadd__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
-    def __radd__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __radd__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "+", self))
 
-    def __sub__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __sub__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "-", value))
 
-    def __isub__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __isub__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "-", value))
 
-    def __rsub__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __rsub__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "-", self))
 
-    def __mul__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __mul__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "*", value))
 
-    def __imul__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __imul__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "*", value))
 
-    def __rmul__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __rmul__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "*", self))
 
-    def __truediv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __truediv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "/", value))
 
-    def __itruediv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __itruediv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "/", value))
 
-    def __rtruediv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __rtruediv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "/", self))
 
-    def __lt__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __lt__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "<", value))
 
-    def __le__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __le__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "<=", value))
 
-    def __gt__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __gt__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, ">", value))
 
-    def __ge__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __ge__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, ">=", value))
 
@@ -678,19 +678,19 @@ class Operand:
             return self is value
         return blosc2.LazyExpr(new_op=(self, "==", value))
 
-    def __ne__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __ne__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "!=", value))
 
-    def __pow__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __pow__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "**", value))
 
-    def __ipow__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __ipow__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "**", value))
 
-    def __rpow__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __rpow__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "**", self))
 
@@ -715,7 +715,7 @@ class Operand:
         return expr.var(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
 
     @is_documented_by(prod)
-    def prod(self, axis=None, dtype=None, out=None, keepdims=False, **kwargs):
+    def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.prod(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
@@ -754,7 +754,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 self._fields[field] = NDField(self, field)
 
     @property
-    def fields(self):
+    def fields(self) -> dict:
         """
         Dictionary with the fields of the structured array.
 
@@ -781,12 +781,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return self._fields
 
     @property
-    def keep_last_read(self):
+    def keep_last_read(self) -> bool:
         """Indicates whether the last read data should be kept in memory."""
         return self._keep_last_read
 
     @keep_last_read.setter
-    def keep_last_read(self, value: bool):
+    def keep_last_read(self, value: bool) -> None:
         """Set whether the last read data should be kept in memory.
 
         This always clear the last read data (if any).
@@ -835,7 +835,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return InfoReporter(self)
 
     @property
-    def info_items(self):
+    def info_items(self) -> list:
         items = []
         items += [("type", f"{self.__class__.__name__}")]
         items += [("shape", self.shape)]
@@ -848,7 +848,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return items
 
     @property
-    def schunk(self):
+    def schunk(self) -> blosc2.SChunk:
         """
         The :ref:`SChunk <SChunk>` reference of the :ref:`NDArray`.
         All the attributes from the :ref:`SChunk <SChunk>` can be accessed through
@@ -861,7 +861,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return self._schunk
 
     @property
-    def blocksize(self):
+    def blocksize(self) -> int:
         """The block size (in bytes) for this container.
 
         This is a shortcut to
@@ -1194,7 +1194,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return super().copy(dtype, **kwargs)
 
-    def resize(self, newshape: tuple | list):
+    def resize(self, newshape: tuple | list) -> None:
         """Change the shape of the array by growing or shrinking one or more dimensions.
 
         Parameters
@@ -1202,6 +1202,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
         newshape : tuple or list
             The new shape of the array. It should have the same dimensions
             as :paramref:`self`.
+
+        Returns
+        -------
+        out: None
 
         Notes
         -----
@@ -1219,12 +1223,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> b = blosc2.asarray(a)
         >>> newshape = [50, 10]
         >>> # Extend first dimension, shrink second dimension
-        >>> _ = b.resize(newshape)
+        >>> b.resize(newshape)
         >>> b.shape
         (50, 10)
         """
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
-        return super().resize(newshape)
+        super().resize(newshape)
 
     def slice(self, key: int | slice | Sequence[slice], **kwargs: dict) -> NDArray:
         """Get a (multidimensional) slice as a new :ref:`NDArray`.
@@ -1280,8 +1284,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return ndslice
 
-    def squeeze(self):
+    def squeeze(self) -> None:
         """Remove the 1's in array's shape.
+
+        Returns
+        -------
+        out: None
 
         Examples
         --------
@@ -2643,12 +2651,12 @@ class NDField(Operand):
         return f"NDField({self.ndarr}, {self.field})"
 
     @property
-    def shape(self):
+    def shape(self) -> tuple[int]:
         """The shape of the associated :ref:`NDArray`."""
         return self.ndarr.shape
 
     @property
-    def schunk(self):
+    def schunk(self) -> blosc2.SChunk:
         """The associated :ref:`SChunk <SChunk>`."""
         return self.ndarr.schunk
 
