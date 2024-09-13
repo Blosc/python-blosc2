@@ -5,6 +5,9 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+# Avoid checking the name of type annotations at run time
+from __future__ import annotations
+
 import copy
 import ctypes
 import ctypes.util
@@ -14,6 +17,7 @@ import pathlib
 import pickle
 import platform
 import sys
+from collections.abc import Callable
 
 import cpuinfo
 import numpy as np
@@ -50,34 +54,34 @@ def _check_codec(codec):
 
 
 def compress(
-    src,
-    typesize=None,
-    clevel=9,
-    filter=blosc2.Filter.SHUFFLE,
-    codec=blosc2.Codec.BLOSCLZ,
-    _ignore_multiple_size=False,
-):
+    src: object,
+    typesize: int = None,
+    clevel: int = 9,
+    filter: blosc2.Filter = blosc2.Filter.SHUFFLE,
+    codec: blosc2.Codec = blosc2.Codec.BLOSCLZ,
+    _ignore_multiple_size: bool = False,
+) -> str | bytes:
     """Compress src, with a given type size.
 
     Parameters
     ----------
-    src : bytes-like object (supporting the buffer interface)
+    src: bytes-like object (supporting the buffer interface)
         The data to be compressed.
-    typesize : int (optional) from 1 to 255
+    typesize: int (optional) from 1 to 255
         The data type size. The default is 1, or `src.itemsize` if it exists.
-    clevel : int (optional)
+    clevel: int (optional)
         The compression level from 0 (no compression) to 9
         (maximum compression).  The default is 9.
-    filter : :class:`Filter` (optional)
+    filter: :class:`Filter` (optional)
         The filter to be activated. The
         default is :py:obj:`Filter.SHUFFLE <Filter>`.
-    codec : :class:`Codec` (optional)
+    codec: :class:`Codec` (optional)
         The compressor used internally in Blosc. The default is :py:obj:`Codec.BLOSCLZ <Codec>`.
 
     Returns
     -------
-    out : str / bytes
-        The compressed data in form of a Python str / bytes object.
+    out: str or bytes
+        The compressed data in form of a Python str or bytes object.
 
     Raises
     ------
@@ -122,31 +126,32 @@ def compress(
     return blosc2_ext.compress(src, typesize, clevel, filter, codec)
 
 
-def decompress(src, dst=None, as_bytearray=False):
+def decompress(src: object, dst: object | bytearray = None,
+               as_bytearray: bool = False) -> str | bytes | bytearray | None:
     """Decompresses a bytes-like compressed object.
 
     Parameters
     ----------
-    src : bytes-like object
+    src: bytes-like object
         The data to be decompressed.  Must be a bytes-like object
         that supports the Python Buffer Protocol, like bytes, bytearray,
         memoryview, or
         `numpy.ndarray <https://numpy.org/doc/stable/reference/generated/numpy.ndarray.html>`_.
-    dst : NumPy object or bytearray
+    dst: NumPy object or bytearray
         The destination NumPy object or bytearray to fill,
         the length of which must be greater than 0.
         The user must make sure
         that it has enough capacity for hosting the decompressed data.
         Default is None, meaning that a new `bytes` or `bytearray` object
         is created, filled and returned.
-    as_bytearray : bool (optional)
+    as_bytearray: bool (optional)
         If this flag is True then the return type will be a bytearray object
         instead of a bytes object.
 
     Returns
     -------
-    out: str/bytes or bytearray
-        If :paramref:`dst` is `None`, the decompressed data in form of a Python str / bytes object.
+    out: str or bytes or bytearray
+        If :paramref:`dst` is `None`, the decompressed data in form of a Python str or bytes object.
         If as_bytearray is True then this will be a bytearray object.
 
         If :paramref:`dst` is not `None`, it will return `None` because the result
@@ -190,27 +195,28 @@ def decompress(src, dst=None, as_bytearray=False):
     return blosc2_ext.decompress(src, dst, as_bytearray)
 
 
-def pack(obj, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ):
+def pack(obj: object, clevel: int = 9, filter: blosc2.Filter = blosc2.Filter.SHUFFLE,
+         codec: blosc2.Codec = blosc2.Codec.BLOSCLZ) -> str | bytes:
     """Pack (compress) a Python object.
 
     Parameters
     ----------
-    obj : Python object  with `itemsize` attribute
+    obj: Python object  with `itemsize` attribute
         The Python object to be packed.
-    clevel : int (optional)
+    clevel: int (optional)
         The compression level from 0 (no compression) to 9
         (maximum compression).  The default is 9.
-    filter : :class:`Filter` (optional)
+    filter: :class:`Filter` (optional)
         The filter to be activated. The
         default is :py:obj:`Filter.SHUFFLE <Filter>`.
-    codec : :class:`Codec` (optional)
+    codec: :class:`Codec` (optional)
         The compressor used internally in Blosc. The default is
         :py:obj:`Codec.BLOSCLZ <Codec>`.
 
     Returns
     -------
-    out : str / bytes
-        The packed object in form of a Python str / bytes object.
+    out: str or bytes
+        The packed object in form of a Python str or bytes object.
 
     Raises
     ------
@@ -262,20 +268,20 @@ def pack(obj, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ
     )
 
 
-def unpack(packed_object, **kwargs):
+def unpack(packed_object: str | bytes, **kwargs: dict) -> object:
     """Unpack (decompress) an object.
 
     Parameters
     ----------
-    packed_object : str / bytes
+    packed_object: str or bytes
         The packed object to be decompressed.
-    **kwargs : fix_imports / encoding / errors
-        Optional parameters that can be passed to the
+    kwargs: dict, optional
+        Parameters that can be passed to the
         `pickle.loads API <https://docs.python.org/3/library/pickle.html#pickle.loads>`_
 
     Returns
     -------
-    out : object
+    out: object
         The decompressed data in form of the original object.
 
     Raises
@@ -308,27 +314,28 @@ def unpack(packed_object, **kwargs):
     return obj
 
 
-def pack_array(arr, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ):
+def pack_array(arr: np.ndarray, clevel: int = 9, filter: blosc2.Filter = blosc2.Filter.SHUFFLE,
+               codec: blosc2.Codec = blosc2.Codec.BLOSCLZ) -> str | bytes:
     """Pack (compress) a NumPy array. It is equivalent to the pack function.
 
     Parameters
     ----------
-    arr : ndarray
+    arr: np.ndarray
         The NumPy array to be packed.
-    clevel : int (optional)
+    clevel: int (optional)
         The compression level from 0 (no compression) to 9
         (maximum compression).  The default is 9.
-    filter : :class:`Filter` (optional)
+    filter: :class:`Filter` (optional)
         The filter to be activated. The
         default is :py:obj:`Filter.SHUFFLE <Filter>`.
-    codec : :class:`Codec` (optional)
+    codec: :class:`Codec` (optional)
         The compressor used internally in Blosc. The default is
         :py:obj:`Codec.BLOSCLZ <Codec>`.
 
     Returns
     -------
-    out : str / bytes
-        The packed array in form of a Python str / bytes object.
+    out: str or bytes
+        The packed array in form of a Python str or bytes object.
 
     Raises
     ------
@@ -356,20 +363,20 @@ def pack_array(arr, clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.B
     return pack(arr, clevel, filter, codec)
 
 
-def unpack_array(packed_array, **kwargs):
+def unpack_array(packed_array: str | bytes, **kwargs: dict) -> np.ndarray:
     """Restore a packed NumPy array.
 
     Parameters
     ----------
-    packed_array : str / bytes
+    packed_array: str or bytes
         The packed array to be restored.
-    **kwargs : fix_imports / encoding / errors
-        Optional parameters that can be passed to the
-        `pickle.loads API <https://docs.python.org/3/library/pickle.html#pickle.loads>`_.
+    kwargs: dict, optional
+        Parameters that can be passed to the
+        `pickle.loads API <https://docs.python.org/3/library/pickle.html#pickle.loads>`_
 
     Returns
     -------
-    out : ndarray
+    out: ndarray
         The decompressed data in form of a NumPy array.
 
     Raises
@@ -404,28 +411,28 @@ def unpack_array(packed_array, **kwargs):
     return arr
 
 
-def pack_array2(arr, chunksize=None, **kwargs):
+def pack_array2(arr: np.ndarray, chunksize: int = None, **kwargs: dict) -> bytes | int:
     """Pack (compress) a NumPy array. This is faster, and it does not have a 2 GB limitation.
 
     Parameters
     ----------
-    arr : ndarray
+    arr: np.ndarray
         The NumPy array to be packed.
 
     chunksize: int
         The size (in bytes) for the chunks during compression. If not provided,
         it is computed automatically.
 
-    Returns
-    -------
-    out : bytes | int
-        The serialized version (cframe) of the array.
-        If urlpath is provided, the number of bytes in file is returned instead.
-
     Other parameters
     ----------------
     kwargs: dict, optional
         These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`.
+
+    Returns
+    -------
+    out: bytes | int
+        The serialized version (cframe) of the array.
+        If urlpath is provided, the number of bytes in file is returned instead.
 
     Examples
     --------
@@ -446,17 +453,17 @@ def pack_array2(arr, chunksize=None, **kwargs):
     return pack_tensor(arr, chunksize, **kwargs)
 
 
-def unpack_array2(cframe):
+def unpack_array2(cframe: bytes) -> np.ndarray:
     """Unpack (decompress) a packed NumPy array via a cframe.
 
     Parameters
     ----------
-    cframe : bytes
+    cframe: bytes
         The packed array to be restored.
 
     Returns
     -------
-    out : ndarray
+    out: np.ndarray
         The unpacked NumPy array.
 
     Raises
@@ -488,30 +495,30 @@ def unpack_array2(cframe):
     return unpack_tensor(cframe)
 
 
-def save_array(arr, urlpath, chunksize=None, **kwargs):
+def save_array(arr: np.ndarray, urlpath: str, chunksize: int = None, **kwargs: dict) -> int:
     """Save a serialized NumPy array in `urlpath`.
 
     Parameters
     ----------
-    arr : ndarray
+    arr: np.ndarray
         The NumPy array to be saved.
 
-    urlpath : str
+    urlpath: str
         The path for the file where the array is saved.
 
     chunksize: int
         The size (in bytes) for the chunks during compression. If not provided,
         it is computed automatically.
 
-    Returns
-    -------
-    out : int
-        The number of bytes of the saved array.
-
     Other parameters
     ----------------
     kwargs: dict, optional
         These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`.
+
+    Returns
+    -------
+    out: int
+        The number of bytes of the saved array.
 
     Examples
     --------
@@ -532,12 +539,12 @@ def save_array(arr, urlpath, chunksize=None, **kwargs):
     return pack_tensor(arr, chunksize=chunksize, urlpath=urlpath, **kwargs)
 
 
-def load_array(urlpath, dparams=None):
+def load_array(urlpath: str, dparams: dict = None) -> np.ndarray:
     """Load a serialized NumPy array in urlpath.
 
     Parameters
     ----------
-    urlpath : str
+    urlpath: str
         The file where the array is to be loaded.
     dparams: dict, optional
         A dictionary with the decompression parameters, which are the same that can
@@ -545,7 +552,7 @@ def load_array(urlpath, dparams=None):
 
     Returns
     -------
-    out : ndarray
+    out: np.ndarray
         The unpacked NumPy array.
 
     Raises
@@ -577,28 +584,29 @@ def load_array(urlpath, dparams=None):
     return load_tensor(urlpath, dparams=dparams)
 
 
-def pack_tensor(tensor, chunksize=None, **kwargs):
-    """Pack (compress) a TensorFlow / PyTorch tensor or a NumPy array.
+def pack_tensor(tensor: tensorflow.Tensor | torch.Tensor | np.ndarray, chunksize: int = None,
+                **kwargs: dict) -> bytes | int:
+    """Pack (compress) a TensorFlow or PyTorch tensor or a NumPy array.
 
     Parameters
     ----------
-    tensor : tensor, ndarray.
-        The tensor / array to be packed.
+    tensor: tensor or np.ndarray.
+        The tensor or array to be packed.
 
     chunksize: int
         The size (in bytes) for the chunks during compression. If not provided,
         it is computed automatically.
 
-    Returns
-    -------
-    out : bytes | int
-        The serialized version (cframe) of the array.
-        If urlpath is provided, the number of bytes in file is returned instead.
-
     Other parameters
     ----------------
     kwargs: dict, optional
         These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`.
+
+    Returns
+    -------
+    out: bytes | int
+        The serialized version (cframe) of the array.
+        If urlpath is provided, the number of bytes in file is returned instead.
 
     Examples
     --------
@@ -660,18 +668,18 @@ def _unpack_tensor(schunk):
     return th
 
 
-def unpack_tensor(cframe):
-    """Unpack (decompress) a packed TensorFlow / PyTorch via a cframe.
+def unpack_tensor(cframe: bytes) -> tensorflow.Tensor | torch.Tensor | np.ndarray:
+    """Unpack (decompress) a packed TensorFlow or PyTorch via a cframe.
 
     Parameters
     ----------
-    cframe : bytes
+    cframe: bytes
         The packed tensor to be restored.
 
     Returns
     -------
-    out : tensor, ndarray
-        The unpacked TensorFlow / PyTorch tensor or NumPy array.
+    out: tensor or np.ndarray
+        The unpacked TensorFlow or PyTorch tensor or NumPy array.
 
     Raises
     ------
@@ -704,30 +712,31 @@ def unpack_tensor(cframe):
     return _unpack_tensor(schunk)
 
 
-def save_tensor(tensor, urlpath, chunksize=None, **kwargs):
-    """Save a serialized PyTorch / TensorFlow tensor or NumPy array in `urlpath`.
+def save_tensor(tensor: tensorflow.Tensor | torch.Tensor | np.ndarray, urlpath: str, chunksize: int = None,
+                **kwargs: dict) -> int:
+    """Save a serialized PyTorch or TensorFlow tensor or NumPy array in `urlpath`.
 
     Parameters
     ----------
-    tensor : tensor, ndarray
-        The tensor / array to be saved.
+    tensor: tensor, np.ndarray
+        The tensor or array to be saved.
 
-    urlpath : str
+    urlpath: str
         The path for the file where the array is saved.
 
     chunksize: int
         The size (in bytes) for the chunks during compression. If not provided,
         it is computed automatically.
 
-    Returns
-    -------
-    out : int
-        The number of bytes of the saved tensor / array.
-
     Other parameters
     ----------------
     kwargs: dict, optional
         These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`.
+
+    Returns
+    -------
+    out: int
+        The number of bytes of the saved tensor or array.
 
     Examples
     --------
@@ -747,13 +756,13 @@ def save_tensor(tensor, urlpath, chunksize=None, **kwargs):
     return pack_tensor(tensor, chunksize=chunksize, urlpath=urlpath, **kwargs)
 
 
-def load_tensor(urlpath, dparams=None):
-    """Load a serialized PyTorch / TensorFlow  tensor or NumPy array in `urlpath`.
+def load_tensor(urlpath: str, dparams: dict = None) -> tensorflow.Tensor | torch.Tensor | np.ndarray:
+    """Load a serialized PyTorch or TensorFlow  tensor or NumPy array in `urlpath`.
 
     Parameters
     ----------
-    urlpath : str
-        The file where the tensor / array is to be loaded.
+    urlpath: str
+        The file where the tensor or array is to be loaded.
 
     Other parameters
     ----------------
@@ -763,8 +772,8 @@ def load_tensor(urlpath, dparams=None):
 
     Returns
     -------
-    out : tensor, ndarray
-        The unpacked PyTorch / TensorFlow tensor or NumPy array.
+    out: tensor or ndarray
+        The unpacked PyTorch or TensorFlow tensor or NumPy array.
 
     Raises
     ------
@@ -794,18 +803,18 @@ def load_tensor(urlpath, dparams=None):
     return _unpack_tensor(schunk)
 
 
-def set_compressor(codec):
+def set_compressor(codec: blosc2.Codec) -> int:
     """Set the compressor to be used. If this function is not
     called, then :py:obj:`blosc2.Codec.BLOSCLZ <Codec>` will be used.
 
     Parameters
     ----------
-    codec : :class:`Codec`
+    codec: :class:`Codec`
         The compressor to be used.
 
     Returns
     -------
-    out : int
+    out: int
         The code for the compressor (>=0).
 
     Raises
@@ -826,12 +835,12 @@ def set_compressor(codec):
     return blosc2_ext.set_compressor(codec)
 
 
-def free_resources():
+def free_resources() -> None:
     """Free possible memory temporaries and thread resources.
 
     Returns
     -------
-        out : None
+    out: None
 
     Notes
     -----
@@ -846,17 +855,17 @@ def free_resources():
     blosc2_ext.free_resources()
 
 
-def set_nthreads(nthreads):
+def set_nthreads(nthreads: int) -> int:
     """Set the number of threads to be used during Blosc operation.
 
     Parameters
     ----------
-    nthreads : int
+    nthreads: int
         The number of threads to be used during Blosc operation.
 
     Returns
     -------
-    out : int
+    out: int
         The previous number of used threads.
 
     Raises
@@ -888,18 +897,18 @@ def set_nthreads(nthreads):
     return blosc2_ext.set_nthreads(nthreads)
 
 
-def compressor_list(plugins=False):
+def compressor_list(plugins: bool = False) -> list:
     """
     Returns a list of compressors (codecs) available in the C library.
 
     Parameters
     ----------
-    plugins : bool
+    plugins: bool
         Whether to include plugins or not.
 
     Returns
     -------
-    out : list
+    out: list
         The list of codec names.
 
     See also
@@ -912,10 +921,18 @@ def compressor_list(plugins=False):
     return list(key for key in blosc2.Codec if key.value <= cap)
 
 
-def set_blocksize(blocksize=0):
+def set_blocksize(blocksize: int = 0) -> None:
     """
-    Force the use of a specific blocksize.  If 0, an automatic
-    blocksize will be used (the default).
+    Force the use of a specific blocksize.
+
+    Parameters
+    ----------
+    blocksize: int
+        The blocksize to use. If 0, an automatic blocksize will be used (the default).
+
+    Returns
+    -------
+    out: None
 
     Notes
     -----
@@ -926,20 +943,20 @@ def set_blocksize(blocksize=0):
     >>> blosc2.set_blocksize(512)
     >>> blosc2.set_blocksize(0)
     """
-    return blosc2_ext.set_blocksize(blocksize)
+    blosc2_ext.set_blocksize(blocksize)
 
 
-def clib_info(codec):
+def clib_info(codec: blosc2.Codec) -> tuple:
     """Return info for compression libraries in C library.
 
     Parameters
     ----------
-    codec : :class:`Codec`
+    codec: :class:`Codec`
         The compressor.
 
     Returns
     -------
-    out : tuple
+    out: tuple
         The associated library name and version.
 
     Notes
@@ -950,29 +967,29 @@ def clib_info(codec):
     return blosc2_ext.clib_info(codec)
 
 
-def get_clib(bytesobj):
+def get_clib(bytesobj: str | bytes) -> str:
     """
     Return the name of the compression library for Blosc :paramref:`bytesobj` buffer.
 
     Parameters
     ----------
-    bytesobj : str / bytes
+    bytesobj: str or bytes
         The compressed buffer.
 
     Returns
     -------
-    out : str
+    out: str
         The name of the compression library.
     """
     return blosc2_ext.get_clib(bytesobj).decode("utf-8")
 
 
-def get_compressor():
+def get_compressor() -> str:
     """Get the current compressor that is used for compression.
 
     Returns
     -------
-    out : str
+    out: str
         The name of the compressor.
 
     See also
@@ -984,7 +1001,7 @@ def get_compressor():
     return blosc2_ext.get_compressor().decode("utf-8")
 
 
-def set_releasegil(gilstate):
+def set_releasegil(gilstate: bool) -> bool:
     """
     Sets a boolean on whether to release the Python global inter-lock (GIL)
     during c-blosc compress and decompress operations or not.  This defaults
@@ -994,6 +1011,11 @@ def set_releasegil(gilstate):
     ----------
     gilstate: bool
         True to release the GIL
+
+    Returns
+    -------
+    out: bool
+        The previous value of the Python global inter-lock (GIL).
 
     Notes
     -----
@@ -1009,12 +1031,12 @@ def set_releasegil(gilstate):
     return blosc2_ext.set_releasegil(gilstate)
 
 
-def detect_number_of_cores():
+def detect_number_of_cores() -> int:
     """Detect the number of cores in this system.
 
     Returns
     -------
-    out : int
+    out: int
         The number of cores in this system.
     """
     if "count" in blosc2.cpu_info:
@@ -1073,7 +1095,7 @@ def print_versions():
     print("-=" * 38)
 
 
-def apple_silicon_cache_size(cache_level: int):
+def apple_silicon_cache_size(cache_level: int) -> int:
     """Get the data cache_level size in bytes for Apple Silicon in MacOS.
 
     Apple Silicon has two clusters, Performance (0) and Efficiency (1).
@@ -1125,18 +1147,18 @@ def get_cpu_info():
     return cpu_info
 
 
-def get_blocksize():
+def get_blocksize() -> int:
     """Get the internal blocksize to be used during compression.
 
     Returns
     -------
-    out : int
+    out: int
         The size in bytes of the internal block size.
     """
     return blosc2_ext.get_blocksize()
 
 
-def get_cbuffer_sizes(src):
+def get_cbuffer_sizes(src: object) -> tuple[(int, int, int)]:
     """
     Get the sizes of a compressed `src` buffer.
 
@@ -1243,19 +1265,20 @@ def compute_partition(nitems, maxshape, minpart=None):
 
 
 def compute_chunks_blocks(
-    shape, chunks: tuple | list | None = None, blocks: tuple | list | None = None, dtype=np.uint8, **kwargs
-):
+    shape: tuple[int] | list, chunks: tuple | list | None = None, blocks: tuple | list | None = None,
+        dtype: np.dtype = np.uint8, **kwargs: dict
+) -> tuple[(int, int)]:
     """
-    Compute educated guesses for chunks and blocks of a NDArray.
+    Compute educated guesses for chunks and blocks of a :ref:`NDArray`.
 
     Parameters
     ----------
-    shape: tuple
+    shape: tuple or list
         The shape of the array.
-    chunks: tuple
+    chunks: tuple or list
         The shape of the chunk.  If None, a guess is computed based on cache sizes
         and heuristics.
-    blocks: tuple
+    blocks: tuple or list
         The shape of the block.  If None, a guess is computed based on cache sizes
         and heuristics.
     dtype: np.dtype
@@ -1359,12 +1382,13 @@ def compute_chunks_blocks(
     return tuple(chunks), tuple(blocks)
 
 
-def compress2(src, **kwargs):
+def compress2(src: object, **kwargs: dict) -> str | bytes:
     """Compress :paramref:`src` with the given compression params (if given)
 
     Parameters
     ----------
     src: bytes-like object (supporting the buffer interface)
+        The buffer to compress
 
     Other Parameters
     ----------------
@@ -1400,8 +1424,8 @@ def compress2(src, **kwargs):
 
     Returns
     -------
-    out: str/bytes
-        The compressed data in form of a Python str / bytes object.
+    out: str or bytes
+        The compressed data in form of a Python str or bytes object.
 
     Raises
     ------
@@ -1413,7 +1437,7 @@ def compress2(src, **kwargs):
     return blosc2_ext.compress2(src, **kwargs)
 
 
-def decompress2(src, dst=None, **kwargs):
+def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> str | bytes:
     """Compress :paramref:`src` with the given compression params (if given)
 
     Parameters
@@ -1433,13 +1457,14 @@ def decompress2(src, dst=None, **kwargs):
     ----------------
     kwargs: dict, optional
         Keyword arguments supported:
-        nthreads: int
-        The number of threads to use internally (1 by default).
+
+            nthreads: int
+                The number of threads to use internally (1 by default).
 
     Returns
     -------
-    out: str/bytes
-        The decompressed data in form of a Python str / bytes object if
+    out: str or bytes
+        The decompressed data in form of a Python str or bytes object if
         :paramref:`dst` is `None`. Otherwise, it will return `None` because the result
         will already be in :paramref:`dst`.
 
@@ -1460,7 +1485,7 @@ def decompress2(src, dst=None, **kwargs):
 
 
 # Directory utilities
-def remove_urlpath(path):
+def remove_urlpath(path: str) -> None:
     """Permanently remove the file or the directory given by :paramref:`path`. This function is used during
     the tests of a persistent SChunk to remove it.
 
@@ -1471,7 +1496,7 @@ def remove_urlpath(path):
 
     Returns
     -------
-    None
+    out: None
     """
     if path is not None:
         if isinstance(path, pathlib.PurePath):
@@ -1480,12 +1505,12 @@ def remove_urlpath(path):
         blosc2_ext.remove_urlpath(path)
 
 
-def schunk_from_cframe(cframe, copy=False):
+def schunk_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.SChunk:
     """Create a :ref:`SChunk <SChunk>` instance out of a contiguous frame buffer.
 
     Parameters
     ----------
-    cframe: bytes /str
+    cframe: bytes or str
         The bytes object containing the in-memory cframe.
     copy: bool
         Whether to internally do a copy or not. If `False`,
@@ -1504,12 +1529,12 @@ def schunk_from_cframe(cframe, copy=False):
     return blosc2_ext.schunk_from_cframe(cframe, copy)
 
 
-def ndarray_from_cframe(cframe, copy=False):
+def ndarray_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.NDArray:
     """Create a :ref:`NDArray <NDArray>` instance out of a contiguous frame buffer.
 
     Parameters
     ----------
-    cframe: bytes /str
+    cframe: bytes or str
         The bytes object containing the in-memory cframe.
     copy: bool
         Whether to internally do a copy or not. If `False`,
@@ -1523,12 +1548,17 @@ def ndarray_from_cframe(cframe, copy=False):
     See Also
     --------
     :func:`~blosc2.NDArray.to_cframe`
-
     """
     return blosc2_ext.ndarray_from_cframe(cframe, copy)
 
 
-def register_codec(codec_name, id, encoder=None, decoder=None, version=1):
+def register_codec(
+        codec_name: str,
+        id: int,
+        encoder: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], int] = None,
+        decoder: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], int] = None,
+        version: int = 1
+) -> None:
     """Register a user defined codec.
 
     Parameters
@@ -1604,7 +1634,12 @@ def register_codec(codec_name, id, encoder=None, decoder=None, version=1):
     blosc2_ext.register_codec(codec_name, id, encoder, decoder, version)
 
 
-def register_filter(id, forward=None, backward=None, name=None):
+def register_filter(
+        id: int,
+        forward: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], None] = None,
+        backward: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], None] = None,
+        name: str = None
+) -> None:
     """Register an user defined filter.
 
     Parameters
