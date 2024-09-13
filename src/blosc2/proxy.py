@@ -8,6 +8,7 @@
 from abc import ABC, abstractmethod
 
 import blosc2
+import numpy as np
 
 
 class ProxySource(ABC):
@@ -24,7 +25,7 @@ class ProxySource(ABC):
     """
 
     @abstractmethod
-    def get_chunk(self, nchunk):
+    def get_chunk(self, nchunk: int) -> bytes:
         """
         Return the compressed chunk in :paramref:`self`.
 
@@ -48,7 +49,7 @@ class Proxy(blosc2.Operand):
     which follows the :ref:`ProxySource` interface in an urlpath.
     """
 
-    def __init__(self, src, urlpath=None, **kwargs):
+    def __init__(self, src: ProxySource, urlpath: str = None, **kwargs: dict):
         """
         Create a new :ref:`Proxy` to serve like a cache to save accessed
         chunks locally.
@@ -56,7 +57,7 @@ class Proxy(blosc2.Operand):
         Parameters
         ----------
         src: :ref:`ProxySource`
-            The original container
+            The original container.
         urlpath: str, optional
             The urlpath where to save the container that will work as a cache.
 
@@ -115,7 +116,7 @@ class Proxy(blosc2.Operand):
             for key in vlmeta:
                 self._schunk_cache.vlmeta[key] = vlmeta[key]
 
-    def fetch(self, item=None):
+    def fetch(self, item: slice | list[slice] = None) -> blosc2.NDArray | blosc2.schunk.SChunk:
         """
         Get the container used as cache with the requested data updated.
 
@@ -146,7 +147,7 @@ class Proxy(blosc2.Operand):
 
         return self._cache
 
-    async def afetch(self, item=None):
+    async def afetch(self, item: slice | list[slice] = None) -> blosc2.NDArray | blosc2.schunk.SChunk:
         """
         Get the container used as cache with the requested data updated
         in an asynchronous way.
@@ -185,7 +186,7 @@ class Proxy(blosc2.Operand):
 
         return self._cache
 
-    def __getitem__(self, item):
+    def __getitem__(self, item: slice | list[slice]) -> np.ndarray:
         """
         Get a slice as a numpy.ndarray using the :ref:`Proxy`.
 
@@ -204,12 +205,12 @@ class Proxy(blosc2.Operand):
         return self._cache[item]
 
     @property
-    def dtype(self):
+    def dtype(self) -> np.dtype:
         """The dtype of :paramref:`self` or None if the data is unidimensional"""
         return self._cache.dtype if isinstance(self._cache, blosc2.NDArray) else None
 
     @property
-    def shape(self):
+    def shape(self) -> tuple[int]:
         """The shape of :paramref:`self`"""
         return self._cache.shape if isinstance(self._cache, blosc2.NDArray) else len(self._cache)
 
@@ -217,7 +218,7 @@ class Proxy(blosc2.Operand):
         return f"Proxy({self.src}, urlpath={self.urlpath})"
 
     @property
-    def vlmeta(self):
+    def vlmeta(self) -> blosc2.schunk.vlmeta:
         """
         Get the vlmeta of the cache.
 
@@ -228,7 +229,7 @@ class Proxy(blosc2.Operand):
         return self._schunk_cache.vlmeta
 
     @property
-    def fields(self):
+    def fields(self) -> dict:
         """
         Dictionary with the fields of :paramref:`self`.
 
@@ -254,7 +255,7 @@ class ProxyNDField(blosc2.Operand):
         self.shape = proxy.shape
         self.dtype = proxy.dtype
 
-    def __getitem__(self, item: slice):
+    def __getitem__(self, item: slice | list[slice]) -> np.ndarray:
         """
         Get a slice as a numpy.ndarray using the `field` in `proxy`.
 
