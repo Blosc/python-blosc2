@@ -5,6 +5,9 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+# Avoid checking the name of type annotations at run time
+from __future__ import annotations
+
 import asyncio
 import concurrent.futures
 import copy
@@ -13,10 +16,14 @@ import os
 import pathlib
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Sequence
 from enum import Enum
 from pathlib import Path
 from queue import Empty, Queue
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
 
 import ndindex
 import numexpr as ne
@@ -541,7 +548,7 @@ def fill_chunk_operands(
 
 
 def fast_eval(
-    expression: str | Callable, operands: dict, getitem: bool, **kwargs
+    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, getitem: bool, **kwargs
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands using a fast path.
 
@@ -652,7 +659,7 @@ def fast_eval(
 
 
 def slices_eval(
-    expression: str | Callable, operands: dict, getitem: bool, _slice=None, **kwargs
+    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, getitem: bool, _slice=None, **kwargs
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
@@ -827,7 +834,7 @@ def slices_eval(
 
 
 def reduce_slices(
-    expression: str | Callable, operands: dict, reduce_args, _slice=None, **kwargs
+    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, reduce_args, _slice=None, **kwargs
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
@@ -1062,7 +1069,7 @@ def convert_none_out(dtype, reduce_op, reduced_shape):
     return out
 
 
-def chunked_eval(expression: str | Callable, operands: dict, item=None, **kwargs):
+def chunked_eval(expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=None, **kwargs):
     """
     Evaluate the expression in chunks of operands.
 
