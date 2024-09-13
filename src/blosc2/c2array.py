@@ -34,7 +34,7 @@ def c2context(
     username: (str | None) = None,
     password: (str | None) = None,
     auth_token: (str | None) = None,
-):
+) -> None:
     """
     Context manager that sets parameters in Caterva2 subscriber requests.
 
@@ -180,7 +180,7 @@ def slice_to_string(slice_):
 
 
 class C2Array(blosc2.Operand):
-    def __init__(self, path, /, urlbase=None, auth_token=None):
+    def __init__(self, path: str, /, urlbase: str = None, auth_token: str = None):
         """Create an instance of a remote NDArray.
 
         Parameters
@@ -239,7 +239,7 @@ class C2Array(blosc2.Operand):
         slice_ = slice_to_string(slice_)
         return fetch_data(self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token)
 
-    def get_chunk(self, nchunk: int):
+    def get_chunk(self, nchunk: int) -> bytes:
         """
         Get the compressed unidimensional chunk of a :ref:`C2Array`.
 
@@ -259,28 +259,28 @@ class C2Array(blosc2.Operand):
         return response.content
 
     @property
-    def shape(self):
+    def shape(self) -> tuple[int]:
         """The shape of the remote array"""
         return tuple(self.meta["shape"])
 
     @property
-    def chunks(self):
+    def chunks(self) -> tuple[int]:
         """The chunks of the remote array"""
         return tuple(self.meta["chunks"])
 
     @property
-    def blocks(self):
+    def blocks(self) -> tuple[int]:
         """The blocks of the remote array"""
         return tuple(self.meta["blocks"])
 
     @property
-    def dtype(self):
+    def dtype(self) -> np.dtype:
         """The dtype of the remote array"""
         return np.dtype(self.meta["dtype"])
 
 
 class URLPath:
-    def __init__(self, path, /, urlbase=None, auth_token=None):
+    def __init__(self, path: str, /, urlbase: str = None, auth_token: str = None):
         """
         Create an instance of a remote data file (aka :ref:`C2Array <C2Array>`) urlpath.
         This is meant to be used in the :func:`blosc2.open` function.
