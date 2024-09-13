@@ -798,7 +798,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         self._keep_last_read = value
 
     @property
-    def info(self):
+    def info(self) -> InfoReporter:
         """
         Print information about this array.
 
