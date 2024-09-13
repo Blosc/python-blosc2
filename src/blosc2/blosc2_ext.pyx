@@ -647,7 +647,7 @@ def set_nthreads(nthreads):
         return rc
 
 def set_blocksize(size_t blocksize=0):
-    return blosc1_set_blocksize(blocksize)
+    blosc1_set_blocksize(blocksize)
 
 def clib_info(codec):
     cdef char* clib
