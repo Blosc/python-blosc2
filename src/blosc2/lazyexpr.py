@@ -13,7 +13,7 @@ import os
 import pathlib
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from enum import Enum
 from pathlib import Path
 from queue import Empty, Queue
@@ -61,7 +61,7 @@ class LazyArrayEnum(Enum):
 
 class LazyArray(ABC):
     @abstractmethod
-    def eval(self, item, **kwargs):
+    def eval(self, item: slice | list[slice] = None, **kwargs: dict) -> blosc2.NDArray:
         """
         Return a :ref:`NDArray` containing the evaluation of the :ref:`LazyArray`.
 
@@ -90,7 +90,7 @@ class LazyArray(ABC):
         pass
 
     @abstractmethod
-    def __getitem__(self, item):
+    def __getitem__(self, item: int | slice | Sequence[slice]) -> blosc2.NDArray:
         """
         Return a NumPy.ndarray containing the evaluation of the :ref:`LazyArray`.
 
@@ -107,7 +107,7 @@ class LazyArray(ABC):
         pass
 
     @abstractmethod
-    def save(self, **kwargs):
+    def save(self, **kwargs: dict) -> None:
         """
         Save the :ref:`LazyArray` on disk.
 
@@ -133,7 +133,7 @@ class LazyArray(ABC):
 
     @property
     @abstractmethod
-    def dtype(self):
+    def dtype(self) -> np.dtype:
         """
         Get the data type of the :ref:`LazyArray`.
 
@@ -146,7 +146,7 @@ class LazyArray(ABC):
 
     @property
     @abstractmethod
-    def shape(self):
+    def shape(self) -> tuple[int]:
         """
         Get the shape of the :ref:`LazyArray`.
 
@@ -159,7 +159,7 @@ class LazyArray(ABC):
 
     @property
     @abstractmethod
-    def info(self):
+    def info(self) -> InfoReporter:
         """
         Get information about the :ref:`LazyArray`.
 
@@ -1873,7 +1873,8 @@ def _open_lazyarray(array):
     return expr
 
 
-def lazyudf(func, inputs, dtype, chunked_eval=True, **kwargs):
+def lazyudf(func: Callable[[tuple, np.ndarray, tuple[int]], None], inputs: tuple | list,
+            dtype: np.dtype, chunked_eval: bool = True, **kwargs: dict) -> LazyUDF:
     """
     Get a LazyUDF from a python user-defined function.
 
@@ -1908,7 +1909,8 @@ def lazyudf(func, inputs, dtype, chunked_eval=True, **kwargs):
     return LazyUDF(func, inputs, dtype, chunked_eval, **kwargs)
 
 
-def lazyexpr(expression, operands=None, out=None, where=None):
+def lazyexpr(expression: str | bytes | LazyExpr, operands: dict = None,
+             out: blosc2.NDArray | np.ndarray = None, where: tuple | list = None) -> LazyExpr:
     """
     Get a LazyExpr from an expression.
 
