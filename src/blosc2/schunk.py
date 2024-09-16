@@ -490,7 +490,7 @@ class SChunk(blosc2_ext.SChunk):
         Examples
         --------
         >>> import blosc2
-        >>> schunk = blosc2.SChunk(cparams = {'typesize': 1})
+        >>> schunk = blosc2.SChunk(cparams={'typesize': 1})
         >>> buffer = b"wermqeoir23"
         >>> schunk.append_data(buffer)
         1
@@ -833,8 +833,6 @@ class SChunk(blosc2_ext.SChunk):
         >>> chunk_size = 200 * 1000 * 4
         >>> data = np.arange(nchunks * chunk_size // 4, dtype=np.int32)
         >>> schunk = blosc2.SChunk(chunksize=chunk_size, data=data, cparams={"typesize": 4})
-        >>> # Define a slice of the original data array to compare with the result from __getitem__
-        >>> sl = data[150:155]
         >>> # Use __getitem__ to retrieve the same slice of data from the SChunk
         >>> res = schunk[150:155]
         >>> f"Slice data: {np.frombuffer(res, dtype=np.int32)}"
@@ -893,7 +891,6 @@ class SChunk(blosc2_ext.SChunk):
         >>> start_ = 1000
         >>> stop = 2000
         >>> new_values = np.arange(start_, stop, dtype=np.int32) * 2
-        >>> # Use __setitem__ by the slicing syntax to update the chunk
         >>> schunk[start_:stop] = new_values
         >>> # Retrieve the updated slice using the slicing syntax
         >>> retrieved_slice = np.frombuffer(schunk[start_:stop], dtype=np.int32)
