@@ -5,13 +5,16 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+from __future__ import annotations
 
 import os
 import pathlib
 from collections import namedtuple
 from collections.abc import Mapping, MutableMapping
+from typing import Any, Iterator, NamedTuple
 
 import numpy as np
+from defusedxml import NotSupportedError
 from msgpack import packb, unpackb
 
 import blosc2
@@ -66,25 +69,22 @@ class Meta(Mapping):
     It will be available via the `.meta` property of a :ref:`SChunk`.
     """
 
-    def get(self, key, default=None):
+    def get(self, key: str, default: Any = None) -> Any:
         """Return the value for `key` if `key` is in the dictionary, else `default`.
         If `default` is not given, it defaults to ``None``."""
         return self.get(key, default)
 
-    def __del__(self):
-        pass
-
     def __init__(self, schunk):
         self.schunk = schunk
 
-    def __contains__(self, key):
+    def __contains__(self, key: str) -> bool:
         """Check if the `key` metalayer exists or not."""
         return blosc2_ext.meta__contains__(self.schunk, key)
 
-    def __delitem__(self, key):
-        return None
+    def __delitem__(self, key: str) -> None:
+        raise NotSupportedError("Cannot remove a metalayer")
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: str, value: bytes) -> None:
         """Update the `key` metalayer with `value`.
 
         Parameters
@@ -98,9 +98,9 @@ class Meta(Mapping):
             else an exception will be raised.
         """
         value = packb(value, default=blosc2_ext.encode_tuple, strict_types=True, use_bin_type=True)
-        return blosc2_ext.meta__setitem__(self.schunk, key, value)
+        blosc2_ext.meta__setitem__(self.schunk, key, value)
 
-    def __getitem__(self, item):
+    def __getitem__(self, item: str) -> bytes:
         """Return the `item` metalayer.
 
         Parameters
@@ -121,7 +121,7 @@ class Meta(Mapping):
         else:
             raise KeyError(f"{item} not found")
 
-    def keys(self):
+    def keys(self) -> list[str]:
         """Return the metalayers keys."""
         return blosc2_ext.meta_keys(self.schunk)
 
@@ -131,17 +131,17 @@ class Meta(Mapping):
     def items(self):
         raise NotImplementedError("Items can not be accessed")
 
-    def __iter__(self):
+    def __iter__(self) -> Iterator[str]:
         """Iter over the keys of the metalayers."""
         return iter(self.keys())
 
-    def __len__(self):
+    def __len__(self) -> int:
         """Return the number of metalayers."""
         return blosc2_ext.meta__len__(self.schunk)
 
 
 class SChunk(blosc2_ext.SChunk):
-    def __init__(self, chunksize=None, data=None, **kwargs):
+    def __init__(self, chunksize: int = None, data: object = None, **kwargs: dict):
         """Create a new super-chunk, or open an existing one.
 
         Parameters
@@ -346,7 +346,7 @@ class SChunk(blosc2_ext.SChunk):
         self._dparams = super().get_dparams()
 
     @property
-    def cparams(self):
+    def cparams(self) -> dict:
         """
         Dictionary with the compression parameters.
         """
@@ -358,7 +358,7 @@ class SChunk(blosc2_ext.SChunk):
         self._cparams = super().get_cparams()
 
     @property
-    def dparams(self):
+    def dparams(self) -> dict:
         """
         Dictionary with the decompression parameters.
         """
@@ -370,10 +370,79 @@ class SChunk(blosc2_ext.SChunk):
         self._dparams = super().get_dparams()
 
     @property
-    def meta(self):
+    def meta(self) -> Meta:
         return Meta(self)
 
-    def append_data(self, data):
+    @property
+    def chunkshape(self) -> int:
+        """
+        Number of elements per chunk.
+        """
+        return self.chunksize // self.typesize
+
+    @property
+    def chunksize(self) -> int:
+        """
+        Number of bytes in each chunk.
+        """
+        return super().chunksize
+
+    @property
+    def blocksize(self) -> int:
+        """The block size (in bytes).
+        """
+        return super().blocksize
+
+    @property
+    def nchunks(self) -> int:
+        """The number of chunks."""
+        return super().nchunks
+
+    @property
+    def cratio(self) -> float:
+        """
+        Compression ratio.
+        """
+        if self.cbytes == 0:
+            return 0.
+        return self.nbytes / self.cbytes
+
+    @property
+    def nbytes(self) -> int:
+        """
+        Amount of uncompressed data bytes.
+        """
+        return super().nbytes
+
+    @property
+    def cbytes(self) -> int:
+        """
+        Amount of compressed data bytes (data size + chunk headers size).
+        """
+        return super().cbytes
+
+    @property
+    def typesize(self) -> int:
+        """
+        Type size of the `SChunk`.
+        """
+        return super().typesize
+
+    @property
+    def urlpath(self) -> str:
+        """
+        Path where the `SChunk` is stored.
+        """
+        return super().urlpath
+
+    @property
+    def contiguous(self) -> bool:
+        """
+        Whether the `SChunk` is stored contiguously or sparsely.
+        """
+        return super().contiguous
+
+    def append_data(self, data: object) -> int:
         """Append a data buffer to the SChunk.
 
         The data buffer must be of size `chunksize` specified in
@@ -406,7 +475,8 @@ class SChunk(blosc2_ext.SChunk):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().append_data(data)
 
-    def fill_special(self, nitems, special_value, value=None):
+    def fill_special(self, nitems: int, special_value: blosc2.SpecialValue,
+                     value: bytes | int | float | bool = None) -> int:
         """Fill the SChunk with a special value.  SChunk must be empty.
 
         Parameters
@@ -461,7 +531,7 @@ class SChunk(blosc2_ext.SChunk):
             raise RuntimeError("Unable to fill with special values")
         return nchunks
 
-    def decompress_chunk(self, nchunk, dst=None):
+    def decompress_chunk(self, nchunk: int, dst: object = None) -> str | bytes:
         """Decompress the chunk given by its index :paramref:`nchunk`.
 
         Parameters
@@ -477,8 +547,8 @@ class SChunk(blosc2_ext.SChunk):
 
         Returns
         -------
-        out: str/bytes
-            The decompressed chunk in form of a Python str / bytes object if
+        out: str or bytes
+            The decompressed chunk in form of a Python str or bytes object if
             :paramref:`dst` is `None`. Otherwise, it will return `None` because the
             result will already be in :paramref:`dst`.
 
@@ -504,7 +574,7 @@ class SChunk(blosc2_ext.SChunk):
         """
         return super().decompress_chunk(nchunk, dst)
 
-    def get_chunk(self, nchunk):
+    def get_chunk(self, nchunk: int) -> bytes:
         """Return the compressed chunk that is in the SChunk.
 
         Parameters
@@ -540,7 +610,7 @@ class SChunk(blosc2_ext.SChunk):
         """
         return super().get_chunk(nchunk)
 
-    def delete_chunk(self, nchunk):
+    def delete_chunk(self, nchunk: int) -> int:
         """Delete the specified chunk from the SChunk.
 
         Parameters
@@ -578,7 +648,7 @@ class SChunk(blosc2_ext.SChunk):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().delete_chunk(nchunk)
 
-    def insert_chunk(self, nchunk, chunk):
+    def insert_chunk(self, nchunk: int, chunk: bytes) -> int:
         """Insert an already compressed chunk in the SChunk.
 
         Parameters
@@ -616,7 +686,7 @@ class SChunk(blosc2_ext.SChunk):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().insert_chunk(nchunk, chunk)
 
-    def insert_data(self, nchunk, data, copy):
+    def insert_data(self, nchunk: int, data: object, copy: bool) -> int:
         """Insert the data in the specified position in the SChunk.
 
         Parameters
@@ -656,7 +726,7 @@ class SChunk(blosc2_ext.SChunk):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().insert_data(nchunk, data, copy)
 
-    def update_chunk(self, nchunk, chunk):
+    def update_chunk(self, nchunk: int, chunk: bytes) -> int:
         """Update an existing chunk in the SChunk.
 
         Parameters
@@ -697,7 +767,7 @@ class SChunk(blosc2_ext.SChunk):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().update_chunk(nchunk, chunk)
 
-    def update_data(self, nchunk, data, copy):
+    def update_data(self, nchunk: int, data: object, copy: bool) -> int:
         """Update the chunk in the :paramref:`nchunk`-th position with the given data.
 
         Parameters
@@ -738,7 +808,7 @@ class SChunk(blosc2_ext.SChunk):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().update_data(nchunk, data, copy)
 
-    def get_slice(self, start=0, stop=None, out=None):
+    def get_slice(self, start: int = 0, stop: int = None, out: object = None) -> str | bytes | None:
         """Get a slice from :paramref:`start` to :paramref:`stop`.
 
         Parameters
@@ -758,8 +828,8 @@ class SChunk(blosc2_ext.SChunk):
 
         Returns
         -------
-        out: str/bytes or None
-            The decompressed slice in form of a Python str / bytes object if
+        out: str or bytes or None
+            The decompressed slice in form of a Python str or bytes object if
             :paramref:`out` is `None`. Otherwise, it will return `None` as the result
             will already be in :paramref:`out`.
 
@@ -798,7 +868,13 @@ class SChunk(blosc2_ext.SChunk):
         """
         return super().get_slice(start, stop, out)
 
-    def __getitem__(self, item):
+    def __len__(self) -> int:
+        """
+        Return the number of items in the SChunk.
+        """
+        return self.nbytes // self.typesize
+
+    def __getitem__(self, item: int | slice) -> str | bytes:
         """Get a slice from the SChunk.
 
         Parameters
@@ -808,8 +884,8 @@ class SChunk(blosc2_ext.SChunk):
 
         Returns
         -------
-        out: str/bytes
-            The decompressed slice in form of a Python str / bytes object.
+        out: str or bytes
+            The decompressed slice in form of a Python str or bytes object.
 
         Raises
         ------
@@ -846,7 +922,7 @@ class SChunk(blosc2_ext.SChunk):
             raise IndexError("`step` must be 1")
         return self.get_slice(item.start, item.stop)
 
-    def __setitem__(self, key, value):
+    def __setitem__(self, key: int | slice, value: object) -> None:
         """Set slice to :paramref:`value`.
 
         Parameters
@@ -904,7 +980,7 @@ class SChunk(blosc2_ext.SChunk):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().set_slice(start=key.start, stop=key.stop, value=value)
 
-    def to_cframe(self):
+    def to_cframe(self) -> bytes:
         """Get a bytes object containing the serialized :ref:`SChunk` instance.
 
         Returns
@@ -942,7 +1018,7 @@ class SChunk(blosc2_ext.SChunk):
         """
         return super().to_cframe()
 
-    def iterchunks(self, dtype):
+    def iterchunks(self, dtype: np.dtype) -> Iterator[np.ndarray]:
         """
         Iterate over :paramref:`self` chunks.
 
@@ -975,7 +1051,15 @@ class SChunk(blosc2_ext.SChunk):
             self.get_slice(i, i + self.chunkshape, out)
             yield out
 
-    def iterchunks_info(self):
+    def iterchunks_info(self) -> Iterator[
+                NamedTuple("info",
+                           nchunk = int,
+                           cratio = float,
+                           special = blosc2.SpecialValue,
+                           repeated_value = bytes | None,
+                           lazychunk = bytes
+                           )
+            ]:
         """
         Iterate over :paramref:`self` chunks, providing info on index and special values.
 
@@ -1029,7 +1113,7 @@ class SChunk(blosc2_ext.SChunk):
             )
             yield ChunkInfo(nchunk, cratio, special, repeated_value, lazychunk)
 
-    def postfilter(self, input_dtype, output_dtype=None):
+    def postfilter(self, input_dtype: np.dtype, output_dtype: np.dtype = None) -> None:
         """Decorator to set a function as a postfilter.
 
         The postfilter function will be executed each time after decompressing
@@ -1078,7 +1162,6 @@ class SChunk(blosc2_ext.SChunk):
             @schunk.postfilter(input_dtype)
             def postfilter(input, output, offset):
                 output[:] = offset + np.arange(input.size)
-
         """
 
         def initialize(func):
@@ -1091,7 +1174,7 @@ class SChunk(blosc2_ext.SChunk):
 
         return initialize
 
-    def remove_postfilter(self, func_name, _new_ctx=True):
+    def remove_postfilter(self, func_name: str, _new_ctx: bool = True) -> None:
         """Remove the postfilter from the `SChunk` instance.
 
         Parameters
@@ -1127,7 +1210,7 @@ class SChunk(blosc2_ext.SChunk):
         """
         return super().remove_postfilter(func_name)
 
-    def filler(self, inputs_tuple, schunk_dtype, nelem=None):
+    def filler(self, inputs_tuple: tuple[tuple], schunk_dtype: np.dtype, nelem: int = None) -> None:
         """Decorator to set a filler function.
 
         This function will fill :paramref:`self` according to :paramref:`nelem`.
@@ -1208,7 +1291,7 @@ class SChunk(blosc2_ext.SChunk):
 
         return initialize
 
-    def prefilter(self, input_dtype, output_dtype=None):
+    def prefilter(self, input_dtype: np.dtype, output_dtype: np.dtype = None) -> None:
         """Decorator to set a function as a prefilter.
 
         This function will be executed each time before compressing the data. It will receive three parameters:
@@ -1258,7 +1341,6 @@ class SChunk(blosc2_ext.SChunk):
             @schunk.prefilter(input_dtype, output_dtype)
             def prefilter(input, output, offset):
                 output[:] = input - np.pi
-
         """
 
         def initialize(func):
@@ -1271,7 +1353,7 @@ class SChunk(blosc2_ext.SChunk):
 
         return initialize
 
-    def remove_prefilter(self, func_name, _new_ctx=True):
+    def remove_prefilter(self, func_name: str, _new_ctx: bool = True) -> None:
         """Remove the prefilter from the `SChunk` instance.
 
         Parameters
@@ -1316,7 +1398,8 @@ class SChunk(blosc2_ext.SChunk):
 
 @_inherit_doc_parameter(SChunk.__init__, "mmap_mode:", {r"\* - 'w\+'[^*]+": ""})
 @_inherit_doc_parameter(SChunk.__init__, "initial_mapping_size:", {r"r\+ w\+, or c": "r+ or c"})
-def open(urlpath, mode="a", offset=0, **kwargs):
+def open(urlpath: str | pathlib.Path | blosc2.URLPath, mode: str = "a", offset: int = 0,
+         **kwargs: dict) -> blosc2.SChunk | blosc2.NDArray | blosc2.C2Array:
     """Open a persistent :ref:`SChunk` or :ref:`NDArray` or a remote :ref:`C2Array`
     or a :ref:`Proxy` (see the `Notes` section for more info on the latter case).
 
@@ -1345,6 +1428,12 @@ def open(urlpath, mode="a", offset=0, **kwargs):
                 A dictionary with the decompression parameters, which are the same that can
                 be used in the :func:`~blosc2.decompress2` function.
 
+    Returns
+    -------
+    out: :ref:`SChunk`, :ref:`NDArray` or :ref:`C2Array`
+        The SChunk or NDArray (in case there is a "b2nd" metalayer")
+        or the C2Array if :paramref:`urlpath` is a :ref:`blosc2.URLPath <URLPath>` instance.
+
     Notes
     -----
     * This is just a 'logical' open, so there is not a `close()` counterpart because
@@ -1360,12 +1449,6 @@ def open(urlpath, mode="a", offset=0, **kwargs):
       has not accessed it yet).
 
     * When opening a :ref:`LazyExpr` keep in mind the later note regarding the operands.
-
-    Returns
-    -------
-    out: :ref:`SChunk`, :ref:`NDArray` or :ref:`C2Array`
-        The SChunk or NDArray (in case there is a "b2nd" metalayer")
-        or the C2Array if :paramref:`urlpath` is a :ref:`blosc2.URLPath <URLPath>` instance.
 
     Examples
     --------

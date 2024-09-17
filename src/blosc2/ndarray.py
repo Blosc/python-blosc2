@@ -11,7 +11,7 @@ from __future__ import annotations
 import builtins
 import math
 from collections import namedtuple
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Iterator, NamedTuple
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -861,6 +861,101 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return self._schunk
 
     @property
+    def shape(self) -> tuple[int]:
+        """The data shape of this container.
+
+        In case it is multiple in each dimension of :attr:`chunks`,
+        it will be the same as :attr:`ext_shape`.
+
+        See Also
+        --------
+        :attr:`ext_shape`
+        """
+        return super().shape
+
+    @property
+    def ext_shape(self) -> tuple[int]:
+        """The padded data shape.
+
+        The padded data is filled with zeros to make the real data fit into blocks and chunks, but it
+        will never be retrieved as actual data (so the user can ignore this).
+        In case :attr:`shape` is multiple in each dimension of :attr:`chunks` it will be the same
+        as :attr:`shape`.
+
+        See Also
+        --------
+        :attr:`shape`
+        :attr:`chunks`
+        """
+        return super().ext_shape
+
+    @property
+    def chunks(self) -> tuple[int]:
+        """The data chunk shape of this container.
+
+        In case it is multiple in each dimension of :attr:`blocks`,
+        it will be the same as :attr:`ext_chunks`.
+
+        See Also
+        --------
+        :attr:`ext_chunks`
+        """
+        return super().chunks
+
+    @property
+    def ext_chunks(self) -> tuple[int]:
+        """The padded chunk shape which defines the chunksize in the associated schunk.
+
+        This will be the chunk shape used to store each chunk, filling the extra positions
+        with zeros (padding). In case :attr:`chunks` is multiple in
+        each dimension of :attr:`blocks` it will be the same as :attr:`chunks`.
+
+        See Also
+        --------
+        :attr:`chunks`
+        """
+        return super().ext_chunks
+
+    @property
+    def blocks(self) -> tuple[int]:
+        """The block shape of this container."""
+        return super().blocks
+
+    @property
+    def ndim(self) -> int:
+        """The number of dimensions of this container."""
+        return super().ndim
+
+    @property
+    def size(self) -> int:
+        """The size (in bytes) for this container."""
+        return super().size
+
+    @property
+    def chunksize(self) -> int:
+        """The data chunk size (in bytes) for this container.
+
+        This will not be the same as
+        :attr:`SChunk.chunksize <blosc2.schunk.SChunk.chunksize>`
+        in case :attr:`chunks` is not multiple in
+        each dimension of :attr:`blocks` (or equivalently, in case :attr:`chunks` is
+        not the same as :attr:`ext_chunks`.
+
+        See Also
+        --------
+        :attr:`chunks`
+        :attr:`ext_chunks`
+        """
+        return super().chunksize
+
+    @property
+    def dtype(self) -> np.dtype:
+        """
+        Data-type of the array’s elements.
+        """
+        return super().dtype
+
+    @property
     def blocksize(self) -> int:
         """The block size (in bytes) for this container.
 
@@ -1046,7 +1141,16 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return self.schunk.get_chunk(nchunk)
 
-    def iterchunks_info(self):
+    def iterchunks_info(self) -> Iterator[
+                NamedTuple("info",
+                           nchunk = int,
+                           coords = tuple,
+                           cratio = float,
+                           special = blosc2.SpecialValue,
+                           repeated_value = bytes | None,
+                           lazychunk = bytes
+                           )
+            ]:
         """
         Iterate over :paramref:`self` chunks, providing info on index and special values.
 
@@ -2475,8 +2579,8 @@ def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: dict | list) -> NDArra
     out: :ref:`NDArray`
         An new NDArray made of :paramref:`array`.
 
-    Note
-    ----
+    Notes
+    -----
     This will create the NDArray chunk-by-chunk directly from the input array,
     without the need to create a contiguous NumPy array internally.  This can
     be used for ingesting e.g. disk or network based arrays very effectively
