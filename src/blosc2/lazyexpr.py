@@ -102,18 +102,11 @@ class LazyArray(ABC):
         >>> # Perform the mathematical operation
         >>> expr = a1 + b1
         >>> output = expr.eval()
-        >>> print("Array A: ", a[:])
-        [[0.    0.625 1.25 ]
-        [1.875 2.5   3.125]
-        [3.75  4.375 5.   ]]
-        >>> print("Array B: ", b[:])
-        [[0.    0.625 1.25 ]
-        [1.875 2.5   3.125]
-        [3.75  4.375 5.   ]]
-        >>> print("Result of A + B (Lazy evaluation):", output[:])
-        [[ 0.    1.25  2.5 ]
-        [ 3.75  5.    6.25]
-        [ 7.5   8.75 10.  ]]
+        >>> f"Result of a + b (Lazy evaluation): {output[:]}"
+        Result of a + b (Lazy evaluation):
+                    [[ 0.    1.25  2.5 ]
+                    [ 3.75  5.    6.25]
+                    [ 7.5   8.75 10.  ]]
         """
         pass
 
@@ -146,10 +139,9 @@ class LazyArray(ABC):
         >>> b1 = blosc2.asarray(b)
         >>> # Perform the mathematical operation
         >>> expr = a1 + b1  # LazyExpr expression
-        >>> output = expr.eval(cparams={"typesize": 4})
-        >>> output[3]
+        >>> expr[3]
         [2.01680672 2.18487395 2.35294118 2.5210084 ]
-        >>> output[2:4]
+        >>> expr[2:4]
         [[1.34453782 1.51260504 1.68067227 1.8487395 ]
         [2.01680672 2.18487395 2.35294118 2.5210084 ]]
         """
@@ -198,9 +190,9 @@ class LazyArray(ABC):
         >>> expr.save(urlpath='lazy_array.b2nd', mode='w')
         >>> # Open and load the LazyExpr from disk
         >>> disk_expr = blosc2.open('lazy_array.b2nd')
-        >>> f"The first two rows of the loaded LazyExpr data: {disk_expr[:2]}
-        The first two rows of the loaded LazyExpr data:  [[0.   1.25 2.5 ]
-                                                        [3.75 5.   6.25]]
+        >>> disk_expr[:2]
+        [[0.   1.25 2.5 ]
+        [3.75 5.   6.25]]
         """
         pass
 
@@ -1981,10 +1973,6 @@ def lazyudf(func, inputs, dtype, chunked_eval=True, **kwargs):
     --------
     >>> import blosc2
     >>> import numpy as np
-    >>> # Define a user-defined function that will be applied to each block of data
-    >>> def my_function(inputs_tuple, output, offset):
-    >>>     a, b = inputs_tuple
-    >>>     output[:] = a + b
     >>> dtype = np.float64
     >>> shape = [3, 3]
     >>> size = shape[0] * shape[1]
@@ -1992,6 +1980,10 @@ def lazyudf(func, inputs, dtype, chunked_eval=True, **kwargs):
     >>> b = np.linspace(10, 20, num=size, dtype=dtype).reshape(shape)
     >>> a1 = blosc2.asarray(a)
     >>> b1 = blosc2.asarray(b)
+    >>> # Define a user-defined function that will be applied to each block of data
+    >>> def my_function(inputs_tuple, output, offset):
+    >>>     a, b = inputs_tuple
+    >>>     output[:] = a + b
     >>> # Create a LazyUDF object using the user-defined function
     >>> lazy_udf = blosc2.lazyudf(my_function, [a1, b1], dtype)
     >>> type(lazy_udf)
@@ -2040,12 +2032,22 @@ def lazyexpr(expression, operands=None, out=None, where=None):
     >>> a = np.linspace(0, 5, num=size, dtype=dtype).reshape(shape)
     >>> b = np.linspace(0, 5, num=size, dtype=dtype).reshape(shape)
     >>> a1 = blosc2.asarray(a)
+    >>> a1[:]
+    [[0.    0.625 1.25 ]
+    [1.875 2.5   3.125]
+    [3.75  4.375 5.   ]]
     >>> b1 = blosc2.asarray(b)
     >>> expr = 'a1 * b1 + 2'
     >>> operands = { 'a': a1, 'b': b1 }
     >>> lazy_expr = blosc2.lazyexpr(expr, operands=operands)
     >>> f"Lazy Expression Created: {lazy_expr}"
     Lazy Expression Created: a1 * b1 + 2
+    >>> expr_ = a1 * b1 + 2
+    >>> result = expr_.eval()
+    >>> result[:]
+    [[ 2.        2.390625  3.5625  ]
+    [ 5.515625  8.25     11.765625]
+    [16.0625   21.140625 27.      ]]
     """
     if isinstance(expression, LazyExpr):
         if operands is not None:
