@@ -93,6 +93,27 @@ class LazyArray(ABC):
         * If self is a LazyArray from an udf, the kwargs used to store the resulting
           array will be the ones passed to the constructor in :func:`lazyudf` (except the
           `urlpath`) updated with the kwargs passed when calling this method.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> dtype = np.float64
+        >>> shape = [3, 3]
+        >>> size = shape[0] * shape[1]
+        >>> a = np.linspace(0, 5, num=size, dtype=dtype).reshape(shape)
+        >>> b = np.linspace(0, 5, num=size, dtype=dtype).reshape(shape)
+        >>> #  Convert numpy arrays to Blosc2 arrays
+        >>> a1 = blosc2.asarray(a)
+        >>> b1 = blosc2.asarray(b)
+        >>> # Perform the mathematical operation
+        >>> expr = a1 + b1
+        >>> output = expr.eval()
+        >>> f"Result of a + b (lazy evaluation): {output[:]}"
+        Result of a + b (lazy evaluation):
+                    [[ 0.    1.25  2.5 ]
+                    [ 3.75  5.    6.25]
+                    [ 7.5   8.75 10.  ]]
         """
         pass
 
@@ -110,6 +131,26 @@ class LazyArray(ABC):
         -------
         out: np.ndarray
             An array with the data containing the slice evaluated.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> dtype = np.float64
+        >>> shape = [30, 4]
+        >>> size = shape[0] * shape[1]
+        >>> a = np.linspace(0, 10, num=size, dtype=dtype).reshape(shape)
+        >>> b = np.linspace(0, 10, num=size, dtype=dtype).reshape(shape)
+        >>> #  Convert numpy arrays to Blosc2 arrays
+        >>> a1 = blosc2.asarray(a)
+        >>> b1 = blosc2.asarray(b)
+        >>> # Perform the mathematical operation
+        >>> expr = a1 + b1  # LazyExpr expression
+        >>> expr[3]
+        [2.01680672 2.18487395 2.35294118 2.5210084 ]
+        >>> expr[2:4]
+        [[1.34453782 1.51260504 1.68067227 1.8487395 ]
+        [2.01680672 2.18487395 2.35294118 2.5210084 ]]
         """
         pass
 
@@ -135,6 +176,28 @@ class LazyArray(ABC):
           if its source is a :ref:`SChunk`, :ref:`NDArray` or a :ref:`C2Array` (see :func:`blosc2.open` notes
           section for more info).
         * This is currently only supported for :ref:`LazyExpr`.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> dtype = np.float64
+        >>> shape = [3, 3]
+        >>> size = shape[0] * shape[1]
+        >>> a = np.linspace(0, 5, num=size, dtype=dtype).reshape(shape)
+        >>> b = np.linspace(0, 5, num=size, dtype=dtype).reshape(shape)
+        >>> # Define file paths for storing the arrays
+        >>> a1 = blosc2.asarray(a, urlpath='a_array.b2nd', mode='w')
+        >>> b1 = blosc2.asarray(b, urlpath='b_array.b2nd', mode='w')
+        >>> # Perform the mathematical operation to create a LazyExpr expression
+        >>> expr = a1 + b1
+        >>> # Save the LazyExpr to disk
+        >>> expr.save(urlpath='lazy_array.b2nd', mode='w')
+        >>> # Open and load the LazyExpr from disk
+        >>> disk_expr = blosc2.open('lazy_array.b2nd')
+        >>> disk_expr[:2]
+        [[0.   1.25 2.5 ]
+        [3.75 5.   6.25]]
         """
         pass
 
@@ -1912,6 +1975,30 @@ def lazyudf(func: Callable[[tuple, np.ndarray, tuple[int]], None], inputs: tuple
     out: :ref:`LazyUDF`
         A :ref:`LazyUDF` is returned.
 
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> dtype = np.float64
+    >>> shape = [3, 3]
+    >>> size = shape[0] * shape[1]
+    >>> a = np.linspace(0, 10, num=size, dtype=dtype).reshape(shape)
+    >>> b = np.linspace(10, 20, num=size, dtype=dtype).reshape(shape)
+    >>> a1 = blosc2.asarray(a)
+    >>> b1 = blosc2.asarray(b)
+    >>> # Define a user-defined function that will be applied to each block of data
+    >>> def my_function(inputs_tuple, output, offset):
+    >>>     a, b = inputs_tuple
+    >>>     output[:] = a + b
+    >>> # Create a LazyUDF object using the user-defined function
+    >>> lazy_udf = blosc2.lazyudf(my_function, [a1, b1], dtype)
+    >>> type(lazy_udf)
+    <class 'blosc2.lazyexpr.LazyUDF'>
+    >>> f"Result of LazyUDF evaluation: {lazy_udf[:]}"
+    Result of LazyUDF evaluation:
+            [[10.  12.5 15. ]
+            [17.5 20.  22.5]
+            [25.  27.5 30. ]]
     """
     return LazyUDF(func, inputs, dtype, chunked_eval, **kwargs)
 
@@ -1942,6 +2029,30 @@ def lazyexpr(expression: str | bytes | LazyExpr, operands: dict = None,
     out: :ref:`LazyExpr`
         A :ref:`LazyExpr` is returned.
 
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> dtype = np.float64
+    >>> shape = [3, 3]
+    >>> size = shape[0] * shape[1]
+    >>> a = np.linspace(0, 5, num=size, dtype=dtype).reshape(shape)
+    >>> b = np.linspace(0, 5, num=size, dtype=dtype).reshape(shape)
+    >>> a1 = blosc2.asarray(a)
+    >>> a1[:]
+    [[0.    0.625 1.25 ]
+    [1.875 2.5   3.125]
+    [3.75  4.375 5.   ]]
+    >>> b1 = blosc2.asarray(b)
+    >>> expr = 'a1 * b1 + 2'
+    >>> operands = { 'a': a1, 'b': b1 }
+    >>> lazy_expr = blosc2.lazyexpr(expr, operands=operands)
+    >>> f"Lazy expression created: {lazy_expr}"
+    Lazy expression created: a1 * b1 + 2
+    >>> lazy_expr[:]
+    [[ 2.        2.390625  3.5625  ]
+    [ 5.515625  8.25     11.765625]
+    [16.0625   21.140625 27.      ]]
     """
     if isinstance(expression, LazyExpr):
         if operands is not None:
