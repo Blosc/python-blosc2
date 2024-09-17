@@ -679,13 +679,6 @@ def set_releasegil(c_bool gilstate):
     return oldstate
 
 def get_blocksize():
-    """ Get the internal blocksize to be used during compression.
-
-    Returns
-    -------
-    out : int
-        The size in bytes of the internal block size.
-    """
     return blosc1_get_blocksize()
 
 cdef _check_cparams(blosc2_cparams *cparams):
@@ -1036,79 +1029,36 @@ cdef class SChunk:
         return <uintptr_t> self.schunk
 
     @property
-    def chunkshape(self):
-        """
-        Number of elements per chunk.
-        """
-        return self.schunk.chunksize // self.schunk.typesize
-
-    def __len__(self):
-        """
-        Return the number of items in the SChunk.
-        """
-        return self.schunk.nbytes // self.schunk.typesize
-
-    @property
     def chunksize(self):
-        """
-        Number of bytes in each chunk.
-        """
         return self.schunk.chunksize
 
     @property
     def blocksize(self):
-        """The block size (in bytes).
-        """
         return self.schunk.blocksize
 
     @property
     def nchunks(self):
-        """The number of chunks."""
         return self.schunk.nchunks
 
     @property
-    def cratio(self):
-        """
-        Compression ratio.
-        """
-        if self.schunk.cbytes == 0:
-            return 0.
-        return self.schunk.nbytes / self.schunk.cbytes
-
-    @property
     def nbytes(self):
-        """
-        Amount of uncompressed data bytes.
-        """
         return self.schunk.nbytes
 
     @property
     def cbytes(self):
-        """
-        Amount of compressed data bytes (data size + chunk headers size).
-        """
         return self.schunk.cbytes
 
     @property
     def typesize(self):
-        """
-        Type size of the `SChunk`.
-        """
         return self.schunk.typesize
 
     @property
     def urlpath(self):
-        """
-        Path where the `SChunk` is stored.
-        """
         urlpath = self.schunk.storage.urlpath
         return urlpath.decode() if urlpath != NULL else None
 
     @property
     def contiguous(self):
-        """
-        Whether the `SChunk` is stored contiguously or sparsely.
-        """
         return self.schunk.storage.contiguous
 
     def get_cparams(self):
@@ -1565,7 +1515,7 @@ cdef class SChunk:
         if self.schunk.dctx == NULL:
             raise RuntimeError("Could not create decompression context")
 
-    cpdef remove_postfilter(self, func_name, new_ctx=True):
+    cpdef remove_postfilter(self, func_name, _new_ctx=True):
         if func_name is not None:
             del blosc2.postfilter_funcs[func_name]
 
@@ -1577,7 +1527,7 @@ cdef class SChunk:
         self.schunk.storage.dparams.postfilter = NULL
 
         blosc2_free_ctx(self.schunk.dctx)
-        if new_ctx:
+        if _new_ctx:
             self.schunk.dctx = blosc2_create_dctx(dereference(self.schunk.storage.dparams))
             if self.schunk.dctx == NULL:
                 raise RuntimeError("Could not create decompression context")
@@ -1647,7 +1597,7 @@ cdef class SChunk:
         if self.schunk.cctx == NULL:
             raise RuntimeError("Could not create compression context")
 
-    cpdef remove_prefilter(self, func_name, new_ctx=True):
+    cpdef remove_prefilter(self, func_name, _new_ctx=True):
         if func_name is not None:
             del blosc2.prefilter_funcs[func_name]
 
@@ -1660,7 +1610,7 @@ cdef class SChunk:
         self.schunk.storage.cparams.prefilter = NULL
 
         blosc2_free_ctx(self.schunk.cctx)
-        if new_ctx:
+        if _new_ctx:
             self.schunk.cctx = blosc2_create_cctx(dereference(self.schunk.storage.cparams))
             if self.schunk.cctx == NULL:
                 raise RuntimeError("Could not create compression context")
@@ -1672,9 +1622,9 @@ cdef class SChunk:
         if self.schunk != NULL and not self._is_view:
             # Free prefilters and postfilters params
             if self.schunk.storage.cparams.prefilter != NULL:
-                self.remove_prefilter(func_name=None, new_ctx=False)
+                self.remove_prefilter(func_name=None, _new_ctx=False)
             if self.schunk.storage.dparams.postfilter != NULL:
-                self.remove_postfilter(func_name=None, new_ctx=False)
+                self.remove_postfilter(func_name=None, _new_ctx=False)
 
             blosc2_schunk_free(self.schunk)
 
@@ -1938,8 +1888,7 @@ def meta__setitem__(self, name, content):
     old_content = meta__getitem__(self, name)
     if len(old_content) != len(content):
         raise ValueError("The length of the content in a metalayer cannot change.")
-    n = blosc2_meta_update(schunk, name, content, len(content))
-    return n
+    blosc2_meta_update(schunk, name, content, len(content))
 
 def meta__len__(self):
     cdef blosc2_schunk *schunk = <blosc2_schunk *><uintptr_t> self.c_schunk
@@ -2238,103 +2187,39 @@ cdef class NDArray:
         self.array = <b2nd_array_t *> PyCapsule_GetPointer(array, <char *> "b2nd_array_t*")
 
     @property
-    def shape(self):
-        """The data shape of this container.
-
-        In case it is multiple in each dimension of :attr:`chunks`,
-        it will be the same as :attr:`ext_shape`.
-
-        See Also
-        --------
-        :attr:`ext_shape`
-
-        """
+    def shape(self) -> tuple[int]:
         return tuple([self.array.shape[i] for i in range(self.array.ndim)])
 
     @property
     def ext_shape(self):
-        """The padded data shape.
-
-        The padded data is filled with zeros to make the real data fit into blocks and chunks, but it
-        will never be retrieved as actual data (so the user can ignore this).
-        In case :attr:`shape` is multiple in each dimension of :attr:`chunks` it will be the same
-        as :attr:`shape`.
-
-        See Also
-        --------
-        :attr:`shape`
-        :attr:`chunks`
-
-        """
         return tuple([self.array.extshape[i] for i in range(self.array.ndim)])
 
     @property
     def chunks(self):
-        """The data chunk shape of this container.
-
-        In case it is multiple in each dimension of :attr:`blocks`,
-        it will be the same as :attr:`ext_chunks`.
-
-        See Also
-        --------
-        :attr:`ext_chunks`
-
-        """
         return tuple([self.array.chunkshape[i] for i in range(self.array.ndim)])
 
     @property
     def ext_chunks(self):
-        """The padded chunk shape which defines the chunksize in the associated schunk.
-
-        This will be the chunk shape used to store each chunk, filling the extra positions
-        with zeros (padding). In case :attr:`chunks` is multiple in
-        each dimension of :attr:`blocks` it will be the same as :attr:`chunks`.
-
-        See Also
-        --------
-        :attr:`chunks`
-
-        """
         return tuple([self.array.extchunkshape[i] for i in range(self.array.ndim)])
 
     @property
     def blocks(self):
-        """The block shape of this container."""
         return tuple([self.array.blockshape[i] for i in range(self.array.ndim)])
 
     @property
     def ndim(self):
-        """The number of dimensions of this container."""
         return self.array.ndim
 
     @property
     def size(self):
-        """The size (in bytes) for this container."""
         return self.array.nitems * self.array.sc.typesize
 
     @property
     def chunksize(self):
-        """The data chunk size (in bytes) for this container.
-
-        This will not be the same as
-        :attr:`SChunk.chunksize <blosc2.schunk.SChunk.chunksize>`
-        in case :attr:`chunks` is not multiple in
-        each dimension of :attr:`blocks` (or equivalently, in case :attr:`chunks` is
-        not the same as :attr:`ext_chunks`.
-
-        See Also
-        --------
-        :attr:`chunks`
-        :attr:`ext_chunks`
-
-        """
         return self.array.chunknitems * self.array.sc.typesize
 
     @property
     def dtype(self):
-        """
-        Data-type of the array’s elements.
-        """
         if self._dtype is not None:
             return self._dtype
 
