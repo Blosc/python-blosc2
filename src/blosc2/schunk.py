@@ -14,7 +14,6 @@ from collections.abc import Mapping, MutableMapping
 from typing import Any, Iterator, NamedTuple
 
 import numpy as np
-from defusedxml import NotSupportedError
 from msgpack import packb, unpackb
 
 import blosc2
@@ -82,7 +81,7 @@ class Meta(Mapping):
         return blosc2_ext.meta__contains__(self.schunk, key)
 
     def __delitem__(self, key: str) -> None:
-        raise NotSupportedError("Cannot remove a metalayer")
+        raise NotImplementedError("Cannot remove a metalayer")
 
     def __setitem__(self, key: str, value: bytes) -> None:
         """Update the `key` metalayer with `value`.
