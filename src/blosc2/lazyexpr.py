@@ -102,8 +102,8 @@ class LazyArray(ABC):
         >>> # Perform the mathematical operation
         >>> expr = a1 + b1
         >>> output = expr.eval()
-        >>> f"Result of a + b (Lazy evaluation): {output[:]}"
-        Result of a + b (Lazy evaluation):
+        >>> f"Result of a + b (lazy evaluation): {output[:]}"
+        Result of a + b (lazy evaluation):
                     [[ 0.    1.25  2.5 ]
                     [ 3.75  5.    6.25]
                     [ 7.5   8.75 10.  ]]
@@ -180,10 +180,8 @@ class LazyArray(ABC):
         >>> a = np.linspace(0, 5, num=size, dtype=dtype).reshape(shape)
         >>> b = np.linspace(0, 5, num=size, dtype=dtype).reshape(shape)
         >>> # Define file paths for storing the arrays
-        >>> a_path = 'a_array.b2nd'
-        >>> b_path = 'b_array.b2nd'
-        >>> a1 = blosc2.asarray(a, urlpath=a_path, mode='w')
-        >>> b1 = blosc2.asarray(b, urlpath=b_path, mode='w')
+        >>> a1 = blosc2.asarray(a, urlpath='a_array.b2nd', mode='w')
+        >>> b1 = blosc2.asarray(b, urlpath='b_array.b2nd', mode='w')
         >>> # Perform the mathematical operation to create a LazyExpr expression
         >>> expr = a1 + b1
         >>> # Save the LazyExpr to disk
@@ -1988,8 +1986,8 @@ def lazyudf(func, inputs, dtype, chunked_eval=True, **kwargs):
     >>> lazy_udf = blosc2.lazyudf(my_function, [a1, b1], dtype)
     >>> type(lazy_udf)
     <class 'blosc2.lazyexpr.LazyUDF'>
-    >>> f"Result of LazyUDF Evaluation: {lazy_udf[:]}"
-    Result of LazyUDF Evaluation:
+    >>> f"Result of LazyUDF evaluation: {lazy_udf[:]}"
+    Result of LazyUDF evaluation:
             [[10.  12.5 15. ]
             [17.5 20.  22.5]
             [25.  27.5 30. ]]
@@ -2040,11 +2038,10 @@ def lazyexpr(expression, operands=None, out=None, where=None):
     >>> expr = 'a1 * b1 + 2'
     >>> operands = { 'a': a1, 'b': b1 }
     >>> lazy_expr = blosc2.lazyexpr(expr, operands=operands)
-    >>> f"Lazy Expression Created: {lazy_expr}"
-    Lazy Expression Created: a1 * b1 + 2
+    >>> f"Lazy expression created: {lazy_expr}"
+    Lazy expression created: a1 * b1 + 2
     >>> expr_ = a1 * b1 + 2
-    >>> result = expr_.eval()
-    >>> result[:]
+    >>> expr_[:]
     [[ 2.        2.390625  3.5625  ]
     [ 5.515625  8.25     11.765625]
     [16.0625   21.140625 27.      ]]
