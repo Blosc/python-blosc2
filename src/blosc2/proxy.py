@@ -129,6 +129,25 @@ class Proxy(blosc2.Operand):
         -------
         out: :ref:`NDArray` or :ref:`SChunk`
             The local container used to cache the already requested data.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import blosc2
+        >>> data = np.arange(20).reshape(10, 2)
+        >>> ndarray = blosc2.asarray(data)
+        >>> proxy = blosc2.Proxy(ndarray)
+        >>> full_data = proxy.fetch()
+        >>> f"Full data cache: {full_data[:]}"
+        Full data cache:
+            [[ 0  1][ 2  3][ 4  5]
+            [ 6  7][ 8  9][10 11]
+            [12 13][14 15][16 17]
+            [18 19]]
+        >>> slice_data = proxy[0:2, :]
+        >>> f"Slice data cache: {slice_data}"
+        Slice data cache:
+        [[0 1][2 3]]
         """
         if item is None:
             # Full realization
@@ -198,6 +217,26 @@ class Proxy(blosc2.Operand):
         -------
         out: numpy.ndarray
             An array with the data slice.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import blosc2
+        >>> data = np.arange(100).reshape(10, 10)
+        >>> ndarray = blosc2.asarray(data)
+        >>> proxy = blosc2.Proxy(ndarray)
+        >>> slice_1 = proxy[0:3, 0:3]
+        >>> f"Slice 1: {slice_1}"
+        Slice 1:
+        [[ 0  1  2]
+        [10 11 12]
+        [20 21 22]]
+        >>> slice_2 = proxy[5:8, 2:5]
+        >>> f"Slice 2: {slice_2}"
+        Slice 2:
+        [[52 53 54]
+        [62 63 64]
+        [72 73 74]]
         """
         # Populate the cache
         self.fetch(item)

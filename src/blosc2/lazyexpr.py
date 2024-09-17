@@ -2040,8 +2040,7 @@ def lazyexpr(expression, operands=None, out=None, where=None):
     >>> lazy_expr = blosc2.lazyexpr(expr, operands=operands)
     >>> f"Lazy expression created: {lazy_expr}"
     Lazy expression created: a1 * b1 + 2
-    >>> expr_ = a1 * b1 + 2
-    >>> expr_[:]
+    >>> lazy_expr[:]
     [[ 2.        2.390625  3.5625  ]
     [ 5.515625  8.25     11.765625]
     [16.0625   21.140625 27.      ]]
