@@ -18,7 +18,7 @@ import pickle
 import platform
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict
 
 import cpuinfo
 import numpy as np
@@ -52,70 +52,6 @@ def _check_filter(filter):
 def _check_codec(codec):
     if codec not in blosc2.Codec:
         raise ValueError(f"codec can only be one of: {codecs}, not '{codec}'")
-
-
-def default_filters():
-    return [blosc2.Filter.NOFILTER,
-            blosc2.Filter.NOFILTER,
-            blosc2.Filter.NOFILTER,
-            blosc2.Filter.NOFILTER,
-            blosc2.Filter.NOFILTER,
-            blosc2.Filter.SHUFFLE]
-
-
-def default_filters_meta():
-    return [0] * 6
-
-@dataclass
-class CParams:
-    """Dataclass for hosting the different compression parameters.
-
-    Parameters
-    ----------
-    codec: :class:`Codec`
-        The compressor code. Default is :py:obj:`Codec.ZSTD <Codec>`.
-    codec_meta: int
-        The metadata for the compressor code, 0 by default.
-    clevel: int
-        The compression level from 0 (no compression) to 9
-        (maximum compression). Default: 1.
-    use_dict: bool
-        Use dicts or not when compressing
-        (only for :py:obj:`blosc2.Codec.ZSTD <Codec>`). Default: `False`.
-    typesize: int from 1 to 255
-        The data type size. Default: 8.
-    nthreads: int
-        The number of threads to use internally. By default, blosc2 computes
-        a good guess.
-    blocksize: int
-        The requested size of the compressed blocks. If 0 (the default)
-        blosc2 chooses it automatically.
-    splitmode: :class:`SplitMode`
-        The split mode for the blocks.
-        The default value is :py:obj:`SplitMode.ALWAYS_SPLIT <SplitMode>`.
-    filters: :class:`Filter` list
-        The sequence of filters. Default: [:py:obj:`Filter.NOFILTER <Filter>`,
-        :py:obj:`Filter.NOFILTER <Filter>`, :py:obj:`Filter.NOFILTER <Filter>`, :py:obj:`Filter.NOFILTER <Filter>`,
-        :py:obj:`Filter.NOFILTER <Filter>`, :py:obj:`Filter.SHUFFLE <Filter>`].
-    filters_meta: list
-        The metadata for filters. Default: `[0, 0, 0, 0, 0, 0]`.
-    tuner: :class:`Tuner`
-        The tuner to use. Default: :py:obj:`Tuner.STUNE <Tuner>`.
-    """
-    codec: blosc2.Codec = blosc2.Codec.ZSTD
-    codec_meta: int = 0
-    clevel: int = 1
-    use_dict: bool = False
-    typesize: int = 8
-    nthreads: int = blosc2.nthreads
-    blocksize: int = 0
-    splitmode: blosc2.SplitMode = blosc2.SplitMode.ALWAYS_SPLIT
-    filters: list[blosc2.Filter] = field(default_factory=default_filters)
-    filters_meta: list[int] = field(default_factory=default_filters_meta)
-    tuner: blosc2.Tuner = blosc2.Tuner.STUNE
-
-    # def __post_init__(self):
-    #     if len(self.filters) > 6:
 
 
 def compress(
@@ -1447,7 +1383,7 @@ def compute_chunks_blocks(
     return tuple(chunks), tuple(blocks)
 
 
-def compress2(src: object, **kwargs: CParams | dict) -> str | bytes:
+def compress2(src: object, **kwargs: dict) -> str | bytes:
     """Compress :paramref:`src` with the given compression params (if given)
 
     Parameters
@@ -1461,11 +1397,11 @@ def compress2(src: object, **kwargs: CParams | dict) -> str | bytes:
         Compression parameters. The default values are in :ref:`blosc2.CParams`.
         Keyword arguments supported:
 
-            cparams: :class:`CParams`
+            cparams: :class:`blosc2.CParams`
                 All the compression parameters that you want to use as
-                a :class:`CParams` instance.
+                a :class:`blosc2.CParams` instance.
             others: Any
-                If `cparams` is not passed, all the parameters of a :class:`CParams`
+                If `cparams` is not passed, all the parameters of a :class:`blosc2.CParams`
                 can be passed as keyword arguments.
 
     Returns

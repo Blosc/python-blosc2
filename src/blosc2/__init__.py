@@ -155,7 +155,6 @@ from .core import (
     compress2,
     compressor_list,
     compute_chunks_blocks,
-    CParams,
     decompress,
     decompress2,
     detect_number_of_cores,
@@ -189,9 +188,6 @@ from .core import (
     unpack_tensor,
 )
 
-# Get CPU info
-cpu_info = get_cpu_info()
-
 
 from .ndarray import (  # noqa: I001
     NDArray,
@@ -216,6 +212,8 @@ from .lazyexpr import LazyExpr, lazyudf, lazyexpr, LazyArray, _open_lazyarray
 from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField
 
 from .schunk import SChunk, open
+
+from .storage import cpu_info, CParams, cparams_dflts, dparams_dflts, ncores, nthreads, storage_dflts
 
 
 # Registry for postfilters
@@ -244,54 +242,12 @@ blosclib_version = f"{VERSION_STRING} ({VERSION_DATE})"
 """
 The blosc2 version + date.
 """
+
 # Internal Blosc threading
-nthreads = ncores = cpu_info.get("count", 1)
-"""Number of threads to be used in compression/decompression.
-"""
-# Protection against too many threads
-nthreads = min(nthreads, 32)
-# Experiments say that, when using a large number of threads, it is better to not use them all
-nthreads -= nthreads // 8
 set_nthreads(nthreads)
 
 # Set the number of threads for NumExpr
 numexpr.set_num_threads(nthreads)
-
-# Defaults for compression params
-cparams_dflts = {
-    "codec": Codec.ZSTD,
-    "codec_meta": 0,
-    "clevel": 1,
-    "use_dict": False,
-    "typesize": 8,
-    "nthreads": nthreads,
-    "blocksize": 0,
-    "splitmode": SplitMode.ALWAYS_SPLIT,
-    "filters": [
-        Filter.NOFILTER,
-        Filter.NOFILTER,
-        Filter.NOFILTER,
-        Filter.NOFILTER,
-        Filter.NOFILTER,
-        Filter.SHUFFLE,
-    ],
-    "filters_meta": [0, 0, 0, 0, 0, 0],
-    "tuner": Tuner.STUNE,
-}
-"""
-Compression params defaults.
-"""
-
-# Defaults for decompression params
-dparams_dflts = {"nthreads": nthreads, "schunk": None, "postfilter": None, "postparams": None}
-"""
-Decompression params defaults.
-"""
-# Default for storage
-storage_dflts = {"contiguous": False, "urlpath": None, "cparams": None, "dparams": None, "io": None}
-"""
-Storage params defaults. This is meant only for :ref:`SChunk <SChunk>` or :ref:`NDArray <NDArray>`.
-"""
 
 _disable_overloaded_equal = False
 

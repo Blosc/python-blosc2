@@ -239,7 +239,7 @@ class TestCodec(unittest.TestCase):
         xx = x.tobytes()
         with pytest.raises(ValueError):
             blosc2.compress(xx, typesize=8, filter=blosc2.Filter.BITSHUFFLE)
-        zxx = blosc2.compress(xx, filter=blosc2.Filter.BITSHUFFLE)
+        zxx = blosc2.compress(xx, typesize=1, filter=blosc2.Filter.BITSHUFFLE)
         last_xx = blosc2.decompress(zxx)[-3:]
         assert last_xx == b"\x01\x01\x01"
 
@@ -248,7 +248,7 @@ class TestCodec(unittest.TestCase):
         buffer = b" " * 641091  # a buffer that is not divisible by 8
         with pytest.raises(ValueError):
             blosc2.compress(buffer, typesize=8, filter=blosc2.Filter.BITSHUFFLE, clevel=1)
-        cbuffer = blosc2.compress(buffer, filter=blosc2.Filter.BITSHUFFLE, clevel=1)
+        cbuffer = blosc2.compress(buffer, typesize=1, filter=blosc2.Filter.BITSHUFFLE, clevel=1)
         dbuffer = blosc2.decompress(cbuffer)
         assert buffer == dbuffer
 
