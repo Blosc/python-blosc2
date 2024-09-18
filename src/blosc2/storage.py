@@ -22,42 +22,6 @@ nthreads = min(nthreads, 32)
 # Experiments say that, when using a large number of threads, it is better to not use them all
 nthreads -= nthreads // 8
 
-# Defaults for compression params
-cparams_dflts = {
-    "codec": blosc2.Codec.ZSTD,
-    "codec_meta": 0,
-    "clevel": 1,
-    "use_dict": False,
-    "typesize": 8,
-    "nthreads": nthreads,
-    "blocksize": 0,
-    "splitmode": blosc2.SplitMode.ALWAYS_SPLIT,
-    "filters": [
-        blosc2.Filter.NOFILTER,
-        blosc2.Filter.NOFILTER,
-        blosc2.Filter.NOFILTER,
-        blosc2.Filter.NOFILTER,
-        blosc2.Filter.NOFILTER,
-        blosc2.Filter.SHUFFLE,
-    ],
-    "filters_meta": [0, 0, 0, 0, 0, 0],
-    "tuner": blosc2.Tuner.STUNE,
-}
-"""
-Compression params defaults.
-"""
-
-# Defaults for decompression params
-dparams_dflts = {"nthreads": nthreads}
-"""
-Decompression params defaults.
-"""
-# Default for storage
-storage_dflts = {"contiguous": False, "urlpath": None, "cparams": None, "dparams": None, "io": None}
-"""
-Storage params defaults. This is meant only for :ref:`SChunk <SChunk>` or :ref:`NDArray <NDArray>`.
-"""
-
 
 def default_nthreads():
     return nthreads
@@ -124,3 +88,33 @@ class CParams:
 
     # def __post_init__(self):
     #     if len(self.filters) > 6:
+
+
+@dataclass
+class DParams:
+    """Dataclass for hosting the different decompression parameters.
+
+    Parameters
+    ----------
+    nthreads: int
+        The number of threads to use internally. By default, blosc2 computes
+        a good guess.
+    """
+    nthreads: int = field(default_factory=default_nthreads)
+
+# Defaults for compression params
+cparams_dflts = asdict(CParams())
+"""
+Compression params defaults.
+"""
+
+# Defaults for decompression params
+dparams_dflts = asdict(DParams())
+"""
+Decompression params defaults.
+"""
+# Default for storage
+storage_dflts = {"contiguous": False, "urlpath": None, "cparams": blosc2.CParams(), "dparams": blosc2.DParams}
+"""
+Storage params defaults. This is meant only for :ref:`SChunk <SChunk>` or :ref:`NDArray <NDArray>`.
+"""

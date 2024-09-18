@@ -1444,10 +1444,15 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
     Other Parameters
     ----------------
     kwargs: dict, optional
+        Decompression parameters. The default values are in :ref:`blosc2.DParams`.
         Keyword arguments supported:
 
-            nthreads: int
-                The number of threads to use internally (1 by default).
+            cparams: :class:`blosc2.DParams`
+                All the decompression parameters that you want to use as
+                a :class:`blosc2.DParams` instance.
+            others: Any
+                If `dparams` is not passed, all the parameters of a :class:`blosc2.DParams`
+                can be passed as keyword arguments.
 
     Returns
     -------
@@ -1469,6 +1474,12 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
         If the length of :paramref:`src` is smaller than the minimum.
         If :paramref:`dst` is not None and its length is 0.
     """
+    if kwargs is not None:
+        if 'dparams' in kwargs:
+            if len(kwargs) > 1:
+                raise AttributeError("Cannot pass both dparams and other kwargs already included in DParams")
+            kwargs = asdict(kwargs.get('dparams'))
+
     return blosc2_ext.decompress2(src, dst, **kwargs)
 
 

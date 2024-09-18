@@ -28,7 +28,7 @@ random = np.random.default_rng()
                 filters_meta=[10, 0],
                 typesize=4
             )},
-            {"nthreads": 4},
+            {'dparams': blosc2.DParams(nthreads=4)},
         ),
         (
             np.arange(10, dtype="float32"),
@@ -43,7 +43,7 @@ random = np.random.default_rng()
         (
             random.integers(0, 1000, 1000, endpoint=True),
             {'cparams': blosc2.CParams(splitmode=blosc2.SplitMode.ALWAYS_SPLIT, nthreads=5, typesize=4)},
-            {},
+            {'dparams': blosc2.DParams()},
         ),
         (np.arange(45, dtype=np.float64), {'cparams': blosc2.CParams(codec=blosc2.Codec.LZ4HC, typesize=4)}, {}),
         (np.arange(50, dtype=np.int64), {"typesize": 4}, blosc2.dparams_dflts),

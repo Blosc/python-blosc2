@@ -213,7 +213,7 @@ from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField
 
 from .schunk import SChunk, open
 
-from .storage import cpu_info, CParams, cparams_dflts, dparams_dflts, ncores, nthreads, storage_dflts
+from .storage import cpu_info, CParams, cparams_dflts, DParams, dparams_dflts, ncores, nthreads, storage_dflts
 
 
 # Registry for postfilters
