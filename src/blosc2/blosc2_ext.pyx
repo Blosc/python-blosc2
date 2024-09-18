@@ -716,7 +716,9 @@ cdef _check_dparams(blosc2_dparams* dparams, blosc2_cparams* cparams=NULL):
 
 cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     if "compcode" in kwargs:
-        raise NameError("`compcode` has been renamed to `codec`.  Please go update your code.")
+        raise NameError("`compcode` has been renamed to `codec`. Please go update your code.")
+    if "shuffle" in kwargs:
+        raise NameError("`shuffle` has been substituted by `filters`. Please go update your code.")
     codec = kwargs.get('codec', blosc2.cparams_dflts['codec'])
     cparams.compcode = codec if not isinstance(codec, blosc2.Codec) else codec.value
     cparams.compcode_meta = kwargs.get('codec_meta', blosc2.cparams_dflts['codec_meta'])

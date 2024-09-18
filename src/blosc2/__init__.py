@@ -155,6 +155,7 @@ from .core import (
     compress2,
     compressor_list,
     compute_chunks_blocks,
+    CParams,
     decompress,
     decompress2,
     detect_number_of_cores,
@@ -266,7 +267,6 @@ cparams_dflts = {
     "nthreads": nthreads,
     "blocksize": 0,
     "splitmode": SplitMode.ALWAYS_SPLIT,
-    "schunk": None,
     "filters": [
         Filter.NOFILTER,
         Filter.NOFILTER,
@@ -276,10 +276,7 @@ cparams_dflts = {
         Filter.SHUFFLE,
     ],
     "filters_meta": [0, 0, 0, 0, 0, 0],
-    "prefilter": None,
-    "preparams": None,
     "tuner": Tuner.STUNE,
-    "instr_codec": False,
 }
 """
 Compression params defaults.
