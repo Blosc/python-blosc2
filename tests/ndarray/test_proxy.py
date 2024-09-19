@@ -6,10 +6,10 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+import blosc2
 import numpy as np
 import pytest
-
-import blosc2
+from blosc2.ndarray import get_chunks_idx
 
 argnames = "urlpath, shape, chunks, blocks, slices, dtype"
 argvalues = [
@@ -109,18 +109,36 @@ def test_open(urlpath, shape, chunks, blocks, slices, dtype):
     blosc2.remove_urlpath(proxy_urlpath)
 
 
-# Test the ProxyNDSource interface
-def test_proxy_source():
+# Test the ProxyNDSources interface
+@pytest.mark.parametrize("shape, chunks, blocks", [
+    # One should be careful to choose aligned partitions for our source
+    # E.g., the following is not aligned
+    # ((10, 8), (4, 4), (2, 2))
+    ((12,), (4,), (2,)),
+    ((10, 8), (2, 8), (1, 4)),
+    ((10, 8, 6), (2, 4, 3), (1, 2, 3)),
+    ((4, 8, 6, 4), (2, 4, 3, 2), (1, 2, 3, 2)),
+    ]
+)
+def test_proxy_source(shape, chunks, blocks):
     # Define an object that will be used as a source
     class Source(blosc2.ProxyNDSource):
+        """
+        A simple source that will be used to test the ProxyNDSource interface.
+
+        """
         def __init__(self, data, chunks, blocks):
-            self._data = data.flatten()
+            self._data = data
             self._shape = data.shape
             self._dtype = data.dtype
             self._chunks = chunks
             self._chunksize = np.prod(self._chunks)
             self._blocks = blocks
             self._blocksize = np.prod(self._blocks) * self._dtype.itemsize
+            self._chunks_idx, self._nchunks = get_chunks_idx(self._shape, self._chunks)
+            aligned = blosc2.are_partitions_aligned(self._shape, self._chunks, self._blocks)
+            if not aligned:
+                raise ValueError("The partitions are not aligned")
 
         @property
         def shape(self) -> tuple:
@@ -139,15 +157,18 @@ def test_proxy_source():
             return self._blocks
 
         def get_chunk(self, nchunk):
-            # Here we are using simple undimensional logic.  In a real case, you should
-            # use full multdimensional logic.
-            data = self._data[nchunk * self._chunksize : (nchunk + 1) * self._chunksize]
-            datab = data.tobytes()
+            # Yep, this seems complex, but is one of the simplest possible implementations
+            coords = tuple(np.unravel_index(nchunk, self._chunks_idx))
+            slice_ = tuple(
+                slice(c * s, min((c + 1) * s, self._shape[i]))
+                for i, (c, s) in enumerate(zip(coords, self._chunks, strict=True))
+            )
+            data = self._data[slice_].tobytes()
             # Compress the data
-            return blosc2.compress2(datab, typesize=self._dtype.itemsize, blocksize=self._blocksize)
+            return blosc2.compress2(data, typesize=self._dtype.itemsize, blocksize=self._blocksize)
 
-    data = np.arange(64, dtype="int32")
-    source = Source(data, 16, 4)
+    data = np.arange(np.prod(shape), dtype="int32").reshape(shape)
+    source = Source(data, chunks, blocks)
     proxy = blosc2.Proxy(source)
     result = proxy[...]
     np.testing.assert_array_equal(result, data)
