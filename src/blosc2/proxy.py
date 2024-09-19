@@ -21,7 +21,7 @@ class ProxyNDSource(ABC):
     @abstractmethod
     def shape(self) -> tuple:
         """
-        Return the shape of the source.
+        The shape of the source.
         """
         pass
 
@@ -29,7 +29,7 @@ class ProxyNDSource(ABC):
     @abstractmethod
     def chunks(self) -> tuple:
         """
-        Return the chunks of the source.
+        The chunk shape of the source.
         """
         pass
 
@@ -37,7 +37,7 @@ class ProxyNDSource(ABC):
     @abstractmethod
     def blocks(self) -> tuple:
         """
-        Return the blocks of the source.
+        The block shape of the source.
         """
         pass
 
@@ -45,7 +45,7 @@ class ProxyNDSource(ABC):
     @abstractmethod
     def dtype(self) -> np.dtype:
         """
-        Return the dtype of the source.
+        The dtype of the source.
         """
         pass
 
@@ -96,7 +96,7 @@ class ProxySource(ABC):
     @abstractmethod
     def nbytes(self) -> int:
         """
-        Return the nbytes in the source.
+        The total number of bytes in the source.
         """
         pass
 
@@ -104,7 +104,7 @@ class ProxySource(ABC):
     @abstractmethod
     def chunksize(self) -> tuple:
         """
-        Return the chunksize of the source.
+        The chunksize of the source.
         """
         pass
 
@@ -112,7 +112,7 @@ class ProxySource(ABC):
     @abstractmethod
     def typesize(self) -> int:
         """
-        Return the typesize of the source.
+        The typesize of the source.
         """
         pass
 
