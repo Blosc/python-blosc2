@@ -188,6 +188,18 @@ from .core import (
     unpack_tensor,
 )
 
+# This import must be before ndarray and schunk
+from .storage import (
+    CParams,
+    cparams_dflts,
+    cpu_info,
+    DParams,
+    dparams_dflts,
+    ncores,
+    nthreads,
+    Storage,
+    storage_dflts,
+)
 
 from .ndarray import (  # noqa: I001
     NDArray,
@@ -213,7 +225,6 @@ from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField
 
 from .schunk import SChunk, open
 
-from .storage import cpu_info, CParams, cparams_dflts, DParams, dparams_dflts, ncores, nthreads, storage_dflts
 
 
 # Registry for postfilters
@@ -294,7 +305,9 @@ __all__ = [
     "__version__",
     "compress",
     "decompress",
+    "CParams",
     "cparams_dflts",
+    "DParams",
     "dparams_dflts",
     "storage_dflts",
     "set_compressor",
@@ -326,6 +339,7 @@ __all__ = [
     "compress2",
     "decompress2",
     "SChunk",
+    "Storage",
     "open",
     "remove_urlpath",
     "nthreads",

@@ -929,7 +929,7 @@ cdef class SChunk:
             self._urlpath = urlpath.encode() if isinstance(urlpath, str) else urlpath
             kwargs["urlpath"] = self._urlpath
 
-        self.mode = kwargs.get("mode", "a")
+        self.mode = blosc2.Storage().mode if kwargs.get("mode", None) is None else kwargs.get("mode")
         self.mmap_mode = kwargs.get("mmap_mode")
         self.initial_mapping_size = kwargs.get("initial_mapping_size")
         if self.mmap_mode is not None:
@@ -1077,7 +1077,8 @@ cdef class SChunk:
                         "typesize": self.schunk.storage.cparams.typesize,
                         "nthreads": self.schunk.storage.cparams.nthreads,
                         "blocksize": self.schunk.storage.cparams.blocksize,
-                        "splitmode": blosc2.SplitMode(self.schunk.storage.cparams.splitmode)
+                        "splitmode": blosc2.SplitMode(self.schunk.storage.cparams.splitmode),
+                        "tuner": blosc2.Tuner(self.schunk.storage.cparams.tuner_id),
         }
 
         filters = [0] * BLOSC2_MAX_FILTERS
