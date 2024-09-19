@@ -25,27 +25,11 @@ class ProxyNDSource(ABC):
         """
         pass
 
-    @shape.setter
-    @abstractmethod
-    def shape(self, shape: tuple):
-        """
-        Set the shape of the source.
-        """
-        pass
-
     @property
     @abstractmethod
     def chunks(self) -> tuple:
         """
         Return the chunks of the source.
-        """
-        pass
-
-    @chunks.setter
-    @abstractmethod
-    def chunks(self, chunks: tuple):
-        """
-        Set the chunks of the source.
         """
         pass
 
@@ -57,27 +41,11 @@ class ProxyNDSource(ABC):
         """
         pass
 
-    @blocks.setter
-    @abstractmethod
-    def blocks(self, blocks: tuple):
-        """
-        Set the blocks of the source.
-        """
-        pass
-
     @property
     @abstractmethod
     def dtype(self) -> np.dtype:
         """
         Return the dtype of the source.
-        """
-        pass
-
-    @dtype.setter
-    @abstractmethod
-    def dtype(self, dtype: np.dtype):
-        """
-        Set the dtype of the source.
         """
         pass
 
@@ -132,14 +100,6 @@ class ProxySource(ABC):
         """
         pass
 
-    @nbytes.setter
-    @abstractmethod
-    def nbytes(self, nbytes: int):
-        """
-        Set the nbytes in the source.
-        """
-        pass
-
     @property
     @abstractmethod
     def chunksize(self) -> tuple:
@@ -148,27 +108,11 @@ class ProxySource(ABC):
         """
         pass
 
-    @chunksize.setter
-    @abstractmethod
-    def chunksize(self, chunksize: tuple):
-        """
-        Set the chunksize of the source.
-        """
-        pass
-
     @property
     @abstractmethod
     def typesize(self) -> int:
         """
         Return the typesize of the source.
-        """
-        pass
-
-    @typesize.setter
-    @abstractmethod
-    def typesize(self, typesize: int):
-        """
-        Set the typesize of the source.
         """
         pass
 
