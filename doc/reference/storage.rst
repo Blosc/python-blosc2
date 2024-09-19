@@ -1,9 +1,8 @@
-.. _Storage:
+Dataclasses
+===========
 
-Storage
-=======
-
-This is a class for .......
+Dataclasses for setting the compression, decompression
+and storage parameters. All their parameters are optional.
 
 .. currentmodule:: blosc2
 
@@ -24,3 +23,12 @@ DParams
    :nosignatures:
 
     DParams
+
+Storage
+-------
+
+.. autosummary::
+   :toctree: autofiles/storage
+   :nosignatures:
+
+    Storage

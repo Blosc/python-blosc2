@@ -1394,7 +1394,7 @@ def compress2(src: object, **kwargs: dict) -> str | bytes:
     Other Parameters
     ----------------
     kwargs: dict, optional
-        Compression parameters. The default values are in :ref:`blosc2.CParams`.
+        Compression parameters. The default values are in :class:`blosc2.CParams`.
         Keyword arguments supported:
 
             cparams: :class:`blosc2.CParams`
@@ -1444,7 +1444,7 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
     Other Parameters
     ----------------
     kwargs: dict, optional
-        Decompression parameters. The default values are in :ref:`blosc2.DParams`.
+        Decompression parameters. The default values are in :class:`blosc2.DParams`.
         Keyword arguments supported:
 
             cparams: :class:`blosc2.DParams`
