@@ -107,3 +107,47 @@ def test_open(urlpath, shape, chunks, blocks, slices, dtype):
 
     blosc2.remove_urlpath(urlpath)
     blosc2.remove_urlpath(proxy_urlpath)
+
+
+# Test the ProxyNDSource interface
+def test_proxy_source():
+    # Define an object that will be used as a source
+    class Source(blosc2.ProxyNDSource):
+        def __init__(self, data, chunks, blocks):
+            self._data = data.flatten()
+            self._shape = data.shape
+            self._dtype = data.dtype
+            self._chunks = chunks
+            self._chunksize = np.prod(self._chunks)
+            self._blocks = blocks
+            self._blocksize = np.prod(self._blocks) * self._dtype.itemsize
+
+        @property
+        def shape(self) -> tuple:
+            return self._shape
+
+        @property
+        def dtype(self):
+            return self._dtype
+
+        @property
+        def chunks(self) -> tuple:
+            return self._chunks
+
+        @property
+        def blocks(self) -> tuple:
+            return self._blocks
+
+        def get_chunk(self, nchunk):
+            # Here we are using simple undimensional logic.  In a real case, you should
+            # use full multdimensional logic.
+            data = self._data[nchunk * self._chunksize : (nchunk + 1) * self._chunksize]
+            datab = data.tobytes()
+            # Compress the data
+            return blosc2.compress2(datab, typesize=self._dtype.itemsize, blocksize=self._blocksize)
+
+    data = np.arange(64, dtype="int32")
+    source = Source(data, 16, 4)
+    proxy = blosc2.Proxy(source)
+    result = proxy[...]
+    np.testing.assert_array_equal(result, data)

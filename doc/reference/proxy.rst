@@ -5,8 +5,8 @@ Proxy
 
 Class that implements a proxy (with cache support) of a Python-Blosc2 container.
 
-This can be used to cache chunks of
-a regular data container which follows the :ref:`ProxySource` interface in an urlpath.
+This can be used to cache chunks of regular data container which follows the
+:ref:`ProxySource` or :ref:`ProxyNDSource` interfaces.
 
 .. currentmodule:: blosc2.Proxy
 

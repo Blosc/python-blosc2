@@ -3,14 +3,9 @@
 ProxySource
 ===========
 
-Base interface for all supported sources in :ref:`Proxy`.
-
-In case the source is multidimensional, the attributes `shape`, `chunks`,
-`blocks` and `dtype` are also required when creating the :ref:`Proxy`.
-In case the source is unidimensional, the attributes `chunksize`, `typesize`
-and `nbytes` are required as well when creating the :ref:`Proxy`.
-These attributes do not need to be available when opening an already
-existing :ref:`Proxy`.
+Base interface for all supported sources in :ref:`Proxy` and are not NDim objects.
+For example, a file, a memory buffer, a network resource, etc.  For NDims, see
+:ref:`ProxyNDSource`.
 
 .. currentmodule:: blosc2.ProxySource
 
@@ -22,3 +17,15 @@ Methods
     :nosignatures:
 
     get_chunk
+    aget_chunk
+
+Attributes
+----------
+
+.. autosummary::
+    :toctree: autofiles/proxysource
+    :nosignatures:
+
+    nbytes
+    chunksize
+    typesize
