@@ -62,12 +62,12 @@ def test_open(contiguous, urlpath, cparams, dparams, nchunks, chunk_nitems, dtyp
     cparams2 = cparams
     cparams2["nthreads"] = 1
     schunk_open = blosc2.open(urlpath, mode, mmap_mode=mmap_mode, cparams=cparams2)
-    assert schunk_open.cparams["nthreads"] == cparams2["nthreads"]
+    assert schunk_open.cparams.nthreads == cparams2["nthreads"]
 
     for key in cparams:
         if key == "nthreads":
             continue
-        assert schunk_open.cparams[key] == cparams[key]
+        assert getattr(schunk_open.cparams, key) == cparams[key]
 
     buffer = np.zeros(chunk_nitems, dtype=dtype)
     if mode != "r":

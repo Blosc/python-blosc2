@@ -35,9 +35,9 @@ def test_copy(shape, chunks1, blocks1, chunks2, blocks2, dtype):
     assert a.schunk.dparams == b.schunk.dparams
     for key in cparams2:
         if key in ("filters", "filters_meta"):
-            assert b.schunk.cparams[key][: len(cparams2[key])] == cparams2[key]
+            assert getattr(b.schunk.cparams, key)[: len(cparams2[key])] == cparams2[key]
             continue
-        assert b.schunk.cparams[key] == cparams2[key]
+        assert getattr(b.schunk.cparams, key) == cparams2[key]
     assert b.chunks == tuple(chunks2)
     assert b.blocks == tuple(blocks2)
     assert a.dtype == b.dtype

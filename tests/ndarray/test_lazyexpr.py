@@ -455,8 +455,8 @@ def test_params(array_fixture):
     res = expr.eval(urlpath=urlpath, cparams=cparams, dparams=dparams, chunks=chunks, blocks=blocks)
     np.testing.assert_allclose(res[:], nres)
     assert res.schunk.urlpath == urlpath
-    assert res.schunk.cparams["nthreads"] == cparams["nthreads"]
-    assert res.schunk.dparams["nthreads"] == dparams["nthreads"]
+    assert res.schunk.cparams.nthreads == cparams["nthreads"]
+    assert res.schunk.dparams.nthreads == dparams["nthreads"]
     assert res.chunks == chunks
     assert res.blocks == blocks
 

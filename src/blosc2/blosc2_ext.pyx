@@ -33,6 +33,7 @@ from enum import Enum
 
 import numpy as np
 from msgpack import packb, unpackb
+from dataclasses import asdict
 
 import blosc2
 
@@ -1069,17 +1070,6 @@ cdef class SChunk:
         else:
             # User codec
             codec = self.schunk.storage.cparams.compcode
-        cparams_dict = {
-                        "codec": codec,
-                        "codec_meta": self.schunk.storage.cparams.compcode_meta,
-                        "clevel": self.schunk.storage.cparams.clevel,
-                        "use_dict": self.schunk.storage.cparams.use_dict,
-                        "typesize": self.schunk.storage.cparams.typesize,
-                        "nthreads": self.schunk.storage.cparams.nthreads,
-                        "blocksize": self.schunk.storage.cparams.blocksize,
-                        "splitmode": blosc2.SplitMode(self.schunk.storage.cparams.splitmode),
-                        "tuner": blosc2.Tuner(self.schunk.storage.cparams.tuner_id),
-        }
 
         filters = [0] * BLOSC2_MAX_FILTERS
         filters_meta = [0] * BLOSC2_MAX_FILTERS
@@ -1090,42 +1080,50 @@ cdef class SChunk:
                 # User filter
                 filters[i] = self.schunk.filters[i]
             filters_meta[i] = self.schunk.filters_meta[i]
-        cparams_dict["filters"] = filters
-        cparams_dict["filters_meta"] = filters_meta
-        return cparams_dict
 
-    def update_cparams(self, cparams_dict):
+        cparams = blosc2.CParams(
+            codec=codec,
+            codec_meta=self.schunk.storage.cparams.compcode_meta,
+            clevel=self.schunk.storage.cparams.clevel,
+            use_dict=bool(self.schunk.storage.cparams.use_dict),
+            typesize=self.schunk.storage.cparams.typesize,
+            nthreads=self.schunk.storage.cparams.nthreads,
+            blocksize=self.schunk.storage.cparams.blocksize,
+            splitmode=blosc2.SplitMode(self.schunk.storage.cparams.splitmode),
+            tuner=blosc2.Tuner(self.schunk.storage.cparams.tuner_id),
+            filters=filters,
+            filters_meta=filters_meta,
+        )
+
+        return cparams
+
+    def update_cparams(self, new_cparams):
         cdef blosc2_cparams* cparams = self.schunk.storage.cparams
-        codec = cparams_dict.get('codec', None)
-        if codec is None:
-            cparams.compcode = cparams.compcode
-        else:
-            cparams.compcode = codec if not isinstance(codec, blosc2.Codec) else codec.value
-        cparams.compcode_meta = cparams_dict.get('codec_meta', cparams.compcode_meta)
-        cparams.clevel = cparams_dict.get('clevel', cparams.clevel)
-        cparams.use_dict = cparams_dict.get('use_dict', cparams.use_dict)
-        cparams.typesize = cparams_dict.get('typesize', cparams.typesize)
-        cparams.nthreads = cparams_dict.get('nthreads', cparams.nthreads)
-        cparams.blocksize = cparams_dict.get('blocksize', cparams.blocksize)
-        splitmode = cparams_dict.get('splitmode', None)
-        cparams.splitmode = cparams.splitmode if splitmode is None else splitmode.value
+        codec = new_cparams.codec
+        cparams.compcode = codec if not isinstance(codec, blosc2.Codec) else codec.value
+        cparams.compcode_meta = new_cparams.codec_meta
+        cparams.clevel = new_cparams.clevel
+        cparams.use_dict = new_cparams.use_dict
+        cparams.typesize = new_cparams.typesize
+        cparams.nthreads = new_cparams.nthreads
+        cparams.blocksize = new_cparams.blocksize
+        cparams.splitmode = new_cparams.splitmode.value
+        cparams.tuner_id = new_cparams.tuner.value
 
-        filters = cparams_dict.get('filters', None)
-        if filters is not None:
-            for i, filter in enumerate(filters):
-                cparams.filters[i] = filter.value if isinstance(filter, Enum) else filter
-            for i in range(len(filters), BLOSC2_MAX_FILTERS):
-                cparams.filters[i] = 0
+        filters = new_cparams.filters
+        for i, filter in enumerate(filters):
+            cparams.filters[i] = filter.value if isinstance(filter, Enum) else filter
+        for i in range(len(filters), BLOSC2_MAX_FILTERS):
+            cparams.filters[i] = 0
 
-        filters_meta = cparams_dict.get('filters_meta', None)
+        filters_meta = new_cparams.filters_meta
         cdef int8_t meta_value
-        if filters_meta is not None:
-            for i, meta in enumerate(filters_meta):
-                # We still may want to encode negative values
-                meta_value = <int8_t> meta if meta < 0 else meta
-                cparams.filters_meta[i] = <uint8_t> meta_value
-            for i in range(len(filters_meta), BLOSC2_MAX_FILTERS):
-                cparams.filters_meta[i] = 0
+        for i, meta in enumerate(filters_meta):
+            # We still may want to encode negative values
+            meta_value = <int8_t> meta if meta < 0 else meta
+            cparams.filters_meta[i] = <uint8_t> meta_value
+        for i in range(len(filters_meta), BLOSC2_MAX_FILTERS):
+            cparams.filters_meta[i] = 0
 
         _check_cparams(cparams)
 
@@ -1143,12 +1141,11 @@ cdef class SChunk:
         self.schunk.filters_meta = self.schunk.storage.cparams.filters_meta
 
     def get_dparams(self):
-        dparams_dict = {"nthreads": self.schunk.storage.dparams.nthreads}
-        return dparams_dict
+        return blosc2.DParams(nthreads=self.schunk.storage.dparams.nthreads)
 
-    def update_dparams(self, dparams_dict):
+    def update_dparams(self, new_dparams):
         cdef blosc2_dparams* dparams = self.schunk.storage.dparams
-        dparams.nthreads = dparams_dict.get('nthreads', dparams.nthreads)
+        dparams.nthreads = new_dparams.nthreads
 
         _check_dparams(dparams, self.schunk.storage.cparams)
 
@@ -1967,17 +1964,17 @@ def open(urlpath, mode, offset, **kwargs):
         res = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
         if cparams is not None:
-            res.schunk.cparams = cparams
+            res.schunk.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
         if dparams is not None:
-            res.schunk.dparams = dparams
+            res.schunk.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
         res.schunk.mode = mode
     else:
         res = blosc2.SChunk(_schunk=PyCapsule_New(schunk, <char *> "blosc2_schunk*", NULL),
                             mode=mode, **kwargs)
         if cparams is not None:
-            res.cparams = cparams
+            res.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
         if dparams is not None:
-            res.dparams = dparams
+            res.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
 
     return res
 

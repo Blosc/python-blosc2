@@ -67,7 +67,7 @@ def test_postfilters(
         def postf3(input, output, offset):
             output[:] = input <= np.datetime64("1997-12-31")
 
-    schunk.dparams = {"nthreads": 1}
+    schunk.dparams = blosc2.DParams(nthreads=1)
     post_data = np.empty(chunk_len * nchunks, dtype=output_dtype)
     schunk.get_slice(0, chunk_len * nchunks, out=post_data)
 

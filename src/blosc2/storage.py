@@ -86,8 +86,14 @@ class CParams:
     filters_meta: list[int] = field(default_factory=default_filters_meta)
     tuner: blosc2.Tuner = blosc2.Tuner.STUNE
 
-    # def __post_init__(self):
-    #     if len(self.filters) > 6:
+    def __post_init__(self):
+        if len(self.filters) > 6:
+            raise ValueError("Number of filters exceeds 6")
+        if len(self.filters) < len(self.filters_meta):
+            self.filters_meta = self.filters_meta[:len(self.filters)]
+            warnings.warn("Changed `filters_meta` length to match `filters` length")
+        if len(self.filters) > len(self.filters_meta):
+            raise ValueError("Number of filters cannot exceed number of filters meta")
 
 
 @dataclass

@@ -1884,7 +1884,7 @@ class LazyUDF(LazyArray):
             aux = np.empty(res_eval.shape, res_eval.dtype)
             res_eval[...] = aux
             res_eval.schunk.remove_prefilter(self.func.__name__)
-            res_eval.schunk.cparams["nthreads"] = self._cnthreads
+            res_eval.schunk.cparams.nthreads = self._cnthreads
 
             return res_eval
         else:
