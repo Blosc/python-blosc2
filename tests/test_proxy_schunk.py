@@ -78,3 +78,36 @@ def test_open(urlpath, chunksize, nchunks):
 
     blosc2.remove_urlpath(urlpath)
     blosc2.remove_urlpath(proxy_urlpath)
+
+
+# Test the ProxySource class
+def test_proxy_source():
+    # Define an object that will be used as a source
+    class Source(blosc2.ProxySource):
+        def __init__(self, data):
+            self._data = data
+            self._nbytes = len(data)
+            self._typesize = 4
+            self._chunksize = 20
+
+        @property
+        def nbytes(self) -> int:
+            return self._nbytes
+
+        @property
+        def chunksize(self) -> int:
+            return self._chunksize
+
+        @property
+        def typesize(self) -> int:
+            return self._typesize
+
+        def get_chunk(self, nchunk):
+            data = self._data[nchunk * self.chunksize : (nchunk + 1) * self.chunksize]
+            # Compress the data
+            return blosc2.compress2(data, typesize=self._typesize)
+
+    data = np.arange(100, dtype="int32").tobytes()
+    source = Source(data)
+    proxy = blosc2.Proxy(source)
+    assert proxy[0:100] == data

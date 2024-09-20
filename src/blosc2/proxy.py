@@ -7,22 +7,47 @@
 #######################################################################
 from abc import ABC, abstractmethod
 
-import blosc2
 import numpy as np
 
+import blosc2
 
-class ProxySource(ABC):
+
+class ProxyNDSource(ABC):
     """
-    Base interface for all supported sources in :ref:`Proxy`.
-
-    In case the source is multidimensional, the attributes `shape`, `chunks`,
-    `blocks` and `dtype` are also required when creating the :ref:`Proxy`.
-
-    In case the source is unidimensional, the attributes `chunksize`, `typesize`
-     and `nbytes` are required as well when creating the :ref:`Proxy`.
-    These attributes do not need to be available when opening an already
-     existing :ref:`Proxy`.
+    Base interface for NDim sources in :ref:`Proxy`.
     """
+
+    @property
+    @abstractmethod
+    def shape(self) -> tuple:
+        """
+        The shape of the source.
+        """
+        pass
+
+    @property
+    @abstractmethod
+    def chunks(self) -> tuple:
+        """
+        The chunk shape of the source.
+        """
+        pass
+
+    @property
+    @abstractmethod
+    def blocks(self) -> tuple:
+        """
+        The block shape of the source.
+        """
+        pass
+
+    @property
+    @abstractmethod
+    def dtype(self) -> np.dtype:
+        """
+        The dtype of the source.
+        """
+        pass
 
     @abstractmethod
     def get_chunk(self, nchunk: int) -> bytes:
@@ -41,22 +66,108 @@ class ProxySource(ABC):
         """
         pass
 
+    def aget_chunk(self, nchunk: int) -> bytes:
+        """
+        Return the compressed chunk in :paramref:`self` in an asynchronous way.
+
+        Parameters
+        ----------
+        nchunk: int
+            The index of the chunk to retrieve.
+
+        Returns
+        -------
+        out: bytes object
+            The compressed chunk.
+
+        Notes
+        -----
+        This method is optional, and only available if the source has an async `aget_chunk` method.
+        """
+        raise NotImplementedError("aget_chunk is only available if the source has an aget_chunk method")
+
+
+class ProxySource(ABC):
+    """
+    Base interface for sources of :ref:`Proxy` that are not NDim objects.
+    """
+
+    @property
+    @abstractmethod
+    def nbytes(self) -> int:
+        """
+        The total number of bytes in the source.
+        """
+        pass
+
+    @property
+    @abstractmethod
+    def chunksize(self) -> tuple:
+        """
+        The chunksize of the source.
+        """
+        pass
+
+    @property
+    @abstractmethod
+    def typesize(self) -> int:
+        """
+        The typesize of the source.
+        """
+        pass
+
+    @abstractmethod
+    def get_chunk(self, nchunk: int) -> bytes:
+        """
+        Return the compressed chunk in :paramref:`self`.
+
+        Parameters
+        ----------
+        nchunk: int
+            The index of the chunk to retrieve.
+
+        Returns
+        -------
+        out: bytes object
+            The compressed chunk.
+        """
+        pass
+
+    def aget_chunk(self, nchunk: int) -> bytes:
+        """
+        Return the compressed chunk in :paramref:`self` in an asynchronous way.
+
+        Parameters
+        ----------
+        nchunk: int
+            The index of the chunk to retrieve.
+
+        Returns
+        -------
+        out: bytes object
+            The compressed chunk.
+
+        Notes
+        -----
+        This method is optional, and only available if the source has an async `aget_chunk` method.
+        """
+        raise NotImplementedError("aget_chunk is only available if the source has an aget_chunk method")
+
 
 class Proxy(blosc2.Operand):
     """Proxy (with cache support) of an object following the :ref:`ProxySource` interface.
 
-    This can be used to cache chunks of a regular data container
-    which follows the :ref:`ProxySource` interface in an urlpath.
+    This can be used to cache chunks of a regular data container which follows the
+    :ref:`ProxySource` or :ref:`ProxyNDSource` interfaces.
     """
 
-    def __init__(self, src: ProxySource, urlpath: str = None, **kwargs: dict):
+    def __init__(self, src: ProxySource or ProxyNDSource, urlpath: str = None, **kwargs: dict):
         """
-        Create a new :ref:`Proxy` to serve like a cache to save accessed
-        chunks locally.
+        Create a new :ref:`Proxy` to serve like a cache to save accessed chunks locally.
 
         Parameters
         ----------
-        src: :ref:`ProxySource`
+        src: :ref:`ProxySource` or :ref:`ProxyNDSource`
             The original container.
         urlpath: str, optional
             The urlpath where to save the container that will work as a cache.
@@ -68,7 +179,6 @@ class Proxy(blosc2.Operand):
 
                 vlmeta: dict or None
                     A dictionary with different variable length metalayers.  One entry per metalayer:
-
                         key: bytes or str
                             The name of the metalayer.
                         value: object
@@ -184,8 +294,8 @@ class Proxy(blosc2.Operand):
 
         Notes
         -----
-        This method is only available if the :ref:`ProxySource` has an
-        async `aget_chunk` method.
+        This method is only available if the :ref:`ProxySource` or :ref:`ProxyNDSource`
+        have an async `aget_chunk` method.
         """
         if not callable(getattr(self.src, "aget_chunk", None)):
             raise NotImplementedError("afetch is only available if the source has an aget_chunk method")
