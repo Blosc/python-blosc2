@@ -8,6 +8,7 @@
 
 import numpy as np
 import pytest
+from dataclasses import asdict, replace
 
 import blosc2
 
@@ -104,7 +105,7 @@ def test_fillers(
 
         fill_f4((data, data2, np.pi), res, offset)
 
-    new_cparams = {"nthreads": 2}
+    new_cparams = replace(schunk.cparams, nthreads=2)
     schunk.cparams = new_cparams
 
     pre_data = np.empty(chunk_len * nchunks, dtype=schunk_dtype)
@@ -180,7 +181,9 @@ def test_prefilters(contiguous, urlpath, cparams, dparams, nchunks, func, data_d
         def pref3(input, output, offset):
             output[:] = input <= np.datetime64("1997-12-31")
 
-    schunk.cparams = {"nthreads": 1}
+    new_cparams = asdict(schunk.cparams)
+    new_cparams["nthreads"] = 1
+    schunk.cparams = blosc2.CParams(**new_cparams)
 
     schunk[: nchunks * chunk_len] = data
     post_data = np.empty(chunk_len * nchunks, dtype=schunk_dtype)

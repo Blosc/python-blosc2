@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 import ndindex
 import numpy as np
+from dataclasses import asdict
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext, compute_chunks_blocks
@@ -1288,8 +1289,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         if dtype is None:
             dtype = self.dtype
-        kwargs["cparams"] = kwargs.get("cparams", self.schunk.cparams).copy()
-        kwargs["dparams"] = kwargs.get("dparams", self.schunk.dparams).copy()
+        kwargs["cparams"] = kwargs.get("cparams", asdict(self.schunk.cparams)).copy()
+        kwargs["dparams"] = kwargs.get("dparams", asdict(self.schunk.dparams)).copy()
         if "meta" not in kwargs:
             # Copy metalayers as well
             meta_dict = {meta: self.schunk.meta[meta] for meta in self.schunk.meta}

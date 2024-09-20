@@ -8,6 +8,7 @@
 
 import numpy as np
 import pytest
+from dataclasses import asdict
 
 import blosc2
 
@@ -74,7 +75,7 @@ def test_full(shape, chunks, blocks, fill_value, cparams, dparams, dtype, urlpat
         urlpath=urlpath,
         contiguous=contiguous,
     )
-    assert a.schunk.dparams == dparams
+    assert asdict(a.schunk.dparams) == dparams
     if isinstance(fill_value, bytes):
         dtype = np.dtype(f"S{len(fill_value)}")
     assert a.dtype == np.dtype(dtype) if dtype is not None else np.dtype(np.uint8)

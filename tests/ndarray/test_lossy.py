@@ -66,8 +66,8 @@ def test_lossy(shape, cparams, dtype, urlpath, contiguous):
     a = blosc2.asarray(array, cparams=cparams, urlpath=urlpath, contiguous=contiguous, mode="w")
 
     if (
-        a.schunk.cparams["codec"] in (blosc2.Codec.ZFP_RATE, blosc2.Codec.ZFP_PREC, blosc2.Codec.ZFP_ACC)
-        or a.schunk.cparams["filters"][0] == blosc2.Filter.NDMEAN
+        a.schunk.cparams.codec in (blosc2.Codec.ZFP_RATE, blosc2.Codec.ZFP_PREC, blosc2.Codec.ZFP_ACC)
+        or a.schunk.cparams.filters[0] == blosc2.Filter.NDMEAN
     ):
         _ = a[...]
     else:

@@ -279,26 +279,26 @@ class SChunk(blosc2_ext.SChunk):
         self._dparams = super().get_dparams()
 
     @property
-    def cparams(self) -> dict:
+    def cparams(self) -> blosc2.CParams:
         """
-        Dictionary with the compression parameters.
+        :class:`blosc2.CParams` instance with the compression parameters.
         """
         return self._cparams
 
     @cparams.setter
-    def cparams(self, value):
+    def cparams(self, value: blosc2.CParams) -> None:
         super().update_cparams(value)
         self._cparams = super().get_cparams()
 
     @property
-    def dparams(self) -> dict:
+    def dparams(self) -> blosc2.DParams:
         """
-        Dictionary with the decompression parameters.
+        :class:`blosc2.DParams` instance with the decompression parameters.
         """
         return self._dparams
 
     @dparams.setter
-    def dparams(self, value):
+    def dparams(self, value: blosc2.DParams) -> None:
         super().update_dparams(value)
         self._dparams = super().get_dparams()
 
