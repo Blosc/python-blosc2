@@ -2655,15 +2655,11 @@ def _check_ndarray_kwargs(**kwargs):
             if key in list(blosc2.Storage.__annotations__):
                 raise AttributeError("Cannot pass both `storage` and other kwargs already included in Storage")
         storage = kwargs.get("storage")
-        del kwargs["storage"]
-        kwargs = {**kwargs, **asdict(storage)}
-    else:
-        cparams = kwargs.get("cparams", {})
-        cparams = cparams if isinstance(cparams, dict) else asdict(cparams)
-        dparams = kwargs.get("dparams", {})
-        dparams = dparams if isinstance(dparams, dict) else asdict(dparams)
-        kwargs["cparams"] = cparams
-        kwargs["dparams"] = dparams
+        if isinstance(storage, blosc2.Storage):
+            kwargs = {**kwargs, **asdict(storage)}
+        else:
+            kwargs = {**kwargs, **storage}
+
     supported_keys = [
         "chunks",
         "blocks",
@@ -2683,10 +2679,17 @@ def _check_ndarray_kwargs(**kwargs):
                 f"Only {supported_keys} are supported as keyword arguments, and you passed '{key}'"
             )
 
-    if "cparams" in kwargs and "chunks" in kwargs["cparams"]:
-        raise ValueError("You cannot pass chunks in cparams, use `chunks` argument instead")
-    if "cparams" in kwargs and "blocks" in kwargs["cparams"]:
-        raise ValueError("You cannot pass chunks in cparams, use `blocks` argument instead")
+    if "cparams" in kwargs:
+        if isinstance(kwargs["cparams"], blosc2.CParams):
+            kwargs["cparams"] = asdict(kwargs["cparams"])
+        else:
+            if "chunks" in kwargs["cparams"]:
+                raise ValueError("You cannot pass chunks in cparams, use `chunks` argument instead")
+            if "blocks" in kwargs["cparams"]:
+                raise ValueError("You cannot pass chunks in cparams, use `blocks` argument instead")
+    if "dparams" in kwargs:
+        if isinstance(kwargs["dparams"], blosc2.DParams):
+            kwargs["dparams"] = asdict(kwargs["dparams"])
 
     return kwargs
 

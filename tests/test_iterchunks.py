@@ -24,10 +24,10 @@ import blosc2
     ],
 )
 def test_iterchunks(contiguous, urlpath, cparams, dparams, nchunks):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    kwargs = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     blosc2.remove_urlpath(urlpath)
 
-    schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, **storage)
+    schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, **kwargs)
 
     for i in range(nchunks):
         buffer = i * np.arange(200 * 1000, dtype="int32")
@@ -54,12 +54,12 @@ def test_iterchunks(contiguous, urlpath, cparams, dparams, nchunks):
     ],
 )
 def test_iterchunks_pf(contiguous, urlpath, cparams, dparams, nchunks):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    kwargs = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     blosc2.remove_urlpath(urlpath)
 
     chunkshape = 200 * 1000
     data = np.arange(0, nchunks * chunkshape, dtype=np.int32)
-    schunk = blosc2.SChunk(chunksize=chunkshape * 4, data=data, **storage)
+    schunk = blosc2.SChunk(chunksize=chunkshape * 4, data=data, **kwargs)
 
     @schunk.postfilter(np.int32, np.int32)
     def postf1(input, output, offset):

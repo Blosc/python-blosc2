@@ -29,7 +29,7 @@ import blosc2
 @pytest.mark.parametrize("create_chunk", [True, False])
 def test_schunk_update_numpy(contiguous, urlpath, nchunks, nupdates, copy, create_chunk, gil):
     blosc2.set_releasegil(gil)
-    storage = {
+    kwargs = {
         "contiguous": contiguous,
         "urlpath": urlpath,
         "cparams": {"nthreads": 2},
@@ -37,7 +37,7 @@ def test_schunk_update_numpy(contiguous, urlpath, nchunks, nupdates, copy, creat
     }
     blosc2.remove_urlpath(urlpath)
 
-    schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, **storage)
+    schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, **kwargs)
     for i in range(nchunks):
         buffer = i * np.arange(200 * 1000, dtype="int32")
         nchunks_ = schunk.append_data(buffer)
@@ -79,7 +79,7 @@ def test_schunk_update_numpy(contiguous, urlpath, nchunks, nupdates, copy, creat
 @pytest.mark.parametrize("create_chunk", [True, False])
 def test_update(contiguous, urlpath, nchunks, nupdates, copy, create_chunk, gil):
     blosc2.set_releasegil(gil)
-    storage = {
+    kwargs = {
         "contiguous": contiguous,
         "urlpath": urlpath,
         "cparams": {"nthreads": 2},
@@ -89,7 +89,7 @@ def test_update(contiguous, urlpath, nchunks, nupdates, copy, create_chunk, gil)
     blosc2.remove_urlpath(urlpath)
     nbytes = 23401
 
-    schunk = blosc2.SChunk(chunksize=nbytes * 2, **storage)
+    schunk = blosc2.SChunk(chunksize=nbytes * 2, **kwargs)
     for i in range(nchunks):
         bytes_obj = b"i " * nbytes
         nchunks_ = schunk.append_data(bytes_obj)

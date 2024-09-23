@@ -34,11 +34,11 @@ import blosc2
     ],
 )
 def test_schunk_get_slice(contiguous, urlpath, mode, cparams, dparams, nchunks, start, stop):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    kwargs = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     blosc2.remove_urlpath(urlpath)
 
     data = np.arange(200 * 100 * nchunks, dtype="int32")
-    schunk = blosc2.SChunk(chunksize=200 * 100 * 4, data=data, mode=mode, **storage)
+    schunk = blosc2.SChunk(chunksize=200 * 100 * 4, data=data, mode=mode, **kwargs)
 
     start_, stop_ = start, stop
     if start is None:
@@ -82,10 +82,8 @@ def test_schunk_get_slice(contiguous, urlpath, mode, cparams, dparams, nchunks, 
     ],
 )
 def test_schunk_getitem_int(cparams, nchunks, elem):
-    storage = {"cparams": cparams}
-
     data = np.arange(200 * 100 * nchunks, dtype="int32")
-    schunk = blosc2.SChunk(chunksize=200 * 100 * 4, data=data, **storage)
+    schunk = blosc2.SChunk(chunksize=200 * 100 * 4, data=data, cparams=cparams)
 
     sl = data[elem]
     res = schunk[elem]
@@ -93,12 +91,12 @@ def test_schunk_getitem_int(cparams, nchunks, elem):
 
 
 def test_schunk_get_slice_raises():
-    storage = {"contiguous": True, "urlpath": "schunk.b2frame", "cparams": {"typesize": 4}, "dparams": {}}
-    blosc2.remove_urlpath(storage["urlpath"])
+    kwargs = {"contiguous": True, "urlpath": "schunk.b2frame", "cparams": {"typesize": 4}, "dparams": {}}
+    blosc2.remove_urlpath(kwargs["urlpath"])
 
     nchunks = 2
     data = np.arange(200 * 100 * nchunks, dtype="int32")
-    schunk = blosc2.SChunk(chunksize=200 * 100 * 4, data=data, **storage)
+    schunk = blosc2.SChunk(chunksize=200 * 100 * 4, data=data, **kwargs)
 
     start = 200 * 100
     stop = 200 * 100 * nchunks
@@ -118,4 +116,4 @@ def test_schunk_get_slice_raises():
     stop = start + 4
     assert schunk[start:stop] == b""
 
-    blosc2.remove_urlpath(storage["urlpath"])
+    blosc2.remove_urlpath(kwargs["urlpath"])

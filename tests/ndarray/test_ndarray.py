@@ -25,11 +25,11 @@ import blosc2
 )
 @pytest.mark.parametrize("copy", [True, False])
 def test_ndarray_cframe(contiguous, urlpath, cparams, dparams, nchunks, copy):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    storage = {"contiguous": contiguous, "urlpath": urlpath}
     blosc2.remove_urlpath(urlpath)
 
     data = np.arange(200 * 1000 * nchunks, dtype="int32").reshape(200, 1000, nchunks)
-    ndarray = blosc2.asarray(data, **storage)
+    ndarray = blosc2.asarray(data, storage=storage, cparams=cparams, dparams=dparams)
 
     cframe = ndarray.to_cframe()
     ndarray2 = blosc2.ndarray_from_cframe(cframe, copy)

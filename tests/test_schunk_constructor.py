@@ -24,13 +24,13 @@ import blosc2
     ],
 )
 def test_schunk_numpy(contiguous, urlpath, cparams, dparams, chunksize):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    kwargs = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     blosc2.remove_urlpath(urlpath)
     num_elem = 20 * 1000
     nchunks = num_elem * 4 // chunksize + 1 if num_elem * 4 % chunksize != 0 else num_elem * 4 // chunksize
     data = np.arange(num_elem, dtype="int32")
     bytes_obj = data.tobytes()
-    schunk = blosc2.SChunk(chunksize=chunksize, data=data, **storage)
+    schunk = blosc2.SChunk(chunksize=chunksize, data=data, **kwargs)
     # Test properties
     assert len(schunk) == num_elem
     assert chunksize == schunk.chunksize
@@ -81,14 +81,14 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, chunksize):
     ],
 )
 def test_schunk(contiguous, urlpath, cparams, dparams, chunksize):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    storage = {"contiguous": contiguous, "urlpath": urlpath}
 
     blosc2.remove_urlpath(urlpath)
     nrep = 1000
     nchunks = 5 * nrep // chunksize + 1 if nrep * 5 % chunksize != 0 else 5 * nrep // chunksize
 
     buffer = b"1234 " * nrep
-    schunk = blosc2.SChunk(chunksize=chunksize, data=buffer, **storage)
+    schunk = blosc2.SChunk(chunksize=chunksize, data=buffer, cparams=cparams, dparams=dparams, **storage)
 
     for i in range(nchunks):
         start = i * chunksize
@@ -141,11 +141,11 @@ def test_schunk(contiguous, urlpath, cparams, dparams, chunksize):
                          ],
 )
 def test_schunk_fill_special(contiguous, urlpath, cparams, nitems, special_value, expected_value):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams}
+    kwargs = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams}
     blosc2.remove_urlpath(urlpath)
 
     chunk_len = 200 * 1000
-    schunk = blosc2.SChunk(chunksize=chunk_len * 4, **storage)
+    schunk = blosc2.SChunk(chunksize=chunk_len * 4, **kwargs)
     if special_value in [blosc2.SpecialValue.ZERO, blosc2.SpecialValue.NAN, blosc2.SpecialValue.UNINIT]:
         schunk.fill_special(nitems, special_value)
     else:

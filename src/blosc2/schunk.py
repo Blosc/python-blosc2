@@ -160,8 +160,14 @@ class SChunk(blosc2_ext.SChunk):
             Storage parameters. The default values are in :class:`blosc2.Storage`.
             Keyword arguments supported:
                 storage: :class:`blosc2.Storage`
+                    All the storage parameters that you want to use as
+                    a :class:`blosc2.Storage` or dict instance.
+                cparams: :class:`blosc2.CParams` or dict
+                    All the compression parameters that you want to use as
+                    a :class:`blosc2.CParams` or dict instance.
+                dparams: :class:`blosc2.DParams` or dict
                     All the decompression parameters that you want to use as
-                    a :class:`blosc2.Storage` instance.
+                    a :class:`blosc2.DParams` or dict instance.
                 others: Any
                     If `storage` is not passed, all the parameters of a :class:`blosc2.Storage`
                     can be passed as keyword arguments.
@@ -227,11 +233,13 @@ class SChunk(blosc2_ext.SChunk):
             if kwarg not in allowed_kwargs:
                 raise ValueError(f"{kwarg} is not supported as keyword argument")
         if kwargs.get("storage") is not None:
-            if any(key not in ["_is_view", "_schunk", "storage"] for key in kwargs.keys()):
+            if any(key in list(blosc2.Storage.__annotations__) for key in kwargs.keys()):
                 raise AttributeError("Cannot pass both `storage` and other kwargs already included in Storage")
             storage = kwargs.get("storage")
-            del kwargs["storage"]
-            kwargs = {**kwargs, **asdict(storage)}
+            if isinstance(storage, blosc2.Storage):
+                kwargs = {**kwargs, **asdict(storage)}
+            else:
+                kwargs = {**kwargs, **storage}
 
         if isinstance(kwargs.get("cparams"), blosc2.CParams):
             kwargs["cparams"] = asdict(kwargs.get("cparams"))

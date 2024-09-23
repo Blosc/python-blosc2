@@ -14,22 +14,21 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "urlpath, contiguous, mode, mmap_mode, cparams, dparams",
+    "urlpath, contiguous, mode, mmap_mode",
     [
-        (None, None, "w", None, blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6, typesize=4), blosc2.DParams()),
-        (None, False, "a", None, {"typesize": 4}, blosc2.DParams()),
-        (None, None, "r", None, blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6, typesize=4), blosc2.DParams(nthreads=4)),
-        (None, True, "a", None, blosc2.CParams(splitmode=blosc2.SplitMode.ALWAYS_SPLIT, nthreads=5, typesize=4), {}),
-        ("b2frame", None, "r", None, {"codec": blosc2.Codec.LZ4HC, "typesize": 4}, blosc2.DParams()),
-        ("b2frame", False, "a", None, blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6, typesize=4), blosc2.DParams(nthreads=4)),
-        ("b2frame", True, "w", None, blosc2.CParams(splitmode=blosc2.SplitMode.ALWAYS_SPLIT, nthreads=5, typesize=4), {}),
-        ("b2frame", True, "r", "r", blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6, typesize=4), blosc2.DParams()),
-        ("b2frame", None, "w", "w+", {"typesize": 4}, {}),
+        (None, None, "w", None),
+        (None, False, "a", None),
+        (None, None, "r", None),
+        (None, True, "a", None),
+        ("b2frame", None, "r", None),
+        ("b2frame", False, "a", None),
+        ("b2frame", True, "w", None),
+        ("b2frame", True, "r", "r"),
+        ("b2frame", None, "w", "w+"),
     ],
 )
-def test_storage_values(contiguous, urlpath, mode, mmap_mode, cparams, dparams):
-    storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode=mode, mmap_mode=mmap_mode,
-                             cparams=cparams, dparams=dparams)
+def test_storage_values(contiguous, urlpath, mode, mmap_mode):
+    storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode=mode, mmap_mode=mmap_mode)
     if contiguous is None:
         if urlpath is not None:
             assert storage.contiguous
@@ -41,8 +40,6 @@ def test_storage_values(contiguous, urlpath, mode, mmap_mode, cparams, dparams):
     assert storage.urlpath == urlpath
     assert storage.mode == mode
     assert storage.mmap_mode == mmap_mode
-    assert storage.cparams == cparams
-    assert storage.dparams == dparams
 
 
 def test_storage_defaults():
@@ -52,23 +49,20 @@ def test_storage_defaults():
     assert storage.mode == "a"
     assert storage.mmap_mode is None
     assert storage.initial_mapping_size is None
-    assert storage.cparams == blosc2.CParams()
-    assert storage.dparams == blosc2.DParams()
     assert storage.meta is None
 
 
 @pytest.mark.parametrize(
-    "urlpath, contiguous, cparams, dparams",
+    "urlpath, contiguous",
     [
-        (None, False, blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6, typesize=4), blosc2.DParams()),
-        (None, True, {"typesize": 4}, blosc2.DParams(nthreads=4)),
-        ("b2frame", False, blosc2.CParams(splitmode=blosc2.SplitMode.ALWAYS_SPLIT, nthreads=5, typesize=4), {}),
-        ("b2frame", True, {"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {}),
+        (None, False),
+        (None, True),
+        ("b2frame", False),
+        ("b2frame", True),
     ],
 )
-def test_raises_storage(contiguous, urlpath, cparams, dparams):
-    storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath,
-                             cparams=cparams, dparams=dparams)
+def test_raises_storage(contiguous, urlpath):
+    storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath)
     blosc2.remove_urlpath(urlpath)
 
     for field in fields(blosc2.Storage):

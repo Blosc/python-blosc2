@@ -95,7 +95,8 @@ def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, c2su
         chunked_eval=chunked_eval,
         chunks=chunks,
         blocks=blocks,
-        storage=blosc2.Storage(urlpath=urlpath, contiguous=contiguous, dparams=dparams),
+        storage=blosc2.Storage(urlpath=urlpath, contiguous=contiguous),
+        dparams=dparams,
     )
     lazy_eval = expr[slices]
     np.testing.assert_allclose(lazy_eval, npc[slices])
