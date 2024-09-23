@@ -96,13 +96,13 @@ class Tuner(Enum):
 
 from .blosc2_ext import (
     DEFINED_CODECS_STOP,
-    GLOBAL_REGISTERED_CODECS_STOP,
-    USER_REGISTERED_CODECS_STOP,
     EXTENDED_HEADER_LENGTH,
+    GLOBAL_REGISTERED_CODECS_STOP,
     MAX_BUFFERSIZE,
     MAX_OVERHEAD,
     MAX_TYPESIZE,
     MIN_HEADER_LENGTH,
+    USER_REGISTERED_CODECS_STOP,
     VERSION_DATE,
     VERSION_STRING,
 )
@@ -212,7 +212,7 @@ from .ndarray import (  # noqa: I001
 from .c2array import c2context, C2Array, URLPath
 
 from .lazyexpr import LazyExpr, lazyudf, lazyexpr, LazyArray, _open_lazyarray
-from .proxy import Proxy, ProxySource, ProxyNDField
+from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField
 
 from .schunk import SChunk, open
 

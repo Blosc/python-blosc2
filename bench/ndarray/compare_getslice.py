@@ -28,7 +28,7 @@ import zarr
 
 import blosc2
 
-persistent = True if len(sys.argv) == 1 else False
+persistent = (len(sys.argv) == 1)
 if persistent:
     print("Testing the persistent backends")
 else:
