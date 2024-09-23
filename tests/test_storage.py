@@ -7,6 +7,7 @@
 #######################################################################
 
 from dataclasses import asdict, fields
+import numpy as np
 
 import pytest
 
@@ -71,6 +72,11 @@ def test_raises_storage(contiguous, urlpath):
         with pytest.raises(TypeError):
             _ = blosc2.SChunk(**{str(field.name): {}}, **asdict(storage))
 
+        with pytest.raises(AttributeError):
+            _ = blosc2.empty((30, 30), storage=storage, **{str(field.name): {}})
+        with pytest.raises(TypeError):
+            _ = blosc2.empty((30, 30), **{str(field.name): {}}, **asdict(storage))
+
 
 @pytest.mark.parametrize(
     "cparams",
@@ -84,12 +90,22 @@ def test_raises_storage(contiguous, urlpath):
 def test_cparams_values(cparams):
     schunk = blosc2.SChunk(cparams=cparams)
     cparams_dataclass = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
-
     for field in fields(cparams_dataclass):
         if field.name in ['filters', 'filters_meta']:
             assert getattr(schunk.cparams, field.name)[:len(getattr(cparams_dataclass, field.name))] == getattr(cparams_dataclass, field.name)
         else:
             assert getattr(schunk.cparams, field.name) == getattr(cparams_dataclass, field.name)
+
+    array = blosc2.empty((30, 30), np.int32, cparams=cparams)
+    for field in fields(cparams_dataclass):
+        print(field.name)
+        if field.name in ['filters', 'filters_meta']:
+            print(getattr(array.schunk.cparams, field.name))
+            assert getattr(array.schunk.cparams, field.name)[:len(getattr(cparams_dataclass, field.name))] == getattr(cparams_dataclass, field.name)
+        elif field.name == 'typesize':
+            assert getattr(array.schunk.cparams, field.name) == array.dtype.itemsize
+        elif field.name != 'blocksize':
+            assert getattr(array.schunk.cparams, field.name) == getattr(cparams_dataclass, field.name)
 
 
 def test_cparams_defaults():
@@ -114,6 +130,8 @@ def test_raises_cparams():
             _ = blosc2.SChunk(cparams=cparams, **{str(field.name): {}})
         with pytest.raises(AttributeError):
             _ = blosc2.compress2(b"12345678" * 1000, cparams=cparams, **{str(field.name): {}})
+        with pytest.raises(KeyError):
+            _ = blosc2.empty((10, 10), cparams=cparams, **{str(field.name): {}})
 
 
 @pytest.mark.parametrize(
@@ -128,9 +146,10 @@ def test_raises_cparams():
 def test_dparams_values(dparams):
     schunk = blosc2.SChunk(dparams=dparams)
     dparams_dataclass = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
-
+    array = blosc2.empty((30, 30), dparams=dparams)
     for field in fields(dparams_dataclass):
         assert getattr(schunk.dparams, field.name) == getattr(dparams_dataclass, field.name)
+        assert getattr(array.schunk.dparams, field.name) == getattr(dparams_dataclass, field.name)
 
 
 def test_dparams_defaults():
