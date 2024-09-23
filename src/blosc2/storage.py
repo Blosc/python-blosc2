@@ -127,10 +127,6 @@ class Storage:
         If the storage is persistent, the name of the file (when
         `contiguous = True`) or the directory (if `contiguous = False`).
         If the storage is in-memory, then this field is `None`.
-    cparams: :class:`CParams` or dict
-        The compression parameters as a :class:`CParams` instance or a dictionary.
-    dparams: :class:`DParams` or dict
-        The decompression parameters as a :class:`DParams` instance or a dictionary.
     mode: str, optional
         Persistence mode: ‘r’ means read only (must exist);
         ‘a’ means read/write (create if it doesn’t exist);
@@ -206,8 +202,6 @@ class Storage:
     """
     contiguous: bool = None
     urlpath: str = None
-    cparams: CParams | dict = field(default_factory=CParams)
-    dparams: DParams | dict = field(default_factory=DParams)
     mode: str = 'a'
     mmap_mode: str = None
     initial_mapping_size: int = None

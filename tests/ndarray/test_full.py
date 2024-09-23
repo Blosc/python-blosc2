@@ -64,6 +64,7 @@ import blosc2
 )
 def test_full(shape, chunks, blocks, fill_value, cparams, dparams, dtype, urlpath, contiguous):
     blosc2.remove_urlpath(urlpath)
+    storage = {"urlpath": urlpath, "contiguous": contiguous}
     a = blosc2.full(
         shape,
         fill_value,
@@ -72,8 +73,7 @@ def test_full(shape, chunks, blocks, fill_value, cparams, dparams, dtype, urlpat
         dtype=dtype,
         cparams=cparams,
         dparams=blosc2.DParams(**dparams),
-        urlpath=urlpath,
-        contiguous=contiguous,
+        **storage,
     )
     assert asdict(a.schunk.dparams) == dparams
     if isinstance(fill_value, bytes):

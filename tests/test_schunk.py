@@ -45,18 +45,18 @@ import blosc2
     ],
 )
 def test_schunk_numpy(contiguous, urlpath, mode, mmap_mode, cparams, dparams, nchunks):
-    storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode=mode, mmap_mode=mmap_mode,
-                             cparams=cparams, dparams=dparams)
+    storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode=mode, mmap_mode=mmap_mode)
     blosc2.remove_urlpath(urlpath)
 
     chunk_len = 200 * 1000
     if mode != "r":
-        schunk = blosc2.SChunk(chunksize=chunk_len * 4, storage=storage)
+        schunk = blosc2.SChunk(chunksize=chunk_len * 4, storage=storage, cparams=cparams, dparams=dparams)
+
     else:
         with pytest.raises(
             ValueError, match="not specify a urlpath" if urlpath is None else "does not exist"
         ):
-            blosc2.SChunk(chunksize=chunk_len * 4, storage=storage)
+            blosc2.SChunk(chunksize=chunk_len * 4, storage=storage, cparams=cparams, dparams=dparams)
 
         # Create a schunk which we can read later
         storage2 = replace(storage,
@@ -65,6 +65,8 @@ def test_schunk_numpy(contiguous, urlpath, mode, mmap_mode, cparams, dparams, nc
         schunk = blosc2.SChunk(
             chunksize=chunk_len * 4,
             storage=storage2,
+            cparams=cparams,
+            dparams=dparams
         )
 
     assert schunk.urlpath == urlpath
@@ -143,13 +145,13 @@ def test_schunk_ndarray(tmp_path, mode_write, mode_read, mmap_mode_write, mmap_m
     ],
 )
 def test_schunk(contiguous, urlpath, mode, mmap_mode, nbytes, cparams, dparams, nchunks):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    kwargs = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     numpy_meta = {b"dtype": str(np.dtype(np.uint8))}
     test_meta = {b"lorem": 1234}
     meta = {"numpy": numpy_meta, "test": test_meta}
     blosc2.remove_urlpath(urlpath)
 
-    schunk = blosc2.SChunk(chunksize=2 * nbytes, meta=meta, mode=mode, mmap_mode=mmap_mode, **storage)
+    schunk = blosc2.SChunk(chunksize=2 * nbytes, meta=meta, mode=mode, mmap_mode=mmap_mode, **kwargs)
 
     assert "numpy" in schunk.meta
     assert "error" not in schunk.meta
@@ -201,12 +203,12 @@ def test_schunk(contiguous, urlpath, mode, mmap_mode, nbytes, cparams, dparams, 
 )
 @pytest.mark.parametrize("copy", [True, False])
 def test_schunk_cframe(contiguous, urlpath, mode, mmap_mode, cparams, dparams, nchunks, copy):
-    storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath, cparams=cparams, dparams=dparams,
+    storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath,
                              mode=mode, mmap_mode=mmap_mode)
     blosc2.remove_urlpath(urlpath)
 
     data = np.arange(200 * 1000 * nchunks, dtype="int32")
-    schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, data=data, **asdict(storage))
+    schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, data=data, **asdict(storage), cparams=cparams, dparams=dparams)
 
     cframe = schunk.to_cframe()
     schunk2 = blosc2.schunk_from_cframe(cframe, copy)
@@ -267,10 +269,10 @@ def test_schunk_cframe(contiguous, urlpath, mode, mmap_mode, cparams, dparams, n
     ],
 )
 def test_schunk_cdparams(cparams, dparams, new_cparams, new_dparams):
-    storage = {"cparams": cparams, "dparams": dparams}
+    kwargs = {"cparams": cparams, "dparams": dparams}
 
     chunk_len = 200 * 1000
-    schunk = blosc2.SChunk(chunksize=chunk_len * 4, **storage)
+    schunk = blosc2.SChunk(chunksize=chunk_len * 4, **kwargs)
 
     # Check cparams have been set correctly
     cparams_dict = cparams if isinstance(cparams, dict) else asdict(cparams)

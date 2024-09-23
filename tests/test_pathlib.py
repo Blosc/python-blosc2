@@ -23,12 +23,12 @@ import blosc2
 )
 def test_schunk_pathlib(mode, mmap_mode, cparams, dparams, nchunks):
     urlpath = pathlib.Path("b2frame")
-    storage = {"urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    kwargs = {"urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     blosc2.remove_urlpath(urlpath)
 
     if mode != "r":
         chunk_len = 200 * 1000
-        schunk = blosc2.SChunk(chunksize=chunk_len * 4, mode=mode, mmap_mode=mmap_mode, **storage)
+        schunk = blosc2.SChunk(chunksize=chunk_len * 4, mode=mode, mmap_mode=mmap_mode, **kwargs)
         assert schunk.urlpath == str(urlpath)
 
         for i in range(nchunks):

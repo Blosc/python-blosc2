@@ -34,11 +34,11 @@ import blosc2
     ],
 )
 def test_schunk_set_slice(contiguous, urlpath, mode, cparams, dparams, nchunks, start, stop):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    storage = {"contiguous": contiguous, "urlpath": urlpath, "mode": mode}
     blosc2.remove_urlpath(urlpath)
 
     data = np.arange(200 * 100 * nchunks, dtype="int32")
-    schunk = blosc2.SChunk(chunksize=200 * 100 * 4, data=data, mode=mode, **storage)
+    schunk = blosc2.SChunk(chunksize=200 * 100 * 4, data=data, storage=storage, cparams=cparams, dparams=dparams)
 
     _start, _stop = start, stop
     if _start is None:
@@ -62,14 +62,14 @@ def test_schunk_set_slice(contiguous, urlpath, mode, cparams, dparams, nchunks, 
 
 
 def test_schunk_set_slice_raises():
-    storage = {"contiguous": True, "urlpath": "schunk.b2frame", "cparams": {"typesize": 4}, "dparams": {}}
-    blosc2.remove_urlpath(storage["urlpath"])
+    kwargs = {"contiguous": True, "urlpath": "schunk.b2frame", "cparams": {"typesize": 4}, "dparams": {}}
+    blosc2.remove_urlpath(kwargs["urlpath"])
 
     nchunks = 2
     data = np.arange(200 * 100 * nchunks, dtype="int32")
-    blosc2.SChunk(chunksize=200 * 100 * 4, data=data, **storage)
+    blosc2.SChunk(chunksize=200 * 100 * 4, data=data, **kwargs)
 
-    schunk = blosc2.open(storage["urlpath"], mode="r")
+    schunk = blosc2.open(kwargs["urlpath"], mode="r")
     start = 200 * 100
     stop = 200 * 100 * nchunks
     val = 3 * np.arange(start, stop, dtype="int32")
@@ -77,7 +77,7 @@ def test_schunk_set_slice_raises():
     with pytest.raises(ValueError):
         schunk[start:stop] = val
 
-    schunk = blosc2.open(storage["urlpath"], mode="a")
+    schunk = blosc2.open(kwargs["urlpath"], mode="a")
     with pytest.raises(IndexError):
         schunk[start:stop:2] = val
 
@@ -95,4 +95,4 @@ def test_schunk_set_slice_raises():
     with pytest.raises(ValueError):
         schunk[start:stop] = val
 
-    blosc2.remove_urlpath(storage["urlpath"])
+    blosc2.remove_urlpath(kwargs["urlpath"])

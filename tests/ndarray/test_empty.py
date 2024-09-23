@@ -65,17 +65,15 @@ import blosc2
 def test_empty(shape, chunks, blocks, dtype, cparams, urlpath, contiguous):
     blosc2.remove_urlpath(urlpath)
     filters = cparams["filters"]
-    storage = blosc2.Storage(cparams=blosc2.CParams(**cparams),
-                               dparams={"nthreads": 2},
-                               urlpath=urlpath,
-                               contiguous=contiguous,
-                               )
+    storage = blosc2.Storage(urlpath=urlpath, contiguous=contiguous)
     a = blosc2.empty(
         shape,
         chunks=chunks,
         blocks=blocks,
         dtype=dtype,
         storage=storage,
+        cparams=blosc2.CParams(**cparams),
+        dparams={"nthreads": 2},
     )
 
     dtype = np.dtype(dtype)
