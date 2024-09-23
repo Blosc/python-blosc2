@@ -542,7 +542,7 @@ def fill_chunk_operands(
             arr = operands["o0"]
             chunks_idx, nchunks = get_chunks_idx(arr.shape, arr.chunks)
             info = (reduc, aligned, low_mem, chunks_idx)
-            iter_chunks = read_nchunk(list(value for value in operands.values()), info)
+            iter_chunks = read_nchunk(list(operands.values()), info)
         # Run the asynchronous file reading function from a synchronous context
         chunks = next(iter_chunks)
 
