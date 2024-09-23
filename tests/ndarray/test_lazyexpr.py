@@ -448,14 +448,14 @@ def test_params(array_fixture):
 
     urlpath = "eval_expr.b2nd"
     blosc2.remove_urlpath(urlpath)
-    cparams = {"nthreads": 2}
+    cparams = blosc2.CParams(nthreads=2)
     dparams = {"nthreads": 4}
     chunks = tuple(i // 2 for i in nres.shape)
     blocks = tuple(i // 4 for i in nres.shape)
     res = expr.eval(urlpath=urlpath, cparams=cparams, dparams=dparams, chunks=chunks, blocks=blocks)
     np.testing.assert_allclose(res[:], nres)
     assert res.schunk.urlpath == urlpath
-    assert res.schunk.cparams.nthreads == cparams["nthreads"]
+    assert res.schunk.cparams.nthreads == cparams.nthreads
     assert res.schunk.dparams.nthreads == dparams["nthreads"]
     assert res.chunks == chunks
     assert res.blocks == blocks
@@ -493,8 +493,8 @@ def test_save():
     chunks = tuple(i // 2 for i in nres.shape)
     blocks = tuple(i // 4 for i in nres.shape)
     urlpath_eval = "eval_expr.b2nd"
-    res = expr.eval(
-        urlpath=urlpath_eval, cparams=cparams, dparams=dparams, mode="w", chunks=chunks, blocks=blocks
+    res = expr.eval(storage=blosc2.Storage(urlpath=urlpath_eval, cparams=cparams, dparams=dparams, mode="w"),
+                    chunks=chunks, blocks=blocks
     )
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
 
