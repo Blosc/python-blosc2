@@ -198,6 +198,24 @@ class C2Array(blosc2.Operand):
         -------
         out: C2Array
 
+        Examples
+        --------
+        >>> import blosc2
+        >>> import pathlib
+        >>> host = "https://demo.caterva2.net/"
+        >>> root = "b2tests"
+        >>> dir = "expr/"
+        >>> name = "ds-0-10-linspace-float64-(True, True)-a1-(60, 60)d.b2nd"
+        >>> path = pathlib.Path(f"{root}/{dir + name}").as_posix()
+        >>> remote_array = blosc2.C2Array(path, urlbase=host)
+        >>> f"Shape of the remote array: {remote_array.shape}"
+        >>> f"Chunks of the remote array: {remote_array.chunks}"
+        >>> f"Blocks of the remote array: {remote_array.blocks}"
+        >>> f"Dtype of the remote array: {remote_array.dtype}"
+        Shape of the remote array: (60, 60)
+        Chunks of the remote array: (30, 60)
+        Blocks of the remote array: (10, 60)
+        Dtype of the remote array: float64
         """
         if path.startswith("/"):
             raise ValueError("The path should start with a root name, not a slash")
@@ -252,6 +270,36 @@ class C2Array(blosc2.Operand):
         -------
         out: bytes
             The requested compressed chunk.
+
+        Examples
+        --------
+        >>> import pathlib
+        >>> import numpy as np
+        >>> import blosc2
+        >>> host = "https://demo.caterva2.net/"
+        >>> root = "b2tests"
+        >>> dir = "expr/"
+        >>> root = "b2tests"
+        >>> dir = "expr/"
+        >>> name1 = "ds-0-10-linspace-float64-(True, True)-a1-(60, 60)d.b2nd"
+        >>> name2 = "ds-0-10-linspace-float64-(True, True)-a2-(60, 60)d.b2nd"
+        >>> path1 = pathlib.Path(f"{root}/{dir + name1}").as_posix()
+        >>> path2 = pathlib.Path(f"{root}/{dir + name2}").as_posix()
+        >>> a = blosc2.C2Array(path1, host)
+        >>> b = blosc2.C2Array(path2, host)
+        >>> c = a + b
+        >>> # Get the compressed chunk from array 'a' for index 0
+        >>> chunk_index = 0
+        >>> compressed_chunk = c.get_chunk(chunk_index)
+        >>> f"Size of chunk {chunk_index} from a: {len(compressed_chunk)} bytes"
+        Size of chunk 0 from 'a': 8604 bytes
+        >>> # Decompress the chunk and convert it to a NumPy array
+        >>> decompressed_chunk = blosc2.decompress(compressed_chunk)
+        >>> chunk_np_array = np.frombuffer(decompressed_chunk, dtype=a.dtype)
+        >>> f"Content of chunk {chunk_index} as NumPy array:{chunk_np_array}"
+        Content of chunk 0 as NumPy array:
+        [0.00000000e+00 5.55709919e-03 1.11141984e-02 ... 9.98610725e+00
+        9.99166435e+00 9.99722145e+00]
         """
         url = _sub_url(self.urlbase, f"api/chunk/{self.path}")
         params = {"nchunk": nchunk}

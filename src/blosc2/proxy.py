@@ -10,8 +10,6 @@ from abc import ABC, abstractmethod
 import blosc2
 import numpy as np
 
-import blosc2
-
 
 class ProxyNDSource(ABC):
     """
@@ -51,7 +49,7 @@ class ProxyNDSource(ABC):
         pass
 
     @abstractmethod
-    def get_chunk(self, nchunk):
+    def get_chunk(self, nchunk: int) -> bytes:
         """
         Return the compressed chunk in :paramref:`self`.
 
@@ -227,7 +225,7 @@ class Proxy(blosc2.Operand):
             for key in vlmeta:
                 self._schunk_cache.vlmeta[key] = vlmeta[key]
 
-    def fetch(self, item=None):
+    def fetch(self, item: slice | list[slice] = None) -> blosc2.NDArray | blosc2.schunk.SChunk:
         """
         Get the container used as cache with the requested data updated.
 
@@ -272,7 +270,7 @@ class Proxy(blosc2.Operand):
 
         return self._cache
 
-    async def afetch(self, item=None):
+    async def afetch(self, item: slice | list[slice] = None) -> blosc2.NDArray | blosc2.schunk.SChunk:
         """
         Get the container used as cache with the requested data updated
         in an asynchronous way.
@@ -299,44 +297,51 @@ class Proxy(blosc2.Operand):
         >>> import blosc2
         >>> import asyncio
         >>> class MyProxySource:
-        >>>     def __init__(self, data, chunk, block):
+        >>>     def __init__(self, data):
         >>>             # If the next source is multidimensional, it must have the attributes:
         >>>             self.data = data
-        >>>             self.shape = data.shape
-        >>>             self.chunks = chunk
-        >>>             self.blocks = block
-        >>>             self.dtype = data.dtype
         >>>             f"Data shape: {self.shape}, Chunks: {self.chunks}"
-        Data shape: (4, 5), Chunks: [2, 2]
+        Data shape: (4, 5), Chunks: [2, 5]
         >>>             f"Blocks: {self.blocks}, Dtype: {self.dtype}"
-        Blocks: [2, 2], Dtype: int64
-        >>> # This method must be present.
+        Blocks: [1, 5], Dtype: int64
+        >>>     @property
+        >>>     def shape(self):
+        >>>             return self.data.shape
+        >>>     @property
+        >>>     def chunks(self):
+        >>>             return self.data.chunks
+        >>>     @property
+        >>>     def blocks(self):
+        >>>             return self.data.blocks
+        >>>     @property
+        >>>     def dtype(self):
+        >>>             return self.data.dtype
+        >>>     # This method must be present
+        >>>     def get_chunk(self, nchunk):
+        >>>             return self.data.get_chunk(nchunk)
+        >>>     # This method is optional
         >>>     async def aget_chunk(self, nchunk):
-        >>>             await asyncio.sleep(0.1)
-        >>>             return self.data[nchunk]
-        >>> class MyProxy(blosc2.Proxy):
-        >>>     def __init__(self, source):
-        >>>               super().__init__(source)
-        >>>               self._cache = source.data
-        >>>     # Asynchronous method to get the cache data
-        >>>     async def afetch(self, slice_=None):
-        >>>               return self._cache if slice_ is None else self._cache[slice_]
+        >>>             await asyncio.sleep(0.1) # Simulate an asynchronous operation
+        >>>             return self.data.get_chunk(nchunk)
         >>> data = np.arange(20).reshape(4, 5)
-        >>> chunk = [2, 2]
-        >>> block = [2, 2]
-        >>> source = MyProxySource(data, chunk, block)
-        >>> proxy = MyProxy(source)
+        >>> chunks = [2, 5]
+        >>> blocks = [1, 5]
+        >>> data = blosc2.asarray(data, chunks=chunks, blocks=blocks)
+        >>> source = MyProxySource(data2)
+        >>> proxy = blosc2.Proxy(source)
         >>> async def fetch_data():
-        >>>         # Fetch a slice of the data from the proxy asynchronously
-        >>>         slice_data = await proxy.afetch(slice(0, 2))
-        >>>         f"Slice data cache: {slice_data[:]}"
+        >>>        # Fetch a slice of the data from the proxy asynchronously
+        >>>        slice_data = await proxy.afetch(slice(0, 2))
+        >>>        # Note that only data fetched is shown, the rest is uninitialized
+        >>>        f"Slice data cache: {slice_data[:]}"
         Slice data cache:
                             [[0 1 2 3 4]
-                            [5 6 7 8 9]]
-        >>>         # Note: It is not possible to print the intermediate state of the proxy
-        >>>         # because accessing the proxy causes the entire data to be copied.
+                            [5 6 7 8 9]
+                            [0 0 0 0 0]
+                            [0 0 0 0 0]]
         >>>         # Fetch the full data from the proxy asynchronously
         >>>         full_data = await proxy.afetch()
+        >>>         # Now, all data is shown, meaning the full data has been fetched
         >>>         f"Full data cache: {full_data[:]}"
         Full data cache:
                         [[ 0  1  2  3  4]
@@ -363,7 +368,7 @@ class Proxy(blosc2.Operand):
 
         return self._cache
 
-    def __getitem__(self, item):
+    def __getitem__(self, item: slice | list[slice]) -> np.ndarray:
         """
         Get a slice as a numpy.ndarray using the :ref:`Proxy`.
 
@@ -417,7 +422,7 @@ class Proxy(blosc2.Operand):
         return f"Proxy({self.src}, urlpath={self.urlpath})"
 
     @property
-    def vlmeta(self):
+    def vlmeta(self) -> blosc2.schunk.vlmeta:
         """
         Get the vlmeta of the cache.
 
@@ -428,7 +433,7 @@ class Proxy(blosc2.Operand):
         return self._schunk_cache.vlmeta
 
     @property
-    def fields(self):
+    def fields(self)-> dict:
         """
         Dictionary with the fields of :paramref:`self`.
 
@@ -474,7 +479,7 @@ class ProxyNDField(blosc2.Operand):
         self.shape = proxy.shape
         self.dtype = proxy.dtype
 
-    def __getitem__(self, item: slice):
+    def __getitem__(self, item: slice | list[slice]) -> np.ndarray:
         """
         Get a slice as a numpy.ndarray using the `field` in `proxy`.
 
