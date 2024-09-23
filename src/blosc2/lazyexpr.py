@@ -1225,13 +1225,13 @@ def fuse_expressions(expr, new_base, dup_op):
     skip_to_char = 0
     old_base = 0
     prev_pos = {}
-    for i in range(len(expr)):
+    for i, expr_i in enumerate(expr):
         if i < skip_to_char:
             continue
-        if expr[i] == "o":
+        if expr_i == "o":
             if i > 0 and (expr[i - 1] != " " and expr[i - 1] != "("):
                 # Not a variable
-                new_expr += expr[i]
+                new_expr += expr_i
                 continue
             # This is a variable.  Find the end of it.
             j = i + 1
@@ -1256,7 +1256,7 @@ def fuse_expressions(expr, new_base, dup_op):
                 new_expr += dup_op[old_op]
             skip_to_char = i + j + 1
         else:
-            new_expr += expr[i]
+            new_expr += expr_i
     return new_expr
 
 
