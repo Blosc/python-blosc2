@@ -44,7 +44,7 @@ class CParams:
 
     Parameters
     ----------
-    codec: :class:`Codec`
+    codec: :class:`Codec` or int
         The compressor code. Default is :py:obj:`Codec.ZSTD <Codec>`.
     codec_meta: int
         The metadata for the compressor code, 0 by default.
@@ -65,7 +65,7 @@ class CParams:
     splitmode: :class:`SplitMode`
         The split mode for the blocks.
         The default value is :py:obj:`SplitMode.ALWAYS_SPLIT <SplitMode>`.
-    filters: :class:`Filter` list
+    filters: :class:`Filter` or int list
         The sequence of filters. Default: [:py:obj:`Filter.NOFILTER <Filter>`,
         :py:obj:`Filter.NOFILTER <Filter>`, :py:obj:`Filter.NOFILTER <Filter>`, :py:obj:`Filter.NOFILTER <Filter>`,
         :py:obj:`Filter.NOFILTER <Filter>`, :py:obj:`Filter.SHUFFLE <Filter>`].
@@ -74,7 +74,7 @@ class CParams:
     tuner: :class:`Tuner`
         The tuner to use. Default: :py:obj:`Tuner.STUNE <Tuner>`.
     """
-    codec: blosc2.Codec = blosc2.Codec.ZSTD
+    codec: blosc2.Codec | int = blosc2.Codec.ZSTD
     codec_meta: int = 0
     clevel: int = 1
     use_dict: bool = False
@@ -82,7 +82,7 @@ class CParams:
     nthreads: int = field(default_factory=default_nthreads)
     blocksize: int = 0
     splitmode: blosc2.SplitMode = blosc2.SplitMode.ALWAYS_SPLIT
-    filters: list[blosc2.Filter] = field(default_factory=default_filters)
+    filters: list[blosc2.Filter | int] = field(default_factory=default_filters)
     filters_meta: list[int] = field(default_factory=default_filters_meta)
     tuner: blosc2.Tuner = blosc2.Tuner.STUNE
 
@@ -94,6 +94,10 @@ class CParams:
             warnings.warn("Changed `filters_meta` length to match `filters` length")
         if len(self.filters) > len(self.filters_meta):
             raise ValueError("Number of filters cannot exceed number of filters meta")
+
+        for i in range(len(self.filters)):
+            if self.filters_meta[i] == 0 and self.filters[i] == blosc2.Filter.BYTEDELTA:
+                self.filters_meta[i] = self.typesize
 
 
 @dataclass

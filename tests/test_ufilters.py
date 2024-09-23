@@ -82,7 +82,7 @@ def test_ufilters(contiguous, urlpath, nchunks, filters, filters_meta, dtype):
         contiguous=contiguous,
         urlpath=urlpath,
         cparams=cparams,
-        dparams=dparams,
+        dparams=blosc2.DParams(**dparams),
     )
 
     out = np.empty(chunk_len * nchunks, dtype=dtype)
@@ -129,7 +129,7 @@ def test_pyufilters_error(cparams, dparams):
         _ = blosc2.SChunk(
             chunksize=chunk_len * dtype.itemsize,
             data=data,
-            cparams=cparams,
+            cparams=blosc2.CParams(**cparams),
             dparams=dparams,
         )
 

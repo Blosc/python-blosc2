@@ -1447,7 +1447,7 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
         Decompression parameters. The default values are in :class:`blosc2.DParams`.
         Keyword arguments supported:
 
-            cparams: :class:`blosc2.DParams`
+            dparams: :class:`blosc2.DParams`
                 All the decompression parameters that you want to use as
                 a :class:`blosc2.DParams` instance.
             others: Any
