@@ -81,10 +81,10 @@ def test_raises_storage(contiguous, urlpath, cparams, dparams):
 @pytest.mark.parametrize(
     "cparams",
     [
-        blosc2.CParams(codec=blosc2.Codec.LZ4, filters=[blosc2.Filter.BITSHUFFLE], tuner=blosc2.Tuner.BTUNE),
+        blosc2.CParams(codec=blosc2.Codec.LZ4, filters=[blosc2.Filter.BITSHUFFLE]),
         {"typesize": 4, 'filters': [blosc2.Filter.TRUNC_PREC, blosc2.Filter.DELTA], 'filters_meta': [0, 0]},
         blosc2.CParams(nthreads=5, filters=[blosc2.Filter.BITSHUFFLE, blosc2.Filter.BYTEDELTA], filters_meta=[0] * 3),
-        {"codec": blosc2.Codec.LZ4HC, "typesize": 4, 'filters': [blosc2.Filter.BYTEDELTA], 'tuner': blosc2.Tuner.BTUNE},
+        {"codec": blosc2.Codec.LZ4HC, "typesize": 4, 'filters': [blosc2.Filter.BYTEDELTA]},
     ],
 )
 def test_cparams_values(cparams):
