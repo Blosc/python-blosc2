@@ -17,10 +17,10 @@ import blosc2
 @pytest.mark.parametrize(
     "cparams, dparams, nchunks",
     [
-        ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 1),
+        (blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6, typesize=4), blosc2.DParams(), 1),
         ({"typesize": 4}, {"nthreads": 4}, 1),
-        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "typesize": 4}, {}, 5),
-        ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {}, 10),
+        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "typesize": 4}, blosc2.DParams(), 5),
+        (blosc2.CParams(codec=blosc2.Codec.LZ4HC, typesize=4), {}, 10),
     ],
 )
 @pytest.mark.parametrize("copy", [True, False])

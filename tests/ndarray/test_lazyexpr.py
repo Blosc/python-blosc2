@@ -160,7 +160,7 @@ def test_simple_expression(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 - a3 * a4
     nres = ne.evaluate("na1 + na2 - na3 * na4")
-    res = expr.eval()
+    res = expr.eval(cparams=blosc2.CParams())
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -171,7 +171,7 @@ def test_proxy_simple_expression(array_fixture):
     a3 = blosc2.Proxy(a3)
     expr = a1 + a2 - a3 * a4
     nres = ne.evaluate("na1 + na2 - na3 * na4")
-    res = expr.eval()
+    res = expr.eval(storage=blosc2.Storage())
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -221,7 +221,7 @@ def test_func_expression(array_fixture):
     expr = (a1 + a2) * a3 - a4
     expr = blosc2.sin(expr) + blosc2.cos(expr)
     nres = ne.evaluate("sin((na1 + na2) * na3 - na4) + cos((na1 + na2) * na3 - na4)")
-    res = expr.eval()
+    res = expr.eval(storage={})
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -250,7 +250,7 @@ def test_comparison_operators(dtype_fixture, compare_expressions, comparison_ope
     else:
         expr = eval(f"a1 {comparison_operator} a2", {"a1": a1, "a2": a2})
         expr_string = f"na1 {comparison_operator} na2"
-    res_lazyexpr = expr.eval()
+    res_lazyexpr = expr.eval(dparams={})
     # Evaluate using NumExpr
     res_numexpr = ne.evaluate(expr_string)
     # Compare the results
@@ -290,7 +290,7 @@ def test_functions(function, dtype_fixture, shape_fixture):
     a1 = blosc2.asarray(na1, cparams=cparams)
     # Construct the lazy expression based on the function name
     expr = blosc2.LazyExpr(new_op=(a1, function, None))
-    res_lazyexpr = expr.eval()
+    res_lazyexpr = expr.eval(cparams={})
     # Evaluate using NumExpr
     expr_string = f"{function}(na1)"
     res_numexpr = ne.evaluate(expr_string)
@@ -384,7 +384,7 @@ def test_abs(shape_fixture, dtype_fixture):
     na1 = np.linspace(-1, 1, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     a1 = blosc2.asarray(na1)
     expr = blosc2.LazyExpr(new_op=(a1, "abs", None))
-    res_lazyexpr = expr.eval()
+    res_lazyexpr = expr.eval(dparams={})
     res_np = np.abs(na1)
     np.testing.assert_allclose(res_lazyexpr[:], res_np)
 

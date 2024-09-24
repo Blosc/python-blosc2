@@ -41,9 +41,8 @@ def test_metalayers(shape, chunks, blocks, urlpath, contiguous, dtype):
         chunks=chunks,
         blocks=blocks,
         dtype=dtype,
-        urlpath=urlpath,
-        contiguous=contiguous,
-        meta={"numpy": numpy_meta, "test": test_meta},
+        storage=blosc2.Storage(urlpath=urlpath, contiguous=contiguous,
+                               meta={"numpy": numpy_meta, "test": test_meta}),
     )
     assert os.path.exists(urlpath)
 

@@ -18,7 +18,7 @@ import blosc2
         (
             (32, 18),
             np.float32,
-            {"codec": blosc2.Codec.NDLZ, "codec_meta": 4},
+            blosc2.CParams(codec=blosc2.Codec.NDLZ, codec_meta=4),
             None,
             False,
         ),
