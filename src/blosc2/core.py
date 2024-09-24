@@ -894,8 +894,9 @@ def set_nthreads(nthreads: int) -> int:
     --------
     :attr:`~blosc2.nthreads`
     """
+    rc = blosc2_ext.set_nthreads(nthreads)
     blosc2.nthreads = nthreads
-    return blosc2_ext.set_nthreads(nthreads)
+    return rc
 
 
 def compressor_list(plugins: bool = False) -> list:

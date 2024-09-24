@@ -98,14 +98,20 @@ def test_cparams_values(cparams):
 
     array = blosc2.empty((30, 30), np.int32, cparams=cparams)
     for field in fields(cparams_dataclass):
-        print(field.name)
         if field.name in ['filters', 'filters_meta']:
-            print(getattr(array.schunk.cparams, field.name))
             assert getattr(array.schunk.cparams, field.name)[:len(getattr(cparams_dataclass, field.name))] == getattr(cparams_dataclass, field.name)
         elif field.name == 'typesize':
             assert getattr(array.schunk.cparams, field.name) == array.dtype.itemsize
         elif field.name != 'blocksize':
             assert getattr(array.schunk.cparams, field.name) == getattr(cparams_dataclass, field.name)
+
+    blosc2.set_nthreads(10)
+    schunk = blosc2.SChunk(cparams=cparams)
+    cparams_dataclass = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
+    assert schunk.cparams.nthreads == cparams_dataclass.nthreads
+
+    array = blosc2.empty((30, 30), np.int32, cparams=cparams)
+    assert array.schunk.cparams.nthreads == cparams_dataclass.nthreads
 
 
 def test_cparams_defaults():
@@ -121,6 +127,10 @@ def test_cparams_defaults():
     assert not cparams.use_dict
     assert cparams.blocksize == 0
     assert cparams.tuner == blosc2.Tuner.STUNE
+
+    blosc2.set_nthreads(1)
+    cparams = blosc2.CParams()
+    assert cparams.nthreads == blosc2.nthreads
 
 
 def test_raises_cparams():
@@ -151,8 +161,18 @@ def test_dparams_values(dparams):
         assert getattr(schunk.dparams, field.name) == getattr(dparams_dataclass, field.name)
         assert getattr(array.schunk.dparams, field.name) == getattr(dparams_dataclass, field.name)
 
+    blosc2.set_nthreads(3)
+    schunk = blosc2.SChunk(dparams=dparams)
+    dparams_dataclass = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
+    array = blosc2.empty((30, 30), dparams=dparams)
+    assert schunk.dparams.nthreads == dparams_dataclass.nthreads
+    assert array.schunk.dparams.nthreads == dparams_dataclass.nthreads
 
 def test_dparams_defaults():
+    dparams = blosc2.DParams()
+    assert dparams.nthreads == blosc2.nthreads
+
+    blosc2.set_nthreads(1)
     dparams = blosc2.DParams()
     assert dparams.nthreads == blosc2.nthreads
 

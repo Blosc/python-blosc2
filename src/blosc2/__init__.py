@@ -188,15 +188,23 @@ from .core import (
     unpack_tensor,
 )
 
+# Internal Blosc threading
+# Get CPU info
+cpu_info = get_cpu_info()
+nthreads = ncores = cpu_info.get("count", 1)
+"""Number of threads to be used in compression/decompression.
+"""
+# Protection against too many threads
+nthreads = min(nthreads, 32)
+# Experiments say that, when using a large number of threads, it is better to not use them all
+nthreads -= nthreads // 8
+
 # This import must be before ndarray and schunk
 from .storage import (
     CParams,
     cparams_dflts,
-    cpu_info,
     DParams,
     dparams_dflts,
-    ncores,
-    nthreads,
     Storage,
     storage_dflts,
 )
@@ -254,13 +262,6 @@ blosclib_version = f"{VERSION_STRING} ({VERSION_DATE})"
 The blosc2 version + date.
 """
 
-# Internal Blosc threading
-set_nthreads(nthreads)
-
-# Set the number of threads for NumExpr
-numexpr.set_num_threads(nthreads)
-
-_disable_overloaded_equal = False
 
 # Delayed imports for avoiding overwriting of python builtins
 from .ndarray import (
