@@ -159,7 +159,7 @@ class SChunk(blosc2_ext.SChunk):
         kwargs: dict, optional
             Storage parameters. The default values are in :class:`blosc2.Storage`.
             Keyword arguments supported:
-                storage: :class:`blosc2.Storage`
+                storage: :class:`blosc2.Storage` or dict
                     All the storage parameters that you want to use as
                     a :class:`blosc2.Storage` or dict instance.
                 cparams: :class:`blosc2.CParams` or dict

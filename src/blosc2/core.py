@@ -1398,9 +1398,9 @@ def compress2(src: object, **kwargs: dict) -> str | bytes:
         Compression parameters. The default values are in :class:`blosc2.CParams`.
         Keyword arguments supported:
 
-            cparams: :class:`blosc2.CParams`
+            cparams: :class:`blosc2.CParams` or dict
                 All the compression parameters that you want to use as
-                a :class:`blosc2.CParams` instance.
+                a :class:`blosc2.CParams` or dict instance.
             others: Any
                 If `cparams` is not passed, all the parameters of a :class:`blosc2.CParams`
                 can be passed as keyword arguments.
@@ -1421,7 +1421,10 @@ def compress2(src: object, **kwargs: dict) -> str | bytes:
         if 'cparams' in kwargs:
             if len(kwargs) > 1:
                 raise AttributeError("Cannot pass both cparams and other kwargs already included in CParams")
-            kwargs = asdict(kwargs.get('cparams'))
+            if isinstance(kwargs.get('cparams'), blosc2.CParams):
+                kwargs = asdict(kwargs.get('cparams'))
+            else:
+                kwargs = kwargs.get('cparams')
 
     return blosc2_ext.compress2(src, **kwargs)
 
@@ -1448,9 +1451,9 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
         Decompression parameters. The default values are in :class:`blosc2.DParams`.
         Keyword arguments supported:
 
-            dparams: :class:`blosc2.DParams`
+            dparams: :class:`blosc2.DParams` or dict
                 All the decompression parameters that you want to use as
-                a :class:`blosc2.DParams` instance.
+                a :class:`blosc2.DParams` or dict instance.
             others: Any
                 If `dparams` is not passed, all the parameters of a :class:`blosc2.DParams`
                 can be passed as keyword arguments.
@@ -1479,7 +1482,10 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
         if 'dparams' in kwargs:
             if len(kwargs) > 1:
                 raise AttributeError("Cannot pass both dparams and other kwargs already included in DParams")
-            kwargs = asdict(kwargs.get('dparams'))
+            if isinstance(kwargs.get('dparams'), blosc2.DParams):
+                kwargs = asdict(kwargs.get('dparams'))
+            else:
+                kwargs = kwargs.get('dparams')
 
     return blosc2_ext.decompress2(src, dst, **kwargs)
 

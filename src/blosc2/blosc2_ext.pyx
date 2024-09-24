@@ -33,7 +33,6 @@ from enum import Enum
 
 import numpy as np
 from msgpack import packb, unpackb
-from dataclasses import asdict
 
 import blosc2
 

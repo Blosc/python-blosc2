@@ -33,11 +33,11 @@ random = np.random.default_rng()
         (
             np.arange(10, dtype="float32"),
             # Do a reduction of precision of 10 bits in mantissa
-            {
-                "filters": [blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE],
-                "filters_meta": [-10, 0],
-                "typesize": 4,
-            },
+            {"cparams": {"filters": [blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE],
+                         "filters_meta": [-10, 0],
+                         "typesize": 4,
+                         },
+             },
             {"nthreads": 4},
         ),
         (
@@ -46,7 +46,7 @@ random = np.random.default_rng()
             {'dparams': blosc2.DParams()},
         ),
         (np.arange(45, dtype=np.float64), {'cparams': blosc2.CParams(codec=blosc2.Codec.LZ4HC, typesize=4)}, {}),
-        (np.arange(50, dtype=np.int64), {"typesize": 4}, blosc2.dparams_dflts),
+        (np.arange(50, dtype=np.int64), {"typesize": 4}, {"dparams": blosc2.dparams_dflts}),
     ],
 )
 def test_compress2_numpy(obj, cparams, dparams, gil):
