@@ -202,20 +202,18 @@ class C2Array(blosc2.Operand):
         --------
         >>> import blosc2
         >>> import pathlib
-        >>> host = "https://demo.caterva2.net/"
-        >>> root = "b2tests"
-        >>> dir = "expr/"
-        >>> name = "ds-0-10-linspace-float64-(True, True)-a1-(60, 60)d.b2nd"
-        >>> path = pathlib.Path(f"{root}/{dir + name}").as_posix()
-        >>> remote_array = blosc2.C2Array(path, urlbase=host)
-        >>> f"Shape of the remote array: {remote_array.shape}"
-        >>> f"Chunks of the remote array: {remote_array.chunks}"
-        >>> f"Blocks of the remote array: {remote_array.blocks}"
-        >>> f"Dtype of the remote array: {remote_array.dtype}"
-        Shape of the remote array: (60, 60)
-        Chunks of the remote array: (30, 60)
-        Blocks of the remote array: (10, 60)
-        Dtype of the remote array: float64
+        >>> urlbase = "https://demo.caterva2.net/"
+        >>> root = "example"
+        >>> path = pathlib.Path(f"{root}/dir1/ds-3d.b2nd").as_posix()
+        >>> remote_array = blosc2.C2Array(path, urlbase=urlbase)
+        >>> remote_array.shape
+        (3, 4, 5)
+        >>> remote_array.chunks
+        (2, 3, 4)
+        >>> remote_array.blocks
+        (2, 2, 2)
+        >>> remote_array.dtype
+        float32
         """
         if path.startswith("/"):
             raise ValueError("The path should start with a root name, not a slash")
@@ -253,6 +251,21 @@ class C2Array(blosc2.Operand):
         -------
         out: numpy.ndarray
             A numpy.ndarray containing the data slice.
+
+        Examples
+        --------
+        >>> import pathlib
+        >>> import blosc2
+        >>> urlbase = "https://demo.caterva2.net/"
+        >>> root = "example"
+        >>> path = pathlib.Path(f"{root}/dir1/ds-2d.b2nd").as_posix()
+        >>> remote_array = blosc2.C2Array(path, urlbase=urlbase)
+        >>> data_slice = remote_array[3:5, 1:4]
+        >>> data_slice.shape
+        (2, 3)
+        >>> data_slice[:]
+        [[61 62 63]
+        [81 82 83]]
         """
         slice_ = slice_to_string(slice_)
         return fetch_data(self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token)
@@ -276,30 +289,24 @@ class C2Array(blosc2.Operand):
         >>> import pathlib
         >>> import numpy as np
         >>> import blosc2
-        >>> host = "https://demo.caterva2.net/"
-        >>> root = "b2tests"
-        >>> dir = "expr/"
-        >>> root = "b2tests"
-        >>> dir = "expr/"
-        >>> name1 = "ds-0-10-linspace-float64-(True, True)-a1-(60, 60)d.b2nd"
-        >>> name2 = "ds-0-10-linspace-float64-(True, True)-a2-(60, 60)d.b2nd"
-        >>> path1 = pathlib.Path(f"{root}/{dir + name1}").as_posix()
-        >>> path2 = pathlib.Path(f"{root}/{dir + name2}").as_posix()
-        >>> a = blosc2.C2Array(path1, host)
-        >>> b = blosc2.C2Array(path2, host)
+        >>> urlbase = "https://demo.caterva2.net/"
+        >>> root = "example"
+        >>> path = pathlib.Path(f"{root}/dir1/ds-3d.b2nd").as_posix()
+        >>> a = blosc2.C2Array(path, urlbase)
+        >>> b = blosc2.C2Array(path, urlbase)
         >>> c = a + b
         >>> # Get the compressed chunk from array 'a' for index 0
         >>> chunk_index = 0
         >>> compressed_chunk = c.get_chunk(chunk_index)
         >>> f"Size of chunk {chunk_index} from a: {len(compressed_chunk)} bytes"
-        Size of chunk 0 from 'a': 8604 bytes
+        Size of chunk 0 from a: 160 bytes
         >>> # Decompress the chunk and convert it to a NumPy array
         >>> decompressed_chunk = blosc2.decompress(compressed_chunk)
         >>> chunk_np_array = np.frombuffer(decompressed_chunk, dtype=a.dtype)
-        >>> f"Content of chunk {chunk_index} as NumPy array:{chunk_np_array}"
+        >>> chunk_np_array
         Content of chunk 0 as NumPy array:
-        [0.00000000e+00 5.55709919e-03 1.11141984e-02 ... 9.98610725e+00
-        9.99166435e+00 9.99722145e+00]
+        [ 0.  2. 10. 12. 40. 42. 50. 52.  4.  6. 14. 16. 44. 46. 54. 56. 20. 22.
+         0.  0. 60. 62.  0.  0. 24. 26.  0.  0. 64. 66.  0.  0.]
         """
         url = _sub_url(self.urlbase, f"api/chunk/{self.path}")
         params = {"nchunk": nchunk}

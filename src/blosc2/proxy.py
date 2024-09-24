@@ -296,38 +296,39 @@ class Proxy(blosc2.Operand):
         >>> import numpy as np
         >>> import blosc2
         >>> import asyncio
-        >>> class MyProxySource:
+        >>> from blosc2 import ProxyNDSource
+        >>> class MyProxySource(ProxyNDSource):
         >>>     def __init__(self, data):
-        >>>             # If the next source is multidimensional, it must have the attributes:
-        >>>             self.data = data
-        >>>             f"Data shape: {self.shape}, Chunks: {self.chunks}"
+        >>>           # If the next source is multidimensional, it must have the attributes:
+        >>>           self.data = data
+        >>>           f"Data shape: {self.shape}, Chunks: {self.chunks}"
         Data shape: (4, 5), Chunks: [2, 5]
-        >>>             f"Blocks: {self.blocks}, Dtype: {self.dtype}"
+        >>>           f"Blocks: {self.blocks}, Dtype: {self.dtype}"
         Blocks: [1, 5], Dtype: int64
         >>>     @property
         >>>     def shape(self):
-        >>>             return self.data.shape
+        >>>           return self.data.shape
         >>>     @property
         >>>     def chunks(self):
-        >>>             return self.data.chunks
+        >>>           return self.data.chunks
         >>>     @property
         >>>     def blocks(self):
-        >>>             return self.data.blocks
+        >>>           return self.data.blocks
         >>>     @property
         >>>     def dtype(self):
-        >>>             return self.data.dtype
+        >>>           return self.data.dtype
         >>>     # This method must be present
         >>>     def get_chunk(self, nchunk):
-        >>>             return self.data.get_chunk(nchunk)
+        >>>           return self.data.get_chunk(nchunk)
         >>>     # This method is optional
         >>>     async def aget_chunk(self, nchunk):
-        >>>             await asyncio.sleep(0.1) # Simulate an asynchronous operation
-        >>>             return self.data.get_chunk(nchunk)
+        >>>           await asyncio.sleep(0.1) # Simulate an asynchronous operation
+        >>>           return self.data.get_chunk(nchunk)
         >>> data = np.arange(20).reshape(4, 5)
         >>> chunks = [2, 5]
         >>> blocks = [1, 5]
         >>> data = blosc2.asarray(data, chunks=chunks, blocks=blocks)
-        >>> source = MyProxySource(data2)
+        >>> source = MyProxySource(data)
         >>> proxy = blosc2.Proxy(source)
         >>> async def fetch_data():
         >>>        # Fetch a slice of the data from the proxy asynchronously
@@ -335,20 +336,23 @@ class Proxy(blosc2.Operand):
         >>>        # Note that only data fetched is shown, the rest is uninitialized
         >>>        f"Slice data cache: {slice_data[:]}"
         Slice data cache:
-                            [[0 1 2 3 4]
-                            [5 6 7 8 9]
-                            [0 0 0 0 0]
-                            [0 0 0 0 0]]
+                [[0 1 2 3 4]
+                [5 6 7 8 9]
+                [0 0 0 0 0]
+                [0 0 0 0 0]]
         >>>         # Fetch the full data from the proxy asynchronously
         >>>         full_data = await proxy.afetch()
         >>>         # Now, all data is shown, meaning the full data has been fetched
         >>>         f"Full data cache: {full_data[:]}"
         Full data cache:
-                        [[ 0  1  2  3  4]
-                        [ 5  6  7  8  9]
-                        [10 11 12 13 14]
-                        [15 16 17 18 19]]
+                [[ 0  1  2  3  4]
+                [ 5  6  7  8  9]
+                [10 11 12 13 14]
+                [15 16 17 18 19]]
         >>> asyncio.run(fetch_data())
+        >>> # Using getitem to get a slice of the data
+        >>> result = proxy[1:2, 1:3]
+        [[6 7]]
         """
         if not callable(getattr(self.src, "aget_chunk", None)):
             raise NotImplementedError("afetch is only available if the source has an aget_chunk method")
