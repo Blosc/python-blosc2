@@ -11,20 +11,9 @@ import warnings
 
 import blosc2
 
-# Internal Blosc threading
-# Get CPU info
-cpu_info = blosc2.get_cpu_info()
-nthreads = ncores = cpu_info.get("count", 1)
-"""Number of threads to be used in compression/decompression.
-"""
-# Protection against too many threads
-nthreads = min(nthreads, 32)
-# Experiments say that, when using a large number of threads, it is better to not use them all
-nthreads -= nthreads // 8
-
 
 def default_nthreads():
-    return nthreads
+    return blosc2.nthreads
 
 def default_filters():
     return [blosc2.Filter.NOFILTER,

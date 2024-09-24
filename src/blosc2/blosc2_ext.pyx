@@ -726,7 +726,7 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
     cparams.clevel = kwargs.get('clevel', blosc2.cparams_dflts['clevel'])
     cparams.use_dict = kwargs.get('use_dict', blosc2.cparams_dflts['use_dict'])
     cparams.typesize = typesize = kwargs.get('typesize', blosc2.cparams_dflts['typesize'])
-    cparams.nthreads = kwargs.get('nthreads', blosc2.cparams_dflts['nthreads'])
+    cparams.nthreads = kwargs.get('nthreads', blosc2.nthreads)
     cparams.blocksize = kwargs.get('blocksize', blosc2.cparams_dflts['blocksize'])
     splitmode = kwargs.get('splitmode', blosc2.cparams_dflts['splitmode'])
     cparams.splitmode = splitmode.value
@@ -807,7 +807,7 @@ def compress2(src, **kwargs):
     return dest[:size]
 
 cdef create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs, blosc2_cparams* cparams=NULL):
-    dparams.nthreads = kwargs.get('nthreads', blosc2.dparams_dflts['nthreads'])
+    dparams.nthreads = kwargs.get('nthreads', blosc2.nthreads)
     dparams.schunk = NULL
     dparams.postfilter = NULL
     dparams.postparams = NULL
