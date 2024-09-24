@@ -234,7 +234,6 @@ from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField
 from .schunk import SChunk, open
 
 
-
 # Registry for postfilters
 postfilter_funcs = {}
 """

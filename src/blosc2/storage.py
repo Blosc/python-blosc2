@@ -46,8 +46,9 @@ class CParams:
     typesize: int from 1 to 255
         The data type size. Default: 8.
     nthreads: int
-        The number of threads to use internally. By default, blosc2 computes
-        a good guess.
+        The number of threads to use internally. By default, the
+        value of :py:obj:`blosc2.nthreads` is used. If not set with
+        :func:`blosc2.set_nthreads`, blosc2 computes a good guess for it.
     blocksize: int
         The requested size of the compressed blocks. If 0 (the default)
         blosc2 chooses it automatically.
@@ -96,8 +97,9 @@ class DParams:
     Parameters
     ----------
     nthreads: int
-        The number of threads to use internally. By default, blosc2 computes
-        a good guess.
+        The number of threads to use internally. By default, the
+        value of :py:obj:`blosc2.nthreads` is used. If not set with
+        :func:`blosc2.set_nthreads`, blosc2 computes a good guess for it.
     """
     nthreads: int = field(default_factory=default_nthreads)
 
