@@ -233,7 +233,7 @@ class SChunk(blosc2_ext.SChunk):
             if kwarg not in allowed_kwargs:
                 raise ValueError(f"{kwarg} is not supported as keyword argument")
         if kwargs.get("storage") is not None:
-            if any(key in list(blosc2.Storage.__annotations__) for key in kwargs.keys()):
+            if any(key in list(blosc2.Storage.__annotations__) for key in kwargs):
                 raise AttributeError("Cannot pass both `storage` and other kwargs already included in Storage")
             storage = kwargs.get("storage")
             if isinstance(storage, blosc2.Storage):
