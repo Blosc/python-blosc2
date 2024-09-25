@@ -11,7 +11,8 @@ from __future__ import annotations
 import builtins
 import math
 from collections import namedtuple
-from typing import TYPE_CHECKING, Iterator, NamedTuple
+from collections.abc import Iterator
+from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

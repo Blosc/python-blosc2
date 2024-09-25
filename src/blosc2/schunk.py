@@ -10,9 +10,9 @@ from __future__ import annotations
 import os
 import pathlib
 from collections import namedtuple
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Iterator, Mapping, MutableMapping
 from dataclasses import asdict
-from typing import Any, Iterator, NamedTuple
+from typing import Any, NamedTuple
 
 import numpy as np
 from msgpack import packb, unpackb
