@@ -248,17 +248,11 @@ class Proxy(blosc2.Operand):
         >>> data = np.arange(20).reshape(10, 2)
         >>> ndarray = blosc2.asarray(data)
         >>> proxy = blosc2.Proxy(ndarray)
-        >>> full_data = proxy.fetch()
-        >>> f"Full data cache: {full_data[:]}"
-        Full data cache:
-            [[ 0  1][ 2  3][ 4  5]
-            [ 6  7][ 8  9][10 11]
-            [12 13][14 15][16 17]
-            [18 19]]
-        >>> slice_data = proxy[0:2, :]
-        >>> f"Slice data cache: {slice_data}"
-        Slice data cache:
-        [[0 1][2 3]]
+        >>> slice_data = proxy.fetch((slice(0, 3), slice(0, 2)))
+        >>> slice_data[:3, :2]
+        [[0 1]
+        [2 3]
+        [4 5]]
         """
         if item is None:
             # Full realization
@@ -296,6 +290,60 @@ class Proxy(blosc2.Operand):
         -----
         This method is only available if the :ref:`ProxySource` or :ref:`ProxyNDSource`
         have an async `aget_chunk` method.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import blosc2
+        >>> import asyncio
+        >>> from blosc2 import ProxyNDSource
+        >>> class MyProxySource(ProxyNDSource):
+        >>>     def __init__(self, data):
+        >>>         # If the next source is multidimensional, it must have the attributes:
+        >>>         self.data = data
+        >>>         f"Data shape: {self.shape}, Chunks: {self.chunks}"
+        >>>         f"Blocks: {self.blocks}, Dtype: {self.dtype}"
+        >>>     @property
+        >>>     def shape(self):
+        >>>         return self.data.shape
+        >>>     @property
+        >>>     def chunks(self):
+        >>>         return self.data.chunks
+        >>>     @property
+        >>>     def blocks(self):
+        >>>         return self.data.blocks
+        >>>     @property
+        >>>     def dtype(self):
+        >>>         return self.data.dtype
+        >>>     # This method must be present
+        >>>     def get_chunk(self, nchunk):
+        >>>         return self.data.get_chunk(nchunk)
+        >>>     # This method is optional
+        >>>     async def aget_chunk(self, nchunk):
+        >>>         await asyncio.sleep(0.1) # Simulate an asynchronous operation
+        >>>         return self.data.get_chunk(nchunk)
+        >>> data = np.arange(20).reshape(4, 5)
+        >>> chunks = [2, 5]
+        >>> blocks = [1, 5]
+        >>> data = blosc2.asarray(data, chunks=chunks, blocks=blocks)
+        >>> source = MyProxySource(data)
+        >>> proxy = blosc2.Proxy(source)
+        >>> async def fetch_data():
+        >>>     # Fetch a slice of the data from the proxy asynchronously
+        >>>     slice_data = await proxy.afetch(slice(0, 2))
+        >>>     # Note that only data fetched is shown, the rest is uninitialized
+        >>>     slice_data[:]
+        >>> asyncio.run(fetch_data())
+        >>> # Using getitem to get a slice of the data
+        >>> result = proxy[1:2, 1:3]
+        >>> f"Proxy getitem: {result}"
+        Data shape: (4, 5), Chunks: (2, 5)
+        Blocks: (1, 5), Dtype: int64
+        [[0 1 2 3 4]
+        [5 6 7 8 9]
+        [0 0 0 0 0]
+        [0 0 0 0 0]]
+        Proxy getitem: [[6 7]]
         """
         if not callable(getattr(self.src, "aget_chunk", None)):
             raise NotImplementedError("afetch is only available if the source has an aget_chunk method")
@@ -333,21 +381,18 @@ class Proxy(blosc2.Operand):
         --------
         >>> import numpy as np
         >>> import blosc2
-        >>> data = np.arange(100).reshape(10, 10)
+        >>> data = np.arange(25).reshape(5, 5)
         >>> ndarray = blosc2.asarray(data)
         >>> proxy = blosc2.Proxy(ndarray)
-        >>> slice_1 = proxy[0:3, 0:3]
-        >>> f"Slice 1: {slice_1}"
-        Slice 1:
+        >>> proxy[0:3, 0:3]
         [[ 0  1  2]
+        [ 5  6  7]
         [10 11 12]
         [20 21 22]]
-        >>> slice_2 = proxy[5:8, 2:5]
-        >>> f"Slice 2: {slice_2}"
-        Slice 2:
-        [[52 53 54]
-        [62 63 64]
-        [72 73 74]]
+        >>> proxy[2:5, 2:5]
+        [[12 13 14]
+        [17 18 19]
+        [22 23 24]]
         """
         # Populate the cache
         self.fetch(item)
@@ -390,6 +435,25 @@ class Proxy(blosc2.Operand):
         See Also
         --------
         :ref:`NDField`
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import blosc2
+        >>> data = np.ones(16, dtype=[('field1', 'i4'), ('field2', 'f4')]).reshape(4, 4)
+        >>> ndarray = blosc2.asarray(data)
+        >>> proxy = blosc2.Proxy(ndarray)
+        >>>  # Get a dictionary of fields from the proxy, where each field can be accessed individually
+        >>> fields_dict = proxy.fields
+        >>> for field_name, field_proxy in fields_dict.items():
+        >>>     print(f"Field name: {field_name}, Field data: {field_proxy}")
+        Field name: field1, Field data: <blosc2.proxy.ProxyNDField object at 0x114472d20>
+        Field name: field2, Field data: <blosc2.proxy.ProxyNDField object at 0x10e215be0>
+        >>> fields_dict['field2'][:]
+        [[1. 1. 1. 1.]
+         [1. 1. 1. 1.]
+         [1. 1. 1. 1.]
+         [1. 1. 1. 1.]]
         """
         _fields = getattr(self._cache, "fields", None)
         if _fields is None:
