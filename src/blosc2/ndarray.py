@@ -11,11 +11,10 @@ from __future__ import annotations
 import builtins
 import math
 from collections import namedtuple
-from collections.abc import Iterator
 from typing import TYPE_CHECKING, NamedTuple
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterator, Sequence
 
 from dataclasses import asdict
 
