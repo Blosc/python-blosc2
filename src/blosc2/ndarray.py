@@ -16,14 +16,16 @@ from typing import TYPE_CHECKING, Iterator, NamedTuple
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+from dataclasses import asdict
+
 import ndindex
 import numpy as np
-from dataclasses import asdict
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext, compute_chunks_blocks
 from blosc2.info import InfoReporter
 from blosc2.schunk import SChunk
+
 
 def is_documented_by(original):
     def wrapper(target):

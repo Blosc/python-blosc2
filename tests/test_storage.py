@@ -7,8 +7,8 @@
 #######################################################################
 
 from dataclasses import asdict, fields
-import numpy as np
 
+import numpy as np
 import pytest
 
 import blosc2

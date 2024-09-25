@@ -19,7 +19,6 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from pathlib import Path
 from queue import Empty, Queue
-
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:

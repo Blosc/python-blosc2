@@ -6,8 +6,8 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-from dataclasses import dataclass, field, asdict, fields
 import warnings
+from dataclasses import asdict, dataclass, field, fields
 
 import blosc2
 

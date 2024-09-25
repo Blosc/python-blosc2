@@ -6,9 +6,10 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+from dataclasses import asdict
+
 import numpy as np
 import pytest
-from dataclasses import asdict
 
 import blosc2
 

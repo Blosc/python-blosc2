@@ -7,7 +7,7 @@
 #######################################################################
 
 import os
-from dataclasses import asdict, replace, fields
+from dataclasses import asdict, fields, replace
 
 import numpy as np
 import pytest
