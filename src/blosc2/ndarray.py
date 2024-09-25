@@ -2689,9 +2689,8 @@ def _check_ndarray_kwargs(**kwargs):
                 raise ValueError("You cannot pass chunks in cparams, use `chunks` argument instead")
             if "blocks" in kwargs["cparams"]:
                 raise ValueError("You cannot pass chunks in cparams, use `blocks` argument instead")
-    if "dparams" in kwargs:
-        if isinstance(kwargs["dparams"], blosc2.DParams):
-            kwargs["dparams"] = asdict(kwargs["dparams"])
+    if "dparams" in kwargs and isinstance(kwargs["dparams"], blosc2.DParams):
+        kwargs["dparams"] = asdict(kwargs["dparams"])
 
     return kwargs
 
