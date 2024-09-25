@@ -29,6 +29,7 @@ from blosc2 import blosc2_ext
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+    import tensorflow
     import torch
 
 
