@@ -45,7 +45,7 @@ def test_storage_values(contiguous, urlpath, mode, mmap_mode):
 
 def test_storage_defaults():
     storage = blosc2.Storage()
-    assert storage.contiguous == False
+    assert storage.contiguous is False
     assert storage.urlpath is None
     assert storage.mode == "a"
     assert storage.mmap_mode is None
