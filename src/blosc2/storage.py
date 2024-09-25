@@ -206,7 +206,7 @@ class Storage:
             if (getattr(self, field.name) is None and
                     field.name not in ['urlpath', 'mmap_mode', 'initial_mapping_size', 'meta']):
                 setattr(self, field.name, getattr(Storage(), field.name))
-                warnings.warn("`{name}` field value changed from `None` to `{value}`".format(name=field.name, value=getattr(self, field.name)))
+                warnings.warn(f"`{field.name}` field value changed from `None` to `{getattr(self, field.name)}`")
 
 
 # Defaults for compression params
