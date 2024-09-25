@@ -1071,8 +1071,6 @@ def os_release_pretty_name():
 
 def print_versions():
     """Print all the versions of software that python-blosc2 relies on."""
-    import platform
-
     print("-=" * 38)
     print(f"python-blosc2 version: {blosc2.__version__}")
     print(f"Blosc version: {blosc2.blosclib_version}")
