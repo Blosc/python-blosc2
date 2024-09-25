@@ -95,8 +95,7 @@ def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, c2su
         chunked_eval=chunked_eval,
         chunks=chunks,
         blocks=blocks,
-        urlpath=urlpath,
-        contiguous=contiguous,
+        storage=blosc2.Storage(urlpath=urlpath, contiguous=contiguous),
         dparams=dparams,
     )
     lazy_eval = expr[slices]
@@ -107,6 +106,6 @@ def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, c2su
     assert res.schunk.urlpath is None
     assert res.schunk.contiguous == contiguous
     # Check dparams after a getitem and an eval
-    assert res.schunk.dparams["nthreads"] == dparams["nthreads"]
+    assert res.schunk.dparams.nthreads == dparams["nthreads"]
 
     blosc2.remove_urlpath(urlpath)

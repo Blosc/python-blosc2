@@ -8,6 +8,7 @@
 
 import numpy as np
 import pytest
+from dataclasses import asdict
 
 import blosc2
 
@@ -32,7 +33,7 @@ import blosc2
             (10, 10),
             b"sun",
             None,
-            {"codec": blosc2.Codec.LZ4HC, "clevel": 8, "use_dict": False, "nthreads": 2},
+            blosc2.CParams(codec=blosc2.Codec.LZ4HC, clevel=8, use_dict=False, nthreads=2),
             {"nthreads": 2},
             "full.b2nd",
             True,
@@ -54,7 +55,7 @@ import blosc2
             (11, 11),
             123456789,
             None,
-            {"codec": blosc2.Codec.LZ4HC, "clevel": 8, "use_dict": False, "nthreads": 2},
+            blosc2.CParams(codec=blosc2.Codec.LZ4HC, clevel=8, use_dict=False, nthreads=2),
             {"nthreads": 2},
             None,
             True,
@@ -63,6 +64,7 @@ import blosc2
 )
 def test_full(shape, chunks, blocks, fill_value, cparams, dparams, dtype, urlpath, contiguous):
     blosc2.remove_urlpath(urlpath)
+    storage = {"urlpath": urlpath, "contiguous": contiguous}
     a = blosc2.full(
         shape,
         fill_value,
@@ -70,11 +72,10 @@ def test_full(shape, chunks, blocks, fill_value, cparams, dparams, dtype, urlpat
         blocks=blocks,
         dtype=dtype,
         cparams=cparams,
-        dparams=dparams,
-        urlpath=urlpath,
-        contiguous=contiguous,
+        dparams=blosc2.DParams(**dparams),
+        **storage,
     )
-    assert a.schunk.dparams == dparams
+    assert asdict(a.schunk.dparams) == dparams
     if isinstance(fill_value, bytes):
         dtype = np.dtype(f"S{len(fill_value)}")
     assert a.dtype == np.dtype(dtype) if dtype is not None else np.dtype(np.uint8)

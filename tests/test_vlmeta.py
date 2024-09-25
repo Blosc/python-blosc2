@@ -21,10 +21,10 @@ import blosc2
     ],
 )
 def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    kwargs = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     blosc2.remove_urlpath(urlpath)
 
-    schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, **storage)
+    schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, **kwargs)
     for i in range(nchunks):
         buffer = i * np.arange(200 * 1000, dtype="int32")
         nchunks_ = schunk.append_data(buffer)
@@ -47,10 +47,10 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
     ],
 )
 def test_schunk(contiguous, urlpath, nbytes, cparams, dparams, nchunks):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    kwargs = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
 
     blosc2.remove_urlpath(urlpath)
-    schunk = blosc2.SChunk(chunksize=2 * nbytes, **storage)
+    schunk = blosc2.SChunk(chunksize=2 * nbytes, **kwargs)
     for i in range(nchunks):
         bytes_obj = b"i " * nbytes
         nchunks_ = schunk.append_data(bytes_obj)

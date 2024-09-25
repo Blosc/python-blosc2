@@ -28,7 +28,8 @@ random = np.random.default_rng()
 )
 def test_decompress_numpy(object, codec, gil):
     blosc2.set_releasegil(gil)
-    c = blosc2.compress(object, codec=codec)
+    typesize = None if hasattr(object, "itemsize") else 1
+    c = blosc2.compress(object, typesize=typesize, codec=codec)
 
     dest = bytearray(object)
     blosc2.decompress(c, dst=dest)
@@ -59,7 +60,7 @@ def test_decompress_numpy(object, codec, gil):
     ],
 )
 def test_decompress(object, codec):
-    c = blosc2.compress(object, codec=codec)
+    c = blosc2.compress(object, typesize=1, codec=codec)
 
     dest = bytearray(object)
     blosc2.decompress(c, dst=dest)

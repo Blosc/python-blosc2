@@ -22,11 +22,11 @@ import blosc2
     ],
 )
 def test_schunk_proxy(contiguous, urlpath, chunksize, nchunks, start, stop):
-    storage = {"contiguous": contiguous, "cparams": {"typesize": 4}}
+    kwargs = {"contiguous": contiguous, "cparams": {"typesize": 4}}
     blosc2.remove_urlpath(urlpath)
     num_elem = chunksize // 4 * nchunks
     data = np.arange(num_elem, dtype="int32")
-    schunk = blosc2.SChunk(chunksize=chunksize, data=data, **storage)
+    schunk = blosc2.SChunk(chunksize=chunksize, data=data, **kwargs)
     bytes_obj = data.tobytes()
     cache = blosc2.Proxy(schunk, urlpath=urlpath)
 
@@ -58,13 +58,13 @@ def test_schunk_proxy(contiguous, urlpath, chunksize, nchunks, start, stop):
     ],
 )
 def test_open(urlpath, chunksize, nchunks):
-    storage = {"urlpath": urlpath, "cparams": {"typesize": 4}}
+    kwargs = {"urlpath": urlpath, "cparams": {"typesize": 4}}
     proxy_urlpath = "proxy.b2frame"
     blosc2.remove_urlpath(urlpath)
     blosc2.remove_urlpath(proxy_urlpath)
     num_elem = chunksize // 4 * nchunks
     data = np.arange(num_elem, dtype="int32")
-    schunk = blosc2.SChunk(chunksize=chunksize, data=data, **storage)
+    schunk = blosc2.SChunk(chunksize=chunksize, data=data, **kwargs)
     bytes_obj = data.tobytes()
     proxy = blosc2.Proxy(schunk, urlpath=proxy_urlpath)
     del proxy

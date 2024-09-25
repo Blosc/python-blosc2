@@ -65,16 +65,15 @@ import blosc2
 def test_empty(shape, chunks, blocks, dtype, cparams, urlpath, contiguous):
     blosc2.remove_urlpath(urlpath)
     filters = cparams["filters"]
-    cparams["filters_meta"] = [0] * len(filters)
+    storage = blosc2.Storage(urlpath=urlpath, contiguous=contiguous)
     a = blosc2.empty(
         shape,
         chunks=chunks,
         blocks=blocks,
         dtype=dtype,
-        cparams=cparams,
+        storage=storage,
+        cparams=blosc2.CParams(**cparams),
         dparams={"nthreads": 2},
-        urlpath=urlpath,
-        contiguous=contiguous,
     )
 
     dtype = np.dtype(dtype)
@@ -83,10 +82,10 @@ def test_empty(shape, chunks, blocks, dtype, cparams, urlpath, contiguous):
     assert a.blocks == blocks
     assert a.dtype == dtype
     assert a.schunk.typesize == dtype.itemsize
-    assert a.schunk.cparams["codec"] == cparams["codec"]
-    assert a.schunk.cparams["clevel"] == cparams["clevel"]
-    assert a.schunk.cparams["filters"][: len(filters)] == filters
-    assert a.schunk.dparams["nthreads"] == 2
+    assert a.schunk.cparams.codec == cparams["codec"]
+    assert a.schunk.cparams.clevel == cparams["clevel"]
+    assert a.schunk.cparams.filters[: len(filters)] == filters
+    assert a.schunk.dparams.nthreads == 2
 
     blosc2.remove_urlpath(urlpath)
 

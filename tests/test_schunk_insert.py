@@ -30,15 +30,10 @@ import blosc2
 @pytest.mark.parametrize("create_chunk", [True, False])
 def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts, copy, create_chunk, gil):
     blosc2.set_releasegil(gil)
-    storage = {
-        "contiguous": contiguous,
-        "urlpath": urlpath,
-        "cparams": {"nthreads": 2},
-        "dparams": {"nthreads": 2},
-    }
+    storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath)
     blosc2.remove_urlpath(urlpath)
 
-    schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, **storage)
+    schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, storage=storage, cparams={"nthreads": 2}, dparams={"nthreads": 2})
     for i in range(nchunks):
         buffer = i * np.arange(200 * 1000, dtype="int32")
         nchunks_ = schunk.append_data(buffer)

@@ -43,11 +43,11 @@ def test_open(contiguous, urlpath, cparams, dparams, nchunks, chunk_nitems, dtyp
     if os.name == "nt" and mmap_mode == "c":
         pytest.skip("Cannot test mmap_mode 'c' on Windows")
 
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    kwargs = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     blosc2.remove_urlpath(urlpath)
     dtype = np.dtype(dtype)
     schunk = blosc2.SChunk(
-        chunksize=chunk_nitems * dtype.itemsize, mmap_mode="w+" if mmap_mode is not None else None, **storage
+        chunksize=chunk_nitems * dtype.itemsize, mmap_mode="w+" if mmap_mode is not None else None, **kwargs
     )
     for i in range(nchunks):
         buffer = i * np.arange(chunk_nitems, dtype=dtype)
@@ -62,12 +62,12 @@ def test_open(contiguous, urlpath, cparams, dparams, nchunks, chunk_nitems, dtyp
     cparams2 = cparams
     cparams2["nthreads"] = 1
     schunk_open = blosc2.open(urlpath, mode, mmap_mode=mmap_mode, cparams=cparams2)
-    assert schunk_open.cparams["nthreads"] == cparams2["nthreads"]
+    assert schunk_open.cparams.nthreads == cparams2["nthreads"]
 
     for key in cparams:
         if key == "nthreads":
             continue
-        assert schunk_open.cparams[key] == cparams[key]
+        assert getattr(schunk_open.cparams, key) == cparams[key]
 
     buffer = np.zeros(chunk_nitems, dtype=dtype)
     if mode != "r":

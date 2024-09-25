@@ -40,6 +40,7 @@ def test_ucodecs(contiguous, urlpath, cparams, nchunks, codec_name, id, dtype):
     chunk_len = 20 * 1000
     blocksize = chunk_len * dtype.itemsize / 10
     cparams["blocksize"] = blocksize
+    cparams["typesize"] = dtype.itemsize
 
     def encoder1(input, output, meta, schunk):
         nd_input = input.view(dtype)
@@ -71,7 +72,7 @@ def test_ucodecs(contiguous, urlpath, cparams, nchunks, codec_name, id, dtype):
         data=data,
         contiguous=contiguous,
         urlpath=urlpath,
-        cparams=cparams,
+        cparams=blosc2.CParams(**cparams),
         dparams=dparams,
     )
 
@@ -149,5 +150,5 @@ def test_dynamic_ucodecs_error(cparams, dparams):
             chunksize=chunk_len * dtype.itemsize,
             data=data,
             cparams=cparams,
-            dparams=dparams,
+            dparams=blosc2.DParams(**dparams),
         )

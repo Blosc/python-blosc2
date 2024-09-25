@@ -7,6 +7,7 @@
 #######################################################################
 
 import os
+from dataclasses import asdict, replace, fields
 
 import numpy as np
 import pytest
@@ -37,31 +38,35 @@ import blosc2
 @pytest.mark.parametrize(
     "cparams, dparams, nchunks",
     [
-        ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 0),
-        ({"typesize": 4}, {"nthreads": 4}, 1),
-        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {}, 5),
+        (blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6, typesize=4), blosc2.DParams(), 0),
+        ({"typesize": 4}, blosc2.DParams(nthreads=4), 1),
+        (blosc2.CParams(splitmode=blosc2.SplitMode.ALWAYS_SPLIT, nthreads=5, typesize=4), {}, 5),
         ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {}, 10),
     ],
 )
 def test_schunk_numpy(contiguous, urlpath, mode, mmap_mode, cparams, dparams, nchunks):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode=mode, mmap_mode=mmap_mode)
     blosc2.remove_urlpath(urlpath)
 
     chunk_len = 200 * 1000
     if mode != "r":
-        schunk = blosc2.SChunk(chunksize=chunk_len * 4, mode=mode, mmap_mode=mmap_mode, **storage)
+        schunk = blosc2.SChunk(chunksize=chunk_len * 4, storage=storage, cparams=cparams, dparams=dparams)
+
     else:
         with pytest.raises(
             ValueError, match="not specify a urlpath" if urlpath is None else "does not exist"
         ):
-            blosc2.SChunk(chunksize=chunk_len * 4, mode=mode, mmap_mode=mmap_mode, **storage)
+            blosc2.SChunk(chunksize=chunk_len * 4, storage=storage, cparams=cparams, dparams=dparams)
 
         # Create a schunk which we can read later
+        storage2 = replace(storage,
+                           mode="w" if mmap_mode is None else None,
+                           mmap_mode="w+" if mmap_mode is not None else None)
         schunk = blosc2.SChunk(
             chunksize=chunk_len * 4,
-            mode="w" if mmap_mode is None else None,
-            mmap_mode="w+" if mmap_mode is not None else None,
-            **storage,
+            storage=storage2,
+            cparams=cparams,
+            dparams=dparams
         )
 
     assert schunk.urlpath == urlpath
@@ -74,9 +79,10 @@ def test_schunk_numpy(contiguous, urlpath, mode, mmap_mode, cparams, dparams, nc
 
     if mode == "r":
         if urlpath is not None:
-            schunk = blosc2.SChunk(chunksize=chunk_len * 4, mode=mode, mmap_mode=mmap_mode, **storage)
+            schunk = blosc2.SChunk(chunksize=chunk_len * 4, **asdict(storage))
         else:
             return
+    assert schunk.nchunks == nchunks
 
     for i in range(nchunks):
         buffer = i * np.arange(chunk_len, dtype="int32")
@@ -132,20 +138,20 @@ def test_schunk_ndarray(tmp_path, mode_write, mode_read, mmap_mode_write, mmap_m
 @pytest.mark.parametrize(
     "nbytes, cparams, dparams, nchunks",
     [
-        (7, {"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 5}, {}, 1),
-        (641091, {"typesize": 3}, {"nthreads": 2}, 1),
-        (136, {"typesize": 1}, {}, 5),
+        (7, blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6, typesize=5), {}, 1),
+        (641091, {"typesize": 3}, blosc2.DParams(nthreads=2), 1),
+        (136, blosc2.CParams(typesize=1), blosc2.DParams(), 5),
         (1232, {"typesize": 8}, blosc2.dparams_dflts, 10),
     ],
 )
 def test_schunk(contiguous, urlpath, mode, mmap_mode, nbytes, cparams, dparams, nchunks):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    kwargs = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     numpy_meta = {b"dtype": str(np.dtype(np.uint8))}
     test_meta = {b"lorem": 1234}
     meta = {"numpy": numpy_meta, "test": test_meta}
     blosc2.remove_urlpath(urlpath)
 
-    schunk = blosc2.SChunk(chunksize=2 * nbytes, meta=meta, mode=mode, mmap_mode=mmap_mode, **storage)
+    schunk = blosc2.SChunk(chunksize=2 * nbytes, meta=meta, mode=mode, mmap_mode=mmap_mode, **kwargs)
 
     assert "numpy" in schunk.meta
     assert "error" not in schunk.meta
@@ -189,27 +195,31 @@ def test_schunk(contiguous, urlpath, mode, mmap_mode, nbytes, cparams, dparams, 
 @pytest.mark.parametrize(
     "cparams, dparams, nchunks",
     [
-        ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 1),
+        ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, blosc2.DParams(), 1),
         ({"typesize": 4}, {"nthreads": 4}, 1),
-        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {}, 5),
-        ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {}, 10),
+        (blosc2.CParams(splitmode=blosc2.SplitMode.ALWAYS_SPLIT, nthreads=5, typesize=4), {}, 5),
+        (blosc2.CParams(codec=blosc2.Codec.LZ4HC, typesize=4), blosc2.DParams(), 10),
     ],
 )
 @pytest.mark.parametrize("copy", [True, False])
 def test_schunk_cframe(contiguous, urlpath, mode, mmap_mode, cparams, dparams, nchunks, copy):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath,
+                             mode=mode, mmap_mode=mmap_mode)
     blosc2.remove_urlpath(urlpath)
 
     data = np.arange(200 * 1000 * nchunks, dtype="int32")
-    schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, data=data, mode=mode, mmap_mode=mmap_mode, **storage)
+    schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, data=data, **asdict(storage), cparams=cparams, dparams=dparams)
 
     cframe = schunk.to_cframe()
     schunk2 = blosc2.schunk_from_cframe(cframe, copy)
+    cparams_dict = cparams if isinstance(cparams, dict) else asdict(cparams)
     if not os.getenv("BTUNE_TRADEOFF"):
-        for key in cparams:
+        for key in cparams_dict:
             if key == "nthreads":
                 continue
-            assert schunk2.cparams[key] == cparams[key]
+            if key == "blocksize" and cparams_dict[key] == 0:
+                continue
+            assert getattr(schunk2.cparams, key) == cparams_dict[key]
 
     data2 = np.empty(data.shape, dtype=data.dtype)
     schunk2.get_slice(out=data2)
@@ -228,76 +238,56 @@ def test_schunk_cframe(contiguous, urlpath, mode, mmap_mode, cparams, dparams, n
     "cparams, dparams, new_cparams, new_dparams",
     [
         (
-            {"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4},
+            blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6, typesize=4),
             {},
-            {"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4},
-            {"nthreads": 4},
+            blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6, typesize=4),
+            blosc2.DParams(nthreads=4),
         ),
         (
             {"typesize": 4},
-            {"nthreads": 4},
-            {"codec": blosc2.Codec.ZLIB, "splitmode": blosc2.SplitMode.ALWAYS_SPLIT},
-            {"nthreads": 1},
+            blosc2.DParams(nthreads=4),
+            blosc2.CParams(codec=blosc2.Codec.ZLIB, splitmode=blosc2.SplitMode.ALWAYS_SPLIT),
+            blosc2.DParams(nthreads=1),
         ),
         (
             {"codec": blosc2.Codec.ZLIB, "splitmode": blosc2.SplitMode.ALWAYS_SPLIT},
             {},
-            {
-                "splitmode": blosc2.SplitMode.ALWAYS_SPLIT,
-                "nthreads": 5,
-                "typesize": 4,
-                "filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.TRUNC_PREC],
-            },
-            {"nthreads": 16},
+            blosc2.CParams(
+                splitmode=blosc2.SplitMode.ALWAYS_SPLIT,
+                nthreads=5,
+                typesize=4,
+                filters=[blosc2.Filter.SHUFFLE, blosc2.Filter.TRUNC_PREC],
+            ),
+            blosc2.DParams(nthreads=16),
         ),
         (
-            {"codec": blosc2.Codec.LZ4HC, "typesize": 4},
-            {},
-            {"filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.TRUNC_PREC]},
-            {"nthreads": 3},
+            blosc2.CParams(codec=blosc2.Codec.LZ4HC, typesize=4),
+            blosc2.DParams(),
+            blosc2.CParams(filters=[blosc2.Filter.SHUFFLE, blosc2.Filter.TRUNC_PREC]),
+            blosc2.DParams(nthreads=3),
         ),
     ],
 )
 def test_schunk_cdparams(cparams, dparams, new_cparams, new_dparams):
-    storage = {"cparams": cparams, "dparams": dparams}
+    kwargs = {"cparams": cparams, "dparams": dparams}
 
     chunk_len = 200 * 1000
-    schunk = blosc2.SChunk(chunksize=chunk_len * 4, **storage)
+    schunk = blosc2.SChunk(chunksize=chunk_len * 4, **kwargs)
 
     # Check cparams have been set correctly
-    for key in cparams:
-        assert schunk.cparams[key] == cparams[key]
-    for key in dparams:
-        assert schunk.dparams[key] == dparams[key]
+    cparams_dict = cparams if isinstance(cparams, dict) else asdict(cparams)
+    dparams_dict = dparams if isinstance(dparams, dict) else asdict(dparams)
+    for key in cparams_dict:
+        assert getattr(schunk.cparams, key) == cparams_dict[key]
+    for key in dparams_dict:
+        assert getattr(schunk.dparams, key) == dparams_dict[key]
 
     schunk.cparams = new_cparams
     schunk.dparams = new_dparams
-    for key in schunk.cparams:
-        if key in new_cparams:
-            if key == "filters":
-                assert schunk.cparams[key][: len(new_cparams[key])] == new_cparams[key]
-            else:
-                assert schunk.cparams[key] == new_cparams[key]
-        elif key in cparams:
-            if key == "filters":
-                assert schunk.cparams[key][: len(cparams[key])] == cparams[key]
-            else:
-                assert schunk.cparams[key] == cparams[key]
+    for field in fields(schunk.cparams):
+        if field.name in ["filters", "filters_meta"]:
+            assert getattr(schunk.cparams, field.name)[: len(getattr(new_cparams, field.name))] == getattr(new_cparams, field.name)
         else:
-            if key == "filters":
-                assert schunk.cparams[key][: len(blosc2.cparams_dflts[key])] == blosc2.cparams_dflts[key]
-            elif key == "filters_meta":
-                # Exception for testing bytedelta in the last position
-                assert (
-                    schunk.cparams[key][: len(blosc2.cparams_dflts[key]) - 1]
-                    == blosc2.cparams_dflts[key][:-1]
-                )
-            else:
-                assert schunk.cparams[key] == blosc2.cparams_dflts[key]
+            assert getattr(schunk.cparams, field.name) == getattr(new_cparams, field.name)
 
-    if "nthreads" in new_dparams:
-        assert schunk.dparams["nthreads"] == new_dparams["nthreads"]
-    elif "nthreads" in dparams:
-        assert schunk.dparams["nthreads"] == dparams["nthreads"]
-    else:
-        assert schunk.dparams["nthreads"] == blosc2.dparams_dflts["nthreads"]
+    assert schunk.dparams.nthreads == new_dparams.nthreads

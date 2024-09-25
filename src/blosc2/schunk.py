@@ -11,6 +11,7 @@ import os
 import pathlib
 from collections import namedtuple
 from collections.abc import Mapping, MutableMapping
+from dataclasses import asdict
 from typing import Any, Iterator, NamedTuple
 
 import numpy as np
@@ -156,95 +157,20 @@ class SChunk(blosc2_ext.SChunk):
         Other parameters
         ----------------
         kwargs: dict, optional
+            Storage parameters. The default values are in :class:`blosc2.Storage`.
             Keyword arguments supported:
-
-                contiguous: bool, optional
-                    If the chunks are stored contiguously or not.
-                    Default is True when :paramref:`urlpath` is not None;
-                    False otherwise.
-                urlpath: str | pathlib.Path, optional
-                    If the storage is persistent, the name of the file (when
-                    `contiguous = True`) or the directory (if `contiguous = False`).
-                    If the storage is in-memory, then this field is `None`.
-                mode: str, optional
-                    Persistence mode: ‘r’ means read only (must exist);
-                    ‘a’ means read/write (create if it doesn’t exist);
-                    ‘w’ means create (overwrite if it exists).
-                mmap_mode: str, optional
-                    If set, the file will be memory-mapped instead of using the default
-                    I/O functions and the `mode` argument will be ignored. The memory-mapping
-                    modes are similar as used by the
-                    `numpy.memmap <https://numpy.org/doc/stable/reference/generated/numpy.memmap.html>`_
-                    function, but it is possible to extend the file:
-
-                    .. list-table::
-                        :widths: 10 90
-                        :header-rows: 1
-
-                        * - mode
-                          - description
-                        * - 'r'
-                          - Open an existing file for reading only.
-                        * - 'r+'
-                          - Open an existing file for reading and writing. Use this mode if you want
-                            to append data to an existing schunk file.
-                        * - 'w+'
-                          - Create or overwrite an existing file for reading and writing. Use this
-                            mode if you want to create a new schunk.
-                        * - 'c'
-                          - Open an existing file in copy-on-write mode: all changes affect the data
-                            in memory but changes are not saved to disk. The file on disk is
-                            read-only. On Windows, the size of the mapping cannot change.
-
-                    Only contiguous storage can be memory-mapped. Hence, `urlpath` must point to a
-                    file (and not a directory).
-
-                    .. note::
-                        Memory-mapped files are opened once and the file contents remain in (virtual)
-                        memory for the lifetime of the schunk. Using memory-mapped I/O can be faster
-                        than using the default I/O functions depending on the use case. Whereas
-                        reading performance is generally better, writing performance may also be
-                        slower in some cases on certain systems. In any case, memory-mapped files
-                        can be especially beneficial when operating with network file systems
-                        (like NFS).
-
-                        This is currently a beta feature (especially write operations) and we
-                        recommend trying it out and reporting any issues you may encounter.
-
-                initial_mapping_size: int, optional
-                    The initial size of the mapping for the memory-mapped file when writes are
-                    allowed (r+ w+, or c mode). Once a file is memory-mapped and extended beyond the
-                    initial mapping size, the file must be remapped which may be expensive. This
-                    parameter allows to decouple the mapping size from the actual file size to early
-                    reserve memory for future writes and avoid remappings. The memory is only
-                    reserved virtually and does not occupy physical memory unless actual writes
-                    happen. Since the virtual address space is large enough, it is ok to be generous
-                    with this parameter (with special consideration on Windows, see note below).
-                    For best performance, set this to the maximum expected size of the compressed
-                    data (see example in :obj:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`).
-                    The size is in bytes.
-
-                    Default: 1 GiB.
-
-                    .. note::
-                        On Windows, the size of the mapping is directly coupled to the file size.
-                        When the schunk gets destroyed, the file size will be truncated to the
-                        actual size of the schunk.
-
-                cparams: dict
-                    A dictionary with the compression parameters, which are the same
-                    as those can be used in the :func:`~blosc2.compress2` function.
-                dparams: dict
-                    A dictionary with the decompression parameters, which are the same
-                    as those that can be used in the :func:`~blosc2.decompress2`
-                    function.
-                meta: dict or None
-                    A dictionary with different metalayers.  One entry per metalayer:
-
-                        key: bytes or str
-                            The name of the metalayer.
-                        value: object
-                            The metalayer object that will be serialized using msgpack.
+                storage: :class:`blosc2.Storage` or dict
+                    All the storage parameters that you want to use as
+                    a :class:`blosc2.Storage` or dict instance.
+                cparams: :class:`blosc2.CParams` or dict
+                    All the compression parameters that you want to use as
+                    a :class:`blosc2.CParams` or dict instance.
+                dparams: :class:`blosc2.DParams` or dict
+                    All the decompression parameters that you want to use as
+                    a :class:`blosc2.DParams` or dict instance.
+                others: Any
+                    If `storage` is not passed, all the parameters of a :class:`blosc2.Storage`
+                    can be passed as keyword arguments.
 
         Examples
         --------
@@ -301,10 +227,26 @@ class SChunk(blosc2_ext.SChunk):
             "mmap_mode",
             "initial_mapping_size",
             "_is_view",
+            "storage"
         ]
         for kwarg in kwargs:
             if kwarg not in allowed_kwargs:
                 raise ValueError(f"{kwarg} is not supported as keyword argument")
+        if kwargs.get("storage") is not None:
+            if any(key in list(blosc2.Storage.__annotations__) for key in kwargs.keys()):
+                raise AttributeError("Cannot pass both `storage` and other kwargs already included in Storage")
+            storage = kwargs.get("storage")
+            if isinstance(storage, blosc2.Storage):
+                kwargs = {**kwargs, **asdict(storage)}
+            else:
+                kwargs = {**kwargs, **storage}
+
+        if isinstance(kwargs.get("cparams"), blosc2.CParams):
+            kwargs["cparams"] = asdict(kwargs.get("cparams"))
+
+        if isinstance(kwargs.get("dparams"), blosc2.DParams):
+            kwargs["dparams"] = asdict(kwargs.get("dparams"))
+
         urlpath = kwargs.get("urlpath")
         if "contiguous" not in kwargs:
             # Make contiguous true for disk, else sparse (for in-memory performance)
@@ -345,26 +287,26 @@ class SChunk(blosc2_ext.SChunk):
         self._dparams = super().get_dparams()
 
     @property
-    def cparams(self) -> dict:
+    def cparams(self) -> blosc2.CParams:
         """
-        Dictionary with the compression parameters.
+        :class:`blosc2.CParams` instance with the compression parameters.
         """
         return self._cparams
 
     @cparams.setter
-    def cparams(self, value):
+    def cparams(self, value: blosc2.CParams) -> None:
         super().update_cparams(value)
         self._cparams = super().get_cparams()
 
     @property
-    def dparams(self) -> dict:
+    def dparams(self) -> blosc2.DParams:
         """
-        Dictionary with the decompression parameters.
+        :class:`blosc2.DParams` instance with the decompression parameters.
         """
         return self._dparams
 
     @dparams.setter
-    def dparams(self, value):
+    def dparams(self, value: blosc2.DParams) -> None:
         super().update_dparams(value)
         self._dparams = super().get_dparams()
 
@@ -1395,8 +1337,8 @@ class SChunk(blosc2_ext.SChunk):
         super().__dealloc__()
 
 
-@_inherit_doc_parameter(SChunk.__init__, "mmap_mode:", {r"\* - 'w\+'[^*]+": ""})
-@_inherit_doc_parameter(SChunk.__init__, "initial_mapping_size:", {r"r\+ w\+, or c": "r+ or c"})
+@_inherit_doc_parameter(blosc2.Storage, "mmap_mode:", {r"\* - 'w\+'[^*]+": ""})
+@_inherit_doc_parameter(blosc2.Storage, "initial_mapping_size:", {r"r\+ w\+, or c": "r+ or c"})
 def open(urlpath: str | pathlib.Path | blosc2.URLPath, mode: str = "a", offset: int = 0,
          **kwargs: dict) -> blosc2.SChunk | blosc2.NDArray | blosc2.C2Array:
     """Open a persistent :ref:`SChunk` or :ref:`NDArray` or a remote :ref:`C2Array`

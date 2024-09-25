@@ -27,7 +27,7 @@ def test_copy(shape, chunks1, blocks1, chunks2, blocks2, dtype):
     typesize = dtype.itemsize
     size = int(np.prod(shape))
     buffer = bytes(size * typesize)
-    cparams1 = {"clevel": 2}
+    cparams1 = blosc2.CParams(clevel=2)
     a = blosc2.frombuffer(buffer, shape, dtype=dtype, chunks=chunks1, blocks=blocks1, cparams=cparams1)
     cparams2 = {"clevel": 5, "filters": [blosc2.Filter.BITSHUFFLE], "filters_meta": [0]}
     b = a.copy(chunks=chunks2, blocks=blocks2, cparams=cparams2)
@@ -35,9 +35,9 @@ def test_copy(shape, chunks1, blocks1, chunks2, blocks2, dtype):
     assert a.schunk.dparams == b.schunk.dparams
     for key in cparams2:
         if key in ("filters", "filters_meta"):
-            assert b.schunk.cparams[key][: len(cparams2[key])] == cparams2[key]
+            assert getattr(b.schunk.cparams, key)[: len(cparams2[key])] == cparams2[key]
             continue
-        assert b.schunk.cparams[key] == cparams2[key]
+        assert getattr(b.schunk.cparams, key) == cparams2[key]
     assert b.chunks == tuple(chunks2)
     assert b.blocks == tuple(blocks2)
     assert a.dtype == b.dtype
@@ -63,7 +63,7 @@ def test_copy_numpy(shape, chunks1, blocks1, chunks2, blocks2, dtype):
     else:
         nparray = np.arange(size, dtype=dtype).reshape(shape)
     a = blosc2.asarray(nparray, chunks=chunks1, blocks=blocks1)
-    cparams = {"clevel": 5, "filters": [blosc2.Filter.BITSHUFFLE], "filters_meta": [0]}
+    cparams = blosc2.CParams(clevel=5, filters=[blosc2.Filter.BITSHUFFLE], filters_meta=[0])
     b = a.copy(chunks=chunks2, blocks=blocks2, cparams=cparams)
     assert b.dtype == nparray.dtype
     if dtype.kind == "V":

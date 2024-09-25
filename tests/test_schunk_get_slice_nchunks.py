@@ -33,8 +33,8 @@ import blosc2
     ],
 )
 def test_schunk_get_slice(contiguous, urlpath, cparams, nchunks, start, stop):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams}
-    schunk = blosc2.SChunk(chunksize=200 * 100 * 4, mode="w", **storage)
+    kwargs = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams}
+    schunk = blosc2.SChunk(chunksize=200 * 100 * 4, mode="w", **kwargs)
     for i in range(nchunks):
         chunk = np.full(schunk.chunksize // schunk.typesize, i, dtype=np.int32)
         schunk.append_data(chunk)

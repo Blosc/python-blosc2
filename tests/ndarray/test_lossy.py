@@ -9,6 +9,7 @@
 import numpy as np
 import pytest
 
+from dataclasses import asdict
 import blosc2
 
 
@@ -18,7 +19,7 @@ import blosc2
         (
             (32, 18),
             np.float32,
-            {"codec": blosc2.Codec.NDLZ, "codec_meta": 4},
+            blosc2.CParams(codec=blosc2.Codec.NDLZ, codec_meta=4),
             None,
             False,
         ),
@@ -60,14 +61,15 @@ import blosc2
     ],
 )
 def test_lossy(shape, cparams, dtype, urlpath, contiguous):
-    if cparams.get("codec") == blosc2.Codec.NDLZ:
+    cparams_dict = cparams if isinstance(cparams, dict) else asdict(cparams)
+    if cparams_dict.get("codec") == blosc2.Codec.NDLZ:
         dtype = np.uint8
     array = np.linspace(0, np.prod(shape), np.prod(shape), dtype=dtype).reshape(shape)
     a = blosc2.asarray(array, cparams=cparams, urlpath=urlpath, contiguous=contiguous, mode="w")
 
     if (
-        a.schunk.cparams["codec"] in (blosc2.Codec.ZFP_RATE, blosc2.Codec.ZFP_PREC, blosc2.Codec.ZFP_ACC)
-        or a.schunk.cparams["filters"][0] == blosc2.Filter.NDMEAN
+        a.schunk.cparams.codec in (blosc2.Codec.ZFP_RATE, blosc2.Codec.ZFP_PREC, blosc2.Codec.ZFP_ACC)
+        or a.schunk.cparams.filters[0] == blosc2.Filter.NDMEAN
     ):
         _ = a[...]
     else:

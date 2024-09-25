@@ -188,9 +188,26 @@ from .core import (
     unpack_tensor,
 )
 
+# Internal Blosc threading
 # Get CPU info
 cpu_info = get_cpu_info()
+nthreads = ncores = cpu_info.get("count", 1)
+"""Number of threads to be used in compression/decompression.
+"""
+# Protection against too many threads
+nthreads = min(nthreads, 32)
+# Experiments say that, when using a large number of threads, it is better to not use them all
+nthreads -= nthreads // 8
 
+# This import must be before ndarray and schunk
+from .storage import (
+    CParams,
+    cparams_dflts,
+    DParams,
+    dparams_dflts,
+    Storage,
+    storage_dflts,
+)
 
 from .ndarray import (  # noqa: I001
     NDArray,
@@ -243,60 +260,7 @@ blosclib_version = f"{VERSION_STRING} ({VERSION_DATE})"
 """
 The blosc2 version + date.
 """
-# Internal Blosc threading
-nthreads = ncores = cpu_info.get("count", 1)
-"""Number of threads to be used in compression/decompression.
-"""
-# Protection against too many threads
-nthreads = min(nthreads, 32)
-# Experiments say that, when using a large number of threads, it is better to not use them all
-nthreads -= nthreads // 8
-set_nthreads(nthreads)
 
-# Set the number of threads for NumExpr
-numexpr.set_num_threads(nthreads)
-
-# Defaults for compression params
-cparams_dflts = {
-    "codec": Codec.ZSTD,
-    "codec_meta": 0,
-    "clevel": 1,
-    "use_dict": False,
-    "typesize": 8,
-    "nthreads": nthreads,
-    "blocksize": 0,
-    "splitmode": SplitMode.ALWAYS_SPLIT,
-    "schunk": None,
-    "filters": [
-        Filter.NOFILTER,
-        Filter.NOFILTER,
-        Filter.NOFILTER,
-        Filter.NOFILTER,
-        Filter.NOFILTER,
-        Filter.SHUFFLE,
-    ],
-    "filters_meta": [0, 0, 0, 0, 0, 0],
-    "prefilter": None,
-    "preparams": None,
-    "tuner": Tuner.STUNE,
-    "instr_codec": False,
-}
-"""
-Compression params defaults.
-"""
-
-# Defaults for decompression params
-dparams_dflts = {"nthreads": nthreads, "schunk": None, "postfilter": None, "postparams": None}
-"""
-Decompression params defaults.
-"""
-# Default for storage
-storage_dflts = {"contiguous": False, "urlpath": None, "cparams": None, "dparams": None, "io": None}
-"""
-Storage params defaults. This is meant only for :ref:`SChunk <SChunk>` or :ref:`NDArray <NDArray>`.
-"""
-
-_disable_overloaded_equal = False
 
 # Delayed imports for avoiding overwriting of python builtins
 from .ndarray import (
@@ -341,7 +305,9 @@ __all__ = [
     "__version__",
     "compress",
     "decompress",
+    "CParams",
     "cparams_dflts",
+    "DParams",
     "dparams_dflts",
     "storage_dflts",
     "set_compressor",
@@ -373,6 +339,7 @@ __all__ = [
     "compress2",
     "decompress2",
     "SChunk",
+    "Storage",
     "open",
     "remove_urlpath",
     "nthreads",

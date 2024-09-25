@@ -17,19 +17,19 @@ import blosc2
 @pytest.mark.parametrize(
     "cparams, dparams, nchunks",
     [
-        ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 1),
+        (blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6, typesize=4), blosc2.DParams(), 1),
         ({"typesize": 4}, {"nthreads": 4}, 1),
-        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "typesize": 4}, {}, 5),
-        ({"codec": blosc2.Codec.LZ4HC, "typesize": 4}, {}, 10),
+        ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "typesize": 4}, blosc2.DParams(), 5),
+        (blosc2.CParams(codec=blosc2.Codec.LZ4HC, typesize=4), {}, 10),
     ],
 )
 @pytest.mark.parametrize("copy", [True, False])
 def test_ndarray_cframe(contiguous, urlpath, cparams, dparams, nchunks, copy):
-    storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+    storage = {"contiguous": contiguous, "urlpath": urlpath}
     blosc2.remove_urlpath(urlpath)
 
     data = np.arange(200 * 1000 * nchunks, dtype="int32").reshape(200, 1000, nchunks)
-    ndarray = blosc2.asarray(data, **storage)
+    ndarray = blosc2.asarray(data, storage=storage, cparams=cparams, dparams=dparams)
 
     cframe = ndarray.to_cframe()
     ndarray2 = blosc2.ndarray_from_cframe(cframe, copy)

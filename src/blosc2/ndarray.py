@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 import ndindex
 import numpy as np
+from dataclasses import asdict
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext, compute_chunks_blocks
@@ -1288,13 +1289,15 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         if dtype is None:
             dtype = self.dtype
-        kwargs["cparams"] = kwargs.get("cparams", self.schunk.cparams).copy()
-        kwargs["dparams"] = kwargs.get("dparams", self.schunk.dparams).copy()
+        kwargs["cparams"] = kwargs.get("cparams").copy() if isinstance(kwargs.get("cparams"), dict) \
+            else asdict(self.schunk.cparams)
+        kwargs["dparams"] = kwargs.get("dparams").copy() if isinstance(kwargs.get("dparams"), dict) \
+            else asdict(self.schunk.dparams)
         if "meta" not in kwargs:
             # Copy metalayers as well
             meta_dict = {meta: self.schunk.meta[meta] for meta in self.schunk.meta}
             kwargs["meta"] = meta_dict
-        _check_ndarray_kwargs(**kwargs)
+        kwargs = _check_ndarray_kwargs(**kwargs)
 
         return super().copy(dtype, **kwargs)
 
@@ -1369,7 +1372,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> print(type(c))
         <class 'blosc2.ndarray.NDArray'>
         """
-        _check_ndarray_kwargs(**kwargs)
+        kwargs = _check_ndarray_kwargs(**kwargs)
         key, mask = process_key(key, self.shape)
         start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
         key = (start, stop)
@@ -2328,7 +2331,7 @@ def empty(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict)
     dtype('int32')
     """
     shape = _check_shape(shape)
-    _check_ndarray_kwargs(**kwargs)
+    kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
@@ -2361,7 +2364,7 @@ def uninit(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict
     dtype('float64')
     """
     shape = _check_shape(shape)
-    _check_ndarray_kwargs(**kwargs)
+    kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
@@ -2394,7 +2397,7 @@ def nans(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: dict
     dtype('float64')
     """
     shape = _check_shape(shape)
-    _check_ndarray_kwargs(**kwargs)
+    kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
@@ -2433,7 +2436,7 @@ def zeros(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict)
     dtype('float64')
     """
     shape = _check_shape(shape)
-    _check_ndarray_kwargs(**kwargs)
+    kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
@@ -2486,7 +2489,7 @@ def full(shape: int | tuple | list, fill_value: bytes | int | float | bool, dtyp
     if dtype is None:
         dtype = np.dtype(type(fill_value))
     shape = _check_shape(shape)
-    _check_ndarray_kwargs(**kwargs)
+    kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
@@ -2533,7 +2536,7 @@ def frombuffer(
     >>> a = blosc2.frombuffer(buffer, shape, chunks=chunks, dtype=dtype)
     """
     shape = _check_shape(shape)
-    _check_ndarray_kwargs(**kwargs)
+    kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
@@ -2596,7 +2599,7 @@ def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: dict | list) -> NDArra
     >>> # Create a NDArray from a NumPy array
     >>> nda = blosc2.asarray(a)
     """
-    _check_ndarray_kwargs(**kwargs)
+    kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
     # Use the chunks and blocks from the array if they are not passed
@@ -2647,6 +2650,16 @@ def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: dict | list) -> NDArra
 
 
 def _check_ndarray_kwargs(**kwargs):
+    if "storage" in kwargs:
+        for key in kwargs:
+            if key in list(blosc2.Storage.__annotations__):
+                raise AttributeError("Cannot pass both `storage` and other kwargs already included in Storage")
+        storage = kwargs.get("storage")
+        if isinstance(storage, blosc2.Storage):
+            kwargs = {**kwargs, **asdict(storage)}
+        else:
+            kwargs = {**kwargs, **storage}
+
     supported_keys = [
         "chunks",
         "blocks",
@@ -2658,16 +2671,27 @@ def _check_ndarray_kwargs(**kwargs):
         "mode",
         "mmap_mode",
         "initial_mapping_size",
+        "storage",
     ]
     for key in kwargs:
         if key not in supported_keys:
             raise KeyError(
                 f"Only {supported_keys} are supported as keyword arguments, and you passed '{key}'"
             )
-    if "cparams" in kwargs and "chunks" in kwargs["cparams"]:
-        raise ValueError("You cannot pass chunks in cparams, use `chunks` argument instead")
-    if "cparams" in kwargs and "blocks" in kwargs["cparams"]:
-        raise ValueError("You cannot pass chunks in cparams, use `blocks` argument instead")
+
+    if "cparams" in kwargs:
+        if isinstance(kwargs["cparams"], blosc2.CParams):
+            kwargs["cparams"] = asdict(kwargs["cparams"])
+        else:
+            if "chunks" in kwargs["cparams"]:
+                raise ValueError("You cannot pass chunks in cparams, use `chunks` argument instead")
+            if "blocks" in kwargs["cparams"]:
+                raise ValueError("You cannot pass chunks in cparams, use `blocks` argument instead")
+    if "dparams" in kwargs:
+        if isinstance(kwargs["dparams"], blosc2.DParams):
+            kwargs["dparams"] = asdict(kwargs["dparams"])
+
+    return kwargs
 
 
 def get_slice_nchunks(schunk: blosc2.SChunk,

@@ -18,6 +18,7 @@ import pickle
 import platform
 import sys
 from collections.abc import Callable
+from dataclasses import asdict
 
 import cpuinfo
 import numpy as np
@@ -55,10 +56,10 @@ def _check_codec(codec):
 
 def compress(
     src: object,
-    typesize: int = None,
-    clevel: int = 9,
+    typesize: int = 8,
+    clevel: int = 1,
     filter: blosc2.Filter = blosc2.Filter.SHUFFLE,
-    codec: blosc2.Codec = blosc2.Codec.BLOSCLZ,
+    codec: blosc2.Codec = blosc2.Codec.ZSTD,
     _ignore_multiple_size: bool = False,
 ) -> str | bytes:
     """Compress src, with a given type size.
@@ -893,8 +894,9 @@ def set_nthreads(nthreads: int) -> int:
     --------
     :attr:`~blosc2.nthreads`
     """
+    rc = blosc2_ext.set_nthreads(nthreads)
     blosc2.nthreads = nthreads
-    return blosc2_ext.set_nthreads(nthreads)
+    return rc
 
 
 def compressor_list(plugins: bool = False) -> list:
@@ -1393,34 +1395,15 @@ def compress2(src: object, **kwargs: dict) -> str | bytes:
     Other Parameters
     ----------------
     kwargs: dict, optional
+        Compression parameters. The default values are in :class:`blosc2.CParams`.
         Keyword arguments supported:
 
-            codec: :class:`Codec`
-                The compressor code. Default is :py:obj:`Codec.BLOSCLZ <Codec>`.
-            codec_meta: int
-                The metadata for the compressor code, 0 by default.
-            clevel: int
-                The compression level from 0 (no compression) to 9
-                (maximum compression). Default: 5.
-            use_dict: bool
-                Use dicts or not when compressing
-                (only for :py:obj:`blosc2.Codec.ZSTD <Codec>`). By default `False`.
-            typesize: int from 1 to 255
-                The data type size. Default: 8.
-            nthreads: int
-                The number of threads to use internally (1 by default).
-            blocksize: int
-                The requested size of the compressed blocks. If 0 (the default)
-                blosc2 chooses it automatically.
-            splitmode: :class:`SplitMode`
-                The split mode for the blocks.
-                The default value is :py:obj:`SplitMode.FORWARD_COMPAT_SPLIT <SplitMode>`.
-            filters: :class:`Filter` list
-                The sequence of filters. Default: {0, 0, 0, 0, 0, :py:obj:`Filter.SHUFFLE <Filter>`}.
-            filters_meta: list
-                The metadata for filters. Default: `{0, 0, 0, 0, 0, 0}`.
-            tuner: :class:`Tuner`
-                The tuner to use. Default: :py:obj:`Tuner.STUNE <Tuner>`.
+            cparams: :class:`blosc2.CParams` or dict
+                All the compression parameters that you want to use as
+                a :class:`blosc2.CParams` or dict instance.
+            others: Any
+                If `cparams` is not passed, all the parameters of a :class:`blosc2.CParams`
+                can be passed as keyword arguments.
 
     Returns
     -------
@@ -1434,6 +1417,15 @@ def compress2(src: object, **kwargs: dict) -> str | bytes:
         If an internal error occurred, probably because some
         parameter is not a valid parameter.
     """
+    if kwargs is not None:
+        if 'cparams' in kwargs:
+            if len(kwargs) > 1:
+                raise AttributeError("Cannot pass both cparams and other kwargs already included in CParams")
+            if isinstance(kwargs.get('cparams'), blosc2.CParams):
+                kwargs = asdict(kwargs.get('cparams'))
+            else:
+                kwargs = kwargs.get('cparams')
+
     return blosc2_ext.compress2(src, **kwargs)
 
 
@@ -1456,10 +1448,15 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
     Other Parameters
     ----------------
     kwargs: dict, optional
+        Decompression parameters. The default values are in :class:`blosc2.DParams`.
         Keyword arguments supported:
 
-            nthreads: int
-                The number of threads to use internally (1 by default).
+            dparams: :class:`blosc2.DParams` or dict
+                All the decompression parameters that you want to use as
+                a :class:`blosc2.DParams` or dict instance.
+            others: Any
+                If `dparams` is not passed, all the parameters of a :class:`blosc2.DParams`
+                can be passed as keyword arguments.
 
     Returns
     -------
@@ -1481,6 +1478,15 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
         If the length of :paramref:`src` is smaller than the minimum.
         If :paramref:`dst` is not None and its length is 0.
     """
+    if kwargs is not None:
+        if 'dparams' in kwargs:
+            if len(kwargs) > 1:
+                raise AttributeError("Cannot pass both dparams and other kwargs already included in DParams")
+            if isinstance(kwargs.get('dparams'), blosc2.DParams):
+                kwargs = asdict(kwargs.get('dparams'))
+            else:
+                kwargs = kwargs.get('dparams')
+
     return blosc2_ext.decompress2(src, dst, **kwargs)
 
 
