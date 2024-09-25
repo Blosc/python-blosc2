@@ -200,7 +200,7 @@ class Storage:
 
     def __post_init__(self):
         if self.contiguous is None:
-            self.contiguous = False if self.urlpath is None else True
+            self.contiguous = self.urlpath is not None
         # Check for None values
         for field in fields(self):
             if (getattr(self, field.name) is None and
