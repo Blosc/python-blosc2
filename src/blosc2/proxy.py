@@ -221,7 +221,7 @@ class Proxy(blosc2.Operand):
                 )
                 self._cache.fill_special(self.src.nbytes // self.src.typesize, blosc2.SpecialValue.UNINIT)
         self._schunk_cache = getattr(self._cache, "schunk", self._cache)
-        vlmeta = kwargs.get("vlmeta", None)
+        vlmeta = kwargs.get("vlmeta")
         if vlmeta:
             for key in vlmeta:
                 self._schunk_cache.vlmeta[key] = vlmeta[key]
