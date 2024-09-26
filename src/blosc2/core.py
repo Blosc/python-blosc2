@@ -1415,14 +1415,13 @@ def compress2(src: object, **kwargs: dict) -> str | bytes:
         If an internal error occurred, probably because some
         parameter is not a valid parameter.
     """
-    if kwargs is not None:
-        if 'cparams' in kwargs:
-            if len(kwargs) > 1:
-                raise AttributeError("Cannot pass both cparams and other kwargs already included in CParams")
-            if isinstance(kwargs.get('cparams'), blosc2.CParams):
-                kwargs = asdict(kwargs.get('cparams'))
-            else:
-                kwargs = kwargs.get('cparams')
+    if kwargs is not None and 'cparams' in kwargs:
+        if len(kwargs) > 1:
+            raise AttributeError("Cannot pass both cparams and other kwargs already included in CParams")
+        if isinstance(kwargs.get('cparams'), blosc2.CParams):
+            kwargs = asdict(kwargs.get('cparams'))
+        else:
+            kwargs = kwargs.get('cparams')
 
     return blosc2_ext.compress2(src, **kwargs)
 
@@ -1476,14 +1475,13 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
         If the length of :paramref:`src` is smaller than the minimum.
         If :paramref:`dst` is not None and its length is 0.
     """
-    if kwargs is not None:
-        if 'dparams' in kwargs:
-            if len(kwargs) > 1:
-                raise AttributeError("Cannot pass both dparams and other kwargs already included in DParams")
-            if isinstance(kwargs.get('dparams'), blosc2.DParams):
-                kwargs = asdict(kwargs.get('dparams'))
-            else:
-                kwargs = kwargs.get('dparams')
+    if kwargs is not None and 'dparams' in kwargs:
+        if len(kwargs) > 1:
+            raise AttributeError("Cannot pass both dparams and other kwargs already included in DParams")
+        if isinstance(kwargs.get('dparams'), blosc2.DParams):
+            kwargs = asdict(kwargs.get('dparams'))
+        else:
+            kwargs = kwargs.get('dparams')
 
     return blosc2_ext.decompress2(src, dst, **kwargs)
 
