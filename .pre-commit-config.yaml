@@ -1,7 +1,13 @@
+ci:
+  autoupdate_commit_msg: "Update pre-commit hooks"
+  autofix_commit_msg: "Apply pre-commit fixes"
+  autofix_prs: false
+default_stages: [commit, push]
+default_language_version:
+  python: python3
 repos:
 - repo: https://github.com/astral-sh/ruff-pre-commit
-  rev: v0.6.2
+  rev: v0.6.7
   hooks:
   - id: ruff
   - id: ruff-format
-    exclude: blosc2/c-blosc2
