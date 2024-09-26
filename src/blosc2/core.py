@@ -17,14 +17,19 @@ import pathlib
 import pickle
 import platform
 import sys
-from collections.abc import Callable
 from dataclasses import asdict
+from typing import TYPE_CHECKING
 
 import cpuinfo
 import numpy as np
 
 import blosc2
 from blosc2 import blosc2_ext
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    import torch
 
 
 def _check_typesize(typesize):
