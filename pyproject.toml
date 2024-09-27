@@ -97,6 +97,7 @@ extend-select = [
 ignore = [
     "B028",
     "PT006",
+    "PT004",  # deprecated
     "PT011",
     "RET505",
     "RET508",
