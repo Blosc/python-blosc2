@@ -1085,7 +1085,7 @@ def print_versions():
     for clib in sorted(clib_versions.keys()):
         print(f"  {clib}: {clib_versions[clib]}")
     print(f"Python version: {sys.version}")
-    (sysname, nodename, release, version, machine, processor) = platform.uname()
+    (sysname, _nodename, release, version, machine, processor) = platform.uname()
     print(f"Platform: {sysname}-{release}-{machine} ({version})")
     if sysname == "Linux":
         distro = os_release_pretty_name()

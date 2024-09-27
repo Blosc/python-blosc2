@@ -102,3 +102,6 @@ ignore = [
     "RET508",
     "SIM108",
 ]
+
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/**" = ["F841"]

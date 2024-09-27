@@ -539,7 +539,7 @@ def fill_chunk_operands(
         if nchunk == 0:
             # Initialize the iterator for reading the chunks
             arr = operands["o0"]
-            chunks_idx, nchunks = get_chunks_idx(arr.shape, arr.chunks)
+            chunks_idx, _ = get_chunks_idx(arr.shape, arr.chunks)
             info = (reduc, aligned, low_mem, chunks_idx)
             iter_chunks = read_nchunk(list(operands.values()), info)
         # Run the asynchronous file reading function from a synchronous context
@@ -1162,7 +1162,7 @@ def chunked_eval(expression: str | Callable[[tuple, np.ndarray, tuple[int]], Non
         if where:
             # Make the where arguments part of the operands
             operands = {**operands, **where}
-        shape, _, _, fast_path = validate_inputs(operands, out)
+        _, _, _, fast_path = validate_inputs(operands, out)
 
         # Activate last read cache for NDField instances
         for op in operands:
@@ -1364,7 +1364,7 @@ class LazyExpr(LazyArray):
         shape = out.shape
         chunks = out.chunks
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
-        chunks_idx, nchunks = get_chunks_idx(shape, chunks)
+        chunks_idx, _ = get_chunks_idx(shape, chunks)
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
