@@ -133,8 +133,9 @@ def compress(
     return blosc2_ext.compress(src, typesize, clevel, filter, codec)
 
 
-def decompress(src: object, dst: object | bytearray = None,
-               as_bytearray: bool = False) -> str | bytes | bytearray | None:
+def decompress(
+    src: object, dst: object | bytearray = None, as_bytearray: bool = False
+) -> str | bytes | bytearray | None:
     """Decompresses a bytes-like compressed object.
 
     Parameters
@@ -202,8 +203,12 @@ def decompress(src: object, dst: object | bytearray = None,
     return blosc2_ext.decompress(src, dst, as_bytearray)
 
 
-def pack(obj: object, clevel: int = 9, filter: blosc2.Filter = blosc2.Filter.SHUFFLE,
-         codec: blosc2.Codec = blosc2.Codec.BLOSCLZ) -> str | bytes:
+def pack(
+    obj: object,
+    clevel: int = 9,
+    filter: blosc2.Filter = blosc2.Filter.SHUFFLE,
+    codec: blosc2.Codec = blosc2.Codec.BLOSCLZ,
+) -> str | bytes:
     """Pack (compress) a Python object.
 
     Parameters
@@ -321,8 +326,12 @@ def unpack(packed_object: str | bytes, **kwargs: dict) -> object:
     return obj
 
 
-def pack_array(arr: np.ndarray, clevel: int = 9, filter: blosc2.Filter = blosc2.Filter.SHUFFLE,
-               codec: blosc2.Codec = blosc2.Codec.BLOSCLZ) -> str | bytes:
+def pack_array(
+    arr: np.ndarray,
+    clevel: int = 9,
+    filter: blosc2.Filter = blosc2.Filter.SHUFFLE,
+    codec: blosc2.Codec = blosc2.Codec.BLOSCLZ,
+) -> str | bytes:
     """Pack (compress) a NumPy array. It is equivalent to the pack function.
 
     Parameters
@@ -591,8 +600,9 @@ def load_array(urlpath: str, dparams: dict = None) -> np.ndarray:
     return load_tensor(urlpath, dparams=dparams)
 
 
-def pack_tensor(tensor: tensorflow.Tensor | torch.Tensor | np.ndarray, chunksize: int = None,
-                **kwargs: dict) -> bytes | int:
+def pack_tensor(
+    tensor: tensorflow.Tensor | torch.Tensor | np.ndarray, chunksize: int = None, **kwargs: dict
+) -> bytes | int:
     """Pack (compress) a TensorFlow or PyTorch tensor or a NumPy array.
 
     Parameters
@@ -719,8 +729,12 @@ def unpack_tensor(cframe: bytes) -> tensorflow.Tensor | torch.Tensor | np.ndarra
     return _unpack_tensor(schunk)
 
 
-def save_tensor(tensor: tensorflow.Tensor | torch.Tensor | np.ndarray, urlpath: str, chunksize: int = None,
-                **kwargs: dict) -> int:
+def save_tensor(
+    tensor: tensorflow.Tensor | torch.Tensor | np.ndarray,
+    urlpath: str,
+    chunksize: int = None,
+    **kwargs: dict,
+) -> int:
     """Save a serialized PyTorch or TensorFlow tensor or NumPy array in `urlpath`.
 
     Parameters
@@ -1271,8 +1285,11 @@ def compute_partition(nitems, maxshape, minpart=None):
 
 
 def compute_chunks_blocks(
-    shape: tuple[int] | list, chunks: tuple | list | None = None, blocks: tuple | list | None = None,
-        dtype: np.dtype = np.uint8, **kwargs: dict
+    shape: tuple[int] | list,
+    chunks: tuple | list | None = None,
+    blocks: tuple | list | None = None,
+    dtype: np.dtype = np.uint8,
+    **kwargs: dict,
 ) -> tuple[(int, int)]:
     """
     Compute educated guesses for chunks and blocks of a :ref:`NDArray`.
@@ -1421,13 +1438,13 @@ def compress2(src: object, **kwargs: dict) -> str | bytes:
         If an internal error occurred, probably because some
         parameter is not a valid parameter.
     """
-    if kwargs is not None and 'cparams' in kwargs:
+    if kwargs is not None and "cparams" in kwargs:
         if len(kwargs) > 1:
             raise AttributeError("Cannot pass both cparams and other kwargs already included in CParams")
-        if isinstance(kwargs.get('cparams'), blosc2.CParams):
-            kwargs = asdict(kwargs.get('cparams'))
+        if isinstance(kwargs.get("cparams"), blosc2.CParams):
+            kwargs = asdict(kwargs.get("cparams"))
         else:
-            kwargs = kwargs.get('cparams')
+            kwargs = kwargs.get("cparams")
 
     return blosc2_ext.compress2(src, **kwargs)
 
@@ -1481,13 +1498,13 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
         If the length of :paramref:`src` is smaller than the minimum.
         If :paramref:`dst` is not None and its length is 0.
     """
-    if kwargs is not None and 'dparams' in kwargs:
+    if kwargs is not None and "dparams" in kwargs:
         if len(kwargs) > 1:
             raise AttributeError("Cannot pass both dparams and other kwargs already included in DParams")
-        if isinstance(kwargs.get('dparams'), blosc2.DParams):
-            kwargs = asdict(kwargs.get('dparams'))
+        if isinstance(kwargs.get("dparams"), blosc2.DParams):
+            kwargs = asdict(kwargs.get("dparams"))
         else:
-            kwargs = kwargs.get('dparams')
+            kwargs = kwargs.get("dparams")
 
     return blosc2_ext.decompress2(src, dst, **kwargs)
 
@@ -1582,11 +1599,11 @@ def ndarray_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.NDArr
 
 
 def register_codec(
-        codec_name: str,
-        id: int,
-        encoder: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], int] = None,
-        decoder: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], int] = None,
-        version: int = 1
+    codec_name: str,
+    id: int,
+    encoder: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], int] = None,
+    decoder: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], int] = None,
+    version: int = 1,
 ) -> None:
     """Register a user defined codec.
 
@@ -1664,10 +1681,10 @@ def register_codec(
 
 
 def register_filter(
-        id: int,
-        forward: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], None] = None,
-        backward: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], None] = None,
-        name: str = None
+    id: int,
+    forward: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], None] = None,
+    backward: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], None] = None,
+    name: str = None,
 ) -> None:
     """Register an user defined filter.
 

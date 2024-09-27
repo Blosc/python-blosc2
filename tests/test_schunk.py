@@ -59,15 +59,12 @@ def test_schunk_numpy(contiguous, urlpath, mode, mmap_mode, cparams, dparams, nc
             blosc2.SChunk(chunksize=chunk_len * 4, storage=storage, cparams=cparams, dparams=dparams)
 
         # Create a schunk which we can read later
-        storage2 = replace(storage,
-                           mode="w" if mmap_mode is None else None,
-                           mmap_mode="w+" if mmap_mode is not None else None)
-        schunk = blosc2.SChunk(
-            chunksize=chunk_len * 4,
-            storage=storage2,
-            cparams=cparams,
-            dparams=dparams
+        storage2 = replace(
+            storage,
+            mode="w" if mmap_mode is None else None,
+            mmap_mode="w+" if mmap_mode is not None else None,
         )
+        schunk = blosc2.SChunk(chunksize=chunk_len * 4, storage=storage2, cparams=cparams, dparams=dparams)
 
     assert schunk.urlpath == urlpath
     assert schunk.contiguous == contiguous
@@ -203,12 +200,13 @@ def test_schunk(contiguous, urlpath, mode, mmap_mode, nbytes, cparams, dparams, 
 )
 @pytest.mark.parametrize("copy", [True, False])
 def test_schunk_cframe(contiguous, urlpath, mode, mmap_mode, cparams, dparams, nchunks, copy):
-    storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath,
-                             mode=mode, mmap_mode=mmap_mode)
+    storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode=mode, mmap_mode=mmap_mode)
     blosc2.remove_urlpath(urlpath)
 
     data = np.arange(200 * 1000 * nchunks, dtype="int32")
-    schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, data=data, **asdict(storage), cparams=cparams, dparams=dparams)
+    schunk = blosc2.SChunk(
+        chunksize=200 * 1000 * 4, data=data, **asdict(storage), cparams=cparams, dparams=dparams
+    )
 
     cframe = schunk.to_cframe()
     schunk2 = blosc2.schunk_from_cframe(cframe, copy)
@@ -286,7 +284,9 @@ def test_schunk_cdparams(cparams, dparams, new_cparams, new_dparams):
     schunk.dparams = new_dparams
     for field in fields(schunk.cparams):
         if field.name in ["filters", "filters_meta"]:
-            assert getattr(schunk.cparams, field.name)[: len(getattr(new_cparams, field.name))] == getattr(new_cparams, field.name)
+            assert getattr(schunk.cparams, field.name)[: len(getattr(new_cparams, field.name))] == getattr(
+                new_cparams, field.name
+            )
         else:
             assert getattr(schunk.cparams, field.name) == getattr(new_cparams, field.name)
 

@@ -111,15 +111,17 @@ def test_open(urlpath, shape, chunks, blocks, slices, dtype):
 
 
 # Test the ProxyNDSources interface
-@pytest.mark.parametrize("shape, chunks, blocks", [
-    # One should be careful to choose aligned partitions for our source
-    # E.g., the following is not aligned
-    # ((10, 8), (4, 4), (2, 2))
-    ((12,), (4,), (2,)),
-    ((10, 8), (2, 8), (1, 4)),
-    ((10, 8, 6), (2, 4, 3), (1, 2, 3)),
-    ((4, 8, 6, 4), (2, 4, 3, 2), (1, 2, 3, 2)),
-    ]
+@pytest.mark.parametrize(
+    "shape, chunks, blocks",
+    [
+        # One should be careful to choose aligned partitions for our source
+        # E.g., the following is not aligned
+        # ((10, 8), (4, 4), (2, 2))
+        ((12,), (4,), (2,)),
+        ((10, 8), (2, 8), (1, 4)),
+        ((10, 8, 6), (2, 4, 3), (1, 2, 3)),
+        ((4, 8, 6, 4), (2, 4, 3, 2), (1, 2, 3, 2)),
+    ],
 )
 def test_proxy_source(shape, chunks, blocks):
     # Define an object that will be used as a source
@@ -128,6 +130,7 @@ def test_proxy_source(shape, chunks, blocks):
         A simple source that will be used to test the ProxyNDSource interface.
 
         """
+
         def __init__(self, data, chunks, blocks):
             self._data = data
             self._shape = data.shape

@@ -493,8 +493,12 @@ def test_save():
     chunks = tuple(i // 2 for i in nres.shape)
     blocks = tuple(i // 4 for i in nres.shape)
     urlpath_eval = "eval_expr.b2nd"
-    res = expr.eval(storage=blosc2.Storage(urlpath=urlpath_eval, mode="w"),
-                    chunks=chunks, blocks=blocks, cparams=cparams, dparams=dparams,
+    res = expr.eval(
+        storage=blosc2.Storage(urlpath=urlpath_eval, mode="w"),
+        chunks=chunks,
+        blocks=blocks,
+        cparams=cparams,
+        dparams=dparams,
     )
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
 

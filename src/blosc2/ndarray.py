@@ -34,6 +34,7 @@ def is_documented_by(original):
 
     return wrapper
 
+
 def make_key_hashable(key):
     if isinstance(key, slice):
         return (key.start, key.stop, key.step)
@@ -151,9 +152,13 @@ def _check_allowed_dtypes(
         )
 
 
-def sum(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
-        dtype: np.dtype = None, keepdims: bool = False, **kwargs: dict
-        ) -> np.ndarray | NDArray | int | float | complex | bool:
+def sum(
+    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    axis: int | tuple[int] = None,
+    dtype: np.dtype = None,
+    keepdims: bool = False,
+    **kwargs: dict,
+) -> np.ndarray | NDArray | int | float | complex | bool:
     """
     Return the sum of array elements over a given axis.
 
@@ -204,9 +209,13 @@ def sum(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int |
     return ndarr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
 
-def mean(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
-         dtype: np.dtype = None, keepdims: bool = False, **kwargs: dict
-         ) -> np.ndarray | NDArray | int | float | complex | bool:
+def mean(
+    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    axis: int | tuple[int] = None,
+    dtype: np.dtype = None,
+    keepdims: bool = False,
+    **kwargs: dict,
+) -> np.ndarray | NDArray | int | float | complex | bool:
     """
     Return the arithmetic mean along the specified axis.
 
@@ -251,9 +260,14 @@ def mean(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int 
     return ndarr.mean(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
 
-def std(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
-        dtype: np.dtype = None, ddof: int = 0, keepdims: bool = False, **kwargs: dict
-        ) -> np.ndarray | NDArray | int | float | bool:
+def std(
+    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    axis: int | tuple[int] = None,
+    dtype: np.dtype = None,
+    ddof: int = 0,
+    keepdims: bool = False,
+    **kwargs: dict,
+) -> np.ndarray | NDArray | int | float | bool:
     """
     Return the standard deviation along the specified axis.
 
@@ -305,9 +319,14 @@ def std(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int |
     return ndarr.std(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
 
 
-def var(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
-        dtype: np.dtype = None, ddof: int = 0, keepdims: bool = False, **kwargs: dict
-        ) -> np.ndarray | NDArray | int | float | bool:
+def var(
+    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    axis: int | tuple[int] = None,
+    dtype: np.dtype = None,
+    ddof: int = 0,
+    keepdims: bool = False,
+    **kwargs: dict,
+) -> np.ndarray | NDArray | int | float | bool:
     """
     Return the variance along the specified axis.
 
@@ -360,9 +379,13 @@ def var(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int |
     return ndarr.var(axis=axis, dtype=dtype, ddof=ddof, keepdims=keepdims, **kwargs)
 
 
-def prod(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
-        dtype: np.dtype = None, keepdims: bool = False, **kwargs: dict
-         ) -> np.ndarray | NDArray | int | float | complex | bool:
+def prod(
+    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    axis: int | tuple[int] = None,
+    dtype: np.dtype = None,
+    keepdims: bool = False,
+    **kwargs: dict,
+) -> np.ndarray | NDArray | int | float | complex | bool:
     """
     Return the product of array elements over a given axis.
 
@@ -414,9 +437,12 @@ def prod(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int 
     return ndarr.prod(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
 
-def min(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
-        keepdims: bool = False, **kwargs: dict
-        ) -> np.ndarray | NDArray | int | float | complex | bool:
+def min(
+    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    axis: int | tuple[int] = None,
+    keepdims: bool = False,
+    **kwargs: dict,
+) -> np.ndarray | NDArray | int | float | complex | bool:
     """
     Return the minimum along a given axis.
 
@@ -459,9 +485,12 @@ def min(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int |
     return ndarr.min(axis=axis, keepdims=keepdims, **kwargs)
 
 
-def max(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
-        keepdims: bool = False, **kwargs: dict
-        ) -> np.ndarray | NDArray | int | float | complex | bool:
+def max(
+    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    axis: int | tuple[int] = None,
+    keepdims: bool = False,
+    **kwargs: dict,
+) -> np.ndarray | NDArray | int | float | complex | bool:
     """
     Return the maximum along a given axis.
 
@@ -510,9 +539,12 @@ def max(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int |
     return ndarr.max(axis=axis, keepdims=keepdims, **kwargs)
 
 
-def any(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
-        keepdims: bool = False, **kwargs: dict
-        ) -> np.ndarray | NDArray | bool:
+def any(
+    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    axis: int | tuple[int] = None,
+    keepdims: bool = False,
+    **kwargs: dict,
+) -> np.ndarray | NDArray | bool:
     """
     Test whether any array element along a given axis evaluates to True.
 
@@ -559,9 +591,12 @@ def any(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int |
     return ndarr.any(axis=axis, keepdims=keepdims, **kwargs)
 
 
-def all(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | tuple[int] = None,
-        keepdims: bool = False, **kwargs: dict
-        ) -> np.ndarray | NDArray | bool:
+def all(
+    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    axis: int | tuple[int] = None,
+    keepdims: bool = False,
+    **kwargs: dict,
+) -> np.ndarray | NDArray | bool:
     """
     Test whether all array elements along a given axis evaluate to True.
 
@@ -981,7 +1016,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return self._schunk.blocksize
 
-    def __getitem__(self, key: int | slice | Sequence[slice] | blosc2.LazyExpr | str) -> np.ndarray | blosc2.LazyExpr:
+    def __getitem__(
+        self, key: int | slice | Sequence[slice] | blosc2.LazyExpr | str
+    ) -> np.ndarray | blosc2.LazyExpr:
         """Get a (multidimensional) slice as specified in key.
 
         Parameters
@@ -1144,16 +1181,19 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return self.schunk.get_chunk(nchunk)
 
-    def iterchunks_info(self) -> Iterator[
-                NamedTuple("info",
-                           nchunk = int,
-                           coords = tuple,
-                           cratio = float,
-                           special = blosc2.SpecialValue,
-                           repeated_value = bytes | None,
-                           lazychunk = bytes
-                           )
-            ]:
+    def iterchunks_info(
+        self,
+    ) -> Iterator[
+        NamedTuple(
+            "info",
+            nchunk=int,
+            coords=tuple,
+            cratio=float,
+            special=blosc2.SpecialValue,
+            repeated_value=bytes | None,
+            lazychunk=bytes,
+        )
+    ]:
         """
         Iterate over :paramref:`self` chunks, providing info on index and special values.
 
@@ -1200,7 +1240,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
             if cinfo.special == SpecialValue.VALUE:
                 repeated_value = np.frombuffer(cinfo.repeated_value, dtype=self.dtype)[0]
             yield ChunkInfoNDArray(nchunk, coords, cratio, special, repeated_value, lazychunk)
-
 
     def tobytes(self) -> bytes:
         """Returns a buffer with the data contents.
@@ -1291,10 +1330,16 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         if dtype is None:
             dtype = self.dtype
-        kwargs["cparams"] = kwargs.get("cparams").copy() if isinstance(kwargs.get("cparams"), dict) \
+        kwargs["cparams"] = (
+            kwargs.get("cparams").copy()
+            if isinstance(kwargs.get("cparams"), dict)
             else asdict(self.schunk.cparams)
-        kwargs["dparams"] = kwargs.get("dparams").copy() if isinstance(kwargs.get("dparams"), dict) \
+        )
+        kwargs["dparams"] = (
+            kwargs.get("dparams").copy()
+            if isinstance(kwargs.get("dparams"), dict)
             else asdict(self.schunk.dparams)
+        )
         if "meta" not in kwargs:
             # Copy metalayers as well
             meta_dict = {meta: self.schunk.meta[meta] for meta in self.schunk.meta}
@@ -1759,8 +1804,9 @@ def arctan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> bl
     return blosc2.LazyExpr(new_op=(ndarr, "arctan", None))
 
 
-def arctan2(ndarr1: NDArray | NDField | blosc2.C2Array,
-            ndarr2: NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+def arctan2(
+    ndarr1: NDArray | NDField | blosc2.C2Array, ndarr2: NDArray | NDField | blosc2.C2Array, /
+) -> blosc2.LazyExpr:
     """
     Element-wise arc tangent of ``ndarr1 / ndarr2`` choosing the quadrant correctly.
 
@@ -2445,8 +2491,9 @@ def zeros(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict)
     return blosc2_ext.zeros(shape, chunks, blocks, dtype, **kwargs)
 
 
-def full(shape: int | tuple | list, fill_value: bytes | int | float | bool, dtype: np.dtype = None,
-         **kwargs: dict) -> NDArray:
+def full(
+    shape: int | tuple | list, fill_value: bytes | int | float | bool, dtype: np.dtype = None, **kwargs: dict
+) -> NDArray:
     """Create an array, with :paramref:`fill_value` being used as the default value
     for uninitialized portions of the array.
 
@@ -2655,7 +2702,9 @@ def _check_ndarray_kwargs(**kwargs):
     if "storage" in kwargs:
         for key in kwargs:
             if key in list(blosc2.Storage.__annotations__):
-                raise AttributeError("Cannot pass both `storage` and other kwargs already included in Storage")
+                raise AttributeError(
+                    "Cannot pass both `storage` and other kwargs already included in Storage"
+                )
         storage = kwargs.get("storage")
         if isinstance(storage, blosc2.Storage):
             kwargs = {**kwargs, **asdict(storage)}
@@ -2695,9 +2744,9 @@ def _check_ndarray_kwargs(**kwargs):
     return kwargs
 
 
-def get_slice_nchunks(schunk: blosc2.SChunk,
-                      key: tuple[(int, int)] | int | slice | Sequence[slice]
-                      ) -> np.ndarray:
+def get_slice_nchunks(
+    schunk: blosc2.SChunk, key: tuple[(int, int)] | int | slice | Sequence[slice]
+) -> np.ndarray:
     """
     Get the unidimensional chunk indexes needed to get a
     slice of a :ref:`SChunk <SChunk>` or a :ref:`NDArray`.

@@ -610,7 +610,10 @@ def fill_chunk_operands(
 
 
 def fast_eval(
-    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, getitem: bool, **kwargs
+    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
+    operands: dict,
+    getitem: bool,
+    **kwargs,
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands using a fast path.
 
@@ -721,7 +724,11 @@ def fast_eval(
 
 
 def slices_eval(
-    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, getitem: bool, _slice=None, **kwargs
+    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
+    operands: dict,
+    getitem: bool,
+    _slice=None,
+    **kwargs,
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
@@ -896,7 +903,11 @@ def slices_eval(
 
 
 def reduce_slices(
-    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, reduce_args, _slice=None, **kwargs
+    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
+    operands: dict,
+    reduce_args,
+    _slice=None,
+    **kwargs,
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
@@ -1131,7 +1142,9 @@ def convert_none_out(dtype, reduce_op, reduced_shape):
     return out
 
 
-def chunked_eval(expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=None, **kwargs):
+def chunked_eval(
+    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=None, **kwargs
+):
     """
     Evaluate the expression in chunks of operands.
 
@@ -1942,8 +1955,13 @@ def _open_lazyarray(array):
     return expr
 
 
-def lazyudf(func: Callable[[tuple, np.ndarray, tuple[int]], None], inputs: tuple | list,
-            dtype: np.dtype, chunked_eval: bool = True, **kwargs: dict) -> LazyUDF:
+def lazyudf(
+    func: Callable[[tuple, np.ndarray, tuple[int]], None],
+    inputs: tuple | list,
+    dtype: np.dtype,
+    chunked_eval: bool = True,
+    **kwargs: dict,
+) -> LazyUDF:
     """
     Get a LazyUDF from a python user-defined function.
 
@@ -2002,8 +2020,12 @@ def lazyudf(func: Callable[[tuple, np.ndarray, tuple[int]], None], inputs: tuple
     return LazyUDF(func, inputs, dtype, chunked_eval, **kwargs)
 
 
-def lazyexpr(expression: str | bytes | LazyExpr, operands: dict = None,
-             out: blosc2.NDArray | np.ndarray = None, where: tuple | list = None) -> LazyExpr:
+def lazyexpr(
+    expression: str | bytes | LazyExpr,
+    operands: dict = None,
+    out: blosc2.NDArray | np.ndarray = None,
+    where: tuple | list = None,
+) -> LazyExpr:
     """
     Get a LazyExpr from an expression.
 
