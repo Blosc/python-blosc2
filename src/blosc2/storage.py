@@ -202,11 +202,11 @@ class Storage:
         if self.contiguous is None:
             self.contiguous = self.urlpath is not None
         # Check for None values
-        for field in fields(self):
-            if (getattr(self, field.name) is None and
-                    field.name not in ['urlpath', 'mmap_mode', 'initial_mapping_size', 'meta']):
-                setattr(self, field.name, getattr(Storage(), field.name))
-                warnings.warn(f"`{field.name}` field value changed from `None` to `{getattr(self, field.name)}`")
+        for f in fields(self):
+            if (getattr(self, f.name) is None and
+                    f.name not in ['urlpath', 'mmap_mode', 'initial_mapping_size', 'meta']):
+                setattr(self, f.name, getattr(Storage(), f.name))
+                warnings.warn(f"`{f.name}` field value changed from `None` to `{getattr(self, f.name)}`")
 
 
 # Defaults for compression params
