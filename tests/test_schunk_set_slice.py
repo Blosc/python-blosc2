@@ -38,7 +38,9 @@ def test_schunk_set_slice(contiguous, urlpath, mode, cparams, dparams, nchunks, 
     blosc2.remove_urlpath(urlpath)
 
     data = np.arange(200 * 100 * nchunks, dtype="int32")
-    schunk = blosc2.SChunk(chunksize=200 * 100 * 4, data=data, storage=storage, cparams=cparams, dparams=dparams)
+    schunk = blosc2.SChunk(
+        chunksize=200 * 100 * 4, data=data, storage=storage, cparams=cparams, dparams=dparams
+    )
 
     _start, _stop = start, stop
     if _start is None:

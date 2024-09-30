@@ -19,33 +19,41 @@ random = np.random.default_rng()
 @pytest.mark.parametrize(
     "obj, cparams, dparams",
     [
-        (random.integers(0, 10, 10), {'cparams': blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6)}, {}),
+        (random.integers(0, 10, 10), {"cparams": blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6)}, {}),
         (
             np.arange(10, dtype="float32"),
             # Select an absolute precision of 10 bits in mantissa
-            {'cparams': blosc2.CParams(
-                filters=[blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE],
-                filters_meta=[10, 0],
-                typesize=4
-            )},
-            {'dparams': blosc2.DParams(nthreads=4)},
+            {
+                "cparams": blosc2.CParams(
+                    filters=[blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE],
+                    filters_meta=[10, 0],
+                    typesize=4,
+                )
+            },
+            {"dparams": blosc2.DParams(nthreads=4)},
         ),
         (
             np.arange(10, dtype="float32"),
             # Do a reduction of precision of 10 bits in mantissa
-            {"cparams": {"filters": [blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE],
-                         "filters_meta": [-10, 0],
-                         "typesize": 4,
-                         },
-             },
+            {
+                "cparams": {
+                    "filters": [blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE],
+                    "filters_meta": [-10, 0],
+                    "typesize": 4,
+                },
+            },
             {"nthreads": 4},
         ),
         (
             random.integers(0, 1000, 1000, endpoint=True),
-            {'cparams': blosc2.CParams(splitmode=blosc2.SplitMode.ALWAYS_SPLIT, nthreads=5, typesize=4)},
-            {'dparams': blosc2.DParams()},
+            {"cparams": blosc2.CParams(splitmode=blosc2.SplitMode.ALWAYS_SPLIT, nthreads=5, typesize=4)},
+            {"dparams": blosc2.DParams()},
         ),
-        (np.arange(45, dtype=np.float64), {'cparams': blosc2.CParams(codec=blosc2.Codec.LZ4HC, typesize=4)}, {}),
+        (
+            np.arange(45, dtype=np.float64),
+            {"cparams": blosc2.CParams(codec=blosc2.Codec.LZ4HC, typesize=4)},
+            {},
+        ),
         (np.arange(50, dtype=np.int64), {"typesize": 4}, {"dparams": blosc2.dparams_dflts}),
     ],
 )

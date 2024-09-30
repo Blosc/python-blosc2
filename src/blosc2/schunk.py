@@ -10,9 +10,9 @@ from __future__ import annotations
 import os
 import pathlib
 from collections import namedtuple
-from collections.abc import Mapping, MutableMapping
+from collections.abc import Iterator, Mapping, MutableMapping
 from dataclasses import asdict
-from typing import Any, Iterator, NamedTuple
+from typing import Any, NamedTuple
 
 import numpy as np
 from msgpack import packb, unpackb
@@ -227,14 +227,16 @@ class SChunk(blosc2_ext.SChunk):
             "mmap_mode",
             "initial_mapping_size",
             "_is_view",
-            "storage"
+            "storage",
         ]
         for kwarg in kwargs:
             if kwarg not in allowed_kwargs:
                 raise ValueError(f"{kwarg} is not supported as keyword argument")
         if kwargs.get("storage") is not None:
-            if any(key in list(blosc2.Storage.__annotations__) for key in kwargs.keys()):
-                raise AttributeError("Cannot pass both `storage` and other kwargs already included in Storage")
+            if any(key in list(blosc2.Storage.__annotations__) for key in kwargs):
+                raise AttributeError(
+                    "Cannot pass both `storage` and other kwargs already included in Storage"
+                )
             storage = kwargs.get("storage")
             if isinstance(storage, blosc2.Storage):
                 kwargs = {**kwargs, **asdict(storage)}
@@ -330,8 +332,7 @@ class SChunk(blosc2_ext.SChunk):
 
     @property
     def blocksize(self) -> int:
-        """The block size (in bytes).
-        """
+        """The block size (in bytes)."""
         return super().blocksize
 
     @property
@@ -345,7 +346,7 @@ class SChunk(blosc2_ext.SChunk):
         Compression ratio.
         """
         if self.cbytes == 0:
-            return 0.
+            return 0.0
         return self.nbytes / self.cbytes
 
     @property
@@ -416,8 +417,9 @@ class SChunk(blosc2_ext.SChunk):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().append_data(data)
 
-    def fill_special(self, nitems: int, special_value: blosc2.SpecialValue,
-                     value: bytes | int | float | bool = None) -> int:
+    def fill_special(
+        self, nitems: int, special_value: blosc2.SpecialValue, value: bytes | int | float | bool = None
+    ) -> int:
         """Fill the SChunk with a special value.  SChunk must be empty.
 
         Parameters
@@ -992,15 +994,18 @@ class SChunk(blosc2_ext.SChunk):
             self.get_slice(i, i + self.chunkshape, out)
             yield out
 
-    def iterchunks_info(self) -> Iterator[
-                NamedTuple("info",
-                           nchunk = int,
-                           cratio = float,
-                           special = blosc2.SpecialValue,
-                           repeated_value = bytes | None,
-                           lazychunk = bytes
-                           )
-            ]:
+    def iterchunks_info(
+        self,
+    ) -> Iterator[
+        NamedTuple(
+            "info",
+            nchunk=int,
+            cratio=float,
+            special=blosc2.SpecialValue,
+            repeated_value=bytes | None,
+            lazychunk=bytes,
+        )
+    ]:
         """
         Iterate over :paramref:`self` chunks, providing info on index and special values.
 
@@ -1339,8 +1344,9 @@ class SChunk(blosc2_ext.SChunk):
 
 @_inherit_doc_parameter(blosc2.Storage, "mmap_mode:", {r"\* - 'w\+'[^*]+": ""})
 @_inherit_doc_parameter(blosc2.Storage, "initial_mapping_size:", {r"r\+ w\+, or c": "r+ or c"})
-def open(urlpath: str | pathlib.Path | blosc2.URLPath, mode: str = "a", offset: int = 0,
-         **kwargs: dict) -> blosc2.SChunk | blosc2.NDArray | blosc2.C2Array:
+def open(
+    urlpath: str | pathlib.Path | blosc2.URLPath, mode: str = "a", offset: int = 0, **kwargs: dict
+) -> blosc2.SChunk | blosc2.NDArray | blosc2.C2Array:
     """Open a persistent :ref:`SChunk` or :ref:`NDArray` or a remote :ref:`C2Array`
     or a :ref:`Proxy` (see the `Notes` section for more info on the latter case).
 

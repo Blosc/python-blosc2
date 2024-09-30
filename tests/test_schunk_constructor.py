@@ -129,16 +129,17 @@ def test_schunk(contiguous, urlpath, cparams, dparams, chunksize):
         ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, 200 * 1000 * 2 + 17),
     ],
 )
-@pytest.mark.parametrize("special_value, expected_value",
-                         [
-                             (blosc2.SpecialValue.ZERO, 0),
-                             (blosc2.SpecialValue.NAN, np.nan),
-                             (blosc2.SpecialValue.UNINIT, 0),
-                             (blosc2.SpecialValue.VALUE, 34),
-                             (blosc2.SpecialValue.VALUE, np.pi),
-                             (blosc2.SpecialValue.VALUE, b"0123"),
-                             (blosc2.SpecialValue.VALUE, True),
-                         ],
+@pytest.mark.parametrize(
+    "special_value, expected_value",
+    [
+        (blosc2.SpecialValue.ZERO, 0),
+        (blosc2.SpecialValue.NAN, np.nan),
+        (blosc2.SpecialValue.UNINIT, 0),
+        (blosc2.SpecialValue.VALUE, 34),
+        (blosc2.SpecialValue.VALUE, np.pi),
+        (blosc2.SpecialValue.VALUE, b"0123"),
+        (blosc2.SpecialValue.VALUE, True),
+    ],
 )
 def test_schunk_fill_special(contiguous, urlpath, cparams, nitems, special_value, expected_value):
     kwargs = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams}
@@ -157,7 +158,7 @@ def test_schunk_fill_special(contiguous, urlpath, cparams, nitems, special_value
         if isinstance(expected_value, float):
             dtype = np.float32
         elif isinstance(expected_value, bytes):
-            dtype = np.dtype('|S' + str(len(expected_value)))
+            dtype = np.dtype("|S" + str(len(expected_value)))
         array = np.full(nitems, expected_value, dtype=dtype)
         dest = np.empty(nitems, dtype=dtype)
         schunk.get_slice(out=dest)

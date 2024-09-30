@@ -95,9 +95,15 @@ extend-select = [
     "UP",
 ]
 ignore = [
+    "B028",
     "PT006",
+    "PT004",  # deprecated
     "PT011",
     "RET505",
     "RET508",
     "SIM108",
+    "UP038",  # https://github.com/astral-sh/ruff/issues/7871
 ]
+
+[tool.ruff.lint.extend-per-file-ignores]
+"tests/**" = ["F841"]

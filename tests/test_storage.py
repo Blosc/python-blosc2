@@ -7,8 +7,8 @@
 #######################################################################
 
 from dataclasses import asdict, fields
-import numpy as np
 
+import numpy as np
 import pytest
 
 import blosc2
@@ -45,7 +45,7 @@ def test_storage_values(contiguous, urlpath, mode, mmap_mode):
 
 def test_storage_defaults():
     storage = blosc2.Storage()
-    assert storage.contiguous == False
+    assert storage.contiguous is False
     assert storage.urlpath is None
     assert storage.mode == "a"
     assert storage.mmap_mode is None
@@ -82,27 +82,33 @@ def test_raises_storage(contiguous, urlpath):
     "cparams",
     [
         blosc2.CParams(codec=blosc2.Codec.LZ4, filters=[blosc2.Filter.BITSHUFFLE]),
-        {"typesize": 4, 'filters': [blosc2.Filter.TRUNC_PREC, blosc2.Filter.DELTA], 'filters_meta': [0, 0]},
-        blosc2.CParams(nthreads=5, filters=[blosc2.Filter.BITSHUFFLE, blosc2.Filter.BYTEDELTA], filters_meta=[0] * 3),
-        {"codec": blosc2.Codec.LZ4HC, "typesize": 4, 'filters': [blosc2.Filter.BYTEDELTA]},
+        {"typesize": 4, "filters": [blosc2.Filter.TRUNC_PREC, blosc2.Filter.DELTA], "filters_meta": [0, 0]},
+        blosc2.CParams(
+            nthreads=5, filters=[blosc2.Filter.BITSHUFFLE, blosc2.Filter.BYTEDELTA], filters_meta=[0] * 3
+        ),
+        {"codec": blosc2.Codec.LZ4HC, "typesize": 4, "filters": [blosc2.Filter.BYTEDELTA]},
     ],
 )
 def test_cparams_values(cparams):
     schunk = blosc2.SChunk(cparams=cparams)
     cparams_dataclass = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
     for field in fields(cparams_dataclass):
-        if field.name in ['filters', 'filters_meta']:
-            assert getattr(schunk.cparams, field.name)[:len(getattr(cparams_dataclass, field.name))] == getattr(cparams_dataclass, field.name)
+        if field.name in ["filters", "filters_meta"]:
+            assert getattr(schunk.cparams, field.name)[
+                : len(getattr(cparams_dataclass, field.name))
+            ] == getattr(cparams_dataclass, field.name)
         else:
             assert getattr(schunk.cparams, field.name) == getattr(cparams_dataclass, field.name)
 
     array = blosc2.empty((30, 30), np.int32, cparams=cparams)
     for field in fields(cparams_dataclass):
-        if field.name in ['filters', 'filters_meta']:
-            assert getattr(array.schunk.cparams, field.name)[:len(getattr(cparams_dataclass, field.name))] == getattr(cparams_dataclass, field.name)
-        elif field.name == 'typesize':
+        if field.name in ["filters", "filters_meta"]:
+            assert getattr(array.schunk.cparams, field.name)[
+                : len(getattr(cparams_dataclass, field.name))
+            ] == getattr(cparams_dataclass, field.name)
+        elif field.name == "typesize":
             assert getattr(array.schunk.cparams, field.name) == array.dtype.itemsize
-        elif field.name != 'blocksize':
+        elif field.name != "blocksize":
             assert getattr(array.schunk.cparams, field.name) == getattr(cparams_dataclass, field.name)
 
     blosc2.set_nthreads(10)
@@ -150,7 +156,7 @@ def test_raises_cparams():
         (blosc2.DParams()),
         (blosc2.DParams(nthreads=2)),
         ({}),
-        ({'nthreads': 2}),
+        ({"nthreads": 2}),
     ],
 )
 def test_dparams_values(dparams):
@@ -167,6 +173,7 @@ def test_dparams_values(dparams):
     array = blosc2.empty((30, 30), dparams=dparams)
     assert schunk.dparams.nthreads == dparams_dataclass.nthreads
     assert array.schunk.dparams.nthreads == dparams_dataclass.nthreads
+
 
 def test_dparams_defaults():
     dparams = blosc2.DParams()

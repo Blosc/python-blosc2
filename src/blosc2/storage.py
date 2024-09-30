@@ -6,8 +6,8 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-from dataclasses import dataclass, field, asdict, fields
 import warnings
+from dataclasses import asdict, dataclass, field, fields
 
 import blosc2
 
@@ -15,17 +15,21 @@ import blosc2
 def default_nthreads():
     return blosc2.nthreads
 
+
 def default_filters():
-    return [blosc2.Filter.NOFILTER,
-            blosc2.Filter.NOFILTER,
-            blosc2.Filter.NOFILTER,
-            blosc2.Filter.NOFILTER,
-            blosc2.Filter.NOFILTER,
-            blosc2.Filter.SHUFFLE]
+    return [
+        blosc2.Filter.NOFILTER,
+        blosc2.Filter.NOFILTER,
+        blosc2.Filter.NOFILTER,
+        blosc2.Filter.NOFILTER,
+        blosc2.Filter.NOFILTER,
+        blosc2.Filter.SHUFFLE,
+    ]
 
 
 def default_filters_meta():
     return [0] * 6
+
 
 @dataclass
 class CParams:
@@ -64,6 +68,7 @@ class CParams:
     tuner: :class:`Tuner`
         The tuner to use. Default: :py:obj:`Tuner.STUNE <Tuner>`.
     """
+
     codec: blosc2.Codec | int = blosc2.Codec.ZSTD
     codec_meta: int = 0
     clevel: int = 1
@@ -80,7 +85,7 @@ class CParams:
         if len(self.filters) > 6:
             raise ValueError("Number of filters exceeds 6")
         if len(self.filters) < len(self.filters_meta):
-            self.filters_meta = self.filters_meta[:len(self.filters)]
+            self.filters_meta = self.filters_meta[: len(self.filters)]
             warnings.warn("Changed `filters_meta` length to match `filters` length")
         if len(self.filters) > len(self.filters_meta):
             raise ValueError("Number of filters cannot exceed number of filters meta")
@@ -101,6 +106,7 @@ class DParams:
         value of :py:obj:`blosc2.nthreads` is used. If not set with
         :func:`blosc2.set_nthreads`, blosc2 computes a good guess for it.
     """
+
     nthreads: int = field(default_factory=default_nthreads)
 
 
@@ -191,22 +197,27 @@ class Storage:
             value: object
                 The metalayer object that will be serialized using msgpack.
     """
+
     contiguous: bool = None
     urlpath: str = None
-    mode: str = 'a'
+    mode: str = "a"
     mmap_mode: str = None
     initial_mapping_size: int = None
     meta: dict = None
 
     def __post_init__(self):
         if self.contiguous is None:
-            self.contiguous = False if self.urlpath is None else True
+            self.contiguous = self.urlpath is not None
         # Check for None values
-        for field in fields(self):
-            if (getattr(self, field.name) is None and
-                    field.name not in ['urlpath', 'mmap_mode', 'initial_mapping_size', 'meta']):
-                setattr(self, field.name, getattr(Storage(), field.name))
-                warnings.warn("`{name}` field value changed from `None` to `{value}`".format(name=field.name, value=getattr(self, field.name)))
+        for f in fields(self):
+            if getattr(self, f.name) is None and f.name not in [
+                "urlpath",
+                "mmap_mode",
+                "initial_mapping_size",
+                "meta",
+            ]:
+                setattr(self, f.name, getattr(Storage(), f.name))
+                warnings.warn(f"`{f.name}` field value changed from `None` to `{getattr(self, f.name)}`")
 
 
 # Defaults for compression params

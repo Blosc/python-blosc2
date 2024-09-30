@@ -19,7 +19,6 @@ from abc import ABC, abstractmethod
 from enum import Enum
 from pathlib import Path
 from queue import Empty, Queue
-
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -540,7 +539,7 @@ def fill_chunk_operands(
         if nchunk == 0:
             # Initialize the iterator for reading the chunks
             arr = operands["o0"]
-            chunks_idx, nchunks = get_chunks_idx(arr.shape, arr.chunks)
+            chunks_idx, _ = get_chunks_idx(arr.shape, arr.chunks)
             info = (reduc, aligned, low_mem, chunks_idx)
             iter_chunks = read_nchunk(list(operands.values()), info)
         # Run the asynchronous file reading function from a synchronous context
@@ -611,7 +610,10 @@ def fill_chunk_operands(
 
 
 def fast_eval(
-    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, getitem: bool, **kwargs
+    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
+    operands: dict,
+    getitem: bool,
+    **kwargs,
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands using a fast path.
 
@@ -722,7 +724,11 @@ def fast_eval(
 
 
 def slices_eval(
-    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, getitem: bool, _slice=None, **kwargs
+    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
+    operands: dict,
+    getitem: bool,
+    _slice=None,
+    **kwargs,
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
@@ -897,7 +903,11 @@ def slices_eval(
 
 
 def reduce_slices(
-    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, reduce_args, _slice=None, **kwargs
+    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
+    operands: dict,
+    reduce_args,
+    _slice=None,
+    **kwargs,
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
@@ -1132,7 +1142,9 @@ def convert_none_out(dtype, reduce_op, reduced_shape):
     return out
 
 
-def chunked_eval(expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=None, **kwargs):
+def chunked_eval(
+    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=None, **kwargs
+):
     """
     Evaluate the expression in chunks of operands.
 
@@ -1163,7 +1175,7 @@ def chunked_eval(expression: str | Callable[[tuple, np.ndarray, tuple[int]], Non
         if where:
             # Make the where arguments part of the operands
             operands = {**operands, **where}
-        shape, _, _, fast_path = validate_inputs(operands, out)
+        _, _, _, fast_path = validate_inputs(operands, out)
 
         # Activate last read cache for NDField instances
         for op in operands:
@@ -1365,7 +1377,7 @@ class LazyExpr(LazyArray):
         shape = out.shape
         chunks = out.chunks
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
-        chunks_idx, nchunks = get_chunks_idx(shape, chunks)
+        chunks_idx, _ = get_chunks_idx(shape, chunks)
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
@@ -1943,8 +1955,13 @@ def _open_lazyarray(array):
     return expr
 
 
-def lazyudf(func: Callable[[tuple, np.ndarray, tuple[int]], None], inputs: tuple | list,
-            dtype: np.dtype, chunked_eval: bool = True, **kwargs: dict) -> LazyUDF:
+def lazyudf(
+    func: Callable[[tuple, np.ndarray, tuple[int]], None],
+    inputs: tuple | list,
+    dtype: np.dtype,
+    chunked_eval: bool = True,
+    **kwargs: dict,
+) -> LazyUDF:
     """
     Get a LazyUDF from a python user-defined function.
 
@@ -2003,8 +2020,12 @@ def lazyudf(func: Callable[[tuple, np.ndarray, tuple[int]], None], inputs: tuple
     return LazyUDF(func, inputs, dtype, chunked_eval, **kwargs)
 
 
-def lazyexpr(expression: str | bytes | LazyExpr, operands: dict = None,
-             out: blosc2.NDArray | np.ndarray = None, where: tuple | list = None) -> LazyExpr:
+def lazyexpr(
+    expression: str | bytes | LazyExpr,
+    operands: dict = None,
+    out: blosc2.NDArray | np.ndarray = None,
+    where: tuple | list = None,
+) -> LazyExpr:
     """
     Get a LazyExpr from an expression.
 

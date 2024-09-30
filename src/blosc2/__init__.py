@@ -200,7 +200,7 @@ nthreads = min(nthreads, 32)
 nthreads -= nthreads // 8
 
 # This import must be before ndarray and schunk
-from .storage import (
+from .storage import (  # noqa: I001
     CParams,
     cparams_dflts,
     DParams,
@@ -220,10 +220,10 @@ from .ndarray import (  # noqa: I001
     empty,
     frombuffer,
     full,
+    get_slice_nchunks,
     nans,
     uninit,
     zeros,
-    get_slice_nchunks,
 )
 
 from .c2array import c2context, C2Array, URLPath
