@@ -86,7 +86,7 @@ def test_proxy_source():
     class Source(blosc2.ProxySource):
         def __init__(self, data):
             self._data = data
-            self._nbytes = len(data)
+            self._nbytes = len(data) * 4
             self._typesize = 4
             self._chunksize = 20
 

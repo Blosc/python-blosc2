@@ -49,6 +49,16 @@ class ProxyNDSource(ABC):
         """
         pass
 
+    @property
+    def cparams(self) -> blosc2.CParams:
+        """
+        The compression parameters of the source.
+
+        This property is optional, and it can be overridden if the source has a different compression
+        configuration.
+        """
+        return blosc2.CParams(typesize=self.dtype.itemsize)
+
     @abstractmethod
     def get_chunk(self, nchunk: int) -> bytes:
         """
@@ -66,7 +76,7 @@ class ProxyNDSource(ABC):
         """
         pass
 
-    def aget_chunk(self, nchunk: int) -> bytes:
+    async def aget_chunk(self, nchunk: int) -> bytes:
         """
         Return the compressed chunk in :paramref:`self` in an asynchronous way.
 
@@ -82,9 +92,10 @@ class ProxyNDSource(ABC):
 
         Notes
         -----
-        This method is optional, and only available if the source has an async `aget_chunk` method.
+        This property is optional, and only available if the source has an async `aget_chunk` method.
         """
-        raise NotImplementedError("aget_chunk is only available if the source has an aget_chunk method")
+        raise NotImplementedError("aget_chunk is only available if the source has an"
+                                  " async aget_chunk method")
 
 
 class ProxySource(ABC):
@@ -116,6 +127,16 @@ class ProxySource(ABC):
         """
         pass
 
+    @property
+    def cparams(self) -> blosc2.CParams:
+        """
+        The compression parameters of the source.
+
+        This method is optional, and it can be overridden if the source has a different compression
+        configuration.
+        """
+        return blosc2.CParams(typesize=self.typesize)
+
     @abstractmethod
     def get_chunk(self, nchunk: int) -> bytes:
         """
@@ -133,7 +154,7 @@ class ProxySource(ABC):
         """
         pass
 
-    def aget_chunk(self, nchunk: int) -> bytes:
+    async def aget_chunk(self, nchunk: int) -> bytes:
         """
         Return the compressed chunk in :paramref:`self` in an asynchronous way.
 
@@ -151,7 +172,8 @@ class ProxySource(ABC):
         -----
         This method is optional, and only available if the source has an async `aget_chunk` method.
         """
-        raise NotImplementedError("aget_chunk is only available if the source has an aget_chunk method")
+        raise NotImplementedError("aget_chunk is only available if the source has an"
+                                  " async aget_chunk method")
 
 
 class Proxy(blosc2.Operand):
