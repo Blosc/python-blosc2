@@ -235,6 +235,10 @@ class C2Array(blosc2.Operand):
                 self.meta = info(self.path, self.urlbase, auth_token=self.auth_token)
             except httpx.HTTPStatusError as err:
                 raise FileNotFoundError(f"Remote path not found: {path}.\nError was: {err}") from err
+        cparams = self.meta["schunk"]["cparams"]
+        # Remove "filters, meta" from cparams; this is an artifact from the server
+        cparams.pop("filters, meta", None)
+        self._cparams = blosc2.CParams(**cparams)
 
     def __getitem__(self, slice_: int | slice | Sequence[slice]) -> np.ndarray:
         """
@@ -321,6 +325,16 @@ class C2Array(blosc2.Operand):
     def dtype(self) -> np.dtype:
         """The dtype of the remote array"""
         return np.dtype(self.meta["dtype"])
+
+    @property
+    def cparams(self) -> blosc2.CParams:
+        """The compression parameters of the remote array"""
+        return self._cparams
+
+    @property
+    def urlpath(self) -> str:
+        """The URL path of the remote array"""
+        return self.path
 
 
 class URLPath:

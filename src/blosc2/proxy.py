@@ -209,14 +209,15 @@ class Proxy(blosc2.Operand):
                     self.src.dtype,
                     chunks=self.src.chunks,
                     blocks=self.src.blocks,
+                    cparams=self.src.cparams,
                     urlpath=urlpath,
                     meta=meta,
                 )
             else:
                 self._cache = blosc2.SChunk(
                     chunksize=self.src.chunksize,
+                    cparams=self.src.cparams,
                     urlpath=urlpath,
-                    cparams={"typesize": self.src.typesize},
                     meta=meta,
                 )
                 self._cache.fill_special(self.src.nbytes // self.src.typesize, blosc2.SpecialValue.UNINIT)
@@ -407,6 +408,23 @@ class Proxy(blosc2.Operand):
     def shape(self) -> tuple[int]:
         """The shape of :paramref:`self`"""
         return self._cache.shape if isinstance(self._cache, blosc2.NDArray) else len(self._cache)
+
+    @property
+    def schunk(self) -> blosc2.schunk.SChunk:
+        """The :ref:`SChunk` of the cache"""
+        return self._schunk_cache
+
+    @property
+    def cparams(self) -> blosc2.CParams:
+        """The compression parameters of the cache"""
+        return self._cache.cparams
+
+    @property
+    def info(self) -> str:
+        """The info of the cache"""
+        if isinstance(self._cache, blosc2.NDArray):
+            return self._cache.info
+        raise NotImplementedError("info is only available if the source is a NDArray")
 
     def __str__(self):
         return f"Proxy({self.src}, urlpath={self.urlpath})"

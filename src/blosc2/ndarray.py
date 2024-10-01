@@ -792,6 +792,26 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 self._fields[field] = NDField(self, field)
 
     @property
+    def cparams(self) -> dict:
+        """The compression parameters used by the array."""
+        return self.schunk.cparams
+
+    @property
+    def dparams(self) -> dict:
+        """The decompression parameters used by the array."""
+        return self.schunk.dparams
+
+    @property
+    def urlpath(self) -> str:
+        """The URL path of the array."""
+        return self.schunk.urlpath
+
+    @property
+    def vlmeta(self) -> dict:
+        """The variable-length metadata of the array."""
+        return self.schunk.vlmeta
+
+    @property
     def fields(self) -> dict:
         """
         Dictionary with the fields of the structured array.
