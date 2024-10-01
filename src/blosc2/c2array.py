@@ -83,7 +83,7 @@ def c2context(
         password = password or os.environ.get("BLOSC_C2PASSWORD")
     if username or password:
         if auth_token:
-            raise ValueError("Either provide a username/password or an authorizaton token")
+            raise ValueError("Either provide a username/password or an authorization token")
         auth_token = login(username, password, urlbase)
 
     try:
@@ -330,11 +330,6 @@ class C2Array(blosc2.Operand):
     def cparams(self) -> blosc2.CParams:
         """The compression parameters of the remote array"""
         return self._cparams
-
-    @property
-    def urlpath(self) -> str:
-        """The URL path of the remote array"""
-        return self.path
 
 
 class URLPath:
