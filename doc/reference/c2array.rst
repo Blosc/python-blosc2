@@ -29,7 +29,6 @@ Attributes
     blocks
     dtype
     cparams
-    urlpath
 
 .. _URLPath:
 
