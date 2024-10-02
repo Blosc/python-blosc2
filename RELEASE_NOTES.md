@@ -2,7 +2,19 @@
 
 ## Changes from 3.0.0-beta.3 to 3.0.0-beta.4
 
-XXX version-specific blurb XXX
+* Many new examples in the documentation.  Now, the documentation is more complete and has a better structure.
+ Have a look at our new docs at: https://www.blosc.org/python-blosc2/index.html
+ For a guide on using UDFs, check out: https://www.blosc.org/python-blosc2/reference/autofiles/lazyarray/blosc2.lazyudf.html
+ If interested in asynchronously fetching parts of an array, take a look at: https://www.blosc.org/python-blosc2/reference/autofiles/proxy/blosc2.Proxy.afetch.html
+ Finally, there is a new tutorial on optimizing reductions in large NDArray objects: https://www.blosc.org/python-blosc2/getting_started/tutorials/04.reductions.html
+ Special thanks @omaech and @martaiborrar for the excellent work on the documentation and examples, and to @NumFOCUS for their support in making this possible!
+
+* New CParams, DParams and Storage dataclasses for better handling of parameters in the library.  Now, you can use these dataclasses to pass parameters to the library, and get a better error handling.  See [here](https://www.blosc.org/python-blosc2/reference/storage.html).  Thanks to @martaiborra for the excellent implementation.
+
+* Better support for CParams in Proxy and C2Array instances.  This allows to better propagate compression parameters from Caterva2 datasets to the Proxy and C2Array instances, improving the perception of codecs and filters used originally in datasets.  Thanks to @FrancescAlted for the implementation.
+
+* Many improvements in ruff linting and code style.  Thanks to @DimitriPapadopoulos for the excellent work in this area.
+
 
 ## Changes from 3.0.0-beta.1 to 3.0.0-beta.3
 

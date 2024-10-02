@@ -31,8 +31,8 @@ jobs:
         arch: [x86_64, aarch64]
         # Just build for x86_64 for now (Mac arm64 is already covered by cibuildwheel)
         # arch: [x86_64]
-        cibw_build: ["cp3{10,11,12}-*"]
-        p_ver: ["3.10-3.12"]
+        cibw_build: ["cp3{11,12,13}-*"]
+        p_ver: ["3.11-3.13"]
         exclude:
           - os: windows-latest
             arch: aarch64
