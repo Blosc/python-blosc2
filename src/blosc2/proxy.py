@@ -92,10 +92,12 @@ class ProxyNDSource(ABC):
 
         Notes
         -----
-        This property is optional, and only available if the source has an async `aget_chunk` method.
+        This method is optional, and only available if the source has an async
+        `aget_chunk` method.
         """
-        raise NotImplementedError("aget_chunk is only available if the source has an"
-                                  " async aget_chunk method")
+        raise NotImplementedError(
+            "aget_chunk is only available if the source has an" " async aget_chunk method"
+        )
 
 
 class ProxySource(ABC):
@@ -170,10 +172,12 @@ class ProxySource(ABC):
 
         Notes
         -----
-        This method is optional, and only available if the source has an async `aget_chunk` method.
+        This method is optional, and only available if the source has an async
+        `aget_chunk` method.
         """
-        raise NotImplementedError("aget_chunk is only available if the source has an"
-                                  " async aget_chunk method")
+        raise NotImplementedError(
+            "aget_chunk is only available if the source has an" " async aget_chunk method"
+        )
 
 
 class Proxy(blosc2.Operand):
