@@ -79,8 +79,16 @@ jobs:
           #  E   AssertionError: Parameter initial_mapping_size: not found in the docstring of Storage
           # I don't see obvious way to fix this, so we skip it for now
           CIBW_BEFORE_TEST: |
-            if [ "${{ matrix.python-version }}" == "3.13" ]; then
-              exit 0
+            if [ "$RUNNER_OS" == "Windows" ]; then
+              if [ "%PYTHON_VERSION%" == "3.13" ]; then
+                echo "Skipping tests for Python 3.13 on Windows"
+                exit 0
+              fi
+            else
+              if [ "${{ matrix.p_ver }}" == "3.13" ]; then
+                echo "Skipping tests for Python 3.13 on Unix-like systems"
+                exit 0
+              fi
             fi
 
       - name: Upload wheels
