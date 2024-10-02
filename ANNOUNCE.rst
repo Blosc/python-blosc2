@@ -1,32 +1,34 @@
-Announcing Python-Blosc2 3.0.0-beta.3
+Announcing Python-Blosc2 3.0.0-beta.4
 =====================================
 
-The Blosc development team is pleased to announce the second beta release of
-Python-Blosc2 3.0.0.  Here, we have fine tuned the performance of the new
-evaluation engine, and extended it to operate with other instances than NDArray,
-like the `C2Array` class and the new one `Proxy` (access to remote data with caching).
-Documentation has been improved and we have added more examples and tutorials.
-As always, we would like to get feedback from the community before the final release.
+The Blosc development team is pleased to announce the fourth beta release of
+Python-Blosc2 3.0.0.  Here, documentation has been improved quite a lot and
+we have added more examples and tutorials (thanks NumFOCUS for sponsoring this).
+Also, there are new CParams, DParams and Storage dataclasses that allow for
+a more flexible and powerful way to set parameters for the Blosc2 compressor.
 
-Now, you can evaluate expressions like `a + sin(b) + 1` where `a` and `b`
-are NDArray instances.  This is a powerful feature that allows for
+In new 3.0 release, you can evaluate expressions like `a + sin(b) + 1` where
+`a` and `b` are NDArray instances.  This is a powerful feature that allows for
 efficient computations on compressed data, and supports advanced features
 like reductions, filters, user-defined functions and broadcasting (still
-in beta).  See this `example <https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/eval_expr.py>`_.
+in beta).  See this
+`example <https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/eval_expr.py>`_.
 
 Also, we have added support for memory mapping in `SChunk` and `NDArray` instances.
 This allows to map super-chunks stored in disk and access them as if they were in
 memory.  When combined with the evaluation engine, this feature allows for very
-good performance when working with large datasets.  See this `benchmark <https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr.ipynb>`_
+good performance when working with large datasets.  See this
+`benchmark <https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr.ipynb>`_
 (as it is a Jupyter notebook, you can easily run it in your own computer).
 
 Last, but not least, we are using NumPy 2.x as the default for testing procedures
 and builds. This means that our wheels are built against NumPy 2, so in case you want
 to use NumPy 1.x, you will need to use NumPy 1.23.0 or later.
 
+As always, we would like to get feedback from the community before the final release.
 We are providing binary wheels that you can easily install from PyPI with:
 
-    pip install blosc2==3.0.0b1
+    pip install blosc2==3.0.0b4
 
 For more info, you can have a look at the release notes in:
 

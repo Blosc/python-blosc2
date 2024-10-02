@@ -58,6 +58,12 @@ Tagging
 * Make sure that the tag is passing the tests in continuous integration (this
   may take more than an hour).
 
+* Update the latest release in the ``doc/python-blosc2.rst`` file with the new version
+  number (and date?).  Do a commit::
+
+    git commit -a -m "Update latest release in doc"
+    git push
+
 * Go to ``Blosc/blogsite`` repo, then to "Actions", click on the most recent
   workflow run (at the top of the list), and then click on the "Re-run all
   jobs" button to regenerate the documentation and check that it has been

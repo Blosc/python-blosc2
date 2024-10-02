@@ -6,9 +6,9 @@
 
     <p style="text-align: center; color: black; background-color: rgba(230, 169, 9, 0.65);">
         <a href="https://github.com/Blosc/python-blosc2/blob/main/RELEASE_NOTES.md"
-           style="font-size: 1.5em;">Version 3.0.0 beta3 released!</a>
+           style="font-size: 1.5em;">Version 3.0.0 beta4 released on 2024-10-02!</a>
         <span style="display: inline-block; width: 20px;"></span>
-        <span style="font-family: monospace;">pip install blosc2==3.0.0b3</span>
+        <span style="font-family: monospace;">pip install blosc2==3.0.0b4</span>
     </p>
 
 .. raw:: html
