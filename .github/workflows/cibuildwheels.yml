@@ -79,8 +79,7 @@ jobs:
           #  E   AssertionError: Parameter initial_mapping_size: not found in the docstring of Storage
           # I don't see obvious way to fix this, so we skip it for now
           CIBW_BEFORE_TEST: |
-            if [[ "${{ matrix.python-version }}" == "3.13" ]]; then
-              echo "Skipping tests for Python 3.13"
+            if [ "${{ matrix.python-version }}" == "3.13" ]; then
               exit 0
             fi
 
