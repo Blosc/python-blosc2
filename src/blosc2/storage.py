@@ -6,11 +6,11 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+import contextlib
 import warnings
 from dataclasses import asdict, dataclass, field, fields
 
 import blosc2
-import contextlib
 
 
 def default_nthreads():
@@ -177,7 +177,6 @@ class Storage:
 
             This is currently a beta feature (especially write operations) and we
             recommend trying it out and reporting any issues you may encounter.
-
     initial_mapping_size: int, optional
         The initial size of the mapping for the memory-mapped file when writes are
         allowed (r+ w+, or c mode). Once a file is memory-mapped and extended beyond the
@@ -197,7 +196,6 @@ class Storage:
             On Windows, the size of the mapping is directly coupled to the file size.
             When the schunk gets destroyed, the file size will be truncated to the
             actual size of the schunk.
-
     meta: dict or None
         A dictionary with different metalayers.  One entry per metalayer:
 
