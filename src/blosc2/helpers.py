@@ -10,7 +10,7 @@ def _inherit_doc_parameter(parent_func, parameter, replacements=None):
         indent_parent = None
         for line in parent_func.__doc__.splitlines():
             if parameter in line:
-                match = re.search(rf"(\s+){parameter}", line)
+                match = re.search(rf"(\s*){parameter}", line)
                 assert (
                     match is not None
                 ), f"Parameter {parameter} not found in the docstring of {parent_func.__name__}"
@@ -35,7 +35,11 @@ def _inherit_doc_parameter(parent_func, parameter, replacements=None):
             match is not None
         ), f"Parameter {parameter} not found in the docstring of {child_func.__name__}"
         indent_child = match.group(1)
-        matching_lines = [ml.replace(indent_parent, indent_child, 1) for ml in matching_lines]
+
+        # First line contains the parameter name itself which should not be indented
+        matching_lines = [matching_lines[0].lstrip()] + [
+            ml.replace(indent_parent, indent_child, 1) for ml in matching_lines[1:]
+        ]
 
         child_func.__doc__ = child_func.__doc__.replace(parameter, "\n".join(matching_lines))
 
