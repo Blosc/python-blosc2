@@ -54,8 +54,8 @@ class ProxyNDSource(ABC):
         """
         The compression parameters of the source.
 
-        This property is optional, and it can be overridden if the source has a different compression
-        configuration.
+        This property is optional, and it can be overridden if the source has a
+        different compression configuration.
         """
         return blosc2.CParams(typesize=self.dtype.itemsize)
 
@@ -134,8 +134,8 @@ class ProxySource(ABC):
         """
         The compression parameters of the source.
 
-        This method is optional, and it can be overridden if the source has a different compression
-        configuration.
+        This property is optional, and it can be overridden if the source has a
+        different compression configuration.
         """
         return blosc2.CParams(typesize=self.typesize)
 
