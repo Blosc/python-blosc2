@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from 3.0.0-beta.4 to 3.0.0-rc.1
+
+XXX version-specific blurb XXX
+
+
 ## Changes from 3.0.0-beta.3 to 3.0.0-beta.4
 
 * Many new examples in the documentation.  Now, the documentation is more complete and has a better structure.
