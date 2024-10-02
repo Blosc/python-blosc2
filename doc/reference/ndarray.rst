@@ -45,6 +45,10 @@ Attributes
     info
     schunk
     size
+    cparams
+    dparams
+    urlpath
+    vlmeta
 
 
 .. currentmodule:: blosc2

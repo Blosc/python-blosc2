@@ -28,6 +28,7 @@ Attributes
     chunks
     blocks
     dtype
+    cparams
 
 .. _URLPath:
 

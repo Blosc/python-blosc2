@@ -10,6 +10,7 @@ import warnings
 from dataclasses import asdict, dataclass, field, fields
 
 import blosc2
+import contextlib
 
 
 def default_nthreads():
@@ -82,6 +83,10 @@ class CParams:
     tuner: blosc2.Tuner = blosc2.Tuner.STUNE
 
     def __post_init__(self):
+        if not isinstance(self.codec, blosc2.Codec):
+            with contextlib.suppress(ValueError):
+                # User-defined codecs may have no entries in Codec
+                self.codec = blosc2.Codec(self.codec)
         if len(self.filters) > 6:
             raise ValueError("Number of filters exceeds 6")
         if len(self.filters) < len(self.filters_meta):
@@ -91,6 +96,10 @@ class CParams:
             raise ValueError("Number of filters cannot exceed number of filters meta")
 
         for i in range(len(self.filters)):
+            if not isinstance(self.filters[i], blosc2.Filter):
+                with contextlib.suppress(ValueError):
+                    # User-defined filters may have no entries in Filter
+                    self.filters[i] = blosc2.Filter(self.filters[i])
             if self.filters_meta[i] == 0 and self.filters[i] == blosc2.Filter.BYTEDELTA:
                 self.filters_meta[i] = self.typesize
 

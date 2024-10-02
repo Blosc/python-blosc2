@@ -29,6 +29,10 @@ Attributes
     :toctree: autofiles/proxy
 
     shape
+    chunks
+    blocks
     dtype
+    cparams
+    info
     fields
     vlmeta

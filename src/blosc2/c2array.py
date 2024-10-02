@@ -83,7 +83,7 @@ def c2context(
         password = password or os.environ.get("BLOSC_C2PASSWORD")
     if username or password:
         if auth_token:
-            raise ValueError("Either provide a username/password or an authorizaton token")
+            raise ValueError("Either provide a username/password or an authorization token")
         auth_token = login(username, password, urlbase)
 
     try:
@@ -235,6 +235,10 @@ class C2Array(blosc2.Operand):
                 self.meta = info(self.path, self.urlbase, auth_token=self.auth_token)
             except httpx.HTTPStatusError as err:
                 raise FileNotFoundError(f"Remote path not found: {path}.\nError was: {err}") from err
+        cparams = self.meta["schunk"]["cparams"]
+        # Remove "filters, meta" from cparams; this is an artifact from the server
+        cparams.pop("filters, meta", None)
+        self._cparams = blosc2.CParams(**cparams)
 
     def __getitem__(self, slice_: int | slice | Sequence[slice]) -> np.ndarray:
         """
@@ -321,6 +325,11 @@ class C2Array(blosc2.Operand):
     def dtype(self) -> np.dtype:
         """The dtype of the remote array"""
         return np.dtype(self.meta["dtype"])
+
+    @property
+    def cparams(self) -> blosc2.CParams:
+        """The compression parameters of the remote array"""
+        return self._cparams
 
 
 class URLPath:

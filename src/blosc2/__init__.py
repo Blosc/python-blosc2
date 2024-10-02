@@ -261,6 +261,11 @@ blosclib_version = f"{VERSION_STRING} ({VERSION_DATE})"
 The blosc2 version + date.
 """
 
+# Private global variables
+_disable_overloaded_equal = False
+"""
+Disable the overloaded equal operator.
+"""
 
 # Delayed imports for avoiding overwriting of python builtins
 from .ndarray import (
