@@ -96,7 +96,7 @@ class ProxyNDSource(ABC):
         `aget_chunk` method.
         """
         raise NotImplementedError(
-            "aget_chunk is only available if the source has an" " async aget_chunk method"
+            "aget_chunk is only available if the source has an async aget_chunk method"
         )
 
 
@@ -176,7 +176,7 @@ class ProxySource(ABC):
         `aget_chunk` method.
         """
         raise NotImplementedError(
-            "aget_chunk is only available if the source has an" " async aget_chunk method"
+            "aget_chunk is only available if the source has an async aget_chunk method"
         )
 
 
