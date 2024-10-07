@@ -15,16 +15,16 @@ input_dtype = np.dtype(np.int32)
 output_dtype = np.dtype(np.float32)
 
 # Set the compression and decompression parameters
-cparams = {"codec": blosc2.Codec.LZ4, "typesize": 4}
-dparams = {"nthreads": 1}
+cparams = blosc2.CParams(codec=blosc2.Codec.LZ4, typesize=4)
+dparams = blosc2.DParams(nthreads=1)
 contiguous = True
 urlpath = None
-storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode='a')
 # Remove previous SChunk
 blosc2.remove_urlpath(urlpath)
 # Create and set data
 data = np.arange(200 * 1000 * nchunks, dtype=input_dtype)
-schunk = blosc2.SChunk(chunksize=200 * 1000 * input_dtype.itemsize, data=data, **storage)
+schunk = blosc2.SChunk(chunksize=200 * 1000 * input_dtype.itemsize, data=data, cparams=cparams, dparams=dparams, storage=storage)
 
 out1 = np.empty(200 * 1000 * nchunks, dtype=input_dtype)
 schunk.get_slice(0, 200 * 1000 * nchunks, out=out1)
