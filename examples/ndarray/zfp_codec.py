@@ -20,6 +20,6 @@ typesize = dtype.itemsize
 random = np.random.default_rng()
 array = random.normal(0, 1, np.prod(shape)).reshape(shape)
 # Use ZFP_RATE codec
-cparams = {"codec": blosc2.Codec.ZFP_RATE, "codec_meta": 37}
+cparams = blosc2.CParams(codec=blosc2.Codec.ZFP_RATE, codec_meta=37)
 a = blosc2.asarray(array, chunks=chunks, cparams=cparams)
 print("compression ratio:", a.schunk.cratio)

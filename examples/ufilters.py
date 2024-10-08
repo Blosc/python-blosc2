@@ -37,13 +37,10 @@ id = 160
 blosc2.register_filter(id, forward, backward)
 
 # Set the compression and decompression parameters
-cparams = {
-    "typesize": dtype.itemsize,
-    "nthreads": 1,
-    "filters": [blosc2.Filter.NOFILTER, id],
-    "filters_meta": [0, 0],
-}
-dparams = {"nthreads": 1}
+cparams = blosc2.CParams(
+    typesize=dtype.itemsize, nthreads=1, filters=[blosc2.Filter.NOFILTER, id], filters_meta=[0, 0]
+)
+dparams = blosc2.DParams(nthreads=1)
 
 # Create SChunk and fill it with data
 data = np.arange(0, chunk_len * nchunks, 1, dtype=dtype)

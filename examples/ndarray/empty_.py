@@ -10,13 +10,13 @@
 
 import blosc2
 
-cparams = {
-    "codec": blosc2.Codec.LZ4,
-    "clevel": 5,
-    "nthreads": 4,
-    "filters": [blosc2.Filter.DELTA, blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE],
-    "filters_meta": [0, 3, 0],  # keep just 3 bits in mantissa
-}
+cparams = blosc2.CParams(
+    codec=blosc2.Codec.LZ4,
+    clevel=5,
+    nthreads=4,
+    filters=[blosc2.Filter.DELTA, blosc2.Filter.TRUNC_PREC, blosc2.Filter.BITSHUFFLE],
+    filters_meta=[0, 3, 0],  # keep just 3 bits in mantissa
+)
 a = blosc2.empty(shape=(40, 401), blocks=(6, 26), dtype="f8", cparams=cparams)
 
 a[...] = 222

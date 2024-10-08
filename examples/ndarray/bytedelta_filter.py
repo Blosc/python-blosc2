@@ -21,14 +21,14 @@ shape = (1000, 1000)
 nparray = np.linspace(0, 1000, math.prod(shape)).reshape(shape)
 
 # Compress with and without bytedelta
-cparams = {"filters": [blosc2.Filter.SHUFFLE]}
+cparams = blosc2.CParams(filters=[blosc2.Filter.SHUFFLE], filters_meta=[0])
 a = blosc2.asarray(nparray, cparams=cparams)
 print(
     f"Compression ratio with shuffle: {a.schunk.cratio:.2f} x",
 )
 
 # Now with bytedelta
-cparams = {"filters": [blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA]}
+cparams = blosc2.CParams(filters=[blosc2.Filter.SHUFFLE, blosc2.Filter.BYTEDELTA], filters_meta=[0, 0])
 a = blosc2.asarray(nparray, cparams=cparams)
 print(
     f"Compression ratio with shuffle + bytedelta: {a.schunk.cratio:.2f} x",

@@ -51,14 +51,10 @@ id = 180
 blosc2.register_codec(codec_name, id, encoder1, decoder1)
 
 # Set the compression and decompression parameters
-cparams = {
-    "typesize": dtype.itemsize,
-    "nthreads": 1,
-    "filters": [blosc2.Filter.NOFILTER],
-    "filters_meta": [0],
-}
-dparams = {"nthreads": 1}
-cparams["codec"] = id
+cparams = blosc2.CParams(
+    typesize=dtype.itemsize, codec=id, nthreads=1, filters=[blosc2.Filter.NOFILTER], filters_meta=[0]
+)
+dparams = blosc2.DParams(nthreads=1)
 
 # Create SChunk and fill it with data
 data = np.arange(0, chunk_len * nchunks, 1, dtype=dtype)
