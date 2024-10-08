@@ -95,11 +95,11 @@ class CParams:
         if len(self.filters) > len(self.filters_meta):
             raise ValueError("Number of filters cannot exceed number of filters meta")
 
-        for i in range(len(self.filters)):
-            if not isinstance(self.filters[i], blosc2.Filter):
+        for i, filter_i in enumerate(self.filters):
+            if not isinstance(filter_i, blosc2.Filter):
                 with contextlib.suppress(ValueError):
                     # User-defined filters may have no entries in Filter
-                    self.filters[i] = blosc2.Filter(self.filters[i])
+                    self.filters[i] = blosc2.Filter(filter_i)
             if self.filters_meta[i] == 0 and self.filters[i] == blosc2.Filter.BYTEDELTA:
                 self.filters_meta[i] = self.typesize
 
