@@ -11,6 +11,7 @@ Tutorials
    tutorials/03.lazyarray-expressions
    tutorials/03.lazyarray-udf
    tutorials/04.reductions
+   tutorials/05.remote_proxy
    tutorials/10.ucodecs-ufilters
    tutorials/11.prefilters
    tutorials/12.postfilters
