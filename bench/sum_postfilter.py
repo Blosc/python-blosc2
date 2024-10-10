@@ -19,13 +19,12 @@ dtype = np.dtype(np.int32)
 chunksize = chunkshape * dtype.itemsize
 
 # Set the compression and decompression parameters
-cparams = {"typesize": 4, "nthreads": 1}
-dparams = {"nthreads": 1}
-storage = {"cparams": cparams, "dparams": dparams}
+cparams = blosc2.CParams(typesize=4, nthreads=1)
+dparams = blosc2.DParams(nthreads=1)
 
 # Create super-chunks
-schunk0 = blosc2.SChunk(chunksize=chunksize, **storage)
-schunk = blosc2.SChunk(chunksize=chunksize, **storage)
+schunk0 = blosc2.SChunk(chunksize=chunksize, cparams=cparams, dparams=dparams)
+schunk = blosc2.SChunk(chunksize=chunksize, cparams=cparams, dparams=dparams)
 
 data = np.arange(chunkshape, dtype=dtype)
 t0 = time()

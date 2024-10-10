@@ -22,8 +22,8 @@ dtype = np.float64
 
 nchunks = shape // chunksize
 # Set the compression and decompression parameters
-cparams = {"codec": blosc2.Codec.BLOSCLZ, "typesize": 8, "blocksize": blocksize * 8}
-dparams = {}
+cparams = blosc2.CParams(codec=blosc2.Codec.BLOSCLZ, typesize=8, blocksize=blocksize * 8)
+dparams = blosc2.DParams()
 contiguous = True
 persistent = bool(sys.argv[1]) if len(sys.argv) > 1 else False
 
@@ -32,11 +32,11 @@ if persistent:
 else:
     urlpath = None
 
-storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath)
 blosc2.remove_urlpath(urlpath)
 
 # Create the empty SChunk
-schunk = blosc2.SChunk(chunksize=chunksize * cparams["typesize"], **storage)
+schunk = blosc2.SChunk(chunksize=chunksize * cparams.typesize, storage=storage, cparams=cparams, dparams=dparams)
 
 # Append some chunks
 for i in range(nchunks):

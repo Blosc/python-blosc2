@@ -62,14 +62,14 @@ clevel = 1
 cname = "zstd"
 nthreads = 8
 filter = blosc2.Filter.SHUFFLE
-cparams = {
-    "codec": blosc2.Codec.ZSTD,
-    "clevel": clevel,
-    "filters": [filter],
-    "filters_meta": [0],
-    "nthreads": nthreads,
-}
-dparams = {"nthreads": nthreads}
+cparams = blosc2.CParams(
+    codec=blosc2.Codec.ZSTD,
+    clevel=clevel,
+    filters=[filter],
+    filters_meta=[0],
+    nthreads=nthreads,
+)
+dparams = blosc2.DParams(nthreads=nthreads)
 
 zfilter = numcodecs.Blosc.SHUFFLE
 blocksize = int(np.prod(blocks)) if blocks else 0
