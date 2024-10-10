@@ -69,9 +69,9 @@ filters = {
     },
 }
 
-dparams = {
-    "nthreads": nthreads_decomp,
-}
+dparams = blosc2.DParams(
+    nthreads=nthreads_decomp,
+)
 
 dir_path = Path(dir_path)
 if not dir_path.is_dir():

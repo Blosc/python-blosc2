@@ -12,17 +12,19 @@ import blosc2
 
 nchunks = 10
 # Set the compression and decompression parameters
-cparams = {"codec": blosc2.Codec.LZ4HC, "typesize": 4}
-dparams = {}
+cparams = blosc2.CParams(codec=blosc2.Codec.LZ4HC, typesize=4)
+dparams = blosc2.DParams()
 contiguous = True
 urlpath = "filename"
 
-storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath)
 blosc2.remove_urlpath(urlpath)
 
 # Create the SChunk
 data = np.arange(200 * 1000 * nchunks)
-schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, data=data, **storage)
+schunk = blosc2.SChunk(
+    chunksize=200 * 1000 * 4, data=data, cparams=cparams, dparams=dparams, storage=storage
+)
 
 cframe = schunk.to_cframe()
 

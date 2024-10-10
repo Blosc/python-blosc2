@@ -20,6 +20,6 @@ typesize = dtype.itemsize
 random = np.random.default_rng()
 array = random.normal(0, 1, np.prod(shape)).reshape(shape)
 # Use NDMEAN filter
-cparams = {"filters": [blosc2.Filter.NDMEAN], "filters_meta": [4]}
+cparams = blosc2.CParams(filters=[blosc2.Filter.NDMEAN], filters_meta=[4])
 a = blosc2.asarray(array, chunks=chunks, cparams=cparams)
 print("compression ratio:", a.schunk.cratio)

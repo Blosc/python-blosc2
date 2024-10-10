@@ -18,11 +18,12 @@ chunkshape = 200_000
 dtype = np.dtype(np.int32)
 
 # Set the compression and decompression parameters
-dparams = {"nthreads": 1}
+dparams = {"nthreads" : 1}
 
 # Create array
 arr = blosc2.empty(shape=(nchunks * chunkshape,), chunks=(chunkshape,), dtype=dtype, dparams=dparams)
 data = np.arange(chunkshape, dtype=dtype)
+
 t0 = time()
 for i in range(nchunks):
     arr[i * chunkshape : (i + 1) * chunkshape] = data

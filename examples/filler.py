@@ -17,7 +17,7 @@ chunk_len = 200 * 1000
 schunk_dtype = np.dtype(np.float64)
 
 # Set the compression parameters. We need nthreads=1 for this example.
-cparams = {"typesize": schunk_dtype.itemsize, "nthreads": 1}
+cparams = blosc2.CParams(typesize=schunk_dtype.itemsize, nthreads=1)
 
 # Create empty SChunk
 schunk = blosc2.SChunk(chunksize=chunk_len * schunk_dtype.itemsize, cparams=cparams)

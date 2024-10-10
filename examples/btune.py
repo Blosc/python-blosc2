@@ -18,12 +18,12 @@ import blosc2
 
 nchunks = 10
 # Set the compression and decompression parameters, use BTUNE tuner
-cparams = {"codec": blosc2.Codec.LZ4HC, "typesize": 4, "tuner": blosc2.Tuner.BTUNE}
-dparams = {}
+cparams = blosc2.CParams(codec=blosc2.Codec.LZ4HC, typesize=4, tuner=blosc2.Tuner.BTUNE)
+dparams = blosc2.DParams()
 contiguous = True
 urlpath = "filename"
 
-storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode='a')
 blosc2.remove_urlpath(urlpath)
 
 # Set the Btune configuration to use
@@ -32,7 +32,7 @@ blosc2_btune.set_params_defaults(**btune_conf)
 
 # Create the SChunk
 data = np.arange(200 * 1000 * nchunks)
-schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, data=data, **storage)
+schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, data=data, cparams=cparams, dparams=dparams, storage=storage)
 
 # Check data can be retrieved correctly
 data2 = np.empty(data.shape, dtype=data.dtype)

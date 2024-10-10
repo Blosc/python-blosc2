@@ -1557,7 +1557,8 @@ def schunk_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.SChunk
     >>> nchunks = 4
     >>> chunk_size = 200 * 1000 * 4
     >>> data = np.arange(nchunks * chunk_size // 4, dtype=np.int32)
-    >>> schunk = blosc2.SChunk(data=data, cparams={"typesize": 4})
+    >>> cparams = blosc2.CParams(typesize=4)
+    >>> schunk = blosc2.SChunk(data=data, cparams=cparams)
     >>> serialized_schunk = schunk.to_cframe()
     >>> print(f"Serialized SChunk length: {len(serialized_schunk)} bytes")
     Serialized SChunk length: 14129 bytes

@@ -12,19 +12,19 @@ import blosc2
 
 nchunks = 10
 # Set the compression and decompression parameters
-cparams = {"codec": blosc2.Codec.LZ4HC, "typesize": 4}
-dparams = {}
+cparams = blosc2.CParams(codec=blosc2.Codec.LZ4HC, typesize=4)
+dparams = blosc2.DParams()
 contiguous = True
 urlpath = "filename"
 
-storage = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
+storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode='a')
 blosc2.remove_urlpath(urlpath)
 numpy_meta = {b"dtype": str(np.dtype("int32"))}
 test_meta = {b"lorem": 1234}
 meta = {"numpy": numpy_meta, "test": test_meta}
 
 # Create the empty SChunk
-schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, meta=meta, **storage)
+schunk = blosc2.SChunk(chunksize=200 * 1000 * 4, meta=meta, cparams=cparams, dparams=dparams)
 # Append some chunks
 for i in range(nchunks):
     buffer = i * np.arange(200 * 1000, dtype="int32")
@@ -54,7 +54,7 @@ schunk.insert_data(5, buffer, False)
 
 # Update a chunk compressing the data first
 buffer = 11 * np.arange(200 * 1000, dtype="int32")
-chunk = blosc2.compress2(buffer, **cparams)
+chunk = blosc2.compress2(buffer, cparams=cparams)
 schunk.update_chunk(7, chunk)
 
 # Delete the 4th chunk
