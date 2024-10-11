@@ -83,10 +83,18 @@ class CParams:
     tuner: blosc2.Tuner = blosc2.Tuner.STUNE
 
     def __post_init__(self):
+        # C2Array sends metadata (like codec, filters, splitmode and tuner) as ints
         if not isinstance(self.codec, blosc2.Codec):
             with contextlib.suppress(ValueError):
                 # User-defined codecs may have no entries in Codec
                 self.codec = blosc2.Codec(self.codec)
+        if not isinstance(self.splitmode, blosc2.SplitMode):
+            with contextlib.suppress(ValueError):
+                self.splitmode = blosc2.SplitMode(self.splitmode)
+        if not isinstance(self.tuner, blosc2.Tuner):
+            with contextlib.suppress(ValueError):
+                self.tuner = blosc2.Tuner(self.tuner)
+
         if len(self.filters) > 6:
             raise ValueError("Number of filters exceeds 6")
         if len(self.filters) < len(self.filters_meta):
