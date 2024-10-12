@@ -1753,6 +1753,9 @@ class LazyExpr(LazyArray):
 
         # Save the expression and operands in the metadata
         operands = {}
+        urlpath = kwargs["urlpath"]
+        # Prepare a tmpdir for possible intermediate operands (coming from reductions)
+        tmpdir = os.path.splitext(urlpath)[0] + ".tmpdir"
         for key, value in self.operands.items():
             if isinstance(value, blosc2.C2Array):
                 operands[key] = {
@@ -1764,8 +1767,15 @@ class LazyExpr(LazyArray):
                 # Take the required info from the Proxy._cache container
                 value = value._cache
             if not hasattr(value, "schunk"):
-                raise ValueError(
-                    "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
+                if isinstance(value, np.ndarray):
+                    # Dump the value to a temporary file
+                    os.makedirs(tmpdir, exist_ok=True)
+                    urlpath2 = os.path.join(tmpdir, f"{key}.b2nd")
+                    value = blosc2.asarray(value, urlpath=urlpath2, mode="w")
+                else:
+                    raise ValueError(
+                        "To save a LazyArray, all operands must be blosc2.NDArray,"
+                        " blosc2.C2Array or any object that can be converted to a blosc2.NDArray"
                 )
             if value.schunk.urlpath is None:
                 raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
