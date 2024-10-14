@@ -304,9 +304,6 @@ def check_smaller_shape(value, shape, slice_shape):
 
 
 def _compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
-    """
-    Returns the slice of the smaller array that corresponds to the slice of the larger array.
-    """
     smaller_slice = []
     diff_dims = len(larger_shape) - len(smaller_shape)
 
@@ -329,11 +326,94 @@ def _compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
 
 # A more compact version of the function above, albeit less readable
 def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
+    """
+    Returns the slice of the smaller array that corresponds to the slice of the larger array.
+    """
     diff_dims = len(larger_shape) - len(smaller_shape)
     return tuple(
         larger_slice[i] if smaller_shape[i - diff_dims] != 1 else slice(None)
         for i in range(diff_dims, len(larger_shape))
     )
+
+
+def _parse_expression(expression):
+    stack = []
+    operand = ""
+    for char in expression:
+        if char == ")":
+            if operand:
+                stack.append(operand)
+                operand = ""
+            right = stack.pop()
+            op = stack.pop()
+            left = stack.pop()
+            stack.append((left, op, right))
+        elif char in "() ":
+            if operand:
+                stack.append(operand)
+                operand = ""
+        else:
+            operand += char
+    if operand:
+        stack.append(operand)
+    return stack[0]
+
+
+def guess_shape(lazy_expr):
+    """
+    Guess the shape of the result of the expression.
+
+    Parameters
+    ----------
+    lazy_expr: LazyExpr
+        The lazy expression to evaluate.
+
+    Returns
+    -------
+    tuple
+        The shape of the result of the expression.
+    """
+
+    def eval_shape(expr):
+        if isinstance(expr, str):
+            return lazy_expr.operands[expr].shape
+        elif isinstance(expr, tuple):
+            left_shape = eval_shape(expr[0])
+            right_shape = eval_shape(expr[2])
+            return np.broadcast_shapes(left_shape, right_shape)
+        else:
+            raise ValueError("Unsupported expression type")
+
+    parsed_expr = _parse_expression(lazy_expr.expression)
+    return eval_shape(parsed_expr)
+
+
+def guess_dtype(lazy_expr):
+    """
+    Guess the dtype of the result of the expression.
+
+    Parameters
+    ----------
+    lazy_expr: LazyExpr
+
+    Returns
+    -------
+    np.dtype
+        The dtype of the result of the expression.
+    """
+
+    def eval_dtype(expr):
+        if isinstance(expr, str):
+            return lazy_expr.operands[expr].dtype
+        elif isinstance(expr, tuple):
+            left_dtype = eval_dtype(expr[0])
+            right_dtype = eval_dtype(expr[2])
+            return np.promote_types(left_dtype, right_dtype)
+        else:
+            raise ValueError("Unsupported expression type")
+
+    parsed_expr = _parse_expression(lazy_expr.expression)
+    return eval_dtype(parsed_expr)
 
 
 def validate_inputs(inputs: dict, out=None) -> tuple:
@@ -1782,7 +1862,15 @@ class LazyExpr(LazyArray):
     def _new_expr(cls, expression, operands, out=None, where=None):
         # Create a new LazyExpr object
         new_expr = cls(None)
-        ne.validate(expression, locals=operands)
+        # Validate the expression only if it has no reductions (sum, prod, etc.)
+        if not any(
+            op in expression for op in ["sum", "prod", "min", "max", "std", "mean", "var", "any", "all"]
+        ):
+            ne.validate(expression, locals=operands)
+        else:
+            # Perform the evaluation of the expression in guess mode (to avoid reductions)
+            # XXX TODO
+            expression = eval(expression, {}, operands)
         new_expr.expression = expression
         new_expr.operands = operands
         if out is not None:
@@ -2025,6 +2113,7 @@ def lazyexpr(
     operands: dict = None,
     out: blosc2.NDArray | np.ndarray = None,
     where: tuple | list = None,
+    guess: bool = False,
 ) -> LazyExpr:
     """
     Get a LazyExpr from an expression.
@@ -2044,6 +2133,12 @@ def lazyexpr(
     where: tuple, list, optional
         A sequence with the where arguments. This is useful when the expression
         contains a where clause. The where arguments should be provided as a sequence.
+    guess: bool, optional
+        Whether to guess the output dtype and shape. If False, the dtype and shape
+        will be computed producing temporary arrays in the process (e.g. for reductions).
+        If True, the dtype and shape will be guessed from the expression, but withouth
+        evaluating any part of it.  Use True when you want to e.g. save the expression
+        but without evaluating it.
 
     Returns
     -------
@@ -2086,7 +2181,8 @@ def lazyexpr(
         return expression
     if operands is None:
         raise ValueError("`operands` must be provided for a string expression")
-    return LazyExpr._new_expr(expression, operands, out=out, where=where)
+
+    return LazyExpr._new_expr(expression, operands, out=out, where=where, guess=guess)
 
 
 if __name__ == "__main__":
