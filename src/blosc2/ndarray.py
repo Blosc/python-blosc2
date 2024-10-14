@@ -72,7 +72,7 @@ def get_ndarray_start_stop(ndim, key, shape):
 
 def are_partitions_aligned(shape, chunks, blocks):
     """
-    Check whether the partitions defined by chunks and blocks are aligned with shape.
+    Check if the partitions defined by chunks and blocks are aligned with shape.
 
     This checks that shape is aligned with the chunks and the chunks are aligned
     with the blocks.
@@ -91,9 +91,9 @@ def are_partitions_aligned(shape, chunks, blocks):
 
 def are_partitions_behaved(shape, chunks, blocks):
     """
-    Check whether the partitions defined by chunks and blocks are well-behaved with shape.
+    Check if the partitions defined by chunks and blocks are well-behaved with respect to the shape.
 
-    This checks that partitions are C-contiguous with respect the outer container.
+    This function verifies that partitions are C-contiguous with respect the outer container.
 
     Returns
     -------
@@ -167,7 +167,7 @@ def sum(
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
-        Axis or axes along which a sum is performed. The default, axis=None,
+        Axis or axes along which a sum is performed. By default, axis=None,
         will sum all the elements of the input array. If axis is negative
         it counts from the last to the first axis.
     dtype: np.dtype, optional
@@ -175,11 +175,11 @@ def sum(
         elements are summed. The dtype of :paramref:`ndarr` is used by default unless it has
         an integer dtype of less precision than the default platform integer.
     keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result
+        If set to True, the reduced axes are left in the result
         as dimensions with size one. With this option, the result will broadcast
         correctly against the input array.
     kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+        Additional keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
@@ -230,11 +230,11 @@ def mean(
         Type to use in computing the mean. For integer inputs, the default is
         float32; for floating point inputs, it is the same as the input dtype.
     keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result
+        If set to True, the reduced axes are left in the result
         as dimensions with size one. With this option, the result will broadcast
         correctly against the input array.
     kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+        Additional keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
@@ -276,8 +276,8 @@ def std(
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
-        Axis or axes along which the standard deviation is computed. The default is
-        to compute the standard deviation of the flattened array.
+        Axis or axes along which the standard deviation is computed. By default, `axis=None`,
+        which will compute the standard deviation of the flattened array.
     dtype: np.dtype, optional
         Type to use in computing the standard deviation. For integer inputs, the
         default is float32; for floating point inputs, it is the same as the input dtype.
@@ -285,11 +285,11 @@ def std(
         Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
         where N represents the number of elements. By default, ddof is zero.
     keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result as
-        dimensions with size one. With this option, the result will broadcast correctly
+        If set to True, the reduced axes are left in the result as
+        dimensions with size one. This ensuresb that the result will broadcast correctly
         against the input array.
     kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+        Additional keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
@@ -345,7 +345,7 @@ def var(
         where N represents the number of elements. By default, ddof is zero.
     keepdims: bool, optional
         If this is set to True, the axes which are reduced are left in the result as
-        dimensions with size one. With this option, the result will broadcast correctly
+        dimensions with size one. This ensures that the result will broadcast correctly
         against the input array.
     kwargs: dict, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
@@ -403,11 +403,11 @@ def prod(
         :paramref:`ndarr` has an integer dtype of less precision than the
         default platform integer.
     keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result
-        as dimensions with size one. With this option, the result will broadcast
+        If set to True, the reduced axes are left in the result
+        as dimensions with size one. This ensures the result will broadcast
         correctly against the input array.
     kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+        Additional keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
@@ -453,7 +453,7 @@ def min(
     axis: int or tuple of ints, optional
         Axis or axes along which to operate. By default, flattened input is used.
     keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result as
+        If set to True, the axes which are reduced are left in the result as
         dimensions with size one. With this option, the result will broadcast correctly
         against the input array.
     kwargs: dict, optional
@@ -501,11 +501,11 @@ def max(
     axis: int or tuple of ints, optional
         Axis or axes along which to operate. By default, flattened input is used.
     keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result as
+        If set to True, the reduced axes are left in the result as
         dimensions with size one. With this option, the result will broadcast correctly
         against the input array.
     kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+        Additional keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
@@ -922,7 +922,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
     def shape(self) -> tuple[int]:
         """The data shape of this container.
 
-        In case it is multiple in each dimension of :attr:`chunks`,
+        If the shape is multiple in each dimension of :attr:`chunks`,
         it will be the same as :attr:`ext_shape`.
 
         See Also
@@ -1044,9 +1044,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Parameters
         ----------
         key: int, slice, sequence of slices, LazyExpr or str
-            The slice(s) to be retrieved. Note that step parameter is not honored yet
-            in slices. If a LazyExpr is provided, the expression is supposed to be of boolean
-            type and the result will be the values of this array where the expression is True.
+            The slice(s) to be retrieved. Note that step parameter is not yet honored
+            in slices. If a LazyExpr is provided, the expression is expected to be of boolean
+            type, and the result will be the values of this array where the expression is True.
             If the key is a string, it will be converted to a LazyExpr, and will search for the
             operands in the fields of this structured array.
 
@@ -1322,7 +1322,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         ----------------
         kwargs: dict, optional
             Keyword arguments that are supported by the :func:`empty` constructor.
-            If some are not specified, the default will be the ones from the original
+            If some are not specified, the defaults will be taken from the original
             array (except for the urlpath).
 
         Returns
@@ -1374,7 +1374,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Parameters
         ----------
         newshape : tuple or list
-            The new shape of the array. It should have the same dimensions
+            The new shape of the array. It should have the same number of dimensions
             as :paramref:`self`.
 
         Returns
@@ -1410,8 +1410,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Parameters
         ----------
         key: int, slice or sequence of slices
-            The index for the slices to be updated. Note that the step parameter is
-            not honored yet in slices.
+            The index for the slices to be retrieved. Note that the step parameter is
+            not yet supported in slices.
 
         Other Parameters
         ----------------
@@ -1421,7 +1421,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Returns
         -------
         out: :ref:`NDArray`
-            An array with the requested data. The dtype will be the same as `self`.
+            An array containing the requested data. The dtype will match that of `self`.
 
         Examples
         --------
