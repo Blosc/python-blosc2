@@ -14,6 +14,7 @@ import copy
 import math
 import os
 import pathlib
+import re
 import threading
 from abc import ABC, abstractmethod
 from enum import Enum
@@ -32,6 +33,9 @@ import blosc2
 from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
 from blosc2.ndarray import get_chunks_idx
+
+# Whether we should avoid reduction computations for just guessing the shape and dtype
+_guess: bool = False
 
 
 class ReduceOp(Enum):
@@ -414,6 +418,48 @@ def guess_dtype(lazy_expr):
 
     parsed_expr = _parse_expression(lazy_expr.expression)
     return eval_dtype(parsed_expr)
+
+
+def extract_operands(expression):
+    # Regular expression to match variable names and function calls
+    pattern = re.compile(r'\b[a-zA-Z_]\w*\b')
+    # Find all matches
+    matches = pattern.findall(expression)
+    # Filter out function names and keywords
+    keywords = {'axis'}
+    operands = []
+    for match in matches:
+        # Check if the match is followed by '(' indicating a function call
+        if re.search(r'\b' + re.escape(match) + r'\s*\(', expression):
+            continue
+        if match not in keywords:
+            operands.append(match)
+    return list(set(operands))
+
+
+_flow_pat = r'[\;\[\:]'
+_dunder_pat = r'(^|[^\w])__[\w]+__($|[^\w])'
+methods = ['where', 'sum', 'prod', 'min', 'max', 'std', 'mean', 'var', 'any', 'all']
+methods_pattern = '|'.join([f'{method}\\(' for method in methods])
+_attr_pat = rf'\.\b(?!real|imag|(\d*[eE]?[+-]?\d+)|\d*j\b|{methods_pattern}.*)'
+_blacklist_re = re.compile(f'{_flow_pat}|{_dunder_pat}|{_attr_pat}')
+
+def validate_expr(expr: str) -> None:
+    """
+    Validate expression for forbidden syntax.
+
+    Parameters
+    ----------
+    expr
+
+    Returns
+    -------
+
+    """
+    no_whitespace = re.sub(r'\s+', '', expr)
+    skip_quotes = re.sub(r'(\'[^\']*\')', '', no_whitespace)
+    if _blacklist_re.search(skip_quotes) is not None:
+        raise ValueError(f'Expression {expr} has forbidden control characters.')
 
 
 def validate_inputs(inputs: dict, out=None) -> tuple:
@@ -1013,6 +1059,7 @@ def reduce_slices(
     :ref:`NDArray` or np.ndarray
         The output array.
     """
+    global _guess
     out = kwargs.pop("_output", None)
     where: dict | None = kwargs.pop("_where_args", None)
     reduce_op = reduce_args.pop("op")
@@ -1173,6 +1220,9 @@ def reduce_slices(
             if dtype is None:
                 dtype = result.dtype
             out = convert_none_out(dtype, reduce_op, reduced_shape)
+            if _guess:
+                # We already have the dtype and reduced_shape, so return immediately
+                return out
 
         # Update the output array with the result
         if reduce_op == ReduceOp.ANY:
@@ -1534,7 +1584,7 @@ class LazyExpr(LazyArray):
         blosc2._disable_overloaded_equal = False
         # Return a new expression
         operands = self.operands | new_operands
-        return self._new_expr(expression, operands, out=None, where=None)
+        return self._new_expr(expression, operands, guess=False, out=None, where=None)
 
     @property
     def dtype(self):
@@ -1859,20 +1909,18 @@ class LazyExpr(LazyArray):
         }
 
     @classmethod
-    def _new_expr(cls, expression, operands, out=None, where=None):
-        # Create a new LazyExpr object
-        new_expr = cls(None)
-        # Validate the expression only if it has no reductions (sum, prod, etc.)
-        if not any(
-            op in expression for op in ["sum", "prod", "min", "max", "std", "mean", "var", "any", "all"]
-        ):
-            ne.validate(expression, locals=operands)
+    def _new_expr(cls, expression, operands, guess, out=None, where=None):
+        # Validate the expression
+        validate_expr(expression)
+        if guess:
+            # The expression has been validated, so we can evaluate it
+            # in guessing mode to avoid computing reductions
+            new_expr = eval(expression, {"_guess": True}, operands)
         else:
-            # Perform the evaluation of the expression in guess mode (to avoid reductions)
-            # XXX TODO
-            expression = eval(expression, {}, operands)
-        new_expr.expression = expression
-        new_expr.operands = operands
+            # Create a new LazyExpr object
+            new_expr = cls(None)
+            new_expr.expression = expression
+            new_expr.operands = operands
         if out is not None:
             new_expr._output = out
         if where is not None:
@@ -2182,7 +2230,8 @@ def lazyexpr(
     if operands is None:
         raise ValueError("`operands` must be provided for a string expression")
 
-    return LazyExpr._new_expr(expression, operands, out=out, where=where, guess=guess)
+    lazy_expr = LazyExpr._new_expr(expression, operands, guess, out=out, where=where)
+    return lazy_expr
 
 
 if __name__ == "__main__":
