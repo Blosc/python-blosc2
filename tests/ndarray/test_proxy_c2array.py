@@ -45,10 +45,9 @@ def get_array(shape, chunks_blocks):
     ],
 )
 def test_simple(chunks_blocks, c2sub_context, urlpath, slices):
-    blosc2.remove_urlpath(urlpath)
     shape = (60, 60)
     a = get_array(shape, chunks_blocks)
-    b = blosc2.Proxy(a, urlpath=urlpath)
+    b = blosc2.Proxy(a, urlpath=urlpath, mode="w")
 
     np.testing.assert_allclose(b[slices], a[slices])
 
@@ -80,11 +79,10 @@ def test_small(c2sub_context):
 
 def test_open(c2sub_context):
     urlpath = "proxy.b2nd"
-    blosc2.remove_urlpath(urlpath)
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
     a = get_array(shape, chunks_blocks)
-    b = blosc2.Proxy(a, urlpath=urlpath)
+    b = blosc2.Proxy(a, urlpath=urlpath, mode="w")
     del a
     del b
 

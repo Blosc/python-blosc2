@@ -30,7 +30,6 @@ argvalues = [
 
 @pytest.mark.parametrize(argnames, argvalues)
 def test_ndarray(urlpath, shape, chunks, blocks, slices, dtype):
-    blosc2.remove_urlpath(urlpath)
     size = int(np.prod(shape))
     struct_dtype = False
     if isinstance(dtype, str) and "," in dtype:
@@ -39,7 +38,7 @@ def test_ndarray(urlpath, shape, chunks, blocks, slices, dtype):
     else:
         nparray = np.arange(size, dtype=dtype).reshape(shape)
     a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks)
-    b = blosc2.Proxy(a, urlpath=urlpath)
+    b = blosc2.Proxy(a, urlpath=urlpath, mode="w")
 
     np_slice = a[slices]
     cache_slice = b[slices]
@@ -79,8 +78,6 @@ def test_ndarray(urlpath, shape, chunks, blocks, slices, dtype):
 @pytest.mark.parametrize(argnames, argvalues)
 def test_open(urlpath, shape, chunks, blocks, slices, dtype):
     proxy_urlpath = "proxy.b2nd"
-    blosc2.remove_urlpath(urlpath)
-    blosc2.remove_urlpath(proxy_urlpath)
     size = int(np.prod(shape))
     struct_dtype = False
     if isinstance(dtype, str) and "," in dtype:
@@ -89,7 +86,7 @@ def test_open(urlpath, shape, chunks, blocks, slices, dtype):
     else:
         nparray = np.arange(size, dtype=dtype).reshape(shape)
     a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks, urlpath=urlpath)
-    b = blosc2.Proxy(a, urlpath=proxy_urlpath)
+    b = blosc2.Proxy(a, urlpath=proxy_urlpath, mode="w")
     del a
     del b
     if urlpath is None:

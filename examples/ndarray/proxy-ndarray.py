@@ -17,17 +17,16 @@ cparams = blosc2.CParams(
 )
 cwd = os.getcwd()
 a = blosc2.full((128, 128), 1, dtype="float64", urlpath=f"{cwd}/a.b2nd", mode="w", cparams=cparams)
-blosc2.remove_urlpath(f"{cwd}/proxy.b2nd")
-b = blosc2.Proxy(a, urlpath=f"{cwd}/proxy.b2nd")
+b = blosc2.Proxy(a, urlpath=f"{cwd}/proxy.b2nd", mode="w")
 
 # Check metadata
 print("*** Metadata ***")
-print(f"Codec in 'a': {a.cparams.codec}")
-print(f"Codec in 'b': {b.cparams.codec}")
-print(f"Clevel in 'a': {a.cparams.clevel}")
-print(f"Clevel in 'b': {b.cparams.clevel}")
-print(f"Filters in 'a': {a.cparams.filters}")
-print(f"Filters in 'b': {b.cparams.filters}")
+print(f"Codec in 'a': {a.cparams["codec"]}")
+print(f"Codec in 'b': {b.cparams["codec"]}")
+print(f"Clevel in 'a': {a.cparams["clevel"]}")
+print(f"Clevel in 'b': {b.cparams["clevel"]}")
+print(f"Filters in 'a': {a.cparams["filters"]}")
+print(f"Filters in 'b': {b.cparams["filters"]}")
 
 # Check array properties
 print("*** Array properties ***")
