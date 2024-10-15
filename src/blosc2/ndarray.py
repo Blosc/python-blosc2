@@ -2266,7 +2266,7 @@ def contains(
     >>> text_values = blosc2.asarray(values)
     >>> value_to_check = b"banana"
     >>> expr = blosc2.contains(text_values, value_to_check)
-    >>> result = expr.eval()
+    >>> result = expr.compute()
     >>> print("Contains 'banana':", result[:])
     Contains 'banana': [False  True False False]
     """

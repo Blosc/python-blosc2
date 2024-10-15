@@ -25,6 +25,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+import builtins
+import inspect
+
 import ndindex
 import numexpr as ne
 import numpy as np
@@ -34,8 +37,11 @@ from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
 from blosc2.ndarray import get_chunks_idx
 
-# Whether we should avoid reduction computations for just guessing the shape and dtype
-_guess: bool = False
+
+def is_inside_eval():
+    # Get the current call stack
+    stack = inspect.stack()
+    return any('eval' in frame_info.function or 'eval' in frame_info.filename for frame_info in stack)
 
 
 class ReduceOp(Enum):
@@ -71,7 +77,7 @@ class LazyArrayEnum(Enum):
 
 class LazyArray(ABC):
     @abstractmethod
-    def eval(self, item: slice | list[slice] = None, **kwargs: dict) -> blosc2.NDArray:
+    def compute(self, item: slice | list[slice] = None, **kwargs: dict) -> blosc2.NDArray:
         """
         Return a :ref:`NDArray` containing the evaluation of the :ref:`LazyArray`.
 
@@ -111,7 +117,7 @@ class LazyArray(ABC):
         >>> b1 = blosc2.asarray(b)
         >>> # Perform the mathematical operation
         >>> expr = a1 + b1
-        >>> output = expr.eval()
+        >>> output = expr.compute()
         >>> f"Result of a + b (lazy evaluation): {output[:]}"
         Result of a + b (lazy evaluation):
                     [[ 0.    1.25  2.5 ]
@@ -1059,7 +1065,6 @@ def reduce_slices(
     :ref:`NDArray` or np.ndarray
         The output array.
     """
-    global _guess
     out = kwargs.pop("_output", None)
     where: dict | None = kwargs.pop("_where_args", None)
     reduce_op = reduce_args.pop("op")
@@ -1220,7 +1225,7 @@ def reduce_slices(
             if dtype is None:
                 dtype = result.dtype
             out = convert_none_out(dtype, reduce_op, reduced_shape)
-            if _guess:
+            if is_inside_eval():
                 # We already have the dtype and reduced_shape, so return immediately
                 return out
 
@@ -1518,8 +1523,8 @@ class LazyExpr(LazyArray):
         expr = lazyexpr(self, out=out)
         # The evals below produce arrays with different chunks and blocks;
         # we choose the ones for LazyExpr main class
-        expr.eval(item=slice_)
-        # out = expr.eval(item=slice_)
+        expr.compute(item=slice_)
+        # out = expr.compute(item=slice_)
         return out.schunk.get_chunk(nchunk)
 
     def update_expr(self, new_op):
@@ -1538,9 +1543,9 @@ class LazyExpr(LazyArray):
         # Another possibility would have been to always evaluate where() and produce
         # an NDArray, but that would have been less efficient for the case above.
         if hasattr(value1, "_where_args"):
-            value1 = value1.eval()
+            value1 = value1.compute()
         if hasattr(value2, "_where_args"):
-            value2 = value2.eval()
+            value2 = value2.compute()
         if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
             # We converted some of the operands to NDArray (where() handling above)
             new_operands = {"o0": value1, "o1": value2}
@@ -1732,7 +1737,7 @@ class LazyExpr(LazyArray):
             "dtype": dtype,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, **kwargs)
 
     def get_num_elements(self, axis, item):
         if np.isscalar(axis):
@@ -1799,7 +1804,7 @@ class LazyExpr(LazyArray):
             "dtype": dtype,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, **kwargs)
 
     def min(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
@@ -1807,7 +1812,7 @@ class LazyExpr(LazyArray):
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, **kwargs)
 
     def max(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
@@ -1815,7 +1820,7 @@ class LazyExpr(LazyArray):
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, **kwargs)
 
     def any(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
@@ -1823,7 +1828,7 @@ class LazyExpr(LazyArray):
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, **kwargs)
 
     def all(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
@@ -1831,9 +1836,9 @@ class LazyExpr(LazyArray):
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, **kwargs)
 
-    def eval(self, item=None, **kwargs) -> blosc2.NDArray:
+    def compute(self, item=None, **kwargs) -> blosc2.NDArray:
         if hasattr(self, "_output"):
             kwargs["_output"] = self._output
         if hasattr(self, "_where_args"):
@@ -1915,7 +1920,13 @@ class LazyExpr(LazyArray):
         if guess:
             # The expression has been validated, so we can evaluate it
             # in guessing mode to avoid computing reductions
-            new_expr = eval(expression, {"_guess": True}, operands)
+            _globals = {func: getattr(blosc2, func) for func in functions if func in expression}
+            _globals["__inside_eval__"] = True
+            print(f"Guessing expression: {expression}, operands: {operands}")
+            new_expr = eval(expression, _globals, operands)
+            print(f"new expression: {new_expr.expression}, operands: {new_expr.operands}")
+            print(f"shape: {new_expr.shape}, dtype: {new_expr.dtype}")
+            new_expr.expression = expression
         else:
             # Create a new LazyExpr object
             new_expr = cls(None)
@@ -2077,11 +2088,7 @@ def _open_lazyarray(array):
             raise TypeError("Error when retrieving the operands")
 
     expr = lazyarray["expression"]
-    globals = {}
-    for func in functions:
-        if func in expr:
-            globals[func] = getattr(blosc2, func)
-
+    globals = {func: getattr(blosc2, func) for func in functions if func in expr}
     # Validate the expression (prevent security issues)
     ne.validate(expr, globals, operands_dict)
     # Create the expression as such
@@ -2260,7 +2267,7 @@ if __name__ == "__main__":
     print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
-    res = expr.eval(item=sl)
+    res = expr.compute(item=sl)
     print(f"Elapsed time (evaluate): {time() - t0:.3f} s")
     res = res[sl] if sl is not None else res[:]
     t0 = time()
@@ -2283,7 +2290,7 @@ if __name__ == "__main__":
     print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
-    res = expr.eval(sl)
+    res = expr.compute(sl)
     print(f"Elapsed time (evaluate): {time() - t0:.3f} s")
     res = res[sl] if sl is not None else res[:]
     t0 = time()

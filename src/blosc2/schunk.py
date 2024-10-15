@@ -1401,23 +1401,25 @@ def open(
     -------
     out: :ref:`SChunk`, :ref:`NDArray` or :ref:`C2Array`
         The SChunk or NDArray (in case there is a "b2nd" metalayer")
-        or the C2Array if :paramref:`urlpath` is a :ref:`blosc2.URLPath <URLPath>` instance.
+        or the C2Array if :paramref:`urlpath` is a
+        :ref:`blosc2.URLPath <URLPath>` instance.
 
     Notes
     -----
-    * This is just a 'logical' open, so there is not a `close()` counterpart because
-      currently there is no need for it.
+    * This is just a 'logical' open, so there is not a `close()` counterpart
+      because currently there is no need for it.
 
     * In case :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
       must be 'r', :paramref:`offset` must be 0, and kwargs cannot be passed.
 
-    * In case the original object saved in :paramref:`urlpath` was a :ref:`Proxy`, this function
-      will only return a :ref:`Proxy` if its source is a local :ref:`SChunk`, :ref:`NDArray`
-      or a remote :ref:`C2Array`. Otherwise, it will return the Python-Blosc2 container used to cache the data which
-      can be a :ref:`SChunk` or a :ref:`NDArray` and may not have all the data initialized (e.g. if the user
-      has not accessed it yet).
+    * In case the original object saved in :paramref:`urlpath` is a :ref:`Proxy`,
+      this function will only return a :ref:`Proxy` if its source is a local
+      :ref:`SChunk`, :ref:`NDArray` or a remote :ref:`C2Array`.
+      Otherwise, it will return the Python-Blosc2 container used to cache the
+      data which can be a :ref:`SChunk` or a :ref:`NDArray` and may not have
+      all the data initialized (e.g. if the user has not accessed it yet).
 
-    * When opening a :ref:`LazyExpr` keep in mind the later note regarding the operands.
+    * When opening a :ref:`LazyExpr` keep in mind the note above regarding operands.
 
     Examples
     --------
