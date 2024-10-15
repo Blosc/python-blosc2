@@ -17,8 +17,7 @@ import blosc2
 urlbase = "https://demo.caterva2.net/"
 path = "example/lung-jpeg2000_10x.b2nd"
 a = blosc2.C2Array(path, urlbase=urlbase)
-blosc2.remove_urlpath("proxy.b2nd")
-b = blosc2.Proxy(a, urlpath="proxy.b2nd")
+b = blosc2.Proxy(a, urlpath="proxy.b2nd", mode="w")
 
 # Check metadata (note that all should be the same)
 print("*** Metadata ***")
