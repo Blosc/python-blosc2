@@ -489,7 +489,7 @@ def validate_expr(expr: str) -> None:
         raise ValueError(f"Expression {expr} has forbidden control characters.")
 
     # Check for invalid characters not covered by the tokenizer
-    invalid_chars = re.compile(r"[^\w\s+\-*/%().,=]")
+    invalid_chars = re.compile(r"[^\w\s+\-*/%().,=<>!&|~^]")
     if invalid_chars.search(skip_quotes) is not None:
         # Print offending characters
         invalid_chars = invalid_chars.findall(skip_quotes)
