@@ -8,6 +8,7 @@
 # Avoid checking the name of type annotations at run time
 from __future__ import annotations
 
+import ast
 import asyncio
 import concurrent.futures
 import copy
@@ -25,7 +26,6 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-import builtins
 import inspect
 
 import ndindex
@@ -41,7 +41,8 @@ from blosc2.ndarray import get_chunks_idx
 def is_inside_eval():
     # Get the current call stack
     stack = inspect.stack()
-    return any('eval' in frame_info.function or 'eval' in frame_info.filename for frame_info in stack)
+    # return any('eval' in frame_info.function or 'eval' in frame_info.filename for frame_info in stack)
+    return any("_new_expr" in frame_info.function for frame_info in stack)
 
 
 class ReduceOp(Enum):
@@ -414,7 +415,15 @@ def guess_dtype(lazy_expr):
 
     def eval_dtype(expr):
         if isinstance(expr, str):
-            return lazy_expr.operands[expr].dtype
+            if expr in lazy_expr.operands:
+                return lazy_expr.operands[expr].dtype
+            else:
+                try:
+                    # Handle numeric literals
+                    literal = ast.literal_eval(expr)
+                    return np.array([literal]).dtype
+                except ValueError as e:
+                    raise ValueError(f"Unsupported operand: {expr}") from e
         elif isinstance(expr, tuple):
             left_dtype = eval_dtype(expr[0])
             right_dtype = eval_dtype(expr[2])
@@ -428,44 +437,70 @@ def guess_dtype(lazy_expr):
 
 def extract_operands(expression):
     # Regular expression to match variable names and function calls
-    pattern = re.compile(r'\b[a-zA-Z_]\w*\b')
+    pattern = re.compile(r"\b[a-zA-Z_]\w*\b")
     # Find all matches
     matches = pattern.findall(expression)
     # Filter out function names and keywords
-    keywords = {'axis'}
+    keywords = {"axis"}
     operands = []
     for match in matches:
         # Check if the match is followed by '(' indicating a function call
-        if re.search(r'\b' + re.escape(match) + r'\s*\(', expression):
+        if re.search(r"\b" + re.escape(match) + r"\s*\(", expression):
             continue
         if match not in keywords:
             operands.append(match)
     return list(set(operands))
 
 
-_flow_pat = r'[\;\[\:]'
-_dunder_pat = r'(^|[^\w])__[\w]+__($|[^\w])'
-methods = ['where', 'sum', 'prod', 'min', 'max', 'std', 'mean', 'var', 'any', 'all']
-methods_pattern = '|'.join([f'{method}\\(' for method in methods])
-_attr_pat = rf'\.\b(?!real|imag|(\d*[eE]?[+-]?\d+)|\d*j\b|{methods_pattern}.*)'
-_blacklist_re = re.compile(f'{_flow_pat}|{_dunder_pat}|{_attr_pat}')
+# Define the patterns for validation
+validation_patterns = [
+    r"[\;\[\:]",  # Flow control characters
+    r"(^|[^\w])__[\w]+__($|[^\w])",  # Dunder methods
+    r"\.\b(?!real|imag|(\d*[eE]?[+-]?\d+)|\d*j\b|(sum|prod|min|max|std|mean|var|any|all|where)"
+    r"\s*\([^)]*\)|[a-zA-Z_]\w*\s*\([^)]*\))",  # Attribute patterns
+]
+
+# Compile the blacklist regex
+_blacklist_re = re.compile("|".join(validation_patterns))
+
+# Define valid method names
+valid_methods = {"sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "where"}
+
 
 def validate_expr(expr: str) -> None:
     """
-    Validate expression for forbidden syntax.
+    Validate expression for forbidden syntax and valid method names.
 
     Parameters
     ----------
-    expr
+    expr : str
+        The expression to validate.
 
     Returns
     -------
-
+    None
     """
-    no_whitespace = re.sub(r'\s+', '', expr)
-    skip_quotes = re.sub(r'(\'[^\']*\')', '', no_whitespace)
+    # Remove whitespace and skip quoted strings
+    no_whitespace = re.sub(r"\s+", "", expr)
+    skip_quotes = re.sub(r"(\'[^\']*\')", "", no_whitespace)
+
+    # Check for forbidden patterns
     if _blacklist_re.search(skip_quotes) is not None:
-        raise ValueError(f'Expression {expr} has forbidden control characters.')
+        raise ValueError(f"Expression {expr} has forbidden control characters.")
+
+    # Check for invalid characters not covered by the tokenizer
+    invalid_chars = re.compile(r"[^\w\s+\-*/%().,=]")
+    if invalid_chars.search(skip_quotes) is not None:
+        # Print offending characters
+        invalid_chars = invalid_chars.findall(skip_quotes)
+        print(invalid_chars)
+        raise ValueError(f"Expression {expr} contains invalid characters.")
+
+    # Check for invalid method names
+    method_calls = re.findall(r"\.\b(\w+)\s*\(", skip_quotes)
+    for method in method_calls:
+        if method not in valid_methods:
+            raise ValueError(f"Invalid method name: {method}")
 
 
 def validate_inputs(inputs: dict, out=None) -> tuple:
@@ -1593,14 +1628,18 @@ class LazyExpr(LazyArray):
 
     @property
     def dtype(self):
+        if hasattr(self, "_dtype"):
+            # This comes from string expressions, so it is always the same
+            return self._dtype
         # Updating the expression can change the dtype
+        return guess_dtype(self)
         # Infer the dtype by evaluating the scalar version of the expression
-        scalar_inputs = {}
-        for key, value in self.operands.items():
-            single_item = (0,) * len(value.shape)
-            scalar_inputs[key] = value[single_item]
-        # Evaluate the expression with scalar inputs (it is cheap)
-        return ne.evaluate(self.expression, scalar_inputs).dtype
+        # scalar_inputs = {}
+        # for key, value in self.operands.items():
+        #     single_item = (0,) * len(value.shape)
+        #     scalar_inputs[key] = value[single_item]
+        # # Evaluate the expression with scalar inputs (it is cheap)
+        # return ne.evaluate(self.expression, scalar_inputs).dtype
 
     @property
     def shape(self):
@@ -1838,12 +1877,22 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, **kwargs)
 
+    def _compute_expr(self, item, kwargs):
+        reduce_methods = ("sum", "prod", "min", "max", "std", "mean", "var", "any", "all")
+        if any(method in self.expression for method in reduce_methods):
+            # We have reductions in the expression (probably coming from a persistent lazyexpr)
+            _globals = {func: getattr(blosc2, func) for func in functions if func in self.expression}
+            lazy_expr = eval(self.expression, _globals, self.operands)
+            return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
+        else:
+            return chunked_eval(self.expression, self.operands, item, **kwargs)
+
     def compute(self, item=None, **kwargs) -> blosc2.NDArray:
         if hasattr(self, "_output"):
             kwargs["_output"] = self._output
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
-        return chunked_eval(self.expression, self.operands, item, **kwargs)
+        return self._compute_expr(item, kwargs)
 
     def __getitem__(self, item):
         kwargs = {"_getitem": True}
@@ -1851,7 +1900,7 @@ class LazyExpr(LazyArray):
             kwargs["_output"] = self._output
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
-        return chunked_eval(self.expression, self.operands, item, **kwargs)
+        return self._compute_expr(item, kwargs)
 
     def __str__(self):
         return f"{self.expression}"
@@ -1904,9 +1953,11 @@ class LazyExpr(LazyArray):
                 )
             if value.schunk.urlpath is None:
                 raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
+                raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
             operands[key] = value.schunk.urlpath
         # Check that the expression is valid
-        ne.validate(self.expression, locals=operands)
+        # ne.validate(self.expression, locals=operands)
+        validate_expr(self.expression)
         array.schunk.vlmeta["_LazyArray"] = {
             "expression": self.expression,
             "UDF": None,
@@ -1921,12 +1972,15 @@ class LazyExpr(LazyArray):
             # The expression has been validated, so we can evaluate it
             # in guessing mode to avoid computing reductions
             _globals = {func: getattr(blosc2, func) for func in functions if func in expression}
-            _globals["__inside_eval__"] = True
+            _globals["inside_new_expr"] = True
             print(f"Guessing expression: {expression}, operands: {operands}")
             new_expr = eval(expression, _globals, operands)
             print(f"new expression: {new_expr.expression}, operands: {new_expr.operands}")
             print(f"shape: {new_expr.shape}, dtype: {new_expr.dtype}")
+            new_expr._shape = new_expr.shape
+            new_expr._dtype = new_expr.dtype
             new_expr.expression = expression
+            new_expr.operands = operands
         else:
             # Create a new LazyExpr object
             new_expr = cls(None)
@@ -1997,7 +2051,7 @@ class LazyUDF(LazyArray):
         items += [("dtype", self.dtype)]
         return items
 
-    def eval(self, item=None, **kwargs):
+    def compute(self, item=None, **kwargs):
         # Get kwargs
         if kwargs is None:
             kwargs = {}
@@ -2090,7 +2144,8 @@ def _open_lazyarray(array):
     expr = lazyarray["expression"]
     globals = {func: getattr(blosc2, func) for func in functions if func in expr}
     # Validate the expression (prevent security issues)
-    ne.validate(expr, globals, operands_dict)
+    # ne.validate(expr, globals, operands_dict)
+    validate_expr(expr)
     # Create the expression as such
     expr = eval(expr, globals, operands_dict)
     # Make the array info available for the user (only available when opened from disk)
@@ -2237,8 +2292,7 @@ def lazyexpr(
     if operands is None:
         raise ValueError("`operands` must be provided for a string expression")
 
-    lazy_expr = LazyExpr._new_expr(expression, operands, guess, out=out, where=where)
-    return lazy_expr
+    return LazyExpr._new_expr(expression, operands, guess, out=out, where=where)
 
 
 if __name__ == "__main__":
