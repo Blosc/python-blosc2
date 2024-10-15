@@ -8,11 +8,10 @@
 
 # This shows how to evaluate expressions with NDArray instances as operands.
 
+import blosc2
 import numpy as np
 
-import blosc2
-
-shape = (2, 1, 2)
+shape = (2, 2)
 
 # Create a NDArray from a NumPy array
 npa = np.linspace(0, 1, np.prod(shape), dtype=np.float32).reshape(shape)
@@ -25,7 +24,7 @@ b = blosc2.asarray(npb)
 # Get a LazyExpr instance
 c = a**2 + b**2 + 2 * a * b + 1
 # Evaluate: output is a NDArray
-# d = c.sum(axis=1)
+# d = c.sum()
 # d = blosc2.sum(c, axis=1)
 # d = blosc2.sum(c) + blosc2.mean(a)
 # d = blosc2.sum(c, axis=1) + blosc2.mean(a, axis=0)
@@ -42,7 +41,7 @@ assert isinstance(d, blosc2.LazyExpr)
 assert isinstance(e, blosc2.NDArray)
 sum = e[()]
 print("Reduction with Blosc2:\n", sum)
-# npsum = npc.sum(axis=1)
+# npsum = npc.sum()
 # npsum = np.sum(npc, axis=1)
 # npsum = np.sum(npc) + np.mean(npa)
 # npsum = np.sum(npc, axis=1) + np.mean(npa, axis=0)

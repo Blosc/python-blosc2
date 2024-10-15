@@ -1606,6 +1606,7 @@ class LazyExpr(LazyArray):
                     op_name = f"o{len(self.operands)}"
                     new_operands = {op_name: value2}
                 expression = f"({self.expression} {op} {op_name})"
+            self.operands = value1.operands
         else:
             if np.isscalar(value1):
                 expression = f"({value1} {op} {self.expression})"
@@ -1621,6 +1622,7 @@ class LazyExpr(LazyArray):
                     expression = f"({op_name}[{self.expression}])"
                 else:
                     expression = f"({op_name} {op} {self.expression})"
+                self.operands = value2.operands
         blosc2._disable_overloaded_equal = False
         # Return a new expression
         operands = self.operands | new_operands
@@ -1629,22 +1631,17 @@ class LazyExpr(LazyArray):
     @property
     def dtype(self):
         if hasattr(self, "_dtype"):
-            # This comes from string expressions, so it is always the same
+            # This comes from string expressions (probably saved on disk),
+            # so it is always the same
             return self._dtype
         # Updating the expression can change the dtype
         return guess_dtype(self)
-        # Infer the dtype by evaluating the scalar version of the expression
-        # scalar_inputs = {}
-        # for key, value in self.operands.items():
-        #     single_item = (0,) * len(value.shape)
-        #     scalar_inputs[key] = value[single_item]
-        # # Evaluate the expression with scalar inputs (it is cheap)
-        # return ne.evaluate(self.expression, scalar_inputs).dtype
 
     @property
     def shape(self):
         if hasattr(self, "_shape"):
-            # Contrarily to dtype, shape cannot change after creation of the expression
+            # This comes from string expressions (probably saved on disk),
+            # so it is always the same
             return self._shape
         self._shape, chunks, blocks, fast_path = validate_inputs(self.operands)
         if fast_path:

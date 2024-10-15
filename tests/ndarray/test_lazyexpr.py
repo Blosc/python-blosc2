@@ -101,7 +101,7 @@ def test_mix_operands(array_fixture):
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
     np.testing.assert_allclose(expr[:], nres)
-    np.testing.assert_allclose(expr.eval()[:], nres)
+    np.testing.assert_allclose(expr.compute()[:], nres)
 
     # TODO: fix this
     # expr = na2 + a1
@@ -110,35 +110,35 @@ def test_mix_operands(array_fixture):
     # res = expr[sl]
     # np.testing.assert_allclose(res, nres[sl])
     # np.testing.assert_allclose(expr[:], nres)
-    # np.testing.assert_allclose(expr.eval()[:], nres)
+    # np.testing.assert_allclose(expr.compute()[:], nres)
 
     expr = a1 + na2 + a3
     nres = ne.evaluate("na1 + na2 + na3")
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
     np.testing.assert_allclose(expr[:], nres)
-    np.testing.assert_allclose(expr.eval()[:], nres)
+    np.testing.assert_allclose(expr.compute()[:], nres)
 
     expr = a1 * na2 + a3
     nres = ne.evaluate("na1 * na2 + na3")
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
     np.testing.assert_allclose(expr[:], nres)
-    np.testing.assert_allclose(expr.eval()[:], nres)
+    np.testing.assert_allclose(expr.compute()[:], nres)
 
     expr = a1 * na2 * a3
     nres = ne.evaluate("na1 * na2 * na3")
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
     np.testing.assert_allclose(expr[:], nres)
-    np.testing.assert_allclose(expr.eval()[:], nres)
+    np.testing.assert_allclose(expr.compute()[:], nres)
 
     expr = blosc2.LazyExpr(new_op=(na2, "*", a3))
     nres = ne.evaluate("na2 * na3")
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
     np.testing.assert_allclose(expr[:], nres)
-    np.testing.assert_allclose(expr.eval()[:], nres)
+    np.testing.assert_allclose(expr.compute()[:], nres)
 
     # TODO: support this case
     # expr = a1 + na2 * a3
@@ -152,7 +152,7 @@ def test_mix_operands(array_fixture):
     # res = expr[sl]
     # np.testing.assert_allclose(res, nres[sl])
     # np.testing.assert_allclose(expr[:], nres)
-    # np.testing.assert_allclose(expr.eval()[:], nres)
+    # np.testing.assert_allclose(expr.compute()[:], nres)
 
 
 # Add more test functions to test different aspects of the code
@@ -160,7 +160,7 @@ def test_simple_expression(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 - a3 * a4
     nres = ne.evaluate("na1 + na2 - na3 * na4")
-    res = expr.eval(cparams=blosc2.CParams())
+    res = expr.compute(cparams=blosc2.CParams())
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -171,7 +171,7 @@ def test_proxy_simple_expression(array_fixture):
     a3 = blosc2.Proxy(a3)
     expr = a1 + a2 - a3 * a4
     nres = ne.evaluate("na1 + na2 - na3 * na4")
-    res = expr.eval(storage=blosc2.Storage())
+    res = expr.compute(storage=blosc2.Storage())
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -183,7 +183,7 @@ def test_iXXX(array_fixture):
     expr *= 2  # __imul__
     expr /= 7  # __itruediv__
     expr **= 2.3  # __ipow__
-    res = expr.eval()
+    res = expr.compute()
     nres = ne.evaluate("(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7) ** 2.3")
     np.testing.assert_allclose(res[:], nres)
 
@@ -193,7 +193,7 @@ def test_complex_evaluate(array_fixture):
     expr = blosc2.tan(a1) * (blosc2.sin(a2) * blosc2.sin(a2) + blosc2.cos(a3)) + (blosc2.sqrt(a4) * 2)
     expr += 2
     nres = ne.evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
-    res = expr.eval()
+    res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -221,7 +221,7 @@ def test_func_expression(array_fixture):
     expr = (a1 + a2) * a3 - a4
     expr = blosc2.sin(expr) + blosc2.cos(expr)
     nres = ne.evaluate("sin((na1 + na2) * na3 - na4) + cos((na1 + na2) * na3 - na4)")
-    res = expr.eval(storage={})
+    res = expr.compute(storage={})
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -250,7 +250,7 @@ def test_comparison_operators(dtype_fixture, compare_expressions, comparison_ope
     else:
         expr = eval(f"a1 {comparison_operator} a2", {"a1": a1, "a2": a2})
         expr_string = f"na1 {comparison_operator} na2"
-    res_lazyexpr = expr.eval(dparams={})
+    res_lazyexpr = expr.compute(dparams={})
     # Evaluate using NumExpr
     res_numexpr = ne.evaluate(expr_string)
     # Compare the results
@@ -290,7 +290,7 @@ def test_functions(function, dtype_fixture, shape_fixture):
     a1 = blosc2.asarray(na1, cparams=cparams)
     # Construct the lazy expression based on the function name
     expr = blosc2.LazyExpr(new_op=(a1, function, None))
-    res_lazyexpr = expr.eval(cparams={})
+    res_lazyexpr = expr.compute(cparams={})
     # Evaluate using NumExpr
     expr_string = f"{function}(na1)"
     res_numexpr = ne.evaluate(expr_string)
@@ -334,7 +334,7 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
             if urlpath is not None:
                 expr.save(urlpath=urlpath_save)
                 expr = blosc2.open(urlpath_save)
-            res_lazyexpr = expr.eval()
+            res_lazyexpr = expr.compute()
             # Evaluate using NumExpr
             if function == "**":
                 res_numexpr = ne.evaluate("na1**na2")
@@ -348,7 +348,7 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
             if urlpath is not None:
                 expr.save(urlpath=urlpath_save)
                 expr = blosc2.open(urlpath_save)
-            res_lazyexpr = expr.eval()
+            res_lazyexpr = expr.compute()
             # Evaluate using NumExpr
             if function == "**":
                 res_numexpr = ne.evaluate("na1**value2")
@@ -364,7 +364,7 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
         if urlpath is not None:
             expr.save(urlpath=urlpath_save)
             expr = blosc2.open(urlpath_save)
-        res_lazyexpr = expr.eval()
+        res_lazyexpr = expr.compute()
         # Evaluate using NumExpr
         if function == "**":
             res_numexpr = ne.evaluate("value1**na2")
@@ -384,7 +384,7 @@ def test_abs(shape_fixture, dtype_fixture):
     na1 = np.linspace(-1, 1, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     a1 = blosc2.asarray(na1)
     expr = blosc2.LazyExpr(new_op=(a1, "abs", None))
-    res_lazyexpr = expr.eval(dparams={})
+    res_lazyexpr = expr.compute(dparams={})
     res_np = np.abs(na1)
     np.testing.assert_allclose(res_lazyexpr[:], res_np)
 
@@ -418,7 +418,7 @@ def test_contains(values):
         expr_lazy = blosc2.LazyExpr(new_op=(value1, "contains", a2_blosc))
         # Evaluate using NumExpr
         res_numexpr = ne.evaluate("contains(value1, a2)")
-    res_lazyexpr = expr_lazy.eval()
+    res_lazyexpr = expr_lazy.compute()
     # Compare the results
     np.testing.assert_array_equal(res_lazyexpr[:], res_numexpr)
 
@@ -430,13 +430,13 @@ def test_negate(dtype_fixture, shape_fixture):
 
     # Test with a single NDArray
     expr = -a1
-    res_lazyexpr = expr.eval()
+    res_lazyexpr = expr.compute()
     res_np = -na1
     np.testing.assert_allclose(res_lazyexpr[:], res_np)
 
     # Test with a proper expression
     expr = -(a1 + 2)
-    res_lazyexpr = expr.eval()
+    res_lazyexpr = expr.compute()
     res_np = -(na1 + 2)
     np.testing.assert_allclose(res_lazyexpr[:], res_np)
 
@@ -452,7 +452,7 @@ def test_params(array_fixture):
     dparams = {"nthreads": 4}
     chunks = tuple(i // 2 for i in nres.shape)
     blocks = tuple(i // 4 for i in nres.shape)
-    res = expr.eval(urlpath=urlpath, cparams=cparams, dparams=dparams, chunks=chunks, blocks=blocks)
+    res = expr.compute(urlpath=urlpath, cparams=cparams, dparams=dparams, chunks=chunks, blocks=blocks)
     np.testing.assert_allclose(res[:], nres)
     assert res.schunk.urlpath == urlpath
     assert res.schunk.cparams.nthreads == cparams.nthreads
@@ -493,7 +493,7 @@ def test_save():
     chunks = tuple(i // 2 for i in nres.shape)
     blocks = tuple(i // 4 for i in nres.shape)
     urlpath_eval = "eval_expr.b2nd"
-    res = expr.eval(
+    res = expr.compute(
         storage=blosc2.Storage(urlpath=urlpath_eval, mode="w"),
         chunks=chunks,
         blocks=blocks,
@@ -505,7 +505,7 @@ def test_save():
     expr = blosc2.open(urlpath_save)
     # Check the dtype (should be upcasted to float64)
     assert expr.array.dtype == np.float64
-    res = expr.eval()
+    res = expr.compute()
     assert res.dtype == np.float64
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
     # Test getitem
@@ -519,7 +519,7 @@ def test_save():
     lazy_expr.save(urlpath=urlpath_save2)
     expr = blosc2.open(urlpath_save2)
     assert expr.array.dtype == np.float64
-    res = expr.eval()
+    res = expr.compute()
     nres = ne.evaluate("na1 / na2 + na2 - na3 * na4**3")
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
     # Test getitem
@@ -544,7 +544,7 @@ def test_save_unsafe():
     # Replace expression by a (potentially) unsafe expression
     expr.expression = "import os; os.system('touch /tmp/unsafe')"
     with pytest.raises(Exception) as excinfo:
-        expr.eval()
+        expr.compute()
     assert expr.expression in str(excinfo.value)
 
     # Check that an invalid expression cannot be easily saved.
@@ -587,7 +587,7 @@ def test_save_functions(function, dtype_fixture, shape_fixture):
     expr.save(urlpath=urlpath_save)
     del expr
     expr = blosc2.open(urlpath_save)
-    res_lazyexpr = expr.eval()
+    res_lazyexpr = expr.compute()
 
     # Evaluate using NumExpr
     expr_string = f"{function}(na1)"
@@ -598,11 +598,11 @@ def test_save_functions(function, dtype_fixture, shape_fixture):
     expr_string = f"blosc2.{function}(a1)"
     expr = eval(expr_string, {"a1": a1, "blosc2": blosc2})
     expr.save(urlpath=urlpath_save)
-    res_lazyexpr = expr.eval()
+    res_lazyexpr = expr.compute()
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
 
     expr = blosc2.open(urlpath_save)
-    res_lazyexpr = expr.eval()
+    res_lazyexpr = expr.compute()
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
 
     for urlpath in [urlpath_op, urlpath_save]:
@@ -647,7 +647,7 @@ def test_save_contains(values):
         expr_lazy = blosc2.open(urlpath_save)
         # Evaluate using NumExpr
         res_numexpr = ne.evaluate("contains(value1, a2)")
-    res_lazyexpr = expr_lazy.eval()
+    res_lazyexpr = expr_lazy.compute()
     # Compare the results
     np.testing.assert_array_equal(res_lazyexpr[:], res_numexpr)
 
@@ -678,11 +678,11 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
     )
     expr = eval(b2expr_string, {"x": a1, "y": a2, "blosc2": blosc2})
     expr.save(urlpath=urlpath_save)
-    res_lazyexpr = expr.eval()
+    res_lazyexpr = expr.compute()
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol, atol=atol)
 
     expr = blosc2.open(urlpath_save)
-    res_lazyexpr = expr.eval()
+    res_lazyexpr = expr.compute()
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol, atol=atol)
 
     for urlpath in [urlpath_op, urlpath_op2, urlpath_save]:
@@ -731,7 +731,7 @@ def test_broadcasting(broadcast_fixture):
     expr = expr1 - expr2
     assert expr.shape == a1.shape
     nres = ne.evaluate("na1 + na2 - (na1 * na2 + 1)")
-    res = expr.eval()
+    res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
     res = expr[:]
     np.testing.assert_allclose(res, nres)
@@ -760,14 +760,14 @@ def test_lazyexpr(array_fixture, operand_mix):
     # Check eval()
     expr = blosc2.lazyexpr("a1 + a2 - a3 * a4", operands=operands)
     nres = ne.evaluate("na1 + na2 - na3 * na4")
-    res = expr.eval()
+    res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
     # With selections
-    res = expr.eval(item=0)
+    res = expr.compute(item=0)
     np.testing.assert_allclose(res[()], nres[0])
-    res = expr.eval(item=slice(10))
+    res = expr.compute(item=slice(10))
     np.testing.assert_allclose(res[()], nres[:10])
-    res = expr.eval(item=slice(0, 10, 2))
+    res = expr.compute(item=slice(0, 10, 2))
     np.testing.assert_allclose(res[()], nres[0:10:2])
 
     # Check getitem
@@ -810,7 +810,7 @@ def test_lazyexpr_out(array_fixture, out_param, operand_mix):
     else:
         out = na3
     expr = blosc2.lazyexpr("a1 + a2", operands=operands, out=out)
-    res = expr.eval()  # res should be equal to out
+    res = expr.compute()  # res should be equal to out
     assert res is out
     nres = ne.evaluate("na1 + na2", out=na4)
     assert nres is na4
@@ -823,7 +823,7 @@ def test_lazyexpr_out(array_fixture, out_param, operand_mix):
     expr = blosc2.lazyexpr("a1 - a2", operands=operands)
     operands = {"a1": a1, "a2": a2}
     expr2 = blosc2.lazyexpr(expr, operands=operands, out=out)
-    assert expr2.eval() is out
+    assert expr2.compute() is out
     nres = ne.evaluate("na1 - na2")
     np.testing.assert_allclose(out[:], nres)
 
@@ -833,11 +833,11 @@ def test_eval_item(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = blosc2.lazyexpr("a1 + a2 - a3 * a4", operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4})
     nres = ne.evaluate("na1 + na2 - na3 * na4")
-    res = expr.eval(item=0)
+    res = expr.compute(item=0)
     np.testing.assert_allclose(res[()], nres[0])
-    res = expr.eval(item=slice(10))
+    res = expr.compute(item=slice(10))
     np.testing.assert_allclose(res[()], nres[:10])
-    res = expr.eval(item=slice(0, 10, 2))
+    res = expr.compute(item=slice(0, 10, 2))
     np.testing.assert_allclose(res[()], nres[0:10:2])
 
 
@@ -901,7 +901,7 @@ def test_fill_disk_operands(chunks, blocks, disk, fill_value):
 
     expr = ((a**3 + blosc2.sin(c * 2)) < b) & (c > 0)
 
-    out = expr.eval()
+    out = expr.compute()
     assert out.shape == (N, N)
     assert out.dtype == np.bool_
     assert out.schunk.urlpath is None
