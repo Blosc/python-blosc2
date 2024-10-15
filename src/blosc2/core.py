@@ -104,8 +104,8 @@ def compress(
     -----
     The `cname` and `shuffle` parameters in python-blosc API have been replaced by :paramref:`codec` and
     :paramref:`filter` respectively.
-    To set :paramref:`codec` and :paramref:`filter`, the enumerates :class:`Codec` and :class:`Filter`
-    have to be used instead of the python-blosc API variables such as `blosc.SHUFFLE` for :paramref:`filter`
+    To set :paramref:`codec` and :paramref:`filter`, use the enumerations :class:`Codec` and :class:`Filter`
+    instead of the python-blosc API variables like `blosc.SHUFFLE` for :paramref:`filter`
     or strings like "blosclz" for :paramref:`codec`.
 
     Examples
@@ -153,28 +153,28 @@ def decompress(
         Default is None, meaning that a new `bytes` or `bytearray` object
         is created, filled and returned.
     as_bytearray: bool (optional)
-        If this flag is True then the return type will be a bytearray object
+        If this flag is True, then the return type will be a bytearray object
         instead of a bytes object.
 
     Returns
     -------
     out: str or bytes or bytearray
-        If :paramref:`dst` is `None`, the decompressed data in form of a Python str or bytes object.
-        If as_bytearray is True then this will be a bytearray object.
+        If :paramref:`dst` is `None`, the decompressed data will be returned as a Python str or bytes object.
+        If as_bytearray is True, the return type will be a bytearray object.
 
-        If :paramref:`dst` is not `None`, it will return `None` because the result
-        will already be in :paramref:`dst`.
+        If :paramref:`dst` is not `None`, the function will return `None` because the result
+        will already be stored in :paramref:`dst`.
 
     Raises
     ------
     RuntimeError
-        The compressed data is corrupted or the output buffer is not large enough.
-        Could not get a bytes object.
+        Raised if the compressed data is corrupted or the output buffer is not large enough.
+        Also raised if a `bytes` object could not be obtained.
     TypeError
-        If :paramref:`src` does not support Buffer Protocol.
+        Raised if :paramref:`src` does not support the Buffer Protocol.
     ValueError
-        If the length of :paramref:`src` is smaller than the minimum.
-        If :paramref:`dst` is not None and its length is 0.
+        Raised if the length of :paramref:`src` is smaller than the minimum required length.
+        Also raised if `dst` is not `None` and its length is 0.
 
     Examples
     --------
@@ -245,8 +245,8 @@ def pack(
     -----
     The `cname` and `shuffle` parameters in python-blosc API have been replaced by :paramref:`codec` and
     :paramref:`filter` respectively.
-    To set :paramref:`codec` and :paramref:`filter`, the enumerates :class:`Codec` and :class:`Filter`
-    have to be used instead of the python-blosc API variables such as `blosc.SHUFFLE` for :paramref:`filter`
+    To set :paramref:`codec` and :paramref:`filter`, use the enumerations :class:`Codec` and :class:`Filter`
+    instead of the python-blosc API variables such as `blosc.SHUFFLE` for :paramref:`filter`
     or strings like "blosclz" for :paramref:`codec`.
 
     Examples
@@ -342,16 +342,16 @@ def pack_array(
         The compression level from 0 (no compression) to 9
         (maximum compression).  The default is 9.
     filter: :class:`Filter` (optional)
-        The filter to be activated. The
+        The filter to be applied during compression. The
         default is :py:obj:`Filter.SHUFFLE <Filter>`.
     codec: :class:`Codec` (optional)
-        The compressor used internally in Blosc. The default is
+        The codec to be used for compression. The default is
         :py:obj:`Codec.BLOSCLZ <Codec>`.
 
     Returns
     -------
     out: str or bytes
-        The packed array in form of a Python str or bytes object.
+        The packed array in the form of a Python str or bytes object.
 
     Raises
     ------
@@ -556,27 +556,27 @@ def save_array(arr: np.ndarray, urlpath: str, chunksize: int = None, **kwargs: d
 
 
 def load_array(urlpath: str, dparams: dict = None) -> np.ndarray:
-    """Load a serialized NumPy array in urlpath.
+    """Load a serialized NumPy array from a file.
 
     Parameters
     ----------
     urlpath: str
-        The file where the array is to be loaded.
+        The path to the file containing the serialized array.
     dparams: dict, optional
-        A dictionary with the decompression parameters, which are the same that can
+        A dictionary with the decompression parameters, which can
         be used in the :func:`~blosc2.decompress2` function.
 
     Returns
     -------
     out: np.ndarray
-        The unpacked NumPy array.
+        The deserialized NumPy array.
 
     Raises
     ------
     TypeError
         If :paramref:`urlpath` is not in cframe format
     RunTimeError
-        If some other problem is detected.
+        If any other error is detected.
 
     Examples
     --------
@@ -743,7 +743,7 @@ def save_tensor(
         The tensor or array to be saved.
 
     urlpath: str
-        The path for the file where the array is saved.
+        The file path where the tensor or array will be saved.
 
     chunksize: int
         The size (in bytes) for the chunks during compression. If not provided,

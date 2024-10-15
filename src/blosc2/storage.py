@@ -55,8 +55,8 @@ class CParams:
         value of :py:obj:`blosc2.nthreads` is used. If not set with
         :func:`blosc2.set_nthreads`, blosc2 computes a good guess for it.
     blocksize: int
-        The requested size of the compressed blocks. If 0 (the default)
-        blosc2 chooses it automatically.
+        The requested size of the compressed blocks. If set to 0 (the default)
+        blosc2 will choose the size automatically.
     splitmode: :class:`SplitMode`
         The split mode for the blocks.
         The default value is :py:obj:`SplitMode.ALWAYS_SPLIT <SplitMode>`.
@@ -148,7 +148,7 @@ class Storage:
     mmap_mode: str, optional
         If set, the file will be memory-mapped instead of using the default
         I/O functions and the `mode` argument will be ignored. The memory-mapping
-        modes are similar as used by the
+        modes are similar to those used by the
         `numpy.memmap <https://numpy.org/doc/stable/reference/generated/numpy.memmap.html>`_
         function, but it is possible to extend the file:
 
@@ -175,25 +175,25 @@ class Storage:
         file (and not a directory).
 
         .. note::
-            Memory-mapped files are opened once and the file contents remain in (virtual)
+            Memory-mapped files are opened once, and their contents remain in (virtual)
             memory for the lifetime of the schunk. Using memory-mapped I/O can be faster
-            than using the default I/O functions depending on the use case. Whereas
-            reading performance is generally better, writing performance may also be
-            slower in some cases on certain systems. In any case, memory-mapped files
+            than the default I/O functions, depending on the use case. While
+            reading performance is generally better, writing performance may be
+            slower in some cases on certain systems. Memory-mapped files
             can be especially beneficial when operating with network file systems
             (like NFS).
 
-            This is currently a beta feature (especially write operations) and we
+            This is currently a beta feature (especially for write operations) and we
             recommend trying it out and reporting any issues you may encounter.
 
     initial_mapping_size: int, optional
         The initial size of the mapping for the memory-mapped file when writes are
         allowed (r+ w+, or c mode). Once a file is memory-mapped and extended beyond the
-        initial mapping size, the file must be remapped which may be expensive. This
-        parameter allows to decouple the mapping size from the actual file size to early
-        reserve memory for future writes and avoid remappings. The memory is only
+        initial mapping size, the file must be remapped, which may be expensive. This
+        parameter allows decoupling the mapping size from the actual file size to
+        reserve memory early for future writes and avoid remappings. The memory is only
         reserved virtually and does not occupy physical memory unless actual writes
-        happen. Since the virtual address space is large enough, it is ok to be generous
+        occur. Since the virtual address space is large enough, it is ok to be generous
         with this parameter (with special consideration on Windows, see note below).
         For best performance, set this to the maximum expected size of the compressed
         data (see example in :obj:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`).
@@ -203,11 +203,11 @@ class Storage:
 
         .. note::
             On Windows, the size of the mapping is directly coupled to the file size.
-            When the schunk gets destroyed, the file size will be truncated to the
+            When the schunk is destroyed, the file size will be truncated to the
             actual size of the schunk.
 
     meta: dict or None
-        A dictionary with different metalayers.  One entry per metalayer:
+        A dictionary with different metalayers.  Each entry represents a metalayer:
 
             key: bytes or str
                 The name of the metalayer.

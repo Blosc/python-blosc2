@@ -38,35 +38,33 @@ def c2context(
     """
     Context manager that sets parameters in Caterva2 subscriber requests.
 
-    A parameter not specified or set to ``None`` inherits the value set by the
+    A parameter not specified or set to ``None`` will inherit the value from the
     previous context manager, defaulting to an environment variable (see
-    below) if supported by that parameter.  Parameters set to the empty string
-    are not to be used in requests (with no default either).
+    below) if supported by that parameter.  Parameters set to an empty string
+    will not to be used in requests (with no default either).
 
-    If the subscriber requires authorization for requests, you may either
-    provide `auth_token` (which you should have obtained previously from the
-    subscriber), or both `username` and `password` to get that token by first
-    logging in to the subscriber.  The token will be reused until explicitly
-    reset or requested again in a latter context manager invocation.
+    If the subscriber requires authorization for requests, you can either
+    provide an `auth_token` (which you should have obtained previously from the
+    subscriber), or both `username` and `password` to obtain the token by
+    logging in to the subscriber.  The token will be reused until it is explicitly
+    reset or requested again in a subsequent context manager invocation.
 
-    Please note that this manager is reentrant but not concurrency-safe.
+    Please note that this manager is reentrant but not safe for concurrent use.
 
     Parameters
     ----------
     urlbase : str | None
-        A URL base that will be used when an individual C2Array instance has
-        no subscriber URL base set.  Use the ``BLOSC_C2URLBASE`` environment
-        variable if set as a last resort default.
+        The base URL to be used when a C2Array instance does not have a subscriber
+        URL base set. If not specified, it defaults to the value of the
+        ``BLOSC_C2URLBASE`` environment variable.
     username : str | None
-        A name to be used in credentials to login to the subscriber and get an
-        authorization token from it.  Use the ``BLOSC_C2USERNAME`` environment
-        variable if set as a last resort default.
+        The username for logging in to the subscriber to obtain an authorization token.
+        If not specified, it defaults to the value of the ``BLOSC_C2USERNAME`` environment variable.
     password : str | None
-        A secret to be used in credentials to login to the subscriber and get
-        an authorization token from it.  Use the ``BLOSC_C2PASSWORD``
-        environment variable if set as a last resort default.
+        The password for logging in to the subscriber to obtain an authorization token.
+        If not specified, it defaults to the value of the ``BLOSC_C2PASSWORD`` environment variable.
     auth_token : str | None
-        A token that will be used when an individual C2Array instance has no
+        The authorization token to be used when a C2Array instance does not have an
         authorization token set.
 
     Yields

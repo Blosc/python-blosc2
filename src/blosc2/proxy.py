@@ -54,7 +54,7 @@ class ProxyNDSource(ABC):
         """
         The compression parameters of the source.
 
-        This property is optional, and it can be overridden if the source has a
+        This property is optional and can be overridden if the source has a
         different compression configuration.
         """
         return blosc2.CParams(typesize=self.dtype.itemsize)
@@ -78,7 +78,7 @@ class ProxyNDSource(ABC):
 
     async def aget_chunk(self, nchunk: int) -> bytes:
         """
-        Return the compressed chunk in :paramref:`self` in an asynchronous way.
+        Return the compressed chunk in :paramref:`self` asynchronously.
 
         Parameters
         ----------
@@ -134,7 +134,7 @@ class ProxySource(ABC):
         """
         The compression parameters of the source.
 
-        This property is optional, and it can be overridden if the source has a
+        This property is optional and can be overridden if the source has a
         different compression configuration.
         """
         return blosc2.CParams(typesize=self.typesize)
@@ -158,7 +158,7 @@ class ProxySource(ABC):
 
     async def aget_chunk(self, nchunk: int) -> bytes:
         """
-        Return the compressed chunk in :paramref:`self` in an asynchronous way.
+        Return the compressed chunk in :paramref:`self` asynchronously.
 
         Parameters
         ----------
@@ -172,7 +172,7 @@ class ProxySource(ABC):
 
         Notes
         -----
-        This method is optional, and only available if the source has an async
+        This method is optional and only available if the source has an async
         `aget_chunk` method.
         """
         raise NotImplementedError(
@@ -181,7 +181,7 @@ class ProxySource(ABC):
 
 
 class Proxy(blosc2.Operand):
-    """Proxy (with cache support) of an object following the :ref:`ProxySource` interface.
+    """Proxy (with cache support) for an object following the :ref:`ProxySource` interface.
 
     This can be used to cache chunks of a regular data container which follows the
     :ref:`ProxySource` or :ref:`ProxyNDSource` interfaces.
@@ -189,7 +189,7 @@ class Proxy(blosc2.Operand):
 
     def __init__(self, src: ProxySource or ProxyNDSource, urlpath: str = None, **kwargs: dict):
         """
-        Create a new :ref:`Proxy` to serve like a cache to save accessed chunks locally.
+        Create a new :ref:`Proxy` to serve as a cache to save accessed chunks locally.
 
         Parameters
         ----------
@@ -299,14 +299,13 @@ class Proxy(blosc2.Operand):
 
     async def afetch(self, item: slice | list[slice] = None) -> blosc2.NDArray | blosc2.schunk.SChunk:
         """
-        Get the container used as cache with the requested data updated
-        in an asynchronous way.
+        Retrieve the cache container with the requested data updated asynchronously.
 
         Parameters
         ----------
         item: slice or list of slices, optional
-            If not None, only the chunks that intersect with the slices
-            in items will be retrieved if they have not been already.
+            If provided, only the chunks intersecting with the specified slices
+            will be retrieved if they have not been already.
 
         Returns
         -------
