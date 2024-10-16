@@ -44,7 +44,6 @@ def get_arrays(shape, chunks_blocks):
     assert isinstance(a3, blosc2.NDArray)
     assert isinstance(a4, blosc2.NDArray)
 
-
     p1 = blosc2.Proxy(a1, urlpath="p1.b2nd", mode="w")
     p3 = blosc2.Proxy(a3, urlpath="p3.b2nd", mode="w")
     cleanup_paths.extend(["p1.b2nd", "p3.b2nd"])
