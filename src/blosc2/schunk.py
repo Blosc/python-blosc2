@@ -19,7 +19,6 @@ from msgpack import packb, unpackb
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
-from blosc2.helpers import _inherit_doc_parameter
 
 
 class vlmeta(MutableMapping, blosc2_ext.vlmeta):

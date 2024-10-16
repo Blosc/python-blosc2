@@ -19,9 +19,11 @@ output_dtype = np.dtype(np.float32)
 # Set the compression and decompression parameters
 cparams = blosc2.CParams(typesize=4, nthreads=1)
 dparams = blosc2.DParams(nthreads=4)
-storage = blosc2.Storage(mode='a')
+storage = blosc2.Storage(mode="a")
 # Create empty schunk
-schunk = blosc2.SChunk(chunksize=200 * 1000 * input_dtype.itemsize, cparams=cparams, dparams=dparams, storage=storage)
+schunk = blosc2.SChunk(
+    chunksize=200 * 1000 * input_dtype.itemsize, cparams=cparams, dparams=dparams, storage=storage
+)
 
 
 # Set prefilter with decorator
