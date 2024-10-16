@@ -72,9 +72,9 @@ def get_ndarray_start_stop(ndim, key, shape):
 
 def are_partitions_aligned(shape, chunks, blocks):
     """
-    Check if the partitions defined by chunks and blocks are aligned with shape.
+    Check if the partitions defined by chunks and blocks are aligned with the shape.
 
-    This checks that shape is aligned with the chunks and the chunks are aligned
+    This function verifies that the shape is aligned with the chunks and the chunks are aligned
     with the blocks.
 
     Returns
@@ -168,7 +168,7 @@ def sum(
         The input array or expression.
     axis: int or tuple of ints, optional
         Axis or axes along which a sum is performed. By default, axis=None,
-        will sum all the elements of the input array. If axis is negative
+        sums all the elements of the input array. If axis is negative,
         it counts from the last to the first axis.
     dtype: np.dtype, optional
         The type of the returned array and of the accumulator in which the
@@ -179,7 +179,7 @@ def sum(
         as dimensions with size one. With this option, the result will broadcast
         correctly against the input array.
     kwargs: dict, optional
-        Additional keyword arguments that are supported by the :func:`empty` constructor.
+        Additional keyword arguments supported by the :func:`empty` constructor.
 
     Returns
     -------
@@ -276,8 +276,8 @@ def std(
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
-        Axis or axes along which the standard deviation is computed. By default, `axis=None`,
-        which will compute the standard deviation of the flattened array.
+        Axis or axes along which the standard deviation is computed. By default, `axis=None`
+        computes the standard deviation of the flattened array.
     dtype: np.dtype, optional
         Type to use in computing the standard deviation. For integer inputs, the
         default is float32; for floating point inputs, it is the same as the input dtype.
@@ -341,14 +341,14 @@ def var(
         Type to use in computing the variance. For integer inputs, the default is
         float32; for floating point inputs, it is the same as the input dtype.
     ddof: int, optional
-        Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
+        Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
         where N represents the number of elements. By default, ddof is zero.
     keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result as
+        If set to True, the reduced axes are left in the result as
         dimensions with size one. This ensures that the result will broadcast correctly
         against the input array.
     kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+        Additional keyword arguments supported by the :func:`empty` constructor.
 
     Returns
     -------
@@ -394,8 +394,8 @@ def prod(
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
-        Axis or axes along which a product is performed. The default, axis=None,
-        will multiply all the elements of the input array. If axis is negative
+        Axis or axes along which the product is performed. The default, `axis=None`,
+        will multiply all the elements of the input array. If `axis` is negative,
         it counts from the last to the first axis.
     dtype: np.dtype, optional
         The type of the returned array and of the accumulator in which the

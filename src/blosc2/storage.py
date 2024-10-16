@@ -41,15 +41,15 @@ class CParams:
     codec: :class:`Codec` or int
         The compressor code. Default is :py:obj:`Codec.ZSTD <Codec>`.
     codec_meta: int
-        The metadata for the compressor code, 0 by default.
+        The metadata for the compressor code. Default is 0.
     clevel: int
         The compression level from 0 (no compression) to 9
-        (maximum compression). Default: 1.
+        (maximum compression). Default is 1.
     use_dict: bool
-        Use dicts or not when compressing
-        (only for :py:obj:`blosc2.Codec.ZSTD <Codec>`). Default: `False`.
-    typesize: int from 1 to 255
-        The data type size. Default: 8.
+        Whether to use dictionaries when compressing
+        (only for :py:obj:`blosc2.Codec.ZSTD <Codec>`). Default is `False`.
+    typesize: int
+        The data type size, ranging from 1 to 255. Default is 8.
     nthreads: int
         The number of threads to use internally. By default, the
         value of :py:obj:`blosc2.nthreads` is used. If not set with
@@ -134,7 +134,7 @@ class Storage:
     Parameters
     ----------
     contiguous: bool
-        If the chunks are stored contiguously or not.
+        Indicates whether the chunks are stored contiguously.
         Default is True when :paramref:`urlpath` is not None;
         False otherwise.
     urlpath: str or pathlib.Path, optional
