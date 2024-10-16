@@ -135,7 +135,7 @@ jobs:
           cd ./dist
           tar -xzf blosc2-*.tar.gz
           cd ./blosc2-*/
-          pip install -e .[test]
+          pip install -e .[test] --break-system-packages
 
       - name: Test sdist package with pytest
         run: |
