@@ -343,7 +343,7 @@ def validate_inputs(inputs: dict, out=None) -> tuple:
             "You need to pass at least one array.  Use blosc2.empty() if values are not really needed."
         )
 
-    inputs = list(input for input in inputs.values() if hasattr(input, "shape"))
+    inputs = [input for input in inputs.values() if hasattr(input, "shape")]
 
     # All array inputs should have a compatible shape
     if len(inputs) > 1:
@@ -355,7 +355,7 @@ def validate_inputs(inputs: dict, out=None) -> tuple:
         return ref.shape, None, None, False
 
     # More checks specific of NDArray inputs
-    NDinputs = list(input for input in inputs if hasattr(input, "chunks"))
+    NDinputs = [input for input in inputs if hasattr(input, "chunks")]
     if len(NDinputs) == 0:
         # All inputs are NumPy arrays, so we cannot take the fast path
         return inputs[0].shape, None, None, False
