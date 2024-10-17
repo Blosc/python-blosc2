@@ -68,14 +68,14 @@ def compress(
     codec: blosc2.Codec = blosc2.Codec.ZSTD,
     _ignore_multiple_size: bool = False,
 ) -> str | bytes:
-    """Compress src, with a given type size.
+    """Compress the given source data with specified parameters.
 
     Parameters
     ----------
-    src: bytes-like object (supporting the buffer interface)
-        The data to be compressed.
+    src: bytes-like object
+        The data to be compressed. It must support the buffer interface.
     typesize: int (optional) from 1 to 255
-        The data type size. The default is 1, or `src.itemsize` if it exists.
+        The data type size. The default is 8, or `src.itemsize` if it exists.
     clevel: int (optional)
         The compression level from 0 (no compression) to 9
         (maximum compression).  The default is 9.
@@ -84,11 +84,13 @@ def compress(
         default is :py:obj:`Filter.SHUFFLE <Filter>`.
     codec: :class:`Codec` (optional)
         The compressor used internally in Blosc. The default is :py:obj:`Codec.BLOSCLZ <Codec>`.
+    _ignore_multiple_size : bool (optional)
+        If True, ignores the requirement that the length of `src` must be a multiple of `typesize`.
 
     Returns
     -------
     out: str or bytes
-        The compressed data in form of a Python str or bytes object.
+        The compressed data in as a Python str or bytes object.
 
     Raises
     ------
@@ -148,12 +150,12 @@ def decompress(
     dst: NumPy object or bytearray
         The destination NumPy object or bytearray to fill,
         the length of which must be greater than 0.
-        The user must make sure
-        that it has enough capacity for hosting the decompressed data.
+        The user must ensure it has enough capacity to hold
+        the decompressed data.
         Default is None, meaning that a new `bytes` or `bytearray` object
         is created, filled and returned.
     as_bytearray: bool (optional)
-        If this flag is True, then the return type will be a bytearray object
+        If True, then return type will be a bytearray object
         instead of a bytes object.
 
     Returns
@@ -213,8 +215,8 @@ def pack(
 
     Parameters
     ----------
-    obj: Python object  with `itemsize` attribute
-        The Python object to be packed.
+    obj: object
+        The Python object to be packed. It must have an `itemsize` attribute.
     clevel: int (optional)
         The compression level from 0 (no compression) to 9
         (maximum compression).  The default is 9.
@@ -228,7 +230,7 @@ def pack(
     Returns
     -------
     out: str or bytes
-        The packed object in form of a Python str or bytes object.
+        The packed object as a Python str or bytes object.
 
     Raises
     ------
@@ -428,7 +430,7 @@ def unpack_array(packed_array: str | bytes, **kwargs: dict) -> np.ndarray:
 
 
 def pack_array2(arr: np.ndarray, chunksize: int = None, **kwargs: dict) -> bytes | int:
-    """Pack (compress) a NumPy array. This is faster, and it does not have a 2 GB limitation.
+    """Pack (compress) a NumPy array. This method is faster and does not have a 2 GB limitation.
 
     Parameters
     ----------
@@ -470,7 +472,7 @@ def pack_array2(arr: np.ndarray, chunksize: int = None, **kwargs: dict) -> bytes
 
 
 def unpack_array2(cframe: bytes) -> np.ndarray:
-    """Unpack (decompress) a packed NumPy array via a cframe.
+    """Unpack (decompress) a packed NumPy array from a cframe.
 
     Parameters
     ----------
@@ -487,7 +489,7 @@ def unpack_array2(cframe: bytes) -> np.ndarray:
     TypeError
         If :paramref:`cframe` is not of type bytes, or not a cframe.
     RunTimeError
-        If some other problem is detected.
+        If an error occurs during decompression.
 
     Examples
     --------
@@ -512,7 +514,7 @@ def unpack_array2(cframe: bytes) -> np.ndarray:
 
 
 def save_array(arr: np.ndarray, urlpath: str, chunksize: int = None, **kwargs: dict) -> int:
-    """Save a serialized NumPy array in `urlpath`.
+    """Save a serialized NumPy array to a specified file path.
 
     Parameters
     ----------
@@ -520,7 +522,7 @@ def save_array(arr: np.ndarray, urlpath: str, chunksize: int = None, **kwargs: d
         The NumPy array to be saved.
 
     urlpath: str
-        The path for the file where the array is saved.
+        The path for the file where the array will be saved.
 
     chunksize: int
         The size (in bytes) for the chunks during compression. If not provided,
@@ -607,10 +609,10 @@ def pack_tensor(
 
     Parameters
     ----------
-    tensor: tensor or np.ndarray.
+    tensor: tensorflow.Tensor, torch.Tensor, or np.ndarray.
         The tensor or array to be packed.
 
-    chunksize: int
+    chunksize: int, optional
         The size (in bytes) for the chunks during compression. If not provided,
         it is computed automatically.
 
@@ -686,7 +688,8 @@ def _unpack_tensor(schunk):
 
 
 def unpack_tensor(cframe: bytes) -> tensorflow.Tensor | torch.Tensor | np.ndarray:
-    """Unpack (decompress) a packed TensorFlow or PyTorch via a cframe.
+    """Unpack (decompress) a packed TensorFlow or PyTorch tensor or a NumPy
+    array from a cframe.
 
     Parameters
     ----------
@@ -695,7 +698,7 @@ def unpack_tensor(cframe: bytes) -> tensorflow.Tensor | torch.Tensor | np.ndarra
 
     Returns
     -------
-    out: tensor or np.ndarray
+    out: tensorflow.Tensor, torch.Tensor, or np.ndarray
         The unpacked TensorFlow or PyTorch tensor or NumPy array.
 
     Raises
@@ -703,7 +706,7 @@ def unpack_tensor(cframe: bytes) -> tensorflow.Tensor | torch.Tensor | np.ndarra
     TypeError
         If :paramref:`cframe` is not of type bytes, or not a cframe.
     RunTimeError
-        If some other problem is detected.
+        If an error occurs during decompression.
 
     Examples
     --------
@@ -735,11 +738,12 @@ def save_tensor(
     chunksize: int = None,
     **kwargs: dict,
 ) -> int:
-    """Save a serialized PyTorch or TensorFlow tensor or NumPy array in `urlpath`.
+    """Save a serialized PyTorch or TensorFlow tensor or NumPy array to
+    a specified file path.
 
     Parameters
     ----------
-    tensor: tensor, np.ndarray
+    tensor: tensorflow.Tensor, torch.Tensor, or np.ndarray
         The tensor or array to be saved.
 
     urlpath: str
@@ -892,7 +896,7 @@ def set_nthreads(nthreads: int) -> int:
     Raises
     ------
     ValueError
-        If :paramref:`nthreads` is larger than the maximum number of threads blosc can use.
+        If :paramref:`nthreads` is larger than the maximum number of threads Blosc can use.
         If :paramref:`nthreads` is not a positive integer.
 
     Notes

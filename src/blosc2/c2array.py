@@ -275,7 +275,7 @@ class C2Array(blosc2.Operand):
         Parameters
         ----------
         nchunk: int
-            The unidimensional chunk index.
+            The index of the unidimensional chunk to retrieve.
 
         Returns
         -------
