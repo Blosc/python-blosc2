@@ -672,11 +672,7 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
     res_numexpr = ne.evaluate(expr_string, {"x": na1, "y": na2})
 
     urlpath_save = "expr.b2nd"
-    b2expr_string = (
-        "blosc2.sin(x)**3 + blosc2.cos(y)**2 + "
-        "blosc2.cos(x) * blosc2.arcsin(y) + blosc2.arcsinh(x) + blosc2.sinh(x)"
-    )
-    expr = eval(b2expr_string, {"x": a1, "y": a2, "blosc2": blosc2})
+    expr = blosc2.lazyexpr(expr_string, {"x": a1, "y": a2})
     expr.save(urlpath=urlpath_save)
     res_lazyexpr = expr.compute()
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol, atol=atol)

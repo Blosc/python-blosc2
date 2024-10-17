@@ -654,6 +654,40 @@ class Operand:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        # Handle operations at the array level
+        if method != "__call__":
+            return NotImplemented
+        value = inputs[0] if inputs[1] is self else inputs[1]
+        _check_allowed_dtypes(value)
+        if ufunc == np.add:
+            return blosc2.LazyExpr(new_op=(value, "+", self))
+        if ufunc == np.subtract:
+            return blosc2.LazyExpr(new_op=(value, "-", self))
+        if ufunc == np.multiply:
+            return blosc2.LazyExpr(new_op=(value, "*", self))
+        if ufunc == np.divide:
+            return blosc2.LazyExpr(new_op=(value, "/", self))
+        if ufunc == np.true_divide:
+            return blosc2.LazyExpr(new_op=(value, "/", self))
+        if ufunc == np.power:
+            return blosc2.LazyExpr(new_op=(value, "**", self))
+        if ufunc == np.less:
+            return blosc2.LazyExpr(new_op=(value, "<", self))
+        if ufunc == np.less_equal:
+            return blosc2.LazyExpr(new_op=(value, "<=", self))
+        if ufunc == np.greater:
+            return blosc2.LazyExpr(new_op=(value, ">", self))
+        if ufunc == np.greater_equal:
+            return blosc2.LazyExpr(new_op=(value, ">=", self))
+        if ufunc == np.equal:
+            return blosc2.LazyExpr(new_op=(value, "==", self))
+        if ufunc == np.not_equal:
+            return blosc2.LazyExpr(new_op=(value, "!=", self))
+
+
+        return NotImplemented
+
     def __radd__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "+", self))

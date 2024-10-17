@@ -1968,6 +1968,7 @@ class LazyExpr(LazyArray):
             operands[key] = value.schunk.urlpath
         # Check that the expression is valid
         # ne.validate(self.expression, locals=operands)
+        # Is that necessary here? I think this has been done already.
         validate_expr(self.expression)
         array.schunk.vlmeta["_LazyArray"] = {
             "expression": self.expression,
@@ -1983,13 +1984,23 @@ class LazyExpr(LazyArray):
             # The expression has been validated, so we can evaluate it
             # in guessing mode to avoid computing reductions
             _globals = {func: getattr(blosc2, func) for func in functions if func in expression}
-            _globals["inside_new_expr"] = True
-            print(f"Guessing expression: {expression}, operands: {operands}")
             new_expr = eval(expression, _globals, operands)
-            print(f"new expression: {new_expr.expression}, operands: {new_expr.operands}")
-            print(f"shape: {new_expr.shape}, dtype: {new_expr.dtype}")
-            new_expr._shape = new_expr.shape
-            new_expr._dtype = new_expr.dtype
+            if isinstance(new_expr, blosc2.LazyExpr):
+                print(f"new expression: {new_expr.expression}") #, operands: {new_expr.operands}")
+                #print(f"shape: {new_expr.shape}, dtype: {new_expr.dtype}")
+                # new_expr._shape = new_expr.shape
+                # Create versions of operands as numpy arrays with one single element
+                operands = {key: np.ones(1, dtype=value.dtype) for key, value in new_expr.operands.items()}
+                #operands = {key: value[()] for key, value in new_expr.operands.items()}
+                # Evaluate the expression with numexpr to guess the dtype
+                _out = ne.evaluate(new_expr.expression, local_dict=operands)
+                new_expr._dtype = _out.dtype
+                new_expr._shape = compute_broadcast_shape(new_expr.operands.values())
+            else:
+                # An immediate evaluation happened (e.g. all operands are numpy arrays)
+                new_expr = cls(None)
+                new_expr.expression = expression
+                new_expr.operands = operands
         else:
             # Create a new LazyExpr object
             new_expr = cls(None)
@@ -2301,7 +2312,7 @@ def lazyexpr(
     if operands is None:
         raise ValueError("`operands` must be provided for a string expression")
 
-    return LazyExpr._new_expr(expression, operands, guess, out=out, where=where)
+    return LazyExpr._new_expr(expression, operands, guess=True, out=out, where=where)
 
 
 if __name__ == "__main__":
