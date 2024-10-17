@@ -358,7 +358,12 @@ def _parse_expression(expression):
             right = stack.pop()
             op = stack.pop()
             left = stack.pop()
-            stack.append((left, op, right))
+            if left == "arctan2":
+                # Special case for arctan2. We will treat it as regular binary operation.
+                # Also, sometimes the operand ends with a comma, so we strip it.
+                stack.append((op.strip(","), left, right))
+            else:
+                stack.append((left, op, right))
         elif char in "() ":
             if operand:
                 stack.append(operand)
@@ -1500,7 +1505,7 @@ class LazyExpr(LazyArray):
                 self.expression = f"{op}(o0, {value2})"
             elif np.isscalar(value1):
                 self.operands = {"o0": value2}
-                self.expression = f"{op}({value1} , o0)"
+                self.expression = f"{op}({value1}, o0)"
             else:
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"{op}(o0, o1)"
@@ -1949,7 +1954,6 @@ class LazyExpr(LazyArray):
                     "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
                 )
             if value.schunk.urlpath is None:
-                raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
                 raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
             operands[key] = value.schunk.urlpath
         # Check that the expression is valid
