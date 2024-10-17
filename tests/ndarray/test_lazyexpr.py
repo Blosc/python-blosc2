@@ -618,7 +618,7 @@ def test_save_contains(values):
     urlpath_save = "expr.b2nd"
     if value1 == "NDArray":
         a1 = np.array([b"abc(", b"def", b"aterr", b"oot", b"zu", b"ab c"])
-        a1_blosc = blosc2.asarray(a1, urlpath=urlpath)
+        a1_blosc = blosc2.asarray(a1, urlpath=urlpath, mode="w")
         if value2 == "str":  # ("NDArray", "str")
             value2 = b"test abc( here"
             # Construct the lazy expression
@@ -630,7 +630,7 @@ def test_save_contains(values):
             res_numexpr = ne.evaluate(expr_numexpr)
         else:  # ("NDArray", "NDArray")
             a2 = np.array([b"abc(", b"ab c", b" abc", b" abc ", b"\tabc", b"c h"])
-            a2_blosc = blosc2.asarray(a2, urlpath=urlpath2)
+            a2_blosc = blosc2.asarray(a2, urlpath=urlpath2, mode="w")
             # Construct the lazy expression
             expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", a2_blosc))
             expr_lazy.save(urlpath=urlpath_save)
@@ -640,7 +640,7 @@ def test_save_contains(values):
     else:  # ("str", "NDArray")
         value1 = b"abc"
         a2 = np.array([b"abc(", b"def", b"aterr", b"oot", b"zu", b"ab c"])
-        a2_blosc = blosc2.asarray(a2, urlpath=urlpath2)
+        a2_blosc = blosc2.asarray(a2, urlpath=urlpath2, mode="w")
         # Construct the lazy expression
         expr_lazy = blosc2.LazyExpr(new_op=(value1, "contains", a2_blosc))
         expr_lazy.save(urlpath=urlpath_save)

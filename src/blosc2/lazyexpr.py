@@ -350,7 +350,16 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
 def _parse_expression(expression):
     stack = []
     operand = ""
+    inside_string = False
     for char in expression:
+        # Check that we are not inside a string that acts as an operand
+        if inside_string and char != "'":
+            operand += char
+            continue
+        if char == "'":
+            operand += char
+            inside_string = not inside_string
+            continue
         if char == ")":
             if operand:
                 stack.append(operand)
@@ -358,10 +367,11 @@ def _parse_expression(expression):
             right = stack.pop()
             op = stack.pop()
             left = stack.pop()
-            if left == "arctan2":
-                # Special case for arctan2. We will treat it as regular binary operation.
-                # Also, sometimes the operand ends with a comma, so we strip it.
-                stack.append((op.strip(","), left, right))
+            if left in {"arctan2", "contains"}:
+                # Special case for functions with 2 operands.
+                # We will treat them as regular binary operations.
+                # Also, the operands can end with a comma, so we strip it.
+                stack.append((op.strip(","), left, right.strip(",")))
             else:
                 stack.append((left, op, right))
         elif char in "() ":
