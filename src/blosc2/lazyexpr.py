@@ -1990,8 +1990,6 @@ class LazyExpr(LazyArray):
             print(f"shape: {new_expr.shape}, dtype: {new_expr.dtype}")
             new_expr._shape = new_expr.shape
             new_expr._dtype = new_expr.dtype
-            new_expr.expression = expression
-            new_expr.operands = operands
         else:
             # Create a new LazyExpr object
             new_expr = cls(None)

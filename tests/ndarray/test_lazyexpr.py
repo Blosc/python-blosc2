@@ -552,7 +552,7 @@ def test_save_unsafe():
     # during loading time (tested above).
     with pytest.raises(Exception) as excinfo:
         expr.save(urlpath=urlpath)
-    assert expr.expression in str(excinfo.value)
+    assert "invalid syntax" in str(excinfo.value)
 
     for urlpath in disk_arrays:
         blosc2.remove_urlpath(urlpath)
