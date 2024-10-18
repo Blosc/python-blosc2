@@ -1530,22 +1530,23 @@ class LazyExpr(LazyArray):
     @property
     def dtype(self):
         if hasattr(self, "_dtype"):
+            # In some situations, we already know the dtype
             return self._dtype
         operands = {key: np.ones(1, dtype=value.dtype) for key, value in self.operands.items()}
         _out = ne.evaluate(self.expression, local_dict=operands)
-        self._dtype = _out.dtype
-        return self._dtype
+        return _out.dtype
 
     @property
     def shape(self):
         if hasattr(self, "_shape"):
+            # In some situations, we already know the shape
             return self._shape
-        self._shape, chunks, blocks, fast_path = validate_inputs(self.operands)
+        _shape, chunks, blocks, fast_path = validate_inputs(self.operands)
         if fast_path:
             # fast_path ensure that all the operands have the same partitions
             self._chunks = chunks
             self._blocks = blocks
-        return self._shape
+        return _shape
 
     @property
     def chunks(self):
