@@ -501,7 +501,7 @@ def validate_expr(expr: str) -> None:
 
     # Check for forbidden patterns
     if _blacklist_re.search(skip_quotes) is not None:
-        raise ValueError(f"Expression {expr} has forbidden control characters.")
+        raise ValueError(f"'{expr}' is not a valid expression.")
 
     # Check for invalid characters not covered by the tokenizer
     invalid_chars = re.compile(r"[^\w\s+\-*/%().,=<>!&|~^]")
@@ -1968,10 +1968,6 @@ class LazyExpr(LazyArray):
             if value.schunk.urlpath is None:
                 raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
             operands[key] = value.schunk.urlpath
-        # Check that the expression is valid
-        # ne.validate(self.expression, locals=operands)
-        # Is that necessary here? I think this has been done already.
-        validate_expr(self.expression)
         array.schunk.vlmeta["_LazyArray"] = {
             "expression": self.expression,
             "UDF": None,

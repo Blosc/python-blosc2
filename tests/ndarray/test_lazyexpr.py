@@ -543,16 +543,16 @@ def test_save_unsafe():
     expr = blosc2.open(urlpath)
     # Replace expression by a (potentially) unsafe expression
     expr.expression = "import os; os.system('touch /tmp/unsafe')"
-    with pytest.raises(Exception) as excinfo:
+    with pytest.raises(ValueError) as excinfo:
         expr.compute()
     assert expr.expression in str(excinfo.value)
 
     # Check that an invalid expression cannot be easily saved.
     # As this can easily be worked around, the best protection is
     # during loading time (tested above).
-    with pytest.raises(Exception) as excinfo:
+    with pytest.raises(ValueError) as excinfo:
         expr.save(urlpath=urlpath)
-    assert "invalid syntax" in str(excinfo.value)
+    assert expr.expression in str(excinfo.value)
 
     for urlpath in disk_arrays:
         blosc2.remove_urlpath(urlpath)
