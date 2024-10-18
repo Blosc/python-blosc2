@@ -360,10 +360,8 @@ def validate_expr(expr: str) -> None:
     # Check for invalid characters not covered by the tokenizer
     invalid_chars = re.compile(r"[^\w\s+\-*/%().,=<>!&|~^]")
     if invalid_chars.search(skip_quotes) is not None:
-        # Print offending characters
         invalid_chars = invalid_chars.findall(skip_quotes)
-        print(invalid_chars)
-        raise ValueError(f"Expression {expr} contains invalid characters.")
+        raise ValueError(f"Expression {expr} contains invalid characters: {invalid_chars}")
 
     # Check for invalid method names
     method_calls = re.findall(r"\.\b(\w+)\s*\(", skip_quotes)
@@ -515,7 +513,6 @@ async def async_read_chunks(arrs, info, queue):
                 if isinstance(chunk, Exception):
                     # Handle the exception (e.g., log it, raise a custom exception, etc.)
                     print(f"Exception occurred: {chunk}")
-                    # Optionally, you can re-raise the exception or handle it as needed
                     raise chunk
                 chunks_sorted.append(chunk)
             queue.put((nchunk, chunks_sorted))  # use non-async queue.put()
@@ -1999,7 +1996,6 @@ def _open_lazyarray(array):
     expr = lazyarray["expression"]
     globals = {func: getattr(blosc2, func) for func in functions if func in expr}
     # Validate the expression (prevent security issues)
-    # ne.validate(expr, globals, operands_dict)
     validate_expr(expr)
     # Create the expression as such
     expr = eval(expr, globals, operands_dict)
