@@ -708,14 +708,19 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 self._fields[field] = NDField(self, field)
 
     @property
-    def cparams(self) -> dict:
+    def cparams(self) -> blosc2.CParams:
         """The compression parameters used by the array."""
         return self.schunk.cparams
 
     @property
-    def dparams(self) -> dict:
+    def dparams(self) -> blosc2.DParams:
         """The decompression parameters used by the array."""
         return self.schunk.dparams
+
+    @property
+    def storage(self) -> blosc2.Storage:
+        """The storage of the array."""
+        return self.schunk.storage
 
     @property
     def urlpath(self) -> str:

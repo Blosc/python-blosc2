@@ -17,7 +17,7 @@ dparams = blosc2.DParams()
 contiguous = True
 urlpath = "filename"
 
-storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode='a')
+storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode="a")
 blosc2.remove_urlpath(urlpath)
 numpy_meta = {b"dtype": str(np.dtype("int32"))}
 test_meta = {b"lorem": 1234}

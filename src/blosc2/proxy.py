@@ -187,7 +187,7 @@ class Proxy(blosc2.Operand):
     :ref:`ProxySource` or :ref:`ProxyNDSource` interfaces.
     """
 
-    def __init__(self, src: ProxySource or ProxyNDSource, urlpath: str = None, **kwargs: dict):
+    def __init__(self, src: ProxySource or ProxyNDSource, urlpath: str = None, mode="a", **kwargs: dict):
         """
         Create a new :ref:`Proxy` to serve as a cache to save accessed chunks locally.
 
@@ -197,6 +197,9 @@ class Proxy(blosc2.Operand):
             The original container.
         urlpath: str, optional
             The urlpath where to save the container that will work as a cache.
+        mode: str, optional
+            "a" means read/write (create if it doesn’t exist); "w" means create
+            (overwrite if it exists). Default is "a".
 
         Other parameters
         ----------------
@@ -237,6 +240,7 @@ class Proxy(blosc2.Operand):
                     blocks=self.src.blocks,
                     cparams=self.src.cparams,
                     urlpath=urlpath,
+                    mode=mode,
                     meta=meta,
                 )
             else:
@@ -244,6 +248,7 @@ class Proxy(blosc2.Operand):
                     chunksize=self.src.chunksize,
                     cparams=self.src.cparams,
                     urlpath=urlpath,
+                    mode=mode,
                     meta=meta,
                 )
                 self._cache.fill_special(self.src.nbytes // self.src.typesize, blosc2.SpecialValue.UNINIT)

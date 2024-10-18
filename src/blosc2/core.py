@@ -944,7 +944,7 @@ def compressor_list(plugins: bool = False) -> list:
 
     """
     cap = blosc2.GLOBAL_REGISTERED_CODECS_STOP if plugins else blosc2.DEFINED_CODECS_STOP
-    return list(key for key in blosc2.Codec if key.value <= cap)
+    return [key for key in blosc2.Codec if key.value <= cap]
 
 
 def set_blocksize(blocksize: int = 0) -> None:
