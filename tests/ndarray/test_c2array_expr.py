@@ -230,11 +230,11 @@ def broadcast_fixture(broadcast_shape, c2sub_context):
 def test_broadcasting(broadcast_fixture):
     a1, a2, na1, na2 = broadcast_fixture
     expr1 = a1 + a2
-    assert expr1.shape == a1.shape
+    assert expr1.shape == np.broadcast_shapes(a1.shape, a2.shape)
     expr2 = a1 * a2 + 1
-    assert expr2.shape == a1.shape
+    assert expr2.shape == np.broadcast_shapes(a1.shape, a2.shape)
     expr = expr1 - expr2
-    assert expr.shape == a1.shape
+    assert expr.shape == np.broadcast_shapes(a1.shape, a2.shape)
     nres = ne.evaluate("na1 + na2 - (na1 * na2 + 1)")
     res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
