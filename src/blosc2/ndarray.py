@@ -315,25 +315,7 @@ def var(
     """
     Return the variance along the specified axis.
 
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which the variance is computed. The default is to compute
-        the variance of the flattened array.
-    dtype: np.dtype, optional
-        Type to use in computing the variance. For integer inputs, the default is
-        float32; for floating point inputs, it is the same as the input dtype.
-    ddof: int, optional
-        Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
-        where N represents the number of elements. By default, ddof is zero.
-    keepdims: bool, optional
-        If set to True, the reduced axes are left in the result as
-        dimensions with size one. This ensures that the result will broadcast correctly
-        against the input array.
-    kwargs: dict, optional
-        Additional keyword arguments supported by the :func:`empty` constructor.
+    The parameters are documented in the :func:`std <blosc2.std>`.
 
     Returns
     -------
@@ -374,25 +356,7 @@ def prod(
     """
     Return the product of array elements over a given axis.
 
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which the product is performed. The default, `axis=None`,
-        will multiply all the elements of the input array. If `axis` is negative,
-        it counts from the last to the first axis.
-    dtype: np.dtype, optional
-        The type of the returned array and of the accumulator in which the
-        elements are multiplied. The dtype of :paramref:`ndarr` is used by default unless
-        :paramref:`ndarr` has an integer dtype of less precision than the
-        default platform integer.
-    keepdims: bool, optional
-        If set to True, the reduced axes are left in the result
-        as dimensions with size one. This ensures the result will broadcast
-        correctly against the input array.
-    kwargs: dict, optional
-        Additional keyword arguments that are supported by the :func:`empty` constructor.
+    The parameters are documented in the :func:`sum <blosc2.sum>`.
 
     Returns
     -------
@@ -479,18 +443,7 @@ def max(
     """
     Return the maximum along a given axis.
 
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which to operate. By default, flattened input is used.
-    keepdims: bool, optional
-        If set to True, the reduced axes are left in the result as
-        dimensions with size one. With this option, the result will broadcast correctly
-        against the input array.
-    kwargs: dict, optional
-        Additional keyword arguments that are supported by the :func:`empty` constructor.
+    The parameters are documented in the :func:`min <blosc2.min>`.
 
     Returns
     -------
@@ -533,18 +486,7 @@ def any(
     """
     Test whether any array element along a given axis evaluates to True.
 
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        The axis or axes along which to operate. By default, the input is flattened.
-    keepdims: bool, optional
-        If set to True, the reduced axes are left in the result as
-        dimensions with size one. This ensures that the result will broadcast correctly
-        against the input array.
-    kwargs: dict, optional
-        Additional keyword arguments that are supported by the :func:`empty` constructor.
+    The parameters are documented in the :func:`min <blosc2.min>`.
 
     Returns
     -------
@@ -585,18 +527,7 @@ def all(
     """
     Test whether all array elements along a given axis evaluate to True.
 
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        The axis or axes along which to operate. By default, the input is flattened.
-    keepdims: bool, optional
-        If set to True, the reduced axes are left in the result as
-        dimensions with size one. This ensures that the result will broadcast correctly
-        against the input array.
-    kwargs: dict, optional
-        Additional keyword arguments that are supported by the :func:`empty` constructor.
+    The parameters are documented in the :func:`min <blosc2.min>`.
 
     Returns
     -------
