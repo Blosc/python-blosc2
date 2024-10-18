@@ -8,7 +8,6 @@
 # Avoid checking the name of type annotations at run time
 from __future__ import annotations
 
-import ast
 import asyncio
 import concurrent.futures
 import copy
@@ -269,21 +268,6 @@ def convert_inputs(inputs):
     return inputs_
 
 
-def check_broadcast_compatible(arrays):
-    shapes = [arr.shape for arr in arrays]
-    max_len = max(map(len, shapes))
-    # Pad shorter shapes with 1s
-    shapes_ = [(1,) * (max_len - len(shape)) + shape for shape in shapes]
-    # Reverse the shapes to compare from last dimension
-    shapes_ = [shape[::-1] for shape in shapes_]
-    # Check
-    for dims in zip(*shapes_, strict=True):
-        max_dim = max(dims)
-        if not all(dim in (max_dim, 1) for dim in dims):
-            _shapes = " ".join(str(shape) for shape in shapes)
-            raise ValueError(f"operands could not be broadcast together with shapes {_shapes}")
-
-
 def compute_broadcast_shape(arrays):
     """
     Returns the shape of the outcome of an operation with the input arrays.
@@ -335,23 +319,6 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
         larger_slice[i] if smaller_shape[i - diff_dims] != 1 else slice(None)
         for i in range(diff_dims, len(larger_shape))
     )
-
-
-def extract_operands(expression):
-    # Regular expression to match variable names and function calls
-    pattern = re.compile(r"\b[a-zA-Z_]\w*\b")
-    # Find all matches
-    matches = pattern.findall(expression)
-    # Filter out function names and keywords
-    keywords = {"axis"}
-    operands = []
-    for match in matches:
-        # Check if the match is followed by '(' indicating a function call
-        if re.search(r"\b" + re.escape(match) + r"\s*\(", expression):
-            continue
-        if match not in keywords:
-            operands.append(match)
-    return list(set(operands))
 
 
 # Define the patterns for validation
@@ -1322,7 +1289,7 @@ def fuse_expressions(expr, new_base, dup_op):
                     break
             if expr[i + j] == ")":
                 j -= 1
-            old_pos = int(expr[i + 1 : i + j + 1])
+            old_pos = int(expr[i + 1: i + j + 1])
             old_op = f"o{old_pos}"
             if old_op not in dup_op:
                 if old_pos in prev_pos:

@@ -141,7 +141,8 @@ class Meta(Mapping):
 
 
 class SChunk(blosc2_ext.SChunk):
-    def __init__(self, chunksize: int = None, data: object = None, **kwargs: dict):
+    def __init__(self, chunksize: int = None, data: object = None,
+                 **kwargs: dict | blosc2.CParams | blosc2.Storage | blosc2.DParams) -> None:
         """Create a new super-chunk, or open an existing one.
 
         Parameters

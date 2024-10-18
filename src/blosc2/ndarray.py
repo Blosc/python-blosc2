@@ -660,31 +660,24 @@ class Operand:
             return NotImplemented
         value = inputs[0] if inputs[1] is self else inputs[1]
         _check_allowed_dtypes(value)
-        if ufunc == np.add:
-            return blosc2.LazyExpr(new_op=(value, "+", self))
-        if ufunc == np.subtract:
-            return blosc2.LazyExpr(new_op=(value, "-", self))
-        if ufunc == np.multiply:
-            return blosc2.LazyExpr(new_op=(value, "*", self))
-        if ufunc == np.divide:
-            return blosc2.LazyExpr(new_op=(value, "/", self))
-        if ufunc == np.true_divide:
-            return blosc2.LazyExpr(new_op=(value, "/", self))
-        if ufunc == np.power:
-            return blosc2.LazyExpr(new_op=(value, "**", self))
-        if ufunc == np.less:
-            return blosc2.LazyExpr(new_op=(value, "<", self))
-        if ufunc == np.less_equal:
-            return blosc2.LazyExpr(new_op=(value, "<=", self))
-        if ufunc == np.greater:
-            return blosc2.LazyExpr(new_op=(value, ">", self))
-        if ufunc == np.greater_equal:
-            return blosc2.LazyExpr(new_op=(value, ">=", self))
-        if ufunc == np.equal:
-            return blosc2.LazyExpr(new_op=(value, "==", self))
-        if ufunc == np.not_equal:
-            return blosc2.LazyExpr(new_op=(value, "!=", self))
 
+        ufunc_map = {
+            np.add: "+",
+            np.subtract: "-",
+            np.multiply: "*",
+            np.divide: "/",
+            np.true_divide: "/",
+            np.power: "**",
+            np.less: "<",
+            np.less_equal: "<=",
+            np.greater: ">",
+            np.greater_equal: ">=",
+            np.equal: "==",
+            np.not_equal: "!="
+        }
+
+        if ufunc in ufunc_map:
+            return blosc2.LazyExpr(new_op=(value, ufunc_map[ufunc], self))
 
         return NotImplemented
 
