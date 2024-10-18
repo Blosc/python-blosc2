@@ -289,18 +289,8 @@ def compute_broadcast_shape(arrays):
     Returns the shape of the outcome of an operation with the input arrays.
     """
     # When dealing with UDFs, one can arrive params that are not arrays
-    shapes = [np.array(arr.shape) for arr in arrays if hasattr(arr, "shape")]
-    max_len = max(map(len, shapes))
-
-    # Pad shorter shapes with 1s
-    shapes = np.array(
-        [np.concatenate([np.ones(max_len - len(shape), dtype=int), shape]) for shape in shapes], dtype=int
-    )
-
-    # Compare dimensions from last dimension, take maximum size
-    result_shape = np.max(shapes, axis=0)
-
-    return tuple(result_shape)
+    shapes = [arr.shape for arr in arrays if hasattr(arr, "shape")]
+    return np.broadcast_shapes(*shapes)
 
 
 def check_smaller_shape(value, shape, slice_shape):
@@ -423,15 +413,11 @@ def validate_inputs(inputs: dict, out=None) -> tuple:
         )
 
     inputs = list(input for input in inputs.values() if hasattr(input, "shape"))
+    shape = compute_broadcast_shape(inputs)
 
-    # All array inputs should have a compatible shape
-    if len(inputs) > 1:
-        check_broadcast_compatible(inputs)
-
-    ref = inputs[0]
-    if not all(np.array_equal(ref.shape, input.shape) for input in inputs):
+    if not all(np.array_equal(shape, input.shape) for input in inputs):
         # If inputs have different shapes, we cannot take the fast path
-        return ref.shape, None, None, False
+        return shape, None, None, False
 
     # More checks specific of NDArray inputs
     NDinputs = list(input for input in inputs if hasattr(input, "chunks"))
@@ -1202,6 +1188,7 @@ def reduce_slices(
 
 
 def convert_none_out(dtype, reduce_op, reduced_shape):
+    out = None
     # out will be a proper numpy.ndarray
     if reduce_op == ReduceOp.SUM:
         out = np.zeros(reduced_shape, dtype=dtype)
@@ -1543,8 +1530,6 @@ class LazyExpr(LazyArray):
     @property
     def dtype(self):
         if hasattr(self, "_dtype"):
-            # This comes from string expressions (probably saved on disk),
-            # so it is always the same
             return self._dtype
         operands = {key: np.ones(1, dtype=value.dtype) for key, value in self.operands.items()}
         _out = ne.evaluate(self.expression, local_dict=operands)
@@ -1554,8 +1539,6 @@ class LazyExpr(LazyArray):
     @property
     def shape(self):
         if hasattr(self, "_shape"):
-            # This comes from string expressions (probably saved on disk),
-            # so it is always the same
             return self._shape
         self._shape, chunks, blocks, fast_path = validate_inputs(self.operands)
         if fast_path:
