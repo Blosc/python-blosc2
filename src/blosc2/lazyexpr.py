@@ -1649,8 +1649,10 @@ class LazyExpr(LazyArray):
             # This comes from string expressions (probably saved on disk),
             # so it is always the same
             return self._dtype
-        # Updating the expression can change the dtype
-        return guess_dtype(self)
+        operands = {key: np.ones(1, dtype=value.dtype) for key, value in self.operands.items()}
+        _out = ne.evaluate(self.expression, local_dict=operands)
+        self._dtype = _out.dtype
+        return self._dtype
 
     @property
     def shape(self):
@@ -1990,12 +1992,12 @@ class LazyExpr(LazyArray):
                 #print(f"shape: {new_expr.shape}, dtype: {new_expr.dtype}")
                 # new_expr._shape = new_expr.shape
                 # Create versions of operands as numpy arrays with one single element
-                operands = {key: np.ones(1, dtype=value.dtype) for key, value in new_expr.operands.items()}
-                #operands = {key: value[()] for key, value in new_expr.operands.items()}
-                # Evaluate the expression with numexpr to guess the dtype
-                _out = ne.evaluate(new_expr.expression, local_dict=operands)
-                new_expr._dtype = _out.dtype
-                new_expr._shape = compute_broadcast_shape(new_expr.operands.values())
+                # operands = {key: np.ones(1, dtype=value.dtype) for key, value in new_expr.operands.items()}
+                # #operands = {key: value[()] for key, value in new_expr.operands.items()}
+                # # Evaluate the expression with numexpr to guess the dtype
+                # _out = ne.evaluate(new_expr.expression, local_dict=operands)
+                # new_expr._dtype = _out.dtype
+                # new_expr._shape = compute_broadcast_shape(new_expr.operands.values())
             else:
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
                 new_expr = cls(None)
