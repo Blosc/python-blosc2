@@ -1123,7 +1123,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             if isinstance(key, str):
                 if self.dtype.fields is None:
                     raise ValueError("The array is not structured (its dtype does not have fields)")
-                expr = blosc2.LazyExpr._new_expr(key, self.fields)
+                expr = blosc2.LazyExpr._new_expr(key, self.fields, guess=False)
                 return expr.where(self)
             key_, mask = process_key(key, self.shape)
             start, stop, step = get_ndarray_start_stop(self.ndim, key_, self.shape)
