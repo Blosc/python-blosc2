@@ -347,109 +347,6 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
     )
 
 
-def _parse_expression(expression):
-    stack = []
-    operand = ""
-    inside_string = False
-    for char in expression:
-        # Check that we are not inside a string that acts as an operand
-        if inside_string and char != "'":
-            operand += char
-            continue
-        if char == "'":
-            operand += char
-            inside_string = not inside_string
-            continue
-        if char == ")":
-            if operand:
-                stack.append(operand)
-                operand = ""
-            right = stack.pop()
-            op = stack.pop()
-            left = stack.pop()
-            if left in {"arctan2", "contains"}:
-                # Special case for functions with 2 operands.
-                # We will treat them as regular binary operations.
-                # Also, the operands can end with a comma, so we strip it.
-                stack.append((op.strip(","), left, right.strip(",")))
-            else:
-                stack.append((left, op, right))
-        elif char in "() ":
-            if operand:
-                stack.append(operand)
-                operand = ""
-        else:
-            operand += char
-    if operand:
-        stack.append(operand)
-    return stack[0]
-
-
-def guess_shape(lazy_expr):
-    """
-    Guess the shape of the result of the expression.
-
-    Parameters
-    ----------
-    lazy_expr: LazyExpr
-        The lazy expression to evaluate.
-
-    Returns
-    -------
-    tuple
-        The shape of the result of the expression.
-    """
-
-    def eval_shape(expr):
-        if isinstance(expr, str):
-            return lazy_expr.operands[expr].shape
-        elif isinstance(expr, tuple):
-            left_shape = eval_shape(expr[0])
-            right_shape = eval_shape(expr[2])
-            return np.broadcast_shapes(left_shape, right_shape)
-        else:
-            raise ValueError("Unsupported expression type")
-
-    parsed_expr = _parse_expression(lazy_expr.expression)
-    return eval_shape(parsed_expr)
-
-
-def guess_dtype(lazy_expr):
-    """
-    Guess the dtype of the result of the expression.
-
-    Parameters
-    ----------
-    lazy_expr: LazyExpr
-
-    Returns
-    -------
-    np.dtype
-        The dtype of the result of the expression.
-    """
-
-    def eval_dtype(expr):
-        if isinstance(expr, str):
-            if expr in lazy_expr.operands:
-                return lazy_expr.operands[expr].dtype
-            else:
-                try:
-                    # Handle numeric literals
-                    literal = ast.literal_eval(expr)
-                    return np.array([literal]).dtype
-                except ValueError as e:
-                    raise ValueError(f"Unsupported operand: {expr}") from e
-        elif isinstance(expr, tuple):
-            left_dtype = eval_dtype(expr[0])
-            right_dtype = eval_dtype(expr[2])
-            return np.promote_types(left_dtype, right_dtype)
-        else:
-            raise ValueError("Unsupported expression type")
-
-    parsed_expr = _parse_expression(lazy_expr.expression)
-    return eval_dtype(parsed_expr)
-
-
 def extract_operands(expression):
     # Regular expression to match variable names and function calls
     pattern = re.compile(r"\b[a-zA-Z_]\w*\b")
@@ -1983,18 +1880,7 @@ class LazyExpr(LazyArray):
             # in guessing mode to avoid computing reductions
             _globals = {func: getattr(blosc2, func) for func in functions if func in expression}
             new_expr = eval(expression, _globals, operands)
-            if isinstance(new_expr, blosc2.LazyExpr):
-                print(f"new expression: {new_expr.expression}") #, operands: {new_expr.operands}")
-                #print(f"shape: {new_expr.shape}, dtype: {new_expr.dtype}")
-                # new_expr._shape = new_expr.shape
-                # Create versions of operands as numpy arrays with one single element
-                # operands = {key: np.ones(1, dtype=value.dtype) for key, value in new_expr.operands.items()}
-                # #operands = {key: value[()] for key, value in new_expr.operands.items()}
-                # # Evaluate the expression with numexpr to guess the dtype
-                # _out = ne.evaluate(new_expr.expression, local_dict=operands)
-                # new_expr._dtype = _out.dtype
-                # new_expr._shape = compute_broadcast_shape(new_expr.operands.values())
-            else:
+            if not isinstance(new_expr, blosc2.LazyExpr):
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
                 new_expr = cls(None)
                 new_expr.expression = expression
