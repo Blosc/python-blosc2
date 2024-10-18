@@ -72,9 +72,9 @@ def get_ndarray_start_stop(ndim, key, shape):
 
 def are_partitions_aligned(shape, chunks, blocks):
     """
-    Check whether the partitions defined by chunks and blocks are aligned with shape.
+    Check if the partitions defined by chunks and blocks are aligned with the shape.
 
-    This checks that shape is aligned with the chunks and the chunks are aligned
+    This function verifies that the shape is aligned with the chunks and the chunks are aligned
     with the blocks.
 
     Returns
@@ -91,9 +91,9 @@ def are_partitions_aligned(shape, chunks, blocks):
 
 def are_partitions_behaved(shape, chunks, blocks):
     """
-    Check whether the partitions defined by chunks and blocks are well-behaved with shape.
+    Check if the partitions defined by chunks and blocks are well-behaved with respect to the shape.
 
-    This checks that partitions are C-contiguous with respect the outer container.
+    This function verifies that partitions are C-contiguous with respect the outer container.
 
     Returns
     -------
@@ -167,19 +167,19 @@ def sum(
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
-        Axis or axes along which a sum is performed. The default, axis=None,
-        will sum all the elements of the input array. If axis is negative
+        Axis or axes along which a sum is performed. By default, axis=None,
+        sums all the elements of the input array. If axis is negative,
         it counts from the last to the first axis.
     dtype: np.dtype, optional
         The type of the returned array and of the accumulator in which the
         elements are summed. The dtype of :paramref:`ndarr` is used by default unless it has
         an integer dtype of less precision than the default platform integer.
     keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result
+        If set to True, the reduced axes are left in the result
         as dimensions with size one. With this option, the result will broadcast
         correctly against the input array.
     kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+        Additional keyword arguments supported by the :func:`empty` constructor.
 
     Returns
     -------
@@ -219,22 +219,7 @@ def mean(
     """
     Return the arithmetic mean along the specified axis.
 
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which the means are computed. The default is to compute
-        the mean of the flattened array.
-    dtype: np.dtype, optional
-        Type to use in computing the mean. For integer inputs, the default is
-        float32; for floating point inputs, it is the same as the input dtype.
-    keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result
-        as dimensions with size one. With this option, the result will broadcast
-        correctly against the input array.
-    kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+    The parameters are documented in the :func:`sum <blosc2.sum>`.
 
     Returns
     -------
@@ -276,8 +261,8 @@ def std(
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int or tuple of ints, optional
-        Axis or axes along which the standard deviation is computed. The default is
-        to compute the standard deviation of the flattened array.
+        Axis or axes along which the standard deviation is computed. By default, `axis=None`
+        computes the standard deviation of the flattened array.
     dtype: np.dtype, optional
         Type to use in computing the standard deviation. For integer inputs, the
         default is float32; for floating point inputs, it is the same as the input dtype.
@@ -285,11 +270,11 @@ def std(
         Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
         where N represents the number of elements. By default, ddof is zero.
     keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result as
-        dimensions with size one. With this option, the result will broadcast correctly
+        If set to True, the reduced axes are left in the result as
+        dimensions with size one. This ensures that the result will broadcast correctly
         against the input array.
     kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+        Additional keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
@@ -330,25 +315,7 @@ def var(
     """
     Return the variance along the specified axis.
 
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which the variance is computed. The default is to compute
-        the variance of the flattened array.
-    dtype: np.dtype, optional
-        Type to use in computing the variance. For integer inputs, the default is
-        float32; for floating point inputs, it is the same as the input dtype.
-    ddof: int, optional
-        Means Delta Degrees of Freedom. The divisor used in calculations is N - ddof,
-        where N represents the number of elements. By default, ddof is zero.
-    keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result as
-        dimensions with size one. With this option, the result will broadcast correctly
-        against the input array.
-    kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+    The parameters are documented in the :func:`std <blosc2.std>`.
 
     Returns
     -------
@@ -389,25 +356,7 @@ def prod(
     """
     Return the product of array elements over a given axis.
 
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which a product is performed. The default, axis=None,
-        will multiply all the elements of the input array. If axis is negative
-        it counts from the last to the first axis.
-    dtype: np.dtype, optional
-        The type of the returned array and of the accumulator in which the
-        elements are multiplied. The dtype of :paramref:`ndarr` is used by default unless
-        :paramref:`ndarr` has an integer dtype of less precision than the
-        default platform integer.
-    keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result
-        as dimensions with size one. With this option, the result will broadcast
-        correctly against the input array.
-    kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+    The parameters are documented in the :func:`sum <blosc2.sum>`.
 
     Returns
     -------
@@ -453,7 +402,7 @@ def min(
     axis: int or tuple of ints, optional
         Axis or axes along which to operate. By default, flattened input is used.
     keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result as
+        If set to True, the axes which are reduced are left in the result as
         dimensions with size one. With this option, the result will broadcast correctly
         against the input array.
     kwargs: dict, optional
@@ -494,18 +443,7 @@ def max(
     """
     Return the maximum along a given axis.
 
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which to operate. By default, flattened input is used.
-    keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result as
-        dimensions with size one. With this option, the result will broadcast correctly
-        against the input array.
-    kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+    The parameters are documented in the :func:`min <blosc2.min>`.
 
     Returns
     -------
@@ -548,18 +486,7 @@ def any(
     """
     Test whether any array element along a given axis evaluates to True.
 
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which to operate. By default, flattened input is used.
-    keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result as
-        dimensions with size one. With this option, the result will broadcast correctly
-        against the input array.
-    kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+    The parameters are documented in the :func:`min <blosc2.min>`.
 
     Returns
     -------
@@ -600,18 +527,7 @@ def all(
     """
     Test whether all array elements along a given axis evaluate to True.
 
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array or expression.
-    axis: int or tuple of ints, optional
-        Axis or axes along which to operate. By default, flattened input is used.
-    keepdims: bool, optional
-        If this is set to True, the axes which are reduced are left in the result as
-        dimensions with size one. With this option, the result will broadcast correctly
-        against the input array.
-    kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+    The parameters are documented in the :func:`min <blosc2.min>`.
 
     Returns
     -------
@@ -879,7 +795,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
     def keep_last_read(self, value: bool) -> None:
         """Set whether the last read data should be kept in memory.
 
-        This always clear the last read data (if any).
+        This always clears the last read data (if any).
         """
         if not isinstance(value, bool):
             raise TypeError("keep_last_read should be a boolean")
@@ -952,9 +868,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
     @property
     def shape(self) -> tuple[int]:
-        """The data shape of this container.
+        """Returns the data shape of this container.
 
-        In case it is multiple in each dimension of :attr:`chunks`,
+        If the shape is a multiple of each dimension of :attr:`chunks`,
         it will be the same as :attr:`ext_shape`.
 
         See Also
@@ -981,9 +897,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
     @property
     def chunks(self) -> tuple[int]:
-        """The data chunk shape of this container.
+        """Returns the data chunk shape of this container.
 
-        In case it is multiple in each dimension of :attr:`blocks`,
+        If the chunk shape is a multiple of each dimension of :attr:`blocks`,
         it will be the same as :attr:`ext_chunks`.
 
         See Also
@@ -994,10 +910,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
     @property
     def ext_chunks(self) -> tuple[int]:
-        """The padded chunk shape which defines the chunksize in the associated schunk.
+        """
+        Returns the padded chunk shape which defines the chunksize in the associated schunk.
 
         This will be the chunk shape used to store each chunk, filling the extra positions
-        with zeros (padding). In case :attr:`chunks` is multiple in
+        with zeros (padding). If the :attr:`chunks` is a multiple of
         each dimension of :attr:`blocks` it will be the same as :attr:`chunks`.
 
         See Also
@@ -1023,13 +940,13 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
     @property
     def chunksize(self) -> int:
-        """The data chunk size (in bytes) for this container.
+        """Returns the data chunk size (in bytes) for this container.
 
         This will not be the same as
         :attr:`SChunk.chunksize <blosc2.schunk.SChunk.chunksize>`
         in case :attr:`chunks` is not multiple in
-        each dimension of :attr:`blocks` (or equivalently, in case :attr:`chunks` is
-        not the same as :attr:`ext_chunks`.
+        each dimension of :attr:`blocks` (or equivalently, if :attr:`chunks` is
+        not the same as :attr:`ext_chunks`).
 
         See Also
         --------
@@ -1071,21 +988,21 @@ class NDArray(blosc2_ext.NDArray, Operand):
     def __getitem__(
         self, key: int | slice | Sequence[slice] | blosc2.LazyExpr | str
     ) -> np.ndarray | blosc2.LazyExpr:
-        """Get a (multidimensional) slice as specified in key.
+        """Retrive a (multidimensional) slice as specified by the key.
 
         Parameters
         ----------
         key: int, slice, sequence of slices, LazyExpr or str
-            The slice(s) to be retrieved. Note that step parameter is not honored yet
-            in slices. If a LazyExpr is provided, the expression is supposed to be of boolean
-            type and the result will be the values of this array where the expression is True.
+            The slice(s) to be retrieved. Note that step parameter is not yet honored
+            in slices. If a LazyExpr is provided, the expression is expected to be of boolean
+            type, and the result will be the values of this array where the expression is True.
             If the key is a string, it will be converted to a LazyExpr, and will search for the
             operands in the fields of this structured array.
 
         Returns
         -------
         out: np.ndarray | blosc2.LazyExpr
-            An array (or LazyExpr) with the requested data.
+            The requested data as a NumPy array or a LazyExpr.
 
         Examples
         --------
@@ -1145,17 +1062,17 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return nparr
 
     def __setitem__(self, key: int | slice | Sequence[slice], value: object):
-        """Set a slice.
+        """Set a slice of the array.
 
         Parameters
         ----------
         key: int, slice or sequence of slices
-            The index for the slices to be updated. Note that step parameter
-            is not honored yet.
+            The index or indices specifying the slice(s) to be updated. Note that the step parameter
+            is not yet supported.
         value: Py_Object Supporting the Buffer Protocol
             An object supporting the
             `Buffer Protocol <https://docs.python.org/3/c-api/buffer.html>`_
-            used to overwrite the slice.
+            which will be used to overwrite the specified slice(s).
 
         Examples
         --------
@@ -1247,7 +1164,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         )
     ]:
         """
-        Iterate over :paramref:`self` chunks, providing info on index and special values.
+        Iterate over :paramref:`self` chunks of the array, providing information on index
+        and special values.
 
         Yields
         ------
@@ -1265,7 +1183,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 repeated_value: :attr:`self.dtype` or None
                     The repeated value for the chunk; if not SpecialValue.VALUE, it is None.
                 lazychunk: bytes
-                    A buffer with the complete lazy chunk.
+                    A buffer containing the complete lazy chunk.
 
         Examples
         --------
@@ -1294,12 +1212,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
             yield ChunkInfoNDArray(nchunk, coords, cratio, special, repeated_value, lazychunk)
 
     def tobytes(self) -> bytes:
-        """Returns a buffer with the data contents.
+        """Returns a buffer containing the data of the entire array.
 
         Returns
         -------
         out: bytes
-            The buffer containing the data of the whole array.
+            The buffer with the data of the whole array.
 
         Examples
         --------
@@ -1348,13 +1266,13 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Parameters
         ----------
         dtype: np.dtype
-            The new array dtype. Default `self.dtype`.
+            The new array dtype. Default is `self.dtype`.
 
         Other Parameters
         ----------------
         kwargs: dict, optional
-            Keyword arguments that are supported by the :func:`empty` constructor.
-            If some are not specified, the default will be the ones from the original
+            Additional keyword arguments supported by the :func:`empty` constructor.
+            If not specified, the defaults will be taken from the original
             array (except for the urlpath).
 
         Returns
@@ -1406,8 +1324,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Parameters
         ----------
         newshape : tuple or list
-            The new shape of the array. It should have the same dimensions
-            as :paramref:`self`.
+            The new shape of the array. It should have the same number of dimensions
+            as :paramref:`self`, the current shape.
 
         Returns
         -------
@@ -1415,8 +1333,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         Notes
         -----
-        The array values corresponding to the added positions are not initialized.
-        Thus, the user is in charge of initializing them.
+        The array values in the newly added positions are not initialized.
+        The user is responsible for initializing them.
 
         Examples
         --------
@@ -1442,18 +1360,18 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Parameters
         ----------
         key: int, slice or sequence of slices
-            The index for the slices to be updated. Note that the step parameter is
-            not honored yet in slices.
+            The index for the slices to be retrieved. Note that the step parameter is
+            not yet supported in slices.
 
         Other Parameters
         ----------------
         kwargs: dict, optional
-            Keyword arguments that are supported by the :func:`empty` constructor.
+            Additional keyword arguments supported by the :func:`empty` constructor.
 
         Returns
         -------
         out: :ref:`NDArray`
-            An array with the requested data. The dtype will be the same as `self`.
+            An array containing the requested data. The dtype will match that of `self`.
 
         Examples
         --------
@@ -1491,7 +1409,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return ndslice
 
     def squeeze(self) -> None:
-        """Remove the 1's in array's shape.
+        """Remove single-dimensional entries from the shape of the array.
+
+        This method modifies the array in-place, removing any dimensions with size 1.
 
         Returns
         -------
@@ -1515,17 +1435,17 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
 def sin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
-    Trigonometric sine, element-wise.
+    Compute the trigonometric sine, element-wise.
 
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        Angle, in radians.
+        The input array containing angles in radians.
 
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the sine of the input angles. The result can be evaluated.
 
     References
     ----------
@@ -1555,12 +1475,12 @@ def cos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        Angle, in radians.
+        The input array containing angles in radians.
 
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the cosine of the input angles. The result can be evaluated.
 
     References
     ----------
@@ -1585,17 +1505,18 @@ def cos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc
 
 def tan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
-    Trigonometric tangent, element-wise.
+    Compute the trigonometric tangent, element-wise.
 
     Parameters
     ----------
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        Angle, in radians.
+        The input array containing angles in radians.
 
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the tangent of the input angles.
+        The result can be evaluated.
 
     References
     ----------
@@ -1630,7 +1551,8 @@ def sqrt(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the square root of the input array.
+        The result can be evaluated.
 
     References
     ----------
@@ -1664,7 +1586,8 @@ def sinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the hyperbolic sine of the input array.
+        The result can be evaluated.
 
     References
     ----------
@@ -1688,7 +1611,7 @@ def sinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
 
 def cosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
-    Hyperbolic cosine, element-wise.
+    Compute the hyperbolic cosine, element-wise.
 
     Parameters
     ----------
@@ -1698,7 +1621,8 @@ def cosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the hyperbolic cosine of the input array.
+        The result can be evaluated.
 
     References
     ----------
@@ -1722,7 +1646,7 @@ def cosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
 
 def tanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
-    Hyperbolic tangent, element-wise.
+    Compute the hyperbolic tangent, element-wise.
 
     Parameters
     ----------
@@ -1732,7 +1656,8 @@ def tanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the hyperbolic tangent of the input array.
+        The result can be evaluated.
 
     References
     ----------
@@ -1756,7 +1681,7 @@ def tanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
 
 def arcsin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
-    Inverse sine, element-wise.
+    Compute the inverse sine, element-wise.
 
     Parameters
     ----------
@@ -1766,7 +1691,8 @@ def arcsin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> bl
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the inverse sine of the input array.
+        The result can be evaluated.
 
     References
     ----------
@@ -1790,7 +1716,7 @@ def arcsin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> bl
 
 def arccos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
-    Trigonometric inverse cosine, element-wise.
+    Compute the inverse cosine, element-wise.
 
     Parameters
     ----------
@@ -1800,7 +1726,8 @@ def arccos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> bl
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the inverse cosine of the input array.
+        The result can be evaluated.
 
     References
     ----------
@@ -1824,7 +1751,7 @@ def arccos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> bl
 
 def arctan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
-    Trigonometric inverse tangent, element-wise.
+    Compute the inverse tangent, element-wise.
 
     Parameters
     ----------
@@ -1834,7 +1761,8 @@ def arctan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> bl
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the inverse tangent of the input array.
+        The result can be evaluated.
 
     References
     ----------
@@ -1860,19 +1788,20 @@ def arctan2(
     ndarr1: NDArray | NDField | blosc2.C2Array, ndarr2: NDArray | NDField | blosc2.C2Array, /
 ) -> blosc2.LazyExpr:
     """
-    Element-wise arc tangent of ``ndarr1 / ndarr2`` choosing the quadrant correctly.
+    Compute the element-wise arc tangent of ``ndarr1 / ndarr2`` choosing the quadrant correctly.
 
     Parameters
     ----------
     ndarr1: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
-        The input array.
+        The first input array.
     ndarr2: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
-        The input array.
+        The second input array.
 
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the element-wise arc tangent of ``ndarr1 / ndarr2``.
+        The result can be evaluated.
 
     References
     ----------
@@ -1900,7 +1829,7 @@ def arctan2(
 
 def arcsinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
-    Inverse hyperbolic sine, element-wise.
+    Compute the inverse hyperbolic sine, element-wise.
 
     Parameters
     ----------
@@ -1910,7 +1839,8 @@ def arcsinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> b
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the inverse hyperbolic sine of the input array.
+        The result can be evaluated.
 
     References
     ----------
@@ -1934,7 +1864,7 @@ def arcsinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> b
 
 def arccosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
-    Inverse hyperbolic cosine, element-wise.
+    Compute the inverse hyperbolic cosine, element-wise.
 
     Parameters
     ----------
@@ -1944,7 +1874,8 @@ def arccosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> b
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the inverse hyperbolic cosine of the input array.
+        The result can be evaluated.
 
     References
     ----------
@@ -1968,7 +1899,7 @@ def arccosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> b
 
 def arctanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
-    Inverse hyperbolic tangent, element-wise.
+    Compute the inverse hyperbolic tangent, element-wise.
 
     Parameters
     ----------
@@ -1978,7 +1909,8 @@ def arctanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> b
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the inverse hyperbolic tangent of the input array.
+        The result can be evaluated.
 
     References
     ----------
@@ -2012,7 +1944,8 @@ def exp(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the exponential of the input array.
+        The result can be evaluated.
 
     References
     ----------
@@ -2046,7 +1979,8 @@ def expm1(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blo
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing ``exp(ndarr) - 1`` of the input array.
+        The result can be evaluated.
 
     References
     ----------
@@ -2070,7 +2004,7 @@ def expm1(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blo
 
 def log(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
-    Natural logarithm, element-wise.
+    Compute the natural logarithm, element-wise.
 
     Parameters
     ----------
@@ -2080,7 +2014,7 @@ def log(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the natural logarithm of the input array
 
     References
     ----------
@@ -2114,7 +2048,7 @@ def log10(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blo
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the base 10 logarithm of the input array.
 
     References
     ----------
@@ -2148,7 +2082,7 @@ def log1p(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blo
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the natural logarithm of one plus the input array.
 
     References
     ----------
@@ -2182,7 +2116,7 @@ def conj(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the complex conjugate of the input array.
 
     References
     ----------
@@ -2216,7 +2150,7 @@ def real(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the real part of the input array.
 
     References
     ----------
@@ -2250,7 +2184,7 @@ def imag(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression representing the imaginary part of the input array.
 
     References
     ----------
@@ -2276,7 +2210,7 @@ def contains(
     ndarr: NDArray | NDField | blosc2.C2Array, value: str | bytes | NDArray | NDField | blosc2.C2Array, /
 ) -> blosc2.LazyExpr:
     """
-    Check if the array contains a string value.
+    Check if the array contains a specified value.
 
     Parameters
     ----------
@@ -2288,7 +2222,8 @@ def contains(
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression that can be evaluated to check if the value
+        is contained in the array.
 
     Examples
     --------
@@ -2319,7 +2254,7 @@ def abs(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc
     Returns
     -------
     out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated.
+        A lazy expression that can be evaluated to get the absolute values.
 
     References
     ----------
@@ -2393,9 +2328,9 @@ def empty(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict)
     shape: int, tuple or list
         The shape for the final array.
     dtype: np.dtype
-        The ndarray dtype in NumPy format. Default is `np.uint8`.
+        The data type of the array elements in NumPy format. Default is `np.uint8`.
         This will override the `typesize`
-        in the cparams in case they are passed.
+        in the compression parameters if they are provided.
 
     Other Parameters
     ----------------
@@ -2407,7 +2342,7 @@ def empty(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict)
             blocks: tuple or list
                 The block shape. If None (default), Blosc2 will compute
                 an efficient block shape. This will override the `blocksize`
-                in the cparams in case they are passed.
+                in the cparams if they are provided.
 
         The other keyword arguments supported are the same as for the
         :obj:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>` constructor.
@@ -2505,7 +2440,7 @@ def nans(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: dict
 
 
 def zeros(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict) -> NDArray:
-    """Create an array, with zero being used as the default value
+    """Create an array with zero as the default value
     for uninitialized portions of the array.
 
     The parameters and keyword arguments are the same as for the
@@ -2552,16 +2487,16 @@ def full(
     Parameters
     ----------
     shape: int, tuple or list
-        The shape for the final array.
+        The shape of the final array.
     fill_value: bytes, int, float or bool
         Default value to use for uninitialized portions of the array.
         Its size will override the `typesize`
-        in the cparams in case they are passed.
+        in the cparams if they are passed.
     dtype: np.dtype
         The ndarray dtype in NumPy format. By default, this will
         be taken from the :paramref:`fill_value`.
         This will override the `typesize`
-        in the cparams in case they are passed.
+        in the cparams if they are passed.
 
     Other Parameters
     ----------------
@@ -2611,7 +2546,7 @@ def frombuffer(
     dtype: np.dtype
         The ndarray dtype in NumPy format. Default is `np.uint8`.
         This will override the `typesize`
-        in the cparams in case they are passed.
+        in the cparams if they are passed.
 
     Other Parameters
     ----------------
@@ -2800,7 +2735,7 @@ def get_slice_nchunks(
     schunk: blosc2.SChunk, key: tuple[(int, int)] | int | slice | Sequence[slice]
 ) -> np.ndarray:
     """
-    Get the unidimensional chunk indexes needed to get a
+    Get the unidimensional chunk indexes needed to obtain a
     slice of a :ref:`SChunk <SChunk>` or a :ref:`NDArray`.
 
     Parameters
@@ -2808,9 +2743,9 @@ def get_slice_nchunks(
     schunk: :ref:`SChunk <SChunk>` or :ref:`NDArray`
         The super-chunk or ndarray container.
     key: tuple(int, int), int, slice or sequence of slices
-        If it is a super-chunk, a tuple with the start and stop of the slice, an integer,
+        - For a super-chunk: a tuple with the start and stop of the slice, an integer,
         or a single slice.
-        If it is a ndarray, sequences of slices (one per dim) are accepted too.
+        - For an ndarray, sequences of slices (one per dimension) are accepted.
 
     Returns
     -------

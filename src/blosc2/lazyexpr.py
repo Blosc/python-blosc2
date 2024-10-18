@@ -79,7 +79,7 @@ class LazyArray(ABC):
     @abstractmethod
     def compute(self, item: slice | list[slice] = None, **kwargs: dict) -> blosc2.NDArray:
         """
-        Return a :ref:`NDArray` containing the evaluation of the :ref:`LazyArray`.
+        Return an :ref:`NDArray` containing the evaluation of the :ref:`LazyArray`.
 
         Parameters
         ----------
@@ -134,12 +134,12 @@ class LazyArray(ABC):
         Parameters
         ----------
         item: int, slice or sequence of slices
-            The slice(s) to be retrieved. Note that step parameter is not honored yet.
+            The slice(s) to be retrieved. Note that step parameter is not yet honored.
 
         Returns
         -------
         out: np.ndarray
-            An array with the data containing the slice evaluated.
+            An array with the data containing the evaluated slice.
 
         Examples
         --------
@@ -554,9 +554,9 @@ iter_chunks = None
 def fill_chunk_operands(
     operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands, reduc=False
 ):
-    """Get the chunk operands for the expression evaluation.
+    """Retrieve the chunk operands for evaluating an expression.
 
-    This function offers a fast path for full chunks and a slow path for the rest.
+    This function provides an optimized path for full chunks and a slower path for partial chunks.
     """
     global iter_chunks
 
@@ -652,11 +652,12 @@ def fast_eval(
     expression: str or callable
         The expression or udf to evaluate.
     operands: dict
-        A dictionary with the operands.
+        A dictionary containing the operands for the expression.
     getitem: bool, optional
-        Whether the expression is being evaluated for a getitem operation or eval().
+        Indicates whether the expression is being evaluated for a getitem operation or eval().
+        Default is False.
     kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+        Additional keyword arguments supported by the :func:`empty` constructor.
 
     Returns
     -------
@@ -762,24 +763,24 @@ def slices_eval(
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
-    This can be used when the operands in the expression have different chunk shapes.
-    Also, it can be used when only a slice of the output array is needed.
+    This function can handle operands with different chunk shapes and
+    can evaluate only a slice of the output array if needed.
 
-    This is also flexible enough to be used when the operands have different shapes.
+    This is also flexible enough to work with operands of different shapes.
 
     Parameters
     ----------
     expression: str or callable
-        The expression or udf to evaluate.
+        The expression or user-defined (udf) to evaluate.
     operands: dict
-        A dictionary with the operands.
+        A dictionary containing the operands for the expression.
     getitem: bool, optional
-        Whether the expression is being evaluated for a getitem operation.
+        Indicates whether the expression is being evaluated for a getitem operation.
     _slice: slice, list of slices, optional
-        If not None, only the chunks that intersect with this slice
+        If provided, only the chunks that intersect with this slice
         will be evaluated.
     kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+        Additional keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
@@ -941,27 +942,27 @@ def reduce_slices(
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
-    This can be used when the operands in the expression have different chunk shapes.
+    This function can handle operands with different chunk shapes.
     Also, it can be used when only a slice of the output array is needed.
 
     Parameters
     ----------
     expression: str or callable
-        The expression or udf to evaluate.
+        The expression or user-defined function (udf) to evaluate.
     operands: dict
-        A dictionary with the operands.
+        A dictionary containing the operands for the operands.
     reduce_args: dict
-        A dictionary with some of the arguments to be passed to np.reduce.
+        A dictionary with arguments to be passed to the reduction function.
     _slice: slice, list of slices, optional
-        If not None, only the chunks that intersect with this slice
+        If provided, only the chunks that intersect with this slice
         will be evaluated.
     kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
+        Additional keyword arguments supported by the :func:`empty` constructor.
 
     Returns
     -------
     :ref:`NDArray` or np.ndarray
-        The output array.
+        The resulting output array.
     """
     out = kwargs.pop("_output", None)
     where: dict | None = kwargs.pop("_where_args", None)
@@ -1187,20 +1188,21 @@ def chunked_eval(
     Parameters
     ----------
     expression: str or callable
-        The expression or udf to evaluate.
+        The expression or user-defined function (udf) to evaluate.
     operands: dict
-        A dictionary with the operands.
+        A dictionary containing the operands for the expression.
     item: int, slice or sequence of slices, optional
         The slice(s) to be retrieved. Note that step parameter is not honored yet.
     kwargs: dict, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.  In addition,
+        Additional keyword arguments supported by the :func:`empty` constructor.  In addition,
         the following keyword arguments are supported:
         _getitem: bool, optional
-            Whether the expression is being evaluated for a getitem operation.
+            Indicates whether the expression is being evaluated for a getitem operation.
+            Default is False.
         _output: NDArray or np.ndarray, optional
-            The output array.
+            The output array to store the result.
         _where_args: dict, optional
-            The where condition.
+            Additional arguments for conditional evaluation.
     """
     try:
         getitem = kwargs.pop("_getitem", False)
@@ -2034,19 +2036,20 @@ def lazyudf(
     Parameters
     ----------
     func: Python function
-        User defined function to apply to each block. This function will
-        always receive the same parameters: `inputs_tuple`, `output` and `offset`.
-        The first one will contain the corresponding slice for the block of each
-        input in :paramref:`inputs`. The second, the buffer to be filled as a multidimensional
-        numpy.ndarray. And the third one, the multidimensional offset corresponding
-        to the start of the block that it is being computed.
+        The user-defined function to apply to each block. This function will
+        always receive the following parameters:
+        - `inputs_tuple`: A tuple containing the corresponding slice for the block of each input
+        in :paramref:`inputs`.
+        - `output`: The buffer to be filled as a multidimensional numpy.ndarray.
+        - `offset`: The multidimensional offset corresponding to the start of the block being computed.
     inputs: tuple or list
-        The sequence of inputs. The supported inputs are NumPy.ndarray,
+        The sequence of inputs. Supported inputs are NumPy.ndarray,
         Python scalars, :ref:`NDArray`, :ref:`NDField` or :ref:`C2Array`.
     dtype: np.dtype
         The resulting ndarray dtype in NumPy format.
     chunked_eval: bool, optional
-        Whether to evaluate the expression in chunks or not (blocks).
+        Whether to evaluate the function in chunks or not (blocks).
+        Default is True.
     kwargs: dict, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
         These arguments will be used by the :meth:`LazyArray.__getitem__` and
@@ -2108,8 +2111,7 @@ def lazyexpr(
         The output array where the result will be stored. If not provided,
         a new array will be created.
     where: tuple, list, optional
-        A sequence with the where arguments. This is useful when the expression
-        contains a where clause. The where arguments should be provided as a sequence.
+        A sequence of arguments for the where clause in the expression.
     guess: bool, optional
         Whether to guess the output dtype and shape. If False, the dtype and shape
         will be computed producing temporary arrays in the process (e.g. for reductions).
