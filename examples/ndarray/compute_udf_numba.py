@@ -29,7 +29,7 @@ a = blosc2.asarray(npa)
 
 lazyarray = blosc2.lazyudf(func_numba, (npa,), npa.dtype)
 print(lazyarray.info)
-res = lazyarray.eval()
+res = lazyarray.compute()
 print(res.info)
 np.testing.assert_allclose(res[...], npc)
 print("Numba + LazyArray evaluated correctly!")

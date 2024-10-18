@@ -37,7 +37,7 @@ d = a + b
 # print(d, d.shape, d.dtype)
 # print(d.expression, d.operands)
 assert isinstance(d, blosc2.LazyExpr)
-e = d.eval()
+e = d.compute()
 print(e)
 assert isinstance(d, blosc2.LazyExpr)
 # Check

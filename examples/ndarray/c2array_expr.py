@@ -32,5 +32,5 @@ print(c[10:20, 10:20])
 np.testing.assert_allclose(c[:], a[:] + b[:])
 
 # Get an NDArray instance instead of a NumPy array
-ndarr = c.eval()
+ndarr = c.compute()
 np.testing.assert_allclose(ndarr[:], a[:] + b[:])

@@ -6,7 +6,7 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-# This shows how to evaluate expressions with NDField instances as operands.
+# This shows how to evaluate expressions with NDArray instances as operands.
 
 import numpy as np
 
@@ -14,23 +14,18 @@ import blosc2
 
 shape = (50, 50)
 
-# Create a structured NumPy array
+# Create a NDArray from a NumPy array
 npa = np.linspace(0, 1, np.prod(shape), dtype=np.float32).reshape(shape)
 npb = np.linspace(1, 2, np.prod(shape), dtype=np.float64).reshape(shape)
-npc = npa**2 + npb**2 > 2 * npa * npb + 1
-nps = np.empty(shape, dtype=[("a", npa.dtype), ("b", npb.dtype)])
-nps["a"] = npa
-nps["b"] = npb
+npc = npa**2 + npb**2 + 2 * npa * npb + 1
 
-s = blosc2.asarray(nps)
-a = blosc2.NDField(s, "a")
-b = blosc2.NDField(s, "b")
+a = blosc2.asarray(npa)
+b = blosc2.asarray(npb)
 
 # Get a LazyExpr instance
-c = a**2 + b**2 > 2 * a * b + 1
-
+c = a**2 + b**2 + 2 * a * b + 1
 # Evaluate: output is a NDArray
-d = c.eval()
+d = c.compute()
 # Check
 assert isinstance(d, blosc2.NDArray)
 assert np.allclose(d[:], npc)
@@ -47,4 +42,20 @@ npd = c[1:10]
 assert isinstance(npd, np.ndarray)
 assert np.allclose(npd, npc[1:10])
 
-print("Expression with NDField operands evaluated correctly!")
+print("NDArray expression evaluated correctly in-memory!")
+
+# Now, evaluate the expression from operands in disk
+# TODO: when doing a copy, mode should be 'w' by default?
+da = a.copy(urlpath="a.b2nd", mode="w")
+db = b.copy(urlpath="b.b2nd", mode="w")
+
+# Get a LazyExpr instance
+(da**2 + db**2 + 2 * da * db + 1).save(urlpath="c.b2nd")
+dc = blosc2.open("c.b2nd")
+
+# Evaluate: output is a NDArray
+dc2 = dc.compute()
+# Check
+assert isinstance(dc2, blosc2.NDArray)
+assert np.allclose(dc2[:], npc)
+print("NDArray expression evaluated correctly on-disk!")

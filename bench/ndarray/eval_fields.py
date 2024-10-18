@@ -49,7 +49,7 @@ b = s.fields['b']
 c = a**2 + b**2 > 2 * a * b + 1
 # Evaluate: output is a NDArray
 t0 = time()
-d = c.eval(cparams=cparams)
+d = c.compute(cparams=cparams)
 t = time() - t0
 print(f"Time to evaluate field expression (eval): {t:.3f} s; {nps.nbytes/2**30/t:.2f} GB/s")
 
