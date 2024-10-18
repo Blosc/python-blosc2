@@ -111,7 +111,7 @@ def test_simple_expression(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 - a3 * a4
     nres = ne.evaluate("na1 + na2 - na3 * na4")
-    res = expr.eval()
+    res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -123,7 +123,7 @@ def test_simple_expression_proxy(array_fixture):
     a4 = sa2.fields["b"]
     expr = a1 + a2 - a3 * a4
     nres = ne.evaluate("na1 + na2 - na3 * na4")
-    res = expr.eval()
+    res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -135,7 +135,7 @@ def test_iXXX(array_fixture):
     expr *= 2  # __imul__
     expr /= 7  # __itruediv__
     expr **= 2.3  # __ipow__
-    res = expr.eval()
+    res = expr.compute()
     nres = ne.evaluate("(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7) ** 2.3")
     np.testing.assert_allclose(res[:], nres)
 
@@ -145,7 +145,7 @@ def test_complex_evaluate(array_fixture):
     expr = blosc2.tan(a1) * (blosc2.sin(a2) * blosc2.sin(a2) + blosc2.cos(a3)) + (blosc2.sqrt(a4) * 2)
     expr += 2
     nres = ne.evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
-    res = expr.eval()
+    res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -180,7 +180,7 @@ def test_mixed_operands(array_fixture):
     assert not isinstance(a4, blosc2.NDField)
     expr = a1 + a2 - a3 * a4
     nres = ne.evaluate("na1 + na2 - na3 * na4")
-    res = expr.eval()
+    res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -189,7 +189,7 @@ def test_where(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
     # Test with eval
-    res = expr.where(0, 1).eval()
+    res = expr.where(0, 1).compute()
     nres = ne.evaluate("where(na1**2 + na2**2 > 2 * na1 * na2 + 1, 0, 1)")
     np.testing.assert_allclose(res[:], nres)
     # Test with getitem
@@ -203,7 +203,7 @@ def test_where_one_param(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
     # Test with eval
-    res = expr.where(a1).eval()
+    res = expr.where(a1).compute()
     nres = na1[na1**2 + na2**2 > 2 * na1 * na2 + 1]
     np.testing.assert_allclose(res[:], nres)
     # Test with getitem
@@ -217,12 +217,12 @@ def test_where_getitem(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
 
     # Test with eval
-    res = sa1[a1**2 + a2**2 > 2 * a1 * a2 + 1].eval()
+    res = sa1[a1**2 + a2**2 > 2 * a1 * a2 + 1].compute()
     nres = nsa1[na1**2 + na2**2 > 2 * na1 * na2 + 1]
     np.testing.assert_allclose(res["a"], nres["a"])
     np.testing.assert_allclose(res["b"], nres["b"])
     # string version
-    res = sa1["a**2 + b**2 > 2 * a * b + 1"].eval()
+    res = sa1["a**2 + b**2 > 2 * a * b + 1"].compute()
     np.testing.assert_allclose(res["a"], nres["a"])
     np.testing.assert_allclose(res["b"], nres["b"])
 
@@ -242,7 +242,7 @@ def test_where_getitem(array_fixture):
 def test_where_getitem_field(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     # Test with eval
-    res = a1[((a1**2 > a2**2) & ~(a1 * a2 > 1)) | (a1 < 0)].eval()
+    res = a1[((a1**2 > a2**2) & ~(a1 * a2 > 1)) | (a1 < 0)].compute()
     nres = na1[((na1**2 > na2**2) & ~(na1 * na2 > 1)) | (na1 < 0)]
     np.testing.assert_allclose(res[:], nres)
     # Test with getitem

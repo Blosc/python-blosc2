@@ -6,12 +6,12 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import numpy as np
-
-import blosc2
 from time import time
 
 import numexpr as ne
+import numpy as np
+
+import blosc2
 
 shape = (4_000, 5_000)
 chunks = (10, 5_000)
@@ -49,7 +49,7 @@ b = s.fields['b']
 c = a**2 + b**2 > 2 * a * b + 1
 # Evaluate: output is a NDArray
 t0 = time()
-d = c.eval(cparams=cparams)
+d = c.compute(cparams=cparams)
 t = time() - t0
 print(f"Time to evaluate field expression (eval): {t:.3f} s; {nps.nbytes/2**30/t:.2f} GB/s")
 

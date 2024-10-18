@@ -46,7 +46,7 @@ def test_1p(chunks, blocks, chunked_eval, c2sub_context):
     expr = blosc2.lazyudf(
         udf1p, (a,), npa.dtype, chunked_eval=chunked_eval, chunks=chunks, blocks=blocks, dparams={}
     )
-    res = expr.eval()
+    res = expr.compute()
     assert res.chunks == chunks
     assert res.blocks == blocks
     assert res.dtype == npa.dtype
@@ -101,7 +101,7 @@ def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, c2su
     lazy_eval = expr[slices]
     np.testing.assert_allclose(lazy_eval, npc[slices])
 
-    res = expr.eval(item=slices)
+    res = expr.compute(item=slices)
     np.testing.assert_allclose(res[...], npc[slices])
     assert res.schunk.urlpath is None
     assert res.schunk.contiguous == contiguous

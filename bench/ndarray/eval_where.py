@@ -6,12 +6,12 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import numpy as np
-
-import blosc2
 from time import time
 
 import numexpr as ne
+import numpy as np
+
+import blosc2
 
 shape = (4_000, 5_000)
 chunks = (10, 5_000)
@@ -49,7 +49,7 @@ b = s.fields['b']
 # Evaluate: output is a NDArray
 t0 = time()
 c = a**2 + b**2 > 2 * a * b + 1
-d = c.where(0, 1).eval(cparams=cparams)
+d = c.where(0, 1).compute(cparams=cparams)
 t = time() - t0
 print(f"Time to evaluate where expression (eval): {t:.3f} s; {nps.nbytes/2**30/t:.3f} GB/s")
 
@@ -69,13 +69,13 @@ print(f"Time to get row values (NumPy): {t:.3f} s; {nps.nbytes/2**30/t:.3f} GB/s
 
 # Evaluate and get row values: output is a NDArray
 t0 = time()
-npd = s[a**2 + b**2 > 2 * a * b + 1].eval(cparams=cparams)
+npd = s[a**2 + b**2 > 2 * a * b + 1].compute(cparams=cparams)
 t = time() - t0
 print(f"Time to get row values (eval): {t:.3f} s; {nps.nbytes/2**30/t:.3f} GB/s")
 
 # Evaluate and get row values: output is a NDArray
 t0 = time()
-npd = s['a**2 + b**2 > 2 * a * b + 1'].eval(cparams=cparams)
+npd = s['a**2 + b**2 > 2 * a * b + 1'].compute(cparams=cparams)
 t = time() - t0
 print(f"Time to get row values (eval, string): {t:.3f} s; {nps.nbytes/2**30/t:.3f} GB/s")
 

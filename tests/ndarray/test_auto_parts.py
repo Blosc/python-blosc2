@@ -11,6 +11,7 @@ import pytest
 
 import blosc2
 
+
 ################# Automatic compute of optional chunks and blocks #################
 # The exact outcome of these depends on many aspects, including CPUs cache sizes,
 # so what is done here is mainly a shallow sanity check.  Enable the prints in

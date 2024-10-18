@@ -11,7 +11,6 @@
 Packaging tensors (PyTorch, TensorFlow) larger than 2 GB.
 """
 
-import io
 import sys
 import time
 
@@ -20,6 +19,7 @@ import tensorflow as tf
 import torch
 
 import blosc2
+import io
 
 NREP = 1
 # N = int(5e8 + 2**27)  # larger than 2 GB

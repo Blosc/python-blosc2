@@ -36,8 +36,8 @@ for codec in blosc2.Codec:
     c = a * b
     # print(f"Elapsed time (expr): {time() - t0:.6f} s")
     t0 = time()
-    # d = c.eval(cparams=dict(codec=codec, clevel=5), chunks=(chunks, chunks), blocks=(blocks, blocks))
-    d = c.eval(cparams=dict(codec=codec, clevel=5))
+    # d = c.compute(cparams=dict(codec=codec, clevel=5), chunks=(chunks, chunks), blocks=(blocks, blocks))
+    d = c.compute(cparams=dict(codec=codec, clevel=5))
     print(f"Elapsed time (eval): {time() - t0:.6f} s")
     # print(d[:])
     print(f"cratio: {d.schunk.cratio:.2f}x")

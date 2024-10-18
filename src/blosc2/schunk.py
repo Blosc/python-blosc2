@@ -140,7 +140,8 @@ class Meta(Mapping):
 
 
 class SChunk(blosc2_ext.SChunk):
-    def __init__(self, chunksize: int = None, data: object = None, **kwargs: dict):
+    def __init__(self, chunksize: int = None, data: object = None,
+                 **kwargs: dict | blosc2.CParams | blosc2.Storage | blosc2.DParams) -> None:
         """Create a new super-chunk, or open an existing one.
 
         Parameters
@@ -1415,7 +1416,7 @@ def open(
       can be a :ref:`SChunk` or a :ref:`NDArray` and may not have all the data initialized (e.g. if the user
       has not accessed it yet).
 
-    * When opening a :ref:`LazyExpr` keep in mind the later note regarding the operands.
+    * When opening a :ref:`LazyExpr` keep in mind the note above regarding operands.
 
     Examples
     --------

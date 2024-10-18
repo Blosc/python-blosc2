@@ -24,17 +24,17 @@ b = blosc2.asarray(npb)
 
 # Get a LazyExpr instance with all NDArray operands
 c = blosc2.lazyexpr("a**2 + b**2 + 2 * a * b + 1", {"a": a, "b": b})
-d = c.eval()
+d = c.compute()
 assert np.allclose(d[:], npc)
 
 # A LazyExpr instance with a mix of NDArray and NumPy operands
 c = blosc2.lazyexpr("a**2 + b**2 + 2 * a * b + 1", {"a": npa, "b": b})
-d = c.eval()
+d = c.compute()
 assert np.allclose(d[:], npc)
 
 # A LazyExpr instance with a all NumPy operands
 c = blosc2.lazyexpr("a**2 + b**2 + 2 * a * b + 1", {"a": npa, "b": npb})
-d = c.eval()
+d = c.compute()
 assert np.allclose(d[:], npc)
 
 # Evaluate partial slices

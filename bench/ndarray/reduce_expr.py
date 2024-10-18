@@ -17,7 +17,6 @@ import numpy as np
 
 import blosc2
 
-
 shape = (50, 100, 10_000)
 chunks = [5, 100, 10_000]
 blocks = [4, 10, 1_000]
@@ -63,7 +62,7 @@ for n, axis in enumerate(laxis):
     b2expr = expr.replace("sin", "blosc2.sin").replace("cos", "blosc2.cos")
     c = eval(b2expr, b2vardict)
     t0 = time()
-    d = c.eval()
+    d = c.compute()
     d = d.sum(axis=axis)  #, dtype=npres.dtype)
     print("LazyExpr+eval took %.3f s" % (time() - t0))
     # Check
