@@ -19,7 +19,6 @@ from msgpack import packb, unpackb
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
-from blosc2.helpers import _inherit_doc_parameter
 
 
 class vlmeta(MutableMapping, blosc2_ext.vlmeta):
@@ -780,13 +779,11 @@ class SChunk(blosc2_ext.SChunk):
             The index where the slice will end (without including it).
             Default is until the SChunk ends.
         out: bytes-like object or bytearray
-            The destination object (supporting the
+            The target object (supporting the
             `Buffer Protocol <https://docs.python.org/3/c-api/buffer.html>`_) to fill.
-            The user must make sure
-            that it has enough capacity for hosting the decompressed
-            data. Default is None, meaning that a new bytes object
-            is created, filled and returned.
-
+            Verify that the buffer has enough space for the decompressed data.
+            If `None` is provided, a new bytes object will be created, filled,
+            and returned.
         Returns
         -------
         out: str or bytes or None
@@ -1365,8 +1362,6 @@ class SChunk(blosc2_ext.SChunk):
         super().__dealloc__()
 
 
-@_inherit_doc_parameter(blosc2.Storage, "mmap_mode:", {r"\* - 'w\+'[^*]+": ""})
-@_inherit_doc_parameter(blosc2.Storage, "initial_mapping_size:", {r"r\+ w\+, or c": "r+ or c"})
 def open(
     urlpath: str | pathlib.Path | blosc2.URLPath, mode: str = "a", offset: int = 0, **kwargs: dict
 ) -> blosc2.SChunk | blosc2.NDArray | blosc2.C2Array:

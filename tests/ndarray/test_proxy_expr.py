@@ -44,10 +44,8 @@ def get_arrays(shape, chunks_blocks):
     assert isinstance(a3, blosc2.NDArray)
     assert isinstance(a4, blosc2.NDArray)
 
-    blosc2.remove_urlpath("p1.b2nd")
-    blosc2.remove_urlpath("p3.b2nd")
-    p1 = blosc2.Proxy(a1, urlpath="p1.b2nd")
-    p3 = blosc2.Proxy(a3, urlpath="p3.b2nd")
+    p1 = blosc2.Proxy(a1, urlpath="p1.b2nd", mode="w")
+    p3 = blosc2.Proxy(a3, urlpath="p3.b2nd", mode="w")
     cleanup_paths.extend(["p1.b2nd", "p3.b2nd"])
 
     return p1, a2, p3, a4, na1, np.copy(na1), np.copy(na1), np.copy(na1), cleanup_paths
