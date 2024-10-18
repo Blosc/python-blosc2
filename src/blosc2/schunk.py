@@ -64,12 +64,12 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
 
 class Meta(Mapping):
     """
-    Class providing access to user meta on a :ref:`SChunk`.
-    It will be available via the `.meta` property of a :ref:`SChunk`.
+    Class providing access to user metadata on an :ref:`SChunk`.
+    It is available via the `.meta` property of an :ref:`SChunk`.
     """
 
     def get(self, key: str, default: Any = None) -> Any:
-        """Return the value for `key` if `key` is in the dictionary, else `default`.
+        """Return the value for `key` if `key` is in the dictionary, else return `default`.
         If `default` is not given, it defaults to ``None``."""
         return self.get(key, default)
 
@@ -93,14 +93,14 @@ class Meta(Mapping):
         value: bytes
             The buffer containing the new content for the metalayer.
 
-            ..warning: Note that the *length* of the metalayer cannot not change,
-            else an exception will be raised.
+            ..warning: Note that the *length* of the metalayer cannot change,
+            otherwise an exception will be raised.
         """
         value = packb(value, default=blosc2_ext.encode_tuple, strict_types=True, use_bin_type=True)
         blosc2_ext.meta__setitem__(self.schunk, key, value)
 
     def __getitem__(self, item: str) -> bytes:
-        """Return the `item` metalayer.
+        """Return the specified metalayer.
 
         Parameters
         ----------
@@ -110,7 +110,7 @@ class Meta(Mapping):
         Returns
         -------
         bytes
-            The buffer containing the metalayer info.
+            The buffer containing the metalayer information.
         """
         if self.__contains__(item):
             return unpackb(
@@ -146,7 +146,7 @@ class SChunk(blosc2_ext.SChunk):
         Parameters
         ----------
         chunksize: int, optional
-            The size, in bytes, of the chunks from the super-chunk. If not provided,
+            The size, in bytes, of the chunks in the super-chunk. If not provided,
             it is set automatically to a reasonable value.
 
         data: bytes-like object, optional
@@ -157,7 +157,7 @@ class SChunk(blosc2_ext.SChunk):
         ----------------
         kwargs: dict, optional
             Storage parameters. The default values are in :class:`blosc2.Storage`.
-            Keyword arguments supported:
+            Supported keyword arguments:
                 storage: :class:`blosc2.Storage` or dict
                     All the storage parameters that you want to use as
                     a :class:`blosc2.Storage` or dict instance.
@@ -193,8 +193,8 @@ class SChunk(blosc2_ext.SChunk):
         >>> urlpath = os.path.join(tmpdirname, 'schunk.b2frame')
 
         Optional: we intend to write 2 chunks of 24 bytes each, and we expect
-        the compressed size to be smaller than the original size. Hence, we
-        (generously) set the initial size of the mapping to 48 bytes
+        the compressed size to be smaller than the original size. Therefore, we
+        generously set the initial size of the mapping to 48 bytes
         effectively avoiding remappings.
 
         >>> initial_mapping_size = chunksize * n_chunks
@@ -410,7 +410,7 @@ class SChunk(blosc2_ext.SChunk):
         Raises
         ------
         RunTimeError
-            If :paramref:`data` could not be appended.
+            If the :paramref:`data` could not be appended.
 
         Examples
         --------
@@ -427,7 +427,7 @@ class SChunk(blosc2_ext.SChunk):
     def fill_special(
         self, nitems: int, special_value: blosc2.SpecialValue, value: bytes | int | float | bool = None
     ) -> int:
-        """Fill the SChunk with a special value.  SChunk must be empty.
+        """Fill the SChunk with a special value. The SChunk must be empty.
 
         Parameters
         ----------
@@ -492,22 +492,22 @@ class SChunk(blosc2_ext.SChunk):
             The index of the chunk that will be decompressed.
         dst: NumPy object or bytearray
             The destination NumPy object or bytearray to fill, the length
-            of which must be greater than 0. The user must make sure
-            that it has enough capacity for hosting the decompressed
+            of which must be greater than 0. The user must ensure
+            that it has enough capacity to host the decompressed
             chunk. Default is None, meaning that a new bytes object
             is created, filled and returned.
 
         Returns
         -------
         out: str or bytes
-            The decompressed chunk in form of a Python str or bytes object if
-            :paramref:`dst` is `None`. Otherwise, it will return `None` because the
+            The decompressed chunk as a Python str or bytes object if
+            :paramref:`dst` is `None`. Otherwise, it returns `None` because the
             result will already be in :paramref:`dst`.
 
         Raises
         ------
         RunTimeError
-            If some problem was detected.
+            If a problem is detected.
 
         Examples
         --------
@@ -533,7 +533,7 @@ class SChunk(blosc2_ext.SChunk):
         Parameters
         ----------
         nchunk: int
-            The chunk index that identifies the chunk that will be returned.
+            The index of the chunk that will be returned.
 
         Returns
         -------
@@ -543,7 +543,7 @@ class SChunk(blosc2_ext.SChunk):
         Raises
         ------
         RunTimeError
-            If some problem is detected.
+            If a problem is detected.
 
         Examples
         --------
@@ -580,7 +580,7 @@ class SChunk(blosc2_ext.SChunk):
         Raises
         ------
         RunTimeError
-            If some problem was detected.
+            If a problem is detected.
 
         Examples
         --------
@@ -604,12 +604,12 @@ class SChunk(blosc2_ext.SChunk):
         return super().delete_chunk(nchunk)
 
     def insert_chunk(self, nchunk: int, chunk: bytes) -> int:
-        """Insert an already compressed chunk in the SChunk.
+        """Insert an already compressed chunk into the SChunk.
 
         Parameters
         ----------
         nchunk: int
-            The position in which the chunk will be inserted.
+            The index at which the chunk will be inserted.
         chunk: bytes object
             The compressed chunk.
 
@@ -621,7 +621,7 @@ class SChunk(blosc2_ext.SChunk):
         Raises
         ------
         RunTimeError
-            If some problem was detected.
+            If a problem is detected.
 
         Examples
         --------
@@ -648,11 +648,11 @@ class SChunk(blosc2_ext.SChunk):
         Parameters
         ----------
         nchunk: int
-            The position in which the chunk will be inserted.
+            The index at which the chunk will be inserted.
         data: bytes object
             The data that will be compressed and inserted as a chunk.
         copy: bool
-            Whether to internally do a copy of the chunk to insert it or not.
+            Whether to make an internal copy of the chunk to insert it or not.
 
         Returns
         -------
@@ -662,7 +662,7 @@ class SChunk(blosc2_ext.SChunk):
         Raises
         ------
         RunTimeError
-            If some problem was detected.
+            If a problem is detected.
 
         Examples
         --------
@@ -689,9 +689,9 @@ class SChunk(blosc2_ext.SChunk):
         Parameters
         ----------
         nchunk: int
-            The position identifying the chunk that will be updated.
+            The index of the chunk to be updated.
         chunk: bytes object
-            The new compressed chunk that will replace the content of the old one.
+            The new compressed chunk that will replace the old chunk's content.
 
         Returns
         -------
@@ -701,7 +701,7 @@ class SChunk(blosc2_ext.SChunk):
         Raises
         ------
         RunTimeError
-            If some problem was detected.
+            If a problem is detected.
 
         Examples
         --------
@@ -726,16 +726,16 @@ class SChunk(blosc2_ext.SChunk):
         return super().update_chunk(nchunk, chunk)
 
     def update_data(self, nchunk: int, data: object, copy: bool) -> int:
-        """Update the chunk in the :paramref:`nchunk`-th position with the given data.
+        """Update the chunk in the specified position with the given data.
 
         Parameters
         ----------
         nchunk: int
-            The position identifying the chunk that will be updated.
+            The index of the chunk to be updated.
         data: bytes object
-            The data that will be compressed and will replace the old one.
+            The data to be compressed and will replace the old chunk.
         copy: bool
-            Whether to internally do a copy of the chunk to update it or not.
+             Whether to make an internal copy of the chunk before updating it.
 
         Returns
         -------
@@ -745,7 +745,7 @@ class SChunk(blosc2_ext.SChunk):
         Raises
         ------
         RunTimeError
-            If some problem was detected.
+            If a problem is detected.
 
         Examples
         --------
@@ -773,9 +773,9 @@ class SChunk(blosc2_ext.SChunk):
         Parameters
         ----------
         start: int
-            The index where the slice will begin. Default is 0.
+            The starting index of the slice. Default is 0.
         stop: int
-            The index where the slice will end (without including it).
+            The ending index of the slice (exclusive).
             Default is until the SChunk ends.
         out: bytes-like object or bytearray
             The target object (supporting the
@@ -783,11 +783,12 @@ class SChunk(blosc2_ext.SChunk):
             Verify that the buffer has enough space for the decompressed data.
             If `None` is provided, a new bytes object will be created, filled,
             and returned.
+
         Returns
         -------
         out: str or bytes or None
-            The decompressed slice in form of a Python str or bytes object if
-            :paramref:`out` is `None`. Otherwise, it will return `None` as the result
+            The decompressed slice a Python str or bytes object if
+            :paramref:`out` is `None`. Otherwise, it returns `None` since the result
             will already be in :paramref:`out`.
 
         Raises
@@ -795,9 +796,9 @@ class SChunk(blosc2_ext.SChunk):
         ValueError
             If the size to get is negative.
             If there is not enough space in :paramref:`out`.
-            If :paramref:`start` is greater or equal than the SChunk nitems
+            If :paramref:`start` is greater or equal to the number of items in the SChunk.
         RunTimeError
-            If some problem was detected.
+            If a problem is detected.
 
         See Also
         --------
@@ -838,20 +839,21 @@ class SChunk(blosc2_ext.SChunk):
         Parameters
         ----------
         item: int or slice
-            The index for the slice. Note that the step parameter is not honored.
+            The index or slice for the data. Note that the step parameter is not honored.
 
         Returns
         -------
         out: str or bytes
-            The decompressed slice in form of a Python str or bytes object.
+            The decompressed slice as a Python str or bytes object.
 
         Raises
         ------
         ValueError
             If the size to get is negative.
-            If :paramref:`item`.start is greater or equal than the SChunk nitems
+            If :paramref:`item`.start is greater than or equal to the number of
+            items in the SChunk.
         RunTimeError
-            If some problem was detected.
+            If a problem is detected.
         IndexError
             If `step` is not 1.
 
@@ -900,19 +902,19 @@ class SChunk(blosc2_ext.SChunk):
         Raises
         ------
         ValueError
-            If you cannot modify :paramref:`self`.
+            If the object cannot be modified.
             If the size to get is negative.
             If there is not enough space in :paramref:`value` to update the slice.
-            If :paramref:`start` is greater than the SChunk nitems
+            If :paramref:`start` is greater than the number of items in the SChunk.
         RunTimeError
-            If some problem was detected.
+            If a problem is detected.
         IndexError
             If `step` is not 1.
 
         Notes
         -----
         This method can also be used to append new data if :paramref:`key`.stop
-        is greater than the SChunk nitems.
+        is greater than the number of items in the SChunk.
 
         Examples
         --------
@@ -981,12 +983,12 @@ class SChunk(blosc2_ext.SChunk):
 
     def iterchunks(self, dtype: np.dtype) -> Iterator[np.ndarray]:
         """
-        Iterate over :paramref:`self` chunks.
+        Iterate over the :paramref:`self` chunks of the SChunk.
 
         Parameters
         ----------
         dtype: np.dtype
-            The data type to use.
+            The data type to use for the decompressed chunks.
 
         Yields
         ------
@@ -1026,7 +1028,7 @@ class SChunk(blosc2_ext.SChunk):
         )
     ]:
         """
-        Iterate over :paramref:`self` chunks, providing info on index and special values.
+        Iterate over the chunks of the SChunk, providing info on index and special values.
 
         Yields
         ------
@@ -1145,7 +1147,7 @@ class SChunk(blosc2_ext.SChunk):
         Parameters
         ----------
         func_name: str
-            Name of the postfilter func.
+            The name of the postfilter function to remove.
 
         Returns
         -------
@@ -1188,9 +1190,9 @@ class SChunk(blosc2_ext.SChunk):
         Parameters
         ----------
         inputs_tuple: tuple of tuples
-            Tuple which will contain a tuple for each argument that the function will
-            receive with their corresponding np.dtype.
-            The supported operand types are :ref:`SChunk`, `ndarray` and
+            Tuple containing a tuple for each argument that the function will receive, along with their
+            corresponding np.dtype.
+            Supported operand types are :ref:`SChunk`, `ndarray` and
             Python scalars.
         schunk_dtype: np.dtype
             The data type to use to fill :paramref:`self`.
@@ -1259,19 +1261,20 @@ class SChunk(blosc2_ext.SChunk):
     def prefilter(self, input_dtype: np.dtype, output_dtype: np.dtype = None) -> None:
         """Decorator to set a function as a prefilter.
 
-        This function will be executed each time before compressing the data. It will receive three parameters:
+        This function will be executed each time before compressing the data.
+        It will receive three parameters:
 
-        * the actual data as a `ndarray` from which to read,
-        * the `ndarray` to be filled
-        * the offset inside the `SChunk` instance where the corresponding block begins (see example below).
+        * The actual data as a `ndarray` from which to read,
+        * The `ndarray` to be filled,
+        * The offset inside the `SChunk` instance where the corresponding block begins (see example below).
 
         Parameters
         ----------
         input_dtype: np.dtype
-            Data type of the input that will receive the prefilter function.
-        output_dtype: np.dtype
-            Data type of the output that will receive and fill the prefilter function.
-            If None (default) it will be :paramref:`input_dtype`.
+            Data type of the input that will be processed the prefilter function.
+        output_dtype: np.dtype, optional
+            Data type of the output that will be filled by the prefilter function.
+            If None (default), it will be the same as :paramref:`input_dtype`.
 
         Returns
         -------
@@ -1371,7 +1374,7 @@ def open(
     ----------
     urlpath: str | pathlib.Path | :ref:`URLPath`
         The path where the :ref:`SChunk` (or :ref:`NDArray`)
-        is stored. In case it is a remote array, a :ref:`URLPath` must be passed.
+        is stored. If it is a remote array, a :ref:`URLPath` must be passed.
     mode: str, optional
         The open mode.
     offset: int, optional
@@ -1382,8 +1385,8 @@ def open(
     ----------------
     kwargs: dict, optional
         Keyword arguments supported:
-            mmap_mode:
-            initial_mapping_size:
+            mmap_mode: The memory mapping mode.
+            initial_mapping_size: The initial size of the memory mapping.
             cparams: dict
                 A dictionary with the compression parameters, which are the same that can be
                 used in the :func:`~blosc2.compress2` function.
@@ -1395,18 +1398,18 @@ def open(
     Returns
     -------
     out: :ref:`SChunk`, :ref:`NDArray` or :ref:`C2Array`
-        The SChunk or NDArray (in case there is a "b2nd" metalayer")
+        The SChunk or NDArray (if there is a "b2nd" metalayer")
         or the C2Array if :paramref:`urlpath` is a :ref:`blosc2.URLPath <URLPath>` instance.
 
     Notes
     -----
-    * This is just a 'logical' open, so there is not a `close()` counterpart because
-      currently there is no need for it.
+    * This is just a 'logical' open, so there is no `close()` counterpart because
+      currently, there is no need for it.
 
-    * In case :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
+    * If :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
       must be 'r', :paramref:`offset` must be 0, and kwargs cannot be passed.
 
-    * In case the original object saved in :paramref:`urlpath` was a :ref:`Proxy`, this function
+    * If the original object saved in :paramref:`urlpath` was a :ref:`Proxy`, this function
       will only return a :ref:`Proxy` if its source is a local :ref:`SChunk`, :ref:`NDArray`
       or a remote :ref:`C2Array`. Otherwise, it will return the Python-Blosc2 container used to cache the data which
       can be a :ref:`SChunk` or a :ref:`NDArray` and may not have all the data initialized (e.g. if the user
