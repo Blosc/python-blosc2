@@ -13,7 +13,6 @@ import numpy as np
 
 import blosc2
 
-
 CUBE_SIDE = 128
 
 class MmapBenchmarking:

@@ -6,12 +6,12 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import numpy as np
-
-import blosc2
 from time import time
 
 import numexpr as ne
+import numpy as np
+
+import blosc2
 
 shape = (4_000, 5_000)
 chunks = (10, 5_000)

@@ -17,7 +17,6 @@ import numpy as np
 
 import blosc2
 
-
 shape = (50, 100, 10_000)
 chunks = [5, 100, 10_000]
 blocks = [4, 10, 1_000]
