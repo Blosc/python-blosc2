@@ -567,7 +567,8 @@ def fill_chunk_operands(
         # performance only when at least one of them is persisted on disk
         if nchunk == 0:
             # Initialize the iterator for reading the chunks
-            arr = operands["o0"]
+            # Take any operand (all should have the same shape and chunks)
+            arr = next(iter(operands.values()))
             chunks_idx, _ = get_chunks_idx(arr.shape, arr.chunks)
             info = (reduc, aligned, low_mem, chunks_idx)
             iter_chunks = read_nchunk(list(operands.values()), info)
@@ -1828,11 +1829,20 @@ class LazyExpr(LazyArray):
             # in guessing mode to avoid computing reductions
             _globals = {func: getattr(blosc2, func) for func in functions if func in expression}
             new_expr = eval(expression, _globals, operands)
-            if not isinstance(new_expr, blosc2.LazyExpr):
+            _dtype = new_expr.dtype
+            _shape = new_expr.shape
+            if isinstance(new_expr, blosc2.LazyExpr):
+                # Restore the original expression and operands
+                new_expr.expression = expression
+                new_expr.operands = operands
+            else:
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
                 new_expr = cls(None)
                 new_expr.expression = expression
                 new_expr.operands = operands
+            # Cache the dtype and shape (should be immutable)
+            new_expr._dtype = _dtype
+            new_expr._shape = _shape
         else:
             # Create a new LazyExpr object
             new_expr = cls(None)
@@ -1999,8 +2009,15 @@ def _open_lazyarray(array):
     validate_expr(expr)
     # Create the expression as such
     expr = eval(expr, globals, operands_dict)
-    # Make the array info available for the user (only available when opened from disk)
-    expr.array = array
+    if isinstance(expr, blosc2.LazyExpr):
+        # Make the array info available for the user (only available when opened from disk)
+        expr.array = array
+        expr.schunk = array.schunk
+    elif isinstance(expr, np.ndarray):
+        # The expression was evaluated immediately
+        expr = blosc2.asarray(expr)
+    else:
+        raise ValueError("Unexpected error when opening the LazyArray")
     return expr
 
 
@@ -2074,7 +2091,6 @@ def lazyexpr(
     operands: dict = None,
     out: blosc2.NDArray | np.ndarray = None,
     where: tuple | list = None,
-    guess: bool = False,
 ) -> LazyExpr:
     """
     Get a LazyExpr from an expression.

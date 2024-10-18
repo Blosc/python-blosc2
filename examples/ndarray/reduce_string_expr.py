@@ -8,9 +8,8 @@
 
 # This shows how to evaluate expressions with NDArray instances as operands.
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 shape = (10, 10, 2)
 
@@ -25,29 +24,17 @@ b = blosc2.asarray(npb)
 # Get a LazyExpr instance
 c = a**2 + b**2 + 2 * a * b + 1
 # Evaluate: output is a NDArray
-# d = c.sum(axis=1)
-# d = blosc2.sum(c, axis=1)
-# d = blosc2.sum(c) + blosc2.mean(a)
-# d = blosc2.sum(c, axis=1) + blosc2.mean(a, axis=0)
-# d = blosc2.sum(c, axis=(0, 2)) + blosc2.mean(a, axis=(0, 2))
-#d = a.slice((1, 1)) + blosc2.sum(c) + blosc2.std(a)
 d = blosc2.lazyexpr("sl + c.sum() + a.std()",
-                    operands=dict(a=a, c=c, sl=a.slice((1, 1))), guess=True)
-print(d, d.shape, d.dtype)
-# print(d.expression, d.operands)
+                    operands=dict(a=a, c=c, sl=a.slice((1, 1))))
+print(f"Expression: {d.expression}")
+print(f"Operands: {d.operands}")
 assert isinstance(d, blosc2.LazyExpr)
 e = d.compute()
-# print(e)
 assert isinstance(d, blosc2.LazyExpr)
 # Check
 assert isinstance(e, blosc2.NDArray)
 sum = e[()]
 print("Reduction with Blosc2:\n", sum)
-# npsum = npc.sum(axis=1)
-# npsum = np.sum(npc, axis=1)
-# npsum = np.sum(npc) + np.mean(npa)
-# npsum = np.sum(npc, axis=1) + np.mean(npa, axis=0)
-# npsum = np.sum(npc, axis=(0, 2)) + np.mean(npa, axis=(0, 2))
 npsum = npa[1, 1] + np.sum(npc) + np.std(npa)
 print("Reduction with NumPy:\n", npsum)
 # npsum = np.sum(npc, axis=(0,2)) + np.std(npa, axis=(0, 2))
