@@ -59,11 +59,11 @@ def test_simple(chunks_blocks, c2sub_context):
     sl = slice(10)
     expr = a1 + a3
     nres = ne.evaluate("na1 + na3")
-    res = expr.eval(item=sl)
+    res = expr.compute(item=sl)
     np.testing.assert_allclose(res[:], nres[sl])
 
     # All
-    res = expr.eval()
+    res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -98,7 +98,7 @@ def test_ixxx(chunks_blocks, c2sub_context):
     expr += 5  # __iadd__
     expr /= 7  # __itruediv__
     expr **= 2.3  # __ipow__
-    res = expr.eval()
+    res = expr.compute()
     nres = ne.evaluate("(((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) / 7) ** 2.3")
     np.testing.assert_allclose(res[:], nres)
 
@@ -111,7 +111,7 @@ def test_complex(c2sub_context):
     expr += 2
     nres = ne.evaluate("tan(na1) * sin(na2) + (sqrt(na4) * 2) + 2")
     # eval
-    res = expr.eval()
+    res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
     # __getitem__
     res = expr[:]
@@ -141,22 +141,22 @@ def test_mix_operands(chunks_blocks, c2sub_context):
     expr = a1 + b1
     nres = ne.evaluate("na1 + na1")
     np.testing.assert_allclose(expr[:], nres)
-    np.testing.assert_allclose(expr.eval()[:], nres)
+    np.testing.assert_allclose(expr.compute()[:], nres)
 
     expr = a1 + b3
     nres = ne.evaluate("na1 + na3")
     np.testing.assert_allclose(expr[:], nres)
-    np.testing.assert_allclose(expr.eval()[:], nres)
+    np.testing.assert_allclose(expr.compute()[:], nres)
 
     expr = a1 + b1 + a2 + b3
     nres = ne.evaluate("na1 + na1 + na2 + na3")
     np.testing.assert_allclose(expr[:], nres)
-    np.testing.assert_allclose(expr.eval()[:], nres)
+    np.testing.assert_allclose(expr.compute()[:], nres)
 
     expr = a1 + a2 + b1 + b3
     nres = ne.evaluate("na1 + na2 + na1 + na3")
     np.testing.assert_allclose(expr[:], nres)
-    np.testing.assert_allclose(expr.eval()[:], nres)
+    np.testing.assert_allclose(expr.compute()[:], nres)
 
     # TODO: fix this
     # expr = a1 + na1 * b3
@@ -164,7 +164,7 @@ def test_mix_operands(chunks_blocks, c2sub_context):
     # print("expression: ", expr.expression)
     # nres = ne.evaluate("na1 + na1 * na3")
     # np.testing.assert_allclose(expr[:], nres)
-    # np.testing.assert_allclose(expr.eval()[:], nres)
+    # np.testing.assert_allclose(expr.compute()[:], nres)
 
 
 # Tests related with save method
@@ -176,7 +176,7 @@ def test_save(c2sub_context):
     expr = a1 * a2 + a3 - a4 * 3
     nres = ne.evaluate("na1 * na2 + na3 - na4 * 3")
 
-    res = expr.eval()
+    res = expr.compute()
     assert res.dtype == np.float64
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
 
@@ -187,7 +187,7 @@ def test_save(c2sub_context):
         del op
     del expr
     expr = blosc2.open(urlpath)
-    res = expr.eval()
+    res = expr.compute()
     assert res.dtype == np.float64
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
     # Test getitem
@@ -230,13 +230,13 @@ def broadcast_fixture(broadcast_shape, c2sub_context):
 def test_broadcasting(broadcast_fixture):
     a1, a2, na1, na2 = broadcast_fixture
     expr1 = a1 + a2
-    assert expr1.shape == a1.shape
+    assert expr1.shape == np.broadcast_shapes(a1.shape, a2.shape)
     expr2 = a1 * a2 + 1
-    assert expr2.shape == a1.shape
+    assert expr2.shape == np.broadcast_shapes(a1.shape, a2.shape)
     expr = expr1 - expr2
-    assert expr.shape == a1.shape
+    assert expr.shape == np.broadcast_shapes(a1.shape, a2.shape)
     nres = ne.evaluate("na1 + na2 - (na1 * na2 + 1)")
-    res = expr.eval()
+    res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
     res = expr[:]
     np.testing.assert_allclose(res, nres)

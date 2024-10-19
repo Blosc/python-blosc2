@@ -18,7 +18,6 @@ import numpy as np
 
 import blosc2
 
-
 shape = (5000, 10_000)
 chunks = [500, 10_000]
 blocks = [4, 10_000]
@@ -112,7 +111,7 @@ for n, expr in enumerate(exprs):
     b2expr = expr.replace("sin", "blosc2.sin").replace("cos", "blosc2.cos")
     c = eval(b2expr, b2vardict)
     t0 = time()
-    d = c.eval()
+    d = c.compute()
     print("LazyExpr+eval took %.3f s" % (time() - t0))
     # Check
     np.testing.assert_allclose(d[:], npres, rtol=rtol, atol=atol)
@@ -139,7 +138,7 @@ for n, expr in enumerate(exprs):
     # actual benchmark
     # eval() uses the udf function as a prefilter
     t0 = time()
-    res = expr_.eval()
+    res = expr_.compute()
     print("LazyUDF+eval took %.3f s" % (time() - t0))
     np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)
     # getitem uses the same compiled function but as a postfilter
@@ -152,7 +151,7 @@ for n, expr in enumerate(exprs):
                            chunks=chunks, blocks=blocks, cparams=cparams)
     # getitem but using chunked evaluation
     t0 = time()
-    res = expr_.eval()
+    res = expr_.compute()
     print("LazyUDF+chunked_eval took %.3f s" % (time() - t0))
     np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)
     t0 = time()

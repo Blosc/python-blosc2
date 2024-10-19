@@ -7,9 +7,8 @@
 #######################################################################
 import os
 
-import pytest
-
 import blosc2
+import pytest
 
 
 # This still needs to pass the '-s' flag to pytest to see the output but anyways

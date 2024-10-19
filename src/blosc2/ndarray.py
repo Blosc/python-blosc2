@@ -570,6 +570,33 @@ class Operand:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        # Handle operations at the array level
+        if method != "__call__":
+            return NotImplemented
+        value = inputs[0] if inputs[1] is self else inputs[1]
+        _check_allowed_dtypes(value)
+
+        ufunc_map = {
+            np.add: "+",
+            np.subtract: "-",
+            np.multiply: "*",
+            np.divide: "/",
+            np.true_divide: "/",
+            np.power: "**",
+            np.less: "<",
+            np.less_equal: "<=",
+            np.greater: ">",
+            np.greater_equal: ">=",
+            np.equal: "==",
+            np.not_equal: "!="
+        }
+
+        if ufunc in ufunc_map:
+            return blosc2.LazyExpr(new_op=(value, ufunc_map[ufunc], self))
+
+        return NotImplemented
+
     def __radd__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "+", self))
@@ -1011,7 +1038,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             if isinstance(key, str):
                 if self.dtype.fields is None:
                     raise ValueError("The array is not structured (its dtype does not have fields)")
-                expr = blosc2.LazyExpr._new_expr(key, self.fields)
+                expr = blosc2.LazyExpr._new_expr(key, self.fields, guess=False)
                 return expr.where(self)
             key_, mask = process_key(key, self.shape)
             start, stop, step = get_ndarray_start_stop(self.ndim, key_, self.shape)
@@ -2206,7 +2233,7 @@ def contains(
     >>> text_values = blosc2.asarray(values)
     >>> value_to_check = b"banana"
     >>> expr = blosc2.contains(text_values, value_to_check)
-    >>> result = expr.eval()
+    >>> result = expr.compute()
     >>> print("Contains 'banana':", result[:])
     Contains 'banana': [False  True False False]
     """

@@ -69,7 +69,7 @@ def test_expr_proxy_operands(chunks_blocks, c2sub_context):
     expr = a1 + a2 + a3 + a4
     expr += 3
     nres = ne.evaluate("na1 + na2 + na3 + na4 + 3")
-    res = expr.eval(item=sl)
+    res = expr.compute(item=sl)
     np.testing.assert_allclose(res[:], nres[sl])
 
     # Save
@@ -80,7 +80,7 @@ def test_expr_proxy_operands(chunks_blocks, c2sub_context):
     assert isinstance(expr_opened, blosc2.LazyExpr)
 
     # All
-    res = expr_opened.eval()
+    res = expr_opened.compute()
     np.testing.assert_allclose(res[:], nres)
 
     # Cleanup

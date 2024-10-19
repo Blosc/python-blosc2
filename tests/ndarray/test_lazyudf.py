@@ -67,7 +67,7 @@ def test_1p(shape, chunks, blocks, chunked_eval):
     expr = blosc2.lazyudf(
         udf1p, (npa,), npa.dtype, chunked_eval=chunked_eval, chunks=chunks, blocks=blocks, dparams={}
     )
-    res = expr.eval()
+    res = expr.compute()
     assert res.shape == shape
     assert res.chunks == chunks
     assert res.blocks == blocks
@@ -116,7 +116,7 @@ def test_2p(shape, chunks, blocks, chunked_eval):
     expr = blosc2.lazyudf(
         udf2p, (npa, b), npa.dtype, chunked_eval=chunked_eval, chunks=chunks, blocks=blocks
     )
-    res = expr.eval()
+    res = expr.compute()
 
     np.testing.assert_allclose(res[...], npc)
 
@@ -159,7 +159,7 @@ def test_1dim(shape, chunks, blocks, chunked_eval):
         chunks=chunks,
         blocks=blocks,
     )
-    res = expr.eval()
+    res = expr.compute()
 
     tol = 1e-5 if res.dtype is np.float32 else 1e-14
     np.testing.assert_allclose(res[...], npc, rtol=tol, atol=tol)
@@ -183,16 +183,16 @@ def test_params(chunked_eval):
         udf1p, (array,), np.float64, chunked_eval=chunked_eval, urlpath=urlpath, cparams=cparams
     )
     with pytest.raises(ValueError):
-        _ = expr.eval(urlpath=urlpath)
+        _ = expr.compute(urlpath=urlpath)
 
-    res = expr.eval(urlpath=urlpath2, chunks=(10,))
+    res = expr.compute(urlpath=urlpath2, chunks=(10,))
     np.testing.assert_allclose(res[...], npc)
     assert res.shape == npa.shape
     assert res.schunk.cparams.nthreads == cparams["nthreads"]
     assert res.schunk.urlpath == urlpath2
     assert res.chunks == (10,)
 
-    res = expr.eval()
+    res = expr.compute()
     np.testing.assert_allclose(res[...], npc)
     assert res.schunk.urlpath is None
 
@@ -202,7 +202,7 @@ def test_params(chunked_eval):
     # Pass list
     lnumbers = [1, 2, 3, 4, 5]
     expr = blosc2.lazyudf(udf1p, (lnumbers,), np.float64)
-    res = expr.eval()
+    res = expr.compute()
     npc = np.array(lnumbers) + 1
     np.testing.assert_allclose(res[...], npc)
 
@@ -238,7 +238,7 @@ def test_getitem(shape, chunks, blocks, slices, urlpath, contiguous, chunked_eva
     lazy_eval = expr[slices]
     np.testing.assert_allclose(lazy_eval, npc[slices])
 
-    res = expr.eval()
+    res = expr.compute()
     np.testing.assert_allclose(res[...], npc)
     assert res.schunk.urlpath is None
     assert res.schunk.contiguous == contiguous
@@ -278,7 +278,7 @@ def test_eval_slice(shape, chunks, blocks, slices, urlpath, contiguous, chunked_
         contiguous=contiguous,
         dparams=dparams,
     )
-    res = expr.eval(item=slices, chunks=None, blocks=None)
+    res = expr.compute(item=slices, chunks=None, blocks=None)
     np.testing.assert_allclose(res[...], npc[slices])
     assert res.schunk.urlpath is None
     assert res.schunk.contiguous == contiguous
@@ -290,7 +290,7 @@ def test_eval_slice(shape, chunks, blocks, slices, urlpath, contiguous, chunked_
     urlpath2 = "slice_eval2.b2nd"
     blosc2.remove_urlpath(urlpath2)
 
-    res = expr.eval(item=slices, chunks=None, blocks=None, cparams=cparams, urlpath=urlpath2)
+    res = expr.compute(item=slices, chunks=None, blocks=None, cparams=cparams, urlpath=urlpath2)
     np.testing.assert_allclose(res[...], npc[slices])
     assert res.schunk.urlpath == urlpath2
     assert res.schunk.contiguous == contiguous
@@ -355,7 +355,7 @@ def test_offset(shape, chunks, blocks, slices, chunked_eval, eval_mode):
         blocks=blocks,
     )
     if eval_mode == "eval":
-        res = expr.eval(slices)
+        res = expr.compute(slices)
         res = res[:]
     else:
         res = expr[slices]

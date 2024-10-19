@@ -12,8 +12,6 @@
 
 from enum import Enum
 
-import numexpr
-
 from ._version import __version__
 
 __version__ = __version__

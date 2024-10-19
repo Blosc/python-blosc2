@@ -14,6 +14,7 @@ import copy
 import math
 import os
 import pathlib
+import re
 import threading
 from abc import ABC, abstractmethod
 from enum import Enum
@@ -24,6 +25,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+import inspect
+
 import ndindex
 import numexpr as ne
 import numpy as np
@@ -32,6 +35,15 @@ import blosc2
 from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
 from blosc2.ndarray import get_chunks_idx
+
+
+def is_inside_eval():
+    # Get the current call stack
+    stack = inspect.stack()
+    return any(
+        "_new_expr" in frame_info.function or "_open_lazyarray" in frame_info.function
+        for frame_info in stack
+    )
 
 
 class ReduceOp(Enum):
@@ -67,7 +79,7 @@ class LazyArrayEnum(Enum):
 
 class LazyArray(ABC):
     @abstractmethod
-    def eval(self, item: slice | list[slice] = None, **kwargs: dict) -> blosc2.NDArray:
+    def compute(self, item: slice | list[slice] = None, **kwargs: dict) -> blosc2.NDArray:
         """
         Return an :ref:`NDArray` containing the evaluation of the :ref:`LazyArray`.
 
@@ -107,7 +119,7 @@ class LazyArray(ABC):
         >>> b1 = blosc2.asarray(b)
         >>> # Perform the mathematical operation
         >>> expr = a1 + b1
-        >>> output = expr.eval()
+        >>> output = expr.compute()
         >>> f"Result of a + b (lazy evaluation): {output[:]}"
         Result of a + b (lazy evaluation):
                     [[ 0.    1.25  2.5 ]
@@ -258,38 +270,13 @@ def convert_inputs(inputs):
     return inputs_
 
 
-def check_broadcast_compatible(arrays):
-    shapes = [arr.shape for arr in arrays]
-    max_len = max(map(len, shapes))
-    # Pad shorter shapes with 1s
-    shapes_ = [(1,) * (max_len - len(shape)) + shape for shape in shapes]
-    # Reverse the shapes to compare from last dimension
-    shapes_ = [shape[::-1] for shape in shapes_]
-    # Check
-    for dims in zip(*shapes_, strict=True):
-        max_dim = max(dims)
-        if not all(dim in (max_dim, 1) for dim in dims):
-            _shapes = " ".join(str(shape) for shape in shapes)
-            raise ValueError(f"operands could not be broadcast together with shapes {_shapes}")
-
-
 def compute_broadcast_shape(arrays):
     """
     Returns the shape of the outcome of an operation with the input arrays.
     """
     # When dealing with UDFs, one can arrive params that are not arrays
-    shapes = [np.array(arr.shape) for arr in arrays if hasattr(arr, "shape")]
-    max_len = max(map(len, shapes))
-
-    # Pad shorter shapes with 1s
-    shapes = np.array(
-        [np.concatenate([np.ones(max_len - len(shape), dtype=int), shape]) for shape in shapes], dtype=int
-    )
-
-    # Compare dimensions from last dimension, take maximum size
-    result_shape = np.max(shapes, axis=0)
-
-    return tuple(result_shape)
+    shapes = [arr.shape for arr in arrays if hasattr(arr, "shape")]
+    return np.broadcast_shapes(*shapes)
 
 
 def check_smaller_shape(value, shape, slice_shape):
@@ -304,9 +291,6 @@ def check_smaller_shape(value, shape, slice_shape):
 
 
 def _compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
-    """
-    Returns the slice of the smaller array that corresponds to the slice of the larger array.
-    """
     smaller_slice = []
     diff_dims = len(larger_shape) - len(smaller_shape)
 
@@ -329,11 +313,63 @@ def _compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
 
 # A more compact version of the function above, albeit less readable
 def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
+    """
+    Returns the slice of the smaller array that corresponds to the slice of the larger array.
+    """
     diff_dims = len(larger_shape) - len(smaller_shape)
     return tuple(
         larger_slice[i] if smaller_shape[i - diff_dims] != 1 else slice(None)
         for i in range(diff_dims, len(larger_shape))
     )
+
+
+# Define the patterns for validation
+validation_patterns = [
+    r"[\;\[\:]",  # Flow control characters
+    r"(^|[^\w])__[\w]+__($|[^\w])",  # Dunder methods
+    r"\.\b(?!real|imag|(\d*[eE]?[+-]?\d+)|\d*j\b|(sum|prod|min|max|std|mean|var|any|all|where)"
+    r"\s*\([^)]*\)|[a-zA-Z_]\w*\s*\([^)]*\))",  # Attribute patterns
+]
+
+# Compile the blacklist regex
+_blacklist_re = re.compile("|".join(validation_patterns))
+
+# Define valid method names
+valid_methods = {"sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "where"}
+
+
+def validate_expr(expr: str) -> None:
+    """
+    Validate expression for forbidden syntax and valid method names.
+
+    Parameters
+    ----------
+    expr : str
+        The expression to validate.
+
+    Returns
+    -------
+    None
+    """
+    # Remove whitespace and skip quoted strings
+    no_whitespace = re.sub(r"\s+", "", expr)
+    skip_quotes = re.sub(r"(\'[^\']*\')", "", no_whitespace)
+
+    # Check for forbidden patterns
+    if _blacklist_re.search(skip_quotes) is not None:
+        raise ValueError(f"'{expr}' is not a valid expression.")
+
+    # Check for invalid characters not covered by the tokenizer
+    invalid_chars = re.compile(r"[^\w\s+\-*/%().,=<>!&|~^]")
+    if invalid_chars.search(skip_quotes) is not None:
+        invalid_chars = invalid_chars.findall(skip_quotes)
+        raise ValueError(f"Expression {expr} contains invalid characters: {invalid_chars}")
+
+    # Check for invalid method names
+    method_calls = re.findall(r"\.\b(\w+)\s*\(", skip_quotes)
+    for method in method_calls:
+        if method not in valid_methods:
+            raise ValueError(f"Invalid method name: {method}")
 
 
 def validate_inputs(inputs: dict, out=None) -> tuple:
@@ -344,15 +380,11 @@ def validate_inputs(inputs: dict, out=None) -> tuple:
         )
 
     inputs = [input for input in inputs.values() if hasattr(input, "shape")]
+    shape = compute_broadcast_shape(inputs)
 
-    # All array inputs should have a compatible shape
-    if len(inputs) > 1:
-        check_broadcast_compatible(inputs)
-
-    ref = inputs[0]
-    if not all(np.array_equal(ref.shape, input.shape) for input in inputs):
+    if not all(np.array_equal(shape, input.shape) for input in inputs):
         # If inputs have different shapes, we cannot take the fast path
-        return ref.shape, None, None, False
+        return shape, None, None, False
 
     # More checks specific of NDArray inputs
     NDinputs = [input for input in inputs if hasattr(input, "chunks")]
@@ -483,7 +515,6 @@ async def async_read_chunks(arrs, info, queue):
                 if isinstance(chunk, Exception):
                     # Handle the exception (e.g., log it, raise a custom exception, etc.)
                     print(f"Exception occurred: {chunk}")
-                    # Optionally, you can re-raise the exception or handle it as needed
                     raise chunk
                 chunks_sorted.append(chunk)
             queue.put((nchunk, chunks_sorted))  # use non-async queue.put()
@@ -538,7 +569,8 @@ def fill_chunk_operands(
         # performance only when at least one of them is persisted on disk
         if nchunk == 0:
             # Initialize the iterator for reading the chunks
-            arr = operands["o0"]
+            # Take any operand (all should have the same shape and chunks)
+            arr = next(iter(operands.values()))
             chunks_idx, _ = get_chunks_idx(arr.shape, arr.chunks)
             info = (reduc, aligned, low_mem, chunks_idx)
             iter_chunks = read_nchunk(list(operands.values()), info)
@@ -1093,6 +1125,10 @@ def reduce_slices(
         if out is None:
             if dtype is None:
                 dtype = result.dtype
+            if is_inside_eval():
+                out = np.zeros(reduced_shape, dtype=dtype)
+                # We already have the dtype and reduced_shape, so return immediately
+                return out
             out = convert_none_out(dtype, reduce_op, reduced_shape)
 
         # Update the output array with the result
@@ -1121,6 +1157,7 @@ def reduce_slices(
 
 
 def convert_none_out(dtype, reduce_op, reduced_shape):
+    out = None
     # out will be a proper numpy.ndarray
     if reduce_op == ReduceOp.SUM:
         out = np.zeros(reduced_shape, dtype=dtype)
@@ -1255,7 +1292,7 @@ def fuse_expressions(expr, new_base, dup_op):
                     break
             if expr[i + j] == ")":
                 j -= 1
-            old_pos = int(expr[i + 1 : i + j + 1])
+            old_pos = int(expr[i + 1: i + j + 1])
             old_op = f"o{old_pos}"
             if old_op not in dup_op:
                 if old_pos in prev_pos:
@@ -1332,7 +1369,7 @@ class LazyExpr(LazyArray):
                 self.expression = f"{op}(o0, {value2})"
             elif np.isscalar(value1):
                 self.operands = {"o0": value2}
-                self.expression = f"{op}({value1} , o0)"
+                self.expression = f"{op}({value1}, o0)"
             else:
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"{op}(o0, o1)"
@@ -1390,8 +1427,8 @@ class LazyExpr(LazyArray):
         expr = lazyexpr(self, out=out)
         # The evals below produce arrays with different chunks and blocks;
         # we choose the ones for LazyExpr main class
-        expr.eval(item=slice_)
-        # out = expr.eval(item=slice_)
+        expr.compute(item=slice_)
+        # out = expr.compute(item=slice_)
         return out.schunk.get_chunk(nchunk)
 
     def update_expr(self, new_op):
@@ -1410,9 +1447,9 @@ class LazyExpr(LazyArray):
         # Another possibility would have been to always evaluate where() and produce
         # an NDArray, but that would have been less efficient for the case above.
         if hasattr(value1, "_where_args"):
-            value1 = value1.eval()
+            value1 = value1.compute()
         if hasattr(value2, "_where_args"):
-            value2 = value2.eval()
+            value2 = value2.compute()
         if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
             # We converted some of the operands to NDArray (where() handling above)
             new_operands = {"o0": value1, "o1": value2}
@@ -1438,6 +1475,7 @@ class LazyExpr(LazyArray):
                     op_name = f"o{len(self.operands)}"
                     new_operands = {op_name: value2}
                 expression = f"({self.expression} {op} {op_name})"
+            self.operands = value1.operands
         else:
             if np.isscalar(value1):
                 expression = f"({value1} {op} {self.expression})"
@@ -1453,33 +1491,32 @@ class LazyExpr(LazyArray):
                     expression = f"({op_name}[{self.expression}])"
                 else:
                     expression = f"({op_name} {op} {self.expression})"
+                self.operands = value2.operands
         blosc2._disable_overloaded_equal = False
         # Return a new expression
         operands = self.operands | new_operands
-        return self._new_expr(expression, operands, out=None, where=None)
+        return self._new_expr(expression, operands, guess=False, out=None, where=None)
 
     @property
     def dtype(self):
-        # Updating the expression can change the dtype
-        # Infer the dtype by evaluating the scalar version of the expression
-        scalar_inputs = {}
-        for key, value in self.operands.items():
-            single_item = (0,) * len(value.shape)
-            scalar_inputs[key] = value[single_item]
-        # Evaluate the expression with scalar inputs (it is cheap)
-        return ne.evaluate(self.expression, scalar_inputs).dtype
+        if hasattr(self, "_dtype"):
+            # In some situations, we already know the dtype
+            return self._dtype
+        operands = {key: np.ones(1, dtype=value.dtype) for key, value in self.operands.items()}
+        _out = ne.evaluate(self.expression, local_dict=operands)
+        return _out.dtype
 
     @property
     def shape(self):
         if hasattr(self, "_shape"):
-            # Contrarily to dtype, shape cannot change after creation of the expression
+            # In some situations, we already know the shape
             return self._shape
-        self._shape, chunks, blocks, fast_path = validate_inputs(self.operands)
+        _shape, chunks, blocks, fast_path = validate_inputs(self.operands)
         if fast_path:
             # fast_path ensure that all the operands have the same partitions
             self._chunks = chunks
             self._blocks = blocks
-        return self._shape
+        return _shape
 
     @property
     def chunks(self):
@@ -1604,7 +1641,7 @@ class LazyExpr(LazyArray):
             "dtype": dtype,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, **kwargs)
 
     def get_num_elements(self, axis, item):
         if np.isscalar(axis):
@@ -1671,7 +1708,7 @@ class LazyExpr(LazyArray):
             "dtype": dtype,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, **kwargs)
 
     def min(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
@@ -1679,7 +1716,7 @@ class LazyExpr(LazyArray):
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, **kwargs)
 
     def max(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
@@ -1687,7 +1724,7 @@ class LazyExpr(LazyArray):
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, **kwargs)
 
     def any(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
@@ -1695,7 +1732,7 @@ class LazyExpr(LazyArray):
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, **kwargs)
 
     def all(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
@@ -1703,14 +1740,24 @@ class LazyExpr(LazyArray):
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.eval(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, **kwargs)
 
-    def eval(self, item=None, **kwargs) -> blosc2.NDArray:
+    def _compute_expr(self, item, kwargs):
+        reduce_methods = ("sum", "prod", "min", "max", "std", "mean", "var", "any", "all")
+        if any(method in self.expression for method in reduce_methods):
+            # We have reductions in the expression (probably coming from a persistent lazyexpr)
+            _globals = {func: getattr(blosc2, func) for func in functions if func in self.expression}
+            lazy_expr = eval(self.expression, _globals, self.operands)
+            return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
+        else:
+            return chunked_eval(self.expression, self.operands, item, **kwargs)
+
+    def compute(self, item=None, **kwargs) -> blosc2.NDArray:
         if hasattr(self, "_output"):
             kwargs["_output"] = self._output
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
-        return chunked_eval(self.expression, self.operands, item, **kwargs)
+        return self._compute_expr(item, kwargs)
 
     def __getitem__(self, item):
         kwargs = {"_getitem": True}
@@ -1718,7 +1765,7 @@ class LazyExpr(LazyArray):
             kwargs["_output"] = self._output
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
-        return chunked_eval(self.expression, self.operands, item, **kwargs)
+        return self._compute_expr(item, kwargs)
 
     def __str__(self):
         return f"{self.expression}"
@@ -1741,12 +1788,16 @@ class LazyExpr(LazyArray):
         items += [("dtype", self.dtype)]
         return items
 
-    def save(self, **kwargs):
-        if kwargs.get("urlpath") is None:
+    def save(self, urlpath=None, **kwargs):
+        if urlpath is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
+
+        # Validate expression
+        validate_expr(self.expression)
 
         meta = kwargs.get("meta", {})
         meta["LazyArray"] = LazyArrayEnum.Expr.value
+        kwargs["urlpath"] = urlpath
         kwargs["meta"] = meta
         kwargs["mode"] = "w"  # always overwrite the file in urlpath
 
@@ -1772,8 +1823,6 @@ class LazyExpr(LazyArray):
             if value.schunk.urlpath is None:
                 raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
             operands[key] = value.schunk.urlpath
-        # Check that the expression is valid
-        ne.validate(self.expression, locals=operands)
         array.schunk.vlmeta["_LazyArray"] = {
             "expression": self.expression,
             "UDF": None,
@@ -1781,12 +1830,33 @@ class LazyExpr(LazyArray):
         }
 
     @classmethod
-    def _new_expr(cls, expression, operands, out=None, where=None):
-        # Create a new LazyExpr object
-        new_expr = cls(None)
-        ne.validate(expression, locals=operands)
-        new_expr.expression = expression
-        new_expr.operands = operands
+    def _new_expr(cls, expression, operands, guess, out=None, where=None):
+        # Validate the expression
+        validate_expr(expression)
+        if guess:
+            # The expression has been validated, so we can evaluate it
+            # in guessing mode to avoid computing reductions
+            _globals = {func: getattr(blosc2, func) for func in functions if func in expression}
+            new_expr = eval(expression, _globals, operands)
+            _dtype = new_expr.dtype
+            _shape = new_expr.shape
+            if isinstance(new_expr, blosc2.LazyExpr):
+                # Restore the original expression and operands
+                new_expr.expression = expression
+                new_expr.operands = operands
+            else:
+                # An immediate evaluation happened (e.g. all operands are numpy arrays)
+                new_expr = cls(None)
+                new_expr.expression = expression
+                new_expr.operands = operands
+            # Cache the dtype and shape (should be immutable)
+            new_expr._dtype = _dtype
+            new_expr._shape = _shape
+        else:
+            # Create a new LazyExpr object
+            new_expr = cls(None)
+            new_expr.expression = expression
+            new_expr.operands = operands
         if out is not None:
             new_expr._output = out
         if where is not None:
@@ -1852,7 +1922,7 @@ class LazyUDF(LazyArray):
         items += [("dtype", self.dtype)]
         return items
 
-    def eval(self, item=None, **kwargs):
+    def compute(self, item=None, **kwargs):
         # Get kwargs
         if kwargs is None:
             kwargs = {}
@@ -1943,18 +2013,27 @@ def _open_lazyarray(array):
             raise TypeError("Error when retrieving the operands")
 
     expr = lazyarray["expression"]
-    globals = {}
-    for func in functions:
-        if func in expr:
-            globals[func] = getattr(blosc2, func)
-
+    globals = {func: getattr(blosc2, func) for func in functions if func in expr}
     # Validate the expression (prevent security issues)
-    ne.validate(expr, globals, operands_dict)
+    validate_expr(expr)
     # Create the expression as such
-    expr = eval(expr, globals, operands_dict)
-    # Make the array info available for the user (only available when opened from disk)
-    expr.array = array
-    return expr
+    new_expr = eval(expr, globals, operands_dict)
+    if isinstance(new_expr, blosc2.LazyExpr):
+        new_expr._dtype = new_expr.dtype
+        new_expr._shape = new_expr.shape
+        # Restore the original expression and operands
+        new_expr.expression = expr
+        new_expr.operands = operands_dict
+        # Make the array info available for the user (only available when opened from disk)
+        new_expr.array = array
+        # We want to expose schunk too, so that .info() can be used on the LazyArray
+        new_expr.schunk = array.schunk
+    elif isinstance(new_expr, np.ndarray):
+        # The expression was evaluated immediately
+        new_expr = blosc2.asarray(new_expr)
+    else:
+        raise ValueError("Unexpected error when opening the LazyArray")
+    return new_expr
 
 
 def lazyudf(
@@ -2046,6 +2125,12 @@ def lazyexpr(
         a new array will be created.
     where: tuple, list, optional
         A sequence of arguments for the where clause in the expression.
+    guess: bool, optional
+        Whether to guess the output dtype and shape. If False, the dtype and shape
+        will be computed producing temporary arrays in the process (e.g. for reductions).
+        If True, the dtype and shape will be guessed from the expression, but withouth
+        evaluating any part of it.  Use True when you want to e.g. save the expression
+        but without evaluating it.
 
     Returns
     -------
@@ -2088,7 +2173,8 @@ def lazyexpr(
         return expression
     if operands is None:
         raise ValueError("`operands` must be provided for a string expression")
-    return LazyExpr._new_expr(expression, operands, out=out, where=where)
+
+    return LazyExpr._new_expr(expression, operands, guess=True, out=out, where=where)
 
 
 if __name__ == "__main__":
@@ -2117,7 +2203,7 @@ if __name__ == "__main__":
     print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
-    res = expr.eval(item=sl)
+    res = expr.compute(item=sl)
     print(f"Elapsed time (evaluate): {time() - t0:.3f} s")
     res = res[sl] if sl is not None else res[:]
     t0 = time()
@@ -2140,7 +2226,7 @@ if __name__ == "__main__":
     print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
-    res = expr.eval(sl)
+    res = expr.compute(sl)
     print(f"Elapsed time (evaluate): {time() - t0:.3f} s")
     res = res[sl] if sl is not None else res[:]
     t0 = time()

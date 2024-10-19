@@ -106,7 +106,7 @@ Here it is a simple example:
     expr = ((a ** 3 + blosc2.sin(c * 2)) < b) & (c > 0)
 
     # Evaluate and get a NDArray as result
-    out = expr.eval()
+    out = expr.compute()
     print(out.info)
 
 As you can see, the `NDArray` instances are very similar to NumPy arrays, but behind the scenes,
@@ -123,7 +123,7 @@ you can achieve when the operands fit comfortably in memory:
 In this case, the performance is somewhat below that of top-tier libraries like Numexpr or Numba,
 but it is still quite good. Using CPUs with more cores than the M2 could further reduce the
 performance gap. One important point to note is that the memory consumption when
-using the `LazyArray.eval()` method is very low because the output is an `NDArray` object, which
+using the `LazyArray.compute()` method is very low because the output is an `NDArray` object, which
 is compressed and stored in memory by default.  On the other hand, the `LazyArray.__getitem__()`
 method returns an actual NumPy array, so it is not recommended for large datasets, as it can consume
 a significant amount of memory (though it may still be convenient for small outputs).

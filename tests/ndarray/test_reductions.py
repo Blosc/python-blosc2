@@ -6,11 +6,10 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+import blosc2
 import numexpr as ne
 import numpy as np
 import pytest
-
-import blosc2
 
 NITEMS_SMALL = 1000
 NITEMS = 10_000
@@ -213,3 +212,28 @@ def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     nres = getattr(na[:], reduce_op)(axis=axis)
 
     assert np.allclose(res, nres)
+
+@pytest.mark.parametrize("disk", [True, False])
+@pytest.mark.parametrize("fill_value", [0, 1, 0.32])
+@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
+@pytest.mark.parametrize("axis", [0, (0, 1), None])
+def test_save(disk, fill_value, reduce_op, axis):
+    shape = (20, 50, 100)
+    urlpath = "a1.b2nd" if disk else None
+    if fill_value != 0:
+        a = blosc2.full(shape, fill_value, urlpath=urlpath, mode="w")
+    else:
+        a = blosc2.zeros(shape, dtype=np.float64, urlpath=urlpath, mode="w")
+    if disk:
+        a = blosc2.open(urlpath)
+    na = a[:]
+
+    expr = f"a + a.{reduce_op}(axis={axis})"
+    lexpr = blosc2.lazyexpr(expr, operands={"a": a})
+    if disk:
+        lexpr.save("out.b2nd")
+        lexpr = blosc2.open("out.b2nd")
+    res = lexpr.compute()
+    nres = na + getattr(na[:], reduce_op)(axis=axis)
+
+    assert np.allclose(res[:], nres)
