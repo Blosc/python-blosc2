@@ -2014,7 +2014,6 @@ def _open_lazyarray(array):
     if isinstance(expr, blosc2.LazyExpr):
         # Make the array info available for the user (only available when opened from disk)
         expr.array = array
-        expr.schunk = array.schunk
     elif isinstance(expr, np.ndarray):
         # The expression was evaluated immediately
         expr = blosc2.asarray(expr)
