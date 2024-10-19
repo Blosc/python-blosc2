@@ -1748,6 +1748,9 @@ class LazyExpr(LazyArray):
             # We have reductions in the expression (probably coming from a persistent lazyexpr)
             _globals = {func: getattr(blosc2, func) for func in functions if func in self.expression}
             lazy_expr = eval(self.expression, _globals, self.operands)
+            if not isinstance(lazy_expr, blosc2.LazyExpr):
+                # An immediate evaluation happened (e.g. all operands are numpy arrays)
+                return lazy_expr
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
         else:
             return chunked_eval(self.expression, self.operands, item, **kwargs)
@@ -2018,9 +2021,9 @@ def _open_lazyarray(array):
     validate_expr(expr)
     # Create the expression as such
     new_expr = eval(expr, globals, operands_dict)
+    _dtype = new_expr.dtype
+    _shape = new_expr.shape
     if isinstance(new_expr, blosc2.LazyExpr):
-        new_expr._dtype = new_expr.dtype
-        new_expr._shape = new_expr.shape
         # Restore the original expression and operands
         new_expr.expression = expr
         new_expr.operands = operands_dict
@@ -2028,11 +2031,14 @@ def _open_lazyarray(array):
         new_expr.array = array
         # We want to expose schunk too, so that .info() can be used on the LazyArray
         new_expr.schunk = array.schunk
-    elif isinstance(new_expr, np.ndarray):
-        # The expression was evaluated immediately
-        new_expr = blosc2.asarray(new_expr)
     else:
-        raise ValueError("Unexpected error when opening the LazyArray")
+        # An immediate evaluation happened (e.g. all operands are numpy arrays)
+        new_expr = LazyExpr(None)
+        new_expr.expression = expr
+        new_expr.operands = operands_dict
+    # Cache the dtype and shape (should be immutable)
+    new_expr._dtype = _dtype
+    new_expr._shape = _shape
     return new_expr
 
 

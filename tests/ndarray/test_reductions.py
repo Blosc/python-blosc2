@@ -234,6 +234,16 @@ def test_save(disk, fill_value, reduce_op, axis):
         lexpr.save("out.b2nd")
         lexpr = blosc2.open("out.b2nd")
     res = lexpr.compute()
-    nres = na + getattr(na[:], reduce_op)(axis=axis)
+    nres = na + getattr(na[()], reduce_op)(axis=axis)
+    assert np.allclose(res[()], nres)
 
-    assert np.allclose(res[:], nres)
+    # A expression with a single operand that is reduced should be supported as well
+    expr = f"a.{reduce_op}(axis={axis})"
+    lexpr = blosc2.lazyexpr(expr, operands={"a": a})
+    if disk:
+        lexpr.save("out.b2nd")
+        lexpr = blosc2.open("out.b2nd")
+    res = lexpr.compute()
+    nres = getattr(na[()], reduce_op)(axis=axis)
+
+    assert np.allclose(res[()], nres)
