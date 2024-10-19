@@ -503,11 +503,10 @@ def test_save():
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
 
     expr = blosc2.open(urlpath_save)
-    # After opening, check that a lazy expression does have an array attribute,
-    # but does not have a schunk one. This is by design, and because some packages
-    # (e.g. Caterva2), might assume that a LazyExpr does not have a schunk attribute.
+    # After opening, check that a lazy expression does have an array
+    # and schunk attributes. This is to allow the .info() method to work.
     assert hasattr(expr, "array") is True
-    assert hasattr(expr, "schunk") is False
+    assert hasattr(expr, "schunk") is True
     # Check the dtype (should be upcasted to float64)
     assert expr.array.dtype == np.float64
     res = expr.compute()

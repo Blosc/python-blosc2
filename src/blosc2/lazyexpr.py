@@ -40,8 +40,10 @@ from blosc2.ndarray import get_chunks_idx
 def is_inside_eval():
     # Get the current call stack
     stack = inspect.stack()
-    # return any('eval' in frame_info.function or 'eval' in frame_info.filename for frame_info in stack)
-    return any("_new_expr" in frame_info.function for frame_info in stack)
+    return any(
+        "_new_expr" in frame_info.function or "_open_lazyarray" in frame_info.function
+        for frame_info in stack
+    )
 
 
 class ReduceOp(Enum):
@@ -1123,10 +1125,11 @@ def reduce_slices(
         if out is None:
             if dtype is None:
                 dtype = result.dtype
-            out = convert_none_out(dtype, reduce_op, reduced_shape)
             if is_inside_eval():
+                out = np.zeros(reduced_shape, dtype=dtype)
                 # We already have the dtype and reduced_shape, so return immediately
                 return out
+            out = convert_none_out(dtype, reduce_op, reduced_shape)
 
         # Update the output array with the result
         if reduce_op == ReduceOp.ANY:
@@ -1785,12 +1788,16 @@ class LazyExpr(LazyArray):
         items += [("dtype", self.dtype)]
         return items
 
-    def save(self, **kwargs):
-        if kwargs.get("urlpath") is None:
+    def save(self, urlpath=None, **kwargs):
+        if urlpath is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
+
+        # Validate expression
+        validate_expr(self.expression)
 
         meta = kwargs.get("meta", {})
         meta["LazyArray"] = LazyArrayEnum.Expr.value
+        kwargs["urlpath"] = urlpath
         kwargs["meta"] = meta
         kwargs["mode"] = "w"  # always overwrite the file in urlpath
 
@@ -2010,16 +2017,23 @@ def _open_lazyarray(array):
     # Validate the expression (prevent security issues)
     validate_expr(expr)
     # Create the expression as such
-    expr = eval(expr, globals, operands_dict)
-    if isinstance(expr, blosc2.LazyExpr):
+    new_expr = eval(expr, globals, operands_dict)
+    if isinstance(new_expr, blosc2.LazyExpr):
+        new_expr._dtype = new_expr.dtype
+        new_expr._shape = new_expr.shape
+        # Restore the original expression and operands
+        new_expr.expression = expr
+        new_expr.operands = operands_dict
         # Make the array info available for the user (only available when opened from disk)
-        expr.array = array
-    elif isinstance(expr, np.ndarray):
+        new_expr.array = array
+        # We want to expose schunk too, so that .info() can be used on the LazyArray
+        new_expr.schunk = array.schunk
+    elif isinstance(new_expr, np.ndarray):
         # The expression was evaluated immediately
-        expr = blosc2.asarray(expr)
+        new_expr = blosc2.asarray(new_expr)
     else:
         raise ValueError("Unexpected error when opening the LazyArray")
-    return expr
+    return new_expr
 
 
 def lazyudf(
