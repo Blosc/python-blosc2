@@ -7,10 +7,9 @@
 #######################################################################
 import pathlib
 
+import blosc2
 import numpy as np
 import pytest
-
-import blosc2
 
 pytestmark = pytest.mark.network
 

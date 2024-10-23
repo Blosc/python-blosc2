@@ -14,9 +14,8 @@ import gc
 import os
 import unittest
 
-import pytest
-
 import blosc2
+import pytest
 
 try:
     import numpy as np

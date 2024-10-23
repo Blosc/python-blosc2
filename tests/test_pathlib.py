@@ -8,10 +8,9 @@
 
 import pathlib
 
+import blosc2
 import numpy as np
 import pytest
-
-import blosc2
 
 
 @pytest.mark.parametrize("mode, mmap_mode", [("r", None), ("w", None), ("a", None), ("r", "r"), ("w", "w+")])

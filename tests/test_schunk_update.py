@@ -8,10 +8,9 @@
 
 import random
 
+import blosc2
 import numpy as np
 import pytest
-
-import blosc2
 
 
 @pytest.mark.parametrize("gil", [True, False])

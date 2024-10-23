@@ -6,10 +6,9 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+import blosc2
 import numpy as np
 import pytest
-
-import blosc2
 from blosc2.ndarray import get_chunks_idx
 
 argnames = "urlpath, shape, chunks, blocks, slices, dtype"
