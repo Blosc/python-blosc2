@@ -589,7 +589,7 @@ class Operand:
             np.greater: ">",
             np.greater_equal: ">=",
             np.equal: "==",
-            np.not_equal: "!="
+            np.not_equal: "!=",
         }
 
         if ufunc in ufunc_map:

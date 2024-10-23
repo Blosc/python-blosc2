@@ -213,6 +213,7 @@ def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
 
     assert np.allclose(res, nres)
 
+
 @pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize("fill_value", [0, 1, 0.32])
 @pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
