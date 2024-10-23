@@ -12,11 +12,10 @@
 
 from time import time
 
+import blosc2
 import numba as nb
 import numexpr as ne
 import numpy as np
-
-import blosc2
 
 shape = (5000, 10_000)
 chunks = [500, 10_000]

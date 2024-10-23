@@ -13,9 +13,8 @@ Small benchmark that exercises packaging of arrays larger than 2 GB.
 
 import time
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 NREP = 1
 N = int(4e8 - 2**27)  # larger than 2 GB
@@ -36,23 +35,23 @@ if __name__ == "__main__":
 
     c = None
     ctic = time.time()
-    for i in range(NREP):
+    for _i in range(NREP):
         c = blosc2.pack_tensor(in_, cparams=cparams)
     ctoc = time.time()
     tc = (ctoc - ctic) / NREP
     print(
-        "  Time for pack_tensor:   {:.3f} ({:.2f} GB/s)) ".format(tc, ((N * 8 / tc) / 2**30)),
+        f"  Time for pack_tensor:   {tc:.3f} ({(N * 8 / tc) / 2**30:.2f} GB/s)) ",
     )
-    print("\tcr: {:5.1f}x".format(in_.size * in_.dtype.itemsize * 1.0 / len(c)))
+    print(f"\tcr: {in_.size * in_.dtype.itemsize * 1.0 / len(c):5.1f}x")
 
     out = None
     dtic = time.time()
-    for i in range(NREP):
+    for _i in range(NREP):
         out = blosc2.unpack_tensor(c)
     dtoc = time.time()
 
     td = (dtoc - dtic) / NREP
     print(
-        "  Time for unpack_tensor:   {:.3f} s ({:.2f} GB/s)) ".format(td, ((N * 8 / td) / 2**30)),
+        f"  Time for unpack_tensor:   {td:.3f} s ({(N * 8 / td) / 2**30:.2f} GB/s)) ",
     )
     assert np.array_equal(in_, out)

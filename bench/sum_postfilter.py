@@ -8,9 +8,8 @@
 
 from time import time
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 # Size and dtype of super-chunks
 nchunks = 20_000
@@ -28,7 +27,7 @@ schunk = blosc2.SChunk(chunksize=chunksize, cparams=cparams, dparams=dparams)
 
 data = np.arange(chunkshape, dtype=dtype)
 t0 = time()
-for i in range(nchunks):
+for _i in range(nchunks):
     schunk.append_data(data)
     schunk0.append_data(data)
 print(f"time append: {time() - t0:.2f}s")

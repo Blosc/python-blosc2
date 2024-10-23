@@ -8,10 +8,9 @@
 
 from time import time
 
+import blosc2
 import numexpr as ne
 import numpy as np
-
-import blosc2
 
 shape = (4_000, 5_000)
 chunks = (10, 5_000)

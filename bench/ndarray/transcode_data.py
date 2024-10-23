@@ -17,9 +17,8 @@ import copy
 from pathlib import Path
 from time import time
 
-import pandas as pd
-
 import blosc2
+import pandas as pd
 
 # Number of repetitions for each time measurement.  The minimum will be taken.
 NREP = 3
@@ -86,9 +85,9 @@ for fname in dir_path.iterdir():
     mcpy = finput.copy(blocks=(16, 32, 32), dparams=dparams)  # copy in memory
     # Compute decompression time for subtracting from copy later
     lt = []
-    for rep in range(NREP):
+    for _rep in range(NREP):
         t0 = time()
-        for chunk in mcpy.schunk.iterchunks(dtype=mcpy.dtype):
+        for _chunk in mcpy.schunk.iterchunks(dtype=mcpy.dtype):
             pass
         lt.append(time() - t0)
     tdecomp0 = min(lt)
@@ -106,7 +105,7 @@ for fname in dir_path.iterdir():
             lt = []
             # Do not spend too much time performing costly compression settings
             nrep = 1 if codec_.value >= blosc2.Codec.LZ4HC.value and clevel == 9 else NREP
-            for rep in range(nrep):
+            for _rep in range(nrep):
                 t0 = time()
                 fout = mcpy.copy(cparams=cparams2, dparams=dparams)
                 lt.append(time() - t0)
@@ -115,9 +114,9 @@ for fname in dir_path.iterdir():
 
             # Decompression
             lt = []
-            for rep in range(NREP):
+            for _rep in range(NREP):
                 t0 = time()
-                for chunk in schunk.iterchunks(dtype=mcpy.dtype):
+                for _chunk in schunk.iterchunks(dtype=mcpy.dtype):
                     pass
                 lt.append(time() - t0)
             tdecomp = min(lt)

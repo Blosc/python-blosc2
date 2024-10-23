@@ -9,9 +9,8 @@
 import sys
 from time import time
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 # Dimensions, type and persistence properties for the arrays
 shape = 10_000 * 10_000
@@ -49,6 +48,6 @@ t0 = time()
 for i in range(shape // blocksize):
     _ = schunk.get_slice(start=i * blocksize, stop=(i + 1) * blocksize - 1)
 t1 = time()
-print("Time for reading with get_slice: {:.3f}s".format(t1 - t0))
+print(f"Time for reading with get_slice: {t1 - t0:.3f}s")
 
 blosc2.remove_urlpath(urlpath)

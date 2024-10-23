@@ -9,9 +9,8 @@
 import sys
 from time import time
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 # Dimensions, type and persistence properties for the arrays
 shape = 10_000 * 10_000
@@ -52,6 +51,6 @@ val = nchunks * np.arange(start, stop, dtype=dtype)
 t0 = time()
 schunk[start:stop] = val
 t1 = time()
-print("Time for setting with setitem: {:.3f}s".format(t1 - t0))
+print(f"Time for setting with setitem: {t1 - t0:.3f}s")
 
 blosc2.remove_urlpath(urlpath)

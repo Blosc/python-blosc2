@@ -9,9 +9,8 @@
 import argparse
 from time import time
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 CUBE_SIDE = 128
 
@@ -41,7 +40,7 @@ class MmapBenchmarking:
 
     def __enter__(self):
         blosc2.remove_urlpath(self.urlpath)
-        np.random.seed(42)
+        np.random.seed(42)    # noqa: NPY002
         return self
 
     def __exit__(self, exc_type, exc_value, traceback):
@@ -81,7 +80,7 @@ class MmapBenchmarking:
 
         chunks_order = np.arange(self.n_chunks)
         if read_order == "random":
-            np.random.shuffle(chunks_order)
+            np.random.shuffle(chunks_order)    # noqa: NPY002
 
         if self.blosc_mode == "schunk":
             t0 = time()

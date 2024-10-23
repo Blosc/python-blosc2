@@ -12,10 +12,9 @@
 
 from time import time
 
+import blosc2
 import numexpr as ne
 import numpy as np
-
-import blosc2
 
 shape = (50, 100, 10_000)
 chunks = [5, 100, 10_000]
@@ -44,7 +43,7 @@ b2vardict = {"x": x, "y": y, "z": z, "blosc2": blosc2}
 expr = "(x**2 + y**2 * z** 2) < 1"
 
 
-for n, axis in enumerate(laxis):
+for axis in laxis:
     print(f"*** Evaluating expression on axis: {axis} ...")
 
     # Evaluate the reduction with NumPy/numexpr

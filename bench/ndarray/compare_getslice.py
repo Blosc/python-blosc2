@@ -19,14 +19,13 @@ import os
 import sys
 from time import time
 
+import blosc2
 import h5py
 import hdf5plugin
 import numcodecs
 import numpy as np
 import tables
 import zarr
-
-import blosc2
 
 persistent = (len(sys.argv) == 1)
 if persistent:
@@ -177,7 +176,7 @@ print(f"Time for complete read (hdf5, h5py): {t:.3f} s ({speed:.2f} GB/s)")
 # Reading by slices
 print("\nReading by slices...")
 # The coordinates for random planes
-planes_idx = np.random.randint(0, min(shape), 100)
+planes_idx = np.random.randint(0, min(shape), 100)  # noqa: NPY002
 
 
 def time_slices(dset, idx):

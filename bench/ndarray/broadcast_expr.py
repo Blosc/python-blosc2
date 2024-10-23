@@ -10,9 +10,8 @@
 
 from time import time
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 N = 10_000
 # N = 1_000

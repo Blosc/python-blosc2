@@ -8,9 +8,8 @@
 
 from time import time
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 # Size and dtype of super-chunks
 nchunks = 10_000
