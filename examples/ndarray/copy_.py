@@ -8,9 +8,8 @@
 
 # Copying NDArrays
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 shape = (10, 10)
 blocks = (10, 10)

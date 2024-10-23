@@ -8,9 +8,8 @@
 
 # Store metadata in persistent arrays
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 shape = (128, 128)
 urlpath = "ex_meta.b2nd"

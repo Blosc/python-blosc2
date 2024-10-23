@@ -7,9 +7,8 @@
 #######################################################################
 
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 shape = (50, 50)
 chunks = (49, 49)

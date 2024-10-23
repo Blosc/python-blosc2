@@ -8,9 +8,8 @@
 
 # This shows how to evaluate expressions with NDArray instances as operands.
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 shape = (10, 1, 2)
 

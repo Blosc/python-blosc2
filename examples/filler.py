@@ -8,9 +8,8 @@
 
 # Fill an SChunk with a filler decorator
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 nchunks = 3
 chunk_len = 200 * 1000

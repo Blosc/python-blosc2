@@ -8,9 +8,8 @@
 
 # This shows how to build expressions with a general mix of NDArray and NumPy operands.
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 shape = (50, 50)
 

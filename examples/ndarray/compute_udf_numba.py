@@ -8,10 +8,9 @@
 
 # This shows how to evaluate expressions with NDArray instances as operands.
 
+import blosc2
 import numba as nb
 import numpy as np
-
-import blosc2
 
 
 # The UDF to be evaluated

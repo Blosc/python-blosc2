@@ -8,9 +8,8 @@
 
 # Shows how you can persist an array on disk
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 shape = (128, 128)
 urlpath = "ex_persistency.b2nd"

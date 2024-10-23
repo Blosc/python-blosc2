@@ -9,9 +9,8 @@
 
 # Example for writing and reading memory-mapped files
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 urlpath = "array.b2nd"
 blosc2.remove_urlpath(urlpath)

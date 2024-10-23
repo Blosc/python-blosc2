@@ -8,9 +8,8 @@
 
 # Import structured arrays using the array interface
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 shape = (2, 2)
 dtype = np.float64

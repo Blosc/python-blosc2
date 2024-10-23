@@ -11,9 +11,8 @@
 
 import math
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 shape = (1000, 1000)
 

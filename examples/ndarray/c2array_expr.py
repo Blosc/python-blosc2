@@ -1,8 +1,7 @@
 import pathlib
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 host = "https://demo.caterva2.net/"
 root = "b2tests"

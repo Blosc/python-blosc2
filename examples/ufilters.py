@@ -8,9 +8,8 @@
 
 # This shows how to implement an user defined filter in pure Python
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 nchunks = 2
 chunk_len = 20 * 1000

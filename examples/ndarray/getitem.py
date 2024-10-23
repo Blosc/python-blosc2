@@ -8,9 +8,8 @@
 
 # Show how getitem / setitem works for an NDArray
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 shape = (10, 10)
 slices = (slice(2, 7), slice(4, 8))

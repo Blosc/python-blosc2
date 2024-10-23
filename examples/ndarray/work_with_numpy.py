@@ -8,9 +8,8 @@
 
 # Shows how you can easily convert from/to NumPy arrays
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 shape = (1234, 23)
 chunks = (253, 23)

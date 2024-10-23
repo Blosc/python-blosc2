@@ -8,9 +8,8 @@
 
 # This shows how to evaluate expressions with NDField instances as operands.
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 shape = (50, 50)
 

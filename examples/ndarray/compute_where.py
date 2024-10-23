@@ -8,9 +8,8 @@
 
 # This shows how to evaluate expressions in combination with the where() functionality.
 
-import numpy as np
-
 import blosc2
+import numpy as np
 
 shape = (50, 50)
 chunks = (10, 10)
