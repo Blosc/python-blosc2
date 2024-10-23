@@ -6,11 +6,9 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+import blosc2
 import numpy as np
 import pytest
-
-import blosc2
-
 
 ################# Automatic compute of optional chunks and blocks #################
 # The exact outcome of these depends on many aspects, including CPUs cache sizes,

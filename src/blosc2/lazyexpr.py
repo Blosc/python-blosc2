@@ -1126,9 +1126,8 @@ def reduce_slices(
             if dtype is None:
                 dtype = result.dtype
             if is_inside_eval():
-                out = np.zeros(reduced_shape, dtype=dtype)
                 # We already have the dtype and reduced_shape, so return immediately
-                return out
+                return np.zeros(reduced_shape, dtype=dtype)
             out = convert_none_out(dtype, reduce_op, reduced_shape)
 
         # Update the output array with the result

@@ -25,7 +25,7 @@ def shape_fixture(request):
     return request.param
 
 
-@pytest.fixture
+@pytest.fixture()
 def array_fixture(dtype_fixture, shape_fixture):
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
