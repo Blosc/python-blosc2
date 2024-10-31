@@ -9,8 +9,9 @@
 
 # A simple example using the save_tensor and load_tensor functions
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 a = np.arange(1_000_000)
 

@@ -6,10 +6,11 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import blosc2
 import numexpr as ne
 import numpy as np
 import pytest
+
+import blosc2
 
 NITEMS_SMALL = 1_000
 NITEMS = 10_000

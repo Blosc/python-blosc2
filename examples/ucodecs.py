@@ -10,8 +10,9 @@
 
 import sys
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 nchunks = 2
 chunk_len = 20 * 1000

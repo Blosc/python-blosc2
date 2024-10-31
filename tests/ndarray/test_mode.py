@@ -6,9 +6,10 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import blosc2
 import numpy as np
 import pytest
+
+import blosc2
 
 
 @pytest.mark.parametrize("mode", ["r", "w", "a"])

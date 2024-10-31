@@ -7,8 +7,9 @@
 #######################################################################
 
 
-import blosc2
 import pytest
+
+import blosc2
 
 
 @pytest.mark.parametrize("arr", [b"", b"1" * 7])

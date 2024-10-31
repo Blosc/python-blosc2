@@ -6,8 +6,9 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 a = np.linspace(0, 1, 1_000_000, dtype=np.float64)
 typesize = a.dtype.itemsize

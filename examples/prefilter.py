@@ -8,8 +8,9 @@
 
 # Example of prefiltering data before compression
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 nchunks = 3
 input_dtype = np.dtype(np.int32)
