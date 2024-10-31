@@ -38,7 +38,7 @@ def chunks_blocks_fixture(request):
     return request.param
 
 
-@pytest.fixture()
+@pytest.fixture
 def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
     nelems = np.prod(shape_fixture)
     dt1, dt2 = dtype_fixture
