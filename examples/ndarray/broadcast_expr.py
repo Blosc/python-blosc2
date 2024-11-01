@@ -9,8 +9,9 @@
 # This shows how to evaluate expressions with NDArray instances having different shapes as operands.
 # The broadcast is done internally and tries to mimic NumPy behavior.
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 # Two operands with the next shapes should be supported
 # shape1, shape2 = (2, 1, 3, 2), (3, 3, 2)

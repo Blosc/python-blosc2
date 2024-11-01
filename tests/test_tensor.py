@@ -9,9 +9,10 @@
 
 import os
 
-import blosc2
 import numpy as np
 import pytest
+
+import blosc2
 
 ##### pack / unpack  #####
 

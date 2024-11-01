@@ -6,10 +6,11 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import blosc2
 import numexpr as ne
 import numpy as np
 import pytest
+
+import blosc2
 
 NITEMS_SMALL = 1000
 NITEMS = 10_000
@@ -25,7 +26,7 @@ def shape_fixture(request):
     return request.param
 
 
-@pytest.fixture()
+@pytest.fixture
 def array_fixture(dtype_fixture, shape_fixture):
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)

@@ -9,10 +9,11 @@
 import pathlib
 import random
 
-import blosc2
 import httpx
 import numpy as np
 import pytest
+
+import blosc2
 
 pytestmark = pytest.mark.network
 

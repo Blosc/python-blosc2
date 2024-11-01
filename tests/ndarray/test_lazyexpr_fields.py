@@ -6,10 +6,11 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import blosc2
 import numexpr as ne
 import numpy as np
 import pytest
+
+import blosc2
 
 NITEMS_SMALL = 1_000
 NITEMS = 10_000
@@ -38,7 +39,7 @@ def chunks_blocks_fixture(request):
     return request.param
 
 
-@pytest.fixture()
+@pytest.fixture
 def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
     nelems = np.prod(shape_fixture)
     dt1, dt2 = dtype_fixture

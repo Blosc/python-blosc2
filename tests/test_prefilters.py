@@ -8,9 +8,10 @@
 
 from dataclasses import asdict, replace
 
-import blosc2
 import numpy as np
 import pytest
+
+import blosc2
 
 
 @pytest.mark.parametrize(

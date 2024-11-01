@@ -7,9 +7,10 @@
 #######################################################################
 
 
-import blosc2
 import numpy as np
 import pytest
+
+import blosc2
 
 random = np.random.default_rng()
 

@@ -9,9 +9,10 @@
 import os
 import random
 
-import blosc2
 import numpy as np
 import pytest
+
+import blosc2
 
 
 @pytest.mark.parametrize("urlpath", ["schunk.b2frame"])

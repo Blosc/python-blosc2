@@ -6,8 +6,9 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import blosc2
 import pytest
+
+import blosc2
 
 
 @pytest.mark.parametrize(

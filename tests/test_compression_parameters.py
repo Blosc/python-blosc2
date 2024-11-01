@@ -7,8 +7,9 @@
 #######################################################################
 
 
-import blosc2
 import pytest
+
+import blosc2
 
 
 @pytest.mark.parametrize("nthreads, blocksize", [(2, 0), (1, 30), (4, 5)])

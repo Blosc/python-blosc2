@@ -6,10 +6,11 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import blosc2
 import numexpr as ne
 import numpy as np
 import pytest
+
+import blosc2
 from blosc2.ndarray import get_chunks_idx
 
 NITEMS_SMALL = 1_000
@@ -32,7 +33,7 @@ def chunks_blocks_fixture(request):
     return request.param
 
 
-@pytest.fixture()
+@pytest.fixture
 def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
@@ -711,7 +712,7 @@ def broadcast_shape(request):
 
 
 # Test broadcasting
-@pytest.fixture()
+@pytest.fixture
 def broadcast_fixture(dtype_fixture, broadcast_shape):
     shape1, shape2 = broadcast_shape
     na1 = np.linspace(0, 1, np.prod(shape1), dtype=dtype_fixture).reshape(shape1)

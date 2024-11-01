@@ -7,8 +7,9 @@
 #######################################################################
 
 
-import blosc2
 import pytest
+
+import blosc2
 
 
 @pytest.mark.parametrize("gil", [True, False])

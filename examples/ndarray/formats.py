@@ -10,8 +10,9 @@
 
 from time import time
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 urlpath_sparse = "ex_formats_sparse.b2nd"
 urlpath_contiguous = "ex_formats_contiguous.b2nd"

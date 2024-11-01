@@ -8,8 +8,9 @@
 
 # Creating/dumping an NDArray from/to a buffer
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 shape = (50, 50)
 chunks = (49, 49)

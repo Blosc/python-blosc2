@@ -7,9 +7,10 @@
 #######################################################################
 import math
 
-import blosc2
 import numpy as np
 import pytest
+
+import blosc2
 
 
 def udf1p(inputs_tuple, output, offset):
