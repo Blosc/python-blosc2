@@ -1480,7 +1480,7 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
     ------
     RuntimeError
         If the data cannot be compressed into :paramref:`dst`.
-        If an internal error occurrs, likely due to an invalid parameter
+        If an internal error occurs, likely due to an invalid parameter
         If :paramref:`dst` is `None` and a bytes object could not be created to store the result.
     TypeError
         If :paramref:`src` does not support the Buffer Protocol.

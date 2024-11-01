@@ -2133,7 +2133,7 @@ def lazyexpr(
     guess: bool, optional
         Whether to guess the output dtype and shape. If False, the dtype and shape
         will be computed producing temporary arrays in the process (e.g. for reductions).
-        If True, the dtype and shape will be guessed from the expression, but withouth
+        If True, the dtype and shape will be guessed from the expression, but without
         evaluating any part of it.  Use True when you want to e.g. save the expression
         but without evaluating it.
 

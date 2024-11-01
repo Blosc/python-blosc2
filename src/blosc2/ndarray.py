@@ -988,7 +988,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
     def __getitem__(
         self, key: int | slice | Sequence[slice] | blosc2.LazyExpr | str
     ) -> np.ndarray | blosc2.LazyExpr:
-        """Retrive a (multidimensional) slice as specified by the key.
+        """Retrieve a (multidimensional) slice as specified by the key.
 
         Parameters
         ----------
