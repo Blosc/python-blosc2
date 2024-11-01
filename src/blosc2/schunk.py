@@ -158,8 +158,6 @@ class SChunk(blosc2_ext.SChunk):
             The data to be split into different chunks of size :paramref:`chunksize`.
             If None, the Schunk instance will be empty initially.
 
-        Other parameters
-        ----------------
         kwargs: dict, optional
             Storage parameters. The default values are in :class:`blosc2.Storage`.
             Supported keyword arguments:
@@ -1385,20 +1383,16 @@ def open(
     offset: int, optional
         An offset in the file where super-chunk or array data is located
         (e.g. in a file containing several such objects).
-
-    Other parameters
-    ----------------
     kwargs: dict, optional
-        Keyword arguments supported:
-            mmap_mode: The memory mapping mode.
-            initial_mapping_size: The initial size of the memory mapping.
-            cparams: dict
-                A dictionary with the compression parameters, which are the same that can be
-                used in the :func:`~blosc2.compress2` function.
-                Typesize and blocksize cannot be changed.
-            dparams: dict
-                A dictionary with the decompression parameters, which are the same that can
-                be used in the :func:`~blosc2.decompress2` function.
+        mmap_mode: The memory mapping mode.
+        initial_mapping_size: The initial size of the memory mapping.
+        cparams: dict
+            A dictionary with the compression parameters, which are the same that can be
+            used in the :func:`~blosc2.compress2` function.
+            Typesize and blocksize cannot be changed.
+        dparams: dict
+            A dictionary with the decompression parameters, which are the same that can
+            be used in the :func:`~blosc2.decompress2` function.
 
     Returns
     -------

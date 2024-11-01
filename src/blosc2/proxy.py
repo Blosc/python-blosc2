@@ -200,9 +200,6 @@ class Proxy(blosc2.Operand):
         mode: str, optional
             "a" means read/write (create if it doesn’t exist); "w" means create
             (overwrite if it exists). Default is "a".
-
-        Other parameters
-        ----------------
         kwargs: dict, optional
             Keyword arguments supported:
 

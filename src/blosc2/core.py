@@ -441,8 +441,6 @@ def pack_array2(arr: np.ndarray, chunksize: int = None, **kwargs: dict) -> bytes
         The size (in bytes) for the chunks during compression. If not provided,
         it is computed automatically.
 
-    Other parameters
-    ----------------
     kwargs: dict, optional
         These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`.
 
@@ -528,8 +526,6 @@ def save_array(arr: np.ndarray, urlpath: str, chunksize: int = None, **kwargs: d
         The size (in bytes) for the chunks during compression. If not provided,
         it is computed automatically.
 
-    Other parameters
-    ----------------
     kwargs: dict, optional
         These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`.
 
@@ -616,8 +612,6 @@ def pack_tensor(
         The size (in bytes) for the chunks during compression. If not provided,
         it is computed automatically.
 
-    Other parameters
-    ----------------
     kwargs: dict, optional
         These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`.
 
@@ -753,8 +747,6 @@ def save_tensor(
         The size (in bytes) for the chunks during compression. If not provided,
         it is computed automatically.
 
-    Other parameters
-    ----------------
     kwargs: dict, optional
         These are the same as the kwargs in :func:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`.
 
@@ -789,8 +781,6 @@ def load_tensor(urlpath: str, dparams: dict = None) -> tensorflow.Tensor | torch
     urlpath: str
         The path to the file where the tensor or array is stored.
 
-    Other parameters
-    ----------------
     dparams: dict, optional
         A dictionary with the decompression parameters, which are the same as those
         used in the :func:`~blosc2.decompress2` function.
@@ -1419,8 +1409,6 @@ def compress2(src: object, **kwargs: dict) -> str | bytes:
     src: bytes-like object
         The buffer to compress. Must support the buffer interface.
 
-    Other Parameters
-    ----------------
     kwargs: dict, optional
         Compression parameters. The default values are in :class:`blosc2.CParams`.
         Supported keyword arguments:
@@ -1470,8 +1458,6 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
         data. Default is `None`, meaning a new bytes object
         is created, filled and returned.
 
-    Other Parameters
-    ----------------
     kwargs: dict, optional
         Decompression parameters. The default values are in :class:`blosc2.DParams`.
         Supported keyword arguments:

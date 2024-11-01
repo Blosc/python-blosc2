@@ -2743,9 +2743,8 @@ def get_slice_nchunks(
     schunk: :ref:`SChunk <SChunk>` or :ref:`NDArray`
         The super-chunk or ndarray container.
     key: tuple(int, int), int, slice or sequence of slices
-        - For a super-chunk: a tuple with the start and stop of the slice, an integer,
-        or a single slice.
-        - For an ndarray, sequences of slices (one per dimension) are accepted.
+        For a SChunk: a tuple with the start and stop of the slice, an integer,
+        or a single slice. For a ndarray, sequences of slices (one per dimension) are accepted.
 
     Returns
     -------
