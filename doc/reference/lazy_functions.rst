@@ -3,7 +3,7 @@ Lazy Functions
 
 The next functions can be used for computing with any of :ref:`NDArray <NDArray>`, :ref:`C2Array <C2Array>`, :ref:`NDField <NDField>` and :ref:`LazyExpr <LazyExpr>`.
 
-Their result is always a :ref:`LazyExpr` instance, which can be evaluated (with `eval` or `__getitem__`) to get the actual values of the computation.
+Their result is always a :ref:`LazyExpr` instance, which can be evaluated (with `compute` or `__getitem__`) to get the actual values of the computation.
 
 .. currentmodule:: blosc2
 

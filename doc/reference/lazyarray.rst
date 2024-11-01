@@ -23,7 +23,7 @@ Methods
     :nosignatures:
 
     __getitem__
-    eval
+    compute
     save
 
 
