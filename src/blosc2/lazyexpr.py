@@ -1621,9 +1621,9 @@ class LazyExpr(LazyArray):
             raise ValueError("where() can only be used with boolean expressions")
         # This just acts as a 'decorator' for the existing expression
         if value1 is not None and value2 is not None:
-            args = dict(_where_x=value1, _where_y=value2)
+            args = {"_where_x": value1, "_where_y": value2}
         elif value1 is not None:
-            args = dict(_where_x=value1)
+            args = {"_where_x": value1}
         elif value2 is not None:
             raise ValueError("where() requires value1 when using value2")
         else:
@@ -2171,7 +2171,7 @@ def lazyexpr(
         if out is not None:
             expression._output = out
         if where is not None:
-            where_args = dict(_where_x=where[0], _where_y=where[1])
+            where_args = {"_where_x": where[0], "_where_y": where[1]}
             expression._where_args = where_args
         return expression
     if operands is None:

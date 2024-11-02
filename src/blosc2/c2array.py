@@ -127,7 +127,7 @@ def _sub_url(urlbase, path):
 
 def login(username, password, urlbase):
     url = _sub_url(urlbase, "auth/jwt/login")
-    creds = dict(username=username, password=password)
+    creds = {"username": username, "password": password}
     resp = httpx.post(url, data=creds, timeout=15)
     resp.raise_for_status()
     return "=".join(list(resp.cookies.items())[0])

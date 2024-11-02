@@ -27,7 +27,7 @@ c = a**2 + b**2 + 2 * a * b + 1
 c.save(urlpath="c.b2nd")
 c = blosc2.open("c.b2nd")
 # Evaluate: output is a NDArray
-d = blosc2.lazyexpr("a + c.sum() + a.std()", operands=dict(a=a, c=c))
+d = blosc2.lazyexpr("a + c.sum() + a.std()", operands={"a": a, "c": c})
 d.save(urlpath="lazy-d.b2nd")
 
 # Load the expression from disk
