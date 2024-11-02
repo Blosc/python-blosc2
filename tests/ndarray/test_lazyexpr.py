@@ -240,7 +240,7 @@ def test_comparison_operators(dtype_fixture, compare_expressions, comparison_ope
     nelems = np.prod(reshape)
     cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(reshape)
-    na2 = np.copy(na1)  # noqa: F841
+    na2 = np.copy(na1)
     a1 = blosc2.asarray(na1, cparams=cparams)
     a2 = blosc2.asarray(na1, cparams=cparams)
     # Construct the lazy expression
@@ -307,7 +307,7 @@ def test_functions(function, dtype_fixture, shape_fixture):
     ["arctan2", "**"],
 )
 @pytest.mark.parametrize(
-    "value1, value2",
+    ("value1", "value2"),
     [
         ("NDArray", "scalar"),
         ("NDArray", "NDArray"),
@@ -865,7 +865,7 @@ def test_get_chunk(array_fixture):
 
 
 @pytest.mark.parametrize(
-    "chunks, blocks",
+    ("chunks", "blocks"),
     [
         ((10, 100), (6, 100)),  # behaved
         ((15, 100), (5, 100)),  # not behaved

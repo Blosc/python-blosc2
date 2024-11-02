@@ -13,7 +13,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "shape, chunks, dtype, fill_value",
+    ("shape", "chunks", "dtype", "fill_value"),
     [
         ((401, 100), (200, 10), "S10", "Hola!"),  # repeated string
         ((1020, 100), (200, 20), np.bool_, False),  # zeros

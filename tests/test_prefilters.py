@@ -15,7 +15,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "func, op_dtype, op2_dtype, schunk_dtype, offset",
+    ("func", "op_dtype", "op2_dtype", "schunk_dtype", "offset"),
     [
         ("fill_f1", np.dtype(np.int32), None, np.dtype(np.int64), 0),
         ("fill_f1", np.dtype(np.int32), None, np.dtype(np.float32), 0),
@@ -26,7 +26,7 @@ import blosc2
     ],
 )
 @pytest.mark.parametrize(
-    "cparams, dparams, nchunks, contiguous, urlpath, nelem",
+    ("cparams", "dparams", "nchunks", "contiguous", "urlpath", "nelem"),
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "nthreads": 1}, {"nthreads": 4}, 2, True, None, None),
         ({"nthreads": 1}, {"nthreads": 2}, 1, True, "test_fillers.b2frame", 1 * 20_000),
@@ -131,7 +131,7 @@ def test_fillers(
 
 
 @pytest.mark.parametrize(
-    "func, data_dtype, schunk_dtype, offset",
+    ("func", "data_dtype", "schunk_dtype", "offset"),
     [
         ("pref1", np.dtype(np.int32), None, 0),
         ("pref1", np.dtype(np.int32), np.dtype(np.float32), 0),
@@ -141,7 +141,7 @@ def test_fillers(
     ],
 )
 @pytest.mark.parametrize(
-    "cparams, dparams, nchunks, contiguous, urlpath",
+    ("cparams", "dparams", "nchunks", "contiguous", "urlpath"),
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "nthreads": 1}, {}, 2, True, None),
         ({"nthreads": 1}, {"nthreads": 2}, 1, True, "test_prefilters.b2frame"),

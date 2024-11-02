@@ -13,7 +13,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "contiguous, urlpath, chunksize, nchunks, start, stop",
+    ("contiguous", "urlpath", "chunksize", "nchunks", "start", "stop"),
     [
         (True, None, 40_000, 10, 13, 59),
         (True, "b2frame", 20_000, 5, 0, 20_000 // 4 * 5),
@@ -48,7 +48,7 @@ def test_schunk_proxy(contiguous, urlpath, chunksize, nchunks, start, stop):
 
 
 @pytest.mark.parametrize(
-    "urlpath, chunksize, nchunks",
+    ("urlpath", "chunksize", "nchunks"),
     [
         (None, 40_000, 10),
         ("b2frame", 20_000, 5),

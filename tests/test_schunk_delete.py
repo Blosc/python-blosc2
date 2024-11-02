@@ -17,7 +17,7 @@ import blosc2
 @pytest.mark.parametrize("contiguous", [True, False])
 @pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize(
-    "nchunks, ndeletes",
+    ("nchunks", "ndeletes"),
     [
         (0, 0),
         (1, 1),
@@ -60,7 +60,7 @@ def test_schunk_delete_numpy(contiguous, urlpath, nchunks, ndeletes):
 @pytest.mark.parametrize("contiguous", [True, False])
 @pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize(
-    "nchunks, ndeletes",
+    ("nchunks", "ndeletes"),
     [
         (0, 0),
         (1, 1),

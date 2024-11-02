@@ -25,7 +25,7 @@ b = blosc2.asarray(npb)
 # Get a LazyExpr instance
 c = a**2 + b**2 + 2 * a * b + 1
 # Evaluate: output is a NDArray
-d = blosc2.lazyexpr("sl + c.sum() + a.std()", operands=dict(a=a, c=c, sl=a.slice((1, 1))))
+d = blosc2.lazyexpr("sl + c.sum() + a.std()", operands={"a": a, "c": c, "sl": a.slice((1, 1))})
 print(f"Expression: {d.expression}")
 print(f"Operands: {d.operands}")
 assert isinstance(d, blosc2.LazyExpr)

@@ -13,7 +13,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "filters, filters_meta, dtype",
+    ("filters", "filters_meta", "dtype"),
     [
         ([160], [0], np.dtype(np.int32)),
         ([180, 184], [0, 25], np.dtype(np.float64)),  # 2 user-defined filters
@@ -21,7 +21,7 @@ import blosc2
     ],
 )
 @pytest.mark.parametrize(
-    "nchunks, contiguous, urlpath",
+    ("nchunks", "contiguous", "urlpath"),
     [
         (2, True, None),
         (1, True, "test_filter.b2frame"),
@@ -96,7 +96,7 @@ def test_ufilters(contiguous, urlpath, nchunks, filters, filters_meta, dtype):
 
 
 @pytest.mark.parametrize(
-    "cparams, dparams",
+    ("cparams", "dparams"),
     [
         ({"nthreads": 4, "filters": [255, blosc2.Filter.SHUFFLE], "filters_meta": [0, 0]}, {"nthreads": 1}),
         ({"nthreads": 1, "filters": [255], "filters_meta": [4]}, {"nthreads": 4}),
@@ -135,7 +135,7 @@ def test_pyufilters_error(cparams, dparams):
 
 
 @pytest.mark.parametrize(
-    "cparams, dparams",
+    ("cparams", "dparams"),
     [
         ({"nthreads": 4, "filters": [163, blosc2.Filter.SHUFFLE], "filters_meta": [0, 0]}, {"nthreads": 1}),
         ({"nthreads": 1, "filters": [163], "filters_meta": [4]}, {"nthreads": 4}),

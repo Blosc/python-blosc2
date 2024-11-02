@@ -15,7 +15,7 @@ import blosc2
 @pytest.mark.parametrize("contiguous", [True, False])
 @pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize(
-    "cparams, dparams, nchunks",
+    ("cparams", "dparams", "nchunks"),
     [
         (blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6, typesize=4), blosc2.DParams(), 1),
         ({"typesize": 4}, {"nthreads": 4}, 1),
@@ -47,7 +47,7 @@ def test_ndarray_cframe(contiguous, urlpath, cparams, dparams, nchunks, copy):
 
 
 @pytest.mark.parametrize(
-    "shape, steps",
+    ("shape", "steps"),
     [
         ((200,), 1),
         ((200,), 3),

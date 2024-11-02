@@ -79,7 +79,7 @@ class LazyArrayEnum(Enum):
 
 class LazyArray(ABC):
     @abstractmethod
-    def compute(self, item: slice | list[slice] = None, **kwargs: dict) -> blosc2.NDArray:
+    def compute(self, item: slice | list[slice] | None = None, **kwargs: dict) -> blosc2.NDArray:
         """
         Return an :ref:`NDArray` containing the evaluation of the :ref:`LazyArray`.
 
@@ -637,8 +637,6 @@ def fill_chunk_operands(
             chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
         else:
             chunk_operands[key] = value[slice_]
-
-    return
 
 
 def fast_eval(
@@ -1266,7 +1264,7 @@ def fuse_operands(operands1, operands2):
             # The value is not among operands1, so rebase it
             new_op = f"o{new_pos}"
             new_pos += 1
-            new_operands[new_op] = operands2[k2]
+            new_operands[new_op] = v2
     return new_operands, dup_operands
 
 
@@ -1623,9 +1621,9 @@ class LazyExpr(LazyArray):
             raise ValueError("where() can only be used with boolean expressions")
         # This just acts as a 'decorator' for the existing expression
         if value1 is not None and value2 is not None:
-            args = dict(_where_x=value1, _where_y=value2)
+            args = {"_where_x": value1, "_where_y": value2}
         elif value1 is not None:
-            args = dict(_where_x=value1)
+            args = {"_where_x": value1}
         elif value2 is not None:
             raise ValueError("where() requires value1 when using value2")
         else:
@@ -2109,9 +2107,9 @@ def lazyudf(
 
 def lazyexpr(
     expression: str | bytes | LazyExpr,
-    operands: dict = None,
+    operands: dict | None = None,
     out: blosc2.NDArray | np.ndarray = None,
-    where: tuple | list = None,
+    where: tuple | list | None = None,
 ) -> LazyExpr:
     """
     Get a LazyExpr from an expression.
@@ -2173,7 +2171,7 @@ def lazyexpr(
         if out is not None:
             expression._output = out
         if where is not None:
-            where_args = dict(_where_x=where[0], _where_y=where[1])
+            where_args = {"_where_x": where[0], "_where_y": where[1]}
             expression._where_args = where_args
         return expression
     if operands is None:

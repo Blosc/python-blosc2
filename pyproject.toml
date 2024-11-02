@@ -87,10 +87,12 @@ extend-exclude = ["bench"]
 [tool.ruff.lint]
 extend-select = [
     "B",
+    "C4",
     "I",
     "NPY",
     "PT",
     "RET",
+    "RUF",
     "SIM",
     "TCH",
     "UP",
@@ -99,10 +101,11 @@ ignore = [
     "B028",
     "PT004",  # deprecated
     "PT005",  # deprecated
-    "PT006",
     "PT011",
     "RET505",
     "RET508",
+    "RUF005",
+    "RUF015",
     "SIM108",
     "UP027",  # deprecated
     "UP038",  # https://github.com/astral-sh/ruff/issues/7871

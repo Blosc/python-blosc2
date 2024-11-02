@@ -16,7 +16,7 @@ import blosc2
 @pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize("mode", ["w", "a"])
 @pytest.mark.parametrize(
-    "cparams, dparams, nchunks, start, stop",
+    ("cparams", "dparams", "nchunks", "start", "stop"),
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 1, 200 * 100 * 1, 200 * 100 * 2),
         ({"typesize": 4}, {"nthreads": 4}, 1, 200 * 100 * 1 - 233, 200 * 100 * 3 + 7),
