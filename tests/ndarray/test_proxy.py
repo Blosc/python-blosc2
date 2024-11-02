@@ -109,7 +109,7 @@ def test_open(urlpath, shape, chunks, blocks, slices, dtype):
 
 # Test the ProxyNDSources interface
 @pytest.mark.parametrize(
-    "shape, chunks, blocks",
+    ("shape", "chunks", "blocks"),
     [
         # One should be careful to choose aligned partitions for our source
         # E.g., the following is not aligned

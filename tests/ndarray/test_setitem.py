@@ -50,7 +50,7 @@ def test_setitem(shape, chunks, blocks, slices, dtype):
 
 
 @pytest.mark.parametrize(
-    "shape, slices",
+    ("shape", "slices"),
     [
         ([456], slice(0, 1)),
         ([77, 134, 13], (slice(3, 7), slice(50, 100), 7)),

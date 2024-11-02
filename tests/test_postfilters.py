@@ -13,7 +13,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "func, input_dtype, output_dtype, offset",
+    ("func", "input_dtype", "output_dtype", "offset"),
     [
         ("postf1", np.dtype(np.int32), None, 0),
         ("postf1", np.dtype(np.int32), np.dtype(np.float32), 0),
@@ -23,7 +23,7 @@ import blosc2
     ],
 )
 @pytest.mark.parametrize(
-    "cparams, dparams, nchunks, contiguous, urlpath",
+    ("cparams", "dparams", "nchunks", "contiguous", "urlpath"),
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6}, {"nthreads": 1}, 2, True, None),
         ({}, {"nthreads": 1}, 1, True, "test_postfilters.b2frame"),

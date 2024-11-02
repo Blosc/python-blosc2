@@ -307,7 +307,7 @@ def test_functions(function, dtype_fixture, shape_fixture):
     ["arctan2", "**"],
 )
 @pytest.mark.parametrize(
-    "value1, value2",
+    ("value1", "value2"),
     [
         ("NDArray", "scalar"),
         ("NDArray", "NDArray"),
@@ -865,7 +865,7 @@ def test_get_chunk(array_fixture):
 
 
 @pytest.mark.parametrize(
-    "chunks, blocks",
+    ("chunks", "blocks"),
     [
         ((10, 100), (6, 100)),  # behaved
         ((15, 100), (5, 100)),  # not behaved

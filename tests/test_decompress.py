@@ -17,7 +17,7 @@ random = np.random.default_rng()
 
 @pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
-    "object, codec",
+    ("object", "codec"),
     [
         (random.integers(0, 10, 10), blosc2.Codec.LZ4),
         (np.arange(10), blosc2.Codec.BLOSCLZ),
@@ -51,7 +51,7 @@ def test_decompress_numpy(object, codec, gil):
 
 
 @pytest.mark.parametrize(
-    "object, codec",
+    ("object", "codec"),
     [
         (bytearray([0, 12, 24, 33]), blosc2.Codec.LZ4),
         (bytearray([2, 45, 6, 12, 78, 43, 23, 234]), blosc2.Codec.BLOSCLZ),
@@ -77,7 +77,7 @@ def test_decompress(object, codec):
     assert dest5 == object
 
 
-@pytest.mark.parametrize("object, codec", [(np.arange(0), blosc2.Codec.LZ4), (b"", blosc2.Codec.ZLIB)])
+@pytest.mark.parametrize(("object", "codec"), [(np.arange(0), blosc2.Codec.LZ4), (b"", blosc2.Codec.ZLIB)])
 def test_raise_error(object, codec):
     c = blosc2.compress(object, codec=codec)
 

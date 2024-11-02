@@ -13,7 +13,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "shape, chunks, blocks, dtype, cparams, urlpath, contiguous",
+    ("shape", "chunks", "blocks", "dtype", "cparams", "urlpath", "contiguous"),
     [
         (
             (100, 1230),
@@ -91,7 +91,7 @@ def test_empty(shape, chunks, blocks, dtype, cparams, urlpath, contiguous):
 
 
 @pytest.mark.parametrize(
-    "shape, dtype",
+    ("shape", "dtype"),
     [
         (100, np.uint8),
         ((100, 1230), np.uint8),
@@ -112,7 +112,7 @@ def test_empty_minimal(shape, dtype):
 
 
 @pytest.mark.parametrize(
-    "shape, cparams",
+    ("shape", "cparams"),
     [
         (100, {"chunks": (10,)}),
         ((100,), {"blocks": (10,)}),

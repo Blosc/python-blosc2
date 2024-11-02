@@ -15,7 +15,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "shape, chunks, blocks, dtype, cparams, urlpath, contiguous, meta",
+    ("shape", "chunks", "blocks", "dtype", "cparams", "urlpath", "contiguous", "meta"),
     [
         (
             (100, 1230),
@@ -100,7 +100,7 @@ def test_zeros(shape, chunks, blocks, dtype, cparams, urlpath, contiguous, meta)
 
 
 @pytest.mark.parametrize(
-    "shape, dtype",
+    ("shape", "dtype"),
     [
         (100, np.uint8),
         ((100, 1230), np.uint8),
