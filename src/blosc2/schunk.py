@@ -1126,7 +1126,10 @@ class SChunk(blosc2_ext.SChunk):
             input_dtype = np.dtype(np.int64)
             cparams = blosc2.CParams(typesize=input_dtype.itemsize)
             dparams = blosc2.DParams(nthreads=1)
-            schunk = blosc2.SChunk(chunksize=20_000 * input_dtype.itemsize, cparams=cparams, dparams=dparams)
+            schunk = blosc2.SChunk(
+                chunksize=20_000 * input_dtype.itemsize, cparams=cparams, dparams=dparams
+            )
+
 
             # Create postfilter and associate it to the schunk
             @schunk.postfilter(input_dtype)
@@ -1231,6 +1234,7 @@ class SChunk(blosc2_ext.SChunk):
             data = np.full(20_000 * 3, 12, dtype=op_dtype)
             schunk_op = blosc2.SChunk(chunksize=20_000 * op_dtype.itemsize, data=data)
 
+
             # Create filler
             @schunk.filler(((schunk_op, op_dtype), (np.e, np.float32)), schunk_dtype)
             def filler(inputs_tuple, output, offset):
@@ -1305,8 +1309,8 @@ class SChunk(blosc2_ext.SChunk):
             output_dtype = np.dtype(np.float32)
             cparams = blosc2.CParams(typesize=output_dtype.itemsize, nthreads=1)
             # Create schunk
-            schunk = blosc2.SChunk(chunksize=200 * 1000 * input_dtype.itemsize,
-                                   cparams=cparams)
+            schunk = blosc2.SChunk(chunksize=200 * 1000 * input_dtype.itemsize, cparams=cparams)
+
 
             # Set prefilter with decorator
             @schunk.prefilter(input_dtype, output_dtype)

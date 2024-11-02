@@ -1664,7 +1664,7 @@ def register_codec(
 
 
         # Register codec
-        codec_name = 'codec1'
+        codec_name = "codec1"
         id = 180
         blosc2.register_codec(codec_name, id, encoder, decoder)
     """
