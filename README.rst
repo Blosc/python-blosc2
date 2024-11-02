@@ -248,6 +248,5 @@ You can cite our work on the various libraries under the Blosc umbrella as follo
     note = {https://blosc.org}
   }
 
-----
 
 **Make compression better!**
