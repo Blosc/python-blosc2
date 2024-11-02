@@ -30,6 +30,7 @@ def create_schunk(data=None):
     # Create the empty SChunk
     return blosc2.SChunk(data=data, urlpath=urlpath, cparams={"typesize": dtype.itemsize})
 
+
 t0 = time()
 schunk = create_schunk(data=np.full(nelem, np.pi, dtype))
 t = (time() - t0) * 1000.
