@@ -13,7 +13,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "contiguous, urlpath, cparams, nchunks, start, stop",
+    ("contiguous", "urlpath", "cparams", "nchunks", "start", "stop"),
     [
         (True, None, {"typesize": 4}, 10, 0, 100),
         (True, "b2frame", {"typesize": 4}, 1, 7, 23),

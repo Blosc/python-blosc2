@@ -15,7 +15,7 @@ import blosc2
 @pytest.mark.parametrize("mode", ["r", "w", "a"])
 @pytest.mark.parametrize("urlpath", ["test_mode.b2nd"])
 @pytest.mark.parametrize(
-    "shape, fill_value, dtype, cparams, dparams, contiguous",
+    ("shape", "fill_value", "dtype", "cparams", "dparams", "contiguous"),
     [
         (
             (80, 51, 60),

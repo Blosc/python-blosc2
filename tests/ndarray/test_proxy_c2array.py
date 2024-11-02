@@ -36,7 +36,7 @@ def get_array(shape, chunks_blocks):
     ],
 )
 @pytest.mark.parametrize(
-    "urlpath, slices",
+    ("urlpath", "slices"),
     [
         (None, (slice(0, 23), slice(None))),
         ("proxy", (slice(None), slice(None))),

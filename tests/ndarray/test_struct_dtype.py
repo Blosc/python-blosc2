@@ -13,7 +13,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "shape, dtype, urlpath",
+    ("shape", "dtype", "urlpath"),
     [
         ((100, 123), "f4,f8", None),
         ((234, 125), "f4,(2,)f8", "test1.b2nd"),

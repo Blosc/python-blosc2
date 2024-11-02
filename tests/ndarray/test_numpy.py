@@ -13,7 +13,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "shape, chunks, blocks, dtype",
+    ("shape", "chunks", "blocks", "dtype"),
     [
         ([931], [223], [45], np.int32),
         ([134, 121, 78], [12, 13, 18], [4, 4, 9], np.float64),

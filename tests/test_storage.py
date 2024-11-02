@@ -15,7 +15,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "urlpath, contiguous, mode, mmap_mode",
+    ("urlpath", "contiguous", "mode", "mmap_mode"),
     [
         (None, None, "w", None),
         (None, False, "a", None),
@@ -54,7 +54,7 @@ def test_storage_defaults():
 
 
 @pytest.mark.parametrize(
-    "urlpath, contiguous",
+    ("urlpath", "contiguous"),
     [
         (None, False),
         (None, True),

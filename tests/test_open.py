@@ -17,7 +17,7 @@ import blosc2
 
 @pytest.mark.parametrize("urlpath", ["schunk.b2frame"])
 @pytest.mark.parametrize(
-    "cparams, dparams, nchunks, chunk_nitems, dtype",
+    ("cparams", "dparams", "nchunks", "chunk_nitems", "dtype"),
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 2}, {}, 0, 50, np.int16),
         ({"typesize": 4}, {"nthreads": 4}, 1, 200 * 100, float),
@@ -26,7 +26,7 @@ import blosc2
     ],
 )
 @pytest.mark.parametrize(
-    "contiguous, mode, mmap_mode",
+    ("contiguous", "mode", "mmap_mode"),
     [
         (False, "w", None),
         (False, "r", None),
@@ -114,7 +114,7 @@ def test_open_fake():
 
 @pytest.mark.parametrize("offset", [0, 42])
 @pytest.mark.parametrize("urlpath", ["schunk.b2frame"])
-@pytest.mark.parametrize("mode, mmap_mode", [("r", None), (None, "r")])
+@pytest.mark.parametrize(("mode", "mmap_mode"), [("r", None), (None, "r")])
 def test_open_offset(offset, urlpath, mode, mmap_mode):
     urlpath_temp = urlpath + ".temp"
 

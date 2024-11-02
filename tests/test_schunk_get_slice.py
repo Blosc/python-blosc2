@@ -16,7 +16,7 @@ import blosc2
 @pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize("mode", ["w", "a"])
 @pytest.mark.parametrize(
-    "cparams, dparams, nchunks, start, stop",
+    ("cparams", "dparams", "nchunks", "start", "stop"),
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 10, 0, 100),
         ({"typesize": 4}, {"nthreads": 4}, 1, 7, 23),
@@ -68,7 +68,7 @@ def test_schunk_get_slice(contiguous, urlpath, mode, cparams, dparams, nchunks, 
 
 
 @pytest.mark.parametrize(
-    "cparams, nchunks, elem",
+    ("cparams", "nchunks", "elem"),
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, 10, 0),
         ({"typesize": 4}, 1, 7),

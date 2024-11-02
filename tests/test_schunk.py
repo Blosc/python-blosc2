@@ -16,7 +16,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "urlpath, contiguous, mode, mmap_mode",
+    ("urlpath", "contiguous", "mode", "mmap_mode"),
     [
         (None, False, "r", None),
         (None, False, "w", None),
@@ -36,7 +36,7 @@ import blosc2
     ],
 )
 @pytest.mark.parametrize(
-    "cparams, dparams, nchunks",
+    ("cparams", "dparams", "nchunks"),
     [
         (blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6, typesize=4), blosc2.DParams(), 0),
         ({"typesize": 4}, blosc2.DParams(nthreads=4), 1),
@@ -110,7 +110,7 @@ def test_schunk_numpy(contiguous, urlpath, mode, mmap_mode, cparams, dparams, nc
 
 
 @pytest.mark.parametrize(
-    "mode_write, mode_read, mmap_mode_write, mmap_mode_read",
+    ("mode_write", "mode_read", "mmap_mode_write", "mmap_mode_read"),
     [("w", "r", None, None), (None, None, "w+", "r")],
 )
 def test_schunk_ndarray(tmp_path, mode_write, mode_read, mmap_mode_write, mmap_mode_read):
@@ -123,7 +123,7 @@ def test_schunk_ndarray(tmp_path, mode_write, mode_read, mmap_mode_write, mmap_m
 
 
 @pytest.mark.parametrize(
-    "urlpath, contiguous, mode, mmap_mode",
+    ("urlpath", "contiguous", "mode", "mmap_mode"),
     [
         (None, False, "w", None),
         (None, True, "w", None),
@@ -133,7 +133,7 @@ def test_schunk_ndarray(tmp_path, mode_write, mode_read, mmap_mode_write, mmap_m
     ],
 )
 @pytest.mark.parametrize(
-    "nbytes, cparams, dparams, nchunks",
+    ("nbytes", "cparams", "dparams", "nchunks"),
     [
         (7, blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6, typesize=5), {}, 1),
         (641091, {"typesize": 3}, blosc2.DParams(nthreads=2), 1),
@@ -180,7 +180,7 @@ def test_schunk(contiguous, urlpath, mode, mmap_mode, nbytes, cparams, dparams, 
 
 
 @pytest.mark.parametrize(
-    "urlpath, contiguous, mode, mmap_mode",
+    ("urlpath", "contiguous", "mode", "mmap_mode"),
     [
         (None, False, "w", None),
         (None, True, "w", None),
@@ -190,7 +190,7 @@ def test_schunk(contiguous, urlpath, mode, mmap_mode, nbytes, cparams, dparams, 
     ],
 )
 @pytest.mark.parametrize(
-    "cparams, dparams, nchunks",
+    ("cparams", "dparams", "nchunks"),
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, blosc2.DParams(), 1),
         ({"typesize": 4}, {"nthreads": 4}, 1),
@@ -233,7 +233,7 @@ def test_schunk_cframe(contiguous, urlpath, mode, mmap_mode, cparams, dparams, n
 
 
 @pytest.mark.parametrize(
-    "cparams, dparams, new_cparams, new_dparams",
+    ("cparams", "dparams", "new_cparams", "new_dparams"),
     [
         (
             blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6, typesize=4),

@@ -15,7 +15,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "shape, chunks, blocks, fill_value, dtype, cparams, dparams, urlpath, contiguous",
+    ("shape", "chunks", "blocks", "fill_value", "dtype", "cparams", "dparams", "urlpath", "contiguous"),
     [
         (
             (100, 1230),
@@ -92,7 +92,7 @@ def test_full(shape, chunks, blocks, fill_value, cparams, dparams, dtype, urlpat
 
 
 @pytest.mark.parametrize(
-    "shape, fill_value, dtype",
+    ("shape", "fill_value", "dtype"),
     [
         ((100, 1230), b"0123", None),
         ((23, 34), b"sun", None),

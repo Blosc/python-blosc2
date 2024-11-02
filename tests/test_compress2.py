@@ -17,7 +17,7 @@ random = np.random.default_rng()
 
 @pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
-    "obj, cparams, dparams",
+    ("obj", "cparams", "dparams"),
     [
         (random.integers(0, 10, 10), {"cparams": blosc2.CParams(codec=blosc2.Codec.LZ4, clevel=6)}, {}),
         (
@@ -80,7 +80,7 @@ def test_compress2_numpy(obj, cparams, dparams, gil):
 
 @pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
-    "obj, cparams, dparams",
+    ("obj", "cparams", "dparams"),
     [
         (
             random.integers(0, 10, 10, dtype=np.int64),
@@ -111,7 +111,7 @@ def test_compress2_int_trunc(obj, cparams, dparams, gil):
 
 @pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
-    "nbytes, cparams, dparams",
+    ("nbytes", "cparams", "dparams"),
     [
         (7, {"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 1}, {}),
         (641091, {"typesize": 1}, {"nthreads": 4}),
@@ -138,7 +138,7 @@ def test_compress2(nbytes, cparams, dparams, gil):
 
 @pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
-    "object, cparams, dparams",
+    ("object", "cparams", "dparams"),
     [(np.arange(0), {"codec": blosc2.Codec.LZ4, "clevel": 6}, {}), (b"", {}, {"nthreads": 3})],
 )
 def test_raise_error(object, cparams, dparams, gil):

@@ -185,7 +185,7 @@ def test_reduce_item(reduce_op, dtype, stripes, stripe_len, shape, chunks):
 
 # Test fast path for reductions
 @pytest.mark.parametrize(
-    "chunks, blocks",
+    ("chunks", "blocks"),
     [
         ((20, 50, 100), (10, 50, 100)),
         ((10, 25, 70), (10, 25, 50)),

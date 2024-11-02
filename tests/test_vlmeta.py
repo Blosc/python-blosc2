@@ -15,7 +15,7 @@ import blosc2
 @pytest.mark.parametrize("contiguous", [True, False])
 @pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize(
-    "cparams, dparams, nchunks",
+    ("cparams", "dparams", "nchunks"),
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {}, 10),
     ],
@@ -41,7 +41,7 @@ def test_schunk_numpy(contiguous, urlpath, cparams, dparams, nchunks):
 @pytest.mark.parametrize("contiguous", [True, False])
 @pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize(
-    "nbytes, cparams, dparams, nchunks",
+    ("nbytes", "cparams", "dparams", "nchunks"),
     [
         (136, {"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 1}, {}, 10),
     ],

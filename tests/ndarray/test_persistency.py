@@ -21,7 +21,7 @@ import blosc2
     ],
 )
 @pytest.mark.parametrize(
-    "shape, chunks, blocks, urlpath, dtype",
+    ("shape", "chunks", "blocks", "urlpath", "dtype"),
     [
         ([634], [156], [33], "test00.b2nd", np.float64),
         ([20, 134, 13], [7, 22, 5], [3, 5, 3], "test01.b2nd", np.int32),
