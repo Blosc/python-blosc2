@@ -1,6 +1,4 @@
 pre-commit
-black
-isort
 ruff
 h5py
 hdf5plugin
