@@ -71,4 +71,3 @@ for axis in laxis:
     # print("LazyExpr+getitem took %.3f s" % (time() - t0))
     # # Check
     # np.testing.assert_allclose(d[:], npres, rtol=rtol, atol=atol)
-
