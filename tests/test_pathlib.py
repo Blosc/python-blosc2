@@ -14,9 +14,11 @@ import pytest
 import blosc2
 
 
-@pytest.mark.parametrize("mode, mmap_mode", [("r", None), ("w", None), ("a", None), ("r", "r"), ("w", "w+")])
 @pytest.mark.parametrize(
-    "cparams, dparams, nchunks",
+    ("mode", "mmap_mode"), [("r", None), ("w", None), ("a", None), ("r", "r"), ("w", "w+")]
+)
+@pytest.mark.parametrize(
+    ("cparams", "dparams", "nchunks"),
     [
         ({"splitmode": blosc2.SplitMode.ALWAYS_SPLIT, "nthreads": 5, "typesize": 4}, {}, 5),
     ],
@@ -51,7 +53,7 @@ argvalues = [
 ]
 
 
-@pytest.mark.parametrize("mode, mmap_mode", [("w", None), (None, "w+")])
+@pytest.mark.parametrize(("mode", "mmap_mode"), [("w", None), (None, "w+")])
 @pytest.mark.parametrize(argnames, argvalues)
 def test_ndarray_pathlib(tmp_path, mode, mmap_mode, shape, chunks, blocks, slices, dtype):
     size = int(np.prod(shape))

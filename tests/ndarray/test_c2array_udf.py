@@ -25,7 +25,7 @@ def udf1p(inputs_tuple, output, offset):
 
 @pytest.mark.parametrize("chunked_eval", [True, False])
 @pytest.mark.parametrize(
-    "chunks, blocks",
+    ("chunks", "blocks"),
     [
         pytest.param((30, 30), (30, 30), marks=pytest.mark.heavy),
         (
@@ -66,7 +66,7 @@ def udf2p(inputs_tuple, output, offset):
 
 @pytest.mark.parametrize("chunked_eval", [True, False])
 @pytest.mark.parametrize(
-    "chunks, blocks, slices, urlpath, contiguous",
+    ("chunks", "blocks", "slices", "urlpath", "contiguous"),
     [
         pytest.param((53, 20), (10, 13), (slice(3, 8), slice(9, 12)), None, False),
     ],

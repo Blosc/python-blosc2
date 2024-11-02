@@ -15,7 +15,7 @@ import blosc2
 @pytest.mark.parametrize("contiguous", [True, False])
 @pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize(
-    "cparams, dparams, nchunks",
+    ("cparams", "dparams", "nchunks"),
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {"nthreads": 1}, 0),
         ({"typesize": 4}, {"nthreads": 1}, 1),
@@ -45,7 +45,7 @@ def test_iterchunks(contiguous, urlpath, cparams, dparams, nchunks):
 @pytest.mark.parametrize("contiguous", [True, False])
 @pytest.mark.parametrize("urlpath", [None, "b2frame"])
 @pytest.mark.parametrize(
-    "cparams, dparams, nchunks",
+    ("cparams", "dparams", "nchunks"),
     [
         ({"codec": blosc2.Codec.LZ4, "clevel": 6, "typesize": 4}, {"nthreads": 1}, 2),
         ({"typesize": 4}, {"nthreads": 1}, 1),

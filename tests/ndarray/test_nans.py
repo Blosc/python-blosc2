@@ -13,7 +13,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "shape, dtype",
+    ("shape", "dtype"),
     [
         ((100, 1230), np.float64),
         ((23, 34), np.float32),

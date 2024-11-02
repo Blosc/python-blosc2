@@ -13,7 +13,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "shape, chunks, blocks, dtype, urlpath, contiguous, meta",
+    ("shape", "chunks", "blocks", "dtype", "urlpath", "contiguous", "meta"),
     [
         ([450], [128], [25], "|S8", "frombuffer.b2nd", True, None),
         ([20, 134, 13], [3, 13, 5], [3, 10, 5], np.complex128, "frombuffer.b2nd", False, {"123": 123}),
@@ -45,7 +45,7 @@ def test_buffer(shape, chunks, blocks, dtype, urlpath, contiguous, meta):
 
 
 @pytest.mark.parametrize(
-    "shape, dtype",
+    ("shape", "dtype"),
     [
         ([450], "|S8"),
         ([20, 134, 13], np.complex128),

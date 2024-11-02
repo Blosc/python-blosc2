@@ -14,7 +14,7 @@ import blosc2
 
 @pytest.mark.parametrize("gil", [True, False])
 @pytest.mark.parametrize(
-    "clevel, codec",
+    ("clevel", "codec"),
     [
         (8, blosc2.Codec.BLOSCLZ),
         (9, blosc2.Codec.LZ4),

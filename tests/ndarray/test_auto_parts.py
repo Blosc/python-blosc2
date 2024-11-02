@@ -49,7 +49,7 @@ def test_compute_chunks_blocks(clevel, codec, shape: tuple, dtype):
 
 
 @pytest.mark.parametrize(
-    "shape, blocks",
+    ("shape", "blocks"),
     [
         ((1000, 1000), (10, 10)),
         ((10, 10), (100, 100)),  # blocks can exceed shape if user wants to
@@ -72,7 +72,7 @@ def test_compute_chunks(shape: tuple, blocks: tuple):
 
 # Invalid blocks
 @pytest.mark.parametrize(
-    "shape, blocks",
+    ("shape", "blocks"),
     [
         ((1000, 1000), (0, 10)),  # zeros are not allowed
         ((10, 20, 30), (1, 2)),  # blocks need to have the same length as shape
@@ -84,7 +84,7 @@ def test_compute_chunks_except(shape: tuple, blocks: tuple):
 
 
 @pytest.mark.parametrize(
-    "shape, chunks",
+    ("shape", "chunks"),
     [
         ((10, 10), (100, 100)),
         ((1000, 1000), (10, 10)),
@@ -104,7 +104,7 @@ def test_compute_blocks(shape: tuple, chunks: tuple):
 
 
 @pytest.mark.parametrize(
-    "shape, chunks",
+    ("shape", "chunks"),
     [
         ((1000, 1000), (0, 10)),
         ((1000, 1000), (10,)),

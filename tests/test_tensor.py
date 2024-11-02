@@ -18,7 +18,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "size, dtype",
+    ("size", "dtype"),
     [
         (1e6, "int64"),
         (1e6, "f8"),
@@ -36,7 +36,7 @@ def test_pack_array(size, dtype):
 
 
 @pytest.mark.parametrize(
-    "size, dtype",
+    ("size", "dtype"),
     [
         (1e6, "int64"),
         (1e6, "float64"),
@@ -55,7 +55,7 @@ def test_pack_array2(size, dtype):
     assert np.array_equal(nparray, a2)
 
 
-@pytest.mark.parametrize("size, dtype", [(100_000, "i4,i4"), (10_000, "i4,f8"), (3000, "i4,f4,S8")])
+@pytest.mark.parametrize(("size", "dtype"), [(100_000, "i4,i4"), (10_000, "i4,f8"), (3000, "i4,f4,S8")])
 def test_pack_array2_struct(size, dtype):
     nparray = np.fromiter(iter(range(size)), dtype="i4,f4,S8")
     parray = blosc2.pack_array2(nparray)
@@ -67,7 +67,7 @@ def test_pack_array2_struct(size, dtype):
 
 
 @pytest.mark.parametrize(
-    "size, dtype",
+    ("size", "dtype"),
     [
         (1e6, "float32"),
         (1e6, "float64"),
@@ -88,7 +88,7 @@ def test_pack_tensor_torch(size, dtype):
 
 
 @pytest.mark.parametrize(
-    "size, dtype",
+    ("size", "dtype"),
     [
         (1e6, np.float32),
         (1e6, np.float64),
@@ -109,7 +109,7 @@ def test_pack_tensor_tensorflow(size, dtype):
 
 
 @pytest.mark.parametrize(
-    "size, dtype",
+    ("size", "dtype"),
     [
         (1e6, "int64"),
         (1e6, "float64"),
@@ -132,7 +132,7 @@ def test_pack_tensor_array(size, dtype):
 
 
 @pytest.mark.parametrize(
-    "size, dtype, urlpath",
+    ("size", "dtype", "urlpath"),
     [
         (1e6, "int64", "test.bl2"),
         (1e6, "float32", "test.bl2"),
@@ -150,7 +150,7 @@ def test_save_array(size, dtype, urlpath):
 
 
 @pytest.mark.parametrize(
-    "size, dtype, urlpath",
+    ("size", "dtype", "urlpath"),
     [
         (1e6, "int64", "test.bl2"),
         (1e6, "float32", "test.bl2"),
@@ -168,7 +168,7 @@ def test_save_tensor_array(size, dtype, urlpath):
 
 
 @pytest.mark.parametrize(
-    "size, dtype, urlpath",
+    ("size", "dtype", "urlpath"),
     [
         (1e6, "int64", "test.bl2"),
         (1e6, "float32", "test.bl2"),
@@ -188,7 +188,7 @@ def test_save_tensor_tensorflow(size, dtype, urlpath):
 
 
 @pytest.mark.parametrize(
-    "size, dtype, urlpath",
+    ("size", "dtype", "urlpath"),
     [
         (1e6, "int64", "test.bl2"),
         (1e6, "float32", "test.bl2"),
@@ -208,7 +208,7 @@ def test_save_tensor_torch(size, dtype, urlpath):
 
 
 @pytest.mark.parametrize(
-    "size, sparse, urlpath",
+    ("size", "sparse", "urlpath"),
     [
         (1e6, True, "test.bl2"),
         (1e6, False, "test.bl2"),

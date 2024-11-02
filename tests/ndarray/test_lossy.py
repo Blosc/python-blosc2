@@ -15,7 +15,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "shape, dtype, cparams, urlpath, contiguous",
+    ("shape", "dtype", "cparams", "urlpath", "contiguous"),
     [
         (
             (32, 18),

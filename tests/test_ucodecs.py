@@ -15,7 +15,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "codec_name, id, dtype, cparams",
+    ("codec_name", "id", "dtype", "cparams"),
     [
         ("codec1", 160, np.dtype(np.int32), {"filters": [blosc2.Filter.NOFILTER], "filters_meta": [0]}),
         ("codec1", 180, np.dtype(np.float64), {}),
@@ -23,7 +23,7 @@ import blosc2
     ],
 )
 @pytest.mark.parametrize(
-    "nchunks, contiguous, urlpath",
+    ("nchunks", "contiguous", "urlpath"),
     [
         (2, True, None),
         (1, True, "test_codec.b2frame"),
@@ -87,7 +87,7 @@ def test_ucodecs(contiguous, urlpath, cparams, nchunks, codec_name, id, dtype):
 
 
 @pytest.mark.parametrize(
-    "cparams, dparams",
+    ("cparams", "dparams"),
     [
         ({"codec": 163, "nthreads": 1}, {"nthreads": 4}),
         ({"codec": 163, "nthreads": 4}, {"nthreads": 1}),
@@ -131,7 +131,7 @@ def test_pyucodecs_error(cparams, dparams):
 
 
 @pytest.mark.parametrize(
-    "cparams, dparams",
+    ("cparams", "dparams"),
     [
         ({"codec": 254, "nthreads": 1}, {"nthreads": 4}),
         ({"codec": 254, "nthreads": 4}, {"nthreads": 1}),

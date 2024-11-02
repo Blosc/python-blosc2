@@ -20,7 +20,7 @@ def udf1p(inputs_tuple, output, offset):
 
 @pytest.mark.parametrize("chunked_eval", [True, False])
 @pytest.mark.parametrize(
-    "shape, chunks, blocks",
+    ("shape", "chunks", "blocks"),
     [
         # Test different shapes with and without padding
         (
@@ -88,7 +88,7 @@ def udf2p(inputs_tuple, output, offset):
 
 @pytest.mark.parametrize("chunked_eval", [True, False])
 @pytest.mark.parametrize(
-    "shape, chunks, blocks",
+    ("shape", "chunks", "blocks"),
     [
         (
             (20, 20),
@@ -130,7 +130,7 @@ def udf_1dim(inputs_tuple, output, offset):
 
 @pytest.mark.parametrize("chunked_eval", [True, False])
 @pytest.mark.parametrize(
-    "shape, chunks, blocks",
+    ("shape", "chunks", "blocks"),
     [
         (
             (20,),
@@ -209,7 +209,7 @@ def test_params(chunked_eval):
 
 @pytest.mark.parametrize("chunked_eval", [True, False])
 @pytest.mark.parametrize(
-    "shape, chunks, blocks, slices, urlpath, contiguous",
+    ("shape", "chunks", "blocks", "slices", "urlpath", "contiguous"),
     [
         ((40, 20), (30, 10), (5, 5), (slice(0, 5), slice(5, 20)), "eval.b2nd", False),
         ((13, 13, 10), (10, 10, 5), (5, 5, 3), (slice(0, 12), slice(3, 13), ...), "eval.b2nd", True),
@@ -253,7 +253,7 @@ def test_getitem(shape, chunks, blocks, slices, urlpath, contiguous, chunked_eva
 
 @pytest.mark.parametrize("chunked_eval", [True, False])
 @pytest.mark.parametrize(
-    "shape, chunks, blocks, slices, urlpath, contiguous",
+    ("shape", "chunks", "blocks", "slices", "urlpath", "contiguous"),
     [
         ((40, 20), (30, 10), (5, 5), (slice(0, 5), slice(5, 20)), "slice_eval.b2nd", False),
         ((13, 13, 10), (10, 10, 5), (5, 5, 3), (slice(0, 12), slice(3, 13), ...), "slice_eval.b2nd", True),
@@ -310,7 +310,7 @@ def udf_offset(inputs_tuple, output, offset):
 @pytest.mark.parametrize("eval_mode", ["eval", "getitem"])
 @pytest.mark.parametrize("chunked_eval", [True, False])
 @pytest.mark.parametrize(
-    "shape, chunks, blocks, slices",
+    ("shape", "chunks", "blocks", "slices"),
     [
         ((10,), (4,), (3,), ()),
         # ((10,), (4,), (3,), None),  # TODO: make this work (None is equivalent to newaxis)

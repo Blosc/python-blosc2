@@ -13,7 +13,7 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    "shape, chunks1, blocks1, chunks2, blocks2, dtype",
+    ("shape", "chunks1", "blocks1", "chunks2", "blocks2", "dtype"),
     [
         ([521], [212], [33], [121], [18], "|S8"),
         ([521], [212], [33], [121], [18], "|V8"),
@@ -47,7 +47,7 @@ def test_copy(shape, chunks1, blocks1, chunks2, blocks2, dtype):
 
 
 @pytest.mark.parametrize(
-    "shape, chunks1, blocks1, chunks2, blocks2, dtype",
+    ("shape", "chunks1", "blocks1", "chunks2", "blocks2", "dtype"),
     [
         ([521], [212], [33], [121], [18], "i8"),
         ([521], [212], [33], [121], [18], "i8, f4"),
@@ -73,7 +73,7 @@ def test_copy_numpy(shape, chunks1, blocks1, chunks2, blocks2, dtype):
 
 
 @pytest.mark.parametrize(
-    "shape, dtype", [([521], "i8"), ([20, 134, 13], "f4"), ([12, 13, 14, 15, 16], "f8")]
+    ("shape", "dtype"), [([521], "i8"), ([20, 134, 13], "f4"), ([12, 13, 14, 15, 16], "f8")]
 )
 def test_copy_simple(shape, dtype):
     size = int(np.prod(shape))
