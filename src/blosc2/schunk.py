@@ -1370,8 +1370,10 @@ class SChunk(blosc2_ext.SChunk):
 def open(
     urlpath: str | pathlib.Path | blosc2.URLPath, mode: str = "a", offset: int = 0, **kwargs: dict
 ) -> blosc2.SChunk | blosc2.NDArray | blosc2.C2Array:
-    """Open a persistent :ref:`SChunk` or :ref:`NDArray` or a remote :ref:`C2Array`
-    or a :ref:`Proxy` (see the `Notes` section for more info on the latter case).
+    """Open a persistent :ref:`SChunk`, :ref:`NDArray`, a remote :ref:`C2Array`
+    or a :ref:`Proxy`
+
+    See the `Notes` section for more info on opening `Proxy` objects.
 
     Parameters
     ----------
@@ -1408,11 +1410,12 @@ def open(
     * If :paramref:`urlpath` is a :ref:`URLPath` instance, :paramref:`mode`
       must be 'r', :paramref:`offset` must be 0, and kwargs cannot be passed.
 
-    * If the original object saved in :paramref:`urlpath` was a :ref:`Proxy`, this function
-      will only return a :ref:`Proxy` if its source is a local :ref:`SChunk`, :ref:`NDArray`
-      or a remote :ref:`C2Array`. Otherwise, it will return the Python-Blosc2 container used to cache the data which
-      can be a :ref:`SChunk` or a :ref:`NDArray` and may not have all the data initialized (e.g. if the user
-      has not accessed it yet).
+    * If the original object saved in :paramref:`urlpath` is a :ref:`Proxy`,
+      this function will only return a :ref:`Proxy` if its source is a local
+      :ref:`SChunk`, :ref:`NDArray` or a remote :ref:`C2Array`. Otherwise,
+      it will return the Python-Blosc2 container used to cache the data which
+      can be a :ref:`SChunk` or a :ref:`NDArray` and may not have all the data
+      initialized (e.g. if the user has not accessed to it yet).
 
     * When opening a :ref:`LazyExpr` keep in mind the note above regarding operands.
 
