@@ -1266,7 +1266,7 @@ def fuse_operands(operands1, operands2):
             # The value is not among operands1, so rebase it
             new_op = f"o{new_pos}"
             new_pos += 1
-            new_operands[new_op] = operands2[k2]
+            new_operands[new_op] = v2
     return new_operands, dup_operands
 
 
