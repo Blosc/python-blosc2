@@ -34,7 +34,7 @@ import numpy as np
 import blosc2
 from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
-from blosc2.ndarray import get_chunks_idx
+from blosc2.ndarray import get_chunks_idx, _check_allowed_dtypes
 
 
 def is_inside_eval():
@@ -1125,7 +1125,8 @@ def reduce_slices(
                 dtype = result.dtype
             if is_inside_eval():
                 # We already have the dtype and reduced_shape, so return immediately
-                return np.zeros(reduced_shape, dtype=dtype)
+                # Use a blosc2 container, as it consumes less memory in general
+                return blosc2.zeros(reduced_shape, dtype=dtype)
             out = convert_none_out(dtype, reduce_op, reduced_shape)
 
         # Update the output array with the result
@@ -1482,7 +1483,7 @@ class LazyExpr(LazyArray):
                 try:
                     op_name = list(value2.operands.keys())[list(value2.operands.values()).index(value1)]
                 except ValueError:
-                    op_name = f"o{len(self.operands)}"
+                    op_name = f"o{len(value2.operands)}"
                     new_operands = {op_name: value1}
                 if op == "[]":  # syntactic sugar for slicing
                     expression = f"({op_name}[{self.expression}])"
@@ -1534,6 +1535,39 @@ class LazyExpr(LazyArray):
             # Not using the fast path, so we need to compute the chunks/blocks automatically
             self._chunks, self._blocks = compute_chunks_blocks(self.shape, None, None, dtype=self.dtype)
         return self._blocks
+
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        # Handle operations at the array level
+        if method != "__call__":
+            return NotImplemented
+
+        ufunc_map = {
+            np.add: "+",
+            np.subtract: "-",
+            np.multiply: "*",
+            np.divide: "/",
+            np.true_divide: "/",
+            np.power: "**",
+            np.less: "<",
+            np.less_equal: "<=",
+            np.greater: ">",
+            np.greater_equal: ">=",
+            np.equal: "==",
+            np.not_equal: "!=",
+            np.sqrt: "sqrt",
+        }
+
+        if ufunc in ufunc_map:
+            if ufunc == np.sqrt:
+                # Special case for sqrt
+                value = inputs[0]
+                _check_allowed_dtypes(value)
+                return blosc2.LazyExpr(new_op=(value, "sqrt", None))
+            value = inputs[0] if inputs[1] is self else inputs[1]
+            _check_allowed_dtypes(value)
+            return blosc2.LazyExpr(new_op=(value, ufunc_map[ufunc], self))
+
+        return NotImplemented
 
     def __neg__(self):
         return self.update_expr(new_op=(0, "-", self))
@@ -1820,9 +1854,12 @@ class LazyExpr(LazyArray):
                 raise ValueError(
                     "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
                 )
-            if value.schunk.urlpath is None:
-                raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
-            operands[key] = value.schunk.urlpath
+            if key != "blosc2":
+                if value.schunk.urlpath is None:
+                    raise ValueError(
+                        "To save a LazyArray, all operands must be stored on disk/network"
+                    )
+                operands[key] = value.schunk.urlpath
         array.schunk.vlmeta["_LazyArray"] = {
             "expression": self.expression,
             "UDF": None,

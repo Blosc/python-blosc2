@@ -131,14 +131,14 @@ def get_chunks_idx(shape, chunks):
 
 
 def _check_allowed_dtypes(
-    value: bool | int | float | str | NDArray | NDField | blosc2.C2Array | blosc2.Proxy,
+    value: bool | int | float | str | blosc2.NDArray | blosc2.NDField | blosc2.C2Array | blosc2.Proxy,
 ):
     if not (
         isinstance(
             value,
             blosc2.LazyExpr
-            | NDArray
-            | NDField
+            | blosc2.NDArray
+            | blosc2.NDField
             | blosc2.C2Array
             | blosc2.Proxy
             | blosc2.ProxyNDField
@@ -574,8 +574,6 @@ class Operand:
         # Handle operations at the array level
         if method != "__call__":
             return NotImplemented
-        value = inputs[0] if inputs[1] is self else inputs[1]
-        _check_allowed_dtypes(value)
 
         ufunc_map = {
             np.add: "+",
@@ -590,9 +588,17 @@ class Operand:
             np.greater_equal: ">=",
             np.equal: "==",
             np.not_equal: "!=",
+            np.sqrt: "sqrt",
         }
 
         if ufunc in ufunc_map:
+            if ufunc == np.sqrt:
+                # Special case for sqrt
+                value = inputs[0]
+                _check_allowed_dtypes(value)
+                return blosc2.LazyExpr(new_op=(value, "sqrt", None))
+            value = inputs[0] if inputs[1] is self else inputs[1]
+            _check_allowed_dtypes(value)
             return blosc2.LazyExpr(new_op=(value, ufunc_map[ufunc], self))
 
         return NotImplemented

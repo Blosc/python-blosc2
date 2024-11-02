@@ -224,22 +224,36 @@ def test_save(disk, fill_value, reduce_op, axis):
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
         a = blosc2.full(shape, fill_value, urlpath=urlpath, mode="w")
+        b = blosc2.full(shape, fill_value - .1, urlpath="b.b2nd", mode="w")
     else:
         a = blosc2.zeros(shape, dtype=np.float64, urlpath=urlpath, mode="w")
+        b = blosc2.zeros(shape, dtype=np.float64, urlpath="b.b2nd", mode="w") - .1
     if disk:
         a = blosc2.open(urlpath)
+        b = blosc2.open("b.b2nd")
     na = a[:]
+    nb = b[:]
 
-    expr = f"a + a.{reduce_op}(axis={axis})"
-    lexpr = blosc2.lazyexpr(expr, operands={"a": a})
+    expr = f"a + b.{reduce_op}(axis={axis})"
+    lexpr = blosc2.lazyexpr(expr, operands={"a": a, "b": b})
     if disk:
         lexpr.save("out.b2nd")
         lexpr = blosc2.open("out.b2nd")
     res = lexpr.compute()
-    nres = na + getattr(na[()], reduce_op)(axis=axis)
+    nres = na + getattr(nb[()], reduce_op)(axis=axis)
     assert np.allclose(res[()], nres)
 
-    # A expression with a single operand that is reduced should be supported as well
+    # Test an expression with a reduction in front
+    expr = f"a.{reduce_op}(axis={axis}) + b"
+    lexpr = blosc2.lazyexpr(expr, operands={"a": a, "b": b})
+    if disk:
+        lexpr.save("out.b2nd")
+        lexpr = blosc2.open("out.b2nd")
+    res = lexpr.compute()
+    nres = getattr(na[()], reduce_op)(axis=axis) + nb
+    assert np.allclose(res[()], nres)
+
+    # An expression with a single operand that is reduced should be supported as well
     expr = f"a.{reduce_op}(axis={axis})"
     lexpr = blosc2.lazyexpr(expr, operands={"a": a})
     if disk:
@@ -249,3 +263,8 @@ def test_save(disk, fill_value, reduce_op, axis):
     nres = getattr(na[()], reduce_op)(axis=axis)
 
     assert np.allclose(res[()], nres)
+
+    if disk:
+        blosc2.remove_urlpath("a1.b2nd")
+        blosc2.remove_urlpath("b.b2nd")
+        blosc2.remove_urlpath("out.b2nd")
