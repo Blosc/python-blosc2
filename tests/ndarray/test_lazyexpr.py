@@ -240,7 +240,7 @@ def test_comparison_operators(dtype_fixture, compare_expressions, comparison_ope
     nelems = np.prod(reshape)
     cparams = {"clevel": 0, "codec": blosc2.Codec.LZ4}  # Compression parameters
     na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(reshape)
-    na2 = np.copy(na1)  # noqa: F841
+    na2 = np.copy(na1)
     a1 = blosc2.asarray(na1, cparams=cparams)
     a2 = blosc2.asarray(na1, cparams=cparams)
     # Construct the lazy expression

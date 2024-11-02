@@ -143,7 +143,7 @@ class Storage:
         If the storage is in-memory, then this field is `None`.
     mode: str, optional
         Persistence mode: 'r' means read only (must exist);
-        'a' means read/write (create if it doesn’t exist);
+        'a' means read/write (create if it doesn't exist);
         'w' means create (overwrite if it exists). Default is 'a'.
     mmap_mode: str, optional
         If set, the file will be memory-mapped instead of using the default

@@ -142,7 +142,7 @@ class Meta(Mapping):
 class SChunk(blosc2_ext.SChunk):
     def __init__(
         self,
-        chunksize: int = None,
+        chunksize: int | None = None,
         data: object = None,
         **kwargs: dict | blosc2.CParams | blosc2.Storage | blosc2.DParams,
     ) -> None:
@@ -428,7 +428,10 @@ class SChunk(blosc2_ext.SChunk):
         return super().append_data(data)
 
     def fill_special(
-        self, nitems: int, special_value: blosc2.SpecialValue, value: bytes | int | float | bool = None
+        self,
+        nitems: int,
+        special_value: blosc2.SpecialValue,
+        value: bytes | int | float | bool | None = None,
     ) -> int:
         """Fill the SChunk with a special value. The SChunk must be empty.
 
@@ -770,7 +773,7 @@ class SChunk(blosc2_ext.SChunk):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().update_data(nchunk, data, copy)
 
-    def get_slice(self, start: int = 0, stop: int = None, out: object = None) -> str | bytes | None:
+    def get_slice(self, start: int = 0, stop: int | None = None, out: object = None) -> str | bytes | None:
         """Get a slice from :paramref:`start` to :paramref:`stop`.
 
         Parameters
@@ -1181,7 +1184,7 @@ class SChunk(blosc2_ext.SChunk):
         """
         return super().remove_postfilter(func_name)
 
-    def filler(self, inputs_tuple: tuple[tuple], schunk_dtype: np.dtype, nelem: int = None) -> None:
+    def filler(self, inputs_tuple: tuple[tuple], schunk_dtype: np.dtype, nelem: int | None = None) -> None:
         """Decorator to set a filler function.
 
         This function will fill :paramref:`self` according to :paramref:`nelem`.

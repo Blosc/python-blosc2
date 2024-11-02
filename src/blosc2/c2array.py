@@ -178,7 +178,7 @@ def slice_to_string(slice_):
 
 
 class C2Array(blosc2.Operand):
-    def __init__(self, path: str, /, urlbase: str = None, auth_token: str = None):
+    def __init__(self, path: str, /, urlbase: str | None = None, auth_token: str | None = None):
         """Create an instance of a remote NDArray.
 
         Parameters
@@ -331,7 +331,7 @@ class C2Array(blosc2.Operand):
 
 
 class URLPath:
-    def __init__(self, path: str, /, urlbase: str = None, auth_token: str = None):
+    def __init__(self, path: str, /, urlbase: str | None = None, auth_token: str | None = None):
         """
         Create an instance of a remote data file (aka :ref:`C2Array <C2Array>`) urlpath.
         This is meant to be used in the :func:`blosc2.open` function.

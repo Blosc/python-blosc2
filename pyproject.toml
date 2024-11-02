@@ -92,6 +92,7 @@ extend-select = [
     "NPY",
     "PT",
     "RET",
+    "RUF",
     "SIM",
     "TCH",
     "UP",
@@ -102,6 +103,9 @@ ignore = [
     "PT005",  # deprecated
     "PT011",
     "RET505",
+    "RET508",
+    "RUF005",
+    "RUF015",
     "SIM108",
     "UP027",  # deprecated
     "UP038",  # https://github.com/astral-sh/ruff/issues/7871
