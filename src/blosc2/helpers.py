@@ -23,8 +23,7 @@ def _inherit_doc_parameter(parent_func, parameter, replacements=None):
                 if re.search(rf"^{indent_parent}\w+", line) is not None:
                     # Next parameter starts, stop copying lines
                     break
-                else:
-                    matching_lines.append(line)
+                matching_lines.append(line)
         assert (
             len(matching_lines) > 0
         ), f"Could not extract the parameter {parameter} from the docstring of {parent_func.__name__}"

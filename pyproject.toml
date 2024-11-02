@@ -102,7 +102,6 @@ ignore = [
     "PT006",
     "PT011",
     "RET505",
-    "RET508",
     "SIM108",
     "UP027",  # deprecated
     "UP038",  # https://github.com/astral-sh/ruff/issues/7871
