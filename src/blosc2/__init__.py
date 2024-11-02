@@ -207,7 +207,7 @@ from .storage import (  # noqa: I001
     storage_dflts,
 )
 
-from .ndarray import (  # noqa: I001
+from .ndarray import (
     NDArray,
     NDField,
     Operand,
