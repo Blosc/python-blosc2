@@ -34,7 +34,7 @@ import numpy as np
 import blosc2
 from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
-from blosc2.ndarray import get_chunks_idx, _check_allowed_dtypes
+from blosc2.ndarray import _check_allowed_dtypes, get_chunks_idx
 
 
 def is_inside_eval():
