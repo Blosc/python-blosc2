@@ -14,6 +14,7 @@ import numpy as np
 
 CUBE_SIDE = 128
 
+
 class MmapBenchmarking:
     def __init__(self, io_type: str, blosc_mode: str) -> None:
         self.io_type = io_type

@@ -48,6 +48,7 @@ b2vardict = {"x": x, "y": y, "z": z, "blosc2": blosc2}
 
 print(f"shape: {x.shape}, chunks: {x.chunks}, blocks: {x.blocks}, cratio: {x.schunk.cratio:.2f}")
 
+
 # Define the functions to evaluate the expressions
 # First the pure numba+numpy version
 @nb.jit(parallel=True, cache=True)

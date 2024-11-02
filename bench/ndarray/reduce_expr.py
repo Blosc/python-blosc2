@@ -62,7 +62,7 @@ for axis in laxis:
     c = eval(b2expr, b2vardict)
     t0 = time()
     d = c.compute()
-    d = d.sum(axis=axis)  #, dtype=npres.dtype)
+    d = d.sum(axis=axis)  # , dtype=npres.dtype)
     print("LazyExpr+eval took %.3f s" % (time() - t0))
     # Check
     np.testing.assert_allclose(d[()], npres, rtol=rtol, atol=atol)
@@ -71,4 +71,3 @@ for axis in laxis:
     # print("LazyExpr+getitem took %.3f s" % (time() - t0))
     # # Check
     # np.testing.assert_allclose(d[:], npres, rtol=rtol, atol=atol)
-
