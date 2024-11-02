@@ -154,7 +154,7 @@ def _check_allowed_dtypes(
 
 def sum(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    axis: int | tuple[int] = None,
+    axis: int | tuple[int] | None = None,
     dtype: np.dtype = None,
     keepdims: bool = False,
     **kwargs: dict,
@@ -211,7 +211,7 @@ def sum(
 
 def mean(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    axis: int | tuple[int] = None,
+    axis: int | tuple[int] | None = None,
     dtype: np.dtype = None,
     keepdims: bool = False,
     **kwargs: dict,
@@ -247,7 +247,7 @@ def mean(
 
 def std(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    axis: int | tuple[int] = None,
+    axis: int | tuple[int] | None = None,
     dtype: np.dtype = None,
     ddof: int = 0,
     keepdims: bool = False,
@@ -306,7 +306,7 @@ def std(
 
 def var(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    axis: int | tuple[int] = None,
+    axis: int | tuple[int] | None = None,
     dtype: np.dtype = None,
     ddof: int = 0,
     keepdims: bool = False,
@@ -348,7 +348,7 @@ def var(
 
 def prod(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    axis: int | tuple[int] = None,
+    axis: int | tuple[int] | None = None,
     dtype: np.dtype = None,
     keepdims: bool = False,
     **kwargs: dict,
@@ -388,7 +388,7 @@ def prod(
 
 def min(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    axis: int | tuple[int] = None,
+    axis: int | tuple[int] | None = None,
     keepdims: bool = False,
     **kwargs: dict,
 ) -> np.ndarray | NDArray | int | float | complex | bool:
@@ -436,7 +436,7 @@ def min(
 
 def max(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    axis: int | tuple[int] = None,
+    axis: int | tuple[int] | None = None,
     keepdims: bool = False,
     **kwargs: dict,
 ) -> np.ndarray | NDArray | int | float | complex | bool:
@@ -479,7 +479,7 @@ def max(
 
 def any(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    axis: int | tuple[int] = None,
+    axis: int | tuple[int] | None = None,
     keepdims: bool = False,
     **kwargs: dict,
 ) -> np.ndarray | NDArray | bool:
@@ -520,7 +520,7 @@ def any(
 
 def all(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    axis: int | tuple[int] = None,
+    axis: int | tuple[int] | None = None,
     keepdims: bool = False,
     **kwargs: dict,
 ) -> np.ndarray | NDArray | bool:

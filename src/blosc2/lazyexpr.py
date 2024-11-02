@@ -79,7 +79,7 @@ class LazyArrayEnum(Enum):
 
 class LazyArray(ABC):
     @abstractmethod
-    def compute(self, item: slice | list[slice] = None, **kwargs: dict) -> blosc2.NDArray:
+    def compute(self, item: slice | list[slice] | None = None, **kwargs: dict) -> blosc2.NDArray:
         """
         Return an :ref:`NDArray` containing the evaluation of the :ref:`LazyArray`.
 
@@ -2109,9 +2109,9 @@ def lazyudf(
 
 def lazyexpr(
     expression: str | bytes | LazyExpr,
-    operands: dict = None,
+    operands: dict | None = None,
     out: blosc2.NDArray | np.ndarray = None,
-    where: tuple | list = None,
+    where: tuple | list | None = None,
 ) -> LazyExpr:
     """
     Get a LazyExpr from an expression.

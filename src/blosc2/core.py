@@ -429,7 +429,7 @@ def unpack_array(packed_array: str | bytes, **kwargs: dict) -> np.ndarray:
     return arr
 
 
-def pack_array2(arr: np.ndarray, chunksize: int = None, **kwargs: dict) -> bytes | int:
+def pack_array2(arr: np.ndarray, chunksize: int | None = None, **kwargs: dict) -> bytes | int:
     """Pack (compress) a NumPy array. This method is faster and does not have a 2 GB limitation.
 
     Parameters
@@ -511,7 +511,7 @@ def unpack_array2(cframe: bytes) -> np.ndarray:
     return unpack_tensor(cframe)
 
 
-def save_array(arr: np.ndarray, urlpath: str, chunksize: int = None, **kwargs: dict) -> int:
+def save_array(arr: np.ndarray, urlpath: str, chunksize: int | None = None, **kwargs: dict) -> int:
     """Save a serialized NumPy array to a specified file path.
 
     Parameters
@@ -553,7 +553,7 @@ def save_array(arr: np.ndarray, urlpath: str, chunksize: int = None, **kwargs: d
     return pack_tensor(arr, chunksize=chunksize, urlpath=urlpath, **kwargs)
 
 
-def load_array(urlpath: str, dparams: dict = None) -> np.ndarray:
+def load_array(urlpath: str, dparams: dict | None = None) -> np.ndarray:
     """Load a serialized NumPy array from a file.
 
     Parameters
@@ -599,7 +599,7 @@ def load_array(urlpath: str, dparams: dict = None) -> np.ndarray:
 
 
 def pack_tensor(
-    tensor: tensorflow.Tensor | torch.Tensor | np.ndarray, chunksize: int = None, **kwargs: dict
+    tensor: tensorflow.Tensor | torch.Tensor | np.ndarray, chunksize: int | None = None, **kwargs: dict
 ) -> bytes | int:
     """Pack (compress) a TensorFlow or PyTorch tensor or a NumPy array.
 
@@ -729,7 +729,7 @@ def unpack_tensor(cframe: bytes) -> tensorflow.Tensor | torch.Tensor | np.ndarra
 def save_tensor(
     tensor: tensorflow.Tensor | torch.Tensor | np.ndarray,
     urlpath: str,
-    chunksize: int = None,
+    chunksize: int | None = None,
     **kwargs: dict,
 ) -> int:
     """Save a serialized PyTorch or TensorFlow tensor or NumPy array to
@@ -773,7 +773,7 @@ def save_tensor(
     return pack_tensor(tensor, chunksize=chunksize, urlpath=urlpath, **kwargs)
 
 
-def load_tensor(urlpath: str, dparams: dict = None) -> tensorflow.Tensor | torch.Tensor | np.ndarray:
+def load_tensor(urlpath: str, dparams: dict | None = None) -> tensorflow.Tensor | torch.Tensor | np.ndarray:
     """Load a serialized PyTorch or TensorFlow  tensor or NumPy array from a file.
 
     Parameters
@@ -1594,8 +1594,8 @@ def ndarray_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.NDArr
 def register_codec(
     codec_name: str,
     id: int,
-    encoder: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], int] = None,
-    decoder: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], int] = None,
+    encoder: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], int] | None = None,
+    decoder: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], int] | None = None,
     version: int = 1,
 ) -> None:
     """Register a user defined codec.
@@ -1675,9 +1675,9 @@ def register_codec(
 
 def register_filter(
     id: int,
-    forward: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], None] = None,
-    backward: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], None] = None,
-    name: str = None,
+    forward: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], None] | None = None,
+    backward: Callable[[np.ndarray[np.uint8], np.ndarray[np.uint8], int, blosc2.SChunk], None] | None = None,
+    name: str | None = None,
 ) -> None:
     """Register a user-defined filter.
 

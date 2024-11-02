@@ -187,7 +187,9 @@ class Proxy(blosc2.Operand):
     :ref:`ProxySource` or :ref:`ProxyNDSource` interfaces.
     """
 
-    def __init__(self, src: ProxySource or ProxyNDSource, urlpath: str = None, mode="a", **kwargs: dict):
+    def __init__(
+        self, src: ProxySource or ProxyNDSource, urlpath: str | None = None, mode="a", **kwargs: dict
+    ):
         """
         Create a new :ref:`Proxy` to serve as a cache to save accessed chunks locally.
 
@@ -255,7 +257,7 @@ class Proxy(blosc2.Operand):
             for key in vlmeta:
                 self._schunk_cache.vlmeta[key] = vlmeta[key]
 
-    def fetch(self, item: slice | list[slice] = None) -> blosc2.NDArray | blosc2.schunk.SChunk:
+    def fetch(self, item: slice | list[slice] | None = None) -> blosc2.NDArray | blosc2.schunk.SChunk:
         """
         Get the container used as cache with the requested data updated.
 
@@ -299,7 +301,7 @@ class Proxy(blosc2.Operand):
 
         return self._cache
 
-    async def afetch(self, item: slice | list[slice] = None) -> blosc2.NDArray | blosc2.schunk.SChunk:
+    async def afetch(self, item: slice | list[slice] | None = None) -> blosc2.NDArray | blosc2.schunk.SChunk:
         """
         Retrieve the cache container with the requested data updated asynchronously.
 
