@@ -1279,7 +1279,7 @@ def compute_partition(nitems, maxshape, minpart=None):
     return partition
 
 
-def compute_chunks_blocks(
+def compute_chunks_blocks(  # noqa: C901
     shape: tuple[int] | list,
     chunks: tuple | list | None = None,
     blocks: tuple | list | None = None,

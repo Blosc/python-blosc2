@@ -140,7 +140,7 @@ class Meta(Mapping):
 
 
 class SChunk(blosc2_ext.SChunk):
-    def __init__(
+    def __init__(  # noqa: C901
         self,
         chunksize: int | None = None,
         data: object = None,
