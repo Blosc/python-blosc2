@@ -77,7 +77,7 @@ def c2sub_user():
         # Retry on possible username collision.
     resp.raise_for_status()
 
-    return dict(urlbase=urlbase, username=username, password=password)
+    return {"urlbase": urlbase, "username": username, "password": password}
 
 
 def test_open_c2array_auth(c2sub_user):

@@ -114,9 +114,9 @@ def test_empty_minimal(shape, dtype):
 @pytest.mark.parametrize(
     "shape, cparams",
     [
-        (100, dict(chunks=(10,))),
-        ((100,), dict(blocks=(10,))),
-        ((100,), dict(chunks=(10,), blocks=(10,))),
+        (100, {"chunks": (10,)}),
+        ((100,), {"blocks": (10,)}),
+        ((100,), {"chunks": (10,), "blocks": (10,)}),
     ],
 )
 def test_cparams_chunks_blocks(shape, cparams):
