@@ -638,8 +638,6 @@ def fill_chunk_operands(
         else:
             chunk_operands[key] = value[slice_]
 
-    return
-
 
 def fast_eval(
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
