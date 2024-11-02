@@ -26,7 +26,7 @@ is not true (i.e. there is no *forward* compatibility).
 SChunk: a 64-bit compressed store
 ---------------------------------
 
-`SChunk` is the simple data container that handles setting, expanding and getting
+``SChunk`` is the simple data container that handles setting, expanding and getting
 data and metadata. Contrarily to chunks, a super-chunk can update and resize the data
 that it contains, supports user metadata, and it does not have the 2 GB storage limitation.
 
@@ -69,7 +69,7 @@ distributing Mac arm64 wheels too; you are welcome ;-):
 | |pack_arm| | |unpack_arm| |
 +------------+--------------+
 
-Read more about `SChunk` features in our blog entry at: https://www.blosc.org/posts/python-blosc2-improvements
+Read more about ``SChunk`` features in our blog entry at: https://www.blosc.org/posts/python-blosc2-improvements
 
 NDArray: an N-Dimensional store
 -------------------------------
@@ -83,7 +83,7 @@ compressed data in a more fine-grained way:
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/b2nd-2level-parts.png?raw=true
   :width: 75%
 
-To wet you appetite, here it is how the `NDArray` object performs on getting slices
+To wet you appetite, here it is how the ``NDArray`` object performs on getting slices
 orthogonal to the different axis of a 4-dim dataset:
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/Read-Partial-Slices-B2ND.png?raw=true

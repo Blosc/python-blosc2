@@ -64,7 +64,7 @@ and manipulation of arbitrarily large and compressed data:
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/b2nd-2level-parts.png?raw=true
   :width: 75%
 
-To pique your interest, here is how the `NDArray` object performs when retrieving slices
+To pique your interest, here is how the ``NDArray`` object performs when retrieving slices
 orthogonal to the different axis of a 4-dimensional dataset:
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/Read-Partial-Slices-B2ND.png?raw=true
@@ -84,7 +84,7 @@ is useful <https://www.youtube.com/watch?v=LvP9zxMGBng>`_:
 Operating with NDArrays
 =======================
 
-The `NDArray` objects are easy to work with in Python-Blosc2.
+The ``NDArray`` objects are easy to work with in Python-Blosc2.
 Here it is a simple example:
 
 .. code-block:: python
@@ -103,13 +103,13 @@ Here it is a simple example:
     c = blosc2.asarray(nc)
 
     # Expression
-    expr = ((a ** 3 + blosc2.sin(c * 2)) < b) & (c > 0)
+    expr = ((a**3 + blosc2.sin(c * 2)) < b) & (c > 0)
 
     # Evaluate and get a NDArray as result
     out = expr.compute()
     print(out.info)
 
-As you can see, the `NDArray` instances are very similar to NumPy arrays, but behind the scenes,
+As you can see, the ``NDArray`` instances are very similar to NumPy arrays, but behind the scenes,
 they store compressed data that can be processed efficiently using the new computing
 engine included in Python-Blosc2.
 
@@ -123,12 +123,12 @@ you can achieve when the operands fit comfortably in memory:
 In this case, the performance is somewhat below that of top-tier libraries like Numexpr or Numba,
 but it is still quite good. Using CPUs with more cores than the M2 could further reduce the
 performance gap. One important point to note is that the memory consumption when
-using the `LazyArray.compute()` method is very low because the output is an `NDArray` object, which
-is compressed and stored in memory by default.  On the other hand, the `LazyArray.__getitem__()`
+using the ``LazyArray.compute()`` method is very low because the output is an ``NDArray`` object, which
+is compressed and stored in memory by default.  On the other hand, the ``LazyArray.__getitem__()``
 method returns an actual NumPy array, so it is not recommended for large datasets, as it can consume
 a significant amount of memory (though it may still be convenient for small outputs).
 
-It is also important to note that the `NDArray` object can utilize memory-mapped files, and the
+It is also important to note that the ``NDArray`` object can utilize memory-mapped files, and the
 benchmark above actually uses a memory-mapped file for operand storage. Memory-mapped files are
 particularly useful when the operands do not fit in-memory, while still maintaining good
 performance.
@@ -180,7 +180,7 @@ https://github.com/Blosc/python-blosc2/tree/main/examples
 Building from sources
 =====================
 
-`python-blosc2` includes the C-Blosc2 source code and can be built in place:
+``python-blosc2`` includes the C-Blosc2 source code and can be built in place:
 
 .. code-block:: console
 

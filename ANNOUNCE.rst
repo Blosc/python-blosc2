@@ -7,14 +7,14 @@ we have added more examples and tutorials (thanks NumFOCUS for sponsoring this).
 Also, there are new CParams, DParams and Storage dataclasses that allow for
 a more flexible and powerful way to set parameters for the Blosc2 compressor.
 
-In new 3.0 release, you can evaluate expressions like `a + sin(b) + 1` where
-`a` and `b` are NDArray instances.  This is a powerful feature that allows for
+In new 3.0 release, you can evaluate expressions like ``a + sin(b) + 1`` where
+``a`` and ``b`` are NDArray instances.  This is a powerful feature that allows for
 efficient computations on compressed data, and supports advanced features
 like reductions, filters, user-defined functions and broadcasting (still
 in beta).  See this
 `example <https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/eval_expr.py>`_.
 
-Also, we have added support for memory mapping in `SChunk` and `NDArray` instances.
+Also, we have added support for memory mapping in ``SChunk`` and ``NDArray`` instances.
 This allows to map super-chunks stored in disk and access them as if they were in
 memory.  When combined with the evaluation engine, this feature allows for very
 good performance when working with large datasets.  See this

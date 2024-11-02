@@ -27,7 +27,7 @@ XXX version-specific blurb XXX
 
 * New `Proxy` class to access other arrays, while providing caching. This is useful for example when you have a big array, and you want to access a small part of it, but you want to cache the accessed data for later use.  See [its doc](https://www.blosc.org/python-blosc2/reference/proxy.html).
 
-* Lazy expressions can accept proxies as operands. 
+* Lazy expressions can accept proxies as operands.
 
 * Read-ahead support for reading super-chunks from disk.  This allows for overlapping reads and computations, which can be a big performance boost for some workloads.
 
