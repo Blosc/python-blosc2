@@ -958,7 +958,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
     @property
     def dtype(self) -> np.dtype:
         """
-        Data-type of the array’s elements.
+        Data-type of the array's elements.
         """
         return super().dtype
 

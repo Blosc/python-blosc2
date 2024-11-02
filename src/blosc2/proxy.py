@@ -198,7 +198,7 @@ class Proxy(blosc2.Operand):
         urlpath: str, optional
             The urlpath where to save the container that will work as a cache.
         mode: str, optional
-            "a" means read/write (create if it doesn’t exist); "w" means create
+            "a" means read/write (create if it doesn't exist); "w" means create
             (overwrite if it exists). Default is "a".
         kwargs: dict, optional
             Keyword arguments supported:
