@@ -224,10 +224,10 @@ def test_save_version1(disk, fill_value, reduce_op, axis):
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
         a = blosc2.full(shape, fill_value, urlpath=urlpath, mode="w")
-        b = blosc2.full(shape, fill_value - .1, urlpath="b.b2nd", mode="w")
+        b = blosc2.full(shape, fill_value - 0.1, urlpath="b.b2nd", mode="w")
     else:
         a = blosc2.zeros(shape, dtype=np.float64, urlpath=urlpath, mode="w")
-        b = blosc2.zeros(shape, dtype=np.float64, urlpath="b.b2nd", mode="w") - .1
+        b = blosc2.zeros(shape, dtype=np.float64, urlpath="b.b2nd", mode="w") - 0.1
     if disk:
         a = blosc2.open(urlpath)
         b = blosc2.open("b.b2nd")
@@ -259,10 +259,10 @@ def test_save_version2(disk, fill_value, reduce_op, axis):
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
         a = blosc2.full(shape, fill_value, urlpath=urlpath, mode="w")
-        b = blosc2.full(shape, fill_value - .1, urlpath="b.b2nd", mode="w")
+        b = blosc2.full(shape, fill_value - 0.1, urlpath="b.b2nd", mode="w")
     else:
         a = blosc2.zeros(shape, dtype=np.float64, urlpath=urlpath, mode="w")
-        b = blosc2.zeros(shape, dtype=np.float64, urlpath="b.b2nd", mode="w") - .1
+        b = blosc2.zeros(shape, dtype=np.float64, urlpath="b.b2nd", mode="w") - 0.1
     if disk:
         a = blosc2.open(urlpath)
         b = blosc2.open("b.b2nd")
@@ -294,10 +294,10 @@ def test_save_version3(disk, fill_value, reduce_op, axis):
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
         a = blosc2.full(shape, fill_value, urlpath=urlpath, mode="w")
-        b = blosc2.full(shape, fill_value - .1, urlpath="b.b2nd", mode="w")
+        b = blosc2.full(shape, fill_value - 0.1, urlpath="b.b2nd", mode="w")
     else:
         a = blosc2.zeros(shape, dtype=np.float64, urlpath=urlpath, mode="w")
-        b = blosc2.zeros(shape, dtype=np.float64, urlpath="b.b2nd", mode="w") - .1
+        b = blosc2.zeros(shape, dtype=np.float64, urlpath="b.b2nd", mode="w") - 0.1
     if disk:
         a = blosc2.open(urlpath)
         b = blosc2.open("b.b2nd")
@@ -329,10 +329,10 @@ def test_save_version4(disk, fill_value, reduce_op, axis):
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
         a = blosc2.full(shape, fill_value, urlpath=urlpath, mode="w")
-        b = blosc2.full(shape, fill_value - .1, urlpath="b.b2nd", mode="w")
+        b = blosc2.full(shape, fill_value - 0.1, urlpath="b.b2nd", mode="w")
     else:
         a = blosc2.zeros(shape, dtype=np.float64, urlpath=urlpath, mode="w")
-        b = blosc2.zeros(shape, dtype=np.float64, urlpath="b.b2nd", mode="w") - .1
+        b = blosc2.zeros(shape, dtype=np.float64, urlpath="b.b2nd", mode="w") - 0.1
     if disk:
         a = blosc2.open(urlpath)
         b = blosc2.open("b.b2nd")
