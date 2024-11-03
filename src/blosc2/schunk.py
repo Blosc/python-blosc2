@@ -1376,7 +1376,7 @@ class SChunk(blosc2_ext.SChunk):
 
 def open(
     urlpath: str | pathlib.Path | blosc2.URLPath, mode: str = "a", offset: int = 0, **kwargs: dict
-) -> blosc2.SChunk | blosc2.NDArray | blosc2.C2Array:
+) -> blosc2.SChunk | blosc2.NDArray | blosc2.C2Array | blosc2.LazyArray | blosc2.Proxy:
     """Open a persistent :ref:`SChunk`, :ref:`NDArray`, a remote :ref:`C2Array`
     or a :ref:`Proxy`
 
