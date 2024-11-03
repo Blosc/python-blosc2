@@ -1,3 +1,19 @@
+#######################################################################
+# Copyright (c) 2019-present, Blosc Development Team <blosc@blosc.org>
+# All rights reserved.
+#
+# This source code is licensed under a BSD-style license (found in the
+# LICENSE file in the root directory of this source tree)
+#######################################################################
+
+# This shows how to evaluate and store expressions with reductions,
+# using NDArray instances as operands.  Note how we must use a string
+# for the expression, as the reductions are normally evaluated eagerly.
+# Using strings prevents eager computation, and allows to store the
+# expression for later evaluation.
+# In particular, note how re-opening a stored expression can adapt to
+# changes in the operands.
+
 import blosc2
 
 # Create arrays with specific dimensions

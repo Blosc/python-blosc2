@@ -219,7 +219,7 @@ def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
 @pytest.mark.parametrize("fill_value", [0, 1, 0.32])
 @pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
 @pytest.mark.parametrize("axis", [0, (0, 1), None])
-def test_save(disk, fill_value, reduce_op, axis):
+def test_save_version1(disk, fill_value, reduce_op, axis):
     shape = (20, 50, 100)
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
@@ -234,6 +234,7 @@ def test_save(disk, fill_value, reduce_op, axis):
     na = a[:]
     nb = b[:]
 
+    # A reduction in the back
     expr = f"a + b.{reduce_op}(axis={axis})"
     lexpr = blosc2.lazyexpr(expr, operands={"a": a, "b": b})
     if disk:
@@ -243,7 +244,32 @@ def test_save(disk, fill_value, reduce_op, axis):
     nres = na + getattr(nb[()], reduce_op)(axis=axis)
     assert np.allclose(res[()], nres)
 
-    # Test an expression with a reduction in front
+    if disk:
+        blosc2.remove_urlpath("a1.b2nd")
+        blosc2.remove_urlpath("b.b2nd")
+        blosc2.remove_urlpath("out.b2nd")
+
+
+@pytest.mark.parametrize("disk", [True, False])
+@pytest.mark.parametrize("fill_value", [0, 1, 0.32])
+@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
+@pytest.mark.parametrize("axis", [0, (0, 1), None])
+def test_save_version2(disk, fill_value, reduce_op, axis):
+    shape = (20, 50, 100)
+    urlpath = "a1.b2nd" if disk else None
+    if fill_value != 0:
+        a = blosc2.full(shape, fill_value, urlpath=urlpath, mode="w")
+        b = blosc2.full(shape, fill_value - .1, urlpath="b.b2nd", mode="w")
+    else:
+        a = blosc2.zeros(shape, dtype=np.float64, urlpath=urlpath, mode="w")
+        b = blosc2.zeros(shape, dtype=np.float64, urlpath="b.b2nd", mode="w") - .1
+    if disk:
+        a = blosc2.open(urlpath)
+        b = blosc2.open("b.b2nd")
+    na = a[:]
+    nb = b[:]
+
+    # A reduction in front
     expr = f"a.{reduce_op}(axis={axis}) + b"
     lexpr = blosc2.lazyexpr(expr, operands={"a": a, "b": b})
     if disk:
@@ -253,7 +279,32 @@ def test_save(disk, fill_value, reduce_op, axis):
     nres = getattr(na[()], reduce_op)(axis=axis) + nb
     assert np.allclose(res[()], nres)
 
-    # Test the function version of the reduction
+    if disk:
+        blosc2.remove_urlpath("a1.b2nd")
+        blosc2.remove_urlpath("b.b2nd")
+        blosc2.remove_urlpath("out.b2nd")
+
+
+@pytest.mark.parametrize("disk", [True, False])
+@pytest.mark.parametrize("fill_value", [0, 1, 0.32])
+@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
+@pytest.mark.parametrize("axis", [0, (0, 1), None])
+def test_save_version3(disk, fill_value, reduce_op, axis):
+    shape = (20, 50, 100)
+    urlpath = "a1.b2nd" if disk else None
+    if fill_value != 0:
+        a = blosc2.full(shape, fill_value, urlpath=urlpath, mode="w")
+        b = blosc2.full(shape, fill_value - .1, urlpath="b.b2nd", mode="w")
+    else:
+        a = blosc2.zeros(shape, dtype=np.float64, urlpath=urlpath, mode="w")
+        b = blosc2.zeros(shape, dtype=np.float64, urlpath="b.b2nd", mode="w") - .1
+    if disk:
+        a = blosc2.open(urlpath)
+        b = blosc2.open("b.b2nd")
+    na = a[:]
+    nb = b[:]
+
+    # A reduction as a function
     expr = f"{reduce_op}(a, axis={axis}) + b"
     lexpr = blosc2.lazyexpr(expr, operands={"a": a, "b": b})
     if disk:
@@ -263,7 +314,31 @@ def test_save(disk, fill_value, reduce_op, axis):
     nres = getattr(na[()], reduce_op)(axis=axis) + nb
     assert np.allclose(res[()], nres)
 
-    # An expression with a single operand that is reduced should be supported as well
+    if disk:
+        blosc2.remove_urlpath("a1.b2nd")
+        blosc2.remove_urlpath("b.b2nd")
+        blosc2.remove_urlpath("out.b2nd")
+
+
+@pytest.mark.parametrize("disk", [True, False])
+@pytest.mark.parametrize("fill_value", [0, 1, 0.32])
+@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
+@pytest.mark.parametrize("axis", [0, (0, 1), None])
+def test_save_version4(disk, fill_value, reduce_op, axis):
+    shape = (20, 50, 100)
+    urlpath = "a1.b2nd" if disk else None
+    if fill_value != 0:
+        a = blosc2.full(shape, fill_value, urlpath=urlpath, mode="w")
+        b = blosc2.full(shape, fill_value - .1, urlpath="b.b2nd", mode="w")
+    else:
+        a = blosc2.zeros(shape, dtype=np.float64, urlpath=urlpath, mode="w")
+        b = blosc2.zeros(shape, dtype=np.float64, urlpath="b.b2nd", mode="w") - .1
+    if disk:
+        a = blosc2.open(urlpath)
+        b = blosc2.open("b.b2nd")
+    na = a[:]
+
+    # Just a single reduction
     expr = f"a.{reduce_op}(axis={axis})"
     lexpr = blosc2.lazyexpr(expr, operands={"a": a})
     if disk:
