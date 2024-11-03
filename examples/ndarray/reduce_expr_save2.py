@@ -12,8 +12,7 @@ print("Array c:", c[:])
 # Define an expression using the arrays above
 # expression = "a.sum() + b * c"
 # expression = "a.sum(axis=1) + b * c"
-expression = "b * a.sum(axis=1) + c"
-# expression = "sum(a) + b * c"  # does not work yet
+expression = "sum(a, axis=1) + b * c"
 # Define the operands for the expression
 operands = {'a': a, 'b': b, 'c': c}
 # Create a lazy expression

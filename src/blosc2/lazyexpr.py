@@ -1334,6 +1334,15 @@ functions = [
     "imag",
     "contains",
     "abs",
+    "sum",
+    "prod",
+    "mean",
+    "std",
+    "var",
+    "min",
+    "max",
+    "any",
+    "all",
 ]
 
 
@@ -1854,12 +1863,11 @@ class LazyExpr(LazyArray):
                 raise ValueError(
                     "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
                 )
-            if key != "blosc2":
-                if value.schunk.urlpath is None:
-                    raise ValueError(
-                        "To save a LazyArray, all operands must be stored on disk/network"
-                    )
-                operands[key] = value.schunk.urlpath
+            if value.schunk.urlpath is None:
+                raise ValueError(
+                    "To save a LazyArray, all operands must be stored on disk/network"
+                )
+            operands[key] = value.schunk.urlpath
         array.schunk.vlmeta["_LazyArray"] = {
             "expression": self.expression,
             "UDF": None,
