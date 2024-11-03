@@ -297,6 +297,38 @@ def test_functions(function, dtype_fixture, shape_fixture):
     # Compare the results
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
 
+    # For some reason real is not supported by numpy's assert_allclose
+    # (TypeError: bad operand type for abs(): 'LazyExpr')
+    if function == "real":
+        return
+
+    # Using numpy functions
+    expr = eval(f"np.{function}(a1)", {"a1": a1, "np": np})
+    # Compare the results
+    np.testing.assert_allclose(expr[()], res_numexpr)
+
+    # In combination with other operands
+    na2 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
+    a2 = blosc2.asarray(na2, cparams=cparams)
+    # All the next work
+    # expr = blosc2.lazyexpr(f"a1 + {function}(a2)", {"a1": a1, "a2": a2})
+    # expr = eval(f"a1 + blosc2.{function}(a2)", {"a1": a1, "a2": a2, "blosc2": blosc2})
+    expr = eval(f"a1 + np.{function}(a2)", {"a1": a1, "a2": a2, "np": np})
+    res_lazyexpr = expr.compute(cparams={})
+    # Evaluate using NumExpr
+    expr_string = f"na1 + {function}(na2)"
+    res_numexpr = ne.evaluate(expr_string)
+    # Compare the results
+    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
+
+    # Functions of the form np.function(a1 + a2)
+    expr = eval(f"np.{function}(a1 + a2)", {"a1": a1, "a2": a2, "np": np})
+    # Evaluate using NumExpr
+    expr_string = f"{function}(na1 + na2)"
+    res_numexpr = ne.evaluate(expr_string)
+    # Compare the results
+    np.testing.assert_allclose(expr[()], res_numexpr)
+
 
 @pytest.mark.parametrize(
     "urlpath",
@@ -386,6 +418,11 @@ def test_abs(shape_fixture, dtype_fixture):
     expr = blosc2.LazyExpr(new_op=(a1, "abs", None))
     res_lazyexpr = expr.compute(dparams={})
     res_np = np.abs(na1)
+    np.testing.assert_allclose(res_lazyexpr[:], res_np)
+
+    # Using np.abs
+    expr = np.abs(a1)
+    res_lazyexpr = expr.compute(dparams={})
     np.testing.assert_allclose(res_lazyexpr[:], res_np)
 
 

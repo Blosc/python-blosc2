@@ -588,18 +588,42 @@ class Operand:
             np.greater_equal: ">=",
             np.equal: "==",
             np.not_equal: "!=",
+        }
+
+        ufunc_map_1param = {
             np.sqrt: "sqrt",
+            np.sin: "sin",
+            np.cos: "cos",
+            np.tan: "tan",
+            np.arcsin: "arcsin",
+            np.arccos: "arccos",
+            np.arctan: "arctan",
+            np.sinh: "sinh",
+            np.cosh: "cosh",
+            np.tanh: "tanh",
+            np.arcsinh: "arcsinh",
+            np.arccosh: "arccosh",
+            np.arctanh: "arctanh",
+            np.exp: "exp",
+            np.expm1: "expm1",
+            np.log: "log",
+            np.log10: "log10",
+            np.log1p: "log1p",
+            np.abs: "abs",
+            np.conj: "conj",
+            np.real: "real",
+            np.imag: "imag",
         }
 
         if ufunc in ufunc_map:
-            if ufunc == np.sqrt:
-                # Special case for sqrt
-                value = inputs[0]
-                _check_allowed_dtypes(value)
-                return blosc2.LazyExpr(new_op=(value, "sqrt", None))
             value = inputs[0] if inputs[1] is self else inputs[1]
             _check_allowed_dtypes(value)
             return blosc2.LazyExpr(new_op=(value, ufunc_map[ufunc], self))
+
+        if ufunc in ufunc_map_1param:
+            value = inputs[0]
+            _check_allowed_dtypes(value)
+            return blosc2.LazyExpr(new_op=(value, ufunc_map_1param[ufunc], None))
 
         return NotImplemented
 
