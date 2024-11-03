@@ -34,7 +34,7 @@ import numpy as np
 import blosc2
 from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
-from blosc2.ndarray import get_chunks_idx, _check_allowed_dtypes
+from blosc2.ndarray import _check_allowed_dtypes, get_chunks_idx
 
 
 def is_inside_eval():
@@ -1864,9 +1864,7 @@ class LazyExpr(LazyArray):
                     "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
                 )
             if value.schunk.urlpath is None:
-                raise ValueError(
-                    "To save a LazyArray, all operands must be stored on disk/network"
-                )
+                raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
             operands[key] = value.schunk.urlpath
         array.schunk.vlmeta["_LazyArray"] = {
             "expression": self.expression,

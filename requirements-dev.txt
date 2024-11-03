@@ -1,8 +1,5 @@
-pre-commit
-ruff
 h5py
 hdf5plugin
-isort
 jupyterlab
 matplotlib
 pandas

@@ -17,9 +17,9 @@
 import blosc2
 
 # Create arrays with specific dimensions
-a = blosc2.full((2, 3, 4), 1, urlpath="a.b2nd", mode="w")    # 3D array with dimensions (2, 3, 4)
-b = blosc2.full((2, 4), 2,  urlpath="b.b2nd", mode="w")      # 2D array with dimensions (2, 4)
-c = blosc2.full(4, 3, urlpath="c.b2nd", mode="w")            # 1D array with dimensions (4,)
+a = blosc2.full((2, 3, 4), 1, urlpath="a.b2nd", mode="w")  # 3D array with dimensions (2, 3, 4)
+b = blosc2.full((2, 4), 2, urlpath="b.b2nd", mode="w")  # 2D array with dimensions (2, 4)
+c = blosc2.full(4, 3, urlpath="c.b2nd", mode="w")  # 1D array with dimensions (4,)
 
 print("Array a:", a[:])
 print("Array b:", b[:])
@@ -30,7 +30,7 @@ print("Array c:", c[:])
 # expression = "a.sum(axis=1) + b * c"
 expression = "sum(a, axis=1) + b * c"
 # Define the operands for the expression
-operands = {'a': a, 'b': b, 'c': c}
+operands = {"a": a, "b": b, "c": c}
 # Create a lazy expression
 lazy_expression = blosc2.lazyexpr(expression, operands)
 
