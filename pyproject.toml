@@ -43,6 +43,20 @@ dynamic = ["version"]
 
 
 [project.optional-dependencies]
+dev = [
+    "h5py",
+    "hdf5plugin",
+    "jupyterlab",
+    "matplotlib",
+    "pandas",
+    "plotly",
+    "pre-commit",
+    "pyarrow",
+    "ruff",
+    "s3fs",
+    "xarray",
+    "zarr",
+]
 test = [
     "pytest",
     "psutil",
