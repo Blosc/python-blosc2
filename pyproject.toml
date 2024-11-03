@@ -88,6 +88,7 @@ extend-exclude = ["bench"]
 extend-select = [
     "B",
     "C4",
+    "C90",
     "I",
     "NPY",
     "PT",

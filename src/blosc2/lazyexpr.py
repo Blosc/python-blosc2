@@ -372,7 +372,7 @@ def validate_expr(expr: str) -> None:
             raise ValueError(f"Invalid method name: {method}")
 
 
-def validate_inputs(inputs: dict, out=None) -> tuple:
+def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
     """Validate the inputs for the expression."""
     if len(inputs) == 0:
         raise ValueError(
@@ -553,7 +553,7 @@ def read_nchunk(arrs, info):
 iter_chunks = None
 
 
-def fill_chunk_operands(
+def fill_chunk_operands(  # noqa: C901
     operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands, reduc=False
 ):
     """Retrieve the chunk operands for evaluating an expression.
@@ -639,7 +639,7 @@ def fill_chunk_operands(
             chunk_operands[key] = value[slice_]
 
 
-def fast_eval(
+def fast_eval(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
     operands: dict,
     getitem: bool,
@@ -754,7 +754,7 @@ def fast_eval(
     return out
 
 
-def slices_eval(
+def slices_eval(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
     operands: dict,
     getitem: bool,
@@ -933,7 +933,7 @@ def slices_eval(
     return out
 
 
-def reduce_slices(
+def reduce_slices(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
     operands: dict,
     reduce_args,
@@ -1178,7 +1178,7 @@ def convert_none_out(dtype, reduce_op, reduced_shape):
     return out
 
 
-def chunked_eval(
+def chunked_eval(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=None, **kwargs
 ):
     """
@@ -1354,7 +1354,7 @@ class LazyExpr(LazyArray):
     Once the lazy expression is created, it can be evaluated via :func:`LazyExpr.eval`.
     """
 
-    def __init__(self, new_op):
+    def __init__(self, new_op):  # noqa: C901
         if new_op is None:
             self.expression = ""
             self.operands = {}
@@ -1438,7 +1438,7 @@ class LazyExpr(LazyArray):
         # out = expr.compute(item=slice_)
         return out.schunk.get_chunk(nchunk)
 
-    def update_expr(self, new_op):
+    def update_expr(self, new_op):  # noqa: C901
         # We use a lot of the original NDArray.__eq__ as 'is', so deactivate the overloaded one
         blosc2._disable_overloaded_equal = True
         # One of the two operands are LazyExpr instances

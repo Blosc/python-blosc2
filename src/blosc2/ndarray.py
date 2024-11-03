@@ -2691,7 +2691,7 @@ def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: dict | list) -> NDArra
     return ndarr
 
 
-def _check_ndarray_kwargs(**kwargs):
+def _check_ndarray_kwargs(**kwargs):  # noqa: C901
     if "storage" in kwargs:
         for key in kwargs:
             if key in list(blosc2.Storage.__annotations__):
