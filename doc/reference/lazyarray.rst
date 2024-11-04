@@ -54,3 +54,13 @@ For getting a LazyArray-compliant object from a user-defined Python function, yo
     :nosignatures:
 
     lazyudf
+
+Utilities
+---------
+
+.. autosummary::
+    :toctree: autofiles/lazyarray
+    :nosignatures:
+
+    validate_expr
+    get_expr_operands

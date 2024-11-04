@@ -948,3 +948,23 @@ def test_fill_disk_operands(chunks, blocks, disk, fill_value):
         blosc2.remove_urlpath("a.b2nd")
         blosc2.remove_urlpath("b.b2nd")
         blosc2.remove_urlpath("c.b2nd")
+
+
+@pytest.mark.parametrize(
+    ("expression", "expected_operands"),
+    [
+        ("a + b * sin(c) + max(e, axis=1, keepdims=True)", ["a", "b", "c", "e"]),
+        ("x + y + z", ["x", "y", "z"]),
+        ("func1(a, b) + method1(x)", ["a", "b", "x"]),
+        ("u + v * cos(w) + sqrt(x)", ["u", "v", "w", "x"]),
+        ("data.mean(axis=0) + sum(data, axis=1)", ["data"]),
+        ("a + b + custom_func1(c, d)", ["a", "b", "c", "d"]),
+        ("k + l.method1(m, n=3) + max(o, p=q)", ["k", "l", "m", "o"]),
+        ("func_with_no_args() + method_with_no_args().attribute", ["attribute"]),
+        ("a*b + c/d - e**f + g%h", ["a", "b", "c", "d", "e", "f", "g", "h"]),
+        ("single_operand", ["single_operand"]),
+        ("func1(arg1, kwarg1=True) + var.method2(arg2, kwarg2=False)", ["arg1", "var", "arg2"]),
+    ],
+)
+def test_get_expr_operands(expression, expected_operands):
+    assert blosc2.get_expr_operands(expression) == expected_operands

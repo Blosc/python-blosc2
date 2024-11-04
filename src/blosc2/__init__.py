@@ -226,7 +226,15 @@ from .ndarray import (
 
 from .c2array import c2context, C2Array, URLPath
 
-from .lazyexpr import LazyExpr, lazyudf, lazyexpr, LazyArray, _open_lazyarray
+from .lazyexpr import (
+    LazyExpr,
+    lazyudf,
+    lazyexpr,
+    LazyArray,
+    _open_lazyarray,
+    get_expr_operands,
+    validate_expr,
+)
 from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField
 
 from .schunk import SChunk, open
