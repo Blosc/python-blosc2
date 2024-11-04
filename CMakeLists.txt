@@ -3,7 +3,7 @@ project(python-blosc2)
 # Specifying Python version below is tricky, but if you don't specify the minimum version here,
 # it would not consider python3 when looking for the executable. This is problematic since Fedora
 # does not include a python symbolic link to python3.
-# find_package(Python 3.10 COMPONENTS Interpreter NumPy Development.Module REQUIRED)
+# find_package(Python 3.12 COMPONENTS Interpreter NumPy Development.Module REQUIRED)
 # IMO, this would need to be solved in Fedora, so we can just use the following line:
 find_package(Python COMPONENTS Interpreter NumPy Development.Module REQUIRED)
 
