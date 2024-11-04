@@ -783,7 +783,8 @@ def test_broadcasting(broadcast_fixture):
         ("numpy", "numpy"),
     ],
 )
-def test_lazyexpr(array_fixture, operand_mix):
+@pytest.mark.parametrize("operand_guess", [True, False])
+def test_lazyexpr(array_fixture, operand_mix, operand_guess):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     if operand_mix[0] == "NDArray" and operand_mix[1] == "NDArray":
         operands = {"a1": a1, "a2": a2, "a3": a3, "a4": a4}
@@ -795,7 +796,10 @@ def test_lazyexpr(array_fixture, operand_mix):
         operands = {"a1": na1, "a2": na2, "a3": na3, "a4": na4}
 
     # Check eval()
-    expr = blosc2.lazyexpr("a1 + a2 - a3 * a4", operands=operands)
+    if operand_guess:
+        expr = blosc2.lazyexpr("a1 + a2 - a3 * a4")
+    else:
+        expr = blosc2.lazyexpr("a1 + a2 - a3 * a4", operands=operands)
     nres = ne.evaluate("na1 + na2 - na3 * na4")
     res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
