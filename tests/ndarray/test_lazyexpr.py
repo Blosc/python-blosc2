@@ -955,16 +955,18 @@ def test_fill_disk_operands(chunks, blocks, disk, fill_value):
     [
         ("a + b * sin(c) + max(e, axis=1, keepdims=True)", ["a", "b", "c", "e"]),
         ("x + y + z", ["x", "y", "z"]),
+        ("sum(sin(a) + b)", ["a", "b"]),
+        ("sum(sin(a + c)**2 + cos(b + c)**2 + b) + 1", ["a", "b", "c"]),
         ("func1(a, b) + method1(x)", ["a", "b", "x"]),
         ("u + v * cos(w) + sqrt(x)", ["u", "v", "w", "x"]),
         ("data.mean(axis=0) + sum(data, axis=1)", ["data"]),
         ("a + b + custom_func1(c, d)", ["a", "b", "c", "d"]),
-        ("k + l.method1(m, n=3) + max(o, p=q)", ["k", "l", "m", "o"]),
-        ("func_with_no_args() + method_with_no_args().attribute", ["attribute"]),
+        ("k + l.method1(m, n=3) + max(o, p=q)", ["k", "l", "m", "o", "q"]),
+        ("func_with_no_args() + method_with_no_args().attribute", []),
         ("a*b + c/d - e**f + g%h", ["a", "b", "c", "d", "e", "f", "g", "h"]),
         ("single_operand", ["single_operand"]),
-        ("func1(arg1, kwarg1=True) + var.method2(arg2, kwarg2=False)", ["arg1", "var", "arg2"]),
+        ("func1(arg1, kwarg1=True) + var.method2(arg2, kwarg2=False)", ["arg1", "arg2", "var"]),
     ],
 )
 def test_get_expr_operands(expression, expected_operands):
-    assert blosc2.get_expr_operands(expression) == expected_operands
+    assert blosc2.get_expr_operands(expression) == set(expected_operands)

@@ -8,6 +8,7 @@
 # Avoid checking the name of type annotations at run time
 from __future__ import annotations
 
+import ast
 import asyncio
 import concurrent.futures
 import copy
@@ -372,58 +373,40 @@ def validate_expr(expr: str) -> None:
             raise ValueError(f"Invalid method name: {method}")
 
 
-def get_expr_operands(expr: str) -> list:
+def get_expr_operands(expression: str) -> set:
     """
-    Given a (validated) expression in string form, return its operands.
+    Given an expression in string form, return its operands.
 
     Parameters
     ----------
-    expr (str): The mathematical expression in string form.
+    expression : str
+        The expression in string form.
 
     Returns
     -------
-    List[str]: A list of operands found in the expression.
+    set
+        A set of operands found in the expression.
     """
-    # Find all function calls and their keyword arguments using regex
-    function_calls = re.findall(r"\b\w+\s*\([^)]*\)", expr)
 
-    # Extract function names and keyword argument names
-    function_names = []
-    keywords_and_values = []
-    for call in function_calls:
-        # Extract function name
-        func_name = re.match(r"\b\w+", call).group()
-        function_names.append(func_name)
-        # Extract keyword arguments and their values
-        kw_args = re.findall(r"\b\w+\s*=\s*\w+", call)
-        keywords_and_values.extend([kw.split("=")[0].strip() for kw in kw_args])
-        keywords_and_values.extend([kw.split("=")[1].strip() for kw in kw_args])
+    class OperandVisitor(ast.NodeVisitor):
+        def __init__(self):
+            self.operands = set()
+            self.function_names = set()
 
-    # Find all method calls and their keyword arguments using regex
-    method_calls = re.findall(r"\.\w+\s*\([^)]*\)", expr)
+        def visit_Name(self, node):
+            if node.id not in self.function_names:
+                self.operands.add(node.id)
+            self.generic_visit(node)
 
-    # Extract method names and keyword argument names
-    method_names = []
-    for call in method_calls:
-        # Extract method name
-        method_name = re.match(r"\.\w+", call).group()
-        method_names.append(method_name.strip("."))
-        # Extract keyword arguments and their values
-        kw_args = re.findall(r"\b\w+\s*=\s*\w+", call)
-        keywords_and_values.extend([kw.split("=")[0].strip() for kw in kw_args])
-        keywords_and_values.extend([kw.split("=")[1].strip() for kw in kw_args])
+        def visit_Call(self, node):
+            if isinstance(node.func, ast.Name):
+                self.function_names.add(node.func.id)
+            self.generic_visit(node)
 
-    # Combine all function and method names along with keyword arguments and their values to exclude them
-    all_exclusions = function_names + method_names + keywords_and_values
-
-    # Find all words
-    all_words = re.findall(r"\b[a-zA-Z_]\w*\b", expr)
-
-    # Filter out function and method calls as well as keyword arguments and their values to get operands
-    operands = [word for word in all_words if word not in all_exclusions]
-
-    # Remove duplicates
-    return list(dict.fromkeys(operands))
+    tree = ast.parse(expression)
+    visitor = OperandVisitor()
+    visitor.visit(tree)
+    return set(visitor.operands)
 
 
 def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
