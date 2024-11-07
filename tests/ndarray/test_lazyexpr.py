@@ -975,3 +975,43 @@ def test_fill_disk_operands(chunks, blocks, disk, fill_value):
 )
 def test_get_expr_operands(expression, expected_operands):
     assert blosc2.get_expr_operands(expression) == set(expected_operands)
+
+
+@pytest.mark.parametrize(
+    "scalar",
+    [
+        "np.int8(0)",
+        # "np.uint16(0)",
+    ],
+)
+@pytest.mark.parametrize(
+    ("dtype1", "dtype2"),
+    [
+        (np.int8, np.int8),
+        # (np.int8, np.int16),
+        # (np.int8, np.int32),
+        # (np.int8, np.int64),
+        # (np.int8, np.float32),
+        # (np.int8, np.float64),
+        # (np.uint16, np.uint16),
+        # (np.uint16, np.uint32),
+        # (np.uint16, np.uint64),
+        # (np.uint16, np.float32),
+        # (np.uint16, np.float64),
+        # (np.float32, np.float32),
+        # (np.float32, np.float64),
+    ],
+)
+def test_dtype_infer(dtype1, dtype2, scalar):
+    shape = (5, 10)
+    na = np.linspace(0, 1, np.prod(shape), dtype=dtype1).reshape(shape)
+    nb = np.linspace(1, 2, np.prod(shape), dtype=dtype2).reshape(shape)
+    a = blosc2.asarray(na)
+    b = blosc2.asarray(nb)
+
+    expr = blosc2.lazyexpr(f"a + b * {scalar}", operands={"a": a, "b": b})
+    nres = na + nb * eval(scalar)
+    # res = expr[()]. # TODO
+    res = expr.compute()
+    np.testing.assert_allclose(res[()], nres)
+    assert res.dtype == nres.dtype

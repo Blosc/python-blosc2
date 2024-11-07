@@ -747,6 +747,7 @@ def fast_eval(  # noqa: C901
         The output array.
     """
     out = kwargs.pop("_output", None)
+    dtype = kwargs.pop("dtype", None)
     where: dict | None = kwargs.pop("_where_args", None)
     if isinstance(out, blosc2.NDArray):
         # If 'out' has been passed, and is a NDArray, use it as the base array
@@ -817,11 +818,9 @@ def fast_eval(  # noqa: C901
             if out is None:
                 # We can enter here when using any of the eval() or __getitem__() methods
                 if getitem:
-                    out = np.empty(shape, dtype=result.dtype)
+                    out = np.empty(shape, dtype=dtype)
                 else:
-                    out = blosc2.empty(
-                        shape, chunks=chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs
-                    )
+                    out = blosc2.empty(shape, chunks=chunks, blocks=basearr.blocks, dtype=dtype, **kwargs)
 
         # Store the result in the output array
         if getitem:
@@ -872,6 +871,7 @@ def slices_eval(  # noqa: C901
     out = kwargs.pop("_output", None)
     chunks = kwargs.get("chunks")
     where: dict | None = kwargs.pop("_where_args", None)
+    dtype = kwargs.pop("dtype", None)
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
 
@@ -972,23 +972,24 @@ def slices_eval(  # noqa: C901
                 # The result is a linear array
                 shape_ = math.prod(shape)
             if getitem:
-                out = np.empty(shape_, dtype=result.dtype)
+                out = np.empty(shape_, dtype=dtype)
             else:
                 if "chunks" not in kwargs and (where is None or len(where) == 2):
                     # Let's use the same chunks as the first operand (it could have been automatic too)
-                    out = blosc2.empty(shape_, chunks=chunks, dtype=result.dtype, **kwargs)
+                    out = blosc2.empty(shape_, chunks=chunks, dtype=dtype, **kwargs)
                 elif "chunks" in kwargs and (where is not None and len(where) < 2 and len(shape_) > 1):
                     # Remove the chunks argument if the where condition is not a tuple with two elements
                     kwargs.pop("chunks")
-                    out = blosc2.empty(shape_, dtype=result.dtype, **kwargs)
+                    out = blosc2.empty(shape_, dtype=dtype, **kwargs)
                 else:
-                    out = blosc2.empty(shape_, dtype=result.dtype, **kwargs)
+                    out = blosc2.empty(shape_, dtype=dtype, **kwargs)
                 # Check if the in out partitions are well-behaved (i.e. no padding)
                 behaved = blosc2.are_partitions_behaved(out.shape, out.chunks, out.blocks)
 
         if where is None or len(where) == 2:
             if behaved:
                 # Fast path
+                result = np.asarray(result, dtype=dtype)
                 out.schunk.update_data(nchunk, result, copy=False)
             else:
                 out[slice_] = result
@@ -1051,7 +1052,8 @@ def reduce_slices(  # noqa: C901
     reduce_op = reduce_args.pop("op")
     axis = reduce_args["axis"]
     keepdims = reduce_args["keepdims"]
-    dtype = reduce_args["dtype"] if reduce_op in (ReduceOp.SUM, ReduceOp.PROD) else None
+    # dtype = reduce_args["dtype"] if reduce_op in (ReduceOp.SUM, ReduceOp.PROD) else None
+    dtype = kwargs.get("dtype")
 
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
@@ -1906,6 +1908,8 @@ class LazyExpr(LazyArray):
             kwargs["_output"] = self._output
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
+        if hasattr(self, "_dtype"):
+            kwargs["dtype"] = self._dtype
         return self._compute_expr(item, kwargs)
 
     def __getitem__(self, item):
