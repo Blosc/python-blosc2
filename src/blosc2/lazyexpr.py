@@ -277,7 +277,7 @@ def compute_broadcast_shape(arrays):
     Returns the shape of the outcome of an operation with the input arrays.
     """
     # When dealing with UDFs, one can arrive params that are not arrays
-    shapes = [arr.shape for arr in arrays if hasattr(arr, "shape")]
+    shapes = [arr.shape for arr in arrays if hasattr(arr, "shape") and arr is not np]
     return np.broadcast_shapes(*shapes)
 
 
@@ -338,6 +338,8 @@ _blacklist_re = re.compile("|".join(validation_patterns))
 
 # Define valid method names
 valid_methods = {"sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "where"}
+valid_methods |= {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
+valid_methods |= {"float32", "float64", "complex64", "complex128"}
 
 
 def validate_expr(expr: str) -> None:
@@ -410,6 +412,48 @@ def get_expr_operands(expression: str) -> set:
     return set(visitor.operands)
 
 
+class InferDtypeVisitor(ast.NodeVisitor):
+    def __init__(self, dtype_dict):
+        self.dtype_dict = dtype_dict
+        self.result_dtype = None
+
+    def visit_Name(self, node):
+        if node.id in self.dtype_dict:
+            if self.result_dtype is None:
+                self.result_dtype = self.dtype_dict[node.id]
+            else:
+                self.result_dtype = np.result_type(self.result_dtype, self.dtype_dict[node.id])
+
+    def visit_Constant(self, node):
+        const_dtype = np.array(node.value).dtype
+        if self.result_dtype is None:
+            self.result_dtype = const_dtype
+        else:
+            self.result_dtype = np.result_type(self.result_dtype, const_dtype)
+
+    def visit_BinOp(self, node):
+        self.visit(node.left)
+        left_dtype = self.result_dtype
+
+        self.result_dtype = None
+        self.visit(node.right)
+        right_dtype = self.result_dtype
+
+        self.result_dtype = np.result_type(left_dtype, right_dtype)
+
+    def infer_dtype(self, expr):
+        self.result_dtype = None
+        tree = ast.parse(expr, mode="eval")
+        self.visit(tree.body)
+        return self.result_dtype
+
+
+def infer_expression_dtype(expr, array_dict):
+    dtype_dict = {k: v.dtype for k, v in array_dict.items()}
+    visitor = InferDtypeVisitor(dtype_dict)
+    return visitor.infer_dtype(expr)
+
+
 def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
     """Validate the inputs for the expression."""
     if len(inputs) == 0:
@@ -417,7 +461,7 @@ def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
             "You need to pass at least one array.  Use blosc2.empty() if values are not really needed."
         )
 
-    inputs = [input for input in inputs.values() if hasattr(input, "shape")]
+    inputs = [input for input in inputs.values() if hasattr(input, "shape") and input is not np]
     shape = compute_broadcast_shape(inputs)
 
     if not all(np.array_equal(shape, input.shape) for input in inputs):
@@ -1893,7 +1937,7 @@ class LazyExpr(LazyArray):
         items += [("dtype", self.dtype)]
         return items
 
-    def save(self, urlpath=None, **kwargs):
+    def _save(self, urlpath=None, **kwargs):
         if urlpath is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
 
@@ -1918,6 +1962,9 @@ class LazyExpr(LazyArray):
                     "urlbase": value.urlbase,
                 }
                 continue
+            if key in {"numpy", "np"}:
+                # Provide access to cast funcs like int8 et al.
+                continue
             if isinstance(value, blosc2.Proxy):
                 # Take the required info from the Proxy._cache container
                 value = value._cache
@@ -1934,6 +1981,57 @@ class LazyExpr(LazyArray):
             "operands": operands,
         }
 
+    def save(self, urlpath=None, **kwargs):
+        if urlpath is None:
+            raise ValueError("To save a LazyArray you must provide an urlpath")
+
+        expression = self.expression_tosave if hasattr(self, "expression_tosave") else self.expression
+        operands_ = self.operands_tosave if hasattr(self, "operands_tosave") else self.operands
+        # Validate expression
+        validate_expr(expression)
+
+        meta = kwargs.get("meta", {})
+        meta["LazyArray"] = LazyArrayEnum.Expr.value
+        kwargs["urlpath"] = urlpath
+        kwargs["meta"] = meta
+        kwargs["mode"] = "w"  # always overwrite the file in urlpath
+
+        # Create an empty array; useful for providing the shape and dtype of the outcome
+        array = blosc2.empty(shape=self.shape, dtype=self.dtype, **kwargs)
+
+        # Save the expression and operands in the metadata
+        operands = {}
+        print(operands_)
+        for key, value in operands_.items():
+            if isinstance(value, blosc2.C2Array):
+                operands[key] = {
+                    "path": str(value.path),
+                    "urlbase": value.urlbase,
+                }
+                continue
+            # TODO: can this be removed?
+            if key in {"numpy", "np"}:
+                # Provide access to cast funcs like int8 et al.
+                continue
+            if isinstance(value, blosc2.Proxy):
+                # Take the required info from the Proxy._cache container
+                value = value._cache
+            if not hasattr(value, "schunk"):
+                print(f"expression: {expression}")
+                raise ValueError(
+                    "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
+                )
+            if value.schunk.urlpath is None:
+                raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
+            operands[key] = value.schunk.urlpath
+        print("expression:", expression)
+        print("operands:", operands)
+        array.schunk.vlmeta["_LazyArray"] = {
+            "expression": expression,
+            "UDF": None,
+            "operands": operands,
+        }
+
     @classmethod
     def _new_expr(cls, expression, operands, guess, out=None, where=None):
         # Validate the expression
@@ -1941,14 +2039,23 @@ class LazyExpr(LazyArray):
         if guess:
             # The expression has been validated, so we can evaluate it
             # in guessing mode to avoid computing reductions
+            # Extract possible numpy scalars
+            _expression, local_vars = transform_expression(expression)
+            # Let's include numpy and blosc2 as operands so that some functions can be used
+            # Most in particular, castings like np.int8 et al. can be very useful to allow
+            # for desired data types in the output.
+            _operands = operands | local_vars
             _globals = {func: getattr(blosc2, func) for func in functions if func in expression}
-            new_expr = eval(expression, _globals, operands)
-            _dtype = new_expr.dtype
+            _globals |= {"np": np, "numpy": np}
+            new_expr = eval(_expression, _globals, _operands)
+            _dtype = infer_expression_dtype(_expression, _operands)
             _shape = new_expr.shape
             if isinstance(new_expr, blosc2.LazyExpr):
                 # Restore the original expression and operands
-                new_expr.expression = expression
-                new_expr.operands = operands
+                new_expr.expression = _expression
+                new_expr.expression_tosave = expression
+                new_expr.operands = _operands
+                new_expr.operands_tosave = operands
             else:
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
                 new_expr = cls(None)
@@ -2093,6 +2200,46 @@ class LazyUDF(LazyArray):
         raise NotImplementedError("For safety reasons, this is not implemented for UDFs")
 
 
+class TransformNumpyCalls(ast.NodeTransformer):
+    def __init__(self):
+        self.replacements = {}
+        self.tmp_counter = 0
+
+    def visit_Call(self, node):
+        # Check if the call is a numpy type-casting call
+        if (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in ["np", "numpy"]
+            and isinstance(node.args[0], ast.Constant)
+        ):
+            # Create a new temporary variable name
+            tmp_var = f"tmp{self.tmp_counter}"
+            self.tmp_counter += 1
+
+            # Evaluate the type-casting call to create the new variable's value
+            numpy_type = getattr(np, node.func.attr)
+            self.replacements[tmp_var] = numpy_type(node.args[0].value)
+
+            # Replace the call node with a variable node
+            return ast.copy_location(ast.Name(id=tmp_var, ctx=ast.Load()), node)
+        return self.generic_visit(node)
+
+
+def transform_expression(expr: str):
+    # Parse the expression into an AST
+    tree = ast.parse(expr, mode="eval")
+
+    # Transform the AST
+    transformer = TransformNumpyCalls()
+    transformed_tree = transformer.visit(tree)
+
+    # Generate the modified expression
+    transformed_expr = ast.unparse(transformed_tree)
+
+    return transformed_expr, transformer.replacements
+
+
 def _open_lazyarray(array):
     value = array.schunk.meta["LazyArray"]
     if value == LazyArrayEnum.UDF.value:
@@ -2119,16 +2266,31 @@ def _open_lazyarray(array):
 
     expr = lazyarray["expression"]
     globals = {func: getattr(blosc2, func) for func in functions if func in expr}
+    globals |= {"np": np, "numpy": np}
     # Validate the expression (prevent security issues)
     validate_expr(expr)
+    # Extract possible numpy scalars
+    # _expr, local_vars = transform_expression(expr)
+    # operands_dict |= local_vars
+    # Extract possible numpy scalars
+    _expression, local_vars = transform_expression(expr)
+    # Let's include numpy and blosc2 as operands so that some functions can be used
+    # Most in particular, castings like np.int8 et al. can be very useful to allow
+    # for desired data types in the output.
+    # local_vars |= {"np": np, "numpy": np}
+    _operands = operands_dict | local_vars
     # Create the expression as such
-    new_expr = eval(expr, globals, operands_dict)
-    _dtype = new_expr.dtype
+    new_expr = eval(_expression, globals, _operands)
+    _dtype = infer_expression_dtype(_expression, _operands)
+    # _dtype = new_expr.dtype
     _shape = new_expr.shape
     if isinstance(new_expr, blosc2.LazyExpr):
         # Restore the original expression and operands
-        new_expr.expression = expr
-        new_expr.operands = operands_dict
+        print("new_expr:", new_expr.expression, expr, operands_dict)
+        new_expr.expression = _expression
+        new_expr.expression_tosave = expr
+        new_expr.operands = _operands
+        new_expr.operands_tosave = operands_dict
         # Make the array info available for the user (only available when opened from disk)
         new_expr.array = array
         # We want to expose schunk too, so that .info() can be used on the LazyArray
@@ -2317,6 +2479,7 @@ def lazyexpr(
             where_args = {"_where_x": where[0], "_where_y": where[1]}
             expression._where_args = where_args
         return expression
+
     if operands is None:
         # Try to get operands from variables in the stack
         operands = get_expr_operands(expression)
