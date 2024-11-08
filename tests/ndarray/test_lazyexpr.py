@@ -981,25 +981,25 @@ def test_get_expr_operands(expression, expected_operands):
     "scalar",
     [
         "np.int8(0)",
-        # "np.uint16(0)",
+        "np.uint16(0)",
     ],
 )
 @pytest.mark.parametrize(
     ("dtype1", "dtype2"),
     [
         (np.int8, np.int8),
-        # (np.int8, np.int16),
-        # (np.int8, np.int32),
-        # (np.int8, np.int64),
-        # (np.int8, np.float32),
-        # (np.int8, np.float64),
-        # (np.uint16, np.uint16),
-        # (np.uint16, np.uint32),
-        # (np.uint16, np.uint64),
-        # (np.uint16, np.float32),
-        # (np.uint16, np.float64),
-        # (np.float32, np.float32),
-        # (np.float32, np.float64),
+        (np.int8, np.int16),
+        (np.int8, np.int32),
+        (np.int8, np.int64),
+        (np.int8, np.float32),
+        (np.int8, np.float64),
+        (np.uint16, np.uint16),
+        (np.uint16, np.uint32),
+        (np.uint16, np.uint64),
+        (np.uint16, np.float32),
+        (np.uint16, np.float64),
+        (np.float32, np.float32),
+        (np.float32, np.float64),
     ],
 )
 def test_dtype_infer(dtype1, dtype2, scalar):

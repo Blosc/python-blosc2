@@ -276,8 +276,8 @@ def test_where_fusion(array_fixture):
 
     # Two where() calls with a reduction (and using broadcasting)
     axis = None if sa1.ndim == 1 else 1
-    res = expr.where(0, 1) + expr.where(0, 1).sum(axis=axis)
-    nres = np.where(npexpr, 0, 1) + np.where(npexpr, 0, 1).sum(axis=axis)
+    res = expr.where(0.5, 0.2) + expr.where(0.3, 0.6).sum(axis=axis)
+    nres = np.where(npexpr, 0.5, 0.2) + np.where(npexpr, 0.3, 0.6).sum(axis=axis)
     np.testing.assert_allclose(res[:], nres)
 
     # Reuse the result in another expression
@@ -290,11 +290,10 @@ def test_where_fusion(array_fixture):
     nres = 2 * nres + 4 * nres
     np.testing.assert_allclose(res[:], nres)
 
-    # TODO: this is not working yet
     # Reuse the result in another expression twice II
-    # res = 2 * res + blosc2.sqrt(res)
-    # nres = 2 * nres + nres.sqrt()
-    # np.testing.assert_allclose(res[:], nres)
+    res = 2 * res + blosc2.sqrt(res)
+    nres = 2 * nres + np.sqrt(nres)
+    np.testing.assert_allclose(res[:], nres)
 
     # TODO: this is not working yet
     # Reuse the result in another expression twice III

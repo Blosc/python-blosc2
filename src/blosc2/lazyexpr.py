@@ -24,6 +24,8 @@ from pathlib import Path
 from queue import Empty, Queue
 from typing import TYPE_CHECKING
 
+from numpy.exceptions import ComplexWarning
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
@@ -412,48 +414,6 @@ def get_expr_operands(expression: str) -> set:
     return set(visitor.operands)
 
 
-class InferDtypeVisitor(ast.NodeVisitor):
-    def __init__(self, dtype_dict):
-        self.dtype_dict = dtype_dict
-        self.result_dtype = None
-
-    def visit_Name(self, node):
-        if node.id in self.dtype_dict:
-            if self.result_dtype is None:
-                self.result_dtype = self.dtype_dict[node.id]
-            else:
-                self.result_dtype = np.result_type(self.result_dtype, self.dtype_dict[node.id])
-
-    def visit_Constant(self, node):
-        const_dtype = np.array(node.value).dtype
-        if self.result_dtype is None:
-            self.result_dtype = const_dtype
-        else:
-            self.result_dtype = np.result_type(self.result_dtype, const_dtype)
-
-    def visit_BinOp(self, node):
-        self.visit(node.left)
-        left_dtype = self.result_dtype
-
-        self.result_dtype = None
-        self.visit(node.right)
-        right_dtype = self.result_dtype
-
-        self.result_dtype = np.result_type(left_dtype, right_dtype)
-
-    def infer_dtype(self, expr):
-        self.result_dtype = None
-        tree = ast.parse(expr, mode="eval")
-        self.visit(tree.body)
-        return self.result_dtype
-
-
-def infer_expression_dtype(expr, array_dict):
-    dtype_dict = {k: v.dtype for k, v in array_dict.items()}
-    visitor = InferDtypeVisitor(dtype_dict)
-    return visitor.infer_dtype(expr)
-
-
 def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
     """Validate the inputs for the expression."""
     if len(inputs) == 0:
@@ -824,9 +784,15 @@ def fast_eval(  # noqa: C901
 
         # Store the result in the output array
         if getitem:
-            out[slice_] = result
+            try:
+                out[slice_] = result
+            except ComplexWarning:
+                # The result is a complex number, so we need to convert it to real.
+                # This is a workaround for rigidness of NumExpr with type casting.
+                result = result.real.astype(out.dtype)
+                out[slice_] = result
         else:
-            if behaved and result.shape == chunks_:
+            if behaved and result.shape == chunks_ and result.dtype == out.dtype:
                 # Fast path only works for results that are full chunks
                 out.schunk.update_data(nchunk, result, copy=False)
             else:
@@ -1052,8 +1018,8 @@ def reduce_slices(  # noqa: C901
     reduce_op = reduce_args.pop("op")
     axis = reduce_args["axis"]
     keepdims = reduce_args["keepdims"]
-    # dtype = reduce_args["dtype"] if reduce_op in (ReduceOp.SUM, ReduceOp.PROD) else None
-    dtype = kwargs.get("dtype")
+    dtype = kwargs.pop("dtype", None)
+    # dtype = reduce_args["dtype"] if reduce_op in (ReduceOp.SUM, ReduceOp.PROD) else _dtype
 
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
@@ -1205,8 +1171,8 @@ def reduce_slices(  # noqa: C901
             result = reduce_op.value.reduce(result, **reduce_args)
 
         if out is None:
-            if dtype is None:
-                dtype = result.dtype
+            # if dtype is None:
+            #     dtype = result.dtype
             if is_inside_eval():
                 # We already have the dtype and reduced_shape, so return immediately
                 # Use a blosc2 container, as it consumes less memory in general
@@ -1594,7 +1560,18 @@ class LazyExpr(LazyArray):
             # In some situations, we already know the dtype
             return self._dtype
         operands = {key: np.ones(1, dtype=value.dtype) for key, value in self.operands.items()}
-        _out = ne.evaluate(self.expression, local_dict=operands)
+        if "contains" in self.expression:
+            _out = ne.evaluate(self.expression, local_dict=operands)
+        else:
+            # Create a globals dict with the functions of numpy
+            globals_dict = {f: getattr(np, f) for f in functions if f != "contains"}
+            try:
+                _out = eval(self.expression, globals_dict, operands)
+            except RuntimeWarning:
+                # Sometimes, numpy gets a RuntimeWarning when evaluating expressions
+                # with synthetic operands (1's). Let's try with numexpr, which is not so picky
+                # about this.
+                _out = ne.evaluate(self.expression, local_dict=operands)
         return _out.dtype
 
     @property
@@ -1770,17 +1747,26 @@ class LazyExpr(LazyArray):
     def where(self, value1=None, value2=None):
         if self.dtype != np.bool_:
             raise ValueError("where() can only be used with boolean expressions")
+        dtype = self.dtype
         # This just acts as a 'decorator' for the existing expression
         if value1 is not None and value2 is not None:
+            # Guess the outcome dtype for value1 and value2
+            dtype = np.result_type(np.asarray(value1), np.asarray(value2))
             args = {"_where_x": value1, "_where_y": value2}
         elif value1 is not None:
+            dtype = np.asarray(value1).dtype
             args = {"_where_x": value1}
         elif value2 is not None:
             raise ValueError("where() requires value1 when using value2")
         else:
             args = {}
-        self._where_args = args
-        return self
+        # Create a new expression
+        new_expr = blosc2.LazyExpr(new_op=(self, None, None))
+        new_expr.expression = self.expression
+        new_expr.operands = self.operands
+        new_expr._where_args = args
+        new_expr._dtype = dtype
+        return new_expr
 
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         reduce_args = {
@@ -1908,8 +1894,7 @@ class LazyExpr(LazyArray):
             kwargs["_output"] = self._output
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
-        if hasattr(self, "_dtype"):
-            kwargs["dtype"] = self._dtype
+        kwargs["dtype"] = self.dtype
         return self._compute_expr(item, kwargs)
 
     def __getitem__(self, item):
@@ -2052,7 +2037,7 @@ class LazyExpr(LazyArray):
             _globals = {func: getattr(blosc2, func) for func in functions if func in expression}
             _globals |= {"np": np, "numpy": np}
             new_expr = eval(_expression, _globals, _operands)
-            _dtype = infer_expression_dtype(_expression, _operands)
+            _dtype = new_expr.dtype
             _shape = new_expr.shape
             if isinstance(new_expr, blosc2.LazyExpr):
                 # Restore the original expression and operands
@@ -2283,10 +2268,9 @@ def _open_lazyarray(array):
     # for desired data types in the output.
     # local_vars |= {"np": np, "numpy": np}
     _operands = operands_dict | local_vars
-    # Create the expression as such
+    # Create the expression as such, but in guessing mode
     new_expr = eval(_expression, globals, _operands)
-    _dtype = infer_expression_dtype(_expression, _operands)
-    # _dtype = new_expr.dtype
+    _dtype = new_expr.dtype
     _shape = new_expr.shape
     if isinstance(new_expr, blosc2.LazyExpr):
         # Restore the original expression and operands
