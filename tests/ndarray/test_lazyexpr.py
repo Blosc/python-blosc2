@@ -297,9 +297,9 @@ def test_functions(function, dtype_fixture, shape_fixture):
     # Compare the results
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
 
-    # For some reason real is not supported by numpy's assert_allclose
-    # (TypeError: bad operand type for abs(): 'LazyExpr')
-    if function == "real":
+    # For some reason real and imag are not supported by numpy's assert_allclose
+    # (TypeError: bad operand type for abs(): 'LazyExpr' and segfaults are observed)
+    if function in ("real", "imag"):
         return
 
     # Using numpy functions
@@ -589,11 +589,12 @@ def test_save_unsafe():
     assert expr.expression in str(excinfo.value)
 
     # Check that an invalid expression cannot be easily saved.
-    # As this can easily be worked around, the best protection is
+    # Although, as this can easily be worked around, the best protection is
     # during loading time (tested above).
+    expr.expression_tosave = "import os; os.system('touch /tmp/unsafe')"
     with pytest.raises(ValueError) as excinfo:
         expr.save(urlpath=urlpath)
-    assert expr.expression in str(excinfo.value)
+    assert expr.expression_tosave in str(excinfo.value)
 
     for urlpath in disk_arrays:
         blosc2.remove_urlpath(urlpath)
@@ -974,3 +975,61 @@ def test_fill_disk_operands(chunks, blocks, disk, fill_value):
 )
 def test_get_expr_operands(expression, expected_operands):
     assert blosc2.get_expr_operands(expression) == set(expected_operands)
+
+
+@pytest.mark.parametrize(
+    "scalar",
+    [
+        "np.int8(0)",
+        "np.uint8(0)",
+        "np.int16(0)",
+        "np.uint16(0)",
+        "np.int32(0)",
+        "np.uint32(0)",
+        "np.int64(0)",
+        "np.float32(0)",
+        "np.float64(0)",
+        "np.complex64(0)",
+        "np.complex128(0)",
+    ],
+)
+@pytest.mark.parametrize(
+    ("dtype1", "dtype2"),
+    [
+        (np.int8, np.int8),
+        (np.int8, np.int16),
+        (np.int8, np.int32),
+        (np.int8, np.int64),
+        (np.int8, np.float32),
+        (np.int8, np.float64),
+        (np.uint16, np.uint16),
+        (np.uint16, np.uint32),
+        # (np.uint16, np.uint64), # numexpr does not support uint64
+        (np.uint16, np.float32),
+        (np.uint16, np.float64),
+        (np.int32, np.int32),
+        (np.int32, np.int64),
+        (np.float32, np.float32),
+        (np.float32, np.float64),
+        (np.complex64, np.complex64),
+        (np.complex64, np.complex128),
+    ],
+)
+def test_dtype_infer(dtype1, dtype2, scalar):
+    shape = (5, 10)
+    na = np.linspace(0, 1, np.prod(shape), dtype=dtype1).reshape(shape)
+    nb = np.linspace(1, 2, np.prod(shape), dtype=dtype2).reshape(shape)
+    a = blosc2.asarray(na)
+    b = blosc2.asarray(nb)
+
+    # Using compute()
+    expr = blosc2.lazyexpr(f"a + b * {scalar}", operands={"a": a, "b": b})
+    nres = na + nb * eval(scalar)
+    res = expr.compute()
+    np.testing.assert_allclose(res[()], nres)
+    assert res.dtype == nres.dtype
+
+    # Using __getitem__
+    res = expr[()]
+    np.testing.assert_allclose(res, nres)
+    assert res.dtype == nres.dtype

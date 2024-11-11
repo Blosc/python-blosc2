@@ -62,5 +62,6 @@ def test_setitem_different_dtype(shape, slices):
     nparray = np.arange(size, dtype=np.int32).reshape(shape)
     a = blosc2.empty(nparray.shape, dtype=np.float64)
 
-    with pytest.raises(ValueError):
-        a[slices] = nparray
+    a[slices] = nparray[slices]
+    nparray_ = nparray.astype(a.dtype)
+    np.testing.assert_almost_equal(a[slices], nparray_[slices])

@@ -24,6 +24,8 @@ from pathlib import Path
 from queue import Empty, Queue
 from typing import TYPE_CHECKING
 
+from numpy.exceptions import ComplexWarning
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
@@ -277,7 +279,7 @@ def compute_broadcast_shape(arrays):
     Returns the shape of the outcome of an operation with the input arrays.
     """
     # When dealing with UDFs, one can arrive params that are not arrays
-    shapes = [arr.shape for arr in arrays if hasattr(arr, "shape")]
+    shapes = [arr.shape for arr in arrays if hasattr(arr, "shape") and arr is not np]
     return np.broadcast_shapes(*shapes)
 
 
@@ -338,6 +340,9 @@ _blacklist_re = re.compile("|".join(validation_patterns))
 
 # Define valid method names
 valid_methods = {"sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "where"}
+valid_methods |= {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
+valid_methods |= {"float32", "float64", "complex64", "complex128"}
+valid_methods |= {"bool", "str", "bytes"}
 
 
 def validate_expr(expr: str) -> None:
@@ -410,6 +415,46 @@ def get_expr_operands(expression: str) -> set:
     return set(visitor.operands)
 
 
+class TransformNumpyCalls(ast.NodeTransformer):
+    def __init__(self):
+        self.replacements = {}
+        self.tmp_counter = 0
+
+    def visit_Call(self, node):
+        # Check if the call is a numpy type-casting call
+        if (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in ["np", "numpy"]
+            and isinstance(node.args[0], ast.Constant)
+        ):
+            # Create a new temporary variable name
+            tmp_var = f"tmp{self.tmp_counter}"
+            self.tmp_counter += 1
+
+            # Evaluate the type-casting call to create the new variable's value
+            numpy_type = getattr(np, node.func.attr)
+            self.replacements[tmp_var] = numpy_type(node.args[0].value)
+
+            # Replace the call node with a variable node
+            return ast.copy_location(ast.Name(id=tmp_var, ctx=ast.Load()), node)
+        return self.generic_visit(node)
+
+
+def extract_numpy_scalars(expr: str):
+    # Parse the expression into an AST
+    tree = ast.parse(expr, mode="eval")
+
+    # Transform the AST
+    transformer = TransformNumpyCalls()
+    transformed_tree = transformer.visit(tree)
+
+    # Generate the modified expression
+    transformed_expr = ast.unparse(transformed_tree)
+
+    return transformed_expr, transformer.replacements
+
+
 def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
     """Validate the inputs for the expression."""
     if len(inputs) == 0:
@@ -417,7 +462,7 @@ def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
             "You need to pass at least one array.  Use blosc2.empty() if values are not really needed."
         )
 
-    inputs = [input for input in inputs.values() if hasattr(input, "shape")]
+    inputs = [input for input in inputs.values() if hasattr(input, "shape") and input is not np]
     shape = compute_broadcast_shape(inputs)
 
     if not all(np.array_equal(shape, input.shape) for input in inputs):
@@ -703,6 +748,7 @@ def fast_eval(  # noqa: C901
         The output array.
     """
     out = kwargs.pop("_output", None)
+    dtype = kwargs.pop("dtype", None)
     where: dict | None = kwargs.pop("_where_args", None)
     if isinstance(out, blosc2.NDArray):
         # If 'out' has been passed, and is a NDArray, use it as the base array
@@ -748,13 +794,15 @@ def fast_eval(  # noqa: C901
             operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands
         )
 
-        if isinstance(out, np.ndarray) and not where:
-            # Fast path: put the result straight in the output array (avoiding a memory copy)
-            if callable(expression):
-                expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
-            else:
-                ne.evaluate(expression, chunk_operands, out=out[slice_])
-            continue
+        # Since ne.evaluate() can return a dtype larger than the one in computed in the expression,
+        # we cannot take this fast path
+        # if isinstance(out, np.ndarray) and not where:
+        #     # Fast path: put the result straight in the output array (avoiding a memory copy)
+        #     if callable(expression):
+        #         expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
+        #     else:
+        #         ne.evaluate(expression, chunk_operands, out=out[slice_])
+        #     continue
         if callable(expression):
             result = np.empty(chunks_, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
@@ -773,17 +821,21 @@ def fast_eval(  # noqa: C901
             if out is None:
                 # We can enter here when using any of the eval() or __getitem__() methods
                 if getitem:
-                    out = np.empty(shape, dtype=result.dtype)
+                    out = np.empty(shape, dtype=dtype)
                 else:
-                    out = blosc2.empty(
-                        shape, chunks=chunks, blocks=basearr.blocks, dtype=result.dtype, **kwargs
-                    )
+                    out = blosc2.empty(shape, chunks=chunks, blocks=basearr.blocks, dtype=dtype, **kwargs)
 
         # Store the result in the output array
         if getitem:
-            out[slice_] = result
+            try:
+                out[slice_] = result
+            except ComplexWarning:
+                # The result is a complex number, so we need to convert it to real.
+                # This is a workaround for rigidness of NumExpr with type casting.
+                result = result.real.astype(out.dtype)
+                out[slice_] = result
         else:
-            if behaved and result.shape == chunks_:
+            if behaved and result.shape == chunks_ and result.dtype == out.dtype:
                 # Fast path only works for results that are full chunks
                 out.schunk.update_data(nchunk, result, copy=False)
             else:
@@ -828,6 +880,7 @@ def slices_eval(  # noqa: C901
     out = kwargs.pop("_output", None)
     chunks = kwargs.get("chunks")
     where: dict | None = kwargs.pop("_where_args", None)
+    dtype = kwargs.pop("dtype", None)
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
 
@@ -928,23 +981,24 @@ def slices_eval(  # noqa: C901
                 # The result is a linear array
                 shape_ = math.prod(shape)
             if getitem:
-                out = np.empty(shape_, dtype=result.dtype)
+                out = np.empty(shape_, dtype=dtype)
             else:
                 if "chunks" not in kwargs and (where is None or len(where) == 2):
                     # Let's use the same chunks as the first operand (it could have been automatic too)
-                    out = blosc2.empty(shape_, chunks=chunks, dtype=result.dtype, **kwargs)
+                    out = blosc2.empty(shape_, chunks=chunks, dtype=dtype, **kwargs)
                 elif "chunks" in kwargs and (where is not None and len(where) < 2 and len(shape_) > 1):
                     # Remove the chunks argument if the where condition is not a tuple with two elements
                     kwargs.pop("chunks")
-                    out = blosc2.empty(shape_, dtype=result.dtype, **kwargs)
+                    out = blosc2.empty(shape_, dtype=dtype, **kwargs)
                 else:
-                    out = blosc2.empty(shape_, dtype=result.dtype, **kwargs)
+                    out = blosc2.empty(shape_, dtype=dtype, **kwargs)
                 # Check if the in out partitions are well-behaved (i.e. no padding)
                 behaved = blosc2.are_partitions_behaved(out.shape, out.chunks, out.blocks)
 
         if where is None or len(where) == 2:
             if behaved:
                 # Fast path
+                result = np.asarray(result, dtype=dtype)
                 out.schunk.update_data(nchunk, result, copy=False)
             else:
                 out[slice_] = result
@@ -1007,7 +1061,12 @@ def reduce_slices(  # noqa: C901
     reduce_op = reduce_args.pop("op")
     axis = reduce_args["axis"]
     keepdims = reduce_args["keepdims"]
+    # For sum and prod, we can specify the dtype of the output array
     dtype = reduce_args["dtype"] if reduce_op in (ReduceOp.SUM, ReduceOp.PROD) else None
+    if dtype is None:
+        dtype = kwargs.pop("dtype", None)
+    else:
+        del kwargs["dtype"]
 
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
@@ -1159,8 +1218,6 @@ def reduce_slices(  # noqa: C901
             result = reduce_op.value.reduce(result, **reduce_args)
 
         if out is None:
-            if dtype is None:
-                dtype = result.dtype
             if is_inside_eval():
                 # We already have the dtype and reduced_shape, so return immediately
                 # Use a blosc2 container, as it consumes less memory in general
@@ -1420,6 +1477,7 @@ class LazyExpr(LazyArray):
                 self.expression = f"{op}(o0, o1)"
             return
 
+        self._dtype = np.result_type(value1, value2)
         if np.isscalar(value1) and np.isscalar(value2):
             self.expression = f"({value1} {op} {value2})"
         elif np.isscalar(value2):
@@ -1495,6 +1553,7 @@ class LazyExpr(LazyArray):
             value1 = value1.compute()
         if hasattr(value2, "_where_args"):
             value2 = value2.compute()
+        self._dtype = np.result_type(value1, value2)
         if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
             # We converted some of the operands to NDArray (where() handling above)
             new_operands = {"o0": value1, "o1": value2}
@@ -1547,15 +1606,33 @@ class LazyExpr(LazyArray):
         if hasattr(self, "_dtype"):
             # In some situations, we already know the dtype
             return self._dtype
+        if (
+            hasattr(self, "_dtype_")
+            and hasattr(self, "_expression_")
+            and self._expression_ == self.expression
+        ):
+            # Use the cached dtype
+            return self._dtype_
         operands = {key: np.ones(1, dtype=value.dtype) for key, value in self.operands.items()}
-        _out = ne.evaluate(self.expression, local_dict=operands)
-        return _out.dtype
+        if "contains" in self.expression:
+            _out = ne.evaluate(self.expression, local_dict=operands)
+        else:
+            # Create a globals dict with the functions of numpy
+            globals_dict = {f: getattr(np, f) for f in functions if f != "contains"}
+            try:
+                _out = eval(self.expression, globals_dict, operands)
+            except RuntimeWarning:
+                # Sometimes, numpy gets a RuntimeWarning when evaluating expressions
+                # with synthetic operands (1's). Let's try with numexpr, which is not so picky
+                # about this.
+                _out = ne.evaluate(self.expression, local_dict=operands)
+        self._dtype_ = _out.dtype
+        self._expression_ = self.expression
+        return self._dtype_
 
     @property
     def shape(self):
-        if hasattr(self, "_shape"):
-            # In some situations, we already know the shape
-            return self._shape
+        # Operands shape can change, so we always need to recompute this
         _shape, chunks, blocks, fast_path = validate_inputs(self.operands)
         if fast_path:
             # fast_path ensure that all the operands have the same partitions
@@ -1726,19 +1803,39 @@ class LazyExpr(LazyArray):
             raise ValueError("where() can only be used with boolean expressions")
         # This just acts as a 'decorator' for the existing expression
         if value1 is not None and value2 is not None:
+            # Guess the outcome dtype for value1 and value2
+            dtype = np.result_type(value1, value2)
             args = {"_where_x": value1, "_where_y": value2}
         elif value1 is not None:
+            if hasattr(value1, "dtype"):
+                dtype = value1.dtype
+            else:
+                dtype = np.asarray(value1).dtype
             args = {"_where_x": value1}
         elif value2 is not None:
             raise ValueError("where() requires value1 when using value2")
         else:
             args = {}
-        self._where_args = args
-        return self
+        # Create a new expression
+        new_expr = blosc2.LazyExpr(new_op=(self, None, None))
+        new_expr.expression = self.expression
+        new_expr.operands = self.operands
+        new_expr._where_args = args
+        new_expr._dtype = dtype
+        return new_expr
 
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         reduce_args = {
             "op": ReduceOp.SUM,
+            "axis": axis,
+            "dtype": dtype,
+            "keepdims": keepdims,
+        }
+        return self.compute(_reduce_args=reduce_args, **kwargs)
+
+    def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
+        reduce_args = {
+            "op": ReduceOp.PROD,
             "axis": axis,
             "dtype": dtype,
             "keepdims": keepdims,
@@ -1803,15 +1900,6 @@ class LazyExpr(LazyArray):
             out = blosc2.asarray(out, **kwargs)
         return out
 
-    def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
-        reduce_args = {
-            "op": ReduceOp.PROD,
-            "axis": axis,
-            "dtype": dtype,
-            "keepdims": keepdims,
-        }
-        return self.compute(_reduce_args=reduce_args, **kwargs)
-
     def min(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
             "op": ReduceOp.MIN,
@@ -1862,15 +1950,12 @@ class LazyExpr(LazyArray):
             kwargs["_output"] = self._output
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
+        kwargs["dtype"] = self.dtype
         return self._compute_expr(item, kwargs)
 
     def __getitem__(self, item):
         kwargs = {"_getitem": True}
-        if hasattr(self, "_output"):
-            kwargs["_output"] = self._output
-        if hasattr(self, "_where_args"):
-            kwargs["_where_args"] = self._where_args
-        return self._compute_expr(item, kwargs)
+        return self.compute(item, **kwargs)
 
     def __str__(self):
         return f"{self.expression}"
@@ -1893,7 +1978,7 @@ class LazyExpr(LazyArray):
         items += [("dtype", self.dtype)]
         return items
 
-    def save(self, urlpath=None, **kwargs):
+    def _save(self, urlpath=None, **kwargs):
         if urlpath is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
 
@@ -1918,6 +2003,9 @@ class LazyExpr(LazyArray):
                     "urlbase": value.urlbase,
                 }
                 continue
+            if key in {"numpy", "np"}:
+                # Provide access to cast funcs like int8 et al.
+                continue
             if isinstance(value, blosc2.Proxy):
                 # Take the required info from the Proxy._cache container
                 value = value._cache
@@ -1934,6 +2022,49 @@ class LazyExpr(LazyArray):
             "operands": operands,
         }
 
+    def save(self, urlpath=None, **kwargs):
+        if urlpath is None:
+            raise ValueError("To save a LazyArray you must provide an urlpath")
+
+        expression = self.expression_tosave if hasattr(self, "expression_tosave") else self.expression
+        operands_ = self.operands_tosave if hasattr(self, "operands_tosave") else self.operands
+        # Validate expression
+        validate_expr(expression)
+
+        meta = kwargs.get("meta", {})
+        meta["LazyArray"] = LazyArrayEnum.Expr.value
+        kwargs["urlpath"] = urlpath
+        kwargs["meta"] = meta
+        kwargs["mode"] = "w"  # always overwrite the file in urlpath
+
+        # Create an empty array; useful for providing the shape and dtype of the outcome
+        array = blosc2.empty(shape=self.shape, dtype=self.dtype, **kwargs)
+
+        # Save the expression and operands in the metadata
+        operands = {}
+        for key, value in operands_.items():
+            if isinstance(value, blosc2.C2Array):
+                operands[key] = {
+                    "path": str(value.path),
+                    "urlbase": value.urlbase,
+                }
+                continue
+            if isinstance(value, blosc2.Proxy):
+                # Take the required info from the Proxy._cache container
+                value = value._cache
+            if not hasattr(value, "schunk"):
+                raise ValueError(
+                    "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
+                )
+            if value.schunk.urlpath is None:
+                raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
+            operands[key] = value.schunk.urlpath
+        array.schunk.vlmeta["_LazyArray"] = {
+            "expression": expression,
+            "UDF": None,
+            "operands": operands,
+        }
+
     @classmethod
     def _new_expr(cls, expression, operands, guess, out=None, where=None):
         # Validate the expression
@@ -1941,14 +2072,23 @@ class LazyExpr(LazyArray):
         if guess:
             # The expression has been validated, so we can evaluate it
             # in guessing mode to avoid computing reductions
+            # Extract possible numpy scalars
+            _expression, local_vars = extract_numpy_scalars(expression)
+            # Let's include numpy and blosc2 as operands so that some functions can be used
+            # Most in particular, castings like np.int8 et al. can be very useful to allow
+            # for desired data types in the output.
+            _operands = operands | local_vars
             _globals = {func: getattr(blosc2, func) for func in functions if func in expression}
-            new_expr = eval(expression, _globals, operands)
+            _globals |= {"np": np, "numpy": np}
+            new_expr = eval(_expression, _globals, _operands)
             _dtype = new_expr.dtype
             _shape = new_expr.shape
             if isinstance(new_expr, blosc2.LazyExpr):
                 # Restore the original expression and operands
-                new_expr.expression = expression
-                new_expr.operands = operands
+                new_expr.expression = _expression
+                new_expr.expression_tosave = expression
+                new_expr.operands = _operands
+                new_expr.operands_tosave = operands
             else:
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
                 new_expr = cls(None)
@@ -2118,29 +2258,11 @@ def _open_lazyarray(array):
             raise TypeError("Error when retrieving the operands")
 
     expr = lazyarray["expression"]
-    globals = {func: getattr(blosc2, func) for func in functions if func in expr}
-    # Validate the expression (prevent security issues)
-    validate_expr(expr)
-    # Create the expression as such
-    new_expr = eval(expr, globals, operands_dict)
-    _dtype = new_expr.dtype
-    _shape = new_expr.shape
-    if isinstance(new_expr, blosc2.LazyExpr):
-        # Restore the original expression and operands
-        new_expr.expression = expr
-        new_expr.operands = operands_dict
-        # Make the array info available for the user (only available when opened from disk)
-        new_expr.array = array
-        # We want to expose schunk too, so that .info() can be used on the LazyArray
-        new_expr.schunk = array.schunk
-    else:
-        # An immediate evaluation happened (e.g. all operands are numpy arrays)
-        new_expr = LazyExpr(None)
-        new_expr.expression = expr
-        new_expr.operands = operands_dict
-    # Cache the dtype and shape (should be immutable)
-    new_expr._dtype = _dtype
-    new_expr._shape = _shape
+    new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
+    # Make the array info available for the user (only available when opened from disk)
+    new_expr.array = array
+    # We want to expose schunk too, so that .info() can be used on the LazyArray
+    new_expr.schunk = array.schunk
     return new_expr
 
 
@@ -2317,6 +2439,7 @@ def lazyexpr(
             where_args = {"_where_x": where[0], "_where_y": where[1]}
             expression._where_args = where_args
         return expression
+
     if operands is None:
         # Try to get operands from variables in the stack
         operands = get_expr_operands(expression)
