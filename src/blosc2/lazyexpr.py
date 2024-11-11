@@ -1567,6 +1567,13 @@ class LazyExpr(LazyArray):
         if hasattr(self, "_dtype"):
             # In some situations, we already know the dtype
             return self._dtype
+        if (
+            hasattr(self, "_dtype_")
+            and hasattr(self, "_expression_")
+            and self._expression_ == self.expression
+        ):
+            # Use the cached dtype
+            return self._dtype_
         operands = {key: np.ones(1, dtype=value.dtype) for key, value in self.operands.items()}
         if "contains" in self.expression:
             _out = ne.evaluate(self.expression, local_dict=operands)
@@ -1580,13 +1587,13 @@ class LazyExpr(LazyArray):
                 # with synthetic operands (1's). Let's try with numexpr, which is not so picky
                 # about this.
                 _out = ne.evaluate(self.expression, local_dict=operands)
-        return _out.dtype
+        self._dtype_ = _out.dtype
+        self._expression_ = self.expression
+        return self._dtype_
 
     @property
     def shape(self):
-        if hasattr(self, "_shape"):
-            # In some situations, we already know the shape
-            return self._shape
+        # Operands shape can change, so we always need to recompute this
         _shape, chunks, blocks, fast_path = validate_inputs(self.operands)
         if fast_path:
             # fast_path ensure that all the operands have the same partitions
