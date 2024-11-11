@@ -1603,6 +1603,7 @@ class LazyExpr(LazyArray):
 
     @property
     def dtype(self):
+        # Honor self._dtype; it can be set during the building of the expression
         if hasattr(self, "_dtype"):
             # In some situations, we already know the dtype
             return self._dtype
@@ -1632,12 +1633,24 @@ class LazyExpr(LazyArray):
 
     @property
     def shape(self):
+        # Honor self._shape; it can be set during the building of the expression
+        if hasattr(self, "_shape"):
+            return self._shape
+        if (
+            hasattr(self, "_shape_")
+            and hasattr(self, "_expression_")
+            and self._expression_ == self.expression
+        ):
+            # Use the cached shape
+            return self._shape_
         # Operands shape can change, so we always need to recompute this
         _shape, chunks, blocks, fast_path = validate_inputs(self.operands)
         if fast_path:
             # fast_path ensure that all the operands have the same partitions
             self._chunks = chunks
             self._blocks = blocks
+        self._shape_ = _shape
+        self._expression_ = self.expression
         return _shape
 
     @property

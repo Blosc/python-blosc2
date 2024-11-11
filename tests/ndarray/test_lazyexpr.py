@@ -775,6 +775,22 @@ def test_broadcasting(broadcast_fixture):
     np.testing.assert_allclose(res, nres)
 
 
+def test_broadcasting_str(broadcast_fixture):
+    a1, a2, na1, na2 = broadcast_fixture
+    expr1 = blosc2.lazyexpr("a1 + a2")
+    assert expr1.shape == np.broadcast_shapes(a1.shape, a2.shape)
+    expr2 = blosc2.lazyexpr("a1 * a2 + 1")
+    assert expr2.shape == np.broadcast_shapes(a1.shape, a2.shape)
+    expr = blosc2.lazyexpr("expr1 - expr2")
+    assert expr.shape == np.broadcast_shapes(expr1.shape, expr2.shape)
+    nres = ne.evaluate("na1 + na2 - (na1 * na2 + 1)")
+    assert expr.shape == nres.shape
+    res = expr.compute()
+    np.testing.assert_allclose(res[:], nres)
+    res = expr[:]
+    np.testing.assert_allclose(res, nres)
+
+
 @pytest.mark.parametrize(
     "operand_mix",
     [
@@ -802,6 +818,7 @@ def test_lazyexpr(array_fixture, operand_mix, operand_guess):
     else:
         expr = blosc2.lazyexpr("a1 + a2 - a3 * a4", operands=operands)
     nres = ne.evaluate("na1 + na2 - na3 * na4")
+    assert expr.shape == nres.shape
     res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
     # With selections

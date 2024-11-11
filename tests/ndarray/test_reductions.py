@@ -235,13 +235,14 @@ def test_save_version1(disk, fill_value, reduce_op, axis):
     nb = b[:]
 
     # A reduction in the back
-    expr = f"a + b.{reduce_op}(axis={axis})"
-    lexpr = blosc2.lazyexpr(expr, operands={"a": a, "b": b})
+    expr = f"a + {reduce_op}(b, axis={axis}) + 1"
+    lexpr = blosc2.lazyexpr(expr)
+    assert lexpr.shape == a.shape
     if disk:
         lexpr.save("out.b2nd")
         lexpr = blosc2.open("out.b2nd")
     res = lexpr.compute()
-    nres = na + getattr(nb[()], reduce_op)(axis=axis)
+    nres = na + getattr(nb[()], reduce_op)(axis=axis) + 1
     assert np.allclose(res[()], nres)
 
     if disk:
