@@ -342,6 +342,7 @@ _blacklist_re = re.compile("|".join(validation_patterns))
 valid_methods = {"sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "where"}
 valid_methods |= {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
 valid_methods |= {"float32", "float64", "complex64", "complex128"}
+valid_methods |= {"bool", "str", "bytes"}
 
 
 def validate_expr(expr: str) -> None:
@@ -412,6 +413,46 @@ def get_expr_operands(expression: str) -> set:
     visitor = OperandVisitor()
     visitor.visit(tree)
     return set(visitor.operands)
+
+
+class TransformNumpyCalls(ast.NodeTransformer):
+    def __init__(self):
+        self.replacements = {}
+        self.tmp_counter = 0
+
+    def visit_Call(self, node):
+        # Check if the call is a numpy type-casting call
+        if (
+            isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id in ["np", "numpy"]
+            and isinstance(node.args[0], ast.Constant)
+        ):
+            # Create a new temporary variable name
+            tmp_var = f"tmp{self.tmp_counter}"
+            self.tmp_counter += 1
+
+            # Evaluate the type-casting call to create the new variable's value
+            numpy_type = getattr(np, node.func.attr)
+            self.replacements[tmp_var] = numpy_type(node.args[0].value)
+
+            # Replace the call node with a variable node
+            return ast.copy_location(ast.Name(id=tmp_var, ctx=ast.Load()), node)
+        return self.generic_visit(node)
+
+
+def extract_numpy_scalars(expr: str):
+    # Parse the expression into an AST
+    tree = ast.parse(expr, mode="eval")
+
+    # Transform the AST
+    transformer = TransformNumpyCalls()
+    transformed_tree = transformer.visit(tree)
+
+    # Generate the modified expression
+    transformed_expr = ast.unparse(transformed_tree)
+
+    return transformed_expr, transformer.replacements
 
 
 def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
@@ -1177,8 +1218,6 @@ def reduce_slices(  # noqa: C901
             result = reduce_op.value.reduce(result, **reduce_args)
 
         if out is None:
-            # if dtype is None:
-            #     dtype = result.dtype
             if is_inside_eval():
                 # We already have the dtype and reduced_shape, so return immediately
                 # Use a blosc2 container, as it consumes less memory in general
@@ -1794,6 +1833,15 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, **kwargs)
 
+    def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
+        reduce_args = {
+            "op": ReduceOp.PROD,
+            "axis": axis,
+            "dtype": dtype,
+            "keepdims": keepdims,
+        }
+        return self.compute(_reduce_args=reduce_args, **kwargs)
+
     def get_num_elements(self, axis, item):
         if np.isscalar(axis):
             axis = (axis,)
@@ -1851,15 +1899,6 @@ class LazyExpr(LazyArray):
         if kwargs != {} and not np.isscalar(out):
             out = blosc2.asarray(out, **kwargs)
         return out
-
-    def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
-        reduce_args = {
-            "op": ReduceOp.PROD,
-            "axis": axis,
-            "dtype": dtype,
-            "keepdims": keepdims,
-        }
-        return self.compute(_reduce_args=reduce_args, **kwargs)
 
     def min(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
@@ -2011,23 +2050,16 @@ class LazyExpr(LazyArray):
                     "urlbase": value.urlbase,
                 }
                 continue
-            # TODO: can this be removed?
-            if key in {"numpy", "np"}:
-                # Provide access to cast funcs like int8 et al.
-                continue
             if isinstance(value, blosc2.Proxy):
                 # Take the required info from the Proxy._cache container
                 value = value._cache
             if not hasattr(value, "schunk"):
-                print(f"expression: {expression}")
                 raise ValueError(
                     "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
                 )
             if value.schunk.urlpath is None:
                 raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
             operands[key] = value.schunk.urlpath
-        print("expression:", expression)
-        print("operands:", operands)
         array.schunk.vlmeta["_LazyArray"] = {
             "expression": expression,
             "UDF": None,
@@ -2042,7 +2074,7 @@ class LazyExpr(LazyArray):
             # The expression has been validated, so we can evaluate it
             # in guessing mode to avoid computing reductions
             # Extract possible numpy scalars
-            _expression, local_vars = transform_expression(expression)
+            _expression, local_vars = extract_numpy_scalars(expression)
             # Let's include numpy and blosc2 as operands so that some functions can be used
             # Most in particular, castings like np.int8 et al. can be very useful to allow
             # for desired data types in the output.
@@ -2202,46 +2234,6 @@ class LazyUDF(LazyArray):
         raise NotImplementedError("For safety reasons, this is not implemented for UDFs")
 
 
-class TransformNumpyCalls(ast.NodeTransformer):
-    def __init__(self):
-        self.replacements = {}
-        self.tmp_counter = 0
-
-    def visit_Call(self, node):
-        # Check if the call is a numpy type-casting call
-        if (
-            isinstance(node.func, ast.Attribute)
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id in ["np", "numpy"]
-            and isinstance(node.args[0], ast.Constant)
-        ):
-            # Create a new temporary variable name
-            tmp_var = f"tmp{self.tmp_counter}"
-            self.tmp_counter += 1
-
-            # Evaluate the type-casting call to create the new variable's value
-            numpy_type = getattr(np, node.func.attr)
-            self.replacements[tmp_var] = numpy_type(node.args[0].value)
-
-            # Replace the call node with a variable node
-            return ast.copy_location(ast.Name(id=tmp_var, ctx=ast.Load()), node)
-        return self.generic_visit(node)
-
-
-def transform_expression(expr: str):
-    # Parse the expression into an AST
-    tree = ast.parse(expr, mode="eval")
-
-    # Transform the AST
-    transformer = TransformNumpyCalls()
-    transformed_tree = transformer.visit(tree)
-
-    # Generate the modified expression
-    transformed_expr = ast.unparse(transformed_tree)
-
-    return transformed_expr, transformer.replacements
-
-
 def _open_lazyarray(array):
     value = array.schunk.meta["LazyArray"]
     if value == LazyArrayEnum.UDF.value:
@@ -2268,18 +2260,14 @@ def _open_lazyarray(array):
 
     expr = lazyarray["expression"]
     globals = {func: getattr(blosc2, func) for func in functions if func in expr}
+    # Let's include numpy as operands so that some functions can be used.
+    # Most in particular, castings like np.int8 et al. can be very useful to allow
+    # for desired data types in the output.
     globals |= {"np": np, "numpy": np}
     # Validate the expression (prevent security issues)
     validate_expr(expr)
     # Extract possible numpy scalars
-    # _expr, local_vars = transform_expression(expr)
-    # operands_dict |= local_vars
-    # Extract possible numpy scalars
-    _expression, local_vars = transform_expression(expr)
-    # Let's include numpy and blosc2 as operands so that some functions can be used
-    # Most in particular, castings like np.int8 et al. can be very useful to allow
-    # for desired data types in the output.
-    # local_vars |= {"np": np, "numpy": np}
+    _expression, local_vars = extract_numpy_scalars(expr)
     _operands = operands_dict | local_vars
     # Create the expression as such, but in guessing mode
     new_expr = eval(_expression, globals, _operands)
@@ -2287,7 +2275,6 @@ def _open_lazyarray(array):
     _shape = new_expr.shape
     if isinstance(new_expr, blosc2.LazyExpr):
         # Restore the original expression and operands
-        print("new_expr:", new_expr.expression, expr, operands_dict)
         new_expr.expression = _expression
         new_expr.expression_tosave = expr
         new_expr.operands = _operands
