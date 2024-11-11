@@ -1018,8 +1018,12 @@ def reduce_slices(  # noqa: C901
     reduce_op = reduce_args.pop("op")
     axis = reduce_args["axis"]
     keepdims = reduce_args["keepdims"]
-    dtype = kwargs.pop("dtype", None)
-    # dtype = reduce_args["dtype"] if reduce_op in (ReduceOp.SUM, ReduceOp.PROD) else _dtype
+    # For sum and prod, we can specify the dtype of the output array
+    dtype = reduce_args["dtype"] if reduce_op in (ReduceOp.SUM, ReduceOp.PROD) else None
+    if dtype is None:
+        dtype = kwargs.pop("dtype", None)
+    else:
+        del kwargs["dtype"]
 
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
