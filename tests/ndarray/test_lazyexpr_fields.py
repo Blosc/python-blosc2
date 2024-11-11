@@ -261,42 +261,81 @@ def test_where_reduction(array_fixture):
     np.testing.assert_allclose(res, nres)
 
 
-# This is a more complex case with where() calls combined with reductions,
+# More complex cases with where() calls combined with reductions,
 # broadcasting, reusing the result in another expression and other
-# funny stuff that is not working yet.
-def test_where_fusion(array_fixture):
+# funny stuff
+
+
+# Two where() calls
+def test_where_fusion1(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
     npexpr = na1**2 + na2**2 > 2 * na1 * na2 + 1
 
-    # Two where() calls
     res = expr.where(0, 1) + expr.where(0, 1)
     nres = np.where(npexpr, 0, 1) + np.where(npexpr, 0, 1)
     np.testing.assert_allclose(res[:], nres)
 
-    # Two where() calls with a reduction (and using broadcasting)
+
+# Two where() calls with a reduction (and using broadcasting)
+def test_where_fusion2(array_fixture):
+    sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
+    npexpr = na1**2 + na2**2 > 2 * na1 * na2 + 1
+
     axis = None if sa1.ndim == 1 else 1
     res = expr.where(0.5, 0.2) + expr.where(0.3, 0.6).sum(axis=axis)
     nres = np.where(npexpr, 0.5, 0.2) + np.where(npexpr, 0.3, 0.6).sum(axis=axis)
     np.testing.assert_allclose(res[:], nres)
 
-    # Reuse the result in another expression
+
+# Reuse the result in another expression
+def test_where_fusion3(array_fixture):
+    sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
+    npexpr = na1**2 + na2**2 > 2 * na1 * na2 + 1
+
+    res = expr.where(0, 1) + expr.where(0, 1)
+    nres = np.where(npexpr, 0, 1) + np.where(npexpr, 0, 1)
     res = expr.where(0, 1) + res.sum()
     nres = np.where(npexpr, 0, 1) + nres.sum()
     np.testing.assert_allclose(res[:], nres)
 
-    # Reuse the result in another expression twice
+
+# Reuse the result in another expression twice
+def test_where_fusion4(array_fixture):
+    sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
+    npexpr = na1**2 + na2**2 > 2 * na1 * na2 + 1
+
+    res = expr.where(0.1, 0.7) + expr.where(0.2, 5)
+    nres = np.where(npexpr, 0.1, 0.7) + np.where(npexpr, 0.2, 5)
     res = 2 * res + 4 * res
     nres = 2 * nres + 4 * nres
     np.testing.assert_allclose(res[:], nres)
 
-    # Reuse the result in another expression twice II
+
+# Reuse the result in another expression twice II
+def test_where_fusion5(array_fixture):
+    sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
+    npexpr = na1**2 + na2**2 > 2 * na1 * na2 + 1
+
+    res = expr.where(-1, 7) + expr.where(2, 5)
+    nres = np.where(npexpr, -1, 7) + np.where(npexpr, 2, 5)
     res = 2 * res + blosc2.sqrt(res)
     nres = 2 * nres + np.sqrt(nres)
     np.testing.assert_allclose(res[:], nres)
 
-    # TODO: this is not working yet
-    # Reuse the result in another expression twice III
-    # res = expr.where(0, 1) + res
-    # nres = np.where(npexpr, 0, 1) + nres
-    # np.testing.assert_allclose(res[:], nres)
+
+# Reuse the result in another expression twice III
+def test_where_fusion6(array_fixture):
+    sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
+    npexpr = na1**2 + na2**2 > 2 * na1 * na2 + 1
+
+    res = expr.where(-1, 1) + expr.where(2, 1)
+    nres = np.where(npexpr, -1, 1) + np.where(npexpr, 2, 1)
+    res = expr.where(6.1, 1) + res
+    nres = np.where(npexpr, 6.1, 1) + nres
+    np.testing.assert_allclose(res[:], nres)

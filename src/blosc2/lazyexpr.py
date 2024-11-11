@@ -2042,7 +2042,6 @@ class LazyExpr(LazyArray):
 
         # Save the expression and operands in the metadata
         operands = {}
-        print(operands_)
         for key, value in operands_.items():
             if isinstance(value, blosc2.C2Array):
                 operands[key] = {
