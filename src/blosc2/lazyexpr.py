@@ -1755,14 +1755,16 @@ class LazyExpr(LazyArray):
     def where(self, value1=None, value2=None):
         if self.dtype != np.bool_:
             raise ValueError("where() can only be used with boolean expressions")
-        dtype = self.dtype
         # This just acts as a 'decorator' for the existing expression
         if value1 is not None and value2 is not None:
             # Guess the outcome dtype for value1 and value2
-            dtype = np.result_type(np.asarray(value1), np.asarray(value2))
+            dtype = np.result_type(value1, value2)
             args = {"_where_x": value1, "_where_y": value2}
         elif value1 is not None:
-            dtype = np.asarray(value1).dtype
+            if hasattr(value1, "dtype"):
+                dtype = value1.dtype
+            else:
+                dtype = np.asarray(value1).dtype
             args = {"_where_x": value1}
         elif value2 is not None:
             raise ValueError("where() requires value1 when using value2")

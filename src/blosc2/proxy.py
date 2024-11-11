@@ -512,8 +512,8 @@ class ProxyNDField(blosc2.Operand):
     def __init__(self, proxy: Proxy, field: str):
         self.proxy = proxy
         self.field = field
+        self.dtype = proxy.dtype[field]
         self.shape = proxy.shape
-        self.dtype = proxy.dtype
 
     def __getitem__(self, item: slice | list[slice]) -> np.ndarray:
         """
