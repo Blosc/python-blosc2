@@ -2259,38 +2259,11 @@ def _open_lazyarray(array):
             raise TypeError("Error when retrieving the operands")
 
     expr = lazyarray["expression"]
-    globals = {func: getattr(blosc2, func) for func in functions if func in expr}
-    # Let's include numpy as operands so that some functions can be used.
-    # Most in particular, castings like np.int8 et al. can be very useful to allow
-    # for desired data types in the output.
-    globals |= {"np": np, "numpy": np}
-    # Validate the expression (prevent security issues)
-    validate_expr(expr)
-    # Extract possible numpy scalars
-    _expression, local_vars = extract_numpy_scalars(expr)
-    _operands = operands_dict | local_vars
-    # Create the expression as such, but in guessing mode
-    new_expr = eval(_expression, globals, _operands)
-    _dtype = new_expr.dtype
-    _shape = new_expr.shape
-    if isinstance(new_expr, blosc2.LazyExpr):
-        # Restore the original expression and operands
-        new_expr.expression = _expression
-        new_expr.expression_tosave = expr
-        new_expr.operands = _operands
-        new_expr.operands_tosave = operands_dict
-        # Make the array info available for the user (only available when opened from disk)
-        new_expr.array = array
-        # We want to expose schunk too, so that .info() can be used on the LazyArray
-        new_expr.schunk = array.schunk
-    else:
-        # An immediate evaluation happened (e.g. all operands are numpy arrays)
-        new_expr = LazyExpr(None)
-        new_expr.expression = expr
-        new_expr.operands = operands_dict
-    # Cache the dtype and shape (should be immutable)
-    new_expr._dtype = _dtype
-    new_expr._shape = _shape
+    new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
+    # Make the array info available for the user (only available when opened from disk)
+    new_expr.array = array
+    # We want to expose schunk too, so that .info() can be used on the LazyArray
+    new_expr.schunk = array.schunk
     return new_expr
 
 
