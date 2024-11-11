@@ -753,13 +753,15 @@ def fast_eval(  # noqa: C901
             operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands
         )
 
-        if isinstance(out, np.ndarray) and not where:
-            # Fast path: put the result straight in the output array (avoiding a memory copy)
-            if callable(expression):
-                expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
-            else:
-                ne.evaluate(expression, chunk_operands, out=out[slice_])
-            continue
+        # Since ne.evaluate() can return a dtype larger than the one in computed in the expression,
+        # we cannot take this fast path
+        # if isinstance(out, np.ndarray) and not where:
+        #     # Fast path: put the result straight in the output array (avoiding a memory copy)
+        #     if callable(expression):
+        #         expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
+        #     else:
+        #         ne.evaluate(expression, chunk_operands, out=out[slice_])
+        #     continue
         if callable(expression):
             result = np.empty(chunks_, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
@@ -1436,6 +1438,7 @@ class LazyExpr(LazyArray):
                 self.expression = f"{op}(o0, o1)"
             return
 
+        self._dtype = np.result_type(value1, value2)
         if np.isscalar(value1) and np.isscalar(value2):
             self.expression = f"({value1} {op} {value2})"
         elif np.isscalar(value2):
@@ -1511,6 +1514,7 @@ class LazyExpr(LazyArray):
             value1 = value1.compute()
         if hasattr(value2, "_where_args"):
             value2 = value2.compute()
+        self._dtype = np.result_type(value1, value2)
         if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
             # We converted some of the operands to NDArray (where() handling above)
             new_operands = {"o0": value1, "o1": value2}
@@ -1903,11 +1907,7 @@ class LazyExpr(LazyArray):
 
     def __getitem__(self, item):
         kwargs = {"_getitem": True}
-        if hasattr(self, "_output"):
-            kwargs["_output"] = self._output
-        if hasattr(self, "_where_args"):
-            kwargs["_where_args"] = self._where_args
-        return self._compute_expr(item, kwargs)
+        return self.compute(item, **kwargs)
 
     def __str__(self):
         return f"{self.expression}"
