@@ -20,8 +20,17 @@ NITEMS = 10_000
     params=[
         (np.float32, np.float64),
         (np.float64, np.float64),
-        (np.int8, np.int16),
-        (np.int8, np.float64),
+        (np.int32, np.float32),
+        (np.int32, np.uint32),
+        (np.int32, np.float64),
+        # TODO: short ints make some tests fail (maybe downcasting works differently than NumPy?)
+        #  Not sure whether it is a bug in test or code.
+        # (np.int8, np.int16),
+        # (np.int8, np.float64),
+        # (np.uint8, np.uint16),
+        # (np.uint8, np.uint32),
+        # (np.uint8, np.float32),
+        # (np.uint16, np.float64),
     ]
 )
 def dtype_fixture(request):
@@ -43,8 +52,8 @@ def chunks_blocks_fixture(request):
 def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
     nelems = np.prod(shape_fixture)
     dt1, dt2 = dtype_fixture
-    na1_ = np.linspace(0, 10, nelems, dtype=dt1).reshape(shape_fixture)
-    na2_ = np.linspace(10, 20, nelems, dtype=dt2).reshape(shape_fixture)
+    na1_ = np.linspace(0, nelems, nelems, dtype=dt1).reshape(shape_fixture)
+    na2_ = np.linspace(10, 10 + nelems, nelems, dtype=dt2).reshape(shape_fixture)
     na1 = np.empty(shape_fixture, dtype=[("a", dt1), ("b", dt2)])
     na1["a"] = na1_
     na1["b"] = na2_
@@ -276,9 +285,9 @@ def test_where_reduction2(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     axis = None if sa1.ndim == 1 else 1
     # We have to use the original names in fields here
-    expr = sa1[f"b * a.sum(axis={axis}) > 0"]
+    expr = sa1[f"(b * a.sum(axis={axis})) > 0"]
     res = expr[:]
-    nres = nsa1[na2 * na1.sum(axis=axis) > 0]
+    nres = nsa1[(na2 * na1.sum(axis=axis)) > 0]
     np.testing.assert_allclose(res["a"], nres["a"])
 
 

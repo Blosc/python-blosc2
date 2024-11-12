@@ -1975,7 +1975,7 @@ class LazyExpr(LazyArray):
     def _compute_expr(self, item, kwargs):
         reduce_methods = ("sum", "prod", "min", "max", "std", "mean", "var", "any", "all")
         if any(method in self.expression for method in reduce_methods):
-            # We have reductions in the expression (probably coming from a persistent lazyexpr)
+            # We have reductions in the expression (probably coming from a string lazyexpr)
             _globals = {func: getattr(blosc2, func) for func in functions if func in self.expression}
             lazy_expr = eval(self.expression, _globals, self.operands)
             if not isinstance(lazy_expr, blosc2.LazyExpr):
