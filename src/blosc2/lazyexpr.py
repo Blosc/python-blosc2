@@ -1440,6 +1440,22 @@ functions = [
     "all",
 ]
 
+relational_ops = ["==", "!=", "<", "<=", ">", ">="]
+logical_ops = ["&", "|", "^", "~"]
+
+
+def infer_dtype(op, value1, value2):
+    if op in relational_ops:
+        return np.dtype(np.bool_)
+    if op in logical_ops:
+        # Ensure that both operands are boolean
+        if value1.dtype != np.bool_:
+            raise ValueError(f"Invalid operand type for {op}: {value1.dtype}")
+        if op != "~" and value2.dtype != np.bool_:
+            raise ValueError(f"Invalid operand type for {op}: {value2.dtype}")
+        return np.dtype(np.bool_)
+    return np.result_type(value1, value2)
+
 
 class LazyExpr(LazyArray):
     """Class for hosting lazy expressions.
@@ -1477,7 +1493,7 @@ class LazyExpr(LazyArray):
                 self.expression = f"{op}(o0, o1)"
             return
 
-        self._dtype = np.result_type(value1, value2)
+        self._dtype = infer_dtype(op, value1, value2)
         if np.isscalar(value1) and np.isscalar(value2):
             self.expression = f"({value1} {op} {value2})"
         elif np.isscalar(value2):
@@ -1553,7 +1569,8 @@ class LazyExpr(LazyArray):
             value1 = value1.compute()
         if hasattr(value2, "_where_args"):
             value2 = value2.compute()
-        self._dtype = np.result_type(value1, value2)
+
+        self._dtype = infer_dtype(op, value1, value2)
         if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
             # We converted some of the operands to NDArray (where() handling above)
             new_operands = {"o0": value1, "o1": value2}
@@ -1812,7 +1829,7 @@ class LazyExpr(LazyArray):
         return self.update_expr(new_op=(self, ">=", value))
 
     def where(self, value1=None, value2=None):
-        if self.dtype != np.bool_:
+        if not np.issubdtype(self.dtype, np.bool_):
             raise ValueError("where() can only be used with boolean expressions")
         # This just acts as a 'decorator' for the existing expression
         if value1 is not None and value2 is not None:

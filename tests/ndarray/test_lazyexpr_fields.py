@@ -241,13 +241,15 @@ def test_where_getitem(array_fixture):
 # Test boolean operators here too
 def test_where_getitem_field(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    # Test with eval
-    res = a1[((a1**2 > a2**2) & ~(a1 * a2 > 1)) | (a1 < 0)].compute()
+    expr = ((a1**2 > a2**2) & ~(a1 * a2 > 1)) | (a1 < 0)
+    assert expr.dtype == np.bool_
+    # Test with compute
+    res = a1[expr].compute()
     nres = na1[((na1**2 > na2**2) & ~(na1 * na2 > 1)) | (na1 < 0)]
     np.testing.assert_allclose(res[:], nres)
     # Test with getitem
     sl = slice(100)
-    res = a1[((a1**2 > a2**2) & ~(a1 * a2 > 1)) | (a1 < 0)][sl]
+    res = a1[expr][sl]
     np.testing.assert_allclose(res, nres[sl])
 
 

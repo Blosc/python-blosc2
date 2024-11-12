@@ -30,13 +30,14 @@ c = a**2 + b**2 + 2 * a * b + 1
 # d = blosc2.sum(c) + blosc2.mean(a)
 # d = blosc2.sum(c, axis=1) + blosc2.mean(a, axis=0)
 # d = blosc2.sum(c, axis=(0, 2)) + blosc2.mean(a, axis=(0, 2))
-d = blosc2.sum(c) + blosc2.std(a)
-# print(d, d.shape, d.dtype)
+# d = blosc2.sum(c) + blosc2.std(a, axis=1)
+d = blosc2.any(c, axis=(0, 2)) < b.slice((0, slice(0, 10), 0))
+print(d, d.shape, d.dtype)
 # print(d.expression, d.operands)
-assert isinstance(d, blosc2.LazyExpr)
 e = d.compute()
 # print(e)
 assert isinstance(d, blosc2.LazyExpr)
+
 # Check
 assert isinstance(e, blosc2.NDArray)
 sum = e[()]
@@ -46,7 +47,8 @@ print("Reduction with Blosc2:\n", sum)
 # npsum = np.sum(npc) + np.mean(npa)
 # npsum = np.sum(npc, axis=1) + np.mean(npa, axis=0)
 # npsum = np.sum(npc, axis=(0, 2)) + np.mean(npa, axis=(0, 2))
-npsum = np.sum(npc) + np.std(npa)
+# npsum = np.sum(npc) + np.std(npa)
+npsum = np.any(npc, axis=(0, 2)) < npb[0, :, 0]
 print("Reduction with NumPy:\n", npsum)
 # npsum = np.sum(npc, axis=(0,2)) + np.std(npa, axis=(0, 2))
 assert np.allclose(sum, npsum)
