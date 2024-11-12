@@ -816,7 +816,7 @@ def fast_eval(  # noqa: C901
                     result = ne.evaluate(new_expr, chunk_operands)
                 else:
                     # We do not support one or zero operands in the fast path yet
-                    raise ValueError("The where condition must be a tuple with one or two elements")
+                    raise ValueError("Fast path: the where condition must be a tuple with two elements")
 
             if out is None:
                 # We can enter here when using any of the eval() or __getitem__() methods
