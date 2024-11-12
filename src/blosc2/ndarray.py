@@ -590,6 +590,9 @@ class Operand:
             np.greater_equal: ">=",
             np.equal: "==",
             np.not_equal: "!=",
+            np.bitwise_and: "&",
+            np.bitwise_or: "|",
+            np.bitwise_xor: "^",
         }
 
         ufunc_map_1param = {
@@ -615,6 +618,7 @@ class Operand:
             np.conj: "conj",
             np.real: "real",
             np.imag: "imag",
+            np.bitwise_not: "~",
         }
 
         if ufunc in ufunc_map:
