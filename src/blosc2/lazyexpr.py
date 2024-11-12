@@ -1454,7 +1454,9 @@ def infer_dtype(op, value1, value2):
         if op != "~" and value2.dtype != np.bool_:
             raise ValueError(f"Invalid operand type for {op}: {value2.dtype}")
         return np.dtype(np.bool_)
-    return np.result_type(value1, value2)
+    dtype1 = value1.dtype if hasattr(value1, "dtype") else np.array(value1).dtype
+    dtype2 = value2.dtype if hasattr(value2, "dtype") else np.array(value2).dtype
+    return np.result_type(dtype1, dtype2)
 
 
 class LazyExpr(LazyArray):
@@ -1631,7 +1633,10 @@ class LazyExpr(LazyArray):
         ):
             # Use the cached dtype
             return self._dtype_
-        operands = {key: np.ones(1, dtype=value.dtype) for key, value in self.operands.items()}
+        operands = {
+            key: np.ones(np.ones(len(value.shape), dtype=int), dtype=value.dtype)
+            for key, value in self.operands.items()
+        }
         if "contains" in self.expression:
             _out = ne.evaluate(self.expression, local_dict=operands)
         else:
@@ -1850,6 +1855,7 @@ class LazyExpr(LazyArray):
             raise ValueError("where() requires value1 when using value2")
         else:
             args = {}
+            dtype = None
         # Create a new expression
         new_expr = blosc2.LazyExpr(new_op=(self, None, None))
         new_expr.expression = self.expression
@@ -1974,7 +1980,19 @@ class LazyExpr(LazyArray):
             lazy_expr = eval(self.expression, _globals, self.operands)
             if not isinstance(lazy_expr, blosc2.LazyExpr):
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
+                if hasattr(self, "_where_args"):
+                    # We need to apply the where() operation
+                    if len(self._where_args) == 1:
+                        # We have a single argument
+                        where_x = self._where_args["_where_x"]
+                        return where_x[:][lazy_expr]
+                    if len(self._where_args) == 2:
+                        # We have two arguments
+                        where_x = self._where_args["_where_x"]
+                        where_y = self._where_args["_where_y"]
+                        return np.where(lazy_expr, where_x, where_y)
                 return lazy_expr
+
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
         else:
             return chunked_eval(self.expression, self.operands, item, **kwargs)

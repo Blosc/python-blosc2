@@ -262,13 +262,24 @@ def test_where_getitem_field(array_fixture, npflavor, lazystr):
 
 
 # Test where combined with a reduction
-def test_where_reduction(array_fixture):
+def test_where_reduction1(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
     axis = None if sa1.ndim == 1 else 1
     res = expr.where(0, 1).sum(axis=axis)
     nres = ne.evaluate("where(na1**2 + na2**2 > 2 * na1 * na2 + 1, 0, 1)").sum(axis=axis)
     np.testing.assert_allclose(res, nres)
+
+
+# Test *implicit* where (a query) combined with a reduction
+def test_where_reduction2(array_fixture):
+    sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    axis = None if sa1.ndim == 1 else 1
+    # We have to use the original names in fields here
+    expr = sa1[f"b * a.sum(axis={axis}) > 0"]
+    res = expr[:]
+    nres = nsa1[na2 * na1.sum(axis=axis) > 0]
+    np.testing.assert_allclose(res["a"], nres["a"])
 
 
 # More complex cases with where() calls combined with reductions,
