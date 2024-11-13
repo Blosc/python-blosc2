@@ -23,7 +23,7 @@ NITEMS = 10_000
         (np.int32, np.float32),
         (np.int32, np.uint32),
         (np.int8, np.int16),
-        # The next dtypes work, but they take too much time (heavy flag?)
+        # The next dtypes work, but running everything takes too much time
         pytest.param((np.int32, np.float64), marks=pytest.mark.heavy),
         pytest.param((np.int8, np.float64), marks=pytest.mark.heavy),
         pytest.param((np.uint8, np.uint16), marks=pytest.mark.heavy),

@@ -26,7 +26,7 @@ _subscriber_data = {
 }
 """Caterva2 subscriber data saved by context manager."""
 
-TIMEOUT = 25
+TIMEOUT = 15
 """Default timeout for HTTP requests."""
 
 
