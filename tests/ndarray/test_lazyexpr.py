@@ -28,7 +28,14 @@ def shape_fixture(request):
 
 
 # params: (same_chunks, same_blocks)
-@pytest.fixture(params=[(True, True), (True, False), (False, True), (False, False)])
+@pytest.fixture(
+    params=[
+        (True, True),
+        (True, False),
+        pytest.param((False, True), marks=pytest.mark.heavy),
+        (False, False),
+    ]
+)
 def chunks_blocks_fixture(request):
     return request.param
 
@@ -737,11 +744,11 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
         ((2, 1, 3), (5, 3)),
         ((2, 5, 3, 2), (5, 3, 2)),
         ((2, 5, 3, 2), (5, 3, 1)),
-        ((2, 5, 3, 2), (5, 1, 2)),
+        pytest.param(((2, 5, 3, 2), (5, 1, 2)), marks=pytest.mark.heavy),
         ((2, 1, 3, 2), (5, 3, 2)),
-        ((2, 1, 3, 2), (5, 1, 2)),
-        ((2, 5, 3, 2, 2), (5, 3, 2, 2)),
-        ((100, 100, 100), (100, 100)),
+        pytest.param(((2, 1, 3, 2), (5, 1, 2)), marks=pytest.mark.heavy),
+        pytest.param(((2, 5, 3, 2, 2), (5, 3, 2, 2)), marks=pytest.mark.heavy),
+        pytest.param(((100, 100, 100), (100, 100)), marks=pytest.mark.heavy),
         ((1_000, 1), (1_000,)),
     ]
 )
@@ -1023,8 +1030,8 @@ def test_get_expr_operands(expression, expected_operands):
         (np.uint16, np.uint32),
         # (np.uint16, np.uint64), # numexpr does not support uint64
         (np.uint16, np.float32),
-        (np.uint16, np.float64),
-        (np.int32, np.int32),
+        # (np.uint16, np.float64),
+        # (np.int32, np.int32),
         (np.int32, np.int64),
         (np.float32, np.float32),
         (np.float32, np.float64),

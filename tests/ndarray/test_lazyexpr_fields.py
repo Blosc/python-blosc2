@@ -19,7 +19,7 @@ NITEMS = 10_000
 @pytest.fixture(
     params=[
         (np.float32, np.float64),
-        (np.float64, np.float64),
+        pytest.param((np.float64, np.float64), marks=pytest.mark.heavy),
         (np.int32, np.float32),
         (np.int32, np.uint32),
         (np.int8, np.int16),
