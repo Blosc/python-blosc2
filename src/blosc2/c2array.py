@@ -26,6 +26,9 @@ _subscriber_data = {
 }
 """Caterva2 subscriber data saved by context manager."""
 
+TIMEOUT = 25
+"""Default timeout for HTTP requests."""
+
 
 @contextmanager
 def c2context(
@@ -100,7 +103,7 @@ def c2context(
         _subscriber_data = old_sub_data
 
 
-def _xget(url, params=None, headers=None, auth_token=None, timeout=15):
+def _xget(url, params=None, headers=None, auth_token=None, timeout=TIMEOUT):
     auth_token = auth_token or _subscriber_data["auth_token"]
     if auth_token:
         headers = headers.copy() if headers else {}
@@ -110,7 +113,7 @@ def _xget(url, params=None, headers=None, auth_token=None, timeout=15):
     return response
 
 
-def _xpost(url, json=None, auth_token=None, timeout=15):
+def _xpost(url, json=None, auth_token=None, timeout=TIMEOUT):
     auth_token = auth_token or _subscriber_data["auth_token"]
     headers = {"Cookie": auth_token} if auth_token else None
     response = httpx.post(url, json=json, headers=headers, timeout=timeout)
@@ -128,7 +131,7 @@ def _sub_url(urlbase, path):
 def login(username, password, urlbase):
     url = _sub_url(urlbase, "auth/jwt/login")
     creds = {"username": username, "password": password}
-    resp = httpx.post(url, data=creds, timeout=15)
+    resp = httpx.post(url, data=creds, timeout=TIMEOUT)
     resp.raise_for_status()
     return "=".join(list(resp.cookies.items())[0])
 
