@@ -38,5 +38,5 @@ def pytest_runtest_call(item):
         pytest.skip("Skipping test due to sporadic httpx.ConnectTimeout")
     except httpx.ReadTimeout:
         pytest.skip("Skipping test due to sporadic httpx.ReadTimeout")
-    except httpx.Timeout:
+    except httpx.TimeoutException:
         pytest.skip("Skipping test due to sporadic httpx.Timeout")
