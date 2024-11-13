@@ -7,6 +7,7 @@
 #######################################################################
 import os
 
+import httpx
 import pytest
 
 import blosc2
@@ -28,3 +29,14 @@ def c2sub_context():
     c2params = {"urlbase": urlbase, "username": None, "password": None}
     with blosc2.c2context(**c2params):
         yield c2params
+
+
+def pytest_runtest_call(item):
+    try:
+        item.runtest()
+    except httpx.ConnectTimeout:
+        pytest.skip("Skipping test due to sporadic httpx.ConnectTimeout")
+    except httpx.ReadTimeout:
+        pytest.skip("Skipping test due to sporadic httpx.ReadTimeout")
+    except httpx.Timeout:
+        pytest.skip("Skipping test due to sporadic httpx.Timeout")
