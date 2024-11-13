@@ -7,7 +7,6 @@
 #######################################################################
 import os
 
-import httpx
 import pytest
 
 import blosc2
@@ -31,12 +30,15 @@ def c2sub_context():
         yield c2params
 
 
-def pytest_runtest_call(item):
-    try:
-        item.runtest()
-    except httpx.ConnectTimeout:
-        pytest.skip("Skipping test due to sporadic httpx.ConnectTimeout")
-    except httpx.ReadTimeout:
-        pytest.skip("Skipping test due to sporadic httpx.ReadTimeout")
-    except httpx.TimeoutException:
-        pytest.skip("Skipping test due to sporadic httpx.Timeout")
+# This is to avoid sporadic failures in the CI when reaching network,
+# but this makes the tests to stuck in local.  Perhaps move this to
+# every test module that needs it?
+# def pytest_runtest_call(item):
+#     try:
+#         item.runtest()
+#     except httpx.ConnectTimeout:
+#         pytest.skip("Skipping test due to sporadic httpx.ConnectTimeout")
+#     except httpx.ReadTimeout:
+#         pytest.skip("Skipping test due to sporadic httpx.ReadTimeout")
+#     except httpx.TimeoutException:
+#         pytest.skip("Skipping test due to sporadic httpx.Timeout")
