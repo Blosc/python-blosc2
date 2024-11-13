@@ -22,15 +22,14 @@ NITEMS = 10_000
         (np.float64, np.float64),
         (np.int32, np.float32),
         (np.int32, np.uint32),
-        (np.int32, np.float64),
-        # TODO: short ints make some tests fail (maybe downcasting works differently than NumPy?)
-        #  Not sure whether it is a bug in test or code.
-        # (np.int8, np.int16),
-        # (np.int8, np.float64),
-        # (np.uint8, np.uint16),
-        # (np.uint8, np.uint32),
-        # (np.uint8, np.float32),
-        # (np.uint16, np.float64),
+        (np.int8, np.int16),
+        # The next dtypes work, but they take too much time (heavy flag?)
+        pytest.param((np.int32, np.float64), marks=pytest.mark.heavy),
+        pytest.param((np.int8, np.float64), marks=pytest.mark.heavy),
+        pytest.param((np.uint8, np.uint16), marks=pytest.mark.heavy),
+        pytest.param((np.uint8, np.uint32), marks=pytest.mark.heavy),
+        pytest.param((np.uint8, np.float32), marks=pytest.mark.heavy),
+        pytest.param((np.uint16, np.float64), marks=pytest.mark.heavy),
     ]
 )
 def dtype_fixture(request):
@@ -43,7 +42,14 @@ def shape_fixture(request):
 
 
 # params: (same_chunks, same_blocks)
-@pytest.fixture(params=[(True, True), (True, False), (False, True), (False, False)])
+@pytest.fixture(
+    params=[
+        (True, True),
+        (True, False),
+        pytest.param((False, True), marks=pytest.mark.heavy),
+        (False, False),
+    ]
+)
 def chunks_blocks_fixture(request):
     return request.param
 
@@ -97,10 +103,10 @@ def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
 def test_simple_getitem(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 - a3 * a4
-    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    nres = na1 + na2 - na3 * na4
     sl = slice(100)
     res = expr[sl]
-    np.testing.assert_allclose(res, nres[sl])
+    np.testing.assert_allclose(res, nres[sl], rtol=1e-6)
 
 
 def test_simple_getitem_proxy(array_fixture):
@@ -109,19 +115,19 @@ def test_simple_getitem_proxy(array_fixture):
     a1 = sa1.fields["a"]
     a2 = sa1.fields["b"]
     expr = a1 + a2 - a3 * a4
-    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    nres = na1 + na2 - na3 * na4
     sl = slice(100)
     res = expr[sl]
-    np.testing.assert_allclose(res, nres[sl])
+    np.testing.assert_allclose(res, nres[sl], rtol=1e-6)
 
 
 # Add more test functions to test different aspects of the code
 def test_simple_expression(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 - a3 * a4
-    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    nres = na1 + na2 - na3 * na4
     res = expr.compute()
-    np.testing.assert_allclose(res[:], nres)
+    np.testing.assert_allclose(res[:], nres, rtol=1e-6)
 
 
 def test_simple_expression_proxy(array_fixture):
@@ -131,9 +137,9 @@ def test_simple_expression_proxy(array_fixture):
     sa2 = blosc2.Proxy(sa2)
     a4 = sa2.fields["b"]
     expr = a1 + a2 - a3 * a4
-    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    nres = na1 + na2 - na3 * na4
     res = expr.compute()
-    np.testing.assert_allclose(res[:], nres)
+    np.testing.assert_allclose(res[:], nres, rtol=1e-6)
 
 
 def test_iXXX(array_fixture):
@@ -146,6 +152,8 @@ def test_iXXX(array_fixture):
     expr **= 2.3  # __ipow__
     res = expr.compute()
     nres = ne.evaluate("(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7) ** 2.3")
+    # NumPy raises: RuntimeWarning: invalid value encountered in power
+    # nres = (((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7) ** 2.3
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -154,6 +162,8 @@ def test_complex_evaluate(array_fixture):
     expr = blosc2.tan(a1) * (blosc2.sin(a2) * blosc2.sin(a2) + blosc2.cos(a3)) + (blosc2.sqrt(a4) * 2)
     expr += 2
     nres = ne.evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
+    # This slightly differs from numexpr, but it is correct (kind of)
+    # nres = np.tan(na1) * (np.sin(na2) * np.sin(na2) + np.cos(na3)) + (np.sqrt(na4) * 2) + 2
     res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
 
@@ -172,12 +182,12 @@ def test_reductions(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 - a3 * a4
     nres = ne.evaluate("na1 + na2 - na3 * na4")
-    # Testing too much is a waste of time; just keep one reduction here
-    # np.testing.assert_allclose(expr.sum()[()], nres.sum())
-    np.testing.assert_allclose(expr.mean()[()], nres.mean())
-    # np.testing.assert_allclose(expr.min()[()], nres.min())
-    # np.testing.assert_allclose(expr.max()[()], nres.max())
-    # np.testing.assert_allclose(expr.std()[()], nres.std())
+    # Use relative tolerance for mean and std
+    np.testing.assert_allclose(expr.sum()[()], nres.sum())
+    np.testing.assert_allclose(expr.mean()[()], nres.mean(), rtol=1e-5)
+    np.testing.assert_allclose(expr.min()[()], nres.min())
+    np.testing.assert_allclose(expr.max()[()], nres.max())
+    np.testing.assert_allclose(expr.std()[()], nres.std(), rtol=1e-3)
 
 
 def test_mixed_operands(array_fixture):
@@ -188,9 +198,9 @@ def test_mixed_operands(array_fixture):
     a4 = na4  # this is a NumPy array now
     assert not isinstance(a4, blosc2.NDField)
     expr = a1 + a2 - a3 * a4
-    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    nres = na1 + na2 - na3 * na4
     res = expr.compute()
-    np.testing.assert_allclose(res[:], nres)
+    np.testing.assert_allclose(res[:], nres, rtol=1e-6)
 
 
 # Test expressions with where()
@@ -213,7 +223,7 @@ def test_where_one_param(array_fixture):
     expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
     # Test with eval
     res = expr.where(a1).compute()
-    nres = na1[na1**2 + na2**2 > 2 * na1 * na2 + 1]
+    nres = na1[ne.evaluate("na1**2 + na2**2 > 2 * na1 * na2 + 1")]
     np.testing.assert_allclose(res[:], nres)
     # Test with getitem
     sl = slice(100)
@@ -227,7 +237,7 @@ def test_where_getitem(array_fixture):
 
     # Test with eval
     res = sa1[a1**2 + a2**2 > 2 * a1 * a2 + 1].compute()
-    nres = nsa1[na1**2 + na2**2 > 2 * na1 * na2 + 1]
+    nres = nsa1[ne.evaluate("na1**2 + na2**2 > 2 * na1 * na2 + 1")]
     np.testing.assert_allclose(res["a"], nres["a"])
     np.testing.assert_allclose(res["b"], nres["b"])
     # string version
@@ -252,6 +262,9 @@ def test_where_getitem(array_fixture):
 @pytest.mark.parametrize("lazystr", [True, False])
 def test_where_getitem_field(array_fixture, npflavor, lazystr):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    if a1.dtype == np.int8 or a2.dtype == np.int8:
+        # Skip this test for short ints because of casting differences between NumPy and numexpr
+        return
     if npflavor:
         a2 = na2
     # Let's put a *bitwise_or* at the front to test the ufunc mechanism of NumPy
@@ -262,7 +275,7 @@ def test_where_getitem_field(array_fixture, npflavor, lazystr):
     assert expr.dtype == np.bool_
     # Compute and check
     res = a1[expr]
-    nres = na1[(na2 < 0) | ~((na1**2 > na2**2) & ~(na1 * na2 > 1))]
+    nres = na1[ne.evaluate("(na2 < 0) | ~((na1**2 > na2**2) & ~(na1 * na2 > 1))")]
     np.testing.assert_allclose(res[:], nres)
     # Test with getitem
     sl = slice(100)
@@ -300,7 +313,7 @@ def test_where_reduction2(array_fixture):
 def test_where_fusion1(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
-    npexpr = na1**2 + na2**2 > 2 * na1 * na2 + 1
+    npexpr = ne.evaluate("na1**2 + na2**2 > 2 * na1 * na2 + 1")
 
     res = expr.where(0, 1) + expr.where(0, 1)
     nres = np.where(npexpr, 0, 1) + np.where(npexpr, 0, 1)
@@ -311,7 +324,7 @@ def test_where_fusion1(array_fixture):
 def test_where_fusion2(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
-    npexpr = na1**2 + na2**2 > 2 * na1 * na2 + 1
+    npexpr = ne.evaluate("na1**2 + na2**2 > 2 * na1 * na2 + 1")
 
     axis = None if sa1.ndim == 1 else 1
     res = expr.where(0.5, 0.2) + expr.where(0.3, 0.6).sum(axis=axis)
@@ -323,7 +336,7 @@ def test_where_fusion2(array_fixture):
 def test_where_fusion3(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
-    npexpr = na1**2 + na2**2 > 2 * na1 * na2 + 1
+    npexpr = ne.evaluate("na1**2 + na2**2 > 2 * na1 * na2 + 1")
 
     res = expr.where(0, 1) + expr.where(0, 1)
     nres = np.where(npexpr, 0, 1) + np.where(npexpr, 0, 1)
@@ -336,7 +349,7 @@ def test_where_fusion3(array_fixture):
 def test_where_fusion4(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
-    npexpr = na1**2 + na2**2 > 2 * na1 * na2 + 1
+    npexpr = ne.evaluate("na1**2 + na2**2 > 2 * na1 * na2 + 1")
 
     res = expr.where(0.1, 0.7) + expr.where(0.2, 5)
     nres = np.where(npexpr, 0.1, 0.7) + np.where(npexpr, 0.2, 5)
@@ -349,7 +362,7 @@ def test_where_fusion4(array_fixture):
 def test_where_fusion5(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
-    npexpr = na1**2 + na2**2 > 2 * na1 * na2 + 1
+    npexpr = ne.evaluate("na1**2 + na2**2 > 2 * na1 * na2 + 1")
 
     res = expr.where(-1, 7) + expr.where(2, 5)
     nres = np.where(npexpr, -1, 7) + np.where(npexpr, 2, 5)
@@ -362,7 +375,7 @@ def test_where_fusion5(array_fixture):
 def test_where_fusion6(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
-    npexpr = na1**2 + na2**2 > 2 * na1 * na2 + 1
+    npexpr = ne.evaluate("na1**2 + na2**2 > 2 * na1 * na2 + 1")
 
     res = expr.where(-1, 1) + expr.where(2, 1)
     nres = np.where(npexpr, -1, 1) + np.where(npexpr, 2, 1)

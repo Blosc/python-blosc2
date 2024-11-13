@@ -2361,7 +2361,7 @@ def _check_shape(shape):
     return shape
 
 
-def empty(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict) -> NDArray:
+def empty(shape: int | tuple | list, dtype: np.dtype | None = np.uint8, **kwargs: dict) -> NDArray:
     """Create an empty array.
 
     Parameters

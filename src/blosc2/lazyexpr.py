@@ -894,7 +894,7 @@ def slices_eval(  # noqa: C901
             chunks = out.chunks
         elif out is None or len(operands_) == 0:
             # operand will be a 'fake' NDArray just to get the necessary chunking information
-            temp = blosc2.empty(shape)
+            temp = blosc2.empty(shape, dtype=dtype)
             chunks = temp.chunks
             del temp
         else:
@@ -1025,6 +1025,20 @@ def slices_eval(  # noqa: C901
     return out
 
 
+def infer_reduction_dtype(dtype, operation):
+    # It may change in the future, but for now, this mimics NumPy's (2.1) behavior pretty well
+    if operation in {ReduceOp.SUM, ReduceOp.PROD}:
+        return np.result_type(dtype, np.int64 if np.issubdtype(dtype, np.integer) else np.float64)
+    elif operation in {ReduceOp.MEAN, ReduceOp.STD, ReduceOp.VAR}:
+        return np.float64
+    elif operation in {ReduceOp.MIN, ReduceOp.MAX}:
+        return dtype
+    elif operation in {ReduceOp.ANY, ReduceOp.ALL}:
+        return np.bool_
+    else:
+        raise ValueError(f"Unsupported operation: {operation}")
+
+
 def reduce_slices(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
     operands: dict,
@@ -1061,10 +1075,10 @@ def reduce_slices(  # noqa: C901
     reduce_op = reduce_args.pop("op")
     axis = reduce_args["axis"]
     keepdims = reduce_args["keepdims"]
-    # For sum and prod, we can specify the dtype of the output array
-    dtype = reduce_args["dtype"] if reduce_op in (ReduceOp.SUM, ReduceOp.PROD) else None
+    dtype = reduce_args.get("dtype", None)
     if dtype is None:
         dtype = kwargs.pop("dtype", None)
+        dtype = infer_reduction_dtype(dtype, reduce_op)
     else:
         del kwargs["dtype"]
 
