@@ -1030,15 +1030,17 @@ class NDArray(blosc2_ext.NDArray, Operand):
         ----------
         key: int, slice, sequence of slices, LazyExpr or str
             The slice(s) to be retrieved. Note that step parameter is not yet honored
-            in slices. If a LazyExpr is provided, the expression is expected to be of boolean
-            type, and the result will be the values of this array where the expression is True.
-            If the key is a string, it will be converted to a LazyExpr, and will search for the
-            operands in the fields of this structured array.
+            in slices. If a LazyExpr is provided, the expression is expected to be of
+            boolean type, and the result will be the values of this array where the
+            expression is True.
+            If the key is a string, and it is a field name of self, a :ref:`NDField`
+            accessor will be returned; if not, it will be converted to a :ref:`LazyExpr`,
+            and will search for its operands in the fields of self.
 
         Returns
         -------
         out: np.ndarray | blosc2.LazyExpr
-            The requested data as a NumPy array or a LazyExpr.
+            The requested data as a NumPy array or a :ref:`LazyExpr`.
 
         Examples
         --------
@@ -1074,6 +1076,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
             if isinstance(key, str):
                 if self.dtype.fields is None:
                     raise ValueError("The array is not structured (its dtype does not have fields)")
+                if key in self.fields:
+                    # A shortcut to access fields
+                    return self.fields[key]
+                # Assume that the key is a boolean expression
                 expr = blosc2.LazyExpr._new_expr(key, self.fields, guess=False)
                 return expr.where(self)
             key_, mask = process_key(key, self.shape)

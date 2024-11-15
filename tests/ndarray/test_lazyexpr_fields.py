@@ -236,24 +236,24 @@ def test_where_getitem(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
 
     # Test with complete slice
-    res = sa1[a1**2 + a2**2 > 2 * a1 * a2 + 1][:]
+    res = sa1[a1**2 + a2**2 > 2 * a1 * a2 + 1].compute()
     nres = nsa1[ne.evaluate("na1**2 + na2**2 > 2 * na1 * na2 + 1")]
-    np.testing.assert_allclose(res["a"], nres["a"])
-    np.testing.assert_allclose(res["b"], nres["b"])
+    np.testing.assert_allclose(res["a"][:], nres["a"])
+    np.testing.assert_allclose(res["b"][:], nres["b"])
     # string version
-    res = sa1["a**2 + b**2 > 2 * a * b + 1"][:]
-    np.testing.assert_allclose(res["a"], nres["a"])
-    np.testing.assert_allclose(res["b"], nres["b"])
+    res = sa1["a**2 + b**2 > 2 * a * b + 1"].compute()
+    np.testing.assert_allclose(res["a"][:], nres["a"])
+    np.testing.assert_allclose(res["b"][:], nres["b"])
 
     # Test with partial slice
     sl = slice(100)
     res = sa1[a1**2 + a2**2 > 2 * a1 * a2 + 1][sl]
-    np.testing.assert_allclose(res["a"], nres["a"][sl])
-    np.testing.assert_allclose(res["b"], nres["b"][sl])
+    np.testing.assert_allclose(res["a"], nres[sl]["a"])
+    np.testing.assert_allclose(res["b"], nres[sl]["b"])
     # string version
     res = sa1["a**2 + b**2 > 2 * a * b + 1"][sl]
-    np.testing.assert_allclose(res["a"], nres["a"][sl])
-    np.testing.assert_allclose(res["b"], nres["b"][sl])
+    np.testing.assert_allclose(res["a"], nres[sl]["a"])
+    np.testing.assert_allclose(res["b"], nres[sl]["b"])
 
 
 # Test where indirectly via a condition in getitem in a NDField
