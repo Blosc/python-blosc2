@@ -1020,7 +1020,11 @@ def slices_eval(  # noqa: C901
             raise ValueError("The output array is not a NumPy array or a NDArray")
 
     if where is not None and len(where) < 2:
-        out = out[:lenout]
+        # Cap the output array to the actual length
+        if isinstance(out, np.ndarray):
+            out = out[:lenout]
+        else:
+            out.resize((lenout,))
 
     return out
 

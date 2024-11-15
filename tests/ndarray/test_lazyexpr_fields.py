@@ -235,17 +235,17 @@ def test_where_one_param(array_fixture):
 def test_where_getitem(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
 
-    # Test with eval
-    res = sa1[a1**2 + a2**2 > 2 * a1 * a2 + 1].compute()
+    # Test with complete slice
+    res = sa1[a1**2 + a2**2 > 2 * a1 * a2 + 1][:]
     nres = nsa1[ne.evaluate("na1**2 + na2**2 > 2 * na1 * na2 + 1")]
     np.testing.assert_allclose(res["a"], nres["a"])
     np.testing.assert_allclose(res["b"], nres["b"])
     # string version
-    res = sa1["a**2 + b**2 > 2 * a * b + 1"].compute()
+    res = sa1["a**2 + b**2 > 2 * a * b + 1"][:]
     np.testing.assert_allclose(res["a"], nres["a"])
     np.testing.assert_allclose(res["b"], nres["b"])
 
-    # Test with getitem
+    # Test with partial slice
     sl = slice(100)
     res = sa1[a1**2 + a2**2 > 2 * a1 * a2 + 1][sl]
     np.testing.assert_allclose(res["a"], nres["a"][sl])
