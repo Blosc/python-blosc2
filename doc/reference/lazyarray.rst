@@ -3,13 +3,15 @@
 LazyArray
 =========
 
-This is an interface for evaluating an expression or a Python user defined function.
+This is an API interface for evaluating an expression or a Python user defined function.
 
 You can get an object following the LazyArray API with any of the following ways:
 
 * Any expression that involves one or more NDArray objects. e.g. ``a + b``, where ``a`` and ``b`` are NDArray objects (see  `a tutorial <../getting_started/tutorials/03.lazyarray-expressions.html>`_).
 * Using the ``lazyexpr`` constructor.
-* Using the ``lazyudf`` constructor (see  `its tutorial <../getting_started/tutorials/03.LazyArray-UDF.html>`_).
+* Using the ``lazyudf`` constructor (see `a tutorial <../getting_started/tutorials/03.lazyarray-udf.html>`_).
+
+The LazyArray object is a thin wrapper around the expression or user-defined function that allows for lazy evaluation. This means that the expression is not evaluated until the ``compute`` or ``__getitem__`` methods are called. The ``compute`` method will return a new NDArray object with the result of the expression evaluation. The ``__getitem__`` method will return an NumPy object instead.
 
 See the `LazyExpr`_ and `LazyUDF`_ sections for more information.
 
@@ -32,7 +34,9 @@ Methods
 LazyExpr
 --------
 
-For getting a LazyArray-compliant object from an expression (à la numexpr), you can use the lazyexpr constructor.
+An expression like ``a + sum(b)``, where there is at least one NDArray object in operands ``a`` and ``b``, `returns a LazyExpr object <../getting_started/tutorials/03.lazyarray-expressions.html>`_. You can also get a LazyExpr object using the ``lazyexpr`` constructor (see below).
+
+This object follows the `LazyArray`_ API for evaluation and storage.
 
 .. currentmodule:: blosc2
 
@@ -44,19 +48,10 @@ For getting a LazyArray-compliant object from an expression (à la numexpr), you
 
 .. _LazyUDF:
 
-LazyUDF
--------
-
-For getting a LazyArray-compliant object from a user-defined Python function, you can use the lazyudf constructor.
-
-.. autosummary::
-    :toctree: autofiles/lazyarray
-    :nosignatures:
-
-    lazyudf
-
 Utilities
----------
+~~~~~~~~~
+
+A series of utilities are provided to work with LazyExpr objects.
 
 .. autosummary::
     :toctree: autofiles/lazyarray
@@ -64,3 +59,16 @@ Utilities
 
     validate_expr
     get_expr_operands
+
+LazyUDF
+-------
+
+For getting a LazyUDF object (which is LazyArray-compliant) from a user-defined Python function, you can use the lazyudf constructor below. See  `a tutorial on how this works <../getting_started/tutorials/03.lazyarray-udf.html>`_.
+
+This object follows the `LazyArray`_ API for evaluation, although storage is not supported yet.
+
+.. autosummary::
+    :toctree: autofiles/lazyarray
+    :nosignatures:
+
+    lazyudf

@@ -37,7 +37,9 @@ If you want to run the network tests, you can use the following command:
 We are using Sphinx for documentation.  You can build the documentation by executing
 
 ``` bash
-  python -m sphinx doc html
+  cd doc
+  rm -rf html
+  python -m sphinx . html
 ```
 
 You will find the documentation in the `html` directory.
