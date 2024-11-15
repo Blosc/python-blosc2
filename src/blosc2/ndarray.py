@@ -2902,3 +2902,25 @@ class NDField(Operand):
         nparr = self.ndarr[key]
         # And return the field
         return nparr[self.field]
+
+    def __setitem__(self, key: int | slice | Sequence[slice], value: np.ndarray | NDArray | NDField) -> None:
+        """
+        Set a slice of :paramref:`self` to a value.
+
+        Parameters
+        ----------
+        key: int or slice or Sequence[slice]
+            The slice to be set.
+        value: np.ndarray or NDArray or NDField
+            The value to be set.
+        """
+        if isinstance(key, str):
+            raise TypeError("This array is a NDField; use a structured NDArray for bool expressions")
+        if isinstance(value, (NDField, NDArray)):
+            value = value[:]
+        # Get the values in the parent NDArray
+        nparr = self.ndarr[key]
+        # Set the field
+        nparr[self.field] = value
+        # Save the values in the parent NDArray
+        self.ndarr[key] = nparr

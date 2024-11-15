@@ -22,6 +22,7 @@ Methods
 
     __init__
     __getitem__
+    __setitem__
 
 Attributes
 ----------

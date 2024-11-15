@@ -65,3 +65,33 @@ def test_setitem_different_dtype(shape, slices):
     a[slices] = nparray[slices]
     nparray_ = nparray.astype(a.dtype)
     np.testing.assert_almost_equal(a[slices], nparray_[slices])
+
+
+def test_ndfield():
+    # Create a structured NumPy array
+    shape = (50, 50)
+    na = np.linspace(0, 1, np.prod(shape), dtype=np.float32).reshape(shape)
+    nb = np.linspace(1, 2, np.prod(shape), dtype=np.float64).reshape(shape)
+    nsa = np.empty(shape, dtype=[("a", na.dtype), ("b", nb.dtype)])
+    nsa["a"] = na
+    nsa["b"] = nb
+    sa = blosc2.asarray(nsa)
+
+    # Check values
+    assert np.allclose(sa["a"][:], na)
+    assert np.allclose(sa["b"][:], nb)
+
+    # Change values
+    nsa["a"][:] = nsa["b"]
+    sa["a"][:] = sa["b"]
+
+    # Check values
+    assert np.allclose(sa["a"][:], nsa["a"])
+    assert np.allclose(sa["b"][:], nsa["b"])
+
+    # Using NDField accessor
+    nsa["b"][:] = 1
+    fb = blosc2.NDField(sa, "b")
+    fb[:] = blosc2.full(shape, fill_value=1, dtype=np.float64)
+    assert np.allclose(sa["a"][:], nsa["a"])
+    assert np.allclose(sa["b"][:], nsa["b"])
