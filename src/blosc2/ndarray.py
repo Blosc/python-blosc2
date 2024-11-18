@@ -1119,9 +1119,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
             # This can be processed in a fast way already
             start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
             shape = tuple(sp - st for st, sp in zip(start, stop, strict=True))
-        elif isinstance(key, (list, np.ndarray)):
+        elif isinstance(key, (list, np.ndarray, NDArray)):
             if isinstance(key, list):
                 key = np.array(key, dtype=np.intp)
+            elif isinstance(key, NDArray):
+                key = key[:]
             if key.dtype != np.intp:
                 raise ValueError("The key should be an array of integers")
             if key.ndim != 1:
