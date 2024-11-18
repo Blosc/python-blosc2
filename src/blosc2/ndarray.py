@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import builtins
 import math
-from collections import namedtuple
+from collections import OrderedDict, namedtuple
 from typing import TYPE_CHECKING, NamedTuple
 
 from numpy.exceptions import ComplexWarning
@@ -757,6 +757,57 @@ class Operand:
         return expr.all(axis=axis, keepdims=keepdims, **kwargs)
 
 
+class LimitedSizeDict(OrderedDict):
+    def __init__(self, max_entries, *args, **kwargs):
+        self.max_entries = max_entries
+        super().__init__(*args, **kwargs)
+
+    def __setitem__(self, key, value):
+        if len(self) >= self.max_entries:
+            self.popitem(last=False)
+        super().__setitem__(key, value)
+
+
+def extract_values(arr, indices: np.ndarray[np.int_], max_cache_size: int = 10) -> np.ndarray:
+    """
+    Extract values from a chunked and compressed array using an array of indices.
+
+    Parameters
+    ----------
+    arr : blosc2.NDArray
+        The chunked and compressed array.
+    indices : np.ndarray
+        The array of indices to extract values from.
+    max_cache_size : int
+        The maximum number of chunks to cache.
+
+    Returns
+    -------
+    extracted_values : np.ndarray
+        The extracted values.
+    """
+    # Initialize the result array
+    extracted_values = np.empty(len(indices), dtype=arr.dtype)
+
+    # Limited size dictionary to store decompressed chunks
+    chunk_cache = LimitedSizeDict(max_cache_size)
+
+    # Iterate through the indices and extract values
+    chunk_size = int(arr.chunks[0])
+    for i, idx in enumerate(indices):
+        chunk_idx = idx // chunk_size
+        if chunk_idx not in chunk_cache:
+            # Compute the bounds for this chunk
+            start = chunk_idx * chunk_size
+            end = start + chunk_size
+            chunk_cache[chunk_idx] = arr[start:end]
+
+        local_idx = idx % chunk_size
+        extracted_values[i] = chunk_cache[chunk_idx][local_idx]
+
+    return extracted_values
+
+
 class NDArray(blosc2_ext.NDArray, Operand):
     def __init__(self, **kwargs):
         self._schunk = SChunk(_schunk=kwargs["_schunk"], _is_view=True)  # SChunk Python instance
@@ -1021,7 +1072,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return self._schunk.blocksize
 
-    def __getitem__(
+    def __getitem__(  # noqa: C901
         self, key: int | slice | Sequence[slice] | blosc2.LazyExpr | str
     ) -> np.ndarray | blosc2.LazyExpr:
         """Retrieve a (multidimensional) slice as specified by the key.
@@ -1068,6 +1119,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
             # This can be processed in a fast way already
             start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
             shape = tuple(sp - st for st, sp in zip(start, stop, strict=True))
+        elif isinstance(key, (list, np.ndarray)):
+            if isinstance(key, list):
+                key = np.array(key, dtype=np.intp)
+            if key.dtype != np.intp:
+                raise ValueError("The key should be an array of integers")
+            if key.ndim != 1:
+                raise ValueError("The key should be a 1D array")
+            return extract_values(self, key)
         else:
             # The more general case (this is quite slow)
             # If the key is a LazyExpr, decorate with ``where`` and return it
@@ -1157,6 +1216,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
             value = value[...]
 
         return super().set_slice(key, value)
+
+    def __len__(self):
+        return self.shape[0]
 
     def get_chunk(self, nchunk: int) -> bytes:
         """Shortcut to :meth:`SChunk.get_chunk <blosc2.schunk.SChunk.get_chunk>`. This can be accessed

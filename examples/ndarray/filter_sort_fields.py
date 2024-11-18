@@ -7,6 +7,7 @@
 #######################################################################
 
 # Filter and sort fields in a structured array
+# Note that this only works for 1D arrays
 
 from time import time
 
@@ -20,7 +21,7 @@ N = 1_000
 # Create a numpy structured array with 3 fields and N elements
 dt = np.dtype([("a", "i4"), ("b", "f4"), ("c", "f8")])
 nsa = np.empty((N,), dtype=dt)
-# Make this work with a 2D array
+# TODO: Make this work with a 2D array
 # nsa = np.empty((N,N), dtype=dt)
 nsa["a"][:] = np.arange(N, dtype="i4")
 nsa["b"][:] = np.linspace(0, 1, N, dtype="f4")
@@ -30,27 +31,13 @@ nsa["c"][:] = rng.random(N)
 arr = blosc2.asarray(nsa)
 
 t0 = time()
-farr = (
-    arr["b >= c"]
-    .indices()
-    .sort("c")
-    .compute(
-        cparams={
-            "codec": blosc2.Codec.LZ4,
-            "clevel": 1,
-            # 'use_dict': False,
-            # 'filters': [blosc2.Filter.SHUFFLE],
-            # 'splitmode': blosc2.SplitMode.ALWAYS_SPLIT,
-        }
-    )
-)
+farr = arr["b >= c"].indices().sort("c").compute()
 print(f"Time to filter: {time() - t0:.3f} s")
 print(f"farr: {farr[:10]}")
-print(f"sorted: {arr[:][farr[:10]]}")
-# print(f"sorted: {arr[farr[:10]]}")  # TODO
+print(f"sorted (numpy):\n {nsa[farr[:10]]}")
+print(f"sorted (blosc2):\n {arr[farr[:10]]}")  # also works, but more efficient
 
-# print(f"len(farr): {len(farr)}, len(arr): {len(arr)}")
-print(f"shape of farr: {farr.shape}, shape of arr: {arr.shape}")
+print(f"len(farr): {len(farr)}, len(arr): {len(arr)}")
 print(f"type of farr: {farr.dtype}, type of arr: {arr.dtype}")
 print(f"cratio of farr: {farr.schunk.cratio:.2f}, cratio of arr: {arr.schunk.cratio:.2f}")
 print(f"nbytes of farr: {farr.schunk.nbytes}, nbytes of arr: {arr.schunk.nbytes}")

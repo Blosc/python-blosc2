@@ -1049,9 +1049,9 @@ def slices_eval(  # noqa: C901
                     # and result is a boolean array
                     x = chunk_operands["_where_x"]
                     if len(x.shape) > 1:
-                        raise ValueError("The indices() and order() are only supported for 1D arrays")
+                        raise ValueError("indices() and sort() only support 1D arrays")
                     if result.dtype != np.bool_:
-                        raise ValueError("The indices() and order() only support bool conditions")
+                        raise ValueError("indices() and sort() only support bool conditions")
                     indices = np.arange(leninputs, leninputs + len_chunk, dtype=np.int64).reshape(
                         slice_shape
                     )
