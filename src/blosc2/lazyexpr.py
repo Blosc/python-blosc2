@@ -2152,13 +2152,13 @@ class LazyExpr(LazyArray):
             return chunked_eval(self.expression, self.operands, item, **kwargs)
 
     def indices(self):
-        if self.dtype != np.void:
+        if self.dtype.fields is None:
             raise NotImplementedError("indices() can only be used with structured arrays")
         self._indices = True
         return self
 
     def sort(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
-        if self.dtype != np.void:
+        if self.dtype.fields is None:
             raise NotImplementedError("sort() can only be used with structured arrays")
         self._order = order
         return self
