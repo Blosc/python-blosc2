@@ -83,6 +83,41 @@ class LazyArrayEnum(Enum):
 
 class LazyArray(ABC):
     @abstractmethod
+    def indices(self) -> blosc2.LazyArray:
+        """
+        Return an :ref:`LazyArray` containing the indices where self is True.
+
+        The LazyArray must be of bool dtype (e.g. a condition).
+
+        Returns
+        -------
+        out: :ref:`LazyArray`
+            The indices of the :ref:`LazyArray` self that are True.
+        """
+        pass
+
+    @abstractmethod
+    def sort(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
+        """
+        Return a sorted :ref:`LazyArray`.
+
+        This is only valid for LazyArrays with structured dtypes.
+
+        Parameters
+        ----------
+        order: str, list of str, optional
+            Specifies which fields to compare first, second, etc. A single
+            field can be specified as a string. Not all fields need be
+            specified, only the ones by which the array is to be sorted.
+
+        Returns
+        -------
+        out: :ref:`LazyArray`
+            A sorted :ref:`LazyArray`.
+        """
+        pass
+
+    @abstractmethod
     def compute(self, item: slice | list[slice] | None = None, **kwargs: dict) -> blosc2.NDArray:
         """
         Return an :ref:`NDArray` containing the evaluation of the :ref:`LazyArray`.
@@ -844,6 +879,42 @@ def fast_eval(  # noqa: C901
     return out
 
 
+def compute_start_index(shape, slice_obj):
+    """
+    Compute the index of the starting element of a slice in an n-dimensional array.
+
+    Parameters
+    ----------
+    shape : tuple
+        The shape of the n-dimensional array.
+    slice_obj : tuple of slices
+        The slice object representing the slice of the array.
+
+    Returns
+    -------
+    start_index : int
+        The index of the starting element of the slice.
+    """
+    if not isinstance(slice_obj, tuple):
+        slice_obj = (slice_obj,)
+
+    start_index = 0
+    stride = 1
+
+    for dim, sl in reversed(list(enumerate(slice_obj))):
+        if isinstance(sl, slice):
+            start = sl.start if sl.start is not None else 0
+        elif sl is Ellipsis:
+            start = 0
+        else:
+            start = sl
+
+        start_index += start * stride
+        stride *= shape[dim]
+
+    return start_index
+
+
 def slices_eval(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
     operands: dict,
@@ -880,11 +951,19 @@ def slices_eval(  # noqa: C901
     out = kwargs.pop("_output", None)
     chunks = kwargs.get("chunks")
     where: dict | None = kwargs.pop("_where_args", None)
+    _indices = kwargs.pop("_indices", False)
+    if _indices and (not where or len(where) != 1):
+        raise NotImplementedError("Indices can only be used with one where condition")
+    _order = kwargs.pop("_order", None)
+    if _order is not None and not isinstance(_order, list):
+        # Always use a list for _order
+        _order = [_order]
+
     dtype = kwargs.pop("dtype", None)
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
 
-    # We need to keep the original _slice arg, for allowing a final getitem (if necessary
+    # We need to keep the original _slice arg, for allowing a final getitem (if necessary)
     orig_slice = _slice
 
     if chunks is None:
@@ -904,8 +983,19 @@ def slices_eval(  # noqa: C901
 
     # Iterate over the operands and get the chunks
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
+    # The starting point for the indices of the inputs
+    leninputs = compute_start_index(shape, orig_slice) if orig_slice is not None else 0
     lenout = 0
     behaved = False
+    indices_ = None
+    chunk_indices = None
+    dtype_ = np.int64 if _indices else dtype
+    if _order is not None:
+        # Get the dtype of the array to sort
+        dtype_ = operands["_where_x"].dtype
+        # Now, use only the fields that are necessary for the sorting
+        dtype_ = np.dtype([(f, dtype_[f]) for f in _order])
+
     for nchunk in range(nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
         chunk_operands = {}
@@ -932,6 +1022,7 @@ def slices_eval(  # noqa: C901
                 for s1, s2 in zip(slice_, _slice, strict=True)
             )
         slice_shape = tuple(s.stop - s.start for s in slice_)
+        len_chunk = np.prod(slice_shape)
         # Get the slice of each operand
         for key, value in operands.items():
             if np.isscalar(value):
@@ -969,10 +1060,28 @@ def slices_eval(  # noqa: C901
                 result = ne.evaluate(new_expr, chunk_operands)
             elif len(where) == 1:
                 result = ne.evaluate(expression, chunk_operands)
-                x = chunk_operands["_where_x"]
-                result = x[result]
+                if _indices or _order:
+                    # Return indices only makes sense when the where condition is a tuple with one element
+                    # and result is a boolean array
+                    x = chunk_operands["_where_x"]
+                    if len(x.shape) > 1:
+                        raise ValueError("indices() and sort() only support 1D arrays")
+                    if result.dtype != np.bool_:
+                        raise ValueError("indices() and sort() only support bool conditions")
+                    indices = np.arange(leninputs, leninputs + len_chunk, dtype=np.int64).reshape(
+                        slice_shape
+                    )
+                    if _order:
+                        # We need to cumulate all the fields in _order, as well as indices
+                        chunk_indices = indices[result]
+                        result = x[_order][result]
+                    else:
+                        result = indices[result]
+                    leninputs += len_chunk
+                else:
+                    x = chunk_operands["_where_x"]
+                    result = x[result]
             else:
-                # result = np.asarray(result).nonzero()
                 raise ValueError("The where condition must be a tuple with one or two elements")
 
         if out is None:
@@ -980,18 +1089,20 @@ def slices_eval(  # noqa: C901
             if where is not None and len(where) < 2:
                 # The result is a linear array
                 shape_ = math.prod(shape)
-            if getitem:
-                out = np.empty(shape_, dtype=dtype)
+            if getitem or _order:
+                out = np.empty(shape_, dtype=dtype_)
+                if _order:
+                    indices_ = np.empty(shape_, dtype=np.int64)
             else:
                 if "chunks" not in kwargs and (where is None or len(where) == 2):
                     # Let's use the same chunks as the first operand (it could have been automatic too)
-                    out = blosc2.empty(shape_, chunks=chunks, dtype=dtype, **kwargs)
+                    out = blosc2.empty(shape_, chunks=chunks, dtype=dtype_, **kwargs)
                 elif "chunks" in kwargs and (where is not None and len(where) < 2 and len(shape_) > 1):
                     # Remove the chunks argument if the where condition is not a tuple with two elements
                     kwargs.pop("chunks")
-                    out = blosc2.empty(shape_, dtype=dtype, **kwargs)
+                    out = blosc2.empty(shape_, dtype=dtype_, **kwargs)
                 else:
-                    out = blosc2.empty(shape_, dtype=dtype, **kwargs)
+                    out = blosc2.empty(shape_, dtype=dtype_, **kwargs)
                 # Check if the in out partitions are well-behaved (i.e. no padding)
                 behaved = blosc2.are_partitions_behaved(out.shape, out.chunks, out.blocks)
 
@@ -1005,6 +1116,8 @@ def slices_eval(  # noqa: C901
         elif len(where) == 1:
             lenres = len(result)
             out[lenout : lenout + lenres] = result
+            if _order is not None:
+                indices_[lenout : lenout + lenres] = chunk_indices
             lenout += lenres
         else:
             raise ValueError("The where condition must be a tuple with one or two elements")
@@ -1012,6 +1125,8 @@ def slices_eval(  # noqa: C901
     if orig_slice is not None:
         if isinstance(out, np.ndarray):
             out = out[orig_slice]
+            if _order is not None:
+                indices_ = indices_[orig_slice]
         elif isinstance(out, blosc2.NDArray):
             # It *seems* better to choose an automatic chunks and blocks for the output array
             # out = out.slice(orig_slice, chunks=out.chunks, blocks=out.blocks)
@@ -1020,6 +1135,11 @@ def slices_eval(  # noqa: C901
             raise ValueError("The output array is not a NumPy array or a NDArray")
 
     if where is not None and len(where) < 2:
+        if _order is not None:
+            # argsort the result following _order
+            new_order = np.argsort(out[:lenout])
+            # And get the corresponding indices in array
+            out = indices_[new_order]
         # Cap the output array to the actual length
         if isinstance(out, np.ndarray):
             out = out[:lenout]
@@ -1856,6 +1976,21 @@ class LazyExpr(LazyArray):
         return self.update_expr(new_op=(self, ">=", value))
 
     def where(self, value1=None, value2=None):
+        """
+        Select value1 or value2 values based on the condition of the current expression.
+
+        Parameters
+        ----------
+        value1: array_like, optional
+            The value to select when the condition is True.
+        value2: array_like, optional
+            The value to select when the condition is False.
+
+        Returns
+        -------
+        out: LazyExpr
+            A new expression with the where condition applied.
+        """
         if not np.issubdtype(self.dtype, np.bool_):
             raise ValueError("where() can only be used with boolean expressions")
         # This just acts as a 'decorator' for the existing expression
@@ -1874,6 +2009,7 @@ class LazyExpr(LazyArray):
         else:
             args = {}
             dtype = None
+
         # Create a new expression
         new_expr = blosc2.LazyExpr(new_op=(self, None, None))
         new_expr.expression = self.expression
@@ -2015,13 +2151,44 @@ class LazyExpr(LazyArray):
         else:
             return chunked_eval(self.expression, self.operands, item, **kwargs)
 
+    def indices(self):
+        if self.dtype.fields is None:
+            raise NotImplementedError("indices() can only be used with structured arrays")
+        self._indices = True
+        return self
+
+    def sort(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
+        if self.dtype.fields is None:
+            raise NotImplementedError("sort() can only be used with structured arrays")
+        self._order = order
+        return self
+
     def compute(self, item=None, **kwargs) -> blosc2.NDArray:
         if hasattr(self, "_output"):
             kwargs["_output"] = self._output
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
         kwargs["dtype"] = self.dtype
-        return self._compute_expr(item, kwargs)
+        if hasattr(self, "_indices"):
+            kwargs["_indices"] = self._indices
+        if hasattr(self, "_order"):
+            kwargs["_order"] = self._order
+        result = self._compute_expr(item, kwargs)
+        if "_order" in kwargs and "_indices" not in kwargs:
+            # We still need to apply the index in result
+            x = self._where_args["_where_x"]
+            result = x[result]  # always a numpy array; TODO: optimize this for _getitem not in kwargs
+        if (
+            "_getitem" not in kwargs
+            and "_output" not in kwargs
+            and "_reduce_args" not in kwargs
+            and not isinstance(result, blosc2.NDArray)
+        ):
+            # Get rid of all the extra kwargs that are not accepted by blosc2.asarray
+            kwargs_not_accepted = {"_where_args", "_indices", "_order", "dtype"}
+            kwargs = {key: value for key, value in kwargs.items() if key not in kwargs_not_accepted}
+            result = blosc2.asarray(result, **kwargs)
+        return result
 
     def __getitem__(self, item):
         kwargs = {"_getitem": True}
@@ -2236,6 +2403,14 @@ class LazyUDF(LazyArray):
         items += [("shape", self.shape)]
         items += [("dtype", self.dtype)]
         return items
+
+    def indices(self):
+        self._indices = True
+        return self
+
+    def sort(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
+        self._order = order
+        return self
 
     def compute(self, item=None, **kwargs):
         # Get kwargs

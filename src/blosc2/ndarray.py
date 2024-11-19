@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import builtins
 import math
-from collections import namedtuple
+from collections import OrderedDict, namedtuple
 from typing import TYPE_CHECKING, NamedTuple
 
 from numpy.exceptions import ComplexWarning
@@ -757,6 +757,57 @@ class Operand:
         return expr.all(axis=axis, keepdims=keepdims, **kwargs)
 
 
+class LimitedSizeDict(OrderedDict):
+    def __init__(self, max_entries, *args, **kwargs):
+        self.max_entries = max_entries
+        super().__init__(*args, **kwargs)
+
+    def __setitem__(self, key, value):
+        if len(self) >= self.max_entries:
+            self.popitem(last=False)
+        super().__setitem__(key, value)
+
+
+def extract_values(arr, indices: np.ndarray[np.int_], max_cache_size: int = 10) -> np.ndarray:
+    """
+    Extract values from a chunked and compressed array using an array of indices.
+
+    Parameters
+    ----------
+    arr : blosc2.NDArray
+        The chunked and compressed array.
+    indices : np.ndarray
+        The array of indices to extract values from.
+    max_cache_size : int
+        The maximum number of chunks to cache.
+
+    Returns
+    -------
+    extracted_values : np.ndarray
+        The extracted values.
+    """
+    # Initialize the result array
+    extracted_values = np.empty(len(indices), dtype=arr.dtype)
+
+    # Limited size dictionary to store decompressed chunks
+    chunk_cache = LimitedSizeDict(max_cache_size)
+
+    # Iterate through the indices and extract values
+    chunk_size = int(arr.chunks[0])
+    for i, idx in enumerate(indices):
+        chunk_idx = idx // chunk_size
+        if chunk_idx not in chunk_cache:
+            # Compute the bounds for this chunk
+            start = chunk_idx * chunk_size
+            end = start + chunk_size
+            chunk_cache[chunk_idx] = arr[start:end]
+
+        local_idx = idx % chunk_size
+        extracted_values[i] = chunk_cache[chunk_idx][local_idx]
+
+    return extracted_values
+
+
 class NDArray(blosc2_ext.NDArray, Operand):
     def __init__(self, **kwargs):
         self._schunk = SChunk(_schunk=kwargs["_schunk"], _is_view=True)  # SChunk Python instance
@@ -1021,21 +1072,25 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return self._schunk.blocksize
 
-    def __getitem__(
-        self, key: int | slice | Sequence[slice] | blosc2.LazyExpr | str
+    def __getitem__(  # noqa: C901
+        self, key: int | slice | Sequence[slice | int] | np.ndarray[np.bool_] | blosc2.LazyExpr | str
     ) -> np.ndarray | blosc2.LazyExpr:
         """Retrieve a (multidimensional) slice as specified by the key.
 
         Parameters
         ----------
-        key: int, slice, sequence of slices, LazyExpr or str
+        key: int, slice, sequence of (slices, int), array of bools, LazyExpr or str
             The slice(s) to be retrieved. Note that step parameter is not yet honored
             in slices. If a LazyExpr is provided, the expression is expected to be of
-            boolean type, and the result will be the values of this array where the
-            expression is True.
+            boolean type, and the result will be another LazyExpr returning the values
+            of this array where the expression is True.
+            When key is a (nd-)array of bools, the result will be the values of ``self``
+            where the bool values are True (similar to NumPy).
+            If key is a 1-dim sequence of integers, the result will be the values of
+            this array at the specified indices. N-dim indices are not yet supported.
             If the key is a string, and it is a field name of self, a :ref:`NDField`
-            accessor will be returned; if not, it will be converted to a :ref:`LazyExpr`,
-            and will search for its operands in the fields of self.
+            accessor will be returned; if not, it will be attempted to convert to a
+            :ref:`LazyExpr`, and will search for its operands in the fields of ``self``.
 
         Returns
         -------
@@ -1068,6 +1123,27 @@ class NDArray(blosc2_ext.NDArray, Operand):
             # This can be processed in a fast way already
             start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
             shape = tuple(sp - st for st, sp in zip(start, stop, strict=True))
+        elif isinstance(key, (list, np.ndarray, NDArray)):
+            if isinstance(key, list):
+                key = np.array(key, dtype=np.int64)
+            if np.issubdtype(key.dtype, np.bool_):
+                # This can be interpreted as a boolean expression
+                if key.shape != self.shape:
+                    raise ValueError("The shape of the boolean expression should match the array shape")
+                # expr = blosc2.lazyexpr(f"(key)")
+                # The next should be a bit faster
+                expr = blosc2.LazyExpr._new_expr("key", {"key": key}, guess=False)
+                # Decorate with where and force a getitem operation to return actual values.
+                # This behavior is consistent with NumPy, although different from e.g. ['expr']
+                # which returns a lazy expression.
+                return expr.where(self)[:]
+            if key.dtype != np.int64 or key.ndim != 1:
+                raise ValueError("Only 1-dim sequences of ints are supported for now")
+            if isinstance(key, NDArray):
+                key = key[:]
+            # This is a fast path for the case where the key is a short list of 1-d indices
+            # For the rest, use an array of booleans.
+            return extract_values(self, key)
         else:
             # The more general case (this is quite slow)
             # If the key is a LazyExpr, decorate with ``where`` and return it
@@ -1157,6 +1233,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
             value = value[...]
 
         return super().set_slice(key, value)
+
+    def __len__(self):
+        return self.shape[0]
 
     def get_chunk(self, nchunk: int) -> bytes:
         """Shortcut to :meth:`SChunk.get_chunk <blosc2.schunk.SChunk.get_chunk>`. This can be accessed
