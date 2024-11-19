@@ -1057,3 +1057,23 @@ def test_dtype_infer(dtype1, dtype2, scalar):
     res = expr[()]
     np.testing.assert_allclose(res, nres)
     assert res.dtype == nres.dtype
+
+
+def test_indices():
+    shape = (20,)
+    na = np.arange(shape[0])
+    a = blosc2.asarray(na)
+    expr = a > 1
+    # TODO: Implement the indices method for LazyExpr more generally
+    with pytest.raises(NotImplementedError):
+        expr.indices().compute()
+
+
+def test_sort():
+    shape = (20,)
+    na = np.arange(shape[0])
+    a = blosc2.asarray(na)
+    expr = a > 1
+    # TODO: Implement the sort method for LazyExpr more generally
+    with pytest.raises(NotImplementedError):
+        expr.sort().compute()

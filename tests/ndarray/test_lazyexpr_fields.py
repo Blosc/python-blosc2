@@ -382,3 +382,87 @@ def test_where_fusion6(array_fixture):
     res = expr.where(6.1, 1) + res
     nres = np.where(npexpr, 6.1, 1) + nres
     np.testing.assert_allclose(res[:], nres)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "field"),
+    [
+        ((5,), (2,), (1,), "a"),
+        ((15,), (2,), (2,), "b"),
+        ((100,), (44,), (33,), "b"),
+    ],
+)
+def test_indices(shape, chunks, blocks, field):
+    na = np.arange(1, shape[0] + 1)
+    nb = np.arange(2 * shape[0], shape[0], -1)
+    nsa = np.empty(shape, dtype=[("a", np.int32), ("b", np.int32)])
+    nsa["a"] = na
+    nsa["b"] = nb
+    sa = blosc2.asarray(nsa)
+
+    # The expression
+    res = sa[f"{field} > 2"].indices().compute()
+
+    # Emulate that expression with NumPy
+    # nres = np.where(na > 2)[0]
+    mask = nsa[field] > 2
+    nres = np.where(mask)[0]
+
+    # Check
+    np.testing.assert_allclose(res[:], nres)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "order"),
+    [
+        ((5,), (2,), (1,), "a"),
+        ((15,), (2,), (2,), "b"),
+        ((100,), (44,), (33,), "b"),
+    ],
+)
+def test_sort(shape, chunks, blocks, order):
+    na = np.arange(1, shape[0] + 1)
+    nb = np.arange(2 * shape[0], shape[0], -1)
+    nsa = np.empty(shape, dtype=[("a", np.int32), ("b", np.int32)])
+    nsa["a"] = na
+    nsa["b"] = nb
+    sa = blosc2.asarray(nsa, chunks=chunks, blocks=blocks)
+
+    # The expression
+    res = sa["a > 2"].sort(order).compute()
+
+    # Emulate that expression with NumPy
+    nres = np.sort(nsa[na > 2], order=order)
+
+    # Check
+    np.testing.assert_allclose(res["a"][:], nres["a"])
+    np.testing.assert_allclose(res["b"][:], nres["b"])
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "order"),
+    [
+        ((5,), (2,), (1,), "a"),
+        ((5,), (2,), (1,), "b"),
+        ((10,), (4,), (3,), "b"),
+    ],
+)
+def test_sort_indices(shape, chunks, blocks, order):
+    na = np.arange(1, shape[0] + 1)
+    nb = np.arange(2 * shape[0], shape[0], -1)
+    nsa = np.empty(shape, dtype=[("a", np.int32), ("b", np.int32)])
+    nsa["a"] = na
+    nsa["b"] = nb
+    sa = blosc2.asarray(nsa, chunks=chunks, blocks=blocks)
+
+    # The expression
+    res = sa["a > 2"].sort(order).indices().compute()
+
+    # Emulate that expression with NumPy
+    mask = nsa["a"] > 2
+    sorted_indices = np.argsort(nsa[order][mask])
+    nres = np.where(mask)[0][sorted_indices]
+
+    # Check
+    np.testing.assert_allclose(res[:], nres)
+    np.testing.assert_allclose(res[:], nres)

@@ -952,6 +952,8 @@ def slices_eval(  # noqa: C901
     chunks = kwargs.get("chunks")
     where: dict | None = kwargs.pop("_where_args", None)
     _indices = kwargs.pop("_indices", False)
+    if _indices and (not where or len(where) != 1):
+        raise NotImplementedError("Indices can only be used with one where condition")
     _order = kwargs.pop("_order", None)
     if _order is not None and not isinstance(_order, list):
         # Always use a list for _order
@@ -2150,10 +2152,14 @@ class LazyExpr(LazyArray):
             return chunked_eval(self.expression, self.operands, item, **kwargs)
 
     def indices(self):
+        if self.dtype != np.void:
+            raise NotImplementedError("indices() can only be used with structured arrays")
         self._indices = True
         return self
 
     def sort(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
+        if self.dtype != np.void:
+            raise NotImplementedError("sort() can only be used with structured arrays")
         self._order = order
         return self
 
