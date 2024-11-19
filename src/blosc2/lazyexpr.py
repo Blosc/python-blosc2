@@ -904,6 +904,8 @@ def compute_start_index(shape, slice_obj):
     for dim, sl in reversed(list(enumerate(slice_obj))):
         if isinstance(sl, slice):
             start = sl.start if sl.start is not None else 0
+        elif sl is Ellipsis:
+            start = 0
         else:
             start = sl
 
@@ -2170,9 +2172,14 @@ class LazyExpr(LazyArray):
             # We still need to apply the index in result
             x = self._where_args["_where_x"]
             result = x[result]  # always a numpy array; TODO: optimize this for _getitem not in kwargs
-        if "_getitem" not in kwargs and not isinstance(result, blosc2.NDArray):
+        if (
+            "_getitem" not in kwargs
+            and "_output" not in kwargs
+            and "_reduce_args" not in kwargs
+            and not isinstance(result, blosc2.NDArray)
+        ):
             # Get rid of all the extra kwargs that are not accepted by blosc2.asarray
-            kwargs_not_accepted = {"_output", "_where_args", "_indices", "_order", "dtype"}
+            kwargs_not_accepted = {"_where_args", "_indices", "_order", "dtype"}
             kwargs = {key: value for key, value in kwargs.items() if key not in kwargs_not_accepted}
             result = blosc2.asarray(result, **kwargs)
         return result
