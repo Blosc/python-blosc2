@@ -1125,9 +1125,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
             elif isinstance(key, NDArray):
                 key = key[:]
             if key.dtype != np.intp:
-                raise ValueError("The key should be an array of integers")
+                raise ValueError("The key should be a list or array of integers")
             if key.ndim != 1:
-                raise ValueError("The key should be a 1D array")
+                raise ValueError("Only keys meant as indices for 1D arrays are supported for now")
             return extract_values(self, key)
         else:
             # The more general case (this is quite slow)

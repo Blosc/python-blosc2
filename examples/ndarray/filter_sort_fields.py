@@ -33,27 +33,31 @@ arr = blosc2.asarray(nsa)
 
 t0 = time()
 # Using plain sort in combination with filter
-farr = arr["b >= c"].sort("c").compute()
+# farr = arr["b >= c"].sort("c").compute()
 # You add indices() to get the indices of the sorted array
-# farr = arr["b >= c"].sort("c").indices().compute()
+farr = arr["b >= c"].sort("c").indices().compute()
 # You can also use __getitem__ to get numpy arrays as result
 # farr = arr["b >= c"].sort("c")[:]
 # farr = arr["b >= c"].sort("c").indices()[:]
 print(f"Time to filter: {time() - t0:.3f} s")
 print(f"farr: {farr[:10]}")
 if farr.dtype == np.dtype("int64"):
-    print(f"sorted (numpy):\n {nsa[farr[:10]]}")
-    print(f"sorted (blosc2):\n {arr[farr[:10]]}")  # also works, but more efficient
+    print(f"sorted (blosc2):\n {arr[farr[:10]]}")
 
 print(f"len(farr): {len(farr)}, len(arr): {len(arr)}")
 print(f"type of farr: {farr.dtype}, type of arr: {arr.dtype}")
 
 if isinstance(farr, np.ndarray):
+    print(f"nbytes of farr: {farr.nbytes / 2 ** 20:.2f}MB")
     # We cannot proceed anymore
     sys.exit(1)
 
 print(f"cratio of farr: {farr.schunk.cratio:.2f}, cratio of arr: {arr.schunk.cratio:.2f}")
-print(f"nbytes of farr: {farr.schunk.nbytes}, nbytes of arr: {arr.schunk.nbytes}")
-print(f"cbytes of farr: {farr.schunk.cbytes}, cbytes of arr: {arr.schunk.cbytes}")
+print(
+    f"nbytes of farr: {farr.schunk.nbytes / 2**20:.2f}MB, nbytes of arr: {arr.schunk.nbytes / 2**20:.2f}MB"
+)
+print(
+    f"cbytes of farr: {farr.schunk.cbytes / 2**20:.2f}MB, cbytes of arr: {arr.schunk.cbytes / 2**20:.2f}MB"
+)
 print(f"cparams of farr: {farr.cparams}, cparams of arr: {arr.cparams}")
 print(f"chunks of farr: {farr.chunks}, chunks of arr: {arr.chunks}")

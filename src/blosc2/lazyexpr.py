@@ -106,10 +106,9 @@ class LazyArray(ABC):
         Parameters
         ----------
         order: str, list of str, optional
-            This argument specifies which fields to compare first, second, etc.
-            A single field can be specified as a string, and not all fields
-            need be specified, but unspecified fields will still be used,
-            in the order in which they come up in the dtype, to break ties.
+            Specifies which fields to compare first, second, etc. A single
+            field can be specified as a string. Not all fields need be
+            specified, only the ones by which the array is to be sorted.
 
         Returns
         -------
@@ -951,7 +950,11 @@ def slices_eval(  # noqa: C901
     chunks = kwargs.get("chunks")
     where: dict | None = kwargs.pop("_where_args", None)
     _indices = kwargs.pop("_indices", False)
-    _order = kwargs.pop("_order", False)
+    _order = kwargs.pop("_order", None)
+    if _order is not None and not isinstance(_order, list):
+        # Always use a list for _order
+        _order = [_order]
+
     dtype = kwargs.pop("dtype", None)
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
@@ -980,6 +983,15 @@ def slices_eval(  # noqa: C901
     leninputs = compute_start_index(shape, orig_slice) if orig_slice is not None else 0
     lenout = 0
     behaved = False
+    indices_ = None
+    chunk_indices = None
+    dtype_ = np.int64 if _indices else dtype
+    if _order is not None:
+        # Get the dtype of the array to sort
+        dtype_ = operands["_where_x"].dtype
+        # Now, use only the fields that are necessary for the sorting
+        dtype_ = np.dtype([(f, dtype_[f]) for f in _order])
+
     for nchunk in range(nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
         chunk_operands = {}
@@ -1055,11 +1067,12 @@ def slices_eval(  # noqa: C901
                     indices = np.arange(leninputs, leninputs + len_chunk, dtype=np.int64).reshape(
                         slice_shape
                     )
-                    result = indices[result]
                     if _order:
-                        x_ = x[_order][result]
-                        new_indices = np.argsort(x_)
-                        result = indices[result][new_indices]
+                        # We need to cumulate all the fields in _order, as well as indices
+                        chunk_indices = indices[result]
+                        result = x[_order][result]
+                    else:
+                        result = indices[result]
                     leninputs += len_chunk
                 else:
                     x = chunk_operands["_where_x"]
@@ -1072,9 +1085,10 @@ def slices_eval(  # noqa: C901
             if where is not None and len(where) < 2:
                 # The result is a linear array
                 shape_ = math.prod(shape)
-            dtype_ = np.int64 if _indices or _order else dtype
-            if getitem:
+            if getitem or _order:
                 out = np.empty(shape_, dtype=dtype_)
+                if _order:
+                    indices_ = np.empty(shape_, dtype=np.int64)
             else:
                 if "chunks" not in kwargs and (where is None or len(where) == 2):
                     # Let's use the same chunks as the first operand (it could have been automatic too)
@@ -1098,6 +1112,8 @@ def slices_eval(  # noqa: C901
         elif len(where) == 1:
             lenres = len(result)
             out[lenout : lenout + lenres] = result
+            if _order is not None:
+                indices_[lenout : lenout + lenres] = chunk_indices
             lenout += lenres
         else:
             raise ValueError("The where condition must be a tuple with one or two elements")
@@ -1105,6 +1121,8 @@ def slices_eval(  # noqa: C901
     if orig_slice is not None:
         if isinstance(out, np.ndarray):
             out = out[orig_slice]
+            if _order is not None:
+                indices_ = indices_[orig_slice]
         elif isinstance(out, blosc2.NDArray):
             # It *seems* better to choose an automatic chunks and blocks for the output array
             # out = out.slice(orig_slice, chunks=out.chunks, blocks=out.blocks)
@@ -1113,6 +1131,11 @@ def slices_eval(  # noqa: C901
             raise ValueError("The output array is not a NumPy array or a NDArray")
 
     if where is not None and len(where) < 2:
+        if _order is not None:
+            # argsort the result following _order
+            new_order = np.argsort(out[:lenout])
+            # And get the corresponding indices in array
+            out = indices_[new_order]
         # Cap the output array to the actual length
         if isinstance(out, np.ndarray):
             out = out[:lenout]
@@ -2143,15 +2166,15 @@ class LazyExpr(LazyArray):
         if hasattr(self, "_order"):
             kwargs["_order"] = self._order
         result = self._compute_expr(item, kwargs)
-        if "_where_args" in kwargs and "_order" in kwargs and "_indices" not in kwargs:
+        if "_order" in kwargs and "_indices" not in kwargs:
             # We still need to apply the index in result
             x = self._where_args["_where_x"]
-            result = x[result]  # always a numpy array
-            if "_getitem" not in kwargs:
-                # Get rid of all the extra kwargs that are not accepted by blosc2.asarray
-                kwargs_not_accepted = {"_output", "_where_args", "_indices", "_order", "dtype"}
-                kwargs = {key: value for key, value in kwargs.items() if key not in kwargs_not_accepted}
-                result = blosc2.asarray(result, **kwargs)
+            result = x[result]  # always a numpy array; TODO: optimize this for _getitem not in kwargs
+        if "_getitem" not in kwargs and not isinstance(result, blosc2.NDArray):
+            # Get rid of all the extra kwargs that are not accepted by blosc2.asarray
+            kwargs_not_accepted = {"_output", "_where_args", "_indices", "_order", "dtype"}
+            kwargs = {key: value for key, value in kwargs.items() if key not in kwargs_not_accepted}
+            result = blosc2.asarray(result, **kwargs)
         return result
 
     def __getitem__(self, item):
