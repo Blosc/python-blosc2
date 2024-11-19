@@ -1073,20 +1073,24 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return self._schunk.blocksize
 
     def __getitem__(  # noqa: C901
-        self, key: int | slice | Sequence[slice] | blosc2.LazyExpr | str
+        self, key: int | slice | Sequence[slice | int] | np.ndarray[np.bool_] | blosc2.LazyExpr | str
     ) -> np.ndarray | blosc2.LazyExpr:
         """Retrieve a (multidimensional) slice as specified by the key.
 
         Parameters
         ----------
-        key: int, slice, sequence of slices, LazyExpr or str
+        key: int, slice, sequence of (slices, int), array of bools, LazyExpr or str
             The slice(s) to be retrieved. Note that step parameter is not yet honored
             in slices. If a LazyExpr is provided, the expression is expected to be of
-            boolean type, and the result will be the values of this array where the
-            expression is True.
+            boolean type, and the result will be another LazyExpr returning the values
+            of this array where the expression is True.
+            When key is a (nd-)array of bools, the result will be the values of ``self``
+            where the bool values are True (similar to NumPy).
+            If key is a 1-dim sequence of integers, the result will be the values of
+            this array at the specified indices. N-dim indices are not yet supported.
             If the key is a string, and it is a field name of self, a :ref:`NDField`
-            accessor will be returned; if not, it will be converted to a :ref:`LazyExpr`,
-            and will search for its operands in the fields of self.
+            accessor will be returned; if not, it will be attempted to convert to a
+            :ref:`LazyExpr`, and will search for its operands in the fields of ``self``.
 
         Returns
         -------
@@ -1121,13 +1125,24 @@ class NDArray(blosc2_ext.NDArray, Operand):
             shape = tuple(sp - st for st, sp in zip(start, stop, strict=True))
         elif isinstance(key, (list, np.ndarray, NDArray)):
             if isinstance(key, list):
-                key = np.array(key, dtype=np.intp)
-            elif isinstance(key, NDArray):
+                key = np.array(key, dtype=np.int64)
+            if np.issubdtype(key.dtype, np.bool_):
+                # This can be interpreted as a boolean expression
+                if key.shape != self.shape:
+                    raise ValueError("The shape of the boolean expression should match the array shape")
+                # expr = blosc2.lazyexpr(f"(key)")
+                # The next should be a bit faster
+                expr = blosc2.LazyExpr._new_expr("key", {"key": key}, guess=False)
+                # Decorate with where and force a getitem operation to return actual values.
+                # This behavior is consistent with NumPy, although different from e.g. ['expr']
+                # which returns a lazy expression.
+                return expr.where(self)[:]
+            if key.dtype != np.int64 or key.ndim != 1:
+                raise ValueError("Only 1-dim sequences of ints are supported for now")
+            if isinstance(key, NDArray):
                 key = key[:]
-            if key.dtype != np.intp:
-                raise ValueError("The key should be a list or array of integers")
-            if key.ndim != 1:
-                raise ValueError("Only keys meant as indices for 1D arrays are supported for now")
+            # This is a fast path for the case where the key is a short list of 1-d indices
+            # For the rest, use an array of booleans.
             return extract_values(self, key)
         else:
             # The more general case (this is quite slow)

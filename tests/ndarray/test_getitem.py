@@ -20,7 +20,7 @@ argvalues = [
 
 
 @pytest.mark.parametrize(argnames, argvalues)
-def test_getitem(shape, chunks, blocks, slices, dtype):
+def test_basic(shape, chunks, blocks, slices, dtype):
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
     a = blosc2.frombuffer(bytes(nparray), nparray.shape, dtype=dtype, chunks=chunks, blocks=blocks)
@@ -29,7 +29,7 @@ def test_getitem(shape, chunks, blocks, slices, dtype):
 
 
 @pytest.mark.parametrize(argnames, argvalues)
-def test_getitem_numpy(shape, chunks, blocks, slices, dtype):
+def test_numpy(shape, chunks, blocks, slices, dtype):
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
     a = blosc2.asarray(nparray, chunks=chunks, blocks=blocks)
@@ -40,7 +40,7 @@ def test_getitem_numpy(shape, chunks, blocks, slices, dtype):
 
 
 @pytest.mark.parametrize(argnames, argvalues)
-def test_getitem_simple(shape, chunks, blocks, slices, dtype):
+def test_simple(shape, chunks, blocks, slices, dtype):
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
     a = blosc2.asarray(nparray)
@@ -50,7 +50,7 @@ def test_getitem_simple(shape, chunks, blocks, slices, dtype):
     np.testing.assert_almost_equal(a_slice, nparray_slice)
 
 
-def test_getitem_shapes():
+def test_shapes():
     shape = (5, 5)
     slice_ = (slice(4, 6), slice(4, 6))
 
@@ -77,3 +77,50 @@ def test_getitem_shapes():
     assert b2a[1:-1, 1].shape == npa[1:-1, 1].shape
     assert b2a[1, :-2].shape == npa[1, :-2].shape
     assert b2a[1:-2, 2:-3].shape == npa[1:-2, 2:-3].shape
+
+
+def int_array(shape):
+    rng = np.random.Generator(np.random.PCG64(12345))
+    return rng.integers(0, shape[0], size=shape)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "idx"),
+    [
+        ((5,), (2,), (1,), int_array((2,))),
+        ((15,), (4,), (2,), int_array((3,))),
+        ((501,), (22,), (11,), int_array((221,))),
+    ],
+)
+def test_1d_values(shape, chunks, blocks, idx):
+    npa = np.arange(int(np.prod(shape)), dtype=np.int32).reshape(shape)
+    b2a = blosc2.asarray(npa)
+
+    np.testing.assert_equal(b2a[idx], npa[idx])
+    assert b2a[idx].dtype == npa[idx].dtype
+    np.testing.assert_equal(b2a[list(idx)], npa[list(idx)])
+    assert b2a[list(idx)].dtype == npa[list(idx)].dtype
+
+
+def bool_array(shape):
+    rng = np.random.Generator(np.random.PCG64(12345))
+    return rng.choice([True, False], size=shape)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "idx"),
+    [
+        ((5,), (2,), (1,), bool_array((5,))),
+        ((10, 10), (5, 5), (2, 2), bool_array((10, 10))),
+        ((8, 8, 8), (4, 4, 4), (2, 2, 2), bool_array((8, 8, 8))),
+        ((6, 5, 4, 3), (3, 2, 2, 1), (1, 1, 1, 1), bool_array((6, 5, 4, 3))),
+    ],
+)
+def test_bool_values(shape, chunks, blocks, idx):
+    npa = np.arange(int(np.prod(shape)), dtype=np.int32).reshape(shape)
+    b2a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
+
+    assert b2a[idx].shape == npa[idx].shape
+    assert b2a[idx].dtype == npa[idx].dtype
+    assert b2a[idx].size == npa[idx].size
+    assert b2a[idx].ndim == npa[idx].ndim
