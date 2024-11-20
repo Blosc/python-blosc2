@@ -226,7 +226,7 @@ Discussion about this module are welcome on the Blosc mailing list:
 
 blosc@googlegroups.com
 
-https://groups.google.es/group/blosc
+https://groups.google.com/g/blosc
 
 Mastodon
 ========
