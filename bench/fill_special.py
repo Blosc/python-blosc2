@@ -9,8 +9,9 @@
 import sys
 from time import time
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 # Dimensions, type and persistence properties for the arrays
 nelem = 1_00_000_000

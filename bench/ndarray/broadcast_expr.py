@@ -10,8 +10,9 @@
 
 from time import time
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 N = 10_000
 # N = 1_000
@@ -36,7 +37,7 @@ for codec in blosc2.Codec:
     # print(f"Elapsed time (expr): {time() - t0:.6f} s")
     t0 = time()
     # d = c.compute(cparams=dict(codec=codec, clevel=5), chunks=(chunks, chunks), blocks=(blocks, blocks))
-    d = c.compute(cparams=dict(codec=codec, clevel=5))
+    d = c.compute(cparams={"codec": codec, "clevel": 5})
     print(f"Elapsed time (eval): {time() - t0:.6f} s")
     # print(d[:])
     print(f"cratio: {d.schunk.cratio:.2f}x")

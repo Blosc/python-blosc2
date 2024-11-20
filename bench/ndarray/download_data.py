@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 import os.path
 
-import blosc2
 import numpy as np
 import s3fs
 import xarray as xr
+
+import blosc2
 
 dir_path = "era5-pds"
 

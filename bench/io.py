@@ -9,8 +9,9 @@
 import argparse
 from time import time
 
-import blosc2
 import numpy as np
+
+import blosc2
 
 CUBE_SIDE = 128
 
@@ -32,7 +33,7 @@ class MmapBenchmarking:
         self.size = np.prod(self.shape)
         self.nbytes = self.size * self.dtype.itemsize
         self.array = np.arange(self.size, dtype=self.dtype).reshape(self.shape)
-        self.cparams = dict(typesize=self.dtype.itemsize, clevel=0)
+        self.cparams = {"typesize": self.dtype.itemsize, "clevel": 0}
         # For checking with compression, uncomment the next line
         # self.cparams = dict(typesize=self.dtype.itemsize, clevel=5, codec=blosc2.Codec.BLOSCLZ)
         self.cdata = blosc2.asarray(self.array, chunks=self.chunks, blocks=self.blocks,
@@ -53,7 +54,7 @@ class MmapBenchmarking:
 
         if self.blosc_mode == "schunk":
             chunksize = array[0].nbytes
-            cparams = self.cparams | dict(blocksize=np.prod(self.cdata.blocks) * array.itemsize)
+            cparams = self.cparams | {"blocksize": np.prod(self.cdata.blocks) * array.itemsize}
             schunk = blosc2.SChunk(chunksize=chunksize, cparams=cparams,
                                    mode="w", mmap_mode=self.mmap_mode_write,
                                    urlpath=urlpath)

@@ -17,8 +17,9 @@ import copy
 from pathlib import Path
 from time import time
 
-import blosc2
 import pandas as pd
+
+import blosc2
 
 # Number of repetitions for each time measurement.  The minimum will be taken.
 NREP = 3

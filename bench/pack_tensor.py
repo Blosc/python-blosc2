@@ -15,10 +15,11 @@ import io
 import sys
 import time
 
-import blosc2
 import numpy as np
 import tensorflow as tf
 import torch
+
+import blosc2
 
 NREP = 1
 # N = int(5e8 + 2**27)  # larger than 2 GB

@@ -12,10 +12,11 @@
 
 from time import time
 
-import blosc2
 import numba as nb
 import numexpr as ne
 import numpy as np
+
+import blosc2
 
 shape = (5000, 10_000)
 chunks = [500, 10_000]
@@ -23,7 +24,7 @@ blocks = [4, 10_000]
 # Comment out the next line to force chunks and blocks above
 chunks, blocks = None, None
 # Check with fast compression
-cparams = dict(clevel=1, codec=blosc2.Codec.BLOSCLZ)
+cparams = {"clevel": 1, "codec": blosc2.Codec.BLOSCLZ}
 
 dtype = np.float32
 rtol = 1e-6 if dtype == np.float32 else 1e-17

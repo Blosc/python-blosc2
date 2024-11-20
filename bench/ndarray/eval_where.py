@@ -8,9 +8,10 @@
 
 from time import time
 
-import blosc2
 import numexpr as ne
 import numpy as np
+
+import blosc2
 
 shape = (4_000, 5_000)
 chunks = (10, 5_000)
@@ -18,7 +19,7 @@ blocks = (1, 1000)
 # Comment out the next line to force chunks and blocks above
 chunks, blocks = None, None
 # Check with fast compression
-cparams = dict(clevel=1, codec=blosc2.Codec.BLOSCLZ)
+cparams = {'clevel': 1, 'codec': blosc2.Codec.BLOSCLZ}
 
 # Create a structured NumPy array
 npa_ = np.linspace(0, 1, np.prod(shape), dtype=np.float32).reshape(shape)

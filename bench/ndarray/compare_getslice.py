@@ -19,13 +19,14 @@ import os
 import sys
 from time import time
 
-import blosc2
 import h5py
 import hdf5plugin
 import numcodecs
 import numpy as np
 import tables
 import zarr
+
+import blosc2
 
 persistent = (len(sys.argv) == 1)
 if persistent:
