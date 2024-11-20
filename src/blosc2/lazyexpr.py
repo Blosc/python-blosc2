@@ -2367,7 +2367,9 @@ class LazyUDF(LazyArray):
         if shape is None:
             self._shape = compute_broadcast_shape(self.inputs)
             if self._shape is None:
-                raise NotImplementedError("If all operands are scalars, pass a shape= argument")
+                raise ValueError(
+                    "If all inputs are scalars, pass a `shape` argument to indicate the output shape"
+                )
         else:
             self._shape = shape
 
@@ -2491,39 +2493,6 @@ class LazyUDF(LazyArray):
 
     def save(self, **kwargs):
         raise NotImplementedError("For safety reasons, this is not implemented for UDFs")
-
-
-def _open_lazyarray(array):
-    value = array.schunk.meta["LazyArray"]
-    if value == LazyArrayEnum.UDF.value:
-        raise NotImplementedError("For safety reasons, persistent UDFs are not supported")
-
-    # LazyExpr
-    lazyarray = array.schunk.vlmeta["_LazyArray"]
-    operands = lazyarray["operands"]
-    parent_path = Path(array.schunk.urlpath).parent
-    operands_dict = {}
-    for key, value in operands.items():
-        if isinstance(value, str):
-            value = parent_path / value
-            op = blosc2.open(value)
-            operands_dict[key] = op
-        elif isinstance(value, dict):
-            # C2Array
-            operands_dict[key] = blosc2.C2Array(
-                pathlib.Path(value["path"]).as_posix(),
-                urlbase=value["urlbase"],
-            )
-        else:
-            raise TypeError("Error when retrieving the operands")
-
-    expr = lazyarray["expression"]
-    new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
-    # Make the array info available for the user (only available when opened from disk)
-    new_expr.array = array
-    # We want to expose schunk too, so that .info() can be used on the LazyArray
-    new_expr.schunk = array.schunk
-    return new_expr
 
 
 def lazyudf(
@@ -2714,6 +2683,39 @@ def lazyexpr(
         operands = seek_operands(operands, local_dict, global_dict)
 
     return LazyExpr._new_expr(expression, operands, guess=True, out=out, where=where)
+
+
+def _open_lazyarray(array):
+    value = array.schunk.meta["LazyArray"]
+    if value == LazyArrayEnum.UDF.value:
+        raise NotImplementedError("For safety reasons, persistent UDFs are not supported")
+
+    # LazyExpr
+    lazyarray = array.schunk.vlmeta["_LazyArray"]
+    operands = lazyarray["operands"]
+    parent_path = Path(array.schunk.urlpath).parent
+    operands_dict = {}
+    for key, value in operands.items():
+        if isinstance(value, str):
+            value = parent_path / value
+            op = blosc2.open(value)
+            operands_dict[key] = op
+        elif isinstance(value, dict):
+            # C2Array
+            operands_dict[key] = blosc2.C2Array(
+                pathlib.Path(value["path"]).as_posix(),
+                urlbase=value["urlbase"],
+            )
+        else:
+            raise TypeError("Error when retrieving the operands")
+
+    expr = lazyarray["expression"]
+    new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
+    # Make the array info available for the user (only available when opened from disk)
+    new_expr.array = array
+    # We want to expose schunk too, so that .info() can be used on the LazyArray
+    new_expr.schunk = array.schunk
+    return new_expr
 
 
 if __name__ == "__main__":
