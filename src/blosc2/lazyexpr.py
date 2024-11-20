@@ -2523,7 +2523,7 @@ def lazyudf(
     dtype: np.dtype
         The resulting ndarray dtype in NumPy format.
     shape: tuple, optional
-        The shape of the resulting array. If None, the shape will be guessed from operands.
+        The shape of the resulting array. If None, the shape will be guessed from inputs.
     chunked_eval: bool, optional
         Whether to evaluate the function in chunks or not (blocks).
     kwargs: dict, optional
