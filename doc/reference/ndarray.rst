@@ -14,9 +14,12 @@ Methods
     :toctree: autofiles/ndarray
     :nosignatures:
 
+    __iter__
+    __len__
     __getitem__
     __setitem__
     copy
+    flat
     get_chunk
     iterchunks_info
     slice

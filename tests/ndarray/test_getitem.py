@@ -124,3 +124,23 @@ def test_bool_values(shape, chunks, blocks, idx):
     assert b2a[idx].dtype == npa[idx].dtype
     assert b2a[idx].size == npa[idx].size
     assert b2a[idx].ndim == npa[idx].ndim
+
+
+def test_iter():
+    shape = (5, 5)
+    npa = np.arange(int(np.prod(shape)), dtype=np.int32).reshape(shape)
+    b2a = blosc2.asarray(npa)
+
+    for _i, (a, b) in enumerate(zip(b2a, npa, strict=False)):
+        np.testing.assert_equal(a, b)
+    assert _i == 4
+
+
+def test_flat():
+    shape = (5, 5)
+    npa = np.arange(int(np.prod(shape)), dtype=np.int32).reshape(shape)
+    b2a = blosc2.asarray(npa)
+
+    for _i, (a, b) in enumerate(zip(b2a.flat, npa.flat, strict=False)):
+        np.testing.assert_equal(a, b)
+    assert _i == 24

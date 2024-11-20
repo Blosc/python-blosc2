@@ -21,8 +21,11 @@ Methods
     :nosignatures:
 
     __init__
+    __iter__
+    __len__
     __getitem__
     __setitem__
+    flat
 
 Attributes
 ----------
