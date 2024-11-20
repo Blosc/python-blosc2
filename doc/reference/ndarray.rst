@@ -19,7 +19,6 @@ Methods
     __getitem__
     __setitem__
     copy
-    flat
     get_chunk
     iterchunks_info
     slice

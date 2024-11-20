@@ -468,31 +468,23 @@ def test_sort_indices(shape, chunks, blocks, order):
     np.testing.assert_allclose(res[:], nres)
 
 
-def test_iter():
-    shape = (5, 5)
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks"),
+    [
+        ((5,), (2,), (1,)),
+        ((5,), (5,), (1,)),
+        ((10,), (4,), (3,)),
+    ],
+)
+def test_iter(shape, chunks, blocks):
     na = np.arange(int(np.prod(shape)), dtype=np.int32).reshape(shape)
     nb = np.arange(2 * int(np.prod(shape)), int(np.prod(shape)), -1, dtype=np.int32).reshape(shape)
     nsa = np.empty(shape, dtype=[("a", np.int32), ("b", np.int32)])
     nsa["a"] = na
     nsa["b"] = nb
-    sa = blosc2.asarray(nsa)
+    sa = blosc2.asarray(nsa, chunks=chunks, blocks=blocks)
 
     for _i, (a, b) in enumerate(zip(sa, nsa, strict=False)):
         np.testing.assert_equal(a, b)
         assert a.dtype == b.dtype
-    assert _i == 4
-
-
-def test_flat():
-    shape = (5, 5)
-    na = np.arange(int(np.prod(shape)), dtype=np.int32).reshape(shape)
-    nb = np.arange(2 * int(np.prod(shape)), int(np.prod(shape)), -1, dtype=np.int32).reshape(shape)
-    nsa = np.empty(shape, dtype=[("a", np.int32), ("b", np.int32)])
-    nsa["a"] = na
-    nsa["b"] = nb
-    sa = blosc2.asarray(nsa)
-
-    for _i, (a, b) in enumerate(zip(sa.flat, nsa.flat, strict=False)):
-        np.testing.assert_equal(a, b)
-        assert a.dtype == b.dtype
-    assert _i == 24
+    assert _i == shape[0] - 1

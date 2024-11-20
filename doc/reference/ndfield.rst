@@ -25,7 +25,6 @@ Methods
     __len__
     __getitem__
     __setitem__
-    flat
 
 Attributes
 ----------

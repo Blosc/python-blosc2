@@ -126,21 +126,19 @@ def test_bool_values(shape, chunks, blocks, idx):
     assert b2a[idx].ndim == npa[idx].ndim
 
 
-def test_iter():
-    shape = (5, 5)
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks"),
+    [
+        ((5,), (2,), (1,)),
+        ((10, 10), (5, 5), (2, 2)),
+        ((8, 8, 8), (4, 4, 4), (2, 2, 2)),
+        ((6, 5, 4, 3), (3, 2, 2, 1), (1, 1, 1, 1)),
+    ],
+)
+def test_iter(shape, chunks, blocks):
     npa = np.arange(int(np.prod(shape)), dtype=np.int32).reshape(shape)
-    b2a = blosc2.asarray(npa)
+    b2a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
 
     for _i, (a, b) in enumerate(zip(b2a, npa, strict=False)):
         np.testing.assert_equal(a, b)
-    assert _i == 4
-
-
-def test_flat():
-    shape = (5, 5)
-    npa = np.arange(int(np.prod(shape)), dtype=np.int32).reshape(shape)
-    b2a = blosc2.asarray(npa)
-
-    for _i, (a, b) in enumerate(zip(b2a.flat, npa.flat, strict=False)):
-        np.testing.assert_equal(a, b)
-    assert _i == 24
+    assert _i == shape[0] - 1

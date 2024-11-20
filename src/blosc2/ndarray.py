@@ -808,47 +808,11 @@ def extract_values(arr, indices: np.ndarray[np.int_], max_cache_size: int = 10) 
     return extracted_values
 
 
-# This class is used to iterate over the elements of an NDArray in a flat manner
-class NDFlatIterator:
-    def __init__(self, ndarray: NDArray | NDField, cache_size=10):
-        self.ndarray = ndarray
-        self.cache_size = cache_size
-        self.chunk_cache = LimitedSizeDict(cache_size)
-        self.shape = ndarray.shape
-        self.chunks = ndarray.chunks
-        self.current_index = 0
-        self.total_elements = np.prod(self.shape)
-        self.chunk_size = np.prod(self.chunks)
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        if self.current_index >= self.total_elements:
-            raise StopIteration
-
-        chunk_index = self.current_index // self.chunk_size
-        local_index = self.current_index % self.chunk_size
-
-        if chunk_index not in self.chunk_cache:
-            start = chunk_index * self.chunk_size
-            end = start + self.chunk_size
-            self.chunk_cache[chunk_index] = self.ndarray[start:end]
-
-        value = self.chunk_cache[chunk_index].flat[local_index]
-        self.current_index += 1
-        return value
-
-
 class NDOuterIterator:
     def __init__(self, ndarray: NDArray | NDField, cache_size=10):
         self.ndarray = ndarray
-        self.cache_size = cache_size
-        self.chunk_cache = LimitedSizeDict(cache_size)
-        self.shape = ndarray.shape
-        self.chunks = ndarray.chunks
-        self.outer_dim_size = self.shape[0]
-        self.inner_shape = self.shape[1:]
+        self.outer_dim_size = ndarray.shape[0]
+        self.inner_shape = ndarray.shape[1:]
         self.current_index = 0
 
     def __iter__(self):
@@ -861,9 +825,8 @@ class NDOuterIterator:
         outer_index = self.current_index
         self.current_index += 1
 
-        # Calculate the slice for the current outer dimension
-        outer_slice = slice(outer_index, outer_index + 1)
-        return self.ndarray[outer_slice].reshape(self.inner_shape)
+        # Return the outer dimension
+        return self.ndarray[outer_index]
 
 
 class NDArray(blosc2_ext.NDArray, Operand):
@@ -1302,15 +1265,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return NDOuterIterator(self)
 
     @property
-    def flat(self):
-        """Iterate over the elements of the array in a flat manner.
-
-        Returns
-        -------
-        out: iterator
-        """
-        return NDFlatIterator(self)
-
     def __len__(self):
         return self.shape[0]
 
@@ -3090,16 +3044,6 @@ class NDField(Operand):
         out: iterator
         """
         return NDOuterIterator(self)
-
-    @property
-    def flat(self):
-        """Iterate over the elements of the field in a flat manner.
-
-        Returns
-        -------
-        out: iterator
-        """
-        return NDFlatIterator(self)
 
     def __len__(self):
         return self.shape[0]
