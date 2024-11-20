@@ -61,14 +61,13 @@ def fill_chunk(inputs_tuple, output, offset):
     start = off / N * reduc
     stop = (off + lout) / N * reduc
     output["b"][:] = np.linspace(start, stop, lout, dtype="f4")
-    rng = inputs_tuple[1]
+    rng = inputs_tuple[0]
     output["c"][:] = rng.random(len(output))
 
 
 t0 = time()
-npsa = np.empty((N,), dtype=dt)
 rng = np.random.default_rng(42)  # to get reproducible results
-lazyarray = blosc2.lazyudf(fill_chunk, (npsa, rng), npsa.dtype)
+lazyarray = blosc2.lazyudf(fill_chunk, (rng,), dtype=dt, shape=(N,))
 # print(lazyarray.info)
 arr = lazyarray.compute()
 print(f"Time to create blosc2 array (UDF): {time() - t0:.3f} s")

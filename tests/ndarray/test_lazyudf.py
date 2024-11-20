@@ -121,6 +121,42 @@ def test_2p(shape, chunks, blocks, chunked_eval):
     np.testing.assert_allclose(res[...], npc)
 
 
+def udf0p(inputs_tuple, output, offset):
+    output[:] = 1
+
+
+@pytest.mark.parametrize("chunked_eval", [True, False])
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks"),
+    [
+        (
+            (20, 20),
+            (10, 10),
+            (5, 5),
+        ),
+        (
+            (13, 13, 10),
+            (10, 10, 5),
+            (5, 5, 3),
+        ),
+        (
+            (13, 13),
+            (10, 10),
+            (5, 5),
+        ),
+    ],
+)
+def test_0p(shape, chunks, blocks, chunked_eval):
+    npa = np.ones(shape)
+
+    expr = blosc2.lazyudf(
+        udf0p, (), npa.dtype, shape=shape, chunked_eval=chunked_eval, chunks=chunks, blocks=blocks
+    )
+    res = expr.compute()
+
+    np.testing.assert_allclose(res[...], npa)
+
+
 def udf_1dim(inputs_tuple, output, offset):
     x = inputs_tuple[0]
     y = inputs_tuple[1]

@@ -292,6 +292,8 @@ class LazyArray(ABC):
 
 
 def convert_inputs(inputs):
+    if len(inputs) == 0:
+        return []
     inputs_ = []
     for obj in inputs:
         if not isinstance(
@@ -315,7 +317,7 @@ def compute_broadcast_shape(arrays):
     """
     # When dealing with UDFs, one can arrive params that are not arrays
     shapes = [arr.shape for arr in arrays if hasattr(arr, "shape") and arr is not np]
-    return np.broadcast_shapes(*shapes)
+    return np.broadcast_shapes(*shapes) if shapes else None
 
 
 def check_smaller_shape(value, shape, slice_shape):
@@ -493,9 +495,12 @@ def extract_numpy_scalars(expr: str):
 def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
     """Validate the inputs for the expression."""
     if len(inputs) == 0:
-        raise ValueError(
-            "You need to pass at least one array.  Use blosc2.empty() if values are not really needed."
-        )
+        if out is None:
+            raise ValueError(
+                "You really want to pass at least one input or one output for building a LazyArray."
+                "  Maybe you want blosc2.empty() instead?"
+            )
+        return out.shape, out.chunks, out.blocks, True
 
     inputs = [input for input in inputs.values() if hasattr(input, "shape") and input is not np]
     shape = compute_broadcast_shape(inputs)
@@ -948,7 +953,7 @@ def slices_eval(  # noqa: C901
     :ref:`NDArray` or np.ndarray
         The output array.
     """
-    out = kwargs.pop("_output", None)
+    out: blosc2.NDArray | None = kwargs.pop("_output", None)
     chunks = kwargs.get("chunks")
     where: dict | None = kwargs.pop("_where_args", None)
     _indices = kwargs.pop("_indices", False)
@@ -960,8 +965,11 @@ def slices_eval(  # noqa: C901
         _order = [_order]
 
     dtype = kwargs.pop("dtype", None)
-    # Compute the shape and chunks of the output array, including broadcasting
-    shape = compute_broadcast_shape(operands.values())
+    if out is None:
+        # Compute the shape and chunks of the output array, including broadcasting
+        shape = compute_broadcast_shape(operands.values())
+    else:
+        shape = out.shape
 
     # We need to keep the original _slice arg, for allowing a final getitem (if necessary)
     orig_slice = _slice
@@ -981,7 +989,7 @@ def slices_eval(  # noqa: C901
             # Use operands to get the shape and chunks
             chunks = operands_[0].chunks
 
-    # Iterate over the operands and get the chunks
+    # Get the indexes for chunks
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
     # The starting point for the indices of the inputs
     leninputs = compute_start_index(shape, orig_slice) if orig_slice is not None else 0
@@ -1804,7 +1812,7 @@ class LazyExpr(LazyArray):
             # Use the cached shape
             return self._shape_
         # Operands shape can change, so we always need to recompute this
-        _shape, chunks, blocks, fast_path = validate_inputs(self.operands)
+        _shape, chunks, blocks, fast_path = validate_inputs(self.operands, getattr(self, "_out", None))
         if fast_path:
             # fast_path ensure that all the operands have the same partitions
             self._chunks = chunks
@@ -1817,7 +1825,9 @@ class LazyExpr(LazyArray):
     def chunks(self):
         if hasattr(self, "_chunks"):
             return self._chunks
-        self._shape, self._chunks, self._blocks, fast_path = validate_inputs(self.operands)
+        self._shape, self._chunks, self._blocks, fast_path = validate_inputs(
+            self.operands, getattr(self, "_out", None)
+        )
         if not fast_path:
             # Not using the fast path, so we need to compute the chunks/blocks automatically
             self._chunks, self._blocks = compute_chunks_blocks(self.shape, None, None, dtype=self.dtype)
@@ -1827,7 +1837,9 @@ class LazyExpr(LazyArray):
     def blocks(self):
         if hasattr(self, "_blocks"):
             return self._blocks
-        self._shape, self._chunks, self._blocks, fast_path = validate_inputs(self.operands)
+        self._shape, self._chunks, self._blocks, fast_path = validate_inputs(
+            self.operands, getattr(self, "_out", None)
+        )
         if not fast_path:
             # Not using the fast path, so we need to compute the chunks/blocks automatically
             self._chunks, self._blocks = compute_chunks_blocks(self.shape, None, None, dtype=self.dtype)
@@ -2347,14 +2359,17 @@ class LazyExpr(LazyArray):
 
 
 class LazyUDF(LazyArray):
-    def __init__(self, func, inputs, dtype, chunked_eval=True, **kwargs):
+    def __init__(self, func, inputs, dtype, shape=None, chunked_eval=True, **kwargs):
         # After this, all the inputs should be np.ndarray or NDArray objects
         self.inputs = convert_inputs(inputs)
         self.chunked_eval = chunked_eval
         # Get res shape
-        self._shape = compute_broadcast_shape(self.inputs)
-        if self._shape is None:
-            raise NotImplementedError("If all operands are scalars, use python, numpy or numexpr")
+        if shape is None:
+            self._shape = compute_broadcast_shape(self.inputs)
+            if self._shape is None:
+                raise NotImplementedError("If all operands are scalars, pass a shape= argument")
+        else:
+            self._shape = shape
 
         self.kwargs = kwargs
         self._dtype = dtype
@@ -2515,6 +2530,7 @@ def lazyudf(
     func: Callable[[tuple, np.ndarray, tuple[int]], None],
     inputs: tuple | list,
     dtype: np.dtype,
+    shape: tuple[int] | None = None,
     chunked_eval: bool = True,
     **kwargs: dict,
 ) -> LazyUDF:
@@ -2531,13 +2547,16 @@ def lazyudf(
         - `output`: The buffer to be filled as a multidimensional numpy.ndarray.
         - `offset`: The multidimensional offset corresponding to the start of the block being computed.
     inputs: tuple or list
-        The sequence of inputs. Supported inputs are NumPy.ndarray,
-        Python scalars, :ref:`NDArray`, :ref:`NDField` or :ref:`C2Array`.
+        The sequence of inputs. Supported inputs are:
+        NumPy.ndarray, :ref:`NDArray`, :ref:`NDField`, :ref:`C2Array`.
+        Any other object is supported too, and will be passed as is to the user-defined function.
+        If not needed, this can be empty, but `shape` must be provided.
     dtype: np.dtype
         The resulting ndarray dtype in NumPy format.
+    shape: tuple, optional
+        The shape of the resulting array. If None, the shape will be guessed from operands.
     chunked_eval: bool, optional
         Whether to evaluate the function in chunks or not (blocks).
-        Default is True.
     kwargs: dict, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
         These arguments will be used by the :meth:`LazyArray.__getitem__` and
@@ -2574,7 +2593,7 @@ def lazyudf(
             [17.5 20.  22.5]
             [25.  27.5 30. ]]
     """
-    return LazyUDF(func, inputs, dtype, chunked_eval, **kwargs)
+    return LazyUDF(func, inputs, dtype, shape, chunked_eval, **kwargs)
 
 
 def seek_operands(names, local_dict=None, global_dict=None, _frame_depth: int = 2):
