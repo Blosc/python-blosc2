@@ -1264,7 +1264,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return NDOuterIterator(self)
 
-    @property
     def __len__(self):
         return self.shape[0]
 
