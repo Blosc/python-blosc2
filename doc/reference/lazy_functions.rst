@@ -35,3 +35,4 @@ Their result is always a :ref:`LazyExpr` instance, which can be evaluated (with 
     real
     imag
     contains
+    where
