@@ -213,15 +213,19 @@ from .ndarray import (
     Operand,
     are_partitions_aligned,
     are_partitions_behaved,
+    arange,
+    linspace,
     asarray,
+    reshape,
     copy,
     empty,
     frombuffer,
-    full,
     get_slice_nchunks,
     nans,
     uninit,
     zeros,
+    ones,
+    full,
 )
 
 from .c2array import c2context, C2Array, URLPath

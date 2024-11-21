@@ -279,6 +279,19 @@ class LazyArray(ABC):
 
     @property
     @abstractmethod
+    def ndim(self) -> int:
+        """
+        Get the number of dimensions of the :ref:`LazyArray`.
+
+        Returns
+        -------
+        out: int
+            The number of dimensions of the :ref:`LazyArray`.
+        """
+        pass
+
+    @property
+    @abstractmethod
     def info(self) -> InfoReporter:
         """
         Get information about the :ref:`LazyArray`.
@@ -513,7 +526,11 @@ def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
     NDinputs = [input for input in inputs if hasattr(input, "chunks")]
     if len(NDinputs) == 0:
         # All inputs are NumPy arrays, so we cannot take the fast path
-        return inputs[0].shape, None, None, False
+        if inputs and hasattr(inputs[0], "shape"):
+            shape = inputs[0].shape
+        else:
+            shape = None
+        return shape, None, None, False
 
     # Check if we can take the fast path
     # For this we need that the chunks and blocks for all inputs (and a possible output)
@@ -1012,7 +1029,6 @@ def slices_eval(  # noqa: C901
             slice(c * s, min((c + 1) * s, shape[i]))
             for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
-        offset = tuple(s.start for s in slice_)  # offset for the udf
         # Check whether current slice_ intersects with _slice
         if _slice is not None and _slice != ():
             # Ensure that _slice is of type slice
@@ -1051,6 +1067,7 @@ def slices_eval(  # noqa: C901
         if callable(expression):
             result = np.empty(slice_shape, dtype=out.dtype)
             # Call the udf directly and use result as the output array
+            offset = tuple(s.start for s in slice_)
             expression(tuple(chunk_operands.values()), result, offset=offset)
             out[slice_] = result
             continue
@@ -1800,6 +1817,10 @@ class LazyExpr(LazyArray):
         return self._dtype_
 
     @property
+    def ndim(self) -> int:
+        return len(self.shape)
+
+    @property
     def shape(self):
         # Honor self._shape; it can be set during the building of the expression
         if hasattr(self, "_shape"):
@@ -2397,6 +2418,10 @@ class LazyUDF(LazyArray):
     @property
     def dtype(self):
         return self._dtype
+
+    @property
+    def ndim(self) -> int:
+        return len(self.shape)
 
     @property
     def shape(self):

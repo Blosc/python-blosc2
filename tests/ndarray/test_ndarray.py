@@ -5,6 +5,7 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+import math
 
 import numpy as np
 import pytest
@@ -97,3 +98,77 @@ def test_asarray(a):
         np.testing.assert_allclose(a[()], b[()])
     else:
         np.testing.assert_allclose(a, b[:])
+
+
+@pytest.mark.parametrize(
+    ("shape", "newshape", "chunks", "blocks"),
+    [
+        ((10,), (2, 5), (1, 5), (1, 2)),
+        ((20,), (2, 5, 2), (1, 5, 2), (1, 2, 1)),
+        ((60,), (3, 5, 4), (4, 5, 2), (3, 1, 2)),
+        ((160,), (8, 5, 4), (4, 5, 2), (3, 2, 1)),
+        ((140,), (7, 5, 4), (4, 5, 2), (3, 1, 2)),
+    ],
+)
+def test_reshape(shape, newshape, chunks, blocks):
+    a = np.arange(np.prod(shape))
+    b = blosc2.asarray(a)
+    c = b.reshape(newshape, chunks=chunks, blocks=blocks)
+    assert c.shape == newshape
+    assert c.dtype == a.dtype
+    np.testing.assert_allclose(c[:], a.reshape(newshape))
+
+
+@pytest.mark.parametrize(
+    ("sss", "shape", "dtype", "chunks", "blocks"),
+    [
+        ((0, 10, 1), (10,), np.int32, (5,), (2,)),
+        ((1, 11, 1), (2, 5), np.int64, (2, 3), (1, 1)),
+        ((2, 22, 1), (2, 5, 2), np.float32, (2, 5, 1), (1, 5, 1)),
+        ((2, 22, 2), (1, 5, 2), np.float32, (1, 5, 1), (1, 5, 1)),
+        ((3, 33, 3), (1, 5, 2), np.float64, (1, 5, 1), (1, 5, 1)),
+        ((50, None, None), (10, 5, 1), np.float64, (5, 5, 1), (3, 5, 1)),
+    ],
+)
+def test_arange(sss, shape, dtype, chunks, blocks):
+    start, stop, step = sss
+    a = blosc2.arange(start, stop, step, dtype=dtype, shape=shape, chunks=chunks, blocks=blocks)
+    assert a.shape == shape
+    assert isinstance(a, blosc2.NDArray)
+    b = np.arange(start, stop, step, dtype=dtype).reshape(shape)
+    np.testing.assert_allclose(a[:], b)
+
+
+@pytest.mark.parametrize(
+    ("ss", "shape", "dtype", "chunks", "blocks"),
+    [
+        ((0, 7), (10,), np.float32, (10,), (2,)),
+        ((0, 7), (10,), np.float64, (5,), (2,)),
+        ((0, 7), (10,), np.complex64, (5,), (2,)),
+        ((0, 6), (10,), np.complex128, (5,), (2,)),
+        ((-1, 7), (10, 10), np.float32, (10, 2), (2, 2)),
+    ],
+)
+@pytest.mark.parametrize("endpoint", [True, False])
+def test_linspace(ss, shape, dtype, chunks, blocks, endpoint):
+    start, stop = ss
+    num = math.prod(shape)
+    a = blosc2.linspace(
+        start, stop, num, dtype=dtype, shape=shape, endpoint=endpoint, chunks=chunks, blocks=blocks
+    )
+    assert a.shape == shape
+    assert a.dtype == dtype
+    assert isinstance(a, blosc2.NDArray)
+    b = np.linspace(start, stop, num, dtype=dtype, endpoint=endpoint).reshape(shape)
+    np.testing.assert_allclose(a[:], b)
+
+
+def test_ones():
+    # This is based onblosc2.full, so a full test is not needed
+    shape = (10, 10)
+    a = blosc2.ones(shape, dtype=np.float32)
+    assert a.shape == shape
+    assert a.dtype == np.float32
+    assert isinstance(a, blosc2.NDArray)
+    b = np.ones(shape, dtype=np.float32)
+    np.testing.assert_allclose(a[:], b)

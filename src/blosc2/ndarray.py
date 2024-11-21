@@ -132,6 +132,130 @@ def get_chunks_idx(shape, chunks):
     return chunks_idx, nchunks
 
 
+def get_flattened_slices(shape: tuple[int], s: tuple[slice, ...]) -> list[slice]:
+    """
+    From array with `shape`, get the flattened list of slices corresponding to `s`.
+
+    Parameters
+    ----------
+    shape: tuple[int]
+        The shape of the array.
+    s: tuple[slice]
+        The slice we want to flatten.
+
+    Returns
+    -------
+    list[slice]
+        A list of slices that correspond to the slice `s`.
+    """
+    # Process the slice s to get start and stop indices
+    key = np.index_exp[s]
+    start = [k.start if k.start is not None else 0 for k in key]
+    # For stop, cap the values to the shape (shape may not be an exact multiple of the chunks)
+    stop = [builtins.min(k.stop if k.stop is not None else shape[i], shape[i]) for i, k in enumerate(key)]
+
+    # Calculate the strides for each dimension
+    strides = np.cumprod((1,) + shape[::-1][:-1])[::-1]
+
+    # Generate the 1-dimensional slices
+    slices = []
+    current_slice_start = None
+    current_slice_end = None
+    for idx in np.ndindex(*[stop[i] - start[i] for i in range(len(shape))]):
+        flat_idx = builtins.sum((start[i] + idx[i]) * strides[i] for i in range(len(shape)))
+        if current_slice_start is None:
+            current_slice_start = flat_idx
+            current_slice_end = flat_idx
+        elif flat_idx == current_slice_end + 1:
+            current_slice_end = flat_idx
+        else:
+            slices.append(slice(current_slice_start, current_slice_end + 1))
+            current_slice_start = flat_idx
+            current_slice_end = flat_idx
+
+    if current_slice_start is not None:
+        slices.append(slice(current_slice_start, current_slice_end + 1))
+
+    return slices
+
+
+def reshape(
+    src: NDArray | NDField | blosc2.LazyArray | blosc2.C2Array, shape: tuple | list, **kwargs: dict
+) -> NDArray:
+    """Returns an array containing the same data with a new shape.
+
+    This only works when src.shape is 1-dimensional. Multidim case for src is
+    interesting, but not supported yet.
+
+    Parameters
+    ----------
+    shape : tuple or list
+        The new shape of the array. It should have the same number of elements
+        as the current shape.
+    kwargs : dict, optional
+        Additional keyword arguments supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        A new array with the requested shape.
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> shape = [23 * 11]
+    >>> a = np.arange(np.prod(shape))
+    >>> # Create an array
+    >>> b = blosc2.asarray(a)
+    >>> # Reshape the array
+    >>> c = blosc2.reshape(b, (11, 23))
+    >>> print(c.shape)
+    (11, 23)
+    """
+
+    if src.ndim != 1:
+        raise ValueError("reshape only works when src.shape is 1-dimensional")
+    # Check if the new shape is valid
+    if np.prod(shape) != np.prod(src.shape):
+        raise ValueError("total size of new array must be unchanged")
+
+    # Create the new array
+    dst = empty(shape, dtype=src.dtype, **kwargs)
+
+    # Copy the data chunk by chunk
+    for dst_chunk in dst.iterchunks_info():
+        dst_slice = tuple(
+            slice(c * s, (c + 1) * s) for c, s in zip(dst_chunk.coords, dst.chunks, strict=False)
+        )
+        # Cap the stop indices in dst_slices to the dst.shape, and create a new list of slices
+        dst_slice = tuple(
+            slice(s.start, builtins.min(s.stop, sh)) for s, sh in zip(dst_slice, dst.shape, strict=False)
+        )
+        size_dst_slice = np.prod([s.stop - s.start for s in dst_slice])
+        # Find the series of slices in source array that correspond to the destination chunk
+        # (assuming the source array is 1-dimensional here)
+        src_slices = get_flattened_slices(dst.shape, dst_slice)
+        # Compute the size for slices in the source array
+        size_src_slices = builtins.sum([s.stop - s.start for s in src_slices])
+        if size_src_slices != size_dst_slice:
+            raise ValueError("source slice size is not equal to the destination chunk size")
+        # Now, assemble the slices for assignment in the destination array
+        dst_buf = np.empty(size_dst_slice, dtype=src.dtype)
+        dst_buf_len = 0
+        for src_slice in src_slices:
+            slice_size = src_slice.stop - src_slice.start
+            dst_buf_slice = slice(dst_buf_len, dst_buf_len + slice_size)
+            dst_buf_len += slice_size
+            dst_buf[dst_buf_slice] = src[src_slice]
+        # Compute the shape of dst_slice
+        dst_slice_shape = tuple(s.stop - s.start for s in dst_slice)
+        # ... and assign the buffer to the destination array
+        dst[dst_slice] = dst_buf.reshape(dst_slice_shape)
+
+    return dst
+
+
 def _check_allowed_dtypes(
     value: bool | int | float | str | blosc2.NDArray | blosc2.NDField | blosc2.C2Array | blosc2.Proxy,
 ):
@@ -1305,6 +1429,17 @@ class NDArray(blosc2_ext.NDArray, Operand):
         (10,)
         """
         return self.schunk.get_chunk(nchunk)
+
+    def reshape(self, shape: tuple[int], **kwargs: dict) -> NDArray:
+        """Return a new array with the specified shape.
+
+        See full documentation in :func:`reshape`.
+
+        See Also
+        --------
+        :func:`reshape`
+        """
+        return reshape(self, shape, **kwargs)
 
     def iterchunks_info(
         self,
@@ -2686,6 +2821,150 @@ def full(
     blocks = kwargs.pop("blocks", None)
     chunks, blocks = compute_chunks_blocks(shape, chunks, blocks, dtype, **kwargs)
     return blosc2_ext.full(shape, chunks, blocks, fill_value, dtype, **kwargs)
+
+
+def ones(shape: int | tuple | list, dtype: np.dtype = np.int64, **kwargs: dict) -> NDArray:
+    """Create an array with one as values.
+
+    The parameters and keyword arguments are the same as for the
+    :func:`empty` constructor.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+            A :ref:`NDArray` is returned.
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> shape = [8, 8]
+    >>> chunks = [6, 5]
+    >>> blocks = [5, 5]
+    >>> dtype = np.float64
+    >>> # Create ones array
+    >>> array = blosc2.ones(shape, dtype=dtype, chunks=chunks, blocks=blocks)
+    >>> array.shape
+    (8, 8)
+    >>> array.chunks
+    (6, 5)
+    >>> array.blocks
+    (5, 5)
+    >>> array.dtype
+    dtype('float64')
+    """
+    return full(shape, 1, dtype, **kwargs)
+
+
+def arange(
+    start: int | float = 0,
+    stop: int | float | None = None,
+    step: int | float | None = 1,
+    dtype: np.dtype = np.int64,
+    shape: int | tuple | list | None = None,
+    **kwargs: dict,
+) -> NDArray:
+    """Return evenly spaced values within a given interval.
+
+    Parameters
+    ----------
+    start: int, float, complex or np.number
+        The starting value of the sequence.
+    stop: int, float, complex or np.number
+        The end value of the sequence.
+    step: int, float, complex or np.number
+        Spacing between values.
+    dtype: np.dtype
+        The data type of the array elements in NumPy format. Default is `np.uint8`.
+        This will override the `typesize`
+        in the compression parameters if they are provided.
+    shape: int, tuple or list
+        The shape of the final array. If None, the shape will be computed.
+
+    Other Parameters
+    ----------------
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        A :ref:`NDArray` is returned.
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> # Create an array with values from 0 to 10
+    >>> array = blosc2.arange(0, 10, 1)
+    >>> print(array)
+    [0 1 2 3 4 5 6 7 8 9]
+    """
+
+    def arange_fill(inputs, output, offset):
+        lout = len(output)
+        start, stop, step = inputs
+        start_ = start + offset[0] * step
+        stop_ = start_ + lout * step
+        output[:] = np.arange(start_, stop_, step, dtype=output.dtype)
+
+    if stop is None:
+        stop = start
+        start = 0
+    if step is None:
+        step = 1
+    if not shape:
+        shape = (int((stop - start) / step),)
+    lshape = (np.prod(shape),)
+    lazyarr = blosc2.lazyudf(arange_fill, (start, stop, step), dtype=dtype, shape=lshape)
+    return reshape(lazyarr, shape, **kwargs)
+
+
+# Define a numpy linspace-like function
+def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, **kwargs):
+    """Return evenly spaced numbers over a specified interval.
+
+    This is similar to `numpy.linspace` but it returns a `NDArray`
+    instead of a numpy array.  Also, it supports a `shape` parameter
+    to return a ndim array.
+
+    Parameters
+    ----------
+    start: int, float, complex or np.number
+        The starting value of the sequence.
+    stop: int, float, complex or np.number
+        The end value of the sequence.
+    num: int
+        Number of samples to generate.
+    endpoint: bool
+        If True, `stop` is the last sample. Otherwise, it is not included.
+    dtype: np.dtype
+        The data type of the array elements in NumPy format. Default is `np.float64`.
+    shape: int, tuple or list
+        The shape of the final array. If None, the shape will be guessed from `num`.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        A :ref:`NDArray` is returned.
+    """
+
+    def linspace_fill(inputs, output, offset):
+        lout = len(output)
+        start, stop, num = inputs
+        # Compute proper start and stop values for the current chunk
+        start_ = start + offset[0] / num * (stop - start)
+        stop_ = start_ + lout / num * (stop - start)
+        output[:] = np.linspace(start_, stop_, lout, endpoint=False, dtype=output.dtype)
+
+    if not shape:
+        shape = (num,)
+    lshape = (math.prod(shape),)
+    if endpoint:
+        stop += (stop - start) / (num - 1)
+    inputs = (start, stop, num)
+    lazyarr = blosc2.lazyudf(linspace_fill, inputs, dtype=dtype, shape=lshape)
+    return reshape(lazyarr, shape, **kwargs)
 
 
 def frombuffer(

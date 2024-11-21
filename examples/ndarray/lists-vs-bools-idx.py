@@ -5,11 +5,6 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
-from time import time
-
-import numpy as np
-
-import blosc2
 
 # This example shows how to use the `indices()` method to get the indices an expression
 # and compare this with the bools version of the index.
@@ -31,6 +26,12 @@ storage required by bools idx: 2.23 MB (42.68x)
 Time to get values using bools: 0.351 s
 ```
 """
+
+from time import time
+
+import numpy as np
+
+import blosc2
 
 N = 100_000_000
 reduc = 0.01

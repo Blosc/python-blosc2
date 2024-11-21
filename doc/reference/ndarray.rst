@@ -66,8 +66,12 @@ Constructors
     copy
     empty
     frombuffer
-    full
     nans
     ndarray_from_cframe
     uninit
     zeros
+    ones
+    full
+    arange
+    linspace
+    reshape
