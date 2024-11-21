@@ -148,6 +148,7 @@ def get_flattened_slices(shape: tuple[int], s: tuple[slice, ...]) -> list[slice]
     list[slice]
         A list of slices that correspond to the slice `s`.
     """
+    # TODO: this is a hot spot in constructors linke arange or linspace.  We should optimize it somehow.
     # Process the slice s to get start and stop indices
     key = np.index_exp[s]
     start = [k.start if k.start is not None else 0 for k in key]
