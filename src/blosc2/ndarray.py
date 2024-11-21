@@ -2918,6 +2918,8 @@ def arange(
         shape = (int((stop - start) / step),)
     lshape = (np.prod(shape),)
     lazyarr = blosc2.lazyudf(arange_fill, (start, stop, step), dtype=dtype, shape=lshape)
+    if shape == lshape:
+        return lazyarr.compute(**kwargs)
     return reshape(lazyarr, shape, **kwargs)
 
 
@@ -2965,6 +2967,8 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, *
         stop += (stop - start) / (num - 1)
     inputs = (start, stop, num)
     lazyarr = blosc2.lazyudf(linspace_fill, inputs, dtype=dtype, shape=lshape)
+    if shape == lshape:
+        return lazyarr.compute(**kwargs)
     return reshape(lazyarr, shape, **kwargs)
 
 
