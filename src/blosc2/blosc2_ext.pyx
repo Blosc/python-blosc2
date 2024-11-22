@@ -2180,17 +2180,17 @@ cdef _check_rc(rc, message):
 
 
 cdef class slice_flatter:
-    cdef long ndim
+    cdef long long ndim
     cdef int done
-    cdef long[:] shape
-    cdef long[:] start
-    cdef long[:] stop
-    cdef long[:] strides
-    cdef long[:] indices
-    cdef long current_slice_start
-    cdef long current_slice_end
+    cdef long long[:] shape
+    cdef long long[:] start
+    cdef long long[:] stop
+    cdef long long[:] strides
+    cdef long long[:] indices
+    cdef long long current_slice_start
+    cdef long long current_slice_end
 
-    def __cinit__(self, long[:] start not None, long[:] stop not None, long[:] strides not None):
+    def __cinit__(self, long long[:] start not None, long long[:] stop not None, long long[:] strides not None):
         self.ndim = start.shape[0]
         self.done = 0
         self.start = start
@@ -2208,7 +2208,7 @@ cdef class slice_flatter:
     @cython.boundscheck(False)
     @cython.wraparound(False)
     def __next__(self):
-        cdef long i, j, flat_idx
+        cdef long long i, j, flat_idx
 
         while not self.done:
             flat_idx = 0
@@ -2241,7 +2241,7 @@ cdef class slice_flatter:
     @cython.boundscheck(False)
     @cython.wraparound(False)
     cdef void incr_indices(self) nogil:
-        cdef int i
+        cdef long long i
         for i in range(self.ndim - 1, -1, -1):
             self.indices[i] += 1
             if self.indices[i] < self.shape[i]:

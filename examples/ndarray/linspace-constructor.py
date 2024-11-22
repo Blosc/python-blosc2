@@ -31,7 +31,6 @@ shape = (5, N // 5)
 print(f"*** Creating a blosc2 array with {N:_} elements (shape: {shape} ***")
 t0 = time()
 b = blosc2.linspace(0, 10, N, shape=(5, N // 5))
-print(f"Time to create blosc2 array2: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)")
 cratio = b.schunk.nbytes / b.schunk.cbytes
 print(
     f"Time: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)"
