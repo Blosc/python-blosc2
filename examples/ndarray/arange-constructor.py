@@ -14,37 +14,49 @@ import numpy as np
 
 import blosc2
 
-N = 1_000_000
+N = 100_000_000
 
+shape = (N,)
+print(f"*** Creating a blosc2 array with {N:_} elements (shape: {shape} ***")
 t0 = time()
-a = blosc2.arange(N)
-print(f"Time to create blosc2 array: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)")
+a = blosc2.arange(shape=shape)
 cratio = a.schunk.nbytes / a.schunk.cbytes
-print(f"storage required by array: {a.schunk.cbytes / 1e6:.2f} MB ({cratio:.2f}x)")
+print(
+    f"Time: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)"
+    f"\tStorage required: {a.schunk.cbytes / 1e6:.2f} MB (cratio: {cratio:.2f}x)"
+)
 
 # You can create ndim arrays too
+shape = (5, N // 5)
+print(f"*** Creating a blosc2 array with {N:_} elements (shape: {shape} ***")
 t0 = time()
-b = blosc2.arange(N, dtype=np.float32, shape=(5, N // 5))
-print(f"Time to create blosc2 array2: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)")
+b = blosc2.arange(N, shape=shape)
 cratio = b.schunk.nbytes / b.schunk.cbytes
-print(f"storage required by array2: {a.schunk.cbytes / 1e6:.2f} MB ({cratio:.2f}x)")
+print(
+    f"Time: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)"
+    f"\tStorage required: {b.schunk.cbytes / 1e6:.2f} MB (cratio: {cratio:.2f}x)"
+)
 
 # For reference, let's compare with numpy
+print(f"*** Creating a numpy array with {N:_} elements (shape: {shape} ***")
 t0 = time()
-na = np.arange(N)
-print(f"Time to create numpy array: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)")
-print(f"storage required by numpy array: {na.nbytes / 1e6:.2f} MB")
-assert np.array_equal(a[:], na)
+na = np.arange(N).reshape(shape)
+print(
+    f"Time: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)"
+    f"\tStorage required: {na.nbytes / 1e6:.2f} MB"
+)
+assert np.array_equal(b[:], na)
 
 # Create an NDArray from a numpy array
+print(f"*** Creating a blosc2 array with {N:_} elements (shape: {shape} from numpy ***")
 t0 = time()
 c = blosc2.asarray(na)
-print(
-    f"Time to create blosc2 array from numpy array: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)"
-)
 cratio = c.schunk.nbytes / c.schunk.cbytes
-print(f"storage required by array: {c.schunk.cbytes / 1e6:.2f} MB ({cratio:.2f}x)")
-np.testing.assert_allclose(c[:], a[:])
+print(
+    f"Time: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)"
+    f"\tStorage required: {c.schunk.cbytes / 1e6:.2f} MB ({cratio:.2f}x)"
+)
+assert np.array_equal(c[:], b[:])
 
 # In conclusion, you can use blosc2 arange() to create blosc2 arrays requiring much less storage
 # than numpy arrays.  If speed is important, and you can afford the extra memory, you can create

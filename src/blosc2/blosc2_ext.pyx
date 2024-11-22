@@ -15,6 +15,7 @@ import pathlib
 
 import _ctypes
 
+import cython
 from cpython cimport (
     Py_buffer,
     PyBUF_SIMPLE,
@@ -2177,7 +2178,78 @@ cdef _check_rc(rc, message):
     if rc < 0:
         raise RuntimeError(message)
 
-# NDArray
+cdef class slice_flatter:
+    cdef long ndim
+    cdef int done
+    cdef long[:] shape
+    cdef long[:] start
+    cdef long[:] stop
+    cdef long[:] strides
+    cdef long[:] indices
+    cdef long current_slice_start
+    cdef long current_slice_end
+
+    def __cinit__(self, long[:] start not None, long[:] stop not None, long[:] strides not None):
+        self.ndim = start.shape[0]
+        self.done = 0
+        self.start = start
+        self.stop = stop
+        self.strides = strides
+        self.current_slice_start = -1
+        self.current_slice_end = -1
+        shape = tuple(stop[i] - start[i] for i in range(self.ndim))
+        self.shape = np.array(shape, dtype=np.intp)
+        self.indices = cython.view.array(shape=(self.ndim,), itemsize=sizeof(long), format="l")
+
+    def __iter__(self):
+        return self
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    def __next__(self):
+        cdef long i, j, flat_idx
+
+        while not self.done:
+            flat_idx = 0
+            for j in range(self.ndim):
+                flat_idx += (self.start[j] + self.indices[j]) * self.strides[j]
+
+            if self.current_slice_start == -1:
+                self.current_slice_start = flat_idx
+                self.current_slice_end = flat_idx
+            elif flat_idx == self.current_slice_end + 1:
+                self.current_slice_end = flat_idx
+            else:
+                result = slice(self.current_slice_start, self.current_slice_end + 1)
+                self.current_slice_start = flat_idx
+                self.current_slice_end = flat_idx
+                # Increment the indices (TODO: remove duplicated code)
+                self.incr_indices()
+                return result
+
+            # Increment the indices
+            self.incr_indices()
+
+        if self.current_slice_start != -1:
+            result = slice(self.current_slice_start, self.current_slice_end + 1)
+            self.current_slice_start = -1
+            return result
+
+        raise StopIteration
+
+    @cython.boundscheck(False)
+    @cython.wraparound(False)
+    cdef void incr_indices(self) nogil:
+        cdef int i
+        for i in range(self.ndim - 1, -1, -1):
+            self.indices[i] += 1
+            if self.indices[i] < self.shape[i]:
+                break
+            self.indices[i] = 0
+            if i == 0:
+                self.done = 1
+
+
 cdef class NDArray:
     cdef b2nd_array_t* array
 

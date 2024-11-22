@@ -11,6 +11,7 @@ from __future__ import annotations
 import builtins
 import math
 from collections import OrderedDict, namedtuple
+from functools import reduce
 from typing import TYPE_CHECKING, NamedTuple
 
 from numpy.exceptions import ComplexWarning
@@ -132,7 +133,7 @@ def get_chunks_idx(shape, chunks):
     return chunks_idx, nchunks
 
 
-def get_flattened_slices(shape: tuple[int], s: tuple[slice, ...]) -> list[slice]:
+def get_flat_slices_orig(shape: tuple[int], s: tuple[slice, ...]) -> list[slice]:
     """
     From array with `shape`, get the flattened list of slices corresponding to `s`.
 
@@ -148,7 +149,9 @@ def get_flattened_slices(shape: tuple[int], s: tuple[slice, ...]) -> list[slice]
     list[slice]
         A list of slices that correspond to the slice `s`.
     """
-    # TODO: this is a hot spot in constructors linke arange or linspace.  We should optimize it somehow.
+    # Note: this has been rewritten to use cython, see get_flat_slices
+    # It is kept here for reference
+    #
     # Process the slice s to get start and stop indices
     key = np.index_exp[s]
     start = [k.start if k.start is not None else 0 for k in key]
@@ -178,6 +181,40 @@ def get_flattened_slices(shape: tuple[int], s: tuple[slice, ...]) -> list[slice]
         slices.append(slice(current_slice_start, current_slice_end + 1))
 
     return slices
+
+
+def get_flat_slices(shape: tuple[int], s: tuple[slice, ...]) -> list[slice]:
+    """
+    From array with `shape`, get the flattened list of slices corresponding to `s`.
+
+    Parameters
+    ----------
+    shape: tuple
+        The shape of the array.
+    s: tuple
+        The slice we want to flatten.
+
+    Returns
+    -------
+    list
+        A list of slices that correspond to the slice `s`.
+    """
+    ndim = len(shape)
+    start = [s[i].start if s[i].start is not None else 0 for i in range(ndim)]
+    stop = [builtins.min(s[i].stop if s[i].stop is not None else shape[i], shape[i]) for i in range(ndim)]
+
+    # Calculate the strides for each dimension
+    # Both methods are equivalent
+    # strides = np.cumprod((1,) + shape[::-1][:-1])[::-1]
+    strides = [reduce(lambda x, y: x * y, shape[i + 1 :], 1) for i in range(ndim)]
+
+    # Convert lists to numpy arrays
+    start = np.array(start, dtype=np.intp)
+    stop = np.array(stop, dtype=np.intp)
+    strides = np.array(strides, dtype=np.intp)
+
+    # Generate and return the 1-dimensional slices
+    return list(blosc2_ext.slice_flatter(start, stop, strides))
 
 
 def reshape(
@@ -236,7 +273,11 @@ def reshape(
         size_dst_slice = np.prod([s.stop - s.start for s in dst_slice])
         # Find the series of slices in source array that correspond to the destination chunk
         # (assuming the source array is 1-dimensional here)
-        src_slices = get_flattened_slices(dst.shape, dst_slice)
+        # t0 = time()
+        # src_slices = get_flat_slices_orig(dst.shape, dst_slice)
+        # Use the get_flat_slices which uses a much faster iterator in cython
+        src_slices = get_flat_slices(dst.shape, dst_slice)
+        # print(f"Time to get slices: {time() - t0:.3f} s")
         # Compute the size for slices in the source array
         size_src_slices = builtins.sum([s.stop - s.start for s in src_slices])
         if size_src_slices != size_dst_slice:
