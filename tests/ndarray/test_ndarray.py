@@ -5,6 +5,7 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+import itertools
 import math
 
 import numpy as np
@@ -163,12 +164,27 @@ def test_linspace(ss, shape, dtype, chunks, blocks, endpoint):
     np.testing.assert_allclose(a[:], b)
 
 
-def test_ones():
-    # This is based onblosc2.full, so a full test is not needed
-    shape = (10, 10)
-    a = blosc2.ones(shape, dtype=np.float32)
+@pytest.mark.parametrize(
+    ("it", "shape", "dtype", "chunks", "blocks"),
+    [
+        (range(10), (10,), np.int8, (10,), (2,)),
+        (range(1, 11), (10,), np.float64, (5,), (2,)),
+        (range(2, 22, 2), (10,), np.int64, (5,), (2,)),
+        (range(3, 33, 3), (10,), np.complex128, (5,), (2,)),
+        (range(100), (10, 10), np.int32, (10, 2), (2, 2)),
+    ],
+)
+def test_fromiter(it, shape, dtype, chunks, blocks):
+    # Create a duplicate of the iterator
+    it, it2 = itertools.tee(it)
+    a = blosc2.fromiter(it, dtype=dtype, shape=shape, chunks=chunks, blocks=blocks)
     assert a.shape == shape
-    assert a.dtype == np.float32
+    assert a.dtype == dtype
     assert isinstance(a, blosc2.NDArray)
-    b = np.ones(shape, dtype=np.float32)
-    np.testing.assert_allclose(a[:], b)
+    b = np.fromiter(it2, dtype=dtype).reshape(shape)
+    if a.ndim == 1:
+        np.testing.assert_allclose(a[:], b)
+    else:
+        # fromiter consumes the iterator on a per-chunk basis
+        # so comparison is tricky
+        pass

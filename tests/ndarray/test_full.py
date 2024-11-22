@@ -112,3 +112,14 @@ def test_full_simple(shape, fill_value, dtype):
         np.testing.assert_allclose(a[...], b, rtol=tol, atol=tol)
     else:
         np.array_equal(a[...], b)
+
+
+def test_ones():
+    # This is based on blosc2.full, so a full test is not really needed
+    shape = (10, 10)
+    a = blosc2.ones(shape, dtype=np.float32)
+    assert a.shape == shape
+    assert a.dtype == np.float32
+    assert isinstance(a, blosc2.NDArray)
+    b = np.ones(shape, dtype=np.float32)
+    np.testing.assert_allclose(a[:], b)

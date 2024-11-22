@@ -12,7 +12,7 @@ import builtins
 import math
 from collections import OrderedDict, namedtuple
 from functools import reduce
-from typing import TYPE_CHECKING, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 from numpy.exceptions import ComplexWarning
 
@@ -218,7 +218,7 @@ def get_flat_slices(shape: tuple[int], s: tuple[slice, ...]) -> list[slice]:
 
 
 def reshape(
-    src: NDArray | NDField | blosc2.LazyArray | blosc2.C2Array, shape: tuple | list, **kwargs: dict
+    src: NDArray | NDField | blosc2.LazyArray | blosc2.C2Array, shape: tuple | list, **kwargs: Any
 ) -> NDArray:
     """Returns an array containing the same data with a new shape.
 
@@ -325,7 +325,7 @@ def sum(
     axis: int | tuple[int] | None = None,
     dtype: np.dtype = None,
     keepdims: bool = False,
-    **kwargs: dict,
+    **kwargs: Any,
 ) -> np.ndarray | NDArray | int | float | complex | bool:
     """
     Return the sum of array elements over a given axis.
@@ -382,7 +382,7 @@ def mean(
     axis: int | tuple[int] | None = None,
     dtype: np.dtype = None,
     keepdims: bool = False,
-    **kwargs: dict,
+    **kwargs: Any,
 ) -> np.ndarray | NDArray | int | float | complex | bool:
     """
     Return the arithmetic mean along the specified axis.
@@ -419,7 +419,7 @@ def std(
     dtype: np.dtype = None,
     ddof: int = 0,
     keepdims: bool = False,
-    **kwargs: dict,
+    **kwargs: Any,
 ) -> np.ndarray | NDArray | int | float | bool:
     """
     Return the standard deviation along the specified axis.
@@ -478,7 +478,7 @@ def var(
     dtype: np.dtype = None,
     ddof: int = 0,
     keepdims: bool = False,
-    **kwargs: dict,
+    **kwargs: Any,
 ) -> np.ndarray | NDArray | int | float | bool:
     """
     Return the variance along the specified axis.
@@ -519,7 +519,7 @@ def prod(
     axis: int | tuple[int] | None = None,
     dtype: np.dtype = None,
     keepdims: bool = False,
-    **kwargs: dict,
+    **kwargs: Any,
 ) -> np.ndarray | NDArray | int | float | complex | bool:
     """
     Return the product of array elements over a given axis.
@@ -558,7 +558,7 @@ def min(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
     axis: int | tuple[int] | None = None,
     keepdims: bool = False,
-    **kwargs: dict,
+    **kwargs: Any,
 ) -> np.ndarray | NDArray | int | float | complex | bool:
     """
     Return the minimum along a given axis.
@@ -606,7 +606,7 @@ def max(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
     axis: int | tuple[int] | None = None,
     keepdims: bool = False,
-    **kwargs: dict,
+    **kwargs: Any,
 ) -> np.ndarray | NDArray | int | float | complex | bool:
     """
     Return the maximum along a given axis.
@@ -649,7 +649,7 @@ def any(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
     axis: int | tuple[int] | None = None,
     keepdims: bool = False,
-    **kwargs: dict,
+    **kwargs: Any,
 ) -> np.ndarray | NDArray | bool:
     """
     Test whether any array element along a given axis evaluates to True.
@@ -690,7 +690,7 @@ def all(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
     axis: int | tuple[int] | None = None,
     keepdims: bool = False,
-    **kwargs: dict,
+    **kwargs: Any,
 ) -> np.ndarray | NDArray | bool:
     """
     Test whether all array elements along a given axis evaluate to True.
@@ -1472,7 +1472,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return self.schunk.get_chunk(nchunk)
 
-    def reshape(self, shape: tuple[int], **kwargs: dict) -> NDArray:
+    def reshape(self, shape: tuple[int], **kwargs: Any) -> NDArray:
         """Return a new array with the specified shape.
 
         See full documentation in :func:`reshape`.
@@ -1593,7 +1593,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return super().to_cframe()
 
-    def copy(self, dtype: np.dtype = None, **kwargs: dict) -> NDArray:
+    def copy(self, dtype: np.dtype = None, **kwargs: Any) -> NDArray:
         """Create a copy of an array with same parameters.
 
         Parameters
@@ -1687,7 +1687,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
         super().resize(newshape)
 
-    def slice(self, key: int | slice | Sequence[slice], **kwargs: dict) -> NDArray:
+    def slice(self, key: int | slice | Sequence[slice], **kwargs: Any) -> NDArray:
         """Get a (multidimensional) slice as a new :ref:`NDArray`.
 
         Parameters
@@ -2653,7 +2653,7 @@ def _check_shape(shape):
     return shape
 
 
-def empty(shape: int | tuple | list, dtype: np.dtype | None = np.uint8, **kwargs: dict) -> NDArray:
+def empty(shape: int | tuple | list, dtype: np.dtype | None = np.uint8, **kwargs: Any) -> NDArray:
     """Create an empty array.
 
     Parameters
@@ -2706,7 +2706,7 @@ def empty(shape: int | tuple | list, dtype: np.dtype | None = np.uint8, **kwargs
     return blosc2_ext.empty(shape, chunks, blocks, dtype, **kwargs)
 
 
-def uninit(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict) -> NDArray:
+def uninit(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: Any) -> NDArray:
     """Create an array with uninitialized values.
 
     The parameters and keyword arguments are the same as for the
@@ -2739,7 +2739,7 @@ def uninit(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict
     return blosc2_ext.uninit(shape, chunks, blocks, dtype, **kwargs)
 
 
-def nans(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: dict) -> NDArray:
+def nans(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: Any) -> NDArray:
     """Create an array with NaNs values.
 
     The parameters and keyword arguments are the same as for the
@@ -2772,7 +2772,7 @@ def nans(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: dict
     return blosc2_ext.nans(shape, chunks, blocks, dtype, **kwargs)
 
 
-def zeros(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict) -> NDArray:
+def zeros(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: Any) -> NDArray:
     """Create an array with zero as the default value
     for uninitialized portions of the array.
 
@@ -2812,7 +2812,7 @@ def zeros(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict)
 
 
 def full(
-    shape: int | tuple | list, fill_value: bytes | int | float | bool, dtype: np.dtype = None, **kwargs: dict
+    shape: int | tuple | list, fill_value: bytes | int | float | bool, dtype: np.dtype = None, **kwargs: Any
 ) -> NDArray:
     """Create an array, with :paramref:`fill_value` being used as the default value
     for uninitialized portions of the array.
@@ -2865,7 +2865,7 @@ def full(
     return blosc2_ext.full(shape, chunks, blocks, fill_value, dtype, **kwargs)
 
 
-def ones(shape: int | tuple | list, dtype: np.dtype = np.int64, **kwargs: dict) -> NDArray:
+def ones(shape: int | tuple | list, dtype: np.dtype = np.int64, **kwargs: Any) -> NDArray:
     """Create an array with one as values.
 
     The parameters and keyword arguments are the same as for the
@@ -2904,7 +2904,7 @@ def arange(
     step: int | float | None = 1,
     dtype: np.dtype = np.int64,
     shape: int | tuple | list | None = None,
-    **kwargs: dict,
+    **kwargs: Any,
 ) -> NDArray:
     """Return evenly spaced values within a given interval.
 
@@ -2965,7 +2965,7 @@ def arange(
 
 
 # Define a numpy linspace-like function
-def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, **kwargs):
+def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, **kwargs: Any):
     """Return evenly spaced numbers over a specified interval.
 
     This is similar to `numpy.linspace` but it returns a `NDArray`
@@ -3013,8 +3013,53 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, *
     return reshape(lazyarr, shape, **kwargs)
 
 
+def fromiter(iterable, shape, dtype, **kwargs):
+    """Create a new array from an iterable object.
+
+    Parameters
+    ----------
+    iterable: iterable
+        An iterable object providing data for the array.
+    shape: int, tuple or list
+        The shape of the final array.
+    dtype: np.dtype
+        The data type of the array elements in NumPy format.
+
+    Other Parameters
+    ----------------
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        A :ref:`NDArray` is returned.
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> # Create an array from an iterable
+    >>> array = blosc2.fromiter(range(10), shape=(10,), dtype=np.int64)
+    >>> print(array[:])
+    [0 1 2 3 4 5 6 7 8 9]
+    """
+
+    def iter_fill(inputs, output, offset):
+        nout = np.prod(output.shape)
+        (iterable,) = inputs
+        output[:] = np.fromiter(iterable, dtype=output.dtype, count=nout).reshape(output.shape)
+
+    lshape = (np.prod(shape),)
+    inputs = (iterable,)
+    lazyarr = blosc2.lazyudf(iter_fill, inputs, dtype=dtype, shape=lshape)
+    if shape == lshape:
+        return lazyarr.compute(**kwargs)
+    return reshape(lazyarr, shape, **kwargs)
+
+
 def frombuffer(
-    buffer: bytes, shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: dict | list
+    buffer: bytes, shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: Any
 ) -> NDArray:
     """Create an array out of a buffer.
 
@@ -3060,7 +3105,7 @@ def frombuffer(
     return blosc2_ext.from_buffer(buffer, shape, chunks, blocks, dtype, **kwargs)
 
 
-def copy(array: NDArray, dtype: np.dtype = None, **kwargs: dict) -> NDArray:
+def copy(array: NDArray, dtype: np.dtype = None, **kwargs: Any) -> NDArray:
     """
     This is equivalent to :meth:`NDArray.copy`
 
@@ -3081,7 +3126,7 @@ def copy(array: NDArray, dtype: np.dtype = None, **kwargs: dict) -> NDArray:
     return array.copy(dtype, **kwargs)
 
 
-def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: dict | list) -> NDArray:
+def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: Any) -> NDArray:
     """Convert the `array` to an `NDArray`.
 
     Parameters

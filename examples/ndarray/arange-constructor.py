@@ -14,23 +14,26 @@ import numpy as np
 
 import blosc2
 
-N = 100_000_000
+N = 10_000_000
 
 shape = (N,)
-print(f"*** Creating a blosc2 array with {N:_} elements (shape: {shape} ***")
+print(f"*** Creating a blosc2 array with {N:_} elements (shape: {shape}) ***")
 t0 = time()
-a = blosc2.arange(shape=shape)
+a = blosc2.arange(shape=shape, dtype=np.int32)
 cratio = a.schunk.nbytes / a.schunk.cbytes
 print(
     f"Time: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)"
     f"\tStorage required: {a.schunk.cbytes / 1e6:.2f} MB (cratio: {cratio:.2f}x)"
 )
+print(f"Last 3 elements: {a[-3:]}")
 
 # You can create ndim arrays too
 shape = (5, N // 5)
-print(f"*** Creating a blosc2 array with {N:_} elements (shape: {shape} ***")
+chunks = None
+# chunks = (5, N // 10)   # Uncomment this line to experiment with chunks
+print(f"*** Creating a blosc2 array with {N:_} elements (shape: {shape}, chunks: {chunks}) ***")
 t0 = time()
-b = blosc2.arange(N, shape=shape)
+b = blosc2.arange(N, shape=shape, dtype=np.int32, chunks=chunks)
 cratio = b.schunk.nbytes / b.schunk.cbytes
 print(
     f"Time: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)"
@@ -38,9 +41,9 @@ print(
 )
 
 # For reference, let's compare with numpy
-print(f"*** Creating a numpy array with {N:_} elements (shape: {shape} ***")
+print(f"*** Creating a numpy array with {N:_} elements (shape: {shape}) ***")
 t0 = time()
-na = np.arange(N).reshape(shape)
+na = np.arange(N, dtype=np.int32).reshape(shape)
 print(
     f"Time: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)"
     f"\tStorage required: {na.nbytes / 1e6:.2f} MB"
@@ -48,7 +51,7 @@ print(
 assert np.array_equal(b[:], na)
 
 # Create an NDArray from a numpy array
-print(f"*** Creating a blosc2 array with {N:_} elements (shape: {shape} from numpy ***")
+print(f"*** Creating a blosc2 array with {N:_} elements (shape: {shape}) from numpy ***")
 t0 = time()
 c = blosc2.asarray(na)
 cratio = c.schunk.nbytes / c.schunk.cbytes
@@ -60,4 +63,4 @@ assert np.array_equal(c[:], b[:])
 
 # In conclusion, you can use blosc2 arange() to create blosc2 arrays requiring much less storage
 # than numpy arrays.  If speed is important, and you can afford the extra memory, you can create
-# blosc2 arrays much faster straight from numpy arrays as well.
+# blosc2 arrays faster straight from numpy arrays as well.

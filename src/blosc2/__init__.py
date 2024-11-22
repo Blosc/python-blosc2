@@ -220,6 +220,7 @@ from .ndarray import (
     copy,
     empty,
     frombuffer,
+    fromiter,
     get_slice_nchunks,
     nans,
     uninit,
