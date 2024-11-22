@@ -209,9 +209,9 @@ def get_flat_slices(shape: tuple[int], s: tuple[slice, ...]) -> list[slice]:
     strides = [reduce(lambda x, y: x * y, shape[i + 1 :], 1) for i in range(ndim)]
 
     # Convert lists to numpy arrays
-    start = np.array(start, dtype=np.intp)
-    stop = np.array(stop, dtype=np.intp)
-    strides = np.array(strides, dtype=np.intp)
+    start = np.array(start, dtype=np.int64)
+    stop = np.array(stop, dtype=np.int64)
+    strides = np.array(strides, dtype=np.int64)
 
     # Generate and return the 1-dimensional slices
     return list(blosc2_ext.slice_flatter(start, stop, strides))

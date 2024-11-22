@@ -2178,6 +2178,7 @@ cdef _check_rc(rc, message):
     if rc < 0:
         raise RuntimeError(message)
 
+
 cdef class slice_flatter:
     cdef long ndim
     cdef int done
@@ -2198,8 +2199,8 @@ cdef class slice_flatter:
         self.current_slice_start = -1
         self.current_slice_end = -1
         shape = tuple(stop[i] - start[i] for i in range(self.ndim))
-        self.shape = np.array(shape, dtype=np.intp)
-        self.indices = cython.view.array(shape=(self.ndim,), itemsize=sizeof(long), format="l")
+        self.shape = np.array(shape, dtype=np.int64)
+        self.indices = np.zeros(self.ndim, dtype=np.int64)
 
     def __iter__(self):
         return self
