@@ -111,13 +111,18 @@ def test_asarray(a):
         ((140,), (7, 5, 4), (4, 5, 2), (3, 1, 2)),
     ],
 )
-def test_reshape(shape, newshape, chunks, blocks):
+@pytest.mark.parametrize("c_order", [True, False])
+def test_reshape(shape, newshape, chunks, blocks, c_order):
     a = np.arange(np.prod(shape))
     b = blosc2.asarray(a)
-    c = b.reshape(newshape, chunks=chunks, blocks=blocks)
+    c = b.reshape(newshape, chunks=chunks, blocks=blocks, c_order=c_order)
     assert c.shape == newshape
     assert c.dtype == a.dtype
-    np.testing.assert_allclose(c[:], a.reshape(newshape))
+    if a.ndim == 1 or c_order:
+        np.testing.assert_allclose(a[:], b)
+    else:
+        # This is chunk order, so testing is more laborious, and not really necessary
+        pass
 
 
 @pytest.mark.parametrize(

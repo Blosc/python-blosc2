@@ -183,7 +183,11 @@ def get_flat_slices_orig(shape: tuple[int], s: tuple[slice, ...]) -> list[slice]
     return slices
 
 
-def get_flat_slices(shape: tuple[int], s: tuple[slice, ...]) -> list[slice]:
+def get_flat_slices(
+    shape: tuple[int],
+    s: tuple[slice, ...],
+    c_order: bool = True,
+) -> list[slice]:
     """
     From array with `shape`, get the flattened list of slices corresponding to `s`.
 
@@ -193,6 +197,9 @@ def get_flat_slices(shape: tuple[int], s: tuple[slice, ...]) -> list[slice]:
         The shape of the array.
     s: tuple
         The slice we want to flatten.
+    c_order: bool
+        Whether to flatten the slices in C order (row-major) or just plain order.
+        Default is C order.
 
     Returns
     -------
@@ -202,6 +209,9 @@ def get_flat_slices(shape: tuple[int], s: tuple[slice, ...]) -> list[slice]:
     ndim = len(shape)
     start = [s[i].start if s[i].start is not None else 0 for i in range(ndim)]
     stop = [builtins.min(s[i].stop if s[i].stop is not None else shape[i], shape[i]) for i in range(ndim)]
+    # Steps are not used in the computation, so raise an error if they are not None or 1
+    if builtins.any(s[i].step not in (None, 1) for i in range(ndim)):
+        raise ValueError("steps are not supported in slices")
 
     # Calculate the strides for each dimension
     # Both methods are equivalent
@@ -213,12 +223,22 @@ def get_flat_slices(shape: tuple[int], s: tuple[slice, ...]) -> list[slice]:
     stop = np.array(stop, dtype=np.int64)
     strides = np.array(strides, dtype=np.int64)
 
-    # Generate and return the 1-dimensional slices
+    if not c_order:
+        # Generate just a single 1-dimensional slice
+        flat_start = np.sum(start * strides)
+        # Compute the size of the slice
+        flat_size = np.prod(stop - start)
+        return [slice(flat_start, flat_start + flat_size)]
+
+    # Generate and return the 1-dimensional slices in C order
     return list(blosc2_ext.slice_flatter(start, stop, strides))
 
 
 def reshape(
-    src: NDArray | NDField | blosc2.LazyArray | blosc2.C2Array, shape: tuple | list, **kwargs: Any
+    src: NDArray | NDField | blosc2.LazyArray | blosc2.C2Array,
+    shape: tuple | list,
+    c_order: bool = True,
+    **kwargs: Any,
 ) -> NDArray:
     """Returns an array containing the same data with a new shape.
 
@@ -227,9 +247,16 @@ def reshape(
 
     Parameters
     ----------
+    src: :ref:`NDArray` or :ref:`NDField` or :ref:`LazyArray` or :ref:`C2Array`
+        The input array.
     shape : tuple or list
         The new shape of the array. It should have the same number of elements
         as the current shape.
+    c_order: bool
+        Whether to reshape the array in C order (row-major) or insertion order.
+        Insertion order means that values will be stored in the array
+        following the order of chunks in the source array.
+        Default is C order.
     kwargs : dict, optional
         Additional keyword arguments supported by the :func:`empty` constructor.
 
@@ -276,7 +303,7 @@ def reshape(
         # t0 = time()
         # src_slices = get_flat_slices_orig(dst.shape, dst_slice)
         # Use the get_flat_slices which uses a much faster iterator in cython
-        src_slices = get_flat_slices(dst.shape, dst_slice)
+        src_slices = get_flat_slices(dst.shape, dst_slice, c_order)
         # print(f"Time to get slices: {time() - t0:.3f} s")
         # Compute the size for slices in the source array
         size_src_slices = builtins.sum([s.stop - s.start for s in src_slices])
@@ -2966,16 +2993,19 @@ def arange(
         shape = (int((stop - start) / step),)
     lshape = (math.prod(shape),)
     lazyarr = blosc2.lazyudf(arange_fill, (start, stop, step), dtype=dtype, shape=lshape)
-    # Check whether we need to reshape the array
-    need_reshape = len(shape) > 1 and np.prod(shape[:-1]) > 1
-    if c_order and need_reshape:
-        # In C order, we need to compute the lazy array first and then reshape it
-        larr = lazyarr.compute()  # intermediate array
-        return reshape(larr, shape, **kwargs)
+
     if len(shape) == 1:
         # C order is guaranteed, and no reshape is needed
         return lazyarr.compute(**kwargs)
-    # We still need to reshape the (1-dim) array.
+
+    # Check whether we need to reshape the array in C order
+    if c_order and len(shape) > 1 and np.prod(shape[:-1]) > 1:
+        # We need to compute the lazy array first and then reshape it
+        # We could avoid this intermediate array, but benchmarking shows that
+        # the performance is better with this approach and for this case.
+        larr = lazyarr.compute()  # intermediate array
+        return reshape(larr, shape, **kwargs)
+
     # We don't need an intermediate NDArray, but the order will change because of
     # interaction of the lazy array operation and the filling UDF function.
     # Incidentally, not requiring C order can be quite illustrative for the user to
@@ -3033,17 +3063,20 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, c
         stop += (stop - start) / (num - 1)
     inputs = (start, stop, num)
     lazyarr = blosc2.lazyudf(linspace_fill, inputs, dtype=dtype, shape=lshape)
-    # Check whether we need to reshape the array
-    need_reshape = len(shape) > 1 and np.prod(shape[:-1]) > 1
-    if c_order and need_reshape:
-        # In C order, we need to compute the lazy array first and then reshape it
-        larr = lazyarr.compute()  # intermediate array
-        return reshape(larr, shape, **kwargs)
     if len(shape) == 1:
         # C order is guaranteed, and no reshape is needed
         return lazyarr.compute(**kwargs)
-    # We still need to reshape the (1-dim) array.
-    # See blosc2.arange() for more details on how ordering works in this case.
+
+    # Check whether we need to reshape the array in C order
+    if c_order and len(shape) > 1 and np.prod(shape[:-1]) > 1:
+        # We need to compute the lazy array first and then reshape it
+        # We could avoid this intermediate array, but benchmarking shows that
+        # the performance is better with this approach and for this case.
+        larr = lazyarr.compute()  # intermediate array
+        return reshape(larr, shape, **kwargs)
+
+    # We don't need an intermediate NDArray
+    # See blosc2.arange() comments for details
     return reshape(lazyarr, shape, **kwargs)
 
 
@@ -3093,17 +3126,20 @@ def fromiter(iterable, shape, dtype, c_order=True, **kwargs):
     lshape = (np.prod(shape),)
     inputs = (iterable,)
     lazyarr = blosc2.lazyudf(iter_fill, inputs, dtype=dtype, shape=lshape)
-    # Check whether we need to reshape the array
-    need_reshape = len(shape) > 1 and np.prod(shape[:-1]) > 1
-    if c_order and need_reshape:
-        # In C order, we need to compute the lazy array first and then reshape it
-        larr = lazyarr.compute()  # intermediate array
-        return reshape(larr, shape, **kwargs)
     if len(shape) == 1:
         # C order is guaranteed, and no reshape is needed
         return lazyarr.compute(**kwargs)
-    # We still need to reshape the (1-dim) array.
-    # See blosc2.arange() for more details on how ordering works in this case.
+
+    # Check whether we need to reshape the array in C order
+    if c_order and len(shape) > 1 and np.prod(shape[:-1]) > 1:
+        # We need to compute the lazy array first and then reshape it
+        # We could avoid this intermediate array, but benchmarking shows that
+        # the performance is better with this approach and for this case.
+        larr = lazyarr.compute()  # intermediate array
+        return reshape(larr, shape, **kwargs)
+
+    # We don't need an intermediate NDArray
+    # See blosc2.arange() comments for details
     return reshape(lazyarr, shape, **kwargs)
 
 
