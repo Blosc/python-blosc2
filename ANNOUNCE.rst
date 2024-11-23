@@ -1,40 +1,44 @@
-Announcing Python-Blosc2 3.0.0-beta.4
-=====================================
+Announcing Python-Blosc2 3.0.0-rc1
+==================================
 
-The Blosc development team is pleased to announce the fourth beta release of
-Python-Blosc2 3.0.0.  Here, documentation has been improved quite a lot and
-we have added more examples and tutorials (thanks NumFOCUS for sponsoring this).
-Also, there are new CParams, DParams and Storage dataclasses that allow for
-a more flexible and powerful way to set parameters for the Blosc2 compressor.
+The Blosc development team is pleased to announce the first release release of
+Python-Blosc2 3.0.0.  Here is a summary of key achievements since the last
+beta release:
 
-In new 3.0 release, you can evaluate expressions like ``a + sin(b) + 1`` where
-``a`` and ``b`` are NDArray instances.  This is a powerful feature that allows for
-efficient computations on compressed data, and supports advanced features
-like reductions, filters, user-defined functions and broadcasting (still
-in beta).  See this
-`example <https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/eval_expr.py>`_.
+**Improved Data Processing with Lazy Expressions**: Enhancements have been
+made to the lazyexpr.py module, focusing on optimizing the computation of lazy
+expressions over compressed multidimensional datasets. These updates streamline
+operations and improve performance when working with large arrays.
 
-Also, we have added support for memory mapping in ``SChunk`` and ``NDArray`` instances.
-This allows to map super-chunks stored in disk and access them as if they were in
-memory.  When combined with the evaluation engine, this feature allows for very
-good performance when working with large datasets.  See this
-`benchmark <https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr.ipynb>`_
-(as it is a Jupyter notebook, you can easily run it in your own computer).
+**Enhanced Documentation and Tutorials**: New tutorials and updated
+documentation were integrated, particularly highlighting advanced operations
+like using custom user-defined functions (UDFs) with Blosc2's NDArray objects
+and computing efficiently with compressed data. A big thanks to NumFOCUS for
+sponsoring this.
+
+**API Refinements**: Minor fixes and improvements to the API for consistency
+and robustness were implemented, ensuring better usability for developers
+working with NDArray objects and other Blosc2 features.
+
+**Bug Fixes and Code Maintenance**: Various issues were resolved to enhance
+reliability, including fixes to the Python wrapper for the Blosc2 C library.
+These addressed edge cases and potential inconsistencies in handling compressed
+data.
 
 Last, but not least, we are using NumPy 2.x as the default for testing procedures
 and builds. This means that our wheels are built against NumPy 2, so in case you want
-to use NumPy 1.x, you will need to use NumPy 1.23.0 or later.
+to use NumPy 1.x, you will need to use NumPy 1.25.0 or later.
 
 As always, we would like to get feedback from the community before the final release.
 We are providing binary wheels that you can easily install from PyPI with:
 
-    pip install blosc2==3.0.0b4
+    pip install blosc2==3.0.0rc1
 
 For more info, you can have a look at the release notes in:
 
 https://github.com/Blosc/python-blosc2/releases
 
-More docs and examples are available in the documentation site:
+Docs and examples are available in the documentation site:
 
 https://www.blosc.org/python-blosc2/python-blosc2.html
 
@@ -55,13 +59,14 @@ You can read some of our tutorials on how to perform advanced computations at:
 
 * https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/03.lazyarray-expressions.ipynb
 * https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/03.lazyarray-udf.ipynb
+* https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/04.persistent-reductions.ipynb
+* https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/05.remote_proxy.ipynb
 
-In addition, Python-Blosc2 aims to leverage the full C-Blosc2 functionality to
-support super-chunks
-(`SChunk <https://www.blosc.org/python-blosc2/reference/schunk_api.html>`_),
-multi-dimensional arrays
+Python-Blosc2 aims to leverage the full C-Blosc2 functionality to
+support a wide range of compression and decompression needs, but also
+implementing NumPy-like multi-dimensional arrays
 (`NDArray <https://www.blosc.org/python-blosc2/reference/ndarray_api.html>`_),
-metadata, serialization and other bells and whistles introduced in C-Blosc2.
+metadata, serialization and other bells and whistles.
 
 **Note:** Blosc2 is meant to be backward compatible with Blosc(1) data.
 That means that it can read data generated with Blosc, but the opposite
