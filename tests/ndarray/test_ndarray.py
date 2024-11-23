@@ -131,13 +131,20 @@ def test_reshape(shape, newshape, chunks, blocks):
         ((50, None, None), (10, 5, 1), np.float64, (5, 5, 1), (3, 5, 1)),
     ],
 )
-def test_arange(sss, shape, dtype, chunks, blocks):
+@pytest.mark.parametrize("c_order", [True, False])
+def test_arange(sss, shape, dtype, chunks, blocks, c_order):
     start, stop, step = sss
-    a = blosc2.arange(start, stop, step, dtype=dtype, shape=shape, chunks=chunks, blocks=blocks)
+    a = blosc2.arange(
+        start, stop, step, dtype=dtype, shape=shape, c_order=c_order, chunks=chunks, blocks=blocks
+    )
     assert a.shape == shape
     assert isinstance(a, blosc2.NDArray)
     b = np.arange(start, stop, step, dtype=dtype).reshape(shape)
-    np.testing.assert_allclose(a[:], b)
+    if a.ndim == 1 or c_order:
+        np.testing.assert_allclose(a[:], b)
+    else:
+        # This is chunk order, so testing is more laborious, and not really necessary
+        pass
 
 
 @pytest.mark.parametrize(
@@ -151,17 +158,30 @@ def test_arange(sss, shape, dtype, chunks, blocks):
     ],
 )
 @pytest.mark.parametrize("endpoint", [True, False])
-def test_linspace(ss, shape, dtype, chunks, blocks, endpoint):
+@pytest.mark.parametrize("c_order", [True, False])
+def test_linspace(ss, shape, dtype, chunks, blocks, endpoint, c_order):
     start, stop = ss
     num = math.prod(shape)
     a = blosc2.linspace(
-        start, stop, num, dtype=dtype, shape=shape, endpoint=endpoint, chunks=chunks, blocks=blocks
+        start,
+        stop,
+        num,
+        dtype=dtype,
+        shape=shape,
+        endpoint=endpoint,
+        c_order=c_order,
+        chunks=chunks,
+        blocks=blocks,
     )
     assert a.shape == shape
     assert a.dtype == dtype
     assert isinstance(a, blosc2.NDArray)
     b = np.linspace(start, stop, num, dtype=dtype, endpoint=endpoint).reshape(shape)
-    np.testing.assert_allclose(a[:], b)
+    if a.ndim == 1 or c_order:
+        np.testing.assert_allclose(a[:], b)
+    else:
+        # This is chunk order, so testing is more laborious, and not really necessary
+        pass
 
 
 @pytest.mark.parametrize(
@@ -189,5 +209,5 @@ def test_fromiter(it, shape, dtype, chunks, blocks, c_order):
     if a.ndim == 1 or c_order:
         np.testing.assert_allclose(a[:], b)
     else:
-        # fromiter consumes the iterator on a per-chunk basis, so check is tricky
+        # This is chunk order, so testing is more laborious, and not really necessary
         pass

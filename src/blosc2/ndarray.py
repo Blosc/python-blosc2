@@ -2904,6 +2904,7 @@ def arange(
     step: int | float | None = 1,
     dtype: np.dtype = np.int64,
     shape: int | tuple | list | None = None,
+    c_order: bool = True,
     **kwargs: Any,
 ) -> NDArray:
     """Return evenly spaced values within a given interval.
@@ -2922,6 +2923,12 @@ def arange(
         in the compression parameters if they are provided.
     shape: int, tuple or list
         The shape of the final array. If None, the shape will be computed.
+    c_order: bool
+        Whether to store the array in C order (row-major) or insertion order.
+        Insertion order means that values will be stored in the array
+        following the order of chunks in the array; this is more memory
+        efficient, as it does not require an intermediate copy of the array.
+        Default is C order.
 
     Other Parameters
     ----------------
@@ -2957,15 +2964,27 @@ def arange(
         step = 1
     if not shape:
         shape = (int((stop - start) / step),)
-    lshape = (np.prod(shape),)
+    lshape = (math.prod(shape),)
     lazyarr = blosc2.lazyudf(arange_fill, (start, stop, step), dtype=dtype, shape=lshape)
-    if shape == lshape:
+    # Check whether we need to reshape the array
+    need_reshape = len(shape) > 1 and np.prod(shape[:-1]) > 1
+    if c_order and need_reshape:
+        # In C order, we need to compute the lazy array first and then reshape it
+        larr = lazyarr.compute()  # intermediate array
+        return reshape(larr, shape, **kwargs)
+    if len(shape) == 1:
+        # C order is guaranteed, and no reshape is needed
         return lazyarr.compute(**kwargs)
+    # We still need to reshape the (1-dim) array.
+    # We don't need an intermediate NDArray, but the order will change because of
+    # interaction of the lazy array operation and the filling UDF function.
+    # Incidentally, not requiring C order can be quite illustrative for the user to
+    # understand how the process of computing lazy arrays (and chunking) works.
     return reshape(lazyarr, shape, **kwargs)
 
 
 # Define a numpy linspace-like function
-def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, **kwargs: Any):
+def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, c_order=True, **kwargs: Any):
     """Return evenly spaced numbers over a specified interval.
 
     This is similar to `numpy.linspace` but it returns a `NDArray`
@@ -2986,6 +3005,12 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, *
         The data type of the array elements in NumPy format. Default is `np.float64`.
     shape: int, tuple or list
         The shape of the final array. If None, the shape will be guessed from `num`.
+    c_order: bool
+        Whether to store the array in C order (row-major) or insertion order.
+        Insertion order means that values will be stored in the array
+        following the order of chunks in the array; this is more memory
+        efficient, as it does not require an intermediate copy of the array.
+        Default is C order.
 
     Returns
     -------
@@ -3008,8 +3033,17 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, *
         stop += (stop - start) / (num - 1)
     inputs = (start, stop, num)
     lazyarr = blosc2.lazyudf(linspace_fill, inputs, dtype=dtype, shape=lshape)
-    if shape == lshape:
+    # Check whether we need to reshape the array
+    need_reshape = len(shape) > 1 and np.prod(shape[:-1]) > 1
+    if c_order and need_reshape:
+        # In C order, we need to compute the lazy array first and then reshape it
+        larr = lazyarr.compute()  # intermediate array
+        return reshape(larr, shape, **kwargs)
+    if len(shape) == 1:
+        # C order is guaranteed, and no reshape is needed
         return lazyarr.compute(**kwargs)
+    # We still need to reshape the (1-dim) array.
+    # See blosc2.arange() for more details on how ordering works in this case.
     return reshape(lazyarr, shape, **kwargs)
 
 
@@ -3059,18 +3093,18 @@ def fromiter(iterable, shape, dtype, c_order=True, **kwargs):
     lshape = (np.prod(shape),)
     inputs = (iterable,)
     lazyarr = blosc2.lazyudf(iter_fill, inputs, dtype=dtype, shape=lshape)
-    if c_order:
-        # In C order, we need to realize the lazy array first and then reshape it
-        larr = lazyarr.compute()
+    # Check whether we need to reshape the array
+    need_reshape = len(shape) > 1 and np.prod(shape[:-1]) > 1
+    if c_order and need_reshape:
+        # In C order, we need to compute the lazy array first and then reshape it
+        larr = lazyarr.compute()  # intermediate array
         return reshape(larr, shape, **kwargs)
-    else:
-        # In insertion order, we can reshape the lazy array directly.
-        # This does not require the computation (and storage) of an
-        # intermediate NDArray. Also, it can be illustrative to understand
-        # how the process of computing lazy arrays (and chunking) work.
-        if shape == lshape:
-            return lazyarr.compute(**kwargs)
-        return reshape(lazyarr, shape, **kwargs)
+    if len(shape) == 1:
+        # C order is guaranteed, and no reshape is needed
+        return lazyarr.compute(**kwargs)
+    # We still need to reshape the (1-dim) array.
+    # See blosc2.arange() for more details on how ordering works in this case.
+    return reshape(lazyarr, shape, **kwargs)
 
 
 def frombuffer(
