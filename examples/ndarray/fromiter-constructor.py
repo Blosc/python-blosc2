@@ -31,19 +31,6 @@ print(f"Last 3 elements: {a[-3:]}")
 shape = (5, N // 5)
 chunks = None
 # chunks = (5, N // 10)   # Uncomment this line to experiment with chunks
-print(f"*** Creating a blosc2 array with {N:_} elements (shape: {shape}, chunks: {chunks}) ***")
-t0 = time()
-b = blosc2.fromiter(range(N), dtype=np.int32, shape=shape, chunks=chunks)
-cratio = b.schunk.nbytes / b.schunk.cbytes
-print(
-    f"Time: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)"
-    f"\tStorage required: {b.schunk.cbytes / 1e6:.2f} MB (cratio: {cratio:.2f}x)"
-)
-
-# You can create ndim arrays too
-shape = (5, N // 5)
-chunks = None
-# chunks = (5, N // 10)   # Uncomment this line to experiment with chunks
 print(f"*** Creating a blosc2 array with {N:_} elements (shape: {shape}, c_order: True) ***")
 t0 = time()
 b = blosc2.fromiter(range(N), dtype=np.int32, shape=shape, chunks=chunks, c_order=True)
