@@ -3013,7 +3013,7 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, *
     return reshape(lazyarr, shape, **kwargs)
 
 
-def fromiter(iterable, shape, dtype, **kwargs):
+def fromiter(iterable, shape, dtype, c_order=True, **kwargs):
     """Create a new array from an iterable object.
 
     Parameters
@@ -3024,6 +3024,12 @@ def fromiter(iterable, shape, dtype, **kwargs):
         The shape of the final array.
     dtype: np.dtype
         The data type of the array elements in NumPy format.
+    c_order: bool
+        Whether to store the array in C order (row-major) or insertion order.
+        Insertion order means that iterable values will be stored in the array
+        following the order of chunks in the array; this is more memory
+        efficient, as it does not require an intermediate copy of the array.
+        Default is C order.
 
     Other Parameters
     ----------------
@@ -3053,9 +3059,18 @@ def fromiter(iterable, shape, dtype, **kwargs):
     lshape = (np.prod(shape),)
     inputs = (iterable,)
     lazyarr = blosc2.lazyudf(iter_fill, inputs, dtype=dtype, shape=lshape)
-    if shape == lshape:
-        return lazyarr.compute(**kwargs)
-    return reshape(lazyarr, shape, **kwargs)
+    if c_order:
+        # In C order, we need to realize the lazy array first and then reshape it
+        larr = lazyarr.compute()
+        return reshape(larr, shape, **kwargs)
+    else:
+        # In insertion order, we can reshape the lazy array directly.
+        # This does not require the computation (and storage) of an
+        # intermediate NDArray. Also, it can be illustrative to understand
+        # how the process of computing lazy arrays (and chunking) work.
+        if shape == lshape:
+            return lazyarr.compute(**kwargs)
+        return reshape(lazyarr, shape, **kwargs)
 
 
 def frombuffer(

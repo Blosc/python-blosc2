@@ -172,19 +172,22 @@ def test_linspace(ss, shape, dtype, chunks, blocks, endpoint):
         (range(2, 22, 2), (10,), np.int64, (5,), (2,)),
         (range(3, 33, 3), (10,), np.complex128, (5,), (2,)),
         (range(100), (10, 10), np.int32, (10, 2), (2, 2)),
+        (range(100), (5, 20), np.int32, (3, 2), (2, 2)),
+        (range(24), (2, 3, 4), np.int8, (2, 2, 2), (1, 1, 2)),
+        (range(48), (2, 3, 4, 2), np.uint8, (2, 2, 4, 2), (1, 2, 2, 1)),
     ],
 )
-def test_fromiter(it, shape, dtype, chunks, blocks):
+@pytest.mark.parametrize("c_order", [True, False])
+def test_fromiter(it, shape, dtype, chunks, blocks, c_order):
     # Create a duplicate of the iterator
     it, it2 = itertools.tee(it)
-    a = blosc2.fromiter(it, dtype=dtype, shape=shape, chunks=chunks, blocks=blocks)
+    a = blosc2.fromiter(it, dtype=dtype, shape=shape, chunks=chunks, blocks=blocks, c_order=c_order)
     assert a.shape == shape
     assert a.dtype == dtype
     assert isinstance(a, blosc2.NDArray)
     b = np.fromiter(it2, dtype=dtype).reshape(shape)
-    if a.ndim == 1:
+    if a.ndim == 1 or c_order:
         np.testing.assert_allclose(a[:], b)
     else:
-        # fromiter consumes the iterator on a per-chunk basis
-        # so comparison is tricky
+        # fromiter consumes the iterator on a per-chunk basis, so check is tricky
         pass
