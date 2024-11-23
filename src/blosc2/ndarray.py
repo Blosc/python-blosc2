@@ -2998,19 +2998,14 @@ def arange(
         # C order is guaranteed, and no reshape is needed
         return lazyarr.compute(**kwargs)
 
-    # Check whether we need to reshape the array in C order
-    if c_order and len(shape) > 1 and np.prod(shape[:-1]) > 1:
-        # We need to compute the lazy array first and then reshape it
-        # We could avoid this intermediate array, but benchmarking shows that
-        # the performance is better with this approach and for this case.
-        larr = lazyarr.compute()  # intermediate array
-        return reshape(larr, shape, **kwargs)
-
-    # We don't need an intermediate NDArray, but the order will change because of
-    # interaction of the lazy array operation and the filling UDF function.
+    # In principle, when c_order is False, this would be enough:
+    # return reshape(lazyarr, shape, c_order=c_order, **kwargs)
+    # so that an intermediate NDArray wouldn't be needed, which is more memory efficient.
+    # However, benchmarks show that performance is better with the approach below.
     # Incidentally, not requiring C order can be quite illustrative for the user to
     # understand how the process of computing lazy arrays (and chunking) works.
-    return reshape(lazyarr, shape, **kwargs)
+    larr = lazyarr.compute()  # intermediate array
+    return reshape(larr, shape, c_order=c_order, **kwargs)
 
 
 # Define a numpy linspace-like function
@@ -3067,17 +3062,14 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, c
         # C order is guaranteed, and no reshape is needed
         return lazyarr.compute(**kwargs)
 
-    # Check whether we need to reshape the array in C order
-    if c_order and len(shape) > 1 and np.prod(shape[:-1]) > 1:
-        # We need to compute the lazy array first and then reshape it
-        # We could avoid this intermediate array, but benchmarking shows that
-        # the performance is better with this approach and for this case.
-        larr = lazyarr.compute()  # intermediate array
-        return reshape(larr, shape, **kwargs)
+    if len(shape) == 1:
+        # C order is guaranteed, and no reshape is needed
+        return lazyarr.compute(**kwargs)
 
-    # We don't need an intermediate NDArray
-    # See blosc2.arange() comments for details
-    return reshape(lazyarr, shape, **kwargs)
+    # In principle, when c_order is False, the intermediate array wouldn't be needed,
+    # but this is faster; see arange() for more details.
+    larr = lazyarr.compute()  # intermediate array
+    return reshape(larr, shape, c_order=c_order, **kwargs)
 
 
 def fromiter(iterable, shape, dtype, c_order=True, **kwargs):
@@ -3126,21 +3118,15 @@ def fromiter(iterable, shape, dtype, c_order=True, **kwargs):
     lshape = (np.prod(shape),)
     inputs = (iterable,)
     lazyarr = blosc2.lazyudf(iter_fill, inputs, dtype=dtype, shape=lshape)
+
     if len(shape) == 1:
         # C order is guaranteed, and no reshape is needed
         return lazyarr.compute(**kwargs)
 
-    # Check whether we need to reshape the array in C order
-    if c_order and len(shape) > 1 and np.prod(shape[:-1]) > 1:
-        # We need to compute the lazy array first and then reshape it
-        # We could avoid this intermediate array, but benchmarking shows that
-        # the performance is better with this approach and for this case.
-        larr = lazyarr.compute()  # intermediate array
-        return reshape(larr, shape, **kwargs)
-
-    # We don't need an intermediate NDArray
-    # See blosc2.arange() comments for details
-    return reshape(lazyarr, shape, **kwargs)
+    # In principle, when c_order is False, the intermediate array wouldn't be needed,
+    # but this is faster; see arange() for more details.
+    larr = lazyarr.compute()  # intermediate array
+    return reshape(larr, shape, c_order=c_order, **kwargs)
 
 
 def frombuffer(

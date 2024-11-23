@@ -31,9 +31,22 @@ print(f"Last 3 elements: {a[-3:]}")
 shape = (5, N // 5)
 chunks = None
 # chunks = (5, N // 10)   # Uncomment this line to experiment with chunks
-print(f"*** Creating a blosc2 array with {N:_} elements (shape: {shape}, chunks: {chunks}) ***")
+print(f"*** Creating a blosc2 array with {N:_} elements (shape: {shape}, c_order: True) ***")
 t0 = time()
-b = blosc2.arange(N, shape=shape, dtype=np.int32, chunks=chunks)
+b = blosc2.arange(N, shape=shape, dtype=np.int32, chunks=chunks, c_order=True)
+cratio = b.schunk.nbytes / b.schunk.cbytes
+print(
+    f"Time: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)"
+    f"\tStorage required: {b.schunk.cbytes / 1e6:.2f} MB (cratio: {cratio:.2f}x)"
+)
+
+# You can go faster by not requesting the array to be C ordered (fun for users)
+shape = (5, N // 5)
+chunks = None
+# chunks = (5, N // 10)   # Uncomment this line to experiment with chunks
+print(f"*** Creating a blosc2 array with {N:_} elements (shape: {shape}, c_order: False) ***")
+t0 = time()
+b = blosc2.arange(N, shape=shape, dtype=np.int32, chunks=chunks, c_order=False)
 cratio = b.schunk.nbytes / b.schunk.cbytes
 print(
     f"Time: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)"
