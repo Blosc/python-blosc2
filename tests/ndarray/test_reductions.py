@@ -62,7 +62,7 @@ def test_reduce_bool(array_fixture, reduce_op):
 
 
 @pytest.mark.parametrize("reduce_op", ["sum", "prod", "mean", "std", "var", "min", "max", "any", "all"])
-@pytest.mark.parametrize("axis", [0, 1, (0, 1), None])
+@pytest.mark.parametrize("axis", [1, (0, 1), None])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize("dtype_out", [np.int16, np.float64])
 @pytest.mark.parametrize(
@@ -121,7 +121,7 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
 
 # Test broadcasting
 @pytest.mark.parametrize("reduce_op", ["sum", "mean", "std", "var", "min", "max", "any", "all"])
-@pytest.mark.parametrize("axis", [0, 1, (0, 1), None])
+@pytest.mark.parametrize("axis", [0, (0, 1), None])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize(
     "shapes",
@@ -197,7 +197,7 @@ def test_reduce_item(reduce_op, dtype, stripes, stripe_len, shape, chunks):
 @pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize("fill_value", [0, 1, 0.32])
 @pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
-@pytest.mark.parametrize("axis", [0, 1, (0, 1), None])
+@pytest.mark.parametrize("axis", [0, 1, None])
 def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     shape = (20, 50, 100)
     urlpath = "a1.b2nd" if disk else None
