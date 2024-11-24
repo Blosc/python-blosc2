@@ -5,6 +5,7 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+import math
 
 import numexpr as ne
 import numpy as np
@@ -732,6 +733,90 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
 
     for urlpath in [urlpath_op, urlpath_op2, urlpath_save]:
         blosc2.remove_urlpath(urlpath)
+
+
+@pytest.mark.parametrize(
+    "constructor", ["arange", "linspace", "fromiter", "reshape", "zeros", "ones", "full"]
+)
+@pytest.mark.parametrize("shape", [(10,), (10, 10), (10, 10, 10)])
+@pytest.mark.parametrize("dtype", ["int32", "float64", "i2"])
+@pytest.mark.parametrize("disk", [True, False])
+def test_save_constructor(disk, shape, dtype, constructor):  # noqa: C901
+    lshape = math.prod(shape)
+    urlpath = "a.b2nd" if disk else None
+    b2func = getattr(blosc2, constructor)
+    a, expr = None, None
+    if constructor in ("zeros", "ones"):
+        a = b2func(shape, dtype=dtype, urlpath=urlpath, mode="w")
+        expr = f"a + {constructor}({shape}, dtype={dtype}) + 1"
+    elif constructor == "full":
+        a = b2func(shape, 10, dtype=dtype, urlpath=urlpath, mode="w")
+        expr = f"a + {constructor}(10, {shape}, dtype={dtype}) + 1"
+    elif constructor == "fromiter":
+        a = b2func(range(lshape), dtype=dtype, shape=shape, urlpath=urlpath, mode="w")
+        expr = f"a + {constructor}(range({lshape}), dtype={dtype}, shape={shape}) + 1"
+    elif constructor == "reshape":
+        # Let's put a nested arange array here
+        a = blosc2.arange(lshape, dtype=dtype, shape=shape, urlpath=urlpath, mode="w")
+        b = f"arange({lshape}, dtype={dtype})"
+        expr = f"a + {constructor}({b}, shape={shape}) + 1"
+    elif constructor == "linspace":
+        a = b2func(0, 10, lshape, dtype=dtype, shape=shape, urlpath=urlpath, mode="w")
+        expr = f"a + {constructor}(0, 10, {lshape}, dtype={dtype}, shape={shape}) + 1"
+    elif constructor == "arange":
+        a = b2func(lshape, dtype=dtype, shape=shape, urlpath=urlpath, mode="w")
+        expr = f"a + {constructor}({lshape}, dtype={dtype}, shape={shape}) + 1"
+    if disk:
+        a = blosc2.open(urlpath)
+    npfunc = getattr(np, constructor)
+    if constructor == "linspace":
+        na = npfunc(0, 10, lshape, dtype=dtype).reshape(shape)
+    elif constructor == "fromiter":
+        na = np.fromiter(range(lshape), dtype=dtype, count=lshape).reshape(shape)
+    elif constructor == "reshape":
+        na = np.arange(lshape, dtype=dtype).reshape(shape)
+    elif constructor == "full":
+        na = npfunc(shape, 10, dtype=dtype)
+    else:
+        na = npfunc(lshape, dtype=dtype).reshape(shape)
+
+    # An expression involving the constructor
+    lexpr = blosc2.lazyexpr(expr)
+    assert lexpr.shape == a.shape
+    if disk:
+        lexpr.save("out.b2nd")
+        lexpr = blosc2.open("out.b2nd")
+    res = lexpr.compute()
+    nres = na + na + 1
+    assert np.allclose(res[()], nres)
+
+    if disk:
+        blosc2.remove_urlpath("a.b2nd")
+        blosc2.remove_urlpath("out.b2nd")
+
+
+@pytest.mark.parametrize("shape", [(10,), (10, 10), (10, 10, 10)])
+@pytest.mark.parametrize("disk", [True, False])
+def test_save_2_constructors(shape, disk):
+    lshape = math.prod(shape)
+    urlpath_a = "a.b2nd" if disk else None
+    urlpath_b = "b.b2nd" if disk else None
+    a = blosc2.arange(lshape, shape=shape, urlpath=urlpath_a, mode="w")
+    b = blosc2.ones(shape, urlpath=urlpath_b, mode="w")
+    expr = f"arange({lshape}, shape={shape}) + a + ones({shape}) + b + 1"
+    lexpr = blosc2.lazyexpr(expr)
+    if disk:
+        lexpr.save("out.b2nd")
+        lexpr = blosc2.open("out.b2nd")
+    res = lexpr.compute()
+    na = np.arange(lshape).reshape(shape)
+    nb = np.ones(shape)
+    nres = na + a[:] + nb + b[:] + 1
+    assert np.allclose(res[()], nres)
+    if disk:
+        blosc2.remove_urlpath(urlpath_a)
+        blosc2.remove_urlpath(urlpath_b)
+        blosc2.remove_urlpath("out.b2nd")
 
 
 @pytest.fixture(

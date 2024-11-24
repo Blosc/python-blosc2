@@ -29,8 +29,6 @@ from numpy.exceptions import ComplexWarning
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-import inspect
-
 import ndindex
 import numexpr as ne
 import numpy as np
@@ -38,16 +36,87 @@ import numpy as np
 import blosc2
 from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
-from blosc2.ndarray import _check_allowed_dtypes, get_chunks_idx
+from blosc2.ndarray import _check_allowed_dtypes, get_chunks_idx, is_inside_new_expr
 
+# All the dtypes that are supported by the expression evaluator
+dtype_symbols = {
+    "int8": np.int8,
+    "int16": np.int16,
+    "int32": np.int32,
+    "int64": np.int64,
+    "uint8": np.uint8,
+    "uint16": np.uint16,
+    "uint32": np.uint32,
+    "uint64": np.uint64,
+    "float32": np.float32,
+    "float64": np.float64,
+    "complex64": np.complex64,
+    "complex128": np.complex128,
+    "bool": np.bool_,
+    "str": np.str_,
+    "bytes": np.bytes_,
+    "i1": np.int8,
+    "i2": np.int16,
+    "i4": np.int32,
+    "i8": np.int64,
+    "u1": np.uint8,
+    "u2": np.uint16,
+    "u4": np.uint32,
+    "u8": np.uint64,
+    "f4": np.float32,
+    "f8": np.float64,
+    "c8": np.complex64,
+    "c16": np.complex128,
+    "b1": np.bool_,
+    "S": np.str_,
+    "V": np.bytes_,
+}
 
-def is_inside_eval():
-    # Get the current call stack
-    stack = inspect.stack()
-    return any(
-        "_new_expr" in frame_info.function or "_open_lazyarray" in frame_info.function
-        for frame_info in stack
-    )
+# All the available constructors and reducers necessary for the (string) expression evaluator
+constructors = ("arange", "linspace", "fromiter", "zeros", "ones", "empty", "full", "frombuffer", "reshape")
+reducers = ("sum", "prod", "min", "max", "std", "mean", "var", "any", "all")
+
+functions = [
+    "sin",
+    "cos",
+    "tan",
+    "sqrt",
+    "sinh",
+    "cosh",
+    "tanh",
+    "arcsin",
+    "arccos",
+    "arctan",
+    "arctan2",
+    "arcsinh",
+    "arccosh",
+    "arctanh",
+    "exp",
+    "expm1",
+    "log",
+    "log10",
+    "log1p",
+    "conj",
+    "real",
+    "imag",
+    "contains",
+    "abs",
+    "sum",
+    "prod",
+    "mean",
+    "std",
+    "var",
+    "min",
+    "max",
+    "any",
+    "all",
+    "pow",
+    "where",
+]
+functions += constructors
+
+relational_ops = ["==", "!=", "<", "<=", ">", ">="]
+logical_ops = ["&", "|", "^", "~"]
 
 
 class ReduceOp(Enum):
@@ -389,7 +458,7 @@ validation_patterns = [
 _blacklist_re = re.compile("|".join(validation_patterns))
 
 # Define valid method names
-valid_methods = {"sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "where"}
+valid_methods = {"sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "where", "reshape"}
 valid_methods |= {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
 valid_methods |= {"float32", "float64", "complex64", "complex128"}
 valid_methods |= {"bool", "str", "bytes"}
@@ -450,7 +519,7 @@ def get_expr_operands(expression: str) -> set:
             self.function_names = set()
 
         def visit_Name(self, node):
-            if node.id not in self.function_names:
+            if node.id not in self.function_names and node.id not in dtype_symbols:
                 self.operands.add(node.id)
             self.generic_visit(node)
 
@@ -1381,7 +1450,7 @@ def reduce_slices(  # noqa: C901
             result = reduce_op.value.reduce(result, **reduce_args)
 
         if out is None:
-            if is_inside_eval():
+            if is_inside_new_expr():
                 # We already have the dtype and reduced_shape, so return immediately
                 # Use a blosc2 container, as it consumes less memory in general
                 return blosc2.zeros(reduced_shape, dtype=dtype)
@@ -1567,46 +1636,6 @@ def fuse_expressions(expr, new_base, dup_op):
     return new_expr
 
 
-functions = [
-    "sin",
-    "cos",
-    "tan",
-    "sqrt",
-    "sinh",
-    "cosh",
-    "tanh",
-    "arcsin",
-    "arccos",
-    "arctan",
-    "arctan2",
-    "arcsinh",
-    "arccosh",
-    "arctanh",
-    "exp",
-    "expm1",
-    "log",
-    "log10",
-    "log1p",
-    "conj",
-    "real",
-    "imag",
-    "contains",
-    "abs",
-    "sum",
-    "prod",
-    "mean",
-    "std",
-    "var",
-    "min",
-    "max",
-    "any",
-    "all",
-]
-
-relational_ops = ["==", "!=", "<", "<=", ">", ">="]
-logical_ops = ["&", "|", "^", "~"]
-
-
 def infer_dtype(op, value1, value2):
     if op in relational_ops:
         return np.dtype(np.bool_)
@@ -1620,6 +1649,41 @@ def infer_dtype(op, value1, value2):
     dtype1 = value1.dtype if hasattr(value1, "dtype") else np.array(value1).dtype
     dtype2 = value2.dtype if hasattr(value2, "dtype") else np.array(value2).dtype
     return np.result_type(dtype1, dtype2)
+
+
+def eval_constructor(expression, constructor, operands):
+    """Evaluate a constructor function inside a string expression."""
+
+    def find_args(expr):
+        idx = expr.find("(") + 1
+        count = 1
+        for i, c in enumerate(expr[idx:], start=idx):
+            if c == "(":
+                count += 1
+            elif c == ")":
+                count -= 1
+            if count == 0:
+                return expr[idx:i], i + 1
+        raise ValueError("Unbalanced parenthesis in expression")
+
+    # Find the index of the first parenthesis after the constructor
+    idx = expression.find(f"{constructor}")
+    # Find the arguments of the constructor function
+    try:
+        args, idx2 = find_args(expression[idx + len(constructor) :])
+    except ValueError as err:
+        raise ValueError(f"Unbalanced parenthesis in expression: {expression}") from err
+    idx2 = idx + len(constructor) + idx2
+    # Evaluate the constructor function
+    constructor_func = getattr(blosc2, constructor)
+    _globals = {constructor: constructor_func}
+    # The user may want to call numpy functions directly
+    _globals |= {"np": np, "numpy": np}
+    # Add the blosc2 constructors and dtype symbols to the globals
+    _globals |= {k: getattr(blosc2, k) for k in constructors}
+    _globals |= dtype_symbols
+    value = eval(f"{constructor}({args})", _globals, operands)
+    return value, expression[idx:idx2]
 
 
 class LazyExpr(LazyArray):
@@ -2160,8 +2224,7 @@ class LazyExpr(LazyArray):
         return self.compute(_reduce_args=reduce_args, **kwargs)
 
     def _compute_expr(self, item, kwargs):
-        reduce_methods = ("sum", "prod", "min", "max", "std", "mean", "var", "any", "all")
-        if any(method in self.expression for method in reduce_methods):
+        if any(method in self.expression for method in reducers):
             # We have reductions in the expression (probably coming from a string lazyexpr)
             _globals = {func: getattr(blosc2, func) for func in functions if func in self.expression}
             lazy_expr = eval(self.expression, _globals, self.operands)
@@ -2181,8 +2244,30 @@ class LazyExpr(LazyArray):
                 return lazy_expr
 
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
-        else:
-            return chunked_eval(self.expression, self.operands, item, **kwargs)
+
+        if any(constructor in self.expression for constructor in constructors):
+            expression = self.expression
+            newexpr = expression
+            newops = self.operands.copy()
+            # We have constructors in the expression (probably coming from a string lazyexpr)
+            # Let's replace the constructors with the actual NDArray objects
+            for constructor in constructors:
+                if constructor not in expression:
+                    continue
+                # Get the constructor function and replace it by an NDArray object in the operands
+                # Find the constructor call and its arguments
+                value, constexpr = eval_constructor(expression, constructor, newops)
+                # Add the new operand to the operands; its name will be temporary
+                newop = f"_c{len(newops)}"
+                newops[newop] = value
+                # Replace the constructor call by the new operand
+                newexpr = newexpr.replace(constexpr, newop)
+
+            _globals = {func: getattr(blosc2, func) for func in functions if func in newexpr}
+            lazy_expr = eval(newexpr, _globals, newops)
+            return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
+
+        return chunked_eval(self.expression, self.operands, item, **kwargs)
 
     def indices(self):
         if self.dtype.fields is None:
@@ -2349,7 +2434,9 @@ class LazyExpr(LazyArray):
             # for desired data types in the output.
             _operands = operands | local_vars
             _globals = {func: getattr(blosc2, func) for func in functions if func in expression}
+            # The user may want to call numpy functions directly
             _globals |= {"np": np, "numpy": np}
+            _globals |= dtype_symbols
             new_expr = eval(_expression, _globals, _operands)
             _dtype = new_expr.dtype
             _shape = new_expr.shape

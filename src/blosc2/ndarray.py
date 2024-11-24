@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import builtins
+import inspect
 import math
 from collections import OrderedDict, namedtuple
 from functools import reduce
@@ -36,6 +37,18 @@ def is_documented_by(original):
         return target
 
     return wrapper
+
+
+def is_inside_new_expr() -> bool:
+    """
+    Whether the current code is being executed during the creation of new expression.
+    """
+    # Get the current call stack
+    stack = inspect.stack()
+    return builtins.any(
+        frame_info.function == "_new_expr" or frame_info.function == "_open_lazyarray"
+        for frame_info in stack
+    )
 
 
 def make_key_hashable(key):
@@ -2725,6 +2738,7 @@ def empty(shape: int | tuple | list, dtype: np.dtype | None = np.uint8, **kwargs
     >>> array.dtype
     dtype('int32')
     """
+    dtype = np.dtype(dtype)
     shape = _check_shape(shape)
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
@@ -2758,6 +2772,7 @@ def uninit(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: Any)
     >>> array.dtype
     dtype('float64')
     """
+    dtype = np.dtype(dtype)
     shape = _check_shape(shape)
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
@@ -2791,6 +2806,7 @@ def nans(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: Any)
     >>> array.dtype
     dtype('float64')
     """
+    dtype = np.dtype(dtype)
     shape = _check_shape(shape)
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
@@ -2830,6 +2846,7 @@ def zeros(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: Any) 
     >>> array.dtype
     dtype('float64')
     """
+    dtype = np.dtype(dtype)
     shape = _check_shape(shape)
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
@@ -2884,6 +2901,8 @@ def full(
         dtype = np.dtype(f"S{len(fill_value)}")
     if dtype is None:
         dtype = np.dtype(type(fill_value))
+    else:
+        dtype = np.dtype(dtype)
     shape = _check_shape(shape)
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
@@ -2929,7 +2948,7 @@ def arange(
     start: int | float = 0,
     stop: int | float | None = None,
     step: int | float | None = 1,
-    dtype: np.dtype = np.int64,
+    dtype: np.dtype | str = np.int64,
     shape: int | tuple | list | None = None,
     c_order: bool = True,
     **kwargs: Any,
@@ -2991,6 +3010,17 @@ def arange(
         step = 1
     if not shape:
         shape = (int((stop - start) / step),)
+    else:
+        # Check that the shape is consistent with the start, stop and step values
+        if math.prod(shape) != int((stop - start) / step):
+            raise ValueError("The shape is not consistent with the start, stop and step values")
+    # Check dtype
+    dtype = np.dtype(dtype)
+
+    if is_inside_new_expr():
+        # We already have the dtype and shape, so return immediately
+        return blosc2.zeros(shape, dtype=dtype)
+
     lshape = (math.prod(shape),)
     lazyarr = blosc2.lazyudf(arange_fill, (start, stop, step), dtype=dtype, shape=lshape)
 
