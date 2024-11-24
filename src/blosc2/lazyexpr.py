@@ -1115,7 +1115,7 @@ def slices_eval(  # noqa: C901
                 for s1, s2 in zip(slice_, _slice, strict=True)
             )
         slice_shape = tuple(s.stop - s.start for s in slice_)
-        len_chunk = np.prod(slice_shape)
+        len_chunk = math.prod(slice_shape)
         # Get the slice of each operand
         for key, value in operands.items():
             if np.isscalar(value):
@@ -2150,7 +2150,7 @@ class LazyExpr(LazyArray):
                 shape = [s.stop - s.start for s in item]
             else:
                 shape = [s.stop - s.start for i, s in enumerate(item) if i in axis]
-        return np.prod(shape) if axis is None else np.prod([shape[i] for i in axis])
+        return math.prod(shape) if axis is None else math.prod([shape[i] for i in axis])
 
     def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
         item = kwargs.pop("item", None)

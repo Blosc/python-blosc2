@@ -240,7 +240,7 @@ def get_flat_slices(
         # Generate just a single 1-dimensional slice
         flat_start = np.sum(start * strides)
         # Compute the size of the slice
-        flat_size = np.prod(stop - start)
+        flat_size = math.prod(stop - start)
         return [slice(flat_start, flat_start + flat_size)]
 
     # Generate and return the 1-dimensional slices in C order
@@ -295,7 +295,7 @@ def reshape(
     if src.ndim != 1:
         raise ValueError("reshape only works when src.shape is 1-dimensional")
     # Check if the new shape is valid
-    if np.prod(shape) != np.prod(src.shape):
+    if math.prod(shape) != math.prod(src.shape):
         raise ValueError("total size of new array must be unchanged")
 
     # Create the new array
@@ -310,7 +310,7 @@ def reshape(
         dst_slice = tuple(
             slice(s.start, builtins.min(s.stop, sh)) for s, sh in zip(dst_slice, dst.shape, strict=False)
         )
-        size_dst_slice = np.prod([s.stop - s.start for s in dst_slice])
+        size_dst_slice = math.prod([s.stop - s.start for s in dst_slice])
         # Find the series of slices in source array that correspond to the destination chunk
         # (assuming the source array is 1-dimensional here)
         # t0 = time()
@@ -1713,9 +1713,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
         --------
         >>> import blosc2
         >>> import numpy as np
+        >>> import math
         >>> dtype = np.dtype(np.float32)
         >>> shape = [23, 11]
-        >>> a = np.linspace(1, 3, num=int(np.prod(shape))).reshape(shape)
+        >>> a = np.linspace(1, 3, num=math.prod(shape)).reshape(shape)
         >>> # Create an array
         >>> b = blosc2.asarray(a)
         >>> newshape = [50, 10]
@@ -3141,11 +3142,11 @@ def fromiter(iterable, shape, dtype, c_order=True, **kwargs):
     """
 
     def iter_fill(inputs, output, offset):
-        nout = np.prod(output.shape)
+        nout = math.prod(output.shape)
         (iterable,) = inputs
         output[:] = np.fromiter(iterable, dtype=output.dtype, count=nout).reshape(output.shape)
 
-    lshape = (np.prod(shape),)
+    lshape = (math.prod(shape),)
     inputs = (iterable,)
     lazyarr = blosc2.lazyudf(iter_fill, inputs, dtype=dtype, shape=lshape)
 
@@ -3275,7 +3276,7 @@ def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: Any) -> NDArray:
     # Fast path for small arrays. This is not too expensive in terms of memory consumption.
     shape = array.shape
     small_size = 2**24  # 16 MB
-    array_nbytes = np.prod(shape) * array.dtype.itemsize
+    array_nbytes = math.prod(shape) * array.dtype.itemsize
     if array_nbytes < small_size:
         if not isinstance(array, np.ndarray):
             if hasattr(array, "chunks"):
