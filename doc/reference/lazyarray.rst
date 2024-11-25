@@ -25,8 +25,10 @@ Methods
     :nosignatures:
 
     __getitem__
+    indices
     compute
     save
+    sort
 
 
 .. _LazyExpr:

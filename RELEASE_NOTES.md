@@ -14,6 +14,8 @@
 
 * New `NDArray.__iter__()` iterator following NumPy conventions.
 
+* Now, `NDArray.__getitem__()` supports (n-dim) bool arrays or sequences of integers (only 1-dim for now) as indices.  This follows NumPy conventions.
+
 * A new `NDField.__setitem__()` has been added to allow for setting values in a structured NDArray.
 
 * `struct_ndarr['field']` now works as in NumPy.
@@ -24,7 +26,11 @@
 
 * Support reductions inside queries in structured NDArrays.  For example, given an array sarr with fields 'a', 'b' and 'c', the next `farr = sarr["b >= c"].sum("a").compute()` puts in `farr` the sum of the values in field 'a' for the rows that fulfills that values in fields in 'b' are larger than values in 'c' (`b >= c` above).
 
-* Implemented data filtering, as well as sorting, in structured NDArrays. For example, given an array sarr with fields 'a', 'b' and 'c', the next `farr = sarr["b >= c"].sort("c").indices().compute()` puts in `farr` the indices of the rows that fulfills that values in fields in 'b' are larger than values in 'c' (`b >= c` above), sorted by column 'c'.
+* LazyArrays received a new `.indices()` method that returns the indices of the elements that fulfill a condition.  This is useful for filtering data in structured NDArrays.
+
+* LazyArrays received a new `.sort()` method that sorts the elements in the array.  This is useful for sorting data in structured NDArrays.
+
+* Implemented combining data filtering, as well as sorting, in structured NDArrays. For example, given an array `sarr` with fields 'a', 'b' and 'c', the next `farr = sarr["b >= c"].sort("c").indices().compute()` puts in `farr` the indices of the rows that fulfills that values in fields in 'b' are larger than values in 'c' (`b >= c` above), sorted by column 'c'.
 
 * New `expr_operands()` function. `validate_expr()` also added.
 
