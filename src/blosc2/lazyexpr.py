@@ -1369,12 +1369,7 @@ def reduce_slices(  # noqa: C901
                 slice(max(s1.start, s2.start), min(s1.stop, s2.stop))
                 for s1, s2 in zip(slice_, _slice, strict=True)
             )
-
         chunks_ = tuple(s.stop - s.start for s in slice_)
-        if len(slice_) == 1:
-            slice_ = slice_[0]
-        if len(reduced_slice) == 1:
-            reduced_slice = reduced_slice[0]
 
         # To avoid overbooking memory, we need to clear the chunk_operands dict
         chunk_operands.clear()
@@ -1649,41 +1644,6 @@ def infer_dtype(op, value1, value2):
     dtype1 = value1.dtype if hasattr(value1, "dtype") else np.array(value1).dtype
     dtype2 = value2.dtype if hasattr(value2, "dtype") else np.array(value2).dtype
     return np.result_type(dtype1, dtype2)
-
-
-def eval_constructor(expression, constructor, operands):
-    """Evaluate a constructor function inside a string expression."""
-
-    def find_args(expr):
-        idx = expr.find("(") + 1
-        count = 1
-        for i, c in enumerate(expr[idx:], start=idx):
-            if c == "(":
-                count += 1
-            elif c == ")":
-                count -= 1
-            if count == 0:
-                return expr[idx:i], i + 1
-        raise ValueError("Unbalanced parenthesis in expression")
-
-    # Find the index of the first parenthesis after the constructor
-    idx = expression.find(f"{constructor}")
-    # Find the arguments of the constructor function
-    try:
-        args, idx2 = find_args(expression[idx + len(constructor) :])
-    except ValueError as err:
-        raise ValueError(f"Unbalanced parenthesis in expression: {expression}") from err
-    idx2 = idx + len(constructor) + idx2
-    # Evaluate the constructor function
-    constructor_func = getattr(blosc2, constructor)
-    _globals = {constructor: constructor_func}
-    # The user may want to call numpy functions directly
-    _globals |= {"np": np, "numpy": np}
-    # Add the blosc2 constructors and dtype symbols to the globals
-    _globals |= {k: getattr(blosc2, k) for k in constructors}
-    _globals |= dtype_symbols
-    value = eval(f"{constructor}({args})", _globals, operands)
-    return value, expression[idx:idx2]
 
 
 class LazyExpr(LazyArray):
@@ -2223,6 +2183,48 @@ class LazyExpr(LazyArray):
         }
         return self.compute(_reduce_args=reduce_args, **kwargs)
 
+    def _eval_constructor(self, expression, constructor, operands):
+        """Evaluate a constructor function inside a string expression."""
+
+        def find_args(expr):
+            idx = expr.find("(") + 1
+            count = 1
+            for i, c in enumerate(expr[idx:], start=idx):
+                if c == "(":
+                    count += 1
+                elif c == ")":
+                    count -= 1
+                if count == 0:
+                    return expr[idx:i], i + 1
+            raise ValueError("Unbalanced parenthesis in expression")
+
+        # Find the index of the first parenthesis after the constructor
+        idx = expression.find(f"{constructor}")
+        # Find the arguments of the constructor function
+        try:
+            args, idx2 = find_args(expression[idx + len(constructor) :])
+        except ValueError as err:
+            raise ValueError(f"Unbalanced parenthesis in expression: {expression}") from err
+        idx2 = idx + len(constructor) + idx2
+
+        # Evaluate the constructor function
+        constructor_func = getattr(blosc2, constructor)
+        _globals = {constructor: constructor_func}
+        # Add the blosc2 constructors and dtype symbols to the globals
+        _globals |= {k: getattr(blosc2, k) for k in constructors}
+        _globals |= dtype_symbols
+        evalcons = f"{constructor}({args})"
+
+        # Internal constructors will be cached for avoiding multiple computations
+        if not hasattr(self, "cons_cache"):
+            self.cons_cache = {}
+        if evalcons in self.cons_cache:
+            return self.cons_cache[evalcons], expression[idx:idx2]
+        value = eval(evalcons, _globals, operands)
+        self.cons_cache[evalcons] = value
+
+        return value, expression[idx:idx2]
+
     def _compute_expr(self, item, kwargs):
         if any(method in self.expression for method in reducers):
             # We have reductions in the expression (probably coming from a string lazyexpr)
@@ -2256,7 +2258,7 @@ class LazyExpr(LazyArray):
                     continue
                 # Get the constructor function and replace it by an NDArray object in the operands
                 # Find the constructor call and its arguments
-                value, constexpr = eval_constructor(expression, constructor, newops)
+                value, constexpr = self._eval_constructor(expression, constructor, newops)
                 # Add the new operand to the operands; its name will be temporary
                 newop = f"_c{len(newops)}"
                 newops[newop] = value
@@ -2434,8 +2436,6 @@ class LazyExpr(LazyArray):
             # for desired data types in the output.
             _operands = operands | local_vars
             _globals = {func: getattr(blosc2, func) for func in functions if func in expression}
-            # The user may want to call numpy functions directly
-            _globals |= {"np": np, "numpy": np}
             _globals |= dtype_symbols
             new_expr = eval(_expression, _globals, _operands)
             _dtype = new_expr.dtype
