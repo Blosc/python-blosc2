@@ -2698,7 +2698,7 @@ def _check_shape(shape):
     return shape
 
 
-def empty(shape: int | tuple | list, dtype: np.dtype | None = np.uint8, **kwargs: Any) -> NDArray:
+def empty(shape: int | tuple | list, dtype: np.dtype | None = np.float64, **kwargs: Any) -> NDArray:
     """Create an empty array.
 
     Parameters
@@ -2752,7 +2752,7 @@ def empty(shape: int | tuple | list, dtype: np.dtype | None = np.uint8, **kwargs
     return blosc2_ext.empty(shape, chunks, blocks, dtype, **kwargs)
 
 
-def uninit(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: Any) -> NDArray:
+def uninit(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: Any) -> NDArray:
     """Create an array with uninitialized values.
 
     The parameters and keyword arguments are the same as for the
@@ -2820,7 +2820,7 @@ def nans(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: Any)
     return blosc2_ext.nans(shape, chunks, blocks, dtype, **kwargs)
 
 
-def zeros(shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: Any) -> NDArray:
+def zeros(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: Any) -> NDArray:
     """Create an array with zero as the default value
     for uninitialized portions of the array.
 
@@ -2916,7 +2916,7 @@ def full(
     return blosc2_ext.full(shape, chunks, blocks, fill_value, dtype, **kwargs)
 
 
-def ones(shape: int | tuple | list, dtype: np.dtype = np.int64, **kwargs: Any) -> NDArray:
+def ones(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: Any) -> NDArray:
     """Create an array with one as values.
 
     The parameters and keyword arguments are the same as for the
