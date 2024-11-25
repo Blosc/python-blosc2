@@ -1200,6 +1200,27 @@ def test_dtype_infer(dtype1, dtype2, scalar):
     assert res.dtype == nres.dtype
 
 
+@pytest.mark.parametrize(
+    "cfunc", ["np.int8", "np.int16", "np.int32", "np.int64", "np.float32", "np.float64"]
+)
+def test_dtype_infer_scalars(cfunc):
+    castfunc = eval(cfunc)
+    o1 = blosc2.arange(10, dtype=castfunc(1))
+    la1 = o1 + castfunc(1)
+    res = la1[()]
+    n1 = np.arange(10, dtype=castfunc)
+    nres = n1 + castfunc(1)
+    assert res.dtype == nres.dtype
+    np.testing.assert_equal(res, nres)
+
+    expr = f"(o1 + {cfunc}(1))"
+    print(expr)
+    la2 = blosc2.lazyexpr(expr)
+    res = la2[()]
+    assert res.dtype == nres.dtype
+    np.testing.assert_equal(res, nres)
+
+
 def test_indices():
     shape = (20,)
     na = np.arange(shape[0])

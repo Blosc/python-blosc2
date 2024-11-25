@@ -521,6 +521,9 @@ def get_expr_operands(expression: str) -> set:
             self.function_names = set()
 
         def visit_Name(self, node):
+            if node.id == "np":
+                # Skip NumPy namespace (e.g. np.int8, which will be treated separately)
+                return
             if node.id not in self.function_names and node.id not in dtype_symbols:
                 self.operands.add(node.id)
             self.generic_visit(node)
