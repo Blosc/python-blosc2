@@ -789,11 +789,11 @@ def fill_chunk_operands(  # noqa: C901
         chunks = next(iter_chunks)
 
         for i, (key, value) in enumerate(operands.items()):
-            # The chunks are already decompressed, so we can use them directly
+            # Chunks are already decompressed, so we can use them directly
             if not low_mem:
                 chunk_operands[key] = chunks[i]
                 continue
-            # Otherwise, we need to decompress the chunks
+            # Otherwise, we need to decompress them
             special = blosc2.SpecialValue((chunks[i][31] & 0x70) >> 4)
             if special == blosc2.SpecialValue.ZERO:
                 # The chunk is a special zero chunk, so we can treat it as a scalar
@@ -1314,6 +1314,11 @@ def reduce_slices(  # noqa: C901
     else:
         reduced_shape = tuple(s for i, s in enumerate(shape) if i not in axis)
 
+    if is_inside_new_expr():
+        # We already have the dtype and reduced_shape, so return immediately
+        # Use a blosc2 container, as it consumes less memory in general
+        return blosc2.zeros(reduced_shape, dtype=dtype)
+
     # Choose the array with the largest shape as the reference for chunks
     operand = max((o for o in operands.values() if hasattr(o, "chunks")), key=lambda x: len(x.shape))
     chunks = operand.chunks
@@ -1447,10 +1452,6 @@ def reduce_slices(  # noqa: C901
             result = reduce_op.value.reduce(result, **reduce_args)
 
         if out is None:
-            if is_inside_new_expr():
-                # We already have the dtype and reduced_shape, so return immediately
-                # Use a blosc2 container, as it consumes less memory in general
-                return blosc2.zeros(reduced_shape, dtype=dtype)
             out = convert_none_out(dtype, reduce_op, reduced_shape)
 
         # Update the output array with the result
@@ -2212,8 +2213,8 @@ class LazyExpr(LazyArray):
         # Give a chance to a possible .reshape() method
         if expression[idx2 : idx2 + len(".reshape(")] == ".reshape(":
             args2, idx3 = find_args(expression[idx2 + len("reshape(") :])
-            # Remove a possible shape= from the reshape call
-            # (for some reason, other variants like .reshape(shape = shape_) work too)
+            # Remove a possible shape= from the reshape call (due to rewriting the expression
+            # via extract_numpy_scalars(), other variants like .reshape(shape = shape_) work too)
             args2 = args2.replace("shape=", "")
             args = f"{args}, shape={args2}"
             idx2 += len(".reshape") + idx3

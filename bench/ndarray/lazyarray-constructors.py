@@ -26,7 +26,13 @@ t0 = time()
 for i in range(5):
     _ = la[i]
 print(f"Access time: {time() - t0:.3f} s")
+
 t0 = time()
+la = (o1 + 1).sum()
+print(f"Build time (sum): {time() - t0:.3f} s")
+t0 = time()
+print("sum:", la)
+print(f"Reduction time (sum): {time() - t0:.3f} s")
 
 # Use a constructor inside a lazy expression (string form)
 print("*** Using a constructor inside a lazy expression (string form) ***")
@@ -38,4 +44,10 @@ t0 = time()
 for i in range(5):
     _ = la[i]
 print(f"Access time: {time() - t0:.3f} s")
+
 t0 = time()
+la = blosc2.lazyexpr(f"sum({o1} + 1)")
+print(f"Build time (sum): {time() - t0:.3f} s")
+t0 = time()
+print("sum:", la[()])
+print(f"Reduction time (sum): {time() - t0:.3f} s")

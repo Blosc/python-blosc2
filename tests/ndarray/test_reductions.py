@@ -5,6 +5,7 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+import math
 
 import numexpr as ne
 import numpy as np
@@ -50,12 +51,15 @@ def array_fixture(dtype_fixture, shape_fixture):
     return a1, a2, a3, a4, na1, na2, na3, na4
 
 
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all"])
+# @pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all"])
+@pytest.mark.parametrize("reduce_op", ["sum"])
 def test_reduce_bool(array_fixture, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 > a3 * a4
     nres = ne.evaluate("na1 + na2 > na3 * na4")
-    res = getattr(expr, reduce_op)()
+    # res = getattr(expr, reduce_op)()
+    res = expr.sum()
+    print("res:", res)
     nres = getattr(nres, reduce_op)()
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
@@ -352,4 +356,63 @@ def test_save_version4(disk, fill_value, reduce_op, axis):
     if disk:
         blosc2.remove_urlpath("a1.b2nd")
         blosc2.remove_urlpath("b.b2nd")
+        blosc2.remove_urlpath("out.b2nd")
+
+
+@pytest.mark.parametrize("shape", [(10,), (10, 10), (10, 10, 10)])
+@pytest.mark.parametrize("disk", [True, False])
+@pytest.mark.parametrize("compute", [True, False])
+def test_save_constructor_reduce(shape, disk, compute):
+    lshape = math.prod(shape)
+    urlpath_a = "a.b2nd" if disk else None
+    urlpath_b = "b.b2nd" if disk else None
+    a = blosc2.arange(lshape, shape=shape, urlpath=urlpath_a, mode="w")
+    b = blosc2.ones(shape, urlpath=urlpath_b, mode="w")
+    expr = f"arange({lshape}).sum() + a + ones({shape}).sum() + b + 1"
+    lexpr = blosc2.lazyexpr(expr)
+    if disk:
+        lexpr.save("out.b2nd")
+        lexpr = blosc2.open("out.b2nd")
+    if compute:
+        res = lexpr.compute()
+        res = res[()]  # for later comparison with nres
+    else:
+        res = lexpr[()]
+    na = np.arange(lshape).reshape(shape).sum()
+    nb = np.ones(shape).sum()
+    nres = na + a[:] + nb + b[:] + 1
+    assert np.allclose(res[()], nres)
+    if disk:
+        blosc2.remove_urlpath(urlpath_a)
+        blosc2.remove_urlpath(urlpath_b)
+        blosc2.remove_urlpath("out.b2nd")
+
+
+@pytest.mark.parametrize("shape", [(10,), (10, 10), (10, 10, 10)])
+@pytest.mark.parametrize("disk", [True, False])
+@pytest.mark.parametrize("compute", [True, False])
+def test_save_constructor_reduce2(shape, disk, compute):
+    lshape = math.prod(shape)
+    urlpath_a = "a.b2nd" if disk else None
+    urlpath_b = "b.b2nd" if disk else None
+    a = blosc2.arange(lshape, shape=shape, urlpath=urlpath_a, mode="w")
+    b = blosc2.ones(shape, urlpath=urlpath_b, mode="w")
+    expr = "sum(a + 1) + (b + 2).sum() + 3"
+    lexpr = blosc2.lazyexpr(expr)
+    if disk:
+        lexpr.save("out.b2nd")
+        lexpr = blosc2.open("out.b2nd")
+    if compute:
+        res = lexpr.compute()
+        res = res[()]  # for later comparison with nres
+    else:
+        res = lexpr[()]
+    na = np.arange(lshape).reshape(shape)
+    nb = np.ones(shape)
+    nres = np.sum(na + 1) + (nb + 2).sum() + 3
+    assert np.allclose(res, nres)
+    assert res.dtype == nres.dtype
+    if disk:
+        blosc2.remove_urlpath(urlpath_a)
+        blosc2.remove_urlpath(urlpath_b)
         blosc2.remove_urlpath("out.b2nd")

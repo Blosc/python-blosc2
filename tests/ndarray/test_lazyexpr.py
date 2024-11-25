@@ -852,30 +852,6 @@ def test_save_constructor_reshape(shape, disk):
 
 @pytest.mark.parametrize("shape", [(10,), (10, 10), (10, 10, 10)])
 @pytest.mark.parametrize("disk", [True, False])
-def test_save_constructor_reduce(shape, disk):
-    lshape = math.prod(shape)
-    urlpath_a = "a.b2nd" if disk else None
-    urlpath_b = "b.b2nd" if disk else None
-    a = blosc2.arange(lshape, shape=shape, urlpath=urlpath_a, mode="w")
-    b = blosc2.ones(shape, urlpath=urlpath_b, mode="w")
-    expr = f"arange({lshape}).sum() + a + ones({shape}).sum() + b + 1"
-    lexpr = blosc2.lazyexpr(expr)
-    if disk:
-        lexpr.save("out.b2nd")
-        lexpr = blosc2.open("out.b2nd")
-    res = lexpr.compute()
-    na = np.arange(lshape).reshape(shape).sum()
-    nb = np.ones(shape).sum()
-    nres = na + a[:] + nb + b[:] + 1
-    assert np.allclose(res[()], nres)
-    if disk:
-        blosc2.remove_urlpath(urlpath_a)
-        blosc2.remove_urlpath(urlpath_b)
-        blosc2.remove_urlpath("out.b2nd")
-
-
-@pytest.mark.parametrize("shape", [(10,), (10, 10), (10, 10, 10)])
-@pytest.mark.parametrize("disk", [True, False])
 def test_save_2equal_constructors(shape, disk):
     lshape = math.prod(shape)
     urlpath_a = "a.b2nd" if disk else None
