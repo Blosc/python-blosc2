@@ -301,6 +301,10 @@ def reshape(
     # Create the new array
     dst = empty(shape, dtype=src.dtype, **kwargs)
 
+    if is_inside_new_expr():
+        # We already have the dtype and shape, so return immediately
+        return dst
+
     # Copy the data chunk by chunk
     for dst_chunk in dst.iterchunks_info():
         dst_slice = tuple(
@@ -3084,6 +3088,13 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, c
 
     if not shape:
         shape = (num,)
+    # Check dtype
+    dtype = np.dtype(dtype)
+
+    if is_inside_new_expr():
+        # We already have the dtype and shape, so return immediately
+        return blosc2.zeros(shape, dtype=dtype)
+
     lshape = (math.prod(shape),)
     if endpoint:
         stop += (stop - start) / (num - 1)
@@ -3145,6 +3156,13 @@ def fromiter(iterable, shape, dtype, c_order=True, **kwargs):
         nout = math.prod(output.shape)
         (iterable,) = inputs
         output[:] = np.fromiter(iterable, dtype=output.dtype, count=nout).reshape(output.shape)
+
+    # Check dtype
+    dtype = np.dtype(dtype)
+
+    if is_inside_new_expr():
+        # We already have the dtype and shape, so return immediately
+        return blosc2.zeros(shape, dtype=dtype)
 
     lshape = (math.prod(shape),)
     inputs = (iterable,)
