@@ -51,3 +51,17 @@ print(f"Build time (sum): {time() - t0:.3f} s")
 t0 = time()
 print("sum:", la[()])
 print(f"Reduction time (sum): {time() - t0:.3f} s")
+
+# Compare with numpy
+print("*** Comparison with numpy ***")
+t0 = time()
+o1 = np.linspace(0, 10, N).reshape(5, N // 5) + 1
+print(f"Build time: {time() - t0:.3f} s")
+t0 = time()
+for i in range(5):
+    _ = o1[i]
+print(f"Access time: {time() - t0:.3f} s")
+
+t0 = time()
+print("sum:", o1.sum())
+print(f"Reduction time (sum): {time() - t0:.3f} s")
