@@ -759,7 +759,11 @@ def test_save_constructor(disk, shape, dtype, constructor):  # noqa: C901
         # Let's put a nested arange array here
         a = blosc2.arange(lshape, dtype=dtype, shape=shape, urlpath=urlpath, mode="w")
         b = f"arange({lshape}, dtype={dtype})"
-        expr = f"a + {constructor}({b}, shape={shape}) + 1"
+        # Both expressions below are equivalent, but use the method variant for testing purposes
+        # expr = f"a + {constructor}({b}, shape={shape}) + 1"
+        expr = f"a + {b}.reshape({shape}) + 1"
+        # The one below is also supported, but should be rarely used
+        # expr = f"a + {b}.reshape(shape={shape}) + 1"
     elif constructor == "linspace":
         a = b2func(0, 10, lshape, dtype=dtype, shape=shape, urlpath=urlpath, mode="w")
         expr = f"a + {constructor}(0, 10, {lshape}, dtype={dtype}, shape={shape}) + 1"
@@ -813,6 +817,31 @@ def test_save_2_constructors(shape, disk):
     nb = np.ones(shape)
     nres = na + a[:] + nb + b[:] + 1
     assert np.allclose(res[()], nres)
+    if disk:
+        blosc2.remove_urlpath(urlpath_a)
+        blosc2.remove_urlpath(urlpath_b)
+        blosc2.remove_urlpath("out.b2nd")
+
+
+@pytest.mark.parametrize("shape", [(10,), (10, 10), (10, 10, 10)])
+@pytest.mark.parametrize("disk", [True, False])
+def test_save_2equal_constructors(shape, disk):
+    lshape = math.prod(shape)
+    urlpath_a = "a.b2nd" if disk else None
+    urlpath_b = "b.b2nd" if disk else None
+    a = blosc2.ones(shape, dtype=np.int8, urlpath=urlpath_a, mode="w")
+    b = blosc2.ones(shape, urlpath=urlpath_b, mode="w")
+    expr = f"ones({shape}, dtype=int8) + a + ones({shape}) + b + 1"
+    lexpr = blosc2.lazyexpr(expr)
+    if disk:
+        lexpr.save("out.b2nd")
+        lexpr = blosc2.open("out.b2nd")
+    res = lexpr.compute()
+    na = np.ones(shape, dtype=np.int8)
+    nb = np.ones(shape)
+    nres = na + a[:] + nb + b[:] + 1
+    assert np.allclose(res[()], nres)
+    assert res.dtype == nres.dtype
     if disk:
         blosc2.remove_urlpath(urlpath_a)
         blosc2.remove_urlpath(urlpath_b)

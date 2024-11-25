@@ -73,7 +73,9 @@ dtype_symbols = {
 }
 
 # All the available constructors and reducers necessary for the (string) expression evaluator
-constructors = ("arange", "linspace", "fromiter", "zeros", "ones", "empty", "full", "frombuffer", "reshape")
+constructors = ("arange", "linspace", "fromiter", "zeros", "ones", "empty", "full", "frombuffer")
+# Note that, as reshape is accepted as a method too, it should always come last in the list
+constructors += ("reshape",)
 reducers = ("sum", "prod", "min", "max", "std", "mean", "var", "any", "all")
 
 functions = [
@@ -2207,6 +2209,15 @@ class LazyExpr(LazyArray):
             raise ValueError(f"Unbalanced parenthesis in expression: {expression}") from err
         idx2 = idx + len(constructor) + idx2
 
+        # Give a chance to a possible .reshape() method
+        if expression[idx2 : idx2 + len(".reshape(")] == ".reshape(":
+            args2, idx3 = find_args(expression[idx2 + len("reshape(") :])
+            # Remove a possible shape= from the reshape call
+            # (other variants like .reshape(shape = shape_) are unlikely to happen and unsupported)
+            args2 = args2.replace("shape=", "")
+            args = f"{args}, shape={args2}"
+            idx2 += len(".reshape") + idx3
+
         # Evaluate the constructor function
         constructor_func = getattr(blosc2, constructor)
         _globals = {constructor: constructor_func}
@@ -2254,16 +2265,17 @@ class LazyExpr(LazyArray):
             # We have constructors in the expression (probably coming from a string lazyexpr)
             # Let's replace the constructors with the actual NDArray objects
             for constructor in constructors:
-                if constructor not in expression:
+                if constructor not in newexpr:
                     continue
-                # Get the constructor function and replace it by an NDArray object in the operands
-                # Find the constructor call and its arguments
-                value, constexpr = self._eval_constructor(expression, constructor, newops)
-                # Add the new operand to the operands; its name will be temporary
-                newop = f"_c{len(newops)}"
-                newops[newop] = value
-                # Replace the constructor call by the new operand
-                newexpr = newexpr.replace(constexpr, newop)
+                while constructor in newexpr:
+                    # Get the constructor function and replace it by an NDArray object in the operands
+                    # Find the constructor call and its arguments
+                    value, constexpr = self._eval_constructor(newexpr, constructor, newops)
+                    # Add the new operand to the operands; its name will be temporary
+                    newop = f"_c{len(newops)}"
+                    newops[newop] = value
+                    # Replace the constructor call by the new operand
+                    newexpr = newexpr.replace(constexpr, newop)
 
             _globals = {func: getattr(blosc2, func) for func in functions if func in newexpr}
             lazy_expr = eval(newexpr, _globals, newops)
