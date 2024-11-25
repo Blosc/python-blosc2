@@ -2213,7 +2213,7 @@ class LazyExpr(LazyArray):
         if expression[idx2 : idx2 + len(".reshape(")] == ".reshape(":
             args2, idx3 = find_args(expression[idx2 + len("reshape(") :])
             # Remove a possible shape= from the reshape call
-            # (other variants like .reshape(shape = shape_) are unlikely to happen and unsupported)
+            # (for some reason, other variants like .reshape(shape = shape_) work too)
             args2 = args2.replace("shape=", "")
             args = f"{args}, shape={args2}"
             idx2 += len(".reshape") + idx3
