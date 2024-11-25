@@ -3,7 +3,7 @@
 NDArray
 =======
 
-The multidimensional data array class. This class consists of a set of useful parameters and methods that allow not only to create an array correctly, but also to being able to extract multidimensional slices from it (and much more).
+The multidimensional data array class.
 
 .. currentmodule:: blosc2.NDArray
 
@@ -24,8 +24,12 @@ Methods
     slice
     squeeze
     resize
+    reshape
     tobytes
     to_cframe
+
+In addition, all the functions from the :ref:`Lazy Functions <lazy_functions>` section can be used with NDArray instances.
+
 
 Attributes
 ----------
@@ -66,6 +70,7 @@ Constructors
     copy
     empty
     frombuffer
+    fromiter
     nans
     ndarray_from_cframe
     uninit

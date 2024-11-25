@@ -1,3 +1,5 @@
+.. _lazy_functions:
+
 Lazy Functions
 --------------
 
