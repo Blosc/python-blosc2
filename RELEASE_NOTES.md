@@ -2,47 +2,62 @@
 
 ## Changes from 3.0.0-beta.4 to 3.0.0-rc.1
 
-* Added new tutorials demonstrating advanced use cases like efficiently computing with compressed NDArray data and sharing arrays using Caterva2. Documentation updates highlight these features and improve usability for new users. Thanks to @omaech and @martaiborra for their excellent work on the documentation and examples, and to @NumFOCUS for their support in making this possible!
+### General improvements
+
+* New ufunc support for NDArray instances. Now, you can use NumPy ufuncs on NDArray instances, and mix them with other NumPy arrays. This is a powerful feature that allows for more interoperability with NumPy.
 
 * Enhanced dtype inference, so that it mimics now more NumPy than the numexpr one. Although perfect adherence to NumPy casting conventions is not there yet, it is a big step forward towards better compatibility with NumPy.
 
-* A new `reshape()` function allows to do efficient reshaping between NDArrays that follows C order.  Only 1-dim -> n-dim is currently supported though.
+* Fix dtype for sum and prod reductions. Now, the dtype of the result of a sum or prod reduction is the same as the input array, unless the dtype is not supported by the reduction, in which case the dtype is promoted to a supported one. It is more NumPy-like now.
 
-* New ufunc support for `NDArray` instances.  Now, you can use NumPy ufuncs on `NDArray` instances, and mix them with other NumPy arrays.  This is a powerful feature that allows for more interoperability with NumPy.
+* Many improvements on the computation of UDFs (User Defined Functions). Now, the lazy UDF computation is way more robust and efficient.
 
-* Fix dtype for sum and prod reductions.  Now, the dtype of the result of a sum or prod reduction is the same as the input array, unless the dtype is not supported by the reduction, in which case the dtype is promoted to a supported one.  It is more NumPy-like now.
+* Support reductions inside queries in structured NDArrays. For example, given an array `sarr` with fields 'a', 'b' and 'c', the next `farr = sarr["b >= c"].sum("a").compute()` puts in `farr` the sum of the values in field 'a' for the rows that fulfills that values in fields in 'b' are larger than values in 'c' (b >= c above).
 
-* New `NDArray.__iter__()` iterator following NumPy conventions.
+* Implemented combining data filtering, as well as sorting, in structured NDArrays. For example, given an array `sarr` with fields 'a', 'b' and 'c', the next `farr = sarr["b >= c"].sort("c").indices().compute()` puts in farr the indices of the rows that fulfills that values in fields in 'b' are larger than values in 'c' (`b >= c` above), sorted by column 'c'.
 
-* Now, `NDArray.__getitem__()` supports (n-dim) bool arrays or sequences of integers (only 1-dim for now) as indices.  This follows NumPy conventions.
+* Reductions can be stored in persistent lazy expressions. Now, if you have a lazy expression that contains a reduction, the result of the reduction is preserved in the expression, so that you can reuse it later on. See https://www.blosc.org/posts/persistent-reductions/ for more information.
 
-* A new `NDField.__setitem__()` has been added to allow for setting values in a structured NDArray.
+* Many improvements in ruff linting and code style. Thanks to @DimitriPapadopoulos for the excellent work in this area.
 
-* `struct_ndarr['field']` now works as in NumPy.
-
-* Many improvements on the computation of UDFs (User Defined Functions).  Now, the lazy UDF computation is way more robust and efficient.
-
-* Several new constructors are available for creating `NDArray` instances, like `arange()`, `linspace()` and `fromiter()`. These constructors leverage the internal lazyudf() function and make it easier to create `NDArray` instances from scratch. See e.g. https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/arange-constructor.py for an example.
-
-* Support reductions inside queries in structured NDArrays.  For example, given an array sarr with fields 'a', 'b' and 'c', the next `farr = sarr["b >= c"].sum("a").compute()` puts in `farr` the sum of the values in field 'a' for the rows that fulfills that values in fields in 'b' are larger than values in 'c' (`b >= c` above).
-
-* LazyArrays received a new `.indices()` method that returns the indices of the elements that fulfill a condition.  This is useful for filtering data in structured NDArrays.
-
-* LazyArrays received a new `.sort()` method that sorts the elements in the array.  This is useful for sorting data in structured NDArrays.
-
-* Implemented combining data filtering, as well as sorting, in structured NDArrays. For example, given an array `sarr` with fields 'a', 'b' and 'c', the next `farr = sarr["b >= c"].sort("c").indices().compute()` puts in `farr` the indices of the rows that fulfills that values in fields in 'b' are larger than values in 'c' (`b >= c` above), sorted by column 'c'.
-
-* New `expr_operands()` function. `validate_expr()` also added.
-
-* Reductions can be stored in persistent lazy expressions.  Now, if you have a lazy expression that contains a reduction, the result of the reduction is preserved in the expression, so that you can reuse it later on.  See https://www.blosc.org/posts/persistent-reductions/ for more information.
+### API changes
 
 * `LazyArray.eval()` has been renamed to `LazyArray.compute()`. This avoids confusion with the `eval()` function in Python, and it is more in line with the Dask API.
 
-* Many improvements in ruff linting and code style.  Thanks to @DimitriPapadopoulos for the excellent work in this area.
+This is the main change in the API that is not backward compatible with previous beta. If you have code that still uses `LazyArray.eval()`, you should change it to `LazyArray.compute()`.  Starting from this release, the API will be stable and backward compatibility will be maintained.
 
-* New `CParams`, `DParams` and `Storage` dataclasses for better handling of parameters in the library.  Now, you can use these dataclasses to pass parameters to the library, and get a better error handling.  See [here](https://www.blosc.org/python-blosc2/reference/storage.html).  Thanks to @martaiborra for the excellent implementation and @omaech for revamping docs and examples to use them.
+### New API calls
 
-* New remote proxy tutorial.  This tutorial shows how to use the `Proxy` class to access remote arrays, while providing caching. https://www.blosc.org/python-blosc2/getting_started/tutorials/05.remote_proxy.html .  Thanks to @omaech for her work on this tutorial.
+* New `reshape()` function and `NDArray.reshape()` method allow to do efficient reshaping between NDArrays that follows C order. Only 1-dim -> n-dim is currently supported though.
+
+* `New NDArray.__iter__()` iterator following NumPy conventions.
+
+* Now, `NDArray.__getitem__()` supports (n-dim) bool arrays or sequences of integers as indices (only 1-dim for now). This follows NumPy conventions.
+
+* A new `NDField.__setitem__()` has been added to allow for setting values in a structured NDArray.
+
+* `struct_ndarr['field']` now works as in NumPy, that is, it returns an array with the values in 'field' in the structured NDArray.
+
+* Several new constructors are available for creating NDArray instances, like `arange()`, `linspace()` and `fromiter()`. These constructors leverage the internal `lazyudf()` function and make it easier to create NDArray instances from scratch. See e.g. https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/arange-constructor.py for an example.
+
+* Structured LazyArrays received a new `.indices()` method that returns the indices of the elements that fulfill a condition. When combined with the new support of list of indices as key for `NDArray.__getitem__()`, this is useful for creating indexes for data.
+
+* LazyArrays received a new `.sort()` method that sorts the elements in the array. This can be combined with `.indices()` for sorting data from queries in structured NDArrays. For example, given an array `sarr` with fields 'a', 'b' and 'c', the next `farr = sarr["b >= c"].sort("c").indices().compute()` puts in `farr` the indices of the rows that fulfills that values in fields in 'b' are larger than values in 'c' (`b >= c` above), sorted by column 'c'.
+
+* New `expr_operands()` function for extracting operands from a string expression.
+
+* New `validate_expr()` function for validating a string expression.
+
+* New `CParams`, `DParams` and `Storage` dataclasses for better handling of parameters in the library. Now, you can use these dataclasses to pass parameters to the library, and get a better error handling. Thanks to @martaiborra for the excellent implementation and @omaech for revamping docs and examples to use them.  See e.g. https://www.blosc.org/python-blosc2/getting_started/tutorials/03.lazyarray-expressions.html.
+
+### Documentation improvements
+
+* Much improved documentation on how to efficiently compute with compressed NDArray data. Documentation updates highlight these features and improve usability for new users. Thanks to @omaech and @martaiborra for their excellent work on the documentation and examples, and to @NumFOCUS for their support in making this possible!  See https://www.blosc.org/python-blosc2/getting_started/tutorials/04.reductions.html for an example.
+
+* New remote proxy tutorial. This tutorial shows how to use the Proxy class to access remote arrays, while providing caching. https://www.blosc.org/python-blosc2/getting_started/tutorials/05.remote_proxy.html . Thanks to @omaech for her work on this tutorial.
+
+* New tutorial on "Mastering Persistent, Dynamic Reductions and Lazy Expressions". See https://www.blosc.org/posts/persistent-reductions/
+
 
 ## Changes from 3.0.0-beta.3 to 3.0.0-beta.4
 
