@@ -180,7 +180,7 @@ print("\nReading by slices...")
 planes_idx = np.random.randint(0, min(shape), 100)  # noqa: NPY002
 
 
-def time_slices(dset, idx):
+def time_slices(dset, idx):  # noqa: C901
     r = None
     if dset.ndim == 3:
         t0 = time()

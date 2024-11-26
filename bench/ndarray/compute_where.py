@@ -62,7 +62,7 @@ npd = c.where(0, 1)[:]
 t = time() - t0
 print(f"Time to compute where expression (getitem): {t:.3f} s; {nps.nbytes/2**30/t:.3f} GB/s")
 
-print(f"*** Extracting rows")
+print("*** Extracting rows")
 # Compute and get row values: NumPy
 t0 = time()
 npc = npa**2 + npb**2 > 2 * npa * npb + 1
