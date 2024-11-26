@@ -1239,3 +1239,31 @@ def test_sort():
     # TODO: Implement the sort method for LazyExpr more generally
     with pytest.raises(NotImplementedError):
         expr.sort().compute()
+
+
+@pytest.mark.parametrize(
+    "obj",
+    [
+        blosc2.arange(10),
+        blosc2.ones(10),
+        blosc2.zeros(10),
+        blosc2.arange(10) + blosc2.ones(10),
+        "arange(10)",
+        "arange(10) + arange(10)",
+        "arange(10) + linspace(0, 1, 10)",
+        "arange(10, shape=(10,))",
+        "arr",
+        "arange(10) + arr",
+    ],
+)
+def test_ndarray(obj):
+    arr = blosc2.arange(10)  # is a test case
+    larr = blosc2.lazyexpr(obj)
+    if not isinstance(obj, str):
+        assert larr.shape == obj.shape
+        assert larr.dtype == obj.dtype
+    b = larr.compute()
+    assert b.shape == larr.shape
+    assert b.dtype == larr.dtype
+    if not isinstance(obj, str):
+        assert np.allclose(b[:], obj[:])

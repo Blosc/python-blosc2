@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import builtins
 import concurrent.futures
 import copy
 import math
@@ -2241,7 +2242,7 @@ class LazyExpr(LazyArray):
 
         return value, expression[idx:idx2]
 
-    def _compute_expr(self, item, kwargs):
+    def _compute_expr(self, item, kwargs):  # noqa: C901
         if any(method in self.expression for method in reducers):
             # We have reductions in the expression (probably coming from a string lazyexpr)
             _globals = {func: getattr(blosc2, func) for func in functions if func in self.expression}
@@ -2284,6 +2285,9 @@ class LazyExpr(LazyArray):
 
             _globals = {func: getattr(blosc2, func) for func in functions if func in newexpr}
             lazy_expr = eval(newexpr, _globals, newops)
+            if isinstance(lazy_expr, blosc2.NDArray):
+                # We are done (probably the expression is made of only constructors)
+                return lazy_expr
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
 
         return chunked_eval(self.expression, self.operands, item, **kwargs)
@@ -2807,15 +2811,24 @@ def lazyexpr(
             where_args = {"_where_x": where[0], "_where_y": where[1]}
             expression._where_args = where_args
         return expression
+    elif isinstance(expression, blosc2.NDArray):
+        operands = {"o0": expression}
+        return LazyExpr._new_expr("o0", operands, guess=False, out=out, where=where)
 
     if operands is None:
         # Try to get operands from variables in the stack
-        operands = get_expr_operands(expression)
+        operand_set = get_expr_operands(expression)
         # If no operands are found, raise an error
-        if operands is None:
-            raise ValueError("No operands found in the expression")
-        # Look for operands in the stack
-        operands = seek_operands(operands, local_dict, global_dict)
+        if operand_set:
+            # Look for operands in the stack
+            operands = seek_operands(operand_set, local_dict, global_dict)
+        else:
+            # No operands found in the expression. Maybe a constructor?
+            constructor = builtins.any(constructor in expression for constructor in constructors)
+            if not constructor:
+                raise ValueError("No operands nor constructors found in the expression")
+            # _new_expr will take care of the constructor, but needs an empty dict in operands
+            operands = {}
 
     return LazyExpr._new_expr(expression, operands, guess=True, out=out, where=where)
 
