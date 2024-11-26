@@ -101,6 +101,7 @@ def test_proxy_simple_getitem(array_fixture):
     np.testing.assert_allclose(res, nres[sl])
 
 
+@pytest.mark.heavy
 def test_mix_operands(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + na2
@@ -1049,6 +1050,7 @@ def test_eval_item(array_fixture):
 
 
 # Test get_chunk method
+@pytest.mark.heavy
 def test_get_chunk(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = blosc2.lazyexpr(

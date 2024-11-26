@@ -73,6 +73,7 @@ def test_reduce_bool(array_fixture, reduce_op):
     "kwargs",
     [{}, {"cparams": blosc2.CParams(clevel=1, filters=[blosc2.Filter.BITSHUFFLE], filters_meta=[0])}],
 )
+@pytest.mark.heavy
 def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwargs):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     if axis is not None and np.isscalar(axis) and len(a1.shape) >= axis:
@@ -163,6 +164,7 @@ def test_broadcast_params(axis, keepdims, reduce_op, shapes):
 @pytest.mark.parametrize("stripe_len", [2, 10, 15, 100])
 @pytest.mark.parametrize("shape", [(10, 30), (30, 10), (50, 50)])
 @pytest.mark.parametrize("chunks", [None, (10, 15), (20, 30)])
+@pytest.mark.heavy
 def test_reduce_item(reduce_op, dtype, stripes, stripe_len, shape, chunks):
     na = np.linspace(0, 1, num=np.prod(shape), dtype=dtype).reshape(shape)
     a = blosc2.asarray(na, chunks=chunks)
