@@ -39,9 +39,10 @@ or numexpr, you can find:
 * High performance compression codecs, for integer, floating point, complex
   booleans, string and structured data.
 * Can perform many kind of math expressions, including reductions, indexing,
-  filters, User Defined Functions and more.
+  filters and more.
 * Support for NumPy ufunc mechanism, allowing to mix and match NumPy and
   Blosc2 computations.
+* Excellent integration with Numba and Cython via User Defined Functions.
 * Support for broadcasting operations. This is a powerful feature that
   allows to perform operations on arrays of different shapes.
 * Much better adherence to the NumPy casting rules than numexpr.

@@ -19,6 +19,7 @@ import re
 import sys
 import threading
 from abc import ABC, abstractmethod
+from dataclasses import asdict
 from enum import Enum
 from pathlib import Path
 from queue import Empty, Queue
@@ -2565,9 +2566,15 @@ class LazyUDF(LazyArray):
         aux_kwargs = copy.deepcopy(self.kwargs)
         # Update is not recursive
         cparams = aux_kwargs.get("cparams", {})
+        if isinstance(cparams, blosc2.CParams):
+            # Convert to dictionary
+            cparams = asdict(cparams)
         cparams.update(kwargs.get("cparams", {}))
         aux_kwargs["cparams"] = cparams
         dparams = aux_kwargs.get("dparams", {})
+        if isinstance(dparams, blosc2.DParams):
+            # Convert to dictionary
+            dparams = asdict(dparams)
         dparams.update(kwargs.get("dparams", {}))
         aux_kwargs["dparams"] = dparams
         _ = kwargs.pop("cparams", None)

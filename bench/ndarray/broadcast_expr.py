@@ -6,7 +6,7 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-# Small benchmark for evaluating outer products using the broadcast feature
+# Small benchmark for computing outer products using the broadcast feature
 
 from time import time
 
@@ -38,7 +38,7 @@ for codec in blosc2.Codec:
     t0 = time()
     # d = c.compute(cparams=dict(codec=codec, clevel=5), chunks=(chunks, chunks), blocks=(blocks, blocks))
     d = c.compute(cparams={"codec": codec, "clevel": 5})
-    print(f"Elapsed time (eval): {time() - t0:.6f} s")
+    print(f"Elapsed time (compute): {time() - t0:.2f}s")
     # print(d[:])
     print(f"cratio: {d.schunk.cratio:.2f}x")
     # print(d.info)

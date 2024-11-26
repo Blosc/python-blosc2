@@ -19,8 +19,9 @@ blocks = (1, 1000)
 # Comment out the next line to force chunks and blocks above
 chunks, blocks = None, None
 # Check with fast compression
-cparams = {'clevel': 1, 'codec': blosc2.Codec.BLOSCLZ}
+cparams = blosc2.CParams(clevel=1, codec=blosc2.Codec.BLOSCLZ)
 
+print(f"*** Working with an struct array with shape: {shape}")
 # Create a structured NumPy array
 npa_ = np.linspace(0, 1, np.prod(shape), dtype=np.float32).reshape(shape)
 npb_ = np.linspace(1, 2, np.prod(shape), dtype=np.float64).reshape(shape)
@@ -32,35 +33,35 @@ npb = nps['b']
 t0 = time()
 npc = npa**2 + npb**2 > 2 * npa * npb + 1
 t = time() - t0
-print(f"Time to evaluate field expression (NumPy): {t:.3f} s; {nps.nbytes/2**30/t:.2f} GB/s")
+print(f"Time to compute field expression (NumPy): {t:.3f} s; {nps.nbytes/2**30/t:.2f} GB/s")
 
 t0 = time()
 npc = ne.evaluate('a**2 + b**2 > 2 * a * b + 1', local_dict={'a': npa, 'b': npb})
 t = time() - t0
-print(f"Time to evaluate field expression (NumExpr): {t:.3f} s; {nps.nbytes/2**30/t:.2f} GB/s")
+print(f"Time to compute field expression (NumExpr): {t:.3f} s; {nps.nbytes/2**30/t:.2f} GB/s")
 
 s = blosc2.asarray(nps, chunks=chunks, blocks=blocks, cparams=cparams)
-print(f"shape: {s.shape}, chunks: {s.chunks}, blocks: {s.blocks}, cratio: {s.schunk.cratio:.2f}")
-a = s.fields['a']
-# a = s['a']  # TODO: implement this (should be an expression)
-b = s.fields['b']
+print(f"*** Working with NDArray with shape: {s.shape}, chunks: {s.chunks}, blocks: {s.blocks},"
+      f" cratio: {s.schunk.cratio:.2f}x")
+a = s['a']
+b = s['b']
 
 # Get a LazyExpr instance
 c = a**2 + b**2 > 2 * a * b + 1
-# Evaluate: output is a NDArray
+# Compute: output is a NDArray
 t0 = time()
 d = c.compute(cparams=cparams)
 t = time() - t0
-print(f"Time to evaluate field expression (eval): {t:.3f} s; {nps.nbytes/2**30/t:.2f} GB/s")
+print(f"Time to compute field expression (compute): {t:.3f} s; {nps.nbytes/2**30/t:.2f} GB/s")
 
-# Evaluate the whole slice: output is a NumPy array
+# Compute the whole slice: output is a NumPy array
 t0 = time()
 npd = c[:]
 t = time() - t0
-print(f"Time to evaluate field expression (getitem): {t:.3f} s; {nps.nbytes/2**30/t:.2f} GB/s")
+print(f"Time to compute field expression (getitem): {t:.3f} s; {nps.nbytes/2**30/t:.2f} GB/s")
 
-# Evaluate a partial slice: output is a NumPy array
+# Compute a partial slice: output is a NumPy array
 t0 = time()
 npd = c[1:10]
 t = time() - t0
-print(f"Time to evaluate field expression (partial getitem): {t:.3f} s; {npd.nbytes/2**20/t:.2f} MB/s")
+print(f"Time to compute field expression (partial getitem): {t:.3f} s; {npd.nbytes/2**20/t:.2f} MB/s")

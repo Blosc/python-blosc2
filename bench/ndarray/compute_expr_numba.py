@@ -6,7 +6,7 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-# Benchmark to evaluate expressions with numba and NDArray instances as operands.
+# Benchmark to compute expressions with numba and NDArray instances as operands.
 # As numba takes a while to compile the first time, we use cached functions, so
 # make sure to run the script at least a couple of times.
 
@@ -18,19 +18,20 @@ import numpy as np
 
 import blosc2
 
+
 shape = (5000, 10_000)
 chunks = [500, 10_000]
 blocks = [4, 10_000]
-# Comment out the next line to force chunks and blocks above
+# Comment out the next line to enforce chunks and blocks above
 chunks, blocks = None, None
 # Check with fast compression
-cparams = {"clevel": 1, "codec": blosc2.Codec.BLOSCLZ}
+cparams = blosc2.CParams(clevel=1, codec=blosc2.Codec.BLOSCLZ)
 
 dtype = np.float32
 rtol = 1e-6 if dtype == np.float32 else 1e-17
 atol = 1e-6 if dtype == np.float32 else 1e-17
 
-# Expression to evaluate
+# Expression to compute
 exprs = ("x + 1",
          "x**2 + y**2 + 2 * x * y + 1",
          "sin(x)**3 + cos(y)**2 + cos(x) * sin(y) + z",
@@ -50,7 +51,7 @@ b2vardict = {"x": x, "y": y, "z": z, "blosc2": blosc2}
 print(f"shape: {x.shape}, chunks: {x.chunks}, blocks: {x.blocks}, cratio: {x.schunk.cratio:.2f}")
 
 
-# Define the functions to evaluate the expressions
+# Define the functions to compute the expressions
 # First the pure numba+numpy version
 @nb.jit(parallel=True, cache=True)
 def func_numba(x, y, z, n):
@@ -93,9 +94,9 @@ def udf_numba(inputs, output, offset):
 
 
 for n, expr in enumerate(exprs):
-    print(f"*** Evaluating expression: {expr} ...")
+    print(f"*** Computing expression: {expr} ...")
 
-    # Evaluate the expression with NumPy/numexpr
+    # Compute the expression with NumPy/numexpr
     npexpr = expr.replace("sin", "np.sin").replace("cos", "np.cos")
     t0 = time()
     npres = eval(npexpr, vardict)
@@ -106,14 +107,14 @@ for n, expr in enumerate(exprs):
     ne.evaluate(expr, vardict, out=np.empty_like(npx))
     print("NumExpr took %.3f s" % (time() - t0))
 
-    # Evaluate the expression with Blosc2+numexpr
+    # Compute the expression with Blosc2
     blosc2.cparams_dflts["codec"] = blosc2.Codec.LZ4
     blosc2.cparams_dflts["clevel"] = 5
     b2expr = expr.replace("sin", "blosc2.sin").replace("cos", "blosc2.cos")
     c = eval(b2expr, b2vardict)
     t0 = time()
     d = c.compute()
-    print("LazyExpr+eval took %.3f s" % (time() - t0))
+    print("LazyExpr+compute took %.3f s" % (time() - t0))
     # Check
     np.testing.assert_allclose(d[:], npres, rtol=rtol, atol=atol)
     t0 = time()
@@ -134,28 +135,14 @@ for n, expr in enumerate(exprs):
     elif n == 2:
         inputs = (x, y, z)
 
-    expr_ = blosc2.lazyudf(udf_numba, inputs, npx.dtype, chunked_eval=False,
-                           chunks=chunks, blocks=blocks, cparams=cparams)
-    # actual benchmark
-    # eval() uses the udf function as a prefilter
-    t0 = time()
-    res = expr_.compute()
-    print("LazyUDF+eval took %.3f s" % (time() - t0))
-    np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)
-    # getitem uses the same compiled function but as a postfilter
-    t0 = time()
-    res = expr_[:]
-    print("LazyUDF+getitem took %.3f s" % (time() - t0))
-    np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)
-
-    expr_ = blosc2.lazyudf(udf_numba, inputs, npx.dtype, chunked_eval=True,
+    expr_ = blosc2.lazyudf(udf_numba, inputs, npx.dtype,
                            chunks=chunks, blocks=blocks, cparams=cparams)
     # getitem but using chunked evaluation
     t0 = time()
     res = expr_.compute()
-    print("LazyUDF+chunked_eval took %.3f s" % (time() - t0))
+    print("LazyUDF+compute took %.3f s" % (time() - t0))
     np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)
     t0 = time()
     res = expr_[:]
-    print("LazyUDF+getitem+chunked_eval took %.3f s" % (time() - t0))
+    print("LazyUDF+getitem took %.3f s" % (time() - t0))
     np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)

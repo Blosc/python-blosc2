@@ -6,7 +6,7 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-# Benchmark to evaluate expressions with numba and NDArray instances as operands.
+# Benchmark to compute expressions with numba and NDArray instances as operands.
 # As numba takes a while to compile the first time, we use cached functions, so
 # make sure to run the script at least a couple of times.
 
@@ -20,6 +20,8 @@ import blosc2
 shape = (50, 100, 10_000)
 chunks = [5, 100, 10_000]
 blocks = [4, 10, 1_000]
+# Comment out the next line to force chunks and blocks above
+chunks, blocks = None, None
 dtype = np.float32
 rtol = 1e-5 if dtype == np.float32 else 1e-16
 atol = 1e-5 if dtype == np.float32 else 1e-16
@@ -39,15 +41,14 @@ vardict = {"x": npx, "y": npy, "z": npz, "np": np}
 x = blosc2.asarray(npx, chunks=chunks, blocks=blocks)
 y = blosc2.asarray(npy, chunks=chunks, blocks=blocks)
 z = blosc2.asarray(npz, chunks=chunks, blocks=blocks)
-b2vardict = {"x": x, "y": y, "z": z, "blosc2": blosc2}
 
 expr = "(x**2 + y**2 * z** 2) < 1"
 
 
 for axis in laxis:
-    print(f"*** Evaluating expression on axis: {axis} ...")
+    print(f"*** Computing expression on axis: {axis} ...")
 
-    # Evaluate the reduction with NumPy/numexpr
+    # Compute the reduction with NumPy/numexpr
     npexpr = expr.replace("sin", "np.sin").replace("cos", "np.cos")
     t0 = time()
     npres = eval(npexpr, vardict).sum(axis=axis)
@@ -59,16 +60,16 @@ for axis in laxis:
     print("NumExpr took %.3f s" % (time() - t0))
 
     # Reduce with Blosc2
-    b2expr = expr.replace("sin", "blosc2.sin").replace("cos", "blosc2.cos")
-    c = eval(b2expr, b2vardict)
+    c = eval(expr)
     t0 = time()
     d = c.compute()
-    d = d.sum(axis=axis)  # , dtype=npres.dtype)
-    print("LazyExpr+eval took %.3f s" % (time() - t0))
+    d = d.sum(axis=axis)
+    print("LazyExpr+compute took %.3f s" % (time() - t0))
     # Check
     np.testing.assert_allclose(d[()], npres, rtol=rtol, atol=atol)
-    # t0 = time()
-    # d = c[:]
-    # print("LazyExpr+getitem took %.3f s" % (time() - t0))
-    # # Check
-    # np.testing.assert_allclose(d[:], npres, rtol=rtol, atol=atol)
+    t0 = time()
+    d = c[:]
+    d = d.sum(axis=axis)
+    print("LazyExpr+getitem took %.3f s" % (time() - t0))
+    # Check
+    np.testing.assert_allclose(d[()], npres, rtol=rtol, atol=atol)
