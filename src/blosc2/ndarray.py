@@ -63,6 +63,8 @@ def make_key_hashable(key):
 
 
 def process_key(key, shape):
+    if key is None:
+        key = tuple(slice(None) for _ in range(len(shape)))
     key = ndindex.ndindex(key).expand(shape).raw
     mask = tuple(isinstance(k, int) for k in key)
     key = tuple(k if isinstance(k, slice) else slice(k, k + 1, None) for k in key)
