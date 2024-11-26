@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import ast
 import asyncio
-import builtins
 import concurrent.futures
 import copy
 import math
@@ -2824,7 +2823,7 @@ def lazyexpr(
             operands = seek_operands(operand_set, local_dict, global_dict)
         else:
             # No operands found in the expression. Maybe a constructor?
-            constructor = builtins.any(constructor in expression for constructor in constructors)
+            constructor = any(constructor in expression for constructor in constructors)
             if not constructor:
                 raise ValueError("No operands nor constructors found in the expression")
             # _new_expr will take care of the constructor, but needs an empty dict in operands
