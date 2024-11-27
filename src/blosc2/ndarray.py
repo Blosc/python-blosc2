@@ -1021,11 +1021,15 @@ def extract_values(arr, indices: np.ndarray[np.int_], max_cache_size: int = 10) 
 
 
 class NDOuterIterator:
-    def __init__(self, ndarray: NDArray | NDField, cache_size=10):
+    def __init__(self, ndarray: NDArray | NDField, cache_size=1):
         self.ndarray = ndarray
         self.outer_dim_size = ndarray.shape[0]
         self.inner_shape = ndarray.shape[1:]
         self.current_index = 0
+        # Cache for 1D arrays; for higher dimensions, the implementation should be more involved
+        self.chunk_size = ndarray.chunks[0] if len(ndarray.shape) == 1 else None
+        self.cache = {} if len(ndarray.shape) == 1 else None
+        self.cache_size = cache_size
 
     def __iter__(self):
         return self
@@ -1037,8 +1041,20 @@ class NDOuterIterator:
         outer_index = self.current_index
         self.current_index += 1
 
-        # Return the outer dimension
-        return self.ndarray[outer_index]
+        if self.cache is not None:
+            chunk_index = outer_index // self.chunk_size
+            local_index = outer_index % self.chunk_size
+
+            if chunk_index not in self.cache:
+                if len(self.cache) >= self.cache_size:
+                    self.cache.pop(next(iter(self.cache)))
+                self.cache[chunk_index] = self.ndarray[
+                    chunk_index * self.chunk_size : (chunk_index + 1) * self.chunk_size
+                ]
+
+            return self.cache[chunk_index][local_index]
+        else:
+            return self.ndarray[outer_index]
 
 
 class NDArray(blosc2_ext.NDArray, Operand):
