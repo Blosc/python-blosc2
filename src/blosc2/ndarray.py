@@ -369,7 +369,7 @@ def _check_allowed_dtypes(
 def sum(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
     axis: int | tuple[int] | None = None,
-    dtype: np.dtype = None,
+    dtype: np.dtype | str = None,
     keepdims: bool = False,
     **kwargs: Any,
 ) -> np.ndarray | NDArray | int | float | complex | bool:
@@ -384,7 +384,7 @@ def sum(
         Axis or axes along which a sum is performed. By default, axis=None,
         sums all the elements of the input array. If axis is negative,
         it counts from the last to the first axis.
-    dtype: np.dtype, optional
+    dtype: np.dtype or str, optional
         The type of the returned array and of the accumulator in which the
         elements are summed. The dtype of :paramref:`ndarr` is used by default unless it has
         an integer dtype of less precision than the default platform integer.
@@ -426,7 +426,7 @@ def sum(
 def mean(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
     axis: int | tuple[int] | None = None,
-    dtype: np.dtype = None,
+    dtype: np.dtype | str = None,
     keepdims: bool = False,
     **kwargs: Any,
 ) -> np.ndarray | NDArray | int | float | complex | bool:
@@ -462,7 +462,7 @@ def mean(
 def std(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
     axis: int | tuple[int] | None = None,
-    dtype: np.dtype = None,
+    dtype: np.dtype | str = None,
     ddof: int = 0,
     keepdims: bool = False,
     **kwargs: Any,
@@ -477,7 +477,7 @@ def std(
     axis: int or tuple of ints, optional
         Axis or axes along which the standard deviation is computed. By default, `axis=None`
         computes the standard deviation of the flattened array.
-    dtype: np.dtype, optional
+    dtype: np.dtype or str, optional
         Type to use in computing the standard deviation. For integer inputs, the
         default is float32; for floating point inputs, it is the same as the input dtype.
     ddof: int, optional
@@ -521,7 +521,7 @@ def std(
 def var(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
     axis: int | tuple[int] | None = None,
-    dtype: np.dtype = None,
+    dtype: np.dtype | str = None,
     ddof: int = 0,
     keepdims: bool = False,
     **kwargs: Any,
@@ -563,7 +563,7 @@ def var(
 def prod(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
     axis: int | tuple[int] | None = None,
-    dtype: np.dtype = None,
+    dtype: np.dtype | str = None,
     keepdims: bool = False,
     **kwargs: Any,
 ) -> np.ndarray | NDArray | int | float | complex | bool:
@@ -1656,12 +1656,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return super().to_cframe()
 
-    def copy(self, dtype: np.dtype = None, **kwargs: Any) -> NDArray:
+    def copy(self, dtype: np.dtype | str = None, **kwargs: Any) -> NDArray:
         """Create a copy of an array with different parameters.
 
         Parameters
         ----------
-        dtype: np.dtype
+        dtype: np.dtype or str
             The new array dtype. Default is `self.dtype`.
 
         Other Parameters
@@ -2776,14 +2776,14 @@ def _check_shape(shape):
     return shape
 
 
-def empty(shape: int | tuple | list, dtype: np.dtype | None = np.float64, **kwargs: Any) -> NDArray:
+def empty(shape: int | tuple | list, dtype: np.dtype | str | None = np.float64, **kwargs: Any) -> NDArray:
     """Create an empty array.
 
     Parameters
     ----------
     shape: int, tuple or list
         The shape for the final array.
-    dtype: np.dtype
+    dtype: np.dtype or str
         The data type of the array elements in NumPy format. Default is `np.uint8`.
         This will override the `typesize`
         in the compression parameters if they are provided.
@@ -2830,7 +2830,7 @@ def empty(shape: int | tuple | list, dtype: np.dtype | None = np.float64, **kwar
     return blosc2_ext.empty(shape, chunks, blocks, dtype, **kwargs)
 
 
-def uninit(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: Any) -> NDArray:
+def uninit(shape: int | tuple | list, dtype: np.dtype | str = np.float64, **kwargs: Any) -> NDArray:
     """Create an array with uninitialized values.
 
     The parameters and keyword arguments are the same as for the
@@ -2864,7 +2864,7 @@ def uninit(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: An
     return blosc2_ext.uninit(shape, chunks, blocks, dtype, **kwargs)
 
 
-def nans(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: Any) -> NDArray:
+def nans(shape: int | tuple | list, dtype: np.dtype | str = np.float64, **kwargs: Any) -> NDArray:
     """Create an array with NaNs values.
 
     The parameters and keyword arguments are the same as for the
@@ -2898,7 +2898,7 @@ def nans(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: Any)
     return blosc2_ext.nans(shape, chunks, blocks, dtype, **kwargs)
 
 
-def zeros(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: Any) -> NDArray:
+def zeros(shape: int | tuple | list, dtype: np.dtype | str = np.float64, **kwargs: Any) -> NDArray:
     """Create an array with zero as the default value
     for uninitialized portions of the array.
 
@@ -2939,7 +2939,10 @@ def zeros(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: Any
 
 
 def full(
-    shape: int | tuple | list, fill_value: bytes | int | float | bool, dtype: np.dtype = None, **kwargs: Any
+    shape: int | tuple | list,
+    fill_value: bytes | int | float | bool,
+    dtype: np.dtype | str = None,
+    **kwargs: Any,
 ) -> NDArray:
     """Create an array, with :paramref:`fill_value` being used as the default value
     for uninitialized portions of the array.
@@ -2952,7 +2955,7 @@ def full(
         Default value to use for uninitialized portions of the array.
         Its size will override the `typesize`
         in the cparams if they are passed.
-    dtype: np.dtype
+    dtype: np.dtype or str
         The ndarray dtype in NumPy format. By default, this will
         be taken from the :paramref:`fill_value`.
         This will override the `typesize`
@@ -2994,7 +2997,7 @@ def full(
     return blosc2_ext.full(shape, chunks, blocks, fill_value, dtype, **kwargs)
 
 
-def ones(shape: int | tuple | list, dtype: np.dtype = np.float64, **kwargs: Any) -> NDArray:
+def ones(shape: int | tuple | list, dtype: np.dtype | str = np.float64, **kwargs: Any) -> NDArray:
     """Create an array with one as values.
 
     The parameters and keyword arguments are the same as for the
@@ -3046,7 +3049,7 @@ def arange(
         The end value of the sequence.
     step: int, float, complex or np.number
         Spacing between values.
-    dtype: np.dtype
+    dtype: np.dtype or str
         The data type of the array elements in NumPy format. Default is `np.uint8`.
         This will override the `typesize`
         in the compression parameters if they are provided.
@@ -3139,7 +3142,7 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, c
         Number of samples to generate.
     endpoint: bool
         If True, `stop` is the last sample. Otherwise, it is not included.
-    dtype: np.dtype
+    dtype: np.dtype or str
         The data type of the array elements in NumPy format. Default is `np.float64`.
     shape: int, tuple or list
         The shape of the final array. If None, the shape will be guessed from `num`.
@@ -3257,7 +3260,7 @@ def fromiter(iterable, shape, dtype, c_order=True, **kwargs) -> NDArray:
 
 
 def frombuffer(
-    buffer: bytes, shape: int | tuple | list, dtype: np.dtype = np.uint8, **kwargs: Any
+    buffer: bytes, shape: int | tuple | list, dtype: np.dtype | str = np.uint8, **kwargs: Any
 ) -> NDArray:
     """Create an array out of a buffer.
 
@@ -3267,7 +3270,7 @@ def frombuffer(
         The buffer of the data to populate the container.
     shape: int, tuple or list
         The shape for the final container.
-    dtype: np.dtype
+    dtype: np.dtype or str
         The ndarray dtype in NumPy format. Default is `np.uint8`.
         This will override the `typesize`
         in the cparams if they are passed.
@@ -3303,7 +3306,7 @@ def frombuffer(
     return blosc2_ext.from_buffer(buffer, shape, chunks, blocks, dtype, **kwargs)
 
 
-def copy(array: NDArray, dtype: np.dtype = None, **kwargs: Any) -> NDArray:
+def copy(array: NDArray, dtype: np.dtype | str = None, **kwargs: Any) -> NDArray:
     """
     This is equivalent to :meth:`NDArray.copy`
 
