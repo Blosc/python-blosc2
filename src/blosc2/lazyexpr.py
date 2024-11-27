@@ -2303,6 +2303,8 @@ class LazyExpr(LazyArray):
     def indices(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
         if self.dtype.fields is None:
             raise NotImplementedError("indices() can only be used with structured arrays")
+        if not hasattr(self, "_where_args") or len(self._where_args) != 1:
+            raise ValueError("sort() can only be used with conditions")
         # Build a new lazy expression
         lazy_expr = copy.copy(self)
         # ... and assign the new attributes

@@ -216,6 +216,8 @@ from .ndarray import (
     arange,
     linspace,
     asarray,
+    indices,
+    sort,
     reshape,
     copy,
     empty,

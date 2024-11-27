@@ -20,6 +20,7 @@ Methods
     __setitem__
     copy
     get_chunk
+    indices
     iterchunks_info
     reshape
     resize
