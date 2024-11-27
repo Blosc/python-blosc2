@@ -269,7 +269,7 @@ aspects:
 - Jan Sellner, who contributed the mmap support for NDArray/SChunk objects.
 - Dimitri Papadopoulos, who contributed a large bunch of improvements to the
   in many aspects of the project.  His attention to detail is remarkable.
-- J. David Ibáñez, who contributed improvements for the LazyArray object.
+- Juan David Ibáñez, who contributed improvements for the LazyArray object.
 - And many others that have contributed with bug reports, suggestions and
   improvements.
 
