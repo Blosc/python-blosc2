@@ -229,6 +229,7 @@ from .ndarray import (
     zeros,
     ones,
     full,
+    save,
 )
 
 from .c2array import c2context, C2Array, URLPath

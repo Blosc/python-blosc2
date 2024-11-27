@@ -1657,7 +1657,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return super().to_cframe()
 
     def copy(self, dtype: np.dtype = None, **kwargs: Any) -> NDArray:
-        """Create a copy of an array with same parameters.
+        """Create a copy of an array with different parameters.
 
         Parameters
         ----------
@@ -1713,6 +1713,45 @@ class NDArray(blosc2_ext.NDArray, Operand):
         kwargs = _check_ndarray_kwargs(**kwargs)
 
         return super().copy(dtype, **kwargs)
+
+    def save(self, urlpath: str, **kwargs: Any) -> None:
+        """Save the array to a file.
+
+        This is a convenience function that calls the :func:`copy` method with the
+        `urlpath` parameter and the additional keyword arguments provided.
+
+        See :func:`save` for more information.
+
+        Parameters
+        ----------
+        urlpath: str
+            The path where the array will be saved.
+
+        Other Parameters
+        ----------------
+        kwargs: dict, optional
+            Additional keyword arguments supported by the :func:`save` method.
+
+        Returns
+        -------
+        out: None
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> shape = (10, 10)
+        >>> blocks = (10, 10)
+        >>> dtype = np.bool_
+        >>> # Create a NDArray with default chunks
+        >>> a = blosc2.zeros(shape, blocks=blocks, dtype=dtype)
+        >>> # Save the array to a file
+        >>> a.save("array.b2frame")
+        """
+        blosc2_ext.check_access_mode(urlpath, "w")
+        # Add urlpath to kwargs
+        kwargs["urlpath"] = urlpath
+        super().copy(self.dtype, **kwargs)
 
     def resize(self, newshape: tuple | list) -> None:
         """Change the shape of the array by growing or shrinking one or more dimensions.
@@ -3283,6 +3322,33 @@ def copy(array: NDArray, dtype: np.dtype = None, **kwargs: Any) -> NDArray:
     [4.4 5.5 6.6]]
     """
     return array.copy(dtype, **kwargs)
+
+
+def save(array: NDArray, urlpath: str, **kwargs: Any) -> None:
+    """Save an array to a file.
+
+    Parameters
+    ----------
+    array: :ref:`NDArray`
+        The array to be saved.
+    urlpath: str
+        The path to the file where the array will be saved.
+
+    Other Parameters
+    ----------------
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`save` method.
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> # Create an array
+    >>> array = np.arange(0, 100, dtype=np.int64).reshape(10, 10)
+    >>> # Save the array to a file
+    >>> blosc2.save(array, "array.b2")
+    """
+    array.save(urlpath, **kwargs)
 
 
 def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: Any) -> NDArray:

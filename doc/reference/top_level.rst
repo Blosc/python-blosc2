@@ -24,6 +24,8 @@ Compress and decompress
    unpack_array
    unpack_array2
    unpack_tensor
+   save
+   open
    save_array
    load_array
    save_tensor

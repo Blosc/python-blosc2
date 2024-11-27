@@ -24,6 +24,7 @@ Methods
     iterchunks_info
     reshape
     resize
+    save
     slice
     sort
     squeeze

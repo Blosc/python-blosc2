@@ -236,3 +236,13 @@ def test_indices(order):
     narr = a[:]
     nb = np.argsort(narr, order=order)
     assert np.array_equal(b[:], nb)
+
+
+def test_save():
+    a = blosc2.arange(0, 10, 1, dtype="i4", shape=(10,))
+    blosc2.save(a, "test.b2nd")
+    c = blosc2.open("test.b2nd")
+    assert np.array_equal(a[:], c[:])
+    blosc2.remove_urlpath("test.b2nd")
+    with pytest.raises(FileNotFoundError):
+        blosc2.open("test.b2nd")
