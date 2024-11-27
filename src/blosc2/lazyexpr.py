@@ -2300,16 +2300,18 @@ class LazyExpr(LazyArray):
 
         return chunked_eval(self.expression, self.operands, item, **kwargs)
 
+    # TODO: indices and sort are repeated in LazyUDF; refactor
     def indices(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
         if self.dtype.fields is None:
             raise NotImplementedError("indices() can only be used with structured arrays")
         if not hasattr(self, "_where_args") or len(self._where_args) != 1:
-            raise ValueError("sort() can only be used with conditions")
-        # Build a new lazy expression
+            raise ValueError("indices() can only be used with conditions")
+        # Build a new lazy array
         lazy_expr = copy.copy(self)
         # ... and assign the new attributes
         lazy_expr._indices = True
-        lazy_expr._order = order
+        if order:
+            lazy_expr._order = order
         # dtype changes to int64
         lazy_expr._dtype = np.dtype(np.int64)
         return lazy_expr
@@ -2322,7 +2324,8 @@ class LazyExpr(LazyArray):
         # Build a new lazy expression
         lazy_expr = copy.copy(self)
         # ... and assign the new attributes
-        lazy_expr._order = order
+        if order:
+            lazy_expr._order = order
         return lazy_expr
 
     def compute(self, item=None, **kwargs) -> blosc2.NDArray:
@@ -2575,13 +2578,33 @@ class LazyUDF(LazyArray):
         items += [("dtype", self.dtype)]
         return items
 
-    def indices(self):
-        self._indices = True
-        return self
+    # TODO: indices and sort are repeated in LazyExpr; refactor
+    def indices(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
+        if self.dtype.fields is None:
+            raise NotImplementedError("indices() can only be used with structured arrays")
+        if not hasattr(self, "_where_args") or len(self._where_args) != 1:
+            raise ValueError("indices() can only be used with conditions")
+        # Build a new lazy array
+        lazy_expr = copy.copy(self)
+        # ... and assign the new attributes
+        lazy_expr._indices = True
+        if order:
+            lazy_expr._order = order
+        # dtype changes to int64
+        lazy_expr._dtype = np.dtype(np.int64)
+        return lazy_expr
 
     def sort(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
-        self._order = order
-        return self
+        if self.dtype.fields is None:
+            raise NotImplementedError("sort() can only be used with structured arrays")
+        if not hasattr(self, "_where_args") or len(self._where_args) != 1:
+            raise ValueError("sort() can only be used with conditions")
+        # Build a new lazy expression
+        lazy_expr = copy.copy(self)
+        # ... and assign the new attributes
+        if order:
+            lazy_expr._order = order
+        return lazy_expr
 
     def compute(self, item=None, **kwargs):
         # Get kwargs

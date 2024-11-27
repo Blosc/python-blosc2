@@ -425,6 +425,7 @@ def test_indices(shape, chunks, blocks, field, order):
         ((5,), (2,), (1,), "a"),
         ((15,), (2,), (2,), "b"),
         ((100,), (44,), (33,), "b"),
+        ((100,), (44,), (33,), None),
     ],
 )
 def test_sort(shape, chunks, blocks, order):
@@ -452,6 +453,7 @@ def test_sort(shape, chunks, blocks, order):
         ((5,), (2,), (1,), "a"),
         ((5,), (2,), (1,), "b"),
         ((10,), (4,), (3,), "b"),
+        ((10,), (4,), (3,), None),
     ],
 )
 def test_sort_indices(shape, chunks, blocks, order):
@@ -467,7 +469,10 @@ def test_sort_indices(shape, chunks, blocks, order):
 
     # Emulate that expression with NumPy
     mask = nsa["a"] > 2
-    sorted_indices = np.argsort(nsa[order][mask])
+    if order:
+        sorted_indices = np.argsort(nsa[order][mask])
+    else:
+        sorted_indices = np.argsort(nsa[mask])
     nres = np.where(mask)[0][sorted_indices]
 
     # Check
