@@ -5,14 +5,14 @@ Tutorials
    :caption: Index
    :maxdepth: 1
 
-   tutorials/00.schunk-basics
-   tutorials/01.schunk-slicing_and_beyond
-   tutorials/02.ndarray-basics
-   tutorials/03.lazyarray-expressions
+   tutorials/01.ndarray-basics
+   tutorials/02.lazyarray-expressions
    tutorials/03.lazyarray-udf
    tutorials/04.reductions
-   tutorials/04.persistent-reductions
-   tutorials/05.remote_proxy
+   tutorials/05.persistent-reductions
+   tutorials/06.remote_proxy
+   tutorials/07.schunk-basics
+   tutorials/08.schunk-slicing_and_beyond
    tutorials/10.ucodecs-ufilters
    tutorials/11.prefilters
    tutorials/12.postfilters

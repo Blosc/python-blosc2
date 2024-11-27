@@ -48,13 +48,13 @@ This is the main change in the API that is not backward compatible with previous
 
 * New `validate_expr()` function for validating a string expression.
 
-* New `CParams`, `DParams` and `Storage` dataclasses for better handling of parameters in the library. Now, you can use these dataclasses to pass parameters to the library, and get a better error handling. Thanks to @martaiborra for the excellent implementation and @omaech for revamping docs and examples to use them.  See e.g. https://www.blosc.org/python-blosc2/getting_started/tutorials/03.lazyarray-expressions.html.
+* New `CParams`, `DParams` and `Storage` dataclasses for better handling of parameters in the library. Now, you can use these dataclasses to pass parameters to the library, and get a better error handling. Thanks to @martaiborra for the excellent implementation and @omaech for revamping docs and examples to use them.  See e.g. https://www.blosc.org/python-blosc2/getting_started/tutorials/02.lazyarray-expressions.html.
 
 ### Documentation improvements
 
 * Much improved documentation on how to efficiently compute with compressed NDArray data. Documentation updates highlight these features and improve usability for new users. Thanks to @omaech and @martaiborra for their excellent work on the documentation and examples, and to @NumFOCUS for their support in making this possible!  See https://www.blosc.org/python-blosc2/getting_started/tutorials/04.reductions.html for an example.
 
-* New remote proxy tutorial. This tutorial shows how to use the Proxy class to access remote arrays, while providing caching. https://www.blosc.org/python-blosc2/getting_started/tutorials/05.remote_proxy.html . Thanks to @omaech for her work on this tutorial.
+* New remote proxy tutorial. This tutorial shows how to use the Proxy class to access remote arrays, while providing caching. https://www.blosc.org/python-blosc2/getting_started/tutorials/06.remote_proxy.html . Thanks to @omaech for her work on this tutorial.
 
 * New tutorial on "Mastering Persistent, Dynamic Reductions and Lazy Expressions". See https://www.blosc.org/posts/persistent-reductions/
 

@@ -36,12 +36,12 @@ capable of operating on compressed data stored in-memory, on-disk, or across the
 network. This engine also supports advanced features such as reductions, filters,
 user-defined functions, and broadcasting (the latter is still in beta).
 
-You can read some of our tutorials on how to perform advanced computations at the
-following links:
+You can read some of our tutorials on how to perform advanced computations at:
 
-* https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/03.lazyarray-expressions.ipynb
-* https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/03.lazyarray-udf.ipynb
-
+https://www.blosc.org/python-blosc2/getting_started/tutorials/02.lazyarray-expressions.html
+https://www.blosc.org/python-blosc2/getting_started/tutorials/03.lazyarray-udf.html
+https://www.blosc.org/python-blosc2/getting_started/tutorials/05.persistent-reductions.html
+https://www.blosc.org/python-blosc2/getting_started/tutorials/06.remote_proxy.html
 
 Additionally, Python-Blosc2 aims to fully leverage the functionality of C-Blosc2, supporting
 super-chunks (`SChunk <https://www.blosc.org/python-blosc2/reference/schunk_api.html>`_),
@@ -158,11 +158,11 @@ You can install the binary packages from PyPi using ``pip``:
     pip install blosc2
 
 We are in the process of releasing 3.0.0, along with wheels for various
-beta versions.  For example, to install the first beta version, you can use:
+versions.  For example, to install the firt release candidate version, you can use:
 
 .. code-block:: console
 
-    pip install blosc2==3.0.0b1
+    pip install blosc2==3.0.0rc1
 
 
 Documentation
@@ -175,7 +175,6 @@ https://blosc.org/python-blosc2/python-blosc2.html
 Additionally, you can find some examples at:
 
 https://github.com/Blosc/python-blosc2/tree/main/examples
-
 
 Building from sources
 =====================

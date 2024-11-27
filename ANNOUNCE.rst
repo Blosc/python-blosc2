@@ -54,10 +54,10 @@ or numexpr, you can find:
 
 You can read some of our tutorials on how to perform advanced computations at:
 
-* https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/03.lazyarray-expressions.ipynb
-* https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/03.lazyarray-udf.ipynb
-* https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/04.persistent-reductions.ipynb
-* https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/05.remote_proxy.ipynb
+https://www.blosc.org/python-blosc2/getting_started/tutorials/02.lazyarray-expressions.html
+https://www.blosc.org/python-blosc2/getting_started/tutorials/03.lazyarray-udf.html
+https://www.blosc.org/python-blosc2/getting_started/tutorials/05.persistent-reductions.html
+https://www.blosc.org/python-blosc2/getting_started/tutorials/06.remote_proxy.html
 
 Finally, Python-Blosc2 aims to leverage the full C-Blosc2 functionality to
 support a wide range of compression and decompression needs, including

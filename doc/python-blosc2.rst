@@ -46,14 +46,14 @@
     **Flexible storage**
 
 
-    By offering storage in `memory, disk <https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/02.ndarray-basics.ipynb>`_, or `network <https://ironarray.io/caterva2>`_, Blosc2 adapts to your needs and facilitates integration into various systems.
+    By offering storage in `memory, disk <https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/01.ndarray-basics.ipynb>`_, or `network <https://ironarray.io/caterva2>`_, Blosc2 adapts to your needs and facilitates integration into various systems.
 
     ---
 
     **N-dimensional, compressed arrays**
 
 
-    `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/02.ndarray-basics.html>`_ allow for efficient storage and manipulation of multidimensional data, making it easy to work with complex data sets.
+    `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/01.ndarray-basics.html>`_ allow for efficient storage and manipulation of multidimensional data, making it easy to work with complex data sets.
 
     ---
 
