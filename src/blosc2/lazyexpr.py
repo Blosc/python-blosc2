@@ -2285,15 +2285,9 @@ class LazyExpr(LazyArray):
             _globals = {func: getattr(blosc2, func) for func in functions if func in newexpr}
             lazy_expr = eval(newexpr, _globals, newops)
             if isinstance(lazy_expr, blosc2.NDArray):
-                # We are almost done (probably the expression is made of only constructors)
-                getitem = kwargs.get("_getitem", False)
-                if getitem:
-                    # We need to apply the getitem operation
-                    return lazy_expr[item]
-                # Return the computed NDArray
-                if item:
-                    return lazy_expr.slice(item)
-                return lazy_expr
+                # Almost done (probably the expression is made of only constructors)
+                # We only have to define the trivial expression ("o0")
+                lazy_expr = blosc2.LazyExpr(new_op=(lazy_expr, None, None))
 
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
 

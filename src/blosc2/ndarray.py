@@ -3125,7 +3125,7 @@ def fromiter(iterable, shape, dtype, c_order=True, **kwargs):
         An iterable object providing data for the array.
     shape: int, tuple or list
         The shape of the final array.
-    dtype: np.dtype
+    dtype: np.dtype or str
         The data type of the array elements in NumPy format.
     c_order: bool
         Whether to store the array in C order (row-major) or insertion order.
