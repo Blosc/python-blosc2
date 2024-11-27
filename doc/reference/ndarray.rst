@@ -21,10 +21,11 @@ Methods
     copy
     get_chunk
     iterchunks_info
-    slice
-    squeeze
-    resize
     reshape
+    resize
+    slice
+    sort
+    squeeze
     tobytes
     to_cframe
 

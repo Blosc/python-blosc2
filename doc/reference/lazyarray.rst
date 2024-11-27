@@ -25,8 +25,8 @@ Methods
     :nosignatures:
 
     __getitem__
-    indices
     compute
+    indices
     save
     sort
 

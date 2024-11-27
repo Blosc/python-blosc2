@@ -1812,6 +1812,16 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         super().squeeze()
 
+    def sort(self, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
+        """
+        Return a sorted array following the specified order, or the order of the fields.
+
+        This is only valid for 1-dim structured arrays.
+
+        See full documentation in :func:`sort`.
+        """
+        return sort(self, order, **kwargs)
+
 
 def sin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
@@ -3116,7 +3126,7 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, c
     return reshape(larr, shape, c_order=c_order, **kwargs)
 
 
-def fromiter(iterable, shape, dtype, c_order=True, **kwargs):
+def fromiter(iterable, shape, dtype, c_order=True, **kwargs) -> NDArray:
     """Create a new array from an iterable object.
 
     Parameters
@@ -3415,6 +3425,42 @@ def get_slice_nchunks(
                 raise IndexError("Only step=1 is supported")
             key = (key.start, key.stop)
         return blosc2_ext.schunk_get_slice_nchunks(schunk, key)
+
+
+def sort(array: NDArray, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
+    """
+    Return a sorted array following the specified order, or the order of the fields.
+
+    This is only valid for 1-dim structured arrays.
+
+    Parameters
+    ----------
+    array: :ref:`NDArray`
+        The (structured) array to be sorted.
+    order: str, list of str, optional
+        Specifies which fields to compare first, second, etc. A single
+        field can be specified as a string. Not all fields need to be
+        specified, only the ones by which the array is to be sorted.
+    kwargs: Any, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        The sorted array.
+    """
+    if not array.dtype.fields:
+        raise ValueError("This function is only valid for structured arrays")
+
+    if array.ndim != 1:
+        raise ValueError("This function is only valid for 1-dim arrays")
+
+    # Create a lazy array to access the sort machinery there
+    # This is a bit of a hack, but it is the simplest way to do it
+    # (the sorting mechanism in LazyExpr should be improved to avoid this)
+    lbool = blosc2.lazyexpr(blosc2.ones(array.shape, dtype=np.bool_))
+    larr = array[lbool]
+    return larr.sort(order).compute(**kwargs)
 
 
 # Class for dealing with fields in an NDArray

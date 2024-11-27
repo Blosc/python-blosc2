@@ -216,3 +216,13 @@ def test_fromiter(it, shape, dtype, chunks, blocks, c_order):
     else:
         # This is chunk order, so testing is more laborious, and not really necessary
         pass
+
+
+@pytest.mark.parametrize("order", ["f0", "f1", "f2", None])
+def test_sort(order):
+    it = ((-x + 1, x - 2, -x) for x in range(10))
+    arr = blosc2.fromiter(it, dtype="i4, i4, i8", shape=(10,))
+    b = arr.sort(order="f2")
+    narr = arr[:]
+    nb = np.sort(narr, order="f2")
+    assert np.array_equal(b[:], nb)
