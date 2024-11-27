@@ -1306,7 +1306,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return self._schunk.blocksize
 
     def __getitem__(  # noqa: C901
-        self, key: int | slice | Sequence[slice | int] | np.ndarray[np.bool_] | blosc2.LazyExpr | str
+        self,
+        key: int | slice | Sequence[slice | int] | np.ndarray[np.bool_] | NDArray | blosc2.LazyExpr | str,
     ) -> np.ndarray | blosc2.LazyExpr:
         """Retrieve a (multidimensional) slice as specified by the key.
 

@@ -5,6 +5,7 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+import math
 
 import numpy as np
 import pytest
@@ -142,3 +143,17 @@ def test_iter(shape, chunks, blocks):
     for _i, (a, b) in enumerate(zip(b2a, npa, strict=False)):
         np.testing.assert_equal(a, b)
     assert _i == shape[0] - 1
+
+
+@pytest.mark.parametrize("dtype", [np.int32, np.float32, np.float64])
+def test_ndarray(dtype):
+    # Check that we can slice a blosc2 array with a NDArray
+    shape = (10,)
+    size = math.prod(shape)
+    ndarray = blosc2.arange(size - 1, -1, -1, dtype=np.int64, shape=shape)
+    a = blosc2.linspace(0, 10, size, shape=shape, dtype=dtype)
+    a_slice = a[ndarray]
+    na = np.linspace(0, 10, size, dtype=dtype).reshape(shape)
+    nparray = np.arange(size - 1, -1, -1, dtype=np.int64).reshape(shape)
+    na_slice = na[nparray]
+    np.testing.assert_almost_equal(a_slice, na_slice)
