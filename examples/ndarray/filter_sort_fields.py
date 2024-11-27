@@ -34,11 +34,10 @@ arr = blosc2.asarray(nsa)
 t0 = time()
 # Using plain sort in combination with filter
 # farr = arr["b >= c"].sort("c").compute()
-# You add indices() to get the indices of the sorted array
-farr = arr["b >= c"].sort("c").indices().compute()
+# You can use indices() to get the indices sorted
+farr = arr["b >= c"].indices(order="c").compute()
 # You can also use __getitem__ to get numpy arrays as result
 # farr = arr["b >= c"].sort("c")[:]
-# farr = arr["b >= c"].sort("c").indices()[:]
 print(f"Time to filter: {time() - t0:.3f} s")
 print(f"farr: {farr[:10]}")
 if farr.dtype == np.dtype("int64"):

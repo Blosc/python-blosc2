@@ -392,7 +392,8 @@ def test_where_fusion6(array_fixture):
         ((100,), (44,), (33,), "b"),
     ],
 )
-def test_indices(shape, chunks, blocks, field):
+@pytest.mark.parametrize("order", ["a", "b", None])
+def test_indices(shape, chunks, blocks, field, order):
     na = np.arange(1, shape[0] + 1)
     nb = np.arange(2 * shape[0], shape[0], -1)
     nsa = np.empty(shape, dtype=[("a", np.int32), ("b", np.int32)])
@@ -401,12 +402,18 @@ def test_indices(shape, chunks, blocks, field):
     sa = blosc2.asarray(nsa)
 
     # The expression
-    res = sa[f"{field} > 2"].indices().compute()
+    res = sa[f"{field} > 2"].indices(order=order).compute()
+    assert res.dtype == np.int64
 
     # Emulate that expression with NumPy
-    # nres = np.where(na > 2)[0]
+    if order:
+        asort = nsa.argsort(order=order)
+        nsa = nsa[asort]
+        # nres = np.where(nsa[field] > 2)[0][asort]
     mask = nsa[field] > 2
     nres = np.where(mask)[0]
+    if order:
+        nres = asort[mask]
 
     # Check
     np.testing.assert_allclose(res[:], nres)
@@ -456,7 +463,7 @@ def test_sort_indices(shape, chunks, blocks, order):
     sa = blosc2.asarray(nsa, chunks=chunks, blocks=blocks)
 
     # The expression
-    res = sa["a > 2"].sort(order).indices().compute()
+    res = sa["a > 2"].indices(order).compute()
 
     # Emulate that expression with NumPy
     mask = nsa["a"] > 2

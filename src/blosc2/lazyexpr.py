@@ -155,11 +155,18 @@ class LazyArrayEnum(Enum):
 
 class LazyArray(ABC):
     @abstractmethod
-    def indices(self) -> blosc2.LazyArray:
+    def indices(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
         """
         Return an :ref:`LazyArray` containing the indices where self is True.
 
         The LazyArray must be of bool dtype (e.g. a condition).
+
+        Parameters
+        ----------
+        order: str, list of str, optional
+            Specifies which fields to compare first, second, etc. A single
+            field can be specified as a string. Not all fields need to be
+            specified, only the ones by which the array is to be sorted.
 
         Returns
         -------
@@ -2293,19 +2300,28 @@ class LazyExpr(LazyArray):
 
         return chunked_eval(self.expression, self.operands, item, **kwargs)
 
-    def indices(self):
+    def indices(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
         if self.dtype.fields is None:
             raise NotImplementedError("indices() can only be used with structured arrays")
-        self._indices = True
-        return self
+        # Build a new lazy expression
+        lazy_expr = copy.copy(self)
+        # ... and assign the new attributes
+        lazy_expr._indices = True
+        lazy_expr._order = order
+        # dtype changes to int64
+        lazy_expr._dtype = np.dtype(np.int64)
+        return lazy_expr
 
     def sort(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
         if self.dtype.fields is None:
             raise NotImplementedError("sort() can only be used with structured arrays")
         if not hasattr(self, "_where_args") or len(self._where_args) != 1:
             raise ValueError("sort() can only be used with conditions")
-        self._order = order
-        return self
+        # Build a new lazy expression
+        lazy_expr = copy.copy(self)
+        # ... and assign the new attributes
+        lazy_expr._order = order
+        return lazy_expr
 
     def compute(self, item=None, **kwargs) -> blosc2.NDArray:
         if hasattr(self, "_output"):

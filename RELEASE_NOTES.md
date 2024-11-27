@@ -14,7 +14,7 @@
 
 * Support reductions inside queries in structured NDArrays. For example, given an array `sarr` with fields 'a', 'b' and 'c', the next `farr = sarr["b >= c"].sum("a").compute()` puts in `farr` the sum of the values in field 'a' for the rows that fulfills that values in fields in 'b' are larger than values in 'c' (b >= c above).
 
-* Implemented combining data filtering, as well as sorting, in structured NDArrays. For example, given an array `sarr` with fields 'a', 'b' and 'c', the next `farr = sarr["b >= c"].sort("c").indices().compute()` puts in farr the indices of the rows that fulfills that values in fields in 'b' are larger than values in 'c' (`b >= c` above), sorted by column 'c'.
+* Implemented combining data filtering, as well as sorting, in structured NDArrays. For example, given an array `sarr` with fields 'a', 'b' and 'c', the next `farr = sarr["b >= c"].indices(order="c").compute()` puts in farr the indices of the rows that fulfills that values in fields in 'b' are larger than values in 'c' (`b >= c` above), ordered by column 'c'.
 
 * Reductions can be stored in persistent lazy expressions. Now, if you have a lazy expression that contains a reduction, the result of the reduction is preserved in the expression, so that you can reuse it later on. See https://www.blosc.org/posts/persistent-reductions/ for more information.
 
@@ -40,9 +40,9 @@ This is the main change in the API that is not backward compatible with previous
 
 * Several new constructors are available for creating NDArray instances, like `arange()`, `linspace()` and `fromiter()`. These constructors leverage the internal `lazyudf()` function and make it easier to create NDArray instances from scratch. See e.g. https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/arange-constructor.py for an example.
 
-* Structured LazyArrays received a new `.indices()` method that returns the indices of the elements that fulfill a condition. When combined with the new support of list of indices as key for `NDArray.__getitem__()`, this is useful for creating indexes for data.
+* Structured LazyArrays received a new `.indices()` method that returns the indices of the elements that fulfill a condition. When combined with the new support of list of indices as key for `NDArray.__getitem__()`, this is useful for creating indexes for data.  See https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/filter_sort_fields.py for an example.
 
-* LazyArrays received a new `.sort()` method that sorts the elements in the array. This can be combined with `.indices()` for sorting data from queries in structured NDArrays. For example, given an array `sarr` with fields 'a', 'b' and 'c', the next `farr = sarr["b >= c"].sort("c").indices().compute()` puts in `farr` the indices of the rows that fulfills that values in fields in 'b' are larger than values in 'c' (`b >= c` above), sorted by column 'c'.
+* LazyArrays received a new `.sort()` method that sorts the elements in the array.  For example, given an array `sarr` with fields 'a', 'b' and 'c', the next `farr = sarr["b >= c"].sort("c").compute()` puts in `farr` the rows that fulfills that values in fields in 'b' are larger than values in 'c' (`b >= c` above), ordered by column 'c'.
 
 * New `expr_operands()` function for extracting operands from a string expression.
 
