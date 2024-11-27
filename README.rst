@@ -246,6 +246,33 @@ Mastodon
 Please follow `@Blosc2 <https://fosstodon.org/@Blosc2>`_ to stay updated on the latest
 developments.  We recently moved from Twitter to Mastodon.
 
+Thanks
+======
+
+Blosc2 is supported by the `NumFOCUS <https://numfocus.org>`_ non for-profit
+organization and `ironArray SLU <https://ironarray.io>`_, among many other
+donors.
+
+Besides the organizations above, the following people have contributed to
+the core development of Blosc2:
+
+- Francesc Alted
+- Marta Iborra
+- Aleix Alcacer
+- Oscar Guiñon
+- Ivan Vilata i Balaguer
+- Oumaima Ech.Chdig
+
+In addition, other people hava contributed to the project in different
+aspects:
+
+- Jan Sellner, who contributed the mmap support for NDArray/SChunk objects.
+- Dimitri Papadopoulos, who contributed a large bunch of improvements to the
+  in many aspects of the project.  His attention to detail is remarkable.
+- J. David Ibáñez, who contributed improvements for the LazyArray object.
+- And many others that have contributed with bug reports, suggestions and
+  improvements.
+
 Citing Blosc
 ============
 
@@ -256,9 +283,17 @@ You can cite our work on the various libraries under the Blosc umbrella as follo
   @ONLINE{blosc,
     author = {{Blosc Development Team}},
     title = "{A fast, compressed and persistent data store library}",
-    year = {2009-2024},
+    year = {2009-2025},
     note = {https://blosc.org}
   }
+
+Donate
+======
+
+If you find Blosc useful and want to support its development, please consider
+making a donation via the `NumFOCUS <https://numfocus.org/donate-to-blosc>`_
+organization, which is a non-profit that supports many open-source projects.
+Thank you!
 
 
 **Make compression better!**
