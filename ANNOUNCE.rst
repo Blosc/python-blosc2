@@ -18,7 +18,7 @@ https://github.com/Blosc/python-blosc2/releases
 
 Docs and examples are available in the documentation site:
 
-https://www.blosc.org/python-blosc2/python-blosc2.html
+https://www.blosc.org/python-blosc2
 
 What is it?
 -----------

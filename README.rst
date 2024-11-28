@@ -140,7 +140,7 @@ that you can achieve when the operands in the expression above fit comfortably i
 (20_000 x 20_000):
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-expr.png?raw=true
-  :width: 75%
+  :width: 90%
   :alt: Performance when operands fit in-memory
 
 In this case, the performance is somewhat below that of top-tier libraries like Numexpr,
@@ -162,7 +162,7 @@ you may want to read `this paper <https://www.blosc.org/docs/StarvingCPUs-CISE-2
 And here it is the performance when the operands barely fit in memory (50_000 x 50_000):
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-expr-large.png?raw=true
-  :width: 75%
+  :width: 90%
   :alt: Performance when operands do not fit well in-memory
 
 In this latter case, the memory consumption figures does not seem extreme, but this is because

@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.0.0-rc.1 to 3.0.0
+
+   XXX version-specific blurb XXX
+
 ## Changes from 3.0.0-beta.4 to 3.0.0-rc.1
 
 ### General improvements
