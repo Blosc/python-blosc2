@@ -10,12 +10,15 @@ A flexible computational engine for the fast Blosc2 compression library
 :Github: https://github.com/Blosc/python-blosc2
 :Actions: |actions|
 :PyPi: |version|
+:NumFOCUS: |numfocus|
 :Code of Conduct: |Contributor Covenant|
 
 .. |version| image:: https://img.shields.io/pypi/v/blosc2.svg
         :target: https://pypi.python.org/pypi/blosc2
 .. |Contributor Covenant| image:: https://img.shields.io/badge/Contributor%20Covenant-v2.0%20adopted-ff69b4.svg
         :target: https://github.com/Blosc/community/blob/master/code_of_conduct.md
+.. |numfocus| image:: https://img.shields.io/badge/powered%20by-NumFOCUS-orange.svg?style=flat&colorA=E1523D&colorB=007D8A
+        :target: https://numfocus.org
 .. |actions| image:: https://github.com/Blosc/python-blosc2/actions/workflows/build.yml/badge.svg
         :target: https://github.com/Blosc/python-blosc2/actions/workflows/build.yml
 
@@ -266,12 +269,11 @@ developments.  We recently moved from Twitter to Mastodon.
 Thanks
 ======
 
-Blosc2 is supported by the `NumFOCUS <https://numfocus.org>`_ non for-profit
-organization and `ironArray SLU <https://ironarray.io>`_, among many other
-donors.
-
-Besides the organizations above, the following people have contributed to
-the core development of Blosc2:
+Blosc2 is supported by the `NumFOCUS foundation <https://numfocus.org>`_, the
+`LEAPS-INNOV project <https://www.leaps-innov.eu>`_
+and `ironArray SLU <https://ironarray.io>`_, among many other donors.
+This allowed the following people have contributed in an important way
+to the core development of Blosc2:
 
 - Francesc Alted
 - Marta Iborra

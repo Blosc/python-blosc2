@@ -40,7 +40,7 @@ Preliminaries
 
 * Check that the metainfo for the package is correct::
 
-    python -m build --sdist
+    pipx run build --sdist
     twine check dist/*
 
 
