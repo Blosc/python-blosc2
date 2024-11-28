@@ -10,15 +10,12 @@ A Python wrapper for the extremely fast Blosc2 compression library
 :Github: https://github.com/Blosc/python-blosc2
 :Actions: |actions|
 :PyPi: |version|
-:NumFOCUS: |numfocus|
 :Code of Conduct: |Contributor Covenant|
 
 .. |version| image:: https://img.shields.io/pypi/v/blosc2.svg
         :target: https://pypi.python.org/pypi/blosc2
 .. |Contributor Covenant| image:: https://img.shields.io/badge/Contributor%20Covenant-v2.0%20adopted-ff69b4.svg
         :target: https://github.com/Blosc/community/blob/master/code_of_conduct.md
-.. |numfocus| image:: https://img.shields.io/badge/powered%20by-NumFOCUS-orange.svg?style=flat&colorA=E1523D&colorB=007D8A
-        :target: https://numfocus.org
 .. |actions| image:: https://github.com/Blosc/python-blosc2/actions/workflows/build.yml/badge.svg
         :target: https://github.com/Blosc/python-blosc2/actions/workflows/build.yml
 
