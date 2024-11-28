@@ -126,7 +126,8 @@ Here it is a simple example:
 As you can see, the ``NDArray`` instances are very similar to NumPy arrays,
 but behind the scenes, they store compressed data that can be processed
 efficiently using the new computing engine included in Python-Blosc2.
-Although not exercised above, broadcasting and reductions are also supported.
+Although not exercised above, broadcasting and reductions also work, as well as
+filtering, indexing and sorting operations for structured arrays (tables).
 
 To pique your interest, here is the performance (measured on a modern desktop machine) that
 you can achieve when the operands in the expression above fit comfortably in memory
