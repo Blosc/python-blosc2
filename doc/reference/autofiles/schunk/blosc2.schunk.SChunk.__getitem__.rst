@@ -1,5 +1,5 @@
-﻿SChunk.\_\_getitem\_\_
-======================
+﻿blosc2.schunk.SChunk.\_\_getitem\_\_
+====================================
 
 .. currentmodule:: blosc2.schunk
 

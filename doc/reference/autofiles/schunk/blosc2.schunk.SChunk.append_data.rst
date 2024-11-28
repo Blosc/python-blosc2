@@ -1,5 +1,5 @@
-﻿SChunk.append\_data
-===================
+﻿blosc2.schunk.SChunk.append\_data
+=================================
 
 .. currentmodule:: blosc2.schunk
 

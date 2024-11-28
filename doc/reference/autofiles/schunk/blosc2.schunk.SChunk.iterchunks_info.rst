@@ -1,5 +1,5 @@
-﻿SChunk.iterchunks\_info
-=======================
+﻿blosc2.schunk.SChunk.iterchunks\_info
+=====================================
 
 .. currentmodule:: blosc2.schunk
 

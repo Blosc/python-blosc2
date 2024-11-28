@@ -1,5 +1,5 @@
-﻿SChunk.get\_chunk
-=================
+﻿blosc2.schunk.SChunk.get\_chunk
+===============================
 
 .. currentmodule:: blosc2.schunk
 

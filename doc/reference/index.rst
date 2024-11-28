@@ -4,7 +4,8 @@ API Reference
 .. toctree::
     :maxdepth: 2
 
-    storage
-    top_level
     classes
+    save_load
+    storage
     array_operations
+    low_level

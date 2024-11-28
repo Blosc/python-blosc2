@@ -1,5 +1,5 @@
-﻿SChunk.\_\_init\_\_
-===================
+﻿blosc2.schunk.SChunk.\_\_init\_\_
+=================================
 
 .. currentmodule:: blosc2.schunk
 

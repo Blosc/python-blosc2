@@ -465,7 +465,7 @@ class Proxy(blosc2.Operand):
 
         See Also
         --------
-        :ref:`SChunk.vlmeta`
+        :py:attr:`blosc2.schunk.SChunk.vlmeta`
         """
         return self._schunk_cache.vlmeta
 

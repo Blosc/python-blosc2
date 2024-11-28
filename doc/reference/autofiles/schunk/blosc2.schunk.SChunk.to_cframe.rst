@@ -1,5 +1,5 @@
-﻿SChunk.to\_cframe
-=================
+﻿blosc2.schunk.SChunk.to\_cframe
+===============================
 
 .. currentmodule:: blosc2.schunk
 

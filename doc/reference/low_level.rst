@@ -1,7 +1,7 @@
-Top level API
+Low level API
 =============
 
-This API is meant to be compatible with the existing python-blosc API. There could be some parameters that are called differently, but other than that, they are largely compatible.
+This API is meant to be compatible with the existing python-blosc API. There could be some parameters that are called differently, but other than that, they are largely compatible.  In addition, there are some new functions that are not present in the original python-blosc API that are mainly meant to overcome the 2 GB limit that the original API had.
 
 .. currentmodule:: blosc2
 
@@ -9,7 +9,7 @@ Compress and decompress
 -----------------------
 
 .. autosummary::
-   :toctree: autofiles/top_level/
+   :toctree: autofiles/low_level/
    :nosignatures:
 
    compress
@@ -24,18 +24,12 @@ Compress and decompress
    unpack_array
    unpack_array2
    unpack_tensor
-   save
-   open
-   save_array
-   load_array
-   save_tensor
-   load_tensor
 
-Set / Get compression params
+Set / get compression params
 ----------------------------
 
 .. autosummary::
-   :toctree: autofiles/top_level/
+   :toctree: autofiles/low_level/
    :nosignatures:
 
     clib_info
@@ -62,7 +56,7 @@ Enumerated classes
 ------------------
 
 .. autosummary::
-   :toctree: autofiles/top_level/
+   :toctree: autofiles/low_level/
    :nosignatures:
 
    Codec
@@ -77,11 +71,10 @@ Utils
 .. currentmodule:: blosc2
 
 .. autosummary::
-   :toctree: autofiles/top_level/
+   :toctree: autofiles/low_level/
 
     compute_chunks_blocks
     get_slice_nchunks
-    open
     remove_urlpath
 
 Utility variables
@@ -90,7 +83,7 @@ Utility variables
 .. currentmodule:: blosc2
 
 .. autosummary::
-   :toctree: autofiles/top_level/
+   :toctree: autofiles/low_level/
 
     blosclib_version
     DEFINED_CODECS_STOP

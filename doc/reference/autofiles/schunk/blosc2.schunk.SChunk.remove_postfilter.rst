@@ -1,5 +1,5 @@
-﻿SChunk.remove\_postfilter
-=========================
+﻿blosc2.schunk.SChunk.remove\_postfilter
+=======================================
 
 .. currentmodule:: blosc2.schunk
 

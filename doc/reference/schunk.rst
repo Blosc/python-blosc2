@@ -42,23 +42,23 @@ Methods
 Attributes
 ----------
 
-.. toctree::
-   :titlesonly:
-   :maxdepth: 1
+.. autosummary::
+   :toctree: autofiles/schunk/
+   :nosignatures:
 
-   autofiles/schunk/attributes/blosc2.schunk.SChunk.blocksize
-   autofiles/schunk/attributes/blosc2.schunk.SChunk.cbytes
-   autofiles/schunk/attributes/blosc2.schunk.SChunk.chunkshape
-   autofiles/schunk/attributes/blosc2.schunk.SChunk.chunksize
-   autofiles/schunk/attributes/blosc2.schunk.SChunk.contiguous
-   autofiles/schunk/attributes/blosc2.schunk.SChunk.cparams
-   autofiles/schunk/attributes/blosc2.schunk.SChunk.cratio
-   autofiles/schunk/attributes/blosc2.schunk.SChunk.dparams
-   autofiles/schunk/attributes/meta
-   autofiles/schunk/attributes/blosc2.schunk.SChunk.nbytes
-   autofiles/schunk/attributes/blosc2.schunk.SChunk.typesize
-   autofiles/schunk/attributes/blosc2.schunk.SChunk.urlpath
-   autofiles/schunk/attributes/vlmeta
+    SChunk.blocksize
+    SChunk.cbytes
+    SChunk.chunkshape
+    SChunk.chunksize
+    SChunk.contiguous
+    SChunk.cparams
+    SChunk.cratio
+    SChunk.dparams
+    SChunk.meta
+    SChunk.nbytes
+    SChunk.typesize
+    SChunk.urlpath
+    SChunk.vlmeta
 
 Functions
 ---------

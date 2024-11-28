@@ -1,5 +1,5 @@
-﻿SChunk.fill\_special
-=======================
+﻿blosc2.schunk.SChunk.fill\_special
+==================================
 
 .. currentmodule:: blosc2.schunk
 

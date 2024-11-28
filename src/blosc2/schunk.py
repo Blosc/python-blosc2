@@ -22,6 +22,11 @@ from blosc2 import SpecialValue, blosc2_ext
 
 
 class vlmeta(MutableMapping, blosc2_ext.vlmeta):
+    """
+    Class providing access to user metadata on an :ref:`SChunk`.
+    It is available via the `.vlmeta` property of an :ref:`SChunk`.
+    """
+
     def __init__(self, schunk, urlpath, mode, mmap_mode, initial_mapping_size):
         self.urlpath = urlpath
         self.mode = mode
@@ -64,7 +69,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
 
 class Meta(Mapping):
     """
-    Class providing access to user metadata on an :ref:`SChunk`.
+    Class providing access to fixed-length metadata on an :ref:`SChunk`.
     It is available via the `.meta` property of an :ref:`SChunk`.
     """
 
@@ -292,7 +297,7 @@ class SChunk(blosc2_ext.SChunk):
                 chunksize = 2**28
 
         super().__init__(_schunk=sc, chunksize=chunksize, data=data, **kwargs)
-        self.vlmeta = vlmeta(
+        self._vlmeta = vlmeta(
             super().c_schunk, self.urlpath, self.mode, self.mmap_mode, self.initial_mapping_size
         )
         self._cparams = super().get_cparams()
@@ -324,7 +329,17 @@ class SChunk(blosc2_ext.SChunk):
 
     @property
     def meta(self) -> Meta:
+        """
+        Access to the fixed-length metadata of the `SChunk`.
+        """
         return Meta(self)
+
+    @property
+    def vlmeta(self) -> vlmeta:
+        """
+        Access to the variable-length metadata of the `SChunk`.
+        """
+        return self._vlmeta
 
     @property
     def chunkshape(self) -> int:

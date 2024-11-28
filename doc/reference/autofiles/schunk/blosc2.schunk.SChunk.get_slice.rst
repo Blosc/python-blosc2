@@ -1,5 +1,5 @@
-﻿SChunk.get\_slice
-=================
+﻿blosc2.schunk.SChunk.get\_slice
+===============================
 
 .. currentmodule:: blosc2.schunk
 

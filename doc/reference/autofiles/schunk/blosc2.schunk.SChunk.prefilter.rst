@@ -1,5 +1,5 @@
-﻿SChunk.prefilter
-================
+﻿blosc2.schunk.SChunk.prefilter
+==============================
 
 .. currentmodule:: blosc2.schunk
 

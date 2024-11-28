@@ -1,8 +1,7 @@
-Dataclasses
-===========
+Compression, decompression and storage parameters
+=================================================
 
-Dataclasses for setting the compression, decompression
-and storage parameters. All their parameters are optional.
+Dataclasses for setting the compression, decompression and storage parameters. All their parameters are optional.
 
 .. currentmodule:: blosc2
 

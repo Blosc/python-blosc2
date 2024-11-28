@@ -38,7 +38,7 @@ We are using Sphinx for documentation.  You can build the documentation by execu
 
 ``` bash
   cd doc
-  rm -rf html
+  rm -rf html _build
   python -m sphinx . html
 ```
 
