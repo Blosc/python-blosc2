@@ -8,7 +8,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "blosc2"
-description = "Python wrapper for the C-Blosc2 library"
+description = "A flexible computational engine for the fast Blosc2 compression library"
 readme = "README.rst"
 authors = [{name = "Blosc Development Team", email = "blosc@blosc.org"}]
 maintainers = [{ name = "Blosc Development Team", email = "blosc@blosc.org"}]

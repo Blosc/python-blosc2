@@ -2,8 +2,8 @@
 Python-Blosc2
 =============
 
-A Python wrapper for the extremely fast Blosc2 compression library
-==================================================================
+A flexible computational engine for the fast Blosc2 compression library
+=======================================================================
 
 :Author: The Blosc development team
 :Contact: blosc@blosc.org
