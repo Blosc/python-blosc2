@@ -27,7 +27,7 @@ What is it?
 lossless compression library meant for numerical data written in C.  Blosc2
 is the next generation of Blosc, an
 `award-winning <https://www.blosc.org/posts/prize-push-Blosc2/>`_
-library that has been around for more than a decade
+library that has been around for more than a decade.
 
 On top of C-Blosc2 we built Python-Blosc2, a Python wrapper that exposes the
 C-Blosc2 API, plus many extensions that allow it to work transparently with
