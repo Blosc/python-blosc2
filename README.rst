@@ -161,7 +161,9 @@ or Numba is quite competitive.  This is due to the combination of the Blosc2 com
 the new computing engine that is able to work with compressed data very efficiently.
 
 You can find the benchmark for the examples above at:
+
 https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr.ipynb
+
 https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr-large.ipynb
 
 Installing
