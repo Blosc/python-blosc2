@@ -119,9 +119,9 @@ Here it is a simple example:
 
     N = 20_000  # for small scenario
     # N = 50_000 # for large scenario
-    a = np.linspace(0, 1, N * N).reshape(N, N)
-    b = np.linspace(1, 2, N * N).reshape(N, N)
-    c = np.linspace(-10, 10, N * N).reshape(N, N)
+    a = blosc2.linspace(0, 1, N * N).reshape(N, N)
+    b = blosc2.linspace(1, 2, N * N).reshape(N, N)
+    c = blosc2.linspace(-10, 10, N * N).reshape(N, N)
     # Expression
     expr = ((a**3 + blosc2.sin(c * 2)) < b) & (c > 0)
 
@@ -132,15 +132,15 @@ Here it is a simple example:
 As you can see, the ``NDArray`` instances are very similar to NumPy arrays,
 but behind the scenes, they store compressed data that can be processed
 efficiently using the new computing engine included in Python-Blosc2.
-Although not exercised above, broadcasting and reductions also work, as well as
-filtering, indexing and sorting operations for structured arrays (tables).
+[Although not exercised above, broadcasting and reductions also work, as well as
+filtering, indexing and sorting operations for structured arrays (tables).]
 
-To pique your interest, here is the performance (measured on a modern desktop machine) that
-you can achieve when the operands in the expression above fit comfortably in memory
+To pique your interest, here is the performance (measured on a modern desktop machine)
+that you can achieve when the operands in the expression above fit comfortably in memory
 (20_000 x 20_000):
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-expr.png?raw=true
-  :width: 100%
+  :width: 75%
   :alt: Performance when operands fit in-memory
 
 In this case, the performance is somewhat below that of top-tier libraries like Numexpr,
@@ -149,29 +149,36 @@ benchmarks, numba normally loses because its relatively large compiling overhead
 amortized.
 
 One important point is that the memory consumption when using the ``LazyArray.compute()``
-method is very low because the output is an ``NDArray`` object, which is compressed by default.
-On the other hand, the ``LazyArray.__getitem__()`` method returns an actual NumPy array,
-so it is not recommended for large datasets, as it can consume a significant amount of memory
-(although it may still be convenient for small outputs, and most specially slices).
+method is pretty low (does not exceed 100 MB) because the output is an ``NDArray`` object,
+which is compressed by default.  On the other hand, the ``LazyArray.__getitem__()`` method
+returns an actual NumPy array and hence takes about 400 MB of memory (the 20_000 x 20_000
+array of booleans), so using it is not recommended for large datasets, (although it may
+still be convenient for small outputs, and most specially slices).
 
-And here is the performance when the operands barely fit in memory (50_000 x 50_000):
+Another point is that, when using the Blosc2 engine, computation with compression is
+actually faster than without it (not by a large margin, but still).  To understand why,
+you may want to read `this paper <https://www.blosc.org/docs/StarvingCPUs-CISE-2010.pdf>`_.
+
+And here it is the performance when the operands barely fit in memory (50_000 x 50_000):
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-expr-large.png?raw=true
-  :width: 100%
+  :width: 75%
   :alt: Performance when operands do not fit well in-memory
 
 In this latter case, the memory consumption figures does not seem extreme, but this is because
 the displayed values represent *actual* memory consumption *during* the computation
 (not virtual memory); in addition, the resulting array is boolean, so it does not take too much
-space to store. In this scenario, the performance compared to top-tier libraries like Numexpr
-or Numba is quite competitive.  This is due to the combination of the Blosc2 compression and
-the new computing engine that is able to work with compressed data very efficiently.
+space to store (just 2.4 GB uncompressed). In this scenario, the performance compared to top-tier
+libraries like Numexpr or Numba is quite competitive.
 
 You can find the benchmark for the examples above at:
 
 https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr.ipynb
 
 https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr-large.ipynb
+
+Feel free to run them in your own machine and compare the results.
+
 
 Installing
 ==========
