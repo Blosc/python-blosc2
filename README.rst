@@ -31,13 +31,14 @@ lossless compression library meant for numerical data written in C. On top of
 it we built Python-Blosc2, a Python wrapper that exposes the C-Blosc2 API,
 plus many extensions that allow it to work with NumPy arrays, while performing
 advanced computations on compressed data that can be stored either in-memory,
-on-disk or on the network.
+on-disk or on the network (via the
+`Caterva2 library <https://github.com/Blosc/Caterva2>`_).
 
-It leverages both NumPy and numexpr for achieving great performance, but with
-a twist. Among the main differences between the new computing engine and NumPy
-or numexpr, you can find:
+Python-Blosc2 leverages both NumPy and numexpr for achieving great performance,
+but with a twist. Among the main differences between the new computing engine
+and NumPy or numexpr, you can find:
 
-* Support for ndim arrays that are compressed in-memory, on-disk or on the
+* Support for n-dim arrays that are compressed in-memory, on-disk or on the
   network.
 * High performance compression codecs, for integer, floating point, complex
   booleans, string and structured data.
@@ -57,10 +58,11 @@ or numexpr, you can find:
 
 You can read some of our tutorials on how to perform advanced computations at:
 
-* https://www.blosc.org/python-blosc2/getting_started/tutorials/02.lazyarray-expressions.html
-* https://www.blosc.org/python-blosc2/getting_started/tutorials/03.lazyarray-udf.html
-* https://www.blosc.org/python-blosc2/getting_started/tutorials/05.persistent-reductions.html
-* https://www.blosc.org/python-blosc2/getting_started/tutorials/06.remote_proxy.html
+https://www.blosc.org/python-blosc2/getting_started/tutorials
+
+As well as the full documentation at:
+
+https://www.blosc.org/python-blosc2
 
 Finally, Python-Blosc2 aims to leverage the full C-Blosc2 functionality to
 support a wide range of compression and decompression needs, including
@@ -109,13 +111,13 @@ Here it is a simple example:
 
     import blosc2
 
-    N = 10_000
-    a = blosc2.linspace(0, 1, N * N, dtype="float32", shape=(N,))
-    b = blosc2.linspace(1, 2, N * N, shape=(N, N))
-    c = blosc2.linspace(-10, 10, N * N, shape=(1, N))
-
+    N = 20_000  # for small scenario
+    # N = 50_000 # for large scenario
+    a = np.linspace(0, 1, N * N).reshape(N, N)
+    b = np.linspace(1, 2, N * N).reshape(N, N)
+    c = np.linspace(-10, 10, N * N).reshape(N, N)
     # Expression
-    expr = (((a**3).sum() + blosc2.sin(c * 2)) < b) & (c > 0)
+    expr = ((a**3 + blosc2.sin(c * 2)) < b) & (c > 0)
 
     # Evaluate and get a NDArray as result
     out = expr.compute()
@@ -124,41 +126,43 @@ Here it is a simple example:
 As you can see, the ``NDArray`` instances are very similar to NumPy arrays,
 but behind the scenes, they store compressed data that can be processed
 efficiently using the new computing engine included in Python-Blosc2.
-Note how broadcasting and reductions are supported in the expression.
+Although not exercised above, broadcasting and reductions are also supported.
 
-To pique your interest, here is the performance (measured on a MacBook Air M2 with 24 GB of RAM)
-you can achieve when the operands fit comfortably in memory:
+To pique your interest, here is the performance (measured on a modern desktop machine) that
+you can achieve when the operands in the expression above fit comfortably in memory
+(20_000 x 20_000):
 
-.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/eval-expr-full-mem-M2.png?raw=true
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-expr.png?raw=true
   :width: 100%
   :alt: Performance when operands fit in-memory
 
-In this case, the performance is somewhat below that of top-tier libraries like Numexpr or Numba,
-but it is still quite good. Using CPUs with more cores than the M2 could further reduce the
-performance gap. One important point to note is that the memory consumption when
-using the ``LazyArray.compute()`` method is very low because the output is an ``NDArray`` object, which
-is compressed and stored in memory by default.  On the other hand, the ``LazyArray.__getitem__()``
-method returns an actual NumPy array, so it is not recommended for large datasets, as it can consume
-a significant amount of memory (though it may still be convenient for small outputs).
+In this case, the performance is somewhat below that of top-tier libraries like Numexpr,
+but it is still quite good, specially when compared with plain NumPy.  For these short
+benchmarks, numba normally loses because its relatively large compiling overhead cannot be
+amortized.
 
-It is also important to note that the ``NDArray`` object can utilize memory-mapped files, and the
-benchmark above actually uses a memory-mapped file for operand storage. Memory-mapped files are
-particularly useful when the operands do not fit in-memory, while still maintaining good
-performance.
+One important point is that the memory consumption when using the ``LazyArray.compute()``
+method is very low because the output is an ``NDArray`` object, which is compressed by default.
+On the other hand, the ``LazyArray.__getitem__()`` method returns an actual NumPy array,
+so it is not recommended for large datasets, as it can consume a significant amount of memory
+(although it may still be convenient for small outputs, and most specially slices).
 
-And here is the performance when the operands do not fit well in memory:
+And here is the performance when the operands barely fit in memory (50_000 x 50_000):
 
-.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/eval-expr-scarce-mem-M2.png?raw=true
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-expr-large.png?raw=true
   :width: 100%
-  :alt: Performance when operands do not fit in-memory
+  :alt: Performance when operands do not fit well in-memory
 
-In this latter case, the memory consumption figures may seem a bit extreme, but this is because
-the displayed values represent actual memory consumption, not virtual memory. During evaluation,
-the OS may need to swap some memory to disk. In this scenario, the performance compared to
-top-tier libraries like Numexpr or Numba is quite competitive.
+In this latter case, the memory consumption figures does not seem extreme, but this is because
+the displayed values represent *actual* memory consumption *during* the computation
+(not virtual memory); in addition, the resulting array is boolean, so it does not take too much
+space to store. In this scenario, the performance compared to top-tier libraries like Numexpr
+or Numba is quite competitive.  This is due to the combination of the Blosc2 compression and
+the new computing engine that is able to work with compressed data very efficiently.
 
 You can find the benchmark for the examples above at:
 https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr.ipynb
+https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr-large.ipynb
 
 Installing
 ==========
@@ -171,7 +175,7 @@ You can install the binary packages from PyPi using ``pip``:
     pip install blosc2
 
 We are in the process of releasing 3.0.0, along with wheels for various
-versions.  For example, to install the firt release candidate version, you can use:
+versions.  For example, to install the first release candidate version, you can use:
 
 .. code-block:: console
 
@@ -217,8 +221,8 @@ Benchmarking
 ============
 
 If you are curious, you may want to run a small benchmark that compares a plain
-NumPy array copy against compression using different compressors in
-your Blosc build:
+NumPy array copy against compression using different compressors in your Blosc2
+build:
 
 .. code-block:: console
 
@@ -263,13 +267,13 @@ the core development of Blosc2:
 - Ivan Vilata i Balaguer
 - Oumaima Ech.Chdig
 
-In addition, other people hava contributed to the project in different
+In addition, other people have contributed to the project in different
 aspects:
 
 - Jan Sellner, who contributed the mmap support for NDArray/SChunk objects.
 - Dimitri Papadopoulos, who contributed a large bunch of improvements to the
   in many aspects of the project.  His attention to detail is remarkable.
-- Juan David Ibáñez, who contributed improvements for the LazyArray object.
+- Juan David Ibáñez, who contributed different improvements.
 - And many others that have contributed with bug reports, suggestions and
   improvements.
 

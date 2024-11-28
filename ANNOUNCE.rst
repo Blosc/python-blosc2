@@ -28,13 +28,14 @@ lossless compression library meant for numerical data written in C. On top of
 it we built Python-Blosc2, a Python wrapper that exposes the C-Blosc2 API,
 plus many extensions that allow it to work with NumPy arrays, while performing
 advanced computations on compressed data that can be stored either in-memory,
-on-disk or on the network.
+on-disk or on the network (via the
+`Caterva2 library <https://github.com/Blosc/Caterva2>`_).
 
-It leverages both NumPy and numexpr for achieving great performance, but with
-a twist. Among the main differences between the new computing engine and NumPy
-or numexpr, you can find:
+Python-Blosc2 leverages both NumPy and numexpr for achieving great performance,
+but with a twist. Among the main differences between the new computing engine
+and NumPy or numexpr, you can find:
 
-* Support for ndim arrays that are compressed in-memory, on-disk or on the
+* Support for n-dim arrays that are compressed in-memory, on-disk or on the
   network.
 * High performance compression codecs, for integer, floating point, complex
   booleans, string and structured data.
@@ -54,10 +55,11 @@ or numexpr, you can find:
 
 You can read some of our tutorials on how to perform advanced computations at:
 
-* https://www.blosc.org/python-blosc2/getting_started/tutorials/02.lazyarray-expressions.html
-* https://www.blosc.org/python-blosc2/getting_started/tutorials/03.lazyarray-udf.html
-* https://www.blosc.org/python-blosc2/getting_started/tutorials/05.persistent-reductions.html
-* https://www.blosc.org/python-blosc2/getting_started/tutorials/06.remote_proxy.html
+https://www.blosc.org/python-blosc2/getting_started/tutorials
+
+As well as the full documentation at:
+
+https://www.blosc.org/python-blosc2
 
 Finally, Python-Blosc2 aims to leverage the full C-Blosc2 functionality to
 support a wide range of compression and decompression needs, including
