@@ -27,11 +27,17 @@ What it is
 ==========
 
 `C-Blosc2 <https://github.com/Blosc/c-blosc2>`_ is a blocking, shuffling and
-lossless compression library meant for numerical data written in C. On top of
-it we built Python-Blosc2, a Python wrapper that exposes the C-Blosc2 API,
-plus many extensions that allow it to work with NumPy arrays, while performing
-advanced computations on compressed data that can be stored either in-memory,
-on-disk or on the network (via the
+lossless compression library meant for numerical data written in C.  Blosc2
+is the next generation of Blosc, an
+`award-winning <https://www.blosc.org/posts/prize-push-Blosc2/>`_
+library that has been around for more than a decade, and that is been used
+by many projects, including `PyTables <https://www.pytables.org/>`_ or
+`Zarr <https://zarr.readthedocs.io/en/stable/>`_.
+
+On top of C-Blosc2 we built Python-Blosc2, a Python wrapper that exposes the
+C-Blosc2 API, plus many extensions that allow it to work transparently with
+NumPy arrays, while performing advanced computations on compressed data that
+can be stored either in-memory, on-disk or on the network (via the
 `Caterva2 library <https://github.com/Blosc/Caterva2>`_).
 
 Python-Blosc2 leverages both NumPy and numexpr for achieving great performance,
