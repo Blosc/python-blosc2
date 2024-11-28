@@ -14,7 +14,7 @@ authors = [{name = "Blosc Development Team", email = "blosc@blosc.org"}]
 maintainers = [{ name = "Blosc Development Team", email = "blosc@blosc.org"}]
 license = {text = "BSD-3-Clause"}
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Intended Audience :: Information Technology",
     "Intended Audience :: Science/Research",
