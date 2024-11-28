@@ -41,7 +41,7 @@ Preliminaries
 * Check that the metainfo for the package is correct::
 
     pipx run build --sdist
-    twine check dist/*
+    twine check --strict dist/*
 
 
 Tagging
