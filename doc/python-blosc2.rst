@@ -35,10 +35,26 @@
 
     ---
 
+    **Optimized compute engine**
+
+
+    Blosc2 accelerates complex mathematical operations and reductions with an
+    `optimized compute engine <https://www.blosc.org/posts/ndim-reductions/>`_,
+    achieving high-performance for computing and data analysis.
+
+    ---
+
+    **N-dimensional, compressed arrays**
+
+
+    `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/01.ndarray-basics.html>`_ allow for efficient storage and manipulation of multidimensional data, making it easy to work with complex data sets.
+
+    ---
+
     **Binary data optimization**
 
 
-    Designed to enhance compression for binary data (integers, floats, bools), Blosc2 is specially meant for
+    Designed to compute with compressed binary data (integers, floats, bools), Blosc2 is specially meant for
     `high-performance numerical applications <https://nbviewer.org/github/Blosc/python-blosc2/blob/main/bench/lazyarray-expr-small-dask.ipynb>`_.
 
     ---
@@ -50,26 +66,11 @@
 
     ---
 
-    **N-dimensional, compressed arrays**
-
-
-    `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/01.ndarray-basics.html>`_ allow for efficient storage and manipulation of multidimensional data, making it easy to work with complex data sets.
-
-    ---
-
     **Two-level partitions**
 
 
     Leverages multi-level CPU caches, `enhancing data access <https://www.blosc.org/posts/blosc2-ndim-intro/>`_ and performance in computational tasks. Tailored for modern multi-core processors.
 
-    ---
-
-    **Optimized compute engine**
-
-
-    Blosc2 accelerates complex mathematical operations and reductions with an
-    `optimized compute engine <https://www.blosc.org/posts/ndim-reductions/>`_,
-    achieving high-performance for computing and data analysis.
 
 .. raw:: html
 
