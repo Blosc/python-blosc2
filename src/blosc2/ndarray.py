@@ -1714,7 +1714,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return super().copy(dtype, **kwargs)
 
-    def save(self, urlpath: str, **kwargs: Any) -> None:
+    def save(self, urlpath: str, contiguous=True, **kwargs: Any) -> None:
         """Save the array to a file.
 
         This is a convenience function that calls the :func:`copy` method with the
@@ -1726,6 +1726,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         ----------
         urlpath: str
             The path where the array will be saved.
+        contiguous: bool, optional
+            Whether to save the array contiguously.
 
         Other Parameters
         ----------------
@@ -1751,6 +1753,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         blosc2_ext.check_access_mode(urlpath, "w")
         # Add urlpath to kwargs
         kwargs["urlpath"] = urlpath
+        # Add the contiguous parameter
+        kwargs["contiguous"] = contiguous
+
         super().copy(self.dtype, **kwargs)
 
     def resize(self, newshape: tuple | list) -> None:
@@ -3327,7 +3332,7 @@ def copy(array: NDArray, dtype: np.dtype | str = None, **kwargs: Any) -> NDArray
     return array.copy(dtype, **kwargs)
 
 
-def save(array: NDArray, urlpath: str, **kwargs: Any) -> None:
+def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
     """Save an array to a file.
 
     Parameters
@@ -3336,6 +3341,8 @@ def save(array: NDArray, urlpath: str, **kwargs: Any) -> None:
         The array to be saved.
     urlpath: str
         The path to the file where the array will be saved.
+    contiguous: bool, optional
+        Whether to store the array contiguously.
 
     Other Parameters
     ----------------
@@ -3351,7 +3358,7 @@ def save(array: NDArray, urlpath: str, **kwargs: Any) -> None:
     >>> # Save the array to a file
     >>> blosc2.save(array, "array.b2")
     """
-    array.save(urlpath, **kwargs)
+    array.save(urlpath, contiguous, **kwargs)
 
 
 def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: Any) -> NDArray:
