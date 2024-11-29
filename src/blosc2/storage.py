@@ -59,7 +59,7 @@ class CParams:
         blosc2 will choose the size automatically.
     splitmode: :class:`SplitMode`
         The split mode for the blocks.
-        The default value is :py:obj:`SplitMode.ALWAYS_SPLIT <SplitMode>`.
+        The default value is :py:obj:`SplitMode.AUTO_SPLIT <SplitMode>`.
     filters: :class:`Filter` or int list
         The sequence of filters. Default: [:py:obj:`Filter.NOFILTER <Filter>`,
         :py:obj:`Filter.NOFILTER <Filter>`, :py:obj:`Filter.NOFILTER <Filter>`, :py:obj:`Filter.NOFILTER <Filter>`,
@@ -77,7 +77,7 @@ class CParams:
     typesize: int = 8
     nthreads: int = field(default_factory=default_nthreads)
     blocksize: int = 0
-    splitmode: blosc2.SplitMode = blosc2.SplitMode.ALWAYS_SPLIT
+    splitmode: blosc2.SplitMode = blosc2.SplitMode.AUTO_SPLIT
     filters: list[blosc2.Filter | int] = field(default_factory=default_filters)
     filters_meta: list[int] = field(default_factory=default_filters_meta)
     tuner: blosc2.Tuner = blosc2.Tuner.STUNE

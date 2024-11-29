@@ -25,9 +25,10 @@ import blosc2
             False,
         ),
         (
+            # For some reason, ZFP needs to always split buffers in this test
             (100, 1230),
             np.float64,
-            {"codec": blosc2.Codec.ZFP_ACC, "codec_meta": 37},
+            {"codec": blosc2.Codec.ZFP_ACC, "codec_meta": 37, "splitmode": blosc2.SplitMode.ALWAYS_SPLIT},
             None,
             False,
         ),
@@ -39,9 +40,10 @@ import blosc2
             True,
         ),
         (
+            # For some reason, ZFP needs to always split buffers in this test
             (80, 51, 60),
             np.float32,
-            {"codec": blosc2.Codec.ZFP_RATE, "codec_meta": 37},
+            {"codec": blosc2.Codec.ZFP_RATE, "codec_meta": 37, "splitmode": blosc2.SplitMode.ALWAYS_SPLIT},
             "lossy.b2nd",
             False,
         ),

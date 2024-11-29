@@ -124,7 +124,7 @@ def test_cparams_defaults():
     cparams = blosc2.CParams()
     assert cparams.codec == blosc2.Codec.ZSTD
     assert cparams.codec_meta == 0
-    assert cparams.splitmode == blosc2.SplitMode.ALWAYS_SPLIT
+    assert cparams.splitmode == blosc2.SplitMode.AUTO_SPLIT
     assert cparams.clevel == 1
     assert cparams.typesize == 8
     assert cparams.nthreads == blosc2.nthreads
