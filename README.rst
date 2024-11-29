@@ -179,7 +179,6 @@ https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr-la
 
 Feel free to run them in your own machine and compare the results.
 
-
 Installing
 ==========
 
@@ -196,7 +195,6 @@ versions.  For example, to install the first release candidate version, you can 
 .. code-block:: console
 
     pip install blosc2==3.0.0rc1
-
 
 Documentation
 =============

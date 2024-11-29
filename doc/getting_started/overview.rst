@@ -1,10 +1,41 @@
 What is it?
 ===========
 
-`C-Blosc2 <https://github.com/Blosc/c-blosc2>`_ is the new major version of
-`C-Blosc <https://github.com/Blosc/c-blosc>`_, and is backward compatible with
-both the C-Blosc1 API and its in-memory format. Python-Blosc2 is a Python package
-that wraps C-Blosc2, the newest version of the Blosc compressor.
+`C-Blosc2 <https://github.com/Blosc/c-blosc2>`_ is a blocking, shuffling and
+lossless compression library meant for numerical data written in C.  Blosc2
+is the next generation of Blosc, an
+`award-winning <https://www.blosc.org/posts/prize-push-Blosc2/>`_
+library that has been around for more than a decade, and that is been used
+by many projects, including `PyTables <https://www.pytables.org/>`_ or
+`Zarr <https://zarr.readthedocs.io/en/stable/>`_.
+
+On top of C-Blosc2 we built Python-Blosc2, a Python wrapper that exposes the
+C-Blosc2 API, plus many extensions that allow it to work transparently with
+NumPy arrays, while performing advanced computations on compressed data that
+can be stored either in-memory, on-disk or on the network (via the
+`Caterva2 library <https://github.com/Blosc/Caterva2>`_).
+
+Python-Blosc2 leverages both NumPy and numexpr for achieving great performance,
+but with a twist. Among the main differences between the new computing engine
+and NumPy or numexpr, you can find:
+
+* Support for n-dim arrays that are compressed in-memory, on-disk or on the
+  network.
+* High performance compression codecs, for integer, floating point, complex
+  booleans, string and structured data.
+* Can perform many kind of math expressions, including reductions, indexing,
+  filters and more.
+* Support for NumPy ufunc mechanism, allowing to mix and match NumPy and
+  Blosc2 computations.
+* Excellent integration with Numba and Cython via User Defined Functions.
+* Support for broadcasting operations. This is a powerful feature that
+  allows to perform operations on arrays of different shapes.
+* Much better adherence to the NumPy casting rules than numexpr.
+* Lazy expressions that are computed only when needed, and can be stored for
+  later use.
+* Persistent reductions that can be updated incrementally.
+* Support for proxies that allow to work with compressed data on local or
+  remote machines.
 
 Currently Python-Blosc2 already reproduces the API of
 `Python-Blosc <https://github.com/Blosc/python-blosc>`_, so it can be
@@ -22,6 +53,15 @@ C-Blosc2 API capabilities.
 **Note:** Python-Blosc2 is meant to be backward compatible with Python-Blosc data.
 That means that it can read data generated with Python-Blosc, but the opposite
 is not true (i.e. there is no *forward* compatibility).
+
+The main data container objects in Python-Blosc2 are:
+
+* ``SChunk``: a 64-bit compressed store. It can be used to store any kind of data
+  that supports the `buffer protocol <https://docs.python.org/3/c-api/buffer.html>`_.
+* ``NDArray``: an N-Dimensional store.  This mimic the NumPy API, but with the
+  added capability of storing compressed data in a more efficient way.
+
+They are described in more detail below.
 
 SChunk: a 64-bit compressed store
 ---------------------------------
