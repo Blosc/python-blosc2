@@ -1091,6 +1091,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return self.schunk.urlpath
 
     @property
+    def meta(self) -> dict:
+        """The metadata of the array."""
+        return self.schunk.meta
+
+    @property
     def vlmeta(self) -> dict:
         """The variable-length metadata of the array."""
         return self.schunk.vlmeta

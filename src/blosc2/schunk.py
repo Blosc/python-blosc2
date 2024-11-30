@@ -71,6 +71,12 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
         """
         return super().to_dict()
 
+    def __repr__(self):
+        return repr(self.getall())
+
+    def __str__(self):
+        return str(self.getall())
+
 
 class Meta(Mapping):
     """
