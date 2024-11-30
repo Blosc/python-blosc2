@@ -46,6 +46,11 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
         super().set_vlmeta(name, content, **cparams)
 
     def __getitem__(self, name):
+        if isinstance(name, slice):
+            if name.start is None and name.stop is None:
+                # Return all the vlmetalayers
+                return self.getall()
+            raise NotImplementedError("Slicing is not supported, unless [:]")
         return unpackb(super().get_vlmeta(name), list_hook=blosc2_ext.decode_tuple)
 
     def __delitem__(self, name):
