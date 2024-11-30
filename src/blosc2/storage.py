@@ -60,7 +60,7 @@ class CParams:
     splitmode: :class:`SplitMode`
         The split mode for the blocks.
         The default value is :py:obj:`SplitMode.AUTO_SPLIT <SplitMode>`.
-    filters: :class:`Filter` or int list
+    filters: :class:`Filter` or int list or None
         The sequence of filters. Default: [:py:obj:`Filter.NOFILTER <Filter>`,
         :py:obj:`Filter.NOFILTER <Filter>`, :py:obj:`Filter.NOFILTER <Filter>`, :py:obj:`Filter.NOFILTER <Filter>`,
         :py:obj:`Filter.NOFILTER <Filter>`, :py:obj:`Filter.SHUFFLE <Filter>`].
@@ -99,7 +99,8 @@ class CParams:
             raise ValueError("Number of filters exceeds 6")
         if len(self.filters) < len(self.filters_meta):
             self.filters_meta = self.filters_meta[: len(self.filters)]
-            warnings.warn("Changed `filters_meta` length to match `filters` length")
+            # There is no need to raise a warning here
+            # warnings.warn("Changed `filters_meta` length to match `filters` length")
         if len(self.filters) > len(self.filters_meta):
             raise ValueError("Number of filters cannot exceed number of filters meta")
 

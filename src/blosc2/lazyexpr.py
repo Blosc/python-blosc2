@@ -1442,16 +1442,15 @@ def reduce_slices(  # noqa: C901
         else:
             # Apply the where condition (in result)
             if len(where) == 2:
-                # x = chunk_operands["_where_x"]
-                # y = chunk_operands["_where_y"]
-                # result = np.where(result, x, y)
-                # numexpr is a bit faster than np.where, and we can fuse operations in this case
                 new_expr = f"where({expression}, _where_x, _where_y)"
                 result = ne.evaluate(new_expr, chunk_operands)
+            elif len(where) == 1:
+                result = ne.evaluate(expression, chunk_operands)
+                x = chunk_operands["_where_x"]
+                result = x[result]
             else:
-                raise ValueError(
-                    "A where condition with less than 2 params in combination with reductions"
-                    " is not supported yet"
+                raise NotImplementedError(
+                    "A where condition with no params in combination with reductions is not supported yet"
                 )
 
         # Reduce the result

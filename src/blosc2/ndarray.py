@@ -384,7 +384,7 @@ def sum(
         Axis or axes along which a sum is performed. By default, axis=None,
         sums all the elements of the input array. If axis is negative,
         it counts from the last to the first axis.
-    dtype: np.dtype or str, optional
+    dtype: np.dtype or list str, optional
         The type of the returned array and of the accumulator in which the
         elements are summed. The dtype of :paramref:`ndarr` is used by default unless it has
         an integer dtype of less precision than the default platform integer.
@@ -477,7 +477,7 @@ def std(
     axis: int or tuple of ints, optional
         Axis or axes along which the standard deviation is computed. By default, `axis=None`
         computes the standard deviation of the flattened array.
-    dtype: np.dtype or str, optional
+    dtype: np.dtype or list str, optional
         Type to use in computing the standard deviation. For integer inputs, the
         default is float32; for floating point inputs, it is the same as the input dtype.
     ddof: int, optional
@@ -1666,7 +1666,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         Parameters
         ----------
-        dtype: np.dtype or str
+        dtype: np.dtype or list str
             The new array dtype. Default is `self.dtype`.
 
         Other Parameters
@@ -2793,7 +2793,7 @@ def empty(shape: int | tuple | list, dtype: np.dtype | str | None = np.float64, 
     ----------
     shape: int, tuple or list
         The shape for the final array.
-    dtype: np.dtype or str
+    dtype: np.dtype or list str
         The data type of the array elements in NumPy format. Default is `np.uint8`.
         This will override the `typesize`
         in the compression parameters if they are provided.
@@ -2965,7 +2965,7 @@ def full(
         Default value to use for uninitialized portions of the array.
         Its size will override the `typesize`
         in the cparams if they are passed.
-    dtype: np.dtype or str
+    dtype: np.dtype or list str
         The ndarray dtype in NumPy format. By default, this will
         be taken from the :paramref:`fill_value`.
         This will override the `typesize`
@@ -3059,7 +3059,7 @@ def arange(
         The end value of the sequence.
     step: int, float, complex or np.number
         Spacing between values.
-    dtype: np.dtype or str
+    dtype: np.dtype or list str
         The data type of the array elements in NumPy format. Default is `np.uint8`.
         This will override the `typesize`
         in the compression parameters if they are provided.
@@ -3152,7 +3152,7 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, c
         Number of samples to generate.
     endpoint: bool
         If True, `stop` is the last sample. Otherwise, it is not included.
-    dtype: np.dtype or str
+    dtype: np.dtype or list str
         The data type of the array elements in NumPy format. Default is `np.float64`.
     shape: int, tuple or list
         The shape of the final array. If None, the shape will be guessed from `num`.
@@ -3218,7 +3218,7 @@ def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any):
         Index of the diagonal: 0 (the default) refers to the main diagonal,
         a positive value refers to an upper diagonal, and a negative value
         to a lower diagonal.
-    dtype: np.dtype or str
+    dtype: np.dtype or list str
         The data type of the array elements in NumPy format. Default is `np.float64`.
 
     Returns
@@ -3263,7 +3263,7 @@ def fromiter(iterable, shape, dtype, c_order=True, **kwargs) -> NDArray:
         An iterable object providing data for the array.
     shape: int, tuple or list
         The shape of the final array.
-    dtype: np.dtype or str
+    dtype: np.dtype or list str
         The data type of the array elements in NumPy format.
     c_order: bool
         Whether to store the array in C order (row-major) or insertion order.
@@ -3329,7 +3329,7 @@ def frombuffer(
         The buffer of the data to populate the container.
     shape: int, tuple or list
         The shape for the final container.
-    dtype: np.dtype or str
+    dtype: np.dtype or list str
         The ndarray dtype in NumPy format. Default is `np.uint8`.
         This will override the `typesize`
         in the cparams if they are passed.
@@ -3373,8 +3373,8 @@ def copy(array: NDArray, dtype: np.dtype | str = None, **kwargs: Any) -> NDArray
     --------
     >>> import numpy as np
     >>> import blosc2
-    >>> # Create an instance of MyNDArray with some data
-    >>> original_array = np.array([[1.1, 2.2, 3.3], [4.4, 5.5, 6.6]])
+    >>> # Create an instance of NDArray with some data
+    >>> original_array = blosc2.asarray(np.array([[1.1, 2.2, 3.3], [4.4, 5.5, 6.6]]))
     >>> # Create a copy of the array without changing dtype
     >>> copied_array = blosc2.copy(original_array)
     >>> print("Copied array (default dtype):")
@@ -3727,7 +3727,14 @@ class NDField(Operand):
             return key.where(self)
 
         if isinstance(key, str):
-            raise TypeError("This array is a NDField; use a structured NDArray for bool expressions")
+            # Try to compute the key as a boolean expression
+            # Operands will be a dict with all the fields in the NDArray
+            operands = {field: NDField(self.ndarr, field) for field in self.ndarr.dtype.names}
+            expr = blosc2.lazyexpr(key, operands)
+            if expr.dtype != np.bool_:
+                raise TypeError("The expression should return a boolean array")
+            return expr.where(self)
+            # raise TypeError("This array is a NDField; use a structured NDArray for bool expressions")
 
         # Check if the key is in the last read cache
         inmutable_key = make_key_hashable(key)

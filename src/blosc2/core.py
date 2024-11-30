@@ -1285,7 +1285,7 @@ def compute_chunks_blocks(  # noqa: C901
     blocks: tuple | list | None = None,
     dtype: np.dtype = np.uint8,
     **kwargs: dict,
-) -> tuple[(int, int)]:
+) -> tuple:
     """
     Compute educated guesses for chunks and blocks of a :ref:`NDArray`.
 
