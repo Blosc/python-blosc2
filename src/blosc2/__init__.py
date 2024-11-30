@@ -215,6 +215,7 @@ from .ndarray import (
     are_partitions_behaved,
     arange,
     linspace,
+    eye,
     asarray,
     indices,
     sort,

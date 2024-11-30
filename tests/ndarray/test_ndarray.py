@@ -189,6 +189,18 @@ def test_linspace(ss, shape, dtype, chunks, blocks, endpoint, c_order):
         pass
 
 
+@pytest.mark.parametrize(("N", "M"), [(10, None), (10, 20), (20, 10)])
+@pytest.mark.parametrize("k", [-1, 0, 1, 2, 3])
+@pytest.mark.parametrize("dtype", [np.float32, np.float64, np.int32])
+@pytest.mark.parametrize("chunks", [(5, 6), (10, 9)])
+def test_eye(k, N, M, dtype, chunks):
+    a = np.eye(N, M, k, dtype=dtype)
+    b = blosc2.eye(N, M, k, dtype=dtype, chunks=chunks)
+    assert a.shape == b.shape
+    assert a.dtype == b.dtype
+    np.testing.assert_allclose(a, b[:])
+
+
 @pytest.mark.parametrize(
     ("it", "shape", "dtype", "chunks", "blocks"),
     [

@@ -82,4 +82,5 @@ Constructors
     full
     arange
     linspace
+    eye
     reshape

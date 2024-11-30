@@ -3200,6 +3200,55 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, c
     return reshape(larr, shape, c_order=c_order, **kwargs)
 
 
+def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any):
+    """Return a 2-D array with ones on the diagonal and zeros elsewhere.
+
+    Parameters
+    ----------
+    N: int
+        Number of rows in the output.
+    M: int, optional
+        Number of columns in the output. If None, defaults to `N`.
+    k: int, optional
+        Index of the diagonal: 0 (the default) refers to the main diagonal,
+        a positive value refers to an upper diagonal, and a negative value
+        to a lower diagonal.
+    dtype: np.dtype or str
+        The data type of the array elements in NumPy format. Default is `np.float64`.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        A :ref:`NDArray` is returned.
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> array = blosc2.eye(2, 3, dtype=np.int32)
+    >>> print(array[:])
+    [[1 0 0]
+     [0 1 0]]
+    """
+
+    def fill_eye(inputs, output: np.array, offset: tuple):
+        out_k = offset[0] - offset[1] + inputs[0]
+        output[:] = np.eye(*output.shape, out_k, dtype=output.dtype)
+
+    if M is None:
+        M = N
+    shape = (N, M)
+    # Check dtype
+    dtype = np.dtype(dtype)
+
+    if is_inside_new_expr():
+        # We already have the dtype and shape, so return immediately
+        return blosc2.zeros(shape, dtype=dtype)
+
+    lazyarr = blosc2.lazyudf(fill_eye, (k,), dtype=dtype, shape=shape)
+    return lazyarr.compute(**kwargs)
+
+
 def fromiter(iterable, shape, dtype, c_order=True, **kwargs) -> NDArray:
     """Create a new array from an iterable object.
 

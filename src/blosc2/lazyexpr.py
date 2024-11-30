@@ -23,7 +23,7 @@ from dataclasses import asdict
 from enum import Enum
 from pathlib import Path
 from queue import Empty, Queue
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from numpy.exceptions import ComplexWarning
 
@@ -197,7 +197,7 @@ class LazyArray(ABC):
         pass
 
     @abstractmethod
-    def compute(self, item: slice | list[slice] | None = None, **kwargs: dict) -> blosc2.NDArray:
+    def compute(self, item: slice | list[slice] | None = None, **kwargs: Any) -> blosc2.NDArray:
         """
         Return an :ref:`NDArray` containing the evaluation of the :ref:`LazyArray`.
 
@@ -207,7 +207,7 @@ class LazyArray(ABC):
             If not None, only the chunks that intersect with the slices
             in items will be evaluated.
 
-        kwargs: dict, optional
+        kwargs: Any, optional
             Keyword arguments that are supported by the :func:`empty` constructor.
             These arguments will be set in the resulting :ref:`NDArray`.
 
@@ -284,13 +284,13 @@ class LazyArray(ABC):
         pass
 
     @abstractmethod
-    def save(self, **kwargs: dict) -> None:
+    def save(self, **kwargs: Any) -> None:
         """
         Save the :ref:`LazyArray` on disk.
 
         Parameters
         ----------
-        kwargs: dict, optional
+        kwargs: Any, optional
             Keyword arguments that are supported by the :func:`empty` constructor.
             The `urlpath` must always be provided.
 
@@ -384,7 +384,7 @@ class LazyArray(ABC):
 
 
 def convert_inputs(inputs):
-    if len(inputs) == 0:
+    if not inputs or len(inputs) == 0:
         return []
     inputs_ = []
     for obj in inputs:
@@ -595,7 +595,10 @@ def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
                 "You really want to pass at least one input or one output for building a LazyArray."
                 "  Maybe you want blosc2.empty() instead?"
             )
-        return out.shape, out.chunks, out.blocks, True
+        if isinstance(out, blosc2.NDArray):
+            return out.shape, out.chunks, out.blocks, True
+        else:
+            return out.shape, None, None, True
 
     inputs = [input for input in inputs.values() if hasattr(input, "shape") and input is not np]
     shape = compute_broadcast_shape(inputs)
@@ -878,7 +881,7 @@ def fast_eval(  # noqa: C901
     getitem: bool, optional
         Indicates whether the expression is being evaluated for a getitem operation or eval().
         Default is False.
-    kwargs: dict, optional
+    kwargs: Any, optional
         Additional keyword arguments supported by the :func:`empty` constructor.
 
     Returns
@@ -892,6 +895,9 @@ def fast_eval(  # noqa: C901
     if isinstance(out, blosc2.NDArray):
         # If 'out' has been passed, and is a NDArray, use it as the base array
         basearr = out
+    elif isinstance(out, np.ndarray):
+        # If 'out' is a NumPy array, create a NDArray with the same shape and dtype
+        basearr = blosc2.empty(out.shape, dtype=out.dtype, **kwargs)
     else:
         # Otherwise, find the operand with the 'chunks' attribute and the longest shape
         operands_with_chunks = [o for o in operands.values() if hasattr(o, "chunks")]
@@ -1044,7 +1050,7 @@ def slices_eval(  # noqa: C901
     _slice: slice, list of slices, optional
         If provided, only the chunks that intersect with this slice
         will be evaluated.
-    kwargs: dict, optional
+    kwargs: Any, optional
         Additional keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
@@ -1293,7 +1299,7 @@ def reduce_slices(  # noqa: C901
     _slice: slice, list of slices, optional
         If provided, only the chunks that intersect with this slice
         will be evaluated.
-    kwargs: dict, optional
+    kwargs: Any, optional
         Additional keyword arguments supported by the :func:`empty` constructor.
 
     Returns
@@ -1530,7 +1536,7 @@ def chunked_eval(  # noqa: C901
         A dictionary containing the operands for the expression.
     item: int, slice or sequence of slices, optional
         The slice(s) to be retrieved. Note that step parameter is not honored yet.
-    kwargs: dict, optional
+    kwargs: Any, optional
         Additional keyword arguments supported by the :func:`empty` constructor.  In addition,
         the following keyword arguments are supported:
         _getitem: bool, optional
@@ -2680,11 +2686,11 @@ class LazyUDF(LazyArray):
 
 def lazyudf(
     func: Callable[[tuple, np.ndarray, tuple[int]], None],
-    inputs: tuple | list,
+    inputs: tuple | list | None,
     dtype: np.dtype,
-    shape: tuple[int] | None = None,
+    shape: tuple | list | None = None,
     chunked_eval: bool = True,
-    **kwargs: dict,
+    **kwargs: Any,
 ) -> LazyUDF:
     """
     Get a LazyUDF from a python user-defined function.
@@ -2698,7 +2704,7 @@ def lazyudf(
         in :paramref:`inputs`.
         - `output`: The buffer to be filled as a multidimensional numpy.ndarray.
         - `offset`: The multidimensional offset corresponding to the start of the block being computed.
-    inputs: tuple or list
+    inputs: tuple or list or None
         The sequence of inputs. Supported inputs are:
         NumPy.ndarray, :ref:`NDArray`, :ref:`NDField`, :ref:`C2Array`.
         Any other object is supported too, and will be passed as is to the user-defined function.
@@ -2709,7 +2715,7 @@ def lazyudf(
         The shape of the resulting array. If None, the shape will be guessed from inputs.
     chunked_eval: bool, optional
         Whether to evaluate the function in chunks or not (blocks).
-    kwargs: dict, optional
+    kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
         These arguments will be used by the :meth:`LazyArray.__getitem__` and
         :meth:`LazyArray.eval` methods. The
