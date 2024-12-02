@@ -92,4 +92,4 @@ developments.
 
 
 - Blosc Development Team
-  Make compression better
+  Compress better, compute bigger

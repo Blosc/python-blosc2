@@ -1,6 +1,11 @@
 # Release notes
 
-## Changes from 3.0.0-rc.1 to 3.0.0
+## Changes from 3.0.0-rc.2 to 3.0.0
+
+XXX version-specific blurb XXX
+
+
+## Changes from 3.0.0-rc.1 to 3.0.0-rc.2
 
 * Improved docs, tutorials and examples.  Have a look at our new docs at: https://www.blosc.org/python-blosc2.
 
