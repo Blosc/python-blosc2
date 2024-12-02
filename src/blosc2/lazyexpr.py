@@ -1768,7 +1768,7 @@ class LazyExpr(LazyArray):
         new_operands = {}
         # where() handling requires evaluating the expression prior to merge.
         # This is different from reductions, where the expression is evaluated
-        # and returned an NumPy array (for usability convenience).
+        # and returned a NumPy array (for usability convenience).
         # We do things like this to enable the fusion of operations like
         # `a.where(0, 1).sum()`.
         # Another possibility would have been to always evaluate where() and produce
@@ -1783,6 +1783,7 @@ class LazyExpr(LazyArray):
             # We converted some of the operands to NDArray (where() handling above)
             new_operands = {"o0": value1, "o1": value2}
             expression = f"(o0 {op} o1)"
+            return self._new_expr(expression, new_operands, guess=False, out=None, where=None)
         elif isinstance(value1, LazyExpr) and isinstance(value2, LazyExpr):
             # Expression fusion
             # Fuse operands in expressions and detect duplicates
@@ -2113,6 +2114,14 @@ class LazyExpr(LazyArray):
         return self.compute(_reduce_args=reduce_args, **kwargs)
 
     def get_num_elements(self, axis, item):
+        if hasattr(self, "_where_args") and len(self._where_args) == 1:
+            # We have a where condition, so we need to count the number of elements
+            # fulfilling the condition
+            orig_where_args = self._where_args
+            self._where_args = {"_where_x": blosc2.ones(self.shape, dtype=np.int8)}
+            num_elements = self.sum(axis=axis, dtype=np.int64, item=item)
+            self._where_args = orig_where_args
+            return num_elements
         if np.isscalar(axis):
             axis = (axis,)
         # Compute the number of elements in the array

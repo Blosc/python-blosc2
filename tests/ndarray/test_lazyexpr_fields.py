@@ -502,22 +502,23 @@ def test_iter(shape, chunks, blocks):
     assert _i == shape[0] - 1
 
 
-def test_col_reduction():
+@pytest.mark.parametrize("reduce_op", ["sum", "mean", "min", "max", "std", "var"])
+def test_col_reduction(reduce_op):
     N = 1000
     rng = np.random.default_rng()
     it = ((-x + 1, x - 2, rng.normal()) for x in range(N))
-    sa = blosc2.fromiter(
-        it, dtype=[("A", "i4"), ("B", "f4"), ("C", "f8")], shape=(N,), urlpath="sa-1M.b2nd", mode="w"
-    )
+    sa = blosc2.fromiter(it, dtype=[("A", "i4"), ("B", "f4"), ("C", "f8")], shape=(N,), chunks=(N // 2,))
 
     # The operations
+    reduc = getattr(blosc2, reduce_op)
     C = sa.fields["C"]
-    s = blosc2.sum(C[C > 0])
-    s2 = blosc2.sum(C["C > 0"])
+    s = reduc(C[C > 0])
+    s2 = reduc(C["C > 0"])  # string version
 
     # Check
+    nreduc = getattr(np, reduce_op)
     nsa = sa[:]
     nC = nsa["C"]
-    ns = np.sum(nC[nC > 0])
+    ns = nreduc(nC[nC > 0])
     np.testing.assert_allclose(s, ns)
     np.testing.assert_allclose(s2, ns)
