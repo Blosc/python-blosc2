@@ -1670,7 +1670,7 @@ class LazyExpr(LazyArray):
 
     This is not meant to be called directly from user space.
 
-    Once the lazy expression is created, it can be evaluated via :func:`LazyExpr.eval`.
+    Once the lazy expression is created, it can be evaluated via :func:`LazyExpr.compute`.
     """
 
     def __init__(self, new_op):  # noqa: C901
@@ -2726,7 +2726,7 @@ def lazyudf(
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
         These arguments will be used by the :meth:`LazyArray.__getitem__` and
-        :meth:`LazyArray.eval` methods. The
+        :meth:`LazyArray.compute` methods. The
         last one will ignore the `urlpath` parameter passed in this function.
 
     Returns

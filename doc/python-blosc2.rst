@@ -28,22 +28,6 @@
     :column: col-lg-4 col-md-6 col-sm-12 mb-4
     :container: + gap-3
 
-    **Excellent compression capabilities**
-
-
-    Blosc2 combines `advanced codecs and filters <https://www.blosc.org/posts/bytedelta-enhance-compression-toolset/>`_ for efficient compression, reducing storage space while maintaining high performance.
-
-    ---
-
-    **Optimized compute engine**
-
-
-    Blosc2 accelerates complex mathematical operations and reductions with an
-    `optimized compute engine <https://www.blosc.org/posts/ndim-reductions/>`_,
-    achieving high-performance for computing and data analysis.
-
-    ---
-
     **N-dimensional, compressed arrays**
 
 
@@ -51,18 +35,30 @@
 
     ---
 
-    **Binary data optimization**
+    **Excellent compression capabilities**
 
 
-    Designed to compute with compressed binary data (integers, floats, bools), Blosc2 is specially meant for
-    `high-performance numerical applications <https://nbviewer.org/github/Blosc/python-blosc2/blob/main/bench/lazyarray-expr-small-dask.ipynb>`_.
+    Combines `advanced codecs and filters <https://www.blosc.org/posts/bytedelta-enhance-compression-toolset/>`_ for efficient compression, reducing storage space while maintaining high performance.
+
+    ---
+
+    **Optimized compute engine**
+
+
+    For accelerating complex mathematical operations and reductions with an `optimized compute engine <https://www.blosc.org/posts/ndim-reductions/>`_,  achieving high-performance for computing and data analysis.
+
+    ---
+
+    **Super simple format**
+
+    Blosc2's `simple format <https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_, with specs taking less than 1000 lines, makes it easy to integrate with other systems and tools.
 
     ---
 
     **Flexible storage**
 
 
-    By offering storage in `memory, disk <https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/01.ndarray-basics.ipynb>`_, or `network <https://ironarray.io/caterva2>`_, Blosc2 adapts to your needs and facilitates integration into various systems.
+    Can store data in `memory, disk <https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/01.ndarray-basics.ipynb>`_, or `network <https://ironarray.io/caterva2>`_, adapting to your needs and facilitates integration into various systems.
 
     ---
 
