@@ -1,16 +1,16 @@
-Announcing Python-Blosc2 3.0.0-rc1
+Announcing Python-Blosc2 3.0.0-rc2
 ==================================
 
-The Blosc development team is pleased to announce the first release release of
-Python-Blosc2 3.0.0. In this release, we have focused on the making of a
-compute engine that can work with compressed data in a NumPy-like fashion.
+The Blosc development team is pleased to announce the second release release of
+Python-Blosc2 3.0.0. Here, we are streamlining the API and adding more flexibility
+to the compute engine (e.g. support for reductions in fields of struct arrays).
 You can think of Python-Blosc2 3.0 as a replacement of numexpr, but better :-)
 
 As always, we would like to get feedback from the community before the final
 release. We are providing binary wheels that you can easily install from PyPI
 with:
 
-    pip install blosc2==3.0.0rc1
+    pip install blosc2==3.0.0rc2
 
 For more info, you can have a look at the release notes in:
 

@@ -194,7 +194,7 @@ versions.  For example, to install the first release candidate version, you can 
 
 .. code-block:: console
 
-    pip install blosc2==3.0.0rc1
+    pip install blosc2==3.0.0rc2
 
 Documentation
 =============

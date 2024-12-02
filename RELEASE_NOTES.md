@@ -2,7 +2,18 @@
 
 ## Changes from 3.0.0-rc.1 to 3.0.0
 
-   XXX version-specific blurb XXX
+* Improved docs, tutorials and examples.  Have a look at our new docs at: https://www.blosc.org/python-blosc2.
+
+* `blosc2.save()` is using `contiguous=True` by default now.
+
+* `vlmeta[:]` is syntatic sugar for vlmeta.getall() now.
+
+* Add `NDArray.meta` property as a proxy to `NDArray.shunk.vlmeta`.
+
+* Reductions over single fields in structured NDArrays are now supported.  For example, given an array `sarr` with fields 'a', 'b' and 'c', `sarr["a"]["b >= c"].std()` returns the standard deviation of the values in field 'a' for the rows that fulfills that values in fields in 'b' are larger than values in 'c' (`b >= c` above).
+
+* As per discussion #337, the default of cparams.splitmode is now AUTO_SPLIT. See #338 though.
+
 
 ## Changes from 3.0.0-beta.4 to 3.0.0-rc.1
 
