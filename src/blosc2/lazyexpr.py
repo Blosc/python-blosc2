@@ -643,7 +643,7 @@ def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
 def is_full_slice(item):
     """Check whether the slice represented by item is a full slice."""
     if item is None:
-        # This is the case when the user does not pass any slice in eval() method
+        # This is the case when the user does not pass any slice in compute() method
         return True
     if isinstance(item, tuple):
         return all((isinstance(i, slice) and i == slice(None, None, None)) or i == Ellipsis for i in item)
@@ -879,7 +879,7 @@ def fast_eval(  # noqa: C901
     operands: dict
         A dictionary containing the operands for the expression.
     getitem: bool, optional
-        Indicates whether the expression is being evaluated for a getitem operation or eval().
+        Indicates whether the expression is being evaluated for a getitem operation or compute().
         Default is False.
     kwargs: Any, optional
         Additional keyword arguments supported by the :func:`empty` constructor.
@@ -964,7 +964,7 @@ def fast_eval(  # noqa: C901
                     raise ValueError("Fast path: the where condition must be a tuple with two elements")
 
             if out is None:
-                # We can enter here when using any of the eval() or __getitem__() methods
+                # We can enter here when using any of the compute() or __getitem__() methods
                 if getitem:
                     out = np.empty(shape, dtype=dtype)
                 else:
