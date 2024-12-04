@@ -28,15 +28,13 @@
     :column: col-lg-4 col-md-6 col-sm-12 mb-4
     :container: + gap-3
 
-    **N-dimensional, compressed arrays**
+    **N-dim & compressed arrays**
 
-
-    `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/01.ndarray-basics.html>`_ allow for efficient storage and manipulation of multidimensional data, making it easy to work with complex data sets.
+    `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/01.ndarray-basics.html>`_ allow for efficient storage and manipulation of N-dim data, making it easy to work with large datasets.
 
     ---
 
-    **Excellent compression capabilities**
-
+    **Excellent compression**
 
     Combines `advanced codecs and filters <https://www.blosc.org/posts/bytedelta-enhance-compression-toolset/>`_ for efficient compression, reducing storage space while maintaining high performance.
 
@@ -44,19 +42,17 @@
 
     **Optimized compute engine**
 
-
-    For accelerating complex mathematical operations and reductions with an `optimized compute engine <https://www.blosc.org/posts/ndim-reductions/>`_,  achieving high-performance for computing and data analysis.
+    It teams with internal compression to compute complex `mathematical expressions <https://ironarray.io/blog/blosc2-eval-expressions>`_ and `reductions <https://www.blosc.org/posts/ndim-reductions/>`_ at high speed.
 
     ---
 
-    **Super simple format**
+    **Streamlined format**
 
-    Blosc2's `simple format <https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_, with specs taking less than 1000 lines, makes it easy to integrate with other systems and tools.
+    `Blosc2's format <https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_, with specs taking less than 800 lines, makes it easy to integrate with other systems and tools.
 
     ---
 
     **Flexible storage**
-
 
     Can store data in `memory, disk <https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/01.ndarray-basics.ipynb>`_, or `network <https://ironarray.io/caterva2>`_, adapting to your needs and facilitates integration into various systems.
 
@@ -64,8 +60,7 @@
 
     **Two-level partitions**
 
-
-    Leverages multi-level CPU caches, `enhancing data access <https://www.blosc.org/posts/blosc2-ndim-intro/>`_ and performance in computational tasks. Tailored for modern multi-core processors.
+    Leverages multi-level CPU caches, `enhancing data access <https://www.blosc.org/posts/blosc2-ndim-intro/>`_ and `performance <https://www.blosc.org/posts/ndim-reductions/>`_ for modern multi-core processors.
 
 
 .. raw:: html
