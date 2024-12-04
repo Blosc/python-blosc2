@@ -3094,10 +3094,10 @@ def arange(
 
     def arange_fill(inputs, output, offset):
         lout = len(output)
-        start, stop, step = inputs
-        start_ = start + offset[0] * step
-        stop_ = start_ + lout * step
-        output[:] = np.arange(start_, stop_, step, dtype=output.dtype)
+        start, _, step = inputs
+        start += offset[0] * step
+        stop = start + lout * step
+        output[:] = np.arange(start, stop, step, dtype=output.dtype)
 
     if stop is None:
         stop = start
