@@ -11,7 +11,7 @@ XXX version-specific blurb XXX
 
 * `blosc2.save()` is using `contiguous=True` by default now.
 
-* `vlmeta[:]` is syntatic sugar for vlmeta.getall() now.
+* `vlmeta[:]` is syntactic sugar for vlmeta.getall() now.
 
 * Add `NDArray.meta` property as a proxy to `NDArray.shunk.vlmeta`.
 
