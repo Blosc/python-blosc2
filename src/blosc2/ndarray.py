@@ -325,7 +325,7 @@ def reshape(
         src_slices = get_flat_slices(dst.shape, dst_slice, c_order)
         # print(f"Time to get slices: {time() - t0:.3f} s")
         # Compute the size for slices in the source array
-        size_src_slices = builtins.sum([s.stop - s.start for s in src_slices])
+        size_src_slices = builtins.sum(s.stop - s.start for s in src_slices)
         if size_src_slices != size_dst_slice:
             raise ValueError("source slice size is not equal to the destination chunk size")
         # Now, assemble the slices for assignment in the destination array
