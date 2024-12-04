@@ -48,7 +48,7 @@
 
     **Streamlined format**
 
-    `Blosc2's format <https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_, with specs taking less than 800 lines, makes it easy to integrate with other systems and tools.
+    `Blosc2's format <https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_, with specs taking less than 4000 words, makes it easy to integrate with other systems and tools.
 
     ---
 
