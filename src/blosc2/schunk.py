@@ -36,6 +36,13 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
 
     def __setitem__(self, name, content):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
+        # If name is a slice, assume that content is a dictionary and copy all the items
+        if isinstance(name, slice):
+            if name.start is None and name.stop is None:
+                for k, v in content.items():
+                    self.set_vlmeta(k, v)
+                return
+            raise NotImplementedError("Slicing is not supported, unless [:]")
         cparams = {"typesize": 1}
         content = packb(
             content,
@@ -115,19 +122,26 @@ class Meta(Mapping):
         value = packb(value, default=blosc2_ext.encode_tuple, strict_types=True, use_bin_type=True)
         blosc2_ext.meta__setitem__(self.schunk, key, value)
 
-    def __getitem__(self, item: str) -> bytes:
+    def __getitem__(self, item: str | slice) -> bytes | dict[str, bytes]:
         """Return the specified metalayer.
 
         Parameters
         ----------
-        item: str
-            The name of the metalayer to return.
+        item: str or slice
+            The name of the metalayer to return.  If a slice is passed,
+            and start and stop are None ([:]), all the metalayers are returned;
+            else, a NotImplementedError is raised.
 
         Returns
         -------
-        bytes
-            The buffer containing the metalayer information.
+        bytes or dict
+            The buffer containing the metalayer information. If a slice is passed,
+            a dictionary with all the metalayers is returned.
         """
+        if isinstance(item, slice):
+            if item.start is None and item.stop is None:
+                return self.getall()
+            raise NotImplementedError("Slicing is not supported, unless [:]")
         if self.__contains__(item):
             return unpackb(
                 blosc2_ext.meta__getitem__(self.schunk, item),
@@ -153,6 +167,19 @@ class Meta(Mapping):
     def __len__(self) -> int:
         """Return the number of metalayers."""
         return blosc2_ext.meta__len__(self.schunk)
+
+    def getall(self):
+        """
+        Return all the variable length metalayers as a dictionary
+
+        """
+        return {key: self[key] for key in self.keys()}
+
+    def __repr__(self):
+        return repr(self.getall())
+
+    def __str__(self):
+        return str(self.getall())
 
 
 class SChunk(blosc2_ext.SChunk):
