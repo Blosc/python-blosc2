@@ -258,15 +258,3 @@ def test_save():
     blosc2.remove_urlpath("test.b2nd")
     with pytest.raises(FileNotFoundError):
         blosc2.open("test.b2nd")
-
-
-def test_copy():
-    a = blosc2.arange(0, 10, 1, dtype="i4", shape=(10,))
-    a.vlmeta["name"] = "a"
-    b = blosc2.copy(a)
-    assert np.array_equal(a[:], b[:])
-    assert a.vlmeta["name"] == b.vlmeta["name"]
-    cparams = blosc2.CParams(clevel=9, codec=blosc2.Codec.LZ4)
-    c = blosc2.copy(b, cparams=cparams)
-    assert c.cparams.clevel == 9
-    assert c.cparams.codec == blosc2.Codec.LZ4

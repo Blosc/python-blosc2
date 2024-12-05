@@ -13,6 +13,29 @@ import blosc2
 
 
 @pytest.mark.parametrize(
+    ("shape", "dtype"), [([521], "i8"), ([20, 134, 13], "f4"), ([12, 13, 14, 15, 16], "f8")]
+)
+def test_simple(shape, dtype):
+    size = int(np.prod(shape))
+    nparray = np.arange(size, dtype=dtype).reshape(shape)
+    a = blosc2.asarray(nparray)
+    b = a.copy()
+    np.testing.assert_almost_equal(b[...], nparray)
+
+
+def test_cparams_vlmeta():
+    a = blosc2.arange(0, 10, 1, dtype="i4", shape=(10,))
+    a.vlmeta["name"] = "a"
+    b = blosc2.copy(a)
+    assert np.array_equal(a[:], b[:])
+    assert a.vlmeta["name"] == b.vlmeta["name"]
+    cparams = blosc2.CParams(clevel=9, codec=blosc2.Codec.LZ4)
+    c = blosc2.copy(b, cparams=cparams)
+    assert c.cparams.clevel == 9
+    assert c.cparams.codec == blosc2.Codec.LZ4
+
+
+@pytest.mark.parametrize(
     ("shape", "chunks1", "blocks1", "chunks2", "blocks2", "dtype"),
     [
         ([521], [212], [33], [121], [18], "|S8"),
@@ -22,7 +45,7 @@ import blosc2
         ([12, 13, 14, 15, 16], [6, 6, 6, 6, 6], [2, 2, 2, 2, 2], [7, 7, 7, 7, 7], [3, 3, 5, 3, 3], "|S8"),
     ],
 )
-def test_copy(shape, chunks1, blocks1, chunks2, blocks2, dtype):
+def test_values(shape, chunks1, blocks1, chunks2, blocks2, dtype):
     dtype = np.dtype(dtype)
     typesize = dtype.itemsize
     size = int(np.prod(shape))
@@ -70,14 +93,3 @@ def test_copy_numpy(shape, chunks1, blocks1, chunks2, blocks2, dtype):
         assert b.tobytes() == nparray.tobytes()
     else:
         np.testing.assert_almost_equal(b[...], nparray)
-
-
-@pytest.mark.parametrize(
-    ("shape", "dtype"), [([521], "i8"), ([20, 134, 13], "f4"), ([12, 13, 14, 15, 16], "f8")]
-)
-def test_copy_simple(shape, dtype):
-    size = int(np.prod(shape))
-    nparray = np.arange(size, dtype=dtype).reshape(shape)
-    a = blosc2.asarray(nparray)
-    b = a.copy()
-    np.testing.assert_almost_equal(b[...], nparray)
