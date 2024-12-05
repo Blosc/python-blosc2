@@ -1701,22 +1701,15 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         if dtype is None:
             dtype = self.dtype
-        kwargs["cparams"] = (
-            kwargs.get("cparams").copy()
-            if isinstance(kwargs.get("cparams"), dict)
-            else asdict(self.schunk.cparams)
-        )
-        kwargs["dparams"] = (
-            kwargs.get("dparams").copy()
-            if isinstance(kwargs.get("dparams"), dict)
-            else asdict(self.schunk.dparams)
-        )
-        if "meta" not in kwargs:
-            # Copy metalayers as well
-            meta_dict = {meta: self.schunk.meta[meta] for meta in self.schunk.meta}
-            kwargs["meta"] = meta_dict
-        kwargs = _check_ndarray_kwargs(**kwargs)
 
+        # Add the default parameters
+        kwargs["cparams"] = kwargs.get("cparams", self.cparams)
+        kwargs["dparams"] = kwargs.get("dparams", self.dparams)
+        if "meta" in kwargs:
+            # Do not allow to pass meta to copy
+            raise ValueError("meta should not be passed to copy")
+
+        kwargs = _check_ndarray_kwargs(**kwargs)
         return super().copy(dtype, **kwargs)
 
     def save(self, urlpath: str, contiguous=True, **kwargs: Any) -> None:
