@@ -9,7 +9,7 @@ find_package(Python COMPONENTS Interpreter NumPy Development.Module REQUIRED)
 
 # Add custom command to generate the version file
 add_custom_command(
-  OUTPUT src/blosc2/_version.py
+  OUTPUT src/blosc2/version.py
   COMMAND ${Python_EXECUTABLE} generate_version.py
   DEPENDS generate_version.py pyproject.toml
   VERBATIM
@@ -27,11 +27,15 @@ Python_add_library(blosc2_ext MODULE blosc2_ext.c WITH_SOABI)
 # We need to link against NumPy
 target_link_libraries(blosc2_ext PRIVATE Python::NumPy)
 
+if(DEFINED ENV{USE_SYSTEM_BLOSC2})
+    set(USE_SYSTEM_BLOSC2 ON)
+endif()
+
 if(USE_SYSTEM_BLOSC2)
     set(CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(Blosc2 REQUIRED IMPORTED_TARGET blosc2)
-    target_link_libraries(blosc2_ext PkgConfig::Blosc2)
+    target_link_libraries(blosc2_ext PRIVATE PkgConfig::Blosc2)
 else()
     set(STATIC_LIB ON CACHE BOOL "Build a static version of the blosc library.")
     set(SHARED_LIB ON CACHE BOOL "Build a shared library version of the blosc library.")

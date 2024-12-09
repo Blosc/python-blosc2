@@ -10,5 +10,5 @@ with open("pyproject.toml", "rb") as f:
 version = pyproject["project"]["version"]
 
 # Write the version to blosc2/_version.py
-with open("src/blosc2/_version.py", "w") as f:
+with open("src/blosc2/version.py", "w") as f:
     f.write(f'__version__ = "{version}"\n')

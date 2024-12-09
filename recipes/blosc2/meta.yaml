@@ -1,4 +1,4 @@
-{% set name = "blosc2" %}
+{% set name = "blosc2" %}  # TODO: should be python-blosc2 or blosc2 as in PyPI?
 {% set version = "3.0.0rc3" %}
 
 package:
@@ -6,11 +6,10 @@ package:
   version: {{ version }}
 
 source:
+  # TODO: make actual tarballs work
   # url: https://github.com/Blosc/python-blosc2/archive/refs/tags/v{{ version }}.tar.gz
-  #url: https://github.com/Blosc/python-blosc2/archive/refs/tags/v3.0.0-rc2.tar.gz
-  # sha256: cbf42b475c02145a979e4ac6cbd5ad9df49d23a417b56b6b7bdf5a9d0a4b0716
   url: /tmp/blosc2-3.0.0rc3.tar.gz
-  sha256: 74c7c81cdbf28702fc751f3b6079b1e3653fec8fd285d54214e962c2113c593c
+  sha256: ac822fd8d60e7356f48c638266b83486e31790fd70e482f814356be33f3fcedb
   include:
     - pyproject.toml
 
@@ -19,8 +18,6 @@ build:
   script_env:
     - USE_SYSTEM_BLOSC2=1
   script:
-    #- {{ PYTHON }} -m pip install --no-deps --ignore-installed .
-    #- -no-deps --no-build-isolation
     - {{ PYTHON }} -m pip install . -vv
 
 requirements:
@@ -40,9 +37,11 @@ requirements:
     - scikit-build-core
     - cython >=3
     - numpy >=2.0.0
+    - c-blosc2 >=2.15.2
   run:
     - python >=3.11
     - numpy >=1.25.0
+    - c-blosc2 >=2.15.2
     - ndindex
     - msgpack-python
     - numexpr
@@ -54,10 +53,13 @@ test:
     - blosc2
   requires:
     - pip
-    - pytest
+    #- pytest
   commands:
     - pip check
-    - pytest -v --pyargs blosc2
+    - python -c "import blosc2; print(blosc2.__version__)"
+    - python -c "import blosc2; blosc2.print_versions()"
+    # The test suite is not being installed
+    #- pytest -v
 
 about:
   home: https://github.com/Blosc/python-blosc2
