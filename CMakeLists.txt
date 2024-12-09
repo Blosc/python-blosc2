@@ -7,6 +7,14 @@ project(python-blosc2)
 # IMO, this would need to be solved in Fedora, so we can just use the following line:
 find_package(Python COMPONENTS Interpreter NumPy Development.Module REQUIRED)
 
+# Add custom command to generate the version file
+add_custom_command(
+  OUTPUT src/blosc2/_version.py
+  COMMAND ${Python_EXECUTABLE} generate_version.py
+  DEPENDS generate_version.py pyproject.toml
+  VERBATIM
+)
+
 # Compile the Cython extension manually...
 add_custom_command(
   OUTPUT blosc2_ext.c
