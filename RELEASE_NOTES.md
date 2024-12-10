@@ -1,8 +1,19 @@
 # Release notes
 
-## Changes from 3.0.0-rc.2 to 3.0.0
+## Changes from 3.0.0-rc.2 to 3.0.0-rc.3
 
-XXX version-specific blurb XXX
+* Now you can get and set the whole values of VLMeta instances with the `vlmeta[:]` syntax.
+  The get part is syntactic sugar for `vlmeta.getall()` actually.
+
+* `blosc2.copy()` now honors `cparams=` parameter.
+
+* Now, compiling the package with `USE_SYSTEM_BLOSC2` envar set to `1` will use the
+  system-wide Blosc2 library.  This is useful for creating packages that do not want
+  to bundle the Blosc2 library (e.g. conda).
+
+* Several changes in the build process to enable conda-forge packaging.
+
+* Now, `blosc2.pack_tensor()` can pack empty tensors/arrays.  Fixes #290.
 
 
 ## Changes from 3.0.0-rc.1 to 3.0.0-rc.2
