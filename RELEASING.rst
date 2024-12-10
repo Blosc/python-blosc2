@@ -4,9 +4,7 @@ python-blosc2 release procedure
 Preliminaries
 -------------
 
-* Do not worry about the version number.  setuptools_scm in scikit-build-core has machinery
-  to figure it out based on git tags:
-  https://scikit-build-core.readthedocs.io/en/latest/configuration.html#dynamic-metadata
+* Set the version number in ``pyproject.toml`` to the new version number (e.g. ``X.Y.Z``).
 
 * Make sure that the c-blosc2 repository is updated to the latest version (or a specific
   version that will be documented in the ``RELEASE_NOTES.md``). In ``CMakeLists.txt`` edit::
@@ -110,6 +108,9 @@ Post-release actions
     ## Changes from X.Y.Z to X.Y.(Z+1)
 
     XXX version-specific blurb XXX
+
+* Update the version number in ``pyproject.toml`` to the next version number
+  (e.g. ``X.Y.(Z+1).dev``).
 
 * Commit your changes with::
 
