@@ -2,8 +2,8 @@
 Python-Blosc2
 =============
 
-A flexible computational engine for the fast Blosc2 compression library
-=======================================================================
+A high-performance compressed ndarray library with a flexible computational engine
+==================================================================================
 
 :Author: The Blosc development team
 :Contact: blosc@blosc.org
