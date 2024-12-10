@@ -8,7 +8,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "blosc2"
-description = "A flexible computational engine for the fast Blosc2 compression library"
+description = "A high-performance compressed ndarray library with a flexible computational engine"
 readme = {file = "README.rst", content-type = "text/x-rst"}
 authors = [{name = "Blosc Development Team", email = "blosc@blosc.org"}]
 maintainers = [{ name = "Blosc Development Team", email = "blosc@blosc.org"}]
@@ -38,7 +38,7 @@ dependencies = [
     "py-cpuinfo",
     "httpx",
 ]
-dynamic = ["version"]
+version = "3.0.0rc3"
 
 
 [project.optional-dependencies]
@@ -85,13 +85,6 @@ test-command = "pytest {project}/tests"
 # Manylinux 2014 will be the default for x86_64 and aarch64
 manylinux-x86_64-image = "manylinux2014"
 manylinux-aarch64-image = "manylinux2014"
-
-[tool.scikit-build]
-metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
-sdist.include = ["src/blosc2/_version.py"]
-
-[tool.setuptools_scm]
-write_to = "src/blosc2/_version.py"
 
 [tool.ruff]
 line-length = 109
