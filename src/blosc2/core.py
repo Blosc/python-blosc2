@@ -621,6 +621,12 @@ def pack_tensor(
         The serialized version (cframe) of the array.
         If urlpath is provided, the number of bytes in file is returned instead.
 
+    Notes
+    -----
+
+    In case you pass a TensorFlow/PyTorch tensor, the tensor will be converted to a NumPy array
+    before being packed. The tensor will be restored to its original form when unpacked.
+
     Examples
     --------
     >>> import numpy as np
