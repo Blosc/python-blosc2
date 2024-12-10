@@ -45,10 +45,7 @@ def is_inside_new_expr() -> bool:
     """
     # Get the current call stack
     stack = inspect.stack()
-    return builtins.any(
-        frame_info.function == "_new_expr" or frame_info.function == "_open_lazyarray"
-        for frame_info in stack
-    )
+    return builtins.any(frame_info.function in {"_new_expr", "_open_lazyarray"} for frame_info in stack)
 
 
 def make_key_hashable(key):
