@@ -1010,7 +1010,7 @@ cdef class SChunk:
         cdef int64_t index
         cdef Py_buffer *buf
         cdef uint8_t *buf_ptr
-        if data is not None:
+        if data is not None and len(data) > 0:
             buf = <Py_buffer *> malloc(sizeof(Py_buffer))
             PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
             buf_ptr = <uint8_t *> buf.buf

@@ -128,6 +128,16 @@ def test_pack_tensor_array(size, dtype):
     assert np.array_equal(nparray, a2)
 
 
+def test_pack_tensor_empty():
+    empty = np.zeros((0,), dtype=float)
+    pempty = blosc2.pack_tensor(empty)
+
+    empty2 = blosc2.unpack_tensor(pempty)
+    assert np.array_equal(empty, empty2)
+    assert empty2.dtype == empty.dtype
+    assert empty2.shape == empty.shape
+
+
 ##### save / load  #####
 
 
