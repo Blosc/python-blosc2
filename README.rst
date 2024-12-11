@@ -207,6 +207,10 @@ Additionally, you can find some examples at:
 
 https://github.com/Blosc/python-blosc2/tree/main/examples
 
+Finally, we taught a tutorial at the `PyData Global 2024 <https://pydata.org/global2024/>`_
+that you can find at: https://github.com/Blosc/Python-Blosc2-3.0-tutorial.  There you will
+find differents Jupyter notebook that explains the main features of Python-Blosc2.
+
 Building from sources
 =====================
 
