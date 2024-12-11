@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from 3.0.0-rc.3 to 3.0.0
+
+XXX version-specific blurb XXX
+
+
 ## Changes from 3.0.0-rc.2 to 3.0.0-rc.3
 
 * Now you can get and set the whole values of VLMeta instances with the `vlmeta[:]` syntax.
