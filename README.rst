@@ -258,11 +258,13 @@ blosc@googlegroups.com
 
 https://groups.google.com/g/blosc
 
-Mastodon
-========
+Social feeds
+------------
 
-Please follow `@Blosc2 <https://fosstodon.org/@Blosc2>`_ to stay updated on the latest
-developments.  We recently moved from Twitter to Mastodon.
+Stay informed about the latest developments by following us in
+`Mastodon <https://fosstodon.org/@Blosc2>`_,
+`Bluesky <https://bsky.app/profile/blosc.org>`_ or
+`LinkedIn <https://www.linkedin.com/company/88381936/admin/dashboard/>`_.
 
 Thanks
 ======
@@ -271,12 +273,13 @@ Blosc2 is supported by the `NumFOCUS foundation <https://numfocus.org>`_, the
 `LEAPS-INNOV project <https://www.leaps-innov.eu>`_
 and `ironArray SLU <https://ironarray.io>`_, among many other donors.
 This allowed the following people have contributed in an important way
-to the core development of Blosc2:
+to the core development of the Blosc2 library:
 
 - Francesc Alted
 - Marta Iborra
 - Aleix Alcacer
-- Oscar Guiñon
+- Oscar Guiñón
+- Juan David Ibáñez
 - Ivan Vilata i Balaguer
 - Oumaima Ech.Chdig
 
@@ -286,7 +289,6 @@ aspects:
 - Jan Sellner, who contributed the mmap support for NDArray/SChunk objects.
 - Dimitri Papadopoulos, who contributed a large bunch of improvements to the
   in many aspects of the project.  His attention to detail is remarkable.
-- Juan David Ibáñez, who contributed different improvements.
 - And many others that have contributed with bug reports, suggestions and
   improvements.
 

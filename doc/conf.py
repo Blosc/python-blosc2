@@ -40,7 +40,8 @@ html_theme_options = {
         {"name": "Donate to Blosc", "url": "/pages/donate/"},
     ],
     "github_url": "https://github.com/Blosc/python-blosc2",
-    "twitter_url": "https://twitter.com/Blosc2",
+    "mastodon_url": "https://fosstodon.org/@Blosc2",
+    "bluesky_url": "https://bsky.app/profile/blosc.org",
 }
 
 html_show_sourcelink = False
