@@ -11,6 +11,7 @@ from __future__ import annotations
 import copy
 import ctypes
 import ctypes.util
+import json
 import math
 import os
 import pathlib
@@ -18,6 +19,7 @@ import pickle
 import platform
 import sys
 from dataclasses import asdict
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import cpuinfo
@@ -1149,22 +1151,37 @@ def linux_cache_size(cache_level: int, default_size: int) -> int:
     return cache_size
 
 
-def get_cpu_info():
-    cpu_info = cpuinfo.get_cpu_info()
-    # cpuinfo does not correctly retrieve the cache sizes for Apple Silicon, so do it manually
-    if platform.system() == "Darwin":
-        cpu_info["l1_data_cache_size"] = apple_silicon_cache_size(1)
-        cpu_info["l2_cache_size"] = apple_silicon_cache_size(2)
-        cpu_info["l3_cache_size"] = apple_silicon_cache_size(3)
-    # cpuinfo does not correctly retrieve the cache sizes for all CPUs on Linux, so ask the kernel
-    if platform.system() == "Linux":
-        l1_data_cache_size = cpu_info.get("l1_data_cache_size", 32 * 1024)
-        cpu_info["l1_data_cache_size"] = linux_cache_size(1, l1_data_cache_size)
-        l2_cache_size = cpu_info.get("l2_cache_size", 256 * 1024)
-        cpu_info["l2_cache_size"] = linux_cache_size(2, l2_cache_size)
-        l3_cache_size = cpu_info.get("l3_cache_size", 1024 * 1024)
-        cpu_info["l3_cache_size"] = linux_cache_size(3, l3_cache_size)
-    return cpu_info
+def write_cached_cpu_info(cpu_info_dict: dict[str, any]) -> None:
+    with open(Path.home() / '.blosc2-cpuinfo.json', 'w') as f:
+        json.dump(cpu_info_dict, f, indent=4)
+
+
+def read_cached_cpu_info() -> dict:
+    try:
+        with open(Path.home() / '.blosc2-cpuinfo.json', 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+@lru_cache(maxsize=1)
+def get_cpu_info() -> dict:
+    cached_info = read_cached_cpu_info()
+    if cached_info:
+        return cached_info
+
+    try:
+        import cpuinfo
+    except ImportError:
+        return {}
+    cpu_info_dict = cpuinfo.get_cpu_info()
+    try:
+        write_cached_cpu_info(cpu_info_dict)
+    except IOError:
+        # cpu info cannot be stored.
+        # will need to be recomputed in the next process
+        pass
+    return cpu_info_dict
 
 
 def get_blocksize() -> int:
