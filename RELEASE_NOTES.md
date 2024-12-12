@@ -2,7 +2,12 @@
 
 ## Changes from 3.0.0-rc.3 to 3.0.0
 
-XXX version-specific blurb XXX
+* A persistent cache for cpuinfo (stored in `$HOME/.blosc2-cpuinfo.json`) is
+  now used to avoid repeated calls to the cpuinfo library.  This accelerates
+  the startup time of the library considerably (up to 5x on my box).
+
+* We should be creating conda packages now.  Thanks to @hmaarrfk for his
+  assistance in this area.
 
 
 ## Changes from 3.0.0-rc.2 to 3.0.0-rc.3

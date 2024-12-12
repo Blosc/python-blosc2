@@ -1,17 +1,21 @@
-Announcing Python-Blosc2 3.0.0rc3
-=================================
+Announcing Python-Blosc2 3.0.0 final
+====================================
 
-The Blosc development team is pleased to announce the third release release of
-Python-Blosc2 3.0.0. Here, we are making easier to produce conda packages, as
-well as fixing some bugs and improving the documentation.
+The Blosc development team is pleased to announce the final release for
+Python-Blosc2 3.0.0. Now, we will be producing conda(-forge) packages,
+as well as providing wheels for the most common platforms, as usual.
 
-You can think of Python-Blosc2 3.0 as a replacement of numexpr, but better :-)
+With the new compute engine, you can think of Python-Blosc2 3.0 as a
+replacement of numexpr, but better :-)
 
-As always, we would like to get feedback from the community before the final
-release. We are providing binary wheels that you can easily install from PyPI
-with:
+We are providing binary wheels that you can easily install/upgrade from
+PyPI with:
 
-    pip install blosc2==3.0.0rc3
+    pip install blosc2 --upgrade
+
+For conda:
+
+    conda install -c conda-forge python-blosc2
 
 For more info, you can have a look at the release notes in:
 

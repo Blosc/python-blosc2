@@ -12,6 +12,7 @@ add_custom_command(
   OUTPUT src/blosc2/version.py
   COMMAND ${Python_EXECUTABLE} generate_version.py
   DEPENDS generate_version.py pyproject.toml
+  WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   VERBATIM
 )
 

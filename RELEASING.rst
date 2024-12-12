@@ -1,4 +1,4 @@
-python-blosc2 release procedure
+Python-Blosc2 release procedure
 ===============================
 
 Preliminaries
