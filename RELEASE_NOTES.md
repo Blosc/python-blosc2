@@ -1,5 +1,10 @@
 # Release notes
 
+## Changes from 3.0.0 to 3.0.1
+
+XXX version-specific blurb XXX
+
+
 ## Changes from 3.0.0-rc.3 to 3.0.0
 
 * A persistent cache for cpuinfo (stored in `$HOME/.blosc2-cpuinfo.json`) is
