@@ -1,11 +1,10 @@
 exclude: ^doc/reference/autofiles/
 ci:
   autoupdate_commit_msg: "Update pre-commit hooks"
+  autoupdate_schedule: "monthly"
   autofix_commit_msg: "Apply pre-commit fixes"
   autofix_prs: false
 default_stages: [pre-commit, pre-push]
-default_language_version:
-  python: python3
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
