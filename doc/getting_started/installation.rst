@@ -1,14 +1,20 @@
 Installation
 ============
-You can install Python-Blosc2 wheels via PyPI using Pip or clone the GitHub repository.
+You can install Python-Blosc2 wheels via PyPI using Pip, Conda or clone the GitHub repository.
 
 Pip
 +++
 
 .. code-block::
 
-    python -m pip install blosc2
+    python -m pip install blosc2 --upgrade
 
+Conda
++++++
+
+.. code-block::
+
+    conda install -c conda-forge python-blosc2
 
 Source code
 +++++++++++
@@ -17,7 +23,7 @@ Source code
 
     git clone https://github.com/Blosc/python-blosc2/
     cd python-blosc2
-    pip install -e .[test]
+    pip install .[test]   # install with test dependencies
 
 That's all. You can proceed with testing section now.
 
@@ -29,7 +35,7 @@ running the tests:
 
 .. code-block:: console
 
-    python -m pytest  (add -v for verbose mode)
+    python -m pytest  # add -v for verbose mode
 
 Benchmarking
 ------------

@@ -188,7 +188,7 @@ For conda users, you can install the package from the conda-forge channel:
 
 .. code-block:: console
 
-    conda install -c conda-forge blosc2
+    conda install -c conda-forge python-blosc2
 
 Documentation
 =============
