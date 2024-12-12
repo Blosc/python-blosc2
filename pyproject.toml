@@ -8,7 +8,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "blosc2"
-description = "A high-performance compressed ndarray library with a flexible computational engine"
+description = "A high-performance compressed ndarray library with a flexible compute engine"
 readme = {file = "README.rst", content-type = "text/x-rst"}
 authors = [{name = "Blosc Development Team", email = "blosc@blosc.org"}]
 maintainers = [{ name = "Blosc Development Team", email = "blosc@blosc.org"}]

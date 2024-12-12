@@ -34,7 +34,7 @@ On top of C-Blosc2 we built Python-Blosc2, a Python wrapper that exposes the
 C-Blosc2 API, plus many extensions that allow it to work transparently with
 NumPy arrays, while performing advanced computations on compressed data that
 can be stored either in-memory, on-disk or on the network (via the
-`Caterva2 library <https://github.com/Blosc/Caterva2>`_).
+`Caterva2 library <https://github.com/ironArray/Caterva2>`_).
 
 Python-Blosc2 leverages both NumPy and numexpr for achieving great performance,
 but with a twist. Among the main differences between the new computing engine

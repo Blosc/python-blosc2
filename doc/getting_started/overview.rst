@@ -1,58 +1,47 @@
+.. Try to keep in sync with the README.rst file
+
 What is it?
 ===========
 
-`C-Blosc2 <https://github.com/Blosc/c-blosc2>`_ is a blocking, shuffling and
-lossless compression library meant for numerical data written in C.  Blosc2
-is the next generation of Blosc, an
-`award-winning <https://www.blosc.org/posts/prize-push-Blosc2/>`_
+Python-Blosc2 is a high-performance compressed ndarray library with a flexible
+compute engine.  It uses the C-Blosc2 library as the compression backend.
+`C-Blosc2 <https://github.com/Blosc/c-blosc2>`_ is the next generation of
+Blosc, an `award-winning <https://www.blosc.org/posts/prize-push-Blosc2/>`_
 library that has been around for more than a decade, and that is been used
 by many projects, including `PyTables <https://www.pytables.org/>`_ or
 `Zarr <https://zarr.readthedocs.io/en/stable/>`_.
 
-On top of C-Blosc2 we built Python-Blosc2, a Python wrapper that exposes the
-C-Blosc2 API, plus many extensions that allow it to work transparently with
-NumPy arrays, while performing advanced computations on compressed data that
+Python-Blosc2 is Python wrapper that exposes the C-Blosc2 API, *plus* a
+compute engine that allow it to work transparently with NumPy arrays,
+while performing advanced computations on compressed data that
 can be stored either in-memory, on-disk or on the network (via the
-`Caterva2 library <https://github.com/Blosc/Caterva2>`_).
+`Caterva2 library <https://github.com/ironArray/Caterva2>`_).
 
-Python-Blosc2 leverages both NumPy and numexpr for achieving great performance,
-but with a twist. Among the main differences between the new computing engine
-and NumPy or numexpr, you can find:
+Python-Blosc2 makes special emphasis on interacting well with existing
+libraries and tools. In particular, it provides:
 
-* Support for n-dim arrays that are compressed in-memory, on-disk or on the
-  network.
-* High performance compression codecs, for integer, floating point, complex
-  booleans, string and structured data.
+* Support for NumPy `universal functions mechanism <https://numpy.org/doc/2.1/reference/ufuncs.html>`_,
+  allowing to mix and match NumPy and Blosc2 computation engines.
+* Excellent integration with Numba and Cython via
+  `User Defined Functions <https://www.blosc.org/python-blosc2/getting_started/tutorials/03.lazyarray-udf.html>`_.
+* Lazy expressions that are computed only when needed, and that can be stored
+  for later use.
+
+Python-Blosc2 leverages both `NumPy <https://numpy.org>`_ and
+`NumExpr <https://numexpr.readthedocs.io/en/latest/>`_ for achieving great
+performance, but with a twist. Among the main differences between the new
+computing engine and NumPy or numexpr, you can find:
+
+* Support for ndarrays that can be compressed and stored in-memory, on-disk
+  or `on the network <https://github.com/ironArray/Caterva2>`_.
 * Can perform many kind of math expressions, including reductions, indexing,
   filters and more.
-* Support for NumPy ufunc mechanism, allowing to mix and match NumPy and
-  Blosc2 computations.
-* Excellent integration with Numba and Cython via User Defined Functions.
-* Support for broadcasting operations. This is a powerful feature that
-  allows to perform operations on arrays of different shapes.
+* Support for broadcasting operations. Allows to perform operations on arrays
+  of different shapes.
 * Much better adherence to the NumPy casting rules than numexpr.
-* Lazy expressions that are computed only when needed, and can be stored for
-  later use.
-* Persistent reductions that can be updated incrementally.
+* Persistent reductions where ndarrays that can be updated incrementally.
 * Support for proxies that allow to work with compressed data on local or
   remote machines.
-
-Currently Python-Blosc2 already reproduces the API of
-`Python-Blosc <https://github.com/Blosc/python-blosc>`_, so it can be
-used as a drop-in replacement.  However, there are a `few exceptions
-for a full compatibility.
-<https://github.com/Blosc/python-blosc2/blob/main/RELEASE_NOTES.md#changes-from-python-blosc-to-python-blosc2>`_
-
-In addition, Python-Blosc2 aims to leverage the new C-Blosc2 API so as to support
-super-chunks, multi-dimensional arrays
-(`NDArray <https://www.blosc.org/python-blosc2/reference/ndarray_api.html>`_),
-serialization and other bells and whistles introduced in C-Blosc2.  Although
-this is always and endless process, we have already catch up with most of the
-C-Blosc2 API capabilities.
-
-**Note:** Python-Blosc2 is meant to be backward compatible with Python-Blosc data.
-That means that it can read data generated with Python-Blosc, but the opposite
-is not true (i.e. there is no *forward* compatibility).
 
 The main data container objects in Python-Blosc2 are:
 
@@ -138,3 +127,76 @@ is useful <https://www.youtube.com/watch?v=LvP9zxMGBng>`_:
   :width: 50%
   :alt: Slicing a dataset in pineapple-style
   :target: https://www.youtube.com/watch?v=LvP9zxMGBng
+
+Operating with NDArrays
+-----------------------
+
+The ``NDArray`` objects are easy to work with in Python-Blosc2.
+Here it is a simple example:
+
+.. code-block:: python
+
+    import blosc2
+
+    N = 20_000  # for small scenario
+    # N = 50_000 # for large scenario
+    a = blosc2.linspace(0, 1, N * N).reshape(N, N)
+    b = blosc2.linspace(1, 2, N * N).reshape(N, N)
+    c = blosc2.linspace(-10, 10, N * N).reshape(N, N)
+    # Expression
+    expr = ((a**3 + blosc2.sin(c * 2)) < b) & (c > 0)
+
+    # Evaluate and get a NDArray as result
+    out = expr.compute()
+    print(out.info)
+
+As you can see, the ``NDArray`` instances are very similar to NumPy arrays,
+but behind the scenes, they store compressed data that can be processed
+efficiently using the new computing engine included in Python-Blosc2.
+
+To wet your appetite, here is the performance (measured on a modern desktop machine)
+that you can achieve when the operands in the expression above fit comfortably in memory
+(20_000 x 20_000):
+
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-expr.png?raw=true
+  :width: 90%
+  :alt: Performance when operands fit in-memory
+
+In this case, the performance is somewhat below that of top-tier libraries like
+Numexpr, but still quite good, specially when compared with plain NumPy.  For
+these short benchmarks, numba normally loses because its relatively large
+compiling overhead cannot be amortized.
+
+One important point is that the memory consumption when using the ``LazyArray.compute()``
+method is pretty low (does not exceed 100 MB) because the output is an ``NDArray`` object,
+which is compressed by default.  On the other hand, the ``LazyArray.__getitem__()`` method
+returns an actual NumPy array and hence takes about 400 MB of memory (the 20_000 x 20_000
+array of booleans), so using it is not recommended for large datasets, (although it may
+still be convenient for small outputs, and most specially slices).
+
+Another point is that, when using the Blosc2 engine, computation with compression is
+actually faster than without it (not by a large margin, but still).  To understand why,
+you may want to read `this paper <https://www.blosc.org/docs/StarvingCPUs-CISE-2010.pdf>`_.
+
+And here it is the performance when the operands and result (50_000 x 50_000) barely fit in memory
+(a machine with 64 GB of RAM, for a working set of 60 GB):
+
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-expr-large.png?raw=true
+  :width: 90%
+  :alt: Performance when operands do not fit well in-memory
+
+In this latter case, the memory consumption figures do not seem extreme; this
+is because the displayed values represent *actual* memory consumption *during*
+the computation, and not virtual memory; in addition, the resulting array is
+boolean, so it does not take too much space to store (just 2.4 GB uncompressed).
+
+In this later scenario, the performance compared to Numexpr or Numba is quite
+competitive, and actually faster than those.  This is because the Blosc2
+compute engine is is able to perform the computation streaming over the
+compressed chunks and blocks, for a better use of the memory and CPU caches.
+
+You can find the notebooks for these benchmarks at:
+
+https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr.ipynb
+
+https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr-large.ipynb
