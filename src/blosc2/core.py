@@ -8,9 +8,11 @@
 # Avoid checking the name of type annotations at run time
 from __future__ import annotations
 
+import contextlib
 import copy
 import ctypes
 import ctypes.util
+import json
 import math
 import os
 import pathlib
@@ -18,6 +20,7 @@ import pickle
 import platform
 import sys
 from dataclasses import asdict
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 import cpuinfo
@@ -1149,7 +1152,7 @@ def linux_cache_size(cache_level: int, default_size: int) -> int:
     return cache_size
 
 
-def get_cpu_info():
+def _get_cpu_info():
     cpu_info = cpuinfo.get_cpu_info()
     # cpuinfo does not correctly retrieve the cache sizes for Apple Silicon, so do it manually
     if platform.system() == "Darwin":
@@ -1165,6 +1168,32 @@ def get_cpu_info():
         l3_cache_size = cpu_info.get("l3_cache_size", 1024 * 1024)
         cpu_info["l3_cache_size"] = linux_cache_size(3, l3_cache_size)
     return cpu_info
+
+
+def write_cached_cpu_info(cpu_info_dict: dict[str, any]) -> None:
+    with open(pathlib.Path.home() / ".blosc2-cpuinfo.json", "w") as f:
+        json.dump(cpu_info_dict, f, indent=4)
+
+
+def read_cached_cpu_info() -> dict:
+    try:
+        with open(pathlib.Path.home() / ".blosc2-cpuinfo.json") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+@lru_cache(maxsize=1)
+def get_cpu_info() -> dict:
+    cached_info = read_cached_cpu_info()
+    if cached_info:
+        return cached_info
+
+    cpu_info_dict = _get_cpu_info()
+    with contextlib.suppress(OSError):
+        # In case cpu info cannot be stored, will need to be recomputed in the next process
+        write_cached_cpu_info(cpu_info_dict)
+    return cpu_info_dict
 
 
 def get_blocksize() -> int:
