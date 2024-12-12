@@ -8,6 +8,7 @@
 # Avoid checking the name of type annotations at run time
 from __future__ import annotations
 
+import contextlib
 import copy
 import ctypes
 import ctypes.util
@@ -22,7 +23,6 @@ from dataclasses import asdict
 from functools import lru_cache
 from typing import TYPE_CHECKING
 
-import cpuinfo
 import numpy as np
 
 import blosc2
@@ -1152,13 +1152,13 @@ def linux_cache_size(cache_level: int, default_size: int) -> int:
 
 
 def write_cached_cpu_info(cpu_info_dict: dict[str, any]) -> None:
-    with open(Path.home() / '.blosc2-cpuinfo.json', 'w') as f:
+    with open(pathlib.Path.home() / ".blosc2-cpuinfo.json", "w") as f:
         json.dump(cpu_info_dict, f, indent=4)
 
 
 def read_cached_cpu_info() -> dict:
     try:
-        with open(Path.home() / '.blosc2-cpuinfo.json', 'r') as f:
+        with open(pathlib.Path.home() / ".blosc2-cpuinfo.json") as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
@@ -1175,12 +1175,9 @@ def get_cpu_info() -> dict:
     except ImportError:
         return {}
     cpu_info_dict = cpuinfo.get_cpu_info()
-    try:
+    with contextlib.suppress(OSError):
+        # In case cpu info cannot be stored, will need to be recomputed in the next process
         write_cached_cpu_info(cpu_info_dict)
-    except IOError:
-        # cpu info cannot be stored.
-        # will need to be recomputed in the next process
-        pass
     return cpu_info_dict
 
 
