@@ -11,11 +11,19 @@ library that has been around for more than a decade, and that is been used
 by many projects, including `PyTables <https://www.pytables.org/>`_ or
 `Zarr <https://zarr.readthedocs.io/en/stable/>`_.
 
-Python-Blosc2 is Python wrapper that exposes the C-Blosc2 API, *plus* a
-compute engine that allow it to work transparently with NumPy arrays,
-while performing advanced computations on compressed data that
-can be stored either in-memory, on-disk or on the network (via the
-`Caterva2 library <https://github.com/ironArray/Caterva2>`_).
+Python-Blosc2 is Python wrapper that exposes the C-Blosc2 API, *plus* an
+integrated compute engine. This allows to perform complex calculations on
+compressed data in a way that operands do not need to be in-memory, but can be
+stored on disk or on `the network <https://github.com/ironArray/Caterva2>`_.
+This makes possible to work with data no matter how large it is, and that
+can be stored in a distributed fashion.
+
+Most importantly, Python-Blosc2 uses the `C-Blosc2 simple and open format
+<https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_ for storing
+compressed data, making it easy to integrate with other systems and tools.
+
+Interacting with the ecosystem
+==============================
 
 Python-Blosc2 makes special emphasis on interacting well with existing
 libraries and tools. In particular, it provides:
@@ -42,6 +50,9 @@ computing engine and NumPy or numexpr, you can find:
 * Persistent reductions where ndarrays that can be updated incrementally.
 * Support for proxies that allow to work with compressed data on local or
   remote machines.
+
+Data containers
+===============
 
 The main data container objects in Python-Blosc2 are:
 
@@ -129,7 +140,7 @@ is useful <https://www.youtube.com/watch?v=LvP9zxMGBng>`_:
   :target: https://www.youtube.com/watch?v=LvP9zxMGBng
 
 Operating with NDArrays
------------------------
+=======================
 
 The ``NDArray`` objects are easy to work with in Python-Blosc2.
 Here it is a simple example:

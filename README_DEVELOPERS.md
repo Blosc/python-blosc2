@@ -1,6 +1,6 @@
 # Requirements for developers
 
-We are using Black as code formatter and Ruff as a linter.  These are automatically enforced
+We are using Ruff as code formatter and as a linter.  It is automatically enforced
 if you activate these as plugins for [pre-commit](https://pre-commit.com).  You can activate
 the pre-commit actions by following the [instructions](https://pre-commit.com/#installation).
 As the config files are already there, this essentially boils down to:
@@ -11,6 +11,18 @@ As the config files are already there, this essentially boils down to:
 ```
 
 You are done!
+
+## Building from sources
+
+``python-blosc2`` includes the C-Blosc2 source code and can be built in place:
+
+``` bash
+    git clone https://github.com/Blosc/python-blosc2/
+    cd python-blosc2
+    pip install .   # add -e for editable mode
+```
+
+That's it! You can now proceed to the testing section.
 
 ## Testing
 

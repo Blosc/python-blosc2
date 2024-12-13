@@ -7,7 +7,7 @@ Pip
 
 .. code-block::
 
-    python -m pip install blosc2 --upgrade
+    pip install blosc2 --upgrade
 
 Conda
 +++++
@@ -35,7 +35,7 @@ running the tests:
 
 .. code-block:: console
 
-    python -m pytest  # add -v for verbose mode
+    pytest  # add -v for verbose mode
 
 Benchmarking
 ------------
