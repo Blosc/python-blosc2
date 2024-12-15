@@ -27,7 +27,8 @@ html_css_files = [
     "css/custom.css",
 ]
 html_logo = "_static/blosc-logo_256.png"
-html_favicon = "_static/blosc-logo_128.png"
+# Just use the favicon from the parent project
+# html_favicon = "_static/blosc-logo_128.png"
 html_theme_options = {
     "logo": {
         "link": "/index",
@@ -35,8 +36,7 @@ html_theme_options = {
     },
     "external_links": [
         {"name": "C-Blosc2", "url": "/c-blosc2/c-blosc2.html"},
-        {"name": "Python-Blosc", "url": "/python-blosc/python-blosc.html"},
-        {"name": "Blosc In Depth", "url": "/pages/blosc-in-depth/"},
+        {"name": "Python-Blosc2", "url": "/python-blosc/python-blosc2/"},
         {"name": "Donate to Blosc", "url": "/pages/donate/"},
     ],
     "github_url": "https://github.com/Blosc/python-blosc2",

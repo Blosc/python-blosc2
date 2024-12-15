@@ -46,7 +46,7 @@
 
     ---
 
-    **Streamlined format**
+    **Uncomplicated format**
 
     `Blosc2's format <https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_, with specs taking less than 4000 words, makes it easy to integrate with other systems and tools.
 
@@ -62,6 +62,14 @@
 
     Leverages multi-level CPU caches, `enhancing data access <https://www.blosc.org/posts/blosc2-ndim-intro/>`_ and `performance <https://www.blosc.org/posts/ndim-reductions/>`_ for modern multi-core processors.
 
+.. panels::
+    :card: intro-card text-center no-border
+    :column: col-lg-4 col-md-6 col-sm-12 mb-4 offset-lg-4 offset-md-3
+    :container: + gap-3
+
+    **Sparse arrays**
+
+    For `efficient storage <https://www.blosc.org/docs/Exploring-MilkyWay-SciPy2023.pdf>`_ and `data manipulation <https://www.blosc.org/docs/Exploring-MilkyWay-SciPy2023-paper.pdf>`_ with many zero values.
 
 .. raw:: html
 
