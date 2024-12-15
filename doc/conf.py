@@ -29,6 +29,7 @@ html_css_files = [
 html_logo = "_static/blosc-logo_256.png"
 # Just use the favicon from the parent project
 # html_favicon = "_static/blosc-logo_128.png"
+html_favicon = "_static/blosc-favicon_64x64.png"
 html_theme_options = {
     "logo": {
         "link": "/index",
