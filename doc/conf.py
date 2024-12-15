@@ -37,7 +37,7 @@ html_theme_options = {
     },
     "external_links": [
         {"name": "C-Blosc2", "url": "/c-blosc2/c-blosc2.html"},
-        {"name": "Python-Blosc2", "url": "/python-blosc/python-blosc2/"},
+        {"name": "Python-Blosc2", "url": "/python-blosc2/"},
         {"name": "Donate to Blosc", "url": "/pages/donate/"},
     ],
     "github_url": "https://github.com/Blosc/python-blosc2",
