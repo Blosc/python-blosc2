@@ -108,7 +108,7 @@ This is the main change in the API that is not backward compatible with previous
 ## Changes from 3.0.0-beta.3 to 3.0.0-beta.4
 
 * Many new examples in the documentation.  Now, the documentation is more complete and has a better structure.
- Have a look at our new docs at: https://www.blosc.org/python-blosc2/index.html
+ Have a look at our new docs at: https://www.blosc.org/python-blosc2/
  For a guide on using UDFs, check out: https://www.blosc.org/python-blosc2/reference/autofiles/lazyarray/blosc2.lazyudf.html
  If interested in asynchronously fetching parts of an array, take a look at: https://www.blosc.org/python-blosc2/reference/autofiles/proxy/blosc2.Proxy.afetch.html
  Finally, there is a new tutorial on optimizing reductions in large NDArray objects: https://www.blosc.org/python-blosc2/getting_started/tutorials/04.reductions.html
@@ -123,7 +123,7 @@ This is the main change in the API that is not backward compatible with previous
 
 ## Changes from 3.0.0-beta.1 to 3.0.0-beta.3
 
-* Revamped documentation.  Now, the documentation is more complete and has a better structure. See [here](https://www.blosc.org/python-blosc2/index.html).  Thanks to Oumaima Ech Chdig (@omaech), our newcomer to the Blosc team.  Also, thanks to NumFOCUS for the support in this task.
+* Revamped documentation.  Now, the documentation is more complete and has a better structure. See [here](https://www.blosc.org/python-blosc2/).  Thanks to Oumaima Ech Chdig (@omaech), our newcomer to the Blosc team.  Also, thanks to NumFOCUS for the support in this task.
 
 * New `Proxy` class to access other arrays, while providing caching. This is useful for example when you have a big array, and you want to access a small part of it, but you want to cache the accessed data for later use.  See [its doc](https://www.blosc.org/python-blosc2/reference/proxy.html).
 
