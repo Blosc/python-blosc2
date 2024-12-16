@@ -69,7 +69,7 @@ jobs:
       - name: Upload wheels
         uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.runs-on }}
+          name: wheels-${{ matrix.os }}-${{ matrix.arch }}-${{ matrix.p_ver }}
           path: ./wheelhouse/*.whl
 
 
