@@ -19,6 +19,7 @@ extensions = [
     "sphinx_paramlinks",
     "sphinx_panels",
     "nbsphinx",
+    "IPython.sphinxext.ipython_console_highlighting",
 ]
 source_suffix = [".rst", ".md"]
 html_theme = "pydata_sphinx_theme"
@@ -35,15 +36,31 @@ html_theme_options = {
         "link": "/index",
         "alt_text": "Blosc",
     },
+    "icon_links": [
+        {
+            "name": "GitHub",
+            "url": "https://github.com/Blosc/python-blosc2",
+            "icon": "fab fa-github-square",
+        },
+        {
+            "name": "Mastodon",
+            "url": "https://fosstodon.org/@Blosc2",
+            "icon": "fab fa-mastodon",
+        },
+        {
+            "name": "Bluesky",
+            "url": "https://bsky.app/profile/blosc.org",
+            "icon": "fas fa-cloud-sun",
+        },
+    ],
     "external_links": [
         {"name": "C-Blosc2", "url": "/c-blosc2/c-blosc2.html"},
         {"name": "Python-Blosc2", "url": "/python-blosc2/"},
         {"name": "Donate to Blosc", "url": "/pages/donate/"},
     ],
-    "github_url": "https://github.com/Blosc/python-blosc2",
-    "mastodon_url": "https://fosstodon.org/@Blosc2",
-    "bluesky_url": "https://bsky.app/profile/blosc.org",
 }
+
+exclude_patterns = ["_build", ".DS_Store", "**.ipynb_checkpoints"]
 
 html_show_sourcelink = False
 
