@@ -169,7 +169,7 @@ To wet your appetite, here is the performance (measured on a modern desktop mach
 that you can achieve when the operands in the expression above fit comfortably in memory
 (20_000 x 20_000):
 
-.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-small-dask.png?raw=true
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-dask-small.png?raw=true
   :width: 90%
   :alt: Performance when operands comfortably fit in-memory
 
@@ -194,7 +194,7 @@ And here it is the performance when the operands and result (70,000 x 70,000) ca
 fit in memory in an uncompressed form (a machine with 64 GB of RAM, for a working set
 of 115 GB, uncompressed):
 
-.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-large-dask.png?raw=true
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-dask-large.png?raw=true
   :width: 90%
   :alt: Performance when operands do not fit in memory (uncompressed)
 
