@@ -62,7 +62,7 @@ test = [
     "torch",
 ]
 doc = [
-    "sphinx",
+    "sphinx>=8",
     "pydata-sphinx-theme",
     "numpydoc",
     "myst-parser",

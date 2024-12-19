@@ -170,7 +170,7 @@ that you can achieve when the operands in the expression above fit comfortably i
 (20_000 x 20_000):
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-dask-small.png?raw=true
-  :width: 90%
+  :width: 100%
   :alt: Performance when operands comfortably fit in-memory
 
 In this case, the performance is somewhat below that of top-tier libraries like
@@ -195,7 +195,7 @@ fit in memory in an uncompressed form (a machine with 64 GB of RAM, for a workin
 of 115 GB, uncompressed):
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-dask-large.png?raw=true
-  :width: 90%
+  :width: 100%
   :alt: Performance when operands do not fit in memory (uncompressed)
 
 In this latter case, the memory consumption figures do not seem extreme; this
