@@ -150,7 +150,7 @@ Here it is a simple example:
     import blosc2
 
     N = 20_000  # for small scenario
-    # N = 50_000 # for large scenario
+    # N = 70_000 # for large scenario
     a = blosc2.linspace(0, 1, N * N).reshape(N, N)
     b = blosc2.linspace(1, 2, N * N).reshape(N, N)
     c = blosc2.linspace(-10, 10, N * N).reshape(N, N)
@@ -169,19 +169,20 @@ To wet your appetite, here is the performance (measured on a modern desktop mach
 that you can achieve when the operands in the expression above fit comfortably in memory
 (20_000 x 20_000):
 
-.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-expr.png?raw=true
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-small-dask.png?raw=true
   :width: 90%
-  :alt: Performance when operands fit in-memory
+  :alt: Performance when operands comfortably fit in-memory
 
 In this case, the performance is somewhat below that of top-tier libraries like
 Numexpr, but still quite good, specially when compared with plain NumPy.  For
-these short benchmarks, numba normally loses because its relatively large
-compiling overhead cannot be amortized.
+these short benchmarks, Numba normally loses because its relatively large
+compiling overhead cannot be amortized. And although Dask implements a similar
+lazy evaluation mechanism, it is not as efficient as the one in Python-Blosc2.
 
 One important point is that the memory consumption when using the ``LazyArray.compute()``
 method is pretty low (does not exceed 100 MB) because the output is an ``NDArray`` object,
 which is compressed by default.  On the other hand, the ``LazyArray.__getitem__()`` method
-returns an actual NumPy array and hence takes about 400 MB of memory (the 20_000 x 20_000
+returns an actual NumPy array and hence takes about 400 MB of memory (the 20,000 x 20,000
 array of booleans), so using it is not recommended for large datasets, (although it may
 still be convenient for small outputs, and most specially slices).
 
@@ -189,25 +190,36 @@ Another point is that, when using the Blosc2 engine, computation with compressio
 actually faster than without it (not by a large margin, but still).  To understand why,
 you may want to read `this paper <https://www.blosc.org/docs/StarvingCPUs-CISE-2010.pdf>`_.
 
-And here it is the performance when the operands and result (50_000 x 50_000) barely fit in memory
-(a machine with 64 GB of RAM, for a working set of 60 GB):
+And here it is the performance when the operands and result (70,000 x 70,000) cannot
+fit in memory in an uncompressed form (a machine with 64 GB of RAM, for a working set
+of 115 GB, uncompressed):
 
-.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-expr-large.png?raw=true
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-large-dask.png?raw=true
   :width: 90%
-  :alt: Performance when operands do not fit well in-memory
+  :alt: Performance when operands do not fit in memory (uncompressed)
 
 In this latter case, the memory consumption figures do not seem extreme; this
-is because the displayed values represent *actual* memory consumption *during*
-the computation, and not virtual memory; in addition, the resulting array is
-boolean, so it does not take too much space to store (just 2.4 GB uncompressed).
+is because both Blosc2 and Dask are using compressed operands.  The only difference
+between the cases is that the ``LazyArray.__getitem__()`` and ``Dask.compute()``
+methods create an uncompressed output, which is why the memory consumption is higher.
 
-In this later scenario, the performance compared to Numexpr or Numba is quite
-competitive, and actually faster than those.  This is because the Blosc2
-compute engine is is able to perform the computation streaming over the
-compressed chunks and blocks, for a better use of the memory and CPU caches.
+Here, the performance compared to Dask is pretty competitive. Note that, when the output
+is compressed (lower plot), the memory consumption is much lower than Dask, and kept constant
+during the computation, which is testimonial of the smart use of CPU caches and memory by the
+Blosc2 engine --for example, the CPU used in the experiment has 128 MB of L3, which is very
+close to the amount of memory used by Blosc2.  This is a very important point, because
+fitting the working set in memory is not enough; you also need to
+`use caches and memory efficiently <https://purplesyringa.moe/blog/the-ram-myth>`_
+to get the best performance.
+
+Last but not least, as Blosc2 can use the Numexpr engine, if you have a MKL-enabled
+Numexpr (e.g. ``conda install numexpr mkl``), you benefit from the
+`Intel MKL <https://www.intel.com/content/www/us/en/developer/tools/oneapi/onemkl.html>`_
+library, which provides a very fast and optimized library for transcendental functions
+(among others). This is the version that has been used in the benchmarks above.
 
 You can find the notebooks for these benchmarks at:
 
-https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr.ipynb
+https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-dask-small.ipynb
 
-https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-expr-large.ipynb
+https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-dask-large.ipynb
