@@ -5,78 +5,71 @@ The Blosc development team is pleased to announce the final release for
 Python-Blosc2 3.0.0. Now, we will be producing conda(-forge) packages,
 as well as providing wheels for the most common platforms, as usual.
 
-With the new compute engine, you can think of Python-Blosc2 3.0 as a
-replacement of numexpr, but better :-)
+You can think of Python-Blosc2 3.0 as an extension of NumPy/numexpr that:
 
-We are providing binary wheels that you can easily install/upgrade from
-PyPI with:
+- Can deal with ndarrays compressed using first-class codecs & filters.
+- Performs many kind of math expressions, including reductions, indexing...
+- Supports broadcasting operations.
+- Supports NumPy ufunc mechanism: mix and match NumPy and Blosc2 computations.
+- Integrates with Numba and Cython via UDFs (User Defined Functions).
+- Adheres to modern NumPy casting rules way better than numexpr.
+- Computes expressions only when needed. They can also be stored for later use.
 
-    pip install blosc2 --upgrade
+Install it with::
 
-For conda:
-
-    conda install -c conda-forge python-blosc2
+    pip install blosc2==3.0.0   # if you prefer wheels
+    conda install -c conda-forge python-blosc2 mkl  # if you prefer conda and MKL
 
 For more info, you can have a look at the release notes in:
 
 https://github.com/Blosc/python-blosc2/releases
 
-Docs and examples are available in the documentation site:
+Code example::
 
-https://www.blosc.org/python-blosc2
+    from time import time
+    import blosc2
+    import numpy as np
 
-What is it?
------------
+    # Create some data operands
+    N = 20_000
+    a = blosc2.linspace(0, 1, N * N, dtype="float32", shape=(N, N))
+    b = blosc2.linspace(1, 2, N * N, shape=(N, N))
+    c = blosc2.linspace(-10, 10, N)  # broadcasting is supported
 
-`C-Blosc2 <https://github.com/Blosc/c-blosc2>`_ is a blocking, shuffling and
-lossless compression library meant for numerical data written in C.  Blosc2
-is the next generation of Blosc, an
-`award-winning <https://www.blosc.org/posts/prize-push-Blosc2/>`_
-library that has been around for more than a decade.
+    # Expression
+    t0 = time()
+    expr = ((a**3 + blosc2.sin(c * 2)) < b) & (c > 0)
+    print(f"Time to create expression: {time()-t0:.5f}")
 
-On top of C-Blosc2 we built Python-Blosc2, a Python wrapper that exposes the
-C-Blosc2 API, plus many extensions that allow it to work transparently with
-NumPy arrays, while performing advanced computations on compressed data that
-can be stored either in-memory, on-disk or on the network (via the
-`Caterva2 library <https://github.com/ironArray/Caterva2>`_).
+    # Evaluate while reducing (yep, reductions are in) along axis 1
+    t0 = time()
+    out = blosc2.sum(expr, axis=1)
+    t1 = time() - t0
+    print(f"Time to compute with Blosc2: {t1:.5f}")
 
-Python-Blosc2 leverages both NumPy and numexpr for achieving great performance,
-but with a twist. Among the main differences between the new computing engine
-and NumPy or numexpr, you can find:
+    # Evaluate using NumPy
+    na, nb, nc = a[:], b[:], c[:]
+    t0 = time()
+    nout = np.sum(((na**3 + np.sin(nc * 2)) < nb) & (nc > 0), axis=1)
+    t2 = time() - t0
+    print(f"Time to compute with NumPy: {t2:.5f}")
+    print(f"Speedup: {t2/t1:.2f}x")
 
-* Support for n-dim arrays that are compressed in-memory, on-disk or on the
-  network.
-* High performance compression codecs, for integer, floating point, complex
-  booleans, string and structured data.
-* Can perform many kind of math expressions, including reductions, indexing,
-  filters and more.
-* Support for NumPy ufunc mechanism, allowing to mix and match NumPy and
-  Blosc2 computations.
-* Excellent integration with Numba and Cython via User Defined Functions.
-* Support for broadcasting operations. This is a powerful feature that
-  allows to perform operations on arrays of different shapes.
-* Much better adherence to the NumPy casting rules than numexpr.
-* Lazy expressions that are computed only when needed, and can be stored for
-  later use.
-* Persistent reductions that can be updated incrementally.
-* Support for proxies that allow to work with compressed data on local or
-  remote machines.
+    assert np.all(out == nout)
+    print("All results are equal!")
 
-You can read some of our tutorials on how to perform advanced computations at:
 
-https://www.blosc.org/python-blosc2/getting_started/tutorials
+This will output something like (using an Intel i9-13900X CPU here)::
 
-As well as the full documentation at:
+    Time to create expression: 0.00033
+    Time to compute with Blosc2: 0.46387
+    Time to compute with NumPy: 2.57469
+    Speedup: 5.55x
+    All results are equal!
 
-https://www.blosc.org/python-blosc2
+See a more in-depth example, explaining why Python-Blosc2 is so fast, at:
 
-Finally, Python-Blosc2 aims to leverage the full C-Blosc2 functionality to
-support a wide range of compression and decompression needs, including
-metadata, serialization and other bells and whistles.
-
-**Note:** Blosc2 is meant to be backward compatible with Blosc(1) data.
-That means that it can read data generated with Blosc, but the opposite
-is not true (i.e. there is no *forward* compatibility).
+https://www.blosc.org/python-blosc2/getting_started/overview.html#operating-with-ndarrays
 
 Sources repository
 ------------------
@@ -92,9 +85,10 @@ for details.
 Mastodon feed
 -------------
 
-Please follow https://fosstodon.org/@Blosc2 to get informed about the latest
+Follow https://fosstodon.org/@Blosc2 to get informed about the latest
 developments.
 
+Enjoy!
 
 - Blosc Development Team
   Compress better, compute bigger
