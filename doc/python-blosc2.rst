@@ -25,18 +25,18 @@
 
 .. panels::
     :card: intro-card text-center no-border
-    :column: col-lg-4 col-md-6 col-sm-12 mb-4
+    :column: col-lg-4 col-md-6 col-sm-12 mb-4 d-flex
     :container: + gap-3
-
-    **N-dim & compressed arrays**
-
-    `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/01.ndarray-basics.html>`_ allow for efficient storage and manipulation of N-dim data, making it easy to work with large datasets.
-
-    ---
 
     **Excellent compression**
 
-    Combines `advanced codecs and filters <https://www.blosc.org/posts/bytedelta-enhance-compression-toolset/>`_ for efficient compression, reducing storage space while maintaining high performance.
+    `Combine advanced codecs and filters <https://blosc.org/docs/LEAPS-INNOV_WP7_D74_v1.pdf>`_ for efficient `lossless <https://www.blosc.org/posts/bytedelta-enhance-compression-toolset/>`_ and `lossy <https://www.blosc.org/posts/blosc2-lossy-compression/>`_ compression, reducing storage space while keeping high performance.
+
+    ---
+
+    **Compressed NDArrays**
+
+    `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/01.ndarray-basics.html>`_ allow for efficient storage and manipulation of arbitrarily large N-dim datasets. A `C-API <https://www.blosc.org/posts/blosc2-ndim-intro/>`_ is also available.
 
     ---
 
@@ -46,30 +46,31 @@
 
     ---
 
-    **Uncomplicated format**
+    **Support for sparse data**
 
-    `Blosc2's format <https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_, with specs taking less than 4000 words, makes it easy to integrate with other systems and tools.
+    For `efficient storage <https://www.blosc.org/docs/Exploring-MilkyWay-SciPy2023.pdf>`_ and `manipulation <https://www.blosc.org/docs/Exploring-MilkyWay-SciPy2023-paper.pdf>`_ of data with many zero values.
 
     ---
 
     **Flexible storage**
 
-    Can store data in `memory, disk <https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/01.ndarray-basics.ipynb>`_, or `network <https://ironarray.io/caterva2>`_, adapting to your needs and facilitates integration into various systems.
+    Can transparently store data in `memory, disk <https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/01.ndarray-basics.ipynb>`_, or `the network <https://ironarray.io/caterva2>`_. `Memory-mapped files <https://www.blosc.org/python-blosc2/reference/autofiles/storage/blosc2.Storage.html#blosc2.Storage>`_ are also supported.
 
     ---
 
     **Two-level partitions**
 
-    Leverages multi-level CPU caches, `enhancing data access <https://www.blosc.org/posts/blosc2-ndim-intro/>`_ and `performance <https://www.blosc.org/posts/ndim-reductions/>`_ for modern multi-core processors.
+    Leverages multi-level CPU caches, enhancing `data access <https://www.blosc.org/posts/blosc2-ndim-intro/>`_ and `compute performance <https://www.blosc.org/posts/ndim-reductions/>`_ for modern multi-core processors.
 
 .. panels::
     :card: intro-card text-center no-border
-    :column: col-lg-4 col-md-6 col-sm-12 mb-4 offset-lg-4 offset-md-3
+    :column: col-lg-4 col-md-6 col-sm-12 mb-4 offset-lg-4 offset-md-3 d-flex
     :container: + gap-3
 
-    **Sparse arrays**
+    **Uncomplicated format**
 
-    For `efficient storage <https://www.blosc.org/docs/Exploring-MilkyWay-SciPy2023.pdf>`_ and `data manipulation <https://www.blosc.org/docs/Exploring-MilkyWay-SciPy2023-paper.pdf>`_ with many zero values.
+    `Blosc2's format <https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_, with specs taking less than 4000 words, makes it easy to read and integrate with other systems and tools.
+
 
 .. raw:: html
 
