@@ -3185,10 +3185,6 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, c
         # C order is guaranteed, and no reshape is needed
         return lazyarr.compute(**kwargs)
 
-    if len(shape) == 1:
-        # C order is guaranteed, and no reshape is needed
-        return lazyarr.compute(**kwargs)
-
     # In principle, when c_order is False, the intermediate array wouldn't be needed,
     # but this is faster; see arange() for more details.
     larr = lazyarr.compute()  # intermediate array
