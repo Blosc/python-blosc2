@@ -1597,12 +1597,13 @@ def fuse_operands(operands1, operands2):
     new_operands = {}
     dup_operands = {}
     new_pos = len(operands1)
+    operand_to_key = {id(v): k for k, v in operands1.items()}
     for k2, v2 in operands2.items():
         try:
-            k1 = list(operands1.keys())[list(operands1.values()).index(v2)]
+            k1 = operand_to_key[id(v2)]
             # The operand is duplicated; keep track of it
             dup_operands[k2] = k1
-        except ValueError:
+        except KeyError:
             # The value is not among operands1, so rebase it
             new_op = f"o{new_pos}"
             new_pos += 1
@@ -1799,9 +1800,10 @@ class LazyExpr(LazyArray):
             elif hasattr(value2, "shape") and value2.shape == ():
                 expression = f"({self.expression} {op} {value2[()]})"
             else:
+                operand_to_key = {id(v): k for k, v in value1.operands.items()}
                 try:
-                    op_name = list(value1.operands.keys())[list(value1.operands.values()).index(value2)]
-                except ValueError:
+                    op_name = operand_to_key[id(value2)]
+                except KeyError:
                     op_name = f"o{len(self.operands)}"
                     new_operands = {op_name: value2}
                 expression = f"({self.expression} {op} {op_name})"
@@ -1812,9 +1814,10 @@ class LazyExpr(LazyArray):
             elif hasattr(value1, "shape") and value1.shape == ():
                 expression = f"({value1[()]} {op} {self.expression})"
             else:
+                operand_to_key = {id(v): k for k, v in value2.operands.items()}
                 try:
-                    op_name = list(value2.operands.keys())[list(value2.operands.values()).index(value1)]
-                except ValueError:
+                    op_name = operand_to_key[id(value1)]
+                except KeyError:
                     op_name = f"o{len(value2.operands)}"
                     new_operands = {op_name: value1}
                 if op == "[]":  # syntactic sugar for slicing
