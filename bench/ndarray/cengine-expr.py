@@ -3,7 +3,7 @@ import blosc2
 import numpy as np
 
 # Create some data operands
-N = 5_000
+N = 20_000   # working size of 6 GB
 chunks = (100, N)
 blocks = (1, N)
 chunks, blocks= None, None
