@@ -1315,7 +1315,7 @@ def compute_partition(nitems, maxshape, minpart=None):
 
 
 def compute_chunks_blocks(  # noqa: C901
-    shape: tuple[int] | list,
+    shape: tuple | list,
     chunks: tuple | list | None = None,
     blocks: tuple | list | None = None,
     dtype: np.dtype = np.uint8,
@@ -1376,6 +1376,8 @@ def compute_chunks_blocks(  # noqa: C901
         return chunks, blocks
 
     cparams = kwargs.get("cparams") or copy.deepcopy(blosc2.cparams_dflts)
+    if isinstance(cparams, blosc2.CParams):
+        cparams = asdict(cparams)
     # Typesize in dtype always has preference over typesize in cparams
     itemsize = cparams["typesize"] = np.dtype(dtype).itemsize
 

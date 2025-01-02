@@ -3511,6 +3511,7 @@ def _check_ndarray_kwargs(**kwargs):  # noqa: C901
         "mmap_mode",
         "initial_mapping_size",
         "storage",
+        "out",
     ]
     for key in kwargs:
         if key not in supported_keys:

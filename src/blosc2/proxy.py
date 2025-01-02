@@ -532,3 +532,102 @@ class ProxyNDField(blosc2.Operand):
         # Get the data and return the corresponding field
         nparr = self.proxy[item]
         return nparr[self.field]
+
+
+class SimpleProxy(blosc2.Operand):
+    """
+    Simple proxy for a NumPy array (or similar) that can be used with the Blosc2 compute engine.
+
+    This only supports the __getitem__ method. No caching is performed.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> a = np.arange(20, dtype=np.float32).reshape(4, 5)
+    >>> proxy = blosc2.SimpleProxy(a)
+    >>> proxy[1:3, 2:4]
+    [[ 7.  8.]
+     [12. 13.]]
+    """
+
+    def __init__(self, src, chunks: tuple | None = None, blocks: tuple | None = None):
+        if not hasattr(src, "shape") or not hasattr(src, "dtype"):
+            # If the source is not a NumPy array, convert it to one
+            src = np.asarray(src)
+        self.src = src
+        self.dtype = src.dtype
+        self.shape = src.shape
+        # Compute reasonable values for chunks and blocks
+        cparams = blosc2.CParams(clevel=0)
+        self.chunks, self.blocks = blosc2.compute_chunks_blocks(
+            self.shape, chunks, blocks, self.dtype, **{"cparams": cparams}
+        )
+
+    def __getitem__(self, item: slice | list[slice]) -> np.ndarray:
+        """
+        Get a slice as a numpy.ndarray using the :ref:`ProxyNumPy`.
+
+        Parameters
+        ----------
+        item
+
+        Returns
+        -------
+        out: numpy.ndarray
+            An array with the data slice.
+        """
+        return self.src[item]
+
+
+def cengine(func: callable) -> callable:
+    """
+    Wrap a function so that it can be used with the Blosc2 compute engine.
+
+    The output of the function should be a NumPy array or a scalar, and the
+    input can be any combination of NumPy arrays and scalars. The function
+    will be called with the NumPy arrays replaced by :ref:`SimpleProxy` objects,
+    which will allow the compute engine to cache the results of the function.
+
+    **Note**: Although many NumPy functions are supported, some may not be
+    implemented yet. If you find a function that is not supported, please
+    open an issue.
+
+    Parameters
+    ----------
+    func
+
+    Returns
+    -------
+    wrapper
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> @blosc2.cengine
+    >>> def compute_expression(a, b, c):
+    >>>     np.sum(((a ** 3 + np.sin(a * 2)) > 2 * c) & (b > 0), axis=1)
+    >>> a = np.arange(20, dtype=np.float32).reshape(4, 5)
+    >>> b = np.arange(20).reshape(4, 5)
+    >>> c = np.arange(5)
+    >>> compute_expression(a, b, c)
+    [3. 5. 5. 5.]
+    """
+
+    def wrapper(*args, **kwargs):
+        new_args = []
+        for arg in args:
+            if issubclass(type(arg), blosc2.Operand):
+                new_args.append(arg)
+            else:
+                new_args.append(SimpleProxy(arg, **kwargs))
+        val = func(*new_args, **kwargs)
+        # Always return NumPy array(s)
+        if isinstance(val, tuple):
+            return tuple([v[:] if not isinstance(v, np.ndarray) else v for v in val])
+        elif not isinstance(val, np.ndarray):
+            return val[:]
+        return val
+
+    return wrapper
