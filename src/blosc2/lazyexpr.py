@@ -1357,10 +1357,11 @@ def reduce_slices(  # noqa: C901
         #     (isinstance(value, blosc2.NDArray) and value.shape != () and value.schunk.urlpath is not None)
         #     for value in operands.values()
         # )
-        # iter_disk = all_ndarray and any_persisted
+        iter_disk = all_ndarray and any_persisted
         # Experiments say that iter_disk is faster than the regular path for reductions
         # even when all operands are in memory, so no need to check any_persisted
-        iter_disk = all_ndarray
+        # New benchs are saying the contrary (> 10% slower), so this needs more investigation
+        # iter_disk = all_ndarray
         aligned = blosc2.are_partitions_aligned(shape, chunks, operand.blocks)
 
     # Iterate over the operands and get the chunks
