@@ -1253,10 +1253,11 @@ def get_chunksize(blocksize, l3_minimum=2**20, l3_maximum=2**26):
     if isinstance(l2_cache_size, int) and l2_cache_size > chunksize:
         chunksize = l2_cache_size
 
-    # When evaluating expressions, it is convenient to keep chunks for all operands in L3 cache,
-    # so let's divide by 4 (3 operands + result is a typical situation for moderately complex
-    # expressions)
-    chunksize //= 4
+    # When computing expressions on Intel arch, it is convenient to keep chunks for all operands
+    # in L3 cache, so let's divide by 4 (3 operands + result is a typical situation for moderately
+    # complex expressions)
+    if platform.machine() == "x86_64":
+        chunksize //= 4
 
     # Ensure a minimum size
     if chunksize < l3_minimum:
@@ -1407,8 +1408,8 @@ def compute_chunks_blocks(  # noqa: C901
             # For modern Intel/AMD archs, experiments say to use half of the L2 cache size
             max_blocksize = blosc2.cpu_info["l2_cache_size"] // 2
         elif platform.system() == "Darwin" and "arm" in platform.machine():
-            # For Apple Silicon, experiments say to use half of the L1 cache size
-            max_blocksize = blosc2.cpu_info["l1_data_cache_size"] // 2
+            # For Apple Silicon, experiments say we can use the full L1 data cache size
+            max_blocksize = blosc2.cpu_info["l1_data_cache_size"]
         if "clevel" in cparams and cparams["clevel"] == 0:
             # Experiments show that, when no compression is used, it is not a good idea
             # to exceed half of private cache for the blocksize because speed suffers
