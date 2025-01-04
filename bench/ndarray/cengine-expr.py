@@ -9,6 +9,10 @@ chunks = (100, N)
 blocks = (1, N)
 chunks, blocks= None, None
 cparams = blosc2.CParams(clevel=1, codec=blosc2.Codec.LZ4)
+# Lossy compression
+# filters = [blosc2.Filter.TRUNC_PREC, blosc2.Filter.SHUFFLE]
+# filters_meta = [8, 0]  # keep 8 bits of precision in mantissa
+# cparams = blosc2.CParams(clevel=1, codec=blosc2.Codec.LZ4, filters=filters, filters_meta=filters_meta)
 
 t0 = time()
 a = blosc2.linspace(0, 1, N * N, dtype=dtype, shape=(N, N), cparams=cparams, chunks=chunks, blocks=blocks)
