@@ -1339,6 +1339,8 @@ def reduce_slices(  # noqa: C901
     # Choose the array with the largest shape as the reference for chunks
     operand = max((o for o in operands.values() if hasattr(o, "chunks")), key=lambda x: len(x.shape))
     chunks = operand.chunks
+    aligned = blosc2.are_partitions_aligned(shape, chunks, operand.blocks)
+    behaved = blosc2.are_partitions_behaved(shape, chunks, operand.blocks)
 
     # Check if the partitions are aligned (i.e. all operands have the same shape,
     # chunks and blocks, and have no padding). This will allow us to take the fast path.
@@ -1362,7 +1364,6 @@ def reduce_slices(  # noqa: C901
         # even when all operands are in memory, so no need to check any_persisted
         # New benchs are saying the contrary (> 10% slower), so this needs more investigation
         # iter_disk = all_ndarray
-        aligned = blosc2.are_partitions_aligned(shape, chunks, operand.blocks)
 
     # Iterate over the operands and get the chunks
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
@@ -1421,9 +1422,6 @@ def reduce_slices(  # noqa: C901
                     chunk_operands[key] = value[smaller_slice]
                     continue
                 if isinstance(value, blosc2.NDArray):
-                    # Check if partitions are aligned and behaved
-                    aligned = blosc2.are_partitions_aligned(shape, chunks, operand.blocks)
-                    behaved = blosc2.are_partitions_behaved(shape, chunks, operand.blocks)
                     if aligned and behaved:
                         # Decompress the whole chunk
                         buff = value.schunk.decompress_chunk(nchunk)
