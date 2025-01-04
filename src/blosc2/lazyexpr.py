@@ -1353,10 +1353,10 @@ def reduce_slices(  # noqa: C901
             isinstance(value, blosc2.NDArray) and value.shape != () for value in operands.values()
         )
         # Check that there is some NDArray that is persisted in the disk
-        # any_persisted = any(
-        #     (isinstance(value, blosc2.NDArray) and value.shape != () and value.schunk.urlpath is not None)
-        #     for value in operands.values()
-        # )
+        any_persisted = any(
+            (isinstance(value, blosc2.NDArray) and value.shape != () and value.schunk.urlpath is not None)
+            for value in operands.values()
+        )
         iter_disk = all_ndarray and any_persisted
         # Experiments say that iter_disk is faster than the regular path for reductions
         # even when all operands are in memory, so no need to check any_persisted
@@ -1420,6 +1420,16 @@ def reduce_slices(  # noqa: C901
                     smaller_slice = compute_smaller_slice(operand.shape, value.shape, slice_)
                     chunk_operands[key] = value[smaller_slice]
                     continue
+                if isinstance(value, blosc2.NDArray):
+                    # Check if partitions are aligned and behaved
+                    aligned = blosc2.are_partitions_aligned(shape, chunks, operand.blocks)
+                    behaved = blosc2.are_partitions_behaved(shape, chunks, operand.blocks)
+                    if aligned and behaved:
+                        # Decompress the whole chunk
+                        buff = value.schunk.decompress_chunk(nchunk)
+                        bsize = value.dtype.itemsize * math.prod(chunks_)
+                        chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
+                        continue
                 chunk_operands[key] = value[slice_]
 
         # Evaluate and reduce the expression using chunks of operands
