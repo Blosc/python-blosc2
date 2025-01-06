@@ -353,12 +353,13 @@ def _check_allowed_dtypes(
             | blosc2.C2Array
             | blosc2.Proxy
             | blosc2.ProxyNDField
+            | blosc2.SimpleProxy
             | np.ndarray,
         )
         or np.isscalar(value)
     ):
         raise RuntimeError(
-            "Expected LazyExpr, NDArray, NDField, C2Array, np.ndarray or scalar instances"
+            "Expected LazyExpr, NDArray, NDField, C2Array, Proxy, np.ndarray or scalar instances"
             f" and you provided a '{type(value)}' instance"
         )
 
