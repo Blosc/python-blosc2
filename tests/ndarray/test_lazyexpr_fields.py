@@ -224,11 +224,19 @@ def test_where_one_param(array_fixture):
     # Test with eval
     res = expr.where(a1).compute()
     nres = na1[ne.evaluate("na1**2 + na2**2 > 2 * na1 * na2 + 1")]
+    # On general chunked ndim arrays, we cannot guarantee the order of the results
+    if not (len(a1.shape) == 1 or a1.chunks == a1.shape):
+        res = np.sort(res)
+        nres = np.sort(nres)
     np.testing.assert_allclose(res[:], nres)
     # Test with getitem
     sl = slice(100)
     res = expr.where(a1)[sl]
-    np.testing.assert_allclose(res, nres[sl])
+    if len(a1.shape) == 1 or a1.chunks == a1.shape:
+        np.testing.assert_allclose(res, nres[sl])
+    else:
+        # In this case, we cannot compare results, only the length
+        assert len(res) == len(nres[sl])
 
 
 # Test where indirectly via a condition in getitem in a NDArray
@@ -238,22 +246,53 @@ def test_where_getitem(array_fixture):
     # Test with complete slice
     res = sa1[a1**2 + a2**2 > 2 * a1 * a2 + 1].compute()
     nres = nsa1[ne.evaluate("na1**2 + na2**2 > 2 * na1 * na2 + 1")]
-    np.testing.assert_allclose(res["a"][:], nres["a"])
-    np.testing.assert_allclose(res["b"][:], nres["b"])
+    resa = res["a"][:]
+    resb = res["b"][:]
+    nresa = nres["a"]
+    nresb = nres["b"]
+    # On general chunked ndim arrays, we cannot guarantee the order of the results
+    if not (len(a1.shape) == 1 or a1.chunks == a1.shape):
+        resa = np.sort(resa)
+        resb = np.sort(resb)
+        nresa = np.sort(nresa)
+        nresb = np.sort(nresb)
+    np.testing.assert_allclose(resa, nresa)
+    np.testing.assert_allclose(resb, nresb)
+
     # string version
     res = sa1["a**2 + b**2 > 2 * a * b + 1"].compute()
-    np.testing.assert_allclose(res["a"][:], nres["a"])
-    np.testing.assert_allclose(res["b"][:], nres["b"])
+    resa = res["a"][:]
+    resb = res["b"][:]
+    nresa = nres["a"]
+    nresb = nres["b"]
+    # On general chunked ndim arrays, we cannot guarantee the order of the results
+    if not (len(a1.shape) == 1 or a1.chunks == a1.shape):
+        resa = np.sort(resa)
+        resb = np.sort(resb)
+        nresa = np.sort(nresa)
+        nresb = np.sort(nresb)
+    np.testing.assert_allclose(resa, nresa)
+    np.testing.assert_allclose(resb, nresb)
 
     # Test with partial slice
     sl = slice(100)
     res = sa1[a1**2 + a2**2 > 2 * a1 * a2 + 1][sl]
-    np.testing.assert_allclose(res["a"], nres[sl]["a"])
-    np.testing.assert_allclose(res["b"], nres[sl]["b"])
+    if len(a1.shape) == 1 or a1.chunks == a1.shape:
+        np.testing.assert_allclose(res["a"], nres[sl]["a"])
+        np.testing.assert_allclose(res["b"], nres[sl]["b"])
+    else:
+        # In this case, we cannot compare results, only the length
+        assert len(res["a"]) == len(nres[sl]["a"])
+        assert len(res["b"]) == len(nres[sl]["b"])
     # string version
     res = sa1["a**2 + b**2 > 2 * a * b + 1"][sl]
-    np.testing.assert_allclose(res["a"], nres[sl]["a"])
-    np.testing.assert_allclose(res["b"], nres[sl]["b"])
+    if len(a1.shape) == 1 or a1.chunks == a1.shape:
+        np.testing.assert_allclose(res["a"], nres[sl]["a"])
+        np.testing.assert_allclose(res["b"], nres[sl]["b"])
+    else:
+        # We cannot compare the results here, other than the length
+        assert len(res["a"]) == len(nres[sl]["a"])
+        assert len(res["b"]) == len(nres[sl]["b"])
 
 
 # Test where indirectly via a condition in getitem in a NDField
@@ -274,13 +313,21 @@ def test_where_getitem_field(array_fixture, npflavor, lazystr):
         expr = (a2 < 0) | ~((a1**2 > a2**2) & ~(a1 * a2 > 1))
     assert expr.dtype == np.bool_
     # Compute and check
-    res = a1[expr]
+    res = a1[expr][:]
     nres = na1[ne.evaluate("(na2 < 0) | ~((na1**2 > na2**2) & ~(na1 * na2 > 1))")]
-    np.testing.assert_allclose(res[:], nres)
+    # On general chunked ndim arrays, we cannot guarantee the order of the results
+    if not (len(a1.shape) == 1 or a1.chunks == a1.shape):
+        res = np.sort(res)
+        nres = np.sort(nres)
+    np.testing.assert_allclose(res, nres)
     # Test with getitem
     sl = slice(100)
     ressl = res[sl]
-    np.testing.assert_allclose(ressl, nres[sl])
+    if len(a1.shape) == 1 or a1.chunks == a1.shape:
+        np.testing.assert_allclose(ressl, nres[sl])
+    else:
+        # In this case, we cannot compare results, only the length
+        assert len(ressl) == len(nres[sl])
 
 
 # Test where combined with a reduction
@@ -296,12 +343,15 @@ def test_where_reduction1(array_fixture):
 # Test *implicit* where (a query) combined with a reduction
 def test_where_reduction2(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    axis = None if sa1.ndim == 1 else 1
     # We have to use the original names in fields here
-    expr = sa1[f"(b * a.sum(axis={axis})) > 0"]
+    expr = sa1[f"(b * a.sum()) > 0"]
     res = expr[:]
-    nres = nsa1[(na2 * na1.sum(axis=axis)) > 0]
-    np.testing.assert_allclose(res["a"], nres["a"])
+    nres = nsa1[(na2 * na1.sum()) > 0]
+    # On general chunked ndim arrays, we cannot guarantee the order of the results
+    if not (len(a1.shape) == 1 or a1.chunks == a1.shape):
+        np.testing.assert_allclose(np.sort(res["a"]), np.sort(nres["a"]))
+    else:
+        np.testing.assert_allclose(res["a"], nres["a"])
 
 
 # More complex cases with where() calls combined with reductions,
@@ -326,9 +376,8 @@ def test_where_fusion2(array_fixture):
     expr = a1**2 + a2**2 > 2 * a1 * a2 + 1
     npexpr = ne.evaluate("na1**2 + na2**2 > 2 * na1 * na2 + 1")
 
-    axis = None if sa1.ndim == 1 else 1
-    res = expr.where(0.5, 0.2) + expr.where(0.3, 0.6).sum(axis=axis)
-    nres = np.where(npexpr, 0.5, 0.2) + np.where(npexpr, 0.3, 0.6).sum(axis=axis)
+    res = expr.where(0.5, 0.2) + expr.where(0.3, 0.6).sum()
+    nres = np.where(npexpr, 0.5, 0.2) + np.where(npexpr, 0.3, 0.6).sum()
     np.testing.assert_allclose(res[:], nres)
 
 

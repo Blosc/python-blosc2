@@ -1229,7 +1229,7 @@ def get_cbuffer_sizes(src: object) -> tuple[(int, int, int)]:
 
 
 # Compute a decent value for chunksize based on L3 and/or heuristics
-def get_chunksize(blocksize, l3_minimum=2**20, l3_maximum=2**26):
+def get_chunksize(blocksize, l3_minimum=16*2**20, l3_maximum=2**26):
     # Find a decent default when L3 cannot be detected by cpuinfo
     # Based mainly in heuristics
     chunksize = blocksize
@@ -1406,10 +1406,15 @@ def compute_chunks_blocks(  # noqa: C901
         max_blocksize = blocksize
         if platform.machine() == "x86_64":
             # For modern Intel/AMD archs, experiments say to use half of the L2 cache size
-            max_blocksize = blosc2.cpu_info["l2_cache_size"] // 2
+            # max_blocksize = blosc2.cpu_info["l2_cache_size"] // 2
+            # New experiments say that using the 2x of the L1 cache size is also good
+            max_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 2
         elif platform.system() == "Darwin" and "arm" in platform.machine():
-            # For Apple Silicon, experiments say we can use the full L1 data cache size
-            max_blocksize = blosc2.cpu_info["l1_data_cache_size"]
+            # For Apple Silicon, experiments say we can use 2x the L1 data cache size
+            max_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 2
+        else:
+            # For other archs, use 2x the L1 cache size
+            max_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 2
         if "clevel" in cparams and cparams["clevel"] == 0:
             # Experiments show that, when no compression is used, it is not a good idea
             # to exceed half of private cache for the blocksize because speed suffers

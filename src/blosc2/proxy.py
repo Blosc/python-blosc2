@@ -625,9 +625,9 @@ def cengine(func: callable) -> callable:
         val = func(*new_args, **kwargs)
         # Always return NumPy array(s)
         if isinstance(val, tuple):
-            return tuple([v[:] if not isinstance(v, np.ndarray) else v for v in val])
+            return tuple([v[()] if not isinstance(v, np.ndarray) else v for v in val])
         elif not isinstance(val, np.ndarray):
-            return val[:]
+            return val[()]
         return val
 
     return wrapper
