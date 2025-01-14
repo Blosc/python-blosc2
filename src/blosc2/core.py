@@ -1235,6 +1235,7 @@ def get_chunksize(blocksize, l3_minimum=16*2**20, l3_maximum=2**26):
     chunksize = blocksize
     if blocksize * 32 < l3_maximum:
         chunksize = blocksize * 32
+
     # Refine with L2/L3 measurements (not always possible)
     cpu_info = blosc2.cpu_info
     if "l3_cache_size" in cpu_info:
@@ -1248,16 +1249,15 @@ def get_chunksize(blocksize, l3_minimum=16*2**20, l3_maximum=2**26):
             l2_cache_size = cpu_info.get("l2_cache_size", "Not found")
             if isinstance(l2_cache_size, int) and l3_cache_size > l2_cache_size:
                 chunksize = l3_cache_size
+        # When computing expressions, it is convenient to keep chunks for all operands
+        # in L3 cache, so let's divide by 4 (3 operands + result is a typical situation
+        # for moderately complex expressions)
+        chunksize //= 4
+
     # Chunksize should be at least the size of L2
     l2_cache_size = cpu_info.get("l2_cache_size", "Not found")
     if isinstance(l2_cache_size, int) and l2_cache_size > chunksize:
         chunksize = l2_cache_size
-
-    # When computing expressions on Intel arch, it is convenient to keep chunks for all operands
-    # in L3 cache, so let's divide by 4 (3 operands + result is a typical situation for moderately
-    # complex expressions)
-    if platform.machine() == "x86_64":
-        chunksize //= 4
 
     # Ensure a minimum size
     if chunksize < l3_minimum:
@@ -1412,7 +1412,8 @@ def compute_chunks_blocks(  # noqa: C901
         elif platform.system() == "Darwin" and "arm" in platform.machine():
             # For Apple Silicon, experiments say we can use 2x the L1 data cache size
             max_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 2
-        else:
+        elif ("l1_data_cache_size" in blosc2.cpu_info and
+              isinstance(blosc2.cpu_info["l1_data_cache_size"], int)):
             # For other archs, use 2x the L1 cache size
             max_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 2
         if "clevel" in cparams and cparams["clevel"] == 0:
