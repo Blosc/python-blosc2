@@ -822,6 +822,10 @@ def fill_chunk_operands(  # noqa: C901
                 chunk_operands[key] = value[slice_]
         return
 
+    # Get the starts and stops for the slice
+    starts = [s.start if s.start is not None else 0 for s in slice_]
+    stops = [s.stop if s.stop is not None else sh for s, sh in zip(slice_, chunks_, strict=True)]
+
     for key, value in operands.items():
         if np.isscalar(value):
             chunk_operands[key] = value
@@ -848,6 +852,14 @@ def fill_chunk_operands(  # noqa: C901
             # The chunk is a special zero chunk, so we can treat it as a scalar
             chunk_operands[key] = np.zeros((), dtype=value.dtype)
             continue
+
+        # If key is in operands, we can reuse the buffer
+        if (key in chunk_operands and
+            chunks_ == chunk_operands[key].shape and
+            isinstance(value, blosc2.NDArray)):
+            value.get_slice_numpy(chunk_operands[key], (starts, stops))
+            continue
+
         if aligned:
             # Decompress the whole chunk and store it
             buff = value.schunk.decompress_chunk(nchunk)
@@ -1128,6 +1140,10 @@ def slices_eval(  # noqa: C901
         slice_shape = tuple(s.stop - s.start for s in slice_)
         len_chunk = math.prod(slice_shape)
 
+        # Get the starts and stops for the slice
+        starts = [s.start if s.start is not None else 0 for s in slice_]
+        stops = [s.stop if s.stop is not None else sh for s, sh in zip(slice_, slice_shape, strict=True)]
+
         # Get the slice of each operand
         for key, value in operands.items():
             if np.isscalar(value):
@@ -1141,6 +1157,13 @@ def slices_eval(  # noqa: C901
                 smaller_slice = compute_smaller_slice(shape, value.shape, slice_)
                 chunk_operands[key] = value[smaller_slice]
                 continue
+            # If key is in operands, we can reuse the buffer
+            if (key in chunk_operands and
+                slice_shape == chunk_operands[key].shape and
+                isinstance(value, blosc2.NDArray)):
+                arr2 = value.get_slice_numpy(chunk_operands[key], (starts, stops))
+                continue
+
             chunk_operands[key] = value[slice_]
 
         # Evaluate the expression using chunks of operands
@@ -1393,6 +1416,9 @@ def reduce_slices(  # noqa: C901
                 operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands, reduc=True
             )
         else:
+            # Get the starts and stops for the slice
+            starts = [s.start if s.start is not None else 0 for s in slice_]
+            stops = [s.stop if s.stop is not None else sh for s, sh in zip(slice_, chunks_, strict=True)]
             # Get the slice of each operand
             for key, value in operands.items():
                 if np.isscalar(value):
@@ -1405,6 +1431,12 @@ def reduce_slices(  # noqa: C901
                     # We need to fetch the part of the value that broadcasts with the operand
                     smaller_slice = compute_smaller_slice(operand.shape, value.shape, slice_)
                     chunk_operands[key] = value[smaller_slice]
+                    continue
+                # If key is in operands, we can reuse the buffer
+                if (key in chunk_operands and
+                    chunks_ == chunk_operands[key].shape and
+                    isinstance(value, blosc2.NDArray)):
+                    value.get_slice_numpy(chunk_operands[key], (starts, stops))
                     continue
                 chunk_operands[key] = value[slice_]
 
