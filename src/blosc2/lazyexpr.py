@@ -1236,9 +1236,8 @@ def slices_eval(  # noqa: C901
                 behaved = blosc2.are_partitions_behaved(out.shape, out.chunks, out.blocks)
 
         if where is None or len(where) == 2:
-            if behaved:
+            if behaved and result.shape == out.chunks and result.dtype == out.dtype:
                 # Fast path
-                result = np.asarray(result, dtype=dtype)
                 out.schunk.update_data(nchunk, result, copy=False)
             else:
                 out[slice_] = result
