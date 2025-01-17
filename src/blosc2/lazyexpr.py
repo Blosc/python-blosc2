@@ -2364,6 +2364,9 @@ class LazyExpr(LazyArray):
         return lazy_expr
 
     def compute(self, item=None, **kwargs) -> blosc2.NDArray:
+        # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
+        if "out" in kwargs:
+            kwargs["_output"] = kwargs.pop("out")
         if hasattr(self, "_output"):
             kwargs["_output"] = self._output
         if hasattr(self, "_where_args"):

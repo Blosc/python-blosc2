@@ -1,9 +1,11 @@
 from time import time
 import blosc2
 import numpy as np
+import numexpr as ne
 
+niter = 5
 # Create some data operands
-N = 20_000   # working size of 3 GB
+N = 10_000   # working size of ~1 GB
 dtype = "float32"
 chunks = (100, N)
 blocks = (1, N)
@@ -15,44 +17,49 @@ cparams = blosc2.CParams(clevel=1, codec=blosc2.Codec.LZ4)
 # cparams = blosc2.CParams(clevel=1, codec=blosc2.Codec.LZ4, filters=filters, filters_meta=filters_meta)
 
 t0 = time()
-a = blosc2.linspace(0, 1, N * N, dtype=dtype, shape=(N, N), cparams=cparams, chunks=chunks, blocks=blocks)
-b = blosc2.linspace(1, 2, N * N, dtype=dtype, shape=(N, N), cparams=cparams, chunks=chunks, blocks=blocks)
-c = blosc2.linspace(-10, 10, N, dtype=dtype, cparams=cparams)  # broadcasting is supported
-#c = blosc2.linspace(-10, 10, N * N, dtype=dtype, shape=(N, N), cparams=cparams)
+na = np.linspace(0, 1, N * N, dtype=dtype).reshape(N, N)
+nb = np.linspace(1, 2, N * N, dtype=dtype).reshape(N, N)
+nc = np.linspace(-10, 10, N, dtype=dtype)  # broadcasting is supported
+# nc = np.linspace(-10, 10, N * N, dtype=dtype).reshape(N, N)
 print("Time to create data: ", time() - t0)
-print("a.chunks, a.blocks, a.schunk.cratio: ", a.chunks, a.blocks, a.schunk.cratio)
-
-# Expression
-t0 = time()
-expr = ((a ** 3 + blosc2.sin(a * 2)) < c) & (b > 0)
-print(f"Time to create expression: {time() - t0:.5f}")
-
-# Compute while reducing (yep, reductions are in) along axis 1
-t0 = time()
-out = blosc2.sum(expr, axis=1) # , cparams=cparams)
-t1 = time() - t0
-print(f"Time to compute with Blosc2: {t1:.5f}")
-
-# Compute using NumPy operands
-na, nb, nc = a[:], b[:], c[:]
-
-@blosc2.cengine
-def compute_expression(na, nb, nc):
-    return np.sum(((na ** 3 + np.sin(na * 2)) < nc) & (nb > 0), axis=1)
-
-t0 = time()
-out2 = compute_expression(na, nb, nc)
-t1 = time() - t0
-print(f"Time to compute with NumPy operands and Blosc2 engine: {t1:.5f}")
 
 def compute_expression_numpy(na, nb, nc):
-    return np.sum(((na ** 3 + np.sin(na * 2)) < nc) & (nb > 0), axis=1)
+    return np.sum(((na ** 3 - nb ** 3 + np.sin(na * 2)) < nc) & (nb > nc ** 2), axis=1)
 
-# Compute using NumPy compute engine
 t0 = time()
 nout = compute_expression_numpy(na, nb, nc)
 t2 = time() - t0
-print(f"Time to compute with NumPy: {t2:.5f}")
+print(f"Time to compute with NumPy engine: {t2:.5f}")
+
+@blosc2.cengine
+def compute_expression_nocompr(na, nb, nc):
+    return np.sum(((na ** 3 - nb ** 3 + np.sin(na * 2)) < nc) & (nb > nc ** 2), axis=1)
+
+out = compute_expression_nocompr(na, nb, nc)
+t0 = time()
+for i in range(niter):
+    out = compute_expression_nocompr(na, nb, nc)
+t1 = (time() - t0) / niter
+print(f"Time to compute with NumPy operands and Blosc2 engine: {t1:.5f}")
+print(f"Speedup: {t2 / t1:.2f}x")
+
+@blosc2.cengine(cparams=cparams)
+def compute_expression_compr(a, b, c):
+    return np.sum(((a ** 3 - b ** 3 + np.sin(a * 2)) < c) & (b > nc ** 2), axis=1)
+
+# Use Blosc2 operands
+a = blosc2.asarray(na, cparams=cparams, chunks=chunks, blocks=blocks)
+b = blosc2.asarray(nb, cparams=cparams, chunks=chunks, blocks=blocks)
+c = blosc2.asarray(nc, cparams=cparams)
+# c = blosc2.asarray(nc, cparams=cparams, chunks=chunks, blocks=blocks)
+print("a.chunks, a.blocks, a.schunk.cratio: ", a.chunks, a.blocks, a.schunk.cratio)
+
+out2 = compute_expression_compr(a, b, c)
+t0 = time()
+for i in range(niter):
+    out2 = compute_expression_compr(a, b, c)
+t1 = (time() - t0) / niter
+print(f"Time to compute with Blosc2: {t1:.5f}")
 print(f"Speedup: {t2 / t1:.2f}x")
 
 assert np.all(out == nout)
