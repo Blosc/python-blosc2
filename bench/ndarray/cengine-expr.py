@@ -50,12 +50,13 @@ for i in range(niter):
 t1 = (time() - t0) / niter
 print(f"Time to compute with NumPy operands and Blosc2 engine: {t1:.5f}")
 print(f"Speedup: {t2 / t1:.2f}x")
+np.testing.assert_allclose(out, nout)
 
 @blosc2.cengine(cparams=cparams)
 def compute_expression_compr(a, b, c):
     return ((a ** 3 + np.sin(a * 2)) < c) & (b > 0)
 
-# Use Blosc2 operands
+# Create Blosc2 operands
 a = blosc2.asarray(na, cparams=cparams, chunks=chunks, blocks=blocks)
 b = blosc2.asarray(nb, cparams=cparams, chunks=chunks, blocks=blocks)
 c = blosc2.asarray(nc, cparams=cparams)
@@ -67,9 +68,26 @@ t0 = time()
 for i in range(niter):
     out2 = compute_expression_compr(a, b, c)
 t1 = (time() - t0) / niter
-print(f"Time to compute with Blosc2: {t1:.5f}")
+print(f"Time to compute with NDArray operands and NDArray as result: {t1:.5f}")
 print(f"Speedup: {t2 / t1:.2f}x")
+np.testing.assert_allclose(out2, nout)
 
-assert np.all(out == nout)
-assert np.all(out2 == nout)
+out3 = compute_expression_compr(na, nb, nc)
+t0 = time()
+for i in range(niter):
+    out3 = compute_expression_compr(na, nb, nc)
+t1 = (time() - t0) / niter
+print(f"Time to compute with NumPy operands and NDArray as result: {t1:.5f}")
+print(f"Speedup: {t2 / t1:.2f}x")
+np.testing.assert_allclose(out3, nout)
+
+out4 = compute_expression_nocompr(a, b, c)
+t0 = time()
+for i in range(niter):
+    out4 = compute_expression_nocompr(a, b, c)
+t1 = (time() - t0) / niter
+print(f"Time to compute with NDArray operands and NumPy as result: {t1:.5f}")
+print(f"Speedup: {t2 / t1:.2f}x")
+np.testing.assert_allclose(out4, nout)
+
 print("All results are equal!")

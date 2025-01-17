@@ -636,18 +636,29 @@ def cengine(func=None, out=None, **kwargs):  # noqa: C901
 
     def decorator(func):  # noqa: C901
         def wrapper(*args, **func_kwargs):
+            # Massage kwargs for SimpleProxy
+            if "chunks" in kwargs:
+                chunks = kwargs.pop("chunks")
+            else:
+                chunks = None
+            if "blocks" in kwargs:
+                blocks = kwargs.pop("blocks")
+            else:
+                blocks = None
+            proxy_kwargs = {"chunks": chunks, "blocks": blocks}
+
             # Wrap the arguments in SimpleProxy objects if they are not NDArrays
             new_args = []
             for arg in args:
                 if issubclass(type(arg), blosc2.Operand):
                     new_args.append(arg)
                 else:
-                    new_args.append(SimpleProxy(arg, **kwargs))
+                    new_args.append(SimpleProxy(arg, **proxy_kwargs))
             # The same for the keyword arguments
             for key, value in func_kwargs.items():
                 if issubclass(type(value), blosc2.Operand):
                     continue
-                func_kwargs[key] = SimpleProxy(value, **kwargs)
+                func_kwargs[key] = SimpleProxy(value, **proxy_kwargs)
 
             # Call function with the new arguments
             retval = func(*new_args, **func_kwargs)
