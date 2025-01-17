@@ -59,7 +59,7 @@ def test_reduce_bool(array_fixture, reduce_op):
     nres = ne.evaluate("na1 + na2 > na3 * na4")
     # res = getattr(expr, reduce_op)()
     res = expr.sum()
-    print("res:", res)
+    # print("res:", res)
     nres = getattr(nres, reduce_op)()
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)

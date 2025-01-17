@@ -854,9 +854,11 @@ def fill_chunk_operands(  # noqa: C901
             continue
 
         # If key is in operands, we can reuse the buffer
-        if (key in chunk_operands and
-            chunks_ == chunk_operands[key].shape and
-            isinstance(value, blosc2.NDArray)):
+        if (
+            key in chunk_operands
+            and chunks_ == chunk_operands[key].shape
+            and isinstance(value, blosc2.NDArray)
+        ):
             value.get_slice_numpy(chunk_operands[key], (starts, stops))
             continue
 
@@ -1158,10 +1160,12 @@ def slices_eval(  # noqa: C901
                 chunk_operands[key] = value[smaller_slice]
                 continue
             # If key is in operands, we can reuse the buffer
-            if (key in chunk_operands and
-                slice_shape == chunk_operands[key].shape and
-                isinstance(value, blosc2.NDArray)):
-                arr2 = value.get_slice_numpy(chunk_operands[key], (starts, stops))
+            if (
+                key in chunk_operands
+                and slice_shape == chunk_operands[key].shape
+                and isinstance(value, blosc2.NDArray)
+            ):
+                value.get_slice_numpy(chunk_operands[key], (starts, stops))
                 continue
 
             chunk_operands[key] = value[slice_]
@@ -1381,6 +1385,7 @@ def reduce_slices(  # noqa: C901
     # Iterate over the operands and get the chunks
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
     chunk_operands = {}
+    out_init = False
     for nchunk in range(nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
@@ -1432,9 +1437,11 @@ def reduce_slices(  # noqa: C901
                     chunk_operands[key] = value[smaller_slice]
                     continue
                 # If key is in operands, we can reuse the buffer
-                if (key in chunk_operands and
-                    chunks_ == chunk_operands[key].shape and
-                    isinstance(value, blosc2.NDArray)):
+                if (
+                    key in chunk_operands
+                    and chunks_ == chunk_operands[key].shape
+                    and isinstance(value, blosc2.NDArray)
+                ):
                     value.get_slice_numpy(chunk_operands[key], (starts, stops))
                     continue
                 chunk_operands[key] = value[slice_]
@@ -1485,8 +1492,14 @@ def reduce_slices(  # noqa: C901
         else:
             result = reduce_op.value.reduce(result, **reduce_args)
 
-        if out is None:
-            out = convert_none_out(dtype, reduce_op, reduced_shape)
+        if not out_init:
+            if out is None:
+                out = convert_none_out(result.dtype, reduce_op, reduced_shape)
+            else:
+                out2 = convert_none_out(result.dtype, reduce_op, reduced_shape)
+                out[:] = out2
+                del out2
+            out_init = True
 
         # Update the output array with the result
         if reduce_op == ReduceOp.ANY:
@@ -1567,6 +1580,7 @@ def chunked_eval(  # noqa: C901
     try:
         getitem = kwargs.pop("_getitem", False)
         out = kwargs.get("_output")
+
         where: dict | None = kwargs.get("_where_args")
         if where:
             # Make the where arguments part of the operands

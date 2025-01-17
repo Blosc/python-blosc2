@@ -580,7 +580,7 @@ class SimpleProxy(blosc2.Operand):
         return self.src[item]
 
 
-def cengine(func=None, **kwargs):
+def cengine(func=None, out=None, **kwargs):  # noqa: C901
     """
     Wrap a function so that it can be used with the Blosc2 compute engine.
 
@@ -594,6 +594,8 @@ def cengine(func=None, **kwargs):
 
     Parameters
     ----------
+    out: np.ndarray, NDArray, optional
+        The output array where the result will be stored.
     **kwargs: dict, optional
         Additional keyword arguments supported by the :func:`empty` constructor.
 
@@ -601,9 +603,14 @@ def cengine(func=None, **kwargs):
     -------
     wrapper
 
-    **Note**: Although many NumPy functions are supported, some may not be
-    implemented yet. If you find a function that is not supported, please
-    open an issue.
+    Notes
+    -----
+    * Although many NumPy functions are supported, some may not be implemented yet.
+      If you find a function that is not supported, please open an issue.
+    * Due to implementation, rhe `out` and `kwargs` parameters are not supported
+      for all expressions (e.g. when using a reduction as the last function).
+      In this case, you can still use the `out` parameter of the reduction function
+      for some custom control over the output.
 
     Parameters
     ----------
@@ -617,16 +624,17 @@ def cengine(func=None, **kwargs):
     --------
     >>> import numpy as np
     >>> import blosc2
-    >>> @blosc2.cengine(celvel=1)
+    >>> @blosc2.cengine
     >>> def compute_expression(a, b, c):
     >>>     return np.sum(((a ** 3 + np.sin(a * 2)) > 2 * c) & (b > 0), axis=1)
     >>> a = np.arange(20, dtype=np.float32).reshape(4, 5)
     >>> b = np.arange(20).reshape(4, 5)
     >>> c = np.arange(5)
     >>> compute_expression(a, b, c)
-    [3. 5. 5. 5.]
+    [5 5 5 5]
     """
-    def decorator(func):
+
+    def decorator(func):  # noqa: C901
         def wrapper(*args, **func_kwargs):
             # Wrap the arguments in SimpleProxy objects if they are not NDArrays
             new_args = []
@@ -640,17 +648,29 @@ def cengine(func=None, **kwargs):
                 if issubclass(type(value), blosc2.Operand):
                     continue
                 func_kwargs[key] = SimpleProxy(value, **kwargs)
+
+            # Call function with the new arguments
             retval = func(*new_args, **func_kwargs)
-            # Convert the return value to a NumPy array if no kwargs are provided
+
+            # Treat return value
+            # If it is a numpy array, return it as is
             if isinstance(retval, np.ndarray):
-                if func_kwargs:
+                if kwargs:
+                    # But if kwargs are provided, return a NDArray instead
                     return blosc2.asarray(retval, **kwargs)
                 return retval
-            if isinstance(retval, blosc2.LazyExpr):
-                if kwargs:
-                    return retval.compute(**kwargs)
-                return retval[()]
-            return retval
+
+            # In some instances, the return value is not a LazyExpr
+            # (e.g. using a reduction as the last function, and using an `out` param)
+            if not isinstance(retval, blosc2.LazyExpr):
+                return retval
+
+            if out is not None:
+                return retval.compute(out=out, **kwargs)
+            if kwargs:
+                return retval.compute(**kwargs)
+            return retval[()]
+
         return wrapper
 
     if func is None:
