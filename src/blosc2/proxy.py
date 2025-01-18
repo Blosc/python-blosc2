@@ -607,7 +607,7 @@ def cengine(func=None, out=None, **kwargs):  # noqa: C901
     -----
     * Although many NumPy functions are supported, some may not be implemented yet.
       If you find a function that is not supported, please open an issue.
-    * Due to implementation, rhe `out` and `kwargs` parameters are not supported
+    * Due to implementation, the `out` and `kwargs` parameters are not supported
       for all expressions (e.g. when using a reduction as the last function).
       In this case, you can still use the `out` parameter of the reduction function
       for some custom control over the output.
@@ -636,16 +636,8 @@ def cengine(func=None, out=None, **kwargs):  # noqa: C901
 
     def decorator(func):  # noqa: C901
         def wrapper(*args, **func_kwargs):
-            # Massage kwargs for SimpleProxy
-            if "chunks" in kwargs:
-                chunks = kwargs.pop("chunks")
-            else:
-                chunks = None
-            if "blocks" in kwargs:
-                blocks = kwargs.pop("blocks")
-            else:
-                blocks = None
-            proxy_kwargs = {"chunks": chunks, "blocks": blocks}
+            # Get some kwargs in decorator for SimpleProxy constructor
+            proxy_kwargs = {"chunks": kwargs.get("chunks"), "blocks": kwargs.get("blocks")}
 
             # Wrap the arguments in SimpleProxy objects if they are not NDArrays
             new_args = []
@@ -676,10 +668,12 @@ def cengine(func=None, out=None, **kwargs):  # noqa: C901
             if not isinstance(retval, blosc2.LazyExpr):
                 return retval
 
+            # If the return value is a LazyExpr, compute it
             if out is not None:
                 return retval.compute(out=out, **kwargs)
             if kwargs:
                 return retval.compute(**kwargs)
+            # If no kwargs are provided, return a numpy array
             return retval[()]
 
         return wrapper
