@@ -1407,10 +1407,15 @@ def compute_chunks_blocks(  # noqa: C901
         # Minimum blocksize calculation
         min_blocksize = blocksize
         if platform.machine() == "x86_64":
-            # For modern Intel/AMD archs, experiments say to use half of the L2 size
-            # min_blocksize = blosc2.cpu_info["l2_cache_size"] // 2
+            # For modern Intel/AMD archs, experiments say to split the cache among the operands
+            min_blocksize = blosc2.cpu_info["l2_cache_size"] // 4
+            if blosc2.cpu_info["l2_cache_size"] >= 2**21:
+                # Incidentally, some modern Intel CPUs have a larger L2 cache (2 MB) and they
+                # prefer smaller blocks.  This is somewhat heuristic, but it seems to work well.
+                min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 4
             # New experiments say that using the 4x of the L1 size is even better
-            min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 4
+            # But let's avoid this because it does not work well for AMD archs
+            # min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 4
         elif platform.system() == "Darwin" and "arm" in platform.machine():
             # For Apple Silicon, experiments say we can use 4x the L1 size
             min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 4
