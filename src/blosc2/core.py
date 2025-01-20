@@ -1229,7 +1229,7 @@ def get_cbuffer_sizes(src: object) -> tuple[(int, int, int)]:
 
 
 # Compute a decent value for chunksize based on L3 and/or heuristics
-def get_chunksize(blocksize, l3_minimum=16*2**20, l3_maximum=2**26):
+def get_chunksize(blocksize, l3_minimum=16 * 2**20, l3_maximum=2**26):
     # Find a decent default when L3 cannot be detected by cpuinfo
     # Based mainly in heuristics
     chunksize = blocksize
@@ -1257,7 +1257,9 @@ def get_chunksize(blocksize, l3_minimum=16*2**20, l3_maximum=2**26):
     # Chunksize should be at least the size of L2
     l2_cache_size = cpu_info.get("l2_cache_size", "Not found")
     if isinstance(l2_cache_size, int) and l2_cache_size > chunksize:
-        chunksize = l2_cache_size
+        # Apple Silicon has a large L2 cache, and memory bandwidth is high,
+        # so we can use a larger chunksize based on L2 cache size
+        chunksize = l2_cache_size * 4
 
     # Ensure a minimum size
     if chunksize < l3_minimum:
@@ -1402,27 +1404,23 @@ def compute_chunks_blocks(  # noqa: C901
         cparams2["tuner"] = blosc2.Tuner.STUNE
         src = blosc2.compress2(np.zeros(nitems, dtype=f"V{itemsize}"), **cparams2)
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
-        # Maximum blocksize calculation
-        max_blocksize = blocksize
+        # Minimum blocksize calculation
+        min_blocksize = blocksize
         if platform.machine() == "x86_64":
-            # For modern Intel/AMD archs, experiments say to use half of the L2 cache size
-            # max_blocksize = blosc2.cpu_info["l2_cache_size"] // 2
-            # New experiments say that using the 2x of the L1 cache size is also good
-            max_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 2
+            # For modern Intel/AMD archs, experiments say to use half of the L2 size
+            # min_blocksize = blosc2.cpu_info["l2_cache_size"] // 2
+            # New experiments say that using the 4x of the L1 size is even better
+            min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 4
         elif platform.system() == "Darwin" and "arm" in platform.machine():
-            # For Apple Silicon, experiments say we can use 2x the L1 data cache size
-            max_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 2
-        elif ("l1_data_cache_size" in blosc2.cpu_info and
-              isinstance(blosc2.cpu_info["l1_data_cache_size"], int)):
-            # For other archs, use 2x the L1 cache size
-            max_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 2
-        if "clevel" in cparams and cparams["clevel"] == 0:
-            # Experiments show that, when no compression is used, it is not a good idea
-            # to exceed half of private cache for the blocksize because speed suffers
-            # too much during evaluations.
-            blocksize = max_blocksize
-        elif blocksize > max_blocksize:
-            blocksize = max_blocksize
+            # For Apple Silicon, experiments say we can use 4x the L1 size
+            min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 4
+        elif "l1_data_cache_size" in blosc2.cpu_info and isinstance(
+            blosc2.cpu_info["l1_data_cache_size"], int
+        ):
+            # For other archs, we don't have hints; be conservative and use 2x the L1 size
+            min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 2
+        if blocksize < min_blocksize:
+            blocksize = min_blocksize
 
         cparams2["tuner"] = aux_tuner
     else:
