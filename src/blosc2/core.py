@@ -1229,7 +1229,7 @@ def get_cbuffer_sizes(src: object) -> tuple[(int, int, int)]:
 
 
 # Compute a decent value for chunksize based on L3 and/or heuristics
-def get_chunksize(blocksize, l3_minimum=16 * 2**20, l3_maximum=2**26):
+def get_chunksize(blocksize, l3_minimum=4 * 2**20, l3_maximum=2**26):
     # Find a decent default when L3 cannot be detected by cpuinfo
     # Based mainly in heuristics
     chunksize = blocksize
