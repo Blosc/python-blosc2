@@ -1418,7 +1418,7 @@ def compute_chunks_blocks(  # noqa: C901
             # min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 4
         elif platform.system() == "Darwin" and "arm" in platform.machine():
             # For Apple Silicon, experiments say we can use 4x the L1 size
-            min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 4
+            min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 2
         elif "l1_data_cache_size" in blosc2.cpu_info and isinstance(
             blosc2.cpu_info["l1_data_cache_size"], int
         ):
