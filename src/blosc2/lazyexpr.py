@@ -912,10 +912,15 @@ def fast_eval(  # noqa: C901
 
     # Get the shape of the base array
     shape = basearr.shape
-    chunks = basearr.chunks
+    chunks = kwargs.pop("chunks", None)
+    if chunks is None:
+        chunks = basearr.chunks
+    blocks = kwargs.pop("blocks", None)
+    if blocks is None:
+        blocks = basearr.blocks
     # Check whether the partitions are aligned and behaved
-    aligned = blosc2.are_partitions_aligned(shape, chunks, basearr.blocks)
-    behaved = blosc2.are_partitions_behaved(shape, chunks, basearr.blocks)
+    aligned = blosc2.are_partitions_aligned(shape, chunks, blocks)
+    behaved = blosc2.are_partitions_behaved(shape, chunks, blocks)
 
     # Check that all operands are NDArray for fast path
     all_ndarray = all(isinstance(value, blosc2.NDArray) and value.shape != () for value in operands.values())
@@ -972,7 +977,7 @@ def fast_eval(  # noqa: C901
                 if getitem:
                     out = np.empty(shape, dtype=dtype)
                 else:
-                    out = blosc2.empty(shape, chunks=chunks, blocks=basearr.blocks, dtype=dtype, **kwargs)
+                    out = blosc2.empty(shape, chunks=chunks, blocks=blocks, dtype=dtype, **kwargs)
 
         # Store the result in the output array
         if getitem:

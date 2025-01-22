@@ -3521,7 +3521,10 @@ def _check_ndarray_kwargs(**kwargs):  # noqa: C901
             )
 
     if "cparams" in kwargs:
-        if isinstance(kwargs["cparams"], blosc2.CParams):
+        cparams = kwargs["cparams"]
+        if cparams is None:
+            kwargs["cparams"] = blosc2.cparams_dflts
+        if isinstance(cparams, blosc2.CParams):
             kwargs["cparams"] = asdict(kwargs["cparams"])
         else:
             if "chunks" in kwargs["cparams"]:
