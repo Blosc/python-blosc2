@@ -658,7 +658,7 @@ def cengine(func=None, out=None, **kwargs):  # noqa: C901
             # Treat return value
             # If it is a numpy array, return it as is
             if isinstance(retval, np.ndarray):
-                if kwargs:
+                if kwargs and any(kwargs[key] is not None for key in kwargs):
                     # But if kwargs are provided, return a NDArray instead
                     return blosc2.asarray(retval, **kwargs)
                 return retval
@@ -671,7 +671,7 @@ def cengine(func=None, out=None, **kwargs):  # noqa: C901
             # If the return value is a LazyExpr, compute it
             if out is not None:
                 return retval.compute(out=out, **kwargs)
-            if kwargs:
+            if kwargs and any(kwargs[key] is not None for key in kwargs):
                 return retval.compute(**kwargs)
             # If no kwargs are provided, return a numpy array
             return retval[()]
