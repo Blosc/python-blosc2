@@ -21,10 +21,11 @@ import platform
 import sys
 from dataclasses import asdict
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import cpuinfo
 import numpy as np
+import platformdirs
 
 import blosc2
 from blosc2 import blosc2_ext
@@ -34,6 +35,12 @@ if TYPE_CHECKING:
 
     import tensorflow
     import torch
+
+
+_USER_CACHE_DIR: pathlib.Path = platformdirs.user_cache_path(
+    appname="python-blosc2",
+    appauthor="blosc",
+)
 
 
 def _check_typesize(typesize):
@@ -1170,14 +1177,15 @@ def _get_cpu_info():
     return cpu_info
 
 
-def write_cached_cpu_info(cpu_info_dict: dict[str, any]) -> None:
-    with open(pathlib.Path.home() / ".blosc2-cpuinfo.json", "w") as f:
+def write_cached_cpu_info(cpu_info_dict: dict[str, Any]) -> None:
+    _USER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    with (_USER_CACHE_DIR / "cpuinfo.json").open("w") as f:
         json.dump(cpu_info_dict, f, indent=4)
 
 
-def read_cached_cpu_info() -> dict:
+def read_cached_cpu_info() -> dict[str, Any]:
     try:
-        with open(pathlib.Path.home() / ".blosc2-cpuinfo.json") as f:
+        with (_USER_CACHE_DIR / "cpuinfo.json").open() as f:
             return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError):
         return {}

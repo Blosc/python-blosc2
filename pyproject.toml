@@ -37,6 +37,7 @@ dependencies = [
     "numexpr",
     "py-cpuinfo",
     "httpx",
+    "platformdirs",
 ]
 version = "3.0.1.dev"
 
