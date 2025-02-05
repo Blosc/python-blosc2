@@ -14,6 +14,21 @@ import numpy as np
 
 ###### General expressions
 
+# Define the parameters
+test_params = [
+    ((10, 100), (10, 100,), "float32"),
+    ((10, 100), (100,), "float64"),  # using broadcasting
+]
+
+@pytest.fixture(params=test_params)
+def sample_data(request):
+    shape, cshape, dtype = request.param
+    # The jit decorator can work with any numpy or NDArray params in functions
+    a = blosc2.linspace(0, 1, shape[0] * shape[1], dtype=dtype, shape=shape)
+    b = np.linspace(1, 2, shape[0] * shape[1], dtype=dtype).reshape(shape)
+    c = blosc2.linspace(-10, 10, cshape[0], dtype=dtype, shape=cshape)
+    return a, b, c, shape, cshape, dtype
+
 def expr_nojit(a, b, c):
     return ((a ** 3 + np.sin(a * 2)) < c) & (b > 0)
 
@@ -21,29 +36,15 @@ def expr_nojit(a, b, c):
 def expr_jit(a, b, c):
     return ((a ** 3 + np.sin(a * 2)) < c) & (b > 0)
 
-# Define the parameters
-test_params = [
-    ((10, 100), (10, 100,), "float32"),
-    ((10, 100), (100,), "float64"),  # using broadcasting
-]
-
-@pytest.mark.parametrize("shape, cshape, dtype", test_params)
-def test_expr(shape, cshape, dtype):
-    a = blosc2.linspace(0, 1, shape[0] * shape[1], dtype=dtype, shape=shape)
-    b = blosc2.linspace(1, 2, shape[0] * shape[1], dtype=dtype, shape=shape)
-    c = blosc2.linspace(-10, 10, cshape[0], dtype=dtype, shape=cshape)
-
+def test_expr(sample_data):
+    a, b, c, shape, cshape, dtype = sample_data
     d_jit = expr_jit(a, b, c)
     d_nojit = expr_nojit(a, b, c)
-
     np.testing.assert_equal(d_jit[...], d_nojit[...])
 
 
-@pytest.mark.parametrize("shape, cshape, dtype", test_params)
-def test_expr_out(shape, cshape, dtype):
-    a = blosc2.linspace(0, 1, shape[0] * shape[1], dtype=dtype, shape=shape)
-    b = blosc2.linspace(1, 2, shape[0] * shape[1], dtype=dtype, shape=shape)
-    c = blosc2.linspace(-10, 10, cshape[0], dtype=dtype, shape=cshape)
+def test_expr_out(sample_data):
+    a, b, c, shape, cshape, dtype = sample_data
     d_nojit = expr_nojit(a, b, c)
 
     # Testing jit decorator with an out param
@@ -57,11 +58,8 @@ def test_expr_out(shape, cshape, dtype):
     np.testing.assert_equal(d_jit[...], d_nojit[...])
     np.testing.assert_equal(out[...], d_nojit[...])
 
-@pytest.mark.parametrize("shape, cshape, dtype", test_params)
-def test_expr_kwargs(shape, cshape, dtype):
-    a = blosc2.linspace(0, 1, shape[0] * shape[1], dtype=dtype, shape=shape)
-    b = blosc2.linspace(1, 2, shape[0] * shape[1], dtype=dtype, shape=shape)
-    c = blosc2.linspace(-10, 10, cshape[0], dtype=dtype, shape=cshape)
+def test_expr_kwargs(sample_data):
+    a, b, c, shape, cshape, dtype = sample_data
     d_nojit = expr_nojit(a, b, c)
 
     # Testing jit decorator with kwargs
@@ -87,22 +85,16 @@ def reduc_nojit(a, b, c):
 def reduc_jit(a, b, c):
     return np.sum(((a ** 3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
 
-@pytest.mark.parametrize("shape, cshape, dtype", test_params)
-def test_reduc(shape, cshape, dtype):
-    a = blosc2.linspace(0, 1, shape[0] * shape[1], dtype=dtype, shape=shape)
-    b = blosc2.linspace(1, 2, shape[0] * shape[1], dtype=dtype, shape=shape)
-    c = blosc2.linspace(-10, 10, cshape[0], dtype=dtype, shape=cshape)
+def test_reduc(sample_data):
+    a, b, c, shape, cshape, dtype = sample_data
 
     d_jit = reduc_jit(a, b, c)
     d_nojit = reduc_nojit(a, b, c)
 
     np.testing.assert_equal(d_jit[...], d_nojit[...])
 
-@pytest.mark.parametrize("shape, cshape, dtype", test_params)
-def test_reduc_out(shape, cshape, dtype):
-    a = blosc2.linspace(0, 1, shape[0] * shape[1], dtype=dtype, shape=shape)
-    b = blosc2.linspace(1, 2, shape[0] * shape[1], dtype=dtype, shape=shape)
-    c = blosc2.linspace(-10, 10, cshape[0], dtype=dtype, shape=cshape)
+def test_reduc_out(sample_data):
+    a, b, c, shape, cshape, dtype = sample_data
     d_nojit = reduc_nojit(a, b, c)
 
     # Testing jit decorator with an out param via the reduction function
@@ -117,11 +109,8 @@ def test_reduc_out(shape, cshape, dtype):
     np.testing.assert_equal(d_jit[...], d_nojit[...])
     np.testing.assert_equal(out[...], d_nojit[...])
 
-@pytest.mark.parametrize("shape, cshape, dtype", test_params)
-def test_reduc_kwargs(shape, cshape, dtype):
-    a = blosc2.linspace(0, 1, shape[0] * shape[1], dtype=dtype, shape=shape)
-    b = blosc2.linspace(1, 2, shape[0] * shape[1], dtype=dtype, shape=shape)
-    c = blosc2.linspace(-10, 10, cshape[0], dtype=dtype, shape=cshape)
+def test_reduc_kwargs(sample_data):
+    a, b, c, shape, cshape, dtype = sample_data
     d_nojit = reduc_nojit(a, b, c)
 
     # Testing jit decorator with kwargs via an out param in the reduction function
