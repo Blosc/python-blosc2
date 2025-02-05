@@ -587,7 +587,7 @@ def extract_numpy_scalars(expr: str):
     return transformed_expr, transformer.replacements
 
 
-def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
+def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C901
     """Validate the inputs for the expression."""
     if len(inputs) == 0:
         if out is None:
@@ -624,7 +624,7 @@ def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
     fast_path = True
     first_input = NDinputs[0]
     # Check the out NDArray (if present) first
-    if isinstance(out, blosc2.NDArray):
+    if isinstance(out, blosc2.NDArray) and not reduce:
         if first_input.shape != out.shape:
             raise ValueError("Output shape does not match the first input shape")
         if first_input.chunks != out.chunks:
@@ -1590,14 +1590,15 @@ def chunked_eval(  # noqa: C901
         if where:
             # Make the where arguments part of the operands
             operands = {**operands, **where}
-        _, _, _, fast_path = validate_inputs(operands, out)
+
+        reduce_args = kwargs.pop("_reduce_args", {})
+        _, _, _, fast_path = validate_inputs(operands, out, reduce=reduce_args != {})
 
         # Activate last read cache for NDField instances
         for op in operands:
             if isinstance(operands[op], blosc2.NDField):
                 operands[op].ndarr.keep_last_read = True
 
-        reduce_args = kwargs.pop("_reduce_args", {})
         if reduce_args:
             # Eval and reduce the expression in a single step
             return reduce_slices(expression, operands, reduce_args=reduce_args, _slice=item, **kwargs)

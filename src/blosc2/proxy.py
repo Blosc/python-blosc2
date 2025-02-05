@@ -8,7 +8,6 @@
 from abc import ABC, abstractmethod
 
 import numpy as np
-from traitlets import Callable
 
 import blosc2
 
@@ -581,7 +580,7 @@ class SimpleProxy(blosc2.Operand):
         return self.src[item]
 
 
-def jit(func : Callable, out=None, **kwargs):  # noqa: C901
+def jit(func=None, *, out=None, **kwargs):  # noqa: C901
     """
     Prepare a function so that it can be used with the Blosc2 compute engine.
 
@@ -610,9 +609,10 @@ def jit(func : Callable, out=None, **kwargs):  # noqa: C901
     -----
     * Although many NumPy functions are supported, some may not be implemented yet.
       If you find a function that is not supported, please open an issue.
-    * `kwargs` parameters are not supported for all expressions (e.g. when using a
-      reduction as the last function).  In this case, you can still use the `out`
-      parameter of the reduction function for some custom control over the output.
+    * `out` and `kwargs` parameters are not supported for all expressions
+      (e.g. when using a reduction as the last function).  In this case, you can
+      still use the `out` parameter of the reduction function for some custom
+      control over the output.
 
     Examples
     --------
