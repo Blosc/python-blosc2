@@ -248,7 +248,7 @@ from .lazyexpr import (
     get_expr_operands,
     validate_expr,
 )
-from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy, cengine
+from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy, jit
 
 from .schunk import SChunk, open
 

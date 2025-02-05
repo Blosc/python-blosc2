@@ -1,3 +1,13 @@
+#######################################################################
+# Copyright (c) 2019-present, Blosc Development Team <blosc@blosc.org>
+# All rights reserved.
+#
+# This source code is licensed under a BSD-style license (found in the
+# LICENSE file in the root directory of this source tree)
+#######################################################################
+
+# Compute expressions for different array sizes, using the jit decorator.
+
 from time import time
 import blosc2
 import numpy as np
@@ -44,13 +54,13 @@ t1 = (time() - t0) / niter
 print(f"Time to compute with NumExpr: {t1:.5f}")
 print(f"Speedup: {tref / t1:.2f}x")
 
-@blosc2.cengine
+@blosc2.jit
 def compute_expression_nocompr(a, b, c):
     return ((a ** 3 + np.sin(a * 2)) < c) & (b > 0)
 
 print("\nUsing NumPy operands...")
 
-@blosc2.cengine(cparams=cparams_out)
+@blosc2.jit(cparams=cparams_out)
 def compute_expression_compr(a, b, c):
     return ((a ** 3 + np.sin(a * 2)) < c) & (b > 0)
 
@@ -115,7 +125,7 @@ c = blosc2.asarray(nc, cparams=cparams)
 # c = blosc2.asarray(nc, cparams=cparams, chunks=chunks, blocks=blocks)
 print(f"{a.chunks=}, {a.blocks=}, {a.schunk.cratio=:.2f}x")
 
-@blosc2.cengine(cparams=cparams_out)
+@blosc2.jit(cparams=cparams_out)
 def compute_expression_compr(a, b, c):
     return ((a ** 3 + np.sin(a * 2)) < c) & (b > 0)
 

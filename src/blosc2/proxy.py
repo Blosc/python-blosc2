@@ -8,6 +8,7 @@
 from abc import ABC, abstractmethod
 
 import numpy as np
+from traitlets import Callable
 
 import blosc2
 
@@ -580,20 +581,22 @@ class SimpleProxy(blosc2.Operand):
         return self.src[item]
 
 
-def cengine(func=None, out=None, **kwargs):  # noqa: C901
+def jit(func : Callable, out=None, **kwargs):  # noqa: C901
     """
-    Wrap a function so that it can be used with the Blosc2 compute engine.
+    Prepare a function so that it can be used with the Blosc2 compute engine.
 
-    The inputs can be any combination of NumPy/NDArray arrays and scalars.
-    The function will be called with the NumPy arrays replaced by
+    The inputs of the function can be any combination of NumPy/NDArray arrays
+    and scalars.  The function will be called with the NumPy arrays replaced by
     :ref:`SimpleProxy` objects, whereas NDArray objects will be used as is.
 
     The returned value will be a NumPy array if all arguments are NumPy arrays
     or if not kwargs are provided. Else, the return value will be a NDArray
-    created using the provided kwargs (or the default ones).
+    created using the provided kwargs.
 
     Parameters
     ----------
+    func: callable
+        The function to be prepared for the Blosc2 compute engine.
     out: np.ndarray, NDArray, optional
         The output array where the result will be stored.
     **kwargs: dict, optional
@@ -607,24 +610,15 @@ def cengine(func=None, out=None, **kwargs):  # noqa: C901
     -----
     * Although many NumPy functions are supported, some may not be implemented yet.
       If you find a function that is not supported, please open an issue.
-    * Due to implementation, the `out` and `kwargs` parameters are not supported
-      for all expressions (e.g. when using a reduction as the last function).
-      In this case, you can still use the `out` parameter of the reduction function
-      for some custom control over the output.
-
-    Parameters
-    ----------
-    func
-
-    Returns
-    -------
-    wrapper
+    * `kwargs` parameters are not supported for all expressions (e.g. when using a
+      reduction as the last function).  In this case, you can still use the `out`
+      parameter of the reduction function for some custom control over the output.
 
     Examples
     --------
     >>> import numpy as np
     >>> import blosc2
-    >>> @blosc2.cengine
+    >>> @blosc2.jit
     >>> def compute_expression(a, b, c):
     >>>     return np.sum(((a ** 3 + np.sin(a * 2)) > 2 * c) & (b > 0), axis=1)
     >>> a = np.arange(20, dtype=np.float32).reshape(4, 5)

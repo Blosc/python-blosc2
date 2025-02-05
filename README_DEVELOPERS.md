@@ -46,12 +46,13 @@ If you want to run the network tests, you can use the following command:
 
 ## Documentation
 
-We are using Sphinx for documentation.  You can build the documentation by executing
+We are using Sphinx for documentation.  You can build the documentation by executing:
 
 ``` bash
   cd doc
   rm -rf html _build
   python -m sphinx . html
 ```
+[You may need to install the `pandoc` package first: https://pandoc.org/installing.html]
 
 You will find the documentation in the `html` directory.

@@ -1,7 +1,16 @@
+#######################################################################
+# Copyright (c) 2019-present, Blosc Development Team <blosc@blosc.org>
+# All rights reserved.
+#
+# This source code is licensed under a BSD-style license (found in the
+# LICENSE file in the root directory of this source tree)
+#######################################################################
+
+# Compute expressions for different array sizes, using the jit decorator.
+
 from time import time
 import blosc2
 import numpy as np
-import numexpr as ne
 
 niter = 5
 # Create some data operands
@@ -36,13 +45,13 @@ nout = compute_expression_numpy(na, nb, nc)
 tref = time() - t0
 print(f"Time to compute with NumPy engine: {tref:.5f}")
 
-@blosc2.cengine
+@blosc2.jit
 def compute_expression_nocompr(a, b, c):
     return np.sum(((a ** 3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
 
 print("\nUsing NumPy operands...")
 
-@blosc2.cengine
+@blosc2.jit
 def compute_expression_compr(a, b, c, out):
     return np.sum(((a ** 3 + np.sin(a * 2)) < c) & (b > 0), axis=1, out=out)
 
