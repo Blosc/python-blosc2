@@ -28,9 +28,10 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        arch: [x86_64, aarch64]
+        # arch: [x86_64, aarch64]
+        # aarch64 is emulated, and it is giving issues with cibuildwheel
         # Just build for x86_64 for now (Mac arm64 is already covered by cibuildwheel)
-        # arch: [x86_64]
+        arch: [x86_64]
         cibw_build: ["cp3{11,12,13}-*"]
         p_ver: ["3.11-3.13"]
         exclude:
