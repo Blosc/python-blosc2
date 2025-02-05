@@ -6,19 +6,26 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
+import numpy as np
 import pytest
 
 import blosc2
-
-import numpy as np
 
 ###### General expressions
 
 # Define the parameters
 test_params = [
-    ((10, 100), (10, 100,), "float32"),
+    (
+        (10, 100),
+        (
+            10,
+            100,
+        ),
+        "float32",
+    ),
     ((10, 100), (100,), "float64"),  # using broadcasting
 ]
+
 
 @pytest.fixture(params=test_params)
 def sample_data(request):
@@ -29,12 +36,15 @@ def sample_data(request):
     c = blosc2.linspace(-10, 10, cshape[0], dtype=dtype, shape=cshape)
     return a, b, c, shape, cshape, dtype
 
+
 def expr_nojit(a, b, c):
-    return ((a ** 3 + np.sin(a * 2)) < c) & (b > 0)
+    return ((a**3 + np.sin(a * 2)) < c) & (b > 0)
+
 
 @blosc2.jit
 def expr_jit(a, b, c):
-    return ((a ** 3 + np.sin(a * 2)) < c) & (b > 0)
+    return ((a**3 + np.sin(a * 2)) < c) & (b > 0)
+
 
 def test_expr(sample_data):
     a, b, c, shape, cshape, dtype = sample_data
@@ -52,11 +62,12 @@ def test_expr_out(sample_data):
 
     @blosc2.jit(out=out)
     def expr_jit_out(a, b, c):
-        return ((a ** 3 + np.sin(a * 2)) < c) & (b > 0)
+        return ((a**3 + np.sin(a * 2)) < c) & (b > 0)
 
     d_jit = expr_jit_out(a, b, c)
     np.testing.assert_equal(d_jit[...], d_nojit[...])
     np.testing.assert_equal(out[...], d_nojit[...])
+
 
 def test_expr_kwargs(sample_data):
     a, b, c, shape, cshape, dtype = sample_data
@@ -67,7 +78,7 @@ def test_expr_kwargs(sample_data):
 
     @blosc2.jit(**{"cparams": cparams})
     def expr_jit_cparams(a, b, c):
-        return ((a ** 3 + np.sin(a * 2)) < c) & (b > 0)
+        return ((a**3 + np.sin(a * 2)) < c) & (b > 0)
 
     d_jit = expr_jit_cparams(a, b, c)
     np.testing.assert_equal(d_jit[...], d_nojit[...])
@@ -78,12 +89,15 @@ def test_expr_kwargs(sample_data):
 
 ###### Reductions
 
+
 def reduc_nojit(a, b, c):
-    return np.sum(((a ** 3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+    return np.sum(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+
 
 @blosc2.jit
 def reduc_jit(a, b, c):
-    return np.sum(((a ** 3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+    return np.sum(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+
 
 def test_reduc(sample_data):
     a, b, c, shape, cshape, dtype = sample_data
@@ -92,6 +106,7 @@ def test_reduc(sample_data):
     d_nojit = reduc_nojit(a, b, c)
 
     np.testing.assert_equal(d_jit[...], d_nojit[...])
+
 
 def test_reduc_out(sample_data):
     a, b, c, shape, cshape, dtype = sample_data
@@ -103,11 +118,12 @@ def test_reduc_out(sample_data):
     # Note that out does not work with reductions as the last function call
     @blosc2.jit
     def reduc_jit_out(a, b, c):
-        return np.sum(((a ** 3 + np.sin(a * 2)) < c) & (b > 0), axis=1, out=out)
+        return np.sum(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1, out=out)
 
     d_jit = reduc_jit_out(a, b, c)
     np.testing.assert_equal(d_jit[...], d_nojit[...])
     np.testing.assert_equal(out[...], d_nojit[...])
+
 
 def test_reduc_kwargs(sample_data):
     a, b, c, shape, cshape, dtype = sample_data
@@ -119,7 +135,7 @@ def test_reduc_kwargs(sample_data):
 
     @blosc2.jit
     def reduc_jit_cparams(a, b, c):
-        return np.sum(((a ** 3 + np.sin(a * 2)) < c) & (b > 0), axis=1, out=out)
+        return np.sum(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1, out=out)
 
     d_jit = reduc_jit_cparams(a, b, c)
     np.testing.assert_equal(d_jit[...], d_nojit[...])

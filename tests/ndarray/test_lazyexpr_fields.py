@@ -344,7 +344,7 @@ def test_where_reduction1(array_fixture):
 def test_where_reduction2(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     # We have to use the original names in fields here
-    expr = sa1[f"(b * a.sum()) > 0"]
+    expr = sa1["(b * a.sum()) > 0"]
     res = expr[:]
     nres = nsa1[(na2 * na1.sum()) > 0]
     # On general chunked ndim arrays, we cannot guarantee the order of the results
