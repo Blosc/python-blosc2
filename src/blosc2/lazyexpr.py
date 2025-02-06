@@ -2984,6 +2984,56 @@ def _open_lazyarray(array):
     return new_expr
 
 
+# Mimim numexpr's evaluate function
+def evaluate(ex, local_dict=None, global_dict=None):
+    """
+    Evaluate a string expression using the Blosc2 compute engine.
+
+    This is a drop-in replacement for numexpr.evaluate, but using the Blosc2
+    compute engine.  This allows for:
+
+    1) Use more functionality (e.g. reductions) than numexpr.
+    2) Use both NumPy arrays and Blosc2 NDArrays in the same expression.
+
+    As NDArrays can be on-disk, the expression can be evaluated without loading
+    the whole array into memory (i.e. using an out-of-core approach).
+
+    Parameters
+    ----------
+    ex: str
+        The expression to evaluate.
+    local_dict: dict, optional
+        The local dictionary to use when looking for operands in the expression.
+        If not provided, the local dictionary of the caller will be used.
+    global_dict: dict, optional
+        The global dictionary to use when looking for operands in the expression.
+        If not provided, the global dictionary of the caller will be used.
+
+    Returns
+    -------
+    out: NumPy array
+        A NumPy array is returned.
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> dtype = np.float64
+    >>> shape = [3, 3]
+    >>> size = shape[0] * shape[1]
+    >>> a = np.linspace(0, 5, num=size, dtype=dtype).reshape(shape)
+    >>> b = blosc2.linspace(0, 5, num=size, dtype=dtype, shape=shape)
+    >>> expr = 'a * b + 2'
+    >>> out = blosc2.evaluate(expr)
+    >>> out
+    [[ 2.        2.390625  3.5625  ]
+    [ 5.515625  8.25     11.765625]
+    [16.0625   21.140625 27.      ]]
+    """
+    lexpr = lazyexpr(ex, local_dict=local_dict, global_dict=global_dict)
+    return lexpr[:]
+
+
 if __name__ == "__main__":
     from time import time
 
