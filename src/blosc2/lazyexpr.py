@@ -2188,6 +2188,10 @@ class LazyExpr(LazyArray):
         if num_elements == 0:
             raise ValueError("mean of an empty array is not defined")
         out = total_sum / num_elements
+        out2 = kwargs.pop("out", None)
+        if out2 is not None:
+            out2[:] = out
+            return out2
         if kwargs != {} and not np.isscalar(out):
             out = blosc2.asarray(out, **kwargs)
         return out
@@ -2202,6 +2206,10 @@ class LazyExpr(LazyArray):
             out = np.sqrt(out * num_elements / (num_elements - ddof))
         else:
             out = np.sqrt(out)
+        out2 = kwargs.pop("out", None)
+        if out2 is not None:
+            out2[:] = out
+            return out2
         if kwargs != {} and not np.isscalar(out):
             out = blosc2.asarray(out, **kwargs)
         return out
@@ -2216,6 +2224,10 @@ class LazyExpr(LazyArray):
             out = out * num_elements / (num_elements - ddof)
         else:
             out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, item=item)
+        out2 = kwargs.pop("out", None)
+        if out2 is not None:
+            out2[:] = out
+            return out2
         if kwargs != {} and not np.isscalar(out):
             out = blosc2.asarray(out, **kwargs)
         return out

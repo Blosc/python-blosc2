@@ -94,6 +94,14 @@ def reduc_nojit(a, b, c):
     return np.sum(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
 
 
+def reduc_mean_nojit(a, b, c):
+    return np.mean(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+
+
+def reduc_std_nojit(a, b, c):
+    return np.std(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+
+
 @blosc2.jit
 def reduc_jit(a, b, c):
     return np.sum(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
@@ -125,6 +133,22 @@ def test_reduc_out(sample_data):
     np.testing.assert_equal(out[...], d_nojit[...])
 
 
+def test_reduc_mean_out(sample_data):
+    a, b, c, shape, cshape, dtype = sample_data
+    d_nojit = reduc_mean_nojit(a, b, c)
+
+    # Testing jit decorator with an out param via the reduction function
+    out = np.zeros((shape[0],), dtype=np.float64)
+
+    # Note that out does not work with reductions as the last function call
+    @blosc2.jit
+    def reduc_mean_jit_out(a, b, c):
+        return np.mean(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1, out=out)
+
+    d_jit = reduc_mean_jit_out(a, b, c)
+    np.testing.assert_equal(out[...], d_nojit[...])
+
+
 def test_reduc_kwargs(sample_data):
     a, b, c, shape, cshape, dtype = sample_data
     d_nojit = reduc_nojit(a, b, c)
@@ -138,6 +162,25 @@ def test_reduc_kwargs(sample_data):
         return np.sum(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1, out=out)
 
     d_jit = reduc_jit_cparams(a, b, c)
+    np.testing.assert_equal(d_jit[...], d_nojit[...])
+    assert d_jit.schunk.cparams.clevel == 1
+    assert d_jit.schunk.cparams.codec == blosc2.Codec.LZ4
+    assert d_jit.schunk.cparams.filters == [blosc2.Filter.BITSHUFFLE] + [blosc2.Filter.NOFILTER] * 5
+
+
+def test_reduc_std_kwargs(sample_data):
+    a, b, c, shape, cshape, dtype = sample_data
+    d_nojit = reduc_std_nojit(a, b, c)
+
+    # Testing jit decorator with kwargs via an out param in the reduction function
+    cparams = blosc2.CParams(clevel=1, codec=blosc2.Codec.LZ4, filters=[blosc2.Filter.BITSHUFFLE])
+    out = blosc2.zeros((shape[0],), dtype=np.float64, cparams=cparams)
+
+    @blosc2.jit
+    def reduc_std_jit_cparams(a, b, c):
+        return np.std(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1, out=out)
+
+    d_jit = reduc_std_jit_cparams(a, b, c)
     np.testing.assert_equal(d_jit[...], d_nojit[...])
     assert d_jit.schunk.cparams.clevel == 1
     assert d_jit.schunk.cparams.codec == blosc2.Codec.LZ4
