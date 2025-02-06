@@ -12,6 +12,8 @@
 
 from enum import Enum
 
+import numexpr
+
 from .version import __version__
 
 __version__ = __version__
@@ -195,7 +197,9 @@ nthreads = ncores = cpu_info.get("count", 1)
 # Protection against too many threads
 nthreads = min(nthreads, 32)
 # Experiments say that, when using a large number of threads, it is better to not use them all
-nthreads -= nthreads // 8
+if nthreads > 16:
+    nthreads -= nthreads // 8
+numexpr.set_num_threads(nthreads)
 
 # This import must be before ndarray and schunk
 from .storage import (  # noqa: I001
@@ -244,7 +248,7 @@ from .lazyexpr import (
     get_expr_operands,
     validate_expr,
 )
-from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField
+from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy, jit
 
 from .schunk import SChunk, open
 

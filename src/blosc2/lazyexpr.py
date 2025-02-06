@@ -439,7 +439,7 @@ def _compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
             if smaller_shape[i - diff_dims] != 1:
                 smaller_slice.append(larger_slice[i])
             else:
-                smaller_slice.append(slice(None))
+                smaller_slice.append(slice(0, larger_shape[i]))
 
     return tuple(smaller_slice)
 
@@ -451,7 +451,7 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
     """
     diff_dims = len(larger_shape) - len(smaller_shape)
     return tuple(
-        larger_slice[i] if smaller_shape[i - diff_dims] != 1 else slice(None)
+        larger_slice[i] if smaller_shape[i - diff_dims] != 1 else slice(0, larger_shape[i])
         for i in range(diff_dims, len(larger_shape))
     )
 
@@ -587,7 +587,7 @@ def extract_numpy_scalars(expr: str):
     return transformed_expr, transformer.replacements
 
 
-def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
+def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C901
     """Validate the inputs for the expression."""
     if len(inputs) == 0:
         if out is None:
@@ -601,6 +601,7 @@ def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
             return out.shape, None, None, True
 
     inputs = [input for input in inputs.values() if hasattr(input, "shape") and input is not np]
+    # This will raise an exception if the input shapes are not compatible
     shape = compute_broadcast_shape(inputs)
 
     if not all(np.array_equal(shape, input.shape) for input in inputs):
@@ -623,7 +624,7 @@ def validate_inputs(inputs: dict, out=None) -> tuple:  # noqa: C901
     fast_path = True
     first_input = NDinputs[0]
     # Check the out NDArray (if present) first
-    if isinstance(out, blosc2.NDArray):
+    if isinstance(out, blosc2.NDArray) and not reduce:
         if first_input.shape != out.shape:
             raise ValueError("Output shape does not match the first input shape")
         if first_input.chunks != out.chunks:
@@ -821,6 +822,10 @@ def fill_chunk_operands(  # noqa: C901
                 chunk_operands[key] = value[slice_]
         return
 
+    # Get the starts and stops for the slice
+    starts = [s.start if s.start is not None else 0 for s in slice_]
+    stops = [s.stop if s.stop is not None else sh for s, sh in zip(slice_, chunks_, strict=True)]
+
     for key, value in operands.items():
         if np.isscalar(value):
             chunk_operands[key] = value
@@ -832,14 +837,6 @@ def fill_chunk_operands(  # noqa: C901
         if isinstance(value, np.ndarray | blosc2.C2Array):
             chunk_operands[key] = value[slice_]
             continue
-
-        # TODO: broadcast is not in the fast path yet, so no need to check for it
-        # slice_shape = tuple(s.stop - s.start for s in slice_)
-        # if check_smaller_shape(value, shape, slice_shape):
-        #     # We need to fetch the part of the value that broadcasts with the operand
-        #     smaller_slice = compute_smaller_slice(shape, value.shape, slice_)
-        #     chunk_operands[key] = value[smaller_slice]
-        #     continue
 
         if not full_chunk or not isinstance(value, blosc2.NDArray):
             # The chunk is not a full one, or has padding, or is not a blosc2.NDArray,
@@ -855,6 +852,16 @@ def fill_chunk_operands(  # noqa: C901
             # The chunk is a special zero chunk, so we can treat it as a scalar
             chunk_operands[key] = np.zeros((), dtype=value.dtype)
             continue
+
+        # If key is in operands, we can reuse the buffer
+        if (
+            key in chunk_operands
+            and chunks_ == chunk_operands[key].shape
+            and isinstance(value, blosc2.NDArray)
+        ):
+            value.get_slice_numpy(chunk_operands[key], (starts, stops))
+            continue
+
         if aligned:
             # Decompress the whole chunk and store it
             buff = value.schunk.decompress_chunk(nchunk)
@@ -905,10 +912,15 @@ def fast_eval(  # noqa: C901
 
     # Get the shape of the base array
     shape = basearr.shape
-    chunks = basearr.chunks
+    chunks = kwargs.pop("chunks", None)
+    if chunks is None:
+        chunks = basearr.chunks
+    blocks = kwargs.pop("blocks", None)
+    if blocks is None:
+        blocks = basearr.blocks
     # Check whether the partitions are aligned and behaved
-    aligned = blosc2.are_partitions_aligned(shape, chunks, basearr.blocks)
-    behaved = blosc2.are_partitions_behaved(shape, chunks, basearr.blocks)
+    aligned = blosc2.are_partitions_aligned(shape, chunks, blocks)
+    behaved = blosc2.are_partitions_behaved(shape, chunks, blocks)
 
     # Check that all operands are NDArray for fast path
     all_ndarray = all(isinstance(value, blosc2.NDArray) and value.shape != () for value in operands.values())
@@ -919,10 +931,9 @@ def fast_eval(  # noqa: C901
     )
     iter_disk = all_ndarray and any_persisted
 
-    chunk_operands = {}
-    chunks_idx, nchunks = get_chunks_idx(shape, chunks)
-
     # Iterate over the chunks and evaluate the expression
+    chunks_idx, nchunks = get_chunks_idx(shape, chunks)
+    chunk_operands = {}
     for nchunk in range(nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
         slice_ = tuple(
@@ -933,8 +944,6 @@ def fast_eval(  # noqa: C901
         chunks_ = tuple(s.stop - s.start for s in slice_)
 
         full_chunk = chunks_ == chunks
-        # To avoid overbooking memory, we need to clear the chunk_operands dict
-        chunk_operands.clear()
         fill_chunk_operands(
             operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands
         )
@@ -968,7 +977,7 @@ def fast_eval(  # noqa: C901
                 if getitem:
                     out = np.empty(shape, dtype=dtype)
                 else:
-                    out = blosc2.empty(shape, chunks=chunks, blocks=basearr.blocks, dtype=dtype, **kwargs)
+                    out = blosc2.empty(shape, chunks=chunks, blocks=blocks, dtype=dtype, **kwargs)
 
         # Store the result in the output array
         if getitem:
@@ -1080,19 +1089,20 @@ def slices_eval(  # noqa: C901
     orig_slice = _slice
 
     if chunks is None:
-        # Any out or operand with `chunks` will be used to get the chunks
-        operands_ = [o for o in operands.values() if hasattr(o, "chunks")]
+        # Either out, or operand with `chunks`, can be used to get the chunks
+        operands_ = [o for o in operands.values() if hasattr(o, "chunks") and o.shape == shape]
         if out is not None and hasattr(out, "chunks"):
             chunks = out.chunks
-        elif out is None or len(operands_) == 0:
+        elif len(operands_) > 0:
+            # Use the first operand with chunks to get the necessary chunking information
+            chunks = operands_[0].chunks
+        else:
+            # Typically, we enter here when using UDFs, and out is a NumPy array.
+            # Use operands to get the shape and chunks
             # operand will be a 'fake' NDArray just to get the necessary chunking information
             temp = blosc2.empty(shape, dtype=dtype)
             chunks = temp.chunks
             del temp
-        else:
-            # Typically, we enter here when using UDFs, and out is a NumPy array.
-            # Use operands to get the shape and chunks
-            chunks = operands_[0].chunks
 
     # Get the indexes for chunks
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
@@ -1109,9 +1119,10 @@ def slices_eval(  # noqa: C901
         # Now, use only the fields that are necessary for the sorting
         dtype_ = np.dtype([(f, dtype_[f]) for f in _order])
 
+    # Iterate over the operands and get the chunks
+    chunk_operands = {}
     for nchunk in range(nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
-        chunk_operands = {}
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
@@ -1135,6 +1146,11 @@ def slices_eval(  # noqa: C901
             )
         slice_shape = tuple(s.stop - s.start for s in slice_)
         len_chunk = math.prod(slice_shape)
+
+        # Get the starts and stops for the slice
+        starts = [s.start if s.start is not None else 0 for s in slice_]
+        stops = [s.stop if s.stop is not None else sh for s, sh in zip(slice_, slice_shape, strict=True)]
+
         # Get the slice of each operand
         for key, value in operands.items():
             if np.isscalar(value):
@@ -1148,6 +1164,15 @@ def slices_eval(  # noqa: C901
                 smaller_slice = compute_smaller_slice(shape, value.shape, slice_)
                 chunk_operands[key] = value[smaller_slice]
                 continue
+            # If key is in operands, we can reuse the buffer
+            if (
+                key in chunk_operands
+                and slice_shape == chunk_operands[key].shape
+                and isinstance(value, blosc2.NDArray)
+            ):
+                value.get_slice_numpy(chunk_operands[key], (starts, stops))
+                continue
+
             chunk_operands[key] = value[slice_]
 
         # Evaluate the expression using chunks of operands
@@ -1220,9 +1245,8 @@ def slices_eval(  # noqa: C901
                 behaved = blosc2.are_partitions_behaved(out.shape, out.chunks, out.blocks)
 
         if where is None or len(where) == 2:
-            if behaved:
+            if behaved and result.shape == out.chunks and result.dtype == out.dtype:
                 # Fast path
-                result = np.asarray(result, dtype=dtype)
                 out.schunk.update_data(nchunk, result, copy=False)
             else:
                 out[slice_] = result
@@ -1353,21 +1377,20 @@ def reduce_slices(  # noqa: C901
             isinstance(value, blosc2.NDArray) and value.shape != () for value in operands.values()
         )
         # Check that there is some NDArray that is persisted in the disk
-        # any_persisted = any(
-        #     (isinstance(value, blosc2.NDArray) and value.shape != () and value.schunk.urlpath is not None)
-        #     for value in operands.values()
-        # )
-        # iter_disk = all_ndarray and any_persisted
+        any_persisted = any(
+            (isinstance(value, blosc2.NDArray) and value.shape != () and value.schunk.urlpath is not None)
+            for value in operands.values()
+        )
+        iter_disk = all_ndarray and any_persisted
         # Experiments say that iter_disk is faster than the regular path for reductions
         # even when all operands are in memory, so no need to check any_persisted
-        iter_disk = all_ndarray
-        aligned = blosc2.are_partitions_aligned(shape, chunks, operand.blocks)
+        # New benchs are saying the contrary (> 10% slower), so this needs more investigation
+        # iter_disk = all_ndarray
 
     # Iterate over the operands and get the chunks
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
     chunk_operands = {}
-
-    # Iterate over the operands and get the chunks
+    out_init = False
     for nchunk in range(nchunks):
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
         # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
@@ -1395,8 +1418,6 @@ def reduce_slices(  # noqa: C901
             )
         chunks_ = tuple(s.stop - s.start for s in slice_)
 
-        # To avoid overbooking memory, we need to clear the chunk_operands dict
-        chunk_operands.clear()
         if _slice in (None, ()) and fast_path:
             # Fast path
             full_chunk = chunks_ == chunks
@@ -1404,9 +1425,10 @@ def reduce_slices(  # noqa: C901
                 operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands, reduc=True
             )
         else:
+            # Get the starts and stops for the slice
+            starts = [s.start if s.start is not None else 0 for s in slice_]
+            stops = [s.stop if s.stop is not None else sh for s, sh in zip(slice_, chunks_, strict=True)]
             # Get the slice of each operand
-            chunk_operands = {}
-
             for key, value in operands.items():
                 if np.isscalar(value):
                     chunk_operands[key] = value
@@ -1418,6 +1440,14 @@ def reduce_slices(  # noqa: C901
                     # We need to fetch the part of the value that broadcasts with the operand
                     smaller_slice = compute_smaller_slice(operand.shape, value.shape, slice_)
                     chunk_operands[key] = value[smaller_slice]
+                    continue
+                # If key is in operands, we can reuse the buffer
+                if (
+                    key in chunk_operands
+                    and chunks_ == chunk_operands[key].shape
+                    and isinstance(value, blosc2.NDArray)
+                ):
+                    value.get_slice_numpy(chunk_operands[key], (starts, stops))
                     continue
                 chunk_operands[key] = value[slice_]
 
@@ -1467,8 +1497,14 @@ def reduce_slices(  # noqa: C901
         else:
             result = reduce_op.value.reduce(result, **reduce_args)
 
-        if out is None:
-            out = convert_none_out(dtype, reduce_op, reduced_shape)
+        if not out_init:
+            if out is None:
+                out = convert_none_out(result.dtype, reduce_op, reduced_shape)
+            else:
+                out2 = convert_none_out(result.dtype, reduce_op, reduced_shape)
+                out[:] = out2
+                del out2
+            out_init = True
 
         # Update the output array with the result
         if reduce_op == ReduceOp.ANY:
@@ -1549,18 +1585,20 @@ def chunked_eval(  # noqa: C901
     try:
         getitem = kwargs.pop("_getitem", False)
         out = kwargs.get("_output")
+
         where: dict | None = kwargs.get("_where_args")
         if where:
             # Make the where arguments part of the operands
             operands = {**operands, **where}
-        _, _, _, fast_path = validate_inputs(operands, out)
+
+        reduce_args = kwargs.pop("_reduce_args", {})
+        _, _, _, fast_path = validate_inputs(operands, out, reduce=reduce_args != {})
 
         # Activate last read cache for NDField instances
         for op in operands:
             if isinstance(operands[op], blosc2.NDField):
                 operands[op].ndarr.keep_last_read = True
 
-        reduce_args = kwargs.pop("_reduce_args", {})
         if reduce_args:
             # Eval and reduce the expression in a single step
             return reduce_slices(expression, operands, reduce_args=reduce_args, _slice=item, **kwargs)
@@ -2150,6 +2188,10 @@ class LazyExpr(LazyArray):
         if num_elements == 0:
             raise ValueError("mean of an empty array is not defined")
         out = total_sum / num_elements
+        out2 = kwargs.pop("out", None)
+        if out2 is not None:
+            out2[:] = out
+            return out2
         if kwargs != {} and not np.isscalar(out):
             out = blosc2.asarray(out, **kwargs)
         return out
@@ -2164,6 +2206,10 @@ class LazyExpr(LazyArray):
             out = np.sqrt(out * num_elements / (num_elements - ddof))
         else:
             out = np.sqrt(out)
+        out2 = kwargs.pop("out", None)
+        if out2 is not None:
+            out2[:] = out
+            return out2
         if kwargs != {} and not np.isscalar(out):
             out = blosc2.asarray(out, **kwargs)
         return out
@@ -2178,6 +2224,10 @@ class LazyExpr(LazyArray):
             out = out * num_elements / (num_elements - ddof)
         else:
             out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, item=item)
+        out2 = kwargs.pop("out", None)
+        if out2 is not None:
+            out2[:] = out
+            return out2
         if kwargs != {} and not np.isscalar(out):
             out = blosc2.asarray(out, **kwargs)
         return out
@@ -2346,6 +2396,9 @@ class LazyExpr(LazyArray):
         return lazy_expr
 
     def compute(self, item=None, **kwargs) -> blosc2.NDArray:
+        # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
+        if "out" in kwargs:
+            kwargs["_output"] = kwargs.pop("out")
         if hasattr(self, "_output"):
             kwargs["_output"] = self._output
         if hasattr(self, "_where_args"):

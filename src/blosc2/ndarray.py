@@ -353,12 +353,13 @@ def _check_allowed_dtypes(
             | blosc2.C2Array
             | blosc2.Proxy
             | blosc2.ProxyNDField
+            | blosc2.SimpleProxy
             | np.ndarray,
         )
         or np.isscalar(value)
     ):
         raise RuntimeError(
-            "Expected LazyExpr, NDArray, NDField, C2Array, np.ndarray or scalar instances"
+            "Expected LazyExpr, NDArray, NDField, C2Array, Proxy, np.ndarray or scalar instances"
             f" and you provided a '{type(value)}' instance"
         )
 
@@ -3511,6 +3512,7 @@ def _check_ndarray_kwargs(**kwargs):  # noqa: C901
         "mmap_mode",
         "initial_mapping_size",
         "storage",
+        "out",
     ]
     for key in kwargs:
         if key not in supported_keys:
@@ -3519,7 +3521,10 @@ def _check_ndarray_kwargs(**kwargs):  # noqa: C901
             )
 
     if "cparams" in kwargs:
-        if isinstance(kwargs["cparams"], blosc2.CParams):
+        cparams = kwargs["cparams"]
+        if cparams is None:
+            kwargs["cparams"] = blosc2.cparams_dflts
+        if isinstance(cparams, blosc2.CParams):
             kwargs["cparams"] = asdict(kwargs["cparams"])
         else:
             if "chunks" in kwargs["cparams"]:

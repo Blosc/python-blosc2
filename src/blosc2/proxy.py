@@ -532,3 +532,147 @@ class ProxyNDField(blosc2.Operand):
         # Get the data and return the corresponding field
         nparr = self.proxy[item]
         return nparr[self.field]
+
+
+class SimpleProxy(blosc2.Operand):
+    """
+    Simple proxy for a NumPy array (or similar) that can be used with the Blosc2 compute engine.
+
+    This only supports the __getitem__ method. No caching is performed.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> a = np.arange(20, dtype=np.float32).reshape(4, 5)
+    >>> proxy = blosc2.SimpleProxy(a)
+    >>> proxy[1:3, 2:4]
+    [[ 7.  8.]
+     [12. 13.]]
+    """
+
+    def __init__(self, src, chunks: tuple | None = None, blocks: tuple | None = None):
+        if not hasattr(src, "shape") or not hasattr(src, "dtype"):
+            # If the source is not a NumPy array, convert it to one
+            src = np.asarray(src)
+        self.src = src
+        self.dtype = src.dtype
+        self.shape = src.shape
+        # Compute reasonable values for chunks and blocks
+        cparams = blosc2.CParams(clevel=0)
+        self.chunks, self.blocks = blosc2.compute_chunks_blocks(
+            self.shape, chunks, blocks, self.dtype, **{"cparams": cparams}
+        )
+
+    def __getitem__(self, item: slice | list[slice]) -> np.ndarray:
+        """
+        Get a slice as a numpy.ndarray using the :ref:`ProxyNumPy`.
+
+        Parameters
+        ----------
+        item
+
+        Returns
+        -------
+        out: numpy.ndarray
+            An array with the data slice.
+        """
+        return self.src[item]
+
+
+def jit(func=None, *, out=None, **kwargs):  # noqa: C901
+    """
+    Prepare a function so that it can be used with the Blosc2 compute engine.
+
+    The inputs of the function can be any combination of NumPy/NDArray arrays
+    and scalars.  The function will be called with the NumPy arrays replaced by
+    :ref:`SimpleProxy` objects, whereas NDArray objects will be used as is.
+
+    The returned value will be a NumPy array if all arguments are NumPy arrays
+    or if not kwargs are provided. Else, the return value will be a NDArray
+    created using the provided kwargs.
+
+    Parameters
+    ----------
+    func: callable
+        The function to be prepared for the Blosc2 compute engine.
+    out: np.ndarray, NDArray, optional
+        The output array where the result will be stored.
+    **kwargs: dict, optional
+        Additional keyword arguments supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    wrapper
+
+    Notes
+    -----
+    * Although many NumPy functions are supported, some may not be implemented yet.
+      If you find a function that is not supported, please open an issue.
+    * `out` and `kwargs` parameters are not supported for all expressions
+      (e.g. when using a reduction as the last function).  In this case, you can
+      still use the `out` parameter of the reduction function for some custom
+      control over the output.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> @blosc2.jit
+    >>> def compute_expression(a, b, c):
+    >>>     return np.sum(((a ** 3 + np.sin(a * 2)) > 2 * c) & (b > 0), axis=1)
+    >>> a = np.arange(20, dtype=np.float32).reshape(4, 5)
+    >>> b = np.arange(20).reshape(4, 5)
+    >>> c = np.arange(5)
+    >>> compute_expression(a, b, c)
+    [5 5 5 5]
+    """
+
+    def decorator(func):  # noqa: C901
+        def wrapper(*args, **func_kwargs):
+            # Get some kwargs in decorator for SimpleProxy constructor
+            proxy_kwargs = {"chunks": kwargs.get("chunks"), "blocks": kwargs.get("blocks")}
+
+            # Wrap the arguments in SimpleProxy objects if they are not NDArrays
+            new_args = []
+            for arg in args:
+                if issubclass(type(arg), blosc2.Operand):
+                    new_args.append(arg)
+                else:
+                    new_args.append(SimpleProxy(arg, **proxy_kwargs))
+            # The same for the keyword arguments
+            for key, value in func_kwargs.items():
+                if issubclass(type(value), blosc2.Operand):
+                    continue
+                func_kwargs[key] = SimpleProxy(value, **proxy_kwargs)
+
+            # Call function with the new arguments
+            retval = func(*new_args, **func_kwargs)
+
+            # Treat return value
+            # If it is a numpy array, return it as is
+            if isinstance(retval, np.ndarray):
+                if kwargs and any(kwargs[key] is not None for key in kwargs):
+                    # But if kwargs are provided, return a NDArray instead
+                    return blosc2.asarray(retval, **kwargs)
+                return retval
+
+            # In some instances, the return value is not a LazyExpr
+            # (e.g. using a reduction as the last function, and using an `out` param)
+            if not isinstance(retval, blosc2.LazyExpr):
+                return retval
+
+            # If the return value is a LazyExpr, compute it
+            if out is not None:
+                return retval.compute(out=out, **kwargs)
+            if kwargs and any(kwargs[key] is not None for key in kwargs):
+                return retval.compute(**kwargs)
+            # If no kwargs are provided, return a numpy array
+            return retval[()]
+
+        return wrapper
+
+    if func is None:
+        return decorator
+    else:
+        return decorator(func)

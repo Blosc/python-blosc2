@@ -1237,12 +1237,13 @@ def get_cbuffer_sizes(src: object) -> tuple[(int, int, int)]:
 
 
 # Compute a decent value for chunksize based on L3 and/or heuristics
-def get_chunksize(blocksize, l3_minimum=2**20, l3_maximum=2**26):
+def get_chunksize(blocksize, l3_minimum=4 * 2**20, l3_maximum=2**26):
     # Find a decent default when L3 cannot be detected by cpuinfo
     # Based mainly in heuristics
     chunksize = blocksize
     if blocksize * 32 < l3_maximum:
         chunksize = blocksize * 32
+
     # Refine with L2/L3 measurements (not always possible)
     cpu_info = blosc2.cpu_info
     if "l3_cache_size" in cpu_info:
@@ -1256,15 +1257,17 @@ def get_chunksize(blocksize, l3_minimum=2**20, l3_maximum=2**26):
             l2_cache_size = cpu_info.get("l2_cache_size", "Not found")
             if isinstance(l2_cache_size, int) and l3_cache_size > l2_cache_size:
                 chunksize = l3_cache_size
+        # When computing expressions, it is convenient to keep chunks for all operands
+        # in L3 cache, so let's divide by 4 (3 operands + result is a typical situation
+        # for moderately complex expressions)
+        chunksize //= 4
+
     # Chunksize should be at least the size of L2
     l2_cache_size = cpu_info.get("l2_cache_size", "Not found")
     if isinstance(l2_cache_size, int) and l2_cache_size > chunksize:
-        chunksize = l2_cache_size
-
-    # When evaluating expressions, it is convenient to keep chunks for all operands in L3 cache,
-    # so let's divide by 4 (3 operands + result is a typical situation for moderately complex
-    # expressions)
-    chunksize //= 4
+        # Apple Silicon has a large L2 cache, and memory bandwidth is high,
+        # so we can use a larger chunksize based on L2 cache size
+        chunksize = l2_cache_size * 4
 
     # Ensure a minimum size
     if chunksize < l3_minimum:
@@ -1323,7 +1326,7 @@ def compute_partition(nitems, maxshape, minpart=None):
 
 
 def compute_chunks_blocks(  # noqa: C901
-    shape: tuple[int] | list,
+    shape: tuple | list,
     chunks: tuple | list | None = None,
     blocks: tuple | list | None = None,
     dtype: np.dtype = np.uint8,
@@ -1384,6 +1387,8 @@ def compute_chunks_blocks(  # noqa: C901
         return chunks, blocks
 
     cparams = kwargs.get("cparams") or copy.deepcopy(blosc2.cparams_dflts)
+    if isinstance(cparams, blosc2.CParams):
+        cparams = asdict(cparams)
     # Typesize in dtype always has preference over typesize in cparams
     itemsize = cparams["typesize"] = np.dtype(dtype).itemsize
 
@@ -1407,21 +1412,28 @@ def compute_chunks_blocks(  # noqa: C901
         cparams2["tuner"] = blosc2.Tuner.STUNE
         src = blosc2.compress2(np.zeros(nitems, dtype=f"V{itemsize}"), **cparams2)
         _, _, blocksize = blosc2.get_cbuffer_sizes(src)
-        # Maximum blocksize calculation
-        max_blocksize = blocksize
+        # Minimum blocksize calculation
+        min_blocksize = blocksize
         if platform.machine() == "x86_64":
-            # For modern Intel/AMD archs, experiments say to use half of the L2 cache size
-            max_blocksize = blosc2.cpu_info["l2_cache_size"] // 2
+            # For modern Intel/AMD archs, experiments say to split the cache among the operands
+            min_blocksize = blosc2.cpu_info["l2_cache_size"] // 4
+            if blosc2.cpu_info["l2_cache_size"] >= 2**21:
+                # Incidentally, some modern Intel CPUs have a larger L2 cache (2 MB) and they
+                # prefer smaller blocks.  This is somewhat heuristic, but it seems to work well.
+                min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 4
+            # New experiments say that using the 4x of the L1 size is even better
+            # But let's avoid this because it does not work well for AMD archs
+            # min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 4
         elif platform.system() == "Darwin" and "arm" in platform.machine():
-            # For Apple Silicon, experiments say to use half of the L1 cache size
-            max_blocksize = blosc2.cpu_info["l1_data_cache_size"] // 2
-        if "clevel" in cparams and cparams["clevel"] == 0:
-            # Experiments show that, when no compression is used, it is not a good idea
-            # to exceed half of private cache for the blocksize because speed suffers
-            # too much during evaluations.
-            blocksize = max_blocksize
-        elif blocksize > max_blocksize:
-            blocksize = max_blocksize
+            # For Apple Silicon, experiments say we can use 4x the L1 size
+            min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 2
+        elif "l1_data_cache_size" in blosc2.cpu_info and isinstance(
+            blosc2.cpu_info["l1_data_cache_size"], int
+        ):
+            # For other archs, we don't have hints; be conservative and use 2x the L1 size
+            min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 2
+        if blocksize < min_blocksize:
+            blocksize = min_blocksize
 
         cparams2["tuner"] = aux_tuner
     else:
