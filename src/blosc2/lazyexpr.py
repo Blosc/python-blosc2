@@ -460,7 +460,7 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
 validation_patterns = [
     r"[\;\[\:]",  # Flow control characters
     r"(^|[^\w])__[\w]+__($|[^\w])",  # Dunder methods
-    r"\.\b(?!real|imag|(\d*[eE]?[+-]?\d+)|\d*j\b|(sum|prod|min|max|std|mean|var|any|all|where)"
+    r"\.\b(?!real|imag|(\d*[eE]?[+-]?\d+)|(\d*[eE]?[+-]?\d+j)|\d*j\b|(sum|prod|min|max|std|mean|var|any|all|where)"
     r"\s*\([^)]*\)|[a-zA-Z_]\w*\s*\([^)]*\))",  # Attribute patterns
 ]
 
