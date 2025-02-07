@@ -2338,6 +2338,9 @@ class LazyExpr(LazyArray):
                         where_x = self._where_args["_where_x"]
                         where_y = self._where_args["_where_y"]
                         return np.where(lazy_expr, where_x, where_y)
+                if hasattr(self, "_output"):
+                    # This is not exactly optimized, but it works for now
+                    self._output[:] = lazy_expr
                 return lazy_expr
 
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
@@ -2873,6 +2876,7 @@ def lazyexpr(
     local_dict: dict | None = None,
     global_dict: dict | None = None,
     optimization: str = "aggressive",
+    _frame_depth: int = 2,
 ) -> LazyExpr:
     """
     Get a LazyExpr from an expression.
@@ -2902,6 +2906,10 @@ def lazyexpr(
         The optimization level to use when evaluating the expression. Possible
         values are "aggressive" and "moderate".  The default value is "aggressive".
         This parameter has the same meaning as in `numexpr.evaluate()`.
+    _frame_depth: int, optional
+        The depth of the frame to use when looking for operands in the expression.
+        The default value is 2.
+
 
     Returns
     -------
@@ -2955,7 +2963,7 @@ def lazyexpr(
         # If no operands are found, raise an error
         if operand_set:
             # Look for operands in the stack
-            operands = seek_operands(operand_set, local_dict, global_dict)
+            operands = seek_operands(operand_set, local_dict, global_dict, _frame_depth=_frame_depth)
         else:
             # No operands found in the expression. Maybe a constructor?
             constructor = any(constructor in expression for constructor in constructors)
@@ -3003,7 +3011,11 @@ def _open_lazyarray(array):
 
 
 # Mimim numexpr's evaluate function
-def evaluate(ex, local_dict=None, global_dict=None, optimization="aggressive"):
+def evaluate(ex: str,
+             local_dict: dict = None,
+             global_dict: dict = None,
+             out: blosc2.NDArray | numpy.ndarray = None,
+             optimization="aggressive"):
     """
     Evaluate a string expression using the Blosc2 compute engine.
 
@@ -3026,10 +3038,13 @@ def evaluate(ex, local_dict=None, global_dict=None, optimization="aggressive"):
     global_dict: dict, optional
         The global dictionary to use when looking for operands in the expression.
         If not provided, the global dictionary of the caller will be used.
+    out: NDArray or NumPy array, optional
+        The output array where the result will be stored. If not provided,
+        a new array will be created and returned.
     optimization: str, optional
         The optimization level to use when evaluating the expression. Possible
-        values are "aggressive" and "moderate".  The default value is "aggressive".
-        This parameter has the same meaning as in `numexpr.evaluate()`.
+        values are "aggressive", "moderate" and "none"; the default value is
+        "aggressive".  This parameter is the same as in `numexpr.evaluate()`.
 
     Returns
     -------
@@ -3052,7 +3067,8 @@ def evaluate(ex, local_dict=None, global_dict=None, optimization="aggressive"):
     [ 5.515625  8.25     11.765625]
     [16.0625   21.140625 27.      ]]
     """
-    lexpr = lazyexpr(ex, local_dict=local_dict, global_dict=global_dict, optimization=optimization)
+    lexpr = lazyexpr(ex, local_dict=local_dict, global_dict=global_dict,
+                     out=out, optimization=optimization, _frame_depth=3)
     return lexpr[:]
 
 

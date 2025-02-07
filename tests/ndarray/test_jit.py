@@ -34,7 +34,7 @@ def sample_data(request):
     a = blosc2.linspace(0, 1, shape[0] * shape[1], dtype=dtype, shape=shape)
     b = np.linspace(1, 2, shape[0] * shape[1], dtype=dtype).reshape(shape)
     c = blosc2.linspace(-10, 10, cshape[0], dtype=dtype, shape=cshape)
-    return a, b, c, shape, cshape, dtype
+    return a, b, c, shape
 
 
 def expr_nojit(a, b, c):
@@ -47,14 +47,14 @@ def expr_jit(a, b, c):
 
 
 def test_expr(sample_data):
-    a, b, c, shape, cshape, dtype = sample_data
+    a, b, c, shape = sample_data
     d_jit = expr_jit(a, b, c)
     d_nojit = expr_nojit(a, b, c)
     np.testing.assert_equal(d_jit[...], d_nojit[...])
 
 
 def test_expr_out(sample_data):
-    a, b, c, shape, cshape, dtype = sample_data
+    a, b, c, shape = sample_data
     d_nojit = expr_nojit(a, b, c)
 
     # Testing jit decorator with an out param
@@ -70,7 +70,7 @@ def test_expr_out(sample_data):
 
 
 def test_expr_kwargs(sample_data):
-    a, b, c, shape, cshape, dtype = sample_data
+    a, b, c, shape = sample_data
     d_nojit = expr_nojit(a, b, c)
 
     # Testing jit decorator with kwargs
@@ -108,7 +108,7 @@ def reduc_jit(a, b, c):
 
 
 def test_reduc(sample_data):
-    a, b, c, shape, cshape, dtype = sample_data
+    a, b, c, shape = sample_data
 
     d_jit = reduc_jit(a, b, c)
     d_nojit = reduc_nojit(a, b, c)
@@ -117,7 +117,7 @@ def test_reduc(sample_data):
 
 
 def test_reduc_out(sample_data):
-    a, b, c, shape, cshape, dtype = sample_data
+    a, b, c, shape = sample_data
     d_nojit = reduc_nojit(a, b, c)
 
     # Testing jit decorator with an out param via the reduction function
@@ -134,7 +134,7 @@ def test_reduc_out(sample_data):
 
 
 def test_reduc_mean_out(sample_data):
-    a, b, c, shape, cshape, dtype = sample_data
+    a, b, c, shape = sample_data
     d_nojit = reduc_mean_nojit(a, b, c)
 
     # Testing jit decorator with an out param via the reduction function
@@ -150,7 +150,7 @@ def test_reduc_mean_out(sample_data):
 
 
 def test_reduc_kwargs(sample_data):
-    a, b, c, shape, cshape, dtype = sample_data
+    a, b, c, shape = sample_data
     d_nojit = reduc_nojit(a, b, c)
 
     # Testing jit decorator with kwargs via an out param in the reduction function
@@ -169,7 +169,7 @@ def test_reduc_kwargs(sample_data):
 
 
 def test_reduc_std_kwargs(sample_data):
-    a, b, c, shape, cshape, dtype = sample_data
+    a, b, c, shape = sample_data
     d_nojit = reduc_std_nojit(a, b, c)
 
     # Testing jit decorator with kwargs via an out param in the reduction function
