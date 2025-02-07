@@ -3023,8 +3023,8 @@ def evaluate(
     """
     Evaluate a string expression using the Blosc2 compute engine.
 
-    This is a drop-in replacement for numexpr.evaluate, but using the Blosc2
-    compute engine.  This allows for:
+    This is a drop-in replacement for `numexpr.evaluate()`, but using the
+    Blosc2 compute engine.  This allows for:
 
     1) Use more functionality (e.g. reductions) than numexpr.
     2) Use both NumPy arrays and Blosc2 NDArrays in the same expression.

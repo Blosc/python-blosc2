@@ -48,19 +48,8 @@ This object follows the `LazyArray`_ API for computation and storage.
 
     lazyexpr
 
+
 .. _LazyUDF:
-
-Utilities
-~~~~~~~~~
-
-A series of utilities are provided to work with LazyExpr objects.
-
-.. autosummary::
-    :toctree: autofiles/lazyarray
-    :nosignatures:
-
-    validate_expr
-    get_expr_operands
 
 LazyUDF
 -------
@@ -74,3 +63,17 @@ This object follows the `LazyArray`_ API for computation, although storage is no
     :nosignatures:
 
     lazyudf
+
+
+Utilities
+---------
+
+A series of utilities are provided to work with LazyExpr objects.
+
+.. autosummary::
+    :toctree: autofiles/lazyarray
+    :nosignatures:
+
+    evaluate
+    get_expr_operands
+    validate_expr
