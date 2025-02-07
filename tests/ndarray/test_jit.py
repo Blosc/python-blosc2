@@ -15,14 +15,7 @@ import blosc2
 
 # Define the parameters
 test_params = [
-    (
-        (10, 100),
-        (
-            10,
-            100,
-        ),
-        "float32",
-    ),
+    ((10, 100), (10, 100), "float32"),
     ((10, 100), (100,), "float64"),  # using broadcasting
 ]
 

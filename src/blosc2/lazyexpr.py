@@ -897,7 +897,9 @@ def fast_eval(  # noqa: C901
         The output array.
     """
     out = kwargs.pop("_output", None)
-    optimization = kwargs.pop("_optimization", "aggressive")
+    ne_args: dict = kwargs.pop("_ne_args", {})
+    if ne_args is None:
+        ne_args = {}
     dtype = kwargs.pop("dtype", None)
     where: dict | None = kwargs.pop("_where_args", None)
     if isinstance(out, blosc2.NDArray):
@@ -963,12 +965,12 @@ def fast_eval(  # noqa: C901
             expression(tuple(chunk_operands.values()), result, offset=offset)
         else:
             if where is None:
-                result = ne.evaluate(expression, chunk_operands, optimization=optimization)
+                result = ne.evaluate(expression, chunk_operands, **ne_args)
             else:
                 # Apply the where condition (in result)
                 if len(where) == 2:
                     new_expr = f"where({expression}, _where_x, _where_y)"
-                    result = ne.evaluate(new_expr, chunk_operands, optimization=optimization)
+                    result = ne.evaluate(new_expr, chunk_operands, **ne_args)
                 else:
                     # We do not support one or zero operands in the fast path yet
                     raise ValueError("Fast path: the where condition must be a tuple with two elements")
@@ -1069,7 +1071,9 @@ def slices_eval(  # noqa: C901
         The output array.
     """
     out: blosc2.NDArray | None = kwargs.pop("_output", None)
-    optimization = kwargs.pop("_optimization", "aggressive")
+    ne_args: dict = kwargs.pop("_ne_args", {})
+    if ne_args is None:
+        ne_args = {}
     chunks = kwargs.get("chunks")
     where: dict | None = kwargs.pop("_where_args", None)
     _indices = kwargs.pop("_indices", False)
@@ -1188,7 +1192,7 @@ def slices_eval(  # noqa: C901
             continue
 
         if where is None:
-            result = ne.evaluate(expression, chunk_operands, optimization=optimization)
+            result = ne.evaluate(expression, chunk_operands, **ne_args)
         else:
             # Apply the where condition (in result)
             if len(where) == 2:
@@ -1197,9 +1201,9 @@ def slices_eval(  # noqa: C901
                 # result = np.where(result, x, y)
                 # numexpr is a bit faster than np.where, and we can fuse operations in this case
                 new_expr = f"where({expression}, _where_x, _where_y)"
-                result = ne.evaluate(new_expr, chunk_operands, optimization=optimization)
+                result = ne.evaluate(new_expr, chunk_operands, **ne_args)
             elif len(where) == 1:
-                result = ne.evaluate(expression, chunk_operands, optimization=optimization)
+                result = ne.evaluate(expression, chunk_operands, **ne_args)
                 if _indices or _order:
                     # Return indices only makes sense when the where condition is a tuple with one element
                     # and result is a boolean array
@@ -1334,7 +1338,9 @@ def reduce_slices(  # noqa: C901
         The resulting output array.
     """
     out = kwargs.pop("_output", None)
-    optimization = kwargs.pop("_optimization", "aggressive")
+    ne_args: dict = kwargs.pop("_ne_args", {})
+    if ne_args is None:
+        ne_args = {}
     where: dict | None = kwargs.pop("_where_args", None)
     reduce_op = reduce_args.pop("op")
     axis = reduce_args["axis"]
@@ -1471,14 +1477,14 @@ def reduce_slices(  # noqa: C901
                 # We don't have an actual expression, so avoid a copy
                 result = chunk_operands["o0"]
             else:
-                result = ne.evaluate(expression, chunk_operands, optimization=optimization)
+                result = ne.evaluate(expression, chunk_operands, **ne_args)
         else:
             # Apply the where condition (in result)
             if len(where) == 2:
                 new_expr = f"where({expression}, _where_x, _where_y)"
-                result = ne.evaluate(new_expr, chunk_operands, optimization=optimization)
+                result = ne.evaluate(new_expr, chunk_operands, **ne_args)
             elif len(where) == 1:
-                result = ne.evaluate(expression, chunk_operands, optimization=optimization)
+                result = ne.evaluate(expression, chunk_operands, **ne_args)
                 x = chunk_operands["_where_x"]
                 result = x[result]
             else:
@@ -1582,8 +1588,8 @@ def chunked_eval(  # noqa: C901
             Default is False.
         _output: NDArray or np.ndarray, optional
             The output array to store the result.
-        _optimization: str, optional
-            The optimization level to use.  Default is 'aggressive'.
+        _ne_args: dict, optional
+            Additional arguments to be passed to `numexpr.evaluate()` function.
         _where_args: dict, optional
             Additional arguments for conditional evaluation.
     """
@@ -2407,10 +2413,12 @@ class LazyExpr(LazyArray):
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
         if "out" in kwargs:
             kwargs["_output"] = kwargs.pop("out")
-        if "optimization" in kwargs:
-            kwargs["_optimization"] = kwargs.pop("optimization")
         if hasattr(self, "_output"):
             kwargs["_output"] = self._output
+        if "ne_args" in kwargs:
+            kwargs["_ne_args"] = kwargs.pop("ne_args")
+        if hasattr(self, "_ne_args"):
+            kwargs["_ne_args"] = self._ne_args
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
         kwargs["dtype"] = self.dtype
@@ -2430,7 +2438,7 @@ class LazyExpr(LazyArray):
             and not isinstance(result, blosc2.NDArray)
         ):
             # Get rid of all the extra kwargs that are not accepted by blosc2.asarray
-            kwargs_not_accepted = {"_where_args", "_indices", "_order", "dtype"}
+            kwargs_not_accepted = {"_where_args", "_indices", "_order", "_ne_args", "dtype"}
             kwargs = {key: value for key, value in kwargs.items() if key not in kwargs_not_accepted}
             result = blosc2.asarray(result, **kwargs)
         return result
@@ -2548,7 +2556,7 @@ class LazyExpr(LazyArray):
         }
 
     @classmethod
-    def _new_expr(cls, expression, operands, guess, out=None, where=None, optimization="aggressive"):
+    def _new_expr(cls, expression, operands, guess, out=None, where=None, ne_args=None):
         # Validate the expression
         validate_expr(expression)
         if guess:
@@ -2588,7 +2596,7 @@ class LazyExpr(LazyArray):
             new_expr._output = out
         if where is not None:
             new_expr._where_args = where
-        new_expr._optimization = optimization
+        new_expr._ne_args = ne_args
         return new_expr
 
 
@@ -2875,7 +2883,7 @@ def lazyexpr(
     where: tuple | list | None = None,
     local_dict: dict | None = None,
     global_dict: dict | None = None,
-    optimization: str = "aggressive",
+    ne_args: dict | None = None,
     _frame_depth: int = 2,
 ) -> LazyExpr:
     """
@@ -2902,10 +2910,8 @@ def lazyexpr(
     global_dict: dict, optional
         The global dictionary to use when looking for operands in the expression.
         If not provided, the global dictionary of the caller will be used.
-    optimization: str, optional
-        The optimization level to use when evaluating the expression. Possible
-        values are "aggressive" and "moderate".  The default value is "aggressive".
-        This parameter has the same meaning as in `numexpr.evaluate()`.
+    ne_args: dict, optional
+        Additional arguments to be passed to `numexpr.evaluate()` function.
     _frame_depth: int, optional
         The depth of the frame to use when looking for operands in the expression.
         The default value is 2.
@@ -2946,16 +2952,14 @@ def lazyexpr(
             expression.operands.update(operands)
         if out is not None:
             expression._output = out
-        expression._optimization = optimization
+        expression._ne_args = ne_args
         if where is not None:
             where_args = {"_where_x": where[0], "_where_y": where[1]}
             expression._where_args = where_args
         return expression
     elif isinstance(expression, blosc2.NDArray):
         operands = {"o0": expression}
-        return LazyExpr._new_expr(
-            "o0", operands, guess=False, out=out, where=where, optimization=optimization
-        )
+        return LazyExpr._new_expr("o0", operands, guess=False, out=out, where=where, ne_args=ne_args)
 
     if operands is None:
         # Try to get operands from variables in the stack
@@ -2972,9 +2976,7 @@ def lazyexpr(
             # _new_expr will take care of the constructor, but needs an empty dict in operands
             operands = {}
 
-    return LazyExpr._new_expr(
-        expression, operands, guess=True, out=out, where=where, optimization=optimization
-    )
+    return LazyExpr._new_expr(expression, operands, guess=True, out=out, where=where, ne_args=ne_args)
 
 
 def _open_lazyarray(array):
@@ -3011,11 +3013,13 @@ def _open_lazyarray(array):
 
 
 # Mimim numexpr's evaluate function
-def evaluate(ex: str,
-             local_dict: dict = None,
-             global_dict: dict = None,
-             out: blosc2.NDArray | numpy.ndarray = None,
-             optimization="aggressive"):
+def evaluate(
+    ex: str,
+    local_dict: dict | None = None,
+    global_dict: dict | None = None,
+    out: np.ndarray | blosc2.NDArray = None,
+    ne_args: dict | None = None,
+) -> np.ndarray | blosc2.NDArray:
     """
     Evaluate a string expression using the Blosc2 compute engine.
 
@@ -3040,16 +3044,15 @@ def evaluate(ex: str,
         If not provided, the global dictionary of the caller will be used.
     out: NDArray or NumPy array, optional
         The output array where the result will be stored. If not provided,
-        a new array will be created and returned.
-    optimization: str, optional
-        The optimization level to use when evaluating the expression. Possible
-        values are "aggressive", "moderate" and "none"; the default value is
-        "aggressive".  This parameter is the same as in `numexpr.evaluate()`.
+        a new NumPy array will be created and returned.
+    ne_args: dict, optional
+        Additional arguments to be passed to `numexpr.evaluate()` function.
 
     Returns
     -------
-    out: NumPy array
-        A NumPy array is returned.
+    out: NumPy or NDArray
+        The result of the expression evaluation.  If out is provided, the result
+        will be stored in out and returned at the same time.
 
     Examples
     --------
@@ -3067,9 +3070,14 @@ def evaluate(ex: str,
     [ 5.515625  8.25     11.765625]
     [16.0625   21.140625 27.      ]]
     """
-    lexpr = lazyexpr(ex, local_dict=local_dict, global_dict=global_dict,
-                     out=out, optimization=optimization, _frame_depth=3)
-    return lexpr[:]
+    lexpr = lazyexpr(
+        ex, local_dict=local_dict, global_dict=global_dict, out=out, ne_args=ne_args, _frame_depth=3
+    )
+    if out is not None:
+        # The user specified an output array
+        return lexpr.compute()
+    # The user did not specify an output array, so return a NumPy array
+    return lexpr[()]
 
 
 if __name__ == "__main__":
