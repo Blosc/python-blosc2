@@ -3018,7 +3018,7 @@ def evaluate(
     local_dict: dict | None = None,
     global_dict: dict | None = None,
     out: np.ndarray | blosc2.NDArray = None,
-    kwargs: dict | None = None,
+    **kwargs: Any,
 ) -> np.ndarray | blosc2.NDArray:
     """
     Evaluate a string expression using the Blosc2 compute engine.
@@ -3027,7 +3027,8 @@ def evaluate(
     Blosc2 compute engine.  This allows for:
 
     1) Use more functionality (e.g. reductions) than numexpr.
-    2) Use both NumPy arrays and Blosc2 NDArrays in the same expression.
+    2) Follow casting rules of NumPy more closely.
+    3) Use both NumPy arrays and Blosc2 NDArrays in the same expression.
 
     As NDArrays can be on-disk, the expression can be evaluated without loading
     the whole array into memory (i.e. using an out-of-core approach).
@@ -3045,7 +3046,7 @@ def evaluate(
     out: NDArray or NumPy array, optional
         The output array where the result will be stored. If not provided,
         a new NumPy array will be created and returned.
-    kwargs: dict, optional
+    kwargs: Any, optional
         Additional arguments to be passed to `numexpr.evaluate()` function.
 
     Returns
