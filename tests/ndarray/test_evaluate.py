@@ -51,7 +51,7 @@ def test_expr_out(sample_data):
 
 def test_expr_optimization(sample_data):
     a, b, c, shape = sample_data
-    d_blosc2 = blosc2.evaluate("((a**3 + sin(a * 2)) < c) & (b > 0)", ne_args={"optimization": "none"})
+    d_blosc2 = blosc2.evaluate("((a**3 + sin(a * 2)) < c) & (b > 0)", kwargs={"optimization": "none"})
     d_numexpr = ne.evaluate("((a**3 + sin(a * 2)) < c) & (b > 0)", optimization="none")
     np.testing.assert_equal(d_blosc2, d_numexpr)
 

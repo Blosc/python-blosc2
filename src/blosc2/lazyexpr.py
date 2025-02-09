@@ -3018,7 +3018,7 @@ def evaluate(
     local_dict: dict | None = None,
     global_dict: dict | None = None,
     out: np.ndarray | blosc2.NDArray = None,
-    ne_args: dict | None = None,
+    kwargs: dict | None = None,
 ) -> np.ndarray | blosc2.NDArray:
     """
     Evaluate a string expression using the Blosc2 compute engine.
@@ -3045,7 +3045,7 @@ def evaluate(
     out: NDArray or NumPy array, optional
         The output array where the result will be stored. If not provided,
         a new NumPy array will be created and returned.
-    ne_args: dict, optional
+    kwargs: dict, optional
         Additional arguments to be passed to `numexpr.evaluate()` function.
 
     Returns
@@ -3071,7 +3071,7 @@ def evaluate(
     [16.0625   21.140625 27.      ]]
     """
     lexpr = lazyexpr(
-        ex, local_dict=local_dict, global_dict=global_dict, out=out, ne_args=ne_args, _frame_depth=3
+        ex, local_dict=local_dict, global_dict=global_dict, out=out, ne_args=kwargs, _frame_depth=3
     )
     if out is not None:
         # The user specified an output array
