@@ -8,5 +8,5 @@ API Reference
     save_load
     storage
     array_operations
-    decorators
+    utilities
     low_level

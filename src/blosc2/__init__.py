@@ -247,6 +247,7 @@ from .lazyexpr import (
     _open_lazyarray,
     get_expr_operands,
     validate_expr,
+    evaluate,
 )
 from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy, jit
 

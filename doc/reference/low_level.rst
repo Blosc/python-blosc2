@@ -1,5 +1,7 @@
-Low level API
-=============
+Compression Utilities
+=====================
+
+Although using NDArray/SChunk objects is the recommended way to work with Blosc2 data, there are some utilities that allow you to work with Blosc2 data in a more low-level way.  This is useful when you need to work with data that is not stored in NDArray/SChunk objects, or when you need to work with data that is stored in a different format.
 
 This API is meant to be compatible with the existing python-blosc API. There could be some parameters that are called differently, but other than that, they are largely compatible.  In addition, there are some new functions that are not present in the original python-blosc API that are mainly meant to overcome the 2 GB limit that the original API had.
 
