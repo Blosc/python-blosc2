@@ -120,6 +120,10 @@ def compress(
     instead of the python-blosc API variables like `blosc.SHUFFLE` for :paramref:`filter`
     or strings like "blosclz" for :paramref:`codec`.
 
+    This function only can deal with data < 2 GB.  If you want to compress
+    larger buffers, you should use the :class:`~blosc2.SChunk` class or, if you want to save
+    large arrays/tensors, the :func:`~blosc2.pack_tensor` function can be handier.
+
     Examples
     --------
     >>> import array, sys
@@ -128,6 +132,12 @@ def compress(
     >>> c_bytesobj = blosc2.compress(a_bytesobj, typesize=4)
     >>> len(c_bytesobj) < len(a_bytesobj)
     True
+
+    See also
+    --------
+    :func:`~blosc2.decompress`
+    :func:`~blosc2.pack_tensor`
+    :class:`~blosc2.SChunk`
     """
     len_src = len(src)
     if hasattr(src, "itemsize"):
@@ -633,7 +643,6 @@ def pack_tensor(
 
     Notes
     -----
-
     In case you pass a TensorFlow/PyTorch tensor, the tensor will be converted to a NumPy array
     before being packed. The tensor will be restored to its original form when unpacked.
 
@@ -1486,6 +1495,27 @@ def compress2(src: object, **kwargs: dict) -> str | bytes:
         If the data cannot be compressed into `dst`.
         If an internal error occurs, likely due to an
         invalid parameter.
+
+    Notes
+    -----
+    This function only can deal with data < 2 GB.  If you want to compress
+    larger buffers, you should use the :class:`~blosc2.SChunk` class or, if you want to save
+    large arrays/tensors, the :func:`~blosc2.pack_tensor` function can be handier.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> data = np.arange(1e6, dtype=np.float32)
+    >>> cparams = blosc2.CParams()
+    >>> compressed_data = blosc2.compress2(data, cparams=cparams)
+    >>> print(f"Compressed data length: {len(compressed_data)} bytes")
+    Compressed data length: 14129 bytes
+
+    See also
+    --------
+    :func:`~blosc2.decompress2`
+    :func:`~blosc2.pack_tensor`
+    :class:`~blosc2.SChunk`
     """
     if kwargs is not None and "cparams" in kwargs:
         if len(kwargs) > 1:
