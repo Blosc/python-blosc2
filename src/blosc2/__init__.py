@@ -195,7 +195,7 @@ nthreads = ncores = cpu_info.get("count", 1)
 """Number of threads to be used in compression/decompression.
 """
 # Protection against too many threads
-nthreads = min(nthreads, 32)
+nthreads = min(nthreads, 64)
 # Experiments say that, when using a large number of threads, it is better to not use them all
 if nthreads > 16:
     nthreads -= nthreads // 8
