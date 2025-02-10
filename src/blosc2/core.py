@@ -26,6 +26,8 @@ from typing import TYPE_CHECKING, Any
 import cpuinfo
 import numpy as np
 import platformdirs
+import subprocess
+import json
 
 import blosc2
 from blosc2 import blosc2_ext
@@ -1152,9 +1154,40 @@ def apple_silicon_cache_size(cache_level: int) -> int:
     return size.value
 
 
+def get_l3_cache_info():
+    result = subprocess.run(["lscpu", "--json"], capture_output=True, text=True)
+    lscpu_info = json.loads(result.stdout)
+    for entry in lscpu_info['lscpu']:
+        if entry['field'] == "L3 cache:":
+            size_str, instances_str = entry['data'].split(' (')
+            size = int(size_str.split()[0]) * 1024 * 1024  # Convert MiB to bytes
+            instances = int(instances_str.split()[0])
+            return size, instances
+
+    return None, None
+
+
 def linux_cache_size(cache_level: int, default_size: int) -> int:
     """Get the data cache_level size in bytes for Linux."""
     cache_size = default_size
+    if cache_level == 3:
+        # In modern multicore CPUs, the L3 cache is normally shared among all core complexes (CCX),
+        # but sysfs only reports the cache size for each complex, so better use lscpu, if available.
+        try:
+            l3_cache_size, l3_cache_instances = get_l3_cache_info()
+            # What comes next is an heuristic to guess the most appropriate L3 cache size.
+            # Essentially, this is the result of different experiments, mainly on AMD CPUs
+            # (in particular, Ryzen 9800X3D with 8 cores, and EPYC 9454P with 48 cores).
+            # For Intel, YMMV, but my guess is that they are not using the same CCX approach.
+            l3_cache_size *= l3_cache_instances
+            if l3_cache_instances > 1:
+                # This is yet another heuristic for large CPUs with core sets (CCX) having
+                # their own L3.  No idea why, but it seems to work well.
+                l3_cache_size *= l3_cache_instances // 2
+            return l3_cache_size
+        except (FileNotFoundError, ValueError):
+            # If lscpu is not available or the cache size cannot be read, try with sysfs
+            pass
     try:
         with open(f"/sys/devices/system/cpu/cpu0/cache/index{cache_level}/size") as f:
             size = f.read()
@@ -1178,7 +1211,8 @@ def _get_cpu_info():
     # cpuinfo does not correctly retrieve the cache sizes for all CPUs on Linux, so ask the kernel
     if platform.system() == "Linux":
         l1_data_cache_size = cpu_info.get("l1_data_cache_size", 32 * 1024)
-        cpu_info["l1_data_cache_size"] = linux_cache_size(1, l1_data_cache_size)
+        # Cache level 0 is typically the L1 data cache, and level 1 is the L1 instruction cache
+        cpu_info["l1_data_cache_size"] = linux_cache_size(0, l1_data_cache_size)
         l2_cache_size = cpu_info.get("l2_cache_size", 256 * 1024)
         cpu_info["l2_cache_size"] = linux_cache_size(2, l2_cache_size)
         l3_cache_size = cpu_info.get("l3_cache_size", 1024 * 1024)
