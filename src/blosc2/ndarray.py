@@ -3643,6 +3643,63 @@ def sort(array: NDArray, order: str | list[str] | None = None, **kwargs: Any) ->
     return larr.sort(order).compute(**kwargs)
 
 
+def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
+    """
+    Perform matrix multiplication between two Blosc2 NDArrays.
+
+    Parameters
+    ----------
+    x1: `NDArray`
+        First input array. Must have a numeric data type and at least one dimension.
+        If one-dimensional (M,), it is promoted to (1, M) before multiplication.
+    x2: `NDArray`
+        Second input array. Must have a numeric data type and at least one dimension.
+        If one-dimensional (N,), it is promoted to (N, 1) before multiplication.
+    kwargs: Any, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        The result matrix.
+    """
+
+    # Ensure inputs have at least one dimension
+    if x1.ndim == 0 or x2.ndim == 0:
+        raise ValueError("Both inputs must have at least one dimension.")
+
+    # Promote 1D arrays to 2D if necessary
+    if x1.ndim == 1:
+        x1 = x1.reshape((1, x1.shape[0]))  # (M,) -> (1, M)
+    if x2.ndim == 1:
+        x2 = x2.reshape((x2.shape[0], 1))  # (N,) -> (N, 1)
+
+    # Validate matrix multiplication compatibility
+    if x1.shape[1] != x2.shape[0]:
+        raise ValueError("Shapes are not aligned for matrix multiplication.")
+
+    m, l = x1.shape
+    _, n = x2.shape
+    p1, q1 = x1.chunks
+    p2, q2 = x2.chunks
+
+    result = np.zeros((m, n))
+    # result = blosc2.zeros(n) # TODO: file a ticket for blosc2.zeros()
+
+    for row in range(0, m, p1):
+        rowA_end = min(row + p1, m)
+        for col in range(0, n, q2):
+            colB_end = min(col + q2, n)
+            br = result[row:rowA_end, col:colB_end]
+            for k in range(0, l, q1):
+                k_end = min(k + q1, l)
+                bA = x1[row:rowA_end, k:k_end]
+                bB = x2[k:k_end, col:colB_end]
+                br[:] += np.matmul(bA, bB)
+
+    return result
+
+
 # Class for dealing with fields in an NDArray
 # This will allow to access fields by name in the dtype of the NDArray
 class NDField(Operand):
