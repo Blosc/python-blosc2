@@ -18,6 +18,7 @@ import os
 import pathlib
 import pickle
 import platform
+import subprocess
 import sys
 from dataclasses import asdict
 from functools import lru_cache
@@ -26,8 +27,6 @@ from typing import TYPE_CHECKING, Any
 import cpuinfo
 import numpy as np
 import platformdirs
-import subprocess
-import json
 
 import blosc2
 from blosc2 import blosc2_ext
@@ -1157,9 +1156,9 @@ def apple_silicon_cache_size(cache_level: int) -> int:
 def get_l3_cache_info():
     result = subprocess.run(["lscpu", "--json"], capture_output=True, text=True)
     lscpu_info = json.loads(result.stdout)
-    for entry in lscpu_info['lscpu']:
-        if entry['field'] == "L3 cache:":
-            size_str, instances_str = entry['data'].split(' (')
+    for entry in lscpu_info["lscpu"]:
+        if entry["field"] == "L3 cache:":
+            size_str, instances_str = entry["data"].split(" (")
             size = int(size_str.split()[0]) * 1024 * 1024  # Convert MiB to bytes
             instances = int(instances_str.split()[0])
             return size, instances
@@ -1323,9 +1322,11 @@ def get_chunksize(blocksize, l3_minimum=4 * 2**20, l3_maximum=2**26):
     return chunksize
 
 
-def nearest_divisor(a, b):
-    if a > 100_000:
-        # When `a` is largish, use a faster algorithm that only goes downwards
+def nearest_divisor(a, b, strict=False):
+    if a > 100_000 or strict:
+        # When `a` is largish, or we require `b` strictly less than `a`,
+        # use a (faster) algorithm that only goes downwards.
+        # This is quite brute force, and tried to optimize this, but I have not found a faster way.
         for i in range(b, 0, -1):
             if a % i == 0:
                 return i
@@ -1335,6 +1336,15 @@ def nearest_divisor(a, b):
     divisors = (i for i in range(1, a + 1) if a % i == 0)
     # Find the divisor nearest to b
     return min(divisors, key=lambda x: abs(x - b))
+
+
+# This could be a good alternative to nearest_divisor that deserves more testing
+# Found at: https://gist.github.com/raphaelvallat/5d5af7205df720db53be4cc2ee7e7549
+def find_closest_divisor(n, m):
+    """Find the divisor of n closest to m"""
+    divisors = np.array([i for i in range(1, int(np.sqrt(n) + 1)) if n % i == 0])
+    divisions = n // divisors
+    return divisions[np.argmin(np.abs(m - divisions))]
 
 
 # Compute chunks and blocks partitions
@@ -1358,7 +1368,7 @@ def compute_partition(nitems, maxshape, minpart=None):
             partition[-(i + 1)] = rsize
         else:
             rsize = max(max_items, minsize)
-            new_rsize = rsize if size % rsize == 0 else nearest_divisor(size, rsize)
+            new_rsize = rsize if size % rsize == 0 else nearest_divisor(size, rsize, strict=True)
             # If the new rsize is not too far from the original rsize, use it
             if rsize // 2 < new_rsize < rsize * 2:
                 rsize = new_rsize
