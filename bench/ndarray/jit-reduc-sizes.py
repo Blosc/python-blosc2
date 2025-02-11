@@ -35,6 +35,7 @@ cparams = cparams_out = None
 sizes_numpy = (1, 5, 10, 20, 30, 35, 40)  # limit numpy float64
 sizes_numpy_jit = (1, 5, 10, 20, 30, 35, 40, 45)  # limit numpy float64
 sizes_clevel0 = (1, 5, 10, 20, 30, 35, 40, 45)  # limit clevel==0 float64
+#sizes_clevel0 = (50, 55, 60, 65, 70)  # extra sizes for clevel==0 float64
 size_list = (1, 5, 10, 20, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90)  # limit clevel>=1 float64
 
 codec = "LZ4"  # default codec
@@ -78,11 +79,11 @@ create_times = []
 compute_times = []
 for n in size_list:
     if clevel == 0 and n not in sizes_clevel0:
-        break
+        continue
     if numpy_jit and n not in sizes_numpy_jit:
-        break
+        continue
     if numpy and not numpy_jit and n not in sizes_numpy:
-        break
+        continue
     N = n * 1000
     print(f"\nN = {n}000, {dtype=}, size={N ** 2 * 2 * dtype.itemsize / 2**30 }")
     chunks = (100, N)

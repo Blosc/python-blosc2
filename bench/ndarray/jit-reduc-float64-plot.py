@@ -10,11 +10,13 @@
 
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
+import numpy as np
 
 plotly = True
+iobw = True  # use I/O bandwidth instead of time
 
 sizes = [1, 5, 10, 20, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110, 115, 120]
-sizes_GB = [n * 1000 * n * 1000 * 8 * 2 / 2**30 for n in sizes]
+sizes_GB = np.array([n * 1000 * n * 1000 * 8 * 2 / 2**30 for n in sizes])
 
 amd = True
 intel = False
@@ -23,13 +25,13 @@ m2linux = False
 # Load the data
 if amd:
     title_ = "AMD Ryzen 9 9800X3D (64 GB RAM)"
-    title_ = "np.sum(((a ** 3 + np.sin(a * 2)) < c) & (b > 0), axis=1)"
+    #title_ = "np.sum(((a ** 3 + np.sin(a * 2)) < c) & (b > 0), axis=1)"
 
     create_l0 = [ 0.0325, 0.2709, 1.0339, 4.0489, 9.0849, 12.4154, 16.7818, 25.5946, 47.5691, 35.9919, 45.4295, 93.3075, 66.6529 ]
     compute_l0 = [ 0.0017, 0.0243, 0.0869, 0.3370, 0.7665, 1.0375, 1.3727, 1.7377, 2.1472, 2.6205, 3.0435, 18.5878, 28.0816 ]
 
-    create_l0_ooc = [ 0.0305, 0.3371, 1.3249, 5.0602, 11.0410, 16.3685, 22.2012, 27.1348, 31.7409, 38.0690, 47.4424, 56.9335, 62.6965 ]
-    compute_l0_ooc = [ 0.0019, 0.0243, 0.0885, 0.3434, 0.7761, 1.0724, 1.4082, 1.7373, 2.1827, 2.6124, 7.0940, 9.0734, 10.1089 ]
+    create_l0_ooc = [ 0.0305, 0.3371, 1.3249, 5.0602, 11.0410, 16.3685, 22.2012, 27.1348, 31.7409, 38.0690, 47.4424, 56.9335, 62.6965, 65.2226, 81.1631, 92.8310, 103.7345, 112.1973, 124.5319 ]
+    compute_l0_ooc = [ 0.0019, 0.0243, 0.0885, 0.3434, 0.7761, 1.0724, 1.4082, 1.7373, 2.1827, 2.6124, 7.0940, 9.0734, 10.1089, 11.2911, 13.0464, 22.6369, 25.4538, 28.7107, 31.9562 ]
 
     create_LZ4_l1 = [ 0.0304, 0.2582, 1.0298, 3.9502, 8.8945, 11.9267, 16.3965, 20.2368, 24.6837, 29.3425, 36.2631, 42.1709, 48.0605, 52.3962, 61.5175, 68.6328, 80.1160, 85.4322, 97.1122, 106.9973, 114.8584 ]
     compute_LZ4_l1 = [ 0.0018, 0.0210, 0.0756, 0.3003, 0.6609, 0.8886, 1.1285, 1.4453, 1.7959, 2.1889, 2.6978, 3.1586, 3.4286, 3.9929, 4.4590, 5.3601, 5.6702, 6.4690, 6.9764, 7.8714, 8.6404 ]
@@ -114,8 +116,8 @@ else:
     create_l0 = [ 0.0344, 0.5770, 1.8655, 5.8634, 15.5161, 21.1114, 26.4065, 32.8173 ]
     compute_l0 = [ 0.0021, 0.0300, 0.0936, 0.3474, 0.7027, 8.4870, 11.1171, 31.2273 ]
 
-    create_l0_ooc = [ 0.0614, 0.5894, 1.9954, 6.4042, 16.9128, 21.5730, 26.9225, 33.8051 ]
-    compute_l0_ooc = [ 0.0027, 0.0427, 0.1650, 0.6768, 5.7428, 7.7228, 8.2640, 14.4505 ]
+    create_l0_ooc = [ 0.0614, 0.5894, 1.9954, 6.4042, 16.9128, 21.5730, 26.9225, 33.8051, 45.1457, 53.1039, 63.7202, 69.6944, 79.1652 ]
+    compute_l0_ooc = [ 0.0027, 0.0427, 0.1650, 0.6768, 5.7428, 7.7228, 8.2640, 14.4505, 17.5742, 20.0730, 22.8288, 26.0431, 41.3722 ]
 
     create_LZ4_l1 = [ 0.0361, 0.5804, 1.9389, 6.0536, 15.1991, 19.7225, 24.0663, 30.4482, 42.4730, 48.8970, 57.3124, 66.8990, 76.1380, 88.6604, 93.2565, 124.5175, 119.0430, 154.8972, 148.1766 ]
     compute_LZ4_l1 = [ 0.0021, 0.0303, 0.1018, 0.3595, 0.7678, 1.0191, 1.3130, 1.7165, 2.0468, 2.6400, 3.1438, 3.6971, 3.9760, 4.6626, 5.2315, 6.1437, 6.7120, 8.3231, 8.8490 ]
@@ -129,27 +131,82 @@ else:
     create_ZSTD_l1_ooc = [ 0.1724, 0.6122, 2.0364, 6.4511, 16.3306, 20.9426, 25.9797, 32.1823, 45.2271, 51.2425, 59.8028, 68.1794, 78.3132, 90.4755, 96.8384, 129.1539, 125.2803 ]
     compute_ZSTD_l1_ooc = [ 0.0030, 0.0452, 0.1687, 0.6854, 1.2524, 1.8355, 2.5684, 3.2852, 3.9175, 5.0215, 5.3327, 6.0550, 6.9507, 7.4801, 8.4181, 10.1903, 11.7509 ]
 
+yaxis_title = 'Time (s)'
+if iobw:
+    yaxis_title = 'I/O bandwidth (GB/s)'
+    # Convert times to I/O bandwidth
+    create_l0 = sizes_GB[:len(create_l0)] / np.array(create_l0)
+    compute_l0 = sizes_GB[:len(compute_l0)] / np.array(compute_l0)
+    create_l0_ooc = sizes_GB[:len(create_l0_ooc)] / np.array(create_l0_ooc)
+    compute_l0_ooc = sizes_GB[:len(compute_l0_ooc)] / np.array(compute_l0_ooc)
+    create_LZ4_l1 = sizes_GB[:len(create_LZ4_l1)] / np.array(create_LZ4_l1)
+    compute_LZ4_l1 = sizes_GB[:len(compute_LZ4_l1)] / np.array(compute_LZ4_l1)
+    create_LZ4_l1_ooc = sizes_GB[:len(create_LZ4_l1_ooc)] / np.array(create_LZ4_l1_ooc)
+    compute_LZ4_l1_ooc = sizes_GB[:len(compute_LZ4_l1_ooc)] / np.array(compute_LZ4_l1_ooc)
+    create_ZSTD_l1 = sizes_GB[:len(create_ZSTD_l1)] / np.array(create_ZSTD_l1)
+    compute_ZSTD_l1 = sizes_GB[:len(compute_ZSTD_l1)] / np.array(compute_ZSTD_l1)
+    create_ZSTD_l1_ooc = sizes_GB[:len(create_ZSTD_l1_ooc)] / np.array(create_ZSTD_l1_ooc)
+    compute_ZSTD_l1_ooc = sizes_GB[:len(compute_ZSTD_l1_ooc)] / np.array(compute_ZSTD_l1_ooc)
+    create_numpy = sizes_GB[:len(create_numpy)] / np.array(create_numpy)
+    compute_numpy = sizes_GB[:len(compute_numpy)] / np.array(compute_numpy)
+    create_numpy_jit = sizes_GB[:len(create_numpy_jit)] / np.array(create_numpy_jit)
+    compute_numpy_jit = sizes_GB[:len(compute_numpy_jit)] / np.array(compute_numpy_jit)
+
+def add_ram_limit(figure, compute=True):
+    y1_max = 25 if compute else 2
+    if amd:
+        #y1_max = 35 if compute else y1_max
+        figure.add_shape(
+            type="line", x0=64, y0=0, x1=64, y1=y1_max,
+            line=dict(color="Gray", width=2, dash="dot"),
+        )
+        figure.add_annotation(x=64, y=y1_max * .9, text="64 GB", showarrow=True, arrowhead=2, ax=40, ay=0)
+    elif m2linux:
+        #y1_max = 100 if compute else y1_max
+        figure.add_shape(
+            type="line", x0=24, y0=0, x1=24, y1=y1_max,
+            line=dict(color="Gray", width=2, dash="dot"),
+        )
+        figure.add_annotation(x=24, y=y1_max * .9, text="24 GB", showarrow=True, arrowhead=2, ax=40, ay=0)
+    elif intel:
+        #y1_max = 50 if compute else y1_max
+        figure.add_shape(
+            type="line", x0=32, y0=0, x1=32, y1=y1_max,
+            line=dict(color="Gray", width=2, dash="dot"),
+        )
+        figure.add_annotation(x=32, y=y1_max * .9, text="32 GB", showarrow=True, arrowhead=2, ax=40, ay=0)
+    else:
+        #y1_max = 35 if compute else y1_max
+        figure.add_shape(
+            type="line", x0=24, y0=0, x1=24, y1=y1_max,
+            line=dict(color="Gray", width=2, dash="dot"),
+        )
+        figure.add_annotation(x=24, y=y1_max * .9, text="24 GB", showarrow=True, arrowhead=2, ax=40, ay=0)
 
 # Plot the data. There will be 2 plots: one for create times and another for compute times
 labels = ['lvl=0', 'LZ4 lvl=1', 'ZSTD lvl=1', 'NumPy', "numpy_jit"]
+
 if plotly:
     # Create the create times plot
     fig_create = go.Figure()
     fig_create.add_trace(
-        go.Scatter(x=sizes_GB, y=create_l0, mode='lines+markers', name=labels[0]))
+        go.Scatter(x=sizes_GB, y=create_l0, mode='lines+markers', name=labels[0] + " (mem)"))
     fig_create.add_trace(
-        go.Scatter(x=sizes_GB, y=create_l0_ooc, mode='lines+markers', name=labels[0] + "(ooc)"))
+        go.Scatter(x=sizes_GB, y=create_l0_ooc, mode='lines+markers', name=labels[0] + " (ooc)"))
     fig_create.add_trace(
-        go.Scatter(x=sizes_GB, y=create_LZ4_l1, mode='lines+markers', name=labels[1]))
+        go.Scatter(x=sizes_GB, y=create_LZ4_l1, mode='lines+markers', name=labels[1] + " (mem)"))
     fig_create.add_trace(
-        go.Scatter(x=sizes_GB, y=create_LZ4_l1_ooc, mode='lines+markers', name=labels[1] + "(ooc)"))
+        go.Scatter(x=sizes_GB, y=create_LZ4_l1_ooc, mode='lines+markers', name=labels[1] + " (ooc)"))
     fig_create.add_trace(
-        go.Scatter(x=sizes_GB, y=create_ZSTD_l1, mode='lines+markers', name=labels[2]))
+        go.Scatter(x=sizes_GB, y=create_ZSTD_l1, mode='lines+markers', name=labels[2] + " (mem)"))
     fig_create.add_trace(
-        go.Scatter(x=sizes_GB, y=create_ZSTD_l1_ooc, mode='lines+markers', name=labels[2] + "(ooc)"))
+        go.Scatter(x=sizes_GB, y=create_ZSTD_l1_ooc, mode='lines+markers', name=labels[2] + " (ooc)"))
     fig_create.add_trace(
-        go.Scatter(x=sizes_GB, y=create_numpy_jit, mode='lines+markers', name=labels[3]))
-    fig_create.update_layout(title=f'Create operands times ({title_})', xaxis_title='Size (GB)', yaxis_title='Time (s)')
+        go.Scatter(x=sizes_GB, y=create_numpy_jit, mode='lines+markers', name=labels[3] + " (mem)"))
+    fig_create.update_layout(title=f'Create operands ({title_})', xaxis_title='Size (GB)', yaxis_title=yaxis_title)
+
+    # Add a vertical line at RAM limit
+    add_ram_limit(fig_create, compute=False)
 
     # Create the compute times plot
     # Calculate the maximum y1 value
@@ -158,54 +215,23 @@ if plotly:
 
     fig_compute = go.Figure()
     fig_compute.add_trace(
-        go.Scatter(x=sizes_GB, y=compute_l0, mode='lines+markers', name=labels[0]))
+        go.Scatter(x=sizes_GB, y=compute_l0, mode='lines+markers', name=labels[0] + " (mem)"))
     fig_compute.add_trace(
-        go.Scatter(x=sizes_GB, y=compute_l0_ooc, mode='lines+markers', name=labels[0] + "(ooc)"))
+        go.Scatter(x=sizes_GB, y=compute_l0_ooc, mode='lines+markers', name=labels[0] + " (ooc)"))
     fig_compute.add_trace(
-        go.Scatter(x=sizes_GB, y=compute_LZ4_l1, mode='lines+markers', name=labels[1]))
+        go.Scatter(x=sizes_GB, y=compute_LZ4_l1, mode='lines+markers', name=labels[1] + " (mem)"))
     fig_compute.add_trace(
-        go.Scatter(x=sizes_GB, y=compute_LZ4_l1_ooc, mode='lines+markers', name=labels[1] + "(ooc)"))
+        go.Scatter(x=sizes_GB, y=compute_LZ4_l1_ooc, mode='lines+markers', name=labels[1] + " (ooc)"))
     fig_compute.add_trace(
-        go.Scatter(x=sizes_GB, y=compute_ZSTD_l1, mode='lines+markers', name=labels[2]))
+        go.Scatter(x=sizes_GB, y=compute_ZSTD_l1, mode='lines+markers', name=labels[2] + " (mem)"))
     fig_compute.add_trace(
-        go.Scatter(x=sizes_GB, y=compute_ZSTD_l1_ooc, mode='lines+markers', name=labels[2] + "(ooc)"))
+        go.Scatter(x=sizes_GB, y=compute_ZSTD_l1_ooc, mode='lines+markers', name=labels[2] + " (ooc)"))
     fig_compute.add_trace(go.Scatter(x=sizes_GB, y=compute_numpy, mode='lines+markers', name=labels[3]))
-    fig_compute.add_trace(go.Scatter(x=sizes_GB, y=compute_numpy_jit, mode='lines+markers', name=labels[4]))
-    fig_compute.update_layout(title=f'Compute times ({title_})', xaxis_title='Size (GB)', yaxis_title='Time (s)')
+    #fig_compute.add_trace(go.Scatter(x=sizes_GB, y=compute_numpy_jit, mode='lines+markers', name=labels[4]))
+    fig_compute.update_layout(title=f'Compute ({title_})', xaxis_title='Size (GB)', yaxis_title=yaxis_title)
 
-    if amd:
-        # Add a vertical line at 64 GB
-        y1_max = 35
-        fig_compute.add_shape(
-            type="line", x0=64, y0=0, x1=64, y1=y1_max,
-            line=dict(color="Gray", width=2, dash="dot"),
-        )
-        fig_compute.add_annotation(x=64, y=y1_max * .9, text="64 GB", showarrow=True, arrowhead=2, ax=40, ay=0)
-    elif m2linux:
-        # Add a vertical line at 24 GB
-        y1_max = 100
-        fig_compute.add_shape(
-            type="line", x0=24, y0=0, x1=24, y1=y1_max,
-            line=dict(color="Gray", width=2, dash="dot"),
-        )
-        fig_compute.add_annotation(x=24, y=y1_max * .9, text="24 GB", showarrow=True, arrowhead=2, ax=40, ay=0)
-    elif intel:
-        # Add a vertical line at 32 GB
-        y1_max = 50
-        fig_compute.add_shape(
-            type="line", x0=32, y0=0, x1=32, y1=y1_max,
-            line=dict(color="Gray", width=2, dash="dot"),
-        )
-        fig_compute.add_annotation(x=32, y=y1_max * .9, text="32 GB", showarrow=True, arrowhead=2, ax=40, ay=0)
-    else:
-        # Add a vertical line at 24 GB
-        y1_max = 35
-        fig_compute.add_shape(
-            type="line", x0=24, y0=0, x1=24, y1=y1_max,
-            line=dict(color="Gray", width=2, dash="dot"),
-        )
-        fig_compute.add_annotation(x=24, y=y1_max * .9, text="24 GB", showarrow=True, arrowhead=2, ax=40, ay=0)
-
+    # Add a vertical line at RAM limit
+    add_ram_limit(fig_compute, compute=True)
 
     # Show the plots
     fig_create.show()
@@ -217,8 +243,8 @@ else:
     plt.plot(sizes_GB, create_ZSTD_l1, "o-", label=labels[2])
     plt.plot(sizes_GB, create_numpy_jit, "o-", label=labels[3])
     plt.xlabel("Size (GB)")
-    plt.ylabel("Time (s)")
-    plt.title(f"Create times ({title_})")
+    plt.ylabel(yaxis_title)
+    plt.title(f"Create operands ({title_})")
     plt.legend()
     # Now, the compute times
     plt.figure()
@@ -226,9 +252,9 @@ else:
     plt.plot(sizes_GB, compute_LZ4_l1, "o-", label=labels[1])
     plt.plot(sizes_GB, compute_ZSTD_l1, "o-", label=labels[2])
     plt.plot(sizes_GB, compute_numpy, "o-", label=labels[3])
-    plt.plot(sizes_GB, compute_numpy_jit, "o-", label=labels[4])
+    #plt.plot(sizes_GB, compute_numpy_jit, "o-", label=labels[4])
     plt.xlabel("Size (GB)")
-    plt.ylabel("Time (s)")
-    plt.title(f"Compute times ({title_})")
+    plt.ylabel(yaxis_title)
+    plt.title(f"Compute ({title_})")
     plt.legend()
     plt.show()
