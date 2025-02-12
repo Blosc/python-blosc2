@@ -3650,23 +3650,21 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     Parameters
     ----------
     x1: `NDArray`
-        First input array. Must have a numeric data type and at least one dimension.
-        If one-dimensional (M,), it is promoted to (1, M) before multiplication.
+        First input array.
     x2: `NDArray`
-        Second input array. Must have a numeric data type and at least one dimension.
-        If one-dimensional (N,), it is promoted to (N, 1) before multiplication.
+        Second input array.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
     out: :ref:`NDArray`
-        The result matrix.
+        The result matrix multiplication.
     """
 
-    # Ensure inputs have at least one dimension
-    if x1.ndim == 0 or x2.ndim == 0:
-        raise ValueError("Both inputs must have at least one dimension.")
+    # # Ensure inputs have at least one dimension
+    # if x1.ndim == 0 or x2.ndim == 0:
+    #     raise ValueError("Both inputs must have at least one dimension.")
 
     # Promote 1D arrays to 2D if necessary
     if x1.ndim == 1:
@@ -3683,20 +3681,19 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     p1, q1 = x1.chunks
     p2, q2 = x2.chunks
 
-    result = np.zeros((m, n))
+    result = np.zeros((m, n), dtype=x1.dtype)
     # result = blosc2.zeros(n) # TODO: file a ticket for blosc2.zeros()
 
     for row in range(0, m, p1):
-        rowA_end = min(row + p1, m)
+        row_end = (row+p1) if (row+p1) < m else m
         for col in range(0, n, q2):
-            colB_end = min(col + q2, n)
-            br = result[row:rowA_end, col:colB_end]
+            col_end = (col+q2) if (col+q2) < n else n
+            bres = result[row:row_end, col:col_end]
             for k in range(0, l, q1):
-                k_end = min(k + q1, l)
-                bA = x1[row:rowA_end, k:k_end]
-                bB = x2[k:k_end, col:colB_end]
-                br[:] += np.matmul(bA, bB)
-
+                k_end = (k+q1) if (k+q1) < l else l
+                bx1 = x1[row:row_end, k:k_end]
+                bx2 = x2[k:k_end, col:col_end]
+                bres[:] += np.matmul(bx1, bx2)
     return result
 
 
