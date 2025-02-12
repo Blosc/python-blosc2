@@ -1315,9 +1315,13 @@ def get_chunksize(blocksize, l3_minimum=4 * 2**20, l3_maximum=2**26):
     if chunksize < l3_minimum:
         chunksize = l3_minimum
 
-    # In Blosc2, the chunksize cannot be larger than 2 GB - BLOSC2_MAX_BUFFERSIZE
-    if chunksize > 2**31 - blosc2.MAX_OVERHEAD:
-        chunksize = 2**31 - blosc2.MAX_OVERHEAD
+    # In Blosc2, the chunksize cannot be larger than MAX_BUFFERSIZE
+    if chunksize > blosc2.MAX_BUFFERSIZE:
+        chunksize = blosc2.MAX_BUFFERSIZE
+
+    # chunksize can never be larger than blocksize
+    if chunksize < blocksize:
+        chunksize = blocksize
 
     return chunksize
 
@@ -1485,12 +1489,21 @@ def compute_chunks_blocks(  # noqa: C901
         ):
             # For other archs, we don't have hints; be conservative and use 2x the L1 size
             min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 2
+
         if blocksize < min_blocksize:
             blocksize = min_blocksize
+
+        # Fix for #364
+        if blocksize < itemsize:
+            blocksize = itemsize
 
         cparams2["tuner"] = aux_tuner
     else:
         blocksize = math.prod(blocks) * itemsize
+
+    # Check limits for blocksize
+    if blocksize > blosc2.MAX_BLOCKSIZE:
+        raise ValueError("blocksize is too large: it cannot exceed MAX_BLOCKSIZE (~512MB)")
 
     # Now that a sensible blocksize has been computed, let's compute the blocks
     if chunks is None:
