@@ -46,12 +46,7 @@ def info_html_report(items: list) -> str:
     report = '<table class="NDArray-info">'
     report += "<tbody>"
     for k, v in items:
-        report += (
-            f"<tr>"
-            f'<th style="text-align: left">{k}</th>'
-            f'<td style="text-align: left">{v}</td>'
-            f"</tr>"
-        )
+        report += f'<tr><th style="text-align: left">{k}</th><td style="text-align: left">{v}</td></tr>'
     report += "</tbody>"
     report += "</table>"
     return report
