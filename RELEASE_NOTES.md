@@ -1,9 +1,52 @@
 # Release notes
 
-## Changes from 3.0.0 to 3.0.1
+## Changes from 3.0.0 to 3.1.0
 
-XXX version-specific blurb XXX
+### Improvements
 
+* Optimizations for the compute engine. Now, it is faster and uses less memory.
+  In particular, careful attention has been paid to the memory handling, as
+  this is the main bottleneck for the compute engine in many instances.
+
+* Improved detection of CPU cache sizes for Linux and macOS.  In particular,
+  support for multi-CCX (AMD EPYC) and multi-socket systems has been implemented.
+  Now, the library should be able to detect the cache sizes for most of the
+  CPUs out there (specially on Linux).
+
+* Optimization on NDArray slicing when the slice is a single chunk.  This is a
+  common operation when working with NDArray instances, and now it is faster.
+
+### New API functions and decorators
+
+* New `blosc2.evaluate()` function for evaluating expressions on NDArray/NumPy
+  instances.  This a drop-in replacement of `numexpr.evaluate()`, but with the 
+  next improvements:
+  - More functionality than numexpr (e.g. reductions).
+  - Follow casting rules of NumPy more closely.
+  - Use both NumPy arrays and Blosc2 NDArrays in the same expression.
+
+  See [here](https://www.blosc.org/python-blosc2/reference/autofiles/utilities/blosc2.evaluate.html)
+  for more information.
+
+* New `blosc2.jit` decorator for allowing NumPy expressions to be computed
+  using the Blosc2 compute engine.  This is a powerful feature that allows for
+  efficient computations on compressed data, and supports advanced features like
+  reductions, filters and broadcasting.  See
+  [here](https://www.blosc.org/python-blosc2/reference/autofiles/utilities/blosc2.jit.html)
+  for more information.
+
+* Support `out=` in `blosc2.mean()`, `blosc2.std()` and `blosc2.var()` reductions
+  (besides `blosc2.sum()` and `blosc2.prod()`).
+
+
+### Others
+
+* Bumped to use latest C-Blosc2 sources (2.16.0).
+
+* The cache for cpuinfo is now stored in `${HOME}/.cache/python-blosc2/cpuinfo.json`
+  instead of `${HOME}/.blosc2-cpuinfo.json`; you can get rid of the latter, as
+  the former is more standard (see PR #360). Thanks to Jonas Lundholm Bertelsen
+  (@jonaslb).
 
 ## Changes from 3.0.0-rc.3 to 3.0.0
 
