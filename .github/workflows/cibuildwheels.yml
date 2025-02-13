@@ -127,8 +127,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          name: wheels
+          path: ./dist
           pattern: wheels-*   # Download the wheels artifact
           merge-multiple: true  # Merge all the wheels artifacts into one directory
+
+      - name: List files in dist
+        run: ls -l ./dist
 
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
