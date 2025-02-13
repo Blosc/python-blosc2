@@ -1163,7 +1163,7 @@ def get_l3_cache_info():
             instances = int(instances_str.split()[0])
             return size, instances
 
-    return None, None
+    raise ValueError("L3 cache not found in lscpu output")
 
 
 def linux_cache_size(cache_level: int, default_size: int) -> int:
@@ -1174,7 +1174,7 @@ def linux_cache_size(cache_level: int, default_size: int) -> int:
         # but sysfs only reports the cache size for each complex, so better use lscpu, if available.
         try:
             l3_cache_size, l3_cache_instances = get_l3_cache_info()
-            # What comes next is an heuristic to guess the most appropriate L3 cache size.
+            # What comes next is a heuristic to guess the most appropriate L3 cache size.
             # Essentially, this is the result of different experiments, mainly on AMD CPUs
             # (in particular, Ryzen 9800X3D with 8 cores, and EPYC 9454P with 48 cores).
             # For Intel, YMMV, but my guess is that they are not using the same CCX approach.
