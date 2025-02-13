@@ -8,7 +8,7 @@
         <a href="https://github.com/Blosc/python-blosc2/blob/main/RELEASE_NOTES.md"
            style="font-size: 1.5em;">Version 3.1.0 released on 2025-02-13!</a>
         <span style="display: inline-block; width: 20px;"></span>
-        <span style="font-family: monospace;">pip install blosc2==3.0.0</span>
+        <span style="font-family: monospace;">pip install blosc2 -U</span>
     </p>
 
 .. raw:: html
