@@ -207,7 +207,7 @@ Here, the performance compared to Dask is pretty competitive. Note that, when th
 is compressed (lower plot), the memory consumption is much lower than Dask, and kept constant
 during the computation, which is testimonial of the smart use of CPU caches and memory by the
 Blosc2 engine --for example, the CPU used in the experiment has 128 MB of L3, which is very
-close to the amount of memory used by Blosc2.  This is a very important point, because
+close to the amount of memory used by Blosc2.  This is an important point, because
 fitting the working set in memory is not enough; you also need to
 `use caches and memory efficiently <https://purplesyringa.moe/blog/the-ram-myth>`_
 to get the best performance.
@@ -268,28 +268,32 @@ useful metric when dealing with large datasets.  The performance is quite
 good and, when compression is used, it is kept constant for all operand sizes,
 which is a sign that Blosc2 is using the CPU caches (and memory) efficiently.
 
-On the other hand, when compression is not used the performance degrades as
+On the other hand, when compression is not used, the performance degrades as
 the operand size increases, which is a sign that the CPU caches are not being
 used efficiently.  This is a because data needs more time to be fetched from
-(disk) storage, and the CPU is not able to keep up with the data flow.
+(slower disk) storage, and the CPU is not able to keep up with the data flow.
 
-Finally, here is a plot for a much larger set of datasets (up to 400,000 x 400,000),
-where the operands do not fit in memory even when compressed:
+Finally, here is a plot for a much larger set of datasets (up to
+400,000 x 400,000, or 2.3 TB), where the operands do not fit in memory, even
+when compressed:
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/reduc-float64-log-amd.png?raw=true
   :width: 100%
   :alt: Performance vs large operand sizes for reductions
 
-In this case, we see that for operand sizes exceeding 2 TB, the performance
+In this case, we see that for operand sizes exceeding ~1 TB, the performance
 degrades significantly as well, but it is still quite good, specially when using
-disk-based operands.  This demonstrates that Blosc2 is able to load data from disk
-more efficiently than the swap subsystem of the operating system.
+disk-based operands.  This demonstrates how Blosc2 is able to load data from disk
+more efficiently than the swap subsystem of the operating system; it can do so
+because it is able to grab data from disk while it is computing, so it can
+overlap I/O with computation.
 
 You can find the script for these benchmarks at:
 
 https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/jit-reduc-sizes.py
 
-All in all, thanks to compression and a fine-tuned partitioning for leveraging modern
-CPU caches and efficient I/O that overlaps computation, Blosc2 allows to perform
-calculations on data that is too large to fit in memory, and that can be stored in
-memory, on disk or `on the network <https://github.com/ironArray/Caterva2>`_.
+All in all, thanks to compression, a fine-tuned partitioning for leveraging modern
+CPU caches, and an efficient I/O that overlaps with computation, the Blosc2 compute
+engine allows to perform calculations on data that is too large to fit in memory,
+and that can be stored in memory, on disk or
+`on the network <https://github.com/ironArray/Caterva2>`_.
