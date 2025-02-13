@@ -3666,34 +3666,45 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     # if x1.ndim == 0 or x2.ndim == 0:
     #     raise ValueError("Both inputs must have at least one dimension.")
 
+    x1_dim = False
+    x2_dim = False
     # Promote 1D arrays to 2D if necessary
     if x1.ndim == 1:
-        x1 = x1.reshape((1, x1.shape[0]))  # (M,) -> (1, M)
+        x1_dim = True
+        x1 = x1.reshape((1, x1.shape[0]))  # (N,) -> (1, N)
     if x2.ndim == 1:
-        x2 = x2.reshape((x2.shape[0], 1))  # (N,) -> (N, 1)
+        x2_dim = True
+        x2 = x2.reshape((x2.shape[0], 1))  # (M,) -> (M, 1)
 
     # Validate matrix multiplication compatibility
-    if x1.shape[1] != x2.shape[0]:
+    if x1.shape[-1] != x2.shape[0]:
         raise ValueError("Shapes are not aligned for matrix multiplication.")
 
-    m, l = x1.shape
-    _, n = x2.shape
+    n, l = x1.shape
+    _, m = x2.shape
     p1, q1 = x1.chunks
     p2, q2 = x2.chunks
 
-    result = np.zeros((m, n), dtype=x1.dtype)
+    result = np.zeros((n, m), dtype=x1.dtype)
     # result = blosc2.zeros(n) # TODO: file a ticket for blosc2.zeros()
 
-    for row in range(0, m, p1):
-        row_end = (row+p1) if (row+p1) < m else m
-        for col in range(0, n, q2):
-            col_end = (col+q2) if (col+q2) < n else n
+    for row in range(0, n, p1):
+        row_end = (row+p1) if (row+p1) < n else n
+        for col in range(0, m, q2):
+            col_end = (col+q2) if (col+q2) < m else m
             bres = result[row:row_end, col:col_end]
-            for k in range(0, l, q1):
-                k_end = (k+q1) if (k+q1) < l else l
-                bx1 = x1[row:row_end, k:k_end]
-                bx2 = x2[k:k_end, col:col_end]
+            for aux in range(0, l, q1):
+                aux_end = (aux+q1) if (aux+q1) < l else l
+                bx1 = x1[row:row_end, aux:aux_end]
+                bx2 = x2[aux:aux_end, col:col_end]
                 bres[:] += np.matmul(bx1, bx2)
+
+    if x1_dim and x2_dim:
+        result = result.reshape((n, m))
+    elif x1_dim:
+        result = result.reshape((m,))
+    elif x2_dim:
+        result = result.reshape((n,))
     return result
 
 
