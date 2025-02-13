@@ -19,7 +19,7 @@
 ### New API functions and decorators
 
 * New `blosc2.evaluate()` function for evaluating expressions on NDArray/NumPy
-  instances.  This a drop-in replacement of `numexpr.evaluate()`, but with the 
+  instances.  This a drop-in replacement of `numexpr.evaluate()`, but with the
   next improvements:
   - More functionality than numexpr (e.g. reductions).
   - Follow casting rules of NumPy more closely.
