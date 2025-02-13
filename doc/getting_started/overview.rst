@@ -223,3 +223,73 @@ You can find the notebooks for these benchmarks at:
 https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-dask-small.ipynb
 
 https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-dask-large.ipynb
+
+Reductions and disk-based computations
+======================================
+
+One of the most interesting features of the new computing engine in Python-Blosc2 is
+the ability to perform reductions on compressed data that can optionally be stored
+on disk.  This allows to perform calculations on data that is too large to fit in
+memory.
+
+Here is a simple example:
+
+.. code-block:: python
+
+    import blosc2
+
+    N = 20_000  # for small scenario
+    # N = 100_000 # for large scenario
+    a = blosc2.linspace(0, 1, N * N, shape=(N, N), urlpath="a.b2nd", mode="w")
+    b = blosc2.linspace(1, 2, N * N, shape=(N, N), urlpath="b.b2nd", mode="w")
+    c = blosc2.linspace(-10, 10, N * N, shape=(N, N))  # small and in-memory
+    # Expression
+    expr = np.sum(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
+
+    # Evaluate and get a NDArray as result
+    out = expr.compute()
+    print(out.info)
+
+In this case, we are performing a reduction that computes the sum of the boolean
+array that results from a expression.  The result is a 1D array that will be
+stored in memory, but that can be optionally stored on disk (via the ``out=``
+parameter in the ``compute()`` or ``sum()`` methods).
+
+Here you can see a plot on how this performs for a series of operands that
+vary in size (run on a modern desktop machine, using Linux and a 8-core
+AMD CPU, with a large 96 MB L3 cache, and 64 GB of RAM):
+
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/reduc-float64-amd.png?raw=true
+  :width: 100%
+  :alt: Performance vs operand sizes for reductions
+
+As you can see, we are expressing the performance in GB/s, which is a very
+useful metric when dealing with large datasets.  The performance is quite
+good and, when compression is used, it is kept constant for all operand sizes,
+which is a sign that Blosc2 is using the CPU caches (and memory) efficiently.
+
+On the other hand, when compression is not used the performance degrades as
+the operand size increases, which is a sign that the CPU caches are not being
+used efficiently.  This is a because data needs more time to be fetched from
+(disk) storage, and the CPU is not able to keep up with the data flow.
+
+Finally, here is a plot for a much larger set of datasets (up to 400,000 x 400,000),
+where the operands do not fit in memory even when compressed:
+
+.. image:: https://github.com/Blosc/python-blosc2/blob/main/images/reduc-float64-log-amd.png?raw=true
+  :width: 100%
+  :alt: Performance vs large operand sizes for reductions
+
+In this case, we see that for operand sizes exceeding 2 TB, the performance
+degrades significantly as well, but it is still quite good, specially when using
+disk-based operands.  This demonstrates that Blosc2 is able to load data from disk
+more efficiently than the swap subsystem of the operating system.
+
+You can find the script for these benchmarks at:
+
+https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/jit-reduc-sizes.py
+
+All in all, thanks to compression and a fine-tuned partitioning for leveraging modern
+CPU caches and efficient I/O that overlaps computation, Blosc2 allows to perform
+calculations on data that is too large to fit in memory, and that can be stored in
+memory, on disk or `on the network <https://github.com/ironArray/Caterva2>`_.
