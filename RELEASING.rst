@@ -58,6 +58,14 @@ Tagging
 
     git push --tags
 
+* If you happen to have to delete the tag, such as artifacts demonstrates a fault, first delete it locally::
+
+    git tag --delete vX.Y.Z
+
+  and then remotely on Github:
+
+    git push --delete origin vX.Y.Z
+
 * Make sure that the tag is passing the tests in continuous integration (this
   may take more than an hour).
 
@@ -67,10 +75,10 @@ Tagging
     git commit -a -m "Update latest release in doc"
     git push
 
-* Go to ``Blosc/blogsite`` repo, then to "Actions", click on the most recent
-  workflow run (at the top of the list), and then click on the "Re-run all
-  jobs" button to regenerate the documentation and check that it has been
-  correctly updated in https://www.blosc.org.
+* Go to ``https://github.com/Blosc/blogsite`` repo, then to "Actions", click
+  on the most recent workflow run (at the top of the list), and then click on
+  the "Re-run all jobs" button to regenerate the documentation and check that
+  it has been correctly updated in https://www.blosc.org.
 
 
 Checking packaging
