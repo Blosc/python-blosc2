@@ -28,7 +28,7 @@ jobs:
       CIBW_ARCHS_MACOS: "x86_64 arm64"
     strategy:
       matrix:
-        os: [ubuntu-latest, ubuntu-22.04-arm, windows-latest, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-latest]
         arch: [x86_64, aarch64]
         # aarch64 is emulated, and it is giving issues with cibuildwheel
         # Just build for x86_64 for now (Mac arm64 is already covered by cibuildwheel)
@@ -56,6 +56,10 @@ jobs:
         with:
           # Use the most recent released python
           python-version: '3.x'
+
+      - name: Set up QEMU
+        if: ${{ matrix.arch == 'aarch64' }}
+        uses: docker/setup-qemu-action@v3
 
       - name: Install Ninja
         id: ninja
