@@ -45,7 +45,7 @@ def test_matmul(ashape, achunks, ablocks, bshape, bchunks, bblocks, dtype):
     ("bshape", "bchunks", "bblocks"),
     [
         ((1, 5), (1, 4), (1, 3)),
-        ((10, 12), (2, 4), (1, 3)),
+        ((4, 12), (2, 4), (1, 3)),
         ((10,), (4,), (2,)),
     ],
 )

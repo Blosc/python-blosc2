@@ -3662,19 +3662,15 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
         The result matrix multiplication.
     """
 
-    # # Ensure inputs have at least one dimension
-    # if x1.ndim == 0 or x2.ndim == 0:
-    #     raise ValueError("Both inputs must have at least one dimension.")
-
-    x1_dim = False
-    x2_dim = False
     # Promote 1D arrays to 2D if necessary
+    x1_is_vector = False
+    x2_is_vector = False
     if x1.ndim == 1:
-        x1_dim = True
         x1 = x1.reshape((1, x1.shape[0]))  # (N,) -> (1, N)
+        x1_is_vector = True
     if x2.ndim == 1:
-        x2_dim = True
         x2 = x2.reshape((x2.shape[0], 1))  # (M,) -> (M, 1)
+        x2_is_vector = True
 
     # Validate matrix multiplication compatibility
     if x1.shape[-1] != x2.shape[0]:
@@ -3699,12 +3695,13 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
                 bx2 = x2[aux:aux_end, col:col_end]
                 bres[:] += np.matmul(bx1, bx2)
 
-    if x1_dim and x2_dim:
+    if x1_is_vector and x2_is_vector:
         result = result.reshape((n, m))
-    elif x1_dim:
+    elif x1_is_vector:
         result = result.reshape((m,))
-    elif x2_dim:
+    elif x2_is_vector:
         result = result.reshape((n,))
+
     return result
 
 
