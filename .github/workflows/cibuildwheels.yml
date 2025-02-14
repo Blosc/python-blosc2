@@ -102,7 +102,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Build sdist
-        run: pipx run build --sdist --output-dir wheelhouse
+        run: pipx run build --sdist --outdir ./wheelhouse
 
       - name: Upload sdist package
         uses: actions/upload-artifact@v4
