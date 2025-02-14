@@ -67,7 +67,15 @@ Tagging
     git push --delete origin vX.Y.Z
 
 * Make sure that the tag is passing the tests in continuous integration (this
-  may take more than an hour).
+  may take about 30 min).
+
+* In case the automatic upload to PyPI fails, you can upload the package
+  wheels (and tarball!) by downloading the artifacts manually, copying to
+  an empty dir (say dist), and upload to PyPI with::
+
+    rm dist/*
+    # download artifacts from the tag in github
+    twine upload --repository blosc dist/*
 
 * Update the latest release in the ``doc/python-blosc2.rst`` file with the new version
   number (and date?).  Do a commit::
@@ -106,6 +114,7 @@ Announcing
   skeleton (or possibly as the definitive version). Start the subject with ANN:.
 
 * Announce in Mastodon via https://fosstodon.org/@Blosc2 account and rejoice.
+  Announce it in Bluesky too.
 
 
 Post-release actions
@@ -122,8 +131,9 @@ Post-release actions
 
     XXX version-specific blurb XXX
 
-* Update the version number in ``pyproject.toml`` to the next version number
-  (e.g. ``X.Y.(Z+1).dev``).
+* Update the version number in ``pyproject.toml`` and ``version.py`` to the next version number::
+
+    python update_version.py X.Y.(Z+1).dev0
 
 * Commit your changes with::
 

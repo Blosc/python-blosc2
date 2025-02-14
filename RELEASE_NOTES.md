@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.1.1 to 3.1.2
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.1.0 to 3.1.1
 
 * Quick release to fix an issue with version number in the package (was reporting 3.0.0
