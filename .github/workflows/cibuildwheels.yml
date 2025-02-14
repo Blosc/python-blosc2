@@ -112,7 +112,6 @@ jobs:
 
       - name: Build building extension from sdist package
         run: |
-          mkdir -p ./wheelhouse
           cd ./wheelhouse
           tar -xzf blosc2-*.tar.gz
           cd ./blosc2-*/
@@ -132,9 +131,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: wheels
+          name: wheels-*
           path: ./wheelhouse
-          pattern: wheels-*   # Download the wheels artifact
           merge-multiple: true  # Merge all the wheels artifacts into one directory
 
       - uses: pypa/gh-action-pypi-publish@release/v1
