@@ -1,5 +1,5 @@
-Announcing Python-Blosc2 3.1.0
-==============================
+Announcing Python-Blosc2 3.1.0 (and 3.1.1)
+==========================================
 
 This is a minor release where we optimized the performance of the
 internal compute engine, as well as indexing for NDArrays.  We also
@@ -29,7 +29,7 @@ You can think of Python-Blosc2 3.0 as an extension of NumPy/numexpr that:
 
 Install it with::
 
-    pip install blosc2==3.1.0   # if you prefer wheels
+    pip install blosc2 --update   # if you prefer wheels
     conda install -c conda-forge python-blosc2 mkl  # if you prefer conda and MKL
 
 For more info, you can have a look at the release notes in:

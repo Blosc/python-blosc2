@@ -4,7 +4,13 @@ Python-Blosc2 release procedure
 Preliminaries
 -------------
 
-* Set the version number in ``pyproject.toml`` to the new version number (e.g. ``X.Y.Z``).
+* Set the version number for the release by using::
+
+    python update_version.py X.Y.Z
+
+  and double-check the updated version number in ``pyproject.toml`` and with::
+
+    python -c "import blosc2; print(blosc2.__version__)"
 
 * Make sure that the c-blosc2 repository is updated to the latest version (or a specific
   version that will be documented in the ``RELEASE_NOTES.md``). In ``CMakeLists.txt`` edit::
@@ -18,11 +24,10 @@ Preliminaries
 
 * Make sure that the current main branch is passing the tests in continuous integration.
 
-* Build the package and make sure that::
+* Build the package and make sure that tests are passing::
 
-    python -c "import blosc2; blosc2.print_versions()"
-
-  is printing the correct versions.
+    pip install -e ".[test]"
+    pytest
 
 * Make sure that ``RELEASE_NOTES.md`` and ``ANNOUNCE.rst`` are up to date with the
   latest news in the release.

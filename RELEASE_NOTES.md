@@ -1,5 +1,11 @@
 # Release notes
 
+## Changes from 3.1.0 to 3.1.1
+
+* Quick release to fix an issue with version number in the package (was reporting 3.0.0
+  instead of 3.1.0).
+
+
 ## Changes from 3.0.0 to 3.1.0
 
 ### Improvements
