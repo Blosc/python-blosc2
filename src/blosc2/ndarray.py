@@ -3645,22 +3645,69 @@ def sort(array: NDArray, order: str | list[str] | None = None, **kwargs: Any) ->
 
 def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     """
-    Perform matrix multiplication between two Blosc2 NDArrays.
+    Computes the matrix product between two Blosc2 NDArrays.
 
     Parameters
     ----------
     x1: `NDArray`
-        First input array.
+        The first input array.
     x2: `NDArray`
-        Second input array.
+        The second input array.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
     out: :ref:`NDArray`
-        The result matrix multiplication.
+        The matrix product of the inputs. This is a scalar only when both x1,
+        x2 are 1-d vectors.
+
+    Raises
+    ------
+    ValueError
+        If the last dimension of ``x1`` is not the same size as
+        the second-to-last dimension of ``x2``.
+
+        If a scalar value is passed in.
+
+    References
+    ----------
+    `numpy.matmul <https://numpy.org/doc/stable/reference/generated/numpy.matmul.html>`_
+
+    Examples
+    --------
+    For 2-D arrays it is the matrix product:
+
+    >>> import numpy as np
+    >>> import blosc2
+    >>> a = np.array([[1, 2],
+    ...               [3, 4]])
+    >>> nd_a = blosc2.asarray(a)
+    >>> b = np.array([[2, 3],
+    ...               [2, 1]])
+    >>> nd_b = blosc2.asarray(b)
+    >>> blosc2.matmul(nd_a, nd_b)
+    array([[ 6,  5],
+           [14, 13]])
+
+
+    For 2-D mixed with 1-D, the result is the usual.
+
+    >>> a = np.array([[1, 3],
+    ...               [0, 1]])
+    >>> nd_a = blosc2.asarray(a)
+    >>> v = np.array([1, 2])
+    >>> nd_v = blosc2.asarray(v)
+    >>> blosc2.matmul(nd_a, nd_v)
+    array([7, 2])
+    >>> blosc2.matmul(nd_v, nd_a)
+    array([1, 5])
+
     """
+
+    # Validate arguments are not scalars
+    if np.isscalar(x1) or np.isscalar(x2):
+        raise ValueError("Arguments can't be scalars.")
 
     # Promote 1D arrays to 2D if necessary
     x1_is_vector = False
@@ -3673,13 +3720,14 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
         x2_is_vector = True
 
     # Validate matrix multiplication compatibility
-    if x1.shape[-1] != x2.shape[0]:
+    if x1.shape[-1] != x2.shape[-2]:
         raise ValueError("Shapes are not aligned for matrix multiplication.")
 
-    n, l = x1.shape
-    _, m = x2.shape
-    p1, q1 = x1.chunks
-    p2, q2 = x2.chunks
+    n, l = x1.shape[-2:]
+    m = x2.shape[-1]
+
+    p1, q1 = x1.chunks[-2:]
+    q2 = x2.chunks[-1]
 
     result = np.zeros((n, m), dtype=x1.dtype)
     # result = blosc2.zeros(n) # TODO: file a ticket for blosc2.zeros()
@@ -3696,7 +3744,7 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
                 bres[:] += np.matmul(bx1, bx2)
 
     if x1_is_vector and x2_is_vector:
-        result = result.reshape((n, m))
+        result = result[0][0]
     elif x1_is_vector:
         result = result.reshape((m,))
     elif x2_is_vector:

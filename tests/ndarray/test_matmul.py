@@ -1,14 +1,13 @@
 import pytest
 import numpy as np
 import blosc2
-from blosc2.ndarray import matmul
 
 
 @pytest.mark.parametrize(
     ("ashape", "achunks", "ablocks"),
     [
-        ((12, 10), (6, 5), (3, 3)),
-        ((10, ), (9, ), (7, )),
+        ((12, 10), (7, 5), (3, 3)),
+        ((10,), (9,), (7,)),
     ],
 )
 @pytest.mark.parametrize(
@@ -25,18 +24,19 @@ from blosc2.ndarray import matmul
 def test_matmul(ashape, achunks, ablocks, bshape, bchunks, bblocks, dtype):
     a = blosc2.linspace(0, 10, dtype=dtype, shape=ashape, chunks=achunks, blocks=ablocks)
     b = blosc2.linspace(0, 10, dtype=dtype, shape=bshape, chunks=bchunks, blocks=bblocks)
+    blosc2_res = blosc2.matmul(a, b)
 
     na = a[:]
     nb = b[:]
-    blosc2_res = matmul(a, b)
     np_res = np.matmul(na, nb)
+
     np.testing.assert_allclose(blosc2_res, np_res, rtol=1e-6)
 
 
 @pytest.mark.parametrize(
     ("ashape", "achunks", "ablocks"),
     [
-        ((12, 11), (6, 5), (3, 1)),
+        ((12, 11), (7, 5), (3, 1)),
         ((0, 0), (0, 0), (0, 0)),
         ((10,), (4,), (2,)),
     ],
@@ -45,13 +45,40 @@ def test_matmul(ashape, achunks, ablocks, bshape, bchunks, bblocks, dtype):
     ("bshape", "bchunks", "bblocks"),
     [
         ((1, 5), (1, 4), (1, 3)),
-        ((4, 12), (2, 4), (1, 3)),
-        ((10,), (4,), (2,)),
+        ((4, 6), (2, 4), (1, 3)),
+        ((5,), (4,), (2,)),
     ],
 )
-def test_matmul_raises(ashape, achunks, ablocks, bshape, bchunks, bblocks):
+def test_matmul_shapes(ashape, achunks, ablocks, bshape, bchunks, bblocks):
     a = blosc2.linspace(0, 10, shape=ashape, chunks=achunks, blocks=ablocks)
     b = blosc2.linspace(0, 10, shape=bshape, chunks=bchunks, blocks=bblocks)
-    if a.shape[-1] != b.shape[0]:
-        with pytest.raises(ValueError):
-            matmul(a, b)
+
+    with pytest.raises(ValueError):
+        blosc2.matmul(a, b)
+
+    with pytest.raises(ValueError):
+        blosc2.matmul(b, a)
+
+
+@pytest.mark.parametrize("scalar", [
+    5,                      # int
+    5.3,                    # float
+    1 + 2j,                 # complex
+    np.int32(5),            # NumPy int32
+    np.int64(5),            # NumPy int64
+    np.float32(5.3),        # NumPy float32
+    np.float64(5.3),        # NumPy float64
+    np.complex64(1 + 2j),   # NumPy complex64
+    np.complex128(1 + 2j),  # NumPy complex128
+])
+def test_matmul_scalars(scalar):
+    vector = blosc2.asarray(np.array([1, 2, 3]))
+
+    with pytest.raises(ValueError):
+        blosc2.matmul(scalar, vector)
+
+    with pytest.raises(ValueError):
+        blosc2.matmul(vector, scalar)
+
+    with pytest.raises(ValueError):
+        blosc2.matmul(scalar, scalar)
