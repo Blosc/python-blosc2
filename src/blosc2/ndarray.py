@@ -1845,14 +1845,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return ndslice
 
-    def squeeze(self) -> None:
+    def squeeze(self) -> NDArray:
         """Remove single-dimensional entries from the shape of the array.
 
         This method modifies the array in-place, removing any dimensions with size 1.
 
         Returns
         -------
-        out: None
+        out: NDArray
 
         Examples
         --------
@@ -1868,6 +1868,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         (23, 11)
         """
         super().squeeze()
+        return self
 
     def indices(self, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
         """
@@ -3744,9 +3745,7 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     if x1_is_vector and x2_is_vector:
         return result[0][0]
 
-    result.squeeze()
-
-    return result
+    return result.squeeze()
 
 
 # Class for dealing with fields in an NDArray
