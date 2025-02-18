@@ -3729,26 +3729,22 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     p1, q1 = x1.chunks[-2:]
     q2 = x2.chunks[-1]
 
-    result = np.zeros((n, m), dtype=x1.dtype)
-    # result = blosc2.zeros(n) # TODO: file a ticket for blosc2.zeros()
+    result = blosc2.zeros((n, m), dtype=x1.dtype)
 
     for row in range(0, n, p1):
         row_end = (row+p1) if (row+p1) < n else n
         for col in range(0, m, q2):
             col_end = (col+q2) if (col+q2) < m else m
-            bres = result[row:row_end, col:col_end]
             for aux in range(0, l, q1):
                 aux_end = (aux+q1) if (aux+q1) < l else l
                 bx1 = x1[row:row_end, aux:aux_end]
                 bx2 = x2[aux:aux_end, col:col_end]
-                bres[:] += np.matmul(bx1, bx2)
+                result[row:row_end, col:col_end] += np.matmul(bx1, bx2)
 
     if x1_is_vector and x2_is_vector:
-        result = result[0][0]
-    elif x1_is_vector:
-        result = result.reshape((m,))
-    elif x2_is_vector:
-        result = result.reshape((n,))
+        return result[0][0]
+
+    result.squeeze()
 
     return result
 
