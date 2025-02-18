@@ -508,12 +508,12 @@ cdef extern from "b2nd.h":
     int b2nd_from_schunk(blosc2_schunk *schunk, b2nd_array_t **array)
 
     void blosc2_unidim_to_multidim(uint8_t ndim, int64_t *shape, int64_t i, int64_t *index)
-    int b2nd_copy_buffer(int8_t ndim,
-                         uint8_t itemsize,
-                         const void *src, const int64_t *src_pad_shape,
-                         const int64_t *src_start, const int64_t *src_stop,
-                         void *dst, const int64_t *dst_pad_shape,
-                         const int64_t *dst_start);
+    int b2nd_copy_buffer2(int8_t ndim,
+                          int32_t itemsize,
+                          const void *src, const int64_t *src_pad_shape,
+                          const int64_t *src_start, const int64_t *src_stop,
+                          void *dst, const int64_t *dst_pad_shape,
+                          const int64_t *dst_start);
 
 
 ctypedef struct user_filters_udata:
@@ -1739,9 +1739,9 @@ cdef int aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
             blockshape_int64[i] = udata.array.blockshape[i]
         buf = <Py_buffer *> malloc(sizeof(Py_buffer))
         PyObject_GetBuffer(output, buf, PyBUF_SIMPLE)
-        rc = b2nd_copy_buffer(udata.array.ndim, typesize,
-                              buf.buf, slice_shape, start, slice_shape,
-                              params_output, blockshape_int64, start)
+        rc = b2nd_copy_buffer2(udata.array.ndim, typesize,
+                               buf.buf, slice_shape, start, slice_shape,
+                               params_output, blockshape_int64, start)
         PyBuffer_Release(buf)
         _check_rc(rc, "Could not copy the result into the buffer")
 
