@@ -2,7 +2,10 @@
 
 ## Changes from 3.1.1 to 3.1.2
 
-XXX version-specific blurb XXX
+* Structured arrays can be larger than 255 bytes now.  This was a limitation
+  in the previous versions, but now it is gone (the new limit is ~512 MB,
+  which I hope will be enough for some time).
+
 
 ## Changes from 3.1.0 to 3.1.1
 
