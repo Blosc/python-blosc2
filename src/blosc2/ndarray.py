@@ -3691,7 +3691,6 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     array([[ 6,  5],
            [14, 13]])
 
-
     For 2-D mixed with 1-D, the result is the usual.
 
     >>> a = np.array([[1, 3],
@@ -3724,7 +3723,7 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     if x1.shape[-1] != x2.shape[-2]:
         raise ValueError("Shapes are not aligned for matrix multiplication.")
 
-    n, l = x1.shape[-2:]
+    n, k = x1.shape[-2:]
     m = x2.shape[-1]
 
     p1, q1 = x1.chunks[-2:]
@@ -3733,11 +3732,11 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     result = blosc2.zeros((n, m), dtype=x1.dtype)
 
     for row in range(0, n, p1):
-        row_end = (row+p1) if (row+p1) < n else n
+        row_end = (row + p1) if (row + p1) < n else n
         for col in range(0, m, q2):
-            col_end = (col+q2) if (col+q2) < m else m
-            for aux in range(0, l, q1):
-                aux_end = (aux+q1) if (aux+q1) < l else l
+            col_end = (col + q2) if (col + q2) < m else m
+            for aux in range(0, k, q1):
+                aux_end = (aux + q1) if (aux + q1) < k else k
                 bx1 = x1[row:row_end, aux:aux_end]
                 bx2 = x2[aux:aux_end, col:col_end]
                 result[row:row_end, col:col_end] += np.matmul(bx1, bx2)
