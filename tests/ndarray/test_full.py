@@ -123,3 +123,51 @@ def test_ones():
     assert isinstance(a, blosc2.NDArray)
     b = np.ones(shape, dtype=np.float32)
     np.testing.assert_allclose(a[:], b)
+
+
+@pytest.mark.parametrize("asarray", [True, False])
+@pytest.mark.parametrize("typesize", [255, 256, 257, 261, 256 * 256])
+@pytest.mark.parametrize("shape", [(1,), (3,), (10,), (1024,)])
+def test_large_typesize(shape, typesize, asarray):
+    dtype = np.dtype([("f_001", "<i1", (typesize,))])
+    a = np.full(shape, 3, dtype=dtype)
+    if asarray:
+        b = blosc2.asarray(a)
+    else:
+        b = blosc2.full(shape, 3, dtype=dtype)
+    assert np.array_equal(b[0], a[0])
+
+
+def test_complex_datatype():
+    dtype = np.dtype(
+        [
+            ("f_001", "<f4", (164,)),
+            ("f_002", "<f4", (11,)),
+            ("f_003", "<f4", (154,)),
+            ("f_004", "<f4", (870,)),
+            ("f_005", "<f4", (1062,)),
+            ("f_006", "<f4", (22,)),
+            ("f_007", "<f4", (44,)),
+            ("f_008", "<f4", (512,)),
+            ("f_009", "<f4", (64, 77)),
+            ("f_010", "<f4", (97, 489)),
+            ("f_011", "<f4", (75, 255)),
+            ("f_012", "<f4", (8, 293)),
+            ("f_013", "<f4", (230, 591)),
+            ("f_014", "<f4", (101, 193)),
+            ("f_015", "<f4", (12, 48)),
+            ("f_016", "<f4", (90, 699)),
+            ("f_017", "<f4", (125, 65)),
+            ("f_018", "<f4", (132, 81)),
+            ("f_019", "<f4", (27, 363)),
+            ("f_020", "S1000"),
+            ("f_021", "S1000"),
+        ]
+    )
+    a = np.zeros((256,), dtype=dtype)
+    cparams = blosc2.CParams(codec=blosc2.Codec.BLOSCLZ, clevel=1, nthreads=3)
+    b = blosc2.asarray(a, cparams=cparams, urlpath="b.b2nd", mode="w")
+    # Iterate over the fields of the structured array and check that the data is the same
+    for field in dtype.fields:
+        assert np.array_equal(b[field], a[field])
+    blosc2.remove_urlpath("b.b2nd")

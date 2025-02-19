@@ -4,7 +4,13 @@ Python-Blosc2 release procedure
 Preliminaries
 -------------
 
-* Set the version number in ``pyproject.toml`` to the new version number (e.g. ``X.Y.Z``).
+* Set the version number for the release by using::
+
+    python update_version.py X.Y.Z
+
+  and double-check the updated version number in ``pyproject.toml`` and with::
+
+    python -c "import blosc2; print(blosc2.__version__)"
 
 * Make sure that the c-blosc2 repository is updated to the latest version (or a specific
   version that will be documented in the ``RELEASE_NOTES.md``). In ``CMakeLists.txt`` edit::
@@ -18,11 +24,10 @@ Preliminaries
 
 * Make sure that the current main branch is passing the tests in continuous integration.
 
-* Build the package and make sure that::
+* Build the package and make sure that tests are passing::
 
-    python -c "import blosc2; blosc2.print_versions()"
-
-  is printing the correct versions.
+    pip install -e ".[test]"
+    pytest
 
 * Make sure that ``RELEASE_NOTES.md`` and ``ANNOUNCE.rst`` are up to date with the
   latest news in the release.
@@ -53,8 +58,24 @@ Tagging
 
     git push --tags
 
+* If you happen to have to delete the tag, such as artifacts demonstrates a fault, first delete it locally::
+
+    git tag --delete vX.Y.Z
+
+  and then remotely on Github:
+
+    git push --delete origin vX.Y.Z
+
 * Make sure that the tag is passing the tests in continuous integration (this
-  may take more than an hour).
+  may take about 30 min).
+
+* In case the automatic upload to PyPI fails, you can upload the package
+  wheels (and tarball!) by downloading the artifacts manually, copying to
+  an empty dir (say dist), and upload to PyPI with::
+
+    rm dist/*
+    # download artifacts from the tag in github
+    twine upload --repository blosc dist/*
 
 * Update the latest release in the ``doc/python-blosc2.rst`` file with the new version
   number (and date?).  Do a commit::
@@ -62,10 +83,10 @@ Tagging
     git commit -a -m "Update latest release in doc"
     git push
 
-* Go to ``Blosc/blogsite`` repo, then to "Actions", click on the most recent
-  workflow run (at the top of the list), and then click on the "Re-run all
-  jobs" button to regenerate the documentation and check that it has been
-  correctly updated in https://www.blosc.org.
+* Go to ``https://github.com/Blosc/blogsite`` repo, then to "Actions", click
+  on the most recent workflow run (at the top of the list), and then click on
+  the "Re-run all jobs" button to regenerate the documentation and check that
+  it has been correctly updated in https://www.blosc.org.
 
 
 Checking packaging
@@ -93,6 +114,7 @@ Announcing
   skeleton (or possibly as the definitive version). Start the subject with ANN:.
 
 * Announce in Mastodon via https://fosstodon.org/@Blosc2 account and rejoice.
+  Announce it in Bluesky too.
 
 
 Post-release actions
@@ -109,8 +131,9 @@ Post-release actions
 
     XXX version-specific blurb XXX
 
-* Update the version number in ``pyproject.toml`` to the next version number
-  (e.g. ``X.Y.(Z+1).dev``).
+* Update the version number in ``pyproject.toml`` and ``version.py`` to the next version number::
+
+    python update_version.py X.Y.(Z+1).dev0
 
 * Commit your changes with::
 

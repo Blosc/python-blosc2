@@ -47,7 +47,7 @@ print(f"len(farr): {len(farr)}, len(arr): {len(arr)}")
 print(f"type of farr: {farr.dtype}, type of arr: {arr.dtype}")
 
 if isinstance(farr, np.ndarray):
-    print(f"nbytes of farr: {farr.nbytes / 2 ** 20:.2f}MB")
+    print(f"nbytes of farr: {farr.nbytes / 2**20:.2f}MB")
     # We cannot proceed anymore
     sys.exit(1)
 
