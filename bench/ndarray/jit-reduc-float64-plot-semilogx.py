@@ -8,7 +8,6 @@
 
 # Plots for the jit vs. numpy benchmarks on different array sizes and platforms.
 
-import matplotlib.pyplot as plt
 import plotly.graph_objects as go
 import numpy as np
 
