@@ -8,7 +8,7 @@ build-backend = "scikit_build_core.build"
 
 [project]
 name = "blosc2"
-description = "A fast & compressed ndarray library with a flexible computational engine."
+description = "A fast & compressed ndarray library with a flexible compute engine."
 readme = {file = "README.rst", content-type = "text/x-rst"}
 authors = [{name = "Blosc Development Team", email = "blosc@blosc.org"}]
 maintainers = [{ name = "Blosc Development Team", email = "blosc@blosc.org"}]
@@ -39,7 +39,7 @@ dependencies = [
     "httpx",
     "platformdirs",
 ]
-version = "3.0.1.dev"
+version = "3.1.2.dev0"
 
 
 [project.optional-dependencies]

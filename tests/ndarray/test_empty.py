@@ -128,3 +128,15 @@ def test_zero_in_blockshape():
     # Check for #165
     with pytest.raises(ValueError):
         blosc2.empty(shape=(1200,), chunks=(100,), blocks=(0,))
+
+
+def test_large_itemsize():
+    # Check for #364
+    a = blosc2.empty(shape=10, dtype=f"S{100_000_000}")
+    assert a.blocks == (1,)
+
+
+def test_toolarge_itemsize():
+    # blocksize cannot be larger that MAX_BLOCKSIZE
+    with pytest.raises(ValueError):
+        a = blosc2.empty(shape=10, dtype=f"S{blosc2.MAX_BLOCKSIZE}", blocks=(2,))

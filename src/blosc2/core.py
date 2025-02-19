@@ -18,6 +18,7 @@ import os
 import pathlib
 import pickle
 import platform
+import subprocess
 import sys
 from dataclasses import asdict
 from functools import lru_cache
@@ -1152,9 +1153,40 @@ def apple_silicon_cache_size(cache_level: int) -> int:
     return size.value
 
 
+def get_l3_cache_info():
+    result = subprocess.run(["lscpu", "--json"], capture_output=True, text=True)
+    lscpu_info = json.loads(result.stdout)
+    for entry in lscpu_info["lscpu"]:
+        if entry["field"] == "L3 cache:":
+            size_str, instances_str = entry["data"].split(" (")
+            size = int(size_str.split()[0]) * 1024 * 1024  # Convert MiB to bytes
+            instances = int(instances_str.split()[0])
+            return size, instances
+
+    raise ValueError("L3 cache not found in lscpu output")
+
+
 def linux_cache_size(cache_level: int, default_size: int) -> int:
     """Get the data cache_level size in bytes for Linux."""
     cache_size = default_size
+    if cache_level == 3:
+        # In modern multicore CPUs, the L3 cache is normally shared among all core complexes (CCX),
+        # but sysfs only reports the cache size for each complex, so better use lscpu, if available.
+        try:
+            l3_cache_size, l3_cache_instances = get_l3_cache_info()
+            # What comes next is a heuristic to guess the most appropriate L3 cache size.
+            # Essentially, this is the result of different experiments, mainly on AMD CPUs
+            # (in particular, Ryzen 9800X3D with 8 cores, and EPYC 9454P with 48 cores).
+            # For Intel, YMMV, but my guess is that they are not using the same CCX approach.
+            l3_cache_size *= l3_cache_instances
+            if l3_cache_instances > 1:
+                # This is yet another heuristic for large CPUs with core sets (CCX) having
+                # their own L3.  No idea why, but it seems to work well.
+                l3_cache_size *= l3_cache_instances // 2
+            return l3_cache_size
+        except (FileNotFoundError, ValueError):
+            # If lscpu is not available or the cache size cannot be read, try with sysfs
+            pass
     try:
         with open(f"/sys/devices/system/cpu/cpu0/cache/index{cache_level}/size") as f:
             size = f.read()
@@ -1178,7 +1210,8 @@ def _get_cpu_info():
     # cpuinfo does not correctly retrieve the cache sizes for all CPUs on Linux, so ask the kernel
     if platform.system() == "Linux":
         l1_data_cache_size = cpu_info.get("l1_data_cache_size", 32 * 1024)
-        cpu_info["l1_data_cache_size"] = linux_cache_size(1, l1_data_cache_size)
+        # Cache level 0 is typically the L1 data cache, and level 1 is the L1 instruction cache
+        cpu_info["l1_data_cache_size"] = linux_cache_size(0, l1_data_cache_size)
         l2_cache_size = cpu_info.get("l2_cache_size", 256 * 1024)
         cpu_info["l2_cache_size"] = linux_cache_size(2, l2_cache_size)
         l3_cache_size = cpu_info.get("l3_cache_size", 1024 * 1024)
@@ -1282,16 +1315,22 @@ def get_chunksize(blocksize, l3_minimum=4 * 2**20, l3_maximum=2**26):
     if chunksize < l3_minimum:
         chunksize = l3_minimum
 
-    # In Blosc2, the chunksize cannot be larger than 2 GB - BLOSC2_MAX_BUFFERSIZE
-    if chunksize > 2**31 - blosc2.MAX_OVERHEAD:
-        chunksize = 2**31 - blosc2.MAX_OVERHEAD
+    # In Blosc2, the chunksize cannot be larger than MAX_BUFFERSIZE
+    if chunksize > blosc2.MAX_BUFFERSIZE:
+        chunksize = blosc2.MAX_BUFFERSIZE
+
+    # chunksize can never be larger than blocksize
+    if chunksize < blocksize:
+        chunksize = blocksize
 
     return chunksize
 
 
-def nearest_divisor(a, b):
-    if a > 100_000:
-        # When `a` is largish, use a faster algorithm that only goes downwards
+def nearest_divisor(a, b, strict=False):
+    if a > 100_000 or strict:
+        # When `a` is largish, or we require `b` strictly less than `a`,
+        # use a (faster) algorithm that only goes downwards.
+        # This is quite brute force, and tried to optimize this, but I have not found a faster way.
         for i in range(b, 0, -1):
             if a % i == 0:
                 return i
@@ -1301,6 +1340,15 @@ def nearest_divisor(a, b):
     divisors = (i for i in range(1, a + 1) if a % i == 0)
     # Find the divisor nearest to b
     return min(divisors, key=lambda x: abs(x - b))
+
+
+# This could be a good alternative to nearest_divisor that deserves more testing
+# Found at: https://gist.github.com/raphaelvallat/5d5af7205df720db53be4cc2ee7e7549
+def find_closest_divisor(n, m):
+    """Find the divisor of n closest to m"""
+    divisors = np.array([i for i in range(1, int(np.sqrt(n) + 1)) if n % i == 0])
+    divisions = n // divisors
+    return divisions[np.argmin(np.abs(m - divisions))]
 
 
 # Compute chunks and blocks partitions
@@ -1324,7 +1372,7 @@ def compute_partition(nitems, maxshape, minpart=None):
             partition[-(i + 1)] = rsize
         else:
             rsize = max(max_items, minsize)
-            new_rsize = rsize if size % rsize == 0 else nearest_divisor(size, rsize)
+            new_rsize = rsize if size % rsize == 0 else nearest_divisor(size, rsize, strict=True)
             # If the new rsize is not too far from the original rsize, use it
             if rsize // 2 < new_rsize < rsize * 2:
                 rsize = new_rsize
@@ -1441,12 +1489,21 @@ def compute_chunks_blocks(  # noqa: C901
         ):
             # For other archs, we don't have hints; be conservative and use 2x the L1 size
             min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 2
+
         if blocksize < min_blocksize:
             blocksize = min_blocksize
+
+        # Fix for #364
+        if blocksize < itemsize:
+            blocksize = itemsize
 
         cparams2["tuner"] = aux_tuner
     else:
         blocksize = math.prod(blocks) * itemsize
+
+    # Check limits for blocksize
+    if blocksize > blosc2.MAX_BLOCKSIZE:
+        raise ValueError("blocksize is too large: it cannot exceed MAX_BLOCKSIZE (~512MB)")
 
     # Now that a sensible blocksize has been computed, let's compute the blocks
     if chunks is None:

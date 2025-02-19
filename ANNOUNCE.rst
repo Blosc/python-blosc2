@@ -1,9 +1,21 @@
-Announcing Python-Blosc2 3.0.0 final
-====================================
+Announcing Python-Blosc2 3.1.0 (and 3.1.1)
+==========================================
 
-The Blosc development team is pleased to announce the final release for
-Python-Blosc2 3.0.0. Now, we will be producing conda(-forge) packages,
-as well as providing wheels for the most common platforms, as usual.
+This is a minor release where we optimized the performance of the
+internal compute engine, as well as indexing for NDArrays.  We also
+added new API:
+
+* blosc2.evaluate: a drop-in replacement of numexpr.evaluate().  This
+  allows to evaluate expressions with combinations of NDArrays and NumPy
+  arrays.  In addition, it has the next improvements:
+
+  - More functionality than numexpr (e.g. reductions).
+  - Follow casting rules of NumPy more closely.
+  - Use both NumPy arrays and Blosc2 NDArrays in the same expression.
+
+* blosc2.jit: a decorator to compile a function with a NumPy expression
+  using the compute engine of Blosc2.  Useful to speed up the evaluation
+  of pure NumPy expressions at runtime.
 
 You can think of Python-Blosc2 3.0 as an extension of NumPy/numexpr that:
 
@@ -17,7 +29,7 @@ You can think of Python-Blosc2 3.0 as an extension of NumPy/numexpr that:
 
 Install it with::
 
-    pip install blosc2==3.0.0   # if you prefer wheels
+    pip install blosc2 --update   # if you prefer wheels
     conda install -c conda-forge python-blosc2 mkl  # if you prefer conda and MKL
 
 For more info, you can have a look at the release notes in:
