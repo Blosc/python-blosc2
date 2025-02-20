@@ -1,5 +1,6 @@
-import pytest
 import numpy as np
+import pytest
+
 import blosc2
 
 
@@ -19,7 +20,8 @@ import blosc2
     ],
 )
 @pytest.mark.parametrize(
-    "dtype", [np.float32, np.float64, np.complex64, np.complex128],
+    "dtype",
+    [np.float32, np.float64, np.complex64, np.complex128],
 )
 def test_matmul(ashape, achunks, ablocks, bshape, bchunks, bblocks, dtype):
     a = blosc2.linspace(0, 10, dtype=dtype, shape=ashape, chunks=achunks, blocks=ablocks)
@@ -60,17 +62,20 @@ def test_matmul_shapes(ashape, achunks, ablocks, bshape, bchunks, bblocks):
         blosc2.matmul(b, a)
 
 
-@pytest.mark.parametrize("scalar", [
-    5,                      # int
-    5.3,                    # float
-    1 + 2j,                 # complex
-    np.int32(5),            # NumPy int32
-    np.int64(5),            # NumPy int64
-    np.float32(5.3),        # NumPy float32
-    np.float64(5.3),        # NumPy float64
-    np.complex64(1 + 2j),   # NumPy complex64
-    np.complex128(1 + 2j),  # NumPy complex128
-])
+@pytest.mark.parametrize(
+    "scalar",
+    [
+        5,  # int
+        5.3,  # float
+        1 + 2j,  # complex
+        np.int32(5),  # NumPy int32
+        np.int64(5),  # NumPy int64
+        np.float32(5.3),  # NumPy float32
+        np.float64(5.3),  # NumPy float64
+        np.complex64(1 + 2j),  # NumPy complex64
+        np.complex128(1 + 2j),  # NumPy complex128
+    ],
+)
 def test_matmul_scalars(scalar):
     vector = blosc2.asarray(np.array([1, 2, 3]))
 
@@ -82,3 +87,29 @@ def test_matmul_scalars(scalar):
 
     with pytest.raises(ValueError):
         blosc2.matmul(scalar, scalar)
+
+
+@pytest.mark.parametrize(
+    "ashape",
+    [
+        (12, 10, 10),
+        (7, 5, 5),
+        (3, 3, 3),
+    ],
+)
+@pytest.mark.parametrize(
+    "bshape",
+    [
+        (10, 10, 10, 11),
+        (3, 2, 9),
+    ],
+)
+def test_matmul_dims(ashape, bshape):
+    a = blosc2.linspace(0, 10, shape=ashape)
+    b = blosc2.linspace(0, 1, shape=bshape)
+
+    with pytest.raises(ValueError):
+        blosc2.matmul(a, b)
+
+    with pytest.raises(ValueError):
+        blosc2.matmul(b, a)

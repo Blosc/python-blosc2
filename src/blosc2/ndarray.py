@@ -3709,6 +3709,10 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     if np.isscalar(x1) or np.isscalar(x2):
         raise ValueError("Arguments can't be scalars.")
 
+    # Validate arguments are dimension 1 or 2
+    if x1.ndim > 2 or x2.ndim > 2:
+        raise ValueError("Multiplication of arrays with dimension greater than 2 is not supported yet.")
+
     # Promote 1D arrays to 2D if necessary
     x1_is_vector = False
     x2_is_vector = False
@@ -3729,7 +3733,7 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     p1, q1 = x1.chunks[-2:]
     q2 = x2.chunks[-1]
 
-    result = blosc2.zeros((n, m), dtype=x1.dtype)
+    result = blosc2.zeros((n, m), dtype=np.result_type(x1, x2), **kwargs)
 
     for row in range(0, n, p1):
         row_end = (row + p1) if (row + p1) < n else n
