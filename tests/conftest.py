@@ -12,13 +12,8 @@ import pytest
 import blosc2
 
 
-# This still needs to pass the '-s' flag to pytest to see the output but anyways
-@pytest.fixture(scope="session", autouse=True)
-def _setup_session():
-    # This code will be executed before the test suite
-    print()
+def pytest_configure(config):
     blosc2.print_versions()
-
 
 @pytest.fixture(scope="session")
 def c2sub_context():

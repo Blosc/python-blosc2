@@ -1118,6 +1118,7 @@ def print_versions():
     print("Main codec library versions:")
     for clib in sorted(clib_versions.keys()):
         print(f"  {clib}: {clib_versions[clib]}")
+    print(f"NumPy version: {np.__version__}")
     print(f"Python version: {sys.version}")
     (sysname, _nodename, release, version, machine, processor) = platform.uname()
     print(f"Platform: {sysname}-{release}-{machine} ({version})")
