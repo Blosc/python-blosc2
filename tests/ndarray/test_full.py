@@ -169,5 +169,5 @@ def test_complex_datatype():
     b = blosc2.asarray(a, cparams=cparams, urlpath="b.b2nd", mode="w")
     # Iterate over the fields of the structured array and check that the data is the same
     for field in dtype.fields:
-        assert np.array_equal(b[field], a[field])
+        assert np.array_equal(b[field][:], a[field])
     blosc2.remove_urlpath("b.b2nd")

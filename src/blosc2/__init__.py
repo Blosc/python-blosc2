@@ -12,7 +12,10 @@
 
 from enum import Enum
 
-import numexpr
+try:
+    import numexpr
+except ImportError:
+    numexpr = None
 
 from .version import __version__
 
@@ -200,7 +203,8 @@ nthreads = min(nthreads, 64)
 # Experiments say that, when using a large number of threads, it is better to not use them all
 if nthreads > 16:
     nthreads -= nthreads // 8
-numexpr.set_num_threads(nthreads)
+if numexpr:
+    numexpr.set_num_threads(nthreads)
 
 # This import must be before ndarray and schunk
 from .storage import (  # noqa: I001
@@ -249,6 +253,7 @@ from .lazyexpr import (
     get_expr_operands,
     validate_expr,
     evaluate,
+    ne_evaluate,
 )
 from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy, jit
 

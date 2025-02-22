@@ -31,13 +31,38 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
 import ndindex
-import numexpr as ne
 import numpy as np
 
 import blosc2
 from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
 from blosc2.ndarray import _check_allowed_dtypes, get_chunks_idx, is_inside_new_expr
+
+import platform
+
+# Do the platform check once at module level
+IS_WASM = platform.machine() == "wasm32"
+
+# Import numexpr only if not running in WebAssembly
+try:
+    import numexpr as ne
+except ImportError:
+    ne = None
+
+def ne_evaluate(expression, local_dict=None, **kwargs):
+    """Safely evaluate expressions using numexpr when possible, falling back to numpy."""
+    if ne is None:
+        # Use numpy eval when running in WebAssembly
+        safe_globals = {"np": np}
+        # Add all first-level numpy functions
+        safe_globals.update({
+            name: getattr(np, name)
+            for name in dir(np)
+            if callable(getattr(np, name)) and not name.startswith('_')
+        })
+        return eval(expression, safe_globals, local_dict or {})
+    return ne.evaluate(expression, local_dict=local_dict, **kwargs)
+
 
 # All the dtypes that are supported by the expression evaluator
 dtype_symbols = {
@@ -932,7 +957,8 @@ def fast_eval(  # noqa: C901
         (isinstance(value, blosc2.NDArray) and value.shape != () and value.schunk.urlpath is not None)
         for value in operands.values()
     )
-    iter_disk = all_ndarray and any_persisted
+    #iter_disk = all_ndarray and any_persisted
+    iter_disk = False
 
     # Iterate over the chunks and evaluate the expression
     chunks_idx, nchunks = get_chunks_idx(shape, chunks)
@@ -951,26 +977,26 @@ def fast_eval(  # noqa: C901
             operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands
         )
 
-        # Since ne.evaluate() can return a dtype larger than the one in computed in the expression,
+        # Since ne_evaluate() can return a dtype larger than the one in computed in the expression,
         # we cannot take this fast path
         # if isinstance(out, np.ndarray) and not where:
         #     # Fast path: put the result straight in the output array (avoiding a memory copy)
         #     if callable(expression):
         #         expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
         #     else:
-        #         ne.evaluate(expression, chunk_operands, out=out[slice_])
+        #         ne_evaluate(expression, chunk_operands, out=out[slice_])
         #     continue
         if callable(expression):
             result = np.empty(chunks_, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
         else:
             if where is None:
-                result = ne.evaluate(expression, chunk_operands, **ne_args)
+                result = ne_evaluate(expression, chunk_operands, **ne_args)
             else:
                 # Apply the where condition (in result)
                 if len(where) == 2:
                     new_expr = f"where({expression}, _where_x, _where_y)"
-                    result = ne.evaluate(new_expr, chunk_operands, **ne_args)
+                    result = ne_evaluate(new_expr, chunk_operands, **ne_args)
                 else:
                     # We do not support one or zero operands in the fast path yet
                     raise ValueError("Fast path: the where condition must be a tuple with two elements")
@@ -1192,7 +1218,7 @@ def slices_eval(  # noqa: C901
             continue
 
         if where is None:
-            result = ne.evaluate(expression, chunk_operands, **ne_args)
+            result = ne_evaluate(expression, chunk_operands, **ne_args)
         else:
             # Apply the where condition (in result)
             if len(where) == 2:
@@ -1201,9 +1227,9 @@ def slices_eval(  # noqa: C901
                 # result = np.where(result, x, y)
                 # numexpr is a bit faster than np.where, and we can fuse operations in this case
                 new_expr = f"where({expression}, _where_x, _where_y)"
-                result = ne.evaluate(new_expr, chunk_operands, **ne_args)
+                result = ne_evaluate(new_expr, chunk_operands, **ne_args)
             elif len(where) == 1:
-                result = ne.evaluate(expression, chunk_operands, **ne_args)
+                result = ne_evaluate(expression, chunk_operands, **ne_args)
                 if _indices or _order:
                     # Return indices only makes sense when the where condition is a tuple with one element
                     # and result is a boolean array
@@ -1390,7 +1416,7 @@ def reduce_slices(  # noqa: C901
             (isinstance(value, blosc2.NDArray) and value.shape != () and value.schunk.urlpath is not None)
             for value in operands.values()
         )
-        iter_disk = all_ndarray and any_persisted
+        #iter_disk = all_ndarray and any_persisted
         # Experiments say that iter_disk is faster than the regular path for reductions
         # even when all operands are in memory, so no need to check any_persisted
         # New benchs are saying the contrary (> 10% slower), so this needs more investigation
@@ -1477,14 +1503,14 @@ def reduce_slices(  # noqa: C901
                 # We don't have an actual expression, so avoid a copy
                 result = chunk_operands["o0"]
             else:
-                result = ne.evaluate(expression, chunk_operands, **ne_args)
+                result = ne_evaluate(expression, chunk_operands, **ne_args)
         else:
             # Apply the where condition (in result)
             if len(where) == 2:
                 new_expr = f"where({expression}, _where_x, _where_y)"
-                result = ne.evaluate(new_expr, chunk_operands, **ne_args)
+                result = ne_evaluate(new_expr, chunk_operands, **ne_args)
             elif len(where) == 1:
-                result = ne.evaluate(expression, chunk_operands, **ne_args)
+                result = ne_evaluate(expression, chunk_operands, **ne_args)
                 x = chunk_operands["_where_x"]
                 result = x[result]
             else:
@@ -1737,7 +1763,7 @@ class LazyExpr(LazyArray):
                 self.operands = {"o0": value1}
                 self.expression = "o0" if op is None else f"{op}(o0)"
             return
-        elif op in ("arctan2", "contains", "pow"):
+        elif op in ("arctan2", "contains", "pow", "power"):
             if np.isscalar(value1) and np.isscalar(value2):
                 self.expression = f"{op}(o0, o1)"
             elif np.isscalar(value2):
@@ -1897,17 +1923,17 @@ class LazyExpr(LazyArray):
             for key, value in self.operands.items()
         }
         if "contains" in self.expression:
-            _out = ne.evaluate(self.expression, local_dict=operands)
+            _out = ne_evaluate(self.expression, local_dict=operands)
         else:
             # Create a globals dict with the functions of numpy
-            globals_dict = {f: getattr(np, f) for f in functions if f != "contains"}
+            globals_dict = {f: getattr(np, f) for f in functions if f not in ("contains", "pow")}
             try:
                 _out = eval(self.expression, globals_dict, operands)
             except RuntimeWarning:
                 # Sometimes, numpy gets a RuntimeWarning when evaluating expressions
                 # with synthetic operands (1's). Let's try with numexpr, which is not so picky
                 # about this.
-                _out = ne.evaluate(self.expression, local_dict=operands)
+                _out = ne_evaluate(self.expression, local_dict=operands)
         self._dtype_ = _out.dtype
         self._expression_ = self.expression
         return self._dtype_
@@ -3103,7 +3129,7 @@ if __name__ == "__main__":
     nres = na1 + na2
     print(f"Elapsed time (numpy, [:]): {time() - t0:.3f} s")
     t0 = time()
-    nres = ne.evaluate("na1 + na2")
+    nres = ne_evaluate("na1 + na2")
     print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
@@ -3126,7 +3152,7 @@ if __name__ == "__main__":
     # nres = np.sin(na1[:]) + 2 * na1[:] + 1 + 2
     print(f"Elapsed time (numpy, [:]): {time() - t0:.3f} s")
     t0 = time()
-    nres = ne.evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
+    nres = ne_evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
     print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
