@@ -24,13 +24,14 @@ from dataclasses import asdict
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
-if platform.system() != "Emscripten":
-    import cpuinfo
 import numpy as np
 import platformdirs
 
 import blosc2
 from blosc2 import blosc2_ext
+
+if blosc2.IS_WASM:
+    import cpuinfo
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1114,13 +1115,16 @@ def print_versions():
     """Print all the versions of software that python-blosc2 relies on."""
     print("-=" * 38)
     print(f"python-blosc2 version: {blosc2.__version__}")
-    print(f"numpy version: {np.__version__}")
     print(f"Blosc version: {blosc2.blosclib_version}")
     print(f"Codecs available (including plugins): {', '.join([codec.name for codec in codecs])}")
     print("Main codec library versions:")
     for clib in sorted(clib_versions.keys()):
         print(f"  {clib}: {clib_versions[clib]}")
     print(f"NumPy version: {np.__version__}")
+    if not blosc2.IS_WASM:
+        import numexpr
+
+        print(f"numexpr version: {numexpr.__version__}")
     print(f"Python version: {sys.version}")
     (sysname, _nodename, release, version, machine, processor) = platform.uname()
     print(f"Platform: {sysname}-{release}-{machine} ({version})")
@@ -1204,12 +1208,12 @@ def linux_cache_size(cache_level: int, default_size: int) -> int:
 
 
 def _get_cpu_info():
-    if platform.system() == "Emscripten":
-        # Emscripten does not have access to CPU information
-        # Populate with some reasonable defaults
+    if blosc2.IS_WASM:
+        # Emscripten/wasm32 does not have access to CPU information.
+        # Populate it with some reasonable defaults.
         return {
             "brand": "Emscripten",
-            "arch": "wasm",
+            "arch": "wasm32",
             "count": 1,
             "l1_data_cache_size": 32 * 1024,
             "l2_cache_size": 256 * 1024,
