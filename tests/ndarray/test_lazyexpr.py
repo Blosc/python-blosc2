@@ -190,9 +190,15 @@ def test_iXXX(array_fixture):
     expr -= 15  # __isub__
     expr *= 2  # __imul__
     expr /= 7  # __itruediv__
-    expr **= 2.3  # __ipow__
+    if not blosc2.IS_WASM:
+        expr **= 2.3  # __ipow__
     res = expr.compute()
-    nres = blosc2._ne_evaluate("(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7) ** 2.3")
+    if not blosc2.IS_WASM:
+        nres = blosc2._ne_evaluate(
+            "(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7) ** 2.3"
+        )
+    else:
+        nres = blosc2._ne_evaluate("(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7)")
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -265,6 +271,8 @@ def test_comparison_operators(dtype_fixture, compare_expressions, comparison_ope
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
 
 
+# Skip this test for blosc2.IS_WASM
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize(
     "function",
     [
@@ -434,6 +442,7 @@ def test_abs(shape_fixture, dtype_fixture):
     np.testing.assert_allclose(res_lazyexpr[:], res_np)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize("values", [("NDArray", "str"), ("NDArray", "NDArray"), ("str", "NDArray")])
 def test_contains(values):
     # Unpack the value fixture
@@ -578,6 +587,7 @@ def test_save():
         blosc2.remove_urlpath(urlpath)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 def test_save_unsafe():
     na = np.arange(1000)
     nb = np.arange(1000)
@@ -608,6 +618,7 @@ def test_save_unsafe():
         blosc2.remove_urlpath(urlpath)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize(
     "function",
     [
@@ -659,6 +670,7 @@ def test_save_functions(function, dtype_fixture, shape_fixture):
         blosc2.remove_urlpath(urlpath)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize("values", [("NDArray", "str"), ("NDArray", "NDArray"), ("str", "NDArray")])
 def test_save_contains(values):
     # Unpack the value fixture
@@ -705,6 +717,7 @@ def test_save_contains(values):
         blosc2.remove_urlpath(path)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 def test_save_many_functions(dtype_fixture, shape_fixture):
     rtol = 1e-6 if dtype_fixture == np.float32 else 1e-15
     atol = 1e-6 if dtype_fixture == np.float32 else 1e-15
@@ -735,6 +748,7 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
         blosc2.remove_urlpath(urlpath)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize(
     "constructor", ["arange", "linspace", "fromiter", "reshape", "zeros", "ones", "full"]
 )
@@ -1072,6 +1086,7 @@ def test_get_chunk(array_fixture):
     np.testing.assert_allclose(out[:], nres)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize(
     ("chunks", "blocks"),
     [

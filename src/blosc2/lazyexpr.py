@@ -63,6 +63,10 @@ def _ne_evaluate(expression, local_dict=None, **kwargs):
         # Get local vars dict from the stack frame
         _frame_depth = kwargs.pop("_frame_depth", 1)
         local_dict |= dict(sys._getframe(_frame_depth).f_locals)
+        if "out" in kwargs:
+            out = kwargs.pop("out")
+            out[:] = eval(expression, safe_globals, local_dict)
+            return out
         return eval(expression, safe_globals, local_dict)
     return ne.evaluate(expression, local_dict=local_dict, **kwargs)
 
