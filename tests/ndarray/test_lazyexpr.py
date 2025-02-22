@@ -1144,6 +1144,10 @@ def test_get_expr_operands(expression, expected_operands):
     assert blosc2.get_expr_operands(expression) == set(expected_operands)
 
 
+@pytest.mark.skipif(
+    np.__version__.startswith("1."),
+    reason="NumPy < 2.0 has different casting rules"
+)
 @pytest.mark.parametrize(
     "scalar",
     [

@@ -113,7 +113,7 @@ functions = [
     "max",
     "any",
     "all",
-    "pow",
+    "pow" if np.__version__.startswith("2.") else "power",
     "where",
 ]
 functions += constructors

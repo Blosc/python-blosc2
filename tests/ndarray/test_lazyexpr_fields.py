@@ -22,7 +22,10 @@ NITEMS = 10_000
         pytest.param((np.float64, np.float64), marks=pytest.mark.heavy),
         (np.int32, np.float32),
         (np.int32, np.uint32),
-        (np.int8, np.int16),
+        pytest.param((np.int8, np.int16), marks=pytest.mark.skipif(
+            np.__version__.startswith("1."),
+            reason="NumPy < 2.0 has different casting rules"
+        )),
         # The next dtypes work, but running everything takes too much time
         pytest.param((np.int32, np.float64), marks=pytest.mark.heavy),
         pytest.param((np.int8, np.float64), marks=pytest.mark.heavy),
