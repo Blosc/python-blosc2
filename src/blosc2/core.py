@@ -30,7 +30,7 @@ import platformdirs
 import blosc2
 from blosc2 import blosc2_ext
 
-if blosc2.IS_WASM:
+if not blosc2.IS_WASM:
     import cpuinfo
 
 if TYPE_CHECKING:
