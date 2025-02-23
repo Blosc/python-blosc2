@@ -31,12 +31,11 @@ classifiers = [
 requires-python = ">=3.11"
 # Follow guidelines from https://scientific-python.org/specs/spec-0000/
 dependencies = [
-    "numpy>=1.25.0",
+    "numpy>=1.26",
     #"numpy>=2",
     "ndindex",
     "msgpack",
-    #"numexpr",
-    #"numexpr @ file:///home/faltet/blosc/numexpr/wheelhouse/numexpr-2.10.3.dev0-cp312-cp312-pyodide_2024_0_wasm32.whl",
+    "numexpr; platform_machine != 'wasm32'",
     "py-cpuinfo",
     "httpx",
     "platformdirs",
