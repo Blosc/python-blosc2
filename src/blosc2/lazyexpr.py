@@ -40,15 +40,20 @@ from blosc2.ndarray import _check_allowed_dtypes, get_chunks_idx, is_inside_new_
 
 # Import numexpr only if not running in WebAssembly
 if not blosc2.IS_WASM:
-    import numexpr as ne
-else:
-    ne = None
+    import numexpr
 
 
 def ne_evaluate(expression, local_dict=None, **kwargs):
     """Safely evaluate expressions using numexpr when possible, falling back to numpy."""
     if local_dict is None:
         local_dict = {}
+    # Get local vars dict from the stack frame
+    _frame_depth = kwargs.pop("_frame_depth", 1)
+    local_dict |= {
+        k: v
+        for k, v in dict(sys._getframe(_frame_depth).f_locals).items()
+        if hasattr(v, "shape") or np.isscalar(v)
+    }
     if blosc2.IS_WASM:
         # Use numpy eval when running in WebAssembly
         safe_globals = {"np": np}
@@ -60,19 +65,12 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
                 if callable(getattr(np, name)) and not name.startswith("_")
             }
         )
-        # Get local vars dict from the stack frame
-        _frame_depth = kwargs.pop("_frame_depth", 1)
-        local_dict |= {
-            k: v
-            for k, v in dict(sys._getframe(_frame_depth).f_locals).items()
-            if hasattr(v, "dtype") or np.isscalar(v)
-        }
         if "out" in kwargs:
             out = kwargs.pop("out")
             out[:] = eval(expression, safe_globals, local_dict)
             return out
         return eval(expression, safe_globals, local_dict)
-    return ne.evaluate(expression, local_dict=local_dict, **kwargs)
+    return numexpr.evaluate(expression, local_dict=local_dict, **kwargs)
 
 
 # All the dtypes that are supported by the expression evaluator

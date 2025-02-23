@@ -15,19 +15,13 @@ from enum import Enum
 
 # Do the platform check once at module level
 IS_WASM = platform.machine() == "wasm32"
-IS_WASM = True  # for testing
+IS_WASM = True  # for testing (comment this line out for production)
 """
 Flag for WebAssembly platform.
 """
 
 if not IS_WASM:
     import numexpr
-else:
-    numexpr = None
-# try:
-#     import numexpr
-# except ImportError:
-#     numexpr = None
 
 from .version import __version__
 

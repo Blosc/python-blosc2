@@ -7,11 +7,11 @@
 #######################################################################
 import pathlib
 
-import numexpr as ne
 import numpy as np
 import pytest
 
 import blosc2
+from blosc2.lazyexpr import ne_evaluate
 
 pytestmark = pytest.mark.network
 
@@ -58,7 +58,7 @@ def test_simple(chunks_blocks, c2sub_context):
     # Slice
     sl = slice(10)
     expr = a1 + a3
-    nres = ne.evaluate("na1 + na3")
+    nres = ne_evaluate("na1 + na3")
     res = expr.compute(item=sl)
     np.testing.assert_allclose(res[:], nres[sl])
 
@@ -72,7 +72,7 @@ def test_simple_getitem(c2sub_context):
     chunks_blocks = "default"
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     expr = a1 + a2 - a3 * a4
-    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    nres = ne_evaluate("na1 + na2 - na3 * na4")
 
     # slice
     sl = slice(10)
@@ -99,7 +99,7 @@ def test_ixxx(chunks_blocks, c2sub_context):
     expr /= 7  # __itruediv__
     expr **= 2.3  # __ipow__
     res = expr.compute()
-    nres = ne.evaluate("(((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) / 7) ** 2.3")
+    nres = ne_evaluate("(((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) / 7) ** 2.3")
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -109,7 +109,7 @@ def test_complex(c2sub_context):
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     expr = blosc2.tan(a1) * blosc2.sin(a2) + (blosc2.sqrt(a4) * 2)
     expr += 2
-    nres = ne.evaluate("tan(na1) * sin(na2) + (sqrt(na4) * 2) + 2")
+    nres = ne_evaluate("tan(na1) * sin(na2) + (sqrt(na4) * 2) + 2")
     # eval
     res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
@@ -139,22 +139,22 @@ def test_mix_operands(chunks_blocks, c2sub_context):
     b3 = blosc2.asarray(na3, chunks=a3.chunks, blocks=a3.blocks)
 
     expr = a1 + b1
-    nres = ne.evaluate("na1 + na1")
+    nres = ne_evaluate("na1 + na1")
     np.testing.assert_allclose(expr[:], nres)
     np.testing.assert_allclose(expr.compute()[:], nres)
 
     expr = a1 + b3
-    nres = ne.evaluate("na1 + na3")
+    nres = ne_evaluate("na1 + na3")
     np.testing.assert_allclose(expr[:], nres)
     np.testing.assert_allclose(expr.compute()[:], nres)
 
     expr = a1 + b1 + a2 + b3
-    nres = ne.evaluate("na1 + na1 + na2 + na3")
+    nres = ne_evaluate("na1 + na1 + na2 + na3")
     np.testing.assert_allclose(expr[:], nres)
     np.testing.assert_allclose(expr.compute()[:], nres)
 
     expr = a1 + a2 + b1 + b3
-    nres = ne.evaluate("na1 + na2 + na1 + na3")
+    nres = ne_evaluate("na1 + na2 + na1 + na3")
     np.testing.assert_allclose(expr[:], nres)
     np.testing.assert_allclose(expr.compute()[:], nres)
 
@@ -162,7 +162,7 @@ def test_mix_operands(chunks_blocks, c2sub_context):
     # expr = a1 + na1 * b3
     # print(type(expr))
     # print("expression: ", expr.expression)
-    # nres = ne.evaluate("na1 + na1 * na3")
+    # nres = ne_evaluate("na1 + na1 * na3")
     # np.testing.assert_allclose(expr[:], nres)
     # np.testing.assert_allclose(expr.compute()[:], nres)
 
@@ -174,7 +174,7 @@ def test_save(c2sub_context):
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, (False, True))
 
     expr = a1 * a2 + a3 - a4 * 3
-    nres = ne.evaluate("na1 * na2 + na3 - na4 * 3")
+    nres = ne_evaluate("na1 * na2 + na3 - na4 * 3")
 
     res = expr.compute()
     assert res.dtype == np.float64
@@ -235,7 +235,7 @@ def test_broadcasting(broadcast_fixture):
     assert expr2.shape == np.broadcast_shapes(a1.shape, a2.shape)
     expr = expr1 - expr2
     assert expr.shape == np.broadcast_shapes(a1.shape, a2.shape)
-    nres = ne.evaluate("na1 + na2 - (na1 * na2 + 1)")
+    nres = ne_evaluate("na1 + na2 - (na1 * na2 + 1)")
     res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
     res = expr[:]
