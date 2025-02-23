@@ -45,7 +45,7 @@ else:
     ne = None
 
 
-def _ne_evaluate(expression, local_dict=None, **kwargs):
+def ne_evaluate(expression, local_dict=None, **kwargs):
     """Safely evaluate expressions using numexpr when possible, falling back to numpy."""
     if local_dict is None:
         local_dict = {}
@@ -62,7 +62,11 @@ def _ne_evaluate(expression, local_dict=None, **kwargs):
         )
         # Get local vars dict from the stack frame
         _frame_depth = kwargs.pop("_frame_depth", 1)
-        local_dict |= dict(sys._getframe(_frame_depth).f_locals)
+        local_dict |= {
+            k: v
+            for k, v in dict(sys._getframe(_frame_depth).f_locals).items()
+            if hasattr(v, "dtype") or np.isscalar(v)
+        }
         if "out" in kwargs:
             out = kwargs.pop("out")
             out[:] = eval(expression, safe_globals, local_dict)
@@ -994,19 +998,19 @@ def fast_eval(  # noqa: C901
         #     if callable(expression):
         #         expression(tuple(chunk_operands.values()), out[slice_], offset=offset)
         #     else:
-        #         _ne_evaluate(expression, chunk_operands, out=out[slice_])
+        #         ne_evaluate(expression, chunk_operands, out=out[slice_])
         #     continue
         if callable(expression):
             result = np.empty(chunks_, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
         else:
             if where is None:
-                result = _ne_evaluate(expression, chunk_operands, **ne_args)
+                result = ne_evaluate(expression, chunk_operands, **ne_args)
             else:
                 # Apply the where condition (in result)
                 if len(where) == 2:
                     new_expr = f"where({expression}, _where_x, _where_y)"
-                    result = _ne_evaluate(new_expr, chunk_operands, **ne_args)
+                    result = ne_evaluate(new_expr, chunk_operands, **ne_args)
                 else:
                     # We do not support one or zero operands in the fast path yet
                     raise ValueError("Fast path: the where condition must be a tuple with two elements")
@@ -1228,7 +1232,7 @@ def slices_eval(  # noqa: C901
             continue
 
         if where is None:
-            result = _ne_evaluate(expression, chunk_operands, **ne_args)
+            result = ne_evaluate(expression, chunk_operands, **ne_args)
         else:
             # Apply the where condition (in result)
             if len(where) == 2:
@@ -1237,9 +1241,9 @@ def slices_eval(  # noqa: C901
                 # result = np.where(result, x, y)
                 # numexpr is a bit faster than np.where, and we can fuse operations in this case
                 new_expr = f"where({expression}, _where_x, _where_y)"
-                result = _ne_evaluate(new_expr, chunk_operands, **ne_args)
+                result = ne_evaluate(new_expr, chunk_operands, **ne_args)
             elif len(where) == 1:
-                result = _ne_evaluate(expression, chunk_operands, **ne_args)
+                result = ne_evaluate(expression, chunk_operands, **ne_args)
                 if _indices or _order:
                     # Return indices only makes sense when the where condition is a tuple with one element
                     # and result is a boolean array
@@ -1517,14 +1521,14 @@ def reduce_slices(  # noqa: C901
                 # We don't have an actual expression, so avoid a copy
                 result = chunk_operands["o0"]
             else:
-                result = _ne_evaluate(expression, chunk_operands, **ne_args)
+                result = ne_evaluate(expression, chunk_operands, **ne_args)
         else:
             # Apply the where condition (in result)
             if len(where) == 2:
                 new_expr = f"where({expression}, _where_x, _where_y)"
-                result = _ne_evaluate(new_expr, chunk_operands, **ne_args)
+                result = ne_evaluate(new_expr, chunk_operands, **ne_args)
             elif len(where) == 1:
-                result = _ne_evaluate(expression, chunk_operands, **ne_args)
+                result = ne_evaluate(expression, chunk_operands, **ne_args)
                 x = chunk_operands["_where_x"]
                 result = x[result]
             else:
@@ -1937,7 +1941,7 @@ class LazyExpr(LazyArray):
             for key, value in self.operands.items()
         }
         if "contains" in self.expression:
-            _out = _ne_evaluate(self.expression, local_dict=operands)
+            _out = ne_evaluate(self.expression, local_dict=operands)
         else:
             # Create a globals dict with the functions of numpy
             globals_dict = {f: getattr(np, f) for f in functions if f not in ("contains", "pow")}
@@ -1947,7 +1951,7 @@ class LazyExpr(LazyArray):
                 # Sometimes, numpy gets a RuntimeWarning when evaluating expressions
                 # with synthetic operands (1's). Let's try with numexpr, which is not so picky
                 # about this.
-                _out = _ne_evaluate(self.expression, local_dict=operands)
+                _out = ne_evaluate(self.expression, local_dict=operands)
         self._dtype_ = _out.dtype
         self._expression_ = self.expression
         return self._dtype_
@@ -3143,7 +3147,7 @@ if __name__ == "__main__":
     nres = na1 + na2
     print(f"Elapsed time (numpy, [:]): {time() - t0:.3f} s")
     t0 = time()
-    nres = _ne_evaluate("na1 + na2")
+    nres = ne_evaluate("na1 + na2")
     print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()
@@ -3166,7 +3170,7 @@ if __name__ == "__main__":
     # nres = np.sin(na1[:]) + 2 * na1[:] + 1 + 2
     print(f"Elapsed time (numpy, [:]): {time() - t0:.3f} s")
     t0 = time()
-    nres = _ne_evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
+    nres = ne_evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
     print(f"Elapsed time (numexpr, [:]): {time() - t0:.3f} s")
     nres = nres[sl] if sl is not None else nres
     t0 = time()

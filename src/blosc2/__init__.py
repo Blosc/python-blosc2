@@ -266,7 +266,6 @@ from .lazyexpr import (
     get_expr_operands,
     validate_expr,
     evaluate,
-    _ne_evaluate,
 )
 from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy, jit
 

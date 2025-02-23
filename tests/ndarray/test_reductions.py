@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.lazyexpr import ne_evaluate
 
 NITEMS_SMALL = 1000
 NITEMS = 10_000
@@ -55,7 +56,7 @@ def array_fixture(dtype_fixture, shape_fixture):
 def test_reduce_bool(array_fixture, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 > a3 * a4
-    nres = blosc2._ne_evaluate("na1 + na2 > na3 * na4")
+    nres = ne_evaluate("na1 + na2 > na3 * na4")
     # res = getattr(expr, reduce_op)()
     res = expr.sum()
     # print("res:", res)
