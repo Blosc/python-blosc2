@@ -1132,6 +1132,8 @@ def print_versions():
         distro = os_release_pretty_name()
         if distro:
             print(f"Linux dist: {distro}")
+    if blosc2.IS_WASM:
+        processor = "wasm32"
     if not processor:
         processor = "not recognized"
     print(f"Processor: {processor}")

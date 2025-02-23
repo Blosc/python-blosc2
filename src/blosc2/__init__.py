@@ -15,7 +15,7 @@ from enum import Enum
 
 # Do the platform check once at module level
 IS_WASM = platform.machine() == "wasm32"
-IS_WASM = True  # for testing (comment this line out for production)
+# IS_WASM = True  # for testing (comment this line out for production)
 """
 Flag for WebAssembly platform.
 """

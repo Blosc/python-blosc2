@@ -52,7 +52,15 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
     local_dict |= {
         k: v
         for k, v in dict(sys._getframe(_frame_depth).f_locals).items()
-        if hasattr(v, "shape") or np.isscalar(v)
+        if (
+            hasattr(v, "shape")
+            or (
+                np.isscalar(v)
+                and
+                # Do not overwrite the local_dict with the expression variables
+                not (k in local_dict or k in ("_where_x", "_where_y"))
+            )
+        )
     }
     if blosc2.IS_WASM:
         # Use numpy eval when running in WebAssembly
