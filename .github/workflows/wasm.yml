@@ -39,6 +39,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake
 
+      - name: Install cibuildwheel
+        run: pip install cibuildwheel
+
       - name: Build wheels
         run: cibuildwheel --platform pyodide
 
