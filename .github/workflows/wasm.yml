@@ -1,0 +1,55 @@
+name: Python wheels for WASM
+on:
+  push:
+    tags:
+      - '*'
+  pull_request:
+    branches:
+      - main
+
+env:
+  CIBW_BUILD_VERBOSITY: 1
+
+jobs:
+  build_wheels_wasm:
+    name: Build and test wheels for WASM on ${{ matrix.os }} for ${{ matrix.p_ver }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      CIBW_BUILD: ${{ matrix.cibw_build }}
+      CMAKE_ARGS: "-DWITH_OPTIM=OFF"
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        cibw_build: ["cp3{11,12,13}-*"]
+        p_ver: ["3.11-3.13"]
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake
+
+      - name: Build wheels
+        run: cibuildwheel --platform pyodide
+
+      - name: Install pytest
+        run: pip install pytest
+
+      - name: Test wheels
+        run: pytest {project}/tests/ndarray/test_reductions.py
+
+      - name: Upload wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: wheels-wasm-${{ matrix.os }}-${{ matrix.p_ver }}
+          path: ./wheelhouse/*.whl
