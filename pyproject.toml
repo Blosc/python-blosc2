@@ -84,29 +84,15 @@ skip = "*-manylinux_i686 cp*-win32 *_ppc64le *_s390x *musllinux*"
 # We won't require torch when testing wheels to avoid building/running torch on slow platforms
 #test-requires = "pytest psutil"
 test-requires = "pytest"
-#test-command = "pytest {project}/tests"
-#test-command = "pytest {project}/tests/ndarray/test_reductions.py"
-#test-command = "pytest {project}/tests/ndarray/test_reductions.py::test_save_version1"
+test-command = "pytest {project}/tests"  # default command
 #test-command = "python -c'import blosc2; blosc2.print_versions(); import numpy; print(dir(numpy))'"
 # Manylinux 2014 will be the default for x86_64 and aarch64
 manylinux-x86_64-image = "manylinux2014"
 manylinux-aarch64-image = "manylinux2014"
 
-[[tool.cibuildwheel.environment.CIBW_TEST_COMMAND]]
-CIBW_PLATFORM = "wasm32"
-value = "pytest {project}/tests/ndarray/test_reductions.py"
-
-[[tool.cibuildwheel.environment.CIBW_TEST_COMMAND]]
-CIBW_PLATFORM = "linux"
-value = "pytest {project}/tests"
-
-[[tool.cibuildwheel.environment.CIBW_TEST_COMMAND]]
-CIBW_PLATFORM = "macos"
-value = "pytest {project}/tests"
-
-[[tool.cibuildwheel.environment.CIBW_TEST_COMMAND]]
-CIBW_PLATFORM = "windows"
-value = "pytest {project}/tests"
+[tool.cibuildwheel.overrides]
+[tool.cibuildwheel.overrides.pyodide]  # for WASM/pyodide
+test-command = "pytest {project}/tests/ndarray/test_reductions.py"
 
 [tool.ruff]
 line-length = 109
