@@ -9,7 +9,8 @@ on:
 
 env:
   CIBW_BUILD_VERBOSITY: 1
-  PYODIDE_VERSION: 0.27.2
+  # cibuildwheel cannot choose for a specified version of pyodide yet
+  # PYODIDE_VERSION: 0.27.2
 
 jobs:
   build_wheels_wasm:
@@ -44,13 +45,8 @@ jobs:
         run: pip install cibuildwheel
 
       - name: Build wheels
+        # Testing is automaticall made by cibuildwheel
         run: cibuildwheel --platform pyodide
-
-      - name: Install pytest
-        run: pip install pytest
-
-      - name: Test wheels
-        run: pytest {project}/tests/ndarray/test_reductions.py
 
       - name: Upload wheels
         uses: actions/upload-artifact@v4
