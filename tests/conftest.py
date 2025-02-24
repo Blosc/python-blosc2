@@ -15,6 +15,7 @@ import blosc2
 def pytest_configure(config):
     blosc2.print_versions()
 
+
 @pytest.fixture(scope="session")
 def c2sub_context():
     # You may use the URL and credentials for an already existing user

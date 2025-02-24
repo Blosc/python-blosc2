@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 import numpy as np
 
 import blosc2
+
 if not blosc2.IS_WASM:
     import httpx
 

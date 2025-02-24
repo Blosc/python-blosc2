@@ -31,7 +31,7 @@ def test_nans_simple(shape, dtype):
 
 @pytest.mark.parametrize("asarray", [True, False])
 @pytest.mark.parametrize("typesize", [1, 3, 255, 256, 257, 256 * 256])
-@pytest.mark.parametrize("shape", [(1,), (3,), (10,), (2*10,)])
+@pytest.mark.parametrize("shape", [(1,), (3,), (10,), (2 * 10,)])
 def test_large_typesize(shape, typesize, asarray):
     dtype = np.dtype([("f_001", "f8", (typesize,)), ("f_002", "f4", (typesize,))])
     a = np.full(shape, np.nan, dtype=dtype)
