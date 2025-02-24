@@ -125,7 +125,7 @@ for disk in (False,):
             nc = np.linspace(-10, 10, N, dtype=dtype)
             nout = compute_reduction_numpy(na, nb, nc)
         t0 = time()
-        if numpy or numpy_jit:
+        if numpy or numpy_jit and not dask_da:
             na = np.linspace(0, 1, N * N, dtype=dtype).reshape(N, N)
             nb = na + 1
             nc = np.linspace(-10, 10, N, dtype=dtype)
