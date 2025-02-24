@@ -9,6 +9,7 @@ on:
 
 env:
   CIBW_BUILD_VERBOSITY: 1
+  PYODIDE_VERSION: 0.27.2
 
 jobs:
   build_wheels_wasm:

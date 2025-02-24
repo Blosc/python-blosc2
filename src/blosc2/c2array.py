@@ -15,10 +15,11 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-import httpx
 import numpy as np
 
 import blosc2
+if not blosc2.IS_WASM:
+    import httpx
 
 _subscriber_data = {
     "urlbase": os.environ.get("BLOSC_C2URLBASE"),
