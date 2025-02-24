@@ -24,12 +24,14 @@ from dataclasses import asdict
 from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 
-import cpuinfo
 import numpy as np
 import platformdirs
 
 import blosc2
 from blosc2 import blosc2_ext
+
+if not blosc2.IS_WASM:
+    import cpuinfo
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -1119,6 +1121,10 @@ def print_versions():
     for clib in sorted(clib_versions.keys()):
         print(f"  {clib}: {clib_versions[clib]}")
     print(f"NumPy version: {np.__version__}")
+    if not blosc2.IS_WASM:
+        import numexpr
+
+        print(f"numexpr version: {numexpr.__version__}")
     print(f"Python version: {sys.version}")
     (sysname, _nodename, release, version, machine, processor) = platform.uname()
     print(f"Platform: {sysname}-{release}-{machine} ({version})")
@@ -1126,6 +1132,8 @@ def print_versions():
         distro = os_release_pretty_name()
         if distro:
             print(f"Linux dist: {distro}")
+    if blosc2.IS_WASM:
+        processor = "wasm32"
     if not processor:
         processor = "not recognized"
     print(f"Processor: {processor}")
@@ -1202,6 +1210,17 @@ def linux_cache_size(cache_level: int, default_size: int) -> int:
 
 
 def _get_cpu_info():
+    if blosc2.IS_WASM:
+        # Emscripten/wasm32 does not have access to CPU information.
+        # Populate it with some reasonable defaults.
+        return {
+            "brand": "Emscripten",
+            "arch": "wasm32",
+            "count": 1,
+            "l1_data_cache_size": 32 * 1024,
+            "l2_cache_size": 256 * 1024,
+            "l3_cache_size": 1024 * 1024,
+        }
     cpu_info = cpuinfo.get_cpu_info()
     # cpuinfo does not correctly retrieve the cache sizes for Apple Silicon, so do it manually
     if platform.system() == "Darwin":

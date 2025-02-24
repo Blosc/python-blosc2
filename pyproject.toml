@@ -31,13 +31,14 @@ classifiers = [
 requires-python = ">=3.11"
 # Follow guidelines from https://scientific-python.org/specs/spec-0000/
 dependencies = [
-    "numpy>=1.25.0",
+    "numpy>=1.26",
+    #"numpy>=2",
     "ndindex",
     "msgpack",
-    "numexpr",
-    "py-cpuinfo",
-    "httpx",
     "platformdirs",
+    "numexpr; platform_machine != 'wasm32'",
+    "py-cpuinfo; platform_machine != 'wasm32'",
+    "httpx; platform_machine != 'wasm32'",
 ]
 version = "3.1.2.dev0"
 
@@ -59,8 +60,8 @@ dev = [
 ]
 test = [
     "pytest",
-    "psutil",
-    "torch",
+    "psutil; platform_machine != 'wasm32'",
+    "torch; platform_machine != 'wasm32'",
 ]
 doc = [
     "sphinx>=8",
@@ -81,8 +82,11 @@ build-verbosity = 1
 # Skip unsupported python versions as well as 32-bit platforms, which are not supported anymore.
 skip = "*-manylinux_i686 cp*-win32 *_ppc64le *_s390x *musllinux*"
 # We won't require torch when testing wheels to avoid building/running torch on slow platforms
-test-requires = "pytest psutil"
-test-command = "pytest {project}/tests"
+#test-requires = "pytest psutil"
+test-requires = "pytest"
+#test-command = "pytest {project}/tests"  # default command
+# Use a simpler command here, and let the workflow .yml file to set the command
+test-command = "python -c \"import blosc2; blosc2.print_versions()\""
 # Manylinux 2014 will be the default for x86_64 and aarch64
 manylinux-x86_64-image = "manylinux2014"
 manylinux-aarch64-image = "manylinux2014"

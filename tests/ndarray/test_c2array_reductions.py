@@ -7,11 +7,11 @@
 #######################################################################
 import pathlib
 
-import numexpr as ne
 import numpy as np
 import pytest
 
 import blosc2
+from blosc2.lazyexpr import ne_evaluate
 
 pytestmark = pytest.mark.network
 
@@ -50,7 +50,7 @@ def test_reduce_bool(reduce_op, c2sub_context):
     chunks_blocks = "default"
     a1, a2, a3, a4, na1, na2, na3, na4 = get_arrays(shape, chunks_blocks)
     expr = a1 + a2 > a3 * a4
-    nres = ne.evaluate("na1 + na2 > na3 * na4")
+    nres = ne_evaluate("na1 + na2 > na3 * na4")
     res = getattr(expr, reduce_op)()
     nres = getattr(nres, reduce_op)()
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
@@ -105,7 +105,7 @@ def test_reduce_params(chunks_blocks, axis, keepdims, dtype_out, reduce_op, c2su
 
 
 # TODO: "any" and "all" are not supported yet because:
-# ne.evaluate('(o0 + o1)', local_dict = {'o0': np.array(True), 'o1': np.array(True)})
+# ne_evaluate('(o0 + o1)', local_dict = {'o0': np.array(True), 'o1': np.array(True)})
 # is not supported by NumExpr
 @pytest.mark.parametrize(
     "chunks_blocks",

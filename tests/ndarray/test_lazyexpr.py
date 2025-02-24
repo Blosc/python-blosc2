@@ -7,11 +7,11 @@
 #######################################################################
 import math
 
-import numexpr as ne
 import numpy as np
 import pytest
 
 import blosc2
+from blosc2.lazyexpr import ne_evaluate
 from blosc2.ndarray import get_chunks_idx
 
 NITEMS_SMALL = 1_000
@@ -83,7 +83,7 @@ def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
 def test_simple_getitem(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 - a3 * a4
-    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    nres = ne_evaluate("na1 + na2 - na3 * na4")
     sl = slice(100)
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
@@ -95,7 +95,7 @@ def test_proxy_simple_getitem(array_fixture):
     a1 = blosc2.Proxy(a1)
     a2 = blosc2.Proxy(a2)
     expr = a1 + a2 - a3 * a4
-    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    nres = ne_evaluate("na1 + na2 - na3 * na4")
     sl = slice(100)
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
@@ -105,7 +105,7 @@ def test_proxy_simple_getitem(array_fixture):
 def test_mix_operands(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + na2
-    nres = ne.evaluate("na1 + na2")
+    nres = ne_evaluate("na1 + na2")
     sl = slice(100)
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
@@ -114,7 +114,7 @@ def test_mix_operands(array_fixture):
 
     # TODO: fix this
     # expr = na2 + a1
-    # nres = ne.evaluate("na2 + na1")
+    # nres = ne_evaluate("na2 + na1")
     # sl = slice(100)
     # res = expr[sl]
     # np.testing.assert_allclose(res, nres[sl])
@@ -122,28 +122,28 @@ def test_mix_operands(array_fixture):
     # np.testing.assert_allclose(expr.compute()[:], nres)
 
     expr = a1 + na2 + a3
-    nres = ne.evaluate("na1 + na2 + na3")
+    nres = ne_evaluate("na1 + na2 + na3")
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
     np.testing.assert_allclose(expr[:], nres)
     np.testing.assert_allclose(expr.compute()[:], nres)
 
     expr = a1 * na2 + a3
-    nres = ne.evaluate("na1 * na2 + na3")
+    nres = ne_evaluate("na1 * na2 + na3")
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
     np.testing.assert_allclose(expr[:], nres)
     np.testing.assert_allclose(expr.compute()[:], nres)
 
     expr = a1 * na2 * a3
-    nres = ne.evaluate("na1 * na2 * na3")
+    nres = ne_evaluate("na1 * na2 * na3")
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
     np.testing.assert_allclose(expr[:], nres)
     np.testing.assert_allclose(expr.compute()[:], nres)
 
     expr = blosc2.LazyExpr(new_op=(na2, "*", a3))
-    nres = ne.evaluate("na2 * na3")
+    nres = ne_evaluate("na2 * na3")
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
     np.testing.assert_allclose(expr[:], nres)
@@ -156,7 +156,7 @@ def test_mix_operands(array_fixture):
     # print(expr.expression)
     # print(expr.operands)
     # print("--------------------------------------------------------")
-    # nres = ne.evaluate("na1 + na2 * na3")
+    # nres = ne_evaluate("na1 + na2 * na3")
     # sl = slice(100)
     # res = expr[sl]
     # np.testing.assert_allclose(res, nres[sl])
@@ -168,7 +168,7 @@ def test_mix_operands(array_fixture):
 def test_simple_expression(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 - a3 * a4
-    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    nres = ne_evaluate("na1 + na2 - na3 * na4")
     res = expr.compute(cparams=blosc2.CParams())
     np.testing.assert_allclose(res[:], nres)
 
@@ -179,7 +179,7 @@ def test_proxy_simple_expression(array_fixture):
     a1 = blosc2.Proxy(a1)
     a3 = blosc2.Proxy(a3)
     expr = a1 + a2 - a3 * a4
-    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    nres = ne_evaluate("na1 + na2 - na3 * na4")
     res = expr.compute(storage=blosc2.Storage())
     np.testing.assert_allclose(res[:], nres)
 
@@ -191,9 +191,13 @@ def test_iXXX(array_fixture):
     expr -= 15  # __isub__
     expr *= 2  # __imul__
     expr /= 7  # __itruediv__
-    expr **= 2.3  # __ipow__
+    if not blosc2.IS_WASM:
+        expr **= 2.3  # __ipow__
     res = expr.compute()
-    nres = ne.evaluate("(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7) ** 2.3")
+    if not blosc2.IS_WASM:
+        nres = ne_evaluate("(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7) ** 2.3")
+    else:
+        nres = ne_evaluate("(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7)")
     np.testing.assert_allclose(res[:], nres)
 
 
@@ -201,7 +205,7 @@ def test_complex_evaluate(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = blosc2.tan(a1) * (blosc2.sin(a2) * blosc2.sin(a2) + blosc2.cos(a3)) + (blosc2.sqrt(a4) * 2)
     expr += 2
-    nres = ne.evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
+    nres = ne_evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
     res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
 
@@ -210,7 +214,7 @@ def test_complex_getitem(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = blosc2.tan(a1) * (blosc2.sin(a2) * blosc2.sin(a2) + blosc2.cos(a3)) + (blosc2.sqrt(a4) * 2)
     expr += 2
-    nres = ne.evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
+    nres = ne_evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
     res = expr[:]
     np.testing.assert_allclose(res, nres)
 
@@ -219,7 +223,7 @@ def test_complex_getitem_slice(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = blosc2.tan(a1) * (blosc2.sin(a2) * blosc2.sin(a2) + blosc2.cos(a3)) + (blosc2.sqrt(a4) * 2)
     expr += 2
-    nres = ne.evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
+    nres = ne_evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
     sl = slice(100)
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
@@ -229,7 +233,7 @@ def test_func_expression(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = (a1 + a2) * a3 - a4
     expr = blosc2.sin(expr) + blosc2.cos(expr)
-    nres = ne.evaluate("sin((na1 + na2) * na3 - na4) + cos((na1 + na2) * na3 - na4)")
+    nres = ne_evaluate("sin((na1 + na2) * na3 - na4) + cos((na1 + na2) * na3 - na4)")
     res = expr.compute(storage={})
     np.testing.assert_allclose(res[:], nres)
 
@@ -238,7 +242,7 @@ def test_expression_with_constants(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     # Test with operands with same chunks and blocks
     expr = a1 + 2 - a3 * 3.14
-    nres = ne.evaluate("na1 + 2 - na3 * 3.14")
+    nres = ne_evaluate("na1 + 2 - na3 * 3.14")
     np.testing.assert_allclose(expr[:], nres)
 
 
@@ -261,11 +265,13 @@ def test_comparison_operators(dtype_fixture, compare_expressions, comparison_ope
         expr_string = f"na1 {comparison_operator} na2"
     res_lazyexpr = expr.compute(dparams={})
     # Evaluate using NumExpr
-    res_numexpr = ne.evaluate(expr_string)
+    res_numexpr = ne_evaluate(expr_string)
     # Compare the results
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
 
 
+# Skip this test for blosc2.IS_WASM
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize(
     "function",
     [
@@ -302,7 +308,7 @@ def test_functions(function, dtype_fixture, shape_fixture):
     res_lazyexpr = expr.compute(cparams={})
     # Evaluate using NumExpr
     expr_string = f"{function}(na1)"
-    res_numexpr = ne.evaluate(expr_string)
+    res_numexpr = ne_evaluate(expr_string)
     # Compare the results
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
 
@@ -326,7 +332,7 @@ def test_functions(function, dtype_fixture, shape_fixture):
     res_lazyexpr = expr.compute(cparams={})
     # Evaluate using NumExpr
     expr_string = f"na1 + {function}(na2)"
-    res_numexpr = ne.evaluate(expr_string)
+    res_numexpr = ne_evaluate(expr_string)
     # Compare the results
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
 
@@ -334,7 +340,7 @@ def test_functions(function, dtype_fixture, shape_fixture):
     expr = eval(f"np.{function}(a1 + a2)", {"a1": a1, "a2": a2, "np": np})
     # Evaluate using NumExpr
     expr_string = f"{function}(na1 + na2)"
-    res_numexpr = ne.evaluate(expr_string)
+    res_numexpr = ne_evaluate(expr_string)
     # Compare the results
     np.testing.assert_allclose(expr[()], res_numexpr)
 
@@ -378,10 +384,10 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
             res_lazyexpr = expr.compute()
             # Evaluate using NumExpr
             if function == "**":
-                res_numexpr = ne.evaluate("na1**na2")
+                res_numexpr = ne_evaluate("na1**na2")
             else:
                 expr_string = f"{function}(na1, na2)"
-                res_numexpr = ne.evaluate(expr_string)
+                res_numexpr = ne_evaluate(expr_string)
         else:  # ("NDArray", "scalar")
             value2 = 3
             # Construct the lazy expression based on the function name
@@ -392,10 +398,10 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
             res_lazyexpr = expr.compute()
             # Evaluate using NumExpr
             if function == "**":
-                res_numexpr = ne.evaluate("na1**value2")
+                res_numexpr = ne_evaluate("na1**value2")
             else:
                 expr_string = f"{function}(na1, value2)"
-                res_numexpr = ne.evaluate(expr_string)
+                res_numexpr = ne_evaluate(expr_string)
     else:  # ("scalar", "NDArray")
         value1 = 12
         na2 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
@@ -408,10 +414,10 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
         res_lazyexpr = expr.compute()
         # Evaluate using NumExpr
         if function == "**":
-            res_numexpr = ne.evaluate("value1**na2")
+            res_numexpr = ne_evaluate("value1**na2")
         else:
             expr_string = f"{function}(value1, na2)"
-            res_numexpr = ne.evaluate(expr_string)
+            res_numexpr = ne_evaluate(expr_string)
     # Compare the results
     tol = 1e-15 if dtype_fixture == "float64" else 1e-6
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, atol=tol, rtol=tol)
@@ -435,6 +441,7 @@ def test_abs(shape_fixture, dtype_fixture):
     np.testing.assert_allclose(res_lazyexpr[:], res_np)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize("values", [("NDArray", "str"), ("NDArray", "NDArray"), ("str", "NDArray")])
 def test_contains(values):
     # Unpack the value fixture
@@ -448,14 +455,14 @@ def test_contains(values):
             expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", value2))
             # Evaluate using NumExpr
             expr_numexpr = f"{'contains'}(a1, value2)"
-            res_numexpr = ne.evaluate(expr_numexpr)
+            res_numexpr = ne_evaluate(expr_numexpr)
         else:  # ("NDArray", "NDArray")
             a2 = np.array([b"abc", b"ab c", b" abc", b" abc ", b"\tabc", b"c h"])
             a2_blosc = blosc2.asarray(a2)
             # Construct the lazy expression
             expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", a2_blosc))
             # Evaluate using NumExpr
-            res_numexpr = ne.evaluate("contains(a2, a1)")
+            res_numexpr = ne_evaluate("contains(a2, a1)")
     else:  # ("str", "NDArray")
         value1 = b"abc"
         a2 = np.array([b"abc", b"def", b"aterr", b"oot", b"zu", b"ab c"])
@@ -463,7 +470,7 @@ def test_contains(values):
         # Construct the lazy expression
         expr_lazy = blosc2.LazyExpr(new_op=(value1, "contains", a2_blosc))
         # Evaluate using NumExpr
-        res_numexpr = ne.evaluate("contains(value1, a2)")
+        res_numexpr = ne_evaluate("contains(value1, a2)")
     res_lazyexpr = expr_lazy.compute()
     # Compare the results
     np.testing.assert_array_equal(res_lazyexpr[:], res_numexpr)
@@ -490,7 +497,7 @@ def test_negate(dtype_fixture, shape_fixture):
 def test_params(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 - a3 * a4
-    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    nres = ne_evaluate("na1 + na2 - na3 * na4")
 
     urlpath = "eval_expr.b2nd"
     blosc2.remove_urlpath(urlpath)
@@ -530,7 +537,7 @@ def test_save():
     # Construct the lazy expression with the on-disk operands
     da1, da2, da3, da4 = ops
     expr = da1 / da2 + da2 - da3 * da4
-    nres = ne.evaluate("na1 / na2 + na2 - na3 * na4")
+    nres = ne_evaluate("na1 / na2 + na2 - na3 * na4")
     urlpath_save = "expr.b2nd"
     expr.save(urlpath=urlpath_save)
 
@@ -570,7 +577,7 @@ def test_save():
     expr = blosc2.open(urlpath_save2)
     assert expr.array.dtype == np.float64
     res = expr.compute()
-    nres = ne.evaluate("na1 / na2 + na2 - na3 * na4**3")
+    nres = ne_evaluate("na1 / na2 + na2 - na3 * na4**3")
     np.testing.assert_allclose(res[:], nres, rtol=tol, atol=tol)
     # Test getitem
     np.testing.assert_allclose(expr[:], nres, rtol=tol, atol=tol)
@@ -579,6 +586,7 @@ def test_save():
         blosc2.remove_urlpath(urlpath)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 def test_save_unsafe():
     na = np.arange(1000)
     nb = np.arange(1000)
@@ -609,6 +617,7 @@ def test_save_unsafe():
         blosc2.remove_urlpath(urlpath)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize(
     "function",
     [
@@ -642,7 +651,7 @@ def test_save_functions(function, dtype_fixture, shape_fixture):
 
     # Evaluate using NumExpr
     expr_string = f"{function}(na1)"
-    res_numexpr = ne.evaluate(expr_string)
+    res_numexpr = ne_evaluate(expr_string)
     # Compare the results
     np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
 
@@ -660,6 +669,7 @@ def test_save_functions(function, dtype_fixture, shape_fixture):
         blosc2.remove_urlpath(urlpath)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize("values", [("NDArray", "str"), ("NDArray", "NDArray"), ("str", "NDArray")])
 def test_save_contains(values):
     # Unpack the value fixture
@@ -678,7 +688,7 @@ def test_save_contains(values):
             expr_lazy = blosc2.open(urlpath_save)
             # Evaluate using NumExpr
             expr_numexpr = f"{'contains'}(a1, value2)"
-            res_numexpr = ne.evaluate(expr_numexpr)
+            res_numexpr = ne_evaluate(expr_numexpr)
         else:  # ("NDArray", "NDArray")
             a2 = np.array([b"abc(", b"ab c", b" abc", b" abc ", b"\tabc", b"c h"])
             a2_blosc = blosc2.asarray(a2, urlpath=urlpath2, mode="w")
@@ -687,7 +697,7 @@ def test_save_contains(values):
             expr_lazy.save(urlpath=urlpath_save)
             expr_lazy = blosc2.open(urlpath_save)
             # Evaluate using NumExpr
-            res_numexpr = ne.evaluate("contains(a2, a1)")
+            res_numexpr = ne_evaluate("contains(a2, a1)")
     else:  # ("str", "NDArray")
         value1 = b"abc"
         a2 = np.array([b"abc(", b"def", b"aterr", b"oot", b"zu", b"ab c"])
@@ -697,7 +707,7 @@ def test_save_contains(values):
         expr_lazy.save(urlpath=urlpath_save)
         expr_lazy = blosc2.open(urlpath_save)
         # Evaluate using NumExpr
-        res_numexpr = ne.evaluate("contains(value1, a2)")
+        res_numexpr = ne_evaluate("contains(value1, a2)")
     res_lazyexpr = expr_lazy.compute()
     # Compare the results
     np.testing.assert_array_equal(res_lazyexpr[:], res_numexpr)
@@ -706,6 +716,7 @@ def test_save_contains(values):
         blosc2.remove_urlpath(path)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 def test_save_many_functions(dtype_fixture, shape_fixture):
     rtol = 1e-6 if dtype_fixture == np.float32 else 1e-15
     atol = 1e-6 if dtype_fixture == np.float32 else 1e-15
@@ -720,7 +731,7 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
 
     # Evaluate using NumExpr
     expr_string = "sin(x)**3 + cos(y)**2 + cos(x) * arcsin(y) + arcsinh(x) + sinh(x)"
-    res_numexpr = ne.evaluate(expr_string, {"x": na1, "y": na2})
+    res_numexpr = ne_evaluate(expr_string, {"x": na1, "y": na2})
 
     urlpath_save = "expr.b2nd"
     expr = blosc2.lazyexpr(expr_string, {"x": a1, "y": a2})
@@ -736,6 +747,7 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
         blosc2.remove_urlpath(urlpath)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize(
     "constructor", ["arange", "linspace", "fromiter", "reshape", "zeros", "ones", "full"]
 )
@@ -917,7 +929,7 @@ def test_broadcasting(broadcast_fixture):
     assert expr2.shape == np.broadcast_shapes(a1.shape, a2.shape)
     expr = expr1 - expr2
     assert expr.shape == np.broadcast_shapes(expr1.shape, expr2.shape)
-    nres = ne.evaluate("na1 + na2 - (na1 * na2 + 1)")
+    nres = ne_evaluate("na1 + na2 - (na1 * na2 + 1)")
     res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
     res = expr[:]
@@ -932,7 +944,7 @@ def test_broadcasting_str(broadcast_fixture):
     assert expr2.shape == np.broadcast_shapes(a1.shape, a2.shape)
     expr = blosc2.lazyexpr("expr1 - expr2")
     assert expr.shape == np.broadcast_shapes(expr1.shape, expr2.shape)
-    nres = ne.evaluate("na1 + na2 - (na1 * na2 + 1)")
+    nres = ne_evaluate("na1 + na2 - (na1 * na2 + 1)")
     assert expr.shape == nres.shape
     res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
@@ -966,7 +978,7 @@ def test_lazyexpr(array_fixture, operand_mix, operand_guess):
         expr = blosc2.lazyexpr("a1 + a2 - a3 * a4")
     else:
         expr = blosc2.lazyexpr("a1 + a2 - a3 * a4", operands=operands)
-    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    nres = ne_evaluate("na1 + na2 - na3 * na4")
     assert expr.shape == nres.shape
     res = expr.compute()
     np.testing.assert_allclose(res[:], nres)
@@ -1020,7 +1032,7 @@ def test_lazyexpr_out(array_fixture, out_param, operand_mix):
     expr = blosc2.lazyexpr("a1 + a2", operands=operands, out=out)
     res = expr.compute()  # res should be equal to out
     assert res is out
-    nres = ne.evaluate("na1 + na2", out=na4)
+    nres = ne_evaluate("na1 + na2", out=na4)
     assert nres is na4
     if out_param == "NDArray":
         np.testing.assert_allclose(res[:], nres)
@@ -1032,7 +1044,7 @@ def test_lazyexpr_out(array_fixture, out_param, operand_mix):
     operands = {"a1": a1, "a2": a2}
     expr2 = blosc2.lazyexpr(expr, operands=operands, out=out)
     assert expr2.compute() is out
-    nres = ne.evaluate("na1 - na2")
+    nres = ne_evaluate("na1 - na2")
     np.testing.assert_allclose(out[:], nres)
 
 
@@ -1040,7 +1052,7 @@ def test_lazyexpr_out(array_fixture, out_param, operand_mix):
 def test_eval_item(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = blosc2.lazyexpr("a1 + a2 - a3 * a4", operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4})
-    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    nres = ne_evaluate("na1 + na2 - na3 * na4")
     res = expr.compute(item=0)
     np.testing.assert_allclose(res[()], nres[0])
     res = expr.compute(item=slice(10))
@@ -1057,7 +1069,7 @@ def test_get_chunk(array_fixture):
         "a1 + a2 - a3 * a4",
         operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4},
     )
-    nres = ne.evaluate("na1 + na2 - na3 * na4")
+    nres = ne_evaluate("na1 + na2 - na3 * na4")
     chunksize = np.prod(expr.chunks) * expr.dtype.itemsize
     blocksize = np.prod(expr.blocks) * expr.dtype.itemsize
     _, nchunks = get_chunks_idx(expr.shape, expr.chunks)
@@ -1073,6 +1085,7 @@ def test_get_chunk(array_fixture):
     np.testing.assert_allclose(out[:], nres)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize(
     ("chunks", "blocks"),
     [
@@ -1144,10 +1157,7 @@ def test_get_expr_operands(expression, expected_operands):
     assert blosc2.get_expr_operands(expression) == set(expected_operands)
 
 
-@pytest.mark.skipif(
-    np.__version__.startswith("1."),
-    reason="NumPy < 2.0 has different casting rules"
-)
+@pytest.mark.skipif(np.__version__.startswith("1."), reason="NumPy < 2.0 has different casting rules")
 @pytest.mark.parametrize(
     "scalar",
     [

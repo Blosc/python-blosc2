@@ -10,9 +10,18 @@
 # ruff: noqa: E402 - Module level import not at top of file
 # ruff: noqa: F401 - `var` imported but unused
 
+import platform
 from enum import Enum
 
-import numexpr
+# Do the platform check once at module level
+IS_WASM = platform.machine() == "wasm32"
+# IS_WASM = True  # for testing (comment this line out for production)
+"""
+Flag for WebAssembly platform.
+"""
+
+if not IS_WASM:
+    import numexpr
 
 from .version import __version__
 
@@ -200,7 +209,9 @@ nthreads = min(nthreads, 64)
 # Experiments say that, when using a large number of threads, it is better to not use them all
 if nthreads > 16:
     nthreads -= nthreads // 8
-numexpr.set_num_threads(nthreads)
+if not IS_WASM:
+    # WASM does not support threading
+    numexpr.set_num_threads(nthreads)
 
 # This import must be before ndarray and schunk
 from .storage import (  # noqa: I001

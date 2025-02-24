@@ -6,11 +6,11 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import numexpr as ne
 import numpy as np
 import pytest
 
 import blosc2
+from blosc2.lazyexpr import ne_evaluate
 
 ###### General expressions
 
@@ -34,17 +34,19 @@ def sample_data(request):
 def test_expr(sample_data):
     a, b, c, shape = sample_data
     d_blosc2 = blosc2.evaluate("((a**3 + sin(a * 2)) < c) & (b > 0)")
-    d_numexpr = ne.evaluate("((a**3 + sin(a * 2)) < c) & (b > 0)")
+    d_numexpr = ne_evaluate("((a**3 + sin(a * 2)) < c) & (b > 0)")
     np.testing.assert_equal(d_blosc2, d_numexpr)
 
 
+# skip this test for WASM for now
+@pytest.mark.skipif(blosc2.IS_WASM, reason="Skip test for WASM")
 def test_expr_out(sample_data):
     a, b, c, shape = sample_data
     # Testing with an out param
     out = blosc2.zeros(shape, dtype="bool")
     d_blosc2 = blosc2.evaluate("((a**3 + sin(a * 2)) < c) & (b > 0)", out=out)
     out2 = np.zeros(shape, dtype=np.bool_)
-    d_numexpr = ne.evaluate("((a**3 + sin(a * 2)) < c) & (b > 0)", out=out2)
+    d_numexpr = ne_evaluate("((a**3 + sin(a * 2)) < c) & (b > 0)", out=out2)
     np.testing.assert_equal(d_blosc2, d_numexpr)
     np.testing.assert_equal(out, out2)
 
@@ -52,7 +54,7 @@ def test_expr_out(sample_data):
 def test_expr_optimization(sample_data):
     a, b, c, shape = sample_data
     d_blosc2 = blosc2.evaluate("((a**3 + sin(a * 2)) < c) & (b > 0)", optimization="none")
-    d_numexpr = ne.evaluate("((a**3 + sin(a * 2)) < c) & (b > 0)", optimization="none")
+    d_numexpr = ne_evaluate("((a**3 + sin(a * 2)) < c) & (b > 0)", optimization="none")
     np.testing.assert_equal(d_blosc2, d_numexpr)
 
 

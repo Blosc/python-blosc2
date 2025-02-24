@@ -2776,11 +2776,13 @@ def _check_shape(shape):
         raise TypeError("shape should be a tuple or a list!")
     return shape
 
+
 def _check_dtype(dtype):
     dtype = np.dtype(dtype)
     if dtype.itemsize > blosc2.MAX_TYPESIZE:
         raise ValueError(f"dtype itemsize {dtype.itemsize} is too large (>{blosc2.MAX_TYPESIZE})!")
     return dtype
+
 
 def empty(shape: int | tuple | list, dtype: np.dtype | str | None = np.float64, **kwargs: Any) -> NDArray:
     """Create an empty array.
