@@ -60,8 +60,8 @@ dev = [
 ]
 test = [
     "pytest",
-    #"psutil",
-    "torch",
+    "psutil; platform_machine != 'wasm32'",
+    "torch; platform_machine != 'wasm32'",
 ]
 doc = [
     "sphinx>=8",

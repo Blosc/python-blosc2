@@ -38,7 +38,6 @@ from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
 from blosc2.ndarray import _check_allowed_dtypes, get_chunks_idx, is_inside_new_expr
 
-# Import numexpr only if not running in WebAssembly
 if not blosc2.IS_WASM:
     import numexpr
 
