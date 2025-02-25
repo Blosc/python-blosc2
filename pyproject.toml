@@ -45,6 +45,7 @@ version = "3.1.2.dev0"
 
 [project.optional-dependencies]
 dev = [
+    "dask",
     "h5py",
     "hdf5plugin",
     "jupyterlab",
