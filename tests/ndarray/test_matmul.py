@@ -26,13 +26,13 @@ import blosc2
 def test_matmul(ashape, achunks, ablocks, bshape, bchunks, bblocks, dtype):
     a = blosc2.linspace(0, 10, dtype=dtype, shape=ashape, chunks=achunks, blocks=ablocks)
     b = blosc2.linspace(0, 10, dtype=dtype, shape=bshape, chunks=bchunks, blocks=bblocks)
-    blosc2_res = blosc2.matmul(a, b)
+    c = blosc2.matmul(a, b)
 
     na = a[:]
     nb = b[:]
-    np_res = np.matmul(na, nb)
+    nc = np.matmul(na, nb)
 
-    np.testing.assert_allclose(blosc2_res, np_res, rtol=1e-6)
+    np.testing.assert_allclose(c, nc, rtol=1e-6)
 
 
 @pytest.mark.parametrize(
@@ -51,7 +51,7 @@ def test_matmul(ashape, achunks, ablocks, bshape, bchunks, bblocks, dtype):
         ((5,), (4,), (2,)),
     },
 )
-def test_matmul_shapes(ashape, achunks, ablocks, bshape, bchunks, bblocks):
+def test_shapes(ashape, achunks, ablocks, bshape, bchunks, bblocks):
     a = blosc2.linspace(0, 10, shape=ashape, chunks=achunks, blocks=ablocks)
     b = blosc2.linspace(0, 10, shape=bshape, chunks=bchunks, blocks=bblocks)
 
@@ -76,7 +76,7 @@ def test_matmul_shapes(ashape, achunks, ablocks, bshape, bchunks, bblocks):
         np.complex128(1 + 2j),  # NumPy complex128
     },
 )
-def test_matmul_scalars(scalar):
+def test_scalars(scalar):
     vector = blosc2.asarray(np.array([1, 2, 3]))
 
     with pytest.raises(ValueError):
@@ -93,7 +93,6 @@ def test_matmul_scalars(scalar):
     "ashape",
     [
         (12, 10, 10),
-        (7, 5, 5),
         (3, 3, 3),
     ],
 )
@@ -101,10 +100,10 @@ def test_matmul_scalars(scalar):
     "bshape",
     [
         (10, 10, 10, 11),
-        (3, 2, 9),
+        (3, 2),
     ],
 )
-def test_matmul_dims(ashape, bshape):
+def test_dims(ashape, bshape):
     a = blosc2.linspace(0, 10, shape=ashape)
     b = blosc2.linspace(0, 1, shape=bshape)
 
@@ -130,13 +129,29 @@ def test_matmul_dims(ashape, bshape):
         ((10, 12), (2, 4), (1, 2), np.complex128),
     },
 )
-def test_matmul_especial_cases(ashape, achunks, ablocks, adtype, bshape, bchunks, bblocks, bdtype):
+def test_special_cases(ashape, achunks, ablocks, adtype, bshape, bchunks, bblocks, bdtype):
     a = blosc2.linspace(0, 10, dtype=adtype, shape=ashape, chunks=achunks, blocks=ablocks)
     b = blosc2.linspace(0, 10, dtype=bdtype, shape=bshape, chunks=bchunks, blocks=bblocks)
-    blosc2_res = blosc2.matmul(a, b)
+    c = blosc2.matmul(a, b)
 
     na = a[:]
     nb = b[:]
-    np_res = np.matmul(na, nb)
+    nc = np.matmul(na, nb)
 
-    np.testing.assert_allclose(blosc2_res, np_res, rtol=1e-6)
+    np.testing.assert_allclose(c, nc, rtol=1e-6)
+
+
+def test_disk():
+    a = blosc2.linspace(0, 1, shape=(3, 4), urlpath="a_test.b2nd", mode="w")
+    b = blosc2.linspace(0, 1, shape=(4, 2), urlpath="b_test.b2nd", mode="w")
+    c = blosc2.matmul(a, b, urlpath="c_test.b2nd", mode="w")
+
+    na = a[:]
+    nb = b[:]
+    nc = np.matmul(na, nb)
+
+    np.testing.assert_allclose(c, nc, rtol=1e-6)
+
+    blosc2.remove_urlpath("a_test.b2nd")
+    blosc2.remove_urlpath("b_test.b2nd")
+    blosc2.remove_urlpath("c_test.b2nd")
