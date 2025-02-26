@@ -247,6 +247,7 @@ from .ndarray import (
     ones,
     full,
     save,
+    matmul,
 )
 
 from .c2array import c2context, C2Array, URLPath

@@ -6,3 +6,4 @@ Operations with arrays
 
     lazy_functions
     reduction_functions
+    linear_algebra

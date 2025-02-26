@@ -1845,14 +1845,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return ndslice
 
-    def squeeze(self) -> None:
+    def squeeze(self) -> NDArray:
         """Remove single-dimensional entries from the shape of the array.
 
         This method modifies the array in-place, removing any dimensions with size 1.
 
         Returns
         -------
-        out: None
+        out: NDArray
 
         Examples
         --------
@@ -1868,6 +1868,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         (23, 11)
         """
         super().squeeze()
+        return self
 
     def indices(self, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
         """
@@ -3645,6 +3646,113 @@ def sort(array: NDArray, order: str | list[str] | None = None, **kwargs: Any) ->
     lbool = blosc2.lazyexpr(blosc2.ones(array.shape, dtype=np.bool_))
     larr = array[lbool]
     return larr.sort(order).compute(**kwargs)
+
+
+def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
+    """
+    Computes the matrix product between two Blosc2 NDArrays.
+
+    Parameters
+    ----------
+    x1: `NDArray`
+        The first input array.
+    x2: `NDArray`
+        The second input array.
+    kwargs: Any, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        The matrix product of the inputs. This is a scalar only when both x1,
+        x2 are 1-d vectors.
+
+    Raises
+    ------
+    ValueError
+        If the last dimension of ``x1`` is not the same size as
+        the second-to-last dimension of ``x2``.
+
+        If a scalar value is passed in.
+
+    References
+    ----------
+    `numpy.matmul <https://numpy.org/doc/stable/reference/generated/numpy.matmul.html>`_
+
+    Examples
+    --------
+    For 2-D arrays it is the matrix product:
+
+    >>> import numpy as np
+    >>> import blosc2
+    >>> a = np.array([[1, 2],
+    ...               [3, 4]])
+    >>> nd_a = blosc2.asarray(a)
+    >>> b = np.array([[2, 3],
+    ...               [2, 1]])
+    >>> nd_b = blosc2.asarray(b)
+    >>> blosc2.matmul(nd_a, nd_b)
+    array([[ 6,  5],
+           [14, 13]])
+
+    For 2-D mixed with 1-D, the result is the usual.
+
+    >>> a = np.array([[1, 3],
+    ...               [0, 1]])
+    >>> nd_a = blosc2.asarray(a)
+    >>> v = np.array([1, 2])
+    >>> nd_v = blosc2.asarray(v)
+    >>> blosc2.matmul(nd_a, nd_v)
+    array([7, 2])
+    >>> blosc2.matmul(nd_v, nd_a)
+    array([1, 5])
+
+    """
+
+    # Validate arguments are not scalars
+    if np.isscalar(x1) or np.isscalar(x2):
+        raise ValueError("Arguments can't be scalars.")
+
+    # Validate arguments are dimension 1 or 2
+    if x1.ndim > 2 or x2.ndim > 2:
+        raise ValueError("Multiplication of arrays with dimension greater than 2 is not supported yet.")
+
+    # Promote 1D arrays to 2D if necessary
+    x1_is_vector = False
+    x2_is_vector = False
+    if x1.ndim == 1:
+        x1 = x1.reshape((1, x1.shape[0]))  # (N,) -> (1, N)
+        x1_is_vector = True
+    if x2.ndim == 1:
+        x2 = x2.reshape((x2.shape[0], 1))  # (M,) -> (M, 1)
+        x2_is_vector = True
+
+    # Validate matrix multiplication compatibility
+    if x1.shape[-1] != x2.shape[-2]:
+        raise ValueError("Shapes are not aligned for matrix multiplication.")
+
+    n, k = x1.shape[-2:]
+    m = x2.shape[-1]
+
+    p1, q1 = x1.chunks[-2:]
+    q2 = x2.chunks[-1]
+
+    result = blosc2.zeros((n, m), dtype=np.result_type(x1, x2), **kwargs)
+
+    for row in range(0, n, p1):
+        row_end = (row + p1) if (row + p1) < n else n
+        for col in range(0, m, q2):
+            col_end = (col + q2) if (col + q2) < m else m
+            for aux in range(0, k, q1):
+                aux_end = (aux + q1) if (aux + q1) < k else k
+                bx1 = x1[row:row_end, aux:aux_end]
+                bx2 = x2[aux:aux_end, col:col_end]
+                result[row:row_end, col:col_end] += np.matmul(bx1, bx2)
+
+    if x1_is_vector and x2_is_vector:
+        return result[0][0]
+
+    return result.squeeze()
 
 
 # Class for dealing with fields in an NDArray
