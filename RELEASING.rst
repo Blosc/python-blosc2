@@ -73,9 +73,9 @@ Tagging
   wheels (and tarball!) by downloading the artifacts manually, copying to
   an empty dir (say dist), and upload to PyPI with::
 
-    rm dist/*
+    rm wheelhouse/*
     # download artifacts from the tag in github
-    twine upload --repository blosc dist/*
+    twine upload --repository blosc2 wheelhouse/*
 
 * Update the latest release in the ``doc/python-blosc2.rst`` file with the new version
   number (and date?).  Do a commit::
@@ -105,6 +105,10 @@ Checking packaging
 * Do an actual release in github by visiting:
   https://github.com/Blosc/python-blosc2/releases/new
   Add the notes specific for this release.
+
+  Also, upload the wasm32 wheels to release page in github::
+
+    [upload e.g.:] blosc2-3.2.0-cp312-cp312-pyodide_2024_0_wasm32.whl
 
 
 Announcing
