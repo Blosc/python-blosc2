@@ -32,9 +32,9 @@ def c2sub_context():
 # def pytest_runtest_call(item):
 #     try:
 #         item.runtest()
-#     except httpx.ConnectTimeout:
-#         pytest.skip("Skipping test due to sporadic httpx.ConnectTimeout")
-#     except httpx.ReadTimeout:
-#         pytest.skip("Skipping test due to sporadic httpx.ReadTimeout")
-#     except httpx.TimeoutException:
-#         pytest.skip("Skipping test due to sporadic httpx.Timeout")
+#     except requests.ConnectTimeout:
+#         pytest.skip("Skipping test due to sporadic requests.ConnectTimeout")
+#     except requests.ReadTimeout:
+#         pytest.skip("Skipping test due to sporadic requests.ReadTimeout")
+#     except requests.Timeout:
+#         pytest.skip("Skipping test due to sporadic requests.Timeout")

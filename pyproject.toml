@@ -38,7 +38,7 @@ dependencies = [
     "platformdirs",
     "numexpr; platform_machine != 'wasm32'",
     "py-cpuinfo; platform_machine != 'wasm32'",
-    "httpx; platform_machine != 'wasm32'",
+    "requests",
 ]
 version = "3.1.2.dev0"
 
