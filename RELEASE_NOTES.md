@@ -1,11 +1,29 @@
 # Release notes
 
-## Changes from 3.1.1 to 3.1.2
+## Changes from 3.1.1 to 3.2.0
 
 * Structured arrays can be larger than 255 bytes now.  This was a limitation
   in the previous versions, but now it is gone (the new limit is ~512 MB,
   which I hope will be enough for some time).
 
+* New `blosc2.matmul()` function for computing matrix multiplication on NDArray
+  instances.  This allows for efficient computations on compressed data that
+  can be in-memory, on-disk and in the network.  See
+  [here](https://www.blosc.org/python-blosc2/reference/autofiles/operations_with_arrays/blosc2.matmul.html)
+  for more information.
+
+* Support for building WASM32 wheels.  This is a new feature that allows to
+  build wheels for WebAssembly 32-bit platforms.  This is useful for running
+  Python code in the browser.
+
+* Tested support for NumPy<2 (at least 1.26 series).  Now, the library should
+  work with NumPy 1.26 and up.
+
+* C-Blosc2 updated to 2.17.0.
+
+* httpx has replaced by requests library for the remote proxy.  This has been
+  done to avoid the need of the `httpx` library, which is not supported by
+  Pyodide.
 
 ## Changes from 3.1.0 to 3.1.1
 

@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import platformdirs
+import requests
 
 import blosc2
 from blosc2 import blosc2_ext
@@ -1125,6 +1126,7 @@ def print_versions():
         import numexpr
 
         print(f"numexpr version: {numexpr.__version__}")
+    print(f"requests version: {requests.__version__}")
     print(f"Python version: {sys.version}")
     (sysname, _nodename, release, version, machine, processor) = platform.uname()
     print(f"Platform: {sysname}-{release}-{machine} ({version})")
