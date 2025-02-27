@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.2.0 to 3.2.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.1.1 to 3.2.0
 
 * Structured arrays can be larger than 255 bytes now.  This was a limitation
