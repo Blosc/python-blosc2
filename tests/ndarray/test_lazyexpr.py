@@ -494,6 +494,7 @@ def test_negate(dtype_fixture, shape_fixture):
     np.testing.assert_allclose(res_lazyexpr[:], res_np)
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 def test_params(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 - a3 * a4
@@ -541,8 +542,12 @@ def test_save():
     urlpath_save = "expr.b2nd"
     expr.save(urlpath=urlpath_save)
 
-    cparams = {"nthreads": 2}
-    dparams = {"nthreads": 4}
+    if not blosc2.IS_WASM:
+        cparams = {"nthreads": 2}
+        dparams = {"nthreads": 4}
+    else:
+        cparams = {}
+        dparams = {}
     chunks = tuple(i // 2 for i in nres.shape)
     blocks = tuple(i // 4 for i in nres.shape)
     urlpath_eval = "eval_expr.b2nd"
