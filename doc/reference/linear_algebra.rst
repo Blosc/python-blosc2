@@ -12,3 +12,4 @@ The next functions can be used for computing linear algebra operations with :ref
    :nosignatures:
 
     matmul
+    transpose

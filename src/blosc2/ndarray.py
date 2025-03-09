@@ -3755,6 +3755,49 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     return result.squeeze()
 
 
+def transpose(x, **kwargs: Any) -> NDArray:
+    """
+    Returns a Blosc2 NDArray with axes transposed.
+
+    Parameters
+    ----------
+    x: `NDArray`
+        The input matrix.
+    kwargs: Any, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        The Blosc2 NDArray with axes transposed.
+
+    References
+    ----------
+    `numpy.transpose <https://numpy.org/doc/2.2/reference/generated/numpy.transpose.html>`_
+    """
+
+    # Validate arguments are not scalars
+    if np.isscalar(x) or x.ndim < 2:
+        return x
+
+    # Validate arguments are dimension 2
+    if x.ndim > 2:
+        raise ValueError("Transposing arrays with dimension greater than 2 is not supported yet.")
+
+    n, m = x.shape
+    p, q = x.chunks
+    result = blosc2.zeros((m, n), dtype=np.result_type(x), **kwargs)
+
+    for row in range(0, n, p):
+        row_end = (row + p) if (row + p) < n else n
+        for col in range(0, m, q):
+            col_end = (col + q) if (col + q) < m else m
+            aux = x[row:row_end, col:col_end]
+            result[col:col_end, row:row_end] = np.transpose(aux).copy()
+
+    return result
+
+
 # Class for dealing with fields in an NDArray
 # This will allow to access fields by name in the dtype of the NDArray
 class NDField(Operand):
