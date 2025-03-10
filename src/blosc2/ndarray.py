@@ -3730,17 +3730,17 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     n, k = x1.shape[-2:]
     m = x2.shape[-1]
 
-    p1, q1 = x1.chunks[-2:]
-    q2 = x2.chunks[-1]
-
     result = blosc2.zeros((n, m), dtype=np.result_type(x1, x2), **kwargs)
 
-    for row in range(0, n, p1):
-        row_end = (row + p1) if (row + p1) < n else n
-        for col in range(0, m, q2):
-            col_end = (col + q2) if (col + q2) < m else m
-            for aux in range(0, k, q1):
-                aux_end = (aux + q1) if (aux + q1) < k else k
+    p, q = result.chunks[-2:]
+    r = x2.chunks[-1]
+
+    for row in range(0, n, p):
+        row_end = (row + p) if (row + p) < n else n
+        for col in range(0, m, q):
+            col_end = (col + q) if (col + q) < m else m
+            for aux in range(0, k, r):
+                aux_end = (aux + r) if (aux + r) < k else k
                 bx1 = x1[row:row_end, aux:aux_end]
                 bx2 = x2[aux:aux_end, col:col_end]
                 result[row:row_end, col:col_end] += np.matmul(bx1, bx2)
