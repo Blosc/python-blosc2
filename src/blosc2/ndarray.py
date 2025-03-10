@@ -2778,6 +2778,13 @@ def _check_shape(shape):
     return shape
 
 
+def _check_dtype(dtype):
+    dtype = np.dtype(dtype)
+    if dtype.itemsize > blosc2.MAX_TYPESIZE:
+        raise ValueError(f"dtype itemsize {dtype.itemsize} is too large (>{blosc2.MAX_TYPESIZE})!")
+    return dtype
+
+
 def empty(shape: int | tuple | list, dtype: np.dtype | str | None = np.float64, **kwargs: Any) -> NDArray:
     """Create an empty array.
 
@@ -2823,7 +2830,7 @@ def empty(shape: int | tuple | list, dtype: np.dtype | str | None = np.float64, 
     >>> array.dtype
     dtype('int32')
     """
-    dtype = np.dtype(dtype)
+    dtype = _check_dtype(dtype)
     shape = _check_shape(shape)
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
@@ -2857,7 +2864,7 @@ def uninit(shape: int | tuple | list, dtype: np.dtype | str = np.float64, **kwar
     >>> array.dtype
     dtype('float64')
     """
-    dtype = np.dtype(dtype)
+    dtype = _check_dtype(dtype)
     shape = _check_shape(shape)
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
@@ -2891,7 +2898,7 @@ def nans(shape: int | tuple | list, dtype: np.dtype | str = np.float64, **kwargs
     >>> array.dtype
     dtype('float64')
     """
-    dtype = np.dtype(dtype)
+    dtype = _check_dtype(dtype)
     shape = _check_shape(shape)
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
@@ -2931,7 +2938,7 @@ def zeros(shape: int | tuple | list, dtype: np.dtype | str = np.float64, **kwarg
     >>> array.dtype
     dtype('float64')
     """
-    dtype = np.dtype(dtype)
+    dtype = _check_dtype(dtype)
     shape = _check_shape(shape)
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
@@ -2991,6 +2998,7 @@ def full(
         dtype = np.dtype(type(fill_value))
     else:
         dtype = np.dtype(dtype)
+    dtype = _check_dtype(dtype)
     shape = _check_shape(shape)
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
@@ -3102,8 +3110,7 @@ def arange(
         # Check that the shape is consistent with the start, stop and step values
         if math.prod(shape) != int((stop - start) / step):
             raise ValueError("The shape is not consistent with the start, stop and step values")
-    # Check dtype
-    dtype = np.dtype(dtype)
+    dtype = _check_dtype(dtype)
 
     if is_inside_new_expr():
         # We already have the dtype and shape, so return immediately
@@ -3171,8 +3178,7 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, c
 
     if not shape:
         shape = (num,)
-    # Check dtype
-    dtype = np.dtype(dtype)
+    dtype = _check_dtype(dtype)
 
     if is_inside_new_expr():
         # We already have the dtype and shape, so return immediately
@@ -3231,8 +3237,7 @@ def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any):
     if M is None:
         M = N
     shape = (N, M)
-    # Check dtype
-    dtype = np.dtype(dtype)
+    dtype = _check_dtype(dtype)
 
     if is_inside_new_expr():
         # We already have the dtype and shape, so return immediately
@@ -3285,8 +3290,7 @@ def fromiter(iterable, shape, dtype, c_order=True, **kwargs) -> NDArray:
         (iterable,) = inputs
         output[:] = np.fromiter(iterable, dtype=output.dtype, count=nout).reshape(output.shape)
 
-    # Check dtype
-    dtype = np.dtype(dtype)
+    dtype = _check_dtype(dtype)
 
     if is_inside_new_expr():
         # We already have the dtype and shape, so return immediately

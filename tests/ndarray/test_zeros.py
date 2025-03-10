@@ -122,3 +122,16 @@ def test_zeros_minimal(shape, dtype):
     assert all(c >= b for c, b in zip(a.chunks, a.blocks, strict=False))
     assert a.dtype == dtype
     assert a.schunk.typesize == dtype.itemsize
+
+
+@pytest.mark.parametrize("asarray", [True, False])
+@pytest.mark.parametrize("typesize", [255, 256, 257, 261, 256 * 256])
+@pytest.mark.parametrize("shape", [(1,), (3,), (10,), (2 * 10,), (2**8 - 1, 3)])
+def test_large_typesize(shape, typesize, asarray):
+    dtype = np.dtype([("f_001", "<i1", (typesize,)), ("f_002", "f4", (typesize,))])
+    a = np.zeros(shape, dtype=dtype)
+    if asarray:
+        b = blosc2.asarray(a)
+    else:
+        b = blosc2.zeros(shape, dtype=dtype)
+    assert np.array_equal(b[0], a[0])

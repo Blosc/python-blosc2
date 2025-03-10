@@ -1,23 +1,15 @@
-Announcing Python-Blosc2 3.1.0 (and 3.1.1)
-==========================================
+Announcing Python-Blosc2 3.2.0
+==============================
 
-This is a minor release where we optimized the performance of the
-internal compute engine, as well as indexing for NDArrays.  We also
-added new API:
+This is a minor release where we fixed some bugs related with the
+maximum type size supported by Blosc2; now, the maximum size is
+512 MB (compared to 255 bytes in previous versions).  We are also
+introducing WASM32 wheels for the first time.
 
-* blosc2.evaluate: a drop-in replacement of numexpr.evaluate().  This
-  allows to evaluate expressions with combinations of NDArrays and NumPy
-  arrays.  In addition, it has the next improvements:
+We also added new ``blosc2.matmul()`` function for computing matrix
+multiplication on NDArray instances.
 
-  - More functionality than numexpr (e.g. reductions).
-  - Follow casting rules of NumPy more closely.
-  - Use both NumPy arrays and Blosc2 NDArrays in the same expression.
-
-* blosc2.jit: a decorator to compile a function with a NumPy expression
-  using the compute engine of Blosc2.  Useful to speed up the evaluation
-  of pure NumPy expressions at runtime.
-
-You can think of Python-Blosc2 3.0 as an extension of NumPy/numexpr that:
+You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
 - Can deal with ndarrays compressed using first-class codecs & filters.
 - Performs many kind of math expressions, including reductions, indexing...
@@ -26,6 +18,7 @@ You can think of Python-Blosc2 3.0 as an extension of NumPy/numexpr that:
 - Integrates with Numba and Cython via UDFs (User Defined Functions).
 - Adheres to modern NumPy casting rules way better than numexpr.
 - Computes expressions only when needed. They can also be stored for later use.
+- Supports linear algebra operations (like ``blosc2.matmul()``).
 
 Install it with::
 

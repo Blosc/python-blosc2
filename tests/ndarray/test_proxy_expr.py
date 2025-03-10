@@ -7,11 +7,11 @@
 #######################################################################
 import pathlib
 
-import numexpr as ne
 import numpy as np
 import pytest
 
 import blosc2
+from blosc2.lazyexpr import ne_evaluate
 
 pytestmark = pytest.mark.network
 
@@ -68,7 +68,7 @@ def test_expr_proxy_operands(chunks_blocks, c2sub_context):
     sl = slice(10)
     expr = a1 + a2 + a3 + a4
     expr += 3
-    nres = ne.evaluate("na1 + na2 + na3 + na4 + 3")
+    nres = ne_evaluate("na1 + na2 + na3 + na4 + 3")
     res = expr.compute(item=sl)
     np.testing.assert_allclose(res[:], nres[sl])
 

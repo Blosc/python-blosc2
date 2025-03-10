@@ -12,11 +12,7 @@ import pytest
 import blosc2
 
 
-# This still needs to pass the '-s' flag to pytest to see the output but anyways
-@pytest.fixture(scope="session", autouse=True)
-def _setup_session():
-    # This code will be executed before the test suite
-    print()
+def pytest_configure(config):
     blosc2.print_versions()
 
 
@@ -36,9 +32,9 @@ def c2sub_context():
 # def pytest_runtest_call(item):
 #     try:
 #         item.runtest()
-#     except httpx.ConnectTimeout:
-#         pytest.skip("Skipping test due to sporadic httpx.ConnectTimeout")
-#     except httpx.ReadTimeout:
-#         pytest.skip("Skipping test due to sporadic httpx.ReadTimeout")
-#     except httpx.TimeoutException:
-#         pytest.skip("Skipping test due to sporadic httpx.Timeout")
+#     except requests.ConnectTimeout:
+#         pytest.skip("Skipping test due to sporadic requests.ConnectTimeout")
+#     except requests.ReadTimeout:
+#         pytest.skip("Skipping test due to sporadic requests.ReadTimeout")
+#     except requests.Timeout:
+#         pytest.skip("Skipping test due to sporadic requests.Timeout")

@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-import httpx
 import numpy as np
+import requests
 
 import blosc2
 
@@ -108,7 +108,7 @@ def _xget(url, params=None, headers=None, auth_token=None, timeout=TIMEOUT):
     if auth_token:
         headers = headers.copy() if headers else {}
         headers["Cookie"] = auth_token
-    response = httpx.get(url, params=params, headers=headers, timeout=timeout)
+    response = requests.get(url, params=params, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response
 
@@ -116,7 +116,7 @@ def _xget(url, params=None, headers=None, auth_token=None, timeout=TIMEOUT):
 def _xpost(url, json=None, auth_token=None, timeout=TIMEOUT):
     auth_token = auth_token or _subscriber_data["auth_token"]
     headers = {"Cookie": auth_token} if auth_token else None
-    response = httpx.post(url, json=json, headers=headers, timeout=timeout)
+    response = requests.post(url, json=json, headers=headers, timeout=timeout)
     response.raise_for_status()
     return response.json()
 
@@ -131,7 +131,7 @@ def _sub_url(urlbase, path):
 def login(username, password, urlbase):
     url = _sub_url(urlbase, "auth/jwt/login")
     creds = {"username": username, "password": password}
-    resp = httpx.post(url, data=creds, timeout=TIMEOUT)
+    resp = requests.post(url, data=creds, timeout=TIMEOUT)
     resp.raise_for_status()
     return "=".join(list(resp.cookies.items())[0])
 
@@ -227,14 +227,14 @@ class C2Array(blosc2.Operand):
         # Try to 'open' the remote path
         try:
             self.meta = info(self.path, self.urlbase, auth_token=self.auth_token)
-        except httpx.HTTPStatusError:
+        except requests.HTTPError:
             # Subscribe to root and try again. It is less latency to subscribe directly
             # than to check for the subscription.
             root, _ = self.path.split("/", 1)
             subscribe(root, self.urlbase, self.auth_token)
             try:
                 self.meta = info(self.path, self.urlbase, auth_token=self.auth_token)
-            except httpx.HTTPStatusError as err:
+            except requests.HTTPError as err:
                 raise FileNotFoundError(f"Remote path not found: {path}.\nError was: {err}") from err
         cparams = self.meta["schunk"]["cparams"]
         # Remove "filters, meta" from cparams; this is an artifact from the server
