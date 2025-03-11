@@ -111,7 +111,7 @@ def add_ram_limit(figure, compute=True):
             type="line", x0=64, y0=0, x1=64, y1=y1_max,
             line=dict(color="Gray", width=2, dash="dot"),
         )
-        figure.add_annotation(x=64, y=y1_max * .9, text="64 GB", showarrow=True, arrowhead=2, ax=40, ay=0)
+        figure.add_annotation(x=64, y=y1_max * .9, text="64 GB RAM", showarrow=True, arrowhead=2, ax=40, ay=0)
 
 # Plot the data. There will be 2 plots: one for create times and another for compute times
 labels = dict(
