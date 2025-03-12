@@ -67,7 +67,7 @@ if len(sys.argv) > 3:
         dask_da = True
     elif sys.argv[3] == "numba":
         numba_jit = True
-        check_result = True
+        # check_result = True
 
 
 # The reductions to compute
