@@ -66,6 +66,9 @@ if amd:
     create_numpy_dask = [ 0.0007, 0.0378, 0.1640, 0.6665, 1.5046, 2.0726, 2.7750, 4.6960, 5.7110, 41.2241 ]
     compute_numpy_dask = [ 0.0169, 0.3955, 1.5680, 6.2638, 14.0860, 19.2658, 32.2012, 70.2960, 368.6261, 392.6483 ]
 
+    create_numpy_numba = [ 0.0013, 0.0401, 0.1643, 0.6682, 1.5016, 2.0528, 2.6803, 3.4313, 5.5713, 15.3014, 23.5496, 43.5016, 62.5048 ]
+    compute_numpy_numba = [ 0.0932, 0.0317, 0.1569, 0.7485, 1.9492, 2.8305, 3.8708, 5.2393, 6.8156, 8.3882, 12.2608, 25.4770, 37.2782 ]
+
     create_numpy_jit = [ 0.0019, 0.0529, 0.2261, 0.9219, 2.0589, 2.8350, 3.7131, 18.4375, 26.5959, 34.5221, 33.7157, 49.6762, 63.1401 ]
     compute_numpy_jit = [ 0.0035, 0.0180, 0.0622, 0.2307, 0.5196, 0.7095, 0.9251, 1.1981, 1.4729, 2.2007, 2.0953, 12.6746, 26.6424 ]
 
@@ -100,6 +103,8 @@ if iobw:
     compute_numpy = sizes_GB[:len(compute_numpy)] / np.array(compute_numpy)
     create_numpy_dask = sizes_GB[:len(create_numpy_dask)] / np.array(create_numpy_dask)
     compute_numpy_dask = sizes_GB[:len(compute_numpy_dask)] / np.array(compute_numpy_dask)
+    create_numpy_numba = sizes_GB[:len(create_numpy_numba)] / np.array(create_numpy_numba)
+    compute_numpy_numba = sizes_GB[:len(compute_numpy_numba)] / np.array(compute_numpy_numba)
     create_numpy_jit = sizes_GB[:len(create_numpy_jit)] / np.array(create_numpy_jit)
     compute_numpy_jit = sizes_GB[:len(compute_numpy_jit)] / np.array(compute_numpy_jit)
 
@@ -111,7 +116,7 @@ def add_ram_limit(figure, compute=True):
             type="line", x0=64, y0=0, x1=64, y1=y1_max,
             line=dict(color="Gray", width=2, dash="dot"),
         )
-        figure.add_annotation(x=64, y=y1_max * .9, text="64 GB RAM", showarrow=True, arrowhead=2, ax=40, ay=0)
+        figure.add_annotation(x=64, y=y1_max * .9, text="64 GB RAM", showarrow=True, arrowhead=2, ax=45, ay=0)
 
 # Plot the data. There will be 2 plots: one for create times and another for compute times
 labels = dict(
@@ -124,6 +129,7 @@ labels = dict(
     numpy="NumPy",
     numpy_jit="Blosc2 + NumPy",
     numpy_dask="Dask + NumPy",
+    numpy_numba="Numba + NumPy",
 )
 
 # Create the create times plot
@@ -141,6 +147,9 @@ fig_create.add_trace(
 fig_create.add_trace(
     go.Scatter(x=sizes_GB, y=create_ZSTD_l1_dask, mode='lines+markers', name=labels["ZSTD_l1_dask"]))
 fig_create.add_trace(
+    go.Scatter(x=sizes_GB, y=create_numpy_numba, mode='lines+markers',
+               name=labels["numpy_numba"], line=dict(color='black', dash='dot')))
+fig_create.add_trace(
     go.Scatter(x=sizes_GB, y=create_numpy_jit, mode='lines+markers',
                name=labels["numpy"], line=dict(color='brown')))
 fig_create.add_trace(
@@ -154,7 +163,8 @@ add_ram_limit(fig_create, compute=False)
 # Create the compute times plot
 # Calculate the maximum y1 value
 y1_max = max(max(compute_l0), max(compute_l0_disk), max(compute_LZ4_l1), max(compute_LZ4_l1_disk),
-             max(compute_ZSTD_l1), max(compute_ZSTD_l1_disk), max(compute_numpy), max(compute_numpy_jit))
+             max(compute_ZSTD_l1), max(compute_ZSTD_l1_disk), max(compute_numpy), max(compute_numpy_jit),
+             max(compute_numpy_numba))
 
 fig_compute = go.Figure()
 # fig_compute.add_trace(
@@ -169,9 +179,11 @@ fig_compute.add_trace(
     go.Scatter(x=sizes_GB, y=compute_l0_dask, mode='lines+markers', name=labels["l0_dask"], line=dict(color='red', dash='dash')))
 fig_compute.add_trace(
     go.Scatter(x=sizes_GB, y=compute_LZ4_l1_dask, mode='lines+markers', name=labels["LZ4_l1_dask"], line=dict(color='purple', dash='dash')))
+fig_compute.add_trace(
+    go.Scatter(x=sizes_GB, y=compute_numpy_numba, mode='lines+markers', name=labels["numpy_numba"], line=dict(color='black', dash='dot')))
 fig_compute.add_trace(go.Scatter(x=sizes_GB, y=compute_numpy, mode='lines+markers',
                                  name=labels["numpy"], line=dict(color='grey', dash='dot')))
-fig_compute.update_layout(title=f'Blosc2 vs Dask+Zarr compute: {title_}', xaxis_title='Size (GB)', yaxis_title=yaxis_title)
+fig_compute.update_layout(title=f'Blosc2 vs others compute: {title_}', xaxis_title='Size (GB)', yaxis_title=yaxis_title)
 
 # Add a vertical line at RAM limit
 add_ram_limit(fig_compute, compute=True)
