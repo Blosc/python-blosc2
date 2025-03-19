@@ -235,4 +235,4 @@ Hopefully, this overview has provided a good understanding of
 Python-Blosc2's capabilities. To begin your journey with Python-Blosc2,
 proceed to the `installation instructions <installation>`_.
 Additionally, explore the `tutorials <tutorials>`_ and
-`reference <reference>`_ sections for further information.
+`reference <../reference>`_ sections for further information.
