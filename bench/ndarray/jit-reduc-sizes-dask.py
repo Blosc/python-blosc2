@@ -38,10 +38,13 @@ check_result = False
 # size_list = (1, 5, 10, 20, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110)  # limit clevel>=1 float64
 
 # For 24 GB RAM
-sizes_numpy = (1, 5, 10, 20, 30)  # limit numpy float64
+# sizes_numpy = (1, 5, 10, 20, 30)  # limit numpy float64
+sizes_numpy = (1, 5, 10, 20, 30, 35, 40, 45, 50, 55, 60, 65, 70)
 sizes_numpy_jit = (1, 5, 10, 20, 30)  # limit numpy float64
-sizes_clevel0 = (1, 5, 10, 20, 30)  # limit clevel==0 float64
-size_list = (1, 5, 10, 20, 30)
+#sizes_clevel0 = (1, 5, 10, 20, 30)  # limit clevel==0 float64
+sizes_clevel0 = (1, 5, 10, 20, 30, 35, 40, 45, 50, 55, 60, 65, 70)
+#size_list = (1, 5, 10, 20, 30)
+size_list = (1, 5, 10, 20, 30, 35, 40, 45, 50, 55, 60, 65, 70)
 
 codec = "LZ4"  # default codec
 if len(sys.argv) > 2:
