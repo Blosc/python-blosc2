@@ -7,7 +7,7 @@ Python-Blosc2 is a high-performance compressed ndarray library with a flexible
 compute engine.  It uses the C-Blosc2 library as the compression backend.
 `C-Blosc2 <https://github.com/Blosc/c-blosc2>`_ is the next generation of
 Blosc, an `award-winning <https://www.blosc.org/posts/prize-push-Blosc2/>`_
-library that has been around for more than a decade, and that is been used
+library that has been around for more than a decade, and that is being used
 by many projects, including `PyTables <https://www.pytables.org/>`_ or
 `Zarr <https://zarr.readthedocs.io/en/stable/>`_.
 
@@ -46,7 +46,7 @@ computing engine and NumPy or NumExpr include:
 
 * Support for compressed ndarrays stored in memory, on disk, or
   `over the network <https://github.com/ironArray/Caterva2>`_.
-* Ability to perform various mathematical expressions, including reductions,
+* Ability to evaluate various mathematical expressions, including reductions,
   indexing, and filters.
 * Support for broadcasting operations, enabling operations on arrays with
   different shapes.
@@ -69,16 +69,16 @@ These containers are described in more detail below.
 SChunk: a 64-bit compressed store
 ---------------------------------
 
-``SChunk`` is the simple data container that handles setting, expanding and
+``SChunk`` is a simple data container that handles setting, expanding and
 getting data and metadata.  In contrast to chunks, a super-chunk can update
-and resize the data that it contains, supports user metadata, and it does
-not have the 2 GB storage limitation.
+and resize the data that it contains, supports user metadata, and has virtually
+unlimited storage capacity (chunks, on the other hand, cannot store more than 2 GB).
 
 Additionally, you can convert a SChunk into a contiguous, serialized buffer
 (aka `cframe
 <https://github.com/Blosc/c-blosc2/blob/main/README_CFRAME_FORMAT.rst>`_) and
 vice-versa; as a bonus, the serialization/deserialization process also works
-with NumPy arrays and PyTorch/TensorFlow tensors at a blazing speed:
+with NumPy arrays and PyTorch/TensorFlow tensors at lightning-fast speed:
 
 .. |compress| image:: https://github.com/Blosc/python-blosc2/blob/main/images/linspace-compress.png?raw=true
    :width: 100%
@@ -99,8 +99,8 @@ while reaching excellent compression ratios:
    :align: center
    :alt: Compression ratio for different codecs
 
-Also, if you are a Mac M1/M2 owner, make you a favor and use its native arm64
-arch (yes, we are distributing Mac arm64 wheels too; you are welcome ;-):
+Also, if you are a Mac M1/M2 owner, do yourself a favor and use its native arm64
+arch (yes, we are distributing Mac arm64 wheels too; you're welcome ;-) ):
 
 .. |pack_arm| image:: https://github.com/Blosc/python-blosc2/blob/main/images/M1-i386-vs-arm64-pack.png?raw=true
    :width: 100%
@@ -133,7 +133,7 @@ compressed data:
   :width: 75%
 
 As an example, see how the ``NDArray`` object excels at retrieving slices
-orthogonal to different axes in a 4-dimensional dataset:
+orthogonal to different axes of a 4-dimensional dataset:
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/Read-Partial-Slices-B2ND.png?raw=true
   :width: 75%
@@ -190,7 +190,7 @@ performance (70,000 x 70,000).
   :alt: Performance when operands do not fit in memory (uncompressed)
 
 Blosc2 can utilize MKL-enabled Numexpr for optimized transcendental
-functions on Intel compatible CPUs (it has been actually used in plots above).
+functions on Intel compatible CPUs (as used for the above plots).
 
 Benchmark notebooks:
 
@@ -228,11 +228,11 @@ expression, where the operands are on disk, with the result being a
 1D array stored in memory (or optionally on disk via the ``out=``
 parameter in ``compute()`` or ``sum()`` functions).
 
-Check a blog post about this feature, with performance comparisons at:
+Check out a blog post about this feature, with performance comparisons, at:
 https://ironarray.io/blog/compute-bigger
 
 Hopefully, this overview has provided a good understanding of
 Python-Blosc2's capabilities. To begin your journey with Python-Blosc2,
 proceed to the `installation instructions <installation>`_.
-Additionally, explore the `tutorials <tutorials>`_ and
-`reference <../reference>`_ sections for further information.
+Then explore the `tutorials <tutorials>`_ and
+`reference <../reference>`_ sections for further information!
