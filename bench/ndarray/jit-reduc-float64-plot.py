@@ -243,26 +243,26 @@ if plotly:
                  max(compute_ZSTD_l1), max(compute_ZSTD_l1_disk), max(compute_numpy), max(compute_numpy_jit))
 
     fig_compute = go.Figure()
-    # fig_compute.add_trace(
-    #     go.Scatter(x=sizes_GB, y=compute_l0, mode='lines+markers', name=labels["l0"] + " (mem)"))
-    # fig_compute.add_trace(
-    #     go.Scatter(x=sizes_GB, y=compute_l0_disk, mode='lines+markers', name=labels["l0"] + " (disk)"))
+    fig_compute.add_trace(
+        go.Scatter(x=sizes_GB, y=compute_l0, mode='lines+markers', name=labels["l0"] + " (mem)"))
+    fig_compute.add_trace(
+        go.Scatter(x=sizes_GB, y=compute_l0_disk, mode='lines+markers', name=labels["l0"] + " (disk)"))
     # fig_compute.add_trace(
     #     go.Scatter(x=sizes_GB, y=compute_BLOSCLZ_l7, mode='lines+markers', name=labels["BLOSCLZ_l7"] + " (mem)"))
     # fig_compute.add_trace(
     #     go.Scatter(x=sizes_GB, y=compute_BLOSCLZ_l7_disk, mode='lines+markers', name=labels["BLOSCLZ_l7"] + " (disk)"))
-    # fig_compute.add_trace(
-    #     go.Scatter(x=sizes_GB, y=compute_LZ4_l1, mode='lines+markers', name=labels["LZ4_l1"] + " (mem)"))
-    # fig_compute.add_trace(
-    #     go.Scatter(x=sizes_GB, y=compute_LZ4_l1_disk, mode='lines+markers', name=labels["LZ4_l1"] + " (disk)"))
-    # fig_compute.add_trace(
-    #     go.Scatter(x=sizes_GB, y=compute_ZSTD_l1, mode='lines+markers', name=labels["ZSTD_l1"] + " (mem)"))
-    # fig_compute.add_trace(
-    #     go.Scatter(x=sizes_GB, y=compute_ZSTD_l1_disk, mode='lines+markers', name=labels["ZSTD_l1"] + " (disk)"))
+    fig_compute.add_trace(
+        go.Scatter(x=sizes_GB, y=compute_LZ4_l1, mode='lines+markers', name=labels["LZ4_l1"] + " (mem)"))
+    fig_compute.add_trace(
+        go.Scatter(x=sizes_GB, y=compute_LZ4_l1_disk, mode='lines+markers', name=labels["LZ4_l1"] + " (disk)"))
+    fig_compute.add_trace(
+        go.Scatter(x=sizes_GB, y=compute_ZSTD_l1, mode='lines+markers', name=labels["ZSTD_l1"] + " (mem)"))
+    fig_compute.add_trace(
+        go.Scatter(x=sizes_GB, y=compute_ZSTD_l1_disk, mode='lines+markers', name=labels["ZSTD_l1"] + " (disk)"))
     fig_compute.add_trace(go.Scatter(x=sizes_GB, y=compute_numpy, mode='lines+markers',
-                                     name=labels["numpy"], line=dict(color='brown')))
-    fig_compute.add_trace(go.Scatter(x=sizes_GB, y=compute_numpy_jit, mode='lines+markers',
-                                     name=labels["numpy_jit"], line=dict(color='darkgreen')))
+                                     name=labels["numpy"], line=dict(color='gray', dash='dot')))
+    # fig_compute.add_trace(go.Scatter(x=sizes_GB, y=compute_numpy_jit, mode='lines+markers',
+    #                                  name=labels["numpy_jit"], line=dict(color='darkgreen')))
     fig_compute.update_layout(title=f'Blosc2 compute: {title_}', xaxis_title='Size (GB)', yaxis_title=yaxis_title)
 
     # Add a vertical line at RAM limit

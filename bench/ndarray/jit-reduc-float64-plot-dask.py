@@ -183,7 +183,7 @@ fig_compute.add_trace(
     go.Scatter(x=sizes_GB, y=compute_numpy_numba, mode='lines+markers', name=labels["numpy_numba"], line=dict(color='black', dash='dot')))
 fig_compute.add_trace(go.Scatter(x=sizes_GB, y=compute_numpy, mode='lines+markers',
                                  name=labels["numpy"], line=dict(color='grey', dash='dot')))
-fig_compute.update_layout(title=f'Blosc2 vs others compute: {title_}', xaxis_title='Size (GB)', yaxis_title=yaxis_title)
+fig_compute.update_layout(title=f'Blosc2 vs others; compute: {title_}', xaxis_title='Size (GB)', yaxis_title=yaxis_title)
 
 # Add a vertical line at RAM limit
 add_ram_limit(fig_compute, compute=True)

@@ -7,7 +7,10 @@ maximum type size supported by Blosc2; now, the maximum size is
 introducing WASM32 wheels for the first time.
 
 We also added new ``blosc2.matmul()`` function for computing matrix
-multiplication on NDArray instances.
+multiplication on NDArray instances.  We blogged about this at:
+https://www.blosc.org/posts/optimizing-chunks-blosc2/
+Thanks to Ricardo Sales Piquer, our new intern, for his contribution
+to this feature.
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
