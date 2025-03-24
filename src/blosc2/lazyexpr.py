@@ -2193,6 +2193,30 @@ class LazyExpr(LazyArray):
         new_expr._dtype = dtype
         return new_expr
 
+    def cumulative_function(self, op, axis=None, dtype=None, **kwargs):
+        # This is a special case of functions that are not ufuncs.
+        # In the future, this could be computed in a block-wise fashion.
+        # For now, just apply the NumPy function to the expression.
+        if op == ReduceOp.SUM:
+            return np.cumsum(self[:], axis=axis, dtype=dtype, **kwargs)
+        if op == ReduceOp.PROD:
+            return np.cumprod(self[:], axis=axis, dtype=dtype, **kwargs)
+        raise NotImplementedError(f"cumulative_function for {op} is not implemented yet")
+
+    def cumulative_sum(self, axis=None, dtype=None, **kwargs):
+        return self.cumulative_function(ReduceOp.SUM, axis=axis, dtype=dtype, **kwargs)
+
+    def cumsum(self, axis=None, dtype=None, **kwargs):
+        # This is necessary to allow NumPy capturing the cumulative_sum function
+        return self.cumulative_function(ReduceOp.SUM, axis=axis, dtype=dtype, **kwargs)
+
+    def cumulative_prod(self, axis=None, dtype=None, **kwargs):
+        return self.cumulative_function(ReduceOp.PROD, axis=axis, dtype=dtype, **kwargs)
+
+    def cumprod(self, axis=None, dtype=None, **kwargs):
+        # This is necessary to allow NumPy capturing the cumulative_prod function
+        return self.cumulative_function(ReduceOp.PROD, axis=axis, dtype=dtype, **kwargs)
+
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         reduce_args = {
             "op": ReduceOp.SUM,

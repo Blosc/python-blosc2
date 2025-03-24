@@ -364,6 +364,113 @@ def _check_allowed_dtypes(
         )
 
 
+def cumulative_sum(
+    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    axis: int | tuple[int] | None = None,
+    dtype: np.dtype | str = None,
+    **kwargs: Any,
+) -> np.ndarray | NDArray | int | float | complex | bool:
+    """
+    Return the cumulative sum of the elements along a given axis.
+
+    Parameters
+    ----------
+    ndarr : :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array or expression.
+    axis : int or tuple of ints, optional
+        Axis or axes along which the cumulative sum is computed. By default, axis=None,
+        the flattened array is used.
+    dtype : np.dtype or str, optional
+        Type of the returned array and of the accumulator in which the elements are summed.
+        If dtype is not specified, it defaults to the dtype of ndarr.
+    kwargs : dict, optional
+        Additional keyword arguments supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    cumulative_sum_along_axis : np.ndarray or :ref:`NDArray` or scalar
+        The cumulative sum of the elements along the axis.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> # Create an instance of NDArray with some data
+    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
+    >>> blosc2.cumulative_sum(array)
+    [[ 1  3  6]
+     [ 5 10 16]]
+    """
+    return ndarr.cumulative_sum(axis=axis, dtype=dtype, **kwargs)
+
+
+def cumsum(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+           axis: int | tuple[int] | None = None,
+           dtype: np.dtype | str = None,
+           **kwargs: Any
+) -> np.ndarray | NDArray | int | float | complex | bool:
+    """
+    Return the cumulative sum of the elements along a given axis.
+
+    This is the NumPy counterpart of the :func:`cumulative_sum` function.
+    """
+    return cumulative_sum(ndarr, axis=axis, dtype=dtype, **kwargs)
+
+
+def cumulative_prod(
+    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    axis: int | tuple[int] | None = None,
+    dtype: np.dtype | str = None,
+    **kwargs: Any,
+) -> np.ndarray | NDArray | int | float | complex | bool:
+    """
+    Return the cumulative product of the elements along a given axis.
+
+    Parameters
+    ----------
+    ndarr : :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array or expression.
+    axis : int or tuple of ints, optional
+        Axis or axes along which the cumulative sum is computed. By default, axis=None,
+        the flattened array is used.
+    dtype : np.dtype or str, optional
+        Type of the returned array and of the accumulator in which the elements are summed.
+        If dtype is not specified, it defaults to the dtype of ndarr.
+    kwargs : dict, optional
+        Additional keyword arguments supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    cumprod_along_axis : np.ndarray or :ref:`NDArray` or scalar
+        The cumulative sum of the elements along the axis.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> # Create an instance of NDArray with some data
+    >>> array = np.array([[1, 2, 3], [4, 5, 6]])
+    >>> blosc2.cumulative_prod(array)
+    [[  1   2   6]
+     [  4  20 120]]
+    """
+    return ndarr.cumulative_prod(axis=axis, dtype=dtype, **kwargs)
+
+
+def cumprod(
+    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    axis: int | tuple[int] | None = None,
+    dtype: np.dtype | str = None,
+    **kwargs: Any,
+) -> np.ndarray | NDArray | int | float | complex | bool:
+    """
+    Return the cumulative product of the elements along a given axis.
+
+    This is the NumPy counterpart of the :func:`cumulative_prod` function.
+    """
+    return cumulative_prod(ndarr, axis=axis, dtype=dtype, **kwargs)
+
+
 def sum(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
     axis: int | tuple[int] | None = None,
@@ -920,6 +1027,26 @@ class Operand:
     def __rpow__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "**", self))
+
+    @is_documented_by(cumulative_sum)
+    def cumulative_sum(self, axis=None, dtype=None, **kwargs):
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.cumulative_sum(axis=axis, dtype=dtype, **kwargs)
+
+    @is_documented_by(cumulative_sum)
+    def cumsum(self, axis=None, dtype=None, **kwargs):
+        # This is necessary to allow NumPy capturing the cumsum function
+        return self.cumulative_sum(axis=axis, dtype=dtype, **kwargs)
+
+    @is_documented_by(cumulative_prod)
+    def cumulative_prod(self, axis=None, dtype=None, **kwargs):
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.cumulative_prod(axis=axis, dtype=dtype, **kwargs)
+
+    @is_documented_by(cumulative_prod)
+    def cumprod(self, axis=None, dtype=None, **kwargs):
+        # This is necessary to allow NumPy capturing the cumprod function
+        return self.cumulative_prod(axis=axis, dtype=dtype, **kwargs)
 
     @is_documented_by(sum)
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
