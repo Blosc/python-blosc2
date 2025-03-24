@@ -782,6 +782,16 @@ class Operand:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
+    # Provide minimal __array_interface__ to allow NumPy to work with this object
+    @property
+    def __array_interface__(self):
+        return dict(
+            shape=self.shape,
+            typestr=self.dtype.str,
+            data=self[()].__array_interface__["data"],
+            version=3,
+        )
+
     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
         # Handle operations at the array level
         if method != "__call__":
