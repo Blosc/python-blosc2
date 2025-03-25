@@ -1349,6 +1349,27 @@ def get_chunksize(blocksize, l3_minimum=4 * 2**20, l3_maximum=2**26):
 
 
 def nearest_divisor(a, b, strict=False):
+    """Find the divisor of `a` that is closest to `b`.
+
+    Parameters
+    ----------
+    a : int
+        The number for which to find divisors.
+    b : int
+        The reference value to compare divisors against.
+    strict : bool, optional
+        If True, always use the downward search algorithm.
+
+    Returns
+    -------
+    int
+        The divisor of `a` that is closest to `b`.
+
+    Notes
+    -----
+    There is a version of this function in the Cython extension module
+    that is *way* faster.
+    """
     if a > 100_000 or strict:
         # When `a` is largish, or we require `b` strictly less than `a`,
         # use a (faster) algorithm that only goes downwards.
@@ -1356,6 +1377,7 @@ def nearest_divisor(a, b, strict=False):
         for i in range(b, 0, -1):
             if a % i == 0:
                 return i
+        return 1  # Fallback to 1, which is always a divisor
 
     # When `a` is smallish, use a more general algorithm that can find forwards and backwards
     # Get all divisors of `a`; use a generator to avoid creating a list
@@ -1390,11 +1412,13 @@ def compute_partition(nitems, maxshape, minpart=None):
             break
         rsize = max(size, minsize)
         if rsize <= max_items:
-            rsize = rsize if size % rsize == 0 else nearest_divisor(size, rsize)
+            # rsize = rsize if size % rsize == 0 else nearest_divisor(size, rsize)
+            rsize = rsize if size % rsize == 0 else blosc2_ext.nearest_divisor(size, rsize)
             partition[-(i + 1)] = rsize
         else:
             rsize = max(max_items, minsize)
-            new_rsize = rsize if size % rsize == 0 else nearest_divisor(size, rsize, strict=True)
+            # new_rsize = rsize if size % rsize == 0 else nearest_divisor(size, rsize, strict=True)
+            new_rsize = rsize if size % rsize == 0 else blosc2_ext.nearest_divisor(size, rsize, strict=True)
             # If the new rsize is not too far from the original rsize, use it
             if rsize // 2 < new_rsize < rsize * 2:
                 rsize = new_rsize
