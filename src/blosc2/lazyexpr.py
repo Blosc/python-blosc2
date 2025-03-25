@@ -158,8 +158,9 @@ functions = [
 
 # Gather all callable functions in numpy
 numpy_funcs = {
-    name for name, member in inspect.getmembers(np, callable)
-    if not name.startswith('_') and not isinstance(member, np.ufunc)
+    name
+    for name, member in inspect.getmembers(np, callable)
+    if not name.startswith("_") and not isinstance(member, np.ufunc)
 }
 numpy_ufuncs = {name for name, member in inspect.getmembers(np, lambda x: isinstance(x, np.ufunc))}
 # Add these functions to the list of available functions
