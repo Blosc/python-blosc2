@@ -813,6 +813,7 @@ class Operand:
             np.bitwise_and: "&",
             np.bitwise_or: "|",
             np.bitwise_xor: "^",
+            np.arctan2: "arctan2",
         }
 
         ufunc_map_1param = {
