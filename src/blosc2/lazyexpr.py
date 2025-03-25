@@ -423,12 +423,12 @@ class LazyArray(ABC):
     # Provide minimal __array_interface__ to allow NumPy to work with this object
     @property
     def __array_interface__(self):
-        return dict(
-            shape=self.shape,
-            typestr=self.dtype.str,
-            data=self[()].__array_interface__["data"],
-            version=3,
-        )
+        return {
+            "shape": self.shape,
+            "typestr": self.dtype.str,
+            "data": self[()],
+            "version": 3,
+        }
 
 
 def convert_inputs(inputs):
