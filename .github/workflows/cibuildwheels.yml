@@ -16,7 +16,7 @@ env:
   # CIBW_TEST_SKIP: "*linux*aarch64*"
   # Skip PyPy wheels for now (numexpr needs some adjustments first)
   # musllinux takes too long to build, and it's not worth it for now
-  CIBW_SKIP: "pp* *musllinux*"
+  CIBW_SKIP: "pp* *musllinux* *-win32"
 
 jobs:
 
@@ -50,7 +50,7 @@ jobs:
           # Windows builds
           - os: windows-latest
             arch: x86_64
-            cibw_pattern: "cp3{11,12,13}-win*"
+            cibw_pattern: "cp3{11,12,13}-win64"
             artifact_name: "windows-x86_64"
 
           # macOS builds (universal2)
