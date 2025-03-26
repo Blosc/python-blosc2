@@ -14,6 +14,8 @@ env:
   # Skip testing on aarch64 for now, as it is emulated on GitHub Actions and takes too long
   # Now that github provides native arm64 runners, we can enable tests again
   # CIBW_TEST_SKIP: "*linux*aarch64*"
+  # Skip PyPy wheels for now (numexpr needs some adjustments first)
+  CIBW_SKIP: "pp*"
 
 jobs:
 
@@ -110,7 +112,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: ./wheelhouse/*
+          path: |
+            ./wheelhouse/*.whl
+            ./wheelhouse/*.tar.gz
 
 
   upload_pypi:
