@@ -133,3 +133,4 @@ jobs:
         with:
           user: __token__
           password: ${{ secrets.blosc_pypi_secret }}
+          packages-dir: wheelhouse/
