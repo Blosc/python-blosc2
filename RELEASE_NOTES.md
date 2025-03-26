@@ -2,7 +2,20 @@
 
 ## Changes from 3.2.0 to 3.2.1
 
-XXX version-specific blurb XXX
+* The array containers are now using the `__array_interface__` protocol to
+  expose the data in the array.  This allows for better interoperability with
+  other libraries that support the `__array_interface__` protocol, like NumPy,
+  CuPy, etc.  Now, the range of functions that can be used within the `blosc2.jit`
+  decorator is way larger, and essentially all NumPy functions should work now.
+
+  See examples at: https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/jit-numpy-funcs.py
+  See benchmarks at: https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/jit-numpy-funcs.py
+
+* The performance of constructors like `arange()`, `linspace()` and `fromiter()`
+  has been improved.  Now, they can be up to 3x faster, specially with large
+  arrays.
+
+* C-Blosc2 updated to 2.17.1.  This fixes various UB as well as compiler warnings.
 
 ## Changes from 3.1.1 to 3.2.0
 
