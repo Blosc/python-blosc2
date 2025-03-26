@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.2.1 to 3.2.2
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.2.0 to 3.2.1
 
 * The array containers are now using the `__array_interface__` protocol to
