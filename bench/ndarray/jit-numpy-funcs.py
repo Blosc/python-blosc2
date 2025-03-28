@@ -14,7 +14,8 @@ import numba
 
 import blosc2
 
-N = 30_000   # working size is N * N * 4 * 2 bytes = 7.2 GB
+N = 30_000   # working size is N * N * 4 * 2 bytes ~ 6.7 GB
+# N = 65_000   # working size is N * N * 4 * 2 bytes ~ 32 GB
 
 # Create some sample data
 t0 = time()
