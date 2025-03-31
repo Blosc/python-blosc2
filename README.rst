@@ -108,6 +108,7 @@ to the core development of the Blosc2 library:
 - Juan David Ibáñez
 - Ivan Vilata i Balaguer
 - Oumaima Ech.Chdig
+- Ricardo Sales Piquer
 
 In addition, other people have participated to the project in different
 aspects:
