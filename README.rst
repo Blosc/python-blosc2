@@ -23,43 +23,31 @@ A fast & compressed ndarray library with a flexible compute engine
         :target: https://github.com/Blosc/python-blosc2/actions/workflows/build.yml
 
 
-What it is
-==========
+What is Python-Blosc2?
+=======================
 
 Python-Blosc2 is a high-performance compressed ndarray library with a flexible
-compute engine.  It uses the C-Blosc2 library as the compression backend.
-`C-Blosc2 <https://github.com/Blosc/c-blosc2>`_ is the next generation of
-Blosc, an `award-winning <https://www.blosc.org/posts/prize-push-Blosc2/>`_
-library that has been around for more than a decade, and that is been used
-by many projects, including `PyTables <https://www.pytables.org/>`_ or
-`Zarr <https://zarr.readthedocs.io/en/stable/>`_.
-
-Python-Blosc2 is Python wrapper that exposes the C-Blosc2 API, *plus* an
-integrated compute engine. This allows to perform complex calculations on
-compressed data in a way that operands do not need to be in-memory, but can be
-stored on disk or on `the network <https://github.com/ironArray/Caterva2>`_.
-This makes possible to work with data no matter how large it is, and that
-can be stored in a distributed fashion.
-
-Most importantly, Python-Blosc2 uses the `C-Blosc2 simple and open format
+compute engine, using `C-Blosc2 <https://www.blosc.org/c-blosc2/c-blosc2.html>`_
+as its compression backend. It allows complex calculations on compressed data,
+whether stored in memory, on disk, or over the network (e.g., via
+`Caterva2 <https://github.com/ironArray/Caterva2>`_).  It uses the
+`C-Blosc2 simple and open format
 <https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_ for storing
-compressed data, making it easy to integrate with other systems and tools.
+compressed data.
 
-You can find more introductory info about Python-Blosc2 at:
-
-https://www.blosc.org/python-blosc2/getting_started/overview.html
+More info: https://www.blosc.org/python-blosc2/getting_started/overview.html
 
 Installing
 ==========
 
-Blosc2 now provides Python wheels for the major OS (Win, Mac and Linux) and platforms.
-You can install the binary packages from PyPi using ``pip``:
+Binary packages are available for major OSes (Win, Mac, Linux) and platforms.
+Install from PyPi using ``pip``:
 
 .. code-block:: console
 
     pip install blosc2 --upgrade
 
-For conda users, you can install the package from the conda-forge channel:
+Conda users can install from conda-forge:
 
 .. code-block:: console
 
@@ -72,13 +60,15 @@ The documentation is available here:
 
 https://blosc.org/python-blosc2/python-blosc2.html
 
-Additionally, you can find some examples at:
+You can find examples at:
 
 https://github.com/Blosc/python-blosc2/tree/main/examples
 
-Finally, we taught a tutorial at the `PyData Global 2024 <https://pydata.org/global2024/>`_
-that you can find at: https://github.com/Blosc/Python-Blosc2-3.0-tutorial.  There you will
-find different Jupyter notebook that explains the main features of Python-Blosc2.
+A tutorial from PyData Global 2024 is available at:
+
+https://github.com/Blosc/Python-Blosc2-3.0-tutorial
+
+It contains Jupyter notebooks explaining the main features of Python-Blosc2.
 
 License
 =======
@@ -118,6 +108,7 @@ to the core development of the Blosc2 library:
 - Juan David Ibáñez
 - Ivan Vilata i Balaguer
 - Oumaima Ech.Chdig
+- Ricardo Sales Piquer
 
 In addition, other people have participated to the project in different
 aspects:

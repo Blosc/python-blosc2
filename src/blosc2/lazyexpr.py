@@ -12,6 +12,7 @@ import ast
 import asyncio
 import concurrent.futures
 import copy
+import inspect
 import math
 import os
 import pathlib
@@ -154,10 +155,44 @@ functions = [
     "pow" if np.__version__.startswith("2.") else "power",
     "where",
 ]
+
+# Gather all callable functions in numpy
+numpy_funcs = {
+    name
+    for name, member in inspect.getmembers(np, callable)
+    if not name.startswith("_") and not isinstance(member, np.ufunc)
+}
+numpy_ufuncs = {name for name, member in inspect.getmembers(np, lambda x: isinstance(x, np.ufunc))}
+# Add these functions to the list of available functions
+# (will be evaluated via the array interface)
+additional_funcs = sorted((numpy_funcs | numpy_ufuncs) - set(functions))
+functions += additional_funcs
+
 functions += constructors
 
 relational_ops = ["==", "!=", "<", "<=", ">", ">="]
 logical_ops = ["&", "|", "^", "~"]
+
+
+def get_expr_globals(expression):
+    """Build a dictionary of functions needed for evaluating the expression."""
+    _globals = {}
+
+    # Only check for functions that actually appear in the expression
+    # This avoids many unnecessary string searches
+    for func in functions:
+        if func in expression:
+            # Try blosc2 first
+            if hasattr(blosc2, func):
+                _globals[func] = getattr(blosc2, func)
+            # Fall back to numpy
+            elif hasattr(np, func):
+                _globals[func] = getattr(np, func)
+            # Function not found in either module
+            else:
+                raise AttributeError(f"Function {func} not found in blosc2 or numpy")
+
+    return _globals
 
 
 class ReduceOp(Enum):
@@ -419,6 +454,16 @@ class LazyArray(ABC):
             A printable class with information about the :ref:`LazyArray`.
         """
         pass
+
+    # Provide minimal __array_interface__ to allow NumPy to work with this object
+    @property
+    def __array_interface__(self):
+        return {
+            "shape": self.shape,
+            "typestr": self.dtype.str,
+            "data": self[()],
+            "version": 3,
+        }
 
 
 def convert_inputs(inputs):
@@ -2375,7 +2420,7 @@ class LazyExpr(LazyArray):
     def _compute_expr(self, item, kwargs):  # noqa: C901
         if any(method in self.expression for method in reducers):
             # We have reductions in the expression (probably coming from a string lazyexpr)
-            _globals = {func: getattr(blosc2, func) for func in functions if func in self.expression}
+            _globals = get_expr_globals(self.expression)
             lazy_expr = eval(self.expression, _globals, self.operands)
             if not isinstance(lazy_expr, blosc2.LazyExpr):
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
@@ -2614,7 +2659,7 @@ class LazyExpr(LazyArray):
             # Most in particular, castings like np.int8 et al. can be very useful to allow
             # for desired data types in the output.
             _operands = operands | local_vars
-            _globals = {func: getattr(blosc2, func) for func in functions if func in expression}
+            _globals = get_expr_globals(expression)
             _globals |= dtype_symbols
             new_expr = eval(_expression, _globals, _operands)
             _dtype = new_expr.dtype

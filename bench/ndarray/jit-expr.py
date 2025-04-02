@@ -23,7 +23,7 @@ chunks, blocks= None, None   # enforce automatic chunk and block sizes
 cparams = blosc2.CParams(clevel=1, codec=blosc2.Codec.LZ4)
 cparams_out = blosc2.CParams(clevel=1, codec=blosc2.Codec.LZ4)
 print("Using cparams: ", cparams)
-check_result = True
+check_result = False
 # Lossy compression
 # filters = [blosc2.Filter.TRUNC_PREC, blosc2.Filter.SHUFFLE]
 # filters_meta = [8, 0]  # keep 8 bits of precision in mantissa
@@ -150,5 +150,4 @@ cratio = out.schunk.cratio if isinstance(out, blosc2.NDArray) else 1.0
 print(f"Speedup: {tref / t1:.2f}x, out cratio: {cratio:.2f}x")
 if check_result:
     np.testing.assert_allclose(out, nout)
-
-print("All results are equal!")
+    print("All results are equal!")

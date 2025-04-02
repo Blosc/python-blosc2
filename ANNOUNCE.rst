@@ -1,13 +1,16 @@
-Announcing Python-Blosc2 3.2.0
+Announcing Python-Blosc2 3.2.1
 ==============================
 
-This is a minor release where we fixed some bugs related with the
-maximum type size supported by Blosc2; now, the maximum size is
-512 MB (compared to 255 bytes in previous versions).  We are also
-introducing WASM32 wheels for the first time.
+Here, all array containers in Blosc2 implement the ``__array_interface__``
+protocol to expose the data in the array.  This allows for better
+interoperability with other libraries like NumPy, CuPy, etc.  Now, the range
+of functions spans to most of NumPy functions, including reductions.
 
-We also added new ``blosc2.matmul()`` function for computing matrix
-multiplication on NDArray instances.
+See examples at: https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/jit-numpy-funcs.py
+See benchmarks at: https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/jit-numpy-funcs.py
+
+We have also improved the performance of constructors like ``blosc2.linspace()``
+or ``blosc2.arange()`` by a factor of up to 3x for large arrays.
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
@@ -17,7 +20,6 @@ You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 - Supports NumPy ufunc mechanism: mix and match NumPy and Blosc2 computations.
 - Integrates with Numba and Cython via UDFs (User Defined Functions).
 - Adheres to modern NumPy casting rules way better than numexpr.
-- Computes expressions only when needed. They can also be stored for later use.
 - Supports linear algebra operations (like ``blosc2.matmul()``).
 
 Install it with::

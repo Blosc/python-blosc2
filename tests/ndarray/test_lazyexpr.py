@@ -1297,3 +1297,13 @@ def test_only_ndarrays_or_constructors(obj, getitem, item):
     assert b.dtype == larr.dtype
     if not isinstance(obj, str):
         assert np.allclose(b[:], obj[item])
+
+
+@pytest.mark.parametrize("func", ["cumsum", "cumulative_sum", "cumprod"])
+def test_numpy_funcs(array_fixture, func):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    npfunc = getattr(np, func)
+    d_blosc2 = npfunc(((a1**3 + blosc2.sin(na2 * 2)) < a3) & (na2 > 0), axis=0)
+    npfunc = getattr(np, func)
+    d_numpy = npfunc(((na1**3 + np.sin(na2 * 2)) < na3) & (na2 > 0), axis=0)
+    np.testing.assert_equal(d_blosc2, d_numpy)
