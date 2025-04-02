@@ -21,11 +21,50 @@ import blosc2
 )
 @pytest.mark.parametrize(
     "dtype",
-    {np.float32, np.float64, np.complex64, np.complex128},
+    {np.float32, np.float64},
 )
 def test_matmul(ashape, achunks, ablocks, bshape, bchunks, bblocks, dtype):
-    a = blosc2.linspace(0, 10, dtype=dtype, shape=ashape, chunks=achunks, blocks=ablocks)
-    b = blosc2.linspace(0, 10, dtype=dtype, shape=bshape, chunks=bchunks, blocks=bblocks)
+    a = blosc2.linspace(0, 1, dtype=dtype, shape=ashape, chunks=achunks, blocks=ablocks)
+    b = blosc2.linspace(0, 1, dtype=dtype, shape=bshape, chunks=bchunks, blocks=bblocks)
+    c = blosc2.matmul(a, b)
+
+    na = a[:]
+    nb = b[:]
+    nc = np.matmul(na, nb)
+
+    np.testing.assert_allclose(c, nc, rtol=1e-6)
+
+
+@pytest.mark.parametrize(
+    ("ashape", "achunks", "ablocks"),
+    {
+        ((12, 10), (7, 5), (3, 3)),
+        ((10,), (9,), (7,)),
+    },
+)
+@pytest.mark.parametrize(
+    ("bshape", "bchunks", "bblocks"),
+    {
+        ((10,), (4,), (2,)),
+        ((10, 5), (3, 4), (1, 3)),
+        ((10, 12), (2, 4), (1, 2)),
+    },
+)
+@pytest.mark.parametrize(
+    "dtype",
+    {np.complex64, np.complex128},
+)
+def test_complex(ashape, achunks, ablocks, bshape, bchunks, bblocks, dtype):
+    real_part = blosc2.linspace(0, 1, shape=ashape, chunks=achunks, blocks=ablocks, dtype=dtype)
+    imag_part = blosc2.linspace(0, 1, shape=ashape, chunks=achunks, blocks=ablocks, dtype=dtype)
+    complex_matrix_a = real_part + 1j * imag_part
+    a = blosc2.asarray(complex_matrix_a)
+
+    real_part = blosc2.linspace(1, 2, shape=bshape, chunks=bchunks, blocks=bblocks, dtype=dtype)
+    imag_part = blosc2.linspace(1, 2, shape=bshape, chunks=bchunks, blocks=bblocks, dtype=dtype)
+    complex_matrix_b = real_part + 1j * imag_part
+    b = blosc2.asarray(complex_matrix_b)
+
     c = blosc2.matmul(a, b)
 
     na = a[:]
