@@ -3762,7 +3762,7 @@ def transpose(x, **kwargs: Any) -> NDArray:
     Parameters
     ----------
     x: `NDArray`
-        The input matrix.
+        The input array.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
@@ -3776,7 +3776,7 @@ def transpose(x, **kwargs: Any) -> NDArray:
     `numpy.transpose <https://numpy.org/doc/2.2/reference/generated/numpy.transpose.html>`_
     """
 
-    # Validate arguments are not scalars
+    # If arguments are dimension < 2 they are returned
     if np.isscalar(x) or x.ndim < 2:
         return x
 

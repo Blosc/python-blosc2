@@ -4,21 +4,25 @@ import pytest
 import blosc2
 
 
-@pytest.mark.parametrize(
-    ("shape", "chunks", "blocks"),
-    {
+@pytest.fixture(
+    params=[
         ((3, 3), (2, 2), (1, 1)),
         ((12, 11), (7, 5), (6, 2)),
         ((1, 5), (1, 4), (1, 3)),
-        ((201, 1903), None, None),
+        ((51, 603), (22, 99), (13, 29)),
         ((10,), (5,), None),
-    },
+    ]
 )
+def shape_chunks_blocks(request):
+    return request.param
+
+
 @pytest.mark.parametrize(
     "dtype",
     {np.int32, np.int64, np.float32, np.float64},
 )
-def test_transpose(shape, chunks, blocks, dtype):
+def test_transpose(shape_chunks_blocks, dtype):
+    shape, chunks, blocks = shape_chunks_blocks
     a = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype)
     at = blosc2.transpose(a)
 
@@ -29,20 +33,11 @@ def test_transpose(shape, chunks, blocks, dtype):
 
 
 @pytest.mark.parametrize(
-    ("shape", "chunks", "blocks"),
-    {
-        ((3, 3), (2, 2), (1, 1)),
-        ((12, 11), (7, 5), (6, 2)),
-        ((1, 5), (1, 4), (1, 3)),
-        ((201, 1903), None, None),
-        ((10,), (5,), None),
-    },
-)
-@pytest.mark.parametrize(
     "dtype",
     {np.complex64, np.complex128},
 )
-def test_complex(shape, chunks, blocks, dtype):
+def test_complex(shape_chunks_blocks, dtype):
+    shape, chunks, blocks = shape_chunks_blocks
     real_part = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype)
     imag_part = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype)
     complex_matrix = real_part + 1j * imag_part
