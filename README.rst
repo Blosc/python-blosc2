@@ -114,8 +114,8 @@ In addition, other people have participated to the project in different
 aspects:
 
 - Jan Sellner, contributed the mmap support for NDArray/SChunk objects.
-- Dimitri Papadopoulos, contributed a large bunch of improvements to the
-  in many aspects of the project.  His attention to detail is remarkable.
+- Dimitri Papadopoulos, contributed a large bunch of improvements to
+  many aspects of the project.  His attention to detail is remarkable.
 - And many others that have contributed with bug reports, suggestions and
   improvements.
 
