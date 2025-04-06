@@ -140,9 +140,10 @@ def test_iter(shape, chunks, blocks):
     npa = np.arange(int(np.prod(shape)), dtype=np.int32).reshape(shape)
     b2a = blosc2.asarray(npa, chunks=chunks, blocks=blocks)
 
-    for _i, (a, b) in enumerate(zip(b2a, npa, strict=False)):
+    zip_b2a_npa = zip(b2a, npa, strict=False)
+    assert len(zip_b2a_npa) == shape[0] - 1
+    for a, b in zip_b2a_npa:
         np.testing.assert_equal(a, b)
-    assert _i == shape[0] - 1
 
 
 @pytest.mark.parametrize("dtype", [np.int32, np.float32, np.float64])

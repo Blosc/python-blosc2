@@ -564,10 +564,11 @@ def test_iter(shape, chunks, blocks):
     nsa["b"] = nb
     sa = blosc2.asarray(nsa, chunks=chunks, blocks=blocks)
 
-    for _i, (a, b) in enumerate(zip(sa, nsa, strict=False)):
+    zip_sa_nsa = zip(sa, nsa, strict=False)
+    assert len(zip_sa_nsa) == shape[0] - 1
+    for a, b in zip_sa_nsa:
         np.testing.assert_equal(a, b)
         assert a.dtype == b.dtype
-    assert _i == shape[0] - 1
 
 
 @pytest.mark.parametrize("reduce_op", ["sum", "mean", "min", "max", "std", "var"])
