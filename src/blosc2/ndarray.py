@@ -1837,14 +1837,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> print(type(c))
         <class 'blosc2.ndarray.NDArray'>
         """
-        original_codec = self.cparams.codec
-        original_clevel = self.cparams.clevel
-        original_filters = self.cparams.filters
         if "cparams" not in kwargs:
             kwargs["cparams"] = {
-                "codec": original_codec,
-                "clevel": original_clevel,
-                "filters": original_filters,
+                "codec": self.cparams.codec,
+                "clevel": self.cparams.clevel,
+                "filters": self.cparams.filters,
             }
         kwargs = _check_ndarray_kwargs(**kwargs)  # sets cparams to defaults
         key, mask = process_key(key, self.shape)
