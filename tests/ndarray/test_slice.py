@@ -35,12 +35,16 @@ def test_slice_codec_and_clevel(shape, chunks, blocks, slices, dtype):
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
     a = blosc2.asarray(
-        nparray, chunks=chunks, blocks=blocks, cparams={"codec": blosc2.Codec.LZ4, "clevel": 6}
+        nparray,
+        chunks=chunks,
+        blocks=blocks,
+        cparams={"codec": blosc2.Codec.LZ4, "clevel": 6, "filters": [blosc2.Filter.BITSHUFFLE]},
     )
 
     b = a.slice(slices)
     assert b.cparams.codec == a.cparams.codec
     assert b.cparams.clevel == a.cparams.clevel
+    assert b.cparams.filters == a.cparams.filters
 
 
 argnames = "shape, chunks, blocks, slices, dtype, chunks2, blocks2"
