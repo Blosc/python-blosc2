@@ -1074,15 +1074,7 @@ def detect_aligned_chunks(  # noqa: C901
         start = s.start if s.start is not None else 0
         stop = s.stop if s.stop is not None else shape[i]
 
-        if stop > shape[i]:
-            return []
-
         chunk_size = chunks[i]
-
-        # Ensure alignment with chunk boundaries
-        if start % chunk_size != 0:
-            return []
-
         start_idx = start // chunk_size
         end_idx = math.ceil(stop / chunk_size)
         start_indices.append(start_idx)
