@@ -13,6 +13,7 @@ import inspect
 import math
 from collections import OrderedDict, namedtuple
 from functools import reduce
+from itertools import product
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from numpy.exceptions import ComplexWarning
@@ -1029,6 +1030,82 @@ def extract_values(arr, indices: np.ndarray[np.int_], max_cache_size: int = 10) 
     return extracted_values
 
 
+def detect_aligned_chunks(  # noqa: C901
+    key: Sequence[slice], shape: Sequence[int], chunks: Sequence[int], consecutive: bool = False
+) -> list[int]:
+    """
+    Detect whether a multidimensional slice is aligned with chunk boundaries.
+
+    Parameters
+    ----------
+    key : Sequence of slice
+        The multidimensional slice to check.
+    shape : Sequence of int
+        Shape of the NDArray.
+    chunks : Sequence of int
+        Chunk shape of the NDArray.
+    consecutive : bool, default=False
+        If True, check if the chunks are consecutive in storage order.
+        If False, only check for chunk boundary alignment.
+
+    Returns
+    -------
+    list[int]
+        List of chunk indices (in C-order) that the slice overlaps with.
+        If the slice isn't aligned with chunk boundaries, returns an empty list.
+        If consecutive=True and chunks aren't consecutive, returns an empty list.
+    """
+    if len(key) != len(shape):
+        return []
+
+    # Check that slice boundaries are exact multiple of chunk boundaries
+    for i, s in enumerate(key):
+        if s.start is not None and s.start % chunks[i] != 0:
+            return []
+        if s.stop is not None and s.stop % chunks[i] != 0:
+            return []
+
+    # Parse the slice boundaries
+    start_indices = []
+    end_indices = []
+    n_chunks = []
+
+    for i, s in enumerate(key):
+        start = s.start if s.start is not None else 0
+        stop = s.stop if s.stop is not None else shape[i]
+        chunk_size = chunks[i]
+        start_idx = start // chunk_size
+        end_idx = stop // chunk_size
+        start_indices.append(start_idx)
+        end_indices.append(end_idx)
+        n_chunks.append(shape[i] // chunk_size)
+
+    # Get all chunk combinations in the slice
+    indices = [range(start, end) for start, end in zip(start_indices, end_indices, strict=False)]
+    result = []
+
+    for combination in product(*indices):
+        flat_index = 0
+        multiplier = 1
+        for idx, n in zip(reversed(range(len(n_chunks))), reversed(n_chunks), strict=False):
+            flat_index += combination[idx] * multiplier
+            multiplier *= n
+        result.append(flat_index)
+
+    # Check if chunks are consecutive if requested
+    if consecutive and result:
+        sorted_result = sorted(result)
+        if sorted_result[-1] - sorted_result[0] + 1 != len(sorted_result):
+            return []
+
+        # The array of indices must be consecutive
+        for i in range(len(sorted_result) - 1):
+            if sorted_result[i + 1] - sorted_result[i] != 1:
+                return []
+
+    return sorted(result)
+
+
 class NDOuterIterator:
     def __init__(self, ndarray: NDArray | NDField, cache_size=1):
         self.ndarray = ndarray
@@ -1846,6 +1923,30 @@ class NDArray(blosc2_ext.NDArray, Operand):
         kwargs = _check_ndarray_kwargs(**kwargs)  # sets cparams to defaults
         key, mask = process_key(key, self.shape)
         start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
+
+        # Fast path for slices made with consecutive chunks
+        if step == (1,) * self.ndim:
+            aligned_chunks = detect_aligned_chunks(key, self.shape, self.chunks, consecutive=False)
+            if aligned_chunks:
+                # print("Aligned chunks detected", aligned_chunks)
+                # Create a new ndarray for the key slice
+                new_shape = [
+                    sp - st for sp, st in zip([k.stop for k in key], [k.start for k in key], strict=False)
+                ]
+                newarr = blosc2.empty(
+                    shape=new_shape,
+                    dtype=self.dtype,
+                    chunks=self.chunks,
+                    blocks=self.blocks,
+                    **kwargs,
+                )
+                # Get the chunks from the original array and update the new array
+                # No need for chunks to decompress and compress again
+                for order, nchunk in enumerate(aligned_chunks):
+                    chunk = self.schunk.get_chunk(nchunk)
+                    newarr.schunk.update_chunk(order, chunk)
+                return newarr
+
         key = (start, stop)
         ndslice = super().get_slice(key, mask, **kwargs)
 
