@@ -2,7 +2,7 @@ Announcing Python-Blosc2 3.3.0
 ==============================
 
 We are introducing a new blosc2.transpose() function for natively transposing
-2D NDArray instances and a fast path for NDArray.slice() that delivers up to
+2D NDArray instances, and a fast path for NDArray.slice() that delivers up to
 40x speedup when slices align with underlying chunks. Documentation has also
 been improved with several edits throughout.
 

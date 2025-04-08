@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.3.0 to 3.3.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.2.1 to 3.3.0
 
 * New `blosc2.transpose()` function for transposing 2D NDArray instances
