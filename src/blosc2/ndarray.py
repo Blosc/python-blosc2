@@ -13,6 +13,7 @@ import inspect
 import math
 from collections import OrderedDict, namedtuple
 from functools import reduce
+from itertools import product
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from numpy.exceptions import ComplexWarning
@@ -1029,6 +1030,89 @@ def extract_values(arr, indices: np.ndarray[np.int_], max_cache_size: int = 10) 
     return extracted_values
 
 
+def detect_consecutive_chunks(  # noqa: C901
+    key: Sequence[slice], shape: Sequence[int], chunks: Sequence[int]
+) -> list[int]:
+    """
+    Detect whether a multidimensional slice matches a sequence of consecutive chunk boundaries.
+
+    Parameters
+    ----------
+    key : Sequence of slice
+        The multidimensional slice to check.
+    shape : Sequence of int
+        Shape of the NDArray.
+    chunks : Sequence of int
+        Chunk shape of the NDArray.
+
+    Returns
+    -------
+    list[int]
+        Index of the chunk (in C-order) if the slice matches exactly with a single chunk,
+        a list of chunk indices if the slice matches a consecutive sequence of chunks.
+        If it doesn't match any chunk(s) properly, return an empty list.
+    """
+    if len(key) != len(shape):
+        return []
+
+    # Check that slice boundaries are exact multiple of chunk boundaries.
+    # We want to do that so we don't copy data, and hence, waste space,
+    # unnecessarily into destination.
+    for i, s in enumerate(key):
+        if s.start is not None and s.start % chunks[i] != 0:
+            return []
+        if s.stop is not None and s.stop % chunks[i] != 0:
+            return []
+
+    # Parse the slice boundaries and check for alignment
+    start_indices = []
+    end_indices = []
+    n_chunks = []
+
+    for i, s in enumerate(key):
+        start = s.start if s.start is not None else 0
+        stop = s.stop if s.stop is not None else shape[i]
+
+        if stop > shape[i]:
+            return []
+
+        chunk_size = chunks[i]
+
+        # Ensure alignment with chunk boundaries
+        if start % chunk_size != 0:
+            return []
+
+        start_idx = start // chunk_size
+        end_idx = math.ceil(stop / chunk_size)
+        start_indices.append(start_idx)
+        end_indices.append(end_idx)
+        n_chunks.append(math.ceil(shape[i] / chunk_size))
+
+    indices = [range(start, end) for start, end in zip(start_indices, end_indices, strict=False)]
+    result = []
+
+    for combination in product(*indices):
+        flat_index = 0
+        multiplier = 1
+        for idx, n in zip(reversed(range(len(n_chunks))), reversed(n_chunks), strict=False):
+            flat_index += combination[idx] * multiplier
+            multiplier *= n
+
+        result.append(flat_index)
+
+    if not result:
+        return []
+
+    # The product() of ranges might not naturally produce indices in ascending order
+    result.sort()
+    is_consecutive = builtins.all(result[i] == result[i - 1] + 1 for i in range(1, len(result)))
+
+    if not is_consecutive:
+        return []
+
+    return result
+
+
 class NDOuterIterator:
     def __init__(self, ndarray: NDArray | NDField, cache_size=1):
         self.ndarray = ndarray
@@ -1846,6 +1930,29 @@ class NDArray(blosc2_ext.NDArray, Operand):
         kwargs = _check_ndarray_kwargs(**kwargs)  # sets cparams to defaults
         key, mask = process_key(key, self.shape)
         start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
+
+        # Fast path for slices made with consecutive chunks
+        if step == (1,) * self.ndim:
+            consecutive_chunks = detect_consecutive_chunks(key, self.shape, self.chunks)
+            if consecutive_chunks:
+                # Create a new ndarray for the key slice
+                new_shape = [
+                    sp - st for sp, st in zip([k.stop for k in key], [k.start for k in key], strict=False)
+                ]
+                newarr = blosc2.empty(
+                    shape=new_shape,
+                    dtype=self.dtype,
+                    chunks=self.chunks,
+                    blocks=self.blocks,
+                    **kwargs,
+                )
+                # Get the chunks from the original array and update the new array
+                # No need for chunks to decompress and compress again
+                for order, nchunk in enumerate(consecutive_chunks):
+                    chunk = self.schunk.get_chunk(nchunk)
+                    newarr.schunk.update_chunk(order, chunk)
+                return newarr
+
         key = (start, stop)
         ndslice = super().get_slice(key, mask, **kwargs)
 
