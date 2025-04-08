@@ -11,6 +11,7 @@ import blosc2
         ((1, 5), (1, 4), (1, 3)),
         ((51, 603), (22, 99), (13, 29)),
         ((10,), (5,), None),
+        ((31,), (14,), (9,)),
     ]
 )
 def shape_chunks_blocks(request):
@@ -39,7 +40,7 @@ def test_transpose(shape_chunks_blocks, dtype):
 def test_complex(shape_chunks_blocks, dtype):
     shape, chunks, blocks = shape_chunks_blocks
     real_part = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype)
-    imag_part = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype)
+    imag_part = blosc2.linspace(1, 0, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype)
     complex_matrix = real_part + 1j * imag_part
 
     a = blosc2.asarray(complex_matrix)
@@ -80,7 +81,7 @@ def test_scalars(scalar):
         (3, 3, 3),
         (12, 10, 10),
         (10, 10, 10, 11),
-        (5, 4, 3, 2, 1, 0),
+        (5, 4, 3, 2, 1, 1),
     ],
 )
 def test_dims(shape):

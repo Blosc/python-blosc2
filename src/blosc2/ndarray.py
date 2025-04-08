@@ -3654,9 +3654,9 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
 
     Parameters
     ----------
-    x1: `NDArray`
+    x1: :ref:`NDArray`
         The first input array.
-    x2: `NDArray`
+    x2: :ref:`NDArray`
         The second input array.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
@@ -3761,7 +3761,7 @@ def transpose(x, **kwargs: Any) -> NDArray:
 
     Parameters
     ----------
-    x: `NDArray`
+    x: :ref:`NDArray`
         The input array.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
