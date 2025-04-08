@@ -41,4 +41,4 @@ def test_large_typesize(shape, typesize, asarray):
         # b = blosc2.nans(shape, dtype=dtype)  # TODO: this is not working; perhaps deprecate blosc2.nans()?
         b = blosc2.full(shape, np.nan, dtype=dtype)
     for field in dtype.fields:
-        np.testing.assert_allclose(b[field], a[field], equal_nan=True)
+        np.testing.assert_allclose(b[field][:], a[field], equal_nan=True)

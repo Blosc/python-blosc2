@@ -27,6 +27,7 @@ from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
 from cython.operator cimport dereference
 from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free, malloc, realloc
+from libc.stdlib cimport abs as c_abs
 from libc.string cimport memcpy, strcpy, strdup, strlen
 from libcpp cimport bool as c_bool
 
@@ -560,6 +561,70 @@ blosc2_init()
 @atexit.register
 def destroy():
     blosc2_destroy()
+
+
+@cython.boundscheck(False)
+@cython.wraparound(False)
+@cython.cdivision(True)
+def nearest_divisor(int64_t a, int64_t b, bint strict=False):
+    """Find the divisor of `a` that is closest to `b`.
+
+    Parameters
+    ----------
+    a : int
+        The number for which to find divisors.
+    b : int
+        The reference value to compare divisors against.
+    strict : bool, optional
+        If True, always use the downward search algorithm.
+
+    Returns
+    -------
+    int
+        The divisor of `a` that is closest to `b`.
+
+    Notes
+    -----
+    This is a *much* faster version than its Python counterpart.
+    """
+    cdef:
+        int64_t i, closest, min_diff, diff
+        bint found
+
+    if a > 100_000 or strict:
+        # For large numbers or when strict=True, search downwards from b
+        i = b
+        while i > 0:
+            if a % i == 0:
+                return i
+            i -= 1
+        return 1  # Fallback to 1, which is always a divisor
+
+    # For smaller numbers, find the closest divisor
+    closest = 1
+    min_diff = a  # Initialize to a large value
+    found = False
+
+    # Search for divisors up to sqrt(a)
+    i = 1
+    while i * i <= a:
+        if a % i == 0:
+            # Check i as a divisor
+            diff = c_abs(i - b)
+            if diff < min_diff:
+                min_diff = diff
+                closest = i
+                found = True
+
+            # Check a/i as a divisor
+            diff = c_abs(a // i - b)
+            if diff < min_diff:
+                min_diff = diff
+                closest = a // i
+                found = True
+        i += 1
+
+    return closest if found else 1
 
 
 def cbuffer_sizes(src):

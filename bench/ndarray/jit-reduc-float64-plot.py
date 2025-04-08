@@ -181,7 +181,7 @@ def add_ram_limit(figure, compute=True):
             type="line", x0=64, y0=0, x1=64, y1=y1_max,
             line=dict(color="Gray", width=2, dash="dot"),
         )
-        figure.add_annotation(x=64, y=y1_max * .9, text="64 GB", showarrow=True, arrowhead=2, ax=40, ay=0)
+        figure.add_annotation(x=64, y=y1_max * .9, text="64 GB RAM", showarrow=True, arrowhead=2, ax=45, ay=0)
     elif m2linux:
         #y1_max = 100 if compute else y1_max
         figure.add_shape(
@@ -207,7 +207,7 @@ def add_ram_limit(figure, compute=True):
 # Plot the data. There will be 2 plots: one for create times and another for compute times
 labels = dict(
     l0="No compression", BLOSCLZ_l7="BLOSCLZ lvl=7", LZ4_l1="LZ4 lvl=1", ZSTD_l1="ZSTD lvl=1",
-    numpy="NumPy", numpy_jit="NumPy (jit)"
+    numpy="NumPy engine", numpy_jit="NumPy with @blosc2.jit"
 )
 
 if plotly:
@@ -260,8 +260,9 @@ if plotly:
     fig_compute.add_trace(
         go.Scatter(x=sizes_GB, y=compute_ZSTD_l1_disk, mode='lines+markers', name=labels["ZSTD_l1"] + " (disk)"))
     fig_compute.add_trace(go.Scatter(x=sizes_GB, y=compute_numpy, mode='lines+markers',
-                                     name=labels["numpy"], line=dict(color='brown')))
-    #fig_compute.add_trace(go.Scatter(x=sizes_GB, y=compute_numpy_jit, mode='lines+markers', name=labels["numpy_jit"]))
+                                     name=labels["numpy"], line=dict(color='gray', dash='dot')))
+    # fig_compute.add_trace(go.Scatter(x=sizes_GB, y=compute_numpy_jit, mode='lines+markers',
+    #                                  name=labels["numpy_jit"], line=dict(color='darkgreen')))
     fig_compute.update_layout(title=f'Blosc2 compute: {title_}', xaxis_title='Size (GB)', yaxis_title=yaxis_title)
 
     # Add a vertical line at RAM limit

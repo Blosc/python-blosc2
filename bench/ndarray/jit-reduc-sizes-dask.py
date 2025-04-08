@@ -18,6 +18,7 @@ import dask
 import dask.array as da
 import zarr
 from numcodecs import Blosc
+import numba as nb
 
 niter = 5
 #dtype = np.dtype("float32")
@@ -26,6 +27,7 @@ clevel = 1
 numpy = False
 numpy_jit = False
 dask_da = False
+numba_jit = False
 cparams = cparams_out = None
 check_result = False
 
@@ -36,10 +38,13 @@ check_result = False
 # size_list = (1, 5, 10, 20, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95, 100, 105, 110)  # limit clevel>=1 float64
 
 # For 24 GB RAM
-sizes_numpy = (1, 5, 10, 20, 30)  # limit numpy float64
+# sizes_numpy = (1, 5, 10, 20, 30)  # limit numpy float64
+sizes_numpy = (1, 5, 10, 20, 30, 35, 40, 45, 50, 55, 60, 65, 70)
 sizes_numpy_jit = (1, 5, 10, 20, 30)  # limit numpy float64
-sizes_clevel0 = (1, 5, 10, 20, 30)  # limit clevel==0 float64
-size_list = (1, 5, 10, 20, 30)
+#sizes_clevel0 = (1, 5, 10, 20, 30)  # limit clevel==0 float64
+sizes_clevel0 = (1, 5, 10, 20, 30, 35, 40, 45, 50, 55, 60, 65, 70)
+#size_list = (1, 5, 10, 20, 30)
+size_list = (1, 5, 10, 20, 30, 35, 40, 45, 50, 55, 60, 65, 70)
 
 codec = "LZ4"  # default codec
 if len(sys.argv) > 2:
@@ -63,6 +68,9 @@ if check_result:
 if len(sys.argv) > 3:
     if sys.argv[3] == "dask":
         dask_da = True
+    elif sys.argv[3] == "numba":
+        numba_jit = True
+        # check_result = True
 
 
 # The reductions to compute
@@ -76,11 +84,14 @@ def compute_reduction(a, b, c):
 def compute_reduction_dask(a, b, c):
     return (((a ** 3 + da.sin(a * 2)) < c) & (b > 0)).sum(axis=1)
 
+@nb.njit(parallel=True)
+def compute_reduction_numba(a, b, c):
+    return np.sum(((a ** 3 + np.sin(a * 2)) < c) & (b > 0), axis=1)
 
 # Compute for both disk or memory
 #for disk in (True, False):
 for disk in (False,):
-    if disk and (numpy or numpy_jit or dask_da):
+    if disk and (numpy or numpy_jit or dask_da or numba_jit):
         continue
     print(f"\n*** Using disk={disk} ***\n")
     apath = bpath = None
@@ -119,7 +130,7 @@ for disk in (False,):
         #cparams = blosc2.CParams(clevel=1, codec=blosc2.Codec.LZ4, filters=filters, filters_meta=filters_meta)
 
         # Create some data operands
-        if check_result or dask_da:
+        if check_result or dask_da and not numba_jit:
             na = np.linspace(0, 1, N * N, dtype=dtype).reshape(N, N)
             nb = na + 1
             nc = np.linspace(-10, 10, N, dtype=dtype)
@@ -148,7 +159,7 @@ for disk in (False,):
         print(f"Time to create data: {t1:.4f}")
         create_times.append(t1)
 
-        if numpy and not dask_da:
+        if numpy and not dask_da and not numba_jit:
             if numpy_jit and not numpy:
                 out = compute_reduction(na, nb, nc)
                 t0 = time()
@@ -171,7 +182,6 @@ for disk in (False,):
                 a = da.from_zarr(za)
                 b = da.from_zarr(zb)
                 c = da.from_zarr(zc)
-
             scheduler = "single-threaded" if blosc2.nthreads == 1 else "threads"
             t0 = time()
             for i in range(niter):
@@ -187,6 +197,14 @@ for disk in (False,):
                         out = zout[:]
             t1 = (time() - t0) / niter
             print(f"Time to compute with dask and {clevel=}: {t1:.4f}")
+            if check_result:
+                np.testing.assert_allclose(out, nout)
+        elif numba_jit:
+            t0 = time()
+            for i in range(niter):
+                out = compute_reduction_numba(na, nb, nc)
+            t1 = (time() - t0) / niter
+            print(f"Time to compute with numba: {t1:.4f}")
             if check_result:
                 np.testing.assert_allclose(out, nout)
         else:

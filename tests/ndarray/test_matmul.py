@@ -107,6 +107,8 @@ def test_shapes(ashape, achunks, ablocks, bshape, bchunks, bblocks):
         5,  # int
         5.3,  # float
         1 + 2j,  # complex
+        np.int8(5),  # NumPy int8
+        np.int16(5),  # NumPy int16
         np.int32(5),  # NumPy int32
         np.int64(5),  # NumPy int64
         np.float32(5.3),  # NumPy float32
