@@ -16,7 +16,6 @@ from functools import reduce
 from itertools import product
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from dask.array.routines import aligned_coarsen_chunks
 from numpy.exceptions import ComplexWarning
 
 if TYPE_CHECKING:
@@ -1031,7 +1030,7 @@ def extract_values(arr, indices: np.ndarray[np.int_], max_cache_size: int = 10) 
     return extracted_values
 
 
-def detect_aligned_chunks(
+def detect_aligned_chunks(  # noqa: C901
     key: Sequence[slice], shape: Sequence[int], chunks: Sequence[int], consecutive: bool = False
 ) -> list[int]:
     """
