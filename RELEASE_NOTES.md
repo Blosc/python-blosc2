@@ -1,8 +1,22 @@
 # Release notes
 
-## Changes from 3.2.1 to 3.2.2
+## Changes from 3.2.1 to 3.3.0
 
-XXX version-specific blurb XXX
+* New `blosc2.transpose()` function for transposing 2D NDArray instances
+  natively. See PR #375 and docs at
+  https://www.blosc.org/python-blosc2/reference/autofiles/operations_with_arrays/blosc2.transpose.html#blosc2.transpose
+  Thanks to Ricardo Sales Piquer (@ricardosp4) for the implementation.
+
+* New fast path for `NDArray.slice()` for getting slices that are aligned with
+  underlying chunks. This is a common operation when working with NDArray
+  instances, and now it is up to 40x faster in our benchmarks (see PR #380).
+
+* Returned `NDArray` object in `NDarray.slice()` now defaults to original
+  codec/clevel/filters. The previous behavior was to use the default
+  codec/clevel/filters.  See PR #378.  Thanks to Luke Shaw (@lshaw8317).
+
+* Several English edits in the documentation.  Thanks to Luke Shaw (@lshaw8317)
+  for his help in this area.
 
 ## Changes from 3.2.0 to 3.2.1
 

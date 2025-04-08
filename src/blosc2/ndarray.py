@@ -1913,6 +1913,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
         (4, 10)
         >>> print(type(c))
         <class 'blosc2.ndarray.NDArray'>
+
+        Notes
+        -----
+        There is a fast path for slices that are aligned with underlying chunks.
+        Aligned means that the slices are made entirely with complete chunks.
         """
         if "cparams" not in kwargs:
             kwargs["cparams"] = {
@@ -3876,6 +3881,8 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
 def transpose(x, **kwargs: Any) -> NDArray:
     """
     Returns a Blosc2 NDArray with axes transposed.
+
+    Only 2D arrays are supported for now.  Other dimensions raise an error.
 
     Parameters
     ----------

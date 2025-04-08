@@ -1,16 +1,12 @@
-Announcing Python-Blosc2 3.2.1
+Announcing Python-Blosc2 3.3.0
 ==============================
 
-Here, all array containers in Blosc2 implement the ``__array_interface__``
-protocol to expose the data in the array.  This allows for better
-interoperability with other libraries like NumPy, CuPy, etc.  Now, the range
-of functions spans to most of NumPy functions, including reductions.
+We are introducing a new blosc2.transpose() function for natively transposing
+2D NDArray instances and a fast path for NDArray.slice() that delivers up to
+40x speedup when slices align with underlying chunks. Documentation has also
+been improved with several edits throughout.
 
-See examples at: https://github.com/Blosc/python-blosc2/blob/main/examples/ndarray/jit-numpy-funcs.py
-See benchmarks at: https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/jit-numpy-funcs.py
-
-We have also improved the performance of constructors like ``blosc2.linspace()``
-or ``blosc2.arange()`` by a factor of up to 3x for large arrays.
+See benchmarks at: https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/aligned_chunks.py
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
