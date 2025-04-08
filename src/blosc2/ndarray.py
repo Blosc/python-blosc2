@@ -1073,13 +1073,12 @@ def detect_aligned_chunks(  # noqa: C901
     for i, s in enumerate(key):
         start = s.start if s.start is not None else 0
         stop = s.stop if s.stop is not None else shape[i]
-
         chunk_size = chunks[i]
         start_idx = start // chunk_size
-        end_idx = math.ceil(stop / chunk_size)
+        end_idx = stop // chunk_size
         start_indices.append(start_idx)
         end_indices.append(end_idx)
-        n_chunks.append(math.ceil(shape[i] / chunk_size))
+        n_chunks.append(shape[i] // chunk_size)
 
     # Get all chunk combinations in the slice
     indices = [range(start, end) for start, end in zip(start_indices, end_indices, strict=False)]
@@ -1091,7 +1090,6 @@ def detect_aligned_chunks(  # noqa: C901
         for idx, n in zip(reversed(range(len(n_chunks))), reversed(n_chunks), strict=False):
             flat_index += combination[idx] * multiplier
             multiplier *= n
-
         result.append(flat_index)
 
     # Check if chunks are consecutive if requested
