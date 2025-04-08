@@ -16,6 +16,7 @@ from functools import reduce
 from itertools import product
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from dask.array.routines import aligned_coarsen_chunks
 from numpy.exceptions import ComplexWarning
 
 if TYPE_CHECKING:
@@ -1030,11 +1031,11 @@ def extract_values(arr, indices: np.ndarray[np.int_], max_cache_size: int = 10) 
     return extracted_values
 
 
-def detect_consecutive_chunks(  # noqa: C901
-    key: Sequence[slice], shape: Sequence[int], chunks: Sequence[int]
+def detect_aligned_chunks(
+    key: Sequence[slice], shape: Sequence[int], chunks: Sequence[int], consecutive: bool = False
 ) -> list[int]:
     """
-    Detect whether a multidimensional slice matches a sequence of consecutive chunk boundaries.
+    Detect whether a multidimensional slice is aligned with chunk boundaries.
 
     Parameters
     ----------
@@ -1044,27 +1045,28 @@ def detect_consecutive_chunks(  # noqa: C901
         Shape of the NDArray.
     chunks : Sequence of int
         Chunk shape of the NDArray.
+    consecutive : bool, default=False
+        If True, check if the chunks are consecutive in storage order.
+        If False, only check for chunk boundary alignment.
 
     Returns
     -------
     list[int]
-        Index of the chunk (in C-order) if the slice matches exactly with a single chunk,
-        a list of chunk indices if the slice matches a consecutive sequence of chunks.
-        If it doesn't match any chunk(s) properly, return an empty list.
+        List of chunk indices (in C-order) that the slice overlaps with.
+        If the slice isn't aligned with chunk boundaries, returns an empty list.
+        If consecutive=True and chunks aren't consecutive, returns an empty list.
     """
     if len(key) != len(shape):
         return []
 
-    # Check that slice boundaries are exact multiple of chunk boundaries.
-    # We want to do that so we don't copy data, and hence, waste space,
-    # unnecessarily into destination.
+    # Check that slice boundaries are exact multiple of chunk boundaries
     for i, s in enumerate(key):
         if s.start is not None and s.start % chunks[i] != 0:
             return []
         if s.stop is not None and s.stop % chunks[i] != 0:
             return []
 
-    # Parse the slice boundaries and check for alignment
+    # Parse the slice boundaries
     start_indices = []
     end_indices = []
     n_chunks = []
@@ -1088,6 +1090,7 @@ def detect_consecutive_chunks(  # noqa: C901
         end_indices.append(end_idx)
         n_chunks.append(math.ceil(shape[i] / chunk_size))
 
+    # Get all chunk combinations in the slice
     indices = [range(start, end) for start, end in zip(start_indices, end_indices, strict=False)]
     result = []
 
@@ -1100,17 +1103,18 @@ def detect_consecutive_chunks(  # noqa: C901
 
         result.append(flat_index)
 
-    if not result:
-        return []
+    # Check if chunks are consecutive if requested
+    if consecutive and result:
+        sorted_result = sorted(result)
+        if sorted_result[-1] - sorted_result[0] + 1 != len(sorted_result):
+            return []
 
-    # The product() of ranges might not naturally produce indices in ascending order
-    result.sort()
-    is_consecutive = builtins.all(result[i] == result[i - 1] + 1 for i in range(1, len(result)))
+        # The array of indices must be consecutive
+        for i in range(len(sorted_result) - 1):
+            if sorted_result[i + 1] - sorted_result[i] != 1:
+                return []
 
-    if not is_consecutive:
-        return []
-
-    return result
+    return sorted(result)
 
 
 class NDOuterIterator:
@@ -1933,8 +1937,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         # Fast path for slices made with consecutive chunks
         if step == (1,) * self.ndim:
-            consecutive_chunks = detect_consecutive_chunks(key, self.shape, self.chunks)
-            if consecutive_chunks:
+            aligned_chunks = detect_aligned_chunks(key, self.shape, self.chunks, consecutive=False)
+            if aligned_chunks:
+                # print("Aligned chunks detected", aligned_chunks)
                 # Create a new ndarray for the key slice
                 new_shape = [
                     sp - st for sp, st in zip([k.stop for k in key], [k.start for k in key], strict=False)
@@ -1948,7 +1953,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 )
                 # Get the chunks from the original array and update the new array
                 # No need for chunks to decompress and compress again
-                for order, nchunk in enumerate(consecutive_chunks):
+                for order, nchunk in enumerate(aligned_chunks):
                     chunk = self.schunk.get_chunk(nchunk)
                     newarr.schunk.update_chunk(order, chunk)
                 return newarr
