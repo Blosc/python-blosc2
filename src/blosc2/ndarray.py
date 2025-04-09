@@ -1929,7 +1929,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         key, mask = process_key(key, self.shape)
         start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
 
-        # Fast path for slices made with consecutive chunks
+        # Fast path for slices made with aligned chunks
         if step == (1,) * self.ndim:
             aligned_chunks = detect_aligned_chunks(key, self.shape, self.chunks, consecutive=False)
             if aligned_chunks:
