@@ -3028,11 +3028,11 @@ def lazyexpr(
     [1.875 2.5   3.125]
     [3.75  4.375 5.   ]]
     >>> b1 = blosc2.asarray(b)
-    >>> expr = 'a1 * b1 + 2'
+    >>> expr = 'a * b + 2'
     >>> operands = { 'a': a1, 'b': b1 }
     >>> lazy_expr = blosc2.lazyexpr(expr, operands=operands)
     >>> f"Lazy expression created: {lazy_expr}"
-    Lazy expression created: a1 * b1 + 2
+    Lazy expression created: a * b + 2
     >>> lazy_expr[:]
     [[ 2.        2.390625  3.5625  ]
     [ 5.515625  8.25     11.765625]
