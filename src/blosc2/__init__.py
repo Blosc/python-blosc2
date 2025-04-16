@@ -248,7 +248,9 @@ from .ndarray import (
     full,
     save,
     matmul,
+    permute_dims,
     transpose,
+    matrix_transpose,
 )
 
 from .c2array import c2context, C2Array, URLPath
@@ -266,7 +268,6 @@ from .lazyexpr import (
 from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy, jit
 
 from .schunk import SChunk, open
-
 
 # Registry for postfilters
 postfilter_funcs = {}

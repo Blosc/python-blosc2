@@ -11,6 +11,7 @@ from __future__ import annotations
 import builtins
 import inspect
 import math
+import warnings
 from collections import OrderedDict, namedtuple
 from functools import reduce
 from itertools import product
@@ -1411,6 +1412,13 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Block size: 80
         """
         return self._schunk.blocksize
+
+    @property
+    def T(self):
+        """Return the transpose of a 2-dimensional array."""
+        if self.ndim != 2:
+            raise ValueError("This property only works for 2-dimensional arrays.")
+        return permute_dims(self)
 
     def __getitem__(  # noqa: C901
         self,
@@ -3878,6 +3886,114 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     return result.squeeze()
 
 
+def permute_dims(arr: NDArray, axes: tuple[int] | list[int] | None = None, **kwargs: Any) -> NDArray:
+    """
+    Permutes the axes (dimensions) of an array.
+
+    Parameters
+    ----------
+    arr: :ref:`NDArray`
+        The input array.
+    axes: tuple[int], list[int], optional
+        The desired permutation of axes. If None, the axes are reversed by default.
+        If specified, axes must be a tuple or list representing a permutation of
+        ``[0, 1, ..., N-1]``, where ``N`` is the number of dimensions of the input array.
+        Negative indices are also supported. The *i*-th axis of the result will correspond
+        to the axis numbered ``axes[i]`` of the input.
+    kwargs: Any, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        A Blosc2 :ref:`NDArray` with axes transposed.
+
+    Raises
+    ------
+    ValueError
+        If ``axes`` is not a valid permutation of the dimensions of ``arr``.
+
+    References
+    ----------
+    `numpy.transpose <https://numpy.org/doc/2.2/reference/generated/numpy.transpose.html>`_
+
+    `permute_dims <https://data-apis.org/array-api/latest/API_specification/generated/array_api.permute_dims.html#permute-dims>`_
+
+    Examples
+    --------
+    For 2-D arrays it is the matrix transposition as usual:
+
+    >>> import blosc2
+    >>> a = blosc2.arange(1, 10).reshape((3, 3))
+    >>> a[:]
+    array([[1, 2, 3],
+           [4, 5, 6],
+           [7, 8, 9]])
+    >>> at = blosc2.permute_dims(a)
+    >>> at[:]
+    array([[1, 4, 7],
+           [2, 5, 8],
+           [3, 6, 9]])
+
+    For 3-D arrays:
+
+    >>> import blosc2
+    >>> a = blosc2.arange(1, 25).reshape((2, 3, 4))
+    >>> a[:]
+    array([[[ 1,  2,  3,  4],
+            [ 5,  6,  7,  8],
+            [ 9, 10, 11, 12]],
+           [[13, 14, 15, 16],
+            [17, 18, 19, 20],
+            [21, 22, 23, 24]]])
+
+
+
+    >>> at = blosc2.permute_dims(a, axes=(1, 0, 2))
+    >>> at[:]
+    array([[[ 1,  2,  3,  4],
+            [13, 14, 15, 16]],
+           [[ 5,  6,  7,  8],
+            [17, 18, 19, 20]],
+           [[ 9, 10, 11, 12],
+            [21, 22, 23, 24]]])
+
+    """
+
+    if np.isscalar(arr) or arr.ndim < 2:
+        return arr
+
+    if axes is None:
+        axes = range(arr.ndim)[::-1]
+    else:
+        axes_transformed = tuple(axis if axis >= 0 else arr.ndim + axis for axis in axes)
+        if sorted(axes_transformed) != list(range(arr.ndim)):
+            raise ValueError(f"axes {axes} is not a valid permutation of {arr.ndim} dimensions")
+        axes = axes_transformed
+
+    new_shape = tuple(arr.shape[axis] for axis in axes)
+    if "chunks" not in kwargs:
+        kwargs["chunks"] = tuple(arr.chunks[axis] for axis in axes)
+
+    result = blosc2.empty(shape=new_shape, dtype=arr.dtype, **kwargs)
+
+    chunk_slices = [
+        [slice(start, builtins.min(dim, start + chunk)) for start in range(0, dim, chunk)]
+        for dim, chunk in zip(arr.shape, arr.chunks, strict=False)
+    ]
+
+    block_counts = [len(s) for s in chunk_slices]
+    grid = np.indices(block_counts).reshape(len(block_counts), -1).T
+
+    for idx in grid:
+        block_slices = tuple(chunk_slices[axis][i] for axis, i in enumerate(idx))
+        block = arr[block_slices]
+        target_slices = tuple(block_slices[axis] for axis in axes)
+        result[target_slices] = np.transpose(block, axes=axes).copy()
+
+    return result
+
+
 def transpose(x, **kwargs: Any) -> NDArray:
     """
     Returns a Blosc2 NDArray with axes transposed.
@@ -3900,6 +4016,12 @@ def transpose(x, **kwargs: Any) -> NDArray:
     ----------
     `numpy.transpose <https://numpy.org/doc/2.2/reference/generated/numpy.transpose.html>`_
     """
+    warnings.warn(
+        "transpose is deprecated and will be removed in a future version. "
+        "Use matrix_transpose or permute_dims instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
 
     # If arguments are dimension < 2 they are returned
     if np.isscalar(x) or x.ndim < 2:
@@ -3908,19 +4030,30 @@ def transpose(x, **kwargs: Any) -> NDArray:
     # Validate arguments are dimension 2
     if x.ndim > 2:
         raise ValueError("Transposing arrays with dimension greater than 2 is not supported yet.")
+    return permute_dims(x, **kwargs)
 
-    n, m = x.shape
-    p, q = x.chunks
-    result = blosc2.zeros((m, n), dtype=np.result_type(x), **kwargs)
 
-    for row in range(0, n, p):
-        row_end = (row + p) if (row + p) < n else n
-        for col in range(0, m, q):
-            col_end = (col + q) if (col + q) < m else m
-            aux = x[row:row_end, col:col_end]
-            result[col:col_end, row:row_end] = np.transpose(aux).copy()
+def matrix_transpose(arr: NDArray, **kwargs: Any) -> NDArray:
+    """
+    Transposes a matrix (or a stack of matrices).
 
-    return result
+    Parameters
+    ----------
+    arr: :ref:`NDArray`
+        The input NDArray having shape ``(..., M, N)`` and whose innermost two dimensions form
+        ``MxN`` matrices.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        A new :ref:`NDArray` containing the transpose for each matrix and having shape
+        ``(..., N, M)``.
+    """
+    axes = None
+    if not np.isscalar(arr) and arr.ndim > 2:
+        axes = list(range(arr.ndim))
+        axes[-2], axes[-1] = axes[-1], axes[-2]
+    return permute_dims(arr, axes, **kwargs)
 
 
 # Class for dealing with fields in an NDArray

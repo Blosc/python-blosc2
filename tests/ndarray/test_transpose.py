@@ -1,3 +1,5 @@
+from itertools import permutations
+
 import numpy as np
 import pytest
 
@@ -6,50 +8,58 @@ import blosc2
 
 @pytest.fixture(
     params=[
-        ((3, 3), (2, 2), (1, 1)),
-        ((12, 11), (7, 5), (6, 2)),
-        ((1, 5), (1, 4), (1, 3)),
-        ((51, 603), (22, 99), (13, 29)),
+        np.float64,
+        pytest.param(np.int32, marks=pytest.mark.heavy),
+        pytest.param(np.int64, marks=pytest.mark.heavy),
+        pytest.param(np.float32, marks=pytest.mark.heavy),
+    ]
+)
+def dtype_fixture(request):
+    return request.param
+
+
+@pytest.fixture(
+    params=[
         ((10,), (5,), None),
         ((31,), (14,), (9,)),
     ]
 )
-def shape_chunks_blocks(request):
+def shape_1d_chunks_blocks(request):
     return request.param
 
 
-@pytest.mark.parametrize(
-    "dtype",
-    {np.int32, np.int64, np.float32, np.float64},
+@pytest.fixture(
+    params=[
+        ((3, 3), (2, 2), (1, 1)),
+        ((12, 11), (7, 5), (6, 2)),
+        ((1, 5), (1, 4), (1, 3)),
+        pytest.param(((51, 603), (22, 99), (13, 29)), marks=pytest.mark.heavy),
+    ]
 )
-def test_transpose(shape_chunks_blocks, dtype):
-    shape, chunks, blocks = shape_chunks_blocks
-    a = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype)
-    at = blosc2.transpose(a)
-
-    na = a[:]
-    nat = np.transpose(na)
-
-    np.testing.assert_allclose(at, nat)
+def shape_2d_chunks_blocks(request):
+    return request.param
 
 
-@pytest.mark.parametrize(
-    "dtype",
-    {np.complex64, np.complex128},
+@pytest.fixture(
+    params=[
+        ((4, 5, 2), (3, 4, 2), (3, 2, 1)),
+        ((12, 10, 10), (11, 9, 7), (9, 7, 3)),
+        pytest.param(((37, 63, 55), (12, 5, 41), (10, 5, 11)), marks=pytest.mark.heavy),
+    ]
 )
-def test_complex(shape_chunks_blocks, dtype):
-    shape, chunks, blocks = shape_chunks_blocks
-    real_part = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype)
-    imag_part = blosc2.linspace(1, 0, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype)
-    complex_matrix = real_part + 1j * imag_part
+def shape_3d_chunks_blocks(request):
+    return request.param
 
-    a = blosc2.asarray(complex_matrix)
-    at = blosc2.transpose(a)
 
-    na = a[:]
-    nat = np.transpose(na)
-
-    np.testing.assert_allclose(at, nat)
+@pytest.fixture(
+    params=[
+        ((3, 3, 5, 7), (2, 3, 2, 4), (1, 1, 1, 4)),
+        ((4, 6, 5, 2), (3, 3, 4, 2), (3, 2, 2, 1)),
+        pytest.param(((10, 10, 10, 11), (7, 8, 9, 11), (6, 7, 8, 5)), marks=pytest.mark.heavy),
+    ]
+)
+def shape_4d_chunks_blocks(request):
+    return request.param
 
 
 @pytest.mark.parametrize(
@@ -69,31 +79,145 @@ def test_complex(shape_chunks_blocks, dtype):
     },
 )
 def test_scalars(scalar):
-    at = blosc2.transpose(scalar)
+    at = blosc2.permute_dims(scalar)
     nat = np.transpose(scalar)
 
     np.testing.assert_allclose(at, nat)
 
 
+def test_1d_transpose(shape_1d_chunks_blocks, dtype_fixture):
+    shape, chunks, blocks = shape_1d_chunks_blocks
+    a = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype_fixture)
+    at = blosc2.permute_dims(a)
+
+    na = a[:]
+    nat = np.transpose(na)
+
+    np.testing.assert_allclose(at, nat)
+
+
+@pytest.mark.parametrize(
+    "axes",
+    list(permutations([0, 1])),
+)
+def test_2d_transpose(shape_2d_chunks_blocks, dtype_fixture, axes):
+    shape, chunks, blocks = shape_2d_chunks_blocks
+    a = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype_fixture)
+    at = blosc2.permute_dims(a, axes=axes)
+
+    na = a[:]
+    nat = np.transpose(na, axes=axes)
+
+    np.testing.assert_allclose(at, nat)
+
+
+@pytest.mark.parametrize(
+    "axes",
+    list(permutations([0, 1, 2])),
+)
+def test_3d_transpose(shape_3d_chunks_blocks, dtype_fixture, axes):
+    shape, chunks, blocks = shape_3d_chunks_blocks
+    a = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype_fixture)
+    at = blosc2.permute_dims(a, axes=axes)
+
+    na = a[:]
+    nat = np.transpose(na, axes=axes)
+
+    np.testing.assert_allclose(at, nat)
+
+
+@pytest.mark.parametrize(
+    "axes",
+    list(permutations([0, 1, 2, 3])),
+)
+def test_4d_transpose(shape_4d_chunks_blocks, dtype_fixture, axes):
+    shape, chunks, blocks = shape_4d_chunks_blocks
+    a = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype_fixture)
+    at = blosc2.permute_dims(a, axes=axes)
+
+    na = a[:]
+    nat = np.transpose(na, axes=axes)
+
+    np.testing.assert_allclose(at, nat)
+
+
+@pytest.mark.heavy
+@pytest.mark.parametrize(
+    "axes",
+    list(permutations([0, 1, 2])),
+)
+@pytest.mark.parametrize(
+    "dtype",
+    {np.complex64, np.complex128},
+)
+def test_complex(shape_3d_chunks_blocks, dtype, axes):
+    shape, chunks, blocks = shape_3d_chunks_blocks
+    real_part = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype)
+    imag_part = blosc2.linspace(1, 0, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype)
+    complex_matrix = real_part + 3j * imag_part
+
+    a = blosc2.asarray(complex_matrix)
+    at = blosc2.permute_dims(a, axes=axes)
+
+    na = a[:]
+    nat = np.transpose(na, axes=axes)
+
+    np.testing.assert_allclose(at, nat)
+
+
+@pytest.mark.parametrize(
+    "axes",
+    [
+        (0, 0, 1),  # repeated axis
+        (0, -1, -1),  # repeated negative
+        (0, 1),  # missing one axis
+        (0, 1, 2, 3),  # one more axis
+        (0, 1, 3),  # out-of-range index
+        (0, -4, 1),
+    ],
+)
+def test_invalid_axes_raises(shape_3d_chunks_blocks, axes):
+    shape, chunks, blocks = shape_3d_chunks_blocks
+    a = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks)
+
+    with pytest.raises(ValueError, match="not a valid permutation"):
+        blosc2.permute_dims(a, axes=axes)
+
+
 @pytest.mark.parametrize(
     "shape",
     [
-        (3, 3, 3),
-        (12, 10, 10),
-        (10, 10, 10, 11),
-        (5, 4, 3, 2, 1, 1),
+        (2, 3),
+        (4, 5, 6),
+        (2, 4, 8, 5),
     ],
 )
-def test_dims(shape):
-    a = blosc2.linspace(0, 1, shape=shape)
+def test_matrix_transpose(shape):
+    arr = blosc2.linspace(0, 1, shape=shape)
+    result = blosc2.matrix_transpose(arr)
 
-    with pytest.raises(ValueError):
-        blosc2.transpose(a)
+    expected = np.swapaxes(arr[:], -2, -1)
+
+    np.testing.assert_allclose(result, expected)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (10,),
+        (4, 5, 6),
+        (2, 3, 4, 5),
+    ],
+)
+def test_T_raises(shape):
+    arr = blosc2.linspace(0, 1, shape=shape)
+    with pytest.raises(ValueError, match="only works for 2-dimensional"):
+        _ = arr.T
 
 
 def test_disk():
     a = blosc2.linspace(0, 1, shape=(3, 4), urlpath="a_test.b2nd", mode="w")
-    c = blosc2.transpose(a, urlpath="c_test.b2nd", mode="w")
+    c = blosc2.permute_dims(a, urlpath="c_test.b2nd", mode="w")
 
     na = a[:]
     nc = np.transpose(na)
@@ -102,3 +226,15 @@ def test_disk():
 
     blosc2.remove_urlpath("a_test.b2nd")
     blosc2.remove_urlpath("c_test.b2nd")
+
+
+def test_transpose(shape_2d_chunks_blocks, dtype_fixture):
+    shape, chunks, blocks = shape_2d_chunks_blocks
+    a = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype_fixture)
+    with pytest.warns(DeprecationWarning):
+        at = blosc2.transpose(a)
+
+    na = a[:]
+    nat = np.transpose(na)
+
+    np.testing.assert_allclose(at, nat)

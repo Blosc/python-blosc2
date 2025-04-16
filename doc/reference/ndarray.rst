@@ -40,6 +40,7 @@ Attributes
 .. autosummary::
     :toctree: autofiles/ndarray
 
+    T
     ndim
     shape
     ext_shape
