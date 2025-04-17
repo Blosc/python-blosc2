@@ -11,6 +11,7 @@ from __future__ import annotations
 import builtins
 import inspect
 import math
+import tempfile
 from collections import OrderedDict, namedtuple
 from functools import reduce
 from itertools import product
@@ -3252,8 +3253,12 @@ def arange(
     # However, benchmarks show that performance is better with the approach below.
     # Incidentally, not requiring C order can be quite illustrative for the user to
     # understand how the process of computing lazy arrays (and chunking) works.
-    larr = lazyarr.compute()  # intermediate array
-    return reshape(larr, shape, c_order=c_order, **kwargs)
+    # Create an intermediate array on-disk for avoiding memory consumption
+    with tempfile.NamedTemporaryFile(suffix=".b2nd", delete=True) as tmp_file:
+        # In principle, we could pass a LazyArray directly to the reshape function,
+        # but this far less memory efficient, but I don't know exactly why (TODO).
+        larr = lazyarr.compute(urlpath=tmp_file.name, mode="w")  # intermediate array
+        return reshape(larr, shape, c_order=c_order, **kwargs)
 
 
 # Define a numpy linspace-like function
@@ -3318,8 +3323,9 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, c
 
     # In principle, when c_order is False, the intermediate array wouldn't be needed,
     # but this is faster; see arange() for more details.
-    larr = lazyarr.compute()  # intermediate array
-    return reshape(larr, shape, c_order=c_order, **kwargs)
+    with tempfile.NamedTemporaryFile(suffix=".b2nd", delete=True) as tmp_file:
+        larr = lazyarr.compute(urlpath=tmp_file.name, mode="w")  # intermediate array
+        return reshape(larr, shape, c_order=c_order, **kwargs)
 
 
 def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any):
@@ -3429,8 +3435,9 @@ def fromiter(iterable, shape, dtype, c_order=True, **kwargs) -> NDArray:
 
     # In principle, when c_order is False, the intermediate array wouldn't be needed,
     # but this is faster; see arange() for more details.
-    larr = lazyarr.compute()  # intermediate array
-    return reshape(larr, shape, c_order=c_order, **kwargs)
+    with tempfile.NamedTemporaryFile(suffix=".b2nd", delete=True) as tmp_file:
+        larr = lazyarr.compute(urlpath=tmp_file.name, mode="w")  # intermediate array
+        return reshape(larr, shape, c_order=c_order, **kwargs)
 
 
 def frombuffer(
