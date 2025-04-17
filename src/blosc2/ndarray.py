@@ -11,6 +11,7 @@ from __future__ import annotations
 import builtins
 import inspect
 import math
+import os
 import tempfile
 from collections import OrderedDict, namedtuple
 from functools import reduce
@@ -299,6 +300,16 @@ def reshape(
     if math.prod(shape) != math.prod(src.shape):
         raise ValueError("total size of new array must be unchanged")
 
+    tmp_path = None
+    if isinstance(src, blosc2.LazyArray):
+        # In principle, we would not need to use a temporary array here, and we could
+        # compute the LazyArray on the go.  However, this consumes far more memory.
+        # TODO: investigate more.
+        # Create an intermediate array on-disk for avoiding memory consumption
+        with tempfile.NamedTemporaryFile(suffix=".b2nd", delete=False) as tmp_file:
+            tmp_path = tmp_file.name
+            src = src.compute(urlpath=tmp_path, mode="w")  # intermediate array
+
     # Create the new array
     dst = empty(shape, dtype=src.dtype, **kwargs)
 
@@ -339,6 +350,9 @@ def reshape(
         dst_slice_shape = tuple(s.stop - s.start for s in dst_slice)
         # ... and assign the buffer to the destination array
         dst[dst_slice] = dst_buf.reshape(dst_slice_shape)
+
+    if tmp_path is not None:
+        os.unlink(tmp_path)
 
     return dst
 
@@ -3247,18 +3261,7 @@ def arange(
         # C order is guaranteed, and no reshape is needed
         return lazyarr.compute(**kwargs)
 
-    # In principle, when c_order is False, this would be enough:
-    # return reshape(lazyarr, shape, c_order=c_order, **kwargs)
-    # so that an intermediate NDArray wouldn't be needed, which is more memory efficient.
-    # However, benchmarks show that performance is better with the approach below.
-    # Incidentally, not requiring C order can be quite illustrative for the user to
-    # understand how the process of computing lazy arrays (and chunking) works.
-    # Create an intermediate array on-disk for avoiding memory consumption
-    with tempfile.NamedTemporaryFile(suffix=".b2nd", delete=True) as tmp_file:
-        # In principle, we could pass a LazyArray directly to the reshape function,
-        # but this far less memory efficient, but I don't know exactly why (TODO).
-        larr = lazyarr.compute(urlpath=tmp_file.name, mode="w")  # intermediate array
-        return reshape(larr, shape, c_order=c_order, **kwargs)
+    return reshape(lazyarr, shape, c_order=c_order, **kwargs)
 
 
 # Define a numpy linspace-like function
@@ -3321,11 +3324,7 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, c
         # C order is guaranteed, and no reshape is needed
         return lazyarr.compute(**kwargs)
 
-    # In principle, when c_order is False, the intermediate array wouldn't be needed,
-    # but this is faster; see arange() for more details.
-    with tempfile.NamedTemporaryFile(suffix=".b2nd", delete=True) as tmp_file:
-        larr = lazyarr.compute(urlpath=tmp_file.name, mode="w")  # intermediate array
-        return reshape(larr, shape, c_order=c_order, **kwargs)
+    return reshape(lazyarr, shape, c_order=c_order, **kwargs)
 
 
 def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any):
@@ -3433,11 +3432,7 @@ def fromiter(iterable, shape, dtype, c_order=True, **kwargs) -> NDArray:
         # C order is guaranteed, and no reshape is needed
         return lazyarr.compute(**kwargs)
 
-    # In principle, when c_order is False, the intermediate array wouldn't be needed,
-    # but this is faster; see arange() for more details.
-    with tempfile.NamedTemporaryFile(suffix=".b2nd", delete=True) as tmp_file:
-        larr = lazyarr.compute(urlpath=tmp_file.name, mode="w")  # intermediate array
-        return reshape(larr, shape, c_order=c_order, **kwargs)
+    return reshape(lazyarr, shape, c_order=c_order, **kwargs)
 
 
 def frombuffer(
