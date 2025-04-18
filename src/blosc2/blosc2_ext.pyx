@@ -2243,6 +2243,7 @@ cdef class slice_flatter:
     cdef long long[:] indices
     cdef long long current_slice_start
     cdef long long current_slice_end
+    cdef long long current_flat_idx  # Track the current flat index
 
     def __cinit__(self, long long[:] start not None, long long[:] stop not None, long long[:] strides not None):
         self.ndim = start.shape[0]
@@ -2255,6 +2256,10 @@ cdef class slice_flatter:
         shape = tuple(stop[i] - start[i] for i in range(self.ndim))
         self.shape = np.array(shape, dtype=np.int64)
         self.indices = np.zeros(self.ndim, dtype=np.int64)
+        # Initialize the flat index
+        self.current_flat_idx = 0
+        for j in range(self.ndim):
+            self.current_flat_idx += self.start[j] * self.strides[j]
 
     def __iter__(self):
         return self
@@ -2262,34 +2267,62 @@ cdef class slice_flatter:
     @cython.boundscheck(False)
     @cython.wraparound(False)
     def __next__(self):
-        cdef long long i, j, flat_idx
+        cdef long long j, next_flat_idx
+        cdef int extended_slice = 0
 
-        while not self.done:
-            flat_idx = 0
-            for j in range(self.ndim):
-                flat_idx += (self.start[j] + self.indices[j]) * self.strides[j]
-
-            if self.current_slice_start == -1:
-                self.current_slice_start = flat_idx
-                self.current_slice_end = flat_idx
-            elif flat_idx == self.current_slice_end + 1:
-                self.current_slice_end = flat_idx
-            else:
+        # Check if we're done
+        if self.done:
+            if self.current_slice_start != -1:
                 result = slice(self.current_slice_start, self.current_slice_end + 1)
-                self.current_slice_start = flat_idx
-                self.current_slice_end = flat_idx
-                # Increment the indices (TODO: remove duplicated code)
+                self.current_slice_start = -1
+                return result
+            raise StopIteration
+
+        # Initialize first slice point if needed
+        if self.current_slice_start == -1:
+            next_flat_idx = 0
+            for j in range(self.ndim):
+                next_flat_idx += (self.start[j] + self.indices[j]) * self.strides[j]
+            self.current_slice_start = next_flat_idx
+            self.current_slice_end = next_flat_idx
+            self.current_flat_idx = next_flat_idx
+            self.incr_indices()
+
+            # If we're done after the first element, return it
+            if self.done:
+                result = slice(self.current_slice_start, self.current_slice_end + 1)
+                self.current_slice_start = -1
+                return result
+
+        # Extend slice as long as indices remain contiguous
+        while not self.done:
+            # Calculate next flat index
+            next_flat_idx = 0
+            for j in range(self.ndim):
+                next_flat_idx += (self.start[j] + self.indices[j]) * self.strides[j]
+
+            # If indices are contiguous, extend current slice
+            if next_flat_idx == self.current_slice_end + 1:
+                self.current_slice_end = next_flat_idx
+                self.current_flat_idx = next_flat_idx
+                self.incr_indices()
+                extended_slice = 1
+            else:
+                # Non-contiguous index found, return current slice
+                result = slice(self.current_slice_start, self.current_slice_end + 1)
+                self.current_slice_start = next_flat_idx
+                self.current_slice_end = next_flat_idx
+                self.current_flat_idx = next_flat_idx
                 self.incr_indices()
                 return result
 
-            # Increment the indices
-            self.incr_indices()
-
-        if self.current_slice_start != -1:
+        # If we've reached the end after extending the slice
+        if extended_slice:
             result = slice(self.current_slice_start, self.current_slice_end + 1)
             self.current_slice_start = -1
             return result
 
+        # Should never reach here
         raise StopIteration
 
     @cython.boundscheck(False)
