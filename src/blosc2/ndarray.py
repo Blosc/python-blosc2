@@ -334,7 +334,14 @@ def reshape(
             slice_size = src_slice.stop - src_slice.start
             dst_buf_slice = slice(dst_buf_len, dst_buf_len + slice_size)
             dst_buf_len += slice_size
-            dst_buf[dst_buf_slice] = src[src_slice]
+            if hasattr(src, "res_getitem"):
+                # Fast path for lazy UDFs (important for e.g. arange or linspace)
+                # This essentially avoids the need to create a new,
+                # potentially large NumPy array in memory.
+                # This is not critical for Linux, but it is for Windows/Mac.
+                dst_buf[dst_buf_slice] = src.res_getitem[src_slice]
+            else:
+                dst_buf[dst_buf_slice] = src[src_slice]
         # Compute the shape of dst_slice
         dst_slice_shape = tuple(s.stop - s.start for s in dst_slice)
         # ... and assign the buffer to the destination array
