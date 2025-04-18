@@ -11,8 +11,8 @@ from __future__ import annotations
 import builtins
 import inspect
 import math
-import warnings
 import tempfile
+import warnings
 from collections import OrderedDict, namedtuple
 from functools import reduce
 from itertools import product
@@ -3946,9 +3946,6 @@ def permute_dims(arr: NDArray, axes: tuple[int] | list[int] | None = None, **kwa
            [[13, 14, 15, 16],
             [17, 18, 19, 20],
             [21, 22, 23, 24]]])
-
-
-
     >>> at = blosc2.permute_dims(a, axes=(1, 0, 2))
     >>> at[:]
     array([[[ 1,  2,  3,  4],
@@ -3957,7 +3954,6 @@ def permute_dims(arr: NDArray, axes: tuple[int] | list[int] | None = None, **kwa
             [17, 18, 19, 20]],
            [[ 9, 10, 11, 12],
             [21, 22, 23, 24]]])
-
     """
 
     if np.isscalar(arr) or arr.ndim < 2:
