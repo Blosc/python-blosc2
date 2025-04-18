@@ -2852,6 +2852,7 @@ class LazyUDF(LazyArray):
 
     def __getitem__(self, item):
         if self.chunked_eval:
+            # TODO: as this creates a big array, this can potentially consume a lot of memory
             output = np.empty(self.shape, self.dtype)
             # It is important to pass kwargs here, because chunks can be used internally
             chunked_eval(self.func, self.inputs_dict, item, _getitem=True, _output=output, **self.kwargs)
