@@ -11,6 +11,7 @@ from __future__ import annotations
 import builtins
 import inspect
 import math
+import tempfile
 from collections import OrderedDict, namedtuple
 from functools import reduce
 from itertools import product
@@ -333,7 +334,14 @@ def reshape(
             slice_size = src_slice.stop - src_slice.start
             dst_buf_slice = slice(dst_buf_len, dst_buf_len + slice_size)
             dst_buf_len += slice_size
-            dst_buf[dst_buf_slice] = src[src_slice]
+            if hasattr(src, "res_getitem"):
+                # Fast path for lazy UDFs (important for e.g. arange or linspace)
+                # This essentially avoids the need to create a new,
+                # potentially large NumPy array in memory.
+                # This is not critical for Linux, but it is for Windows/Mac.
+                dst_buf[dst_buf_slice] = src.res_getitem[src_slice]
+            else:
+                dst_buf[dst_buf_slice] = src[src_slice]
         # Compute the shape of dst_slice
         dst_slice_shape = tuple(s.stop - s.start for s in dst_slice)
         # ... and assign the buffer to the destination array
@@ -3246,14 +3254,7 @@ def arange(
         # C order is guaranteed, and no reshape is needed
         return lazyarr.compute(**kwargs)
 
-    # In principle, when c_order is False, this would be enough:
-    # return reshape(lazyarr, shape, c_order=c_order, **kwargs)
-    # so that an intermediate NDArray wouldn't be needed, which is more memory efficient.
-    # However, benchmarks show that performance is better with the approach below.
-    # Incidentally, not requiring C order can be quite illustrative for the user to
-    # understand how the process of computing lazy arrays (and chunking) works.
-    larr = lazyarr.compute()  # intermediate array
-    return reshape(larr, shape, c_order=c_order, **kwargs)
+    return reshape(lazyarr, shape, c_order=c_order, **kwargs)
 
 
 # Define a numpy linspace-like function
@@ -3316,10 +3317,7 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, c
         # C order is guaranteed, and no reshape is needed
         return lazyarr.compute(**kwargs)
 
-    # In principle, when c_order is False, the intermediate array wouldn't be needed,
-    # but this is faster; see arange() for more details.
-    larr = lazyarr.compute()  # intermediate array
-    return reshape(larr, shape, c_order=c_order, **kwargs)
+    return reshape(lazyarr, shape, c_order=c_order, **kwargs)
 
 
 def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any):
@@ -3427,10 +3425,12 @@ def fromiter(iterable, shape, dtype, c_order=True, **kwargs) -> NDArray:
         # C order is guaranteed, and no reshape is needed
         return lazyarr.compute(**kwargs)
 
-    # In principle, when c_order is False, the intermediate array wouldn't be needed,
-    # but this is faster; see arange() for more details.
-    larr = lazyarr.compute()  # intermediate array
-    return reshape(larr, shape, c_order=c_order, **kwargs)
+    # TODO: in principle, the next should work, but tests still fail:
+    # return reshape(lazyarr, shape, c_order=c_order, **kwargs)
+    # Creating a temporary file is a workaround for the issue
+    with tempfile.NamedTemporaryFile(suffix=".b2nd", delete=True) as tmp_file:
+        larr = lazyarr.compute(urlpath=tmp_file.name, mode="w")  # intermediate array
+        return reshape(larr, shape, c_order=c_order, **kwargs)
 
 
 def frombuffer(
