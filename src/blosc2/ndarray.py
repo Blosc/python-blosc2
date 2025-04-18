@@ -300,59 +300,63 @@ def reshape(
     if math.prod(shape) != math.prod(src.shape):
         raise ValueError("total size of new array must be unchanged")
 
-    tmp_path = None
+    fd, tmp_path = 0, None
     if isinstance(src, blosc2.LazyArray):
         # In principle, we would not need to use a temporary array here, and we could
         # compute the LazyArray on the go.  However, this consumes far more memory.
         # TODO: investigate more.
         # Create an intermediate array on-disk for avoiding memory consumption
-        with tempfile.NamedTemporaryFile(suffix=".b2nd", delete=False) as tmp_file:
-            tmp_path = tmp_file.name
-            src = src.compute(urlpath=tmp_path, mode="w")  # intermediate array
+        fd, tmp_path = tempfile.mkstemp(suffix=".b2nd")
+        src = src.compute(urlpath=tmp_path, mode="w")  # intermediate array
 
-    # Create the new array
-    dst = empty(shape, dtype=src.dtype, **kwargs)
+    try:
+        # We are forced to use a try/finally block here because we want to
+        # make sure that the temporary file is removed even if an exception occurs.
+        # Create the new array
+        dst = empty(shape, dtype=src.dtype, **kwargs)
 
-    if is_inside_new_expr():
-        # We already have the dtype and shape, so return immediately
-        return dst
+        if is_inside_new_expr():
+            # We already have the dtype and shape, so return immediately
+            return dst
 
-    # Copy the data chunk by chunk
-    for dst_chunk in dst.iterchunks_info():
-        dst_slice = tuple(
-            slice(c * s, (c + 1) * s) for c, s in zip(dst_chunk.coords, dst.chunks, strict=False)
-        )
-        # Cap the stop indices in dst_slices to the dst.shape, and create a new list of slices
-        dst_slice = tuple(
-            slice(s.start, builtins.min(s.stop, sh)) for s, sh in zip(dst_slice, dst.shape, strict=False)
-        )
-        size_dst_slice = math.prod([s.stop - s.start for s in dst_slice])
-        # Find the series of slices in source array that correspond to the destination chunk
-        # (assuming the source array is 1-dimensional here)
-        # t0 = time()
-        # src_slices = get_flat_slices_orig(dst.shape, dst_slice)
-        # Use the get_flat_slices which uses a much faster iterator in cython
-        src_slices = get_flat_slices(dst.shape, dst_slice, c_order)
-        # print(f"Time to get slices: {time() - t0:.3f} s")
-        # Compute the size for slices in the source array
-        size_src_slices = builtins.sum(s.stop - s.start for s in src_slices)
-        if size_src_slices != size_dst_slice:
-            raise ValueError("source slice size is not equal to the destination chunk size")
-        # Now, assemble the slices for assignment in the destination array
-        dst_buf = np.empty(size_dst_slice, dtype=src.dtype)
-        dst_buf_len = 0
-        for src_slice in src_slices:
-            slice_size = src_slice.stop - src_slice.start
-            dst_buf_slice = slice(dst_buf_len, dst_buf_len + slice_size)
-            dst_buf_len += slice_size
-            dst_buf[dst_buf_slice] = src[src_slice]
-        # Compute the shape of dst_slice
-        dst_slice_shape = tuple(s.stop - s.start for s in dst_slice)
-        # ... and assign the buffer to the destination array
-        dst[dst_slice] = dst_buf.reshape(dst_slice_shape)
+        # Copy the data chunk by chunk
+        for dst_chunk in dst.iterchunks_info():
+            dst_slice = tuple(
+                slice(c * s, (c + 1) * s) for c, s in zip(dst_chunk.coords, dst.chunks, strict=False)
+            )
+            # Cap the stop indices in dst_slices to the dst.shape, and create a new list of slices
+            dst_slice = tuple(
+                slice(s.start, builtins.min(s.stop, sh)) for s, sh in zip(dst_slice, dst.shape, strict=False)
+            )
+            size_dst_slice = math.prod([s.stop - s.start for s in dst_slice])
+            # Find the series of slices in source array that correspond to the destination chunk
+            # (assuming the source array is 1-dimensional here)
+            # t0 = time()
+            # src_slices = get_flat_slices_orig(dst.shape, dst_slice)
+            # Use the get_flat_slices which uses a much faster iterator in cython
+            src_slices = get_flat_slices(dst.shape, dst_slice, c_order)
+            # print(f"Time to get slices: {time() - t0:.3f} s")
+            # Compute the size for slices in the source array
+            size_src_slices = builtins.sum(s.stop - s.start for s in src_slices)
+            if size_src_slices != size_dst_slice:
+                raise ValueError("source slice size is not equal to the destination chunk size")
+            # Now, assemble the slices for assignment in the destination array
+            dst_buf = np.empty(size_dst_slice, dtype=src.dtype)
+            dst_buf_len = 0
+            for src_slice in src_slices:
+                slice_size = src_slice.stop - src_slice.start
+                dst_buf_slice = slice(dst_buf_len, dst_buf_len + slice_size)
+                dst_buf_len += slice_size
+                dst_buf[dst_buf_slice] = src[src_slice]
+            # Compute the shape of dst_slice
+            dst_slice_shape = tuple(s.stop - s.start for s in dst_slice)
+            # ... and assign the buffer to the destination array
+            dst[dst_slice] = dst_buf.reshape(dst_slice_shape)
 
-    if tmp_path is not None:
-        os.unlink(tmp_path)
+    finally:
+        if tmp_path is not None:
+            os.close(fd)
+            os.unlink(tmp_path)
 
     return dst
 
