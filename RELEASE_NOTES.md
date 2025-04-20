@@ -2,7 +2,24 @@
 
 ## Changes from 3.3.0 to 3.3.1
 
-XXX version-specific blurb XXX
+* In our effort to better adapt to better adapt to the array API
+  (https://data-apis.org/array-api/latest/), we have introduced
+  permute_dims() and matrix_transpose() functions, and the .T property.
+  This replaces to previous transpose() function, which is now deprecated.
+  See PR #384.  Thanks to Ricardo Sales Piquer (@ricardosp4).
+
+* Constructors like `arange()`, `linspace()` and `fromiter()` now
+  use far less memory when creating large arrays. As an example, a 5 TB
+  array of 8-byte floats now uses less than 200 MB of memory instead of
+  170 GB previously.  See PR #387.
+
+* Now, when opening a lazy expression with `blosc2.open()`, and there is
+  a missing operand, the open still works, but the dtype and shape
+  attributes are None.  This is useful for lazy expressions that have
+  lost some operands, but you still want to open them for inspection.
+  See PR #385.
+
+* Added an example of getting a slice out of a C2Array.
 
 ## Changes from 3.2.1 to 3.3.0
 
