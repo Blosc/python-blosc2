@@ -1307,3 +1307,26 @@ def test_numpy_funcs(array_fixture, func):
     npfunc = getattr(np, func)
     d_numpy = npfunc(((na1**3 + np.sin(na2 * 2)) < na3) & (na2 > 0), axis=0)
     np.testing.assert_equal(d_blosc2, d_numpy)
+
+
+# Test the LazyExpr when some operands are missing (e.g. removed file)
+def test_missing_operator():
+    a = blosc2.arange(10, urlpath="a.b2nd", mode="w")
+    b = blosc2.arange(10, urlpath="b.b2nd", mode="w")
+    expr = blosc2.lazyexpr("a + b")
+    c = expr.save("expr.b2nd", mode="w")
+    # Remove the file for operand b
+    blosc2.remove_urlpath("b.b2nd")
+    # Re-open the lazy expression
+    expr2 = blosc2.open("expr.b2nd")
+    # Check that some operand is missing
+    assert expr2.operands["a"] is not None
+    assert expr2.operands["b"] is None
+    # Check that the expression is still there, and can be introspected
+    assert expr2.expression == "a + b"
+    # Check that dtype and shape are None
+    assert expr2.dtype is None
+    assert expr2.shape is None
+    # Clean up
+    blosc2.remove_urlpath("a.b2nd")
+    blosc2.remove_urlpath("expr.b2nd")
