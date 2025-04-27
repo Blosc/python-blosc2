@@ -1322,9 +1322,9 @@ def get_chunksize(blocksize, l3_minimum=4 * 2**20, l3_maximum=2**26):
             if isinstance(l2_cache_size, int) and l3_cache_size > l2_cache_size:
                 chunksize = l3_cache_size
         # When computing expressions, it is convenient to keep chunks for all operands
-        # in L3 cache, so let's divide by 4 (3 operands + result is a typical situation
+        # in L3 cache, so let's divide by 5 (4 operands + result is a typical situation
         # for moderately complex expressions)
-        chunksize //= 4
+        chunksize //= 5
 
     # Chunksize should be at least the size of L2
     l2_cache_size = cpu_info.get("l2_cache_size", "Not found")
@@ -1529,7 +1529,7 @@ def compute_chunks_blocks(  # noqa: C901
             # min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 4
         elif platform.system() == "Darwin" and "arm" in platform.machine():
             # For Apple Silicon, experiments say we can use 4x the L1 size
-            min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 2
+            min_blocksize = blosc2.cpu_info["l1_data_cache_size"] * 4
         elif "l1_data_cache_size" in blosc2.cpu_info and isinstance(
             blosc2.cpu_info["l1_data_cache_size"], int
         ):
