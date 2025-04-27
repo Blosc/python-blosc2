@@ -60,7 +60,7 @@ for i in range(step, N + step, step):
         t0 = time()
         _ = np.random.random(shape)
         a = blosc2.fromiter(np.nditer(_), dtype=dtype, shape=shape, urlpath=urlpath['a'])
-        b = blosc2.fromiter(np.nditer(_), dtype=dtype, shape=shape, urlpath=urlpath['b'])
+        b = a.copy(urlpath=urlpath['b'])
         # This uses less memory, but it is 2x-3x slower
         # iter_ = (rng.random() for _ in range(i**2 * 2))
         # a = blosc2.fromiter(iter_, dtype=dtype, shape=shape, urlpath=urlpath['a'])
