@@ -8,7 +8,7 @@
 
 # Benchmark for comparing compute speeds of Blosc2 and Numexpr.
 # One can use different distributions of data:
-# ones, arange, linspace, or random
+# constant, arange, linspace, or random
 # The expression can be any valid Numexpr expression.
 
 import blosc2
@@ -17,11 +17,11 @@ import numpy as np
 import numexpr as ne
 
 # Bench params
-N = 10_000
-step = 1000
+N = 30_000
+step = 3000
 dtype = np.dtype(np.float64)
 persistent = False
-dist = "linspace"  # "ones" or "linspace" or "arange" or "random"
+dist = "constant"  # "arange" or "linspace" or "constant" or "random"
 expr = "(a - b)"
 #expr = "sum(a - b)"
 #expr = "cos(a)**2 + sin(b)**2 - 1"
@@ -47,15 +47,15 @@ rng = np.random.default_rng()
 for i in range(step, N + step, step):
     shape = (i, i)
     # shape = (i * i,)
-    if dist == "ones":
+    if dist == "constant":
         a = blosc2.ones(shape, dtype=dtype, urlpath=urlpath['a'])
-        b = blosc2.ones(shape, dtype=dtype, urlpath=urlpath['b'])
+        b = blosc2.full(shape, 2, dtype=dtype, urlpath=urlpath['b'])
     elif dist == "arange":
-        a = blosc2.arange(0, i**2, dtype=dtype, shape=shape, urlpath=urlpath['a'])
-        b = blosc2.arange(0, i**2, dtype=dtype, shape=shape, urlpath=urlpath['b'])
+        a = blosc2.arange(0, i * i, dtype=dtype, shape=shape, urlpath=urlpath['a'])
+        b = blosc2.arange(i * i, 2* i * i, dtype=dtype, shape=shape, urlpath=urlpath['b'])
     elif dist == "linspace":
         a = blosc2.linspace(0, 1, dtype=dtype, shape=shape, urlpath=urlpath['a'])
-        b = blosc2.linspace(0, 1, dtype=dtype, shape=shape, urlpath=urlpath['b'])
+        b = blosc2.linspace(1, 2, dtype=dtype, shape=shape, urlpath=urlpath['b'])
     elif dist == "random":
         t0 = time()
         _ = np.random.random(shape)
@@ -73,7 +73,7 @@ for i in range(step, N + step, step):
     t0 = time()
     c = blosc2.lazyexpr(expr).compute(urlpath=urlpath['c'])
     t = time() - t0
-    ws_sizes.append((a.schunk.nbytes + b.schunk.nbytes) / 2**30)
+    ws_sizes.append((a.schunk.nbytes + b.schunk.nbytes + c.schunk.nbytes) / 2**30)
     speed = ws_sizes[-1] / t
     print(f"Time to compute a - b: {t:.5f} s -- {speed:.2f} GB/s -- cratio: {c.schunk.cratio:.1f}x")
     #print(f"result: {c[()]}")
@@ -86,15 +86,15 @@ nspeeds = []
 for i in range(step, N + step, step):
     shape = (i, i)
     # shape = (i * i,)
-    if dist == "ones":
+    if dist == "constant":
         a = np.ones(shape, dtype=dtype)
-        b = np.ones(shape, dtype=dtype)
+        b = np.full(shape, 2, dtype=dtype)
     elif dist == "arange":
-        a = np.arange(0, i**2, dtype=dtype).reshape(shape)
-        b = np.arange(0, i**2, dtype=dtype).reshape(shape)
+        a = np.arange(0, i * i, dtype=dtype).reshape(shape)
+        b = np.arange(i * i, 2 * i * i, dtype=dtype).reshape(shape)
     elif dist == "linspace":
-        a = np.linspace(0, 1, num=i**2, dtype=dtype).reshape(shape)
-        b = np.linspace(0, 1, num=i**2, dtype=dtype).reshape(shape)
+        a = np.linspace(0, 1, num=i * i, dtype=dtype).reshape(shape)
+        b = np.linspace(1, 2, num=i * i, dtype=dtype).reshape(shape)
     elif dist == "random":
         a = np.random.random(shape)
         b = np.random.random(shape)
@@ -104,7 +104,7 @@ for i in range(step, N + step, step):
     t0 = time()
     c = ne.evaluate(expr)
     t = time() - t0
-    ws_size = (a.nbytes + b.nbytes) / 2**30
+    ws_size = (a.nbytes + b.nbytes + c.nbytes) / 2**30
     speed = ws_size / t
     print(f"Time to compute with Numexpr: {t:.5f} s - {speed:.2f} GB/s")
     #print(f"result: {c}")
