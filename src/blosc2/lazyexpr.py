@@ -1920,7 +1920,6 @@ class LazyExpr(LazyArray):
         if hasattr(value2, "_where_args"):
             value2 = value2.compute()
 
-        self._dtype = infer_dtype(op, value1, value2)
         if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
             # We converted some of the operands to NDArray (where() handling above)
             new_operands = {"o0": value1, "o1": value2}
@@ -2678,8 +2677,8 @@ class LazyExpr(LazyArray):
             _shape = new_expr.shape
             if isinstance(new_expr, blosc2.LazyExpr):
                 # Restore the original expression and operands
-                new_expr.expression = _expression
-                new_expr.expression_tosave = expression
+                new_expr.expression = f"({_expression})"  # forcibly add parenthesis
+                new_expr.expression_tosave = new_expr.expression
                 new_expr.operands = _operands
                 new_expr.operands_tosave = operands
             else:
