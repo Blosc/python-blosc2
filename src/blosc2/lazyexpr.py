@@ -1481,7 +1481,8 @@ def reduce_slices(  # noqa: C901
             iter_disk = all_ndarray and any_persisted
             # Experiments say that iter_disk is faster than the regular path for reductions
             # even when all operands are in memory, so no need to check any_persisted
-            # New benchs are saying the contrary (> 10% slower), so this needs more investigation
+            # New benchmarks are saying the contrary (> 10% slower), so this needs more
+            # investigation
             # iter_disk = all_ndarray
         else:
             # WebAssembly does not support threading, so we cannot use the iter_disk option
