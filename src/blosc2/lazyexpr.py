@@ -2641,10 +2641,6 @@ class LazyExpr(LazyArray):
                     "urlbase": value.urlbase,
                 }
                 continue
-            # if isinstance(value, blosc2.LazyExpr) and hasattr(value, "array"):
-            #     # If operand is a persistent lazy expression (i.e. on disk)
-            #     operands[key] = value.array.urlpath
-            #     continue
             if isinstance(value, blosc2.Proxy):
                 # Take the required info from the Proxy._cache container
                 value = value._cache
