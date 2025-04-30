@@ -1220,6 +1220,10 @@ def test_dtype_infer(dtype1, dtype2, scalar):
     np.testing.assert_allclose(res, nres)
     assert res.dtype == nres.dtype
 
+    # Check dtype not changed by expression creation (bug fix)
+    assert a.dtype == dtype1
+    assert b.dtype == dtype2
+
 
 @pytest.mark.parametrize(
     "cfunc", ["np.int8", "np.int16", "np.int32", "np.int64", "np.float32", "np.float64"]
@@ -1307,3 +1311,46 @@ def test_numpy_funcs(array_fixture, func):
     npfunc = getattr(np, func)
     d_numpy = npfunc(((na1**3 + np.sin(na2 * 2)) < na3) & (na2 > 0), axis=0)
     np.testing.assert_equal(d_blosc2, d_numpy)
+
+
+# Test the LazyExpr when some operands are missing (e.g. removed file)
+def test_missing_operator():
+    a = blosc2.arange(10, urlpath="a.b2nd", mode="w")
+    b = blosc2.arange(10, urlpath="b.b2nd", mode="w")
+    expr = blosc2.lazyexpr("a + b")
+    c = expr.save("expr.b2nd", mode="w")
+    # Remove the file for operand b
+    blosc2.remove_urlpath("b.b2nd")
+    # Re-open the lazy expression
+    expr2 = blosc2.open("expr.b2nd")
+    # Check that some operand is missing
+    assert expr2.operands["a"] is not None
+    assert expr2.operands["b"] is None
+    # Check that the expression is still there, and can be introspected
+    # Note the added parentheses. The parser automatically adds these,
+    # mainly because of possible operator precedence issues in nested expressions.
+    assert expr2.expression == "(a + b)"
+    # Check that dtype and shape are None
+    assert expr2.dtype is None
+    assert expr2.shape is None
+    # Clean up
+    blosc2.remove_urlpath("a.b2nd")
+    blosc2.remove_urlpath("expr.b2nd")
+
+
+# Test the chaining of multiple lazy expressions
+def test_chain_expressions():
+    N = 1_000
+    dtype = "float64"
+    a = blosc2.linspace(0, 1, N * N, dtype=dtype, shape=(N, N))
+    b = blosc2.linspace(1, 2, N * N, dtype=dtype, shape=(N, N))
+    c = blosc2.linspace(0, 1, N, dtype=dtype, shape=(N,))
+
+    le1 = a**3 + blosc2.sin(a**2)
+    le2 = le1 < c
+    le3 = le2 & (b < 0)
+
+    le1_ = blosc2.lazyexpr("a ** 3 + sin(a ** 2)", {"a": a})
+    le2_ = blosc2.lazyexpr("(le1 < c)", {"le1": le1_, "c": c})
+    le3_ = blosc2.lazyexpr("(le2 & (b < 0))", {"le2": le2_, "b": b})
+    assert (le3_[:] == le3[:]).all()

@@ -1481,7 +1481,8 @@ def reduce_slices(  # noqa: C901
             iter_disk = all_ndarray and any_persisted
             # Experiments say that iter_disk is faster than the regular path for reductions
             # even when all operands are in memory, so no need to check any_persisted
-            # New benchs are saying the contrary (> 10% slower), so this needs more investigation
+            # New benchmarks are saying the contrary (> 10% slower), so this needs more
+            # investigation
             # iter_disk = all_ndarray
         else:
             # WebAssembly does not support threading, so we cannot use the iter_disk option
@@ -1919,7 +1920,6 @@ class LazyExpr(LazyArray):
         if hasattr(value2, "_where_args"):
             value2 = value2.compute()
 
-        self._dtype = infer_dtype(op, value1, value2)
         if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
             # We converted some of the operands to NDArray (where() handling above)
             new_operands = {"o0": value1, "o1": value2}
@@ -1983,10 +1983,16 @@ class LazyExpr(LazyArray):
         ):
             # Use the cached dtype
             return self._dtype_
+
+        # Return None if there is a missing operand (e.g. a removed file on disk)
+        if any(v is None for v in self.operands.values()):
+            return None
+
         operands = {
             key: np.ones(np.ones(len(value.shape), dtype=int), dtype=value.dtype)
             for key, value in self.operands.items()
         }
+
         if "contains" in self.expression:
             _out = ne_evaluate(self.expression, local_dict=operands)
         else:
@@ -2019,6 +2025,11 @@ class LazyExpr(LazyArray):
         ):
             # Use the cached shape
             return self._shape_
+
+        # Return None if there is a missing operand (e.g. a removed file on disk)
+        if any(v is None for v in self.operands.values()):
+            return None
+
         # Operands shape can change, so we always need to recompute this
         _shape, chunks, blocks, fast_path = validate_inputs(self.operands, getattr(self, "_out", None))
         if fast_path:
@@ -2666,8 +2677,8 @@ class LazyExpr(LazyArray):
             _shape = new_expr.shape
             if isinstance(new_expr, blosc2.LazyExpr):
                 # Restore the original expression and operands
-                new_expr.expression = _expression
-                new_expr.expression_tosave = expression
+                new_expr.expression = f"({_expression})"  # forcibly add parenthesis
+                new_expr.expression_tosave = new_expr.expression
                 new_expr.operands = _operands
                 new_expr.operands_tosave = operands
             else:
@@ -3099,11 +3110,16 @@ def _open_lazyarray(array):
             raise TypeError("Error when retrieving the operands")
 
     expr = lazyarray["expression"]
-    new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
-    # Make the array info available for the user (only available when opened from disk)
-    new_expr.array = array
-    # We want to expose schunk too, so that .info() can be used on the LazyArray
-    new_expr.schunk = array.schunk
+    try:
+        new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
+        # Make the array info available for the user (only available when opened from disk)
+        new_expr.array = array
+        # We want to expose schunk too, so that .info() can be used on the LazyArray
+        new_expr.schunk = array.schunk
+    except RuntimeError:
+        # Something unexpected happened. Avoid guessing and return something that
+        # can be introspected.
+        new_expr = LazyExpr._new_expr(expr, operands_dict, guess=False, out=None, where=None)
     return new_expr
 
 

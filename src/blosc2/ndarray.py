@@ -3624,17 +3624,22 @@ def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: Any) -> NDArray:
 
 
 def _check_ndarray_kwargs(**kwargs):  # noqa: C901
-    if "storage" in kwargs:
+    storage = kwargs.get("storage")
+    if storage is not None:
         for key in kwargs:
             if key in list(blosc2.Storage.__annotations__):
                 raise AttributeError(
                     "Cannot pass both `storage` and other kwargs already included in Storage"
                 )
-        storage = kwargs.get("storage")
         if isinstance(storage, blosc2.Storage):
             kwargs = {**kwargs, **asdict(storage)}
         else:
             kwargs = {**kwargs, **storage}
+    else:
+        # Add the default storage values as long as they are not already passed
+        storage_dflts = asdict(blosc2.Storage(urlpath=kwargs.get("urlpath")))  # urlpath can affect defaults
+        not_passed = {k: v for k, v in storage_dflts.items() if k not in kwargs}
+        kwargs = {**kwargs, **not_passed}
 
     supported_keys = [
         "chunks",
@@ -3955,7 +3960,6 @@ def permute_dims(arr: NDArray, axes: tuple[int] | list[int] | None = None, **kwa
             [17, 18, 19, 20]],
            [[ 9, 10, 11, 12],
             [21, 22, 23, 24]]])
-
     """
     if np.isscalar(arr) or arr.ndim < 2:
         return arr
