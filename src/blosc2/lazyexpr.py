@@ -2641,6 +2641,10 @@ class LazyExpr(LazyArray):
                     "urlbase": value.urlbase,
                 }
                 continue
+            # if isinstance(value, blosc2.LazyExpr) and hasattr(value, "array"):
+            #     # If operand is a persistent lazy expression (i.e. on disk)
+            #     operands[key] = value.array.urlpath
+            #     continue
             if isinstance(value, blosc2.Proxy):
                 # Take the required info from the Proxy._cache container
                 value = value._cache
@@ -2678,7 +2682,7 @@ class LazyExpr(LazyArray):
             if isinstance(new_expr, blosc2.LazyExpr):
                 # Restore the original expression and operands
                 new_expr.expression = f"({_expression})"  # forcibly add parenthesis
-                new_expr.expression_tosave = new_expr.expression
+                new_expr.expression_tosave = _expression
                 new_expr.operands = _operands
                 new_expr.operands_tosave = operands
             else:
