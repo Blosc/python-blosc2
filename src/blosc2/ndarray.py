@@ -11,8 +11,8 @@ from __future__ import annotations
 import builtins
 import inspect
 import math
-import warnings
 import tempfile
+import warnings
 from collections import OrderedDict, namedtuple
 from functools import reduce
 from itertools import product
@@ -3905,7 +3905,7 @@ def permute_dims(arr: NDArray, axes: tuple[int] | list[int] | None = None, **kwa
 
     Returns
     -------
-    out:: ref:`NDArray`
+    out: :ref:`NDArray`
         A Blosc2: ref:`NDArray` with axes transposed.
 
     Raises
@@ -4002,14 +4002,14 @@ def transpose(x, **kwargs: Any) -> NDArray:
 
     Parameters
     ----------
-    x:: ref:`NDArray`
+    x: :ref:`NDArray`
         The input array.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
-    out:: ref:`NDArray`
+    out: :ref:`NDArray`
         The Blosc2 NDArray with axes transposed.
 
     References
@@ -4039,13 +4039,13 @@ def matrix_transpose(arr: NDArray, **kwargs: Any) -> NDArray:
 
     Parameters
     ----------
-    arr:: ref:`NDArray`
+    arr: :ref:`NDArray`
         The input NDArray having shape ``(..., M, N)`` and whose innermost two dimensions form
         ``MxN`` matrices.
 
     Returns
     -------
-    out:: ref:`NDArray`
+    out: :ref:`NDArray`
         A new: ref:`NDArray` containing the transpose for each matrix and having shape
         ``(..., N, M)``.
     """
