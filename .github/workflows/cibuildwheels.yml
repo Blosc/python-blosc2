@@ -1,7 +1,7 @@
 name: Python wheels
+
 on:
-  # Trigger the workflow on push or pull request,
-  # but only for the main branch
+  # Trigger the workflow only for tags and PRs to the main branch
   push:
     tags:
       - '*'

@@ -1,12 +1,16 @@
-Announcing Python-Blosc2 3.3.0
+Announcing Python-Blosc2 3.3.1
 ==============================
 
-We are introducing a new blosc2.transpose() function for natively transposing
-2D NDArray instances, and a fast path for NDArray.slice() that delivers up to
-40x speedup when slices align with underlying chunks. Documentation has also
-been improved with several edits throughout.
+In our effort to better adapt to better adapt to the array API
+(https://data-apis.org/array-api/latest/), we have introduced
+permute_dims() and matrix_transpose() functions, and the .T property.
+This replaces to previous transpose() function, which is now deprecated.
+See PR #384.  Thanks to Ricardo Sales Piquer (@ricardosp4).
 
-See benchmarks at: https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/aligned_chunks.py
+We have also reduced the memory footprint of constructors like ``arange()``,
+``linspace()`` and ``fromiter()`` by a large factor. As an example, a 5 TB
+array of 8-byte floats now uses less than 200 MB of memory instead of
+170 GB previously.
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
