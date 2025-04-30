@@ -3911,7 +3911,7 @@ def permute_dims(arr: NDArray, axes: tuple[int] | list[int] | None = None, **kwa
     Returns
     -------
     out: :ref:`NDArray`
-        A Blosc2: ref:`NDArray` with axes transposed.
+        A Blosc2 :ref:`NDArray` with axes transposed.
 
     Raises
     ------
@@ -4050,7 +4050,7 @@ def matrix_transpose(arr: NDArray, **kwargs: Any) -> NDArray:
     Returns
     -------
     out: :ref:`NDArray`
-        A new: ref:`NDArray` containing the transpose for each matrix and having shape
+        A new :ref:`NDArray` containing the transpose for each matrix and having shape
         ``(..., N, M)``.
     """
     axes = None
