@@ -1327,7 +1327,9 @@ def test_missing_operator():
     assert expr2.operands["a"] is not None
     assert expr2.operands["b"] is None
     # Check that the expression is still there, and can be introspected
-    assert expr2.expression == "a + b"
+    # Note the added parentheses. The parser automatically adds these,
+    # mainly because of possible operator precedence issues in nested expressions.
+    assert expr2.expression == "(a + b)"
     # Check that dtype and shape are None
     assert expr2.dtype is None
     assert expr2.shape is None
