@@ -642,8 +642,8 @@ def cbuffer_sizes(src):
 cpdef compress(src, int32_t typesize=8, int clevel=9, filter=blosc2.Filter.SHUFFLE, codec=blosc2.Codec.BLOSCLZ):
     set_compressor(codec)
     cdef int32_t len_src = <int32_t> len(src)
-    cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-    PyObject_GetBuffer(src, buf, PyBUF_SIMPLE)
+    cdef Py_buffer buf
+    PyObject_GetBuffer(src, &buf, PyBUF_SIMPLE)
     dest = bytes(buf.len + BLOSC2_MAX_OVERHEAD)
     cdef int32_t len_dest =  <int32_t> len(dest)
     cdef int size
@@ -654,8 +654,7 @@ cpdef compress(src, int32_t typesize=8, int clevel=9, filter=blosc2.Filter.SHUFF
             size = blosc2_compress(clevel, filter_, <int32_t> typesize, buf.buf, <int32_t> buf.len, _dest, len_dest)
     else:
         size = blosc2_compress(clevel, filter_, <int32_t> typesize, buf.buf, <int32_t> buf.len, <void*> <char *> dest, len_dest)
-    PyBuffer_Release(buf)
-    free(buf)
+    PyBuffer_Release(&buf)
     if size > 0:
         return dest[:size]
     else:
@@ -672,14 +671,13 @@ def decompress(src, dst=None, as_bytearray=False):
     typed_view_src = mem_view_src.cast('B')
     _check_comp_length('src', len(typed_view_src))
     blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
-    cdef Py_buffer *buf
+    cdef Py_buffer buf
     if dst is not None:
-        buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-        PyObject_GetBuffer(dst, buf, PyBUF_SIMPLE)
+        PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE)
         if buf.len == 0:
             raise ValueError("The dst length must be greater than 0")
         size = blosc1_decompress(<void*>&typed_view_src[0], buf.buf, buf.len)
-        PyBuffer_Release(buf)
+        PyBuffer_Release(&buf)
     else:
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
         if dst is None:
@@ -850,8 +848,8 @@ def compress2(src, **kwargs):
     create_cparams_from_kwargs(&cparams, kwargs)
 
     cdef blosc2_context *cctx
-    cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-    PyObject_GetBuffer(src, buf, PyBUF_SIMPLE)
+    cdef Py_buffer buf
+    PyObject_GetBuffer(src, &buf, PyBUF_SIMPLE)
     cdef int size
     cdef int32_t len_dest = <int32_t> (buf.len + BLOSC2_MAX_OVERHEAD)
     dest = bytes(len_dest)
@@ -865,8 +863,7 @@ def compress2(src, **kwargs):
     else:
         size = blosc2_compress_ctx(cctx, buf.buf, <int32_t> buf.len, _dest, len_dest)
     blosc2_free_ctx(cctx)
-    PyBuffer_Release(buf)
-    free(buf)
+    PyBuffer_Release(&buf)
     if size < 0:
         raise RuntimeError("Could not compress the data")
     elif size == 0:
@@ -900,10 +897,9 @@ def decompress2(src, dst=None, **kwargs):
     cdef int32_t cbytes
     cdef int32_t blocksize
     blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &blocksize)
-    cdef Py_buffer *buf
+    cdef Py_buffer buf
     if dst is not None:
-        buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-        PyObject_GetBuffer(dst, buf, PyBUF_SIMPLE)
+        PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE)
         if buf.len == 0:
             blosc2_free_ctx(dctx)
             raise ValueError("The dst length must be greater than 0")
@@ -914,7 +910,7 @@ def decompress2(src, dst=None, **kwargs):
         else:
             size = blosc2_decompress_ctx(dctx, view, cbytes, buf.buf, nbytes)
         blosc2_free_ctx(dctx)
-        PyBuffer_Release(buf)
+        PyBuffer_Release(&buf)
     else:
         dst = PyBytes_FromStringAndSize(NULL, nbytes)
         if dst is None:
@@ -980,7 +976,6 @@ cdef get_chunk_repeatval(blosc2_cparams cparams, const int32_t nbytes,
     if blosc2_chunk_repeatval(cparams, nbytes, dest, destsize, repeatval.buf) < 0:
         free(dest)
         PyBuffer_Release(repeatval)
-        free(repeatval)
         raise RuntimeError("Problems when creating the repeated values chunk")
 
 
@@ -1076,11 +1071,10 @@ cdef class SChunk:
         self.schunk.chunksize = chunksize
         cdef const uint8_t[:] typed_view
         cdef int64_t index
-        cdef Py_buffer *buf
+        cdef Py_buffer buf
         cdef uint8_t *buf_ptr
         if data is not None and len(data) > 0:
-            buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-            PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
+            PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)
             buf_ptr = <uint8_t *> buf.buf
             len_data = buf.len
             nchunks = len_data // chunksize + 1 if len_data % chunksize != 0 else len_data // chunksize
@@ -1091,9 +1085,9 @@ cdef class SChunk:
                 index = i * chunksize
                 nchunks_ = blosc2_schunk_append_buffer(self.schunk, buf_ptr + index, len_chunk)
                 if nchunks_ != (i + 1):
-                    PyBuffer_Release(buf)
+                    PyBuffer_Release(&buf)
                     raise RuntimeError("An error occurred while appending the chunks")
-            PyBuffer_Release(buf)
+            PyBuffer_Release(&buf)
 
     @property
     def c_schunk(self):
@@ -1223,11 +1217,10 @@ cdef class SChunk:
             raise RuntimeError("Could not create decompression context")
 
     def append_data(self, data):
-        cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-        PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
+        cdef Py_buffer buf
+        PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)
         rc = blosc2_schunk_append_buffer(self.schunk, buf.buf, <int32_t> buf.len)
-        PyBuffer_Release(buf)
-        free(buf)
+        PyBuffer_Release(&buf)
         if rc < 0:
             raise RuntimeError("Could not append the buffer")
         return rc
@@ -1252,31 +1245,29 @@ cdef class SChunk:
             else:
                 raise ValueError("value size in bytes must match with typesize")
             array = np.array([value], dtype=dtype)
-        cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-        PyObject_GetBuffer(array, buf, PyBUF_SIMPLE)
+        cdef Py_buffer buf
+        PyObject_GetBuffer(array, &buf, PyBUF_SIMPLE)
         # Create chunk with repeated values
         nchunks = nitems // self.chunkshape
         cdef blosc2_schunk *c_schunk = <blosc2_schunk *> self.c_schunk
         cdef blosc2_cparams *cparams = self.schunk.storage.cparams
         chunksize = BLOSC_EXTENDED_HEADER_LENGTH + self.typesize
         cdef void *chunk = malloc(chunksize)
-        get_chunk_repeatval(dereference(cparams), self.chunksize, chunk, chunksize, buf)
+        get_chunk_repeatval(dereference(cparams), self.chunksize, chunk, chunksize, &buf)
 
         for i in range(nchunks):
             if blosc2_schunk_append_chunk(self.schunk, <uint8_t *>chunk, True) < 0:
                 free(chunk)
-                PyBuffer_Release(buf)
-                free(buf)
+                PyBuffer_Release(&buf)
                 raise RuntimeError("Error while appending the chunk")
         # Create and append last chunk if it is smaller than chunkshape
         remainder = nitems % self.chunkshape
         rc = 0
         if remainder != 0:
-            get_chunk_repeatval(dereference(cparams), remainder * self.typesize, chunk, chunksize, buf)
+            get_chunk_repeatval(dereference(cparams), remainder * self.typesize, chunk, chunksize, &buf)
             rc = blosc2_schunk_append_chunk(self.schunk, <uint8_t *>chunk, True)
         free(chunk)
-        PyBuffer_Release(buf)
-        free(buf)
+        PyBuffer_Release(&buf)
         if rc < 0:
             raise RuntimeError("Error while appending the chunk")
 
@@ -1297,14 +1288,13 @@ cdef class SChunk:
         if needs_free:
             free(chunk)
 
-        cdef Py_buffer *buf
+        cdef Py_buffer buf
         if dst is not None:
-            buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-            PyObject_GetBuffer(dst, buf, PyBUF_SIMPLE)
+            PyObject_GetBuffer(dst, &buf, PyBUF_SIMPLE)
             if buf.len == 0:
                 raise ValueError("The dst length must be greater than 0")
             size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, buf.buf, <int32_t>buf.len)
-            PyBuffer_Release(buf)
+            PyBuffer_Release(&buf)
         else:
             dst = PyBytes_FromStringAndSize(NULL, nbytes)
             if dst is None:
@@ -1363,8 +1353,8 @@ cdef class SChunk:
 
     def insert_data(self, nchunk, data, copy):
         cdef blosc2_context *cctx
-        cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-        PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
+        cdef Py_buffer buf
+        PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)
         cdef int size
         cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC2_MAX_OVERHEAD)
         cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)
@@ -1374,8 +1364,7 @@ cdef class SChunk:
                 size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
         else:
             size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
-        PyBuffer_Release(buf)
-        free(buf)
+        PyBuffer_Release(&buf)
         if size < 0:
             raise RuntimeError("Could not compress the data")
         elif size == 0:
@@ -1402,8 +1391,8 @@ cdef class SChunk:
         return rc
 
     def update_data(self, nchunk, data, copy):
-        cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-        PyObject_GetBuffer(data, buf, PyBUF_SIMPLE)
+        cdef Py_buffer buf
+        PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)
         cdef int size
         cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC2_MAX_OVERHEAD)
         cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)
@@ -1413,8 +1402,7 @@ cdef class SChunk:
         else:
             size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
 
-        PyBuffer_Release(buf)
-        free(buf)
+        PyBuffer_Release(&buf)
         if size < 0:
             raise RuntimeError("Could not compress the data")
         elif size == 0:
@@ -1437,14 +1425,13 @@ cdef class SChunk:
             return b''
 
         cdef Py_ssize_t nbytes = (stop - start) * self.schunk.typesize
-        cdef Py_buffer *buf
+        cdef Py_buffer buf
         if out is not None:
-            buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-            PyObject_GetBuffer(out, buf, PyBUF_SIMPLE)
+            PyObject_GetBuffer(out, &buf, PyBUF_SIMPLE)
             if buf.len < nbytes:
                 raise ValueError("Not enough space for writing the slice in out")
             rc = blosc2_schunk_get_slice_buffer(self.schunk, start, stop, buf.buf)
-            PyBuffer_Release(buf)
+            PyBuffer_Release(&buf)
         else:
             out = PyBytes_FromStringAndSize(NULL, nbytes)
             if out is None:
@@ -1463,8 +1450,8 @@ cdef class SChunk:
 
         cdef int64_t nbytes = (stop - start) * self.schunk.typesize
 
-        cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-        PyObject_GetBuffer(value, buf, PyBUF_SIMPLE)
+        cdef Py_buffer buf
+        PyObject_GetBuffer(value, &buf, PyBUF_SIMPLE)
         cdef uint8_t *buf_ptr = <uint8_t *> buf.buf
         cdef int64_t buf_pos = 0
         cdef uint8_t *data
@@ -1516,7 +1503,7 @@ cdef class SChunk:
                     buf_pos += chunksize
         else:
             rc = blosc2_schunk_set_slice_buffer(self.schunk, start, stop, buf.buf)
-        PyBuffer_Release(buf)
+        PyBuffer_Release(&buf)
         if rc < 0:
             raise RuntimeError("Error while setting the slice")
 
@@ -1797,18 +1784,17 @@ cdef int aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
     cdef int64_t start[B2ND_MAX_DIM]
     cdef int64_t slice_shape[B2ND_MAX_DIM]
     cdef int64_t blockshape_int64[B2ND_MAX_DIM]
-    cdef Py_buffer *buf
+    cdef Py_buffer buf
     if padding:
         for i in range(udata.array.ndim):
             start[i] = 0
             slice_shape[i] = blockshape[i]
             blockshape_int64[i] = udata.array.blockshape[i]
-        buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-        PyObject_GetBuffer(output, buf, PyBUF_SIMPLE)
+        PyObject_GetBuffer(output, &buf, PyBUF_SIMPLE)
         rc = b2nd_copy_buffer2(udata.array.ndim, typesize,
                                buf.buf, slice_shape, start, slice_shape,
                                params_output, blockshape_int64, start)
-        PyBuffer_Release(buf)
+        PyBuffer_Release(&buf)
         _check_rc(rc, "Could not copy the result into the buffer")
 
     return 0
@@ -2088,13 +2074,13 @@ cdef schunk_is_ndarray(blosc2_schunk* schunk):
 
 
 def schunk_from_cframe(cframe, copy=False):
-    cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-    PyObject_GetBuffer(cframe, buf, PyBUF_SIMPLE)
+    cdef Py_buffer buf
+    PyObject_GetBuffer(cframe, &buf, PyBUF_SIMPLE)
     cdef blosc2_schunk *schunk_ = blosc2_schunk_from_buffer(<uint8_t *>buf.buf, buf.len, copy)
     if schunk_ == NULL:
         raise RuntimeError("Could not get the schunk from the cframe")
     schunk = blosc2.SChunk(_schunk=PyCapsule_New(schunk_, <char *> "blosc2_schunk*", NULL))
-    PyBuffer_Release(buf)
+    PyBuffer_Release(&buf)
     if not copy:
         schunk._avoid_cframe_free(True)
     return schunk
@@ -2257,6 +2243,7 @@ cdef class slice_flatter:
     cdef long long[:] indices
     cdef long long current_slice_start
     cdef long long current_slice_end
+    cdef long long current_flat_idx  # Track the current flat index
 
     def __cinit__(self, long long[:] start not None, long long[:] stop not None, long long[:] strides not None):
         self.ndim = start.shape[0]
@@ -2269,6 +2256,10 @@ cdef class slice_flatter:
         shape = tuple(stop[i] - start[i] for i in range(self.ndim))
         self.shape = np.array(shape, dtype=np.int64)
         self.indices = np.zeros(self.ndim, dtype=np.int64)
+        # Initialize the flat index
+        self.current_flat_idx = 0
+        for j in range(self.ndim):
+            self.current_flat_idx += self.start[j] * self.strides[j]
 
     def __iter__(self):
         return self
@@ -2276,34 +2267,62 @@ cdef class slice_flatter:
     @cython.boundscheck(False)
     @cython.wraparound(False)
     def __next__(self):
-        cdef long long i, j, flat_idx
+        cdef long long j, next_flat_idx
+        cdef int extended_slice = 0
 
-        while not self.done:
-            flat_idx = 0
-            for j in range(self.ndim):
-                flat_idx += (self.start[j] + self.indices[j]) * self.strides[j]
-
-            if self.current_slice_start == -1:
-                self.current_slice_start = flat_idx
-                self.current_slice_end = flat_idx
-            elif flat_idx == self.current_slice_end + 1:
-                self.current_slice_end = flat_idx
-            else:
+        # Check if we're done
+        if self.done:
+            if self.current_slice_start != -1:
                 result = slice(self.current_slice_start, self.current_slice_end + 1)
-                self.current_slice_start = flat_idx
-                self.current_slice_end = flat_idx
-                # Increment the indices (TODO: remove duplicated code)
+                self.current_slice_start = -1
+                return result
+            raise StopIteration
+
+        # Initialize first slice point if needed
+        if self.current_slice_start == -1:
+            next_flat_idx = 0
+            for j in range(self.ndim):
+                next_flat_idx += (self.start[j] + self.indices[j]) * self.strides[j]
+            self.current_slice_start = next_flat_idx
+            self.current_slice_end = next_flat_idx
+            self.current_flat_idx = next_flat_idx
+            self.incr_indices()
+
+            # If we're done after the first element, return it
+            if self.done:
+                result = slice(self.current_slice_start, self.current_slice_end + 1)
+                self.current_slice_start = -1
+                return result
+
+        # Extend slice as long as indices remain contiguous
+        while not self.done:
+            # Calculate next flat index
+            next_flat_idx = 0
+            for j in range(self.ndim):
+                next_flat_idx += (self.start[j] + self.indices[j]) * self.strides[j]
+
+            # If indices are contiguous, extend current slice
+            if next_flat_idx == self.current_slice_end + 1:
+                self.current_slice_end = next_flat_idx
+                self.current_flat_idx = next_flat_idx
+                self.incr_indices()
+                extended_slice = 1
+            else:
+                # Non-contiguous index found, return current slice
+                result = slice(self.current_slice_start, self.current_slice_end + 1)
+                self.current_slice_start = next_flat_idx
+                self.current_slice_end = next_flat_idx
+                self.current_flat_idx = next_flat_idx
                 self.incr_indices()
                 return result
 
-            # Increment the indices
-            self.incr_indices()
-
-        if self.current_slice_start != -1:
+        # If we've reached the end after extending the slice
+        if extended_slice:
             result = slice(self.current_slice_start, self.current_slice_end + 1)
             self.current_slice_start = -1
             return result
 
+        # Should never reach here
         raise StopIteration
 
     @cython.boundscheck(False)
@@ -2441,8 +2460,8 @@ cdef class NDArray:
     def set_slice(self, key, ndarray):
         ndim = self.ndim
         start, stop = key
-        cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-        PyObject_GetBuffer(ndarray, buf, PyBUF_SIMPLE)
+        cdef Py_buffer buf
+        PyObject_GetBuffer(ndarray, &buf, PyBUF_SIMPLE)
 
         cdef int64_t[B2ND_MAX_DIM] buffershape_, start_, stop_
         for i in range(ndim):
@@ -2452,7 +2471,7 @@ cdef class NDArray:
 
         _check_rc(b2nd_set_slice_cbuffer(buf.buf, buffershape_, buf.len, start_, stop_, self.array),
                   "Error while setting the slice")
-        PyBuffer_Release(buf)
+        PyBuffer_Release(&buf)
 
         return self
 
@@ -2715,12 +2734,12 @@ def full(shape, chunks, blocks, fill_value, dtype, **kwargs):
 
     dtype = np.dtype(dtype)
     nparr = np.array([fill_value], dtype=dtype)
-    cdef Py_buffer *val = <Py_buffer *> malloc(sizeof(Py_buffer))
-    PyObject_GetBuffer(nparr, val, PyBUF_SIMPLE)
+    cdef Py_buffer val
+    PyObject_GetBuffer(nparr, &val, PyBUF_SIMPLE)
 
     cdef b2nd_array_t *array
     _check_rc(b2nd_full(ctx, &array, val.buf), "Could not create full array")
-    PyBuffer_Release(val)
+    PyBuffer_Release(&val)
 
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
@@ -2748,8 +2767,8 @@ def from_buffer(buf, shape, chunks, blocks, dtype, **kwargs):
 
 def asarray(ndarray, chunks, blocks, **kwargs):
     interface = ndarray.__array_interface__
-    cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-    PyObject_GetBuffer(ndarray, buf, PyBUF_SIMPLE)
+    cdef Py_buffer buf
+    PyObject_GetBuffer(ndarray, &buf, PyBUF_SIMPLE)
 
     shape = interface["shape"]
     dtype = interface["typestr"]
@@ -2763,7 +2782,7 @@ def asarray(ndarray, chunks, blocks, **kwargs):
     cdef b2nd_array_t *array
     _check_rc(b2nd_from_cbuffer(ctx, &array, <void *> <char *> buf.buf, buf.len),
               "Error while creating the NDArray")
-    PyBuffer_Release(buf)
+    PyBuffer_Release(&buf)
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
     _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
@@ -2773,8 +2792,8 @@ def asarray(ndarray, chunks, blocks, **kwargs):
 
 
 def ndarray_from_cframe(cframe, copy=False):
-    cdef Py_buffer *buf = <Py_buffer *> malloc(sizeof(Py_buffer))
-    PyObject_GetBuffer(cframe, buf, PyBUF_SIMPLE)
+    cdef Py_buffer buf
+    PyObject_GetBuffer(cframe, &buf, PyBUF_SIMPLE)
     cdef b2nd_array_t *array
     cdef int rc
     rc = b2nd_from_cframe(<uint8_t *>buf.buf, buf.len, copy, &array)
@@ -2783,7 +2802,7 @@ def ndarray_from_cframe(cframe, copy=False):
     ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
 
-    PyBuffer_Release(buf)
+    PyBuffer_Release(&buf)
     if not copy:
         ndarray._schunk._avoid_cframe_free(True)
     return ndarray

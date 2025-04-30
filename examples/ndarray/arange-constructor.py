@@ -19,7 +19,7 @@ N = 10_000_000
 shape = (N,)
 print(f"*** Creating a blosc2 array with {N:_} elements (shape: {shape}) ***")
 t0 = time()
-a = blosc2.arange(shape=shape, dtype=np.int32)
+a = blosc2.arange(N, shape=shape, dtype=np.int32)
 cratio = a.schunk.nbytes / a.schunk.cbytes
 print(
     f"Time: {time() - t0:.3f} s ({N / (time() - t0) / 1e6:.2f} M/s)"
