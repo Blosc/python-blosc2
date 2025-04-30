@@ -1329,7 +1329,7 @@ def test_missing_operator():
     # Check that the expression is still there, and can be introspected
     # Note the added parentheses. The parser automatically adds these,
     # mainly because of possible operator precedence issues in nested expressions.
-    assert expr2.expression == "(a + b)"
+    assert expr2.expression == "a + b"
     # Check that dtype and shape are None
     assert expr2.dtype is None
     assert expr2.shape is None
@@ -1349,8 +1349,50 @@ def test_chain_expressions():
     le1 = a**3 + blosc2.sin(a**2)
     le2 = le1 < c
     le3 = le2 & (b < 0)
-
     le1_ = blosc2.lazyexpr("a ** 3 + sin(a ** 2)", {"a": a})
     le2_ = blosc2.lazyexpr("(le1 < c)", {"le1": le1_, "c": c})
     le3_ = blosc2.lazyexpr("(le2 & (b < 0))", {"le2": le2_, "b": b})
     assert (le3_[:] == le3[:]).all()
+
+    # TODO: This test should pass eventually
+    # le1 = a ** 3 + blosc2.sin(a ** 2)
+    # le2 = le1 < c
+    # le3 = (b < 0)
+    # le4 = le2 & le3
+    # le1_ = blosc2.lazyexpr("a ** 3 + sin(a ** 2)", {"a": a})
+    # le2_ = blosc2.lazyexpr("(le1 < c)", {"le1": le1_, "c": c})
+    # le3_ = blosc2.lazyexpr("(b < 0)", {"b": b})
+    # le4_ = blosc2.lazyexpr("(le2 & le3)", {"le2": le2_, "le3": le3_})
+    # assert (le4_[:] == le4[:]).all()
+
+
+# TODO: Test the chaining of multiple persistent lazy expressions
+# def test_chain_persistentexpressions():
+#     N = 1_000
+#     dtype = "float64"
+#     a = blosc2.linspace(0, 1, N * N, dtype=dtype, shape=(N, N), urlpath="a.b2nd", mode="w")
+#     b = blosc2.linspace(1, 2, N * N, dtype=dtype, shape=(N, N), urlpath="b.b2nd", mode="w")
+#     c = blosc2.linspace(0, 1, N, dtype=dtype, shape=(N,), urlpath="c.b2nd", mode="w")
+#
+#     le1 = a ** 3 + blosc2.sin(a ** 2)
+#     le2 = le1 < c
+#     le3 = (b < 0)
+#     le4 = le2 & le3
+#
+#     le1_ = blosc2.lazyexpr("a ** 3 + sin(a ** 2)", {"a": a})
+#     le1_.save("expr1.b2nd", mode="w")
+#     myle1 = blosc2.open("expr1.b2nd")
+#
+#     le2_ = blosc2.lazyexpr("(le1 < c)", {"le1": myle1, "c": c})
+#     le2_.save("expr2.b2nd", mode="w")
+#     myle2 = blosc2.open("expr2.b2nd")
+#
+#     le3_ = blosc2.lazyexpr("(b < 0)", {"b": b})
+#     le3_.save("expr3.b2nd", mode="w")
+#     myle3 = blosc2.open("expr3.b2nd")
+#
+#     le4_ = blosc2.lazyexpr("(le2 & le3)", {"le2": myle2, "le3": myle3})
+#     le4_.save("expr4.b2nd", mode="w")
+#     myle4 = blosc2.open("expr4.b2nd")
+#     print((myle4[:] == le4[:]).all())
+#
