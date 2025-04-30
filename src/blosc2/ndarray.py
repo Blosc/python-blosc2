@@ -3871,11 +3871,11 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     r = x2.chunks[-1]
 
     for row in range(0, n, p):
-        row_end = (row + p) if (row + p) < n else n
+        row_end = builtins.min(row + p, n)
         for col in range(0, m, q):
-            col_end = (col + q) if (col + q) < m else m
+            col_end = builtins.min(col + q, m)
             for aux in range(0, k, r):
-                aux_end = (aux + r) if (aux + r) < k else k
+                aux_end = builtins.min(aux + r, k)
                 bx1 = x1[row:row_end, aux:aux_end]
                 bx2 = x2[aux:aux_end, col:col_end]
                 result[row:row_end, col:col_end] += np.matmul(bx1, bx2)
@@ -3905,8 +3905,8 @@ def permute_dims(arr: NDArray, axes: tuple[int] | list[int] | None = None, **kwa
 
     Returns
     -------
-    out: :ref:`NDArray`
-        A Blosc2 :ref:`NDArray` with axes transposed.
+    out:: ref:`NDArray`
+        A Blosc2: ref:`NDArray` with axes transposed.
 
     Raises
     ------
@@ -3947,8 +3947,6 @@ def permute_dims(arr: NDArray, axes: tuple[int] | list[int] | None = None, **kwa
             [17, 18, 19, 20],
             [21, 22, 23, 24]]])
 
-
-
     >>> at = blosc2.permute_dims(a, axes=(1, 0, 2))
     >>> at[:]
     array([[[ 1,  2,  3,  4],
@@ -3959,37 +3957,39 @@ def permute_dims(arr: NDArray, axes: tuple[int] | list[int] | None = None, **kwa
             [21, 22, 23, 24]]])
 
     """
-
     if np.isscalar(arr) or arr.ndim < 2:
         return arr
 
+    ndim = arr.ndim
+
     if axes is None:
-        axes = range(arr.ndim)[::-1]
+        axes = tuple(range(ndim))[::-1]
     else:
-        axes_transformed = tuple(axis if axis >= 0 else arr.ndim + axis for axis in axes)
-        if sorted(axes_transformed) != list(range(arr.ndim)):
-            raise ValueError(f"axes {axes} is not a valid permutation of {arr.ndim} dimensions")
-        axes = axes_transformed
+        axes = tuple(axis if axis >= 0 else ndim + axis for axis in axes)
+        if sorted(axes) != list(range(ndim)):
+            raise ValueError(f"axes {axes} is not a valid permutation of {ndim} dimensions")
 
     new_shape = tuple(arr.shape[axis] for axis in axes)
-    if "chunks" not in kwargs:
+    if "chunks" not in kwargs or kwargs["chunks"] is None:
         kwargs["chunks"] = tuple(arr.chunks[axis] for axis in axes)
 
     result = blosc2.empty(shape=new_shape, dtype=arr.dtype, **kwargs)
 
-    chunk_slices = [
-        [slice(start, builtins.min(dim, start + chunk)) for start in range(0, dim, chunk)]
-        for dim, chunk in zip(arr.shape, arr.chunks, strict=False)
-    ]
+    chunks = arr.chunks
+    shape = arr.shape
 
-    block_counts = [len(s) for s in chunk_slices]
-    grid = np.indices(block_counts).reshape(len(block_counts), -1).T
+    for info in arr.iterchunks_info():
+        coords = info.coords
+        start_stop = [
+            (coord * chunk, builtins.min(chunk * (coord + 1), dim))
+            for coord, chunk, dim in zip(coords, chunks, shape, strict=False)
+        ]
 
-    for idx in grid:
-        block_slices = tuple(chunk_slices[axis][i] for axis, i in enumerate(idx))
-        block = arr[block_slices]
-        target_slices = tuple(block_slices[axis] for axis in axes)
-        result[target_slices] = np.transpose(block, axes=axes).copy()
+        src_slice = tuple(slice(start, stop) for start, stop in start_stop)
+        dst_slice = tuple(slice(start_stop[ax][0], start_stop[ax][1]) for ax in axes)
+
+        transposed = np.transpose(arr[src_slice], axes=axes)
+        result[dst_slice] = np.ascontiguousarray(transposed)
 
     return result
 
@@ -4002,14 +4002,14 @@ def transpose(x, **kwargs: Any) -> NDArray:
 
     Parameters
     ----------
-    x: :ref:`NDArray`
+    x:: ref:`NDArray`
         The input array.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
-    out: :ref:`NDArray`
+    out:: ref:`NDArray`
         The Blosc2 NDArray with axes transposed.
 
     References
@@ -4023,7 +4023,7 @@ def transpose(x, **kwargs: Any) -> NDArray:
         stacklevel=2,
     )
 
-    # If arguments are dimension < 2 they are returned
+    # If arguments are dimension < 2, they are returned
     if np.isscalar(x) or x.ndim < 2:
         return x
 
@@ -4039,14 +4039,14 @@ def matrix_transpose(arr: NDArray, **kwargs: Any) -> NDArray:
 
     Parameters
     ----------
-    arr: :ref:`NDArray`
+    arr:: ref:`NDArray`
         The input NDArray having shape ``(..., M, N)`` and whose innermost two dimensions form
         ``MxN`` matrices.
 
     Returns
     -------
-    out: :ref:`NDArray`
-        A new :ref:`NDArray` containing the transpose for each matrix and having shape
+    out:: ref:`NDArray`
+        A new: ref:`NDArray` containing the transpose for each matrix and having shape
         ``(..., N, M)``.
     """
     axes = None
