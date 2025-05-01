@@ -15,6 +15,8 @@
 * Now, storage defaults (`blosc2.storage_dflts`) are honored, even if no
   `storage=` param is used in constructors.
 
+* We are distributing Python 3.10 wheels now.
+
 ## Changes from 3.3.0 to 3.3.1
 
 * In our effort to better adapt to better adapt to the array API
