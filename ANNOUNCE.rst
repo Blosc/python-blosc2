@@ -1,16 +1,11 @@
-Announcing Python-Blosc2 3.3.1
+Announcing Python-Blosc2 3.3.2
 ==============================
 
-In our effort to better adapt to better adapt to the array API
-(https://data-apis.org/array-api/latest/), we have introduced
-permute_dims() and matrix_transpose() functions, and the .T property.
-This replaces to previous transpose() function, which is now deprecated.
-See PR #384.  Thanks to Ricardo Sales Piquer (@ricardosp4).
-
-We have also reduced the memory footprint of constructors like ``arange()``,
-``linspace()`` and ``fromiter()`` by a large factor. As an example, a 5 TB
-array of 8-byte floats now uses less than 200 MB of memory instead of
-170 GB previously.
+This is a bugfix release, with some minor optimizations.  We fixed
+specially a bug in the determination of chunk shape in constructors
+on CPUs with large L3 cache sizes (like AMD EPYC).  We also fixed a
+bug preventing the correct chaining of *string* lazy expressions for
+logical operators (``&``, ``|``, ``^``...).
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 

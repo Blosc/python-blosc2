@@ -2,8 +2,18 @@
 
 ## Changes from 3.3.1 to 3.3.2
 
-XXX version-specific blurb XXX
+* Fixed a bug in the determination of chunk shape for the `NDArray` constructor.
+  This was causing problems when creating `NDArray` instances with a CPU that
+  was reporting a L3 cache size close (or exceeding) 2 GB.  See PR #392.
 
+* Fixed a bug preventing the correct chaining of *string* lazy expressions for
+  logical operators (`&`, `|`, `^`...).  See PR #391.
+
+* More performance optimization for `blosc2.permute_dims`.  Thanks to
+  Ricardo Sales Piquer (@ricardosp4) for the implementation.
+
+* Now, storage defaults (`blosc2.storage_dflts`) are honored, even if no
+  `storage=` param is used in constructors.
 
 ## Changes from 3.3.0 to 3.3.1
 
