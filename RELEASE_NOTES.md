@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.3.2 to 3.3.3
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.3.1 to 3.3.2
 
 * Fixed a bug in the determination of chunk shape for the `NDArray` constructor.
