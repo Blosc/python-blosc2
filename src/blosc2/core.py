@@ -1562,6 +1562,11 @@ def compute_chunks_blocks(  # noqa: C901
     if chunks is None:
         blocksize = math.prod(blocks) * itemsize
         chunksize = get_chunksize(blocksize)
+        # Make chunksize to be a multiple of the blocksize. This allows for:
+        # 1. Avoid unnecessary padding in chunks
+        # 2. Avoid exceeding the maximum buffer size (see #392)
+        if chunksize % blocksize != 0:
+            chunksize = chunksize // blocksize * blocksize
         chunks = compute_partition(chunksize // itemsize, shape, blocks)
 
     return tuple(chunks), tuple(blocks)
