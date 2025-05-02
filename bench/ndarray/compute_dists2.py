@@ -17,6 +17,8 @@ import numpy as np
 import numexpr as ne
 import matplotlib.pyplot as plt
 import seaborn as sns
+import sys
+
 
 # Bench params
 N = 10_000
@@ -28,6 +30,11 @@ expr = "(a - b)"
 #expr = "sum(a - b)"
 #expr = "cos(a)**2 + sin(b)**2 - 1"
 #expr = "sum(cos(a)**2 + sin(b)**2 - 1)"
+
+# Params for large memory machines
+if len(sys.argv) > 1 and sys.argv[1] == "large":
+    N = 30_000  # For large memory machines
+    distributions = ["constant", "arange", "linspace"]
 
 # Set default compression params
 cparams = blosc2.CParams(clevel=1, codec=blosc2.Codec.BLOSCLZ)
