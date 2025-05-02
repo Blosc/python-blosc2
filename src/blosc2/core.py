@@ -1164,50 +1164,58 @@ def apple_silicon_cache_size(cache_level: int) -> int:
     return size.value
 
 
-def get_l3_cache_info():
+def get_cache_info(cache_level: int) -> tuple:
     result = subprocess.run(["lscpu", "--json"], capture_output=True, text=True)
     lscpu_info = json.loads(result.stdout)
+    if cache_level == 0:
+        cache_level = "1d"
     for entry in lscpu_info["lscpu"]:
-        if entry["field"] == "L3 cache:":
+        if entry["field"] == f"L{cache_level} cache:":
             size_str, instances_str = entry["data"].split(" (")
-            size = int(size_str.split()[0]) * 1024 * 1024  # Convert MiB to bytes
+            size, units = size_str.split()
+            size = int(size)
+            if units == "KiB":
+                size *= 2**10
+            elif units == "MiB":
+                size *= 2**20
+            elif units == "GiB":
+                size *= 2**30
+            else:
+                raise ValueError("Unrecognized unit when guessing cache units")
             instances = int(instances_str.split()[0])
             return size, instances
 
-    raise ValueError("L3 cache not found in lscpu output")
+    raise ValueError(f"L{cache_level} cache not found in lscpu output")
 
 
 def linux_cache_size(cache_level: int, default_size: int) -> int:
     """Get the data cache_level size in bytes for Linux."""
     cache_size = default_size
-    if cache_level == 3:
-        # In modern multicore CPUs, the L3 cache is normally shared among all core complexes (CCX),
-        # but sysfs only reports the cache size for each complex, so better use lscpu, if available.
-        try:
-            l3_cache_size, l3_cache_instances = get_l3_cache_info()
-            # What comes next is a heuristic to guess the most appropriate L3 cache size.
-            # Essentially, this is the result of different experiments, mainly on AMD CPUs
-            # (in particular, Ryzen 9800X3D with 8 cores, and EPYC 9454P with 48 cores).
-            # For Intel, YMMV, but my guess is that they are not using the same CCX approach.
-            l3_cache_size *= l3_cache_instances
-            if l3_cache_instances > 1:
-                # This is yet another heuristic for large CPUs with core sets (CCX) having
-                # their own L3.  No idea why, but it seems to work well.
-                l3_cache_size *= l3_cache_instances // 2
-            return l3_cache_size
-        except (FileNotFoundError, ValueError):
-            # If lscpu is not available or the cache size cannot be read, try with sysfs
-            pass
     try:
+        # Try to read the cache size from sysfs
         with open(f"/sys/devices/system/cpu/cpu0/cache/index{cache_level}/size") as f:
             size = f.read()
             if size.endswith("K\n"):
-                cache_size = int(size[:-2]) * 1024
+                cache_size = int(size[:-2]) * 2**10
             elif size.endswith("M\n"):
-                cache_size = int(size[:-2]) * 1024 * 1024
+                cache_size = int(size[:-2]) * 2**20
+            elif size.endswith("G\n"):
+                cache_size = int(size[:-2]) * 2**30
     except FileNotFoundError:
-        # If the cache size cannot be read, return the default size
-        pass
+        # Try with lscpu, if available.
+        try:
+            cache_size, cache_instances = get_cache_info(cache_level)
+            # cache_instances typically refers to the number of sockets, CCXs or cores,
+            # depending on the CPU and cache level.
+            # In general, dividing the cache size by the number of instances would bring
+            # best performance for private caches (L1 and L2).  For shared caches (L3),
+            # this should be the case as well, but more experimentation is needed.
+            cache_size //= cache_instances
+            return cache_size
+        except (FileNotFoundError, ValueError):
+            # If lscpu is not available or the cache size cannot be read from sysfs,
+            # return the default size.
+            pass
     return cache_size
 
 
