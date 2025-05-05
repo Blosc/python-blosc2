@@ -186,7 +186,7 @@ def test_proxy_simple_expression(array_fixture):
 
 def test_iXXX(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    expr = a1**3 + a2**2 + a3**3 - a4 + 3
+    expr = a1 ** 3 + a2 ** 2 + a3 ** 3 - a4 + 3
     expr += 5  # __iadd__
     expr -= 15  # __isub__
     expr *= 2  # __imul__
@@ -1126,7 +1126,7 @@ def test_fill_disk_operands(chunks, blocks, disk, fill_value):
         b = blosc2.open("b.b2nd")
         c = blosc2.open("c.b2nd")
 
-    expr = ((a**3 + blosc2.sin(c * 2)) < b) & (c > 0)
+    expr = ((a ** 3 + blosc2.sin(c * 2)) < b) & (c > 0)
 
     out = expr.compute()
     assert out.shape == (N, N)
@@ -1256,6 +1256,13 @@ def test_indices():
         expr.indices().compute()
 
 
+def test_reduction_index():
+    shape = (20, 20)
+    a = blosc2.linspace(0, 20, num=np.prod(shape), shape=shape)
+    expr = blosc2.sum(a, axis=0)
+    assert expr[:10].shape == (10,)
+    assert expr[0].shape == ()
+
 def test_sort():
     shape = (20,)
     na = np.arange(shape[0])
@@ -1307,9 +1314,9 @@ def test_only_ndarrays_or_constructors(obj, getitem, item):
 def test_numpy_funcs(array_fixture, func):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     npfunc = getattr(np, func)
-    d_blosc2 = npfunc(((a1**3 + blosc2.sin(na2 * 2)) < a3) & (na2 > 0), axis=0)
+    d_blosc2 = npfunc(((a1 ** 3 + blosc2.sin(na2 * 2)) < a3) & (na2 > 0), axis=0)
     npfunc = getattr(np, func)
-    d_numpy = npfunc(((na1**3 + np.sin(na2 * 2)) < na3) & (na2 > 0), axis=0)
+    d_numpy = npfunc(((na1 ** 3 + np.sin(na2 * 2)) < na3) & (na2 > 0), axis=0)
     np.testing.assert_equal(d_blosc2, d_numpy)
 
 
@@ -1346,7 +1353,7 @@ def test_chain_expressions():
     b = blosc2.linspace(1, 2, N * N, dtype=dtype, shape=(N, N))
     c = blosc2.linspace(0, 1, N, dtype=dtype, shape=(N,))
 
-    le1 = a**3 + blosc2.sin(a**2)
+    le1 = a ** 3 + blosc2.sin(a ** 2)
     le2 = le1 < c
     le3 = le2 & (b < 0)
     le1_ = blosc2.lazyexpr("a ** 3 + sin(a ** 2)", {"a": a})
@@ -1364,7 +1371,6 @@ def test_chain_expressions():
     # le3_ = blosc2.lazyexpr("(b < 0)", {"b": b})
     # le4_ = blosc2.lazyexpr("(le2 & le3)", {"le2": le2_, "le3": le3_})
     # assert (le4_[:] == le4[:]).all()
-
 
 # TODO: Test the chaining of multiple persistent lazy expressions
 # def test_chain_persistentexpressions():
