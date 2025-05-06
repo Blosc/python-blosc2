@@ -2440,16 +2440,16 @@ class LazyExpr(LazyArray):
                     if len(self._where_args) == 1:
                         # We have a single argument
                         where_x = self._where_args["_where_x"]
-                        return where_x[:][lazy_expr]
+                        return (where_x[:][lazy_expr])[item]
                     if len(self._where_args) == 2:
                         # We have two arguments
                         where_x = self._where_args["_where_x"]
                         where_y = self._where_args["_where_y"]
-                        return np.where(lazy_expr, where_x, where_y)
+                        return np.where(lazy_expr, where_x, where_y)[item]
                 if hasattr(self, "_output"):
                     # This is not exactly optimized, but it works for now
-                    self._output[:] = lazy_expr
-                return lazy_expr
+                    self._output[:] = lazy_expr[item]
+                return lazy_expr[item]
 
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
 

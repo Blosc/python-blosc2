@@ -418,3 +418,10 @@ def test_save_constructor_reduce2(shape, disk, compute):
         blosc2.remove_urlpath(urlpath_a)
         blosc2.remove_urlpath(urlpath_b)
         blosc2.remove_urlpath("out.b2nd")
+
+def test_reduction_index():
+    shape = (20, 20)
+    a = blosc2.linspace(0, 20, num=np.prod(shape), shape=shape)
+    expr = blosc2.sum(a, axis=0)
+    assert expr[:10].shape == (10,)
+    assert expr[0].shape == ()
