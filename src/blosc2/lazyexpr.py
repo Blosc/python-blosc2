@@ -2449,6 +2449,7 @@ class LazyExpr(LazyArray):
                 if hasattr(self, "_output"):
                     # This is not exactly optimized, but it works for now
                     self._output[:] = lazy_expr[item]
+                    return self._output
                 return lazy_expr[item]
 
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)

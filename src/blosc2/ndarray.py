@@ -61,15 +61,14 @@ def make_key_hashable(key):
     else:
         return key
 
+
 def process_key(key, shape):
+    if key is None:
+        key = tuple(slice(None) for _ in range(len(shape)))
     key = ndindex.ndindex(key).expand(shape).raw
-    key_ = () 
-    mask = () #get integer indices where dimension collapses
-    for k in key: #handle multiple Nones in key
-        if k is not None:
-            key_ += (k if isinstance(k, slice) else slice(k, k + 1, None),)
-            mask += (isinstance(k, int),)
-    return key_, mask
+    mask = tuple(isinstance(k, int) for k in key)
+    key = tuple(k if isinstance(k, slice) else slice(k, k + 1, None) for k in key)
+    return key, mask
 
 
 def get_ndarray_start_stop(ndim, key, shape):
@@ -1470,7 +1469,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
         # First try some fast paths for common cases
-        newaxes = None
         if isinstance(key, np.integer):
             # Massage the key to a tuple and go the fast path
             key_ = (slice(key, key + 1), *(slice(None),) * (self.ndim - 1))
@@ -1521,8 +1519,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
             start, stop, step = get_ndarray_start_stop(self.ndim, key_, self.shape)
             shape = np.array([sp - st for st, sp in zip(start, stop, strict=True)])
             shape = tuple(shape[[not m for m in mask]])
-            # Add new axes if necessary
-            newaxes = tuple(i for i, k in enumerate(key) if k is None)
 
         # Create the array to store the result
         arr = np.empty(shape, dtype=self.dtype)
@@ -1537,9 +1533,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
             self._last_read.clear()
             inmutable_key = make_key_hashable(key)
             self._last_read[inmutable_key] = nparr
-            
-        return nparr.expand_dims(newaxes) if newaxes is not None else nparr
-    
+
+        return nparr
+
     def __setitem__(self, key: int | slice | Sequence[slice], value: object):
         """Set a slice of the array.
 
