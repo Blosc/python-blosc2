@@ -37,7 +37,7 @@ import numpy as np
 import blosc2
 from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
-from blosc2.ndarray import _check_allowed_dtypes, get_chunks_idx, is_inside_new_expr
+from blosc2.ndarray import _check_allowed_dtypes, get_chunks_idx, is_inside_new_expr, process_key
 
 if not blosc2.IS_WASM:
     import numexpr
@@ -2434,23 +2434,24 @@ class LazyExpr(LazyArray):
             _globals = get_expr_globals(self.expression)
             lazy_expr = eval(self.expression, _globals, self.operands)
             if not isinstance(lazy_expr, blosc2.LazyExpr):
+                key, _ = process_key(item, self.shape)
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
                 if hasattr(self, "_where_args"):
                     # We need to apply the where() operation
                     if len(self._where_args) == 1:
                         # We have a single argument
                         where_x = self._where_args["_where_x"]
-                        return (where_x[:][lazy_expr])[item]
+                        return (where_x[:][lazy_expr])[key]
                     if len(self._where_args) == 2:
                         # We have two arguments
                         where_x = self._where_args["_where_x"]
                         where_y = self._where_args["_where_y"]
-                        return np.where(lazy_expr, where_x, where_y)[item]
+                        return np.where(lazy_expr, where_x, where_y)[key]
                 if hasattr(self, "_output"):
                     # This is not exactly optimized, but it works for now
-                    self._output[:] = lazy_expr[item]
+                    self._output[:] = lazy_expr[key]
                     return self._output
-                return lazy_expr[item]
+                return lazy_expr[key]
 
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
 
