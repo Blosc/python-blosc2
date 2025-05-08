@@ -423,7 +423,7 @@ def test_save_constructor_reduce2(shape, disk, compute):
 def test_reduction_index():
     shape = (20, 20)
     a = blosc2.linspace(0, 20, num=np.prod(shape), shape=shape)
-    arr = blosc2.lazyexpr('sum(a,axis=0)', {'a': a})
+    arr = blosc2.lazyexpr("sum(a,axis=0)", {"a": a})
     newarr = arr.compute()
     assert arr[:10].shape == (10,)
     assert arr[0].shape == (1,)
