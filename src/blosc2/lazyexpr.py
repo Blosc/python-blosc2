@@ -2725,7 +2725,9 @@ class LazyExpr(LazyArray):
             if isinstance(new_expr, blosc2.LazyExpr):
                 # DO NOT restore the original expression and operands
                 # Instead rebase operands and restore only constructors
-                expression_, operands_ = conserve_functions(expression, operands, new_expr.operands)
+                expression_, operands_ = conserve_functions(
+                    _expression, _operands, new_expr.operands | local_vars
+                )
                 new_expr.expression = f"({expression_})"  # force parenthesis
                 new_expr.expression_tosave = expression
                 new_expr.operands = operands_
