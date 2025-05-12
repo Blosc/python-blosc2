@@ -630,6 +630,51 @@ def get_expr_operands(expression: str) -> set:
     return set(visitor.operands)
 
 
+def conserve_functions(
+    expression: str,
+    operands_old: dict[str : blosc2.ndarray | blosc2.LazyExpr],
+    operands_new: dict[str : blosc2.ndarray | blosc2.LazyExpr],
+) -> tuple(str, dict[str : blosc2.ndarray.NDArray | blosc2.LazyExpr]):
+    operand_to_key = {id(v): k for k, v in operands_new.items()}
+
+    class OperandVisitor(ast.NodeVisitor):
+        def __init__(self):
+            self.operandset = set()
+            self.operands = {}
+            self.opcounter = 0
+            self.function_names = set()
+
+        def visit_Name(self, node):
+            if node.id == "np":
+                # Skip NumPy namespace (e.g. np.int8, which will be treated separately)
+                return
+            if node.id in self.function_names:
+                # Skip function names
+                return
+            elif (node.id not in dtype_symbols) and (node.id not in self.operandset):
+                k = operand_to_key[id(operands_old[node.id])]
+                newkey = f"o{self.opcounter}"
+                self.operands[newkey] = operands_new[k]
+                node.id = newkey
+                self.operandset.add(node.id)
+                self.opcounter += 1
+            else:
+                pass
+            self.generic_visit(node)
+
+        def visit_Call(self, node):
+            if isinstance(
+                node.func, ast.Name
+            ):  # visits Call first, then Name, so don't increment operandcounter yet
+                self.function_names.add(node.func.id)
+            self.generic_visit(node)
+
+    tree = ast.parse(expression)
+    visitor = OperandVisitor()
+    visitor.visit(tree)
+    return ast.unparse(tree), visitor.operands
+
+
 class TransformNumpyCalls(ast.NodeTransformer):
     def __init__(self):
         self.replacements = {}
@@ -2679,9 +2724,11 @@ class LazyExpr(LazyArray):
             _shape = new_expr.shape
             if isinstance(new_expr, blosc2.LazyExpr):
                 # DO NOT restore the original expression and operands
-                # new_expr.expression = new_expr.expression}  #don't have to do anything
-                new_expr.expression_tosave = _expression
-                # new_expr.operands = new_expr.operands #don't have to do anything
+                # Instead rebase operands and restore only constructors
+                expression_, operands_ = conserve_functions(expression, operands, new_expr.operands)
+                new_expr.expression = f"({expression_})"  # force parenthesis
+                new_expr.expression_tosave = expression
+                new_expr.operands = operands_
                 new_expr.operands_tosave = operands
             else:
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
