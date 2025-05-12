@@ -2678,10 +2678,10 @@ class LazyExpr(LazyArray):
             _dtype = new_expr.dtype
             _shape = new_expr.shape
             if isinstance(new_expr, blosc2.LazyExpr):
-                # Restore the original expression and operands
-                new_expr.expression = f"({_expression})"  # forcibly add parenthesis
+                # DO NOT restore the original expression and operands
+                # new_expr.expression = new_expr.expression}  #don't have to do anything
                 new_expr.expression_tosave = _expression
-                new_expr.operands = _operands
+                # new_expr.operands = new_expr.operands #don't have to do anything
                 new_expr.operands_tosave = operands
             else:
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
