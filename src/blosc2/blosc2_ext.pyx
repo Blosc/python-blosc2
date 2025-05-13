@@ -2391,7 +2391,7 @@ cdef class NDArray:
         str_dtype = bytes_dtype.decode("utf-8")
         try:
             dtype = np.dtype(str_dtype)
-        except TypeError:
+        except (ValueError, TypeError):
             dtype = np.dtype(ast.literal_eval(str_dtype))
         self._dtype = dtype
         return dtype
