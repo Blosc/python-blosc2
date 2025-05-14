@@ -26,7 +26,7 @@ def sample_data(request):
     # The jit decorator can work with any numpy or NDArray params in functions
     a = blosc2.linspace(0, 1, shape[0] * shape[1], dtype=dtype, shape=shape)
     b = np.linspace(1, 2, shape[0] * shape[1], dtype=dtype).reshape(shape)
-    c = blosc2.linspace(-10, 10, cshape[0], dtype=dtype, shape=cshape)
+    c = blosc2.linspace(-10, 10, np.prod(cshape), dtype=dtype, shape=cshape)
     return a, b, c, shape
 
 
