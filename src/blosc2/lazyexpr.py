@@ -630,7 +630,11 @@ def get_expr_operands(expression: str) -> set:
     return set(visitor.operands)
 
 
-def conserve_functions(expression, operands_old, operands_new):  # noqa: C901
+def conserve_functions(  # noqa: C901
+    expression: str,
+    operands_old: dict[str, blosc2.NDArray | blosc2.LazyExpr],
+    operands_new: dict[str, blosc2.NDArray | blosc2.LazyExpr],
+) -> tuple(str, dict[str, blosc2.NDArray]):
     """
     Given an expression in string form, return its operands.
 
@@ -654,12 +658,22 @@ def conserve_functions(expression, operands_old, operands_new):  # noqa: C901
     """
 
     operand_to_key = {id(v): k for k, v in operands_new.items()}
-    # for k, v in operands_old.items():  # extend operands_to_key with old operands
-    #     try:
-    #         operand_to_key[id(v)]
-    #     except KeyError:
-    #         operand_to_key[id(v)] = k
-    #         operands_new[k] = v
+    for k, v in operands_old.items():  # extend operands_to_key with old operands
+        if isinstance(
+            v, blosc2.LazyExpr
+        ):  # unroll operands in LazyExpr (only necessary when have reduced a lazyexpr)
+            d = v.operands
+        else:
+            d = {k: v}
+        for newk, newv in d.items():
+            try:
+                operand_to_key[id(newv)]
+            except KeyError:
+                newk = (
+                    f"o{len(operands_new)}" if newk in operands_new else newk
+                )  # possible that names coincide
+                operand_to_key[id(newv)] = newk
+                operands_new[newk] = newv
 
     class OperandVisitor(ast.NodeVisitor):
         def __init__(self):
@@ -687,12 +701,16 @@ def conserve_functions(expression, operands_old, operands_new):  # noqa: C901
             elif node.id not in dtype_symbols:
                 localop = operands_old[node.id]
                 if isinstance(localop, blosc2.LazyExpr):
+                    newexpr = localop.expression
                     for (
-                        _,
+                        opname,
                         v,
                     ) in localop.operands.items():  # expression operands already in terms of basic operands
-                        _ = self.update_func(v)
-                    node.id = localop.expression
+                        newopname = self.update_func(v)
+                        newexpr = re.sub(
+                            rf"(?<=\s){opname}|(?<=\(){opname}", newopname, newexpr
+                        )  # replace with newopname
+                    node.id = newexpr
                 else:
                     node.id = self.update_func(localop)
             else:
@@ -709,7 +727,8 @@ def conserve_functions(expression, operands_old, operands_new):  # noqa: C901
     tree = ast.parse(expression)
     visitor = OperandVisitor()
     visitor.visit(tree)
-    return ast.unparse(tree), visitor.operands
+    newexpression, newoperands = ast.unparse(tree), visitor.operands
+    return newexpression, newoperands
 
 
 class TransformNumpyCalls(ast.NodeTransformer):
