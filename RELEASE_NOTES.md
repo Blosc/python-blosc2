@@ -2,7 +2,29 @@
 
 ## Changes from 3.3.2 to 3.3.3
 
-XXX version-specific blurb XXX
+* Expand possibilities for chaining string-based lazy expressions to include
+  main operand types (LazyExpr and NDArray). Still have to incorporate other
+  data types (which do not have shape attribute, e.g. int, float etc.).
+  See #406.
+
+* Fix indexing for lazy expressions, and allow use of None in getitem.
+  See PR #402.
+
+* Fix incorrect appending of dim to computed reductions. See PR #404.
+
+* Fix `blosc2.linspace()` for incompatible num/shape.  See PR #408.
+
+* Add support for NumPy dtypes that are n-dimensional (e.g.
+  `np.dtype(("<i4,>f4", (10,))),`).
+
+* New MAX_DIM constant for the maximum number of dimensions supported.
+  This is useful for checking if a given array is too large to be handled.
+
+* More refinements on guessing cache sizes for Linux.
+
+* Update to C-Blosc2 2.17.2.dev.  Now, we are forcing the flush of modified
+  pages only in write mode for mmap files. This fixes mmap issues on Windows.
+  Thanks to @JanSellner for the implementation.
 
 ## Changes from 3.3.1 to 3.3.2
 

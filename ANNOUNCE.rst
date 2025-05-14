@@ -1,11 +1,10 @@
-Announcing Python-Blosc2 3.3.2
+Announcing Python-Blosc2 3.3.3
 ==============================
 
-This is a bugfix release, with some minor optimizations.  We fixed
-specially a bug in the determination of chunk shape in constructors
-on CPUs with large L3 cache sizes (like AMD EPYC).  We also fixed a
-bug preventing the correct chaining of *string* lazy expressions for
-logical operators (``&``, ``|``, ``^``...).
+This is a bugfix release, with some minor optimizations. We improved the
+correct chaining of *string* lazy expressions (there is still room for
+improvement).  Also, a new version of C-Blosc2 (v2.7.2.dev) that fixes
+mmap issues on Windows is used; thanks to @JanSellner for the fix.
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
