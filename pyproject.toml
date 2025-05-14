@@ -123,7 +123,6 @@ ignore = [
     "RUF015",
     "SIM108",
     "UP038",  # https://github.com/astral-sh/ruff/issues/7871
-    "C402", #allow dict comprehension as {}
 ]
 
 [tool.ruff.lint.extend-per-file-ignores]
