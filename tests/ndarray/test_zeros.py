@@ -157,3 +157,12 @@ def test_nd_dtype(dtype):
         np.testing.assert_equal(a2, b2)
     else:
         np.testing.assert_equal(a[:], b)
+
+
+def test_shape_empty():
+    # Test that the shape is correctly set to () for an empty array
+    a = blosc2.zeros((), dtype=np.int32)
+    assert a.shape == ()
+    assert a.dtype == np.int32
+    b = np.zeros((), dtype=np.int32)
+    np.testing.assert_equal(a[()], b)
