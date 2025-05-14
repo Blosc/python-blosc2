@@ -166,3 +166,9 @@ def test_shape_empty():
     assert a.dtype == np.int32
     b = np.zeros((), dtype=np.int32)
     np.testing.assert_equal(a[()], b)
+
+
+def test_shape_max_dims():
+    # Test that the shape cannot exceed the maximum number of dimensions
+    with pytest.raises(ValueError):
+        a = blosc2.zeros((1,) * (blosc2.MAX_DIM + 1), dtype=np.int32)

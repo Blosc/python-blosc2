@@ -2914,6 +2914,8 @@ def _check_shape(shape):
         shape = (shape,)
     elif not isinstance(shape, tuple | list):
         raise TypeError("shape should be a tuple or a list!")
+    if len(shape) > blosc2.MAX_DIM:
+        raise ValueError(f"shape length {len(shape)} is too large (>{blosc2.MAX_DIM})!")
     return shape
 
 
