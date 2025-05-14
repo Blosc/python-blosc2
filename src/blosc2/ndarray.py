@@ -3266,7 +3266,9 @@ def arange(
 
 
 # Define a numpy linspace-like function
-def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, c_order=True, **kwargs: Any):
+def linspace(
+    start, stop, num=None, endpoint=True, dtype=np.float64, shape=None, c_order=True, **kwargs: Any
+):
     """Return evenly spaced numbers over a specified interval.
 
     This is similar to `numpy.linspace` but it returns a `NDArray`
@@ -3308,8 +3310,17 @@ def linspace(start, stop, num=50, endpoint=True, dtype=np.float64, shape=None, c
         stop_ = start_ + lout / num * (stop - start)
         output[:] = np.linspace(start_, stop_, lout, endpoint=False, dtype=output.dtype)
 
-    if not shape:
-        shape = (num,)
+    if shape is None or num is None:
+        if shape is None and num is None:
+            raise ValueError("Either `shape` or `num` must be specified.")
+        if shape is None:  # num is not None
+            shape = (num,)
+        else:  # num is none
+            num = math.prod(shape)
+
+    # check compatibility of shape and num
+    if math.prod(shape) != num:
+        raise ValueError("The specified shape is not consistent with the specified num value")
     dtype = _check_dtype(dtype)
 
     if is_inside_new_expr():

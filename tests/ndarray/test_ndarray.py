@@ -187,6 +187,14 @@ def test_linspace(ss, shape, dtype, chunks, blocks, endpoint, c_order):
     else:
         # This is chunk order, so testing is more laborious, and not really necessary
         pass
+    with pytest.raises(ValueError):
+        a = blosc2.linspace(start, stop, 10, shape=(20,))  # num incompatible with shape
+    with pytest.raises(ValueError):
+        a = blosc2.linspace(start, stop)  # num or shape should be specified
+    a = blosc2.linspace(start, stop, shape=(20,))  # should have length 20
+    assert a.shape == (20,)
+    a = blosc2.linspace(start, stop, num=20)  # should have length 20
+    assert a.shape == (20,)
 
 
 @pytest.mark.parametrize(("N", "M"), [(10, None), (10, 20), (20, 10)])
