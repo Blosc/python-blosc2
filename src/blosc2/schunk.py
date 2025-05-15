@@ -19,6 +19,7 @@ from msgpack import packb, unpackb
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
+from blosc2.helpers import _inherit_doc_parameter
 
 
 class vlmeta(MutableMapping, blosc2_ext.vlmeta):
@@ -182,6 +183,8 @@ class Meta(Mapping):
         return str(self.getall())
 
 
+@_inherit_doc_parameter(blosc2.Storage, "mmap_mode:", {r"\* - 'w\+'[^*]+": ""})
+@_inherit_doc_parameter(blosc2.Storage, "initial_mapping_size:", {r"r\+ w\+, or c": "r+ or c"})
 class SChunk(blosc2_ext.SChunk):
     def __init__(  # noqa: C901
         self,
