@@ -555,14 +555,29 @@ class SimpleProxy(blosc2.Operand):
         if not hasattr(src, "shape") or not hasattr(src, "dtype"):
             # If the source is not a NumPy array, convert it to one
             src = np.asarray(src)
-        self.src = src
-        self.dtype = src.dtype
-        self.shape = src.shape
+        self._src = src
+        self._dtype = src.dtype
+        self._shape = src.shape
         # Compute reasonable values for chunks and blocks
         cparams = blosc2.CParams(clevel=0)
         self.chunks, self.blocks = blosc2.compute_chunks_blocks(
             self.shape, chunks, blocks, self.dtype, **{"cparams": cparams}
         )
+
+    @property
+    def src(self):
+        """The source object that this proxy wraps."""
+        return self._src
+
+    @property
+    def shape(self):
+        """The shape of the source array."""
+        return self._shape
+
+    @property
+    def dtype(self):
+        """The data type of the source array."""
+        return self._dtype
 
     def __getitem__(self, item: slice | list[slice]) -> np.ndarray:
         """
@@ -577,7 +592,7 @@ class SimpleProxy(blosc2.Operand):
         out: numpy.ndarray
             An array with the data slice.
         """
-        return self.src[item]
+        return self._src[item]
 
 
 def jit(func=None, *, out=None, **kwargs):  # noqa: C901

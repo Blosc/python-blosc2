@@ -12,3 +12,4 @@ Main Classes
     proxy
     proxysource
     proxyndsource
+    simpleproxy
