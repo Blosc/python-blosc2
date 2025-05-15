@@ -1441,13 +1441,19 @@ def open(
         The path where the :ref:`SChunk` (or :ref:`NDArray`)
         is stored. If it is a remote array, a :ref:`URLPath` must be passed.
     mode: str, optional
-        The open mode.
+        Persistence mode: 'r' means read only (must exist);
+        'a' means read/write (create if it doesn't exist);
+        'w' means create (overwrite if it exists). Default is 'a'.
     offset: int, optional
         An offset in the file where super-chunk or array data is located
         (e.g. in a file containing several such objects).
     kwargs: dict, optional
-        mmap_mode: The memory mapping mode.
-        initial_mapping_size: The initial size of the memory mapping.
+        mmap_mode: str, optional
+            If set, the file will be memory-mapped instead of using the default
+            I/O functions and the `mode` argument will be ignored.
+            For more info, see :class:`blosc2.Storage`.
+        initial_mapping_size: int, optional
+            The initial size of the memory mapping. For more info, see :class:`blosc2.Storage`.
         cparams: dict
             A dictionary with the compression parameters, which are the same that can be
             used in the :func:`~blosc2.compress2` function.

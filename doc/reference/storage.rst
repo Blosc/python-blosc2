@@ -1,3 +1,5 @@
+.. _CompStorParams:
+
 Compression, decompression and storage parameters
 =================================================
 
