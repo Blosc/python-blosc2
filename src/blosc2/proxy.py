@@ -566,7 +566,7 @@ class SimpleProxy(blosc2.Operand):
 
     def __getitem__(self, item: slice | list[slice]) -> np.ndarray:
         """
-        Get a slice as a numpy.ndarray using the :ref:`ProxyNumPy`.
+        Get a slice as a numpy.ndarray (via this proxy).
 
         Parameters
         ----------
