@@ -1451,7 +1451,10 @@ def open(
         mmap_mode: str, optional
             If set, the file will be memory-mapped instead of using the default
             I/O functions and the `mode` argument will be ignored.
-            For more info, see :class:`blosc2.Storage`.
+            For more info, see :class:`blosc2.Storage`. Please note that the `w+` mode, which
+            can be used to create new files, is not supported here since only existing files
+            can be opened. You can use :func:`SChunk.__init__ <blosc2.schunk.SChunk.__init__>`
+            to create new files.
         initial_mapping_size: int, optional
             The initial size of the memory mapping. For more info, see :class:`blosc2.Storage`.
         cparams: dict
