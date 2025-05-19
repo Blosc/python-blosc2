@@ -1364,14 +1364,13 @@ def test_chain_expressions():
     le4_ = blosc2.lazyexpr("(le2 & le3)", {"le2": le2_, "le3": le3_})
     assert (le4_[:] == le4[:]).all()
 
-    # TODO: Eventually this test should pass
-    # expr1 = blosc2.lazyexpr("arange(N) + b")
-    # expr2 = blosc2.lazyexpr("a * b + 1")
-    # expr = blosc2.lazyexpr("expr1 - expr2")
-    # expr_final = blosc2.lazyexpr("expr * expr")
-    # nres = (expr * expr)[:]
-    # res = expr_final.compute()
-    # np.testing.assert_allclose(res[:], nres)
+    expr1 = blosc2.lazyexpr("arange(N) + b")
+    expr2 = blosc2.lazyexpr("a * b + 1")
+    expr = blosc2.lazyexpr("expr1 - expr2")
+    expr_final = blosc2.lazyexpr("expr * expr")
+    nres = (expr * expr)[:]
+    res = expr_final.compute()
+    np.testing.assert_allclose(res[:], nres)
 
 
 # Test the chaining of multiple persistent lazy expressions
