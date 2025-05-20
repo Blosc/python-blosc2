@@ -258,12 +258,12 @@ def test_lazy_where(array_fixture):
     nres = ne_evaluate("where(where(na2 < 0, 3, na2) > 3, 10, na1)")
     np.testing.assert_allclose(res[:], nres)
 
-    # Test 4: muliplied wheres
+    # Test 4: multiplied wheres
     # Test with string expression
-    expr = blosc2.lazyexpr("1*where(a2 < 0, 3, a2)")
+    expr = blosc2.lazyexpr("1 * where(a2 < 0, 3, a2)")
     # Test with eval
     res = expr.compute()
-    nres = ne_evaluate("1*where(na2 < 0, 3, na2)")
+    nres = ne_evaluate("1 * where(na2 < 0, 3, na2)")
     np.testing.assert_allclose(res[:], nres)
 
 
