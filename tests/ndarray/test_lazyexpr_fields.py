@@ -226,6 +226,47 @@ def test_where(array_fixture):
     np.testing.assert_allclose(res, nres[sl])
 
 
+# Test expressions with where() and string comps
+def test_lazy_where(array_fixture):
+    sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+
+    # Test 1: where
+    # Test with string expression
+    expr = blosc2.lazyexpr("where((a1 ** 2 + a2 ** 2) > (2 * a1 * a2 + 1), 0, a1)")
+    # Test with eval
+    res = expr.compute()
+    nres = ne_evaluate("where(na1**2 + na2**2 > 2 * na1 * na2 + 1, 0, na1)")
+    np.testing.assert_allclose(res[:], nres)
+    # Test with getitem
+    sl = slice(100)
+    res = expr[sl]
+    np.testing.assert_allclose(res, nres[sl])
+
+    # Test 2: sum of wheres
+    # Test with string expression
+    expr = blosc2.lazyexpr("where(a1 < 0, 10, a1) + where(a2 < 0, 3, a2)")
+    # Test with eval
+    res = expr.compute()
+    nres = ne_evaluate("where(na1 < 0, 10, na1) + where(na2 < 0, 3, na2)")
+    np.testing.assert_allclose(res[:], nres)
+
+    # Test 3: nested wheres
+    # Test with string expression
+    expr = blosc2.lazyexpr("where(where(a2 < 0, 3, a2) > 3, 10, a1)")
+    # Test with eval
+    res = expr.compute()
+    nres = ne_evaluate("where(where(na2 < 0, 3, na2) > 3, 10, na1)")
+    np.testing.assert_allclose(res[:], nres)
+
+    # Test 4: multiplied wheres
+    # Test with string expression
+    expr = blosc2.lazyexpr("1 * where(a2 < 0, 3, a2)")
+    # Test with eval
+    res = expr.compute()
+    nres = ne_evaluate("1 * where(na2 < 0, 3, na2)")
+    np.testing.assert_allclose(res[:], nres)
+
+
 # Test where with one parameter
 def test_where_one_param(array_fixture):
     sa1, sa2, nsa1, nsa2, a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture

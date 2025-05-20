@@ -2091,6 +2091,8 @@ class LazyExpr(LazyArray):
 
         operands = {
             key: np.ones(np.ones(len(value.shape), dtype=int), dtype=value.dtype)
+            if hasattr(value, "shape")
+            else value
             for key, value in self.operands.items()
         }
 
@@ -2784,6 +2786,20 @@ class LazyExpr(LazyArray):
                 expression_, operands_ = conserve_functions(
                     _expression, _operands, new_expr.operands | local_vars
                 )
+                # if new_expr has where_args, must have come from where(...) - or possibly where(where(..
+                # since 5*where, where + ...  are evaluated eagerly
+                if hasattr(new_expr, "_where_args"):
+                    st = expression_.find("where(") + len(
+                        "where("
+                    )  # expr always begins where( - should have st = 6 always
+                    finalexpr = ""
+                    counter = 0
+                    for char in expression_[st:]:  # get rid of external where(...)
+                        finalexpr += char
+                        counter += 1 * (char == "(") - 1 * (char == ")")
+                        if counter == 0 and char == ",":
+                            break
+                    expression_ = finalexpr[:-1]  # remove trailing comma
                 new_expr.expression = f"({expression_})"  # force parenthesis
                 new_expr.expression_tosave = expression
                 new_expr.operands = operands_
