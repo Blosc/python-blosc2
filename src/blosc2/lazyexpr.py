@@ -2789,9 +2789,9 @@ class LazyExpr(LazyArray):
                 # if new_expr has where_args, must have come from where(...) - or possibly where(where(..
                 # since 5*where, where + ...  are evaluated eagerly
                 if hasattr(new_expr, "_where_args"):
-                    st = (
-                        expression_.find("where(") + 6
-                    )  # expr always begins where( - could just set = 6 probably
+                    st = expression_.find("where(") + len(
+                        "where("
+                    )  # expr always begins where( - should have st = 6 always
                     finalexpr = ""
                     counter = 0
                     for char in expression_[st:]:  # get rid of external where(...)
