@@ -116,7 +116,7 @@ dtype_symbols = {
 constructors = ("arange", "linspace", "fromiter", "zeros", "ones", "empty", "full", "frombuffer")
 # Note that, as reshape is accepted as a method too, it should always come last in the list
 constructors += ("reshape",)
-reducers = ("sum", "prod", "min", "max", "std", "mean", "var", "any", "all")
+reducers = ("sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "slice")
 
 functions = [
     "sin",
@@ -551,7 +551,20 @@ validation_patterns = [
 _blacklist_re = re.compile("|".join(validation_patterns))
 
 # Define valid method names
-valid_methods = {"sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "where", "reshape"}
+valid_methods = {
+    "sum",
+    "prod",
+    "min",
+    "max",
+    "std",
+    "mean",
+    "var",
+    "any",
+    "all",
+    "where",
+    "reshape",
+    "slice",
+}
 valid_methods |= {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
 valid_methods |= {"float32", "float64", "complex64", "complex128"}
 valid_methods |= {"bool", "str", "bytes"}
@@ -2534,6 +2547,7 @@ class LazyExpr(LazyArray):
     def _compute_expr(self, item, kwargs):  # noqa: C901
         if any(method in self.expression for method in reducers):
             # We have reductions in the expression (probably coming from a string lazyexpr)
+            # Also includes slice
             _globals = get_expr_globals(self.expression)
             lazy_expr = eval(self.expression, _globals, self.operands)
             if not isinstance(lazy_expr, blosc2.LazyExpr):

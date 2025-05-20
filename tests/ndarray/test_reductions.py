@@ -428,3 +428,11 @@ def test_reduction_index():
     assert arr[:10].shape == (10,)
     assert arr[0].shape == (1,)
     assert arr.shape == newarr.shape
+
+
+def test_slice_in_lazy():
+    shape = (20, 20)
+    a = blosc2.linspace(0, 20, num=np.prod(shape), shape=shape)
+    arr = blosc2.lazyexpr("anarr.slice(slice(10,15)) + 1", {"anarr": a})
+    newarr = arr.compute()
+    np.testing.assert_allclose(newarr[:], a.slice(slice(10, 15))[:] + 1)
