@@ -2595,8 +2595,33 @@ cdef class NDArray:
 
 
 cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
-    # This is used only in constructors, dtype will always have NumPy format
-    dtype = np.dtype(dtype)
+    if isinstance(dtype, list) and len(dtype) > 0 and isinstance(dtype[0], tuple):
+        # Extract just the field names and basic dtype info
+        fields = []
+        for field in dtype:
+            name = field[0]
+            field_dtype = field[1]
+
+            # Handle different field formats:
+            # 1. ('name', ('|S10', {'h5py_encoding': 'ascii'})) - h5py style
+            # 2. ('name', '<i4') - standard NumPy style
+            # 3. ('name', '<i4', (shape,)) - NumPy with shape info
+
+            if isinstance(field_dtype, tuple) and len(field_dtype) > 0:
+                # h5py nested representation with metadata dict
+                field_dtype = field_dtype[0]
+
+            # Check if we have shape information as third element
+            if len(field) > 2 and field[2] is not None:
+                # Include the shape information
+                fields.append((name, field_dtype, field[2]))
+            else:
+                fields.append((name, field_dtype))
+
+        dtype = np.dtype(fields)
+    else:
+        dtype = np.dtype(dtype)
+
     typesize = dtype.itemsize
     if 'cparams' in kwargs:
         kwargs['cparams']['typesize'] = typesize
