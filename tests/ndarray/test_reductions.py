@@ -430,9 +430,25 @@ def test_reduction_index():
     assert arr.shape == newarr.shape
 
 
-def test_slice_in_lazy():
+def test_slice_lazy():
     shape = (20, 20)
     a = blosc2.linspace(0, 20, num=np.prod(shape), shape=shape)
     arr = blosc2.lazyexpr("anarr.slice(slice(10,15)) + 1", {"anarr": a})
     newarr = arr.compute()
     np.testing.assert_allclose(newarr[:], a.slice(slice(10, 15))[:] + 1)
+
+
+def test_slicebrackets_lazy():
+    shape = (20, 20)
+    a = blosc2.linspace(0, 20, num=np.prod(shape), shape=shape)
+    arr = blosc2.lazyexpr("anarr[10:15] + 1", {"anarr": a})
+    newarr = arr.compute()
+    np.testing.assert_allclose(newarr[:], a[10:15] + 1)
+
+    arr = blosc2.lazyexpr("anarr[10:15, 2:9] + 1", {"anarr": a})
+    newarr = arr.compute()
+    np.testing.assert_allclose(newarr[:], a[10:15, 2:9] + 1)
+
+    arr = blosc2.lazyexpr("anarr[10:15][2:9] + 1", {"anarr": a})
+    newarr = arr.compute()
+    np.testing.assert_allclose(newarr[:], a[10:15][2:9] + 1)
