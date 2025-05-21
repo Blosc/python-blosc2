@@ -766,7 +766,7 @@ def convert_to_slice(expression):
             k = expression[i:].find("]")  # start checking from after [
             slice_convert = expression[i : i + k + 1]  # include [ and ]
             slicer = eval(f"np.s_{slice_convert}")
-            slicer = (slicer,) if isinstance(slicer, slice) else slicer  # standardise to tuple
+            slicer = (slicer,) if not isinstance(slicer, tuple) else slicer  # standardise to tuple
             if any(isinstance(el, str) for el in slicer):  # handle fields
                 raise ValueError("Cannot handle fields for slicing lazy expressions.")
             slicer = str(slicer)
