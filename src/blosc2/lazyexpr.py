@@ -541,7 +541,6 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
 
 # Define the patterns for validation
 validation_patterns = [
-    # r"[\;\[\:]",  # Flow control characters
     r"[\;]",  # Flow control characters
     r"(^|[^\w])__[\w]+__($|[^\w])",  # Dunder methods
     r"\.\b(?!real|imag|(\d*[eE]?[+-]?\d+)|(\d*[eE]?[+-]?\d+j)|\d*j\b|(sum|prod|min|max|std|mean|var|any|all|where)"
@@ -747,7 +746,8 @@ def conserve_functions(  # noqa: C901
 
 def convert_to_slice(expression):
     """
-    Assumes all operands are of the form o...
+    Takes expression and converts all instances of [] to .slice(....)
+
     Parameters
     ----------
     expression: str
@@ -770,6 +770,8 @@ def convert_to_slice(expression):
             if any(isinstance(el, str) for el in slicer):  # handle fields
                 raise ValueError("Cannot handle fields for slicing lazy expressions.")
             slicer = str(slicer)
+            # use slice so that lazyexpr uses blosc arrays internally
+            # (and doesn't decompress according to getitem syntax)
             new_expr += ".slice(" + slicer + ")"
             skip_to_char = i + k + 1
         else:
