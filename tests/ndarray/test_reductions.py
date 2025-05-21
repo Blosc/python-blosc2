@@ -452,6 +452,7 @@ def test_slicebrackets_lazy():
     res = a[10:15] + 1
     np.testing.assert_allclose(newarr, res[:3])
 
+    # Test other cases
     arr = blosc2.lazyexpr("anarr[10:15, 2:9] + 1", {"anarr": a})
     newarr = arr.compute()
     np.testing.assert_allclose(newarr[:], a[10:15, 2:9] + 1)
@@ -459,3 +460,11 @@ def test_slicebrackets_lazy():
     arr = blosc2.lazyexpr("anarr[10:15][2:9] + 1", {"anarr": a})
     newarr = arr.compute()
     np.testing.assert_allclose(newarr[:], a[10:15][2:9] + 1)
+
+    arr = blosc2.lazyexpr("anarr[10] + 1", {"anarr": a})
+    newarr = arr.compute()
+    np.testing.assert_allclose(newarr[:], a[10] + 1)
+
+    arr = blosc2.lazyexpr("anarr[10, 1] + 1", {"anarr": a})
+    newarr = arr[:]
+    np.testing.assert_allclose(newarr, a[10, 1] + 1)
