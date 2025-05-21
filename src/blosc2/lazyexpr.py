@@ -116,7 +116,7 @@ dtype_symbols = {
 constructors = ("arange", "linspace", "fromiter", "zeros", "ones", "empty", "full", "frombuffer")
 # Note that, as reshape is accepted as a method too, it should always come last in the list
 constructors += ("reshape",)
-reducers = ("sum", "prod", "min", "max", "std", "mean", "var", "any", "all")
+reducers = ("sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "slice")
 
 functions = [
     "sin",
@@ -541,7 +541,7 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
 
 # Define the patterns for validation
 validation_patterns = [
-    r"[\;\[\:]",  # Flow control characters
+    r"[\;]",  # Flow control characters
     r"(^|[^\w])__[\w]+__($|[^\w])",  # Dunder methods
     r"\.\b(?!real|imag|(\d*[eE]?[+-]?\d+)|(\d*[eE]?[+-]?\d+j)|\d*j\b|(sum|prod|min|max|std|mean|var|any|all|where)"
     r"\s*\([^)]*\)|[a-zA-Z_]\w*\s*\([^)]*\))",  # Attribute patterns
@@ -551,7 +551,20 @@ validation_patterns = [
 _blacklist_re = re.compile("|".join(validation_patterns))
 
 # Define valid method names
-valid_methods = {"sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "where", "reshape"}
+valid_methods = {
+    "sum",
+    "prod",
+    "min",
+    "max",
+    "std",
+    "mean",
+    "var",
+    "any",
+    "all",
+    "where",
+    "reshape",
+    "slice",
+}
 valid_methods |= {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
 valid_methods |= {"float32", "float64", "complex64", "complex128"}
 valid_methods |= {"bool", "str", "bytes"}
@@ -579,7 +592,7 @@ def validate_expr(expr: str) -> None:
         raise ValueError(f"'{expr}' is not a valid expression.")
 
     # Check for invalid characters not covered by the tokenizer
-    invalid_chars = re.compile(r"[^\w\s+\-*/%().,=<>!&|~^]")
+    invalid_chars = re.compile(r"[^\w\s+\-*/%()[].,=<>!&|~^]")
     if invalid_chars.search(skip_quotes) is not None:
         invalid_chars = invalid_chars.findall(skip_quotes)
         raise ValueError(f"Expression {expr} contains invalid characters: {invalid_chars}")
@@ -729,6 +742,41 @@ def conserve_functions(  # noqa: C901
     visitor.visit(tree)
     newexpression, newoperands = ast.unparse(tree), visitor.operands
     return newexpression, newoperands
+
+
+def convert_to_slice(expression):
+    """
+    Takes expression and converts all instances of [] to .slice(....)
+
+    Parameters
+    ----------
+    expression: str
+
+    Returns
+    -------
+    new_expr : str
+    """
+
+    new_expr = ""
+    skip_to_char = 0
+    for i, expr_i in enumerate(expression):
+        if i < skip_to_char:
+            continue
+        if expr_i == "[":
+            k = expression[i:].find("]")  # start checking from after [
+            slice_convert = expression[i : i + k + 1]  # include [ and ]
+            slicer = eval(f"np.s_{slice_convert}")
+            slicer = (slicer,) if isinstance(slicer, slice) else slicer  # standardise to tuple
+            if any(isinstance(el, str) for el in slicer):  # handle fields
+                raise ValueError("Cannot handle fields for slicing lazy expressions.")
+            slicer = str(slicer)
+            # use slice so that lazyexpr uses blosc arrays internally
+            # (and doesn't decompress according to getitem syntax)
+            new_expr += ".slice(" + slicer + ")"
+            skip_to_char = i + k + 1
+        else:
+            new_expr += expr_i
+    return new_expr
 
 
 class TransformNumpyCalls(ast.NodeTransformer):
@@ -2543,6 +2591,7 @@ class LazyExpr(LazyArray):
     def _compute_expr(self, item, kwargs):  # noqa: C901
         if any(method in self.expression for method in reducers):
             # We have reductions in the expression (probably coming from a string lazyexpr)
+            # Also includes slice
             _globals = get_expr_globals(self.expression)
             lazy_expr = eval(self.expression, _globals, self.operands)
             if not isinstance(lazy_expr, blosc2.LazyExpr):
@@ -2775,6 +2824,7 @@ class LazyExpr(LazyArray):
     def _new_expr(cls, expression, operands, guess, out=None, where=None, ne_args=None):
         # Validate the expression
         validate_expr(expression)
+        expression = convert_to_slice(expression)
         if guess:
             # The expression has been validated, so we can evaluate it
             # in guessing mode to avoid computing reductions
