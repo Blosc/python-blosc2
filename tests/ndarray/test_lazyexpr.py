@@ -1402,3 +1402,24 @@ def test_chain_persistentexpressions():
     le4_.save("expr4.b2nd", mode="w")
     myle4 = blosc2.open("expr4.b2nd")
     assert (myle4[:] == le4[:]).all()
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        (np.ones(10, dtype=np.uint16), 2),
+        (np.ones(10, dtype=np.uint16), np.uint32(2)),
+        (2, np.ones(10, dtype=np.uint16)),
+        (np.uint32(2), np.ones(10, dtype=np.uint16)),
+        (np.ones(10, dtype=np.uint16), 2.0),
+        (np.ones(10, dtype=np.float32), 2.0),
+        (np.ones(10, dtype=np.float32), 2.0j),
+    ],
+)
+def test_scalar_dtypes(values):
+    value1, value2 = values
+    dtype1 = (value1 + value2).dtype
+    avalue1 = blosc2.asarray(value1) if hasattr(value1, "shape") else value1
+    avalue2 = blosc2.asarray(value2) if hasattr(value2, "shape") else value2
+    dtype2 = (avalue1 * avalue2).dtype
+    assert dtype1 == dtype2, f"Expected {dtype1} but got {dtype2}"

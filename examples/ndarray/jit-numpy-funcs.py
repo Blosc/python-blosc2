@@ -18,7 +18,7 @@ import blosc2
 # Create some sample data
 a = blosc2.linspace(0, 1, 10 * 100, dtype="float32", shape=(10, 100))
 b = blosc2.linspace(1, 2, 10 * 100, dtype="float32", shape=(10, 100))
-c = blosc2.linspace(-10, 10, 10, dtype="float32", shape=(100,))
+c = blosc2.linspace(-10, 10, 100, dtype="float32", shape=(100,))
 
 
 # Example 1: Basic usage of the jit decorator with reduction

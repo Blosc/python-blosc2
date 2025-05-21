@@ -1903,9 +1903,18 @@ def infer_dtype(op, value1, value2):
         if op != "~" and value2.dtype != np.bool_:
             raise ValueError(f"Invalid operand type for {op}: {value2.dtype}")
         return np.dtype(np.bool_)
-    dtype1 = value1.dtype if hasattr(value1, "dtype") else np.array(value1).dtype
-    dtype2 = value2.dtype if hasattr(value2, "dtype") else np.array(value2).dtype
-    return np.result_type(dtype1, dtype2)
+
+    # Follow NumPy rules for scalar-array operations
+    # Create small arrays with the same dtypes and let NumPy's type promotion determine the result type
+    if np.isscalar(value1) and hasattr(value2, "shape"):
+        arr2 = np.array([0], dtype=value2.dtype)
+        return (value1 + arr2).dtype
+    elif np.isscalar(value2) and hasattr(value1, "shape"):
+        arr1 = np.array([0], dtype=value1.dtype)
+        return (arr1 + value2).dtype
+    else:
+        # Both are arrays or both are scalars, use NumPy's type promotion rules
+        return np.result_type(value1, value2)
 
 
 class LazyExpr(LazyArray):
