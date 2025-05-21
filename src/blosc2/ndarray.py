@@ -1175,10 +1175,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """The decompression parameters used by the array."""
         return self.schunk.dparams
 
-    @property
-    def storage(self) -> blosc2.Storage:
-        """The storage of the array."""
-        return self.schunk.storage
+    # TODO: Uncomment when blosc2.Storage is available
+    # @property
+    # def storage(self) -> blosc2.Storage:
+    #     """The storage of the array."""
+    #     return self.schunk.storage
 
     @property
     def urlpath(self) -> str:
