@@ -468,3 +468,23 @@ def test_slicebrackets_lazy():
     arr = blosc2.lazyexpr("anarr[10, 1] + 1", {"anarr": a})
     newarr = arr[:]
     np.testing.assert_allclose(newarr, a[10, 1] + 1)
+
+
+def test_reduce_string():
+    shape = (10, 10, 2)
+
+    # Create a NDArray from a NumPy array
+    npa = np.linspace(0, 1, np.prod(shape), dtype=np.float32).reshape(shape)
+    npb = np.linspace(1, 2, np.prod(shape), dtype=np.float64).reshape(shape)
+    npc = npa**2 + npb**2 + 2 * npa * npb + 1
+
+    a = blosc2.asarray(npa)
+    b = blosc2.asarray(npb)
+
+    # Get a LazyExpr instance
+    c = a**2 + b**2 + 2 * a * b + 1
+    # Evaluate: output is a NDArray
+    d = blosc2.lazyexpr("sl + c.sum() + a.std()", operands={"a": a, "c": c, "sl": a.slice((1, 1))})
+    sum = d.compute()[()]
+    npsum = npa[1, 1] + np.sum(npc) + np.std(npa)
+    assert np.allclose(sum, npsum)
