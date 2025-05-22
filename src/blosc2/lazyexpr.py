@@ -465,6 +465,10 @@ class LazyArray(ABC):
             "version": 3,
         }
 
+    # Provide a way to serialize the LazyArray
+    def to_cframe(self):
+        return self.compute().to_cframe()
+
 
 def convert_inputs(inputs):
     if not inputs or len(inputs) == 0:
