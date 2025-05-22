@@ -1,9 +1,22 @@
 # Release notes
 
-## Changes from 3.3.3 to 3.3.4
+## Changes from 3.3.4 to 3.3.5
 
 XXX version-specific blurb XXX
 
+## Changes from 3.3.3 to 3.3.4
+
+* Expand possibilities for chaining string-based lazy expressions to incorporate
+  data types which do not have shape attribute, e.g. int, float etc.
+  See #406 and PR #411.
+
+* Enable slicing within string-based lazy expressions. See PR #414.
+
+* Improved casting for string-based lazy expressions.
+
+* Documentation improvements, see PR #410.
+
+* Compatibility fixes for working with `h5py` files.
 
 ## Changes from 3.3.2 to 3.3.3
 

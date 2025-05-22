@@ -1,10 +1,11 @@
-Announcing Python-Blosc2 3.3.3
+Announcing Python-Blosc2 3.3.4
 ==============================
 
-This is a bugfix release, with some minor optimizations. We improved the
-correct chaining of *string* lazy expressions (there is still room for
-improvement).  Also, a new version of C-Blosc2 (v2.7.2.dev) that fixes
-mmap issues on Windows is used; thanks to @JanSellner for the fix.
+This is a bugfix release, with some minor optimizations. We further improved the
+correct chaining of *string* lazy expressions (to allow operands with more
+diverse data types). In addition, both indexing and where expressions are now
+supported within *string* lazy expressions. Finally, casting rules have
+been improved to be more consistent with NumPy.
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
