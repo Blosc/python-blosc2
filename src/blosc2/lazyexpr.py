@@ -719,11 +719,11 @@ def conserve_functions(  # noqa: C901
                         opname,
                         v,
                     ) in localop.operands.items():  # expression operands already in terms of basic operands
-                        newopname = self.update_func(v)
+                        newopname = ";" + self.update_func(v)  # add illegal character ;
                         newexpr = re.sub(
                             rf"(?<=\s){opname}|(?<=\(){opname}", newopname, newexpr
                         )  # replace with newopname
-                    node.id = newexpr
+                    node.id = newexpr.replace(";", "")  # remove all illegal characters
                 else:
                     node.id = self.update_func(localop)
             else:
