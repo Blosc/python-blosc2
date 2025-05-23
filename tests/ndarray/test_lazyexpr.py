@@ -1066,6 +1066,28 @@ def test_eval_item(array_fixture):
     np.testing.assert_allclose(res[()], nres[0:10:2])
 
 
+# Test lazyexpr's slice method
+def test_eval_slice(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = blosc2.lazyexpr("a1 + a2 - (a3 * a4)", operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4})
+    nres = ne_evaluate("na1 + na2 - (na3 * na4)")[:2]
+    res = expr.slice(slice(0, 2))
+    assert isinstance(res, blosc2.ndarray.NDArray)
+    np.testing.assert_allclose(res[:], nres)
+    res = expr[:2]
+    assert isinstance(res, np.ndarray)
+    np.testing.assert_allclose(res, nres)
+
+    # string lazy expressions automatically use .slice internally
+    expr1 = blosc2.lazyexpr("a1 * a2", operands={"a1": a1, "a2": a2})
+    expr2 = blosc2.lazyexpr("expr1[:2] + a3[:2]")
+    nres = ne_evaluate("(na1 * na2) + na3")[:2]
+    assert isinstance(expr2, blosc2.LazyExpr)
+    res = expr2.compute()
+    assert isinstance(res, blosc2.ndarray.NDArray)
+    np.testing.assert_allclose(res[()], nres)
+
+
 # Test get_chunk method
 @pytest.mark.heavy
 def test_get_chunk(array_fixture):

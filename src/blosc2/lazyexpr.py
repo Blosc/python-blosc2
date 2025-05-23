@@ -2718,6 +2718,9 @@ class LazyExpr(LazyArray):
         kwargs = {"_getitem": True}
         return self.compute(item, **kwargs)
 
+    def slice(self, item):
+        return self.compute(item)  # should do a slice since _getitem = False
+
     def __str__(self):
         return f"{self.expression}"
 
