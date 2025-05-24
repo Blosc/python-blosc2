@@ -1451,8 +1451,6 @@ def test_to_cframe():
     N = 1_000
     dtype = "float64"
     a = blosc2.linspace(0, 1, N * N, dtype=dtype, shape=(N, N))
-    b = blosc2.linspace(1, 2, N * N, dtype=dtype, shape=(N, N))
-    c = blosc2.linspace(0, 1, N, dtype=dtype, shape=(N,))
     expr = a**3 + blosc2.sin(a**2)
     cframe = expr.to_cframe()
     assert len(cframe) > 0

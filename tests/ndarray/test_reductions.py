@@ -426,8 +426,21 @@ def test_reduction_index():
     arr = blosc2.lazyexpr("sum(a,axis=0)", {"a": a})
     newarr = arr.compute()
     assert arr[:10].shape == (10,)
-    assert arr[0].shape == (1,)
+    assert arr[0].shape == ()
     assert arr.shape == newarr.shape
+
+
+@pytest.mark.parametrize("idx", [0, 1, (0,), slice(1, 2), (slice(0, 1),), slice(0, 4), (0, 2)])
+def test_reduction_index2(idx):
+    N = 10
+    shape = (N, N, N)
+    a = blosc2.linspace(0, 1, num=np.prod(shape), shape=(N, N, N))
+    expr = blosc2.lazyexpr("a.sum(axis=1)")
+    out = expr[idx]
+    na = blosc2.asarray(a)
+    nout = na.sum(axis=1)[idx]
+    assert out.shape == nout.shape
+    assert np.allclose(out, nout)
 
 
 def test_slice_lazy():

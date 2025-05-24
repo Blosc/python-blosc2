@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import builtins
 import concurrent.futures
 import copy
 import inspect
@@ -2601,7 +2602,7 @@ class LazyExpr(LazyArray):
             _globals = get_expr_globals(self.expression)
             lazy_expr = eval(self.expression, _globals, self.operands)
             if not isinstance(lazy_expr, blosc2.LazyExpr):
-                key, _ = process_key(item, self.shape)
+                key, mask = process_key(item, self.shape)
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
                 if hasattr(self, "_where_args"):
                     # We need to apply the where() operation
@@ -2618,7 +2619,11 @@ class LazyExpr(LazyArray):
                     # This is not exactly optimized, but it works for now
                     self._output[:] = lazy_expr[key]
                     return self._output
-                return lazy_expr[key]
+                arr = lazy_expr[key]
+                if builtins.sum(mask) > 0:
+                    # Correct shape to adjust to NumPy convention
+                    arr.shape = tuple(arr.shape[i] for i in range(len(mask)) if not mask[i])
+                return arr
 
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
 
