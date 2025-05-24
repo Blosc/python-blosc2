@@ -676,3 +676,50 @@ def jit(func=None, *, out=None, **kwargs):  # noqa: C901
         return decorator
     else:
         return decorator(func)
+
+
+class PandasUdfEngine:
+    @staticmethod
+    def _ensure_numpy_data(data):
+        if not isinstance(data, np.ndarray):
+            try:
+                data = data.values
+            except AttributeError as err:
+                raise ValueError(
+                    "blosc2.jit received an object of type {data.__name__}, which is not supported. "
+                    "Try casting your Series or DataFrame to a NumPy dtype."
+                ) from err
+        return data
+
+    @classmethod
+    def map(cls, data, func, args, kwargs, decorator, skip_na):
+        """
+        JIT a NumPy array element-wise. In the case of Blosc2, functions are
+        expected to be vectorized NumPy operations, so the function is called
+        with the NumPy array as the function parameter, instead of calling the
+        function once for each element.
+        """
+        data = cls._ensure_numpy_data(data)
+        func = decorator(func)
+        return func(data, *args, **kwargs)
+
+    @classmethod
+    def apply(cls, data, func, args, kwargs, decorator, axis):
+        """
+        JIT a NumPy array by column or row. In the case of Blosc2, functions are
+        expected to be vectorized NumPy operations, so the function is called
+        with the NumPy array as the function parameter, instead of calling the
+        function once for each column or row.
+        """
+        data = cls._ensure_numpy_data(data)
+        func = decorator(func)
+        if data.ndim in (1, 2):
+            return func(data, *args, **kwargs)
+        else:
+            raise NotImplementedError(
+                "The blosc2 engine only supports data with with 1 or 2 dimensions. "
+                f"A NumPy array with {data.ndim} dimensions has been received."
+            )
+
+
+jit.__pandas_udf__ = PandasUdfEngine
