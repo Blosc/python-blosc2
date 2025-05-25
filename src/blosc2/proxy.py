@@ -713,13 +713,7 @@ class PandasUdfEngine:
         """
         data = cls._ensure_numpy_data(data)
         func = decorator(func)
-        if data.ndim in (1, 2):
-            return func(data, *args, **kwargs)
-        else:
-            raise NotImplementedError(
-                "The blosc2 engine only supports data with with 1 or 2 dimensions. "
-                f"A NumPy array with {data.ndim} dimensions has been received."
-            )
+        return func(data, *args, **kwargs)
 
 
 jit.__pandas_udf__ = PandasUdfEngine
