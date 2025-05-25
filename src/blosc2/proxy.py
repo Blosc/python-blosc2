@@ -699,9 +699,7 @@ class PandasUdfEngine:
         with the NumPy array as the function parameter, instead of calling the
         function once for each element.
         """
-        data = cls._ensure_numpy_data(data)
-        func = decorator(func)
-        return func(data, *args, **kwargs)
+        raise NotImplementedError("The Blosc2 engine does not support map. Use apply instead.")
 
     @classmethod
     def apply(cls, data, func, args, kwargs, decorator, axis):
@@ -713,7 +711,23 @@ class PandasUdfEngine:
         """
         data = cls._ensure_numpy_data(data)
         func = decorator(func)
-        return func(data, *args, **kwargs)
+        if data.ndim == 1 or axis is None:
+            # pandas Series.apply or pipe
+            return func(data, *args, **kwargs)
+        elif axis in (0, "index"):
+            # pandas apply(axis=0) column-wise
+            result = []
+            for row_idx in range(data.shape[1]):
+                result.append(func(data[:, row_idx], *args, **kwargs))
+            return np.vstack(result).transpose()
+        elif axis == (1, "columns"):
+            # pandas apply(axis=1) row-wise
+            result = []
+            for col_idx in range(data.shape[0]):
+                result.append(func(data[col_idx, :], *args, **kwargs))
+            return np.vstack(result)
+        else:
+            raise NotImplementedError(f"Unknown axis '{axis}'. Use one of 0, 1 or None.")
 
 
 jit.__pandas_udf__ = PandasUdfEngine
