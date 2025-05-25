@@ -720,7 +720,7 @@ class PandasUdfEngine:
             for row_idx in range(data.shape[1]):
                 result.append(func(data[:, row_idx], *args, **kwargs))
             return np.vstack(result).transpose()
-        elif axis == (1, "columns"):
+        elif axis in (1, "columns"):
             # pandas apply(axis=1) row-wise
             result = []
             for col_idx in range(data.shape[0]):
