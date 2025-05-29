@@ -691,3 +691,58 @@ def jit(func=None, *, out=None, **kwargs):  # noqa: C901
         return decorator
     else:
         return decorator(func)
+
+
+class PandasUdfEngine:
+    @staticmethod
+    def _ensure_numpy_data(data):
+        if not isinstance(data, np.ndarray):
+            try:
+                data = data.values
+            except AttributeError as err:
+                raise ValueError(
+                    "blosc2.jit received an object of type {data.__name__}, which is not supported. "
+                    "Try casting your Series or DataFrame to a NumPy dtype."
+                ) from err
+        return data
+
+    @classmethod
+    def map(cls, data, func, args, kwargs, decorator, skip_na):
+        """
+        JIT a NumPy array element-wise. In the case of Blosc2, functions are
+        expected to be vectorized NumPy operations, so the function is called
+        with the NumPy array as the function parameter, instead of calling the
+        function once for each element.
+        """
+        raise NotImplementedError("The Blosc2 engine does not support map. Use apply instead.")
+
+    @classmethod
+    def apply(cls, data, func, args, kwargs, decorator, axis):
+        """
+        JIT a NumPy array by column or row. In the case of Blosc2, functions are
+        expected to be vectorized NumPy operations, so the function is called
+        with the NumPy array as the function parameter, instead of calling the
+        function once for each column or row.
+        """
+        data = cls._ensure_numpy_data(data)
+        func = decorator(func)
+        if data.ndim == 1 or axis is None:
+            # pandas Series.apply or pipe
+            return func(data, *args, **kwargs)
+        elif axis in (0, "index"):
+            # pandas apply(axis=0) column-wise
+            result = []
+            for row_idx in range(data.shape[1]):
+                result.append(func(data[:, row_idx], *args, **kwargs))
+            return np.vstack(result).transpose()
+        elif axis in (1, "columns"):
+            # pandas apply(axis=1) row-wise
+            result = []
+            for col_idx in range(data.shape[0]):
+                result.append(func(data[col_idx, :], *args, **kwargs))
+            return np.vstack(result)
+        else:
+            raise NotImplementedError(f"Unknown axis '{axis}'. Use one of 0, 1 or None.")
+
+
+jit.__pandas_udf__ = PandasUdfEngine
