@@ -278,8 +278,9 @@ class LazyArray(ABC):
         Parameters
         ----------
         item: slice, list of slices, optional
-            If not None, only the chunks that intersect with the slices
-            in items will be evaluated.
+            If provided, item is used to slice the operands *prior* to computation; not to retrieve specified slices of
+            the evaluated result. This difference between slicing operands and slicing the final expression
+            is important when reductions or a where clause are used in the expression.
 
         kwargs: Any, optional
             Keyword arguments that are supported by the :func:`empty` constructor.
@@ -328,7 +329,9 @@ class LazyArray(ABC):
         Parameters
         ----------
         item: int, slice or sequence of slices
-            The slice(s) to be retrieved. Note that step parameter is not yet honored.
+            If provided, item is used to slice the operands *prior* to computation; not to retrieve specified slices of
+            the evaluated result. This difference between slicing operands and slicing the final expression
+            is important when reductions or a where clause are used in the expression.
 
         Returns
         -------
@@ -1378,7 +1381,8 @@ def slices_eval(  # noqa: C901
             for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
         # Check whether current slice_ intersects with _slice
-        if _slice is not None and _slice != ():
+        checker = _slice.item() if hasattr(_slice, "item") else _slice  # can't use != when _slice is np.int
+        if checker is not None and checker != ():
             # Ensure that _slice is of type slice
             key = ndindex.ndindex(_slice).expand(shape).raw
             _slice = tuple(k if isinstance(k, slice) else slice(k, k + 1, None) for k in key)
@@ -1508,19 +1512,7 @@ def slices_eval(  # noqa: C901
         else:
             raise ValueError("The where condition must be a tuple with one or two elements")
 
-    if orig_slice is not None:
-        if isinstance(out, np.ndarray):
-            out = out[orig_slice]
-            if _order is not None:
-                indices_ = indices_[orig_slice]
-        elif isinstance(out, blosc2.NDArray):
-            # It *seems* better to choose an automatic chunks and blocks for the output array
-            # out = out.slice(orig_slice, chunks=out.chunks, blocks=out.blocks)
-            out = out.slice(orig_slice)
-        else:
-            raise ValueError("The output array is not a NumPy array or a NDArray")
-
-    if where is not None and len(where) < 2:
+    if where is not None and len(where) < 2:  # Don't need to take orig_slice since filled up from 0 index
         if _order is not None:
             # argsort the result following _order
             new_order = np.argsort(out[:lenout])
@@ -1531,6 +1523,19 @@ def slices_eval(  # noqa: C901
             out = out[:lenout]
         else:
             out.resize((lenout,))
+
+    else:  # Need to take orig_slice since filled up array according to slice_ for each chunk
+        if orig_slice is not None:
+            if isinstance(out, np.ndarray):
+                out = out[orig_slice]
+                if _order is not None:
+                    indices_ = indices_[orig_slice]
+            elif isinstance(out, blosc2.NDArray):
+                # It *seems* better to choose an automatic chunks and blocks for the output array
+                # out = out.slice(orig_slice, chunks=out.chunks, blocks=out.blocks)
+                out = out.slice(orig_slice)
+            else:
+                raise ValueError("The output array is not a NumPy array or a NDArray")
 
     return out
 
@@ -1827,7 +1832,8 @@ def chunked_eval(  # noqa: C901
     operands: dict
         A dictionary containing the operands for the expression.
     item: int, slice or sequence of slices, optional
-        The slice(s) to be retrieved. Note that step parameter is not honored yet.
+        The slice(s) of the operands to be used in computation. Note that step parameter is not honored yet.
+        Item is used to slice the operands PRIOR to computation.
     kwargs: Any, optional
         Additional keyword arguments supported by the :func:`empty` constructor.  In addition,
         the following keyword arguments are supported:

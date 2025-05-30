@@ -279,17 +279,19 @@ def test_where_one_param(array_fixture):
         res = np.sort(res)
         nres = np.sort(nres)
     np.testing.assert_allclose(res[:], nres)
+
     # Test with getitem
     sl = slice(100)
     res = expr.where(a1)[sl]
+    nres = na1[sl][ne_evaluate("na1**2 + na2**2 > 2 * na1 * na2 + 1")[sl]]
     if len(a1.shape) == 1 or a1.chunks == a1.shape:
         # TODO: fix this, as it seems that is not working well for numexpr?
         if blosc2.IS_WASM:
             return
-        np.testing.assert_allclose(res, nres[sl])
+        np.testing.assert_allclose(res, nres)
     else:
         # In this case, we cannot compare results, only the length
-        assert len(res) == len(nres[sl])
+        assert len(res) == len(nres)
 
 
 # Test where indirectly via a condition in getitem in a NDArray
@@ -330,25 +332,26 @@ def test_where_getitem(array_fixture):
     # Test with partial slice
     sl = slice(100)
     res = sa1[a1**2 + a2**2 > 2 * a1 * a2 + 1][sl]
+    nres = nsa1[sl][ne_evaluate("na1**2 + na2**2 > 2 * na1 * na2 + 1")[sl]]
     if len(a1.shape) == 1 or a1.chunks == a1.shape:
         # TODO: fix this, as it seems that is not working well for numexpr?
         if blosc2.IS_WASM:
             return
-        np.testing.assert_allclose(res["a"], nres[sl]["a"])
-        np.testing.assert_allclose(res["b"], nres[sl]["b"])
+        np.testing.assert_allclose(res["a"], nres["a"])
+        np.testing.assert_allclose(res["b"], nres["b"])
     else:
         # In this case, we cannot compare results, only the length
-        assert len(res["a"]) == len(nres[sl]["a"])
-        assert len(res["b"]) == len(nres[sl]["b"])
+        assert len(res["a"]) == len(nres["a"])
+        assert len(res["b"]) == len(nres["b"])
     # string version
     res = sa1["a**2 + b**2 > 2 * a * b + 1"][sl]
     if len(a1.shape) == 1 or a1.chunks == a1.shape:
-        np.testing.assert_allclose(res["a"], nres[sl]["a"])
-        np.testing.assert_allclose(res["b"], nres[sl]["b"])
+        np.testing.assert_allclose(res["a"], nres["a"])
+        np.testing.assert_allclose(res["b"], nres["b"])
     else:
         # We cannot compare the results here, other than the length
-        assert len(res["a"]) == len(nres[sl]["a"])
-        assert len(res["b"]) == len(nres[sl]["b"])
+        assert len(res["a"]) == len(nres["a"])
+        assert len(res["b"]) == len(nres["b"])
 
 
 # Test where indirectly via a condition in getitem in a NDField
@@ -631,3 +634,40 @@ def test_col_reduction(reduce_op):
     ns = nreduc(nC[nC > 0])
     np.testing.assert_allclose(s, ns)
     np.testing.assert_allclose(s2, ns)
+
+
+def test_fields_indexing():
+    N = 1000
+    it = ((-x + 1, x - 2, 0.1 * x) for x in range(N))
+    sa = blosc2.fromiter(
+        it, dtype=[("A", "i4"), ("B", "f4"), ("C", "f8")], shape=(N,), urlpath="sa-1M.b2nd", mode="w"
+    )
+    expr = sa["(A < B)"]
+    A = sa["A"][:]
+    B = sa["B"][:]
+    C = sa["C"][:]
+    temp = sa[:]
+    indices = A < B
+    idx = np.argmax(indices)
+
+    # Returns less than 10 elements in general
+    sliced = expr.compute(slice(0, 10))
+    gotitem = expr[:10]
+    np.testing.assert_array_equal(sliced[:], gotitem)
+    np.testing.assert_array_equal(gotitem, temp[:10][indices[:10]])
+    # Actually this makes sense since one can understand this as a request to compute on a portion of operands.
+    # If one desires a portion of the result, one should compute the whole expression and then slice it.
+    # For a general slice it is quite difficult to simply stop when the desired slice has been obtained. Or
+    # to try to optimise chunk computation order.
+
+    # Get first true element
+    sliced = expr.compute(idx)
+    gotitem = expr[idx]
+    np.testing.assert_array_equal(sliced[()], gotitem)
+    np.testing.assert_array_equal(gotitem, temp[idx])
+
+    # Should return void arrays here.
+    sliced = expr.compute(0)  # typically gives array of zeros
+    gotitem = expr[0]  # gives an error
+    np.testing.assert_array_equal(sliced[()], gotitem)
+    np.testing.assert_array_equal(gotitem, temp[0])
