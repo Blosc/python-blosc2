@@ -1829,7 +1829,8 @@ def chunked_eval(  # noqa: C901
     operands: dict
         A dictionary containing the operands for the expression.
     item: int, slice or sequence of slices, optional
-        The slice(s) to be retrieved. Note that step parameter is not honored yet.
+        The slice(s) of the operands to be used in computation. Note that step parameter is not honored yet.
+        Item is used to slice the operands PRIOR to computation.
     kwargs: Any, optional
         Additional keyword arguments supported by the :func:`empty` constructor.  In addition,
         the following keyword arguments are supported:
@@ -2688,6 +2689,21 @@ class LazyExpr(LazyArray):
         return lazy_expr
 
     def compute(self, item=None, **kwargs) -> blosc2.NDArray:
+        """
+        Compute the expression with the given item and kwargs.
+        Parameters
+        ----------
+        item: int, slice or sequence of slices, optional
+            The slice(s) of the operands to be used in computation. Note that step parameter is not honored yet.
+            Item is used to slice the operands PRIOR to computation.
+        kwargs
+
+        Returns:
+        blosc2.NDArray or numpy.ndarray
+        -------
+
+        """
+
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
         if "out" in kwargs:
             kwargs["_output"] = kwargs.pop("out")
@@ -2722,6 +2738,17 @@ class LazyExpr(LazyArray):
         return result
 
     def __getitem__(self, item):
+        """
+        Apply LazyExpr on a slice of the oeprands.
+        Parameters
+        ----------
+        item: int, slice or sequence of slices, optional
+            The slice(s) of the operands to be used in computation. Note that step parameter is not honored yet.
+            Item is used to slice the operands PRIOR to computation.
+        Returns:
+        numpy.ndarray
+        """
+
         kwargs = {"_getitem": True}
         return self.compute(item, **kwargs)
 
