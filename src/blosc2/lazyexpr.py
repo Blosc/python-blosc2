@@ -1378,7 +1378,8 @@ def slices_eval(  # noqa: C901
             for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
         # Check whether current slice_ intersects with _slice
-        if _slice is not None and np.any(_slice != ()):  # can't use != when _slice is np.int
+        checker = _slice.item() if hasattr(_slice, "item") else _slice  # can't use != when _slice is np.int
+        if checker is not None and checker != ():
             # Ensure that _slice is of type slice
             key = ndindex.ndindex(_slice).expand(shape).raw
             _slice = tuple(k if isinstance(k, slice) else slice(k, k + 1, None) for k in key)
