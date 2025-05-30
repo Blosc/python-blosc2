@@ -278,9 +278,9 @@ class LazyArray(ABC):
         Parameters
         ----------
         item: slice, list of slices, optional
-            If not None, only the chunks that intersect with the slices
-            in item will be evaluated. If provided, items of the operands to be used in computation.
-            Important to note that item is used to slice the operands PRIOR to computation.
+            If provided, item is used to slice the operands *prior* to computation; not to retrieve specified slices of
+            the evaluated result. This difference between slicing operands and slicing the final expression
+            is important when reductions or a where clause are used in the expression.
 
         kwargs: Any, optional
             Keyword arguments that are supported by the :func:`empty` constructor.
@@ -329,9 +329,9 @@ class LazyArray(ABC):
         Parameters
         ----------
         item: int, slice or sequence of slices
-            If provided, items of the operands to be used in computation.
-            Important to note that item is used to slice the operands PRIOR to computation, not to retrieve specified
-            slices of the evaluated result.
+            If provided, item is used to slice the operands *prior* to computation; not to retrieve specified slices of
+            the evaluated result. This difference between slicing operands and slicing the final expression
+            is important when reductions or a where clause are used in the expression.
 
         Returns
         -------
