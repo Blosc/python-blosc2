@@ -1378,7 +1378,7 @@ def slices_eval(  # noqa: C901
             for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
         # Check whether current slice_ intersects with _slice
-        if _slice is not None and _slice != ():
+        if _slice is not None and _slice != ():  # can't use != when _slice is np.int
             # Ensure that _slice is of type slice
             key = ndindex.ndindex(_slice).expand(shape).raw
             _slice = tuple(k if isinstance(k, slice) else slice(k, k + 1, None) for k in key)
@@ -1508,19 +1508,7 @@ def slices_eval(  # noqa: C901
         else:
             raise ValueError("The where condition must be a tuple with one or two elements")
 
-    if orig_slice is not None:
-        if isinstance(out, np.ndarray):
-            out = out[orig_slice]
-            if _order is not None:
-                indices_ = indices_[orig_slice]
-        elif isinstance(out, blosc2.NDArray):
-            # It *seems* better to choose an automatic chunks and blocks for the output array
-            # out = out.slice(orig_slice, chunks=out.chunks, blocks=out.blocks)
-            out = out.slice(orig_slice)
-        else:
-            raise ValueError("The output array is not a NumPy array or a NDArray")
-
-    if where is not None and len(where) < 2:
+    if where is not None and len(where) < 2:  # Don't need to take orig_slice since filled up from 0 index
         if _order is not None:
             # argsort the result following _order
             new_order = np.argsort(out[:lenout])
@@ -1531,6 +1519,19 @@ def slices_eval(  # noqa: C901
             out = out[:lenout]
         else:
             out.resize((lenout,))
+
+    else:  # Need to take orig_slice since filled up array according to slice_ for each chunk
+        if orig_slice is not None:
+            if isinstance(out, np.ndarray):
+                out = out[orig_slice]
+                if _order is not None:
+                    indices_ = indices_[orig_slice]
+            elif isinstance(out, blosc2.NDArray):
+                # It *seems* better to choose an automatic chunks and blocks for the output array
+                # out = out.slice(orig_slice, chunks=out.chunks, blocks=out.blocks)
+                out = out.slice(orig_slice)
+            else:
+                raise ValueError("The output array is not a NumPy array or a NDArray")
 
     return out
 
