@@ -17,8 +17,8 @@ import numpy as np
 
 import blosc2
 
-shape = (50, 100, 10_000)
-chunks = [5, 100, 10_000]
+shape = (100, 100, 10_000)
+chunks = [10, 100, 10_000]
 blocks = [4, 10, 1_000]
 # Comment out the next line to force chunks and blocks above
 chunks, blocks = None, None
@@ -41,6 +41,7 @@ vardict = {"x": npx, "y": npy, "z": npz, "np": np}
 x = blosc2.asarray(npx, chunks=chunks, blocks=blocks)
 y = blosc2.asarray(npy, chunks=chunks, blocks=blocks)
 z = blosc2.asarray(npz, chunks=chunks, blocks=blocks)
+print(f"*** cratios: x={x.schunk.cratio:.2f}x, y={y.schunk.cratio:.2f}x, z={z.schunk.cratio:.2f}x")
 
 expr = "(x**2 + y**2 * z** 2) < 1"
 
@@ -52,24 +53,28 @@ for axis in laxis:
     npexpr = expr.replace("sin", "np.sin").replace("cos", "np.cos")
     t0 = time()
     npres = eval(npexpr, vardict).sum(axis=axis)
-    print("NumPy took %.3f s" % (time() - t0))
+    tref = time() - t0
+    print("NumPy took %.3f s" % tref)
     # ne.set_num_threads(1)
     # nb.set_num_threads(1)  # this does not work that well; better use the NUMBA_NUM_THREADS env var
     t0 = time()
     out = ne.evaluate(expr, vardict).sum(axis=axis)
-    print("NumExpr took %.3f s" % (time() - t0))
+    t1 = time() - t0
+    print(f"NumExpr took {t1:.3f} s; {tref / t1:.1f}x wrt NumPy")
 
     # Reduce with Blosc2
     c = eval(expr)
     t0 = time()
     d = c.compute()
     d = d.sum(axis=axis)
-    print("LazyExpr+compute took %.3f s" % (time() - t0))
+    t1 = time() - t0
+    print(f"LazyExpr+compute took {t1:.3f} s; {tref / t1:.1f}x wrt NumPy")
     # Check
     np.testing.assert_allclose(d[()], npres, rtol=rtol, atol=atol)
     t0 = time()
     d = c[:]
     d = d.sum(axis=axis)
-    print("LazyExpr+getitem took %.3f s" % (time() - t0))
+    t1 = time() - t0
+    print(f"LazyExpr+getitem took {t1:.3f} s; {tref / t1:.1f}x wrt NumPy")
     # Check
     np.testing.assert_allclose(d[()], npres, rtol=rtol, atol=atol)
