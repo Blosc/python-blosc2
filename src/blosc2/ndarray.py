@@ -3545,9 +3545,9 @@ def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
     >>> import blosc2
     >>> import numpy as np
     >>> # Create an array
-    >>> array = np.arange(0, 100, dtype=np.int64).reshape(10, 10)
+    >>> array = blosc2.arange(0, 100, dtype=np.int64, shape=(10, 10))
     >>> # Save the array to a file
-    >>> blosc2.save(array, "array.b2")
+    >>> blosc2.save(array, "array.b2", mode="w")
     """
     array.save(urlpath, contiguous, **kwargs)
 
