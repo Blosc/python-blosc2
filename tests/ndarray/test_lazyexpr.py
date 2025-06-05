@@ -6,6 +6,7 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 import math
+import pathlib
 
 import numpy as np
 import pytest
@@ -1344,17 +1345,14 @@ def test_missing_operator():
     # Remove the file for operand b
     blosc2.remove_urlpath("b.b2nd")
     # Re-open the lazy expression
-    expr2 = blosc2.open("expr.b2nd")
-    # Check that some operand is missing
-    assert expr2.operands["a"] is not None
-    assert expr2.operands["b"] is None
-    # Check that the expression is still there, and can be introspected
-    # Note the added parentheses. The parser automatically adds these,
-    # mainly because of possible operator precedence issues in nested expressions.
-    assert expr2.expression == "a + b"
-    # Check that dtype and shape are None
-    assert expr2.dtype is None
-    assert expr2.shape is None
+    with pytest.raises(blosc2.exceptions.MissingOperands) as excinfo:
+        blosc2.open("expr.b2nd")
+
+    # Check that some operand is missing"
+    assert "a" not in excinfo.value.missing_ops
+    assert excinfo.value.missing_ops["b"] == pathlib.Path("b.b2nd")
+    assert excinfo.value.expr == "a + b"
+
     # Clean up
     blosc2.remove_urlpath("a.b2nd")
     blosc2.remove_urlpath("expr.b2nd")

@@ -29,6 +29,8 @@ from typing import TYPE_CHECKING, Any
 
 from numpy.exceptions import ComplexWarning
 
+from . import exceptions
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
@@ -3294,14 +3296,16 @@ def _open_lazyarray(array):
     operands = lazyarray["operands"]
     parent_path = Path(array.schunk.urlpath).parent
     operands_dict = {}
+    missing_ops = {}
     for key, value in operands.items():
         if isinstance(value, str):
             value = parent_path / value
             try:
                 op = blosc2.open(value)
             except FileNotFoundError:
-                op = None
-            operands_dict[key] = op
+                missing_ops[key] = value
+            else:
+                operands_dict[key] = op
         elif isinstance(value, dict):
             # C2Array
             operands_dict[key] = blosc2.C2Array(
@@ -3312,16 +3316,17 @@ def _open_lazyarray(array):
             raise TypeError("Error when retrieving the operands")
 
     expr = lazyarray["expression"]
-    try:
-        new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
-        # Make the array info available for the user (only available when opened from disk)
-        new_expr.array = array
-        # We want to expose schunk too, so that .info() can be used on the LazyArray
-        new_expr.schunk = array.schunk
-    except RuntimeError:
-        # Something unexpected happened. Avoid guessing and return something that
-        # can be introspected.
-        new_expr = LazyExpr._new_expr(expr, operands_dict, guess=False, out=None, where=None)
+    if missing_ops:
+        exc = exceptions.MissingOperands(expr, missing_ops)
+        exc.expr = expr
+        exc.missing_ops = missing_ops
+        raise exc
+
+    new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
+    # Make the array info available for the user (only available when opened from disk)
+    new_expr.array = array
+    # We want to expose schunk too, so that .info() can be used on the LazyArray
+    new_expr.schunk = array.schunk
     return new_expr
 
 
