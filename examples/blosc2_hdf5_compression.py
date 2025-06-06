@@ -37,7 +37,7 @@ with h5py.File(fname_in, "r") as fr:
         b2comp = hdf5plugin.Blosc2(cname=cname, clevel=clevel, filters=hdf5plugin.Blosc2.BITSHUFFLE)
         dset_out = g.create_dataset(
             f"cname-{cname}",
-            data=dset[:nframes],
+            data=dset,
             dtype=dset.dtype,
             chunks=(1,) + dset.shape[1:],  # chunk size of 1 frame
             **b2comp,
@@ -56,10 +56,10 @@ cparams = {
     "clevel": clevel
 }
 
-try: # don't reload dset to blosc2 if already done so once
+if os.path.exists("dset.b2nd"): # don't reload dset to blosc2 if already done so once
     b2im = blosc2.open(urlpath="dset.b2nd", mode="r")
     s, d = b2im.shape, b2im.dtype
-except:
+else:
     with h5py.File(fname_in, "r") as fr: # load file and process to blosc2 array
         dset = fr["/entry/data/data"][:]
         b2im = blosc2.asarray(dset, chunks=chunks, blocks=blocks, cparams=cparams, urlpath="dset.b2nd", mode="w")
