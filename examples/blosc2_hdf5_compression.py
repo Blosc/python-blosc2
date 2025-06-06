@@ -68,7 +68,7 @@ else:
         d = dset.dtype
         del dset
 
-# Write to .h5 file
+# Write to .h5 file #
 with h5py.File(fname_out, "w") as fw:
     g = fw.create_group("/data")
     b2comp = hdf5plugin.Blosc2()  # just for identification, no compression algorithm specified
