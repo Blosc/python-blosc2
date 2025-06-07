@@ -238,6 +238,7 @@ from .ndarray import (
     sort,
     reshape,
     copy,
+    concatenate,
     empty,
     frombuffer,
     fromiter,

@@ -3523,6 +3523,58 @@ def copy(array: NDArray, dtype: np.dtype | str = None, **kwargs: Any) -> NDArray
     return array.copy(dtype, **kwargs)
 
 
+def concatenate(arr1: NDArray, arr2: NDArray, /, axis=0, **kwargs: Any) -> NDArray:
+    """Concatenate two arrays along a specified axis.
+
+    Parameters
+    ----------
+    arr1: :ref:`NDArray`
+        The first array to concatenate.
+    arr2: :ref:`NDArray`
+        The second array to concatenate.
+    axis: int, optional
+        The axis along which the arrays will be concatenated. Default is 0.
+
+    Other Parameters
+    ----------------
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        A new NDArray containing the concatenated data.
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> arr1 = blosc2.arange(0, 5, dtype=np.int32)
+    >>> arr2 = blosc2.arange(5, 10, dtype=np.int32)
+    >>> result = blosc2.concatenate(arr1, arr2)
+    >>> print(result[:])
+    [0 1 2 3 4 5 6 7 8 9]
+    """
+    if not isinstance(arr1, blosc2.NDArray) or not isinstance(arr2, blosc2.NDArray):
+        raise TypeError("Both inputs must be instances of blosc2.NDArray")
+    if arr1.ndim != arr2.ndim:
+        raise ValueError("Both arrays must have the same number of dimensions for concatenation.")
+    if axis < 0:
+        axis += arr1.ndim
+    if axis >= arr1.ndim:
+        raise ValueError(f"Axis {axis} is out of bounds for array of dimension {arr1.ndim}.")
+    # Check that the shapes match, except for the concatenation axis
+    if arr1.shape[:axis] != arr2.shape[:axis] or arr1.shape[axis + 1 :] != arr2.shape[axis + 1 :]:
+        raise ValueError(
+            f"Shapes of the arrays do not match along the concatenation axis {axis}: "
+            f"{arr1.shape} vs {arr2.shape}"
+        )
+    if arr1.dtype != arr2.dtype:
+        raise ValueError("Both arrays must have the same dtype for concatenation.")
+
+    return blosc2_ext.concatenate(arr1, arr2, axis, **kwargs)
+
+
 def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
     """Save an array to a file.
 
