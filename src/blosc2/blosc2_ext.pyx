@@ -2875,16 +2875,20 @@ def concatenate(arr1: NDArray, arr2: NDArray, axis: int, **kwargs):
     """
     Concatenate two NDArray objects along a specified axis.
     """
-
+    cdef c_bool copy = kwargs.pop("copy", True)
     cdef b2nd_context_t *ctx = create_b2nd_context(arr1.shape, arr1.chunks, arr1.blocks, arr1.dtype, kwargs)
     if ctx == NULL:
         raise RuntimeError("Error while creating the context for concatenation")
 
-    cdef c_bool copy = kwargs.get("copy", True)
     cdef b2nd_array_t *array
     _check_rc(b2nd_concatenate(ctx, arr1.array, arr2.array, axis, copy, &array),
               "Error while concatenating the arrays")
     _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
 
-    return blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
-                          _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
+    if copy:
+        # We have copied the concatenated data into a new array
+        return blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
+                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
+    else:
+        # Return the first array, which now contains the concatenated data
+        return arr1

@@ -3523,15 +3523,13 @@ def copy(array: NDArray, dtype: np.dtype | str = None, **kwargs: Any) -> NDArray
     return array.copy(dtype, **kwargs)
 
 
-def concatenate(arr1: NDArray, arr2: NDArray, /, axis=0, **kwargs: Any) -> NDArray:
+def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:  # noqa: C901
     """Concatenate two arrays along a specified axis.
 
     Parameters
     ----------
-    arr1: :ref:`NDArray`
-        The first array to concatenate.
-    arr2: :ref:`NDArray`
-        The second array to concatenate.
+    arrays: list of :ref:`NDArray`
+        A list containing two or more NDArray instances to be concatenated.
     axis: int, optional
         The axis along which the arrays will be concatenated. Default is 0.
 
@@ -3551,28 +3549,42 @@ def concatenate(arr1: NDArray, arr2: NDArray, /, axis=0, **kwargs: Any) -> NDArr
     >>> import numpy as np
     >>> arr1 = blosc2.arange(0, 5, dtype=np.int32)
     >>> arr2 = blosc2.arange(5, 10, dtype=np.int32)
-    >>> result = blosc2.concatenate(arr1, arr2)
+    >>> result = blosc2.concatenate([arr1, arr2])
     >>> print(result[:])
     [0 1 2 3 4 5 6 7 8 9]
     """
-    if not isinstance(arr1, blosc2.NDArray) or not isinstance(arr2, blosc2.NDArray):
-        raise TypeError("Both inputs must be instances of blosc2.NDArray")
-    if arr1.ndim != arr2.ndim:
-        raise ValueError("Both arrays must have the same number of dimensions for concatenation.")
-    if axis < 0:
-        axis += arr1.ndim
-    if axis >= arr1.ndim:
-        raise ValueError(f"Axis {axis} is out of bounds for array of dimension {arr1.ndim}.")
-    # Check that the shapes match, except for the concatenation axis
-    if arr1.shape[:axis] != arr2.shape[:axis] or arr1.shape[axis + 1 :] != arr2.shape[axis + 1 :]:
-        raise ValueError(
-            f"Shapes of the arrays do not match along the concatenation axis {axis}: "
-            f"{arr1.shape} vs {arr2.shape}"
-        )
-    if arr1.dtype != arr2.dtype:
-        raise ValueError("Both arrays must have the same dtype for concatenation.")
+    if len(arrays) < 2:
+        raise ValueError("At least two arrays are required for concatenation.")
+    arr1 = arrays[0]
+    if not isinstance(arr1, blosc2.NDArray):
+        raise TypeError("All inputs must be instances of blosc2.NDArray")
+    # Do a first pass for checking array compatibility
+    for arr2 in arrays[1:]:
+        if not isinstance(arr2, blosc2.NDArray):
+            raise TypeError("All inputs must be instances of blosc2.NDArray")
+        if arr1.ndim != arr2.ndim:
+            raise ValueError("Both arrays must have the same number of dimensions for concatenation.")
+        if arr1.dtype != arr2.dtype:
+            raise ValueError("Both arrays must have the same dtype for concatenation.")
+        if axis < 0:
+            axis += arr1.ndim
+        if axis >= arr1.ndim:
+            raise ValueError(f"Axis {axis} is out of bounds for array of dimension {arr1.ndim}.")
+        # Check that the shapes match, except for the concatenation axis
+        if arr1.shape[:axis] != arr2.shape[:axis] or arr1.shape[axis + 1 :] != arr2.shape[axis + 1 :]:
+            raise ValueError(
+                f"Shapes of the arrays do not match along the concatenation axis {axis}: "
+                f"{arr1.shape} vs {arr2.shape}"
+            )
 
-    return blosc2_ext.concatenate(arr1, arr2, axis, **kwargs)
+    # Procced with the actual concatenation
+    copy = True
+    for arr2 in arrays[1:]:
+        arr1 = blosc2_ext.concatenate(arr1, arr2, axis, copy=copy, **kwargs)
+        # arr1 is now the result of the concatenation, so we can now just enlarge it
+        copy = False
+
+    return arr1
 
 
 def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
