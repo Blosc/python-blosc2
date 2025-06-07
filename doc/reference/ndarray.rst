@@ -72,6 +72,7 @@ Constructors
 
     asarray
     copy
+    concatenate
     empty
     frombuffer
     fromiter
