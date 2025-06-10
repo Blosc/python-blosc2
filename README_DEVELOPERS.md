@@ -22,6 +22,20 @@ You are done!
     pip install .   # add -e for editable mode
 ```
 
+There are situations where you may want to build the C-Blosc2 library separately, for example, when debugging issues in the C library. In that case, let's assume you have the C-Blosc2 library installed in `/usr/local`:
+
+```bash
+CMAKE_PREFIX_PATH=/usr/local USE_SYSTEM_BLOSC2=1 pip install -e .
+```
+
+and then, you can run the tests with:
+
+```bash
+LD_LIBRARY_PATH=/usr/local/lib pytest
+```
+
+[replace `LD_LIBRARY_PATH` with the appropriate environment variable for your system, such as `DYLD_LIBRARY_PATH` on macOS or `PATH` on Windows, if necessary].
+
 That's it! You can now proceed to the testing section.
 
 ## Testing
