@@ -3577,7 +3577,7 @@ def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:  # 
                 f"{arr1.shape} vs {arr2.shape}"
             )
 
-    # Procced with the actual concatenation
+    # Proceed with the actual concatenation
     copy = True
     for arr2 in arrays[1:]:
         arr1 = blosc2_ext.concatenate(arr1, arr2, axis, copy=copy, **kwargs)
