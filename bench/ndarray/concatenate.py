@@ -211,7 +211,7 @@ def main():
 
     for axis in [0, 1]:
         print(f"\nConcatenating {num_arrays} arrays along axis {axis}")
-        print(f"{'Size':<10} {'NumPy (GB/s)':<14} {'Unaligned (GB/s)':<18} {'Aligned (GB/s)':<16} {'Alig vs Unalig':<16} {'Aligned vs NumPy':<16}")
+        print(f"{'Size':<10} {'NumPy (GB/s)':<14} {'Unaligned (GB/s)':<18} {'Aligned (GB/s)':<16} {'Alig vs Unalig':<16} {'Alig vs NumPy':<16}")
         print(f"{'-' * 90}")
 
         for size in sizes:
