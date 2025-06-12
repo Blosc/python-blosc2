@@ -42,12 +42,7 @@ def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0):
     arrays = []
     for i, (shape, chunk_shape) in enumerate(zip(shapes, chunk_shapes)):
         arr = blosc2.arange(
-            i * np.prod(shape),
-            (i + 1) * np.prod(shape),
-            1,
-            dtype="i4",
-            shape=shape,
-            chunks=chunk_shape
+            i * np.prod(shape), (i + 1) * np.prod(shape), 1, dtype="i4", shape=shape, chunks=chunk_shape
         )
         arrays.append(arr)
 
@@ -55,9 +50,6 @@ def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0):
     start_time = time.time()
     result = blosc2.concatenate(arrays, axis=axis)
     duration = time.time() - start_time
-
-    # Force evaluation by accessing a value
-    #_ = result[0, 0]
 
     return duration, result.shape
 
@@ -82,7 +74,7 @@ def main():
             aligned_time, shape2 = run_benchmark(num_arrays, size, aligned_chunks=True, axis=axis)
 
             # Calculate speedup
-            speedup = unaligned_time / aligned_time if aligned_time > 0 else float('inf')
+            speedup = unaligned_time / aligned_time if aligned_time > 0 else float("inf")
 
             # Print results
             print(f"{size:<10} {unaligned_time:<15.4f} {aligned_time:<15.4f} {speedup:<10.2f}x")
@@ -93,9 +85,13 @@ def main():
             else:
                 expected_shape = (size, size)  # After concatenation along axis 1
             if shape1 != expected_shape:
-                print(f"Warning: result shape unaligned {shape1} does not match expected shape {expected_shape}")
+                print(
+                    f"Warning: result shape unaligned {shape1} does not match expected shape {expected_shape}"
+                )
             if shape2 != expected_shape:
-                print(f"Warning: result shape aligned {shape2} does not match expected shape {expected_shape}")
+                print(
+                    f"Warning: result shape aligned {shape2} does not match expected shape {expected_shape}"
+                )
 
     print(f"{'=' * 50}")
 
