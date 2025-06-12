@@ -112,7 +112,7 @@ def run_numpy_benchmark(num_arrays=10, size=500, axis=0):
     return duration, result.shape, data_size_gb
 
 
-def create_combined_plot(sizes, numpy_speeds_axis0, unaligned_speeds_axis0, aligned_speeds_axis0,
+def create_combined_plot(num_arrays, sizes, numpy_speeds_axis0, unaligned_speeds_axis0, aligned_speeds_axis0,
                         numpy_speeds_axis1, unaligned_speeds_axis1, aligned_speeds_axis1, output_dir="plots"):
     """
     Create a figure with two side-by-side bar plots comparing the performance for both axes.
@@ -147,7 +147,7 @@ def create_combined_plot(sizes, numpy_speeds_axis0, unaligned_speeds_axis0, alig
     # Add labels and titles
     for ax, axis in [(ax0, 0), (ax1, 1)]:
         ax.set_xlabel('Array Size (N for NxN array)', fontsize=12)
-        ax.set_title(f'Concatenation Performance (axis={axis})', fontsize=14)
+        ax.set_title(f'Concatenation Performance for {num_arrays} arrays (axis={axis})', fontsize=14)
         ax.set_xticks(x)
         ax.set_xticklabels(x_labels)
         ax.grid(True, axis='y', linestyle='--', alpha=0.7)
@@ -198,7 +198,7 @@ def main():
     print(f"{'=' * 60}")
 
     # Parameters
-    sizes = [500, 1000, 2000, 4000]  # must be divisible by 4 for aligned chunks
+    sizes = [500, 1000, 2000, 4000] #, 10000]  # must be divisible by 4 for aligned chunks
     num_arrays = 10
 
     # Lists to store results for both axes
@@ -260,6 +260,7 @@ def main():
 
     # Create the combined plot with both axes
     create_combined_plot(
+        num_arrays,
         sizes,
         numpy_speeds_axis0, unaligned_speeds_axis0, aligned_speeds_axis0,
         numpy_speeds_axis1, unaligned_speeds_axis1, aligned_speeds_axis1
