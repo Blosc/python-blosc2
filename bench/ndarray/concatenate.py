@@ -14,7 +14,7 @@ import os
 from matplotlib.ticker import ScalarFormatter
 
 
-def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0):
+def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0, codec=blosc2.Codec.ZSTD):
     """
     Benchmark blosc2.concatenate performance with different chunk alignments.
 
@@ -51,6 +51,7 @@ def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0):
     for i, (shape, chunk_shape) in enumerate(zip(shapes, chunk_shapes)):
         arr = blosc2.arange(
             i * np.prod(shape), (i + 1) * np.prod(shape), 1, dtype="i4", shape=shape, chunks=chunk_shape,
+            cparams=blosc2.CParams(codec=codec)
         )
         arrays.append(arr)
 
@@ -60,7 +61,7 @@ def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0):
 
     # Time the concatenation
     start_time = time.time()
-    result = blosc2.concatenate(arrays, axis=axis, cparams=blosc2.CParams(codec=blosc2.Codec.BLOSCLZ))
+    result = blosc2.concatenate(arrays, axis=axis, cparams=blosc2.CParams(codec=codec))
     duration = time.time() - start_time
 
     return duration, result.shape, data_size_gb
@@ -193,12 +194,13 @@ def create_combined_plot(num_arrays, sizes, numpy_speeds_axis0, unaligned_speeds
 
 
 def main():
-    print(f"{'=' * 60}")
-    print(f"Blosc2 vs NumPy concatenation benchmark")
-    print(f"{'=' * 60}")
+    codec = blosc2.Codec.BLOSCLZ
+    print(f"{'=' * 70}")
+    print(f"Blosc2 vs NumPy concatenation benchmark {codec=}")
+    print(f"{'=' * 70}")
 
     # Parameters
-    sizes = [500, 1000] #, 2000, 4000] #, 10000]  # must be divisible by 4 for aligned chunks
+    sizes = [500, 1000, 2000, 4000] #, 10000]  # must be divisible by 4 for aligned chunks
     num_arrays = 10
 
     # Lists to store results for both axes
@@ -211,15 +213,15 @@ def main():
 
     for axis in [0, 1]:
         print(f"\nConcatenating {num_arrays} arrays along axis {axis}")
-        print(f"{'Size':<10} {'NumPy (GB/s)':<14} {'Unaligned (GB/s)':<18} "
+        print(f"{'Size':<8} {'NumPy (GB/s)':<14} {'Unaligned (GB/s)':<18} "
               f"{'Aligned (GB/s)':<16} {'Alig vs Unalig':<16} {'Alig vs NumPy':<16}")
         print(f"{'-' * 90}")
 
         for size in sizes:
             # Run the benchmarks
             numpy_time, numpy_shape, data_size_gb = run_numpy_benchmark(num_arrays, size, axis=axis)
-            unaligned_time, shape1, _ = run_benchmark(num_arrays, size, aligned_chunks=False, axis=axis)
-            aligned_time, shape2, _ = run_benchmark(num_arrays, size, aligned_chunks=True, axis=axis)
+            unaligned_time, shape1, _ = run_benchmark(num_arrays, size, aligned_chunks=False, axis=axis, codec=codec)
+            aligned_time, shape2, _ = run_benchmark(num_arrays, size, aligned_chunks=True, axis=axis, codec=codec)
 
             # Calculate throughputs in GB/s
             numpy_speed = data_size_gb / numpy_time if numpy_time > 0 else float("inf")
@@ -257,7 +259,7 @@ def main():
                     if shapes[i] != expected_shape:
                         print(f"Warning: {shape_name} shape {shapes[i]} does not match expected {expected_shape}")
 
-    print(f"{'=' * 90}")
+    print(f"{'=' * 70}")
 
     # Create the combined plot with both axes
     create_combined_plot(
