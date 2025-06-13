@@ -3559,6 +3559,10 @@ def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:  # 
     if not isinstance(arr1, blosc2.NDArray):
         raise TypeError("All inputs must be instances of blosc2.NDArray")
     # Do a first pass for checking array compatibility
+    if axis < 0:
+        axis += arr1.ndim
+    if axis >= arr1.ndim:
+        raise ValueError(f"Axis {axis} is out of bounds for array of dimension {arr1.ndim}.")
     for arr2 in arrays[1:]:
         if not isinstance(arr2, blosc2.NDArray):
             raise TypeError("All inputs must be instances of blosc2.NDArray")
@@ -3566,10 +3570,6 @@ def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:  # 
             raise ValueError("Both arrays must have the same number of dimensions for concatenation.")
         if arr1.dtype != arr2.dtype:
             raise ValueError("Both arrays must have the same dtype for concatenation.")
-        if axis < 0:
-            axis += arr1.ndim
-        if axis >= arr1.ndim:
-            raise ValueError(f"Axis {axis} is out of bounds for array of dimension {arr1.ndim}.")
         # Check that the shapes match, except for the concatenation axis
         if arr1.shape[:axis] != arr2.shape[:axis] or arr1.shape[axis + 1 :] != arr2.shape[axis + 1 :]:
             raise ValueError(
