@@ -253,6 +253,7 @@ from .ndarray import (
     permute_dims,
     transpose,
     matrix_transpose,
+    stack,
 )
 
 from .c2array import c2context, C2Array, URLPath

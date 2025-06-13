@@ -62,3 +62,13 @@ def test_concat3(shape1, shape2, shape3, dtype, axis):
     result = blosc2.concatenate([ndarr1, ndarr2, ndarr3], axis=axis, cparams=cparams)
     nparray = np.concatenate([ndarr1[:], ndarr2[:], ndarr3[:]], axis=axis)
     np.testing.assert_almost_equal(result[:], nparray)
+
+
+def test_stack(shape, dtype, axis):
+    ndarr1 = blosc2.arange(0, int(np.prod(shape)), 1, dtype=dtype, shape=shape)
+    ndarr2 = blosc2.arange(0, int(np.prod(shape)), 1, dtype=dtype, shape=shape)
+    ndarr3 = blosc2.arange(0, int(np.prod(shape)), 1, dtype=dtype, shape=shape)
+    cparams = blosc2.CParams(codec=blosc2.Codec.BLOSCLZ)
+    result = blosc2.stack([ndarr1, ndarr2, ndarr3], axis=axis, cparams=cparams)
+    nparray = np.stack([ndarr1[:], ndarr2[:], ndarr3[:]], axis=axis)
+    np.testing.assert_almost_equal(result[:], nparray)

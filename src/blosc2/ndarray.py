@@ -3588,6 +3588,44 @@ def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:  # 
     return arr1
 
 
+def stack(arrays: list[NDArray], axis=0, **kwargs: Any) -> NDArray:
+    """Stack two arrays, creating a new  axis.
+
+    Parameters
+    ----------
+    arrays: list of :ref:`NDArray`
+        A list containing two or more NDArray instances to be stacked.
+    axis: int, optional
+        The new axis along which the arrays will be stacked. Default is 0.
+
+    Other Parameters
+    ----------------
+    kwargs: dict, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        A new NDArray containing the stacked data.
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> import numpy as np
+    >>> arr1 = blosc2.arange(0, 6, dtype=np.int32, shape=(2,3))
+    >>> arr2 = blosc2.arange(6, 12, dtype=np.int32, shape=(2,3))
+    >>> result = blosc2.stack([arr1, arr2])
+    >>> print(result.shape)
+    (2, 2, 3)
+    """
+    if axis < 0:
+        axis += arrays[0].ndim + 1  # Adjust axis to be within the new stacked array's dimensions
+    newarrays = []
+    for i, arr in enumerate(arrays):
+        newarrays[i] = blosc2_ext.expand_dims(arr, axis=axis)
+    return blosc2.concatenate(newarrays, axis, **kwargs)
+
+
 def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
     """Save an array to a file.
 
