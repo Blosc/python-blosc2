@@ -507,6 +507,8 @@ cdef extern from "b2nd.h":
     int b2nd_squeeze_index(b2nd_array_t *array, const c_bool *index)
     int b2nd_resize(b2nd_array_t *array, const int64_t *new_shape, const int64_t *start)
     int b2nd_copy(b2nd_context_t *ctx, b2nd_array_t *src, b2nd_array_t **array)
+    int b2nd_concatenate(b2nd_context_t *ctx, b2nd_array_t *src1, b2nd_array_t *src2,
+                         int8_t axis, c_bool copy, b2nd_array_t **array)
     int b2nd_from_schunk(blosc2_schunk *schunk, b2nd_array_t **array)
 
     void blosc2_unidim_to_multidim(uint8_t ndim, int64_t *shape, int64_t i, int64_t *index)
@@ -2867,3 +2869,26 @@ def schunk_get_slice_nchunks(schunk: SChunk, key):
         res[i] = chunks_idx[i]
     free(chunks_idx)
     return res
+
+
+def concatenate(arr1: NDArray, arr2: NDArray, axis: int, **kwargs):
+    """
+    Concatenate two NDArray objects along a specified axis.
+    """
+    cdef c_bool copy = kwargs.pop("copy", True)
+    cdef b2nd_context_t *ctx = create_b2nd_context(arr1.shape, arr1.chunks, arr1.blocks, arr1.dtype, kwargs)
+    if ctx == NULL:
+        raise RuntimeError("Error while creating the context for concatenation")
+
+    cdef b2nd_array_t *array
+    _check_rc(b2nd_concatenate(ctx, arr1.array, arr2.array, axis, copy, &array),
+              "Error while concatenating the arrays")
+    _check_rc(b2nd_free_ctx(ctx), "Error while freeing the context")
+
+    if copy:
+        # We have copied the concatenated data into a new array
+        return blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
+                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
+    else:
+        # Return the first array, which now contains the concatenated data
+        return arr1
