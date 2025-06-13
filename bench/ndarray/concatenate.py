@@ -50,7 +50,7 @@ def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0):
     arrays = []
     for i, (shape, chunk_shape) in enumerate(zip(shapes, chunk_shapes)):
         arr = blosc2.arange(
-            i * np.prod(shape), (i + 1) * np.prod(shape), 1, dtype="i4", shape=shape, chunks=chunk_shape
+            i * np.prod(shape), (i + 1) * np.prod(shape), 1, dtype="i4", shape=shape, chunks=chunk_shape,
         )
         arrays.append(arr)
 
@@ -60,7 +60,7 @@ def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0):
 
     # Time the concatenation
     start_time = time.time()
-    result = blosc2.concatenate(arrays, axis=axis)
+    result = blosc2.concatenate(arrays, axis=axis, cparams=blosc2.CParams(codec=blosc2.Codec.BLOSCLZ))
     duration = time.time() - start_time
 
     return duration, result.shape, data_size_gb
@@ -198,7 +198,7 @@ def main():
     print(f"{'=' * 60}")
 
     # Parameters
-    sizes = [500, 1000, 2000, 4000] #, 10000]  # must be divisible by 4 for aligned chunks
+    sizes = [500, 1000] #, 2000, 4000] #, 10000]  # must be divisible by 4 for aligned chunks
     num_arrays = 10
 
     # Lists to store results for both axes
@@ -211,7 +211,8 @@ def main():
 
     for axis in [0, 1]:
         print(f"\nConcatenating {num_arrays} arrays along axis {axis}")
-        print(f"{'Size':<10} {'NumPy (GB/s)':<14} {'Unaligned (GB/s)':<18} {'Aligned (GB/s)':<16} {'Alig vs Unalig':<16} {'Alig vs NumPy':<16}")
+        print(f"{'Size':<10} {'NumPy (GB/s)':<14} {'Unaligned (GB/s)':<18} "
+              f"{'Aligned (GB/s)':<16} {'Alig vs Unalig':<16} {'Alig vs NumPy':<16}")
         print(f"{'-' * 90}")
 
         for size in sizes:

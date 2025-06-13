@@ -3577,6 +3577,7 @@ def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:  # 
                 f"{arr1.shape} vs {arr2.shape}"
             )
 
+    kwargs = _check_ndarray_kwargs(**kwargs)
     # Proceed with the actual concatenation
     copy = True
     for arr2 in arrays[1:]:
