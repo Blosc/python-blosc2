@@ -41,7 +41,7 @@ dependencies = [
     "py-cpuinfo; platform_machine != 'wasm32'",
     "requests",
 ]
-version = "3.4.0"
+version = "3.4.1.dev0"
 
 
 [project.optional-dependencies]
