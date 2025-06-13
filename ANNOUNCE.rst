@@ -1,11 +1,7 @@
-Announcing Python-Blosc2 3.3.4
+Announcing Python-Blosc2 3.4.0
 ==============================
 
-This is a bugfix release, with some minor optimizations. We further improved the
-correct chaining of *string* lazy expressions (to allow operands with more
-diverse data types). In addition, both indexing and where expressions are now
-supported within *string* lazy expressions. Finally, casting rules have
-been improved to be more consistent with NumPy.
+This release adds significant new functionality in the form of ``concatenate``. We support general concatenation of ndarrays, and offer an optimised path with significant speedups for the case of concatenating arrays with compatible chunk and blockshapes. In addition, there are bug fixes and more functionality for slicing of lazyexprs, and the possibility to jit compile user-defined functions which operate on pandas objects using the blosc2 engine.
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 

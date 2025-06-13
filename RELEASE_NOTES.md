@@ -1,8 +1,20 @@
 # Release notes
-
-## Changes from 3.3.4 to 3.3.5
+## Changes from 3.4.0 to 3.4.1
 
 XXX version-specific blurb XXX
+
+## Changes from 3.3.4 to 3.4.0
+
+* Added C-level ``concatenate`` function in response to community request. When possible, uses an optimised path which avoids decompression and recompression, giving a significant performance boost. See PR #423.
+
+* Slicing has been added to string-based lazyexprs, so that one may use
+  expressions like `expr[1:3] +1` to compute a slice of the expression. This is useful
+  for getting a sub-expression of a larger expression, and it works with both
+  string-based and lazy expressions. See PR #417.
+
+* Relatedly, the behaviour of the `slice` parameter in the `compute()` method of `LazyExpr` has been made more consistent and is now better documented, so that results are as expected. See PR #419.
+
+* UDF support for pandas has been added to allow for the use of ``blosc2.jit``. See PR #418. Thanks to [@datapythonista](https://github.com/datapythonista) for the implementation!
 
 ## Changes from 3.3.3 to 3.3.4
 
