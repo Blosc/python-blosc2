@@ -68,8 +68,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
         return super().nvlmetalayers()
 
     def __iter__(self):
-        keys = super().get_names()
-        yield from keys
+        yield from super().get_names()
 
     def getall(self):
         """

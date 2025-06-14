@@ -1092,9 +1092,7 @@ def detect_number_of_cores() -> int:
 # Dictionaries for the maps between compressor names and libs
 codecs = compressor_list(plugins=True)
 # Map for compression libraries and versions
-clib_versions = {}
-for codec in compressor_list(plugins=False):
-    clib_versions[codec.name] = clib_info(codec)[1].decode("utf-8")
+clib_versions = {codec.name: clib_info(codec)[1].decode("utf-8") for codec in compressor_list(plugins=False)}
 
 
 def os_release_pretty_name():
@@ -1422,7 +1420,6 @@ def compute_partition(nitems, maxshape, minpart=None):
         if rsize <= max_items:
             # rsize = rsize if size % rsize == 0 else nearest_divisor(size, rsize)
             rsize = rsize if size % rsize == 0 else blosc2_ext.nearest_divisor(size, rsize)
-            partition[-(i + 1)] = rsize
         else:
             rsize = max(max_items, minsize)
             # new_rsize = rsize if size % rsize == 0 else nearest_divisor(size, rsize, strict=True)
@@ -1430,7 +1427,7 @@ def compute_partition(nitems, maxshape, minpart=None):
             # If the new rsize is not too far from the original rsize, use it
             if rsize // 2 < new_rsize < rsize * 2:
                 rsize = new_rsize
-            partition[-(i + 1)] = rsize
+        partition[-(i + 1)] = rsize
         max_items //= rsize
 
     return partition
