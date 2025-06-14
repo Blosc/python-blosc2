@@ -657,7 +657,7 @@ def conserve_functions(  # noqa: C901
     expression: str,
     operands_old: dict[str, blosc2.NDArray | blosc2.LazyExpr],
     operands_new: dict[str, blosc2.NDArray | blosc2.LazyExpr],
-) -> tuple(str, dict[str, blosc2.NDArray]):
+) -> tuple[str, dict[str, blosc2.NDArray]]:
     """
     Given an expression in string form, return its operands.
 
@@ -738,8 +738,6 @@ def conserve_functions(  # noqa: C901
                     node.id = newexpr.replace(";", "")
                 else:
                     node.id = self.update_func(localop)
-            else:
-                pass
             self.generic_visit(node)
 
         def visit_Call(self, node):
@@ -784,7 +782,7 @@ def convert_to_slice(expression):
             slicer = str(slicer)
             # use slice so that lazyexpr uses blosc arrays internally
             # (and doesn't decompress according to getitem syntax)
-            new_expr += ".slice(" + slicer + ")"
+            new_expr += f".slice({slicer})"
             skip_to_char = i + k + 1
         else:
             new_expr += expr_i
@@ -833,11 +831,11 @@ def extract_numpy_scalars(expr: str):
 
 def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C901
     """Validate the inputs for the expression."""
-    if len(inputs) == 0:
+    if not inputs:
         if out is None:
             raise ValueError(
                 "You really want to pass at least one input or one output for building a LazyArray."
-                "  Maybe you want blosc2.empty() instead?"
+                " Maybe you want blosc2.empty() instead?"
             )
         if isinstance(out, blosc2.NDArray):
             return out.shape, out.chunks, out.blocks, True
@@ -854,7 +852,7 @@ def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C90
 
     # More checks specific of NDArray inputs
     NDinputs = [input for input in inputs if hasattr(input, "chunks")]
-    if len(NDinputs) == 0:
+    if not NDinputs:
         # All inputs are NumPy arrays, so we cannot take the fast path
         if inputs and hasattr(inputs[0], "shape"):
             shape = inputs[0].shape
@@ -895,7 +893,7 @@ def is_full_slice(item):
     elif isinstance(item, int | bool):
         return False
     else:
-        return item == slice(None, None, None) or item == Ellipsis
+        return item in (slice(None, None, None), Ellipsis)
 
 
 def do_slices_intersect(slice1: list | tuple, slice2: list | tuple) -> bool:
@@ -1925,7 +1923,7 @@ def fuse_expressions(expr, new_base, dup_op):
         if i < skip_to_char:
             continue
         if expr_i == "o":
-            if i > 0 and (expr[i - 1] != " " and expr[i - 1] != "("):
+            if i > 0 and expr[i - 1] not in {" ", "("}:
                 # Not a variable
                 new_expr += expr_i
                 continue
@@ -2960,18 +2958,18 @@ class LazyUDF(LazyArray):
 
     @property
     def info_items(self):
-        items = []
-        items += [("type", f"{self.__class__.__name__}")]
         inputs = {}
         for key, value in self.inputs_dict.items():
             if isinstance(value, np.ndarray | blosc2.NDArray | blosc2.C2Array):
                 inputs[key] = f"<{value.__class__.__name__}> {value.shape} {value.dtype}"
             else:
                 inputs[key] = str(value)
-        items += [("inputs", inputs)]
-        items += [("shape", self.shape)]
-        items += [("dtype", self.dtype)]
-        return items
+        return [
+            ("type", f"{self.__class__.__name__}"),
+            ("inputs", inputs),
+            ("shape", self.shape),
+            ("dtype", self.dtype),
+        ]
 
     # TODO: indices and sort are repeated in LazyExpr; refactor
     def indices(self, order: str | list[str] | None = None) -> blosc2.LazyArray:

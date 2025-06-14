@@ -32,7 +32,7 @@ def _inherit_doc_parameter(parent_func, parameter, replacements=None):
                     # Next parameter starts, stop copying lines
                     break
                 matching_lines.append(line)
-        assert len(matching_lines) > 0, (
+        assert matching_lines, (
             f"Could not extract the parameter {parameter} from the docstring of {parent_func.__name__}"
         )
 

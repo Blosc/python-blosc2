@@ -731,15 +731,11 @@ class PandasUdfEngine:
             return func(data, *args, **kwargs)
         elif axis in (0, "index"):
             # pandas apply(axis=0) column-wise
-            result = []
-            for row_idx in range(data.shape[1]):
-                result.append(func(data[:, row_idx], *args, **kwargs))
+            result = [func(data[:, row_idx], *args, **kwargs) for row_idx in range(data.shape[1])]
             return np.vstack(result).transpose()
         elif axis in (1, "columns"):
             # pandas apply(axis=1) row-wise
-            result = []
-            for col_idx in range(data.shape[0]):
-                result.append(func(data[col_idx, :], *args, **kwargs))
+            result = [func(data[col_idx, :], *args, **kwargs) for col_idx in range(data.shape[0])]
             return np.vstack(result)
         else:
             raise NotImplementedError(f"Unknown axis '{axis}'. Use one of 0, 1 or None.")
