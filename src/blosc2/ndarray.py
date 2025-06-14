@@ -3524,7 +3524,7 @@ def copy(array: NDArray, dtype: np.dtype | str = None, **kwargs: Any) -> NDArray
 
 
 def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:  # noqa: C901
-    """Concatenate two arrays along a specified axis.
+    """Concatenate a list of arrays along a specified axis.
 
     Parameters
     ----------
