@@ -75,11 +75,10 @@ def test_lossy(shape, cparams, dtype, urlpath, contiguous):
         or a.schunk.cparams.filters[0] == blosc2.Filter.NDMEAN
     ):
         _ = a[...]
-    else:
+    elif dtype in (np.float32, np.float64):
         tol = 1e-5
-        if dtype in (np.float32, np.float64):
-            np.testing.assert_allclose(a[...], array, rtol=tol, atol=tol)
-        else:
-            np.array_equal(a[...], array)
+        np.testing.assert_allclose(a[...], array, rtol=tol, atol=tol)
+    else:
+        np.array_equal(a[...], array)
 
     blosc2.remove_urlpath(urlpath)
