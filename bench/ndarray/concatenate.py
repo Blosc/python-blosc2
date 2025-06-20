@@ -14,7 +14,8 @@ import os
 from matplotlib.ticker import ScalarFormatter
 
 
-def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0, codec=blosc2.Codec.ZSTD):
+def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0,
+                  dtype=np.float64, datadist="linspace", codec=blosc2.Codec.ZSTD):
     """
     Benchmark blosc2.concatenate performance with different chunk alignments.
 
@@ -23,6 +24,9 @@ def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0, codec=b
     - size: Base size for array dimensions
     - aligned_chunks: Whether to use aligned chunk shapes
     - axis: Axis along which to concatenate (0 or 1)
+    - dtype: Data type for the arrays (default is np.float64)
+    - datadist: Distribution of data in arrays (default is "linspace")
+    - codec: Codec to use for compression (default is blosc2.Codec.ZSTD)
 
     Returns:
     - duration: Time taken in seconds
@@ -39,20 +43,28 @@ def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0, codec=b
         raise ValueError("Only axis 0 and 1 are supported")
 
     # Create appropriate chunk shapes
+    chunks, blocks = blosc2.compute_chunks_blocks(shapes[0], dtype=dtype, cparams=blosc2.CParams(codec=codec))
     if aligned_chunks:
         # Aligned chunks: divisors of the shape dimensions
-        chunk_shapes = [(shape[0] // 4, shape[1] // 4) for shape in shapes]
+        chunk_shapes = [(chunks[0], chunks[1]) for shape in shapes]
     else:
         # Unaligned chunks: not divisors of shape dimensions
-        chunk_shapes = [(shape[0] // 4 + 1, shape[1] // 4 - 1) for shape in shapes]
+        chunk_shapes = [(chunks[0] + 1, chunks[1] - 1) for shape in shapes]
 
     # Create arrays
     arrays = []
     for i, (shape, chunk_shape) in enumerate(zip(shapes, chunk_shapes)):
-        arr = blosc2.arange(
-            i * np.prod(shape), (i + 1) * np.prod(shape), 1, dtype="i4", shape=shape, chunks=chunk_shape,
-            cparams=blosc2.CParams(codec=codec)
-        )
+        if datadist == "linspace":
+            # Create arrays with linearly spaced values
+            arr = blosc2.linspace(i, i + 1, num=np.prod(shape),
+                                  dtype=dtype, shape=shape, chunks=chunk_shape,
+                                  cparams=blosc2.CParams(codec=codec))
+        else:
+            # Default to arange for simplicity
+            arr = blosc2.arange(
+                i * np.prod(shape), (i + 1) * np.prod(shape), 1, dtype=dtype, shape=shape, chunks=chunk_shape,
+                cparams=blosc2.CParams(codec=codec)
+            )
         arrays.append(arr)
 
     # Calculate total data size in GB (4 bytes per int32)
@@ -67,7 +79,7 @@ def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0, codec=b
     return duration, result.shape, data_size_gb
 
 
-def run_numpy_benchmark(num_arrays=10, size=500, axis=0):
+def run_numpy_benchmark(num_arrays=10, size=500, axis=0, dtype=np.float64, datadist="linspace"):
     """
     Benchmark numpy.concatenate performance for comparison.
 
@@ -75,6 +87,8 @@ def run_numpy_benchmark(num_arrays=10, size=500, axis=0):
     - num_arrays: Number of arrays to concatenate
     - size: Base size for array dimensions
     - axis: Axis along which to concatenate (0 or 1)
+    - dtype: Data type for the arrays (default is np.float64)
+    - datadist: Distribution of data in arrays (default is "linspace")
 
     Returns:
     - duration: Time taken in seconds
@@ -93,12 +107,11 @@ def run_numpy_benchmark(num_arrays=10, size=500, axis=0):
     # Create arrays
     numpy_arrays = []
     for i, shape in enumerate(shapes):
-        arr = np.arange(
-            i * np.prod(shape),
-            (i + 1) * np.prod(shape),
-            1,
-            dtype="i4"
-        ).reshape(shape)
+        if datadist == "linspace":
+            # Create arrays with linearly spaced values
+            arr = np.linspace(i, i + 1, num=np.prod(shape), dtype=dtype).reshape(shape)
+        else:
+            arr = np.arange(i * np.prod(shape), (i + 1) * np.prod(shape), 1, dtype=dtype).reshape(shape)
         numpy_arrays.append(arr)
 
     # Calculate total data size in GB (4 bytes per int32)
@@ -114,7 +127,8 @@ def run_numpy_benchmark(num_arrays=10, size=500, axis=0):
 
 
 def create_combined_plot(num_arrays, sizes, numpy_speeds_axis0, unaligned_speeds_axis0, aligned_speeds_axis0,
-                        numpy_speeds_axis1, unaligned_speeds_axis1, aligned_speeds_axis1, output_dir="plots"):
+                         numpy_speeds_axis1, unaligned_speeds_axis1, aligned_speeds_axis1, output_dir="plots",
+                         datadist="linspace", codec_str="LZ4"):
     """
     Create a figure with two side-by-side bar plots comparing the performance for both axes.
 
@@ -148,7 +162,7 @@ def create_combined_plot(num_arrays, sizes, numpy_speeds_axis0, unaligned_speeds
     # Add labels and titles
     for ax, axis in [(ax0, 0), (ax1, 1)]:
         ax.set_xlabel('Array Size (N for NxN array)', fontsize=12)
-        ax.set_title(f'Concatenation Performance for {num_arrays} arrays (axis={axis})', fontsize=14)
+        ax.set_title(f'Concatenation Performance for {num_arrays} arrays (axis={axis}) [{datadist}, {codec_str}]', fontsize=14)
         ax.set_xticks(x)
         ax.set_xticklabels(x_labels)
         ax.grid(True, axis='y', linestyle='--', alpha=0.7)
@@ -186,7 +200,7 @@ def create_combined_plot(num_arrays, sizes, numpy_speeds_axis0, unaligned_speeds
 
     # Save the plot
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'concatenate_benchmark_combined.png'), dpi=300)
+    plt.savefig(os.path.join(output_dir, 'concatenate_benchmark_combined.png'), dpi=100)
     plt.show()
     plt.close()
 
@@ -194,14 +208,17 @@ def create_combined_plot(num_arrays, sizes, numpy_speeds_axis0, unaligned_speeds
 
 
 def main():
-    codec = blosc2.Codec.BLOSCLZ
+    # Parameters
+    sizes = [500, 1000, 2000, 4000, 10000]  #, 20000]  # Sizes of arrays to test
+    num_arrays = 10
+    dtype = np.float64  # Data type for arrays
+    datadist = "linspace"  # Distribution of data in arrays
+    codec = blosc2.Codec.LZ4
+    codec_str = str(codec).split('.')[-1]
     print(f"{'=' * 70}")
-    print(f"Blosc2 vs NumPy concatenation benchmark {codec=}")
+    print(f"Blosc2 vs NumPy concatenation benchmark with {codec_str} codec")
     print(f"{'=' * 70}")
 
-    # Parameters
-    sizes = [500, 1000, 2000, 4000] #, 10000]  # must be divisible by 4 for aligned chunks
-    num_arrays = 10
 
     # Lists to store results for both axes
     numpy_speeds_axis0 = []
@@ -212,16 +229,18 @@ def main():
     aligned_speeds_axis1 = []
 
     for axis in [0, 1]:
-        print(f"\nConcatenating {num_arrays} arrays along axis {axis}")
+        print(f"\nConcatenating {num_arrays} arrays along axis {axis} with data distribution '{datadist}' ")
         print(f"{'Size':<8} {'NumPy (GB/s)':<14} {'Unaligned (GB/s)':<18} "
               f"{'Aligned (GB/s)':<16} {'Alig vs Unalig':<16} {'Alig vs NumPy':<16}")
         print(f"{'-' * 90}")
 
         for size in sizes:
             # Run the benchmarks
-            numpy_time, numpy_shape, data_size_gb = run_numpy_benchmark(num_arrays, size, axis=axis)
-            unaligned_time, shape1, _ = run_benchmark(num_arrays, size, aligned_chunks=False, axis=axis, codec=codec)
-            aligned_time, shape2, _ = run_benchmark(num_arrays, size, aligned_chunks=True, axis=axis, codec=codec)
+            numpy_time, numpy_shape, data_size_gb = run_numpy_benchmark(num_arrays, size, axis=axis, dtype=dtype)
+            unaligned_time, shape1, _ = run_benchmark(num_arrays, size, aligned_chunks=False, axis=axis,
+                                                      dtype=dtype, datadist=datadist, codec=codec)
+            aligned_time, shape2, _ = run_benchmark(num_arrays, size, aligned_chunks=True, axis=axis,
+                                                    dtype=dtype, datadist=datadist, codec=codec)
 
             # Calculate throughputs in GB/s
             numpy_speed = data_size_gb / numpy_time if numpy_time > 0 else float("inf")
@@ -266,7 +285,8 @@ def main():
         num_arrays,
         sizes,
         numpy_speeds_axis0, unaligned_speeds_axis0, aligned_speeds_axis0,
-        numpy_speeds_axis1, unaligned_speeds_axis1, aligned_speeds_axis1
+        numpy_speeds_axis1, unaligned_speeds_axis1, aligned_speeds_axis1,
+        datadist=datadist, output_dir="plots", codec_str=codec_str,
     )
 
 

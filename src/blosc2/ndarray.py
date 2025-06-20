@@ -3524,7 +3524,7 @@ def copy(array: NDArray, dtype: np.dtype | str = None, **kwargs: Any) -> NDArray
 
 
 def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:  # noqa: C901
-    """Concatenate two arrays along a specified axis.
+    """Concatenate a list of arrays along a specified axis.
 
     Parameters
     ----------
@@ -3755,8 +3755,8 @@ def _check_ndarray_kwargs(**kwargs):  # noqa: C901
     else:
         # Add the default storage values as long as they are not already passed
         storage_dflts = asdict(blosc2.Storage(urlpath=kwargs.get("urlpath")))  # urlpath can affect defaults
-        not_passed = {k: v for k, v in storage_dflts.items() if k not in kwargs}
-        kwargs = {**kwargs, **not_passed}
+        # If a key appears in both operands, the one from the right-hand operand wins
+        kwargs = storage_dflts | kwargs
 
     supported_keys = [
         "chunks",

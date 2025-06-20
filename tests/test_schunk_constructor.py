@@ -158,7 +158,7 @@ def test_schunk_fill_special(contiguous, urlpath, cparams, nitems, special_value
         if isinstance(expected_value, float):
             dtype = np.float32
         elif isinstance(expected_value, bytes):
-            dtype = np.dtype("|S" + str(len(expected_value)))
+            dtype = np.dtype(f"|S{len(expected_value)}")
         array = np.full(nitems, expected_value, dtype=dtype)
         dest = np.empty(nitems, dtype=dtype)
         schunk.get_slice(out=dest)
