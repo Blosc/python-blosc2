@@ -3588,8 +3588,12 @@ def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:  # 
     return arr1
 
 
+def expand_dims(array: NDArray, axis=0) -> NDArray:
+    return blosc2_ext.expand_dims(array, axis=axis)
+
+
 def stack(arrays: list[NDArray], axis=0, **kwargs: Any) -> NDArray:
-    """Stack two arrays, creating a new  axis.
+    """Stack multiple arrays, creating a new axis.
 
     Parameters
     ----------
@@ -3621,8 +3625,8 @@ def stack(arrays: list[NDArray], axis=0, **kwargs: Any) -> NDArray:
     if axis < 0:
         axis += arrays[0].ndim + 1  # Adjust axis to be within the new stacked array's dimensions
     newarrays = []
-    for i, arr in enumerate(arrays):
-        newarrays[i] = blosc2_ext.expand_dims(arr, axis=axis)
+    for arr in arrays:
+        newarrays += [blosc2.expand_dims(arr, axis=axis)]
     return blosc2.concatenate(newarrays, axis, **kwargs)
 
 

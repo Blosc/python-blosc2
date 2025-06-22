@@ -74,6 +74,7 @@ Constructors
     copy
     concatenate
     empty
+    expand_dims
     frombuffer
     fromiter
     nans

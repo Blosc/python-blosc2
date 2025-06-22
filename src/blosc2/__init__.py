@@ -239,6 +239,7 @@ from .ndarray import (
     reshape,
     copy,
     concatenate,
+    expand_dims,
     empty,
     frombuffer,
     fromiter,

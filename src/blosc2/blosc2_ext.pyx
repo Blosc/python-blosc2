@@ -509,6 +509,7 @@ cdef extern from "b2nd.h":
     int b2nd_copy(b2nd_context_t *ctx, b2nd_array_t *src, b2nd_array_t **array)
     int b2nd_concatenate(b2nd_context_t *ctx, b2nd_array_t *src1, b2nd_array_t *src2,
                          int8_t axis, c_bool copy, b2nd_array_t **array)
+    int b2nd_expand_dims(const b2nd_array_t *array, b2nd_array_t ** view, const int8_t axis)
     int b2nd_from_schunk(blosc2_schunk *schunk, b2nd_array_t **array)
 
     void blosc2_unidim_to_multidim(uint8_t ndim, int64_t *shape, int64_t i, int64_t *index)
@@ -2892,3 +2893,14 @@ def concatenate(arr1: NDArray, arr2: NDArray, axis: int, **kwargs):
     else:
         # Return the first array, which now contains the concatenated data
         return arr1
+
+def expand_dims(arr1: NDArray, axis: int):
+    """
+    Add new dummy axis to NDArray object at specified dimension.
+    """
+    cdef b2nd_array_t *view
+    _check_rc(b2nd_expand_dims(arr1.array, &view, axis),
+              "Error while concatenating the arrays")
+
+    return blosc2.NDArray(_schunk=PyCapsule_New(view.sc, <char *> "blosc2_schunk*", NULL),
+                              _array=PyCapsule_New(view, <char *> "b2nd_array_t*", NULL))
