@@ -74,6 +74,7 @@ Constructors
     copy
     concatenate
     empty
+    expand_dims
     frombuffer
     fromiter
     nans
@@ -86,3 +87,4 @@ Constructors
     linspace
     eye
     reshape
+    stack
