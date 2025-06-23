@@ -3589,6 +3589,12 @@ def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:  # 
 
 
 def expand_dims(array: NDArray, axis=0) -> NDArray:
+    if not isinstance(array, blosc2.NDArray):
+        raise TypeError("Argument array must be instance of blosc2.NDArray")
+    if axis < 0:
+        axis += array.ndim + 1  # Adjust axis to be within the new stacked array's dimensions
+    if axis > array.ndim:
+        raise ValueError(f"Axis {axis} is out of bounds for expanded array of dimension {array.ndim + 1}.")
     return blosc2_ext.expand_dims(array, axis=axis)
 
 
