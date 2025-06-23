@@ -44,7 +44,10 @@ def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0,
         chunk_shapes = [(chunks[0], chunks[1]) for shape in shapes]
     else:
         # Unaligned chunks: not divisors of shape dimensions
-        chunk_shapes = [(chunks[0] + 1, chunks[1] - 1) for shape in shapes]
+        chunk_shapes = []
+        for i in range(len(shapes)):
+            added_random_size = np.random.randint(1, 10)  # Random size to ensure unalignment
+            chunk_shapes.append((chunks[0] + added_random_size, chunks[1] - added_random_size))
 
     # Create arrays
     arrays = []
@@ -108,7 +111,7 @@ def run_numpy_benchmark(num_arrays=10, size=500, axis=0, dtype=np.float64, datad
     total_elements = sum(np.prod(shape) for shape in shapes)
     data_size_gb = total_elements * 4 / (1024**3)  # Convert bytes to GB
 
-    # Time the concatenation
+    # Time the stacking
     start_time = time.time()
     result = np.stack(numpy_arrays, axis=axis)
     duration = time.time() - start_time
@@ -190,11 +193,11 @@ def create_combined_plot(num_arrays, sizes, numpy_speeds_axis0, unaligned_speeds
 
     # Save the plot
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'concatenate_benchmark_combined.png'), dpi=100)
+    plt.savefig(os.path.join(output_dir, 'stack_benchmark_combined.png'), dpi=100)
     plt.show()
     plt.close()
 
-    print(f"Combined plot saved to {os.path.join(output_dir, 'concatenate_benchmark_combined.png')}")
+    print(f"Combined plot saved to {os.path.join(output_dir, 'stack_benchmark_combined.png')}")
 
 
 def main():
@@ -257,9 +260,9 @@ def main():
 
             # Quick verification of result shape
             if axis == 0:
-                expected_shape = (10, size, size // num_arrays)  # After concatenation along axis 0
+                expected_shape = (10, size, size // num_arrays)  # After stacking along axis 0
             else:
-                expected_shape = (size, size // num_arrays, 10)  # After concatenation along axis - 1
+                expected_shape = (size, size // num_arrays, 10)  # After stacking along axis - 1
 
             # Verify shapes match
             shapes = [numpy_shape, shape1, shape2]
