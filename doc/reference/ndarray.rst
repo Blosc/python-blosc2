@@ -87,3 +87,4 @@ Constructors
     linspace
     eye
     reshape
+    stack
