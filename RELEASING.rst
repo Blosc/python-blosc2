@@ -110,8 +110,11 @@ Checking packaging
 
     [upload e.g.:] blosc2-3.2.0-cp312-cp312-pyodide_2024_0_wasm32.whl
 
-The wheels may be downloaded by going to "Actions->Python wheels for WASM" and selecting the completed workflow run for the version you are releasing.
-  Then, go to the "Artifacts" dropdown and download the WASM wheel file.
+The wheels may be downloaded by going to "Actions->Python wheels for WASM"
+and selecting the completed workflow run for the version you are releasing.
+Then, go to the "Artifacts" dropdown and download the WASM wheel file.
+
+
 Announcing
 ----------
 

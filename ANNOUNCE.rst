@@ -6,6 +6,9 @@ It allows you to stack multiple Blosc2 NDarrays along a new axis, similar
 to NumPy's ``np.stack()``. This is particularly useful for creating
 higher-dimensional arrays from lower-dimensional ones.
 
+We have blogged about this new feature:
+https://www.blosc.org/posts/blosc2-new-concatenate/#stacking-arrays
+
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
 - Can deal with ndarrays compressed using first-class codecs & filters.

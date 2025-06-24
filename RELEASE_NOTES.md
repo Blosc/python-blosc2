@@ -1,14 +1,19 @@
 # Release notes
 
+## Changes from 3.5.0 to 3.5.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.4.0 to 3.5.0
 
 * New `blosc2.stack()` function for stacking multiple arrays along a new axis.
   Useful for creating multi-dimensional arrays from multiple 1D arrays.
-  See PR #427. Thanks to [@lshaw8317](Luke Shaw) for the implementation!
+  See PR #427. Thanks to [Luke Shaw](@lshaw8317) for the implementation!
+  Blog: https://www.blosc.org/posts/blosc2-new-concatenate/#stacking-arrays
 
 * New `blosc2.expand_dims()` function for expanding the dimensions of an array.
   This is useful for adding a new axis to an array, similar to NumPy's `np.expand_dims()`.
-  See PR #427. Thanks to [@lshaw8317](Luke Shaw) for the implementation!
+  See PR #427. Thanks to [Luke Shaw](@lshaw8317) for the implementation!
 
 ## Changes from 3.3.4 to 3.4.0
 
