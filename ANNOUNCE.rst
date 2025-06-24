@@ -1,7 +1,10 @@
-Announcing Python-Blosc2 3.4.0
+Announcing Python-Blosc2 3.5.0
 ==============================
 
-This release adds significant new functionality in the form of ``concatenate``. We support general concatenation of ndarrays, and offer an optimised path with significant speedups for the case of concatenating arrays with compatible chunk and blockshapes. In addition, there are bug fixes and more functionality for slicing of lazyexprs, and the possibility to jit compile user-defined functions which operate on pandas objects using the blosc2 engine.
+This release adds significant new functionality in the form of ``stack()``.
+It allows you to stack multiple Blosc2 NDarrays along a new axis, similar
+to NumPy's ``np.stack()``. This is particularly useful for creating
+higher-dimensional arrays from lower-dimensional ones.
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
