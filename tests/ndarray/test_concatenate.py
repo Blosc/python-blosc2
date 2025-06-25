@@ -85,6 +85,11 @@ def test_stack(shape, dtype, axis):
     ndarr2 = blosc2.arange(0, int(np.prod(shape)), 1, dtype=dtype, shape=shape)
     ndarr3 = blosc2.arange(0, int(np.prod(shape)), 1, dtype=dtype, shape=shape)
     cparams = blosc2.CParams(codec=blosc2.Codec.BLOSCLZ)
-    result = blosc2.stack([ndarr1, ndarr2, ndarr3], axis=axis, cparams=cparams)
+    result = blosc2.stack(
+        [ndarr1, ndarr2, ndarr3], axis=axis, cparams=cparams, urlpath="localfile.b2nd", mode="w"
+    )
     nparray = np.stack([ndarr1[:], ndarr2[:], ndarr3[:]], axis=axis)
     np.testing.assert_almost_equal(result[:], nparray)
+
+    newres = blosc2.open("localfile.b2nd", mode="r")
+    np.testing.assert_almost_equal(newres[:], nparray)
