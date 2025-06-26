@@ -3580,8 +3580,13 @@ def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:  # 
     kwargs = _check_ndarray_kwargs(**kwargs)
     # Proceed with the actual concatenation
     copy = True
+    # When provided urlpath coincides with an array
+    mode = kwargs.pop("mode", "a")  # default mode for blosc2 is "a"
     for arr2 in arrays[1:]:
-        arr1 = blosc2_ext.concatenate(arr1, arr2, axis, copy=copy, **kwargs)
+        arr1 = blosc2_ext.concatenate(arr1, arr2, axis, copy=copy, mode=mode, **kwargs)
+        # Have now overwritten existing file (if mode ='w'), need to change mode
+        # for concatenating to the same file
+        mode = "r" if mode == "r" else "a"
         # arr1 is now the result of the concatenation, so we can now just enlarge it
         copy = False
 
