@@ -47,43 +47,22 @@ if not blosc2.IS_WASM:
 
 
 def compute_slice_shape(shape, slice_obj, dont_squeeze=False):  # noqa: C901
-    """
-    Compute the shape of an array after applying a slice.
-
-    Parameters
-    ----------
-    shape : tuple
-        The original shape of the array.
-    slice_obj : int, slice, tuple of slices, or None
-        The slice object to apply to the array.
-    dont_squeeze : bool
-        Integer indexing normall reduces dimensionality.  Setting this
-        to True, makes dimensionality untouched.
-
-    Returns
-    -------
-    slice_shape : tuple
-        The shape of the resulting array after applying the slice.
-    """
     # Handle None or empty slice case
     if slice_obj is None or slice_obj == ():
         return shape
 
     # Use ndindex to handle slice calculations
     try:
-        # ndindex.ndindex converts slice_obj to a standardized form
-        # and expand expands it to match the shape of the array
         idx = ndindex.ndindex(slice_obj).expand(shape)
-        # Use ndindex's shape property which calculates the resulting shape
         return idx.shape
     except Exception:
-        # Fall back to manual processing if ndindex fails
-        # This could happen for complex cases that ndindex doesn't handle well
+        # Fall back to manual processing
         if not isinstance(slice_obj, tuple):
             slice_obj = (slice_obj,)
 
         result = []
         shape_idx = 0
+        dims_reduced = 0
 
         # Process slice components
         for i, s in enumerate(slice_obj):
@@ -103,20 +82,22 @@ def compute_slice_shape(shape, slice_obj, dont_squeeze=False):  # noqa: C901
                     result.append((stop - start - 1) // step + 1)
                 else:
                     result.append(0)
+                shape_idx += 1
             elif isinstance(s, int) or np.isscalar(s):
                 if dont_squeeze:
                     result.append(1)
+                    shape_idx += 1
                 else:
-                    # Integer indexing reduces dimensionality (normally)
+                    # Integer indexing reduces dimensionality
+                    dims_reduced += 1
+                    shape_idx += 1
                     continue
             elif s is Ellipsis:
                 # Fill in with remaining dimensions
-                remaining_dims = len(shape) - (len(slice_obj) - 1)
+                remaining_dims = len(shape) - (len(slice_obj) - 1 + dims_reduced)
                 result.extend(shape[shape_idx : shape_idx + remaining_dims])
                 shape_idx += remaining_dims
                 continue
-
-            shape_idx += 1
 
         # Add any remaining dimensions
         if shape_idx < len(shape):
@@ -2050,11 +2031,16 @@ def chunked_eval(  # noqa: C901
             return reduce_slices(expression, operands, reduce_args=reduce_args, _slice=item, **kwargs)
 
         if not is_full_slice(item) or (where is not None and len(where) < 2):
-            # The fast path is not possible when using partial slices or where returning
-            # a variable number of elements
+            # The fast path is possible under a few conditions
             if getitem and (where is None or len(where) == 2) and not callable(expression):
-                # If we are using getitem, we can still use some optimizations
-                return slices_eval_getitem(expression, operands, _slice=item, **kwargs)
+                # Compute the size of operands for the fast path
+                shape = compute_broadcast_shape(operands.values())
+                shape_operands = compute_slice_shape(shape, item)
+                _dtype = kwargs.get("dtype", np.float64)
+                size_operands = math.prod(shape_operands) * len(operands) * _dtype.itemsize
+                # Only take the fast path if the size of operands is relatively small
+                if size_operands < blosc2.MAX_FAST_PATH_SIZE:
+                    return slices_eval_getitem(expression, operands, _slice=item, **kwargs)
             return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
 
         if fast_path:

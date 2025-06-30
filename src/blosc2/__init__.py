@@ -138,6 +138,11 @@ MAX_BUFFERSIZE = MAX_BUFFERSIZE
 """
 Maximum buffer size in bytes for a Blosc2 chunk."""
 
+MAX_FAST_PATH_SIZE = 2**30
+"""
+Maximum size in bytes for a fast path evaluation.
+"""
+
 MAX_OVERHEAD = MAX_OVERHEAD
 """
 Maximum overhead during compression (in bytes). This is
