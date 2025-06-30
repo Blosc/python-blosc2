@@ -565,15 +565,18 @@ def compute_broadcast_shape(arrays):
     return np.broadcast_shapes(*shapes) if shapes else None
 
 
-def check_smaller_shape(value, shape, slice_shape):
+def check_smaller_shape(value_shape, shape, slice_shape):
     """Check whether the shape of the value is smaller than the shape of the array.
 
     This follows the NumPy broadcasting rules.
     """
+    # slice_shape must be as long as shape
+    if len(slice_shape) != len(shape):
+        raise ValueError("slice_shape must be as long as shape")
     is_smaller_shape = any(
-        s > (1 if i >= len(value.shape) else value.shape[i]) for i, s in enumerate(slice_shape)
+        s > (1 if i >= len(value_shape) else value_shape[i]) for i, s in enumerate(slice_shape)
     )
-    return len(value.shape) < len(shape) or is_smaller_shape
+    return len(value_shape) < len(shape) or is_smaller_shape
 
 
 def _compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
@@ -1366,7 +1369,7 @@ def slices_eval(  # noqa: C901
     getitem: bool, optional
         Indicates whether the expression is being evaluated for a getitem operation or compute().
         Default is False.
-    _slice: slice, list of slices, optional
+    _slice: int, slice, list of slices, optional
         If provided, only the chunks that intersect with this slice
         will be evaluated.
     kwargs: Any, optional
@@ -1487,7 +1490,7 @@ def slices_eval(  # noqa: C901
             if value.shape == ():
                 chunk_operands[key] = value[()]
                 continue
-            if check_smaller_shape(value, shape, slice_shape):
+            if check_smaller_shape(value.shape, shape, slice_shape):
                 # We need to fetch the part of the value that broadcasts with the operand
                 smaller_slice = compute_smaller_slice(shape, value.shape, slice_)
                 chunk_operands[key] = value[smaller_slice]
@@ -1644,7 +1647,7 @@ def slices_eval_getitem(
         The expression or user-defined (udf) to evaluate.
     operands: dict
         A dictionary containing the operands for the expression.
-    _slice: slice, list of slices, optional
+    _slice: int, slice, list of slices, optional
         If provided, this slice will be evaluated.
     kwargs: Any, optional
         Additional keyword arguments that are supported by the :func:`empty` constructor.
@@ -1667,8 +1670,10 @@ def slices_eval_getitem(
     else:
         shape = out.shape
 
-    # Provided the slice, compute the shape of the output array
-    slice_shape = compute_slice_shape(shape, _slice)
+    # compute the shape of the output array, broadcasting-compatible
+    _slice = ndindex.ndindex(_slice).expand(shape).raw  # make sure slice is tuple
+    _slice_bcast = tuple(slice(i, i + 1) if isinstance(i, int) else i for i in _slice)
+    slice_shape = compute_slice_shape(shape, _slice_bcast)
 
     # Get the slice of each operand
     slice_operands = {}
@@ -1679,7 +1684,7 @@ def slices_eval_getitem(
         if value.shape == ():
             slice_operands[key] = value[()]
             continue
-        if check_smaller_shape(value, shape, slice_shape):
+        if check_smaller_shape(value.shape, shape, slice_shape):
             # We need to fetch the part of the value that broadcasts with the operand
             smaller_slice = compute_smaller_slice(shape, value.shape, _slice)
             slice_operands[key] = value[smaller_slice]
@@ -1736,7 +1741,7 @@ def reduce_slices(  # noqa: C901
         A dictionary containing the operands for the operands.
     reduce_args: dict
         A dictionary with arguments to be passed to the reduction function.
-    _slice: slice, list of slices, optional
+    _slice: int, slice, list of slices, optional
         If provided, only the chunks that intersect with this slice
         will be evaluated.
     kwargs: Any, optional
@@ -1828,6 +1833,7 @@ def reduce_slices(  # noqa: C901
             reduced_slice = tuple(sl for i, sl in enumerate(slice_) if i not in axis)
         offset = tuple(s.start for s in slice_)  # offset for the udf
         # Check whether current slice_ intersects with _slice
+        # TODO: Is this necessary, shouldn't slice always be None for a reduction?
         if _slice is not None and _slice != ():
             # Ensure that slices do not have any None as start or stop
             _slice = tuple(slice(s.start or 0, s.stop or shape[i], s.step) for i, s in enumerate(_slice))
@@ -1860,7 +1866,7 @@ def reduce_slices(  # noqa: C901
                 if value.shape == ():
                     chunk_operands[key] = value[()]
                     continue
-                if check_smaller_shape(value, shape, chunks_):
+                if check_smaller_shape(value.shape, shape, chunks_):
                     # We need to fetch the part of the value that broadcasts with the operand
                     smaller_slice = compute_smaller_slice(operand.shape, value.shape, slice_)
                     chunk_operands[key] = value[smaller_slice]

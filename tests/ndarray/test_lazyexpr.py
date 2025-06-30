@@ -1076,6 +1076,15 @@ def test_eval_getitem(array_fixture):
     np.testing.assert_allclose(expr[:10], nres[:10])
     np.testing.assert_allclose(expr[0:10:2], nres[0:10:2])
 
+    # Small test
+    shape = (2, 10, 5)
+    test_arr = blosc2.linspace(0, 10, np.prod(shape), shape=shape)
+    expr = test_arr * 30
+    nres = test_arr[:] * 30
+    np.testing.assert_allclose(expr[0], nres[0])
+    np.testing.assert_allclose(expr[:10], nres[:10])
+    np.testing.assert_allclose(expr[0:10:2], nres[0:10:2])
+
 
 # Test lazyexpr's slice method
 def test_eval_slice(array_fixture):
