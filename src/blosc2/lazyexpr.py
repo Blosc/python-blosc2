@@ -1669,12 +1669,23 @@ def slices_eval2(  # noqa: C901
 
     dtype = kwargs.pop("dtype", None)
     shape_slice = None
+    _slice_step = False
     if out is None:
         # Compute the shape and chunks of the output array, including broadcasting
         shape = compute_broadcast_shape(operands.values())
         if _slice is not None:
             # print("shape abans:", shape)
-            shape_slice = compute_slice_shape(shape, _slice, dont_squeeze=True)
+            # Remove the step parts from the slice, as code below does not support it
+            # First ensure _slice is a tuple, even if it's a single slice
+            _slice_ = _slice if isinstance(_slice, tuple) else (_slice,)
+            # Check whether _slice_ contains any step that are not None or 1
+            if any(isinstance(s, slice) and s.step not in (None, 1) for s in _slice_):
+                _slice_step = True
+            _slice_ = tuple(
+                slice(s.start or 0, s.stop or shape[i], None) if isinstance(s, slice) else s
+                for i, s in enumerate(_slice_)
+            )
+            shape_slice = compute_slice_shape(shape, _slice_, dont_squeeze=True)
             # print("shape despres:", shape_slice)
     else:
         shape = out.shape
@@ -1726,15 +1737,12 @@ def slices_eval2(  # noqa: C901
         checker = _slice.item() if hasattr(_slice, "item") else _slice  # can't use != when _slice is np.int
         if checker is not None and checker != ():
             # Ensure that _slice is of type slice
-            # print("_slice, shape:", _slice, shape)
             key = ndindex.ndindex(_slice).expand(shape).raw
             _slice = tuple(k if isinstance(k, slice) else slice(k, k + 1, None) for k in key)
             # Ensure that slices do not have any None as start or stop
             _slice = tuple(slice(s.start or 0, s.stop or shape[i], s.step) for i, s in enumerate(_slice))
             slice_ = tuple(slice(s.start or 0, s.stop or shape[i], s.step) for i, s in enumerate(slice_))
             intersects = do_slices_intersect(_slice, slice_)
-            # print("_slice:", _slice)
-            # print("slice_:", slice_)
             if not intersects:
                 continue
             # Compute the part of the slice_ that intersects with _slice
@@ -1748,9 +1756,6 @@ def slices_eval2(  # noqa: C901
         # Get the starts and stops for the slice
         starts = [s.start if s.start is not None else 0 for s in slice_]
         stops = [s.stop if s.stop is not None else sh for s, sh in zip(slice_, slice_shape, strict=True)]
-        # print("-->", slice_)
-        # print("starts:", starts)
-        # print("stops:", stops)
 
         # Get the slice of each operand
         for key, value in operands.items():
@@ -1877,11 +1882,14 @@ def slices_eval2(  # noqa: C901
         if orig_slice is not None:
             if isinstance(out, np.ndarray):
                 out = np.squeeze(out)
+                if _slice_step:
+                    out = out[orig_slice]
             elif isinstance(out, blosc2.NDArray):
                 # It *seems* better to choose an automatic chunks and blocks for the output array
                 # out = out.slice(orig_slice, chunks=out.chunks, blocks=out.blocks)
-                # out = out.slice(orig_slice)
                 out = out.squeeze()
+                if _slice_step:
+                    out = out.slice(orig_slice)
             else:
                 raise ValueError("The output array is not a NumPy array or a NDArray")
 
@@ -2306,9 +2314,9 @@ def chunked_eval(  # noqa: C901
             if getitem and (where is None or len(where) == 2) and not callable(expression):
                 # If we are using getitem, we can still use some optimizations
                 return slices_eval_getitem(expression, operands, _slice=item, **kwargs)
-            # The next is an attempt to reduce memory consumption in a general way, but not working yet
-            # return slices_eval2(expression, operands, getitem=getitem, _slice=item, **kwargs)
-            return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
+            # return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
+            # The next is an improved version of slices_eval that consumes less memory
+            return slices_eval2(expression, operands, getitem=getitem, _slice=item, **kwargs)
 
         if fast_path:
             if getitem:
@@ -2322,7 +2330,9 @@ def chunked_eval(  # noqa: C901
                 # a blosc2.NDArray
                 return fast_eval(expression, operands, getitem=False, **kwargs)
 
-        res = slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
+        # res = slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
+        # The next is an improved version of slices_eval that consumes less memory
+        res = slices_eval2(expression, operands, getitem=getitem, _slice=item, **kwargs)
 
     finally:
         # Deactivate cache for NDField instances
