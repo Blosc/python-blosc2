@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 file = "dset-ones.b2nd"
 # a = blosc2.open(file)
 # expr = blosc2.where(a < 5, a * 2**14, a)
-d = 200
+d = 160
 shape = (d,) * 4
 chunks = (d // 4,) * 4
 blocks = (d // 10,) * 4
