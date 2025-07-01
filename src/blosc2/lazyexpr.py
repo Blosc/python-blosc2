@@ -1663,6 +1663,7 @@ def slices_eval_getitem(
         ne_args = {}
     where: dict | None = kwargs.pop("_where_args", None)
 
+    dtype = kwargs.pop("dtype", None)
     if out is None:
         # Compute the shape and chunks of the output array, including broadcasting
         shape = compute_broadcast_shape(operands.values())
@@ -1700,7 +1701,7 @@ def slices_eval_getitem(
         result = ne_evaluate(new_expr, slice_operands, **ne_args)
 
     if out is None:  # avoid copying unnecessarily
-        return result
+        return result.astype(dtype, copy=False) if dtype else result
     else:
         out[()] = result
         return out
