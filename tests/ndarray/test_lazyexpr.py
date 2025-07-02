@@ -1054,7 +1054,7 @@ def test_lazyexpr_out(array_fixture, out_param, operand_mix):
     np.testing.assert_allclose(out[:], nres)
 
 
-# Test eval with an item parameter
+# Test compute with an item parameter
 def test_eval_item(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = blosc2.lazyexpr("a1 + a2 - a3 * a4", operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4})
@@ -1065,6 +1065,34 @@ def test_eval_item(array_fixture):
     np.testing.assert_allclose(res[()], nres[:10])
     res = expr.compute(item=slice(0, 10, 2))
     np.testing.assert_allclose(res[()], nres[0:10:2])
+
+
+# Test getitem with an item parameter
+def test_eval_getitem(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = blosc2.lazyexpr("a1 + a2 - a3 * a4", operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4})
+    nres = ne_evaluate("na1 + na2 - na3 * na4")
+    np.testing.assert_allclose(expr[0], nres[0])
+    np.testing.assert_allclose(expr[:10], nres[:10])
+    np.testing.assert_allclose(expr[0:10:2], nres[0:10:2])
+
+    # Small test for non-isomorphic shape
+    shape = (2, 10, 5)
+    test_arr = blosc2.linspace(0, 10, np.prod(shape), shape=shape)
+    expr = test_arr * 30
+    nres = test_arr[:] * 30
+    np.testing.assert_allclose(expr[0], nres[0])
+    np.testing.assert_allclose(expr[:10], nres[:10])
+    np.testing.assert_allclose(expr[0:10:2], nres[0:10:2])
+
+    # Small test for broadcasting
+    shape = (2, 10, 5)
+    test_arr = blosc2.linspace(0, 10, np.prod(shape), shape=shape)
+    expr = test_arr + test_arr.slice(slice(1, 2))
+    nres = test_arr[:] + test_arr[1]
+    np.testing.assert_allclose(expr[0], nres[0])
+    np.testing.assert_allclose(expr[:10], nres[:10])
+    np.testing.assert_allclose(expr[0:10:2], nres[0:10:2])
 
 
 # Test lazyexpr's slice method

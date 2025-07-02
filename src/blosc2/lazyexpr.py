@@ -46,6 +46,66 @@ if not blosc2.IS_WASM:
     import numexpr
 
 
+def compute_slice_shape(shape, slice_obj, dont_squeeze=False):  # noqa: C901
+    # Handle None or empty slice case
+    if slice_obj is None or slice_obj == ():
+        return shape
+
+    # Use ndindex to handle slice calculations
+    try:
+        idx = ndindex.ndindex(slice_obj).expand(shape)
+        return idx.shape
+    except Exception:
+        # Fall back to manual processing
+        if not isinstance(slice_obj, tuple):
+            slice_obj = (slice_obj,)
+
+        result = []
+        shape_idx = 0
+        dims_reduced = 0
+
+        # Process slice components
+        for i, s in enumerate(slice_obj):
+            if i >= len(shape):
+                break
+
+            if isinstance(s, slice):
+                start = 0 if s.start is None else max(0, s.start if s.start >= 0 else shape[i] + s.start)
+                stop = (
+                    shape[i]
+                    if s.stop is None
+                    else min(shape[i], s.stop if s.stop >= 0 else shape[i] + s.stop)
+                )
+                step = 1 if s.step is None else abs(s.step)
+
+                if start < stop:
+                    result.append((stop - start - 1) // step + 1)
+                else:
+                    result.append(0)
+                shape_idx += 1
+            elif isinstance(s, int) or np.isscalar(s):
+                if dont_squeeze:
+                    result.append(1)
+                    shape_idx += 1
+                else:
+                    # Integer indexing reduces dimensionality
+                    dims_reduced += 1
+                    shape_idx += 1
+                    continue
+            elif s is Ellipsis:
+                # Fill in with remaining dimensions
+                remaining_dims = len(shape) - (len(slice_obj) - 1 + dims_reduced)
+                result.extend(shape[shape_idx : shape_idx + remaining_dims])
+                shape_idx += remaining_dims
+                continue
+
+        # Add any remaining dimensions
+        if shape_idx < len(shape):
+            result.extend(shape[shape_idx:])
+
+        return tuple(result)
+
+
 def ne_evaluate(expression, local_dict=None, **kwargs):
     """Safely evaluate expressions using numexpr when possible, falling back to numpy."""
     if local_dict is None:
@@ -505,15 +565,18 @@ def compute_broadcast_shape(arrays):
     return np.broadcast_shapes(*shapes) if shapes else None
 
 
-def check_smaller_shape(value, shape, slice_shape):
+def check_smaller_shape(value_shape, shape, slice_shape):
     """Check whether the shape of the value is smaller than the shape of the array.
 
     This follows the NumPy broadcasting rules.
     """
+    # slice_shape must be as long as shape
+    if len(slice_shape) != len(shape):
+        raise ValueError("slice_shape must be as long as shape")
     is_smaller_shape = any(
-        s > (1 if i >= len(value.shape) else value.shape[i]) for i, s in enumerate(slice_shape)
+        s > (1 if i >= len(value_shape) else value_shape[i]) for i, s in enumerate(slice_shape)
     )
-    return len(value.shape) < len(shape) or is_smaller_shape
+    return len(value_shape) < len(shape) or is_smaller_shape
 
 
 def _compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
@@ -1304,8 +1367,9 @@ def slices_eval(  # noqa: C901
     operands: dict
         A dictionary containing the operands for the expression.
     getitem: bool, optional
-        Indicates whether the expression is being evaluated for a getitem operation.
-    _slice: slice, list of slices, optional
+        Indicates whether the expression is being evaluated for a getitem operation or compute().
+        Default is False.
+    _slice: int, slice, list of slices, optional
         If provided, only the chunks that intersect with this slice
         will be evaluated.
     kwargs: Any, optional
@@ -1331,9 +1395,23 @@ def slices_eval(  # noqa: C901
         _order = [_order]
 
     dtype = kwargs.pop("dtype", None)
+    shape_slice = None
+    _slice_step = False
     if out is None:
         # Compute the shape and chunks of the output array, including broadcasting
         shape = compute_broadcast_shape(operands.values())
+        if _slice is not None:
+            # Remove the step parts from the slice, as code below does not support it
+            # First ensure _slice is a tuple, even if it's a single slice
+            _slice_ = _slice if isinstance(_slice, tuple) else (_slice,)
+            # Check whether _slice_ contains any step that are not None or 1
+            if any(isinstance(s, slice) and s.step not in (None, 1) for s in _slice_):
+                _slice_step = True
+            _slice_ = tuple(
+                slice(s.start or 0, s.stop or shape[i], None) if isinstance(s, slice) else s
+                for i, s in enumerate(_slice_)
+            )
+            shape_slice = compute_slice_shape(shape, _slice_, dont_squeeze=True)
     else:
         shape = out.shape
 
@@ -1412,7 +1490,7 @@ def slices_eval(  # noqa: C901
             if value.shape == ():
                 chunk_operands[key] = value[()]
                 continue
-            if check_smaller_shape(value, shape, slice_shape):
+            if check_smaller_shape(value.shape, shape, slice_shape):
                 # We need to fetch the part of the value that broadcasts with the operand
                 smaller_slice = compute_smaller_slice(shape, value.shape, slice_)
                 chunk_operands[key] = value[smaller_slice]
@@ -1476,10 +1554,10 @@ def slices_eval(  # noqa: C901
                 raise ValueError("The where condition must be a tuple with one or two elements")
 
         if out is None:
-            shape_ = shape
+            shape_ = shape_slice if shape_slice is not None else shape
             if where is not None and len(where) < 2:
                 # The result is a linear array
-                shape_ = math.prod(shape)
+                shape_ = math.prod(shape_)
             if getitem or _order:
                 out = np.empty(shape_, dtype=dtype_)
                 if _order:
@@ -1487,7 +1565,8 @@ def slices_eval(  # noqa: C901
             else:
                 if "chunks" not in kwargs and (where is None or len(where) == 2):
                     # Let's use the same chunks as the first operand (it could have been automatic too)
-                    out = blosc2.empty(shape_, chunks=chunks, dtype=dtype_, **kwargs)
+                    # out = blosc2.empty(shape_, chunks=chunks, dtype=dtype_, **kwargs)
+                    out = blosc2.empty(shape_, dtype=dtype_, **kwargs)
                 elif "chunks" in kwargs and (where is not None and len(where) < 2 and len(shape_) > 1):
                     # Remove the chunks argument if the where condition is not a tuple with two elements
                     kwargs.pop("chunks")
@@ -1527,17 +1606,105 @@ def slices_eval(  # noqa: C901
     else:  # Need to take orig_slice since filled up array according to slice_ for each chunk
         if orig_slice is not None:
             if isinstance(out, np.ndarray):
-                out = out[orig_slice]
-                if _order is not None:
-                    indices_ = indices_[orig_slice]
+                out = np.squeeze(out)
+                if _slice_step:
+                    out = out[orig_slice]
             elif isinstance(out, blosc2.NDArray):
                 # It *seems* better to choose an automatic chunks and blocks for the output array
                 # out = out.slice(orig_slice, chunks=out.chunks, blocks=out.blocks)
-                out = out.slice(orig_slice)
+                out = out.squeeze()
+                if _slice_step:
+                    out = out.slice(orig_slice)
             else:
                 raise ValueError("The output array is not a NumPy array or a NDArray")
 
     return out
+
+
+def slices_eval_getitem(
+    expression: str,
+    operands: dict,
+    _slice=None,
+    **kwargs,
+) -> np.ndarray:
+    """Evaluate the expression in slices of operands.
+
+    This function can handle operands with different chunk shapes and
+    can evaluate only a slice of the output array if needed.
+
+    This is a special (and much simplified) version of slices_eval() that
+    only works for the case we are returning a NumPy array, where is
+    either None or has two args, and expression is not callable.
+
+    One inconvenient of this function is that it tries to evaluate
+    the whole slice in one go.  For small slices, this is good, as it
+    is normally way more efficient.  However, for larger slices this
+    can require large amounts of memory per operand.
+
+    Parameters
+    ----------
+    expression: str or callable
+        The expression or user-defined (udf) to evaluate.
+    operands: dict
+        A dictionary containing the operands for the expression.
+    _slice: int, slice, list of slices, optional
+        If provided, this slice will be evaluated.
+    kwargs: Any, optional
+        Additional keyword arguments that are supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    :ref:`NDArray` or np.ndarray
+        The output array.
+    """
+    out: np.ndarray | None = kwargs.pop("_output", None)
+    ne_args: dict = kwargs.pop("_ne_args", {})
+    if ne_args is None:
+        ne_args = {}
+    where: dict | None = kwargs.pop("_where_args", None)
+
+    dtype = kwargs.pop("dtype", None)
+    if out is None:
+        # Compute the shape and chunks of the output array, including broadcasting
+        shape = compute_broadcast_shape(operands.values())
+    else:
+        shape = out.shape
+
+    # compute the shape of the output array, broadcasting-compatible
+    _slice = ndindex.ndindex(_slice).expand(shape).raw  # make sure slice is tuple
+    _slice_bcast = tuple(slice(i, i + 1) if isinstance(i, int) else i for i in _slice)
+    slice_shape = compute_slice_shape(shape, _slice_bcast)
+
+    # Get the slice of each operand
+    slice_operands = {}
+    for key, value in operands.items():
+        if np.isscalar(value):
+            slice_operands[key] = value
+            continue
+        if value.shape == ():
+            slice_operands[key] = value[()]
+            continue
+        if check_smaller_shape(value.shape, shape, slice_shape):
+            # We need to fetch the part of the value that broadcasts with the operand
+            smaller_slice = compute_smaller_slice(shape, value.shape, _slice)
+            slice_operands[key] = value[smaller_slice]
+            continue
+
+        slice_operands[key] = value[_slice]
+
+    # Evaluate the expression using slices of operands
+    if where is None:
+        result = ne_evaluate(expression, slice_operands, **ne_args)
+    else:
+        # Apply the where condition (in result)
+        new_expr = f"where({expression}, _where_x, _where_y)"
+        result = ne_evaluate(new_expr, slice_operands, **ne_args)
+
+    if out is None:  # avoid copying unnecessarily
+        return result.astype(dtype, copy=False) if dtype else result
+    else:
+        out[()] = result
+        return out
 
 
 def infer_reduction_dtype(dtype, operation):
@@ -1574,7 +1741,7 @@ def reduce_slices(  # noqa: C901
         A dictionary containing the operands for the operands.
     reduce_args: dict
         A dictionary with arguments to be passed to the reduction function.
-    _slice: slice, list of slices, optional
+    _slice: int, slice, list of slices, optional
         If provided, only the chunks that intersect with this slice
         will be evaluated.
     kwargs: Any, optional
@@ -1666,6 +1833,7 @@ def reduce_slices(  # noqa: C901
             reduced_slice = tuple(sl for i, sl in enumerate(slice_) if i not in axis)
         offset = tuple(s.start for s in slice_)  # offset for the udf
         # Check whether current slice_ intersects with _slice
+        # TODO: Is this necessary, shouldn't slice always be None for a reduction?
         if _slice is not None and _slice != ():
             # Ensure that slices do not have any None as start or stop
             _slice = tuple(slice(s.start or 0, s.stop or shape[i], s.step) for i, s in enumerate(_slice))
@@ -1698,7 +1866,7 @@ def reduce_slices(  # noqa: C901
                 if value.shape == ():
                     chunk_operands[key] = value[()]
                     continue
-                if check_smaller_shape(value, shape, chunks_):
+                if check_smaller_shape(value.shape, shape, chunks_):
                     # We need to fetch the part of the value that broadcasts with the operand
                     smaller_slice = compute_smaller_slice(operand.shape, value.shape, slice_)
                     chunk_operands[key] = value[smaller_slice]
@@ -1869,8 +2037,16 @@ def chunked_eval(  # noqa: C901
             return reduce_slices(expression, operands, reduce_args=reduce_args, _slice=item, **kwargs)
 
         if not is_full_slice(item) or (where is not None and len(where) < 2):
-            # The fast path is not possible when using partial slices or where returning
-            # a variable number of elements
+            # The fast path is possible under a few conditions
+            if getitem and (where is None or len(where) == 2) and not callable(expression):
+                # Compute the size of operands for the fast path
+                shape = compute_broadcast_shape(operands.values())
+                shape_operands = compute_slice_shape(shape, item)
+                _dtype = kwargs.get("dtype", np.float64)
+                size_operands = math.prod(shape_operands) * len(operands) * _dtype.itemsize
+                # Only take the fast path if the size of operands is relatively small
+                if size_operands < blosc2.MAX_FAST_PATH_SIZE:
+                    return slices_eval_getitem(expression, operands, _slice=item, **kwargs)
             return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
 
         if fast_path:
