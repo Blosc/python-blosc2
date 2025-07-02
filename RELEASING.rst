@@ -78,7 +78,7 @@ Tagging
     twine upload --repository blosc2 wheelhouse/*
 
 * Update the latest release in the ``doc/python-blosc2.rst`` file with the new version
-  number (and date?).  Do a commit::
+  number and date.  Do a commit::
 
     git commit -a -m "Update latest release in doc"
     git push
