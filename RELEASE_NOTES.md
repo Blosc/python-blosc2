@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.5.1 to 3.5.2
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.5.0 to 3.5.1
 
 * Reduced memory usage when computing slices of lazy expressions.

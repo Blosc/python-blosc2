@@ -95,4 +95,4 @@ developments.
 Enjoy!
 
 - Blosc Development Team
-  Compress better, compute bigger
+  Compress Better, Compute Bigger
