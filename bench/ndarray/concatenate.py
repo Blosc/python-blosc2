@@ -73,7 +73,7 @@ def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0,
 
     # Time the concatenation
     start_time = time.time()
-    result = blosc2.concatenate(arrays, axis=axis, cparams=blosc2.CParams(codec=codec))
+    result = blosc2.concat(arrays, axis=axis, cparams=blosc2.CParams(codec=codec))
     duration = time.time() - start_time
 
     return duration, result.shape, data_size_gb
@@ -81,7 +81,7 @@ def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0,
 
 def run_numpy_benchmark(num_arrays=10, size=500, axis=0, dtype=np.float64, datadist="linspace"):
     """
-    Benchmark numpy.concatenate performance for comparison.
+    Benchmark numpy.concat performance for comparison.
 
     Parameters:
     - num_arrays: Number of arrays to concatenate
@@ -120,7 +120,7 @@ def run_numpy_benchmark(num_arrays=10, size=500, axis=0, dtype=np.float64, datad
 
     # Time the concatenation
     start_time = time.time()
-    result = np.concatenate(numpy_arrays, axis=axis)
+    result = np.concat(numpy_arrays, axis=axis)
     duration = time.time() - start_time
 
     return duration, result.shape, data_size_gb
@@ -200,11 +200,11 @@ def create_combined_plot(num_arrays, sizes, numpy_speeds_axis0, unaligned_speeds
 
     # Save the plot
     plt.tight_layout()
-    plt.savefig(os.path.join(output_dir, 'concatenate_benchmark_combined.png'), dpi=100)
+    plt.savefig(os.path.join(output_dir, 'concat_benchmark_combined.png'), dpi=100)
     plt.show()
     plt.close()
 
-    print(f"Combined plot saved to {os.path.join(output_dir, 'concatenate_benchmark_combined.png')}")
+    print(f"Combined plot saved to {os.path.join(output_dir, 'concat_benchmark_combined.png')}")
 
 
 def main():

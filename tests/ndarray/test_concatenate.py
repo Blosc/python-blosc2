@@ -33,8 +33,8 @@ def test_concat2(shape1, shape2, dtype, axis):
     ndarr1 = blosc2.arange(0, int(np.prod(shape1)), 1, dtype=dtype, shape=shape1)
     ndarr2 = blosc2.arange(0, int(np.prod(shape2)), 1, dtype=dtype, shape=shape2)
     cparams = blosc2.CParams(clevel=1)
-    result = blosc2.concatenate([ndarr1, ndarr2], axis=axis, cparams=cparams)
-    nparray = np.concatenate([ndarr1[:], ndarr2[:]], axis=axis)
+    result = blosc2.concat([ndarr1, ndarr2], axis=axis, cparams=cparams)
+    nparray = np.concat([ndarr1[:], ndarr2[:]], axis=axis)
     np.testing.assert_almost_equal(result[:], nparray)
 
 
@@ -59,8 +59,8 @@ def test_concat3(shape1, shape2, shape3, dtype, axis):
     ndarr2 = blosc2.arange(0, int(np.prod(shape2)), 1, dtype=dtype, shape=shape2)
     ndarr3 = blosc2.arange(0, int(np.prod(shape3)), 1, dtype=dtype, shape=shape3)
     cparams = blosc2.CParams(codec=blosc2.Codec.BLOSCLZ)
-    result = blosc2.concatenate([ndarr1, ndarr2, ndarr3], axis=axis, cparams=cparams)
-    nparray = np.concatenate([ndarr1[:], ndarr2[:], ndarr3[:]], axis=axis)
+    result = blosc2.concat([ndarr1, ndarr2, ndarr3], axis=axis, cparams=cparams)
+    nparray = np.concat([ndarr1[:], ndarr2[:], ndarr3[:]], axis=axis)
     np.testing.assert_almost_equal(result[:], nparray)
 
 
