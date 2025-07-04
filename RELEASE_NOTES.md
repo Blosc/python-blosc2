@@ -1,8 +1,25 @@
 # Release notes
 
-## Changes from 3.5.0 to 3.5.1
+## Changes from 3.5.1 to 3.5.2
 
 XXX version-specific blurb XXX
+
+## Changes from 3.5.0 to 3.5.1
+
+* Reduced memory usage when computing slices of lazy expressions.
+  This is a significant improvement for large arrays (up to 20x less).
+  Also, we have added a fast path for slices that are small and fit in
+  memory, which can be up to 20x faster than the previous implementation.
+  See PR #430.
+
+* `blosc2.concatenate()` has been renamed to `blosc2.concat()`.
+  This is in line with the [Array API](https://data-apis.org/array-api).
+  The old name is still available for backward compatibility, but it will
+  be removed in a future release.
+
+* Improve mode handling for concatenating to disk. See PR #428.
+  Useful for concatenating arrays that are stored in disk, and allows
+  specifying the mode to use when concatenating.
 
 ## Changes from 3.4.0 to 3.5.0
 

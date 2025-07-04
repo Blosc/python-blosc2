@@ -72,7 +72,7 @@ Constructors
 
     asarray
     copy
-    concatenate
+    concat
     empty
     expand_dims
     frombuffer

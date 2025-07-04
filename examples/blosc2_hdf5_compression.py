@@ -20,6 +20,7 @@ import blosc2
 clevel = 5  # compression level, e.g., 0-9, where 0 is no compression and 9 is maximum compression
 fname_in = "kevlar.h5"  # input file with the kevlar dataset
 fname_out = "kevlar-blosc2.h5"
+nframes = 1000
 if not os.path.exists(fname_in):
     raise FileNotFoundError(
         f"Input file {fname_in} does not exist\n"
@@ -30,9 +31,11 @@ if not os.path.exists(fname_in):
 # Example 1
 # hdf5plugin supports limited blosc2 compression with certain codecs
 cname = "zstd"
-with h5py.File(fname_in, "r") as fr:
-    dset = fr["/entry/data/data"][:]
-    with h5py.File(fname_out, "w") as fw:
+
+if not os.path.exists("STD" + fname_out):
+    with h5py.File(fname_in, "r") as fr:
+        dset = fr["/entry/data/data"][:nframes]
+    with h5py.File("STD" + fname_out, "w") as fw:
         g = fw.create_group("/data")
         b2comp = hdf5plugin.Blosc2(cname=cname, clevel=clevel, filters=hdf5plugin.Blosc2.BITSHUFFLE)
         dset_out = g.create_dataset(
@@ -42,13 +45,13 @@ with h5py.File(fname_in, "r") as fr:
             chunks=(1,) + dset.shape[1:],  # chunk size of 1 frame
             **b2comp,
         )
-    print("Successfully compressed file with hdf5plugin")
+print("Successfully compressed file with hdf5plugin")
 
 # Example 2
 # For other codecs (e.g grok) or for more custom compression such as with user-defined block shapes, one
 # has to use a more involved route
 blocks = (50, 80, 80)
-chunks = (200, 240, 240)
+chunks = (100, 240, 240)
 cparams = {
     "codec": blosc2.Codec.LZ4,
     "filters": [blosc2.Filter.BITSHUFFLE],
@@ -58,18 +61,17 @@ cparams = {
 
 if os.path.exists("dset.b2nd"):  # don't reload dset to blosc2 if already done so once
     b2im = blosc2.open(urlpath="dset.b2nd", mode="r")
-    s, d = b2im.shape, b2im.dtype
 else:
     with h5py.File(fname_in, "r") as fr:  # load file and process to blosc2 array
-        dset = fr["/entry/data/data"][:]
+        dset = fr["/entry/data/data"][:nframes]
         b2im = blosc2.asarray(
             dset, chunks=chunks, blocks=blocks, cparams=cparams, urlpath="dset.b2nd", mode="w"
         )
-        d = dset.dtype
         del dset
 
+s, d = b2im.shape, b2im.dtype
 # Write to .h5 file #
-with h5py.File(fname_out, "w") as fw:
+with h5py.File("Custom" + fname_out, "w") as fw:
     g = fw.create_group("/data")
     b2comp = hdf5plugin.Blosc2()  # just for identification, no compression algorithm specified
     dset_out = g.create_dataset(

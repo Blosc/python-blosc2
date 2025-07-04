@@ -2879,7 +2879,7 @@ def schunk_get_slice_nchunks(schunk: SChunk, key):
     return res
 
 
-def concatenate(arr1: NDArray, arr2: NDArray, axis: int, **kwargs):
+def concat(arr1: NDArray, arr2: NDArray, axis: int, **kwargs):
     """
     Concatenate two NDArray objects along a specified axis.
     """

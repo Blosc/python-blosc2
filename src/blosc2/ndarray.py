@@ -3526,7 +3526,7 @@ def copy(array: NDArray, dtype: np.dtype | str = None, **kwargs: Any) -> NDArray
     return array.copy(dtype, **kwargs)
 
 
-def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:  # noqa: C901
+def concat(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:  # noqa: C901
     """Concatenate a list of arrays along a specified axis.
 
     Parameters
@@ -3552,7 +3552,7 @@ def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:  # 
     >>> import numpy as np
     >>> arr1 = blosc2.arange(0, 5, dtype=np.int32)
     >>> arr2 = blosc2.arange(5, 10, dtype=np.int32)
-    >>> result = blosc2.concatenate([arr1, arr2])
+    >>> result = blosc2.concat([arr1, arr2])
     >>> print(result[:])
     [0 1 2 3 4 5 6 7 8 9]
     """
@@ -3583,12 +3583,31 @@ def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:  # 
     kwargs = _check_ndarray_kwargs(**kwargs)
     # Proceed with the actual concatenation
     copy = True
+    # When provided urlpath coincides with an array
+    mode = kwargs.pop("mode", "a")  # default mode for blosc2 is "a"
     for arr2 in arrays[1:]:
-        arr1 = blosc2_ext.concatenate(arr1, arr2, axis, copy=copy, **kwargs)
+        arr1 = blosc2_ext.concat(arr1, arr2, axis, copy=copy, mode=mode, **kwargs)
+        # Have now overwritten existing file (if mode ='w'), need to change mode
+        # for concatenating to the same file
+        mode = "r" if mode == "r" else "a"
         # arr1 is now the result of the concatenation, so we can now just enlarge it
         copy = False
 
     return arr1
+
+
+# Previous concatenate function was renamed to concat.  Keep it with a DeprecationWarning
+def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:
+    """Concatenate a list of arrays along a specified axis.
+
+    This is an alias for :func:`concat`.  It is kept for backward compatibility.
+    """
+    warnings.warn(
+        "blosc2.concatenate is deprecated, use blosc2.concat instead.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return concat(arrays, axis, **kwargs)
 
 
 def expand_dims(array: NDArray, axis=0) -> NDArray:
@@ -3636,7 +3655,7 @@ def stack(arrays: list[NDArray], axis=0, **kwargs: Any) -> NDArray:
     newarrays = []
     for arr in arrays:
         newarrays += [blosc2.expand_dims(arr, axis=axis)]
-    return blosc2.concatenate(newarrays, axis, **kwargs)
+    return blosc2.concat(newarrays, axis, **kwargs)
 
 
 def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
