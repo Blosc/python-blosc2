@@ -2528,8 +2528,15 @@ cdef class NDArray:
         _check_rc(b2nd_resize(self.array, new_shape_, NULL),
                   "Error while resizing the array")
 
-    def squeeze(self):
-        _check_rc(b2nd_squeeze(self.array), "Error while performing the squeeze")
+    def squeeze(self, mask=None):
+        cdef c_bool mask_[B2ND_MAX_DIM]
+        if mask is None:
+            _check_rc(b2nd_squeeze(self.array), "Error while performing the squeeze")
+        else:
+            for i in range(self.ndim):
+                mask_[i] = mask[i]
+            _check_rc(b2nd_squeeze_index(self.array, mask_), "Error while squeezing array")
+
         if self.array.shape[0] == 1 and self.ndim == 1:
             self.array.ndim = 0
 

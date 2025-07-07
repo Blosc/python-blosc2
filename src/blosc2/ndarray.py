@@ -1967,6 +1967,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 for order, nchunk in enumerate(aligned_chunks):
                     chunk = self.schunk.get_chunk(nchunk)
                     newarr.schunk.update_chunk(order, chunk)
+                newarr.squeeze(mask=mask)  # remove any dummy dims introduced
                 return newarr
 
         key = (start, stop)
@@ -1985,10 +1986,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return ndslice
 
-    def squeeze(self) -> NDArray:
+    def squeeze(self, mask=None) -> NDArray:
         """Remove single-dimensional entries from the shape of the array.
 
-        This method modifies the array in-place, removing any dimensions with size 1.
+        This method modifies the array in-place. If mask is None removes any dimensions with size 1.
+        If mask is provided, it should be a boolean array of the same shape as the array, and the corresponding
+        dimensions (of size 1) will be removed.
 
         Returns
         -------
@@ -2007,7 +2010,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> a.shape
         (23, 11)
         """
-        super().squeeze()
+        super().squeeze(mask=mask)
         return self
 
     def indices(self, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
