@@ -2058,9 +2058,9 @@ def chunked_eval(  # noqa: C901
                 # e.g. the user cannot specify chunks or blocks, or an output that is not
                 # a blosc2.NDArray
                 return fast_eval(expression, operands, getitem=False, **kwargs)
-        else:
-            # end up here by default
-            return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
+
+        # End up here by default
+        return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
 
     finally:
         # Deactivate cache for NDField instances
