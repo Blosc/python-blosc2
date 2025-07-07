@@ -1572,7 +1572,13 @@ def slices_eval(  # noqa: C901
                 # TODO: Check this only works when slice is ()
                 out.schunk.update_data(nchunk, result, copy=False)
             else:
-                out[cslice] = result
+                try:
+                    out[cslice] = result
+                except ComplexWarning:
+                    # The result is a complex number, so we need to convert it to real.
+                    # This is a workaround for rigidness of numpy with type casting.
+                    result = result.real.astype(out.dtype)
+                    out[cslice] = result
         elif len(where) == 1:
             lenres = len(result)
             out[lenout : lenout + lenres] = result
@@ -1690,7 +1696,12 @@ def slices_eval_getitem(
         result = ne_evaluate(new_expr, slice_operands, **ne_args)
 
     if out is None:  # avoid copying unnecessarily
-        return result.astype(dtype, copy=False) if dtype else result
+        try:
+            return result.astype(dtype, copy=False)
+        except ComplexWarning:
+            # The result is a complex number, so we need to convert it to real.
+            # This is a workaround for rigidness of numpy with type casting.
+            return result.real.astype(dtype, copy=False)
     else:
         out[()] = result
         return out
@@ -1998,10 +2009,10 @@ def chunked_eval(  # noqa: C901
     """
     try:
         # standardise slice to be ndindex.Tuple
-        item = () if item is None else item
+        item = () if item in (None, slice(None, None, None)) else item
         item = ndindex.ndindex(item)
         shape = compute_broadcast_shape(operands.values())
-        if shape is not None:
+        if (shape is not None) and (item.raw != ()):
             item = item.expand(shape)  # converts to standard tuple form
 
         getitem = kwargs.pop("_getitem", False)
