@@ -568,7 +568,7 @@ def compute_broadcast_shape(arrays):
     return np.broadcast_shapes(*shapes) if shapes else None
 
 
-def check_smaller_shape(value_shape, shape, slice_shape):
+def check_smaller_shape(value_shape, shape, slice_shape, slice_):
     """Check whether the shape of the value is smaller than the shape of the array.
 
     This follows the NumPy broadcasting rules.
@@ -579,7 +579,10 @@ def check_smaller_shape(value_shape, shape, slice_shape):
     is_smaller_shape = any(
         s > (1 if i >= len(value_shape) else value_shape[i]) for i, s in enumerate(slice_shape)
     )
-    return len(value_shape) < len(shape) or is_smaller_shape
+    slice_past_bounds = any(
+        s.stop > (1 if i >= len(value_shape) else value_shape[i]) for i, s in enumerate(slice_)
+    )
+    return len(value_shape) < len(shape) or is_smaller_shape or slice_past_bounds
 
 
 def _compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
@@ -1401,10 +1404,11 @@ def slices_eval(  # noqa: C901
     # keep orig_slice for final getitem
     _slice = _slice.raw
     orig_slice = _slice
-    full_slice = _slice
+    full_slice = ()  # by default the full_slice is the whole array
+
+    # Compute the shape and chunks of the output array, including broadcasting
+    shape = compute_broadcast_shape(operands.values())
     if out is None:
-        # Compute the shape and chunks of the output array, including broadcasting
-        shape = compute_broadcast_shape(operands.values())
         if _slice != ():
             # Check whether _slice contains an integer, or any step that are not None or 1
             if any(
@@ -1420,7 +1424,9 @@ def slices_eval(  # noqa: C901
             shape_slice = ndindex.ndindex(full_slice).newshape(shape)
             orig_slice = ndindex.ndindex(orig_slice).as_subindex(full_slice).raw
     else:
-        # TODO: check that this is fine since __out__ could have shape_slice and __shape__ should refer to full array
+        # out should always have shape of full array
+        if shape is not None and shape != out.shape:
+            raise ValueError("Provided output shape does not match the operands' shape.")
         shape = out.shape
 
     if chunks is None:  # Guess chunk shape
@@ -1471,7 +1477,9 @@ def slices_eval(  # noqa: C901
         cslice_shape = tuple(s.stop - s.start for s in cslice)
         len_chunk = math.prod(cslice_shape)
         # get local index of part of out that is to be updated
-        cslice_subidx = ndindex.ndindex(cslice).as_subindex(full_slice).raw
+        cslice_subidx = (
+            ndindex.ndindex(cslice).as_subindex(full_slice).raw
+        )  # in the case full_slice=(), just gives cslice
 
         # Get the starts and stops for the slice
         starts = [s.start if s.start is not None else 0 for s in cslice]
@@ -1485,7 +1493,7 @@ def slices_eval(  # noqa: C901
             if value.shape == ():
                 chunk_operands[key] = value[()]
                 continue
-            if check_smaller_shape(value.shape, shape, cslice_shape):
+            if check_smaller_shape(value.shape, shape, cslice_shape, cslice):
                 # We need to fetch the part of the value that broadcasts with the operand
                 smaller_slice = compute_smaller_slice(shape, value.shape, cslice)
                 chunk_operands[key] = value[smaller_slice]
@@ -1505,10 +1513,11 @@ def slices_eval(  # noqa: C901
 
         if callable(expression):
             result = np.empty(cslice_shape, dtype=out.dtype)  # raises error if out is None
+            # cslice should be equal to cslice_subidx
             # Call the udf directly and use result as the output array
             offset = tuple(s.start for s in cslice)
             expression(tuple(chunk_operands.values()), result, offset=offset)
-            out[cslice_subidx] = result
+            out[cslice] = result
             continue
 
         if where is None:
@@ -1606,12 +1615,12 @@ def slices_eval(  # noqa: C901
     else:  # Need to take orig_slice since filled up array according to slice_ for each chunk
         if orig_slice != ():
             if isinstance(out, np.ndarray):
-                if need_orig_slice:
+                if need_orig_slice:  # only called if out was None
                     out = out[orig_slice]
             elif isinstance(out, blosc2.NDArray):
                 # It *seems* better to choose an automatic chunks and blocks for the output array
                 # out = out.slice(_slice, chunks=out.chunks, blocks=out.blocks)
-                if need_orig_slice:
+                if need_orig_slice:  # only called if out was None
                     out = out.slice(orig_slice)
             else:
                 raise ValueError("The output array is not a NumPy array or a NDArray")
@@ -1682,7 +1691,7 @@ def slices_eval_getitem(
         if value.shape == ():
             slice_operands[key] = value[()]
             continue
-        if check_smaller_shape(value.shape, shape, slice_shape):
+        if check_smaller_shape(value.shape, shape, slice_shape, _slice_bcast):
             # We need to fetch the part of the value that broadcasts with the operand
             smaller_slice = compute_smaller_slice(shape, value.shape, _slice)
             slice_operands[key] = value[smaller_slice]
@@ -1706,7 +1715,8 @@ def slices_eval_getitem(
             # This is a workaround for rigidness of numpy with type casting.
             return result.real.astype(dtype, copy=False)
     else:
-        out[()] = result
+        # out should always have maximal shape
+        out[_slice] = result
         return out
 
 
@@ -1775,12 +1785,14 @@ def reduce_slices(  # noqa: C901
 
     _slice = _slice.raw
     shape_slice = shape
+    full_slice = ()  # by default the full_slice is the whole array
     if out is None:
         if _slice != ():
             shape_slice = ndindex.ndindex(_slice).newshape(shape)
+            full_slice = _slice
     else:
-        # TODO: check that this is fine since __out__ could have shape_slice and __shape__ should refer to full array
-        shape_slice = out.shape
+        if shape != out.shape:
+            raise ValueError("Provided output shape does not match the operands' shape.")
 
     # after slicing, we reduce to calculate shape of output
     if axis is None:
@@ -1867,7 +1879,7 @@ def reduce_slices(  # noqa: C901
                 if value.shape == ():
                     chunk_operands[key] = value[()]
                     continue
-                if check_smaller_shape(value.shape, shape, chunks_):
+                if check_smaller_shape(value.shape, shape, chunks_, cslice):
                     # We need to fetch the part of the value that broadcasts with the operand
                     smaller_slice = compute_smaller_slice(operand.shape, value.shape, cslice)
                     chunk_operands[key] = value[smaller_slice]
@@ -1883,7 +1895,9 @@ def reduce_slices(  # noqa: C901
                 chunk_operands[key] = value[cslice]
 
         # get local index of part of out that is to be updated
-        cslice_subidx = ndindex.ndindex(cslice).as_subindex(_slice).raw
+        cslice_subidx = (
+            ndindex.ndindex(cslice).as_subindex(full_slice).raw
+        )  # if full_slice is (), just gives cslice
         if keepdims:
             reduced_slice = tuple(slice(None) if i in axis else sl for i, sl in enumerate(cslice_subidx))
         else:
@@ -3259,6 +3273,7 @@ class LazyUDF(LazyArray):
             # TODO: as this creates a big array, this can potentially consume a lot of memory
             output = np.empty(self.shape, self.dtype)
             # It is important to pass kwargs here, because chunks can be used internally
+            # fills numpy array with desired slice
             chunked_eval(self.func, self.inputs_dict, item, _getitem=True, _output=output, **self.kwargs)
             return output[item]
         return self.res_getitem[item]

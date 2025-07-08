@@ -200,6 +200,12 @@ def test_reduce_slice(reduce_op):
     nres = getattr(na[_slice], reduce_op)(axis=-1)
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
+    # Test reductions with slices and strides
+    _slice = (slice(1, 2, 1), slice(1, 9, 2))
+    res = getattr(a, reduce_op)(item=_slice, axis=1)
+    nres = getattr(na[_slice], reduce_op)(axis=1)
+    np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
+
 
 # Test fast path for reductions
 @pytest.mark.parametrize(

@@ -1078,6 +1078,8 @@ def test_eval_getitem(array_fixture):
     np.testing.assert_allclose(expr[:10], nres[:10])
     np.testing.assert_allclose(expr[0:10:2], nres[0:10:2])
 
+
+def test_eval_getitem2():
     # Small test for non-isomorphic shape
     shape = (2, 10, 5)
     test_arr = blosc2.linspace(0, 10, np.prod(shape), shape=shape, chunks=(1, 5, 1))
@@ -1086,15 +1088,17 @@ def test_eval_getitem(array_fixture):
     np.testing.assert_allclose(expr[0], nres[0])
     np.testing.assert_allclose(expr[1:, :7], nres[1:, :7])
     np.testing.assert_allclose(expr[0:10:2], nres[0:10:2])
+    # This works, but it is not very efficient since it relies on blosc2.ndarray.slice for non-unit steps
+    np.testing.assert_allclose(expr.slice((slice(None, None, None), slice(0, 10, 2)))[:], nres[:, 0:10:2])
 
     # Small test for broadcasting
-    shape = (2, 10, 5)
-    test_arr = blosc2.linspace(0, 10, np.prod(shape), shape=shape)
-    expr = test_arr + test_arr.slice(slice(1, 2))
+    expr = test_arr + test_arr.slice(1)
     nres = test_arr[:] + test_arr[1]
     np.testing.assert_allclose(expr[0], nres[0])
-    np.testing.assert_allclose(expr[:10], nres[:10])
-    np.testing.assert_allclose(expr[0:10:2], nres[0:10:2])
+    np.testing.assert_allclose(expr[1:, :7], nres[1:, :7])
+    np.testing.assert_allclose(expr[:, 0:10:2], nres[:, 0:10:2])
+    # This works, but it is not very efficient since it relies on blosc2.ndarray.slice for non-unit steps
+    np.testing.assert_allclose(expr.slice((slice(None, None, None), slice(0, 10, 2)))[:], nres[:, 0:10:2])
 
 
 # Test lazyexpr's slice method

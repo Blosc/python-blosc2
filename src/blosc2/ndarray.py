@@ -1474,13 +1474,17 @@ class NDArray(blosc2_ext.NDArray, Operand):
             # Massage the key to a tuple and go the fast path
             key_ = (slice(key, key + 1), *(slice(None),) * (self.ndim - 1))
             start, stop, step = get_ndarray_start_stop(self.ndim, key_, self.shape)
-            shape = tuple(sp - st for st, sp in zip(start, stop, strict=True))
+            shape = tuple(
+                sp - st for st, sp in zip(start, stop, strict=True) if st < sp
+            )  # add condition to avoid 0 in shape
         elif isinstance(key, tuple) and (
             builtins.sum(isinstance(k, builtins.slice) for k in key) == self.ndim
         ):
             # This can be processed in a fast way already
             start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
-            shape = tuple(sp - st for st, sp in zip(start, stop, strict=True))
+            shape = tuple(
+                sp - st for st, sp in zip(start, stop, strict=True) if st < sp
+            )  # add condition to avoid 0 in shape
         elif isinstance(key, (list, np.ndarray, NDArray)):
             if isinstance(key, list):
                 key = np.array(key, dtype=np.int64)
