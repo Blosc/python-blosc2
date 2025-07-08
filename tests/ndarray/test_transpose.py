@@ -226,7 +226,7 @@ def test_disk():
 def test_transpose(shape_chunks_blocks_2d, dtype_fixture):
     shape, chunks, blocks = shape_chunks_blocks_2d
     a = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks, dtype=dtype_fixture)
-    with pytest.warns(DeprecationWarning):
+    with pytest.warns(DeprecationWarning, match="^transpose is deprecated"):
         at = blosc2.transpose(a)
 
     na = a[:]
