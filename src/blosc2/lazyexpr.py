@@ -1401,6 +1401,7 @@ def slices_eval(  # noqa: C901
     # keep orig_slice for final getitem
     _slice = _slice.raw
     orig_slice = _slice
+    full_slice = _slice
     if out is None:
         # Compute the shape and chunks of the output array, including broadcasting
         shape = compute_broadcast_shape(operands.values())
@@ -1417,6 +1418,7 @@ def slices_eval(  # noqa: C901
             # shape_slice in general not equal to final shape:
             # dummy dims (due to ints) or non-unit steps will be dealt with by taking orig_slice
             shape_slice = ndindex.ndindex(full_slice).newshape(shape)
+            orig_slice = ndindex.ndindex(orig_slice).as_subindex(full_slice).raw
     else:
         # TODO: check that this is fine since __out__ could have shape_slice and __shape__ should refer to full array
         shape = out.shape
@@ -1457,9 +1459,8 @@ def slices_eval(  # noqa: C901
     intersecting_chunks = chunk_size.as_subchunks(_slice, shape)  # if _slice is (), returns all chunks
 
     for nchunk, chunk_slice in enumerate(intersecting_chunks):
-        # Check whether current chunk_slice intersects with _slice
+        # get intersection of chunk and target
         if _slice != ():
-            # get intersection of chunk and target
             cslice = tuple(
                 slice(max(s1.start, s2.start), min(s1.stop, s2.stop))
                 for s1, s2 in zip(chunk_slice.raw, _slice, strict=True)
@@ -1469,6 +1470,8 @@ def slices_eval(  # noqa: C901
 
         cslice_shape = tuple(s.stop - s.start for s in cslice)
         len_chunk = math.prod(cslice_shape)
+        # get local index of part of out that is to be updated
+        cslice_subidx = ndindex.ndindex(cslice).as_subindex(full_slice).raw
 
         # Get the starts and stops for the slice
         starts = [s.start if s.start is not None else 0 for s in cslice]
@@ -1505,7 +1508,7 @@ def slices_eval(  # noqa: C901
             # Call the udf directly and use result as the output array
             offset = tuple(s.start for s in cslice)
             expression(tuple(chunk_operands.values()), result, offset=offset)
-            out[cslice] = result
+            out[cslice_subidx] = result
             continue
 
         if where is None:
@@ -1573,12 +1576,12 @@ def slices_eval(  # noqa: C901
                 out.schunk.update_data(nchunk, result, copy=False)
             else:
                 try:
-                    out[cslice] = result
+                    out[cslice_subidx] = result
                 except ComplexWarning:
                     # The result is a complex number, so we need to convert it to real.
                     # This is a workaround for rigidness of numpy with type casting.
                     result = result.real.astype(out.dtype)
-                    out[cslice] = result
+                    out[cslice_subidx] = result
         elif len(where) == 1:
             lenres = len(result)
             out[lenout : lenout + lenres] = result
@@ -1770,14 +1773,25 @@ def reduce_slices(  # noqa: C901
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
 
+    _slice = _slice.raw
+    shape_slice = shape
+    if out is None:
+        if _slice != ():
+            shape_slice = ndindex.ndindex(_slice).newshape(shape)
+    else:
+        # TODO: check that this is fine since __out__ could have shape_slice and __shape__ should refer to full array
+        shape_slice = out.shape
+
+    # after slicing, we reduce to calculate shape of output
     if axis is None:
-        axis = tuple(range(len(shape)))
+        axis = tuple(range(len(shape_slice)))
     elif not isinstance(axis, tuple):
         axis = (axis,)
+    axis = tuple(a if a >= 0 else a + len(shape_slice) for a in axis)
     if keepdims:
-        reduced_shape = tuple(1 if i in axis else s for i, s in enumerate(shape))
+        reduced_shape = tuple(1 if i in axis else s for i, s in enumerate(shape_slice))
     else:
-        reduced_shape = tuple(s for i, s in enumerate(shape) if i not in axis)
+        reduced_shape = tuple(s for i, s in enumerate(shape_slice) if i not in axis)
 
     if is_inside_new_expr():
         # We already have the dtype and reduced_shape, so return immediately
@@ -1820,18 +1834,12 @@ def reduce_slices(  # noqa: C901
     chunk_operands = {}
     # Check which chunks intersect with _slice
     chunk_size = ndindex.ChunkSize(chunks)
-    _slice = _slice.raw
     intersecting_chunks = chunk_size.as_subchunks(_slice, shape)  # if _slice is (), returns all chunks
     out_init = False
 
     for nchunk, chunk_slice in enumerate(intersecting_chunks):
         cslice = chunk_slice.raw
-        if keepdims:
-            reduced_slice = tuple(slice(None) if i in axis else sl for i, sl in enumerate(cslice))
-        else:
-            reduced_slice = tuple(sl for i, sl in enumerate(cslice) if i not in axis)
         offset = tuple(s.start for s in cslice)  # offset for the udf
-        # TODO: Is this necessary, shouldn't slice always be None for a reduction?
         # Check whether current cslice intersects with _slice
         if cslice != () and _slice != ():
             # get intersection of chunk and target
@@ -1873,6 +1881,13 @@ def reduce_slices(  # noqa: C901
                     value.get_slice_numpy(chunk_operands[key], (starts, stops))
                     continue
                 chunk_operands[key] = value[cslice]
+
+        # get local index of part of out that is to be updated
+        cslice_subidx = ndindex.ndindex(cslice).as_subindex(_slice).raw
+        if keepdims:
+            reduced_slice = tuple(slice(None) if i in axis else sl for i, sl in enumerate(cslice_subidx))
+        else:
+            reduced_slice = tuple(sl for i, sl in enumerate(cslice_subidx) if i not in axis)
 
         # Evaluate and reduce the expression using chunks of operands
 
@@ -2622,23 +2637,16 @@ class LazyExpr(LazyArray):
             num_elements = self.sum(axis=axis, dtype=np.int64, item=item)
             self._where_args = orig_where_args
             return num_elements
-        if np.isscalar(axis):
-            axis = (axis,)
         # Compute the number of elements in the array
         shape = self.shape
+        if np.isscalar(axis):
+            axis = (axis,)
         if item is not None:
             # Compute the shape of the slice
-            if not isinstance(item, tuple):
-                item = (item,)
-            # Ensure that the limits in item slices are not None
-            item = tuple(slice(s.start or 0, s.stop or self.shape[i], s.step) for i, s in enumerate(item))
-            # Compute the intersection of the slice with the shape
-            item = tuple(slice(s1.start, min(s1.stop, s2)) for s1, s2 in zip(item, shape, strict=True))
-            if axis is None:
-                shape = [s.stop - s.start for s in item]
-            else:
-                shape = [s.stop - s.start for i, s in enumerate(item) if i in axis]
-        return math.prod(shape) if axis is None else math.prod([shape[i] for i in axis])
+            shape = ndindex.ndindex(item).newshape(shape)
+        axis = tuple(range(len(shape))) if axis is None else axis
+        axis = tuple(a if a >= 0 else a + len(shape) for a in axis)  # handle negative indexing
+        return math.prod([shape[i] for i in axis])
 
     def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
         item = kwargs.pop("item", None)
@@ -2657,9 +2665,15 @@ class LazyExpr(LazyArray):
 
     def std(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
         item = kwargs.pop("item", None)
-        mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, item=item)
-        expr = (self - mean_value) ** 2
-        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, item=item)
+        if item is None:  # fast path
+            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
+            expr = (self - mean_value) ** 2
+        else:
+            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, item=item)
+            # TODO: Not optimal because we load the whole slice in memory. Would have to write
+            #  a bespoke std function that executed within slice_eval to avoid this probably.
+            expr = (self.slice(item) - mean_value) ** 2
+        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
         if ddof != 0:
             num_elements = self.get_num_elements(axis, item)
             out = np.sqrt(out * num_elements / (num_elements - ddof))
@@ -2675,14 +2689,18 @@ class LazyExpr(LazyArray):
 
     def var(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
         item = kwargs.pop("item", None)
-        mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, item=item)
-        expr = (self - mean_value) ** 2
+        if item is None:  # fast path
+            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
+            expr = (self - mean_value) ** 2
+        else:
+            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, item=item)
+            # TODO: Not optimal because we load the whole slice in memory. Would have to write
+            #  a bespoke var function that executed within slice_eval to avoid this probably.
+            expr = (self.slice(item) - mean_value) ** 2
+        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
         if ddof != 0:
-            out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, item=item)
             num_elements = self.get_num_elements(axis, item)
             out = out * num_elements / (num_elements - ddof)
-        else:
-            out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, item=item)
         out2 = kwargs.pop("out", None)
         if out2 is not None:
             out2[:] = out
