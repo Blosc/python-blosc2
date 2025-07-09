@@ -1,7 +1,7 @@
 Announcing Python-Blosc2 3.5.1
 ==============================
 
-This release:
+In this release:
 ✅ Dramatically reduced memory usage when computing slices of lazy expressions
    (up to 20x less memory)
 ✅ Added fast path for small slices that fit in memory (up to 20x faster)

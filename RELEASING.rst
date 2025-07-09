@@ -149,4 +149,18 @@ Post-release actions
     git push
 
 
+Other packaging
+---------------
+
+* If you want to package the Python-Blosc2 for conda, you should get an automatic
+  message from the conda-forge bot, which will create a pull request.  For releases
+  that do not update the C-blosc2 version, you can just merge the pull request;
+  otherwise, it is best to wait until the new C-blosc2 version makes its way to
+  conda-forge.
+
+* If you want to package Blosc2 for Pyodide, you can use the repo at:
+  https://github.com/Blosc/pyodide-recipes
+  and update the recipe for the new version.  Then, issue a pull request to upstream.
+
+
 That's all folks!
