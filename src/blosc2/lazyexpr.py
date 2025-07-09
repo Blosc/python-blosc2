@@ -1734,6 +1734,19 @@ def infer_reduction_dtype(dtype, operation):
         raise ValueError(f"Unsupported operation: {operation}")
 
 
+def step_handler(s1start, s2start, s1stop, s2stop, s2step):
+    # assume s1step = 1
+    newstart = max(s1start, s2start)
+    newstop = min(s1stop, s2stop)
+    rem = (newstart - s2start) % s2step
+    if rem != 0:  # only pass through here if s2step is not 1
+        newstart += s2step - rem
+        # true_stop = start + n*step + 1 -> stop = start + n * step + 1 + residual
+        # so n = (stop - start - 1) // step
+        newstop = newstart + (newstop - newstart - 1) // s2step * s2step + 1
+    return slice(newstart, newstop, s2step)
+
+
 def reduce_slices(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
     operands: dict,
@@ -1856,7 +1869,7 @@ def reduce_slices(  # noqa: C901
         if cslice != () and _slice != ():
             # get intersection of chunk and target
             cslice = tuple(
-                slice(max(s1.start, s2.start), min(s1.stop, s2.stop))
+                step_handler(s1.start, s2.start, s1.stop, s2.stop, s2.step)
                 for s1, s2 in zip(cslice, _slice, strict=True)
             )
         chunks_ = tuple(s.stop - s.start for s in cslice)

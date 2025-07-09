@@ -191,9 +191,9 @@ def test_reduce_item(reduce_op, dtype, stripes, stripe_len, shape, chunks):
 
 @pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
 def test_reduce_slice(reduce_op):
-    shape = (2, 10, 5)
+    shape = (8, 12, 5)
     na = np.linspace(0, 1, num=np.prod(shape)).reshape(shape)
-    a = blosc2.asarray(na, chunks=(1, 5, 1))
+    a = blosc2.asarray(na, chunks=(2, 5, 1))
     tol = 1e-6 if na.dtype == np.float32 else 1e-15
     _slice = (slice(1, 2, 1), slice(3, 7, 1))
     res = getattr(a, reduce_op)(item=_slice, axis=-1)
