@@ -1424,9 +1424,9 @@ def slices_eval(  # noqa: C901
             shape_slice = ndindex.ndindex(full_slice).newshape(shape)
             orig_slice = ndindex.ndindex(orig_slice).as_subindex(full_slice).raw
     else:
-        # out should always have shape of full array
-        if shape is not None and shape != out.shape:
-            raise ValueError("Provided output shape does not match the operands' shape.")
+        # # out should always have shape of full array
+        # if shape is not None and shape != out.shape:
+        #     raise ValueError("Provided output shape does not match the operands' shape.")
         shape = out.shape
 
     if chunks is None:  # Guess chunk shape
@@ -1799,13 +1799,9 @@ def reduce_slices(  # noqa: C901
     _slice = _slice.raw
     shape_slice = shape
     full_slice = ()  # by default the full_slice is the whole array
-    if out is None:
-        if _slice != ():
-            shape_slice = ndindex.ndindex(_slice).newshape(shape)
-            full_slice = _slice
-    else:
-        if shape != out.shape:
-            raise ValueError("Provided output shape does not match the operands' shape.")
+    if out is None and _slice != ():
+        shape_slice = ndindex.ndindex(_slice).newshape(shape)
+        full_slice = _slice
 
     # after slicing, we reduce to calculate shape of output
     if axis is None:
@@ -1817,6 +1813,9 @@ def reduce_slices(  # noqa: C901
         reduced_shape = tuple(1 if i in axis else s for i, s in enumerate(shape_slice))
     else:
         reduced_shape = tuple(s for i, s in enumerate(shape_slice) if i not in axis)
+
+    if out is not None and reduced_shape != out.shape:
+        raise ValueError("Provided output shape does not match the reduced shape.")
 
     if is_inside_new_expr():
         # We already have the dtype and reduced_shape, so return immediately
