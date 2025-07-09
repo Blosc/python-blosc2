@@ -1399,12 +1399,13 @@ def slices_eval(  # noqa: C901
 
     dtype = kwargs.pop("dtype", None)
     shape_slice = None
-    need_orig_slice = False
+    need_final_slice = False
 
-    # keep orig_slice for final getitem
+    # keep orig_slice
     _slice = _slice.raw
     orig_slice = _slice
     full_slice = ()  # by default the full_slice is the whole array
+    final_slice = ()  # by default the final_slice is the whole array
 
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
@@ -1414,15 +1415,15 @@ def slices_eval(  # noqa: C901
             if any(
                 (isinstance(s, int)) or (isinstance(s, slice) and s.step not in (None, 1)) for s in _slice
             ):
-                need_orig_slice = True
+                need_final_slice = True
             _slice = tuple(slice(i, i + 1) if isinstance(i, int) else i for i in _slice)
             full_slice = tuple(
                 slice(s.start or 0, s.stop or shape[i], None) for i, s in enumerate(_slice)
             )  # get rid of non-unit steps
             # shape_slice in general not equal to final shape:
-            # dummy dims (due to ints) or non-unit steps will be dealt with by taking orig_slice
+            # dummy dims (due to ints) or non-unit steps will be dealt with by taking final_slice
             shape_slice = ndindex.ndindex(full_slice).newshape(shape)
-            orig_slice = ndindex.ndindex(orig_slice).as_subindex(full_slice).raw
+            final_slice = ndindex.ndindex(orig_slice).as_subindex(full_slice).raw
     else:
         # # out should always have shape of full array
         # if shape is not None and shape != out.shape:
@@ -1600,7 +1601,7 @@ def slices_eval(  # noqa: C901
         else:
             raise ValueError("The where condition must be a tuple with one or two elements")
 
-    if where is not None and len(where) < 2:  # Don't need to take orig_slice since filled up from 0 index
+    if where is not None and len(where) < 2:  # Don't need to take final_slice since filled up from 0 index
         if _order is not None:
             # argsort the result following _order
             new_order = np.argsort(out[:lenout])
@@ -1612,16 +1613,16 @@ def slices_eval(  # noqa: C901
         else:
             out.resize((lenout,))
 
-    else:  # Need to take orig_slice since filled up array according to slice_ for each chunk
-        if orig_slice != ():
+    else:  # Need to take final_slice since filled up array according to slice_ for each chunk
+        if final_slice != ():
             if isinstance(out, np.ndarray):
-                if need_orig_slice:  # only called if out was None
-                    out = out[orig_slice]
+                if need_final_slice:  # only called if out was None
+                    out = out[final_slice]
             elif isinstance(out, blosc2.NDArray):
                 # It *seems* better to choose an automatic chunks and blocks for the output array
                 # out = out.slice(_slice, chunks=out.chunks, blocks=out.blocks)
-                if need_orig_slice:  # only called if out was None
-                    out = out.slice(orig_slice)
+                if need_final_slice:  # only called if out was None
+                    out = out.slice(final_slice)
             else:
                 raise ValueError("The output array is not a NumPy array or a NDArray")
 
