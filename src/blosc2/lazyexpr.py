@@ -1418,7 +1418,7 @@ def slices_eval(  # noqa: C901
                 need_final_slice = True
             _slice = tuple(slice(i, i + 1) if isinstance(i, int) else i for i in _slice)
             full_slice = tuple(
-                slice(s.start or 0, s.stop or shape[i], None) for i, s in enumerate(_slice)
+                slice(s.start or 0, s.stop or shape[i], 1) for i, s in enumerate(_slice)
             )  # get rid of non-unit steps
             # shape_slice in general not equal to final shape:
             # dummy dims (due to ints) or non-unit steps will be dealt with by taking final_slice
