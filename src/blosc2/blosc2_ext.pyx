@@ -509,6 +509,9 @@ cdef extern from "b2nd.h":
     int b2nd_copy(b2nd_context_t *ctx, b2nd_array_t *src, b2nd_array_t **array)
     int b2nd_concatenate(b2nd_context_t *ctx, b2nd_array_t *src1, b2nd_array_t *src2,
                          int8_t axis, c_bool copy, b2nd_array_t **array)
+    int b2nd_get_orthogonal_selection(const b2nd_array_t *array, int64_t **selection,
+                                  int64_t *selection_size, void *buffer,
+                                  int64_t *buffershape, int64_t buffersize)
     int b2nd_expand_dims(const b2nd_array_t *array, b2nd_array_t ** view, const int8_t axis)
     int b2nd_from_schunk(blosc2_schunk *schunk, b2nd_array_t **array)
 
@@ -2419,6 +2422,23 @@ cdef class NDArray:
 
         return arr
 
+    def get_oindex_numpy(self, arr, key):
+        """
+        Orthogonal indexing. Key is a tuple of lists of integer indices.
+        """
+
+        cdef int64_t[B2ND_MAX_DIM] bufshape
+        for i in range(len(key)):
+            bufshape[i] = len(key[i])
+
+        cdef Py_buffer buf
+        PyObject_GetBuffer(arr, &buf, PyBUF_SIMPLE)
+        cdef int64_t bufsize = np.prod(bufshape) * self.dtype.itemsize
+
+        _check_rc(b2nd_get_orthogonal_selection(self.array, key, bufshape, buf.buf,
+                                                bufshape, bufsize), "Error while getting orthogonal selection")
+        PyBuffer_Release(&buf)
+        return arr
 
     def get_slice(self, key, mask, **kwargs):
         start, stop = key
