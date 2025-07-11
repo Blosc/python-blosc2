@@ -1502,7 +1502,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         elif isinstance(key, tuple):
             if builtins.any(isinstance(k, (list, np.ndarray)) for k in key):
                 return self.vindex_numpy(key)  # fancy index
-            if builtins.sum(isinstance(k, (list, builtins.slice)) for k in key) != self.ndim:
+            if builtins.any(not isinstance(k, (list, builtins.slice)) for k in key):
                 key_, mask = process_key(key, self.shape)
         elif isinstance(key, (list, np.ndarray, NDArray)):
             if isinstance(key, list):
