@@ -1423,13 +1423,24 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return self._schunk.blocksize
 
     @property
+    def oindex(self) -> OIndex:
+        """Shortcut for orthogonal (outer) indexing, see :func:`get_oselection_numpy`"""
+        return OIndex(self)
+
+    @property
+    def vindex(self) -> VIndex:
+        """Shortcut for fancy indexing, see :func:`get_vselection_numpy`"""
+        return VIndex(self)
+
+    @property
     def T(self):
         """Return the transpose of a 2-dimensional array."""
         if self.ndim != 2:
             raise ValueError("This property only works for 2-dimensional arrays.")
         return permute_dims(self)
 
-    def vindex_numpy(self, key):
+    def get_vselection_numpy(self, key):
+        # TODO: Make this faster for broadcasted keys
         shape = self.shape
         if math.prod(shape) * self.dtype.itemsize < blosc2.MAX_FAST_PATH_SIZE:
             # just load whole array into memory and do numpy indexing
@@ -1453,6 +1464,13 @@ class NDArray(blosc2_ext.NDArray, Operand):
             out[sel_idx.raw] = chunk[sub_idx].reshape(new_shape)
 
         return out
+
+    def get_oselection_numpy(self, key):
+        shape = tuple(len(k) for k in key) + self.shape[len(key) :]
+        # Create the array to store the result
+        arr = np.empty(shape, dtype=self.dtype)
+
+        return super().get_oindex_numpy(arr, key)
 
     def __getitem__(  # noqa: C901
         self,
@@ -1501,7 +1519,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             key_ = (slice(key, key + 1), *(slice(None),) * (self.ndim - 1))
         elif isinstance(key, tuple):
             if builtins.any(isinstance(k, (list, np.ndarray)) for k in key):
-                return self.vindex_numpy(key)  # fancy index
+                return self.get_vselection_numpy(key)  # fancy index
             if builtins.sum(isinstance(k, (list, builtins.slice)) for k in key) != self.ndim:
                 key_, mask = process_key(key, self.shape)
         elif isinstance(key, (list, np.ndarray, NDArray)):
@@ -1525,7 +1543,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             if key.dtype == np.int64 and key.ndim == 1 and self.ndim == 1:
                 return extract_values(self, key)
             else:
-                return self.vindex_numpy(key)  # fancy index
+                return self.get_vselection_numpy(key)  # fancy index
         else:
             # The more general case (this is quite slow)
             # If the key is a LazyExpr, decorate with ``where`` and return it
@@ -4362,3 +4380,21 @@ class NDField(Operand):
 
     def __len__(self):
         return self.shape[0]
+
+
+class OIndex:
+    def __init__(self, array: NDArray):
+        self.array = array
+
+    # TODO: add __setitem__
+    def __getitem__(self, selection) -> np.ndarray:
+        return self.array.get_oselection_numpy(selection)
+
+
+class VIndex:
+    def __init__(self, array: NDArray):
+        self.array = array
+
+    # TODO: add __setitem__
+    def __getitem__(self, selection) -> np.ndarray:
+        return self.array.get_vselection_numpy(selection)

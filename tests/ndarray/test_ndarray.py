@@ -266,3 +266,75 @@ def test_save():
     blosc2.remove_urlpath("test.b2nd")
     with pytest.raises(FileNotFoundError):
         blosc2.open("test.b2nd")
+
+
+def test_oindex():
+    ndim = 3
+    shape = (10,) * ndim
+    arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype="i4")
+    sel0 = [3, 1, 2]
+    sel1 = [2, 5]
+    sel2 = [3, 3, 3, 9, 3, 1, 0]
+    sel = [sel0, sel1, sel2]
+    nparr = arr[:][sel0][:, sel1][:, :, sel2]
+    b = arr.oindex[sel]
+
+    np.testing.assert_allclose(b, nparr)
+
+
+def test_vindex():
+    ndim = 2
+    d = 100
+    shape = (d,) * ndim
+    arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype="i4")
+    rng = np.random.default_rng()
+    idx = rng.integers(low=0, high=d, size=(d,))
+
+    row = idx
+    col = rng.permutation(idx)
+    mask = rng.integers(low=0, high=2, size=(d,)) == 1
+
+    ## Test fancy indexing for different use cases
+    m, M = np.min(idx), np.max(idx)
+    # i)
+    b = arr[[m, M // 2, M]]
+    n = arr[:][[m, M // 2, M]]
+    b2 = arr.vindex[[m, M // 2, M]]
+    np.testing.assert_allclose(b, n)
+    np.testing.assert_allclose(b2, n)
+    # ii)
+    b = arr[[[m // 2, M // 2], [m // 4, M // 4]]]
+    n = arr[:][[[m // 2, M // 2], [m // 4, M // 4]]]
+    b2 = arr.vindex[[[m // 2, M // 2], [m // 4, M // 4]]]
+    np.testing.assert_allclose(b, n)
+    np.testing.assert_allclose(b2, n)
+    # iii)
+    b = arr[row, col]
+    n = arr[:][row, col]
+    b2 = arr.vindex[row, col]
+    np.testing.assert_allclose(b, n)
+    np.testing.assert_allclose(b2, n)
+    # iv)
+    b = arr[row[:, None], col]
+    n = arr[:][row[:, None], col]
+    b2 = arr.vindex[row[:, None], col]
+    np.testing.assert_allclose(b, n)
+    np.testing.assert_allclose(b2, n)
+    # v)
+    b = arr[m, col]
+    n = arr[:][m, col]
+    b2 = arr.vindex[m, col]
+    np.testing.assert_allclose(b, n)
+    np.testing.assert_allclose(b2, n)
+    # vi)
+    b = arr[1 : M // 2 : 5, col]
+    n = arr[:][1 : M // 2 : 5, col]
+    b2 = arr.vindex[1 : M // 2 : 5, col]
+    np.testing.assert_allclose(b, n)
+    np.testing.assert_allclose(b2, n)
+    # vii)
+    b = arr[row[:, None], mask]
+    n = arr[:][row[:, None], mask]
+    b2 = arr.vindex[row[:, None], mask]
+    np.testing.assert_allclose(b, n)
+    np.testing.assert_allclose(b2, n)

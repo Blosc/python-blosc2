@@ -51,13 +51,14 @@ if __name__ == '__main__':
     sizes = []
     # dims = np.int64(np.array([2**6.76, 2**6.8, 2**6.85, 2**6.9, 2**6.95]))
     dims = np.int64(np.array([2**4.3, 2**5.25, 2**6.25, 2**6.75, 2**7, 2**7.25, 2**7.4, 2**7.5]))
+    rng = np.random.default_rng()
 
     for d in dims:
         arr = genarray(d)
         arr_size = np.prod(arr.shape) * arr.dtype.itemsize / 2 ** 30
         print(arr_size)
         sizes.append(arr_size)
-        idx = np.random.randint(low=0, high=d, size=(d,))
+        idx = rng.integers(low=0, high=d, size=(d,))
         if MEM_PROFILE:
             fancyIdx = np.s_[idx, :, :d // 2, d // 2:]
 
@@ -76,8 +77,8 @@ if __name__ == '__main__':
             plt.savefig(f'plots/MemoryUsagefancyIdx_d{d}.png', format="png")
 
         row = idx
-        col = np.random.permutation(idx)
-        mask = np.random.randint(low=0, high=2, size=(d,)) == 1
+        col = rng.permutation(idx)
+        mask = rng.integers(low=0, high=2, size=(d,)) == 1
 
         ## Test fancy indexing for different use cases
         loc_blosc_times = []
@@ -132,4 +133,4 @@ if __name__ == '__main__':
     plt.savefig('plots/fancyIdx.png', format="png")
     plt.show()
     ## slowest cases are the ones with broadcasting
-    ## in fact it's a problem for blosc2
+    ## in fact it's a memory problem for blosc2 seemingly
