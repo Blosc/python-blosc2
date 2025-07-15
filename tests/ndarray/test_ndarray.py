@@ -277,22 +277,22 @@ def test_oindex():
     sel1 = [2, 5]
     sel2 = [3, 3, 3, 9, 3, 1, 0]
     sel = [sel0, sel1, sel2]
-    sel0_=np.array(sel0).reshape(-1,1,1)
-    sel1_=np.array(sel1).reshape(1,-1,1)
-    sel2_=np.array(sel2).reshape(1,1,-1)
+    sel0_ = np.array(sel0).reshape(-1, 1, 1)
+    sel1_ = np.array(sel1).reshape(1, -1, 1)
+    sel2_ = np.array(sel2).reshape(1, 1, -1)
 
     nparr = arr[:]
-    n = nparr[sel0_,sel1_,sel2_]
+    n = nparr[sel0_, sel1_, sel2_]
     b = arr.oindex[sel]
 
     np.testing.assert_allclose(b, n)
     # Test set
     arr.oindex[sel] = np.zeros(n.shape)
-    nparr[sel0_,sel1_,sel2_] = 0
+    nparr[sel0_, sel1_, sel2_] = 0
     np.testing.assert_allclose(arr[:], nparr)
 
 
-def test_vindex():
+def test_findex():
     ndim = 3
     d = 100
     shape = (d,) * ndim
@@ -310,45 +310,31 @@ def test_vindex():
     # i)
     b = arr[[m, M // 2, M]]
     n = nparr[[m, M // 2, M]]
-    b2 = arr.vindex[[m, M // 2, M]]
     np.testing.assert_allclose(b, n)
-    np.testing.assert_allclose(b2, n)
     # ii)
     b = arr[[[m // 2, M // 2], [m // 4, M // 4]]]
     n = nparr[[[m // 2, M // 2], [m // 4, M // 4]]]
-    b2 = arr.vindex[[[m // 2, M // 2], [m // 4, M // 4]]]
     np.testing.assert_allclose(b, n)
-    np.testing.assert_allclose(b2, n)
     # iii)
     b = arr[row, col]
     n = nparr[row, col]
-    b2 = arr.vindex[row, col]
     np.testing.assert_allclose(b, n)
-    np.testing.assert_allclose(b2, n)
     # iv)
     b = arr[row[:, None], col]
     n = nparr[row[:, None], col]
-    b2 = arr.vindex[row[:, None], col]
     np.testing.assert_allclose(b, n)
-    np.testing.assert_allclose(b2, n)
     # v)
     b = arr[m, col]
     n = nparr[m, col]
-    b2 = arr.vindex[m, col]
     np.testing.assert_allclose(b, n)
-    np.testing.assert_allclose(b2, n)
     # vi)
     b = arr[1 : M // 2 : 5, col]
     n = nparr[1 : M // 2 : 5, col]
-    b2 = arr.vindex[1 : M // 2 : 5, col]
     np.testing.assert_allclose(b, n)
-    np.testing.assert_allclose(b2, n)
     # vii)
     b = arr[row[:, None], mask]
     n = nparr[row[:, None], mask]
-    b2 = arr.vindex[row[:, None], mask]
     np.testing.assert_allclose(b, n)
-    np.testing.assert_allclose(b2, n)
     # Transposition test (3rd example is transposed)
     b1 = arr[:, [0, 1], 0]
     b2 = arr[[0, 1], 0, :]
@@ -360,4 +346,3 @@ def test_vindex():
     np.testing.assert_allclose(b1, n1)
     np.testing.assert_allclose(b2, n2)
     np.testing.assert_allclose(b3, n3)
-
