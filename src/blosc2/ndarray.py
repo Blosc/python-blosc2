@@ -1469,8 +1469,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
         shape = tuple(len(k) for k in key) + self.shape[len(key) :]
         # Create the array to store the result
         arr = np.empty(shape, dtype=self.dtype)
-
         return super().get_oindex_numpy(arr, key)
+
+    def set_oselection_numpy(self, key, arr):
+        return super().set_oindex_numpy(key, arr)
 
     def __getitem__(  # noqa: C901
         self,
@@ -4386,9 +4388,11 @@ class OIndex:
     def __init__(self, array: NDArray):
         self.array = array
 
-    # TODO: add __setitem__
     def __getitem__(self, selection) -> np.ndarray:
         return self.array.get_oselection_numpy(selection)
+
+    def __setitem__(self, selection, input) -> np.ndarray:
+        return self.array.set_oselection_numpy(selection, input)
 
 
 class VIndex:

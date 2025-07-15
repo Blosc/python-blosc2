@@ -269,6 +269,7 @@ def test_save():
 
 
 def test_oindex():
+    # Test Get
     ndim = 3
     shape = (10,) * ndim
     arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype="i4")
