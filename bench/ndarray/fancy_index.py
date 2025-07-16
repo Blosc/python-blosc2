@@ -24,7 +24,7 @@ plt.rc('text', usetex=False)
 plt.rc('font',**{'serif':['cm']})
 plt.style.use('seaborn-v0_8-paper')
 
-NUMPY_BLOSC = True # activate NUMPY and BLOSC tests
+NUMPY_BLOSC = False # activate NUMPY and BLOSC tests
 NUMPY_BLOSC_ZARR = False # activate NUMPY, BLOSC and Zarr tests
 # default if both are false is to run tests for Numpy, Blosc, Zarr and HDF5
 
@@ -46,7 +46,7 @@ def genarray(r, ndims=1, verbose=True):
     return arr
 
 
-sizes = np.int64(np.array([1, 2, 4, 8, 16, 24]))
+sizes = np.int64(np.array([1, 2, 4, 8, 16, 24, 32]))
 rng = np.random.default_rng()
 blosctimes = []
 nptimes = []
@@ -72,14 +72,14 @@ try:
 except:
     for d in sizes:
         arr = genarray(d, ndims=2)
-        idx = rng.integers(low=0, high=arr.shape[0], size=(arr.shape[0],))
+        idx = rng.integers(low=0, high=arr.shape[0], size=(arr.shape[0]//4,))
         row = np.sort(np.unique(idx))
-        col = np.sort(np.unique(rng.integers(low=0, high=arr.shape[0], size=(arr.shape[0],))))
+        col = np.sort(np.unique(rng.integers(low=0, high=arr.shape[0], size=(arr.shape[0]//4,))))
         mask = rng.integers(low=0, high=2, size=(arr.shape[0],)) == 1
-
 
         ## Test fancy indexing for different use cases
         m, M = np.min(idx), np.max(idx)
+        res = arr[:][row]
         def timer(arr, row=row, col=col):
             time_list = []
             if NUMPY_BLOSC or NUMPY_BLOSC_ZARR:
@@ -112,14 +112,14 @@ except:
             arr=arr[:]
             nptimes += [timer(arr, row=idx, col=idx)]
             if NUMPY_BLOSC_ZARR:
-                z_test = zarr.zeros(shape=arr.shape, dtype=arr.dtype)
+                z_test = zarr.create_array(store='data/example.zarr', shape=arr.shape, dtype=arr.dtype, overwrite=True)
                 z_test[:] = arr
                 zarrtimes += [timer(z_test, row=idx, col=idx)]
         else:
             blosctimes += [timer(arr)]
             arr=arr[:]
             nptimes += [timer(arr)]
-            z_test = zarr.zeros(shape=arr.shape, dtype=arr.dtype)
+            z_test = zarr.create_array(store='data/example.zarr', shape=arr.shape, dtype=arr.dtype, overwrite=True)
             z_test[:] = arr
             zarrtimes += [timer(z_test)]
             with h5py.File('my_hdf5_file.h5', 'w') as f:
@@ -152,7 +152,6 @@ plt.legend()
 plt.xticks(x-width, np.round(sizes, 2))
 plt.ylabel("Time (s)")
 plt.title('Fancy indexing performance comparison')
-# plt.ylim([0,10])
 plt.gca().set_yscale('log')
 plt.savefig(f'plots/fancyIdx{labs}.png', format="png")
 plt.show()

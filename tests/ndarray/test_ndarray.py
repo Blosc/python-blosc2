@@ -293,6 +293,18 @@ def test_oindex():
 
 
 def test_findex():
+    # Test 1d fast path
+    ndim = 1
+    d = 100
+    shape = (d,) * ndim
+    arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype="i4")
+    rng = np.random.default_rng()
+    idx = rng.integers(low=0, high=d, size=(d // 4,))
+    nparr = arr[:]
+    b = arr[idx]
+    n = nparr[idx]
+    np.testing.assert_allclose(b, n)
+
     ndim = 3
     d = 100
     shape = (d,) * ndim
