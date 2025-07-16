@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 import zarr
 import h5py
 import pickle
+import os
 plt.rcParams.update({'text.usetex':False,'font.serif': ['cm'],'font.size':16})
 plt.rcParams['figure.dpi'] = 1000
 plt.rcParams['savefig.dpi'] = 1000
@@ -23,8 +24,9 @@ plt.rc('text', usetex=False)
 plt.rc('font',**{'serif':['cm']})
 plt.style.use('seaborn-v0_8-paper')
 
-NUMPY_BLOSC = True
-NUMPY_BLOSC_ZARR = False
+NUMPY_BLOSC = True # activate NUMPY and BLOSC tests
+NUMPY_BLOSC_ZARR = False # activate NUMPY, BLOSC and Zarr tests
+# default if both are false is to run tests for Numpy, Blosc, Zarr and HDF5
 
 def genarray(r, ndims=1, verbose=True):
     d = int((r*2**30/8)**(1/ndims))
@@ -32,7 +34,10 @@ def genarray(r, ndims=1, verbose=True):
     chunks = (d // 4,) * ndims
     blocks = (max(d // 10, 1),) * ndims
     t = time.time()
-    arr = blosc2.ones(shape=shape, dtype=np.int64)
+    if os.path.exists(f'linspace{r}.b2nd'):
+        arr = blosc2.open(urlpath=f'linspace{r}.b2nd')
+    else:
+        arr = blosc2.linspace(0, 1000, num=np.prod(shape), shape=shape, dtype=np.float64, urlpath=f'linspace{r}.b2nd', mode='w')
     t = time.time() - t
     if verbose:
         print(f"Array shape: {arr.shape}")
@@ -41,7 +46,7 @@ def genarray(r, ndims=1, verbose=True):
     return arr
 
 
-sizes = np.int64(np.array([1, 2, 4, 8, 16]))
+sizes = np.int64(np.array([1, 2, 4, 8, 16, 24]))
 rng = np.random.default_rng()
 blosctimes = []
 nptimes = []
@@ -49,7 +54,7 @@ zarrtimes = []
 h5pytimes = []
 x = np.arange(len(sizes))
 width = 0.2
-labs = 'NumpyBlosc2' if NUMPY_BLOSC else 'NumpyBlosc2ZarrHDF5' 
+labs = 'NumpyBlosc2' if NUMPY_BLOSC else 'NumpyBlosc2ZarrHDF5'
 labs = 'NumpyBlosc2Zarr' if NUMPY_BLOSC_ZARR else labs
 try:
     with open(f"results{labs}.pkl", 'rb') as f:
@@ -118,8 +123,8 @@ except:
             z_test[:] = arr
             zarrtimes += [timer(z_test)]
             with h5py.File('my_hdf5_file.h5', 'w') as f:
-                dset = f.create_dataset("init", data=arr)
-                h5pytimes += [timer(dset)]
+                    dset = f.create_dataset("init", data=arr)
+                    h5pytimes += [timer(dset)]
 
     blosctimes = np.array(blosctimes)
     nptimes = np.array(nptimes)
@@ -135,8 +140,8 @@ except:
             c = ['b', 'r', 'g', 'm'][i]
             mean = times.mean(axis=1)
             err = (mean - times.min(axis=1), times.max(axis=1)-mean)
-            plt.bar(x + w, mean , width, color=c, label=label, yerr=err, capsize=5, ecolor='k', 
-            error_kw=dict(lw=2, capthick=2, ecolor='k'))            
+            plt.bar(x + w, mean , width, color=c, label=label, yerr=err, capsize=5, ecolor='k',
+            error_kw=dict(lw=2, capthick=2, ecolor='k'))
             labs+=label
 
     with open(f"results{labs}.pkl", 'wb') as f:
@@ -147,7 +152,8 @@ plt.legend()
 plt.xticks(x-width, np.round(sizes, 2))
 plt.ylabel("Time (s)")
 plt.title('Fancy indexing performance comparison')
-plt.ylim([0,10])
+# plt.ylim([0,10])
+plt.gca().set_yscale('log')
 plt.savefig(f'plots/fancyIdx{labs}.png', format="png")
 plt.show()
 

@@ -1442,9 +1442,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
     def get_fselection_numpy(self, key):
         # TODO: Make this faster for broadcasted keys
         shape = self.shape
-        if math.prod(shape) * self.dtype.itemsize < blosc2.MAX_FAST_PATH_SIZE:
-            # just load whole array into memory and do numpy indexing
-            return self[:][key]
         chunks = self.chunks
         _slice = ndindex.ndindex(key).expand(shape)
         chunk_size = ndindex.ChunkSize(chunks)
@@ -1466,20 +1463,20 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return out
 
     def get_oselection_numpy(self, key):
-        '''
+        """
         Select independently from self along axes specified in key. Key must be same length as self shape.
         See Zarr https://zarr.readthedocs.io/en/stable/user-guide/arrays.html#orthogonal-indexing.
-        '''
+        """
         shape = tuple(len(k) for k in key) + self.shape[len(key) :]
         # Create the array to store the result
         arr = np.empty(shape, dtype=self.dtype)
         return super().get_oindex_numpy(arr, key)
 
     def set_oselection_numpy(self, key, arr: np.ndarray):
-        '''
+        """
         Select independently from self along axes specified in key and set to entries in arr. Key must be same length as self shape.
         See Zarr https://zarr.readthedocs.io/en/stable/user-guide/arrays.html#orthogonal-indexing.
-        '''
+        """
         return super().set_oindex_numpy(key, arr)
 
     def __getitem__(  # noqa: C901
@@ -4409,7 +4406,7 @@ class VIndex:
 
     # TODO: all this
     def __getitem__(self, selection) -> np.ndarray:
-        return NotImplementedError 
+        return NotImplementedError
 
     def __setitem__(self, selection, input) -> np.ndarray:
         return NotImplementedError
