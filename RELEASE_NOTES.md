@@ -1,8 +1,11 @@
 # Release notes
+## Changes from 3.6.1 to 3.6.2
+
+XXX version-specific blurb XXX
 
 ## Changes from 3.6.0 to 3.6.1
 
-XXX version-specific blurb XXX
+* Points to C-blosc 2.19.1
 
 ## Changes from 3.5.1 to 3.6.0
 
