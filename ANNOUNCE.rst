@@ -1,4 +1,4 @@
-Announcing Python-Blosc2 3.6.0
+Announcing Python-Blosc2 3.6.1
 ==============================
 
 In this release:
@@ -8,6 +8,7 @@ In this release:
 ✅ More complex slicing is now supported for lazy expressions
 ✅ Blosc2 indexing more consistent with NumPy
 ✅ Comprehensive ``squeeze`` function which squeezes only specified dimensions
+✅ Correctly point to most recent C-blosc2 version 2.19.1
 
 We have blogged about the new fancy indexing support:
 https://www.blosc.org/posts/blosc2-fancy-indexing/

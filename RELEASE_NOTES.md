@@ -5,7 +5,7 @@ XXX version-specific blurb XXX
 
 ## Changes from 3.6.0 to 3.6.1
 
-* Points to C-blosc 2.19.1
+* C-Blosc2 internal library updated to latest 2.19.1.
 
 ## Changes from 3.5.1 to 3.6.0
 
@@ -21,8 +21,6 @@ More complex slicing is now supported.
 
 * Minor bug fixes to ensure that Blosc2 indexing does not introduce dummy dimensions when NumPy does not,
 and a more comprehensive `squeeze` function which squeezes specified dimensions.
-
-* C-Blosc2 internal library updated to latest 2.19.1.
 
 ## Changes from 3.5.0 to 3.5.1
 
