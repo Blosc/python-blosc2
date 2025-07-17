@@ -2,6 +2,7 @@ Announcing Python-Blosc2 3.6.0
 ==============================
 
 In this release:
+
 ✅ Blosc2 now suppports fancy indexing (and orthogonal indexing)
 ✅ Added fast path for 1D fancy indexing
 ✅ More complex slicing is now supported for lazy expressions
