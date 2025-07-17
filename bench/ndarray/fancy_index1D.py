@@ -50,7 +50,7 @@ def genarray(r, verbose=True):
     return arr, arrsize
 
 
-target_sizes = np.float64(np.array([.1, .2, .4, .8, 1, 1.2]))
+target_sizes = np.float64(np.array([.2, .5, 1, 2, 5, 10]))
 rng = np.random.default_rng()
 blosctimes = []
 nptimes = []
@@ -61,7 +61,7 @@ for d in target_sizes:
     arr, arrsize = genarray(d)
     genuine_sizes += [arrsize]
     idx = rng.integers(low=0, high=arr.shape[0], size=(1000,)) if SPARSE else rng.integers(low=0, high=arr.shape[0], size=(arr.shape[0]//4,))
-    sorted_idx = np.sort(idx)
+    sorted_idx = np.unique(np.sort(idx))
     ## Test fancy indexing for different use cases
     def timer(arr):
         time_list = []
@@ -114,7 +114,7 @@ for i, r in enumerate(result_tuple):
         error_kw=dict(lw=2, capthick=2, ecolor='k'))
         labs+=label
 
-filename = "results{labs}1Dsparse" if SPARSE else "results{labs}1D"
+filename = f"results{labs}1Dsparse" if SPARSE else f"results{labs}1D"
 with open(filename+".pkl", 'wb') as f:
     pickle.dump({'times':result_tuple, 'sizes':genuine_sizes}, f)
 
