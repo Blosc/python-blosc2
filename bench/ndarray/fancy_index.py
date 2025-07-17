@@ -37,7 +37,8 @@ def genarray(r, ndims=2, verbose=True):
     chunks = (d // 4,) * ndims
     blocks = (max(d // 10, 1),) * ndims
     t = time.time()
-    arr = blosc2.linspace(0, 1000, num=np.prod(shape), shape=shape, dtype=np.float64, urlpath=f'linspace{r}{ndims}D.b2nd', mode='w')
+    arr = blosc2.linspace(0, 1000, num=np.prod(shape), shape=shape, dtype=np.float64,
+                          urlpath=f'linspace{r}{ndims}D.b2nd', mode='w')
     t = time.time() - t
     arrsize = np.prod(arr.shape) * arr.dtype.itemsize / 2 ** 30
     if verbose:
@@ -48,6 +49,7 @@ def genarray(r, ndims=2, verbose=True):
 
 
 target_sizes = np.int64(np.array([1, 2, 4, 8, 16, 24, 32]))
+# target_sizes = np.int64(np.array([1, 2, 4, 8]))  # for quick testing
 rng = np.random.default_rng()
 blosctimes = []
 nptimes = []
@@ -97,12 +99,13 @@ for d in target_sizes:
     if NUMPY:
         nptimes += [timer(nparr)]
     if ZARR:
-        z_test = zarr.create_array(store='data/example.zarr', shape=nparr.shape, dtype=nparr.dtype, overwrite=True)
+        z_test = zarr.create_array(store='data/example.zarr', shape=arr.shape, chunks=arr.chunks,
+                                   dtype=nparr.dtype, overwrite=True)
         z_test[:] = nparr
         zarrtimes += [timer(z_test)]
     if HDF5:
         with h5py.File('my_hdf5_file.h5', 'w') as f:
-                dset = f.create_dataset("init", data=nparr)
+                dset = f.create_dataset("init", data=nparr, chunks=arr.chunks)
                 h5pytimes += [timer(dset)]
 
 blosctimes = np.array(blosctimes)
@@ -110,10 +113,15 @@ nptimes = np.array(nptimes)
 zarrtimes = np.array(zarrtimes)
 h5pytimes = np.array(h5pytimes)
 labs=''
-result_tuple = (["Numpy",nptimes,-2*width],["Blosc2",blosctimes, -width],["Zarr",zarrtimes, 0],["HDF5",h5pytimes, width])
+width = 0.2
+result_tuple = (
+    ["Numpy", nptimes, -2 * width],
+    ["Blosc2", blosctimes, -width],
+    ["Zarr", zarrtimes, 0],
+    ["HDF5", h5pytimes, width]
+)
 
 x = np.arange(len(genuine_sizes))
-width = 0.2
 # Create barplot for Numpy vs Blosc vs Zarr vs H5py
 for i, r in enumerate(result_tuple):
     if r[1].shape != (0,):
@@ -125,7 +133,7 @@ for i, r in enumerate(result_tuple):
         error_kw=dict(lw=2, capthick=2, ecolor='k'))
         labs+=label
 
-filename = "results{labs}{NDIMS}D"
+filename = f"results{labs}{NDIMS}D"
 
 with open(f"{filename}.pkl", 'wb') as f:
     pickle.dump(result_tuple, f)
@@ -134,7 +142,7 @@ plt.xlabel('Array size (GB)')
 plt.legend()
 plt.xticks(x-width, np.round(genuine_sizes, 2))
 plt.ylabel("Time (s)")
-plt.title('Fancy indexing performance comparison, {NDIMS}D')
+plt.title(f"Fancy indexing performance comparison, {NDIMS}D")
 plt.gca().set_yscale('log')
 plt.savefig(f'plots/fancyIdx{filename}.png', format="png")
 plt.show()

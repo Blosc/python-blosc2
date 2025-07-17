@@ -17,6 +17,7 @@ import zarr
 import h5py
 import pickle
 import os
+
 plt.rcParams.update({'text.usetex':False,'font.serif': ['cm'],'font.size':16})
 plt.rcParams['figure.dpi'] = 300
 plt.rcParams['savefig.dpi'] = 300
@@ -26,7 +27,7 @@ plt.style.use('seaborn-v0_8-paper')
 
 NUMPY = True
 BLOSC = True
-ZARR = False
+ZARR = True
 HDF5 = True
 SPARSE = True
 
@@ -75,16 +76,17 @@ for d in target_sizes:
 
     nparr = arr[:]
     if BLOSC:
-        blosctimes += [timer(arr, row=idx, col=idx)]
+        blosctimes += [timer(arr)]
     if NUMPY:
-        nptimes += [timer(nparr, row=idx, col=idx)]
+        nptimes += [timer(nparr)]
     if ZARR:
-        z_test = zarr.create_array(store='data/example.zarr', shape=nparr.shape, dtype=nparr.dtype, overwrite=True)
+        z_test = zarr.create_array(store='data/example.zarr', shape=arr.shape, chunks=arr.chunks,
+                                   dtype=nparr.dtype, overwrite=True)
         z_test[:] = nparr
-        zarrtimes += [timer(z_test, row=idx, col=idx)]
+        zarrtimes += [timer(z_test)]
     if HDF5:
         with h5py.File('my_hdf5_file.h5', 'w') as f:
-            dset = f.create_dataset("init", data=nparr)
+            dset = f.create_dataset("init", data=nparr, chunks=arr.chunks)
             h5pytimes += [timer(dset)]
 
 blosctimes = np.array(blosctimes)
@@ -92,10 +94,15 @@ nptimes = np.array(nptimes)
 zarrtimes = np.array(zarrtimes)
 h5pytimes = np.array(h5pytimes)
 labs=''
-result_tuple = (["Numpy",nptimes,-2*width],["Blosc2",blosctimes, -width],["Zarr",zarrtimes, 0],["HDF5",h5pytimes, width])
+width = 0.2
+result_tuple = (
+    ["Numpy", nptimes, -2 * width],
+    ["Blosc2", blosctimes, -width],
+    ["Zarr", zarrtimes, 0],
+    ["HDF5", h5pytimes, width]
+)
 
 x = np.arange(len(genuine_sizes))
-width = 0.2
 # Create barplot for Numpy vs Blosc vs Zarr vs H5py
 for i, r in enumerate(result_tuple):
     if r[1].shape != (0,):
@@ -103,7 +110,7 @@ for i, r in enumerate(result_tuple):
         c = ['b', 'r', 'g', 'm'][i]
         mean = times.mean(axis=1)
         err = (mean - times.min(axis=1), times.max(axis=1)-mean)
-        plt.bar(x + w, mean , width, color=c, label=label, yerr=err, capsize=5, ecolor='k',
+        plt.bar(x + w, mean, width, color=c, label=label, yerr=err, capsize=5, ecolor='k',
         error_kw=dict(lw=2, capthick=2, ecolor='k'))
         labs+=label
 
@@ -115,7 +122,7 @@ plt.xlabel('Array size (GB)')
 plt.legend()
 plt.xticks(x-width, np.round(genuine_sizes, 2))
 plt.ylabel("Time (s)")
-plt.title('Fancy indexing performance comparison, 1D' + {" sparse" if SPARSE else ""})
+plt.title(f"Fancy indexing performance comparison, 1D {' sparse' if SPARSE else ''}")
 plt.gca().set_yscale('log')
 plt.savefig(f'plots/{filename}.png', format="png")
 plt.show()
