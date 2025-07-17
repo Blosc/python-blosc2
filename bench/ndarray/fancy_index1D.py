@@ -26,18 +26,20 @@ plt.style.use('seaborn-v0_8-paper')
 
 NUMPY = True
 BLOSC = True
-ZARR = True
+ZARR = False
 HDF5 = True
+SPARSE = True
 
-NDIMS = 2 # must be at least 2
+if HDF5:
+    SPARSE = True # HDF5 takes too long for non-sparse indexing
 
-def genarray(r, ndims=2, verbose=True):
-    d = int((r*2**30/8)**(1/ndims))
-    shape = (d,) * ndims
-    chunks = (d // 4,) * ndims
-    blocks = (max(d // 10, 1),) * ndims
+def genarray(r, verbose=True):
+    d = int((r*2**30/8))
+    shape = (d,)
+    chunks = (d // 4,)
+    blocks = (max(d // 10, 1),)
     t = time.time()
-    arr = blosc2.linspace(0, 1000, num=np.prod(shape), shape=shape, dtype=np.float64, urlpath=f'linspace{r}{ndims}D.b2nd', mode='w')
+    arr = blosc2.linspace(0, 1000, num=np.prod(shape), shape=shape, dtype=np.float64, urlpath=f'linspace{r}1D.b2nd', mode='w')
     t = time.time() - t
     arrsize = np.prod(arr.shape) * arr.dtype.itemsize / 2 ** 30
     if verbose:
@@ -47,7 +49,7 @@ def genarray(r, ndims=2, verbose=True):
     return arr, arrsize
 
 
-target_sizes = np.int64(np.array([1, 2, 4, 8, 16, 24, 32]))
+target_sizes = np.float64(np.array([.1, .2, .4, .8, 1, 1.2]))
 rng = np.random.default_rng()
 blosctimes = []
 nptimes = []
@@ -55,55 +57,35 @@ zarrtimes = []
 h5pytimes = []
 genuine_sizes = []
 for d in target_sizes:
-    arr, arrsize = genarray(d, ndims=NDIMS)
+    arr, arrsize = genarray(d)
     genuine_sizes += [arrsize]
-    idx = rng.integers(low=0, high=arr.shape[0], size=(arr.shape[0]//4,))
-    sorted_idx = np.sort(np.unique(idx))
-    col = np.sort(np.unique(rng.integers(low=0, high=arr.shape[0], size=(arr.shape[0]//4,))))
-    mask = rng.integers(low=0, high=2, size=(arr.shape[0],)) == 1
-
+    idx = rng.integers(low=0, high=arr.shape[0], size=(1000,)) if SPARSE else rng.integers(low=0, high=arr.shape[0], size=(arr.shape[0]//4,))
+    sorted_idx = np.sort(idx)
     ## Test fancy indexing for different use cases
-    m, M = sorted_idx[0], sorted_idx[-1]
     def timer(arr):
         time_list = []
-        if not HDF5:
-            t = time.time()
-            b = arr[idx, col]
-            time_list += [time.time() - t]
-            if not ZARR:
-                t = time.time()
-                b = arr[slice(1, M // 2, 5), col]
-                time_list += [time.time() - t]
-                t = time.time()
-                b = arr[[[idx], [col]]]
-                time_list += [time.time() - t]
-                t = time.time()
-                b = arr[idx[:10, None], col[:10]]
-                time_list += [time.time() - t]
-                t = time.time()
-                b = arr[idx[:10, None], mask]
-                time_list += [time.time() - t]
+        if not (HDF5 or ZARR):
+             b = arr[[[sorted_idx], [idx]]]
+             time_list += [time.time() - t]
+             t = time.time()
         t = time.time()
-        b = arr[idx] if not HDF5 else arr[sorted_idx]
-        time_list += [time.time() - t]
-        t = time.time()
-        b = arr[m, idx] if not HDF5 else arr[m, col]
+        b = arr[sorted_idx] if HDF5 else arr[idx]
         time_list += [time.time() - t]
         return np.array(time_list)
 
     nparr = arr[:]
     if BLOSC:
-        blosctimes += [timer(arr)]
+        blosctimes += [timer(arr, row=idx, col=idx)]
     if NUMPY:
-        nptimes += [timer(nparr)]
+        nptimes += [timer(nparr, row=idx, col=idx)]
     if ZARR:
         z_test = zarr.create_array(store='data/example.zarr', shape=nparr.shape, dtype=nparr.dtype, overwrite=True)
         z_test[:] = nparr
-        zarrtimes += [timer(z_test)]
+        zarrtimes += [timer(z_test, row=idx, col=idx)]
     if HDF5:
         with h5py.File('my_hdf5_file.h5', 'w') as f:
-                dset = f.create_dataset("init", data=nparr)
-                h5pytimes += [timer(dset)]
+            dset = f.create_dataset("init", data=nparr)
+            h5pytimes += [timer(dset)]
 
 blosctimes = np.array(blosctimes)
 nptimes = np.array(nptimes)
@@ -125,18 +107,17 @@ for i, r in enumerate(result_tuple):
         error_kw=dict(lw=2, capthick=2, ecolor='k'))
         labs+=label
 
-filename = "results{labs}{NDIMS}D"
-
-with open(f"{filename}.pkl", 'wb') as f:
-    pickle.dump(result_tuple, f)
+filename = "results{labs}1Dsparse" if SPARSE else "results{labs}1D"
+with open(filename+".pkl", 'wb') as f:
+    pickle.dump({'times':result_tuple, 'sizes':genuine_sizes}, f)
 
 plt.xlabel('Array size (GB)')
 plt.legend()
 plt.xticks(x-width, np.round(genuine_sizes, 2))
 plt.ylabel("Time (s)")
-plt.title('Fancy indexing performance comparison, {NDIMS}D')
+plt.title('Fancy indexing performance comparison, 1D' + {" sparse" if SPARSE else ""})
 plt.gca().set_yscale('log')
-plt.savefig(f'plots/fancyIdx{filename}.png', format="png")
+plt.savefig(f'plots/{filename}.png', format="png")
 plt.show()
 
 print("Finished everything!")

@@ -1441,8 +1441,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
     def get_fselection_numpy(self, key):
         # TODO: Make this faster for broadcasted keys
-        if math.prod(self.shape) * self.dtype.itemsize < blosc2.MAX_FAST_PATH_SIZE:
-            return self[:][key]  # load into memory for smallish arrays
+        ## Can`t do this because ndindex doesn't support all the same indexing cases as Numpy
+        # if math.prod(self.shape) * self.dtype.itemsize < blosc2.MAX_FAST_PATH_SIZE:
+        #     return self[:][key]  # load into memory for smallish arrays
         shape = self.shape
         chunks = self.chunks
         _slice = ndindex.ndindex(key).expand(shape)
@@ -1527,7 +1528,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         Retrieve a (multidimensional) slice as specified by the key.
 
-        Note that this __getitem__ matches NumPy fancy indexing behaviour.
+        Note that this __getitem__ closely matches NumPy fancy indexing behaviour, except in
+        some edge cases which are not supported by ndindex.
+        Array indeices eparated by slice object - e.g. arr[0, :10, [0,1]] - are NOT supported.
 
         Parameters
         ----------
