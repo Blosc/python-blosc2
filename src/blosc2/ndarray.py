@@ -1530,7 +1530,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         Note that this __getitem__ closely matches NumPy fancy indexing behaviour, except in
         some edge cases which are not supported by ndindex.
-        Array indeices eparated by slice object - e.g. arr[0, :10, [0,1]] - are NOT supported.
+        Array indices separated by slice object - e.g. arr[0, :10, [0,1]] - are NOT supported.
+        See https://www.blosc.org/posts/blosc2-fancy-indexing for more details.
 
         Parameters
         ----------
