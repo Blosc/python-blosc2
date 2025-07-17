@@ -28,6 +28,7 @@ NUMPY = True
 BLOSC = True
 ZARR = False
 HDF5 = False
+SPARSE = False
 
 NDIMS = 2 # must be at least 2
 
@@ -59,9 +60,10 @@ genuine_sizes = []
 for d in target_sizes:
     arr, arrsize = genarray(d, ndims=NDIMS)
     genuine_sizes += [arrsize]
-    idx = rng.integers(low=0, high=arr.shape[0], size=(arr.shape[0]//4,))
+    sparseness = 1000 if SPARSE else arr.shape[0]//4
+    idx = rng.integers(low=0, high=arr.shape[0], size=(sparseness,))
     sorted_idx = np.sort(np.unique(idx))
-    col = rng.integers(low=0, high=arr.shape[0], size=(arr.shape[0]//4,))
+    col = rng.integers(low=0, high=arr.shape[0], size=(sparseness,))
     col_sorted = np.sort(np.unique(col))
     mask = rng.integers(low=0, high=2, size=(arr.shape[0],)) == 1
 
@@ -134,7 +136,7 @@ for i, r in enumerate(result_tuple):
         error_kw=dict(lw=2, capthick=2, ecolor='k'))
         labs+=label
 
-filename = f"results{labs}{NDIMS}D"
+filename = f"results{labs}{NDIMS}D" + "sparse" if SPARSE else f"results{labs}{NDIMS}D"
 
 with open(f"{filename}.pkl", 'wb') as f:
     pickle.dump(result_tuple, f)
@@ -143,7 +145,7 @@ plt.xlabel('Array size (GB)')
 plt.legend()
 plt.xticks(x-width, np.round(genuine_sizes, 2))
 plt.ylabel("Time (s)")
-plt.title(f"Fancy indexing performance comparison, {NDIMS}D")
+plt.title(f"Fancy indexing performance comparison, {NDIMS}D" +f"{" sparse" if SPARSE else ""}")
 plt.gca().set_yscale('log')
 plt.savefig(f'plots/fancyIdx{filename}.png', format="png")
 plt.show()
