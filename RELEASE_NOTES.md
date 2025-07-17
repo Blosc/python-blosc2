@@ -1,8 +1,23 @@
 # Release notes
 
-## Changes from 3.5.1 to 3.5.2
+## Changes from 3.6.0 to 3.6.1
 
 XXX version-specific blurb XXX
+
+## Changes from 3.5.1 to 3.6.0
+
+* Expose the `oindex` C-level functionality in Blosc2 for `NDArray`.
+
+* Implement fancy indexing which closely matches NumPy functionality, using
+`ndindex` library. Includes a fast path for 1D arrays, based on Zarr's implementation.
+
+* A major refactoring of slicing for lazy expressions using `ndindex`. We have also
+added support for slices with non-unit steps for reduction expressions, which has introduced
+improvements that could be incorporated into other lazy expression machinery in the future.
+More complex slicing is now supported.
+
+* Minor bug fixes to ensure that Blosc2 indexing does not introduce dummy dimensions when NumPy does not,
+and a more comprehensive `squeeze` function which squeezes specified dimensions.
 
 ## Changes from 3.5.0 to 3.5.1
 

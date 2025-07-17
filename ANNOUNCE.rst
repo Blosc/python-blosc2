@@ -1,13 +1,12 @@
-Announcing Python-Blosc2 3.5.1
+Announcing Python-Blosc2 3.6.0
 ==============================
 
 In this release:
-✅ Dramatically reduced memory usage when computing slices of lazy expressions
-   (up to 20x less memory)
-✅ Added fast path for small slices that fit in memory (up to 20x faster)
-✅ Renamed blosc2.concatenate() to blosc2.concat() (following Array API standard)
-✅ Improved mode handling for concatenating arrays stored on disk
-
+✅ Blosc2 now suppports fancy indexing (and orthogonal indexing)
+✅ Added fast path for 1D fancy indexing
+✅ More complex slicing is now supported for lazy expressions
+✅ Blosc2 indexing more consistent with NumPy
+✅ Comprehensive ``squeeze`` function which squeezes only specified dimensions
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
