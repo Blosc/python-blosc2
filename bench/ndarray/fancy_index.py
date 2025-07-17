@@ -26,8 +26,8 @@ plt.style.use('seaborn-v0_8-paper')
 
 NUMPY = True
 BLOSC = True
-ZARR = True
-HDF5 = True
+ZARR = False
+HDF5 = False
 
 NDIMS = 2 # must be at least 2
 
@@ -48,8 +48,8 @@ def genarray(r, ndims=2, verbose=True):
     return arr, arrsize
 
 
-target_sizes = np.int64(np.array([1, 2, 4, 8, 16, 24, 32]))
-# target_sizes = np.int64(np.array([1, 2, 4, 8]))  # for quick testing
+target_sizes = np.int64(np.array([1, 2, 4, 8, 16, 24]))
+#target_sizes = np.int64(np.array([1, 2, 4, 8]))  # for quick testing
 rng = np.random.default_rng()
 blosctimes = []
 nptimes = []
@@ -61,7 +61,8 @@ for d in target_sizes:
     genuine_sizes += [arrsize]
     idx = rng.integers(low=0, high=arr.shape[0], size=(arr.shape[0]//4,))
     sorted_idx = np.sort(np.unique(idx))
-    col = np.sort(np.unique(rng.integers(low=0, high=arr.shape[0], size=(arr.shape[0]//4,))))
+    col = rng.integers(low=0, high=arr.shape[0], size=(arr.shape[0]//4,))
+    col_sorted = np.sort(np.unique(col))
     mask = rng.integers(low=0, high=2, size=(arr.shape[0],)) == 1
 
     ## Test fancy indexing for different use cases
@@ -89,7 +90,7 @@ for d in target_sizes:
         b = arr[idx] if not HDF5 else arr[sorted_idx]
         time_list += [time.time() - t]
         t = time.time()
-        b = arr[m, idx] if not HDF5 else arr[m, col]
+        b = arr[m, idx] if not HDF5 else arr[m, col_sorted]
         time_list += [time.time() - t]
         return np.array(time_list)
 
