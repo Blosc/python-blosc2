@@ -510,6 +510,12 @@ cdef extern from "b2nd.h":
     int b2nd_concatenate(b2nd_context_t *ctx, b2nd_array_t *src1, b2nd_array_t *src2,
                          int8_t axis, c_bool copy, b2nd_array_t **array)
     int b2nd_expand_dims(const b2nd_array_t *array, b2nd_array_t ** view, const int8_t axis)
+    int b2nd_get_orthogonal_selection(const b2nd_array_t *array, int64_t ** selection,
+                                      int64_t *selection_size, void *buffer,
+                                      int64_t *buffershape, int64_t buffersize)
+    int b2nd_set_orthogonal_selection(const b2nd_array_t *array, int64_t ** selection,
+                                      int64_t *selection_size, void *buffer,
+                                      int64_t *buffershape, int64_t buffersize)
     int b2nd_from_schunk(blosc2_schunk *schunk, b2nd_array_t **array)
 
     void blosc2_unidim_to_multidim(uint8_t ndim, int64_t *shape, int64_t i, int64_t *index)
@@ -2417,6 +2423,70 @@ cdef class NDArray:
                   "Error while getting the buffer")
         PyBuffer_Release(&view)
 
+        return arr
+
+    def get_oindex_numpy(self, arr, key):
+        """
+        Orthogonal indexing. Key is a tuple of lists of integer indices.
+        """
+        if len(key) != self.array.ndim:
+            raise ValueError(f"Key must have {self.array.ndim} dimensions, got {len(key)}.")
+        cdef int64_t[B2ND_MAX_DIM] buffershape_
+        cdef int64_t** key_
+        cdef int64_t buffersize_ = self.array.sc.typesize
+        cdef int64_t[B2ND_MAX_DIM] sel_size
+
+        key_ = <int64_t**> malloc(len(key) * sizeof(int64_t *))
+
+        for i in range(self.array.ndim):
+            buffershape_[i] = len(key[i])
+            buffersize_ *= buffershape_[i]
+            sel_size[i] = len(key[i])
+            key_[i] = <int64_t *> malloc(sel_size[i] * sizeof(int64_t))
+            for j in range(len(key[i])):
+                key_[i][j] = key[i][j]
+
+        cdef Py_buffer buf
+        PyObject_GetBuffer(arr, &buf, PyBUF_SIMPLE)
+
+        _check_rc(b2nd_get_orthogonal_selection(self.array, key_, sel_size, buf.buf,
+                                                buffershape_, buffersize_), "Error while getting orthogonal selection")
+        PyBuffer_Release(&buf)
+        for i in range(len(key)):
+            free(key_[i])  # Free the allocated memory for each key
+        free(key_)
+        return arr
+
+    def set_oindex_numpy(self, key, arr):
+        """
+        Orthogonal indexing. Set elements of self with arr using key.
+        """
+        if len(key) != self.array.ndim:
+            raise ValueError(f"Key must have {self.array.ndim} dimensions, got {len(key)}.")
+        cdef int64_t[B2ND_MAX_DIM] buffershape_
+        cdef int64_t** key_
+        cdef int64_t buffersize_ = self.array.sc.typesize
+        cdef int64_t[B2ND_MAX_DIM] sel_size
+
+        key_ = <int64_t**> malloc(len(key) * sizeof(int64_t *))
+
+        for i in range(self.array.ndim):
+            buffershape_[i] = len(key[i])
+            buffersize_ *= buffershape_[i]
+            sel_size[i] = len(key[i])
+            key_[i] = <int64_t *> malloc(sel_size[i] * sizeof(int64_t))
+            for j in range(len(key[i])):
+                key_[i][j] = key[i][j]
+
+        cdef Py_buffer buf
+        PyObject_GetBuffer(arr, &buf, PyBUF_SIMPLE)
+
+        _check_rc(b2nd_set_orthogonal_selection(self.array, key_, sel_size, buf.buf,
+                                                buffershape_, buffersize_), "Error while getting orthogonal selection")
+        PyBuffer_Release(&buf)
+        for i in range(len(key)):
+            free(key_[i])  # Free the allocated memory for each key
+        free(key_)
         return arr
 
 

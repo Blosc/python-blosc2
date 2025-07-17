@@ -1423,17 +1423,115 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return self._schunk.blocksize
 
     @property
+    def oindex(self) -> OIndex:
+        """Shortcut for orthogonal (outer) indexing, see :func:`get_oselection_numpy`"""
+        return OIndex(self)
+
+    # @property
+    # def vindex(self) -> VIndex:
+    #     """Shortcut for vectorised indexing. Not yet supported."""
+    #     return VIndex(self)
+
+    @property
     def T(self):
         """Return the transpose of a 2-dimensional array."""
         if self.ndim != 2:
             raise ValueError("This property only works for 2-dimensional arrays.")
         return permute_dims(self)
 
+    def get_fselection_numpy(self, key):
+        # TODO: Make this faster for broadcasted keys
+        ## Can`t do this because ndindex doesn't support all the same indexing cases as Numpy
+        # if math.prod(self.shape) * self.dtype.itemsize < blosc2.MAX_FAST_PATH_SIZE:
+        #     return self[:][key]  # load into memory for smallish arrays
+        shape = self.shape
+        chunks = self.chunks
+        _slice = ndindex.ndindex(key).expand(shape)
+        out_shape = _slice.newshape(shape)
+        out = np.empty(out_shape, dtype=self.dtype)
+
+        if self.ndim == 1:
+            # Fast path so we can avoid the costly lines in slow path
+            # (sub_idx = _slice.as_subindex(c).raw, sel_idx = c.as_subindex(_slice))
+            key = np.array(key)
+            if np.any(np.diff(key) < 0):
+                idx_order = np.argsort(key)
+                sorted_idxs = key[idx_order]
+            else:
+                idx_order = None
+                sorted_idxs = key
+            chunk_nitems = np.bincount(
+                sorted_idxs // chunks[0], minlength=self.schunk.nchunks
+            )  # number of items per chunk
+            chunk_nitems_cumsum = np.cumsum(chunk_nitems)
+            for chunk_i, c in enumerate(chunk_nitems):
+                if c == 0:
+                    continue  # no items in chunk
+                start = 0 if chunk_i == 0 else chunk_nitems_cumsum[chunk_i - 1]
+                stop = chunk_nitems_cumsum[chunk_i]
+                selection = sorted_idxs[start:stop]
+                out_selection = idx_order[start:stop] if idx_order is not None else slice(start, stop)
+                to_be_loaded = np.empty((selection[-1] - selection[0] + 1,), dtype=self.dtype)
+                # if len(selection) < 10:
+                #     # TODO: optimise for case of few elements and go index-by-index
+                #     selector = out_selection.start + np.arange(out_selection.stop) if isinstance(out_selection, slice) else out_selection
+                #     for j, idx in enumerate(sorted_idxs[start:stop]):
+                #         out[out_selection[j]] = self[idx]
+                # else:
+                super().get_slice_numpy(
+                    to_be_loaded, ((selection[0],), (selection[-1] + 1,))
+                )  # get relevant section of chunk
+                loc_idx = selection - selection[0]
+                out[out_selection] = to_be_loaded[loc_idx]
+
+        else:
+            chunk_size = ndindex.ChunkSize(chunks)
+            # repeated indices are grouped together
+            intersecting_chunks = chunk_size.as_subchunks(
+                _slice, shape
+            )  # if _slice is (), returns all chunks
+            for c in intersecting_chunks:
+                sub_idx = _slice.as_subindex(c).raw
+                sel_idx = c.as_subindex(_slice)
+                new_shape = sel_idx.newshape(out_shape)
+                start, stop, step = get_ndarray_start_stop(self.ndim, c.raw, shape)
+                chunk = np.empty(
+                    tuple(sp - st for st, sp in zip(start, stop, strict=True)), dtype=self.dtype
+                )
+                super().get_slice_numpy(chunk, (start, stop))
+                out[sel_idx.raw] = chunk[sub_idx].reshape(new_shape)
+
+        return out
+
+    def get_oselection_numpy(self, key):
+        """
+        Select independently from self along axes specified in key. Key must be same length as self shape.
+        See Zarr https://zarr.readthedocs.io/en/stable/user-guide/arrays.html#orthogonal-indexing.
+        """
+        shape = tuple(len(k) for k in key) + self.shape[len(key) :]
+        # Create the array to store the result
+        arr = np.empty(shape, dtype=self.dtype)
+        return super().get_oindex_numpy(arr, key)
+
+    def set_oselection_numpy(self, key, arr: np.ndarray):
+        """
+        Select independently from self along axes specified in key and set to entries in arr.
+        Key must be same length as self shape.
+        See Zarr https://zarr.readthedocs.io/en/stable/user-guide/arrays.html#orthogonal-indexing.
+        """
+        return super().set_oindex_numpy(key, arr)
+
     def __getitem__(  # noqa: C901
         self,
         key: int | slice | Sequence[slice | int] | np.ndarray[np.bool_] | NDArray | blosc2.LazyExpr | str,
     ) -> np.ndarray | blosc2.LazyExpr:
-        """Retrieve a (multidimensional) slice as specified by the key.
+        """
+        Retrieve a (multidimensional) slice as specified by the key.
+
+        Note that this __getitem__ closely matches NumPy fancy indexing behaviour, except in
+        some edge cases which are not supported by ndindex.
+        Array indices separated by slice object - e.g. arr[0, :10, [0,1]] - are NOT supported.
+        See https://www.blosc.org/posts/blosc2-fancy-indexing for more details.
 
         Parameters
         ----------
@@ -1470,17 +1568,15 @@ class NDArray(blosc2_ext.NDArray, Operand):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
         # First try some fast paths for common cases
+        key_, mask = key, None
         if isinstance(key, np.integer):
             # Massage the key to a tuple and go the fast path
             key_ = (slice(key, key + 1), *(slice(None),) * (self.ndim - 1))
-            start, stop, step = get_ndarray_start_stop(self.ndim, key_, self.shape)
-            shape = tuple(sp - st for st, sp in zip(start, stop, strict=True))
-        elif isinstance(key, tuple) and (
-            builtins.sum(isinstance(k, builtins.slice) for k in key) == self.ndim
-        ):
-            # This can be processed in a fast way already
-            start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
-            shape = tuple(sp - st for st, sp in zip(start, stop, strict=True))
+        elif isinstance(key, tuple):
+            if builtins.any(isinstance(k, (list, np.ndarray)) for k in key):
+                return self.get_fselection_numpy(key)  # fancy index
+            if builtins.sum(isinstance(k, (list, builtins.slice)) for k in key) != self.ndim:
+                key_, mask = process_key(key, self.shape)
         elif isinstance(key, (list, np.ndarray, NDArray)):
             if isinstance(key, list):
                 key = np.array(key, dtype=np.int64)
@@ -1495,13 +1591,13 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 # This behavior is consistent with NumPy, although different from e.g. ['expr']
                 # which returns a lazy expression.
                 return expr.where(self)[:]
-            if key.dtype != np.int64 or key.ndim != 1:
-                raise ValueError("Only 1-dim sequences of ints are supported for now")
             if isinstance(key, NDArray):
                 key = key[:]
             # This is a fast path for the case where the key is a short list of 1-d indices
             # For the rest, use an array of booleans.
-            return extract_values(self, key)
+            # if key.dtype == np.int64 and key.ndim == 1 and self.ndim == 1:
+            #     return extract_values(self, key)
+            return self.get_fselection_numpy(key)  # fancy index
         else:
             # The more general case (this is quite slow)
             # If the key is a LazyExpr, decorate with ``where`` and return it
@@ -1516,9 +1612,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 # Assume that the key is a boolean expression
                 expr = blosc2.LazyExpr._new_expr(key, self.fields, guess=False)
                 return expr.where(self)
-            key_, mask = process_key(key, self.shape)
-            start, stop, step = get_ndarray_start_stop(self.ndim, key_, self.shape)
-            shape = np.array([sp - st for st, sp in zip(start, stop, strict=True)])
+            key_, mask = process_key(key, self.shape)  # final resort for [:]
+        start, stop, step = get_ndarray_start_stop(self.ndim, key_, self.shape)
+        shape = np.array([sp - st for st, sp in zip(start, stop, strict=True)])
+        if mask is not None:
             shape = tuple(shape[[not m for m in mask]])
 
         # Create the array to store the result
@@ -4337,3 +4434,26 @@ class NDField(Operand):
 
     def __len__(self):
         return self.shape[0]
+
+
+class OIndex:
+    def __init__(self, array: NDArray):
+        self.array = array
+
+    def __getitem__(self, selection) -> np.ndarray:
+        return self.array.get_oselection_numpy(selection)
+
+    def __setitem__(self, selection, input) -> np.ndarray:
+        return self.array.set_oselection_numpy(selection, input)
+
+
+# class VIndex:
+#     def __init__(self, array: NDArray):
+#         self.array = array
+
+#     # TODO: all this
+#     def __getitem__(self, selection) -> np.ndarray:
+#         return NotImplementedError
+
+#     def __setitem__(self, selection, input) -> np.ndarray:
+#         return NotImplementedError

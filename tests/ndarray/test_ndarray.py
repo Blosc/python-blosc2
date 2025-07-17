@@ -266,3 +266,95 @@ def test_save():
     blosc2.remove_urlpath("test.b2nd")
     with pytest.raises(FileNotFoundError):
         blosc2.open("test.b2nd")
+
+
+def test_oindex():
+    # Test Get
+    ndim = 3
+    shape = (10,) * ndim
+    arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype="i4")
+    sel0 = [3, 1, 2]
+    sel1 = [2, 5]
+    sel2 = [3, 3, 3, 9, 3, 1, 0]
+    sel = [sel0, sel1, sel2]
+    sel0_ = np.array(sel0).reshape(-1, 1, 1)
+    sel1_ = np.array(sel1).reshape(1, -1, 1)
+    sel2_ = np.array(sel2).reshape(1, 1, -1)
+
+    nparr = arr[:]
+    n = nparr[sel0_, sel1_, sel2_]
+    b = arr.oindex[sel]
+
+    np.testing.assert_allclose(b, n)
+    # Test set
+    arr.oindex[sel] = np.zeros(n.shape)
+    nparr[sel0_, sel1_, sel2_] = 0
+    np.testing.assert_allclose(arr[:], nparr)
+
+
+def test_findex():
+    # Test 1d fast path
+    ndim = 1
+    d = 1 + int(blosc2.MAX_FAST_PATH_SIZE / 8)  # just over fast path size
+    shape = (d,) * ndim
+    arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype=np.float64)
+    rng = np.random.default_rng()
+    idx = rng.integers(low=0, high=d, size=(d // 4,))
+    nparr = arr[:]
+    b = arr[idx]
+    n = nparr[idx]
+    np.testing.assert_allclose(b, n)
+
+    ndim = 3
+    d = 1 + int((blosc2.MAX_FAST_PATH_SIZE / 8) ** (1 / ndim))  # just over fast path size
+    shape = (d,) * ndim
+    arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype=np.float64)
+    rng = np.random.default_rng()
+    idx = rng.integers(low=0, high=d, size=(100,))
+
+    row = idx
+    col = rng.permutation(idx)
+    mask = rng.integers(low=0, high=2, size=(d,)) == 1
+
+    ## Test fancy indexing for different use cases
+    m, M = np.min(idx), np.max(idx)
+    nparr = arr[:]
+    # i)
+    b = arr[[m, M // 2, M]]
+    n = nparr[[m, M // 2, M]]
+    np.testing.assert_allclose(b, n)
+    # ii)
+    b = arr[[[m // 2, M // 2], [m // 4, M // 4]]]
+    n = nparr[[[m // 2, M // 2], [m // 4, M // 4]]]
+    np.testing.assert_allclose(b, n)
+    # iii)
+    b = arr[row, col]
+    n = nparr[row, col]
+    np.testing.assert_allclose(b, n)
+    # iv)
+    b = arr[row[:, None], col]
+    n = nparr[row[:, None], col]
+    np.testing.assert_allclose(b, n)
+    # v)
+    b = arr[m, col]
+    n = nparr[m, col]
+    np.testing.assert_allclose(b, n)
+    # vi)
+    b = arr[1 : M // 2 : 5, col]
+    n = nparr[1 : M // 2 : 5, col]
+    np.testing.assert_allclose(b, n)
+    # vii)
+    b = arr[row[:, None], mask]
+    n = nparr[row[:, None], mask]
+    np.testing.assert_allclose(b, n)
+    # Transposition test (3rd example is transposed)
+    b1 = arr[:, [0, 1], 0]
+    b2 = arr[[0, 1], 0, :]
+    n1 = nparr[:, [0, 1], 0]
+    n2 = nparr[[0, 1], 0, :]
+    np.testing.assert_allclose(b1, n1)
+    np.testing.assert_allclose(b2, n2)
+    # TODO: Support array indices separate by slices
+    # b3 = arr[0, :, [0, 1]]
+    # n3 = nparr[0, :, [0, 1]]
+    # np.testing.assert_allclose(b3, n3)
