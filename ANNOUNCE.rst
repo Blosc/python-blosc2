@@ -9,15 +9,17 @@ In this release:
 ✅ Blosc2 indexing more consistent with NumPy
 ✅ Comprehensive ``squeeze`` function which squeezes only specified dimensions
 
+We have blogged about the new fancy indexing support:
+https://www.blosc.org/posts/blosc2-fancy-indexing/
+
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
 - Can deal with ndarrays compressed using first-class codecs & filters.
 - Performs many kind of math expressions, including reductions, indexing...
-- Supports broadcasting operations.
 - Supports NumPy ufunc mechanism: mix and match NumPy and Blosc2 computations.
 - Integrates with Numba and Cython via UDFs (User Defined Functions).
 - Adheres to modern NumPy casting rules way better than numexpr.
-- Supports linear algebra operations (like ``blosc2.matmul()``).
+- Performs linear algebra operations (like ``blosc2.matmul()``).
 
 Install it with::
 

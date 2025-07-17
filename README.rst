@@ -103,6 +103,7 @@ to the core development of the Blosc2 library:
 
 - Francesc Alted
 - Marta Iborra
+- Luke Shaw
 - Aleix Alcacer
 - Oscar Guiñón
 - Juan David Ibáñez
@@ -133,12 +134,12 @@ You can cite our work on the various libraries under the Blosc umbrella as follo
     note = {https://blosc.org}
   }
 
-Donate
-======
+Support Blosc for a Sustainable Future
+======================================
 
 If you find Blosc useful and want to support its development, please consider
-making a donation via the `NumFOCUS <https://numfocus.org/donate-to-blosc>`_
-organization, which is a non-profit that supports many open-source projects.
+making a `donation or contract to the Blosc Development Team
+<https://www.blosc.org/pages/blosc-in-depth/#support-blosc>`_
 Thank you!
 
 
