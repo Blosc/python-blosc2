@@ -14,8 +14,8 @@ from time import time
 
 import blosc2
 
-urlbase = "https://demo.caterva2.net/"
-path = "example/lung-jpeg2000_10x.b2nd"
+urlbase = "https://cat2.cloud/demo"
+path = "@public/examples/lung-jpeg2000_10x.b2nd"
 a = blosc2.C2Array(path, urlbase=urlbase)
 b = blosc2.Proxy(a, urlpath="proxy.b2nd", mode="w")
 
