@@ -66,7 +66,7 @@ Code example::
     print("All results are equal!")
 
 
-This will output something like (using an Intel i9-13900X CPU here)::
+This will output something like (using an Intel i9-13900K CPU here)::
 
     Time to create expression: 0.00033
     Time to compute with Blosc2: 0.46387
