@@ -10,9 +10,6 @@ Their result is always a :ref:`LazyExpr` instance, which can be evaluated (with 
 .. currentmodule:: blosc2
 
 .. autosummary::
-   :toctree: autofiles/operations_with_arrays/
-   :nosignatures:
-
     abs
     arcsin
     arccos
@@ -38,3 +35,29 @@ Their result is always a :ref:`LazyExpr` instance, which can be evaluated (with 
     imag
     contains
     where
+
+.. autofunction:: abs
+.. autofunction:: arccos
+.. autofunction:: arccosh
+.. autofunction:: arcsin
+.. autofunction:: arcsinh
+.. autofunction:: arctan
+.. autofunction:: arctan2
+.. autofunction:: arctanh
+.. autofunction:: conj
+.. autofunction:: contains
+.. autofunction:: cos
+.. autofunction:: cosh
+.. autofunction:: exp
+.. autofunction:: expm1
+.. autofunction:: imag
+.. autofunction:: log
+.. autofunction:: log10
+.. autofunction:: log1p
+.. autofunction:: real
+.. autofunction:: sin
+.. autofunction:: sinh
+.. autofunction:: sqrt
+.. autofunction:: tan
+.. autofunction:: tanh
+.. autofunction:: where

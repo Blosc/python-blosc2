@@ -11,26 +11,30 @@ For instance, you can create an array with two fields::
     a = blosc2.NDField(s, "a")
     b = blosc2.NDField(s, "b")
 
-.. currentmodule:: blosc2.NDField
+.. currentmodule:: blosc2
 
-Methods
--------
+.. autoclass:: NDField
+    :members:
+    :exclude-members: all, any, max, mean, min, prod, std, sum, var
+    :member-order: groupwise
 
-.. autosummary::
-    :toctree: autofiles/ndfield
-    :nosignatures:
+    :Special Methods:
 
-    __init__
-    __iter__
-    __len__
-    __getitem__
-    __setitem__
+    .. autosummary::
 
-Attributes
-----------
+        __init__
+        __iter__
+        __len__
+        __getitem__
+        __setitem__
 
-.. autosummary::
-    :toctree: autofiles/ndfield
+    Constructor
+    -----------
+    .. automethod:: __init__
 
-    schunk
-    shape
+    Utility Methods
+    ---------------
+    .. automethod:: __iter__
+    .. automethod:: __len__
+    .. automethod:: __getitem__
+    .. automethod:: __setitem__

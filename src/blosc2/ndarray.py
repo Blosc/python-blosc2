@@ -1279,6 +1279,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
     @property
     def info_items(self) -> list:
+        """A list of tuples with the information about this array.
+        Each tuple contains the name of the attribute and its value.
+        """
         items = []
         items += [("type", f"{self.__class__.__name__}")]
         items += [("shape", self.shape)]
@@ -1439,7 +1442,23 @@ class NDArray(blosc2_ext.NDArray, Operand):
             raise ValueError("This property only works for 2-dimensional arrays.")
         return permute_dims(self)
 
-    def get_fselection_numpy(self, key):
+    def get_fselection_numpy(self, key: list | np.ndarray) -> np.ndarray:
+        """
+        Select a slice from the array using a fancy index.
+        Closely matches NumPy fancy indexing behaviour, except in
+        some edge cases which are not supported by ndindex.
+        Array indices separated by slice object - e.g. arr[0, :10, [0,1]] - are NOT supported.
+        See https://www.blosc.org/posts/blosc2-fancy-indexing for more details.
+
+        Parameters
+        ----------
+        key: list or np.ndarray
+
+        Returns
+        -------
+        out: np.ndarray
+
+        """
         # TODO: Make this faster for broadcasted keys
         ## Can`t do this because ndindex doesn't support all the same indexing cases as Numpy
         # if math.prod(self.shape) * self.dtype.itemsize < blosc2.MAX_FAST_PATH_SIZE:
@@ -1503,7 +1522,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return out
 
-    def get_oselection_numpy(self, key):
+    def get_oselection_numpy(self, key: list | np.ndarray) -> np.ndarray:
         """
         Select independently from self along axes specified in key. Key must be same length as self shape.
         See Zarr https://zarr.readthedocs.io/en/stable/user-guide/arrays.html#orthogonal-indexing.
@@ -1513,7 +1532,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         arr = np.empty(shape, dtype=self.dtype)
         return super().get_oindex_numpy(arr, key)
 
-    def set_oselection_numpy(self, key, arr: np.ndarray):
+    def set_oselection_numpy(self, key: list | np.ndarray, arr: NDArray) -> np.ndarray:
         """
         Select independently from self along axes specified in key and set to entries in arr.
         Key must be same length as self shape.
@@ -1698,7 +1717,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return NDOuterIterator(self)
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """Returns the length of the first dimension of the array.
+        This is equivalent to ``self.shape[0]``.
+        """
         return self.shape[0]
 
     def get_chunk(self, nchunk: int) -> bytes:
@@ -3371,7 +3393,7 @@ def arange(
 # Define a numpy linspace-like function
 def linspace(
     start, stop, num=None, endpoint=True, dtype=np.float64, shape=None, c_order=True, **kwargs: Any
-):
+) -> NDArray:
     """Return evenly spaced numbers over a specified interval.
 
     This is similar to `numpy.linspace` but it returns a `NDArray`
@@ -3442,7 +3464,7 @@ def linspace(
     return reshape(lazyarr, shape, c_order=c_order, **kwargs)
 
 
-def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any):
+def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:
     """Return a 2-D array with ones on the diagonal and zeros elsewhere.
 
     Parameters
@@ -4432,7 +4454,10 @@ class NDField(Operand):
         """
         return NDOuterIterator(self)
 
-    def __len__(self):
+    def __len__(self) -> int:
+        """
+        Returns the length of the first dimension of the field.
+        """
         return self.shape[0]
 
 

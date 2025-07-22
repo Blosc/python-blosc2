@@ -2,7 +2,7 @@ Operations with arrays
 ----------------------
 
 .. toctree::
-    :maxdepth: 2
+    :maxdepth: 1
 
     lazy_functions
     reduction_functions
