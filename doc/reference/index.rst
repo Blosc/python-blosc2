@@ -10,3 +10,4 @@ API Reference
     array_operations
     utilities
     low_level
+    misc

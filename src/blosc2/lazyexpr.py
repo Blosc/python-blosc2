@@ -535,7 +535,15 @@ class LazyArray(ABC):
         }
 
     # Provide a way to serialize the LazyArray
-    def to_cframe(self):
+    def to_cframe(self) -> bytes:
+        """
+        Compute LazyArray and convert to cframe.
+
+        Returns
+        -------
+        out: bytes
+            The buffer containing the serialized :ref:`NDArray` instance.
+        """
         return self.compute().to_cframe()
 
 

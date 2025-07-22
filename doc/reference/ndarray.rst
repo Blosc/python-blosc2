@@ -3,88 +3,73 @@
 NDArray
 =======
 
-The multidimensional data array class.
-
-.. currentmodule:: blosc2.NDArray
-
-Methods
--------
-
-.. autosummary::
-    :toctree: autofiles/ndarray
-    :nosignatures:
-
-    __iter__
-    __len__
-    __getitem__
-    __setitem__
-    copy
-    get_chunk
-    indices
-    iterchunks_info
-    reshape
-    resize
-    save
-    slice
-    sort
-    squeeze
-    tobytes
-    to_cframe
-
+The multidimensional data array class. Instances may be constructed using the constructor functions in the list below `NDArrayConstructors`_.
 In addition, all the functions from the :ref:`Lazy Functions <lazy_functions>` section can be used with NDArray instances.
-
-
-Attributes
-----------
-
-.. autosummary::
-    :toctree: autofiles/ndarray
-
-    T
-    ndim
-    shape
-    ext_shape
-    chunks
-    ext_chunks
-    blocks
-    blocksize
-    chunksize
-    dtype
-    fields
-    keep_last_read
-    info
-    schunk
-    size
-    cparams
-    dparams
-    urlpath
-    vlmeta
-
 
 .. currentmodule:: blosc2
 
+.. autoclass:: NDArray
+    :members:
+    :inherited-members:
+    :exclude-members: get_slice, set_slice, get_slice_numpy, get_oindex_numpy, set_oindex_numpy
+    :member-order: groupwise
+
+    :Special Methods:
+
+    .. autosummary::
+
+        __iter__
+        __len__
+        __getitem__
+        __setitem__
+
+    Utility Methods
+    ---------------
+
+    .. automethod:: __iter__
+    .. automethod:: __len__
+    .. automethod:: __getitem__
+    .. automethod:: __setitem__
+
 Constructors
 ------------
-
+.. _NDArrayConstructors:
 .. autosummary::
-    :toctree: autofiles/ndarray
-    :nosignatures:
 
+    arange
     asarray
-    copy
     concat
+    copy
     empty
     expand_dims
+    eye
     frombuffer
     fromiter
+    full
+    linspace
     nans
     ndarray_from_cframe
-    uninit
-    zeros
     ones
-    full
-    arange
-    linspace
-    eye
     reshape
     stack
+    uninit
+    zeros
+
+.. autofunction:: arange
+.. autofunction:: asarray
+.. autofunction:: concat
+.. autofunction:: copy
+.. autofunction:: empty
+.. autofunction:: expand_dims
+.. autofunction:: eye
+.. autofunction:: frombuffer
+.. autofunction:: fromiter
+.. autofunction:: full
+.. autofunction:: linspace
+.. autofunction:: nans
+.. autofunction:: ndarray_from_cframe
+.. autofunction:: ones
+.. autofunction:: reshape
+.. autofunction:: stack
+.. autofunction:: uninit
+.. autofunction:: zeros
