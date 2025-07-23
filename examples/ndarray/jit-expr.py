@@ -24,7 +24,7 @@ def expr_jit(a, b, c):
 # Create some sample data
 a = blosc2.linspace(0, 1, 10 * 100, dtype="float32", shape=(10, 100))
 b = blosc2.linspace(1, 2, 10 * 100, dtype="float32", shape=(10, 100))
-c = blosc2.linspace(-10, 10, 10, dtype="float32", shape=(100,))
+c = blosc2.linspace(-10, 10, 100, dtype="float32", shape=(100,))
 
 # Call the function with the jit decorator
 result = expr_jit(a, b, c)
