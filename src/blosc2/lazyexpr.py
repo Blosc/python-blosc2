@@ -1475,7 +1475,7 @@ def slices_eval(  # noqa: C901
         # Get the starts and stops for the slice
         starts = [s.start if s.start is not None else 0 for s in cslice]
         stops = [s.stop if s.stop is not None else sh for s, sh in zip(cslice, cslice_shape, strict=True)]
-        stepper = tuple(slice(None, None, s.step) for s in cslice)
+        unit_steps = np.all([s.step == 1 for s in cslice])
 
         # Get the slice of each operand
         for key, value in operands.items():
@@ -1495,9 +1495,9 @@ def slices_eval(  # noqa: C901
                 key in chunk_operands
                 and cslice_shape == chunk_operands[key].shape
                 and isinstance(value, blosc2.NDArray)
+                and unit_steps
             ):
                 value.get_slice_numpy(chunk_operands[key], (starts, stops))
-                chunk_operands[key] = chunk_operands[key][stepper]
                 continue
 
             chunk_operands[key] = value[cslice]
@@ -1871,8 +1871,8 @@ def reduce_slices(  # noqa: C901
             # get intersection of chunk and target
             cslice = step_handler(cslice, _slice)
         chunks_ = tuple(s.stop - s.start for s in cslice)
-        fast_path = False if any((s.step != 1 or s.step is not None) for s in cslice) else fast_path
-        if _slice == () and fast_path:
+        unit_steps = np.all([s.step == 1 for s in cslice])
+        if _slice == () and fast_path and unit_steps:
             # Fast path
             full_chunk = chunks_ == chunks
             fill_chunk_operands(
@@ -1882,7 +1882,6 @@ def reduce_slices(  # noqa: C901
             # Get the starts and stops for the slice
             starts = [s.start if s.start is not None else 0 for s in cslice]
             stops = [s.stop if s.stop is not None else sh for s, sh in zip(cslice, chunks_, strict=True)]
-            stepper = tuple(slice(None, None, s.step) for s in cslice)
             # Get the slice of each operand
             for key, value in operands.items():
                 if np.isscalar(value):
@@ -1901,9 +1900,9 @@ def reduce_slices(  # noqa: C901
                     key in chunk_operands
                     and chunks_ == chunk_operands[key].shape
                     and isinstance(value, blosc2.NDArray)
+                    and unit_steps
                 ):
                     value.get_slice_numpy(chunk_operands[key], (starts, stops))
-                    chunk_operands[key] = chunk_operands[key][stepper]
                     continue
                 chunk_operands[key] = value[cslice]
 

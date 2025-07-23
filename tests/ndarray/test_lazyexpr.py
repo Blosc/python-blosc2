@@ -1088,7 +1088,7 @@ def test_eval_getitem2():
     np.testing.assert_allclose(expr[0], nres[0])
     np.testing.assert_allclose(expr[1:, :7], nres[1:, :7])
     np.testing.assert_allclose(expr[0:10:2], nres[0:10:2])
-    # This works, but it is not very efficient since it relies on blosc2.ndarray.slice for non-unit steps
+    # Now relies on inefficient blosc2.ndarray.slice for non-unit steps but only per chunk (not for whole result)
     np.testing.assert_allclose(expr.slice((slice(None, None, None), slice(0, 10, 2)))[:], nres[:, 0:10:2])
 
     # Small test for broadcasting
@@ -1097,7 +1097,7 @@ def test_eval_getitem2():
     np.testing.assert_allclose(expr[0], nres[0])
     np.testing.assert_allclose(expr[1:, :7], nres[1:, :7])
     np.testing.assert_allclose(expr[:, 0:10:2], nres[:, 0:10:2])
-    # This works, but it is not very efficient since it relies on blosc2.ndarray.slice for non-unit steps
+    # Now relies on inefficient blosc2.ndarray.slice for non-unit steps but only per chunk (not for whole result)
     np.testing.assert_allclose(expr.slice((slice(None, None, None), slice(0, 10, 2)))[:], nres[:, 0:10:2])
 
 
