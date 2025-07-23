@@ -1404,26 +1404,19 @@ def slices_eval(  # noqa: C901
     # keep orig_slice
     _slice = _slice.raw
     orig_slice = _slice
-    full_slice = ()  # by default the full_slice is the whole array
-    final_slice = ()  # by default the final_slice is the whole array
 
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
     if out is None:
         if _slice != ():
             # Check whether _slice contains an integer, or any step that are not None or 1
-            if any(
-                (isinstance(s, int)) or (isinstance(s, slice) and s.step not in (None, 1)) for s in _slice
-            ):
+            if any((isinstance(s, int)) for s in _slice):
                 need_final_slice = True
             _slice = tuple(slice(i, i + 1) if isinstance(i, int) else i for i in _slice)
-            full_slice = tuple(
-                slice(s.start or 0, s.stop or shape[i], 1) for i, s in enumerate(_slice)
-            )  # get rid of non-unit steps
             # shape_slice in general not equal to final shape:
-            # dummy dims (due to ints) or non-unit steps will be dealt with by taking final_slice
-            shape_slice = ndindex.ndindex(full_slice).newshape(shape)
-            final_slice = ndindex.ndindex(orig_slice).as_subindex(full_slice).raw
+            # dummy dims (due to ints) will be dealt with by taking final_slice
+            shape_slice = ndindex.ndindex(_slice).newshape(shape)
+            mask_slice = np.bool([isinstance(i, int) for i in orig_slice])
     else:
         # # out should always have shape of full array
         # if shape is not None and shape != out.shape:
@@ -1469,7 +1462,7 @@ def slices_eval(  # noqa: C901
         # get intersection of chunk and target
         if _slice != ():
             cslice = tuple(
-                slice(max(s1.start, s2.start), min(s1.stop, s2.stop))
+                step_handler(s1.start, s2.start, s1.stop, s2.stop, s2.step)
                 for s1, s2 in zip(chunk_slice.raw, _slice, strict=True)
             )
         else:
@@ -1479,12 +1472,13 @@ def slices_eval(  # noqa: C901
         len_chunk = math.prod(cslice_shape)
         # get local index of part of out that is to be updated
         cslice_subidx = (
-            ndindex.ndindex(cslice).as_subindex(full_slice).raw
-        )  # in the case full_slice=(), just gives cslice
+            ndindex.ndindex(cslice).as_subindex(_slice).raw
+        )  # in the case _slice=(), just gives cslice
 
         # Get the starts and stops for the slice
         starts = [s.start if s.start is not None else 0 for s in cslice]
         stops = [s.stop if s.stop is not None else sh for s, sh in zip(cslice, cslice_shape, strict=True)]
+        stepper = tuple(slice(None, None, s.step) for s in cslice)
 
         # Get the slice of each operand
         for key, value in operands.items():
@@ -1506,6 +1500,7 @@ def slices_eval(  # noqa: C901
                 and isinstance(value, blosc2.NDArray)
             ):
                 value.get_slice_numpy(chunk_operands[key], (starts, stops))
+                chunk_operands[key] = chunk_operands[key][stepper]
                 continue
 
             chunk_operands[key] = value[cslice]
@@ -1614,15 +1609,13 @@ def slices_eval(  # noqa: C901
             out.resize((lenout,))
 
     else:  # Need to take final_slice since filled up array according to slice_ for each chunk
-        if final_slice != ():
+        if need_final_slice:  # only called if out was None
             if isinstance(out, np.ndarray):
-                if need_final_slice:  # only called if out was None
-                    out = out[final_slice]
+                out = np.squeeze(out, np.where(mask_slice))
             elif isinstance(out, blosc2.NDArray):
                 # It *seems* better to choose an automatic chunks and blocks for the output array
                 # out = out.slice(_slice, chunks=out.chunks, blocks=out.blocks)
-                if need_final_slice:  # only called if out was None
-                    out = out.slice(final_slice)
+                out = out.squeeze(mask_slice)
             else:
                 raise ValueError("The output array is not a NumPy array or a NDArray")
 
@@ -1873,7 +1866,7 @@ def reduce_slices(  # noqa: C901
                 for s1, s2 in zip(cslice, _slice, strict=True)
             )
         chunks_ = tuple(s.stop - s.start for s in cslice)
-
+        fast_path = False if any((s.step != 1 or s.step is not None) for s in cslice) else fast_path
         if _slice == () and fast_path:
             # Fast path
             full_chunk = chunks_ == chunks
@@ -1884,6 +1877,7 @@ def reduce_slices(  # noqa: C901
             # Get the starts and stops for the slice
             starts = [s.start if s.start is not None else 0 for s in cslice]
             stops = [s.stop if s.stop is not None else sh for s, sh in zip(cslice, chunks_, strict=True)]
+            stepper = tuple(slice(None, None, s.step) for s in cslice)
             # Get the slice of each operand
             for key, value in operands.items():
                 if np.isscalar(value):
@@ -1904,6 +1898,7 @@ def reduce_slices(  # noqa: C901
                     and isinstance(value, blosc2.NDArray)
                 ):
                     value.get_slice_numpy(chunk_operands[key], (starts, stops))
+                    chunk_operands[key] = chunk_operands[key][stepper]
                     continue
                 chunk_operands[key] = value[cslice]
 
