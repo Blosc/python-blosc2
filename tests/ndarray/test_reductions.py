@@ -206,18 +206,15 @@ def test_reduce_slice(reduce_op):
     nres = getattr(na[_slice], reduce_op)(axis=1)
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
+    # Test reductions with ints
+    _slice = (0, slice(1, 9, 1))
+    res = getattr(a, reduce_op)(item=_slice, axis=1)
+    nres = getattr(na[_slice], reduce_op)(axis=1)
+    np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
-# TODO: Test cache path for reductions with non-unit steps in slice
-def test_reduceslice_cache():
-    shape = (8, 12, 5)
-    na = np.linspace(0, 1, num=np.prod(shape)).reshape(shape)
-    a = blosc2.asarray(na, chunks=(2, 5, 1))
-    tol = 1e-6 if na.dtype == np.float32 else 1e-15
-
-    # Test reductions with slices and strides
-    _slice = (slice(1, 2, 1), slice(1, 9, 2))
-    res = blosc2.sum(2 * a + 0.2 * a, item=_slice, axis=1)
-    nres = na[_slice] * 2.2
+    _slice = (0, slice(1, 9, 2))
+    res = getattr(a, reduce_op)(item=_slice, axis=1)
+    nres = getattr(na[_slice], reduce_op)(axis=1)
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 

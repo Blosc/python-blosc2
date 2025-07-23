@@ -1412,7 +1412,7 @@ def slices_eval(  # noqa: C901
             # Check whether _slice contains an integer, or any step that are not None or 1
             if any((isinstance(s, int)) for s in _slice):
                 need_final_slice = True
-            _slice = tuple(slice(i, i + 1) if isinstance(i, int) else i for i in _slice)
+            _slice = tuple(slice(i, i + 1, 1) if isinstance(i, int) else i for i in _slice)
             # shape_slice in general not equal to final shape:
             # dummy dims (due to ints) will be dealt with by taking final_slice
             shape_slice = ndindex.ndindex(_slice).newshape(shape)
@@ -1461,10 +1461,7 @@ def slices_eval(  # noqa: C901
     for nchunk, chunk_slice in enumerate(intersecting_chunks):
         # get intersection of chunk and target
         if _slice != ():
-            cslice = tuple(
-                step_handler(s1.start, s2.start, s1.stop, s2.stop, s2.step)
-                for s1, s2 in zip(chunk_slice.raw, _slice, strict=True)
-            )
+            cslice = step_handler(chunk_slice.raw, _slice)
         else:
             cslice = chunk_slice.raw
 
@@ -1611,7 +1608,7 @@ def slices_eval(  # noqa: C901
     else:  # Need to take final_slice since filled up array according to slice_ for each chunk
         if need_final_slice:  # only called if out was None
             if isinstance(out, np.ndarray):
-                out = np.squeeze(out, np.where(mask_slice))
+                out = np.squeeze(out, np.where(mask_slice)[0])
             elif isinstance(out, blosc2.NDArray):
                 # It *seems* better to choose an automatic chunks and blocks for the output array
                 # out = out.slice(_slice, chunks=out.chunks, blocks=out.blocks)
@@ -1728,17 +1725,22 @@ def infer_reduction_dtype(dtype, operation):
         raise ValueError(f"Unsupported operation: {operation}")
 
 
-def step_handler(s1start, s2start, s1stop, s2stop, s2step):
-    # assume s1step = 1
-    newstart = max(s1start, s2start)
-    newstop = min(s1stop, s2stop)
-    rem = (newstart - s2start) % s2step
-    if rem != 0:  # only pass through here if s2step is not 1
-        newstart += s2step - rem
-        # true_stop = start + n*step + 1 -> stop = start + n * step + 1 + residual
-        # so n = (stop - start - 1) // step
-        newstop = newstart + (newstop - newstart - 1) // s2step * s2step + 1
-    return slice(newstart, newstop, s2step)
+def step_handler(cslice, _slice):
+    out = ()
+    for s1, s2 in zip(cslice, _slice, strict=True):
+        s1start, s1stop = s1.start, s1.stop
+        s2start, s2stop, s2step = s2.start, s2.stop, s2.step
+        # assume s1step = 1
+        newstart = max(s1start, s2start)
+        newstop = min(s1stop, s2stop)
+        rem = (newstart - s2start) % s2step
+        if rem != 0:  # only pass through here if s2step is not 1
+            newstart += s2step - rem
+            # true_stop = start + n*step + 1 -> stop = start + n * step + 1 + residual
+            # so n = (stop - start - 1) // step
+            newstop = newstart + (newstop - newstart - 1) // s2step * s2step + 1
+        out += (slice(newstart, newstop, s2step),)
+    return out
 
 
 def reduce_slices(  # noqa: C901
@@ -1792,21 +1794,27 @@ def reduce_slices(  # noqa: C901
 
     _slice = _slice.raw
     shape_slice = shape
-    full_slice = ()  # by default the full_slice is the whole array
+    mask_slice = np.bool([isinstance(i, int) for i in _slice])
     if out is None and _slice != ():
+        _slice = tuple(slice(i, i + 1, 1) if isinstance(i, int) else i for i in _slice)
         shape_slice = ndindex.ndindex(_slice).newshape(shape)
-        full_slice = _slice
+        # shape_slice in general not equal to final shape:
+        # dummy dims (due to ints) will be dealt with by taking final_slice
 
     # after slicing, we reduce to calculate shape of output
     if axis is None:
         axis = tuple(range(len(shape_slice)))
     elif not isinstance(axis, tuple):
         axis = (axis,)
-    axis = tuple(a if a >= 0 else a + len(shape_slice) for a in axis)
+    axis = np.array([a if a >= 0 else a + len(shape_slice) for a in axis])
+    if np.any(mask_slice):
+        axis = tuple(axis + np.cumsum(mask_slice)[axis])  # axis now refers to new shape with dummy dims
+        reduce_args["axis"] = axis
     if keepdims:
         reduced_shape = tuple(1 if i in axis else s for i, s in enumerate(shape_slice))
     else:
         reduced_shape = tuple(s for i, s in enumerate(shape_slice) if i not in axis)
+        mask_slice = mask_slice[[i for i in range(len(mask_slice)) if i not in axis]]
 
     if out is not None and reduced_shape != out.shape:
         raise ValueError("Provided output shape does not match the reduced shape.")
@@ -1861,10 +1869,7 @@ def reduce_slices(  # noqa: C901
         # Check whether current cslice intersects with _slice
         if cslice != () and _slice != ():
             # get intersection of chunk and target
-            cslice = tuple(
-                step_handler(s1.start, s2.start, s1.stop, s2.stop, s2.step)
-                for s1, s2 in zip(cslice, _slice, strict=True)
-            )
+            cslice = step_handler(cslice, _slice)
         chunks_ = tuple(s.stop - s.start for s in cslice)
         fast_path = False if any((s.step != 1 or s.step is not None) for s in cslice) else fast_path
         if _slice == () and fast_path:
@@ -1903,9 +1908,7 @@ def reduce_slices(  # noqa: C901
                 chunk_operands[key] = value[cslice]
 
         # get local index of part of out that is to be updated
-        cslice_subidx = (
-            ndindex.ndindex(cslice).as_subindex(full_slice).raw
-        )  # if full_slice is (), just gives cslice
+        cslice_subidx = ndindex.ndindex(cslice).as_subindex(_slice).raw  # if _slice is (), just gives cslice
         if keepdims:
             reduced_slice = tuple(slice(None) if i in axis else sl for i, sl in enumerate(cslice_subidx))
         else:
@@ -1984,6 +1987,9 @@ def reduce_slices(  # noqa: C901
             dtype = np.float64
         out = convert_none_out(dtype, reduce_op, reduced_shape)
 
+    final_mask = tuple(np.where(mask_slice)[0])
+    if np.any(mask_slice):  # remove dummy dims
+        out = np.squeeze(out, axis=final_mask)
     # Check if the output array needs to be converted into a blosc2.NDArray
     if kwargs != {} and not np.isscalar(out):
         out = blosc2.asarray(out, **kwargs)
