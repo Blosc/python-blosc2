@@ -5,67 +5,32 @@ SChunk
 
 The basic compressed data container (aka super-chunk). This class consists of a set of useful parameters and methods that allow not only to create compressed data, and decompress it, but also to manage the data in a more sophisticated way. For example, it is possible to append new data, update existing data, delete data, etc.
 
-.. currentmodule:: blosc2.schunk
-
-Methods
--------
-
-.. autosummary::
-   :toctree: autofiles/schunk/
-   :nosignatures:
-
-    SChunk.__init__
-    SChunk.append_data
-    SChunk.decompress_chunk
-    SChunk.delete_chunk
-    SChunk.get_chunk
-    SChunk.insert_chunk
-    SChunk.insert_data
-    SChunk.iterchunks
-    SChunk.iterchunks_info
-    SChunk.fill_special
-    SChunk.update_chunk
-    SChunk.update_data
-    SChunk.get_slice
-    SChunk.__getitem__
-    SChunk.__setitem__
-    SChunk.__len__
-    SChunk.to_cframe
-    SChunk.postfilter
-    SChunk.remove_postfilter
-    SChunk.filler
-    SChunk.prefilter
-    SChunk.remove_prefilter
-
-.. _SChunkAttributes:
-
-Attributes
-----------
-
-.. autosummary::
-   :toctree: autofiles/schunk/
-   :nosignatures:
-
-    SChunk.blocksize
-    SChunk.cbytes
-    SChunk.chunkshape
-    SChunk.chunksize
-    SChunk.contiguous
-    SChunk.cparams
-    SChunk.cratio
-    SChunk.dparams
-    SChunk.meta
-    SChunk.nbytes
-    SChunk.typesize
-    SChunk.urlpath
-    SChunk.vlmeta
-
-Functions
----------
-
 .. currentmodule:: blosc2
 
-.. autosummary::
-   :toctree: autofiles/schunk/
+.. autoclass:: SChunk
+    :members:
+    :exclude-members: get_cparams, get_dparams, get_lazychunk, set_slice, update_cparams, update_dparams, c_schunk
+    :member-order: groupwise
 
-    schunk_from_cframe
+    :Special Methods:
+
+    .. autosummary::
+
+        __init__
+        __len__
+        __getitem__
+        __setitem__
+
+    Constructor
+    -----------
+    .. automethod:: __init__
+
+    Utility Methods
+    ---------------
+    .. automethod:: __len__
+    .. automethod:: __getitem__
+    .. automethod:: __setitem__
+
+Constructors
+------------
+.. autofunction:: schunk_from_cframe

@@ -7,24 +7,23 @@ Simple proxy for a NumPy array (or similar) that can be used with the Blosc2 com
 
 This only supports the __getitem__ method. No caching is performed.
 
-.. currentmodule:: blosc2.SimpleProxy
+.. currentmodule:: blosc2
 
-Methods
--------
+.. autoclass:: SimpleProxy
+    :members:
+    :exclude-members: all, any, max, mean, min, prod, std, sum, var
+    :member-order: groupwise
 
-.. autosummary::
-    :toctree: autofiles/simpleproxy
-    :nosignatures:
+    :Special Methods:
 
-    __init__
-    __getitem__
+    .. autosummary::
+        __init__
+        __getitem__
 
-Attributes
-----------
+    Constructor
+    -----------
+    .. automethod:: __init__
 
-.. autosummary::
-    :toctree: autofiles/simpleproxy
-
-    shape
-    dtype
-    src
+    Utility Methods
+    ---------------
+    .. automethod:: __getitem__

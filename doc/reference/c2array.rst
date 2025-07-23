@@ -5,49 +5,42 @@ C2Array
 
 This is a class for remote arrays. This kind of array can also work as operand on a LazyExpr, LazyUDF or reduction.
 
-.. currentmodule:: blosc2.C2Array
 
-Methods
--------
+.. currentmodule:: blosc2
 
-.. autosummary::
-    :toctree: autofiles/c2array
-    :nosignatures:
+.. autoclass:: C2Array
+    :members:
+    :exclude-members: all, any, max, mean, min, prod, std, sum, var
+    :member-order: groupwise
 
-    __init__
-    __getitem__
-    get_chunk
+    :Special Methods:
 
-Attributes
-----------
+    .. autosummary::
+        __init__
+        __getitem__
 
-.. autosummary::
-    :toctree: autofiles/c2array
+    Constructor
+    -----------
+    .. automethod:: __init__
 
-    shape
-    chunks
-    blocks
-    dtype
-    cparams
+    Utility Methods
+    ---------------
+    .. automethod:: __getitem__
+
 
 .. _URLPath:
 
 URLPath class
 -------------
+.. autoclass:: URLPath
+    :members:
+    :member-order: groupwise
 
-.. currentmodule:: blosc2.URLPath
+    .. autosummary::
+        __init__
 
-.. autosummary::
-    :toctree: autofiles/URLPath
-
-    __init__
+    .. automethod:: __init__
 
 Context managers
 ----------------
-
-.. currentmodule:: blosc2
-
-.. autosummary::
-    :toctree: autofiles/c2array
-
-    c2context
+.. autofunction:: c2context
