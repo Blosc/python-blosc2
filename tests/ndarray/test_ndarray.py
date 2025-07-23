@@ -358,3 +358,32 @@ def test_findex():
     # b3 = arr[0, :, [0, 1]]
     # n3 = nparr[0, :, [0, 1]]
     # np.testing.assert_allclose(b3, n3)
+
+
+@pytest.mark.parametrize(
+    "arr",
+    [
+        np.random.default_rng().random((2, 1000, 10, 8, 3)).astype(np.float32),
+        blosc2.asarray(np.random.default_rng().random((2, 1000, 10, 8, 3)).astype(np.float32)),
+    ],
+)
+def test_strided_output(arr):
+    def fancy_strided_output(inputs, output_indices, stride=1):
+        b, t, *f = inputs.shape
+        oi = np.asarray(output_indices, dtype=np.int32)
+
+        start = np.amax(output_indices)
+        win_starts = np.arange(start, t, stride, dtype=np.int32)
+        rel_idx = win_starts[:, None] - oi[None]
+        rel_idx[rel_idx < 0] = 0
+
+        w, o = rel_idx.shape
+        batch_idx = np.arange(b, dtype=np.int32)[:, None, None]
+        batch_idx = np.broadcast_to(batch_idx, (b, w, o))
+        time_idx = np.broadcast_to(rel_idx, (b, w, o))
+
+        return inputs[batch_idx, time_idx]
+
+    output_indices = [800, 74, 671, 132, 818]
+    out = fancy_strided_output(arr, output_indices, stride=16)
+    assert out.shape == (2, 12, 5, 10, 8, 3)
