@@ -2,42 +2,42 @@
 
 What is it?
 ===========
-
 Python-Blosc2 is a high-performance compressed ndarray library with a flexible
-compute engine.  It uses the C-Blosc2 library as the compression backend.
+compute engine. The compression functionality comes courtesy of the C-Blosc2 library.
 `C-Blosc2 <https://github.com/Blosc/c-blosc2>`_ is the next generation of
 Blosc, an `award-winning <https://www.blosc.org/posts/prize-push-Blosc2/>`_
 library that has been around for more than a decade, and that is being used
 by many projects, including `PyTables <https://www.pytables.org/>`_ or
 `Zarr <https://zarr.readthedocs.io/en/stable/>`_.
 
-Python-Blosc2 is a Python wrapper around the C-Blosc2 library, enhanced with
-an integrated compute engine. This allows for complex computations on
+Python-Blosc2's bespoke compute engine allows for complex computations on
 compressed data, whether the operands are in memory, on disk, or
 `accessed over a network <https://github.com/ironArray/Caterva2>`_. This
 capability makes it easier to `work with very large datasets
 <https://ironarray.io/blog/compute-bigger>`_, even in distributed
 environments.
 
-Most importantly, Python-Blosc2 uses the
-`C-Blosc2 simple and open format <https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_
-for storing compressed data. This facilitates seamless integration with other
-systems and tools.
-
 Interacting with the Ecosystem
-==============================
+-----------------------------
 
 Python-Blosc2 is designed to integrate seamlessly with existing libraries
-and tools, offering:
+and tools in the Python ecosystem, including:
 
 * Support for NumPy's `universal functions
   mechanism <https://numpy.org/doc/2.1/reference/ufuncs.html>`_, enabling
-  the combination of NumPy and Blosc2 computation engines.
+  the combination of the NumPy and Blosc2 computation engines.
 * Excellent integration with Numba and Cython via
   `User Defined
   Functions <https://www.blosc.org/python-blosc2/getting_started/tutorials/03.lazyarray-udf.html>`_.
-* Lazy expressions that are evaluated only when needed and can be stored
-  for future use.
+* By making use of the simple and open
+`C-Blosc2 format <https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_
+for storing compressed data, Python-Blosc2 facilitates seamless integration with many other
+systems and tools.
+
+Python-Blosc2's compute engine
+==============================
+The compute engine is based on lazy expressions that are evaluated only when needed and can be stored
+for future use.
 
 Python-Blosc2 leverages both `NumPy <https://numpy.org>`_ and
 `NumExpr <https://numexpr.readthedocs.io/en/latest/>`_ to achieve high
@@ -56,8 +56,12 @@ computing engine and NumPy or NumExpr include:
 
 Data Containers
 ===============
+When working with data that is too large to fit in memory, one solution is to load the data in chunks, process each chunk,
+and then write the results back to disk. If each chunk is compressed, say by a factor of 10, this approach can be especially efficient,
+since one is essentially able to send the data 10x faster over the network and store it 10x smaller on disk.
+Even if the data fits in memory, it is often beneficial to use compression and chunking to make more effective use of the cache structure of modern CPUs.
 
-The main data container objects in Python-Blosc2 are:
+The combined chunking-compression approach is the basis of the main data container objects in Python-Blosc2:
 
 * ``SChunk``: A 64-bit compressed store suitable for any data type supporting the
   `buffer protocol <https://docs.python.org/3/c-api/buffer.html>`_.
@@ -70,14 +74,18 @@ SChunk: a 64-bit compressed store
 ---------------------------------
 
 ``SChunk`` is a simple data container that handles setting, expanding and
-getting data and metadata.  In contrast to chunks, a super-chunk can update
+getting data and metadata. A super-chunk is a wrapper around some set of chunked data, and can update
 and resize the data that it contains, supports user metadata, and has virtually
-unlimited storage capacity (chunks, on the other hand, cannot store more than 2 GB).
+unlimited storage capacity (each constituent chunk of the super-chunk cannot store more than 2 GB).
+The separate chunks are in general not stored sequentially, which allows for efficient extension of the super-chunk (a
+new chunk may be inserted anywhere there is space available, and the super-chunk can be extended with a reference to the
+location of the new chunk).
 
-Additionally, you can convert a SChunk into a contiguous, serialized buffer
+However, since it may be advantageous (for e.g. faster file transfer) to convert a SChunk into a contiguous, serialized buffer
 (aka `cframe
-<https://github.com/Blosc/c-blosc2/blob/main/README_CFRAME_FORMAT.rst>`_) and
-vice-versa; as a bonus, the serialization/deserialization process also works
+<https://github.com/Blosc/c-blosc2/blob/main/README_CFRAME_FORMAT.rst>`_), such functionality is supported; likewise
+one may convert a cframe into a SChunk.
+The serialization/deserialization process also works
 with NumPy arrays and PyTorch/TensorFlow tensors at lightning-fast speed:
 
 .. |compress| image:: https://github.com/Blosc/python-blosc2/blob/main/images/linspace-compress.png?raw=true
@@ -99,8 +107,8 @@ while reaching excellent compression ratios:
    :align: center
    :alt: Compression ratio for different codecs
 
-Also, if you are a Mac M1/M2 owner, do yourself a favor and use its native arm64
-arch (yes, we are distributing Mac arm64 wheels too; you're welcome ;-) ):
+Also, if you are a Mac M1/M2 owner you may make use of its native arm64
+arch, since we distribute Mac arm64 wheels too:
 
 .. |pack_arm| image:: https://github.com/Blosc/python-blosc2/blob/main/images/M1-i386-vs-arm64-pack.png?raw=true
    :width: 100%
@@ -122,11 +130,11 @@ NDArray: an N-Dimensional store
 
 A recent feature in Python-Blosc2 is the
 `NDArray <https://www.blosc.org/python-blosc2/reference/ndarray_api.html>`_
-object.  It builds upon the ``SChunk`` object, offering a NumPy-like API
-for compressed n-dimensional data.
+object.  It rests atop the ``SChunk`` object, offering a NumPy-like API
+for compressed n-dimensional data, with the same chunked storage.
 
 It efficiently reads/writes n-dimensional datasets using an n-dimensional
-two-level partitioning scheme, enabling fine-grained slicing of large,
+two-level partitioning scheme (each chunk is itself divided into blocks), enabling fine-grained slicing of large,
 compressed data:
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/b2nd-2level-parts.png?raw=true
@@ -138,23 +146,20 @@ orthogonal to different axes of a 4-dimensional dataset:
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/Read-Partial-Slices-B2ND.png?raw=true
   :width: 75%
 
-More information is available in this blog post:
-https://www.blosc.org/posts/blosc2-ndim-intro
-
-Check this short video explaining `why slicing in a pineapple-style (aka
-double partition) is useful
-<https://www.youtube.com/watch?v=LvP9zxMGBng>`_:
+More information on chunk-block double partitioning is available in this `blog post
+<https://www.blosc.org/posts/blosc2-ndim-intro>`_. Or if you're a visual learner, see this
+`short video <https://www.youtube.com/watch?v=LvP9zxMGBng>`_.
 
 .. image:: https://github.com/Blosc/blogsite/blob/master/files/images/slicing-pineapple-style.png?raw=true
   :width: 50%
   :alt: Slicing a dataset in pineapple-style
   :target: https://www.youtube.com/watch?v=LvP9zxMGBng
 
-Operating with NDArrays
+Computing with NDArrays
 =======================
 
 Python-Blosc2's ``NDArray`` objects are designed for ease of use,
-demonstrated by this example:
+demonstrated by this example, which closely mirrors the very familiar NumPy syntax
 
 .. code-block:: python
 
@@ -162,48 +167,49 @@ demonstrated by this example:
 
     N = 20_000
     # N = 70_000 # for large scenario
-    a = blosc2.linspace(0, 1, N * N).reshape(N, N)
-    b = blosc2.linspace(1, 2, N * N).reshape(N, N)
-    c = blosc2.linspace(-10, 10, N * N).reshape(N, N)
+    a = blosc2.linspace(0, 1, N * N, shape=(N, N))
+    b = blosc2.linspace(1, 2, N * N, shape=(N, N))
+    c = blosc2.linspace(-10, 10, N * N, shape=(N, N))
     expr = ((a**3 + blosc2.sin(c * 2)) < b) & (c > 0)
 
     out = expr.compute()
     print(out.info)
 
-``NDArray`` instances resemble NumPy arrays but store compressed data,
-processed efficiently by Python-Blosc2's engine.
+``NDArray`` instances resemble NumPy arrays, since one may expose their shape, dtype etc. via attributes (try
+``a.shape`` in the example above), but store compressed data, processed efficiently by Python-Blosc2's engine. This
+means that you can work with datasets larger than would be feasible with e.g. NumPy.
 
-When operands fit in memory (20,000 x 20,000), performance nears
-top-tier libraries like NumExpr, exceeding NumPy and Numba, with low memory use
-via default compression. As you can see, Blosc2 compression can speed
-computation via fast codecs and filters, plus efficient CPU cache use.
+To see this, we can compare the execution time for the above example (see the
+`benchmark here >https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-dask-small.ipynb>`_)
+when the operands fit in memory uncompressed (20,000 x 20,000). Performance for Blosc2 then matches that of top-tier
+libraries like NumExpr, and exceeds that of NumPy and Numba, with low memory use via default compression. Even for
+in-memory computations then, Blosc2 compression can speed up computation via fast codecs and filters, plus efficient
+CPU cache use.
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-dask-small.png?raw=true
   :width: 100%
   :alt: Performance when operands comfortably fit in-memory
 
-For larger datasets exceeding memory, Python-Blosc2 rivals Dask+Zarr in
-performance (70,000 x 70,000).
+When the operands are so large that they exceed memory (70,000 x 70,000) unless compressed, one can no longer use
+NumPy or other uncompressed libraries such as NumExpr. Python-Blosc2's compression and chunking means the arrays may be
+stored compressed in memory and then processed chunk-by-chunk; both memory footprint and execution time is greatly reduced
+compared to Dask+Zarr, which also uses compression (see the
+`benchmark here >https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-dask-large.ipynb>`_).
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-dask-large.png?raw=true
   :width: 100%
   :alt: Performance when operands do not fit in memory (uncompressed)
 
-Blosc2 can utilize MKL-enabled Numexpr for optimized transcendental
-functions on Intel compatible CPUs (as used for the above plots).
-
-Benchmark notebooks:
-
-https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-dask-small.ipynb
-
-https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-dask-large.ipynb
+Note: For these plots, we made use of the Blosc2 support for MKL-enabled Numexpr for optimized transcendental
+functions on Intel compatible CPUs.
 
 Reductions and disk-based computations
 --------------------------------------
-
-One key feature of Python-Blosc2's compute engine is its ability to
-perform reductions on compressed data, optionally stored on disk, enabling
-calculations on datasets too large for memory.
+Of course, it may be the case that, even compressed, data is still too large to fit in memory. Python-Blosc2's compute
+engine is perfectly capable of working with data stored on disk, loading the chunked data efficiently to minimise
+latency, optimizing calculations on datasets too large for memory. Computation results may also be stored on disk if
+necessary We can see this at work for reductions, which are 1) computationally demanding, and 2) an important class of
+operations in data analysis, where we often wish to compute a single value from an array, such as the sum or mean.
 
 Example:
 
@@ -226,10 +232,8 @@ Example:
 This example computes the sum of a boolean array resulting from an
 expression, where the operands are on disk, with the result being a
 1D array stored in memory (or optionally on disk via the ``out=``
-parameter in ``compute()`` or ``sum()`` functions).
-
-Check out a blog post about this feature, with performance comparisons, at:
-https://ironarray.io/blog/compute-bigger
+parameter in ``compute()`` or ``sum()`` functions). For a more in-depth look at this example, with performance
+comparisons, see this `blog post <https://ironarray.io/blog/compute-bigger>`_.
 
 Hopefully, this overview has provided a good understanding of
 Python-Blosc2's capabilities. To begin your journey with Python-Blosc2,
