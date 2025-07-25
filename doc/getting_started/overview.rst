@@ -180,7 +180,7 @@ demonstrated by this example, which closely mirrors the very familiar NumPy synt
 means that you can work with datasets larger than would be feasible with e.g. NumPy.
 
 To see this, we can compare the execution time for the above example (see the
-`benchmark here >https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-dask-small.ipynb>`_)
+`benchmark here <https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-dask-small.ipynb>`_)
 when the operands fit in memory uncompressed (20,000 x 20,000). Performance for Blosc2 then matches that of top-tier
 libraries like NumExpr, and exceeds that of NumPy and Numba, with low memory use via default compression. Even for
 in-memory computations then, Blosc2 compression can speed up computation via fast codecs and filters, plus efficient
@@ -194,7 +194,7 @@ When the operands are so large that they exceed memory (70,000 x 70,000) unless 
 NumPy or other uncompressed libraries such as NumExpr. Python-Blosc2's compression and chunking means the arrays may be
 stored compressed in memory and then processed chunk-by-chunk; both memory footprint and execution time is greatly reduced
 compared to Dask+Zarr, which also uses compression (see the
-`benchmark here >https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-dask-large.ipynb>`_).
+`benchmark here <https://github.com/Blosc/python-blosc2/blob/main/bench/ndarray/lazyarray-dask-large.ipynb>`_).
 
 .. image:: https://github.com/Blosc/python-blosc2/blob/main/images/lazyarray-dask-large.png?raw=true
   :width: 100%
