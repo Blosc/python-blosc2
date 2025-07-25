@@ -32,7 +32,7 @@ classifiers = [
 requires-python = ">=3.10"
 # Follow guidelines from https://scientific-python.org/specs/spec-0000/
 dependencies = [
-    "numpy>=1.26",
+    "numpy>=2.2",
     #"numpy>=2",
     "ndindex",
     "msgpack",
@@ -128,7 +128,3 @@ ignore = [
 
 [tool.ruff.lint.extend-per-file-ignores]
 "tests/**" = ["F841"]
-
-[tool.cibuildwheel.pyodide]
-# Build Pyodide wheels using Pyodide version 0.28.0
-pyodide-version = "0.28.0"
