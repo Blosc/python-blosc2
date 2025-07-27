@@ -2153,12 +2153,16 @@ def fuse_expressions(expr, new_base, dup_op):
             # This is a variable.  Find the end of it.
             j = i + 1
             for k in range(len(expr[j:])):
-                if expr[j + k] in " )[":
+                if expr[j + k] in " )[,":  # Added comma to the list of delimiters
                     j = k
                     break
             if expr[i + j] == ")":
                 j -= 1
-            old_pos = int(expr[i + 1 : i + j + 1])
+            # Extract only the numeric part, handling cases where there might be a comma
+            operand_str = expr[i + 1 : i + j + 1]
+            # Split by comma and take the first part (the operand index)
+            operand_num_str = operand_str.split(",")[0]
+            old_pos = int(operand_num_str)
             old_op = f"o{old_pos}"
             if old_op not in dup_op:
                 if old_pos in prev_pos:
@@ -3433,7 +3437,7 @@ def lazyexpr(
         If None, the operands will be seeked in the local and global dictionaries.
     out: NDArray or np.ndarray, optional
         The output array where the result will be stored. If not provided,
-        a new array will be created.
+        a new NumPy array will be created and returned.
     where: tuple, list, optional
         A sequence of arguments for the where clause in the expression.
     local_dict: dict, optional
@@ -3586,7 +3590,7 @@ def evaluate(
     global_dict: dict, optional
         The global dictionary to use when looking for operands in the expression.
         If not provided, the global dictionary of the caller will be used.
-    out: NDArray or NumPy array, optional
+    out: NDArray or np.ndarray, optional
         The output array where the result will be stored. If not provided,
         a new NumPy array will be created and returned.
     kwargs: Any, optional
