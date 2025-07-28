@@ -72,6 +72,7 @@ doc = [
     "myst-parser",
     "sphinx-paramlinks",
     "nbsphinx",
+    "ipykernel",
     "sphinx-panels",
     "furo",
     "numba",
