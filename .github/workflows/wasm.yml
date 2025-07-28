@@ -46,7 +46,7 @@ jobs:
         run: pip install cibuildwheel
 
       - name: Build wheels
-        # Testing is automaticall made by cibuildwheel
+        # Testing is automatically made by cibuildwheel
         run: cibuildwheel --platform pyodide
 
       - name: Upload wheels
