@@ -73,6 +73,8 @@ doc = [
     "sphinx-paramlinks",
     "nbsphinx",
     "sphinx-panels",
+    "furo",
+    "numba",
 ]
 
 [project.urls]
