@@ -92,7 +92,7 @@ available, and the super-chunk can be extended with a reference to the
 location of the new chunk).
 
 However, since it may be advantageous (for e.g. faster file transfer) to
-convert a SChunk into a contiguous, serialized buffer (aka`cframe
+convert a SChunk into a contiguous, serialized buffer (aka `cframe
 <https://github.com/Blosc/c-blosc2/blob/main/README_CFRAME_FORMAT.rst>`_),
 such functionality is supported; likewise one may convert a cframe into a
 SChunk. The serialization/deserialization process also works with NumPy
