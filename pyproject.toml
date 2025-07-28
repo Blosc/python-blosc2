@@ -66,7 +66,7 @@ test = [
     "torch; platform_machine != 'wasm32'",
 ]
 doc = [
-    "sphinx>=8",
+    "sphinx<8",
     "pydata-sphinx-theme",
     "numpydoc",
     "myst-parser",
