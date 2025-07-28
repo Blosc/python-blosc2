@@ -439,6 +439,16 @@ class Proxy(blosc2.Operand):
         return self._cache.shape if isinstance(self._cache, blosc2.NDArray) else len(self._cache)
 
     @property
+    def chunks(self) -> tuple[int]:  # cache should have same chunks as src
+        """The chunks of :paramref:`self` or None if the data is not a Blosc2 NDArray"""
+        return self._cache.chunks if isinstance(self._cache, blosc2.NDArray) else None
+
+    @property
+    def blocks(self) -> tuple[int]:  # cache should have same blocks as src
+        """The blocks of :paramref:`self` or None if the data is not a Blosc2 NDArray"""
+        return self._cache.blocks if isinstance(self._cache, blosc2.NDArray) else None
+
+    @property
     def schunk(self) -> blosc2.schunk.SChunk:
         """The :ref:`SChunk` of the cache"""
         return self._schunk_cache
