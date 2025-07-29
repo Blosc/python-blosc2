@@ -73,7 +73,7 @@ doc = [
     "sphinx-paramlinks",
     "nbsphinx",
     "ipykernel",
-    "sphinx-panels",
+    "sphinx-design",
     "furo",
     "numba",
 ]
