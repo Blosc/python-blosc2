@@ -18,7 +18,7 @@ extensions = [
     "numpydoc",
     "myst_parser",
     "sphinx_paramlinks",
-    "sphinx_panels",
+    "sphinx_design",
     "nbsphinx",
     # For some reason, the following extensions are not working
     # "IPython.sphinxext.ipython_directive",
