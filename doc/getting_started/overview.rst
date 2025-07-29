@@ -20,7 +20,7 @@ capability makes it easier to `work with very large datasets
 environments.
 
 Interacting with the Ecosystem
------------------------------
+------------------------------
 
 Python-Blosc2 is designed to integrate seamlessly with existing libraries
 and tools in the Python ecosystem, including:

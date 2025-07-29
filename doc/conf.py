@@ -29,6 +29,7 @@ html_theme = "furo"
 html_static_path = ["_static"]
 html_css_files = [
     "css/custom.css",
+    "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css",
 ]
 html_logo = "_static/blosc-logo_256.png"
 # Just use the favicon from the parent project
