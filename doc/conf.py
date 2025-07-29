@@ -105,7 +105,9 @@ def linkcode_resolve(domain, info):
 
     # Replace this with your repo info
     github_base_url = "https://github.com/Blosc/python-blosc2/blob/main/"
-    relpath = os.path.relpath(fn, start=os.path.dirname(module.__file__))
+    # Get the path relative to the repository root, not the module directory
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(blosc2.__file__), "..", ".."))
+    relpath = os.path.relpath(fn, start=repo_root)
     return f"{github_base_url}{relpath}#L{lineno}"
 
 
