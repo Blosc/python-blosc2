@@ -1328,9 +1328,9 @@ def get_chunksize(blocksize, l3_minimum=4 * 2**20, l3_maximum=2**26):
             if isinstance(l2_cache_size, int) and l3_cache_size > l2_cache_size:
                 chunksize = l3_cache_size
         # When computing expressions, it is convenient to keep chunks for all operands
-        # in L3 cache, so let's divide by 5 (4 operands + result is a typical situation
+        # in L3 cache, so let's divide by 4 (3 operands + result is a typical situation
         # for moderately complex expressions)
-        chunksize //= 5
+        chunksize //= 4
 
     # Chunksize should be at least the size of L2
     l2_cache_size = cpu_info.get("l2_cache_size", "Not found")
