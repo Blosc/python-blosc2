@@ -2957,7 +2957,13 @@ class LazyExpr(LazyArray):
 
     def __getitem__(self, item):
         kwargs = {"_getitem": True}
-        return self.compute(item, **kwargs)
+        result = self.compute(item, **kwargs)
+        # This is necessary on some cases where we have a single item
+        # See e.g. examples/ndarray/animated_plot.py
+        if isinstance(item, int) and len(result.shape) > 0 and result.shape[0] == 1:
+            # Remove the first dimension if we have a single item
+            result = result[0]
+        return result
 
     def slice(self, item):
         return self.compute(item)  # should do a slice since _getitem = False
