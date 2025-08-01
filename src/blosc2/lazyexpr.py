@@ -2960,9 +2960,8 @@ class LazyExpr(LazyArray):
         result = self.compute(item, **kwargs)
         # This is necessary on some cases where we have a single item
         # See e.g. examples/ndarray/animated_plot.py
-        if isinstance(item, int) and len(result.shape) > 0 and result.shape[0] == 1:
-            # Remove the first dimension if we have a single item
-            result = result[0]
+        if isinstance(item, int) or (hasattr(item, "__iter__") and any(isinstance(i, int) for i in item)):
+            result = result.squeeze()
         return result
 
     def slice(self, item):
