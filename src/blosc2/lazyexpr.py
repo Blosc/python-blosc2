@@ -2958,7 +2958,7 @@ class LazyExpr(LazyArray):
     def __getitem__(self, item):
         kwargs = {"_getitem": True}
         result = self.compute(item, **kwargs)
-        # This is necessary on some cases where we have a single item
+        # Squeeze single-element dimensions when indexing with integers
         # See e.g. examples/ndarray/animated_plot.py
         if isinstance(item, int) or (hasattr(item, "__iter__") and any(isinstance(i, int) for i in item)):
             result = result.squeeze()
