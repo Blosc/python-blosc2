@@ -26,11 +26,13 @@ class Tree:
     mode : str, optional
         File mode ('r', 'w', 'a'). Default is 'w'.
     cparams : dict or None, optional
-        Compression parameters.
+        Compression parameters for nodes.
+        Default is None, which uses the default Blosc2 parameters.
     dparams : dict or None, optional
-        Decompression parameters.
-    storage : blosc2.NDArray or None, optional
-        Optional existing blosc2 NDArray.
+        Decompression parameters for nodes.
+        Default is None, which uses the default Blosc2 parameters.
+    storage : blosc2.Storage or None, optional
+        Storage properties for the tree store.
 
     Examples
     --------
@@ -48,37 +50,27 @@ class Tree:
         mode: str = "w",
         cparams: dict[str, Any] | None = None,
         dparams: dict[str, Any] | None = None,
-        storage: blosc2.NDArray | None = None,
+        storage: blosc2.Storage | None = None,
     ):
         """
-        Initialize the Tree.
-
-        Parameters
-        ----------
-        urlpath : str or None, optional
-            Path for persistent storage.
-        mode : str, optional
-            File mode ('r', 'w', 'a'). Default is 'w'.
-        cparams : dict or None, optional
-            Compression parameters.
-        dparams : dict or None, optional
-            Decompression parameters.
-        storage : blosc2.NDArray or None, optional
-            Optional existing blosc2 NDArray.
+        See :class:`Tree` for full documentation of parameters.
         """
-        self._cparams = cparams or {}
-        self._dparams = dparams or {}
+        self._cparams = cparams or blosc2.CParams()
+        self._dparams = dparams or blosc2.DParams()
+        self._storage = storage or blosc2.Storage()
 
-        if storage is not None:
-            self._storage = storage
-            self._load_metadata()
-        elif mode in ("r", "a") and urlpath:
-            self._storage = blosc2.open(urlpath, mode=mode)
+        if mode in ("r", "a") and urlpath:
+            self._store = blosc2.open(urlpath, mode=mode)
             self._load_metadata()
         else:
-            initial_data = np.zeros(0, dtype=np.uint8)
-            self._storage = blosc2.asarray(
-                initial_data, urlpath=urlpath, mode=mode, cparams=self._cparams, dparams=self._dparams
+            self._store = blosc2.zeros(
+                0,
+                dtype=np.uint8,
+                urlpath=urlpath,
+                mode=mode,
+                cparams=self._cparams,
+                dparams=self._dparams,
+                storage=storage,
             )
             self._tree_map: dict[str, dict[str, int]] = {}
             self._current_offset = 0
@@ -123,9 +115,9 @@ class Tree:
             Number of bytes needed.
         """
         required_size = self._current_offset + needed_bytes
-        if required_size > self._storage.shape[0]:
-            new_size = max(required_size, int(self._storage.shape[0] * 1.5))
-            self._storage.resize((new_size,))
+        if required_size > self._store.shape[0]:
+            new_size = max(required_size, int(self._store.shape[0] * 1.5))
+            self._store.resize((new_size,))
 
     def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray) -> None:
         """
@@ -150,7 +142,7 @@ class Tree:
         data_len = len(serialized_data)
         self._ensure_capacity(data_len)
         offset = self._current_offset
-        self._storage[offset : offset + data_len] = np.frombuffer(serialized_data, dtype=np.uint8)
+        self._store[offset : offset + data_len] = np.frombuffer(serialized_data, dtype=np.uint8)
         self._tree_map[key] = {"offset": offset, "length": data_len}
         self._current_offset += data_len
         self._save_metadata()
@@ -179,7 +171,7 @@ class Tree:
         node_info = self._tree_map[key]
         offset = node_info["offset"]
         length = node_info["length"]
-        serialized_data = bytes(self._storage[offset : offset + length])
+        serialized_data = bytes(self._store[offset : offset + length])
         return blosc2.ndarray_from_cframe(serialized_data)
 
     def get(self, key: str, default: Any = None) -> blosc2.NDArray | Any:
@@ -301,7 +293,7 @@ class Tree:
         None
         """
         metadata = {"tree_map": self._tree_map, "current_offset": self._current_offset}
-        self._storage.vlmeta["tree_metadata"] = metadata
+        self._store.vlmeta["tree_metadata"] = metadata
 
     def _load_metadata(self) -> None:
         """
@@ -311,8 +303,8 @@ class Tree:
         -------
         None
         """
-        if "tree_metadata" in self._storage.vlmeta:
-            metadata = self._storage.vlmeta["tree_metadata"]
+        if "tree_metadata" in self._store.vlmeta:
+            metadata = self._store.vlmeta["tree_metadata"]
             self._tree_map = metadata["tree_map"]
             self._current_offset = metadata["current_offset"]
         else:
