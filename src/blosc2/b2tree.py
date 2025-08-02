@@ -16,8 +16,9 @@ import blosc2
 
 class Tree:
     """
-    A general tree structure for storing numpy/blosc2 arrays as nodes,
-    backed by a 1D uint8 blosc2 NDArray. Dictionary-like interface.
+    A tree for storing numpy/blosc2 arrays as nodes. Dictionary-like interface.
+
+    It is backed by a 1D uint8 blosc2 NDArray.
 
     Parameters
     ----------
@@ -39,7 +40,7 @@ class Tree:
     >>> tree = Tree(urlpath="example_tree.b2z", mode="w")
     >>> tree["/node1"] = np.array([1, 2, 3])
     >>> tree["/node2"] = np.array([[4, 5], [6, 7]])
-    >>> tree["/node3"] = np.array([8, 9, 10])
+    >>> tree["/node3"] = blosc2.arange(3, dtype="i4", urlpath="external_node3.b2nd", mode="w")
     >>> print(list(tree.keys()))
     ['/node1', '/node2', '/node3']
     """
@@ -72,7 +73,7 @@ class Tree:
                 dparams=self._dparams,
                 storage=storage,
             )
-            self._tree_map: dict[str, dict[str, int]] = {}
+            self._tree_map: dict = {}
             self._current_offset = 0
 
     def _validate_key(self, key: str) -> None:
@@ -136,15 +137,19 @@ class Tree:
             If key is invalid or already exists.
         """
         self._validate_key(key)
-        if isinstance(value, np.ndarray):
-            value = blosc2.asarray(value, cparams=self._cparams, dparams=self._dparams)
-        serialized_data = value.to_cframe()
-        data_len = len(serialized_data)
-        self._ensure_capacity(data_len)
-        offset = self._current_offset
-        self._store[offset : offset + data_len] = np.frombuffer(serialized_data, dtype=np.uint8)
-        self._tree_map[key] = {"offset": offset, "length": data_len}
-        self._current_offset += data_len
+        # External file support
+        if isinstance(value, blosc2.NDArray) and getattr(value, "urlpath", None):
+            self._tree_map[key] = {"urlpath": value.urlpath}
+        else:
+            if isinstance(value, np.ndarray):
+                value = blosc2.asarray(value, cparams=self._cparams, dparams=self._dparams)
+            serialized_data = value.to_cframe()
+            data_len = len(serialized_data)
+            self._ensure_capacity(data_len)
+            offset = self._current_offset
+            self._store[offset : offset + data_len] = np.frombuffer(serialized_data, dtype=np.uint8)
+            self._tree_map[key] = {"offset": offset, "length": data_len, "urlpath": None}
+            self._current_offset += data_len
         self._save_metadata()
 
     def __getitem__(self, key: str) -> blosc2.NDArray:
@@ -169,6 +174,9 @@ class Tree:
         if key not in self._tree_map:
             raise KeyError(f"Key '{key}' not found in the tree.")
         node_info = self._tree_map[key]
+        urlpath = node_info.get("urlpath", None)
+        if urlpath:
+            return blosc2.open(urlpath)
         offset = node_info["offset"]
         length = node_info["length"]
         serialized_data = bytes(self._store[offset : offset + length])
@@ -317,11 +325,14 @@ if __name__ == "__main__":
     tree = Tree(urlpath="example_tree.b2z", mode="w")
     tree["/node1"] = np.array([1, 2, 3])
     tree["/node2"] = np.array([[4, 5], [6, 7]])
-    tree["/node3"] = np.array([8, 9, 10])
+    # Make /node3 an external file
+    arr_external = blosc2.arange(3, dtype="i4", urlpath="external_node3.b2nd", mode="w")
+    tree["/node3"] = arr_external
 
     print("Tree keys:", list(tree.keys()))
     print("Node1 data:", tree["/node1"])
     print("Node2 data:", tree["/node2"])
+    print("Node3 data (external):", tree["/node3"][:])
 
     del tree["/node1"]
     print("After deletion, keys:", list(tree.keys()))
@@ -330,4 +341,6 @@ if __name__ == "__main__":
     tree_read = Tree(urlpath="example_tree.b2z", mode="r")
     print("Read keys:", list(tree_read.keys()))
     for key, value in tree_read.items():
-        print(f"shape of {key}: {value.shape}, dtype: {value.dtype}")
+        print(
+            f"shape of {key}: {value.shape}, dtype: {value.dtype}, urlpath: {getattr(value, 'urlpath', None)}"
+        )

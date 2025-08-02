@@ -262,6 +262,7 @@ from .ndarray import (
     matrix_transpose,
     stack,
 )
+from .b2tree import Tree
 
 from .c2array import c2context, C2Array, URLPath
 
@@ -358,11 +359,17 @@ __all__ = [
     "MIN_HEADER_LENGTH",
     "VERSION_DATE",
     "VERSION_STRING",
+    "C2Array",
     "CParams",
     "DParams",
+    "NDArray",
+    "NDField",
     "SChunk",
     "Storage",
+    "Tree",
+    "URLPath",
     "__version__",
+    "c2context",
     "clib_info",
     "compress",
     "compress2",
