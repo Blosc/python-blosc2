@@ -5,13 +5,15 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
-
+import os.path
 from collections.abc import Iterator
 from typing import Any
 
 import numpy as np
 
 import blosc2
+
+PROFILE = False  # Set to True to enable PROFILE prints in Tree
 
 
 class Tree:
@@ -34,6 +36,8 @@ class Tree:
         Default is None, which uses the default Blosc2 parameters.
     storage : blosc2.Storage or None, optional
         Storage properties for the tree store.
+    initial_size : int, optional
+        Initial size of the backing storage in bytes.
 
     Examples
     --------
@@ -52,10 +56,12 @@ class Tree:
         cparams: dict[str, Any] | None = None,
         dparams: dict[str, Any] | None = None,
         storage: blosc2.Storage | None = None,
+        initial_size: int = 1024 * 1024 * 10,  # Default to 10 MiB
     ):
         """
         See :class:`Tree` for full documentation of parameters.
         """
+        self._urlpath = urlpath
         self._cparams = cparams or blosc2.CParams()
         self._dparams = dparams or blosc2.DParams()
         self._storage = storage or blosc2.Storage()
@@ -65,11 +71,12 @@ class Tree:
             self._load_metadata()
         else:
             self._store = blosc2.zeros(
-                0,
+                initial_size,
                 dtype=np.uint8,
                 urlpath=urlpath,
                 mode=mode,
                 cparams=self._cparams,
+                # cparams=blosc2.CParams(clevel=0),  # use no compression for the backing store
                 dparams=self._dparams,
                 storage=storage,
             )
@@ -140,15 +147,38 @@ class Tree:
         # External file support
         if isinstance(value, blosc2.NDArray) and getattr(value, "urlpath", None):
             self._tree_map[key] = {"urlpath": value.urlpath}
+            if PROFILE:
+                print(
+                    f"3.Current file store size using os.path.getsize: {os.path.getsize(self._urlpath)} bytes"
+                )
+                print(f"tree_map updated with key '{key}': {self._tree_map}")
         else:
             if isinstance(value, np.ndarray):
                 value = blosc2.asarray(value, cparams=self._cparams, dparams=self._dparams)
             serialized_data = value.to_cframe()
             data_len = len(serialized_data)
+            if PROFILE:
+                print(f"Storing key '{key}' with data length {data_len} bytes.")
+                print(
+                    f"-1.Current file store size using os.path.getsize: {os.path.getsize(self._urlpath)} bytes"
+                )
             self._ensure_capacity(data_len)
             offset = self._current_offset
+            if PROFILE:
+                print(
+                    f"0.Current file store size using os.path.getsize: {os.path.getsize(self._urlpath)} bytes"
+                )
             self._store[offset : offset + data_len] = np.frombuffer(serialized_data, dtype=np.uint8)
-            self._tree_map[key] = {"offset": offset, "length": data_len, "urlpath": None}
+            if PROFILE:
+                print(
+                    f"1.Current file store size using os.path.getsize: {os.path.getsize(self._urlpath)} bytes"
+                )
+            self._tree_map[key] = {"offset": offset, "length": data_len}
+            if PROFILE:
+                print(
+                    f"2.Current file store size using os.path.getsize: {os.path.getsize(self._urlpath)} bytes"
+                )
+                print(f"tree_map updated with key '{key}': {self._tree_map}")
             self._current_offset += data_len
         self._save_metadata()
 
@@ -322,7 +352,7 @@ class Tree:
 
 if __name__ == "__main__":
     # Example usage
-    tree = Tree(urlpath="example_tree.b2z", mode="w")
+    tree = Tree(urlpath="example_tree.b2z", mode="w")  # , cparams=blosc2.CParams(clevel=0))
     tree["/node1"] = np.array([1, 2, 3])
     tree["/node2"] = blosc2.ones(2)
     # Make /node3 an external file
@@ -343,4 +373,5 @@ if __name__ == "__main__":
     for key, value in tree_read.items():
         print(
             f"shape of {key}: {value.shape}, dtype: {value.dtype}, urlpath: {getattr(value, 'urlpath', None)}"
+            f"; values: {value[:]}"
         )
