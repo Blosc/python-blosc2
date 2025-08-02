@@ -39,7 +39,7 @@ class Tree:
     --------
     >>> tree = Tree(urlpath="example_tree.b2z", mode="w")
     >>> tree["/node1"] = np.array([1, 2, 3])
-    >>> tree["/node2"] = np.array([[4, 5], [6, 7]])
+    >>> tree["/node2"] = blosc2.ones(2)
     >>> tree["/node3"] = blosc2.arange(3, dtype="i4", urlpath="external_node3.b2nd", mode="w")
     >>> print(list(tree.keys()))
     ['/node1', '/node2', '/node3']
@@ -324,14 +324,14 @@ if __name__ == "__main__":
     # Example usage
     tree = Tree(urlpath="example_tree.b2z", mode="w")
     tree["/node1"] = np.array([1, 2, 3])
-    tree["/node2"] = np.array([[4, 5], [6, 7]])
+    tree["/node2"] = blosc2.ones(2)
     # Make /node3 an external file
-    arr_external = blosc2.arange(3, dtype="i4", urlpath="external_node3.b2nd", mode="w")
+    arr_external = blosc2.arange(3, urlpath="external_node3.b2nd", mode="w")
     tree["/node3"] = arr_external
 
     print("Tree keys:", list(tree.keys()))
-    print("Node1 data:", tree["/node1"])
-    print("Node2 data:", tree["/node2"])
+    print("Node1 data:", tree["/node1"][:])
+    print("Node2 data:", tree["/node2"][:])
     print("Node3 data (external):", tree["/node3"][:])
 
     del tree["/node1"]
