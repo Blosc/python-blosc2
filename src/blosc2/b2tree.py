@@ -12,6 +12,7 @@ from typing import Any
 import numpy as np
 
 import blosc2
+from blosc2.c2array import C2Array
 
 PROFILE = False  # Set to True to enable PROFILE prints in Tree
 
@@ -44,7 +45,7 @@ class Tree:
     >>> tree = Tree(urlpath="example_tree.b2z", mode="w")
     >>> tree["/node1"] = np.array([1, 2, 3])
     >>> tree["/node2"] = blosc2.ones(2)
-    >>> tree["/node3"] = blosc2.arange(3, dtype="i4", urlpath="external_node3.b2nd", mode="w")
+    >>> tree["/node3"] = blosc2.arange(3, dtype="i4", urlpath="local_node3.b2nd", mode="w")
     >>> print(list(tree.keys()))
     ['/node1', '/node2', '/node3']
     """
@@ -127,7 +128,7 @@ class Tree:
             new_size = max(required_size, int(self._store.shape[0] * 1.5))
             self._store.resize((new_size,))
 
-    def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray) -> None:
+    def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray | C2Array) -> None:
         """
         Add a node to the tree.
 
@@ -135,7 +136,7 @@ class Tree:
         ----------
         key : str
             Node key.
-        value : np.ndarray or blosc2.NDArray
+        value : np.ndarray or blosc2.NDArray or blosc2.C2Array
             Array to store.
 
         Raises
@@ -144,12 +145,18 @@ class Tree:
             If key is invalid or already exists.
         """
         self._validate_key(key)
-        # External file support
         if isinstance(value, blosc2.NDArray) and getattr(value, "urlpath", None):
             self._tree_map[key] = {"urlpath": value.urlpath}
             if PROFILE:
                 print(
                     f"3.Current file store size using os.path.getsize: {os.path.getsize(self._urlpath)} bytes"
+                )
+                print(f"tree_map updated with key '{key}': {self._tree_map}")
+        elif isinstance(value, C2Array):
+            self._tree_map[key] = {"urlbase": value.urlbase, "path": value.path}
+            if PROFILE:
+                print(
+                    f"4.Current file store size using os.path.getsize: {os.path.getsize(self._urlpath)} bytes"
                 )
                 print(f"tree_map updated with key '{key}': {self._tree_map}")
         else:
@@ -204,6 +211,10 @@ class Tree:
         if key not in self._tree_map:
             raise KeyError(f"Key '{key}' not found in the tree.")
         node_info = self._tree_map[key]
+        urlbase = node_info.get("urlbase", None)
+        if urlbase:
+            urlpath = blosc2.URLPath(node_info["path"], urlbase=urlbase)
+            return blosc2.open(urlpath, mode="r")
         urlpath = node_info.get("urlpath", None)
         if urlpath:
             return blosc2.open(urlpath)
@@ -355,14 +366,17 @@ if __name__ == "__main__":
     tree = Tree(urlpath="example_tree.b2z", mode="w")  # , cparams=blosc2.CParams(clevel=0))
     tree["/node1"] = np.array([1, 2, 3])
     tree["/node2"] = blosc2.ones(2)
-    # Make /node3 an external file
-    arr_external = blosc2.arange(3, urlpath="external_node3.b2nd", mode="w")
-    tree["/node3"] = arr_external
+    # Make /node3 an local file
+    arr_local = blosc2.arange(3, urlpath="local_node3.b2nd", mode="w")
+    tree["/node3"] = arr_local
+    urlpath = blosc2.URLPath("@public/examples/ds-1d.b2nd", "https://cat2.cloud/demo")
+    arr_remote = blosc2.open(urlpath, mode="r")
+    tree["/node4"] = arr_remote
 
     print("Tree keys:", list(tree.keys()))
     print("Node1 data:", tree["/node1"][:])
     print("Node2 data:", tree["/node2"][:])
-    print("Node3 data (external):", tree["/node3"][:])
+    print("Node3 data (local):", tree["/node3"][:])
 
     del tree["/node1"]
     print("After deletion, keys:", list(tree.keys()))
@@ -372,6 +386,6 @@ if __name__ == "__main__":
     print("Read keys:", list(tree_read.keys()))
     for key, value in tree_read.items():
         print(
-            f"shape of {key}: {value.shape}, dtype: {value.dtype}, urlpath: {getattr(value, 'urlpath', None)}"
-            f"; values: {value[:]}"
+            f"shape of {key}: {value.shape}, dtype: {value.dtype}, map: {tree_read._tree_map[key]}, "
+            f"values: {value[:10] if len(value) > 3 else value[:]}"
         )
