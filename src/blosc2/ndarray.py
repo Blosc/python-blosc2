@@ -1175,6 +1175,21 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """The decompression parameters used by the array."""
         return self.schunk.dparams
 
+    @property
+    def nbytes(self) -> int:
+        """The number of bytes used by the array."""
+        return self.schunk.nbytes
+
+    @property
+    def cbytes(self) -> int:
+        """The number of compressed bytes used by the array."""
+        return self.schunk.cbytes
+
+    @property
+    def cratio(self) -> float:
+        """The compression ratio of the array."""
+        return self.schunk.cratio
+
     # TODO: Uncomment when blosc2.Storage is available
     # @property
     # def storage(self) -> blosc2.Storage:
