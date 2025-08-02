@@ -57,7 +57,7 @@ class Tree:
         cparams: dict[str, Any] | None = None,
         dparams: dict[str, Any] | None = None,
         storage: blosc2.Storage | None = None,
-        initial_size: int = 1024 * 1024 * 10,  # Default to 10 MiB
+        initial_size: int = 1024 * 1024,  # Default to 1 MiB
     ):
         """
         See :class:`Tree` for full documentation of parameters.
