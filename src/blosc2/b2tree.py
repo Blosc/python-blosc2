@@ -46,16 +46,20 @@ class Tree:
     >>> tree["/node1"] = np.array([1, 2, 3])
     >>> tree["/node2"] = blosc2.ones(2)
     >>> tree["/node3"] = blosc2.arange(3, dtype="i4", urlpath="local_node3.b2nd", mode="w")
+    >>> urlpath = blosc2.URLPath("@public/examples/ds-1d.b2nd", "https://cat2.cloud/demo")
+    >>> tree["/node4"] = blosc2.open(urlpath, mode="r")
     >>> print(list(tree.keys()))
-    ['/node1', '/node2', '/node3']
+    ['/node1', '/node2', '/node3', '/node4']
+    >>> print(tree["/node1"][:])
+    [1 2 3]
     """
 
     def __init__(
         self,
         urlpath: str | None = None,
-        mode: str = "w",
-        cparams: dict[str, Any] | None = None,
-        dparams: dict[str, Any] | None = None,
+        mode: str = "a",
+        cparams: blosc2.CParams | None = None,
+        dparams: blosc2.CParams | None = None,
         storage: blosc2.Storage | None = None,
         initial_size: int = 1024 * 1024,  # Default to 1 MiB
     ):
