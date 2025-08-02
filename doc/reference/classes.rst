@@ -16,6 +16,7 @@ Main Classes
     ProxySource
     ProxyNDSource
     SimpleProxy
+    Tree
 
 .. toctree::
     :maxdepth: 1
@@ -29,6 +30,7 @@ Main Classes
     proxysource
     proxyndsource
     simpleproxy
+    tree
 
 Other Classes
 -------------

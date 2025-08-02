@@ -19,9 +19,11 @@ PROFILE = False  # Set to True to enable PROFILE prints in Tree
 
 class Tree:
     """
-    A tree for storing numpy/blosc2 arrays as nodes. Dictionary-like interface.
+    A dictionary-like container for storing NumPy/Blosc2 arrays as nodes.
 
-    It is backed by a 1D uint8 blosc2 NDArray.
+    For nodes that are stored locally or remotely, only references to the
+    arrays are stored, not the arrays themselves. This allows for efficient
+    storage and retrieval of large datasets.
 
     Parameters
     ----------
