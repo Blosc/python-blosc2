@@ -38,7 +38,8 @@ class Tree:
         Decompression parameters for nodes.
         Default is None, which uses the default Blosc2 parameters.
     storage : blosc2.Storage or None, optional
-        Storage properties for the tree store.
+        Storage properties for the tree store.  If passed, it will override
+        the `urlpath` and `mode` parameters.
     initial_size : int, optional
         Initial size of the backing storage in bytes.
 
@@ -63,30 +64,50 @@ class Tree:
         cparams: blosc2.CParams | None = None,
         dparams: blosc2.CParams | None = None,
         storage: blosc2.Storage | None = None,
-        initial_size: int = 1024 * 1024,  # Default to 1 MiB
+        chunksize: int | None = 1024 * 1024,  # Default to 1 MiB
     ):
         """
         See :class:`Tree` for full documentation of parameters.
         """
-        self._urlpath = urlpath
-        self._cparams = cparams or blosc2.CParams()
-        self._dparams = dparams or blosc2.DParams()
-        self._storage = storage or blosc2.Storage()
+        self._schunk_store = True  # put this to False to use an NDArray instead of a SChunk
+        self.urlpath = urlpath
+        self.mode = mode
+        self.cparams = cparams or blosc2.CParams()
+        # self.cparams.nthreads = 1  # for debugging purposes, use only one thread
+        self.dparams = dparams or blosc2.DParams()
+        if storage is None:
+            self.storage = blosc2.Storage(
+                contiguous=True,
+                urlpath=urlpath,
+                mode=mode,
+            )
+        else:
+            self.storage = storage
 
         if mode in ("r", "a") and urlpath:
             self._store = blosc2.open(urlpath, mode=mode)
             self._load_metadata()
         else:
-            self._store = blosc2.zeros(
-                initial_size,
-                dtype=np.uint8,
-                urlpath=urlpath,
-                mode=mode,
-                cparams=self._cparams,
-                # cparams=blosc2.CParams(clevel=0),  # use no compression for the backing store
-                dparams=self._dparams,
-                storage=storage,
-            )
+            _cparams = self.cparams
+            _cparams.typesize = 1  # Ensure typesize is set to 1 for byte storage
+            if self._schunk_store:
+                self._store = blosc2.SChunk(
+                    chunksize=chunksize,
+                    data=None,
+                    cparams=_cparams,
+                    dparams=self.dparams,
+                    storage=self.storage,
+                )
+            else:
+                self._store = blosc2.zeros(
+                    chunksize,
+                    dtype=np.uint8,
+                    urlpath=urlpath,
+                    mode=mode,
+                    cparams=self.cparams,
+                    dparams=self.dparams,
+                    storage=storage,
+                )
             self._tree_map: dict = {}
             self._current_offset = 0
 
@@ -134,7 +155,7 @@ class Tree:
             new_size = max(required_size, int(self._store.shape[0] * 1.5))
             self._store.resize((new_size,))
 
-    def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray | C2Array) -> None:
+    def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray | C2Array) -> None:  # noqa: C901
         """
         Add a node to the tree.
 
@@ -155,41 +176,45 @@ class Tree:
             self._tree_map[key] = {"urlpath": value.urlpath}
             if PROFILE:
                 print(
-                    f"3.Current file store size using os.path.getsize: {os.path.getsize(self._urlpath)} bytes"
+                    f"3.Current file store size using os.path.getsize: {os.path.getsize(self.urlpath)} bytes"
                 )
                 print(f"tree_map updated with key '{key}': {self._tree_map}")
         elif isinstance(value, C2Array):
             self._tree_map[key] = {"urlbase": value.urlbase, "path": value.path}
             if PROFILE:
                 print(
-                    f"4.Current file store size using os.path.getsize: {os.path.getsize(self._urlpath)} bytes"
+                    f"4.Current file store size using os.path.getsize: {os.path.getsize(self.urlpath)} bytes"
                 )
                 print(f"tree_map updated with key '{key}': {self._tree_map}")
         else:
             if isinstance(value, np.ndarray):
-                value = blosc2.asarray(value, cparams=self._cparams, dparams=self._dparams)
+                value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)
             serialized_data = value.to_cframe()
             data_len = len(serialized_data)
             if PROFILE:
                 print(f"Storing key '{key}' with data length {data_len} bytes.")
                 print(
-                    f"-1.Current file store size using os.path.getsize: {os.path.getsize(self._urlpath)} bytes"
+                    f"-1.Current file store size using os.path.getsize: {os.path.getsize(self.urlpath)} bytes"
                 )
-            self._ensure_capacity(data_len)
+            if not self._schunk_store:
+                self._ensure_capacity(data_len)
             offset = self._current_offset
             if PROFILE:
                 print(
-                    f"0.Current file store size using os.path.getsize: {os.path.getsize(self._urlpath)} bytes"
+                    f"0.Current file store size using os.path.getsize: {os.path.getsize(self.urlpath)} bytes"
                 )
-            self._store[offset : offset + data_len] = np.frombuffer(serialized_data, dtype=np.uint8)
+            if self._schunk_store:
+                self._store[offset : offset + data_len] = serialized_data
+            else:
+                self._store[offset : offset + data_len] = np.frombuffer(serialized_data, dtype=np.uint8)
             if PROFILE:
                 print(
-                    f"1.Current file store size using os.path.getsize: {os.path.getsize(self._urlpath)} bytes"
+                    f"1.Current file store size using os.path.getsize: {os.path.getsize(self.urlpath)} bytes"
                 )
             self._tree_map[key] = {"offset": offset, "length": data_len}
             if PROFILE:
                 print(
-                    f"2.Current file store size using os.path.getsize: {os.path.getsize(self._urlpath)} bytes"
+                    f"2.Current file store size using os.path.getsize: {os.path.getsize(self.urlpath)} bytes"
                 )
                 print(f"tree_map updated with key '{key}': {self._tree_map}")
             self._current_offset += data_len
