@@ -15,9 +15,10 @@ from memory_profiler import memory_usage
 def make_arrays(n, min_size, max_size, dtype="i4"):
     sizes = np.linspace(min_size, max_size, n).astype(int)
     arrays = [blosc2.arange(size, dtype=dtype) for size in sizes]
+    # arrays = [np.random.randint(0, 100, size=size, dtype=dtype) for size in sizes]
     # Calculate uncompressed size
     uncompressed_size = sum(arr.nbytes for arr in arrays)
-    print(f"Uncompressed data size: {uncompressed_size / 1e6:.2f} MB")
+    print(f"Uncompressed data size: {uncompressed_size / 1e9:.2f} GB")
     return arrays, sizes, uncompressed_size
 
 def get_file_size(filepath):
@@ -71,12 +72,10 @@ def cleanup_files(tree_path, arr_prefix, n):
             os.remove(arr_path)
 
 if __name__ == "__main__":
-    N = 10
+    N = 100
     min_size = int(1e6)   # 1 MB
-    max_size = int(1e8)   # 100 MB (reduced from 1GB for testing)
+    max_size = int(1e8)   # 100 MB
     arrays, sizes, uncompressed_size = make_arrays(N, min_size, max_size)
-
-    print(f"Total uncompressed size: {uncompressed_size / 1e6:.2f} MB")  # More precise calculation
 
     print("Benchmarking Tree with inner arrays...")
     tree_path_inner = "large_inner_tree.b2z"
@@ -94,7 +93,7 @@ if __name__ == "__main__":
     speedup = t_inner / t_local if t_local > 0 else float('inf')
     mem_ratio = mem_inner / mem_local if mem_local > 0 else float('inf')
     file_ratio = file_size_inner / file_size_local if file_size_local > 0 else float('inf')
-    storage_ratio = file_size_inner / (file_size_local + external_size) if (file_size_local + external_size) > 0 else float('inf')
+    storage_ratio = file_size_inner / (file_size_local + external_size)
     print(f"Time ratio (inner/local): {speedup:.2f}x")
     print(f"Memory ratio (inner/local): {mem_ratio:.2f}x")
     print(f"File size ratio (inner/local tree): {file_ratio:.2f}x")
