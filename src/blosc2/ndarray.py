@@ -1303,6 +1303,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         items += [("chunks", self.chunks)]
         items += [("blocks", self.blocks)]
         items += [("dtype", self.dtype)]
+        items += [("nbytes", self.nbytes)]
+        items += [("cbytes", self.cbytes)]
         items += [("cratio", f"{self.schunk.cratio:.2f}")]
         items += [("cparams", self.schunk.cparams)]
         items += [("dparams", self.schunk.dparams)]
