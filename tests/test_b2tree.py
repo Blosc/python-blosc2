@@ -83,14 +83,12 @@ def test_with_remote(with_external_nodes):
 
 def test_with_compression():
     # Create a tree with compressed data
-    tree = blosc2.Tree(
-        urlpath="test_tree-compr.b2z", mode="w", cparams=blosc2.CParams(codec=blosc2.Codec.BLOSCLZ)
-    )
+    tree = blosc2.Tree(cparams=blosc2.CParams(codec=blosc2.Codec.BLOSCLZ))
     arr = np.arange(1000, dtype=np.int32)
     tree["/compressed_node"] = arr
 
     # Read the tree and check the compressed node
-    tree_read = blosc2.Tree(urlpath="test_tree-compr.b2z", mode="r")
+    tree_read = blosc2.from_cframe(tree.to_cframe())
     assert set(tree_read.keys()) == {"/compressed_node"}
     assert np.all(tree_read["/compressed_node"][:] == arr)
     value = tree_read["/compressed_node"]
