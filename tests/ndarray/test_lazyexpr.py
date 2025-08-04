@@ -1105,13 +1105,13 @@ def test_eval_getitem2():
 def test_eval_slice(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = blosc2.lazyexpr("a1 + a2 - (a3 * a4)", operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4})
-    nres = ne_evaluate("na1 + na2 - (na3 * na4)")[:2]
-    res = expr.slice(slice(0, 2))
+    nres = ne_evaluate("na1 + na2 - (na3 * na4)")
+    res = expr.slice(slice(0, 8, 2))
     assert isinstance(res, blosc2.ndarray.NDArray)
-    np.testing.assert_allclose(res[:], nres)
-    res = expr[:2]
+    np.testing.assert_allclose(res[:], nres[:8:2])
+    res = expr[:8:2]
     assert isinstance(res, np.ndarray)
-    np.testing.assert_allclose(res, nres)
+    np.testing.assert_allclose(res, nres[:8:2])
 
     # string lazy expressions automatically use .slice internally
     expr1 = blosc2.lazyexpr("a1 * a2", operands={"a1": a1, "a2": a2})
