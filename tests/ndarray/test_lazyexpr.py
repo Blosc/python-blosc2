@@ -1457,6 +1457,10 @@ def test_chain_persistentexpressions():
     myle4 = blosc2.open("expr4.b2nd")
     assert (myle4[:] == le4[:]).all()
 
+    # Remove files
+    for f in ["expr1.b2nd", "expr2.b2nd", "expr3.b2nd", "expr4.b2nd", "a.b2nd", "b.b2nd", "c.b2nd"]:
+        blosc2.remove_urlpath(f)
+
 
 @pytest.mark.parametrize(
     "values",
