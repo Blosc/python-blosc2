@@ -17,7 +17,7 @@ import blosc2
 def cleanup_files():
     files = [
         "test_tree.b2z",
-        "local_node3.b2nd",
+        "external_node3.b2nd",
     ]
     yield
     for f in files:
@@ -26,26 +26,26 @@ def cleanup_files():
 
 
 @pytest.fixture
-def with_local_nodes(cleanup_files):
+def with_external_nodes(cleanup_files):
     tree = blosc2.Tree(urlpath="test_tree.b2z", mode="w")
     tree["/node1"] = np.array([1, 2, 3])
-    arr_inner = blosc2.arange(3, dtype=np.int32)
-    arr_inner.vlmeta["description"] = "This is vlmeta for /node2"
-    tree["/node2"] = arr_inner
-    arr_local = blosc2.arange(3, urlpath="local_node3.b2nd", mode="w")
-    arr_local.vlmeta["description"] = "This is vlmeta for /node3"
-    tree["/node3"] = arr_local
+    arr_embedded = blosc2.arange(3, dtype=np.int32)
+    arr_embedded.vlmeta["description"] = "This is vlmeta for /node2"
+    tree["/node2"] = arr_embedded
+    arr_external = blosc2.arange(3, urlpath="external_node3.b2nd", mode="w")
+    arr_external.vlmeta["description"] = "This is vlmeta for /node3"
+    tree["/node3"] = arr_external
     return tree
 
 
-def test_basic(with_local_nodes):
-    tree = with_local_nodes
+def test_basic(with_external_nodes):
+    tree = with_external_nodes
 
     assert set(tree.keys()) == {"/node1", "/node2", "/node3"}
     assert np.all(tree["/node1"][:] == np.array([1, 2, 3]))
     assert np.all(tree["/node2"][:] == np.arange(3))
     assert np.all(tree["/node3"][:] == np.arange(3))
-    assert tree["/node3"].urlpath == "local_node3.b2nd"
+    assert tree["/node3"].urlpath == "external_node3.b2nd"
 
     del tree["/node1"]
     assert "/node1" not in tree
@@ -56,11 +56,11 @@ def test_basic(with_local_nodes):
         assert hasattr(value, "shape")
         assert hasattr(value, "dtype")
         if key == "/node3":
-            assert value.urlpath == "local_node3.b2nd"
+            assert value.urlpath == "external_node3.b2nd"
 
 
-def test_with_remote(with_local_nodes):
-    tree = with_local_nodes
+def test_with_remote(with_external_nodes):
+    tree = with_external_nodes
 
     # Re-open the tree to add a remote node
     tree = blosc2.Tree(urlpath="test_tree.b2z")
@@ -74,7 +74,7 @@ def test_with_remote(with_local_nodes):
         assert hasattr(value, "shape")
         assert hasattr(value, "dtype")
         if key == "/node3":
-            assert value.urlpath == "local_node3.b2nd"
+            assert value.urlpath == "external_node3.b2nd"
         if key == "/node4":
             assert hasattr(value, "urlbase")
             assert value.urlbase == urlpath.urlbase
@@ -113,8 +113,8 @@ def test_with_many_nodes():
         assert np.all(tree_read[f"/node_{i}"][:] == np.full((10,), i, dtype=np.int32))
 
 
-def test_vlmeta_get(with_local_nodes):
-    tree = with_local_nodes
+def test_vlmeta_get(with_external_nodes):
+    tree = with_external_nodes
     # Check that vlmeta is present for the nodes
     node2 = tree["/node2"]
     assert "description" in node2.vlmeta
@@ -131,25 +131,25 @@ def test_vlmeta_get(with_local_nodes):
 
 
 # TODO
-def _test_inner_value_set_raise(with_local_nodes):
-    tree = with_local_nodes
+def _test_embedded_value_set_raise(with_external_nodes):
+    tree = with_external_nodes
 
-    # This should raise an error because value is read-only for inner nodes
+    # This should raise an error because value is read-only for embedded nodes
     node2 = tree["/node2"]
     node2[:] = np.arange(5)
 
 
-def test_local_value_set(with_local_nodes):
-    tree = with_local_nodes
+def test_external_value_set(with_external_nodes):
+    tree = with_external_nodes
 
-    # This should raise an error because value is read-only for inner nodes
+    # This should raise an error because value is read-only for embedded nodes
     node3 = tree["/node3"]
     node3[:] = np.ones(3)
     assert np.all(node3[:] == np.ones(3))
 
 
-def test_vlmeta_set(with_local_nodes):
-    tree = with_local_nodes
+def test_vlmeta_set(with_external_nodes):
+    tree = with_external_nodes
 
     # node2 = tree["/node2"]
     # node2.vlmeta["description"] = "This is node 2 modified"
@@ -170,10 +170,10 @@ def test_vlmeta_set(with_local_nodes):
 
 
 # TODO
-def _test_vlmeta_set_raise(with_local_nodes):
-    tree = with_local_nodes
+def _test_vlmeta_set_raise(with_external_nodes):
+    tree = with_external_nodes
 
-    # This should raise an error because vlmeta is read-only for inner nodes
+    # This should raise an error because vlmeta is read-only for embedded nodes
     node2 = tree["/node2"]
     with pytest.raises(AttributeError):
         node2.vlmeta["description"] = "This is node 2 modified"
