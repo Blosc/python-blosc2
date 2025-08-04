@@ -80,8 +80,6 @@ class Tree:
         if _from_schunk is not None:
             self.cparams = _from_schunk.cparams
             self.dparams = _from_schunk.dparams
-            # Updating the storage is not yet supported; investigate later
-            # self.mode = 'r'
             self.mode = mode
             self._store = _from_schunk
             self._load_metadata()

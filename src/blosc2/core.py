@@ -1789,7 +1789,7 @@ def ndarray_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.NDArr
     return blosc2_ext.ndarray_from_cframe(cframe, copy)
 
 
-def from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.Tree | blosc2.NDArray | blosc2.SChunk:
+def from_cframe(cframe: bytes | str, copy: bool = True) -> blosc2.Tree | blosc2.NDArray | blosc2.SChunk:
     """Create a :ref:`Tree <Tree>`, :ref:`NDArray <NDArray>` or :ref:`SChunk <SChunk>` instance
     from a contiguous frame buffer.
 
@@ -1800,7 +1800,10 @@ def from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.Tree | blosc2
     copy: bool
         Whether to internally make a copy. If `False`,
         the user is responsible for keeping a reference to `cframe`.
-        Default is `False`.
+        Default is `True`, which is safer.  If you need to save
+        time/memory, you can set it to `False`, but then you must
+        ensure that the `cframe` is not garbage collected while the
+        returned object is still in use.
 
     Returns
     -------

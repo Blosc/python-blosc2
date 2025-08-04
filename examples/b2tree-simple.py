@@ -41,9 +41,8 @@ else:
     tree_read = blosc2.from_cframe(tree.to_cframe())
 
 # Add another node to the tree
-# TODO: this crashes with a SIGSEGV
-# tree["/node5"] = np.array([4, 5, 6])
-# print("Node5 data:", tree["/node5"][:])
+tree_read["/node5"] = np.array([4, 5, 6])
+print("Node5 data:", tree_read["/node5"][:])
 
 print("Read keys:", list(tree_read.keys()))
 for key, value in tree_read.items():

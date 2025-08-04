@@ -208,7 +208,8 @@ def test_to_cframe_append(with_external_nodes):
     # Deserialize back
     new_tree = blosc2.from_cframe(cframe_data)
 
-    # Appendin a new node to the new tree is not yet supported
-    # This should raise an error because appending is not supported
-    with pytest.raises(ValueError):
-        new_tree["/node2"] = np.arange(3)
+    # Add a new node to the deserialized tree
+    new_tree["/node4"] = np.arange(3)
+    assert np.all(new_tree["/node4"][:] == np.arange(3))
+    new_tree["/node5"] = np.arange(4, 7)
+    assert np.all(new_tree["/node5"][:] == np.arange(4, 7))
