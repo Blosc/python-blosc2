@@ -671,3 +671,6 @@ def test_fields_indexing():
     gotitem = expr[0]  # gives an error
     np.testing.assert_array_equal(sliced[()], gotitem)
     np.testing.assert_array_equal(gotitem, temp[0])
+
+    # Remove file
+    blosc2.remove_urlpath("sa-1M.b2nd")
