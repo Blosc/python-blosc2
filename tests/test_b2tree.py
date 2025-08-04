@@ -16,7 +16,7 @@ import blosc2
 @pytest.fixture
 def cleanup_files():
     files = [
-        "test_tree.b2z",
+        "test_tree.b2t",
         "external_node3.b2nd",
     ]
     yield
@@ -27,7 +27,7 @@ def cleanup_files():
 
 @pytest.fixture
 def with_external_nodes(cleanup_files):
-    tree = blosc2.Tree(urlpath="test_tree.b2z", mode="w")
+    tree = blosc2.Tree(urlpath="test_tree.b2t", mode="w")
     tree["/node1"] = np.array([1, 2, 3])
     arr_embedded = blosc2.arange(3, dtype=np.int32)
     arr_embedded.vlmeta["description"] = "This is vlmeta for /node2"
@@ -50,7 +50,7 @@ def test_basic(with_external_nodes):
     del tree["/node1"]
     assert "/node1" not in tree
 
-    tree_read = blosc2.Tree(urlpath="test_tree.b2z", mode="r")
+    tree_read = blosc2.Tree(urlpath="test_tree.b2t", mode="r")
     assert set(tree_read.keys()) == {"/node2", "/node3"}
     for key, value in tree_read.items():
         assert hasattr(value, "shape")
@@ -63,12 +63,12 @@ def test_with_remote(with_external_nodes):
     tree = with_external_nodes
 
     # Re-open the tree to add a remote node
-    tree = blosc2.Tree(urlpath="test_tree.b2z")
+    tree = blosc2.Tree(urlpath="test_tree.b2t")
     urlpath = blosc2.URLPath("@public/examples/ds-1d.b2nd", "https://cat2.cloud/demo/")
     arr_remote = blosc2.open(urlpath, mode="r")
     tree["/node4"] = arr_remote
 
-    tree_read = blosc2.Tree(urlpath="test_tree.b2z", mode="r")
+    tree_read = blosc2.Tree(urlpath="test_tree.b2t", mode="r")
     assert set(tree_read.keys()) == {"/node1", "/node2", "/node3", "/node4"}
     for key, value in tree_read.items():
         assert hasattr(value, "shape")
@@ -96,14 +96,11 @@ def test_with_compression():
     value = tree_read["/compressed_node"]
     assert value.cparams.codec == blosc2.Codec.BLOSCLZ
 
-    # Remove the test file after checking
-    os.remove("test_tree-compr.b2z")
-
 
 def test_with_many_nodes():
     # Create a tree with many nodes
     N = 200
-    tree = blosc2.Tree(urlpath="test_tree.b2z", mode="w")
+    tree = blosc2.Tree(urlpath="test_tree.b2t", mode="w")
     for i in range(N):
         tree[f"/node_{i}"] = blosc2.full(
             shape=(10,),
@@ -112,7 +109,7 @@ def test_with_many_nodes():
         )
 
     # Read the tree and check the nodes
-    tree_read = blosc2.Tree(urlpath="test_tree.b2z", mode="r")
+    tree_read = blosc2.Tree(urlpath="test_tree.b2t", mode="r")
     assert len(tree_read) == N
     for i in range(N):
         assert np.all(tree_read[f"/node_{i}"][:] == np.full((10,), i, dtype=np.int32))
@@ -169,7 +166,7 @@ def test_vlmeta_set(with_external_nodes):
     assert node3.vlmeta["description"] == "This is node 3 modified"
 
     # Check that vlmeta is preserved after writing and reading
-    tree_read = blosc2.Tree(urlpath="test_tree.b2z", mode="r")
+    tree_read = blosc2.Tree(urlpath="test_tree.b2t", mode="r")
     node3 = tree["/node3"]
     assert node3.vlmeta["description"] == "This is node 3 modified"
 

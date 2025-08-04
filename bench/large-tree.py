@@ -96,11 +96,11 @@ if __name__ == "__main__":
     arrays, sizes, uncompressed_size = make_arrays(N, min_size, max_size)
 
     print("Benchmarking Tree with embedded arrays...")
-    tree_path_embedded = "large_embedded_tree.b2z"
+    tree_path_embedded = "large_embedded_tree.b2t"
     t_embedded, mem_embedded, file_size_embedded = run_embedded_tree(arrays, sizes, tree_path_embedded, uncompressed_size)
 
     print("Benchmarking Tree with external arrays...")
-    tree_path_external = "large_external_tree.b2z"
+    tree_path_external = "large_external_tree.b2t"
     arr_prefix = "large_external"
     t_external, mem_external, file_size_external, external_size = run_external_tree(arrays, sizes, tree_path_external, arr_prefix, uncompressed_size)
 

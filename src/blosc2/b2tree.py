@@ -46,7 +46,7 @@ class Tree:
 
     Examples
     --------
-    >>> tree = Tree(urlpath="example_tree.b2z", mode="w")
+    >>> tree = Tree(urlpath="example_tree.b2t", mode="w")
     >>> tree["/node1"] = np.array([1, 2, 3])
     >>> tree["/node2"] = blosc2.ones(2)
     >>> tree["/node3"] = blosc2.arange(3, dtype="i4", urlpath="external_node3.b2nd", mode="w")
@@ -448,7 +448,7 @@ if __name__ == "__main__":
     # Example usage
     persistent = False
     if persistent:
-        tree = Tree(urlpath="example_tree.b2z", mode="w")  # , cparams=blosc2.CParams(clevel=0))
+        tree = Tree(urlpath="example_tree.b2t", mode="w")  # , cparams=blosc2.CParams(clevel=0))
     else:
         tree = Tree()  # , cparams=blosc2.CParams(clevel=0))
     # import pdb;  pdb.set_trace()
@@ -471,7 +471,7 @@ if __name__ == "__main__":
 
     # Reading back the tree
     if persistent:
-        tree_read = Tree(urlpath="example_tree.b2z", mode="r")
+        tree_read = Tree(urlpath="example_tree.b2t", mode="r")
     else:
         tree_read = blosc2.from_cframe(tree.to_cframe())
 
