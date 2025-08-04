@@ -12,10 +12,11 @@ import blosc2
 from blosc2.b2tree import Tree
 from memory_profiler import memory_usage
 
-def make_arrays(n, min_size, max_size, dtype="i4"):
+def make_arrays(n, min_size, max_size, dtype="f8"):
     sizes = np.linspace(min_size, max_size, n).astype(int)
-    arrays = [blosc2.arange(size, dtype=dtype) for size in sizes]
-    # arrays = [np.random.randint(0, 100, size=size, dtype=dtype) for size in sizes]
+    #arrays = [blosc2.arange(size, dtype=dtype) for size in sizes]
+    arrays = [blosc2.linspace(0, 1, size, dtype=dtype) for size in sizes]
+    #arrays = [np.random.randint(0, 100, size=size, dtype=dtype) for size in sizes]
     # Calculate uncompressed size
     uncompressed_size = sum(arr.nbytes for arr in arrays)
     print(f"Uncompressed data size: {uncompressed_size / 1e9:.2f} GB")

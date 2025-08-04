@@ -69,6 +69,9 @@ class Tree:
         """
         See :class:`Tree` for full documentation of parameters.
         """
+        # For some reason, the SChunk store cannot achieve the same compression ratio as the NDArray store,
+        # although it is more efficient in terms of CPU usage.
+        # Let's use the SChunk store by default and continue experimenting.
         self._schunk_store = True  # put this to False to use an NDArray instead of a SChunk
         self.urlpath = urlpath
         self.mode = mode
