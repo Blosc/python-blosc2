@@ -19,6 +19,7 @@ from msgpack import packb, unpackb
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
+from blosc2.info import InfoReporter
 
 
 class vlmeta(MutableMapping, blosc2_ext.vlmeta):
@@ -445,6 +446,48 @@ class SChunk(blosc2_ext.SChunk):
         Whether the `SChunk` is stored contiguously or sparsely.
         """
         return super().contiguous
+
+    @property
+    def info(self) -> InfoReporter:
+        """
+        Print information about this schunk.
+
+        Examples
+        --------
+        >>> schunk = blosc2.SChunk(data=b"a large, repeated string" * 1000)
+        >>> schunk.info
+        type      : SChunk
+        chunksize : 24000
+        blocksize : 0
+        typesize  : 1
+        nbytes    : 24000
+        cbytes    : 82
+        cratio    : 292.68
+        cparams   : CParams(codec=<Codec.ZSTD: 5>, codec_meta=0, clevel=1, use_dict=False, typesize=1,
+                  : nthreads=8, blocksize=0, splitmode=<SplitMode.AUTO_SPLIT: 3>,
+                  : filters=[<Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>,
+                  : <Filter.NOFILTER: 0>, <Filter.NOFILTER: 0>, <Filter.SHUFFLE: 1>], filters_meta=[0,
+                  : 0, 0, 0, 0, 0], tuner=<Tuner.STUNE: 0>)
+        dparams   : DParams(nthreads=8)
+        """
+        return InfoReporter(self)
+
+    @property
+    def info_items(self) -> list:
+        """A list of tuples with the information about this array.
+        Each tuple contains the name of the attribute and its value.
+        """
+        items = []
+        items += [("type", f"{self.__class__.__name__}")]
+        items += [("chunksize", self.chunksize)]
+        items += [("blocksize", self.blocksize)]
+        items += [("typesize", self.typesize)]
+        items += [("nbytes", self.nbytes)]
+        items += [("cbytes", self.cbytes)]
+        items += [("cratio", f"{self.cratio:.2f}")]
+        items += [("cparams", self.cparams)]
+        items += [("dparams", self.dparams)]
+        return items
 
     def append_data(self, data: object) -> int:
         """Append a data buffer to the SChunk.
