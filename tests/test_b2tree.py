@@ -83,16 +83,21 @@ def test_with_remote(with_external_nodes):
 
 def test_with_compression():
     # Create a tree with compressed data
-    tree = blosc2.Tree(urlpath="test_tree.b2z", mode="w", cparams=blosc2.CParams(codec=blosc2.Codec.BLOSCLZ))
+    tree = blosc2.Tree(
+        urlpath="test_tree-compr.b2z", mode="w", cparams=blosc2.CParams(codec=blosc2.Codec.BLOSCLZ)
+    )
     arr = np.arange(1000, dtype=np.int32)
     tree["/compressed_node"] = arr
 
     # Read the tree and check the compressed node
-    tree_read = blosc2.Tree(urlpath="test_tree.b2z", mode="r")
+    tree_read = blosc2.Tree(urlpath="test_tree-compr.b2z", mode="r")
     assert set(tree_read.keys()) == {"/compressed_node"}
     assert np.all(tree_read["/compressed_node"][:] == arr)
     value = tree_read["/compressed_node"]
     assert value.cparams.codec == blosc2.Codec.BLOSCLZ
+
+    # Remove the test file after checking
+    os.remove("test_tree-compr.b2z")
 
 
 def test_with_many_nodes():
@@ -177,3 +182,33 @@ def _test_vlmeta_set_raise(with_external_nodes):
     node2 = tree["/node2"]
     with pytest.raises(AttributeError):
         node2.vlmeta["description"] = "This is node 2 modified"
+
+
+def test_to_cframe(with_external_nodes):
+    tree = with_external_nodes
+
+    # Convert tree to a cframe
+    cframe_data = tree.to_cframe()
+
+    # Check the type and content of the cframe data
+    assert isinstance(cframe_data, bytes)
+    assert len(cframe_data) > 0
+
+    # Deserialize back
+    deserialized_tree = blosc2.from_cframe(cframe_data)
+    assert np.all(deserialized_tree["/node2"][:] == np.arange(3))
+
+
+def test_to_cframe_append(with_external_nodes):
+    tree = with_external_nodes
+
+    # Convert tree to a cframe
+    cframe_data = tree.to_cframe()
+
+    # Deserialize back
+    new_tree = blosc2.from_cframe(cframe_data)
+
+    # Appendin a new node to the new tree is not yet supported
+    # This should raise an error because appending is not supported
+    with pytest.raises(ValueError):
+        new_tree["/node2"] = np.arange(3)

@@ -13,6 +13,7 @@ import numpy as np
 
 import blosc2
 from blosc2.c2array import C2Array
+from blosc2.schunk import SChunk
 
 PROFILE = False  # Set to True to enable PROFILE prints in Tree
 
@@ -64,20 +65,35 @@ class Tree:
         cparams: blosc2.CParams | None = None,
         dparams: blosc2.CParams | None = None,
         storage: blosc2.Storage | None = None,
-        chunksize: int | None = 1024 * 1024,  # Default to 1 MiB
+        chunksize: int | None = 1024 * 1024,
+        _from_schunk: SChunk | None = None,  # for internal use only
     ):
         """
         See :class:`Tree` for full documentation of parameters.
         """
+
         # For some reason, the SChunk store cannot achieve the same compression ratio as the NDArray store,
         # although it is more efficient in terms of CPU usage.
         # Let's use the SChunk store by default and continue experimenting.
         self._schunk_store = True  # put this to False to use an NDArray instead of a SChunk
+
+        if _from_schunk is not None:
+            self.cparams = _from_schunk.cparams
+            self.dparams = _from_schunk.dparams
+            # Updating the storage is not yet supported; investigate later
+            # self.mode = 'r'
+            self.mode = mode
+            self._store = _from_schunk
+            self._load_metadata()
+            return
+
         self.urlpath = urlpath
+        """Path for persistent storage. If None, the tree will not be saved to disk."""
         self.mode = mode
         self.cparams = cparams or blosc2.CParams()
         # self.cparams.nthreads = 1  # for debugging purposes, use only one thread
         self.dparams = dparams or blosc2.DParams()
+        # self.dparams.nthreads = 1  # for debugging purposes, use only one thread
         if storage is None:
             self.storage = blosc2.Storage(
                 contiguous=True,
@@ -90,29 +106,31 @@ class Tree:
         if mode in ("r", "a") and urlpath:
             self._store = blosc2.open(urlpath, mode=mode)
             self._load_metadata()
+            return
+
+        _cparams = self.cparams
+        _cparams.typesize = 1  # ensure typesize is set to 1 for byte storage
+        _storage = self.storage
+        # Mark this storage as a b2tree object
+        _storage.meta = {"b2tree": {"version": 1}}
+        if self._schunk_store:
+            self._store = blosc2.SChunk(
+                chunksize=chunksize,
+                data=None,
+                cparams=_cparams,
+                dparams=self.dparams,
+                storage=_storage,
+            )
         else:
-            _cparams = self.cparams
-            _cparams.typesize = 1  # Ensure typesize is set to 1 for byte storage
-            if self._schunk_store:
-                self._store = blosc2.SChunk(
-                    chunksize=chunksize,
-                    data=None,
-                    cparams=_cparams,
-                    dparams=self.dparams,
-                    storage=self.storage,
-                )
-            else:
-                self._store = blosc2.zeros(
-                    chunksize,
-                    dtype=np.uint8,
-                    urlpath=urlpath,
-                    mode=mode,
-                    cparams=self.cparams,
-                    dparams=self.dparams,
-                    storage=storage,
-                )
-            self._tree_map: dict = {}
-            self._current_offset = 0
+            self._store = blosc2.zeros(
+                chunksize,
+                dtype=np.uint8,
+                cparams=_cparams,
+                dparams=self.dparams,
+                storage=_storage,
+            )
+        self._tree_map: dict = {}
+        self._current_offset = 0
 
     def _validate_key(self, key: str) -> None:
         """
@@ -174,6 +192,8 @@ class Tree:
         ValueError
             If key is invalid or already exists.
         """
+        if self.mode == "r":
+            raise ValueError("Cannot set items in read-only mode.")
         self._validate_key(key)
         if isinstance(value, blosc2.NDArray) and getattr(value, "urlpath", None):
             self._tree_map[key] = {"urlpath": value.urlpath}
@@ -394,10 +414,46 @@ class Tree:
             self._tree_map = {}
             self._current_offset = 0
 
+    def to_cframe(self) -> bytes:
+        """
+        Serialize the tree to a CFrame format.
+
+        Returns
+        -------
+        cframe : bytes
+            Serialized CFrame representation of the tree.
+        """
+        return self._store.to_cframe()
+
+
+def tree_from_cframe(cframe: bytes, copy: bool = False) -> Tree:
+    """
+    Deserialize a CFrame to a Tree object.
+
+    Parameters
+    ----------
+    cframe : bytes
+        CFrame data to deserialize.
+    copy : bool, optional
+        If True, copy the data. Default is False.
+
+    Returns
+    -------
+    tree : Tree
+        The deserialized Tree object.
+    """
+    schunk = blosc2.schunk_from_cframe(cframe, copy=copy)
+    return Tree(_from_schunk=schunk)
+
 
 if __name__ == "__main__":
     # Example usage
-    tree = Tree(urlpath="example_tree.b2z", mode="w")  # , cparams=blosc2.CParams(clevel=0))
+    persistent = False
+    if persistent:
+        tree = Tree(urlpath="example_tree.b2z", mode="w")  # , cparams=blosc2.CParams(clevel=0))
+    else:
+        tree = Tree()  # , cparams=blosc2.CParams(clevel=0))
+    # import pdb;  pdb.set_trace()
     tree["/node1"] = np.array([1, 2, 3])
     tree["/node2"] = blosc2.ones(2)
     # Make /node3 an external file
@@ -416,7 +472,11 @@ if __name__ == "__main__":
     print("After deletion, keys:", list(tree.keys()))
 
     # Reading back the tree
-    tree_read = Tree(urlpath="example_tree.b2z", mode="r")
+    if persistent:
+        tree_read = Tree(urlpath="example_tree.b2z", mode="r")
+    else:
+        tree_read = blosc2.from_cframe(tree.to_cframe())
+
     print("Read keys:", list(tree_read.keys()))
     for key, value in tree_read.items():
         print(

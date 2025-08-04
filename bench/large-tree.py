@@ -117,5 +117,5 @@ if __name__ == "__main__":
     print(f"File size ratio (embedded/external tree): {file_ratio:.2f}x")
     print(f"Storage efficiency (embedded vs total external): {storage_ratio:.2f}x")
 
-    cleanup_files(tree_path_embedded, arr_prefix, N)
-    cleanup_files(tree_path_external, arr_prefix, N)
+    #cleanup_files(tree_path_embedded, arr_prefix, N)
+    #cleanup_files(tree_path_external, arr_prefix, N)

@@ -24,9 +24,10 @@ For nodes that are stored externally or remotely, only references to the arrays 
         __len__
         __iter__
 
-    Constructor
-    -----------
+    Constructors
+    ------------
     .. automethod:: __init__
+    .. autofunction:: tree_from_cframe
 
     Dictionary Interface
     -------------------
@@ -43,3 +44,4 @@ For nodes that are stored externally or remotely, only references to the arrays 
     Utility Methods
     ---------------
     .. automethod:: get
+    .. automethod:: to_cframe
