@@ -36,28 +36,28 @@ def check_arrays(tree_path, arrays, prefix="node"):
         if not np.allclose(arr, stored_arr):
             raise ValueError(f"Array mismatch at {prefix}{i}")
 
-def run_inner_tree(arrays, sizes, tree_path, uncompressed_size, check=False):
-    def inner_process():
+def run_embedded_tree(arrays, sizes, tree_path, uncompressed_size, check=False):
+    def embedded_process():
         tree = Tree(urlpath=tree_path, mode="w")
         for i, arr in enumerate(arrays):
             tree[f"/node{i}"] = arr
         return tree
 
     t0 = time.time()
-    mem_usage = memory_usage((inner_process, ()), interval=0.1)
+    mem_usage = memory_usage((embedded_process, ()), interval=0.1)
     t1 = time.time()
     peak_mem = max(mem_usage) - min(mem_usage)
     file_size = get_file_size(tree_path)
     compression_ratio = uncompressed_size / (file_size * 1e6) if file_size > 0 else 0
-    print(f"[Inner] Time: {t1-t0:.2f}s, Memory: {peak_mem:.2f} MB, File size: {file_size:.2f} MB, Compression: {compression_ratio:.1f}x")
+    print(f"[Embedded] Time: {t1-t0:.2f}s, Memory: {peak_mem:.2f} MB, File size: {file_size:.2f} MB, Compression: {compression_ratio:.1f}x")
 
     if check:
         check_arrays(tree_path, arrays, prefix="node")
 
     return t1-t0, peak_mem, file_size
 
-def run_local_tree(arrays, sizes, tree_path, arr_prefix, uncompressed_size, check=False):
-    def local_process():
+def run_external_tree(arrays, sizes, tree_path, arr_prefix, uncompressed_size, check=False):
+    def external_process():
         tree = Tree(urlpath=tree_path, mode="w")
         for i, arr in enumerate(arrays):
             arr_path = f"{arr_prefix}_node{i}.b2nd"
@@ -66,14 +66,14 @@ def run_local_tree(arrays, sizes, tree_path, arr_prefix, uncompressed_size, chec
         return tree
 
     t0 = time.time()
-    mem_usage = memory_usage((local_process, ()), interval=0.1)
+    mem_usage = memory_usage((external_process, ()), interval=0.1)
     t1 = time.time()
     peak_mem = max(mem_usage) - min(mem_usage)
     file_size = get_file_size(tree_path)
     total_external_size = sum(get_file_size(f"{arr_prefix}_node{i}.b2nd") for i in range(len(arrays)))
     total_size_mb = (file_size + total_external_size)
     compression_ratio = uncompressed_size / (total_size_mb * 1e6) if total_size_mb > 0 else 0
-    print(f"[Local] Time: {t1-t0:.2f}s, Memory: {peak_mem:.2f} MB, Tree file size: {file_size:.2f} MB, External files size: {total_external_size:.2f} MB, Total: {total_size_mb:.2f} MB, Compression: {compression_ratio:.1f}x")
+    print(f"[External] Time: {t1-t0:.2f}s, Memory: {peak_mem:.2f} MB, Tree file size: {file_size:.2f} MB, External files size: {total_external_size:.2f} MB, Total: {total_size_mb:.2f} MB, Compression: {compression_ratio:.1f}x")
 
     if check:
         check_arrays(tree_path, arrays, prefix="node")
@@ -95,27 +95,27 @@ if __name__ == "__main__":
     print(f"Creating {N} arrays with sizes ranging from {min_size / 1e6:.2f} to {max_size / 1e6:.2f} MB...")
     arrays, sizes, uncompressed_size = make_arrays(N, min_size, max_size)
 
-    print("Benchmarking Tree with inner arrays...")
-    tree_path_inner = "large_inner_tree.b2z"
-    t_inner, mem_inner, file_size_inner = run_inner_tree(arrays, sizes, tree_path_inner, uncompressed_size)
+    print("Benchmarking Tree with embedded arrays...")
+    tree_path_embedded = "large_embedded_tree.b2z"
+    t_embedded, mem_embedded, file_size_embedded = run_embedded_tree(arrays, sizes, tree_path_embedded, uncompressed_size)
 
-    print("Benchmarking Tree with local arrays...")
-    tree_path_local = "large_local_tree.b2z"
-    arr_prefix = "large_local"
-    t_local, mem_local, file_size_local, external_size = run_local_tree(arrays, sizes, tree_path_local, arr_prefix, uncompressed_size)
+    print("Benchmarking Tree with external arrays...")
+    tree_path_external = "large_external_tree.b2z"
+    arr_prefix = "large_external"
+    t_external, mem_external, file_size_external, external_size = run_external_tree(arrays, sizes, tree_path_external, arr_prefix, uncompressed_size)
 
     print("\nSummary:")
-    print(f"Inner arrays:   Time = {t_inner:.2f}s, Memory = {mem_inner:.2f} MB, File size = {file_size_inner:.2f} MB")
-    print(f"Local arrays:   Time = {t_local:.2f}s, Memory = {mem_local:.2f} MB, Tree file size = {file_size_local:.2f} MB, External files size = {external_size:.2f} MB")
+    print(f"Embedded arrays:   Time = {t_embedded:.2f}s, Memory = {mem_embedded:.2f} MB, File size = {file_size_embedded:.2f} MB")
+    print(f"External arrays:   Time = {t_external:.2f}s, Memory = {mem_external:.2f} MB, Tree file size = {file_size_external:.2f} MB, External files size = {external_size:.2f} MB")
 
-    speedup = t_inner / t_local if t_local > 0 else float('inf')
-    mem_ratio = mem_inner / mem_local if mem_local > 0 else float('inf')
-    file_ratio = file_size_inner / file_size_local if file_size_local > 0 else float('inf')
-    storage_ratio = file_size_inner / (file_size_local + external_size)
-    print(f"Time ratio (inner/local): {speedup:.2f}x")
-    print(f"Memory ratio (inner/local): {mem_ratio:.2f}x")
-    print(f"File size ratio (inner/local tree): {file_ratio:.2f}x")
-    print(f"Storage efficiency (inner vs total local): {storage_ratio:.2f}x")
+    speedup = t_embedded / t_external if t_external > 0 else float('inf')
+    mem_ratio = mem_embedded / mem_external if mem_external > 0 else float('inf')
+    file_ratio = file_size_embedded / file_size_external if file_size_external > 0 else float('inf')
+    storage_ratio = file_size_embedded / (file_size_external + external_size)
+    print(f"Time ratio (embedded/external): {speedup:.2f}x")
+    print(f"Memory ratio (embedded/external): {mem_ratio:.2f}x")
+    print(f"File size ratio (embedded/external tree): {file_ratio:.2f}x")
+    print(f"Storage efficiency (embedded vs total external): {storage_ratio:.2f}x")
 
-    cleanup_files(tree_path_inner, arr_prefix, N)
-    cleanup_files(tree_path_local, arr_prefix, N)
+    cleanup_files(tree_path_embedded, arr_prefix, N)
+    cleanup_files(tree_path_external, arr_prefix, N)

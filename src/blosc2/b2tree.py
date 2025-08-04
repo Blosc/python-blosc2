@@ -21,7 +21,7 @@ class Tree:
     """
     A dictionary-like container for storing NumPy/Blosc2 arrays as nodes.
 
-    For nodes that are stored locally or remotely, only references to the
+    For nodes that are stored externally or remotely, only references to the
     arrays are stored, not the arrays themselves. This allows for efficient
     storage and retrieval of large datasets.
 
@@ -48,7 +48,7 @@ class Tree:
     >>> tree = Tree(urlpath="example_tree.b2z", mode="w")
     >>> tree["/node1"] = np.array([1, 2, 3])
     >>> tree["/node2"] = blosc2.ones(2)
-    >>> tree["/node3"] = blosc2.arange(3, dtype="i4", urlpath="local_node3.b2nd", mode="w")
+    >>> tree["/node3"] = blosc2.arange(3, dtype="i4", urlpath="external_node3.b2nd", mode="w")
     >>> urlpath = blosc2.URLPath("@public/examples/ds-1d.b2nd", "https://cat2.cloud/demo")
     >>> tree["/node4"] = blosc2.open(urlpath, mode="r")
     >>> print(list(tree.keys()))
@@ -400,9 +400,9 @@ if __name__ == "__main__":
     tree = Tree(urlpath="example_tree.b2z", mode="w")  # , cparams=blosc2.CParams(clevel=0))
     tree["/node1"] = np.array([1, 2, 3])
     tree["/node2"] = blosc2.ones(2)
-    # Make /node3 an local file
-    arr_local = blosc2.arange(3, urlpath="local_node3.b2nd", mode="w")
-    tree["/node3"] = arr_local
+    # Make /node3 an external file
+    arr_external = blosc2.arange(3, urlpath="external_node3.b2nd", mode="w")
+    tree["/node3"] = arr_external
     urlpath = blosc2.URLPath("@public/examples/ds-1d.b2nd", "https://cat2.cloud/demo")
     arr_remote = blosc2.open(urlpath, mode="r")
     tree["/node4"] = arr_remote
@@ -410,7 +410,7 @@ if __name__ == "__main__":
     print("Tree keys:", list(tree.keys()))
     print("Node1 data:", tree["/node1"][:])
     print("Node2 data:", tree["/node2"][:])
-    print("Node3 data (local):", tree["/node3"][:])
+    print("Node3 data (external):", tree["/node3"][:])
 
     del tree["/node1"]
     print("After deletion, keys:", list(tree.keys()))

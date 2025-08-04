@@ -3,9 +3,9 @@
 Tree
 ====
 
-A dictionary-like container for storing NumPy, Blosc2 (NDArray, either in memory or in local files) and remote (C2Array) arrays as nodes.
+A dictionary-like container for storing NumPy, Blosc2 (NDArray, either in memory or in external files) and remote (C2Array) arrays as nodes.
 
-For nodes that are stored locally or remotely, only references to the arrays are stored, not the arrays themselves. This allows for efficient storage and retrieval of large datasets.
+For nodes that are stored externally or remotely, only references to the arrays are stored, not the arrays themselves. This allows for efficient storage and retrieval of large datasets.
 
 .. currentmodule:: blosc2
 
