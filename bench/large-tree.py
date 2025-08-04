@@ -28,7 +28,15 @@ def get_file_size(filepath):
         return os.path.getsize(filepath) / 1e6
     return 0
 
-def run_inner_tree(arrays, sizes, tree_path, uncompressed_size):
+def check_arrays(tree_path, arrays, prefix="node"):
+    print("Checking stored arrays...")
+    tree = Tree(urlpath=tree_path, mode="r")
+    for i, arr in enumerate(arrays):
+        stored_arr = tree[f"/{prefix}{i}"][:]
+        if not np.allclose(arr, stored_arr):
+            raise ValueError(f"Array mismatch at {prefix}{i}")
+
+def run_inner_tree(arrays, sizes, tree_path, uncompressed_size, check=False):
     def inner_process():
         tree = Tree(urlpath=tree_path, mode="w")
         for i, arr in enumerate(arrays):
@@ -42,9 +50,13 @@ def run_inner_tree(arrays, sizes, tree_path, uncompressed_size):
     file_size = get_file_size(tree_path)
     compression_ratio = uncompressed_size / (file_size * 1e6) if file_size > 0 else 0
     print(f"[Inner] Time: {t1-t0:.2f}s, Memory: {peak_mem:.2f} MB, File size: {file_size:.2f} MB, Compression: {compression_ratio:.1f}x")
+
+    if check:
+        check_arrays(tree_path, arrays, prefix="node")
+
     return t1-t0, peak_mem, file_size
 
-def run_local_tree(arrays, sizes, tree_path, arr_prefix, uncompressed_size):
+def run_local_tree(arrays, sizes, tree_path, arr_prefix, uncompressed_size, check=False):
     def local_process():
         tree = Tree(urlpath=tree_path, mode="w")
         for i, arr in enumerate(arrays):
@@ -62,6 +74,10 @@ def run_local_tree(arrays, sizes, tree_path, arr_prefix, uncompressed_size):
     total_size_mb = (file_size + total_external_size)
     compression_ratio = uncompressed_size / (total_size_mb * 1e6) if total_size_mb > 0 else 0
     print(f"[Local] Time: {t1-t0:.2f}s, Memory: {peak_mem:.2f} MB, Tree file size: {file_size:.2f} MB, External files size: {total_external_size:.2f} MB, Total: {total_size_mb:.2f} MB, Compression: {compression_ratio:.1f}x")
+
+    if check:
+        check_arrays(tree_path, arrays, prefix="node")
+
     return t1-t0, peak_mem, file_size, total_external_size
 
 def cleanup_files(tree_path, arr_prefix, n):
@@ -73,9 +89,10 @@ def cleanup_files(tree_path, arr_prefix, n):
             os.remove(arr_path)
 
 if __name__ == "__main__":
-    N = 100
+    N = 50
     min_size = int(1e6)   # 1 MB
     max_size = int(1e8)   # 100 MB
+    print(f"Creating {N} arrays with sizes ranging from {min_size / 1e6:.2f} to {max_size / 1e6:.2f} MB...")
     arrays, sizes, uncompressed_size = make_arrays(N, min_size, max_size)
 
     print("Benchmarking Tree with inner arrays...")
