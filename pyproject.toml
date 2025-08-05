@@ -29,7 +29,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 # Follow guidelines from https://scientific-python.org/specs/spec-0000/
 dependencies = [
     "numpy>=1.26",
