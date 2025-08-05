@@ -32,7 +32,7 @@ classifiers = [
 requires-python = ">=3.10"
 # Follow guidelines from https://scientific-python.org/specs/spec-0000/
 dependencies = [
-    "numpy>=1.26",
+    "numpy>=2.2",
     #"numpy>=2",
     "ndindex",
     "msgpack",
@@ -84,10 +84,6 @@ documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 
 [tool.cibuildwheel]
 build-verbosity = 1
-[tool.cibuildwheel.pyodide]
-# Build Pyodide wheels using Pyodide version 0.28.0
-pyodide-version = "0.28.0"
-
 # Skip unsupported python versions as well as 32-bit platforms, which are not supported anymore.
 skip = "*-manylinux_i686 cp*-win32 *_ppc64le *_s390x *musllinux*"
 test-requires = "pytest"
