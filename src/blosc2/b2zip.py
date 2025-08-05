@@ -293,7 +293,22 @@ class ZipStore:
         items : Iterator[tuple[str, blosc2.NDArray]]
             Iterator over key-value pairs.
         """
-        return self._tree.items()
+        # Get all unique keys from both map_tree and _tree, with map_tree taking precedence
+        all_keys = set(self.map_tree.keys()) | set(self._tree.keys())
+
+        for key in all_keys:
+            # Check map_tree first, then fall back to _tree
+            if key in self.map_tree:
+                filepath = self.map_tree[key]
+                if filepath in self.offsets:
+                    offset = self.offsets[filepath]["offset"]
+                    yield key, blosc2.open(self.b2z_path, mode="r", offset=offset)
+                else:
+                    # Fallback if filepath not in offsets
+                    yield key, self._tree[key]
+            else:
+                # Use the _tree for keys not in map_tree
+                yield key, self._tree[key]
 
     def to_b2z(self, overwrite=False) -> os.PathLike[Any] | str:
         """

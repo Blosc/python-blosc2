@@ -79,6 +79,7 @@ class Tree:
         # Let's use the SChunk store by default and continue experimenting.
         self._schunk_store = True  # put this to False to use an NDArray instead of a SChunk
         self._zip_store = _zip_store
+        self.urlpath = urlpath
 
         if _from_schunk is not None:
             self.cparams = _from_schunk.cparams
@@ -88,8 +89,6 @@ class Tree:
             self._load_metadata()
             return
 
-        self.urlpath = urlpath
-        """Path for persistent storage. If None, the tree will not be saved to disk."""
         self.mode = mode
         self.cparams = cparams or blosc2.CParams()
         # self.cparams.nthreads = 1  # for debugging purposes, use only one thread
@@ -216,6 +215,7 @@ class Tree:
                 shutil.copy2(value.urlpath, dest_path)
                 # Store relative path from tree directory
                 rel_path = os.path.relpath(dest_path, tree_dir)
+                print(f"Storing {key} as external file at {rel_path}")
                 self._tree_map[key] = {"urlpath": rel_path}
             else:
                 self._tree_map[key] = {"urlpath": value.urlpath}
@@ -265,6 +265,10 @@ class Tree:
             return blosc2.open(urlpath, mode="r")
         urlpath = node_info.get("urlpath", None)
         if urlpath:
+            if self._zip_store and self.urlpath:
+                # Convert the relative path to an absolute path
+                tree_dir = os.path.dirname(self.urlpath)
+                urlpath = os.path.join(tree_dir, urlpath)
             return blosc2.open(urlpath)
         offset = node_info["offset"]
         length = node_info["length"]
