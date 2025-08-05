@@ -1509,7 +1509,7 @@ def test_complex_lazy_expression_multiplication():
     time_factor = 0.5
 
     # First complex expression: R * 4 - time_factor * 2
-    R = np.sqrt(X_b2**2 + Y_b2**2)
+    R = np.hypot(X_b2, Y_b2)
     expr1 = R * 4 - time_factor * 2
 
     # Second complex expression: theta * 6

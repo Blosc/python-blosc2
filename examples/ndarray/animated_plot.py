@@ -54,7 +54,7 @@ def get_memory_mb():
 # --- 3D Data Generation ---
 def compute_3Ddata():
     time_factor = X * Y * 0.001
-    R = np.sqrt(Y**2 + Z**2)
+    R = np.hypot(Y, Z)
     theta = np.arctan2(Z, Y)
     return np.sin(R * 3 - time_factor * 2) * np.cos(theta * 3)
 
