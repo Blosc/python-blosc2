@@ -6,6 +6,7 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 import os.path
+import shutil
 from collections.abc import Iterator
 from typing import Any
 
@@ -67,6 +68,7 @@ class Tree:
         storage: blosc2.Storage | None = None,
         chunksize: int | None = 1024 * 1024,
         _from_schunk: SChunk | None = None,  # for internal use only
+        _zip_store: bool = False,  # for internal use only
     ):
         """
         See :class:`Tree` for full documentation of parameters.
@@ -76,6 +78,7 @@ class Tree:
         # although it is more efficient in terms of CPU usage.
         # Let's use the SChunk store by default and continue experimenting.
         self._schunk_store = True  # put this to False to use an NDArray instead of a SChunk
+        self._zip_store = _zip_store
 
         if _from_schunk is not None:
             self.cparams = _from_schunk.cparams
@@ -174,7 +177,7 @@ class Tree:
             new_size = max(required_size, int(self._store.shape[0] * 1.5))
             self._store.resize((new_size,))
 
-    def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray | C2Array) -> None:  # noqa: C901
+    def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray | C2Array) -> None:
         """
         Add a node to the tree.
 
@@ -194,50 +197,43 @@ class Tree:
             raise ValueError("Cannot set items in read-only mode.")
         self._validate_key(key)
         if isinstance(value, blosc2.NDArray) and getattr(value, "urlpath", None):
-            self._tree_map[key] = {"urlpath": value.urlpath}
-            if PROFILE:
-                print(
-                    f"3.Current file store size using os.path.getsize: {os.path.getsize(self.urlpath)} bytes"
-                )
-                print(f"tree_map updated with key '{key}': {self._tree_map}")
+            if self._zip_store:
+                # Convert key to a proper file path within the tree directory
+                # Remove leading slash and convert to filesystem path
+                rel_key = key.lstrip("/")
+                if not rel_key:  # Handle root key "/"
+                    rel_key = "root"
+
+                # Create the destination path relative to the tree file's directory
+                tree_dir = os.path.dirname(self.urlpath) if self.urlpath else "."
+                dest_path = os.path.join(tree_dir, rel_key + ".b2nd")
+
+                # Ensure the parent directory exists
+                parent_dir = os.path.dirname(dest_path)
+                if parent_dir and not os.path.exists(parent_dir):
+                    os.makedirs(parent_dir, exist_ok=True)
+
+                shutil.copy2(value.urlpath, dest_path)
+                # Store relative path from tree directory
+                rel_path = os.path.relpath(dest_path, tree_dir)
+                self._tree_map[key] = {"urlpath": rel_path}
+            else:
+                self._tree_map[key] = {"urlpath": value.urlpath}
         elif isinstance(value, C2Array):
             self._tree_map[key] = {"urlbase": value.urlbase, "path": value.path}
-            if PROFILE:
-                print(
-                    f"4.Current file store size using os.path.getsize: {os.path.getsize(self.urlpath)} bytes"
-                )
-                print(f"tree_map updated with key '{key}': {self._tree_map}")
         else:
             if isinstance(value, np.ndarray):
                 value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)
             serialized_data = value.to_cframe()
             data_len = len(serialized_data)
-            if PROFILE:
-                print(f"Storing key '{key}' with data length {data_len} bytes.")
-                print(
-                    f"-1.Current file store size using os.path.getsize: {os.path.getsize(self.urlpath)} bytes"
-                )
             if not self._schunk_store:
                 self._ensure_capacity(data_len)
             offset = self._current_offset
-            if PROFILE:
-                print(
-                    f"0.Current file store size using os.path.getsize: {os.path.getsize(self.urlpath)} bytes"
-                )
             if self._schunk_store:
                 self._store[offset : offset + data_len] = serialized_data
             else:
                 self._store[offset : offset + data_len] = np.frombuffer(serialized_data, dtype=np.uint8)
-            if PROFILE:
-                print(
-                    f"1.Current file store size using os.path.getsize: {os.path.getsize(self.urlpath)} bytes"
-                )
             self._tree_map[key] = {"offset": offset, "length": data_len}
-            if PROFILE:
-                print(
-                    f"2.Current file store size using os.path.getsize: {os.path.getsize(self.urlpath)} bytes"
-                )
-                print(f"tree_map updated with key '{key}': {self._tree_map}")
             self._current_offset += data_len
         self._save_metadata()
 
@@ -456,7 +452,7 @@ if __name__ == "__main__":
     tree["/node2"] = blosc2.ones(2)
     # Make /node3 an external file
     arr_external = blosc2.arange(3, urlpath="external_node3.b2nd", mode="w")
-    tree["/node3"] = arr_external
+    tree["/dir1/node3"] = arr_external
     urlpath = blosc2.URLPath("@public/examples/ds-1d.b2nd", "https://cat2.cloud/demo")
     arr_remote = blosc2.open(urlpath, mode="r")
     tree["/node4"] = arr_remote
@@ -464,7 +460,7 @@ if __name__ == "__main__":
     print("Tree keys:", list(tree.keys()))
     print("Node1 data:", tree["/node1"][:])
     print("Node2 data:", tree["/node2"][:])
-    print("Node3 data (external):", tree["/node3"][:])
+    print("Node3 data (external):", tree["/dir1/node3"][:])
 
     del tree["/node1"]
     print("After deletion, keys:", list(tree.keys()))
