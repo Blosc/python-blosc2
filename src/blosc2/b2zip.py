@@ -6,7 +6,7 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 import os
-import shutil
+import tempfile
 import zipfile
 from collections.abc import Iterator
 from typing import Any
@@ -28,12 +28,15 @@ class ZipStore:
 
     Parameters
     ----------
-    dirpath : str
-        Directory path for persistent storage or .b2z file for read-only access.
-        For directories: The index will be stored as dirpath/index.b2t.
-        For .b2z files: Only mode='r' is allowed.
+    localpath : str
+        Local path for the .b2z file. Must have a .b2z extension.
+        For reading: The .b2z file must exist.
+        For writing: The .b2z file will be created.
     mode : str, optional
-        File mode ('r', 'w', 'a'). Default is 'a'. For .b2z files, only 'r' is allowed.
+        File mode ('r', 'w', 'a'). Default is 'a'.
+    tmpdir : str or None, optional
+        Temporary directory to use for working files. If None, a system
+        temporary directory will be created. Default is None.
     cparams : dict or None, optional
         Compression parameters for the index.
         Default is None, which uses the default Blosc2 parameters.
@@ -45,7 +48,7 @@ class ZipStore:
 
     Examples
     --------
-    >>> zipstore = ZipStore(dirpath="my_zipstore", mode="w")
+    >>> zipstore = ZipStore(localpath="my_zipstore.b2z", mode="w")
     >>> zipstore["/node1"] = np.array([1, 2, 3])
     >>> zipstore["/node2"] = blosc2.ones(2)
     >>> print(list(zipstore.keys()))
@@ -56,8 +59,9 @@ class ZipStore:
 
     def __init__(  # noqa: C901
         self,
-        dirpath: os.PathLike[Any] | str | bytes,
+        localpath: os.PathLike[Any] | str | bytes,
         mode: str = "a",
+        tmpdir: str | None = None,
         cparams: blosc2.CParams | None = None,
         dparams: blosc2.CParams | None = None,
         storage: blosc2.Storage | None = None,
@@ -67,18 +71,29 @@ class ZipStore:
         """
         self.offsets = {}
         self.map_tree = {}
-        self.dirpath = dirpath if isinstance(dirpath, (str, bytes)) else str(dirpath)
+        self.localpath = localpath if isinstance(localpath, (str, bytes)) else str(localpath)
         self.mode = mode
-        self.is_b2z_file = self.dirpath.endswith(".b2z")
+        self._temp_dir_obj = None
 
-        if self.is_b2z_file:
-            # Handle .b2z file input
-            if mode != "r":
-                raise ValueError("Only mode='r' is allowed when opening a .b2z file.")
-            if not os.path.exists(self.dirpath):
-                raise FileNotFoundError(f"Zip file {self.dirpath} does not exist.")
+        # Enforce .b2z extension
+        if not self.localpath.endswith(".b2z"):
+            raise ValueError("localpath must have a .b2z extension")
 
-            self.b2z_path = self.dirpath
+        # Handle temporary directory
+        if tmpdir is None:
+            self._temp_dir_obj = tempfile.TemporaryDirectory()
+            self.tmpdir = self._temp_dir_obj.name
+        else:
+            self.tmpdir = tmpdir
+            if not os.path.exists(tmpdir):
+                os.makedirs(tmpdir, exist_ok=True)
+
+        if mode == "r":
+            # Handle .b2z file input for reading
+            if not os.path.exists(self.localpath):
+                raise FileNotFoundError(f"Zip file {self.localpath} does not exist.")
+
+            self.b2z_path = self.localpath
             self.index_path = "index.b2t"
 
             # Populate offsets of files in b2z
@@ -102,23 +117,16 @@ class ZipStore:
                         key = "/" + key
                     self.map_tree[key] = filepath
         else:
-            # Handle directory input (existing behavior)
-            self.index_path = os.path.join(dirpath, "index.b2t")
+            # Handle directory input for writing/appending
+            self.index_path = os.path.join(self.tmpdir, "index.b2t")
 
             # Check if we're opening an existing zipstore
-            if mode == "r" and not os.path.exists(self.index_path):
-                raise FileNotFoundError(f"ZipStore index file {self.index_path} does not exist for opening.")
+            if mode == "a" and os.path.exists(self.localpath):
+                # Extract existing .b2z to tmpdir for append mode
+                with zipfile.ZipFile(self.localpath, "r") as zf:
+                    zf.extractall(self.tmpdir)
 
-            # Handle directory creation/cleanup based on mode
-            if mode == "w" and os.path.exists(dirpath):
-                # Wipe directory contents for write mode
-                shutil.rmtree(dirpath)
-                os.makedirs(dirpath, exist_ok=True)
-            elif mode in ("w", "a") and not os.path.exists(dirpath):
-                # Create directory if it doesn't exist for write/append modes
-                os.makedirs(dirpath, exist_ok=True)
-
-            self.b2z_path = f"{self.dirpath}.b2z"
+            self.b2z_path = self.localpath
 
             # Initialize the underlying Tree index
             self._tree = Tree(
@@ -312,7 +320,7 @@ class ZipStore:
 
     def to_b2z(self, overwrite=False) -> os.PathLike[Any] | str:
         """
-        Serialize the zipstore to a b2z file named `dirpath.b2z`.
+        Serialize zip store contents to the b2z file.
 
         Parameters
         ----------
@@ -324,15 +332,15 @@ class ZipStore:
         filename : str
             The absolute path to the created b2z file.
         """
-        if self.is_b2z_file:
-            raise ValueError("Cannot call to_b2z() on a ZipStore opened from a .b2z file.")
+        if self.mode == "r":
+            raise ValueError("Cannot call to_b2z() on a ZipStore opened in read mode.")
 
         if os.path.exists(self.b2z_path) and not overwrite:
             raise FileExistsError(f"'{self.b2z_path}' already exists. Use overwrite=True to overwrite.")
 
         # Gather all files except index_path
         filepaths = []
-        for root, _, files in os.walk(self.dirpath):
+        for root, _, files in os.walk(self.tmpdir):
             for file in files:
                 filepath = os.path.join(root, file)
                 if os.path.abspath(filepath) != os.path.abspath(self.index_path):
@@ -344,11 +352,11 @@ class ZipStore:
         with zipfile.ZipFile(self.b2z_path, "w", zipfile.ZIP_STORED) as zf:
             # Write all files (except index_path) first (sorted by size)
             for filepath in filepaths:
-                arcname = os.path.relpath(filepath, self.dirpath)
+                arcname = os.path.relpath(filepath, self.tmpdir)
                 zf.write(filepath, arcname)
             # Write index.b2t last
             if os.path.exists(self.index_path):
-                arcname = os.path.relpath(self.index_path, self.dirpath)
+                arcname = os.path.relpath(self.index_path, self.tmpdir)
                 zf.write(self.index_path, arcname)
         return os.path.abspath(self.b2z_path)
 
@@ -356,9 +364,6 @@ class ZipStore:
         """
         Get the offset (and length) of all files in the zip archive.
         """
-        if not self.is_b2z_file:
-            return {}
-
         self.offsets = {}  # Reset offsets
         with open(self.b2z_path, "rb") as f, zipfile.ZipFile(f) as zf:
             for info in zf.infolist():
@@ -376,15 +381,13 @@ class ZipStore:
         """
         Persist changes in the zip file if opened in write or append mode.
         """
-        if self.mode in ("w", "a") and not self.is_b2z_file:
+        if self.mode in ("w", "a"):
             # Serialize to b2z file
             self.to_b2z(overwrite=True)
-            # Remove the dirpath directory if it was created
-            if os.path.exists(self.dirpath):
-                shutil.rmtree(self.dirpath)
-        elif self.is_b2z_file:
-            # For .b2z files, no need to close anything
-            pass
+
+        # Clean up temporary directory if we created it
+        if self._temp_dir_obj is not None:
+            self._temp_dir_obj.cleanup()
 
     def __enter__(self):
         """
@@ -403,15 +406,15 @@ class ZipStore:
 
 if __name__ == "__main__":
     # Example usage
-    dirpath = "example_zipstore"
+    localpath = "example_zipstore.b2z"
     if True:
-        zipstore = ZipStore(dirpath=dirpath, mode="w")
+        zipstore = ZipStore(localpath=localpath, mode="w")
 
         zipstore["/node1"] = np.array([1, 2, 3])
         zipstore["/node2"] = blosc2.ones(2)
 
         # Make /node3 an external file
-        arr_external = blosc2.arange(3, urlpath="external_node3.b2nd", mode="w")
+        arr_external = blosc2.arange(3, urlpath="ext_node3.b2nd", mode="w")
         zipstore["/dir1/node3"] = arr_external
 
         print("ZipStore keys:", list(zipstore.keys()))
@@ -425,8 +428,10 @@ if __name__ == "__main__":
         zipstore.close()
 
     # Open the stored zip file
-    zip_file = f"{dirpath}.b2z"
-    with ZipStore(zip_file, mode="r") as zipstore_opened:
+    with ZipStore(localpath, mode="r") as zipstore_opened:
         print("Opened zipstore keys:", list(zipstore_opened.keys()))
         for key, value in zipstore_opened.items():
-            print(f"Key: {key}, Shape: {value.shape}, Values: {value[:10] if len(value) > 3 else value[:]}")
+            if isinstance(value, blosc2.NDArray):
+                print(
+                    f"Key: {key}, Shape: {value.shape}, Values: {value[:10] if len(value) > 3 else value[:]}"
+                )
