@@ -56,7 +56,7 @@ class ZipStore:
 
     def __init__(  # noqa: C901
         self,
-        dirpath: bytes | os.PathLike[Any] | str | bytes,
+        dirpath: os.PathLike[Any] | str | bytes,
         mode: str = "a",
         cparams: blosc2.CParams | None = None,
         dparams: blosc2.CParams | None = None,
@@ -372,6 +372,20 @@ class ZipStore:
                 self.offsets[info.filename] = {"offset": data_offset, "length": info.file_size}
         return self.offsets
 
+    def close(self) -> None:
+        """
+        Persist changes in the zip file if opened in write or append mode.
+        """
+        if self.mode in ("w", "a") and not self.is_b2z_file:
+            # Serialize to b2z file
+            self.to_b2z(overwrite=True)
+            # Remove the dirpath directory if it was created
+            if os.path.exists(self.dirpath):
+                shutil.rmtree(self.dirpath)
+        elif self.is_b2z_file:
+            # For .b2z files, no need to close anything
+            pass
+
     def __enter__(self):
         """
         Enter the context manager.
@@ -382,8 +396,9 @@ class ZipStore:
         """
         Exit the context manager.
         """
-        # No cleanup needed for now
-        pass
+        self.close()
+        # No need to handle exceptions, just close the zipstore
+        return False
 
 
 if __name__ == "__main__":
@@ -407,19 +422,7 @@ if __name__ == "__main__":
         del zipstore["/node1"]
         print("After deletion, keys:", list(zipstore.keys()))
 
-        # Reading back the zipstore
-        zipstore_read = ZipStore(dirpath="example_zipstore", mode="r")
-        print("Read keys:", list(zipstore_read.keys()))
-        for key, value in zipstore_read.items():
-            print(f"Key: {key}, Shape: {value.shape}, Values: {value[:10] if len(value) > 3 else value[:]}")
-
-        # Serialize to zip file
-        zip_file = zipstore.to_b2z(overwrite=True)
-        print(f"Serialized zipstore to: {zip_file}")
-
-        # Get offsets of files in the zip archive
-        offsets = zipstore._get_zip_offsets()
-        print("Zip offsets:", offsets)
+        zipstore.close()
 
     # Open the stored zip file
     zip_file = f"{dirpath}.b2z"
