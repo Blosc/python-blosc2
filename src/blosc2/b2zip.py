@@ -380,6 +380,10 @@ class ZipStore:
     def close(self) -> None:
         """
         Persist changes in the zip file if opened in write or append mode.
+
+        Yoy always need to call this method to ensure that the zipstore is properly
+        created or updated.  Use a context manager to ensure this is called automatically.
+        If the zipstore was opened in read mode, this method does nothing.
         """
         if self.mode in ("w", "a"):
             # Serialize to b2z file
@@ -408,24 +412,21 @@ if __name__ == "__main__":
     # Example usage
     localpath = "example_zipstore.b2z"
     if True:
-        zipstore = ZipStore(localpath=localpath, mode="w")
+        with ZipStore(localpath, mode="w") as zipstore:
+            zipstore["/node1"] = np.array([1, 2, 3])
+            zipstore["/node2"] = blosc2.ones(2)
 
-        zipstore["/node1"] = np.array([1, 2, 3])
-        zipstore["/node2"] = blosc2.ones(2)
+            # Make /node3 an external file
+            arr_external = blosc2.arange(3, urlpath="ext_node3.b2nd", mode="w")
+            zipstore["/dir1/node3"] = arr_external
 
-        # Make /node3 an external file
-        arr_external = blosc2.arange(3, urlpath="ext_node3.b2nd", mode="w")
-        zipstore["/dir1/node3"] = arr_external
+            print("ZipStore keys:", list(zipstore.keys()))
+            print("Node1 data:", zipstore["/node1"][:])
+            print("Node2 data:", zipstore["/node2"][:])
+            print("Node3 data (external):", zipstore["/dir1/node3"][:])
 
-        print("ZipStore keys:", list(zipstore.keys()))
-        print("Node1 data:", zipstore["/node1"][:])
-        print("Node2 data:", zipstore["/node2"][:])
-        print("Node3 data (external):", zipstore["/dir1/node3"][:])
-
-        del zipstore["/node1"]
-        print("After deletion, keys:", list(zipstore.keys()))
-
-        zipstore.close()
+            del zipstore["/node1"]
+            print("After deletion, keys:", list(zipstore.keys()))
 
     # Open the stored zip file
     with ZipStore(localpath, mode="r") as zipstore_opened:
