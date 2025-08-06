@@ -1522,11 +1522,7 @@ def slices_eval(  # noqa: C901
             continue
 
         if where is None:
-            if expression == "o0":
-                # We don't have an actual expression, so just make sure contiguous
-                result = np.require(chunk_operands["o0"], requirements="C")
-            else:
-                result = ne_evaluate(expression, chunk_operands, **ne_args)
+            result = ne_evaluate(expression, chunk_operands, **ne_args)
         else:
             # Apply the where condition (in result)
             if len(where) == 2:
@@ -1561,6 +1557,9 @@ def slices_eval(  # noqa: C901
                     result = x[result]
             else:
                 raise ValueError("The where condition must be a tuple with one or two elements")
+        # Enforce contiguity of result (necessary to fill the out array)
+        # but avoid copy if already contiguous
+        result = np.require(result, requirements="C")
 
         if out is None:
             shape_ = shape_slice if shape_slice is not None else shape
@@ -1939,7 +1938,7 @@ def reduce_slices(  # noqa: C901
 
         if where is None:
             if expression == "o0":
-                # We don't have an actual expression, so avoid a copy except if have to make contiguous
+                # We don't have an actual expression, so avoid a copy except to make contiguous
                 result = np.require(chunk_operands["o0"], requirements="C")
             else:
                 result = ne_evaluate(expression, chunk_operands, **ne_args)
