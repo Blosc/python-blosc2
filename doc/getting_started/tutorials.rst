@@ -13,6 +13,5 @@ Tutorials
    tutorials/06.remote_proxy
    tutorials/07.schunk-basics
    tutorials/08.schunk-slicing_and_beyond
-   tutorials/10.ucodecs-ufilters
-   tutorials/11.prefilters
-   tutorials/12.postfilters
+   tutorials/09.ucodecs-ufilters
+   tutorials/10.prefilters
