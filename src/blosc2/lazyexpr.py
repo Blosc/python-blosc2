@@ -1522,7 +1522,11 @@ def slices_eval(  # noqa: C901
             continue
 
         if where is None:
-            result = ne_evaluate(expression, chunk_operands, **ne_args)
+            if expression == "o0":
+                # We don't have an actual expression, so just make sure contiguous
+                result = np.require(chunk_operands["o0"], requirements="C")
+            else:
+                result = ne_evaluate(expression, chunk_operands, **ne_args)
         else:
             # Apply the where condition (in result)
             if len(where) == 2:
@@ -1935,8 +1939,8 @@ def reduce_slices(  # noqa: C901
 
         if where is None:
             if expression == "o0":
-                # We don't have an actual expression, so avoid a copy
-                result = chunk_operands["o0"]
+                # We don't have an actual expression, so avoid a copy except if have to make contiguous
+                result = np.require(chunk_operands["o0"], requirements="C")
             else:
                 result = ne_evaluate(expression, chunk_operands, **ne_args)
         else:
@@ -3118,6 +3122,14 @@ class LazyExpr(LazyArray):
                 new_expr.expression_tosave = expression
                 new_expr.operands = operands_
                 new_expr.operands_tosave = operands
+            elif isinstance(new_expr, blosc2.NDArray) and len(operands) == 1:
+                # passed either "a" or possible "a[:10]"
+                expression_, operands_ = conserve_functions(
+                    _expression, _operands, {"o0": list(operands.values())[0]} | local_vars
+                )
+                new_expr = cls(None)
+                new_expr.expression = expression_
+                new_expr.operands = operands_
             else:
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
                 new_expr = cls(None)

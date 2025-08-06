@@ -1089,7 +1089,7 @@ def test_eval_getitem2():
     np.testing.assert_allclose(expr[1:, :7], nres[1:, :7])
     np.testing.assert_allclose(expr[0:10:2], nres[0:10:2])
     # Now relies on inefficient blosc2.ndarray.slice for non-unit steps but only per chunk (not for whole result)
-    np.testing.assert_allclose(expr.slice((slice(None, None, None), slice(0, 10, 2)))[:], nres[:, 0:10:2])
+    np.testing.assert_allclose(expr.slice((slice(1, 2, 1), slice(0, 10, 2)))[:], nres[1:2, 0:10:2])
 
     # Small test for broadcasting
     expr = test_arr + test_arr.slice(1)
@@ -1121,6 +1121,18 @@ def test_eval_slice(array_fixture):
     res = expr2.compute()
     assert isinstance(res, blosc2.ndarray.NDArray)
     np.testing.assert_allclose(res[()], nres)
+
+
+def test_rebasing(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = blosc2.lazyexpr("a1 + a2 - (a3 * a4)", operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4})
+    assert expr.expression == "(o0 + o1 - o2 * o3)"
+
+    expr = blosc2.lazyexpr("a1")
+    assert expr.expression == "o0"
+
+    expr = blosc2.lazyexpr("a1[:10]")
+    assert expr.expression == "o0.slice((slice(None, 10, None),))"
 
 
 # Test get_chunk method
