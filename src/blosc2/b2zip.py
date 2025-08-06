@@ -6,6 +6,7 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 import os
+import shutil
 import tempfile
 import zipfile
 from collections.abc import Iterator
@@ -166,7 +167,29 @@ class ZipStore:
         ValueError
             If key is invalid or already exists.
         """
-        self._tree[key] = value
+        if isinstance(value, blosc2.NDArray) and getattr(value, "urlpath", None):
+            # Convert key to a proper file path within the tree directory
+            # Remove leading slash and convert to filesystem path
+            rel_key = key.lstrip("/")
+            # TODO: Handle case where key is root ("/")
+            # if not rel_key:  # Handle root key "/"
+            #     rel_key = "root"
+
+            # Create the destination path relative to the tree file's directory
+            # tree_dir = os.path.dirname(self.localpath) if self.urlpath else "."
+            dest_path = os.path.join(self.tmpdir, rel_key + ".b2nd")
+
+            # Ensure the parent directory exists
+            parent_dir = os.path.dirname(dest_path)
+            if parent_dir and not os.path.exists(parent_dir):
+                os.makedirs(parent_dir, exist_ok=True)
+
+            shutil.copy2(value.urlpath, dest_path)
+            # Store relative path from tree directory
+            rel_path = os.path.relpath(dest_path, self.tmpdir)
+            self.map_tree[key] = rel_path
+        else:
+            self._tree[key] = value
 
     def __getitem__(self, key: str) -> blosc2.NDArray:
         """
@@ -193,6 +216,12 @@ class ZipStore:
             if filepath in self.offsets:
                 offset = self.offsets[filepath]["offset"]
                 return blosc2.open(self.b2z_path, mode="r", offset=offset)
+            else:
+                urlpath = os.path.join(self.tmpdir, filepath)
+                if os.path.exists(urlpath):
+                    return blosc2.open(urlpath, mode="r" if self.mode == "r" else "a")
+                else:
+                    raise KeyError(f"File for key '{key}' not found in offsets or temporary directory.")
 
         # Fall back to Tree index
         return self._tree[key]

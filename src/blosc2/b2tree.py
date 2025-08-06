@@ -6,7 +6,6 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 import os.path
-import shutil
 from collections.abc import Iterator
 from typing import Any
 
@@ -195,31 +194,12 @@ class Tree:
         if self.mode == "r":
             raise ValueError("Cannot set items in read-only mode.")
         self._validate_key(key)
-        if isinstance(value, blosc2.NDArray) and getattr(value, "urlpath", None):
-            if self._zip_store:
-                # Convert key to a proper file path within the tree directory
-                # Remove leading slash and convert to filesystem path
-                rel_key = key.lstrip("/")
-                if not rel_key:  # Handle root key "/"
-                    rel_key = "root"
-
-                # Create the destination path relative to the tree file's directory
-                tree_dir = os.path.dirname(self.urlpath) if self.urlpath else "."
-                dest_path = os.path.join(tree_dir, rel_key + ".b2nd")
-
-                # Ensure the parent directory exists
-                parent_dir = os.path.dirname(dest_path)
-                if parent_dir and not os.path.exists(parent_dir):
-                    os.makedirs(parent_dir, exist_ok=True)
-
-                shutil.copy2(value.urlpath, dest_path)
-                # Store relative path from tree directory
-                rel_path = os.path.relpath(dest_path, tree_dir)
-                print(f"Storing {key} as external file at {rel_path}")
-                self._tree_map[key] = {"urlpath": rel_path}
-            else:
-                self._tree_map[key] = {"urlpath": value.urlpath}
-        elif isinstance(value, C2Array):
+        if isinstance(value, blosc2.NDArray) and getattr(value, "urlpath", None) is not None:
+            raise ValueError(
+                "Cannot store a blosc2.NDArray with a urlpath in the tree. "
+                "Use ZipStore for external storage."
+            )
+        if isinstance(value, C2Array):
             self._tree_map[key] = {"urlbase": value.urlbase, "path": value.path}
         else:
             if isinstance(value, np.ndarray):
@@ -233,8 +213,8 @@ class Tree:
                 self._store[offset : offset + data_len] = serialized_data
             else:
                 self._store[offset : offset + data_len] = np.frombuffer(serialized_data, dtype=np.uint8)
-            self._tree_map[key] = {"offset": offset, "length": data_len}
             self._current_offset += data_len
+            self._tree_map[key] = {"offset": offset, "length": data_len}
         self._save_metadata()
 
     def __getitem__(self, key: str) -> blosc2.NDArray:
@@ -273,7 +253,8 @@ class Tree:
         offset = node_info["offset"]
         length = node_info["length"]
         serialized_data = bytes(self._store[offset : offset + length])
-        return blosc2.ndarray_from_cframe(serialized_data)
+        # It is safer to copy data here, as the reference to the SChunk may disappear
+        return blosc2.ndarray_from_cframe(serialized_data, copy=True)
 
     def get(self, key: str, default: Any = None) -> blosc2.NDArray | Any:
         """

@@ -26,41 +26,39 @@ def cleanup_files():
 
 
 @pytest.fixture
-def with_external_nodes(cleanup_files):
+def populate_nodes(cleanup_files):
     tree = blosc2.Tree(urlpath="test_tree.b2t", mode="w")
     tree["/node1"] = np.array([1, 2, 3])
     arr_embedded = blosc2.arange(3, dtype=np.int32)
     arr_embedded.vlmeta["description"] = "This is vlmeta for /node2"
     tree["/node2"] = arr_embedded
-    arr_external = blosc2.arange(3, urlpath="external_node3.b2nd", mode="w")
-    arr_external.vlmeta["description"] = "This is vlmeta for /node3"
-    tree["/node3"] = arr_external
+    arr_embedded = blosc2.arange(4, dtype=np.int32)
+    arr_embedded.vlmeta["description"] = "This is vlmeta for /node3"
+    tree["/node3"] = arr_embedded
+
     return tree
 
 
-def test_basic(with_external_nodes):
-    tree = with_external_nodes
+def test_basic(populate_nodes):
+    tree = populate_nodes
 
     assert set(tree.keys()) == {"/node1", "/node2", "/node3"}
     assert np.all(tree["/node1"][:] == np.array([1, 2, 3]))
     assert np.all(tree["/node2"][:] == np.arange(3))
-    assert np.all(tree["/node3"][:] == np.arange(3))
-    assert tree["/node3"].urlpath == "external_node3.b2nd"
+    assert np.all(tree["/node3"][:] == np.arange(4))
 
     del tree["/node1"]
     assert "/node1" not in tree
 
     tree_read = blosc2.Tree(urlpath="test_tree.b2t", mode="r")
     assert set(tree_read.keys()) == {"/node2", "/node3"}
-    for key, value in tree_read.items():
+    for value in tree_read.values():
         assert hasattr(value, "shape")
         assert hasattr(value, "dtype")
-        if key == "/node3":
-            assert value.urlpath == "external_node3.b2nd"
 
 
-def test_with_remote(with_external_nodes):
-    tree = with_external_nodes
+def test_with_remote(populate_nodes):
+    tree = populate_nodes
 
     # Re-open the tree to add a remote node
     tree = blosc2.Tree(urlpath="test_tree.b2t")
@@ -73,8 +71,6 @@ def test_with_remote(with_external_nodes):
     for key, value in tree_read.items():
         assert hasattr(value, "shape")
         assert hasattr(value, "dtype")
-        if key == "/node3":
-            assert value.urlpath == "external_node3.b2nd"
         if key == "/node4":
             assert hasattr(value, "urlbase")
             assert value.urlbase == urlpath.urlbase
@@ -113,14 +109,14 @@ def test_with_many_nodes():
         assert np.all(tree_read[f"/node_{i}"][:] == np.full((10,), i, dtype=np.int32))
 
 
-def test_vlmeta_get(with_external_nodes):
-    tree = with_external_nodes
+def test_vlmeta_get(populate_nodes):
+    tree = populate_nodes
     # Check that vlmeta is present for the nodes
     node2 = tree["/node2"]
     assert "description" in node2.vlmeta
     assert node2.vlmeta["description"] == "This is vlmeta for /node2"
-    assert "description" in tree["/node3"].vlmeta
     node3 = tree["/node3"]
+    assert "description" in node3.vlmeta
     assert node3.vlmeta["description"] == "This is vlmeta for /node3"
     print(f"node3 type: {type(node3)}")
     print(f"tree['/node3'] type: {type(tree['/node3'])}")
@@ -131,42 +127,21 @@ def test_vlmeta_get(with_external_nodes):
 
 
 # TODO
-def _test_embedded_value_set_raise(with_external_nodes):
-    tree = with_external_nodes
+def _test_embedded_value_set_raise(populate_nodes):
+    tree = populate_nodes
 
     # This should raise an error because value is read-only for embedded nodes
     node2 = tree["/node2"]
     node2[:] = np.arange(5)
 
 
-def test_external_value_set(with_external_nodes):
-    tree = with_external_nodes
+# TODO: this should raise an error because vlmeta is read-only for embedded nodes
+def _test_vlmeta_set(populate_nodes):
+    tree = populate_nodes
 
-    # This should raise an error because value is read-only for embedded nodes
-    node3 = tree["/node3"]
-    node3[:] = np.ones(3)
-    assert np.all(node3[:] == np.ones(3))
-
-
-def test_vlmeta_set(with_external_nodes):
-    tree = with_external_nodes
-
-    # node2 = tree["/node2"]
-    # node2.vlmeta["description"] = "This is node 2 modified"
-
-    # Add variable-length metadata to a node
-    node3 = tree["/node3"]
-    node3.vlmeta["description"] = "This is node 3 modified"
-    # TODO: this assignment is failing, investigate why
-    # tree["/node3"].vlmeta["description"] = "This is node 3 modified"
-
-    # Read the vlmeta back
-    assert node3.vlmeta["description"] == "This is node 3 modified"
-
-    # Check that vlmeta is preserved after writing and reading
-    tree_read = blosc2.Tree(urlpath="test_tree.b2t", mode="r")
-    node3 = tree["/node3"]
-    assert node3.vlmeta["description"] == "This is node 3 modified"
+    node2 = tree["/node2"]
+    node2.vlmeta["description"] = "This is node 2 modified"
+    assert node2.vlmeta["description"] == "This is node 2 modified"
 
 
 # TODO
@@ -179,8 +154,8 @@ def _test_vlmeta_set_raise(with_external_nodes):
         node2.vlmeta["description"] = "This is node 2 modified"
 
 
-def test_to_cframe(with_external_nodes):
-    tree = with_external_nodes
+def test_to_cframe(populate_nodes):
+    tree = populate_nodes
 
     # Convert tree to a cframe
     cframe_data = tree.to_cframe()
@@ -194,8 +169,8 @@ def test_to_cframe(with_external_nodes):
     assert np.all(deserialized_tree["/node2"][:] == np.arange(3))
 
 
-def test_to_cframe_append(with_external_nodes):
-    tree = with_external_nodes
+def test_to_cframe_append(populate_nodes):
+    tree = populate_nodes
 
     # Convert tree to a cframe
     cframe_data = tree.to_cframe()

@@ -32,6 +32,7 @@ def with_zipstore(cleanup_zipstore):
         zipstore["/node1"] = np.array([1, 2, 3])
         zipstore["/node2"] = blosc2.ones(2)
         arr_external = blosc2.arange(3, urlpath="ext_node3.b2nd", mode="w")
+        arr_external.vlmeta["description"] = "This is vlmeta for /dir1/node3"
         zipstore["/dir1/node3"] = arr_external
         yield zipstore
 
@@ -42,8 +43,11 @@ def test_basic_zipstore(with_zipstore):
     assert np.all(zipstore["/node1"][:] == np.array([1, 2, 3]))
     assert np.all(zipstore["/node2"][:] == np.ones(2))
     assert np.all(zipstore["/dir1/node3"][:] == np.arange(3))
-    # TODO
-    # assert zipstore["/dir1/node3"].urlpath == "ext_node3.b2nd"
+    # The next is insecure, as vlmeta can be reclaimed by garbage collection
+    # assert zipstore["/dir1/node3"].vlmeta["description"] == "This is vlmeta for /dir1/node3"
+    # This is safe, as we keep a reference to the node
+    node3 = zipstore["/dir1/node3"]
+    assert node3.vlmeta["description"] == "This is vlmeta for /dir1/node3"
 
     del zipstore["/node1"]
     assert "/node1" not in zipstore
@@ -60,7 +64,8 @@ def test_basic_zipstore(with_zipstore):
             assert hasattr(value, "dtype")
             # TODO
             # if key == "/dir1/node3":
-            #     assert value.urlpath == "ext_node3.b2nd"
+            #     node3 = zipstore["/dir1/node3"]
+            #     assert node3.vlmeta["description"] == "This is vlmeta for /dir1/node3"
 
 
 def test_external_value_set(with_zipstore):
@@ -96,8 +101,7 @@ def test_map_tree_precedence(cleanup_zipstore):
         assert np.all(arr[:] == np.arange(4))
 
 
-# TODO
-def _test_len_and_iter(cleanup_zipstore):
+def test_len_and_iter(cleanup_zipstore):
     with ZipStore("test_zipstore.b2z", mode="w") as zipstore:
         for i in range(10):
             zipstore[f"/node_{i}"] = np.full((5,), i)
@@ -109,5 +113,4 @@ def _test_len_and_iter(cleanup_zipstore):
         for key in keys:
             arr = zipstore_read[key]
             i = int(key.split("_")[-1])
-            print("i:", i)
             assert np.all(arr[:] == np.full((5,), i))
