@@ -19,11 +19,11 @@ from blosc2.c2array import C2Array
 from blosc2.embed_store import EmbedStore
 
 
-class ZipStore:
+class DictStore:
     """
     A directory-based storage container that uses a EmbedStore index for metadata.
 
-    The ZipStore maintains a directory structure with an index file (index.b2t)
+    The DictStore maintains a directory structure with an index file (index.b2t)
     that tracks all stored arrays. It also supports reading from a .b2z file,
     which is a zip archive containing Blosc2 compressed files.
 
@@ -49,12 +49,12 @@ class ZipStore:
 
     Examples
     --------
-    >>> zipstore = ZipStore(localpath="my_zipstore.b2z", mode="w")
-    >>> zipstore["/node1"] = np.array([1, 2, 3])
-    >>> zipstore["/node2"] = blosc2.ones(2)
-    >>> print(list(zipstore.keys()))
+    >>> dstore = DictStore(localpath="my_dstore.b2z", mode="w")
+    >>> dstore["/node1"] = np.array([1, 2, 3])
+    >>> dstore["/node2"] = blosc2.ones(2)
+    >>> print(list(dstore.keys()))
     ['/node1', '/node2']
-    >>> print(zipstore["/node1"][:])
+    >>> print(dstore["/node1"][:])
     [1 2 3]
     """
 
@@ -68,7 +68,7 @@ class ZipStore:
         storage: blosc2.Storage | None = None,
     ):
         """
-        See :class:`ZipStore` for full documentation of parameters.
+        See :class:`DictStore` for full documentation of parameters.
         """
         self.offsets = {}
         self.map_tree = {}
@@ -121,7 +121,7 @@ class ZipStore:
             # Handle directory input for writing/appending
             self.index_path = os.path.join(self.tmpdir, "index.b2t")
 
-            # Check if we're opening an existing zipstore
+            # Check if we're opening an existing dstore
             if mode == "a" and os.path.exists(self.localpath):
                 # Extract existing .b2z to tmpdir for append mode
                 with zipfile.ZipFile(self.localpath, "r") as zf:
@@ -153,7 +153,7 @@ class ZipStore:
 
     def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray | C2Array) -> None:
         """
-        Add a node to the zipstore.
+        Add a node to the DictStore.
 
         Parameters
         ----------
@@ -192,7 +192,7 @@ class ZipStore:
 
     def __getitem__(self, key: str) -> blosc2.NDArray:
         """
-        Retrieve a node from the zipstore.
+        Retrieve a node from the DictStore.
 
         Parameters
         ----------
@@ -245,7 +245,7 @@ class ZipStore:
 
     def __delitem__(self, key: str) -> None:
         """
-        Remove a node from the zipstore.
+        Remove a node from the DictStore.
 
         Parameters
         ----------
@@ -261,7 +261,7 @@ class ZipStore:
 
     def __contains__(self, key: str) -> bool:
         """
-        Check if a key exists in the zipstore.
+        Check if a key exists in the DictStore.
 
         Parameters
         ----------
@@ -277,7 +277,7 @@ class ZipStore:
 
     def __len__(self) -> int:
         """
-        Return the number of nodes in the zipstore.
+        Return the number of nodes in the DictStore.
 
         Returns
         -------
@@ -288,7 +288,7 @@ class ZipStore:
 
     def __iter__(self) -> Iterator[str]:
         """
-        Return an iterator over the keys in the zipstore.
+        Return an iterator over the keys in the DictStore.
 
         Returns
         -------
@@ -299,19 +299,19 @@ class ZipStore:
 
     def keys(self) -> dict[str, dict[str, int]].keys:
         """
-        Return all keys in the zipstore.
+        Return all keys in the DictStore.
 
         Returns
         -------
         keys : dict_keys
-            Keys of the zipstore.
+            Keys of the DictStore.
         """
         # Combine keys from both map_tree and EmbedStore index
         return set(self.map_tree.keys()) | set(self._estore.keys())
 
     def values(self) -> Iterator[blosc2.NDArray]:
         """
-        Return an iterator over all values in the zipstore.
+        Return an iterator over all values in the DictStore.
 
         Returns
         -------
@@ -322,7 +322,7 @@ class ZipStore:
 
     def items(self) -> Iterator[tuple[str, blosc2.NDArray]]:
         """
-        Return an iterator over (key, value) pairs in the zipstore.
+        Return an iterator over (key, value) pairs in the DictStore.
 
         Returns
         -------
@@ -360,7 +360,7 @@ class ZipStore:
             The absolute path to the created b2z file.
         """
         if self.mode == "r":
-            raise ValueError("Cannot call to_b2z() on a ZipStore opened in read mode.")
+            raise ValueError("Cannot call to_b2z() on a DictStore opened in read mode.")
 
         if os.path.exists(self.b2z_path) and not overwrite:
             raise FileExistsError(f"'{self.b2z_path}' already exists. Use overwrite=True to overwrite.")
@@ -408,9 +408,9 @@ class ZipStore:
         """
         Persist changes in the zip file if opened in write or append mode.
 
-        Yoy always need to call this method to ensure that the zipstore is properly
+        Yoy always need to call this method to ensure that the DictStore is properly
         created or updated.  Use a context manager to ensure this is called automatically.
-        If the zipstore was opened in read mode, this method does nothing.
+        If the DictStore was opened in read mode, this method does nothing.
         """
         if self.mode in ("w", "a"):
             # Serialize to b2z file
@@ -431,34 +431,34 @@ class ZipStore:
         Exit the context manager.
         """
         self.close()
-        # No need to handle exceptions, just close the zipstore
+        # No need to handle exceptions, just close the DictStore
         return False
 
 
 if __name__ == "__main__":
     # Example usage
-    localpath = "example_zipstore.b2z"
+    localpath = "example_dstore.b2z"
     if True:
-        with ZipStore(localpath, mode="w") as zipstore:
-            zipstore["/node1"] = np.array([1, 2, 3])
-            zipstore["/node2"] = blosc2.ones(2)
+        with DictStore(localpath, mode="w") as dstore:
+            dstore["/node1"] = np.array([1, 2, 3])
+            dstore["/node2"] = blosc2.ones(2)
 
             # Make /node3 an external file
             arr_external = blosc2.arange(3, urlpath="ext_node3.b2nd", mode="w")
-            zipstore["/dir1/node3"] = arr_external
+            dstore["/dir1/node3"] = arr_external
 
-            print("ZipStore keys:", list(zipstore.keys()))
-            print("Node1 data:", zipstore["/node1"][:])
-            print("Node2 data:", zipstore["/node2"][:])
-            print("Node3 data (external):", zipstore["/dir1/node3"][:])
+            print("DictStore keys:", list(dstore.keys()))
+            print("Node1 data:", dstore["/node1"][:])
+            print("Node2 data:", dstore["/node2"][:])
+            print("Node3 data (external):", dstore["/dir1/node3"][:])
 
-            del zipstore["/node1"]
-            print("After deletion, keys:", list(zipstore.keys()))
+            del dstore["/node1"]
+            print("After deletion, keys:", list(dstore.keys()))
 
     # Open the stored zip file
-    with ZipStore(localpath, mode="r") as zipstore_opened:
-        print("Opened zipstore keys:", list(zipstore_opened.keys()))
-        for key, value in zipstore_opened.items():
+    with DictStore(localpath, mode="r") as dstore_opened:
+        print("Opened dstore keys:", list(dstore_opened.keys()))
+        for key, value in dstore_opened.items():
             if isinstance(value, blosc2.NDArray):
                 print(
                     f"Key: {key}, Shape: {value.shape}, Values: {value[:10] if len(value) > 3 else value[:]}"

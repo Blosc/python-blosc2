@@ -25,7 +25,7 @@ class EmbedStore:
     For nodes that are stored remotely, only references to the arrays are
     stored, not the arrays themselves.
 
-    External storage is not supported here, only in the ZipStore.
+    External storage is not supported here, only in the DictStore.
 
     Parameters
     ----------
@@ -198,7 +198,7 @@ class EmbedStore:
         if isinstance(value, blosc2.NDArray) and getattr(value, "urlpath", None) is not None:
             raise ValueError(
                 "Cannot store a blosc2.NDArray with a urlpath in the embed store. "
-                "Use ZipStore for external storage."
+                "Use DictStore for external storage."
             )
         if isinstance(value, C2Array):
             self._embed_map[key] = {"urlbase": value.urlbase, "path": value.path}
