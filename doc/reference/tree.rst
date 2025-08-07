@@ -1,6 +1,6 @@
 .. _Tree:
 
-Tree
+EmbedStore
 ====
 
 A dictionary-like container for storing NumPy, Blosc2 (NDArray, either in memory or in external files) and remote (C2Array) arrays as nodes.
@@ -9,7 +9,7 @@ For nodes that are stored externally or remotely, only references to the arrays 
 
 .. currentmodule:: blosc2
 
-.. autoclass:: Tree
+.. autoclass:: EmbedStore
     :members:
     :member-order: groupwise
 

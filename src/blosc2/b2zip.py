@@ -15,13 +15,13 @@ from typing import Any
 import numpy as np
 
 import blosc2
-from blosc2.b2tree import Tree
+from blosc2.b2embed import EmbedStore
 from blosc2.c2array import C2Array
 
 
 class ZipStore:
     """
-    A directory-based storage container that uses a Tree index for metadata.
+    A directory-based storage container that uses a EmbedStore index for metadata.
 
     The ZipStore maintains a directory structure with an index file (index.b2t)
     that tracks all stored arrays. It also supports reading from a .b2z file,
@@ -107,7 +107,7 @@ class ZipStore:
             # Open the index file directly from zip using offset
             index_offset = self.offsets[self.index_path]["offset"]
             schunk = blosc2.open(self.b2z_path, mode="r", offset=index_offset)
-            self._tree = Tree(_from_schunk=schunk, _zip_store=True)
+            self._tree = EmbedStore(_from_schunk=schunk, _zip_store=True)
 
             # Build map_tree from .b2nd files in zip
             for filepath in self.offsets:
@@ -129,8 +129,8 @@ class ZipStore:
 
             self.b2z_path = self.localpath
 
-            # Initialize the underlying Tree index
-            self._tree = Tree(
+            # Initialize the underlying EmbedStore index
+            self._tree = EmbedStore(
                 urlpath=self.index_path,
                 mode=mode,
                 cparams=cparams,
@@ -140,14 +140,14 @@ class ZipStore:
             )
 
     @property
-    def tree(self) -> Tree:
+    def tree(self) -> EmbedStore:
         """
-        Access to the underlying Tree index.
+        Access to the underlying EmbedStore index.
 
         Returns
         -------
-        tree : Tree
-            The underlying Tree object used for indexing.
+        tree : EmbedStore
+            The underlying EmbedStore object used for indexing.
         """
         return self._tree
 
@@ -210,7 +210,7 @@ class ZipStore:
         KeyError
             If key is not found.
         """
-        # Check map_tree first (takes precedence over Tree index)
+        # Check map_tree first (takes precedence over EmbedStore index)
         if key in self.map_tree:
             filepath = self.map_tree[key]
             if filepath in self.offsets:
@@ -223,7 +223,7 @@ class ZipStore:
                 else:
                     raise KeyError(f"File for key '{key}' not found in offsets or temporary directory.")
 
-        # Fall back to Tree index
+        # Fall back to EmbedStore index
         return self._tree[key]
 
     def get(self, key: str, default: Any = None) -> blosc2.NDArray | Any:
@@ -307,7 +307,7 @@ class ZipStore:
         keys : dict_keys
             Keys of the zipstore.
         """
-        # Combine keys from both map_tree and Tree index
+        # Combine keys from both map_tree and EmbedStore index
         return set(self.map_tree.keys()) | set(self._tree.keys())
 
     def values(self) -> Iterator[blosc2.NDArray]:

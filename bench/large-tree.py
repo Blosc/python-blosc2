@@ -9,7 +9,7 @@ import os
 import time
 import numpy as np
 import blosc2
-from blosc2.b2tree import Tree
+from blosc2.b2embed import EmbedStore
 from memory_profiler import memory_usage
 
 def make_arrays(n, min_size, max_size, dtype="f8"):
@@ -30,7 +30,7 @@ def get_file_size(filepath):
 
 def check_arrays(tree_path, arrays, prefix="node"):
     print("Checking stored arrays...")
-    tree = Tree(urlpath=tree_path, mode="r")
+    tree = EmbedStore(urlpath=tree_path, mode="r")
     for i, arr in enumerate(arrays):
         stored_arr = tree[f"/{prefix}{i}"][:]
         if not np.allclose(arr, stored_arr):
@@ -38,7 +38,7 @@ def check_arrays(tree_path, arrays, prefix="node"):
 
 def run_embedded_tree(arrays, sizes, tree_path, uncompressed_size, check=False):
     def embedded_process():
-        tree = Tree(urlpath=tree_path, mode="w")
+        tree = EmbedStore(urlpath=tree_path, mode="w")
         for i, arr in enumerate(arrays):
             tree[f"/node{i}"] = arr
         return tree
@@ -58,7 +58,7 @@ def run_embedded_tree(arrays, sizes, tree_path, uncompressed_size, check=False):
 
 def run_external_tree(arrays, sizes, tree_path, arr_prefix, uncompressed_size, check=False):
     def external_process():
-        tree = Tree(urlpath=tree_path, mode="w")
+        tree = EmbedStore(urlpath=tree_path, mode="w")
         for i, arr in enumerate(arrays):
             arr_path = f"{arr_prefix}_node{i}.b2nd"
             arr_b2 = blosc2.asarray(arr, urlpath=arr_path, mode="w")
@@ -73,7 +73,7 @@ def run_external_tree(arrays, sizes, tree_path, arr_prefix, uncompressed_size, c
     total_external_size = sum(get_file_size(f"{arr_prefix}_node{i}.b2nd") for i in range(len(arrays)))
     total_size_mb = (file_size + total_external_size)
     compression_ratio = uncompressed_size / (total_size_mb * 1e6) if total_size_mb > 0 else 0
-    print(f"[External] Time: {t1-t0:.2f}s, Memory: {peak_mem:.2f} MB, Tree file size: {file_size:.2f} MB, External files size: {total_external_size:.2f} MB, Total: {total_size_mb:.2f} MB, Compression: {compression_ratio:.1f}x")
+    print(f"[External] Time: {t1-t0:.2f}s, Memory: {peak_mem:.2f} MB, EmbedStore file size: {file_size:.2f} MB, External files size: {total_external_size:.2f} MB, Total: {total_size_mb:.2f} MB, Compression: {compression_ratio:.1f}x")
 
     if check:
         check_arrays(tree_path, arrays, prefix="node")
@@ -95,18 +95,18 @@ if __name__ == "__main__":
     print(f"Creating {N} arrays with sizes ranging from {min_size / 1e6:.2f} to {max_size / 1e6:.2f} MB...")
     arrays, sizes, uncompressed_size = make_arrays(N, min_size, max_size)
 
-    print("Benchmarking Tree with embedded arrays...")
+    print("Benchmarking EmbedStore with embedded arrays...")
     tree_path_embedded = "large_embedded_tree.b2t"
     t_embedded, mem_embedded, file_size_embedded = run_embedded_tree(arrays, sizes, tree_path_embedded, uncompressed_size)
 
-    print("Benchmarking Tree with external arrays...")
+    print("Benchmarking EmbedStore with external arrays...")
     tree_path_external = "large_external_tree.b2t"
     arr_prefix = "large_external"
     t_external, mem_external, file_size_external, external_size = run_external_tree(arrays, sizes, tree_path_external, arr_prefix, uncompressed_size)
 
     print("\nSummary:")
     print(f"Embedded arrays:   Time = {t_embedded:.2f}s, Memory = {mem_embedded:.2f} MB, File size = {file_size_embedded:.2f} MB")
-    print(f"External arrays:   Time = {t_external:.2f}s, Memory = {mem_external:.2f} MB, Tree file size = {file_size_external:.2f} MB, External files size = {external_size:.2f} MB")
+    print(f"External arrays:   Time = {t_external:.2f}s, Memory = {mem_external:.2f} MB, EmbedStore file size = {file_size_external:.2f} MB, External files size = {external_size:.2f} MB")
 
     speedup = t_embedded / t_external if t_external > 0 else float('inf')
     mem_ratio = mem_embedded / mem_external if mem_external > 0 else float('inf')

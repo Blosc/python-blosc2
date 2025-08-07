@@ -16,7 +16,7 @@ Main Classes
     ProxySource
     ProxyNDSource
     SimpleProxy
-    Tree
+    EmbedStore
 
 .. toctree::
     :maxdepth: 1

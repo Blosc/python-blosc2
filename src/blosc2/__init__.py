@@ -263,7 +263,7 @@ from .ndarray import (
     matrix_transpose,
     stack,
 )
-from .b2tree import Tree, tree_from_cframe
+from .b2embed import EmbedStore, estore_from_cframe
 
 from .c2array import c2context, C2Array, URLPath
 
@@ -367,6 +367,7 @@ __all__ = [
     # Enums
     "Codec",
     "DParams",
+    "EmbedStore",
     "Filter",
     "LazyArray",
     "LazyExpr",
@@ -382,7 +383,6 @@ __all__ = [
     "SpecialValue",
     "SplitMode",
     "Storage",
-    "Tree",
     "Tuner",
     "URLPath",
     # Version
@@ -416,6 +416,7 @@ __all__ = [
     "decompress2",
     "detect_number_of_cores",
     "dparams_dflts",
+    "estore_from_cframe",
     "expand_dims",
     "expm1",
     "eye",
@@ -480,7 +481,6 @@ __all__ = [
     "tan",
     "tanh",
     "transpose",
-    "tree_from_cframe",
     "uninit",
     "unpack",
     "unpack_array",

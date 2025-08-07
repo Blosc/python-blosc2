@@ -15,16 +15,17 @@ import blosc2
 from blosc2.c2array import C2Array
 from blosc2.schunk import SChunk
 
-PROFILE = False  # Set to True to enable PROFILE prints in Tree
+PROFILE = False  # Set to True to enable PROFILE prints in EmbedStore
 
 
-class Tree:
+class EmbedStore:
     """
     A dictionary-like container for storing NumPy/Blosc2 arrays as nodes.
 
-    For nodes that are stored externally or remotely, only references to the
-    arrays are stored, not the arrays themselves. This allows for efficient
-    storage and retrieval of large datasets.
+    For nodes that are stored remotely, only references to the arrays are
+    stored, not the arrays themselves.
+
+    External storage is not supported here, only in the ZipStore.
 
     Parameters
     ----------
@@ -33,28 +34,28 @@ class Tree:
     mode : str, optional
         File mode ('r', 'w', 'a'). Default is 'w'.
     cparams : dict or None, optional
-        Compression parameters for nodes.
+        Compression parameters for nodes and the embed store itself.
         Default is None, which uses the default Blosc2 parameters.
     dparams : dict or None, optional
-        Decompression parameters for nodes.
+        Decompression parameters for nodes and the embed store itself.
         Default is None, which uses the default Blosc2 parameters.
     storage : blosc2.Storage or None, optional
-        Storage properties for the tree store.  If passed, it will override
+        Storage properties for the embed store.  If passed, it will override
         the `urlpath` and `mode` parameters.
     initial_size : int, optional
         Initial size of the backing storage in bytes.
 
     Examples
     --------
-    >>> tree = Tree(urlpath="example_tree.b2t", mode="w")
-    >>> tree["/node1"] = np.array([1, 2, 3])
-    >>> tree["/node2"] = blosc2.ones(2)
-    >>> tree["/node3"] = blosc2.arange(3, dtype="i4", urlpath="external_node3.b2nd", mode="w")
+    >>> estore = EmbedStore(urlpath="example_estore.b2t", mode="w")
+    >>> estore["/node1"] = np.array([1, 2, 3])
+    >>> estore["/node2"] = blosc2.ones(2)
+    >>> estore["/node3"] = blosc2.arange(3, dtype="i4", urlpath="external_node3.b2nd", mode="w")
     >>> urlpath = blosc2.URLPath("@public/examples/ds-1d.b2nd", "https://cat2.cloud/demo")
-    >>> tree["/node4"] = blosc2.open(urlpath, mode="r")
-    >>> print(list(tree.keys()))
+    >>> estore["/node4"] = blosc2.open(urlpath, mode="r")
+    >>> print(list(estore.keys()))
     ['/node1', '/node2', '/node3', '/node4']
-    >>> print(tree["/node1"][:])
+    >>> print(estore["/node1"][:])
     [1 2 3]
     """
 
@@ -70,7 +71,7 @@ class Tree:
         _zip_store: bool = False,  # for internal use only
     ):
         """
-        See :class:`Tree` for full documentation of parameters.
+        See :class:`EmbedStore` for full documentation of parameters.
         """
 
         # For some reason, the SChunk store cannot achieve the same compression ratio as the NDArray store,
@@ -110,8 +111,8 @@ class Tree:
         _cparams = self.cparams
         _cparams.typesize = 1  # ensure typesize is set to 1 for byte storage
         _storage = self.storage
-        # Mark this storage as a b2tree object
-        _storage.meta = {"b2tree": {"version": 1}}
+        # Mark this storage as a b2embed object
+        _storage.meta = {"b2embed": {"version": 1}}
         if self._schunk_store:
             self._store = blosc2.SChunk(
                 chunksize=chunksize,
@@ -128,7 +129,7 @@ class Tree:
                 dparams=self.dparams,
                 storage=_storage,
             )
-        self._tree_map: dict = {}
+        self._embed_map: dict = {}
         self._current_offset = 0
 
     def _validate_key(self, key: str) -> None:
@@ -158,8 +159,8 @@ class Tree:
         for char in (":", "\0", "\n", "\r", "\t"):
             if char in key:
                 raise ValueError(f"Key cannot contain character: {char!r}")
-        if key in self._tree_map:
-            raise ValueError(f"Key '{key}' already exists in the tree.")
+        if key in self._embed_map:
+            raise ValueError(f"Key '{key}' already exists in store.")
 
     def _ensure_capacity(self, needed_bytes: int) -> None:
         """
@@ -177,7 +178,7 @@ class Tree:
 
     def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray | C2Array) -> None:
         """
-        Add a node to the tree.
+        Add a node to the embed store.
 
         Parameters
         ----------
@@ -196,11 +197,11 @@ class Tree:
         self._validate_key(key)
         if isinstance(value, blosc2.NDArray) and getattr(value, "urlpath", None) is not None:
             raise ValueError(
-                "Cannot store a blosc2.NDArray with a urlpath in the tree. "
+                "Cannot store a blosc2.NDArray with a urlpath in the embed store. "
                 "Use ZipStore for external storage."
             )
         if isinstance(value, C2Array):
-            self._tree_map[key] = {"urlbase": value.urlbase, "path": value.path}
+            self._embed_map[key] = {"urlbase": value.urlbase, "path": value.path}
         else:
             if isinstance(value, np.ndarray):
                 value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)
@@ -214,12 +215,12 @@ class Tree:
             else:
                 self._store[offset : offset + data_len] = np.frombuffer(serialized_data, dtype=np.uint8)
             self._current_offset += data_len
-            self._tree_map[key] = {"offset": offset, "length": data_len}
+            self._embed_map[key] = {"offset": offset, "length": data_len}
         self._save_metadata()
 
     def __getitem__(self, key: str) -> blosc2.NDArray:
         """
-        Retrieve a node from the tree.
+        Retrieve a node from the embed store.
 
         Parameters
         ----------
@@ -236,9 +237,9 @@ class Tree:
         KeyError
             If key is not found.
         """
-        if key not in self._tree_map:
-            raise KeyError(f"Key '{key}' not found in the tree.")
-        node_info = self._tree_map[key]
+        if key not in self._embed_map:
+            raise KeyError(f"Key '{key}' not found in the embed store.")
+        node_info = self._embed_map[key]
         urlbase = node_info.get("urlbase", None)
         if urlbase:
             urlpath = blosc2.URLPath(node_info["path"], urlbase=urlbase)
@@ -247,8 +248,8 @@ class Tree:
         if urlpath:
             if self._zip_store and self.urlpath:
                 # Convert the relative path to an absolute path
-                tree_dir = os.path.dirname(self.urlpath)
-                urlpath = os.path.join(tree_dir, urlpath)
+                store_dir = os.path.dirname(self.urlpath)
+                urlpath = os.path.join(store_dir, urlpath)
             return blosc2.open(urlpath)
         offset = node_info["offset"]
         length = node_info["length"]
@@ -272,11 +273,11 @@ class Tree:
         out : blosc2.NDArray or Any
             The stored array or default value.
         """
-        return self[key] if key in self._tree_map else default
+        return self[key] if key in self._embed_map else default
 
     def __delitem__(self, key: str) -> None:
         """
-        Remove a node from the tree.
+        Remove a node from the embed store.
 
         Parameters
         ----------
@@ -288,14 +289,14 @@ class Tree:
         KeyError
             If key is not found.
         """
-        if key not in self._tree_map:
-            raise KeyError(f"Key '{key}' not found in the tree.")
-        del self._tree_map[key]
+        if key not in self._embed_map:
+            raise KeyError(f"Key '{key}' not found in the embed store.")
+        del self._embed_map[key]
         self._save_metadata()
 
     def __contains__(self, key: str) -> bool:
         """
-        Check if a key exists in the tree.
+        Check if a key exists in the embed store.
 
         Parameters
         ----------
@@ -307,107 +308,107 @@ class Tree:
         exists : bool
             True if key exists, False otherwise.
         """
-        return key in self._tree_map
+        return key in self._embed_map
 
     def __len__(self) -> int:
         """
-        Return the number of nodes in the tree.
+        Return the number of nodes in the embed store.
 
         Returns
         -------
         count : int
             Number of nodes.
         """
-        return len(self._tree_map)
+        return len(self._embed_map)
 
     def __iter__(self) -> Iterator[str]:
         """
-        Return an iterator over the keys in the tree.
+        Return an iterator over the keys in the embed store.
 
         Returns
         -------
         iterator : Iterator[str]
             Iterator over keys.
         """
-        return iter(self._tree_map)
+        return iter(self._embed_map)
 
     def keys(self) -> dict[str, dict[str, int]].keys:
         """
-        Return all keys in the tree.
+        Return all keys in the embed store.
 
         Returns
         -------
         keys : dict_keys
-            Keys of the tree.
+            Keys of the embed store.
         """
-        return self._tree_map.keys()
+        return self._embed_map.keys()
 
     def values(self) -> Iterator[blosc2.NDArray]:
         """
-        Return an iterator over all values in the tree.
+        Return an iterator over all values in the embed store.
 
         Returns
         -------
         values : Iterator[blosc2.NDArray]
             Iterator over stored arrays.
         """
-        for key in self._tree_map:
+        for key in self._embed_map:
             yield self[key]
 
     def items(self) -> Iterator[tuple[str, blosc2.NDArray]]:
         """
-        Return an iterator over (key, value) pairs in the tree.
+        Return an iterator over (key, value) pairs in the embed store.
 
         Returns
         -------
         items : Iterator[tuple[str, blosc2.NDArray]]
             Iterator over key-value pairs.
         """
-        for key in self._tree_map:
+        for key in self._embed_map:
             yield key, self[key]
 
     def _save_metadata(self) -> None:
         """
-        Serialize and save the tree map to the vlmeta of the storage array.
+        Serialize and save the embed store map to the vlmeta of the storage array.
 
         Returns
         -------
         None
         """
-        metadata = {"tree_map": self._tree_map, "current_offset": self._current_offset}
-        self._store.vlmeta["tree_metadata"] = metadata
+        metadata = {"embed_map": self._embed_map, "current_offset": self._current_offset}
+        self._store.vlmeta["estore_metadata"] = metadata
 
     def _load_metadata(self) -> None:
         """
-        Load and deserialize the tree map from the vlmeta.
+        Load and deserialize the estore map from the vlmeta.
 
         Returns
         -------
         None
         """
-        if "tree_metadata" in self._store.vlmeta:
-            metadata = self._store.vlmeta["tree_metadata"]
-            self._tree_map = metadata["tree_map"]
+        if "estore_metadata" in self._store.vlmeta:
+            metadata = self._store.vlmeta["estore_metadata"]
+            self._embed_map = metadata["embed_map"]
             self._current_offset = metadata["current_offset"]
         else:
-            self._tree_map = {}
+            self._embed_map = {}
             self._current_offset = 0
 
     def to_cframe(self) -> bytes:
         """
-        Serialize the tree to a CFrame format.
+        Serialize the embed store to a CFrame format.
 
         Returns
         -------
         cframe : bytes
-            Serialized CFrame representation of the tree.
+            Serialized CFrame representation of the embed store.
         """
         return self._store.to_cframe()
 
 
-def tree_from_cframe(cframe: bytes, copy: bool = False) -> Tree:
+def estore_from_cframe(cframe: bytes, copy: bool = False) -> EmbedStore:
     """
-    Deserialize a CFrame to a Tree object.
+    Deserialize a CFrame to a EmbedStore object.
 
     Parameters
     ----------
@@ -418,47 +419,44 @@ def tree_from_cframe(cframe: bytes, copy: bool = False) -> Tree:
 
     Returns
     -------
-    tree : Tree
-        The deserialized Tree object.
+    estore : EmbedStore
+        The deserialized EmbedStore object.
     """
     schunk = blosc2.schunk_from_cframe(cframe, copy=copy)
-    return Tree(_from_schunk=schunk)
+    return EmbedStore(_from_schunk=schunk)
 
 
 if __name__ == "__main__":
     # Example usage
     persistent = False
     if persistent:
-        tree = Tree(urlpath="example_tree.b2t", mode="w")  # , cparams=blosc2.CParams(clevel=0))
+        estore = EmbedStore(urlpath="example_estore.b2t", mode="w")  # , cparams=blosc2.CParams(clevel=0))
     else:
-        tree = Tree()  # , cparams=blosc2.CParams(clevel=0))
+        estore = EmbedStore()  # , cparams=blosc2.CParams(clevel=0))
     # import pdb;  pdb.set_trace()
-    tree["/node1"] = np.array([1, 2, 3])
-    tree["/node2"] = blosc2.ones(2)
-    # Make /node3 an external file
-    arr_external = blosc2.arange(3, urlpath="external_node3.b2nd", mode="w")
-    tree["/dir1/node3"] = arr_external
+    estore["/node1"] = np.array([1, 2, 3])
+    estore["/node2"] = blosc2.ones(2)
     urlpath = blosc2.URLPath("@public/examples/ds-1d.b2nd", "https://cat2.cloud/demo")
     arr_remote = blosc2.open(urlpath, mode="r")
-    tree["/node4"] = arr_remote
+    estore["/dir1/node3"] = arr_remote
 
-    print("Tree keys:", list(tree.keys()))
-    print("Node1 data:", tree["/node1"][:])
-    print("Node2 data:", tree["/node2"][:])
-    print("Node3 data (external):", tree["/dir1/node3"][:])
+    print("EmbedStore keys:", list(estore.keys()))
+    print("Node1 data:", estore["/node1"][:])
+    print("Node2 data:", estore["/node2"][:])
+    print("Node3 data (remote):", estore["/dir1/node3"][:3])
 
-    del tree["/node1"]
-    print("After deletion, keys:", list(tree.keys()))
+    del estore["/node1"]
+    print("After deletion, keys:", list(estore.keys()))
 
-    # Reading back the tree
+    # Reading back the estore
     if persistent:
-        tree_read = Tree(urlpath="example_tree.b2t", mode="r")
+        estore_read = EmbedStore(urlpath="example_estore.b2t", mode="r")
     else:
-        tree_read = blosc2.from_cframe(tree.to_cframe())
+        estore_read = blosc2.from_cframe(estore.to_cframe())
 
-    print("Read keys:", list(tree_read.keys()))
-    for key, value in tree_read.items():
+    print("Read keys:", list(estore_read.keys()))
+    for key, value in estore_read.items():
         print(
-            f"shape of {key}: {value.shape}, dtype: {value.dtype}, map: {tree_read._tree_map[key]}, "
+            f"shape of {key}: {value.shape}, dtype: {value.dtype}, map: {estore_read._embed_map[key]}, "
             f"values: {value[:10] if len(value) > 3 else value[:]}"
         )
