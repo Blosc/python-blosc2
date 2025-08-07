@@ -23,7 +23,7 @@ class DictStore:
     """
     A directory-based storage container that uses a EmbedStore index for metadata.
 
-    The DictStore maintains a directory structure with an index file (index.b2t)
+    The DictStore maintains a directory structure with an index file (embed.b2e)
     that tracks all stored arrays. It also supports reading from a .b2z file,
     which is a zip archive containing Blosc2 compressed files.
 
@@ -76,31 +76,43 @@ class DictStore:
         self.mode = mode
         self._temp_dir_obj = None
 
-        # Enforce .b2z extension
-        if not self.localpath.endswith(".b2z"):
-            raise ValueError("localpath must have a .b2z extension")
+        if not self.localpath.endswith(".b2z") and not self.localpath.endswith(".b2d"):
+            raise ValueError("localpath must have a .b2z or .b2d extension")
+
+        if self.mode not in ("r", "w", "a"):
+            raise ValueError("For DictStore containers, mode must be 'r', 'w', or 'a'")
+
+        if self.localpath.endswith(".b2d"):
+            # No need to use a temporary directory for .b2d files
+            self.tmpdir = self.localpath
+            # Ensure the directory exists
+            if mode == "w" and not os.path.exists(self.localpath):
+                os.makedirs(self.localpath, exist_ok=True)
+            if mode in ("r", "a") and not os.path.isdir(self.localpath):
+                raise FileNotFoundError(f"Directory {self.localpath} does not exist for reading.")
 
         # Handle temporary directory
-        if tmpdir is None:
-            self._temp_dir_obj = tempfile.TemporaryDirectory()
-            self.tmpdir = self._temp_dir_obj.name
-        else:
-            self.tmpdir = tmpdir
-            if not os.path.exists(tmpdir):
-                os.makedirs(tmpdir, exist_ok=True)
+        if self.localpath.endswith(".b2z"):
+            if tmpdir is None:
+                self._temp_dir_obj = tempfile.TemporaryDirectory()
+                self.tmpdir = self._temp_dir_obj.name
+            else:
+                self.tmpdir = tmpdir
+                if not os.path.exists(tmpdir):
+                    os.makedirs(tmpdir, exist_ok=True)
 
         if mode == "r":
             # Handle .b2z file input for reading
             if not os.path.exists(self.localpath):
-                raise FileNotFoundError(f"Zip file {self.localpath} does not exist.")
+                raise FileNotFoundError(f"dir/zip file {self.localpath} does not exist.")
 
             self.b2z_path = self.localpath
-            self.index_path = "index.b2t"
+            self.index_path = "embed.b2e"
 
             # Populate offsets of files in b2z
             self.offsets = self._get_zip_offsets()
 
-            # Check if index.b2t exists in zip
+            # Check if embed.b2e exists in zip
             if self.index_path not in self.offsets:
                 raise FileNotFoundError(f"Index file {self.index_path} not found in b2z file.")
 
@@ -119,7 +131,7 @@ class DictStore:
                     self.map_tree[key] = filepath
         else:
             # Handle directory input for writing/appending
-            self.index_path = os.path.join(self.tmpdir, "index.b2t")
+            self.index_path = os.path.join(self.tmpdir, "embed.b2e")
 
             # Check if we're opening an existing dstore
             if mode == "a" and os.path.exists(self.localpath):
@@ -381,7 +393,7 @@ class DictStore:
             for filepath in filepaths:
                 arcname = os.path.relpath(filepath, self.tmpdir)
                 zf.write(filepath, arcname)
-            # Write index.b2t last
+            # Write embed.b2e last
             if os.path.exists(self.index_path):
                 arcname = os.path.relpath(self.index_path, self.tmpdir)
                 zf.write(self.index_path, arcname)

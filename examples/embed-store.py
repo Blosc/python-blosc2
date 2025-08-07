@@ -18,18 +18,14 @@ else:
     tree = blosc2.EmbedStore()
 tree["/node1"] = np.array([1, 2, 3])
 tree["/node2"] = blosc2.ones(2)
-# Make /node3 an external file
-arr_external = blosc2.arange(3, urlpath="external_node3.b2nd", mode="w")
-tree["/node3"] = arr_external
 urlpath = blosc2.URLPath("@public/examples/ds-1d.b2nd", "https://cat2.cloud/demo")
 arr_remote = blosc2.open(urlpath, mode="r")
-tree["/node4"] = arr_remote
+tree["/dir1/node3"] = arr_remote
 
 print("EmbedStore keys:", list(tree.keys()))
 print("Node1 data (embedded, numpy):", tree["/node1"][:])
 print("Node2 data (embedded, blosc2):", tree["/node2"][:])
-print("Node3 data (external):", tree["/node3"][:])
-print("Node4 data (remote):", tree["/node3"][:])
+print("Node3 3 first row data (remote):", tree["/dir1/node3"][:3])
 
 del tree["/node1"]
 print("After deletion, keys:", list(tree.keys()))
@@ -41,8 +37,8 @@ else:
     tree_read = blosc2.from_cframe(tree.to_cframe())
 
 # Add another node to the tree
-tree_read["/node5"] = np.array([4, 5, 6])
-print("Node5 data:", tree_read["/node5"][:])
+tree_read["/node4"] = np.array([4, 5, 6])
+print("Node4 data:", tree_read["/node4"][:])
 
 print("Read keys:", list(tree_read.keys()))
 for key, value in tree_read.items():

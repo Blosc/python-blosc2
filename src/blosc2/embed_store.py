@@ -47,7 +47,7 @@ class EmbedStore:
 
     Examples
     --------
-    >>> estore = EmbedStore(urlpath="example_estore.b2t", mode="w")
+    >>> estore = EmbedStore(urlpath="example_estore.b2e", mode="w")
     >>> estore["/node1"] = np.array([1, 2, 3])
     >>> estore["/node2"] = blosc2.ones(2)
     >>> estore["/node3"] = blosc2.arange(3, dtype="i4", urlpath="external_node3.b2nd", mode="w")
@@ -430,7 +430,7 @@ if __name__ == "__main__":
     # Example usage
     persistent = False
     if persistent:
-        estore = EmbedStore(urlpath="example_estore.b2t", mode="w")  # , cparams=blosc2.CParams(clevel=0))
+        estore = EmbedStore(urlpath="example_estore.b2e", mode="w")  # , cparams=blosc2.CParams(clevel=0))
     else:
         estore = EmbedStore()  # , cparams=blosc2.CParams(clevel=0))
     # import pdb;  pdb.set_trace()
@@ -450,7 +450,7 @@ if __name__ == "__main__":
 
     # Reading back the estore
     if persistent:
-        estore_read = EmbedStore(urlpath="example_estore.b2t", mode="r")
+        estore_read = EmbedStore(urlpath="example_estore.b2e", mode="r")
     else:
         estore_read = blosc2.from_cframe(estore.to_cframe())
 

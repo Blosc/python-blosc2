@@ -16,7 +16,7 @@ import blosc2
 @pytest.fixture
 def cleanup_files():
     files = [
-        "test_estore.b2t",
+        "test_estore.b2e",
         "external_node3.b2nd",
     ]
     yield
@@ -27,7 +27,7 @@ def cleanup_files():
 
 @pytest.fixture
 def populate_nodes(cleanup_files):
-    estore = blosc2.EmbedStore(urlpath="test_estore.b2t", mode="w")
+    estore = blosc2.EmbedStore(urlpath="test_estore.b2e", mode="w")
     estore["/node1"] = np.array([1, 2, 3])
     arr_embedded = blosc2.arange(3, dtype=np.int32)
     arr_embedded.vlmeta["description"] = "This is vlmeta for /node2"
@@ -50,7 +50,7 @@ def test_basic(populate_nodes):
     del estore["/node1"]
     assert "/node1" not in estore
 
-    estore_read = blosc2.EmbedStore(urlpath="test_estore.b2t", mode="r")
+    estore_read = blosc2.EmbedStore(urlpath="test_estore.b2e", mode="r")
     assert set(estore_read.keys()) == {"/node2", "/node3"}
     for value in estore_read.values():
         assert hasattr(value, "shape")
@@ -61,12 +61,12 @@ def test_with_remote(populate_nodes):
     estore = populate_nodes
 
     # Re-open the estore to add a remote node
-    estore = blosc2.EmbedStore(urlpath="test_estore.b2t")
+    estore = blosc2.EmbedStore(urlpath="test_estore.b2e")
     urlpath = blosc2.URLPath("@public/examples/ds-1d.b2nd", "https://cat2.cloud/demo/")
     arr_remote = blosc2.open(urlpath, mode="r")
     estore["/node4"] = arr_remote
 
-    estore_read = blosc2.EmbedStore(urlpath="test_estore.b2t", mode="r")
+    estore_read = blosc2.EmbedStore(urlpath="test_estore.b2e", mode="r")
     assert set(estore_read.keys()) == {"/node1", "/node2", "/node3", "/node4"}
     for key, value in estore_read.items():
         assert hasattr(value, "shape")
@@ -94,7 +94,7 @@ def test_with_compression():
 def test_with_many_nodes():
     # Create a estore with many nodes
     N = 200
-    estore = blosc2.EmbedStore(urlpath="test_estore.b2t", mode="w")
+    estore = blosc2.EmbedStore(urlpath="test_estore.b2e", mode="w")
     for i in range(N):
         estore[f"/node_{i}"] = blosc2.full(
             shape=(10,),
@@ -103,7 +103,7 @@ def test_with_many_nodes():
         )
 
     # Read the estore and check the nodes
-    estore_read = blosc2.EmbedStore(urlpath="test_estore.b2t", mode="r")
+    estore_read = blosc2.EmbedStore(urlpath="test_estore.b2e", mode="r")
     assert len(estore_read) == N
     for i in range(N):
         assert np.all(estore_read[f"/node_{i}"][:] == np.full((10,), i, dtype=np.int32))
