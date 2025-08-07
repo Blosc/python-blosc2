@@ -120,3 +120,7 @@ def process_sig(app, what, name, obj, options, signature, return_annotation):
 
 def setup(app):
     app.connect("autodoc-process-signature", process_sig)
+
+
+# Allow errors (e.g. with numba asking for a specific numpy version)
+nbsphinx_allow_errors = True

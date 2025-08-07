@@ -15,8 +15,8 @@ from typing import Any
 import numpy as np
 
 import blosc2
-from blosc2.b2embed import EmbedStore
 from blosc2.c2array import C2Array
+from blosc2.embed_store import EmbedStore
 
 
 class ZipStore:

@@ -12,11 +12,11 @@ Main Classes
     NDField
     LazyArray
     C2Array
+    EmbedStore
     Proxy
     ProxySource
     ProxyNDSource
     SimpleProxy
-    EmbedStore
 
 .. toctree::
     :maxdepth: 1
@@ -24,13 +24,13 @@ Main Classes
     schunk
     ndarray
     ndfield
+    embed_store
     lazyarray
     c2array
     proxy
     proxysource
     proxyndsource
     simpleproxy
-    tree
 
 Other Classes
 -------------

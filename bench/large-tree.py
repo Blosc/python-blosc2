@@ -9,7 +9,7 @@ import os
 import time
 import numpy as np
 import blosc2
-from blosc2.b2embed import EmbedStore
+from blosc2.embed_store import EmbedStore
 from memory_profiler import memory_usage
 
 def make_arrays(n, min_size, max_size, dtype="f8"):

@@ -263,7 +263,7 @@ from .ndarray import (
     matrix_transpose,
     stack,
 )
-from .b2embed import EmbedStore, estore_from_cframe
+from .embed_store import EmbedStore, estore_from_cframe
 
 from .c2array import c2context, C2Array, URLPath
 
