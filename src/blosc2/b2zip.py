@@ -107,7 +107,7 @@ class ZipStore:
             # Open the index file directly from zip using offset
             index_offset = self.offsets[self.index_path]["offset"]
             schunk = blosc2.open(self.b2z_path, mode="r", offset=index_offset)
-            self._tree = EmbedStore(_from_schunk=schunk, _zip_store=True)
+            self._estore = EmbedStore(_from_schunk=schunk, _zip_store=True)
 
             # Build map_tree from .b2nd files in zip
             for filepath in self.offsets:
@@ -130,7 +130,7 @@ class ZipStore:
             self.b2z_path = self.localpath
 
             # Initialize the underlying EmbedStore index
-            self._tree = EmbedStore(
+            self._estore = EmbedStore(
                 urlpath=self.index_path,
                 mode=mode,
                 cparams=cparams,
@@ -140,16 +140,16 @@ class ZipStore:
             )
 
     @property
-    def tree(self) -> EmbedStore:
+    def estore(self) -> EmbedStore:
         """
         Access to the underlying EmbedStore index.
 
         Returns
         -------
-        tree : EmbedStore
+        estore : EmbedStore
             The underlying EmbedStore object used for indexing.
         """
-        return self._tree
+        return self._estore
 
     def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray | C2Array) -> None:
         """
@@ -176,7 +176,6 @@ class ZipStore:
             #     rel_key = "root"
 
             # Create the destination path relative to the tree file's directory
-            # tree_dir = os.path.dirname(self.localpath) if self.urlpath else "."
             dest_path = os.path.join(self.tmpdir, rel_key + ".b2nd")
 
             # Ensure the parent directory exists
@@ -189,7 +188,7 @@ class ZipStore:
             rel_path = os.path.relpath(dest_path, self.tmpdir)
             self.map_tree[key] = rel_path
         else:
-            self._tree[key] = value
+            self._estore[key] = value
 
     def __getitem__(self, key: str) -> blosc2.NDArray:
         """
@@ -224,7 +223,7 @@ class ZipStore:
                     raise KeyError(f"File for key '{key}' not found in offsets or temporary directory.")
 
         # Fall back to EmbedStore index
-        return self._tree[key]
+        return self._estore[key]
 
     def get(self, key: str, default: Any = None) -> blosc2.NDArray | Any:
         """
@@ -242,7 +241,7 @@ class ZipStore:
         out : blosc2.NDArray or Any
             The stored array or default value.
         """
-        return self._tree.get(key, default)
+        return self._estore.get(key, default)
 
     def __delitem__(self, key: str) -> None:
         """
@@ -258,7 +257,7 @@ class ZipStore:
         KeyError
             If key is not found.
         """
-        del self._tree[key]
+        del self._estore[key]
 
     def __contains__(self, key: str) -> bool:
         """
@@ -274,7 +273,7 @@ class ZipStore:
         exists : bool
             True if key exists, False otherwise.
         """
-        return key in self.map_tree or key in self._tree
+        return key in self.map_tree or key in self._estore
 
     def __len__(self) -> int:
         """
@@ -285,7 +284,7 @@ class ZipStore:
         count : int
             Number of nodes.
         """
-        return len(self._tree)
+        return len(self._estore)
 
     def __iter__(self) -> Iterator[str]:
         """
@@ -296,7 +295,7 @@ class ZipStore:
         iterator : Iterator[str]
             Iterator over keys.
         """
-        return iter(self._tree)
+        return iter(self._estore)
 
     def keys(self) -> dict[str, dict[str, int]].keys:
         """
@@ -308,7 +307,7 @@ class ZipStore:
             Keys of the zipstore.
         """
         # Combine keys from both map_tree and EmbedStore index
-        return set(self.map_tree.keys()) | set(self._tree.keys())
+        return set(self.map_tree.keys()) | set(self._estore.keys())
 
     def values(self) -> Iterator[blosc2.NDArray]:
         """
@@ -319,7 +318,7 @@ class ZipStore:
         values : Iterator[blosc2.NDArray]
             Iterator over stored arrays.
         """
-        return self._tree.values()
+        return self._estore.values()
 
     def items(self) -> Iterator[tuple[str, blosc2.NDArray]]:
         """
@@ -330,11 +329,11 @@ class ZipStore:
         items : Iterator[tuple[str, blosc2.NDArray]]
             Iterator over key-value pairs.
         """
-        # Get all unique keys from both map_tree and _tree, with map_tree taking precedence
-        all_keys = set(self.map_tree.keys()) | set(self._tree.keys())
+        # Get all unique keys from both map_tree and _estore, with map_tree taking precedence
+        all_keys = set(self.map_tree.keys()) | set(self._estore.keys())
 
         for key in all_keys:
-            # Check map_tree first, then fall back to _tree
+            # Check map_tree first, then fall back to _estore
             if key in self.map_tree:
                 filepath = self.map_tree[key]
                 if filepath in self.offsets:
@@ -342,10 +341,9 @@ class ZipStore:
                     yield key, blosc2.open(self.b2z_path, mode="r", offset=offset)
                 else:
                     # Fallback if filepath not in offsets
-                    yield key, self._tree[key]
+                    yield key, self._estore[key]
             else:
-                # Use the _tree for keys not in map_tree
-                yield key, self._tree[key]
+                yield key, self._estore[key]
 
     def to_b2z(self, overwrite=False) -> os.PathLike[Any] | str:
         """
