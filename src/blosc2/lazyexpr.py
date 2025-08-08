@@ -1412,26 +1412,19 @@ def slices_eval(  # noqa: C901
     # keep orig_slice
     _slice = _slice.raw
     orig_slice = _slice
-    full_slice = ()  # by default the full_slice is the whole array
-    final_slice = ()  # by default the final_slice is the whole array
 
     # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
     if out is None:
         if _slice != ():
             # Check whether _slice contains an integer, or any step that are not None or 1
-            if any(
-                (isinstance(s, int)) or (isinstance(s, slice) and s.step not in (None, 1)) for s in _slice
-            ):
+            if any((isinstance(s, int)) for s in _slice):
                 need_final_slice = True
-            _slice = tuple(slice(i, i + 1) if isinstance(i, int) else i for i in _slice)
-            full_slice = tuple(
-                slice(s.start or 0, s.stop or shape[i], 1) for i, s in enumerate(_slice)
-            )  # get rid of non-unit steps
+            _slice = tuple(slice(i, i + 1, 1) if isinstance(i, int) else i for i in _slice)
             # shape_slice in general not equal to final shape:
-            # dummy dims (due to ints) or non-unit steps will be dealt with by taking final_slice
-            shape_slice = ndindex.ndindex(full_slice).newshape(shape)
-            final_slice = ndindex.ndindex(orig_slice).as_subindex(full_slice).raw
+            # dummy dims (due to ints) will be dealt with by taking final_slice
+            shape_slice = ndindex.ndindex(_slice).newshape(shape)
+            mask_slice = np.bool([isinstance(i, int) for i in orig_slice])
     else:
         # # out should always have shape of full array
         # if shape is not None and shape != out.shape:
@@ -1476,10 +1469,7 @@ def slices_eval(  # noqa: C901
     for nchunk, chunk_slice in enumerate(intersecting_chunks):
         # get intersection of chunk and target
         if _slice != ():
-            cslice = tuple(
-                slice(max(s1.start, s2.start), min(s1.stop, s2.stop))
-                for s1, s2 in zip(chunk_slice.raw, _slice, strict=True)
-            )
+            cslice = step_handler(chunk_slice.raw, _slice)
         else:
             cslice = chunk_slice.raw
 
@@ -1487,12 +1477,13 @@ def slices_eval(  # noqa: C901
         len_chunk = math.prod(cslice_shape)
         # get local index of part of out that is to be updated
         cslice_subidx = (
-            ndindex.ndindex(cslice).as_subindex(full_slice).raw
-        )  # in the case full_slice=(), just gives cslice
+            ndindex.ndindex(cslice).as_subindex(_slice).raw
+        )  # in the case _slice=(), just gives cslice
 
         # Get the starts and stops for the slice
         starts = [s.start if s.start is not None else 0 for s in cslice]
         stops = [s.stop if s.stop is not None else sh for s, sh in zip(cslice, cslice_shape, strict=True)]
+        unit_steps = np.all([s.step == 1 for s in cslice])
 
         # Get the slice of each operand
         for key, value in operands.items():
@@ -1512,6 +1503,7 @@ def slices_eval(  # noqa: C901
                 key in chunk_operands
                 and cslice_shape == chunk_operands[key].shape
                 and isinstance(value, blosc2.NDArray)
+                and unit_steps
             ):
                 value.get_slice_numpy(chunk_operands[key], (starts, stops))
                 continue
@@ -1565,6 +1557,9 @@ def slices_eval(  # noqa: C901
                     result = x[result]
             else:
                 raise ValueError("The where condition must be a tuple with one or two elements")
+        # Enforce contiguity of result (necessary to fill the out array)
+        # but avoid copy if already contiguous
+        result = np.require(result, requirements="C")
 
         if out is None:
             shape_ = shape_slice if shape_slice is not None else shape
@@ -1622,15 +1617,13 @@ def slices_eval(  # noqa: C901
             out.resize((lenout,))
 
     else:  # Need to take final_slice since filled up array according to slice_ for each chunk
-        if final_slice != ():
+        if need_final_slice:  # only called if out was None
             if isinstance(out, np.ndarray):
-                if need_final_slice:  # only called if out was None
-                    out = out[final_slice]
+                out = np.squeeze(out, np.where(mask_slice)[0])
             elif isinstance(out, blosc2.NDArray):
                 # It *seems* better to choose an automatic chunks and blocks for the output array
                 # out = out.slice(_slice, chunks=out.chunks, blocks=out.blocks)
-                if need_final_slice:  # only called if out was None
-                    out = out.slice(final_slice)
+                out = out.squeeze(mask_slice)
             else:
                 raise ValueError("The output array is not a NumPy array or a NDArray")
 
@@ -1743,17 +1736,22 @@ def infer_reduction_dtype(dtype, operation):
         raise ValueError(f"Unsupported operation: {operation}")
 
 
-def step_handler(s1start, s2start, s1stop, s2stop, s2step):
-    # assume s1step = 1
-    newstart = max(s1start, s2start)
-    newstop = min(s1stop, s2stop)
-    rem = (newstart - s2start) % s2step
-    if rem != 0:  # only pass through here if s2step is not 1
-        newstart += s2step - rem
-        # true_stop = start + n*step + 1 -> stop = start + n * step + 1 + residual
-        # so n = (stop - start - 1) // step
-        newstop = newstart + (newstop - newstart - 1) // s2step * s2step + 1
-    return slice(newstart, newstop, s2step)
+def step_handler(cslice, _slice):
+    out = ()
+    for s1, s2 in zip(cslice, _slice, strict=True):
+        s1start, s1stop = s1.start, s1.stop
+        s2start, s2stop, s2step = s2.start, s2.stop, s2.step
+        # assume s1step = 1
+        newstart = max(s1start, s2start)
+        newstop = min(s1stop, s2stop)
+        rem = (newstart - s2start) % s2step
+        if rem != 0:  # only pass through here if s2step is not 1
+            newstart += s2step - rem
+            # true_stop = start + n*step + 1 -> stop = start + n * step + 1 + residual
+            # so n = (stop - start - 1) // step
+            newstop = newstart + (newstop - newstart - 1) // s2step * s2step + 1
+        out += (slice(newstart, newstop, s2step),)
+    return out
 
 
 def reduce_slices(  # noqa: C901
@@ -1807,21 +1805,27 @@ def reduce_slices(  # noqa: C901
 
     _slice = _slice.raw
     shape_slice = shape
-    full_slice = ()  # by default the full_slice is the whole array
+    mask_slice = np.bool([isinstance(i, int) for i in _slice])
     if out is None and _slice != ():
+        _slice = tuple(slice(i, i + 1, 1) if isinstance(i, int) else i for i in _slice)
         shape_slice = ndindex.ndindex(_slice).newshape(shape)
-        full_slice = _slice
+        # shape_slice in general not equal to final shape:
+        # dummy dims (due to ints) will be dealt with by taking final_slice
 
     # after slicing, we reduce to calculate shape of output
     if axis is None:
         axis = tuple(range(len(shape_slice)))
     elif not isinstance(axis, tuple):
         axis = (axis,)
-    axis = tuple(a if a >= 0 else a + len(shape_slice) for a in axis)
+    axis = np.array([a if a >= 0 else a + len(shape_slice) for a in axis])
+    if np.any(mask_slice):
+        axis = tuple(axis + np.cumsum(mask_slice)[axis])  # axis now refers to new shape with dummy dims
+        reduce_args["axis"] = axis
     if keepdims:
         reduced_shape = tuple(1 if i in axis else s for i, s in enumerate(shape_slice))
     else:
         reduced_shape = tuple(s for i, s in enumerate(shape_slice) if i not in axis)
+        mask_slice = mask_slice[[i for i in range(len(mask_slice)) if i not in axis]]
 
     if out is not None and reduced_shape != out.shape:
         raise ValueError("Provided output shape does not match the reduced shape.")
@@ -1876,13 +1880,10 @@ def reduce_slices(  # noqa: C901
         # Check whether current cslice intersects with _slice
         if cslice != () and _slice != ():
             # get intersection of chunk and target
-            cslice = tuple(
-                step_handler(s1.start, s2.start, s1.stop, s2.stop, s2.step)
-                for s1, s2 in zip(cslice, _slice, strict=True)
-            )
+            cslice = step_handler(cslice, _slice)
         chunks_ = tuple(s.stop - s.start for s in cslice)
-
-        if _slice == () and fast_path:
+        unit_steps = np.all([s.step == 1 for s in cslice])
+        if _slice == () and fast_path and unit_steps:
             # Fast path
             full_chunk = chunks_ == chunks
             fill_chunk_operands(
@@ -1910,15 +1911,14 @@ def reduce_slices(  # noqa: C901
                     key in chunk_operands
                     and chunks_ == chunk_operands[key].shape
                     and isinstance(value, blosc2.NDArray)
+                    and unit_steps
                 ):
                     value.get_slice_numpy(chunk_operands[key], (starts, stops))
                     continue
                 chunk_operands[key] = value[cslice]
 
         # get local index of part of out that is to be updated
-        cslice_subidx = (
-            ndindex.ndindex(cslice).as_subindex(full_slice).raw
-        )  # if full_slice is (), just gives cslice
+        cslice_subidx = ndindex.ndindex(cslice).as_subindex(_slice).raw  # if _slice is (), just gives cslice
         if keepdims:
             reduced_slice = tuple(slice(None) if i in axis else sl for i, sl in enumerate(cslice_subidx))
         else:
@@ -1938,8 +1938,8 @@ def reduce_slices(  # noqa: C901
 
         if where is None:
             if expression == "o0":
-                # We don't have an actual expression, so avoid a copy
-                result = chunk_operands["o0"]
+                # We don't have an actual expression, so avoid a copy except to make contiguous
+                result = np.require(chunk_operands["o0"], requirements="C")
             else:
                 result = ne_evaluate(expression, chunk_operands, **ne_args)
         else:
@@ -1997,6 +1997,9 @@ def reduce_slices(  # noqa: C901
             dtype = np.float64
         out = convert_none_out(dtype, reduce_op, reduced_shape)
 
+    final_mask = tuple(np.where(mask_slice)[0])
+    if np.any(mask_slice):  # remove dummy dims
+        out = np.squeeze(out, axis=final_mask)
     # Check if the output array needs to be converted into a blosc2.NDArray
     if kwargs != {} and not np.isscalar(out):
         out = blosc2.asarray(out, **kwargs)
@@ -2089,7 +2092,9 @@ def chunked_eval(  # noqa: C901
             # The fast path is possible under a few conditions
             if getitem and (where is None or len(where) == 2) and not callable(expression):
                 # Compute the size of operands for the fast path
-                shape_operands = item.newshape(shape)  # shape of slice
+                unit_steps = np.all([s.step == 1 for s in item.raw if isinstance(s, slice)])
+                # shape of slice, if non-unit steps have to decompress full array into memory
+                shape_operands = item.newshape(shape) if unit_steps else shape
                 _dtype = kwargs.get("dtype", np.float64)
                 size_operands = math.prod(shape_operands) * len(operands) * _dtype.itemsize
                 # Only take the fast path if the size of operands is relatively small
@@ -3118,6 +3123,14 @@ class LazyExpr(LazyArray):
                 new_expr.expression_tosave = expression
                 new_expr.operands = operands_
                 new_expr.operands_tosave = operands
+            elif isinstance(new_expr, blosc2.NDArray) and len(operands) == 1:
+                # passed either "a" or possible "a[:10]"
+                expression_, operands_ = conserve_functions(
+                    _expression, _operands, {"o0": list(operands.values())[0]} | local_vars
+                )
+                new_expr = cls(None)
+                new_expr.expression = expression_
+                new_expr.operands = operands_
             else:
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
                 new_expr = cls(None)

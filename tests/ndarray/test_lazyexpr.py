@@ -1088,7 +1088,7 @@ def test_eval_getitem2():
     np.testing.assert_allclose(expr[0], nres[0])
     np.testing.assert_allclose(expr[1:, :7], nres[1:, :7])
     np.testing.assert_allclose(expr[0:10:2], nres[0:10:2])
-    # This works, but it is not very efficient since it relies on blosc2.ndarray.slice for non-unit steps
+    # Now relies on inefficient blosc2.ndarray.slice for non-unit steps but only per chunk (not for whole result)
     np.testing.assert_allclose(expr.slice((slice(None, None, None), slice(0, 10, 2)))[:], nres[:, 0:10:2])
 
     # Small test for broadcasting
@@ -1097,7 +1097,7 @@ def test_eval_getitem2():
     np.testing.assert_allclose(expr[0], nres[0])
     np.testing.assert_allclose(expr[1:, :7], nres[1:, :7])
     np.testing.assert_allclose(expr[:, 0:10:2], nres[:, 0:10:2])
-    # This works, but it is not very efficient since it relies on blosc2.ndarray.slice for non-unit steps
+    # Now relies on inefficient blosc2.ndarray.slice for non-unit steps but only per chunk (not for whole result)
     np.testing.assert_allclose(expr.slice((slice(None, None, None), slice(0, 10, 2)))[:], nres[:, 0:10:2])
 
 
@@ -1105,13 +1105,13 @@ def test_eval_getitem2():
 def test_eval_slice(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = blosc2.lazyexpr("a1 + a2 - (a3 * a4)", operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4})
-    nres = ne_evaluate("na1 + na2 - (na3 * na4)")[:2]
-    res = expr.slice(slice(0, 2))
+    nres = ne_evaluate("na1 + na2 - (na3 * na4)")
+    res = expr.slice(slice(0, 8, 2))
     assert isinstance(res, blosc2.ndarray.NDArray)
-    np.testing.assert_allclose(res[:], nres)
-    res = expr[:2]
+    np.testing.assert_allclose(res[:], nres[:8:2])
+    res = expr[:8:2]
     assert isinstance(res, np.ndarray)
-    np.testing.assert_allclose(res, nres)
+    np.testing.assert_allclose(res, nres[:8:2])
 
     # string lazy expressions automatically use .slice internally
     expr1 = blosc2.lazyexpr("a1 * a2", operands={"a1": a1, "a2": a2})
@@ -1121,6 +1121,18 @@ def test_eval_slice(array_fixture):
     res = expr2.compute()
     assert isinstance(res, blosc2.ndarray.NDArray)
     np.testing.assert_allclose(res[()], nres)
+
+
+def test_rebasing(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = blosc2.lazyexpr("a1 + a2 - (a3 * a4)", operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4})
+    assert expr.expression == "(o0 + o1 - o2 * o3)"
+
+    expr = blosc2.lazyexpr("a1")
+    assert expr.expression == "o0"
+
+    expr = blosc2.lazyexpr("a1[:10]")
+    assert expr.expression == "o0.slice((slice(None, 10, None),))"
 
 
 # Test get_chunk method
@@ -1456,6 +1468,10 @@ def test_chain_persistentexpressions():
     le4_.save("expr4.b2nd", mode="w")
     myle4 = blosc2.open("expr4.b2nd")
     assert (myle4[:] == le4[:]).all()
+
+    # Remove files
+    for f in ["expr1.b2nd", "expr2.b2nd", "expr3.b2nd", "expr4.b2nd", "a.b2nd", "b.b2nd", "c.b2nd"]:
+        blosc2.remove_urlpath(f)
 
 
 @pytest.mark.parametrize(
