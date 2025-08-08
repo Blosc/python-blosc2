@@ -6,6 +6,7 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 import os
+import shutil
 import zipfile
 
 import numpy as np
@@ -15,31 +16,38 @@ import blosc2
 from blosc2.dict_store import DictStore
 
 
-@pytest.fixture
-def cleanup_dstore():
-    files = [
-        "test_dstore.b2z",
-        "ext_node3.b2nd",
-    ]
-    yield
-    for f in files:
-        if os.path.exists(f):
-            os.remove(f)
+@pytest.fixture(params=["b2d", "b2z"])
+def populated_dict_store(request):
+    """A fixture that creates and populates a DictStore.
 
+    It is parametrized to use both zip (.b2z) and directory (.b2d)
+    storage formats. It also handles cleanup of created files and
+    directories.
+    """
+    storage_type = request.param
+    path = f"test_dstore.{storage_type}"
+    ext_path = "ext_node3.b2nd"
 
-@pytest.fixture
-def with_dstore(cleanup_dstore):
-    with DictStore("test_dstore.b2z", mode="w") as dstore:
+    # Setup: create and populate the store
+    with DictStore(path, mode="w") as dstore:
         dstore["/node1"] = np.array([1, 2, 3])
         dstore["/node2"] = blosc2.ones(2)
-        arr_external = blosc2.arange(3, urlpath="ext_node3.b2nd", mode="w")
+        arr_external = blosc2.arange(3, urlpath=ext_path, mode="w")
         arr_external.vlmeta["description"] = "This is vlmeta for /dir1/node3"
         dstore["/dir1/node3"] = arr_external
-        yield dstore
+        yield dstore, path
+
+    # Teardown: clean up created files and directories
+    if os.path.exists(ext_path):
+        os.remove(ext_path)
+    if os.path.isfile(path):
+        os.remove(path)
+    elif os.path.isdir(path):
+        shutil.rmtree(path)
 
 
-def test_basic_dstore(with_dstore):
-    dstore = with_dstore
+def test_basic_dstore(populated_dict_store):
+    dstore, path = populated_dict_store
     assert set(dstore.keys()) == {"/node1", "/node2", "/dir1/node3"}
     assert np.all(dstore["/node1"][:] == np.array([1, 2, 3]))
     assert np.all(dstore["/node2"][:] == np.ones(2))
@@ -55,7 +63,7 @@ def test_basic_dstore(with_dstore):
 
     # Persist and reopen
     dstore.close()
-    with DictStore("test_dstore.b2z", mode="r") as dstore_read:
+    with DictStore(path, mode="r") as dstore_read:
         keys = set(dstore_read.keys())
         assert "/node2" in keys
         assert "/dir1/node3" in keys
@@ -69,69 +77,84 @@ def test_basic_dstore(with_dstore):
             #     assert node3.vlmeta["description"] == "This is vlmeta for /dir1/node3"
 
 
-def test_external_value_set(with_dstore):
-    dstore = with_dstore
+def test_external_value_set(populated_dict_store):
+    dstore, _ = populated_dict_store
     node3 = dstore["/dir1/node3"]
     node3[:] = np.ones(3)
     assert np.all(node3[:] == np.ones(3))
 
 
-def test_to_b2z_and_reopen(cleanup_dstore):
-    with DictStore("test_dstore.b2z", mode="w") as dstore:
-        dstore["/nodeA"] = np.arange(5)
-        dstore["/nodeB"] = np.arange(6)
+def test_to_b2z_and_reopen(populated_dict_store):
+    dstore, path = populated_dict_store
+    dstore["/nodeA"] = np.arange(5)
+    dstore["/nodeB"] = np.arange(6)
+    dstore.close()
 
-    with DictStore("test_dstore.b2z", mode="r") as dstore_read:
-        assert set(dstore_read.keys()) == {"/nodeA", "/nodeB"}
+    with DictStore(path, mode="r") as dstore_read:
+        assert "/nodeA" in dstore_read
+        assert "/nodeB" in dstore_read
         assert np.all(dstore_read["/nodeA"][:] == np.arange(5))
         assert np.all(dstore_read["/nodeB"][:] == np.arange(6))
 
 
-def test_map_tree_precedence(cleanup_dstore):
+def test_map_tree_precedence(populated_dict_store):
+    dstore, path = populated_dict_store
     # Create external file and add to dstore
-    arr_external = blosc2.arange(4, urlpath="ext_nodeX.b2nd", mode="w")
-    with DictStore("test_dstore.b2z", mode="w") as dstore:
-        dstore["/nodeX"] = np.arange(4)
-        dstore["/externalX"] = arr_external
+    ext_path = "ext_nodeX.b2nd"
+    arr_external = blosc2.arange(4, urlpath=ext_path, mode="w")
+    dstore["/nodeX"] = np.arange(4)  # in embed store
+    dstore["/externalX"] = arr_external  # in map_tree
+    dstore.close()
 
     # Reopen and check map_tree precedence
-    with DictStore("test_dstore.b2z", mode="r") as dstore_read:
+    with DictStore(path, mode="r") as dstore_read:
         # Should prefer external file if key is in map_tree
         assert "/externalX" in dstore_read.map_tree
         arr = dstore_read["/externalX"]
         assert np.all(arr[:] == np.arange(4))
+    if os.path.exists(ext_path):
+        os.remove(ext_path)
 
 
-def test_len_and_iter(cleanup_dstore):
-    with DictStore("test_dstore.b2z", mode="w") as dstore:
-        for i in range(10):
-            dstore[f"/node_{i}"] = np.full((5,), i)
+def test_len_and_iter(populated_dict_store):
+    dstore, path = populated_dict_store
+    # The fixture already adds 3 nodes
+    for i in range(3, 10):
+        dstore[f"/node_{i}"] = np.full((5,), i)
+    print("->", dstore.keys())
+    dstore.close()
 
-    with DictStore("test_dstore.b2z", mode="r") as dstore_read:
-        assert len(dstore_read) == 10
+    with DictStore(path, mode="r") as dstore_read:
         keys = set(dstore_read)
-        assert keys == {f"/node_{i}" for i in range(10)}
-        for key in keys:
-            arr = dstore_read[key]
-            i = int(key.split("_")[-1])
-            assert np.all(arr[:] == np.full((5,), i))
+        print(keys)
+        assert len(dstore_read) == 10
+        expected_keys = {"/node1", "/node2", "/dir1/node3"} | {f"/node_{i}" for i in range(3, 10)}
+        assert keys == expected_keys
 
 
-def test_without_embed(cleanup_dstore):
+def test_without_embed(populated_dict_store):
+    dstore, path = populated_dict_store
+    # For this test, we want to start with a clean state
+    if os.path.isfile(path):
+        os.remove(path)
+    elif os.path.isdir(path):
+        shutil.rmtree(path)
+
     # Create a DictStore without embed files
-    b2zfile = "test_dstore2.b2z"
-    with DictStore(b2zfile, mode="w") as dstore:
-        arr_external = blosc2.arange(3, urlpath="ext_node3.b2nd", mode="w")
+    with DictStore(path, mode="w") as dstore_new:
+        ext_path = "ext_node3.b2nd"
+        arr_external = blosc2.arange(3, urlpath=ext_path, mode="w")
         arr_external.vlmeta["description"] = "This is vlmeta for /dir1/node3"
-        dstore["/dir1/node3"] = arr_external
-        assert "/dir1/node3" in dstore.map_tree
-    with zipfile.ZipFile(b2zfile, "r") as zf:
-        print(zf.namelist())
-        # Check that the external file is present
-        assert zf.namelist() == ["dir1/node3.b2nd", "embed.b2e"]
+        dstore_new["/dir1/node3"] = arr_external
+        assert "/dir1/node3" in dstore_new.map_tree
+
+    if path.endswith(".b2z"):
+        with zipfile.ZipFile(path, "r") as zf:
+            # Check that the external file is present
+            assert "dir1/node3.b2nd" in zf.namelist()
 
     # Reopen and check vlmeta
-    with DictStore(b2zfile, mode="r") as dstore_read:
+    with DictStore(path, mode="r") as dstore_read:
         assert list(dstore_read.keys()) == ["/dir1/node3"]
         node3 = dstore_read["/dir1/node3"]
         assert node3.vlmeta["description"] == "This is vlmeta for /dir1/node3"

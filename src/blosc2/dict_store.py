@@ -9,7 +9,7 @@ import os
 import shutil
 import tempfile
 import zipfile
-from collections.abc import Iterator, KeysView
+from collections.abc import Iterator, Set
 from typing import Any
 
 import numpy as np
@@ -39,7 +39,7 @@ class DictStore:
         File mode ('r', 'w', 'a'). Default is 'a'.
     tmpdir : str or None, optional
         Temporary directory to use when working with `.b2z` files. If None,
-        a system temporary directory will be created. Default is None.
+        a system temporary directory will be managed. Default is None.
     cparams : dict or None, optional
         Compression parameters for the internal embed store.
         If None, the default Blosc2 parameters are used.
@@ -91,66 +91,73 @@ class DictStore:
         if self.mode not in ("r", "w", "a"):
             raise ValueError("For DictStore containers, mode must be 'r', 'w', or 'a'")
 
+        self.is_zip_store = False
         if self.localpath.endswith(".b2d"):
             # No need to use a temporary directory for .b2d files
-            self.tmpdir = self.localpath
+            self.working_dir = self.localpath
             # Ensure the directory exists
             if mode == "w" and not os.path.exists(self.localpath):
                 os.makedirs(self.localpath, exist_ok=True)
             if mode in ("r", "a") and not os.path.isdir(self.localpath):
                 raise FileNotFoundError(f"Directory {self.localpath} does not exist for reading.")
-
-        # Handle temporary directory
-        if self.localpath.endswith(".b2z"):
+        else:
+            self.is_zip_store = True
+            # Handle temporary directory
             if tmpdir is None:
                 self._temp_dir_obj = tempfile.TemporaryDirectory()
-                self.tmpdir = self._temp_dir_obj.name
+                self.working_dir = self._temp_dir_obj.name
             else:
-                self.tmpdir = tmpdir
+                self.working_dir = tmpdir
                 if not os.path.exists(tmpdir):
                     os.makedirs(tmpdir, exist_ok=True)
 
-        self.estore_path = "embed.b2e"
+        estore_fname = "embed.b2e"
+        self.estore_path = os.path.join(self.working_dir, estore_fname)
+
+        self.b2z_path = self.localpath
+        if self.b2z_path.endswith(".b2d"):
+            self.b2z_path = self.b2z_path[:-4] + ".b2z"
+
         if mode == "r":
-            # Handle .b2z file input for reading
             if not os.path.exists(self.localpath):
                 raise FileNotFoundError(f"dir/zip file {self.localpath} does not exist.")
 
-            self.b2z_path = self.localpath
+            if self.is_zip_store:
+                # Populate offsets of files in b2z
+                self.offsets = self._get_zip_offsets()
 
-            # Populate offsets of files in b2z
-            self.offsets = self._get_zip_offsets()
+                # Check if estore exists in zip
+                if estore_fname not in self.offsets:
+                    raise FileNotFoundError(f"Embed file {estore_fname} not found in store.")
 
-            # Check if estore exists in zip
-            if self.estore_path not in self.offsets:
-                raise FileNotFoundError(f"Embed file {self.estore_path} not found in store.")
+                # Open the embed file directly from zip using offset
+                estore_offset = self.offsets[estore_fname]["offset"]
+                schunk = blosc2.open(self.b2z_path, mode="r", offset=estore_offset)
+                self._estore = EmbedStore(_from_schunk=schunk)
 
-            # Open the embed file directly from zip using offset
-            estore_offset = self.offsets[self.estore_path]["offset"]
-            schunk = blosc2.open(self.b2z_path, mode="r", offset=estore_offset)
-            self._estore = EmbedStore(_from_schunk=schunk)
-
-            # Build map_tree from .b2nd files in zip
-            for filepath in self.offsets:
-                if filepath.endswith(".b2nd"):
-                    # Convert filename to key: remove .b2nd extension and ensure starts with /
-                    key = filepath[:-5]  # Remove .b2nd
-                    if not key.startswith("/"):
-                        key = "/" + key
-                    self.map_tree[key] = filepath
+                # Build map_tree from .b2nd files in zip
+                for filepath in self.offsets:
+                    if filepath.endswith(".b2nd"):
+                        # Convert filename to key: remove .b2nd extension and ensure starts with /
+                        key = filepath[:-5]  # Remove .b2nd
+                        if not key.startswith("/"):
+                            key = "/" + key
+                        self.map_tree[key] = filepath
+            else:
+                # Open the embed file directly from localpath
+                schunk = blosc2.open(self.estore_path, mode="r")
+                self._estore = EmbedStore(_from_schunk=schunk)
+                self.update_map_tree()
         else:
-            # Handle directory input for writing/appending
-            self.estore_path = os.path.join(self.tmpdir, self.estore_path)
-
-            # Check if we're opening an existing dstore
-            if mode == "a" and os.path.exists(self.localpath):
-                # Extract existing .b2z to tmpdir for append mode
-                with zipfile.ZipFile(self.localpath, "r") as zf:
-                    zf.extractall(self.tmpdir)
-
-            self.b2z_path = self.localpath
-            if self.b2z_path.endswith(".b2d"):
-                self.b2z_path = self.b2z_path[:-3] + ".b2z"
+            # Modes 'w' and 'a' assume working_dir to exist
+            if mode == "a":
+                if self.is_zip_store:
+                    # Extract existing .b2z to working dir
+                    with zipfile.ZipFile(self.localpath, "r") as zf:
+                        zf.extractall(self.working_dir)
+                else:
+                    if not os.path.isdir(self.working_dir):
+                        raise FileNotFoundError(f"Directory {self.working_dir} does not exist for reading.")
 
             # Initialize the underlying EmbedStore
             self._estore = EmbedStore(
@@ -160,6 +167,21 @@ class DictStore:
                 dparams=dparams,
                 storage=storage,
             )
+            # Build map_tree from .b2nd files in working dir
+            self.update_map_tree()
+
+    def update_map_tree(self):
+        # Build map_tree from .b2nd files in working dir
+        for root, _, files in os.walk(self.working_dir):
+            for file in files:
+                filepath = os.path.join(root, file)
+                if filepath.endswith(".b2nd"):
+                    # Convert filename to key: remove .b2nd extension and ensure starts with /
+                    rel_path = os.path.relpath(filepath, self.working_dir)
+                    key = rel_path[:-5]  # Remove .b2nd
+                    if not key.startswith("/"):
+                        key = "/" + key
+                    self.map_tree[key] = rel_path
 
     @property
     def estore(self) -> EmbedStore:
@@ -191,14 +213,8 @@ class DictStore:
         """
         if isinstance(value, blosc2.NDArray) and getattr(value, "urlpath", None):
             # Convert key to a proper file path within the tree directory
-            # Remove leading slash and convert to filesystem path
             rel_key = key.lstrip("/")
-            # TODO: Handle case where key is root ("/")
-            # if not rel_key:  # Handle root key "/"
-            #     rel_key = "root"
-
-            # Create the destination path relative to the tree file's directory
-            dest_path = os.path.join(self.tmpdir, rel_key + ".b2nd")
+            dest_path = os.path.join(self.working_dir, rel_key + ".b2nd")
 
             # Ensure the parent directory exists
             parent_dir = os.path.dirname(dest_path)
@@ -206,8 +222,8 @@ class DictStore:
                 os.makedirs(parent_dir, exist_ok=True)
 
             shutil.copy2(value.urlpath, dest_path)
-            # Store relative path from tree directory
-            rel_path = os.path.relpath(dest_path, self.tmpdir)
+            # Store relative path from tree directory (remove working_dir from beginning)
+            rel_path = os.path.relpath(dest_path, self.working_dir)
             self.map_tree[key] = rel_path
         else:
             self._estore[key] = value
@@ -238,7 +254,7 @@ class DictStore:
                 offset = self.offsets[filepath]["offset"]
                 return blosc2.open(self.b2z_path, mode="r", offset=offset)
             else:
-                urlpath = os.path.join(self.tmpdir, filepath)
+                urlpath = os.path.join(self.working_dir, filepath)
                 if os.path.exists(urlpath):
                     return blosc2.open(urlpath, mode="r" if self.mode == "r" else "a")
                 else:
@@ -306,7 +322,7 @@ class DictStore:
         count : int
             Number of nodes.
         """
-        return len(self._estore)
+        return len(self.map_tree) + len(self._estore)
 
     def __iter__(self) -> Iterator[str]:
         """
@@ -317,19 +333,22 @@ class DictStore:
         iterator : Iterator[str]
             Iterator over keys.
         """
-        return iter(self._estore)
+        yield from self.map_tree.keys()
+        for key in self._estore:
+            if key not in self.map_tree:
+                yield key
+        return iter(self.keys())
 
-    def keys(self) -> KeysView[str]:
+    def keys(self) -> Set[str]:
         """
         Return all keys in the DictStore.
 
         Returns
         -------
-        keys : KeysView[str]
-            Keys of the DictStore.
+        keys : Set[str]
+            A set containing all unique keys of the DictStore.
         """
-        all_keys = set(self.map_tree.keys()) | set(self._estore.keys())
-        return dict.fromkeys(all_keys).keys()
+        return self.map_tree.keys() | self._estore.keys()
 
     def values(self) -> Iterator[blosc2.NDArray]:
         """
@@ -358,13 +377,14 @@ class DictStore:
             # Check map_tree first, then fall back to _estore
             if key in self.map_tree:
                 filepath = self.map_tree[key]
-                if filepath in self.offsets:
-                    offset = self.offsets[filepath]["offset"]
-                    yield key, blosc2.open(self.b2z_path, mode="r", offset=offset)
+                if self.is_zip_store:
+                    if filepath in self.offsets:
+                        offset = self.offsets[filepath]["offset"]
+                        yield key, blosc2.open(self.b2z_path, mode="r", offset=offset)
                 else:
-                    # Fallback if filepath not in offsets
-                    yield key, self._estore[key]
-            else:
+                    urlpath = os.path.join(self.working_dir, filepath)
+                    yield key, blosc2.open(urlpath, mode="r" if self.mode == "r" else "a")
+            elif key in self._estore:
                 yield key, self._estore[key]
 
     def to_b2z(self, overwrite=False, filename=None) -> os.PathLike[Any] | str:
@@ -395,7 +415,7 @@ class DictStore:
 
         # Gather all files except estore_path
         filepaths = []
-        for root, _, files in os.walk(self.tmpdir):
+        for root, _, files in os.walk(self.working_dir):
             for file in files:
                 filepath = os.path.join(root, file)
                 if os.path.abspath(filepath) != os.path.abspath(self.estore_path):
@@ -407,11 +427,11 @@ class DictStore:
         with zipfile.ZipFile(self.b2z_path, "w", zipfile.ZIP_STORED) as zf:
             # Write all files (except estore_path) first (sorted by size)
             for filepath in filepaths:
-                arcname = os.path.relpath(filepath, self.tmpdir)
+                arcname = os.path.relpath(filepath, self.working_dir)
                 zf.write(filepath, arcname)
             # Write estore last
             if os.path.exists(self.estore_path):
-                arcname = os.path.relpath(self.estore_path, self.tmpdir)
+                arcname = os.path.relpath(self.estore_path, self.working_dir)
                 zf.write(self.estore_path, arcname)
         return os.path.abspath(self.b2z_path)
 
