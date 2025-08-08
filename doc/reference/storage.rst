@@ -7,29 +7,19 @@ Dataclasses for setting the compression, decompression and storage parameters. A
 
 .. currentmodule:: blosc2
 
+.. autosummary::
+    CParams
+    DParams
+    Storage
+
 CParams
 -------
-
-.. autosummary::
-   :toctree: autofiles/storage
-   :nosignatures:
-
-    CParams
+.. autoclass:: CParams
 
 DParams
 -------
-
-.. autosummary::
-   :toctree: autofiles/storage
-   :nosignatures:
-
-    DParams
+.. autoclass:: DParams
 
 Storage
 -------
-
-.. autosummary::
-   :toctree: autofiles/storage
-   :nosignatures:
-
-    Storage
+.. autoclass:: Storage

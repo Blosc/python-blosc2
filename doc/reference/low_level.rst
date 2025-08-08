@@ -11,28 +11,26 @@ Compress and decompress
 -----------------------
 
 .. autosummary::
-   :toctree: autofiles/low_level/
-   :nosignatures:
+    :toctree: autofiles/low_level/
 
-   compress
-   compress2
-   decompress
-   decompress2
-   pack
-   pack_array
-   pack_array2
-   pack_tensor
-   unpack
-   unpack_array
-   unpack_array2
-   unpack_tensor
+    compress
+    compress2
+    decompress
+    decompress2
+    pack
+    pack_array
+    pack_array2
+    pack_tensor
+    unpack
+    unpack_array
+    unpack_array2
+    unpack_tensor
 
 Set / get compression params
 ----------------------------
 
 .. autosummary::
-   :toctree: autofiles/low_level/
-   :nosignatures:
+    :toctree: autofiles/low_level/
 
     clib_info
     compressor_list
@@ -58,22 +56,18 @@ Enumerated classes
 ------------------
 
 .. autosummary::
-   :toctree: autofiles/low_level/
-   :nosignatures:
+    :toctree: autofiles/low_level/
 
-   Codec
-   Filter
-   SpecialValue
-   SplitMode
-   Tuner
+    Codec
+    Filter
+    SpecialValue
+    SplitMode
+    Tuner
 
 Utils
 -----
-
-.. currentmodule:: blosc2
-
 .. autosummary::
-   :toctree: autofiles/low_level/
+    :toctree: autofiles/low_level/
 
     compute_chunks_blocks
     get_slice_nchunks
@@ -81,11 +75,8 @@ Utils
 
 Utility variables
 -----------------
-
-.. currentmodule:: blosc2
-
 .. autosummary::
-   :toctree: autofiles/low_level/
+    :toctree: autofiles/low_level/
 
     blosclib_version
     DEFINED_CODECS_STOP

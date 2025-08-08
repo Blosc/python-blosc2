@@ -8,8 +8,6 @@ Reduction operations can be used with any of :ref:`NDArray <NDArray>`, :ref:`C2A
 .. currentmodule:: blosc2
 
 .. autosummary::
-   :toctree: autofiles/operations_with_arrays/
-   :nosignatures:
 
     all
     any
@@ -20,3 +18,13 @@ Reduction operations can be used with any of :ref:`NDArray <NDArray>`, :ref:`C2A
     var
     min
     max
+
+.. autofunction:: all
+.. autofunction:: any
+.. autofunction:: sum
+.. autofunction:: prod
+.. autofunction:: mean
+.. autofunction:: std
+.. autofunction:: var
+.. autofunction:: min
+.. autofunction:: max

@@ -64,9 +64,9 @@ We are using Sphinx for documentation.  You can build the documentation by execu
 
 ``` bash
   cd doc
-  rm -rf html _build
-  python -m sphinx . html
+  rm -rf ../html _build
+  python -m sphinx . ../html
 ```
 [You may need to install the `pandoc` package first: https://pandoc.org/installing.html]
 
-You will find the documentation in the `html` directory.
+You will find the documentation in the `../html` directory.

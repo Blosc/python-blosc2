@@ -27,7 +27,7 @@ print(f"Time to create data (np.ndarray): {time() - t0:.3f} s")
 t0 = time()
 a = blosc2.linspace(0, 1, N * N, dtype="float32", shape=(N, N))
 b = blosc2.linspace(1, 2, N * N, dtype="float32", shape=(N, N))
-c = blosc2.linspace(-10, 10, 10, dtype="float32", shape=(N,))
+c = blosc2.linspace(-10, 10, N, dtype="float32", shape=(N,))
 print(f"Time to create data (NDArray): {time() - t0:.3f} s")
 #print("a.chunks: ", a.chunks, "a.blocks: ", a.blocks)
 

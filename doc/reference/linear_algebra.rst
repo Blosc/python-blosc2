@@ -8,10 +8,10 @@ The next functions can be used for computing linear algebra operations with :ref
 .. currentmodule:: blosc2
 
 .. autosummary::
-   :toctree: autofiles/operations_with_arrays/
-   :nosignatures:
-
     matmul
-    transpose
     matrix_transpose
     permute_dims
+
+.. autofunction:: matmul
+.. autofunction:: matrix_transpose
+.. autofunction:: permute_dims

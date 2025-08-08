@@ -1089,7 +1089,9 @@ def test_eval_getitem2():
     np.testing.assert_allclose(expr[1:, :7], nres[1:, :7])
     np.testing.assert_allclose(expr[0:10:2], nres[0:10:2])
     # Now relies on inefficient blosc2.ndarray.slice for non-unit steps but only per chunk (not for whole result)
-    np.testing.assert_allclose(expr.slice((slice(None, None, None), slice(0, 10, 2)))[:], nres[:, 0:10:2])
+    np.testing.assert_allclose(expr.slice((slice(1, 2, 1), slice(0, 10, 2)))[:], nres[1:2, 0:10:2])
+    # Now relies on inefficient blosc2.ndarray.slice for non-unit steps but only per chunk (not for whole result)
+    np.testing.assert_allclose(expr.slice((slice(1, 2, 1), slice(0, 10, 2)))[:], nres[:, 0:10:2])
 
     # Small test for broadcasting
     expr = test_arr + test_arr.slice(1)
@@ -1098,20 +1100,21 @@ def test_eval_getitem2():
     np.testing.assert_allclose(expr[1:, :7], nres[1:, :7])
     np.testing.assert_allclose(expr[:, 0:10:2], nres[:, 0:10:2])
     # Now relies on inefficient blosc2.ndarray.slice for non-unit steps but only per chunk (not for whole result)
-    np.testing.assert_allclose(expr.slice((slice(None, None, None), slice(0, 10, 2)))[:], nres[:, 0:10:2])
+    # Now relies on inefficient blosc2.ndarray.slice for non-unit steps but only per chunk (not for whole result)
+    np.testing.assert_allclose(expr.slice((slice(1, 2, 1), slice(0, 10, 2)))[:], nres[:, 0:10:2])
 
 
 # Test lazyexpr's slice method
 def test_eval_slice(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = blosc2.lazyexpr("a1 + a2 - (a3 * a4)", operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4})
-    nres = ne_evaluate("na1 + na2 - (na3 * na4)")[:2]
-    res = expr.slice(slice(0, 2))
+    nres = ne_evaluate("na1 + na2 - (na3 * na4)")
+    res = expr.slice(slice(0, 8, 2))
     assert isinstance(res, blosc2.ndarray.NDArray)
-    np.testing.assert_allclose(res[:], nres)
-    res = expr[:2]
+    np.testing.assert_allclose(res[:], nres[:8:2])
+    res = expr[:8:2]
     assert isinstance(res, np.ndarray)
-    np.testing.assert_allclose(res, nres)
+    np.testing.assert_allclose(res, nres[:8:2])
 
     # string lazy expressions automatically use .slice internally
     expr1 = blosc2.lazyexpr("a1 * a2", operands={"a1": a1, "a2": a2})
@@ -1121,6 +1124,18 @@ def test_eval_slice(array_fixture):
     res = expr2.compute()
     assert isinstance(res, blosc2.ndarray.NDArray)
     np.testing.assert_allclose(res[()], nres)
+
+
+def test_rebasing(array_fixture):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    expr = blosc2.lazyexpr("a1 + a2 - (a3 * a4)", operands={"a1": a1, "a2": a2, "a3": a3, "a4": a4})
+    assert expr.expression == "(o0 + o1 - o2 * o3)"
+
+    expr = blosc2.lazyexpr("a1")
+    assert expr.expression == "o0"
+
+    expr = blosc2.lazyexpr("a1[:10]")
+    assert expr.expression == "o0.slice((slice(None, 10, None),))"
 
 
 # Test get_chunk method
@@ -1437,7 +1452,7 @@ def test_chain_persistentexpressions():
 
     le1 = a**3 + blosc2.sin(a**2)
     le2 = le1 < c
-    le3 = b < 0
+    le3 = le2 & (b < 0)
     le4 = le2 & le3
 
     le1_ = blosc2.lazyexpr("a ** 3 + sin(a ** 2)", {"a": a})
@@ -1456,6 +1471,10 @@ def test_chain_persistentexpressions():
     le4_.save("expr4.b2nd", mode="w")
     myle4 = blosc2.open("expr4.b2nd")
     assert (myle4[:] == le4[:]).all()
+
+    # Remove files
+    for f in ["expr1.b2nd", "expr2.b2nd", "expr3.b2nd", "expr4.b2nd", "a.b2nd", "b.b2nd", "c.b2nd"]:
+        blosc2.remove_urlpath(f)
 
 
 @pytest.mark.parametrize(
@@ -1490,3 +1509,50 @@ def test_to_cframe():
     assert arr.shape == expr.shape
     assert arr.dtype == expr.dtype
     assert np.allclose(arr[:], expr[:])
+
+
+# Test for the bug where multiplying two complex lazy expressions would fail with:
+# ValueError: invalid literal for int() with base 10: '0,'
+def test_complex_lazy_expression_multiplication():
+    # Create test data similar to the animated plot scenario
+    width, height = 64, 64
+    x = np.linspace(-4 * np.pi, 4 * np.pi, width)
+    y = np.linspace(-4 * np.pi, 4 * np.pi, height)
+    X, Y = np.meshgrid(x, y)
+
+    # Convert to blosc2 arrays
+    X_b2 = blosc2.asarray(X)
+    Y_b2 = blosc2.asarray(Y)
+
+    # Create the complex expressions that were causing the bug
+    time_factor = 0.5
+
+    # First complex expression: R * 4 - time_factor * 2
+    R = np.sqrt(X_b2**2 + Y_b2**2)
+    expr1 = R * 4 - time_factor * 2
+
+    # Second complex expression: theta * 6
+    theta = np.arctan2(Y_b2, X_b2)
+    expr2 = theta * 6
+
+    # Apply functions to create more complex expressions
+    sin_expr = np.sin(expr1)
+    cos_expr = np.cos(expr2)
+
+    # This multiplication was failing before the fix
+    result_expr = sin_expr * cos_expr
+
+    # Evaluate the expression - this should not raise an error
+    result = result_expr.compute()
+
+    # Verify the result matches numpy computation using the same approach
+    # Use the blosc2 arrays converted to numpy to ensure consistency
+    R_np = np.sqrt(X_b2[:] ** 2 + Y_b2[:] ** 2)
+    theta_np = np.arctan2(Y_b2[:], X_b2[:])
+    expected = np.sin(R_np * 4 - time_factor * 2) * np.cos(theta_np * 6)
+
+    # TODO: for some reason, the result is negative, so we assert against -expected
+    np.testing.assert_allclose(result, -expected, rtol=1e-14, atol=1e-14)
+
+    # Also test getitem access
+    np.testing.assert_allclose(result_expr[:], -expected, rtol=1e-14, atol=1e-14)

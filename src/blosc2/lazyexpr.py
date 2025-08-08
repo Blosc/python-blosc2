@@ -535,7 +535,15 @@ class LazyArray(ABC):
         }
 
     # Provide a way to serialize the LazyArray
-    def to_cframe(self):
+    def to_cframe(self) -> bytes:
+        """
+        Compute LazyArray and convert to cframe.
+
+        Returns
+        -------
+        out: bytes
+            The buffer containing the serialized :ref:`NDArray` instance.
+        """
         return self.compute().to_cframe()
 
 
@@ -1549,6 +1557,9 @@ def slices_eval(  # noqa: C901
                     result = x[result]
             else:
                 raise ValueError("The where condition must be a tuple with one or two elements")
+        # Enforce contiguity of result (necessary to fill the out array)
+        # but avoid copy if already contiguous
+        result = np.require(result, requirements="C")
 
         if out is None:
             shape_ = shape_slice if shape_slice is not None else shape
@@ -1927,8 +1938,8 @@ def reduce_slices(  # noqa: C901
 
         if where is None:
             if expression == "o0":
-                # We don't have an actual expression, so avoid a copy
-                result = chunk_operands["o0"]
+                # We don't have an actual expression, so avoid a copy except to make contiguous
+                result = np.require(chunk_operands["o0"], requirements="C")
             else:
                 result = ne_evaluate(expression, chunk_operands, **ne_args)
         else:
@@ -2081,7 +2092,9 @@ def chunked_eval(  # noqa: C901
             # The fast path is possible under a few conditions
             if getitem and (where is None or len(where) == 2) and not callable(expression):
                 # Compute the size of operands for the fast path
-                shape_operands = item.newshape(shape)  # shape of slice
+                unit_steps = np.all([s.step == 1 for s in item.raw])
+                # shape of slice, if non-unit steps have to decompress full array into memory
+                shape_operands = item.newshape(shape) if unit_steps else shape
                 _dtype = kwargs.get("dtype", np.float64)
                 size_operands = math.prod(shape_operands) * len(operands) * _dtype.itemsize
                 # Only take the fast path if the size of operands is relatively small
@@ -2145,12 +2158,16 @@ def fuse_expressions(expr, new_base, dup_op):
             # This is a variable.  Find the end of it.
             j = i + 1
             for k in range(len(expr[j:])):
-                if expr[j + k] in " )[":
+                if expr[j + k] in " )[,":  # Added comma to the list of delimiters
                     j = k
                     break
             if expr[i + j] == ")":
                 j -= 1
-            old_pos = int(expr[i + 1 : i + j + 1])
+            # Extract only the numeric part, handling cases where there might be a comma
+            operand_str = expr[i + 1 : i + j + 1]
+            # Split by comma and take the first part (the operand index)
+            operand_num_str = operand_str.split(",")[0]
+            old_pos = int(operand_num_str)
             old_op = f"o{old_pos}"
             if old_op not in dup_op:
                 if old_pos in prev_pos:
@@ -2945,7 +2962,12 @@ class LazyExpr(LazyArray):
 
     def __getitem__(self, item):
         kwargs = {"_getitem": True}
-        return self.compute(item, **kwargs)
+        result = self.compute(item, **kwargs)
+        # Squeeze single-element dimensions when indexing with integers
+        # See e.g. examples/ndarray/animated_plot.py
+        if isinstance(item, int) or (hasattr(item, "__iter__") and any(isinstance(i, int) for i in item)):
+            result = result.squeeze()
+        return result
 
     def slice(self, item):
         return self.compute(item)  # should do a slice since _getitem = False
@@ -3101,6 +3123,14 @@ class LazyExpr(LazyArray):
                 new_expr.expression_tosave = expression
                 new_expr.operands = operands_
                 new_expr.operands_tosave = operands
+            elif isinstance(new_expr, blosc2.NDArray) and len(operands) == 1:
+                # passed either "a" or possible "a[:10]"
+                expression_, operands_ = conserve_functions(
+                    _expression, _operands, {"o0": list(operands.values())[0]} | local_vars
+                )
+                new_expr = cls(None)
+                new_expr.expression = expression_
+                new_expr.operands = operands_
             else:
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
                 new_expr = cls(None)
@@ -3425,7 +3455,7 @@ def lazyexpr(
         If None, the operands will be seeked in the local and global dictionaries.
     out: NDArray or np.ndarray, optional
         The output array where the result will be stored. If not provided,
-        a new array will be created.
+        a new NumPy array will be created and returned.
     where: tuple, list, optional
         A sequence of arguments for the where clause in the expression.
     local_dict: dict, optional
@@ -3578,7 +3608,7 @@ def evaluate(
     global_dict: dict, optional
         The global dictionary to use when looking for operands in the expression.
         If not provided, the global dictionary of the caller will be used.
-    out: NDArray or NumPy array, optional
+    out: NDArray or np.ndarray, optional
         The output array where the result will be stored. If not provided,
         a new NumPy array will be created and returned.
     kwargs: Any, optional

@@ -23,127 +23,160 @@
       :align: center
     -->
 
-.. panels::
-    :card: intro-card text-center no-border
-    :column: col-lg-4 col-md-6 col-sm-12 mb-4 d-flex
-    :container: + gap-3
+.. grid:: 1 2 3 3
+    :gutter: 3
 
-    **Excellent compression**
+    .. grid-item-card::
+        :class-card: intro-card text-center no-border
 
-    `Combine advanced codecs and filters <https://blosc.org/docs/LEAPS-INNOV_WP7_D74_v1.pdf>`_ for efficient `lossless <https://www.blosc.org/posts/bytedelta-enhance-compression-toolset/>`_ and `lossy <https://www.blosc.org/posts/blosc2-lossy-compression/>`_ compression, reducing storage space while keeping high performance.
+        .. raw:: html
 
-    ---
+            <div style="text-align: center;">
+                <i class="fas fa-compress" style="font-size: 2em; color: #007acc; margin-bottom: 10px;"></i>
+                <h3 style="margin-top: 10px; margin-bottom: 15px;">Top-Notch Compression</h3>
+            </div>
 
-    **Compressed NDArrays**
+        `Combine advanced codecs and filters <https://blosc.org/docs/LEAPS-INNOV_WP7_D74_v1.pdf>`_ for efficient `lossless <https://www.blosc.org/posts/bytedelta-enhance-compression-toolset/>`_ and `lossy <https://www.blosc.org/posts/blosc2-lossy-compression/>`_ compression to reduce storage space while maintaining high performance.
 
-    `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/01.ndarray-basics.html>`_ allow for efficient storage and manipulation of arbitrarily large N-dim datasets. A `C-API <https://www.blosc.org/posts/blosc2-ndim-intro/>`_ is also available.
+    .. grid-item-card::
+        :class-card: intro-card text-center no-border
 
-    ---
+        .. raw:: html
 
-    **Optimized compute engine**
+            <div style="text-align: center;">
+                <i class="fas fa-cubes" style="font-size: 2em; color: #007acc; margin-bottom: 10px;"></i>
+                <h3 style="margin-top: 10px; margin-bottom: 15px;">Full-Fledged NDArrays</h3>
+            </div>
 
-    It teams with internal compression to compute complex `mathematical expressions <https://ironarray.io/blog/blosc2-eval-expressions>`_ and `reductions <https://www.blosc.org/posts/ndim-reductions/>`_ at high speed.
+        `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/01.ndarray-basics.html>`_ enable efficient storage and manipulation of arbitrarily large N-dimensional datasets, following the `Array API <https://data-apis.org/array-api/latest/>`_ standard, with an additional `C-API <https://www.blosc.org/posts/blosc2-ndim-intro/>`_ available.
 
-    ---
+    .. grid-item-card::
+        :class-card: intro-card text-center no-border
 
-    **Support for sparse data**
+        .. raw:: html
 
-    For `efficient storage <https://www.blosc.org/docs/Exploring-MilkyWay-SciPy2023.pdf>`_ and `manipulation <https://www.blosc.org/docs/Exploring-MilkyWay-SciPy2023-paper.pdf>`_ of data with many zero values.
+            <div style="text-align: center;">
+                <i class="fas fa-bolt" style="font-size: 2em; color: #007acc; margin-bottom: 10px;"></i>
+                <h3 style="margin-top: 10px; margin-bottom: 15px;">Compute Engine Inside</h3>
+            </div>
 
-    ---
+        Combines compression with high-speed computation of complex `mathematical expressions <https://ironarray.io/blog/blosc2-eval-expressions>`_ and `reductions <https://www.blosc.org/posts/ndim-reductions/>`_, while maintaining compatibility with NumPy.
 
-    **Flexible storage**
+    .. grid-item-card::
+        :class-card: intro-card text-center no-border
 
-    Can transparently store data in `memory, disk <https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/01.ndarray-basics.ipynb>`_, or `the network <https://ironarray.io/caterva2>`_. `Memory-mapped files <https://www.blosc.org/python-blosc2/reference/autofiles/storage/blosc2.Storage.html#blosc2.Storage>`_ are also supported.
+        .. raw:: html
 
-    ---
+            <div style="text-align: center;">
+                <i class="fas fa-th" style="font-size: 2em; color: #007acc; margin-bottom: 10px;"></i>
+                <h3 style="margin-top: 10px; margin-bottom: 15px;">Sparse Data Mastery</h3>
+            </div>
 
-    **Two-level partitions**
+        Efficiently store and manipulate sparse data with `compact sparse constructs <https://www.blosc.org/docs/Exploring-MilkyWay-SciPy2023.pdf>`_ for optimized `performance <https://www.blosc.org/docs/Exploring-MilkyWay-SciPy2023-paper.pdf>`_.
 
-    Leverages multi-level CPU caches, enhancing `data access <https://www.blosc.org/posts/blosc2-ndim-intro/>`_ and `compute performance <https://www.blosc.org/posts/ndim-reductions/>`_ for modern multi-core processors.
+    .. grid-item-card::
+        :class-card: intro-card text-center no-border
 
-.. panels::
-    :card: intro-card text-center no-border
-    :column: col-lg-4 col-md-6 col-sm-12 mb-4 offset-lg-4 offset-md-3 d-flex
-    :container: + gap-3
+        .. raw:: html
 
-    **Uncomplicated format**
+            <div style="text-align: center;">
+                <i class="fas fa-hdd" style="font-size: 2em; color: #007acc; margin-bottom: 10px;"></i>
+                <h3 style="margin-top: 10px; margin-bottom: 15px;">Flexible Storage</h3>
+            </div>
 
-    `Blosc2's format <https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_, with specs taking less than 4000 words, makes it easy to read and integrate with other systems and tools.
+        Access data from anywhere: read/write in `memory or disk <https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/01.ndarray-basics.ipynb>`_, stream from `the network <https://www.blosc.org/python-blosc2/reference/c2array.html>`_, or use `memory-mapped files <https://www.blosc.org/python-blosc2/reference/storage.html#blosc2.Storage.params.mmap_mode>`_ for high-performance I/O.
+
+    .. grid-item-card::
+        :class-card: intro-card text-center no-border
+
+        .. raw:: html
+
+            <div style="text-align: center;">
+                <i class="fas fa-file-code" style="font-size: 2em; color: #007acc; margin-bottom: 10px;"></i>
+                <h3 style="margin-top: 10px; margin-bottom: 15px;">Uncomplicated Format</h3>
+            </div>
+
+        `Blosc2's format <https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_ is simple and accessible, with specifications under 4000 words that make it easy to read and integrate.
 
 
 .. raw:: html
 
     <h1 class="text-center">Documentation</h1>
 
-.. panels::
-    :card: + intro-card text-center
-    :column: col-lg-6 col-md-12 col-sm-12 col-xs-12 d-flex
-    :container: + gap-3
+.. grid:: 1 2 2 2
+    :gutter: 3
 
+    .. grid-item-card::
+        :class-card: intro-card text-center
 
-    ---
+        .. raw:: html
 
-    Getting Started
-    ^^^^^^^^^^^^^^^
+            <div style="text-align: center;">
+                <i class="fas fa-rocket" style="font-size: 2em; color: #007acc; margin-bottom: 10px;"></i>
+                <h3 style="margin-top: 10px; margin-bottom: 15px;">Getting Started</h3>
+            </div>
 
-    New to Python-Blosc2? Check out the getting started guides. They contain an
-    introduction to Python-Blosc2 main concepts and different tutorials.
+        New to Python-Blosc2? Check out the getting started guides. They contain an introduction to Python-Blosc2 main concepts and different tutorials.
 
-    +++
+        .. raw:: html
 
-    .. link-button:: getting_started/index
-            :type: ref
-            :text: To the getting started guides
-            :classes: btn-info
+            <div style="text-align: center; margin-top: 20px;">
+                <a href="getting_started/index.html" class="btn btn-info">To the getting started guides</a>
+            </div>
 
-    ---
+    .. grid-item-card::
+        :class-card: intro-card text-center
 
-    API Reference
-    ^^^^^^^^^^^^^
+        .. raw:: html
 
-    The reference guide contains a detailed description of the Python-Blosc2 API.
-    The reference describes how the functions work and which parameters can
-    be used.
+            <div style="text-align: center;">
+                <i class="fas fa-book" style="font-size: 2em; color: #007acc; margin-bottom: 10px;"></i>
+                <h3 style="margin-top: 10px; margin-bottom: 15px;">API Reference</h3>
+            </div>
 
-    +++
+        The reference guide provides a comprehensive description of the Python-Blosc2 API, detailing how functions work and their available parameters.
 
+        .. raw:: html
 
-    .. link-button:: reference/index
-            :type: ref
-            :text: To the reference guide
-            :classes: btn-info
+            <div style="text-align: center; margin-top: 20px;">
+                <a href="reference/index.html" class="btn btn-info">To the reference guide</a>
+            </div>
 
+    .. grid-item-card::
+        :class-card: intro-card text-center
 
-    ---
+        .. raw:: html
 
-    Development
-    ^^^^^^^^^^^
+            <div style="text-align: center;">
+                <i class="fas fa-code" style="font-size: 2em; color: #007acc; margin-bottom: 10px;"></i>
+                <h3 style="margin-top: 10px; margin-bottom: 15px;">Development</h3>
+            </div>
 
-    Saw a typo in the documentation? Want to improve
-    existing functionalities? The contributing guidelines will guide
-    you through the process of improving Python-Blosc2.
+        Found a typo in the documentation or want to improve existing functionality? The contributing guidelines will walk you through the process of enhancing Python-Blosc2.
 
-    +++
+        .. raw:: html
 
-    .. link-button:: development/index
-            :type: ref
-            :text: To the development guide
-            :classes: btn-info
+            <div style="text-align: center; margin-top: 20px;">
+                <a href="development/index.html" class="btn btn-info">To the development guide</a>
+            </div>
 
-    ---
+    .. grid-item-card::
+        :class-card: intro-card text-center
 
-    Release Notes
-    ^^^^^^^^^^^^^
+        .. raw:: html
 
-    Want to see what's new in the latest release? Check out the release notes to find out!
+            <div style="text-align: center;">
+                <i class="fas fa-newspaper" style="font-size: 2em; color: #007acc; margin-bottom: 10px;"></i>
+                <h3 style="margin-top: 10px; margin-bottom: 15px;">Release Notes</h3>
+            </div>
 
-    +++
+        Want to see what's new in the latest release? Explore the comprehensive release notes to discover new features, improvements, bug fixes, and important changes across all versions.
 
-    .. link-button:: release_notes/index
-            :type: ref
-            :text: To the release notes
-            :classes: btn-info
+        .. raw:: html
+
+            <div style="text-align: center; margin-top: 20px;">
+                <a href="release_notes/index.html" class="btn btn-info">To the release notes</a>
+            </div>
 
 
 

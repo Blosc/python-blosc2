@@ -99,3 +99,5 @@ def test_stack(shape, dtype, axis):
         [ndarr1, ndarr2, ndarr3], axis=axis, cparams=cparams, urlpath="localfile.b2nd", mode="w"
     )
     np.testing.assert_almost_equal(result[:], nparray)
+    # Remove localfile
+    blosc2.remove_urlpath("localfile.b2nd")

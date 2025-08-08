@@ -15,21 +15,22 @@ The LazyArray object is a thin wrapper around the expression or user-defined fun
 
 See the `LazyExpr`_ and `LazyUDF`_ sections for more information.
 
-.. currentmodule:: blosc2.LazyArray
+.. currentmodule:: blosc2
 
-Methods
--------
+.. autoclass:: LazyArray
+    :members:
+    :inherited-members:
+    :member-order: groupwise
 
-.. autosummary::
-    :toctree: autofiles/lazyarray
-    :nosignatures:
+    :Special Methods:
 
-    __getitem__
-    compute
-    indices
-    save
-    sort
+    .. autosummary::
 
+        __getitem__
+
+    Methods
+    ---------------
+    .. automethod:: __getitem__
 
 .. _LazyExpr:
 
@@ -40,14 +41,7 @@ An expression like ``a + sum(b)``, where there is at least one NDArray object in
 
 This object follows the `LazyArray`_ API for computation and storage.
 
-.. currentmodule:: blosc2
-
-.. autosummary::
-    :toctree: autofiles/lazyarray
-    :nosignatures:
-
-    lazyexpr
-
+.. autofunction:: lazyexpr
 
 .. _LazyUDF:
 
@@ -58,8 +52,4 @@ For getting a LazyUDF object (which is LazyArray-compliant) from a user-defined 
 
 This object follows the `LazyArray`_ API for computation, although storage is not supported yet.
 
-.. autosummary::
-    :toctree: autofiles/lazyarray
-    :nosignatures:
-
-    lazyudf
+.. autofunction:: lazyudf

@@ -439,6 +439,16 @@ class Proxy(blosc2.Operand):
         return self._cache.shape if isinstance(self._cache, blosc2.NDArray) else len(self._cache)
 
     @property
+    def chunks(self) -> tuple[int]:  # cache should have same chunks as src
+        """The chunks of :paramref:`self` or None if the data is not a Blosc2 NDArray"""
+        return self._cache.chunks if isinstance(self._cache, blosc2.NDArray) else None
+
+    @property
+    def blocks(self) -> tuple[int]:  # cache should have same blocks as src
+        """The blocks of :paramref:`self` or None if the data is not a Blosc2 NDArray"""
+        return self._cache.blocks if isinstance(self._cache, blosc2.NDArray) else None
+
+    @property
     def schunk(self) -> blosc2.schunk.SChunk:
         """The :ref:`SChunk` of the cache"""
         return self._schunk_cache
@@ -595,7 +605,7 @@ class SimpleProxy(blosc2.Operand):
         return self._src[item]
 
 
-def jit(func=None, *, out=None, **kwargs):  # noqa: C901
+def jit(func=None, *, out=None, disable=False, **kwargs):  # noqa: C901
     """
     Prepare a function so that it can be used with the Blosc2 compute engine.
 
@@ -603,9 +613,10 @@ def jit(func=None, *, out=None, **kwargs):  # noqa: C901
     and scalars.  The function will be called with the NumPy arrays replaced by
     :ref:`SimpleProxy` objects, whereas NDArray objects will be used as is.
 
-    The returned value will be a NumPy array if all arguments are NumPy arrays
-    or if not kwargs are provided. Else, the return value will be a NDArray
-    created using the provided kwargs.
+    The returned value will be a NDArray if appropriate kwargs are provided
+    (e.g. `cparams=`). Else, the return value will be a NumPy array
+    (if the function returns a NumPy array).  If `out` is provided,
+    the result will be computed and stored in the `out` array
 
     Parameters
     ----------
@@ -613,6 +624,9 @@ def jit(func=None, *, out=None, **kwargs):  # noqa: C901
         The function to be prepared for the Blosc2 compute engine.
     out: np.ndarray, NDArray, optional
         The output array where the result will be stored.
+    disable: bool, optional
+        If True, the decorator is disabled and the original function is returned unchanged.
+        Default is False.
     **kwargs: dict, optional
         Additional keyword arguments supported by the :func:`empty` constructor.
 
@@ -644,6 +658,9 @@ def jit(func=None, *, out=None, **kwargs):  # noqa: C901
     """
 
     def decorator(func):  # noqa: C901
+        if disable:
+            return func
+
         def wrapper(*args, **func_kwargs):
             # Get some kwargs in decorator for SimpleProxy constructor
             proxy_kwargs = {"chunks": kwargs.get("chunks"), "blocks": kwargs.get("blocks")}
