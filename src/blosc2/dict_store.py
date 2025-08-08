@@ -67,7 +67,7 @@ class DictStore:
     ['dir1/node3.b2nd','embed.b2e']
     """
 
-    def __init__(  # noqa: C901
+    def __init__(
         self,
         localpath: os.PathLike[Any] | str | bytes,
         mode: str = "a",
@@ -79,98 +79,90 @@ class DictStore:
         """
         See :class:`DictStore` for full documentation of parameters.
         """
-        self.offsets = {}
-        self.map_tree = {}
         self.localpath = localpath if isinstance(localpath, (str, bytes)) else str(localpath)
-        self.mode = mode
-        self._temp_dir_obj = None
-
-        if not self.localpath.endswith(".b2z") and not self.localpath.endswith(".b2d"):
+        if not self.localpath.endswith((".b2z", ".b2d")):
             raise ValueError("localpath must have a .b2z or .b2d extension")
-
-        if self.mode not in ("r", "w", "a"):
+        if mode not in ("r", "w", "a"):
             raise ValueError("For DictStore containers, mode must be 'r', 'w', or 'a'")
 
-        self.is_zip_store = False
-        if self.localpath.endswith(".b2d"):
-            # No need to use a temporary directory for .b2d files
-            self.working_dir = self.localpath
-            # Ensure the directory exists
-            if mode == "w" and not os.path.exists(self.localpath):
-                os.makedirs(self.localpath, exist_ok=True)
-            if mode in ("r", "a") and not os.path.isdir(self.localpath):
-                raise FileNotFoundError(f"Directory {self.localpath} does not exist for reading.")
+        self.mode = mode
+        self.offsets = {}
+        self.map_tree = {}
+        self._temp_dir_obj = None
+
+        self._setup_paths_and_dirs(tmpdir)
+
+        if self.mode == "r":
+            self._init_read_mode()
         else:
-            self.is_zip_store = True
-            # Handle temporary directory
+            self._init_write_append_mode(cparams, dparams, storage)
+
+    def _setup_paths_and_dirs(self, tmpdir: str | None):
+        """Set up working directories and paths."""
+        self.is_zip_store = self.localpath.endswith(".b2z")
+        if self.is_zip_store:
             if tmpdir is None:
                 self._temp_dir_obj = tempfile.TemporaryDirectory()
                 self.working_dir = self._temp_dir_obj.name
             else:
                 self.working_dir = tmpdir
-                if not os.path.exists(tmpdir):
-                    os.makedirs(tmpdir, exist_ok=True)
+                os.makedirs(tmpdir, exist_ok=True)
+            self.b2z_path = self.localpath
+        else:  # .b2d
+            self.working_dir = self.localpath
+            if self.mode in ("w", "a"):
+                os.makedirs(self.working_dir, exist_ok=True)
+            self.b2z_path = self.localpath[:-4] + ".b2z"
 
-        estore_fname = "embed.b2e"
-        self.estore_path = os.path.join(self.working_dir, estore_fname)
+        self.estore_path = os.path.join(self.working_dir, "embed.b2e")
 
-        self.b2z_path = self.localpath
-        if self.b2z_path.endswith(".b2d"):
-            self.b2z_path = self.b2z_path[:-4] + ".b2z"
+    def _init_read_mode(self):
+        """Initialize the store in read mode."""
+        if not os.path.exists(self.localpath):
+            raise FileNotFoundError(f"dir/zip file {self.localpath} does not exist.")
 
-        if mode == "r":
-            if not os.path.exists(self.localpath):
-                raise FileNotFoundError(f"dir/zip file {self.localpath} does not exist.")
+        if self.is_zip_store:
+            self.offsets = self._get_zip_offsets()
+            if "embed.b2e" not in self.offsets:
+                raise FileNotFoundError("Embed file embed.b2e not found in store.")
+            estore_offset = self.offsets["embed.b2e"]["offset"]
+            schunk = blosc2.open(self.b2z_path, mode="r", offset=estore_offset)
+            for filepath in self.offsets:
+                if filepath.endswith(".b2nd"):
+                    key = "/" + filepath[:-5]
+                    self.map_tree[key] = filepath
+        else:  # .b2d
+            if not os.path.isdir(self.localpath):
+                raise FileNotFoundError(f"Directory {self.localpath} does not exist for reading.")
+            schunk = blosc2.open(self.estore_path, mode="r")
+            self._update_map_tree()
 
+        self._estore = EmbedStore(_from_schunk=schunk)
+
+    def _init_write_append_mode(
+        self,
+        cparams: blosc2.CParams | None,
+        dparams: blosc2.DParams | None,
+        storage: blosc2.Storage | None,
+    ):
+        """Initialize the store in write or append mode."""
+        if self.mode == "a" and os.path.exists(self.localpath):
             if self.is_zip_store:
-                # Populate offsets of files in b2z
-                self.offsets = self._get_zip_offsets()
+                with zipfile.ZipFile(self.localpath, "r") as zf:
+                    zf.extractall(self.working_dir)
+            elif not os.path.isdir(self.working_dir):
+                raise FileNotFoundError(f"Directory {self.working_dir} does not exist for reading.")
 
-                # Check if estore exists in zip
-                if estore_fname not in self.offsets:
-                    raise FileNotFoundError(f"Embed file {estore_fname} not found in store.")
+        self._estore = EmbedStore(
+            urlpath=self.estore_path,
+            mode=self.mode,
+            cparams=cparams,
+            dparams=dparams,
+            storage=storage,
+        )
+        self._update_map_tree()
 
-                # Open the embed file directly from zip using offset
-                estore_offset = self.offsets[estore_fname]["offset"]
-                schunk = blosc2.open(self.b2z_path, mode="r", offset=estore_offset)
-                self._estore = EmbedStore(_from_schunk=schunk)
-
-                # Build map_tree from .b2nd files in zip
-                for filepath in self.offsets:
-                    if filepath.endswith(".b2nd"):
-                        # Convert filename to key: remove .b2nd extension and ensure starts with /
-                        key = filepath[:-5]  # Remove .b2nd
-                        if not key.startswith("/"):
-                            key = "/" + key
-                        self.map_tree[key] = filepath
-            else:
-                # Open the embed file directly from localpath
-                schunk = blosc2.open(self.estore_path, mode="r")
-                self._estore = EmbedStore(_from_schunk=schunk)
-                self.update_map_tree()
-        else:
-            # Modes 'w' and 'a' assume working_dir to exist
-            if mode == "a":
-                if self.is_zip_store:
-                    # Extract existing .b2z to working dir
-                    with zipfile.ZipFile(self.localpath, "r") as zf:
-                        zf.extractall(self.working_dir)
-                else:
-                    if not os.path.isdir(self.working_dir):
-                        raise FileNotFoundError(f"Directory {self.working_dir} does not exist for reading.")
-
-            # Initialize the underlying EmbedStore
-            self._estore = EmbedStore(
-                urlpath=self.estore_path,
-                mode=mode,
-                cparams=cparams,
-                dparams=dparams,
-                storage=storage,
-            )
-            # Build map_tree from .b2nd files in working dir
-            self.update_map_tree()
-
-    def update_map_tree(self):
+    def _update_map_tree(self):
         # Build map_tree from .b2nd files in working dir
         for root, _, files in os.walk(self.working_dir):
             for file in files:
