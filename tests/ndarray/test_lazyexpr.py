@@ -1089,9 +1089,7 @@ def test_eval_getitem2():
     np.testing.assert_allclose(expr[1:, :7], nres[1:, :7])
     np.testing.assert_allclose(expr[0:10:2], nres[0:10:2])
     # Now relies on inefficient blosc2.ndarray.slice for non-unit steps but only per chunk (not for whole result)
-    np.testing.assert_allclose(expr.slice((slice(1, 2, 1), slice(0, 10, 2)))[:], nres[1:2, 0:10:2])
-    # Now relies on inefficient blosc2.ndarray.slice for non-unit steps but only per chunk (not for whole result)
-    np.testing.assert_allclose(expr.slice((slice(1, 2, 1), slice(0, 10, 2)))[:], nres[:, 0:10:2])
+    np.testing.assert_allclose(expr.slice((slice(None, None, None), slice(0, 10, 2)))[:], nres[:, 0:10:2])
 
     # Small test for broadcasting
     expr = test_arr + test_arr.slice(1)
@@ -1100,8 +1098,7 @@ def test_eval_getitem2():
     np.testing.assert_allclose(expr[1:, :7], nres[1:, :7])
     np.testing.assert_allclose(expr[:, 0:10:2], nres[:, 0:10:2])
     # Now relies on inefficient blosc2.ndarray.slice for non-unit steps but only per chunk (not for whole result)
-    # Now relies on inefficient blosc2.ndarray.slice for non-unit steps but only per chunk (not for whole result)
-    np.testing.assert_allclose(expr.slice((slice(1, 2, 1), slice(0, 10, 2)))[:], nres[:, 0:10:2])
+    np.testing.assert_allclose(expr.slice((slice(None, None, None), slice(0, 10, 2)))[:], nres[:, 0:10:2])
 
 
 # Test lazyexpr's slice method
