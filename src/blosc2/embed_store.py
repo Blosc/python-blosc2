@@ -5,8 +5,7 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
-import os.path
-from collections.abc import Iterator
+from collections.abc import Iterator, KeysView
 from typing import Any
 
 import numpy as np
@@ -23,14 +22,15 @@ class EmbedStore:
     A dictionary-like container for storing NumPy/Blosc2 arrays as nodes.
 
     For nodes that are stored remotely, only references to the arrays are
-    stored, not the arrays themselves.
-
-    External storage is not supported here, only in the DictStore.
+    stored, not the arrays themselves.  External storage is not supported here;
+    use `blosc2.DictStore` for that purpose.
 
     Parameters
     ----------
     urlpath : str or None, optional
-        Path for persistent storage.
+        Path for persistent storage. Using a ' .b2e' extension is recommended.
+        If None, the embed store will be in memory only, which can be
+        deserialized later using the :func:`blosc2.from_cframe` function.
     mode : str, optional
         File mode ('r', 'w', 'a'). Default is 'w'.
     cparams : dict or None, optional
@@ -42,8 +42,8 @@ class EmbedStore:
     storage : blosc2.Storage or None, optional
         Storage properties for the embed store.  If passed, it will override
         the `urlpath` and `mode` parameters.
-    initial_size : int, optional
-        Initial size of the backing storage in bytes.
+    chunksize : int, optional
+        Size of chunks for the backing storage. Default is 1 MiB.
 
     Examples
     --------
@@ -68,7 +68,6 @@ class EmbedStore:
         storage: blosc2.Storage | None = None,
         chunksize: int | None = 1024 * 1024,
         _from_schunk: SChunk | None = None,  # for internal use only
-        _zip_store: bool = False,  # for internal use only
     ):
         """
         See :class:`EmbedStore` for full documentation of parameters.
@@ -78,7 +77,6 @@ class EmbedStore:
         # although it is more efficient in terms of CPU usage.
         # Let's use the SChunk store by default and continue experimenting.
         self._schunk_store = True  # put this to False to use an NDArray instead of a SChunk
-        self._zip_store = _zip_store
         self.urlpath = urlpath
 
         if _from_schunk is not None:
@@ -244,13 +242,6 @@ class EmbedStore:
         if urlbase:
             urlpath = blosc2.URLPath(node_info["path"], urlbase=urlbase)
             return blosc2.open(urlpath, mode="r")
-        urlpath = node_info.get("urlpath", None)
-        if urlpath:
-            if self._zip_store and self.urlpath:
-                # Convert the relative path to an absolute path
-                store_dir = os.path.dirname(self.urlpath)
-                urlpath = os.path.join(store_dir, urlpath)
-            return blosc2.open(urlpath)
         offset = node_info["offset"]
         length = node_info["length"]
         serialized_data = bytes(self._store[offset : offset + length])
@@ -332,13 +323,13 @@ class EmbedStore:
         """
         return iter(self._embed_map)
 
-    def keys(self) -> dict[str, dict[str, int]].keys:
+    def keys(self) -> KeysView[str]:
         """
         Return all keys in the embed store.
 
         Returns
         -------
-        keys : dict_keys
+        keys : KeysView[str]
             Keys of the embed store.
         """
         return self._embed_map.keys()

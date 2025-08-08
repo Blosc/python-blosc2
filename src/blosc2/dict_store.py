@@ -9,7 +9,7 @@ import os
 import shutil
 import tempfile
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Iterator, KeysView
 from typing import Any
 
 import numpy as np
@@ -21,41 +21,50 @@ from blosc2.embed_store import EmbedStore
 
 class DictStore:
     """
-    A directory-based storage container that uses a EmbedStore index for metadata.
+    A directory-based storage container for compressed data using Blosc2.
 
-    The DictStore maintains a directory structure with an index file (embed.b2e)
-    that tracks all stored arrays. It also supports reading from a .b2z file,
-    which is a zip archive containing Blosc2 compressed files.
+    Manages a directory-based (`.b2d`) structure of NDArrays and SChunks,
+    with an embed store for in-memory data. It also supports creating
+    and reading `.b2z` files, which are zip archives that mirror the
+    directory structure.
 
     Parameters
     ----------
     localpath : str
-        Local path for the .b2z file. Must have a .b2z extension.
-        For reading: The .b2z file must exist.
-        For writing: The .b2z file will be created.
+        Local path for the directory (`.b2d`) or file (`.b2z`); other extensions
+        are not supported. If a directory is specified, it will be treated as
+        a Blosc2 directory format (B2DIR). If a file is specified, it
+        will be treated as a Blosc2 zip format (B2ZIP).
     mode : str, optional
         File mode ('r', 'w', 'a'). Default is 'a'.
     tmpdir : str or None, optional
-        Temporary directory to use for working files. If None, a system
-        temporary directory will be created. Default is None.
+        Temporary directory to use when working with `.b2z` files. If None,
+        a system temporary directory will be created. Default is None.
     cparams : dict or None, optional
-        Compression parameters for the index.
-        Default is None, which uses the default Blosc2 parameters.
+        Compression parameters for the internal embed store.
+        If None, the default Blosc2 parameters are used.
     dparams : dict or None, optional
-        Decompression parameters for the index.
-        Default is None, which uses the default Blosc2 parameters.
+        Decompression parameters for the internal embed store.
+        If None, the default Blosc2 parameters are used.
     storage : blosc2.Storage or None, optional
-        Storage properties for the index store.
+        Storage properties for the internal embed store.
+        If None, the default Blosc2 storage properties are used.
 
     Examples
     --------
     >>> dstore = DictStore(localpath="my_dstore.b2z", mode="w")
-    >>> dstore["/node1"] = np.array([1, 2, 3])
-    >>> dstore["/node2"] = blosc2.ones(2)
+    >>> dstore["/node1"] = np.array([1, 2, 3])  # goes to embed store
+    >>> dstore["/node2"] = blosc2.ones(2)  # goes to embed store
+    >>> arr_external = blosc2.arange(3, urlpath="ext_node3.b2nd", mode="w")
+    >>> dstore["/dir1/node3"] = arr_external  # external file in dir1
+    >>> dstore.to_b2z()  # persist to the zip file; external files are copied in
     >>> print(list(dstore.keys()))
-    ['/node1', '/node2']
+    ['/node1', '/node2', '/dir1/node3']
     >>> print(dstore["/node1"][:])
     [1 2 3]
+    >>> with zipfile.ZipFile("my_dstore.b2z", "r") as zf:
+    ...     print(zf.namelist())
+    ['dir1/node3.b2nd','embed.b2e']
     """
 
     def __init__(  # noqa: C901
@@ -101,25 +110,25 @@ class DictStore:
                 if not os.path.exists(tmpdir):
                     os.makedirs(tmpdir, exist_ok=True)
 
+        self.estore_path = "embed.b2e"
         if mode == "r":
             # Handle .b2z file input for reading
             if not os.path.exists(self.localpath):
                 raise FileNotFoundError(f"dir/zip file {self.localpath} does not exist.")
 
             self.b2z_path = self.localpath
-            self.index_path = "embed.b2e"
 
             # Populate offsets of files in b2z
             self.offsets = self._get_zip_offsets()
 
-            # Check if embed.b2e exists in zip
-            if self.index_path not in self.offsets:
-                raise FileNotFoundError(f"Index file {self.index_path} not found in b2z file.")
+            # Check if estore exists in zip
+            if self.estore_path not in self.offsets:
+                raise FileNotFoundError(f"Embed file {self.estore_path} not found in store.")
 
-            # Open the index file directly from zip using offset
-            index_offset = self.offsets[self.index_path]["offset"]
-            schunk = blosc2.open(self.b2z_path, mode="r", offset=index_offset)
-            self._estore = EmbedStore(_from_schunk=schunk, _zip_store=True)
+            # Open the embed file directly from zip using offset
+            estore_offset = self.offsets[self.estore_path]["offset"]
+            schunk = blosc2.open(self.b2z_path, mode="r", offset=estore_offset)
+            self._estore = EmbedStore(_from_schunk=schunk)
 
             # Build map_tree from .b2nd files in zip
             for filepath in self.offsets:
@@ -131,7 +140,7 @@ class DictStore:
                     self.map_tree[key] = filepath
         else:
             # Handle directory input for writing/appending
-            self.index_path = os.path.join(self.tmpdir, "embed.b2e")
+            self.estore_path = os.path.join(self.tmpdir, self.estore_path)
 
             # Check if we're opening an existing dstore
             if mode == "a" and os.path.exists(self.localpath):
@@ -140,26 +149,27 @@ class DictStore:
                     zf.extractall(self.tmpdir)
 
             self.b2z_path = self.localpath
+            if self.b2z_path.endswith(".b2d"):
+                self.b2z_path = self.b2z_path[:-3] + ".b2z"
 
-            # Initialize the underlying EmbedStore index
+            # Initialize the underlying EmbedStore
             self._estore = EmbedStore(
-                urlpath=self.index_path,
+                urlpath=self.estore_path,
                 mode=mode,
                 cparams=cparams,
                 dparams=dparams,
                 storage=storage,
-                _zip_store=True,
             )
 
     @property
     def estore(self) -> EmbedStore:
         """
-        Access to the underlying EmbedStore index.
+        Access to the underlying EmbedStore object.
 
         Returns
         -------
         estore : EmbedStore
-            The underlying EmbedStore object used for indexing.
+            The underlying EmbedStore object.
         """
         return self._estore
 
@@ -221,7 +231,7 @@ class DictStore:
         KeyError
             If key is not found.
         """
-        # Check map_tree first (takes precedence over EmbedStore index)
+        # Check map_tree first
         if key in self.map_tree:
             filepath = self.map_tree[key]
             if filepath in self.offsets:
@@ -234,7 +244,7 @@ class DictStore:
                 else:
                     raise KeyError(f"File for key '{key}' not found in offsets or temporary directory.")
 
-        # Fall back to EmbedStore index
+        # Fall back to EmbedStore
         return self._estore[key]
 
     def get(self, key: str, default: Any = None) -> blosc2.NDArray | Any:
@@ -309,17 +319,17 @@ class DictStore:
         """
         return iter(self._estore)
 
-    def keys(self) -> dict[str, dict[str, int]].keys:
+    def keys(self) -> KeysView[str]:
         """
         Return all keys in the DictStore.
 
         Returns
         -------
-        keys : dict_keys
+        keys : KeysView[str]
             Keys of the DictStore.
         """
-        # Combine keys from both map_tree and EmbedStore index
-        return set(self.map_tree.keys()) | set(self._estore.keys())
+        all_keys = set(self.map_tree.keys()) | set(self._estore.keys())
+        return dict.fromkeys(all_keys).keys()
 
     def values(self) -> Iterator[blosc2.NDArray]:
         """
@@ -357,7 +367,7 @@ class DictStore:
             else:
                 yield key, self._estore[key]
 
-    def to_b2z(self, overwrite=False) -> os.PathLike[Any] | str:
+    def to_b2z(self, overwrite=False, filename=None) -> os.PathLike[Any] | str:
         """
         Serialize zip store contents to the b2z file.
 
@@ -365,6 +375,8 @@ class DictStore:
         ----------
         overwrite : bool, optional
             If True, overwrite the existing b2z file if it exists. Default is False.
+        filename : str, optional
+            If provided, use this filename instead of the default b2z file path.
 
         Returns
         -------
@@ -374,29 +386,33 @@ class DictStore:
         if self.mode == "r":
             raise ValueError("Cannot call to_b2z() on a DictStore opened in read mode.")
 
-        if os.path.exists(self.b2z_path) and not overwrite:
-            raise FileExistsError(f"'{self.b2z_path}' already exists. Use overwrite=True to overwrite.")
+        b2z_path = self.b2z_path if filename is None else filename
+        if not b2z_path.endswith(".b2z"):
+            raise ValueError("b2z_path must have a .b2z extension")
 
-        # Gather all files except index_path
+        if os.path.exists(b2z_path) and not overwrite:
+            raise FileExistsError(f"'{b2z_path}' already exists. Use overwrite=True to overwrite.")
+
+        # Gather all files except estore_path
         filepaths = []
         for root, _, files in os.walk(self.tmpdir):
             for file in files:
                 filepath = os.path.join(root, file)
-                if os.path.abspath(filepath) != os.path.abspath(self.index_path):
+                if os.path.abspath(filepath) != os.path.abspath(self.estore_path):
                     filepaths.append(filepath)
 
         # Sort filepaths by file size from largest to smallest
         filepaths.sort(key=lambda f: os.path.getsize(f), reverse=True)
 
         with zipfile.ZipFile(self.b2z_path, "w", zipfile.ZIP_STORED) as zf:
-            # Write all files (except index_path) first (sorted by size)
+            # Write all files (except estore_path) first (sorted by size)
             for filepath in filepaths:
                 arcname = os.path.relpath(filepath, self.tmpdir)
                 zf.write(filepath, arcname)
-            # Write embed.b2e last
-            if os.path.exists(self.index_path):
-                arcname = os.path.relpath(self.index_path, self.tmpdir)
-                zf.write(self.index_path, arcname)
+            # Write estore last
+            if os.path.exists(self.estore_path):
+                arcname = os.path.relpath(self.estore_path, self.tmpdir)
+                zf.write(self.estore_path, arcname)
         return os.path.abspath(self.b2z_path)
 
     def _get_zip_offsets(self) -> dict[str, dict[str, int]]:

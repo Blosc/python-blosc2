@@ -6,6 +6,7 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 import os
+import zipfile
 
 import numpy as np
 import pytest
@@ -114,3 +115,26 @@ def test_len_and_iter(cleanup_dstore):
             arr = dstore_read[key]
             i = int(key.split("_")[-1])
             assert np.all(arr[:] == np.full((5,), i))
+
+
+def test_without_embed(cleanup_dstore):
+    # Create a DictStore without embed files
+    b2zfile = "test_dstore2.b2z"
+    with DictStore(b2zfile, mode="w") as dstore:
+        arr_external = blosc2.arange(3, urlpath="ext_node3.b2nd", mode="w")
+        arr_external.vlmeta["description"] = "This is vlmeta for /dir1/node3"
+        dstore["/dir1/node3"] = arr_external
+        assert "/dir1/node3" in dstore.map_tree
+    with zipfile.ZipFile(b2zfile, "r") as zf:
+        print(zf.namelist())
+        # Check that the external file is present
+        assert zf.namelist() == ["dir1/node3.b2nd", "embed.b2e"]
+
+    # Reopen and check vlmeta
+    with DictStore(b2zfile, mode="r") as dstore_read:
+        assert list(dstore_read.keys()) == ["/dir1/node3"]
+        node3 = dstore_read["/dir1/node3"]
+        assert node3.vlmeta["description"] == "This is vlmeta for /dir1/node3"
+        # Check that the value is read-only
+        with pytest.raises(ValueError):
+            node3[:] = np.arange(5)
