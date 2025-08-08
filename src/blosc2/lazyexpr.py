@@ -2092,7 +2092,9 @@ def chunked_eval(  # noqa: C901
             # The fast path is possible under a few conditions
             if getitem and (where is None or len(where) == 2) and not callable(expression):
                 # Compute the size of operands for the fast path
-                shape_operands = item.newshape(shape)  # shape of slice
+                unit_steps = np.all([s.step == 1 for s in item.raw])
+                # shape of slice, if non-unit steps have to decompress full array into memory
+                shape_operands = item.newshape(shape) if unit_steps else shape
                 _dtype = kwargs.get("dtype", np.float64)
                 size_operands = math.prod(shape_operands) * len(operands) * _dtype.itemsize
                 # Only take the fast path if the size of operands is relatively small
