@@ -193,11 +193,6 @@ class EmbedStore:
         if self.mode == "r":
             raise ValueError("Cannot set items in read-only mode.")
         self._validate_key(key)
-        if isinstance(value, blosc2.NDArray) and getattr(value, "urlpath", None) is not None:
-            raise ValueError(
-                "Cannot store a blosc2.NDArray with a urlpath in the embed store. "
-                "Use DictStore for external storage."
-            )
         if isinstance(value, C2Array):
             self._embed_map[key] = {"urlbase": value.urlbase, "path": value.path}
         else:

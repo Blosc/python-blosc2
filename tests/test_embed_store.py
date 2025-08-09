@@ -32,7 +32,7 @@ def populate_nodes(cleanup_files):
     arr_embedded = blosc2.arange(3, dtype=np.int32)
     arr_embedded.vlmeta["description"] = "This is vlmeta for /node2"
     estore["/node2"] = arr_embedded
-    arr_embedded = blosc2.arange(4, dtype=np.int32)
+    arr_embedded = blosc2.arange(4, dtype=np.int32, urlpath="external_node3.b2nd", mode="w")
     arr_embedded.vlmeta["description"] = "This is vlmeta for /node3"
     estore["/node3"] = arr_embedded
 

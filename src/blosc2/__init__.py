@@ -264,6 +264,7 @@ from .ndarray import (
     stack,
 )
 from .embed_store import EmbedStore, estore_from_cframe
+from .dict_store import DictStore
 
 from .c2array import c2context, C2Array, URLPath
 
@@ -367,6 +368,7 @@ __all__ = [
     # Enums
     "Codec",
     "DParams",
+    "DictStore",
     "EmbedStore",
     "Filter",
     "LazyArray",

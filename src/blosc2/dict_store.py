@@ -49,6 +49,14 @@ class DictStore:
     storage : blosc2.Storage or None, optional
         Storage properties for the internal embed store.
         If None, the default Blosc2 storage properties are used.
+    threshold : int, optional
+        Threshold for the size of arrays to be stored in the embed store.
+        If the *compressed* array size is below this threshold, it will be
+        stored in the embed store instead of as a separate file. Default is
+        None, which means in-memory arrays are stored in the embed store and
+        on-disk arrays are stored as separate files.
+        C2Array objects will always be stored in the embed store,
+        regardless of their size.
 
     Examples
     --------
@@ -75,17 +83,23 @@ class DictStore:
         cparams: blosc2.CParams | None = None,
         dparams: blosc2.CParams | None = None,
         storage: blosc2.Storage | None = None,
+        threshold: int | None = None,
     ):
         """
         See :class:`DictStore` for full documentation of parameters.
         """
         self.localpath = localpath if isinstance(localpath, (str, bytes)) else str(localpath)
         if not self.localpath.endswith((".b2z", ".b2d")):
-            raise ValueError("localpath must have a .b2z or .b2d extension")
+            raise ValueError(f"localpath must have a .b2z or .b2d extension; you passed: {self.localpath}")
         if mode not in ("r", "w", "a"):
             raise ValueError("For DictStore containers, mode must be 'r', 'w', or 'a'")
 
         self.mode = mode
+        self.threshold = threshold
+        self.cparams = cparams or blosc2.CParams()
+        self.dparams = dparams or blosc2.DParams()
+        self.storage = storage or blosc2.Storage()
+
         self.offsets = {}
         self.map_tree = {}
         self._temp_dir_obj = None
@@ -203,7 +217,11 @@ class DictStore:
         ValueError
             If key is invalid or already exists.
         """
-        if isinstance(value, blosc2.NDArray) and getattr(value, "urlpath", None):
+        if isinstance(value, np.ndarray):
+            value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)
+        exceeds_threshold = self.threshold is not None and value.cbytes >= self.threshold
+        external_file = isinstance(value, blosc2.NDArray) and getattr(value, "urlpath", None)
+        if exceeds_threshold or (external_file and self.threshold is None):
             # Convert key to a proper file path within the tree directory
             rel_key = key.lstrip("/")
             dest_path = os.path.join(self.working_dir, rel_key + ".b2nd")
@@ -213,11 +231,19 @@ class DictStore:
             if parent_dir and not os.path.exists(parent_dir):
                 os.makedirs(parent_dir, exist_ok=True)
 
-            shutil.copy2(value.urlpath, dest_path)
-            # Store relative path from tree directory (remove working_dir from beginning)
+            # Save the value to the destination path
+            if not external_file:
+                value.save(urlpath=dest_path)
+            else:
+                # This should be faster than using value.save() ?
+                shutil.copy2(value.urlpath, dest_path)
+
+            # Store relative path from tree directory
             rel_path = os.path.relpath(dest_path, self.working_dir)
             self.map_tree[key] = rel_path
         else:
+            if external_file:
+                value = blosc2.from_cframe(value.to_cframe())
             self._estore[key] = value
 
     def __getitem__(self, key: str) -> blosc2.NDArray:
