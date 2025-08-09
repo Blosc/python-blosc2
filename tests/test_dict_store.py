@@ -29,7 +29,7 @@ def populated_dict_store(request):
     ext_path = "ext_node3.b2nd"
 
     # Setup: create and populate the store
-    with DictStore(path, mode="w") as dstore:
+    with DictStore(path, mode="w", threshold=None) as dstore:
         dstore["/node1"] = np.array([1, 2, 3])
         dstore["/node2"] = blosc2.ones(2)
         arr_external = blosc2.arange(3, urlpath=ext_path, mode="w")
@@ -141,7 +141,7 @@ def test_without_embed(populated_dict_store):
         shutil.rmtree(path)
 
     # Create a DictStore without embed files
-    with DictStore(path, mode="w") as dstore_new:
+    with DictStore(path, mode="w", threshold=None) as dstore_new:
         ext_path = "ext_node3.b2nd"
         arr_external = blosc2.arange(3, urlpath=ext_path, mode="w")
         arr_external.vlmeta["description"] = "This is vlmeta for /dir1/node3"

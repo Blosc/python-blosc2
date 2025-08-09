@@ -50,13 +50,14 @@ class DictStore:
         Storage properties for the internal embed store.
         If None, the default Blosc2 storage properties are used.
     threshold : int, optional
-        Threshold for the size of arrays to be stored in the embed store.
+        Threshold for the array size (bytes) to be kept in the embed store.
         If the *compressed* array size is below this threshold, it will be
-        stored in the embed store instead of as a separate file. Default is
-        None, which means in-memory arrays are stored in the embed store and
-        on-disk arrays are stored as separate files.
+        stored in the embed store instead of as a separate file. If None,
+        in-memory arrays are stored in the embed store and on-disk arrays
+        are stored as separate files.
         C2Array objects will always be stored in the embed store,
         regardless of their size.
+        Default is 2**23 (8 MiB).
 
     Examples
     --------
@@ -83,7 +84,7 @@ class DictStore:
         cparams: blosc2.CParams | None = None,
         dparams: blosc2.CParams | None = None,
         storage: blosc2.Storage | None = None,
-        threshold: int | None = None,
+        threshold: int | None = 2**23,  # Default threshold of 8 MiB (2**23 bytes) for embed store
     ):
         """
         See :class:`DictStore` for full documentation of parameters.
