@@ -184,6 +184,8 @@ class DictStore:
                 if filepath.endswith(".b2nd"):
                     # Convert filename to key: remove .b2nd extension and ensure starts with /
                     rel_path = os.path.relpath(filepath, self.working_dir)
+                    # Normalize path separators to forward slashes for cross-platform consistency
+                    rel_path = rel_path.replace(os.sep, "/")
                     key = rel_path[:-5]  # Remove .b2nd
                     if not key.startswith("/"):
                         key = "/" + key
