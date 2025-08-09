@@ -1,15 +1,15 @@
-.. _EmbedStore:
+.. _DictStore:
 
-EmbedStore
-==========
+DictStore
+=========
 
-A dictionary-like container for storing NumPy, Blosc2 (NDArray, either in memory or in external files) and remote (C2Array) arrays as nodes.
+A directory-based storage container for compressed data using Blosc2.
 
-For nodes that are stored externally or remotely, only references to the arrays are stored, not the arrays themselves. This allows for efficient storage and retrieval of large datasets.
+Manages a directory-based (``.b2d``) structure of NDArrays and SChunks, with an embed store for in-memory data. It also supports creating and reading ``.b2z`` files, which are zip archives that mirror the directory structure.
 
 .. currentmodule:: blosc2
 
-.. autoclass:: EmbedStore
+.. autoclass:: DictStore
     :members:
     :member-order: groupwise
 
@@ -23,11 +23,12 @@ For nodes that are stored externally or remotely, only references to the arrays 
         __contains__
         __len__
         __iter__
+        __enter__
+        __exit__
 
     Constructors
     ------------
     .. automethod:: __init__
-    .. autofunction:: tree_from_cframe
 
     Dictionary Interface
     -------------------
@@ -41,7 +42,17 @@ For nodes that are stored externally or remotely, only references to the arrays 
     .. automethod:: values
     .. automethod:: items
 
+    Context Manager
+    ---------------
+    .. automethod:: __enter__
+    .. automethod:: __exit__
+
     Utility Methods
     ---------------
     .. automethod:: get
-    .. automethod:: to_cframe
+    .. automethod:: to_b2z
+    .. automethod:: close
+
+    Properties
+    ----------
+    .. autoattribute:: estore
