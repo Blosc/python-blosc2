@@ -3,9 +3,36 @@
 DictStore
 =========
 
-A directory-based storage container for compressed data using Blosc2.
+A high‑level, dictionary‑like container to organize compressed arrays with Blosc2.
 
-Manages a directory-based (``.b2d``) structure of NDArrays and SChunks, with an embed store for in-memory data. It also supports creating and reading ``.b2z`` files, which are zip archives that mirror the directory structure.
+Overview
+--------
+DictStore lets you store and retrieve arrays by string keys (paths like ``"/dir/node"``), similar to a Python dict, while transparently handling efficient Blosc2 compression and persistence. It supports two on‑disk representations:
+
+- ``.b2d``: a directory layout (B2DIR) where each external array is a separate ``.b2nd`` file and an embedded store file (``embed.b2e``) keeps small/in‑memory arrays.
+- ``.b2z``: a single zip file (B2ZIP) that mirrors the directory structure above. You can zip up a ``.b2d`` layout or write directly and later reopen it for reading.
+
+Small arrays (below a configurable compression‑size threshold) and in‑memory objects are kept inside the embedded store; larger or explicitly external arrays live as regular ``.b2nd`` files. You can mix both seamlessly and use the usual mapping methods (``__getitem__``, ``__setitem__``, ``keys()``, ``items()``...).
+
+Quick example
+-------------
+
+.. code-block:: python
+
+   import numpy as np
+   import blosc2
+
+   # Create a store backed by a zip file
+   with blosc2.DictStore("my_dstore.b2z", mode="w") as dstore:
+       dstore["/node1"] = np.array([1, 2, 3])  # small -> embedded store
+       dstore["/node2"] = blosc2.ones(2)  # small -> embedded store
+       arr_ext = blosc2.arange(3, urlpath="n3.b2nd", mode="w")
+       dstore["/dir1/node3"] = arr_ext  # external file referenced
+
+   # Reopen and read
+   with blosc2.DictStore("my_dstore.b2z", mode="r") as dstore:
+       print(sorted(dstore.keys()))  # ['/dir1/node3', '/node1', '/node2']
+       print(dstore["/node1"][:])  # [1 2 3]
 
 .. currentmodule:: blosc2
 
