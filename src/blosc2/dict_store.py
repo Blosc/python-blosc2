@@ -401,16 +401,30 @@ class DictStore:
         """
         return self.map_tree.keys() | self._estore.keys()
 
-    def values(self) -> Iterator[blosc2.NDArray]:
+    def values(self) -> Iterator[blosc2.NDArray | SChunk | C2Array]:
         """
         Return an iterator over all values in the DictStore.
 
         Returns
         -------
-        values : Iterator[blosc2.NDArray]
+        values : Iterator[blosc2.NDArray | SChunk | C2Array]
             Iterator over stored arrays.
         """
-        return self._estore.values()
+        # Get all unique keys from both map_tree and _estore, with map_tree taking precedence
+        all_keys = set(self.map_tree.keys()) | set(self._estore.keys())
+
+        for key in all_keys:
+            if key in self.map_tree:
+                filepath = self.map_tree[key]
+                if self.is_zip_store:
+                    if filepath in self.offsets:
+                        offset = self.offsets[filepath]["offset"]
+                        yield blosc2.open(self.b2z_path, mode="r", offset=offset)
+                else:
+                    urlpath = os.path.join(self.working_dir, filepath)
+                    yield blosc2.open(urlpath, mode="r" if self.mode == "r" else "a")
+            elif key in self._estore:
+                yield self._estore[key]
 
     def items(self) -> Iterator[tuple[str, blosc2.NDArray | SChunk | C2Array]]:
         """

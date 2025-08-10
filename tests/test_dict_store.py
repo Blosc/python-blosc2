@@ -220,3 +220,64 @@ def test_external_schunk_file_and_reopen():
         os.remove(essch_extern)
     if os.path.exists(path):
         os.remove(path)
+
+
+def _digest_value(value):
+    """Return a bytes digest representative of a stored value content."""
+    if isinstance(value, blosc2.SChunk):
+        return bytes(value[:])
+    # NDArray and potentially C2Array expose slicing to get numpy array
+    arr = value[:]
+    try:
+        # numpy-like
+        return np.ascontiguousarray(arr).tobytes()
+    except Exception:
+        # Fallback to bytes if possible
+        return bytes(arr)
+
+
+def test_values_union_and_precedence(tmp_path):
+    # Build a store where a key exists both in embed and as external; external should take precedence in values()
+    path = tmp_path / "test_values.dstore.b2z"
+    ext_path = tmp_path / "dup_external.b2nd"
+    with DictStore(str(path), mode="w", threshold=None) as dstore:
+        # First, put an embedded value for /dup
+        embed_arr = np.arange(3)
+        dstore["/dup"] = embed_arr
+        embed_digest = np.ascontiguousarray(embed_arr).tobytes()
+        # Now, create an external array for the same key; map_tree should take precedence
+        arr_external = blosc2.arange(5, urlpath=str(ext_path), mode="w")
+        dstore["/dup"] = arr_external
+        assert "/dup" in dstore.map_tree
+    # Reopen read-only and verify
+    with DictStore(str(path), mode="r") as dstore_read:
+        # Collect digests from values()
+        values_digests = {_digest_value(v) for v in dstore_read.values()}
+        # The external content digest should be present, and the embedded one absent
+        external_digest = (
+            np.arange(5).astype(np.int64).tobytes()
+            if np.arange(5).dtype != np.int64
+            else np.arange(5).tobytes()
+        )
+        assert external_digest in values_digests
+        assert embed_digest not in values_digests
+
+
+def test_values_match_items_values(populated_dict_store):
+    dstore, path = populated_dict_store
+    # Add a couple of extra nodes
+    dstore["/A"] = np.arange(4)
+    dstore["/B"] = blosc2.ones(3)
+    # Overwrite one with external to ensure mix
+    ext_path = "A_ext.b2nd"
+    arr_external = blosc2.arange(4, urlpath=ext_path, mode="w")
+    dstore["/A"] = arr_external
+    dstore.close()
+
+    with DictStore(path, mode="r") as dstore_read:
+        items_values = {_digest_value(v) for _, v in dstore_read.items()}
+        values_values = {_digest_value(v) for v in dstore_read.values()}
+        assert items_values == values_values
+
+    if os.path.exists(ext_path):
+        os.remove(ext_path)
