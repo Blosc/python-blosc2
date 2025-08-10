@@ -265,6 +265,7 @@ from .ndarray import (
 )
 from .embed_store import EmbedStore, estore_from_cframe
 from .dict_store import DictStore
+from .tree_store import TreeStore
 
 from .c2array import c2context, C2Array, URLPath
 
@@ -385,6 +386,7 @@ __all__ = [
     "SpecialValue",
     "SplitMode",
     "Storage",
+    "TreeStore",
     "Tuner",
     "URLPath",
     # Version
