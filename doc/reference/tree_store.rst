@@ -88,6 +88,10 @@ Quick example
     .. automethod:: walk
     .. automethod:: get_subtree
 
+    Properties
+    ----------
+    .. autoattribute:: vlmeta
+
 Notes
 -----
 - Keys must start with ``/``. The root is ``/``. Empty path segments (``//``) are not allowed.
