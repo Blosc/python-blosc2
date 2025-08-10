@@ -13,6 +13,7 @@ Main Classes
     LazyArray
     C2Array
     DictStore
+    TreeStore
     EmbedStore
     Proxy
     ProxySource
@@ -26,6 +27,7 @@ Main Classes
     ndarray
     ndfield
     dict_store
+    tree_store
     embed_store
     lazyarray
     c2array
