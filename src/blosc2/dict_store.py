@@ -388,7 +388,6 @@ class DictStore:
         for key in self._estore:
             if key not in self.map_tree:
                 yield key
-        return iter(self.keys())
 
     def keys(self) -> Set[str]:
         """
