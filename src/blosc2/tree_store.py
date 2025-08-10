@@ -6,13 +6,98 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 import os
-from collections.abc import Iterator
+from collections.abc import Iterator, MutableMapping
 
 import numpy as np
 
+import blosc2
 from blosc2.c2array import C2Array
 from blosc2.dict_store import DictStore
 from blosc2.ndarray import NDArray
+
+
+class vlmeta(MutableMapping):
+    """
+    Class providing access to user metadata on a TreeStore.
+
+    Values are serialized via an in-memory SChunk and persisted into the
+    internal EmbedStore of the TreeStore. The actual metadata encoding/decoding
+    is delegated to SChunk.vlmeta, mirroring the behavior of blosc2.schunk.vlmeta.
+    """
+
+    def __init__(self, tstore: "TreeStore"):
+        self._tstore = tstore
+        # Use a reserved namespace inside the EmbedStore to avoid colliding with user keys
+        self._prefix = "/.vlmeta"
+
+    def _fullkey(self, name: str) -> str:
+        if not isinstance(name, (str, bytes, slice)):
+            # Let SChunk.vlmeta accept bytes names too (it does internally). For storage key, use str.
+            name = str(name)
+        if isinstance(name, slice):  # handled by callers
+            return self._prefix
+        # Ensure valid key for EmbedStore
+        return f"{self._prefix}/{name}"
+
+    def _check_writable(self):
+        if getattr(self._tstore, "mode", None) == "r":
+            raise ValueError("Cannot modify vlmeta in read-only mode.")
+
+    def __setitem__(self, name, content):
+        self._check_writable()
+        # Support bulk set via [:]
+        if isinstance(name, slice):
+            if name.start is None and name.stop is None:
+                for k, v in content.items():
+                    self[k] = v
+                return
+            raise NotImplementedError("Slicing is not supported, unless [:]")
+        # Create a tiny in-memory SChunk and delegate vlmeta set
+        schunk = blosc2.SChunk(chunksize=1)
+        # Delegate encoding to SChunk.vlmeta which handles msgpack, tuples, etc.
+        schunk.vlmeta[name] = content
+        # Store the SChunk in the internal EmbedStore under our reserved key
+        self._tstore.estore[self._fullkey(name)] = schunk
+
+    def __getitem__(self, name):
+        if isinstance(name, slice):
+            if name.start is None and name.stop is None:
+                return self.getall()
+            raise NotImplementedError("Slicing is not supported, unless [:]")
+        key = self._fullkey(name)
+        # Retrieve the stored SChunk from the EmbedStore
+        schunk = self._tstore.estore[key]
+        # Delegate decoding to SChunk.vlmeta
+        return schunk.vlmeta[name]
+
+    def __delitem__(self, name):
+        self._check_writable()
+        key = self._fullkey(name)
+        del self._tstore.estore[key]
+
+    def __len__(self):
+        prefix = self._prefix + "/"
+        # Count how many keys in estore belong to the vlmeta namespace
+        return sum(1 for k in self._tstore.estore if isinstance(k, str) and k.startswith(prefix))
+
+    def __iter__(self):
+        prefix = self._prefix + "/"
+        plen = len(prefix)
+        for k in self._tstore.estore:
+            if isinstance(k, str) and k.startswith(prefix):
+                yield k[plen:]
+
+    def getall(self):
+        """
+        Return all the variable length metalayers as a dictionary
+        """
+        return {name: self[name] for name in self}
+
+    def __repr__(self):
+        return repr(self.getall())
+
+    def __str__(self):
+        return str(self.getall())
 
 
 class TreeStore(DictStore):
@@ -493,6 +578,20 @@ class TreeStore(DictStore):
 
         return subtree
 
+    @property
+    def vlmeta(self) -> vlmeta:
+        """
+        Access to variable-length metadata for the TreeStore.
+
+        Notes
+        -----
+        Each vlmeta entry is stored as a tiny in-memory SChunk inside the
+        internal EmbedStore, and the actual metadata is delegated to the
+        SChunk.vlmeta mechanism. This mirrors SChunk.vlmeta behavior and
+        ensures robust serialization.
+        """
+        return vlmeta(self)
+
 
 if __name__ == "__main__":
     # Example usage
@@ -511,7 +610,9 @@ if __name__ == "__main__":
 
         # Test subtree view
         root_subtree = tstore["/child0"]
+        root_subtree.vlmeta["foo"] = "bar"
         print("Subtree keys:", sorted(root_subtree.keys()))
+        print("Subtree vlmeta:", root_subtree.vlmeta)
 
         # Walk the tree
         for path, children, nodes in root_subtree.walk("/"):

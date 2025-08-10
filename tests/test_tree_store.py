@@ -410,3 +410,143 @@ def test_proper_leaf_vs_structural_creation():
         assert isinstance(tstore["/hierarchy/level1/data"], blosc2.NDArray)  # Leaf
 
     os.remove("test_proper_creation.b2z")
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_treestore_vlmeta_basic_and_bulk(storage_type):
+    path = f"vlmeta_basic.{storage_type}"
+    with TreeStore(path, mode="w") as tstore:
+        # Basic set/get
+        tstore.vlmeta["author"] = "blosc2"
+        tstore.vlmeta["version"] = 1
+        tstore.vlmeta["shape"] = (3, 2)
+        assert tstore.vlmeta["author"] == "blosc2"
+        assert tstore.vlmeta["version"] == 1
+        assert tstore.vlmeta["shape"] == (3, 2)
+
+        # Bulk set via [:]
+        tstore.vlmeta[:] = {"desc": "test", "scale": 2.5}
+        # Bulk get via [:]
+        all_meta = tstore.vlmeta[:]
+        assert all_meta["author"] == "blosc2"
+        assert all_meta["version"] == 1
+        assert all_meta["shape"] == (3, 2)
+        assert all_meta["desc"] == "test"
+        assert all_meta["scale"] == 2.5
+
+        # Iteration and len should see all names without prefix
+        names = sorted(iter(tstore.vlmeta))
+        assert set(names) == set(all_meta.keys())
+        assert len(tstore.vlmeta) == len(all_meta)
+
+        # Deletion
+        del tstore.vlmeta["desc"]
+        assert "desc" not in set(iter(tstore.vlmeta))
+        assert len(tstore.vlmeta) == len(all_meta) - 1
+
+    # Reopen in read-only to check persistence and read-only protection
+    with TreeStore(path, mode="r") as tstore:
+        assert tstore.vlmeta["author"] == "blosc2"
+        assert tstore.vlmeta["version"] == 1
+        assert tstore.vlmeta["shape"] == (3, 2)
+        assert "desc" not in set(iter(tstore.vlmeta))
+        with pytest.raises(ValueError, match="read-only"):
+            tstore.vlmeta["new"] = 123
+        with pytest.raises(ValueError, match="read-only"):
+            del tstore.vlmeta["author"]
+
+    # Cleanup
+    if os.path.exists(path):
+        if os.path.isfile(path):
+            os.remove(path)
+        else:
+            shutil.rmtree(path)
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_treestore_vlmeta_does_not_interfere_with_data(storage_type):
+    """Ensure vlmeta keys live in a separate namespace and do not collide with data keys."""
+    path = f"vlmeta_isolation.{storage_type}"
+    with TreeStore(path, mode="w") as tstore:
+        # Put some data keys
+        tstore["/group/data"] = np.array([1, 2, 3])
+        tstore["/other"] = np.array([4, 5, 6])
+        # Add metadata
+        tstore.vlmeta["k1"] = {"a": 1}
+        tstore.vlmeta["k2"] = [1, 2, 3]
+
+        # Ensure data keys are unaffected
+        assert "/group/data" in tstore
+        assert "/other" in tstore
+        assert np.all(tstore["/group/data"][:] == np.array([1, 2, 3]))
+        assert np.all(tstore["/other"][:] == np.array([4, 5, 6]))
+
+        # Ensure vlmeta iteration returns only metadata names (no slashes)
+        for name in tstore.vlmeta:
+            assert "/" not in name
+
+    if os.path.exists(path):
+        if os.path.isfile(path):
+            os.remove(path)
+        else:
+            shutil.rmtree(path)
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_subtree_can_use_vlmeta(storage_type):
+    """A subtree view should be able to read/write vlmeta seamlessly."""
+    path = f"vlmeta_subtree.{storage_type}"
+    with TreeStore(path, mode="w") as tstore:
+        # Create some structure and a subtree view
+        tstore["/group/a"] = np.array([1])
+        tstore["/group/b"] = np.array([2])
+        subtree = tstore.get_subtree("/group")
+
+        # Set metadata via subtree and read via root
+        subtree.vlmeta["note"] = "from_subtree"
+        subtree.vlmeta["level"] = 5
+        assert tstore.vlmeta["note"] == "from_subtree"
+        assert tstore.vlmeta["level"] == 5
+
+        # Set metadata via root and read via subtree
+        tstore.vlmeta["rootmeta"] = 42
+        assert subtree.vlmeta["rootmeta"] == 42
+
+        # Bulk ops through subtree
+        subtree.vlmeta[:] = {"owner": "team", "scale": 1.5}
+        all_meta_sub = subtree.vlmeta[:]
+        assert all_meta_sub["note"] == "from_subtree"
+        assert all_meta_sub["level"] == 5
+        assert all_meta_sub["rootmeta"] == 42
+        assert all_meta_sub["owner"] == "team"
+        assert all_meta_sub["scale"] == 1.5
+
+        # Iteration from subtree matches names
+        names = set(iter(subtree.vlmeta))
+        for k in ("note", "level", "rootmeta", "owner", "scale"):
+            assert k in names
+        assert all("/" not in k for k in names)
+
+        # Ensure data remains unaffected
+        assert "/group/a" in tstore
+        assert "/group/b" in tstore
+        assert np.all(tstore["/group/a"][:] == np.array([1]))
+        assert np.all(tstore["/group/b"][:] == np.array([2]))
+
+    # Reopen in read-only and use subtree again
+    with TreeStore(path, mode="r") as tstore_ro:
+        subtree_ro = tstore_ro.get_subtree("/group")
+        assert subtree_ro.vlmeta["note"] == "from_subtree"
+        assert subtree_ro.vlmeta["rootmeta"] == 42
+        # Cannot modify via subtree in read-only
+        with pytest.raises(ValueError, match="read-only"):
+            subtree_ro.vlmeta["new"] = 1
+        with pytest.raises(ValueError, match="read-only"):
+            del subtree_ro.vlmeta["note"]
+
+    # Cleanup
+    if os.path.exists(path):
+        if os.path.isfile(path):
+            os.remove(path)
+        else:
+            shutil.rmtree(path)
