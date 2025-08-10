@@ -21,9 +21,11 @@ class EmbedStore:
     """
     A dictionary-like container for storing NumPy/Blosc2 arrays as nodes.
 
-    For nodes that are stored remotely, only references to the arrays are
-    stored, not the arrays themselves.  External storage is not supported here;
-    use `blosc2.DictStore` for that purpose.
+    For NumPy arrays and Blosc2 NDArrays (even if they live in external ``.b2nd`` files),
+    the data is read and embedded into the store. For remote arrays (``C2Array``),
+    only lightweight references (URL base and path) are stored. If you need a richer
+    hierarchical container with optional external references, consider using
+    `blosc2.TreeStore` or `blosc2.DictStore`.
 
     Parameters
     ----------

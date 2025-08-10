@@ -3,9 +3,46 @@
 EmbedStore
 ==========
 
-A dictionary-like container for storing NumPy, Blosc2 (NDArray, either in memory or in external files) and remote (C2Array) arrays as nodes.
+Overview
+--------
+EmbedStore is a dictionary-like container that lets you pack many arrays into a single, compressed Blosc2 container file (recommended extension: ``.b2e``).
+It can hold:
+- NumPy arrays (their data is embedded as compressed bytes),
+- Blosc2 NDArrays (either in-memory or persisted in their own ``.b2nd`` files; when added to the store, their data is embedded), and
+- remote Blosc2 arrays (``C2Array``) addressed via URLs.
 
-For nodes that are stored externally or remotely, only references to the arrays are stored, not the arrays themselves. This allows for efficient storage and retrieval of large datasets.
+Important: Only remote ``C2Array`` objects are stored as lightweight references (URL base and path). NumPy arrays and NDArrays are always embedded into the ``.b2e`` container, even if the NDArray originates from an external ``.b2nd`` file.
+
+Typical use cases include bundling several small/medium arrays together, shipping datasets as one file, or creating a simple keyed store for heterogeneous array sources.
+
+Quickstart
+----------
+
+.. code-block:: python
+
+    import numpy as np
+    import blosc2
+
+    estore = blosc2.EmbedStore(urlpath="example_estore.b2e", mode="w")
+    estore["/node1"] = np.array([1, 2, 3])  # embedded NumPy array
+    estore["/node2"] = blosc2.ones(2)  # embedded NDArray
+    estore["/node3"] = blosc2.arange(
+        3,
+        dtype="i4",  # NDArray (embedded, even if it has its own .b2nd)
+        urlpath="external_node3.b2nd",
+        mode="w",
+    )
+    url = blosc2.URLPath("@public/examples/ds-1d.b2nd", "https://cat2.cloud/demo")
+    estore["/node4"] = blosc2.open(
+        url, mode="r"
+    )  # remote C2Array (stored as a lightweight reference)
+
+    print(list(estore.keys()))
+    # ['/node1', '/node2', '/node3', '/node4']
+
+.. note::
+   - Embedded arrays (NumPy and NDArray) increase the size of the ``.b2e`` container.
+   - Remote ``C2Array`` nodes only store lightweight references; reading them requires access to the remote source. NDArrays coming from external ``.b2nd`` files are embedded into the store.
 
 .. currentmodule:: blosc2
 
@@ -27,7 +64,7 @@ For nodes that are stored externally or remotely, only references to the arrays 
     Constructors
     ------------
     .. automethod:: __init__
-    .. autofunction:: tree_from_cframe
+    .. autofunction:: estore_from_cframe
 
     Dictionary Interface
     -------------------
