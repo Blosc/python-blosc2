@@ -183,3 +183,21 @@ def test_to_cframe_append(populate_nodes):
     assert np.all(new_estore["/node4"][:] == np.arange(3))
     new_estore["/node5"] = np.arange(4, 7)
     assert np.all(new_estore["/node5"][:] == np.arange(4, 7))
+
+
+def test_store_and_retrieve_schunk():
+    # Create a small SChunk and store it in an in-memory EmbedStore
+    data = b"This is a small schunk"
+    schunk = blosc2.SChunk(chunksize=None, data=data)
+    vlmeta = "This is a small schunk for testing"
+    schunk.vlmeta["description"] = vlmeta
+
+    estore = blosc2.EmbedStore()
+    estore["/schunk"] = schunk
+
+    # Retrieve it back and check type and contents
+    value = estore["/schunk"]
+    assert isinstance(value, blosc2.SChunk)
+    assert value.nbytes == len(data)
+    assert value[:] == data
+    assert value.vlmeta["description"] == vlmeta

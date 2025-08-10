@@ -19,12 +19,12 @@ PROFILE = False  # Set to True to enable PROFILE prints in EmbedStore
 
 class EmbedStore:
     """
-    A dictionary-like container for storing NumPy/Blosc2 arrays as nodes.
+    A dictionary-like container for storing NumPy/Blosc2 arrays (NDArray or SChunk) as nodes.
 
-    For NumPy arrays and Blosc2 NDArrays (even if they live in external ``.b2nd`` files),
-    the data is read and embedded into the store. For remote arrays (``C2Array``),
-    only lightweight references (URL base and path) are stored. If you need a richer
-    hierarchical container with optional external references, consider using
+    For NumPy arrays, Blosc2 NDArrays (even if they live in external ``.b2nd`` files),
+    and Blosc2 SChunk objects, the data is read and embedded into the store. For remote
+    arrays (``C2Array``), only lightweight references (URL base and path) are stored.
+    If you need a richer hierarchical container with optional external references, consider using
     `blosc2.TreeStore` or `blosc2.DictStore`.
 
     Parameters
@@ -176,7 +176,7 @@ class EmbedStore:
             new_size = max(required_size, int(self._store.shape[0] * 1.5))
             self._store.resize((new_size,))
 
-    def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray | C2Array) -> None:
+    def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray | SChunk | C2Array) -> None:
         """
         Add a node to the embed store.
 
@@ -184,7 +184,7 @@ class EmbedStore:
         ----------
         key : str
             Node key.
-        value : np.ndarray or blosc2.NDArray or blosc2.C2Array
+        value : np.ndarray or blosc2.NDArray or blosc2.SChunk or blosc2.C2Array
             Array to store.
 
         Raises
@@ -213,7 +213,7 @@ class EmbedStore:
             self._embed_map[key] = {"offset": offset, "length": data_len}
         self._save_metadata()
 
-    def __getitem__(self, key: str) -> blosc2.NDArray:
+    def __getitem__(self, key: str) -> blosc2.NDArray | SChunk:
         """
         Retrieve a node from the embed store.
 
@@ -224,7 +224,7 @@ class EmbedStore:
 
         Returns
         -------
-        out : blosc2.NDArray
+        out : blosc2.NDArray or blosc2.SChunk
             The stored array.
 
         Raises
@@ -243,9 +243,10 @@ class EmbedStore:
         length = node_info["length"]
         serialized_data = bytes(self._store[offset : offset + length])
         # It is safer to copy data here, as the reference to the SChunk may disappear
-        return blosc2.ndarray_from_cframe(serialized_data, copy=True)
+        # Use from_cframe so we can deserialize either an NDArray or an SChunk
+        return blosc2.from_cframe(serialized_data, copy=True)
 
-    def get(self, key: str, default: Any = None) -> blosc2.NDArray | Any:
+    def get(self, key: str, default: Any = None) -> blosc2.NDArray | SChunk | Any:
         """
         Retrieve a node, returning a default value if the key is not found.
 
@@ -258,7 +259,7 @@ class EmbedStore:
 
         Returns
         -------
-        out : blosc2.NDArray or Any
+        out : blosc2.NDArray or blosc2.SChunk or Any
             The stored array or default value.
         """
         return self[key] if key in self._embed_map else default
@@ -331,25 +332,25 @@ class EmbedStore:
         """
         return self._embed_map.keys()
 
-    def values(self) -> Iterator[blosc2.NDArray]:
+    def values(self) -> Iterator[blosc2.NDArray | SChunk]:
         """
         Return an iterator over all values in the embed store.
 
         Returns
         -------
-        values : Iterator[blosc2.NDArray]
+        values : Iterator[blosc2.NDArray | blosc2.SChunk]
             Iterator over stored arrays.
         """
         for key in self._embed_map:
             yield self[key]
 
-    def items(self) -> Iterator[tuple[str, blosc2.NDArray]]:
+    def items(self) -> Iterator[tuple[str, blosc2.NDArray | SChunk]]:
         """
         Return an iterator over (key, value) pairs in the embed store.
 
         Returns
         -------
-        items : Iterator[tuple[str, blosc2.NDArray]]
+        items : Iterator[tuple[str, blosc2.NDArray | blosc2.SChunk]]
             Iterator over key-value pairs.
         """
         for key in self._embed_map:
