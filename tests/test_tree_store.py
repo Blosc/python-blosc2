@@ -434,7 +434,7 @@ def test_treestore_vlmeta_basic_and_bulk(storage_type):
         assert all_meta["desc"] == "test"
         assert all_meta["scale"] == 2.5
 
-        # Iteration and len should see all names without prefix
+        # Iteration and len should see all names
         names = sorted(iter(tstore.vlmeta))
         assert set(names) == set(all_meta.keys())
         assert len(tstore.vlmeta) == len(all_meta)

@@ -5,6 +5,7 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+import contextlib
 import os
 from collections.abc import Iterator, MutableMapping
 
@@ -17,88 +18,56 @@ from blosc2.ndarray import NDArray
 from blosc2.schunk import SChunk
 
 
-class vlmeta(MutableMapping):
-    """
-    Class providing access to user metadata on a TreeStore.
+class vlmetaProxy(MutableMapping):
+    """Proxy around SChunk.vlmeta to control slicing and access mode.
 
-    Values are serialized via an in-memory SChunk and persisted into the
-    internal EmbedStore of the TreeStore. The actual metadata encoding/decoding
-    is delegated to SChunk.vlmeta, mirroring the behavior of blosc2.schunk.vlmeta.
+    - Ensures `vlmeta[:]` returns a dict of {name: value} using decoded values.
+    - Enforces TreeStore read-only mode for set/del operations.
+    - Delegates iteration and length to the underlying vlmeta object.
     """
 
-    def __init__(self, tstore: "TreeStore"):
+    def __init__(self, tstore: "TreeStore", inner_vlmeta):
         self._tstore = tstore
-        # Use a reserved namespace inside the EmbedStore to avoid colliding with user keys
-        self._prefix = "/.vlmeta"
+        self._inner = inner_vlmeta
 
-    def _fullkey(self, name: str) -> str:
-        if not isinstance(name, (str, bytes, slice)):
-            # Let SChunk.vlmeta accept bytes names too (it does internally). For storage key, use str.
-            name = str(name)
-        if isinstance(name, slice):  # handled by callers
-            return self._prefix
-        # Ensure valid key for EmbedStore
-        return f"{self._prefix}/{name}"
-
-    def _check_writable(self):
-        if getattr(self._tstore, "mode", None) == "r":
-            raise ValueError("Cannot modify vlmeta in read-only mode.")
-
-    def __setitem__(self, name, content):
-        self._check_writable()
+    def __setitem__(self, key, value):
+        if self._tstore.mode == "r":
+            raise ValueError("TreeStore is in read-only mode")
         # Support bulk set via [:]
-        if isinstance(name, slice):
-            if name.start is None and name.stop is None:
-                for k, v in content.items():
-                    self[k] = v
+        if isinstance(key, slice):
+            if key.start is None and key.stop is None:
+                # Expect value to be a dict-like
+                for k, v in value.items():
+                    self._inner[k] = v
+                # Persist once after bulk update
+                self._tstore._persist_vlmeta()
                 return
             raise NotImplementedError("Slicing is not supported, unless [:]")
-        # Create a tiny in-memory SChunk and delegate vlmeta set
-        schunk = blosc2.SChunk(chunksize=1)
-        # Delegate encoding to SChunk.vlmeta which handles msgpack, tuples, etc.
-        schunk.vlmeta[name] = content
-        # Store the SChunk in the internal EmbedStore under our reserved key
-        self._tstore.estore[self._fullkey(name)] = schunk
+        self._inner[key] = value
+        # Persist changes in the embed store snapshot
+        self._tstore._persist_vlmeta()
 
-    def __getitem__(self, name):
-        if isinstance(name, slice):
-            if name.start is None and name.stop is None:
-                return self.getall()
+    def __getitem__(self, key):
+        # Support bulk get via [:]
+        if isinstance(key, slice):
+            if key.start is None and key.stop is None:
+                # Build a Python dict to ensure keys are str and values decoded
+                return {name: self._inner[name] for name in self._inner}
             raise NotImplementedError("Slicing is not supported, unless [:]")
-        key = self._fullkey(name)
-        # Retrieve the stored SChunk from the EmbedStore
-        schunk = self._tstore.estore[key]
-        # Delegate decoding to SChunk.vlmeta
-        return schunk.vlmeta[name]
+        return self._inner[key]
 
-    def __delitem__(self, name):
-        self._check_writable()
-        key = self._fullkey(name)
-        del self._tstore.estore[key]
-
-    def __len__(self):
-        prefix = self._prefix + "/"
-        # Count how many keys in estore belong to the vlmeta namespace
-        return sum(1 for k in self._tstore.estore if isinstance(k, str) and k.startswith(prefix))
+    def __delitem__(self, key):
+        if self._tstore.mode == "r":
+            raise ValueError("TreeStore is in read-only mode")
+        self._inner.__delitem__(key)
+        # Persist changes in the embed store snapshot
+        self._tstore._persist_vlmeta()
 
     def __iter__(self):
-        prefix = self._prefix + "/"
-        plen = len(prefix)
-        for k in self._tstore.estore:
-            if isinstance(k, str) and k.startswith(prefix):
-                yield k[plen:]
+        return iter(self._inner)
 
-    def getall(self):
-        """
-        Return all the variable length metalayers as a dictionary
-        """
-        return {name: self[name] for name in self}
-
-    def __repr__(self):
-        return repr(self.getall())
-
-    def __str__(self):
-        return str(self.getall())
+    def __len__(self):
+        return len(self._inner)
 
 
 class TreeStore(DictStore):
@@ -579,19 +548,53 @@ class TreeStore(DictStore):
 
         return subtree
 
+    def _persist_vlmeta(self) -> None:
+        """Persist the current vlmeta SChunk into the underlying store.
+
+        This is needed because the EmbedStore keeps a serialized snapshot of
+        stored objects; mutating the in-memory SChunk does not automatically
+        update the snapshot. We emulate an update by deleting and re-adding
+        the object in the embed store.
+        """
+        full_key = self.full_vlmeta_key
+        # Only embedded case is expected; handle it safely.
+        if hasattr(self, "_estore") and full_key in self._estore:
+            # Replace the stored snapshot
+            with contextlib.suppress(KeyError):
+                del self._estore[full_key]
+            self._estore[full_key] = self._vlmeta
+
     @property
-    def vlmeta(self) -> vlmeta:
+    def vlmeta(self) -> MutableMapping | None:
         """
         Access to variable-length metadata for the TreeStore.
 
+        Returns a proxy to the vlmeta attribute of an internal SChunk stored at
+        '/__vlmeta__'. The SChunk is created on-demand if it doesn't exist.
+
         Notes
         -----
-        Each vlmeta entry is stored as a tiny in-memory SChunk inside the
-        internal EmbedStore, and the actual metadata is delegated to the
-        SChunk.vlmeta mechanism. This mirrors SChunk.vlmeta behavior and
-        ensures robust serialization.
+        The metadata is stored as vlmeta of an internal SChunk, ensuring robust
+        serialization and persistence. This mirrors SChunk.vlmeta behavior, with
+        additional guarantees:
+        - Bulk get via `[:]` always returns a dict with string keys and decoded values.
+        - Read-only protection is enforced at the TreeStore level.
         """
-        return vlmeta(self)
+        # Always refer to the global vlmeta at the root scope (ignore subtree_path)
+        self.full_vlmeta_key = "/__vlmeta__"
+
+        if super().__contains__(self.full_vlmeta_key):
+            # Load the current snapshot from the store to ensure freshness
+            self._vlmeta = super().__getitem__(self.full_vlmeta_key)
+        elif self.mode != "r":
+            # Create new vlmeta SChunk and persist it
+            self._vlmeta = blosc2.SChunk()
+            super().__setitem__(self.full_vlmeta_key, self._vlmeta)
+        else:
+            return None
+
+        # Return a fresh proxy that wraps the latest inner vlmeta
+        return vlmetaProxy(self, self._vlmeta.vlmeta)
 
 
 if __name__ == "__main__":
