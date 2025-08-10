@@ -9,10 +9,10 @@ Overview
 --------
 DictStore lets you store and retrieve arrays by string keys (paths like ``"/dir/node"``), similar to a Python dict, while transparently handling efficient Blosc2 compression and persistence. It supports two on‑disk representations:
 
-- ``.b2d``: a directory layout (B2DIR) where each external array is a separate ``.b2nd`` file and an embedded store file (``embed.b2e``) keeps small/in‑memory arrays.
+- ``.b2d``: a directory layout (B2DIR) where each external array is a separate file: ``.b2nd`` for NDArray and ``.b2f`` for SChunk; an embedded store file (``embed.b2e``) keeps small/in‑memory arrays.
 - ``.b2z``: a single zip file (B2ZIP) that mirrors the directory structure above. You can zip up a ``.b2d`` layout or write directly and later reopen it for reading.
 
-Small arrays (below a configurable compression‑size threshold) and in‑memory objects are kept inside the embedded store; larger or explicitly external arrays live as regular ``.b2nd`` files. You can mix both seamlessly and use the usual mapping methods (``__getitem__``, ``__setitem__``, ``keys()``, ``items()``...).
+Supported values include ``blosc2.NDArray``, ``blosc2.SChunk`` and ``blosc2.C2Array`` (as well as ``numpy.ndarray``, which is converted to NDArray). Small arrays (below a configurable compression‑size threshold) and in‑memory objects are kept inside the embedded store; larger or explicitly external arrays live as regular ``.b2nd`` (NDArray) or ``.b2f`` (SChunk) files. ``C2Array`` objects are always stored in the embedded store. You can mix all types seamlessly and use the usual mapping methods (``__getitem__``, ``__setitem__``, ``keys()``, ``items()``...).
 
 Quick example
 -------------

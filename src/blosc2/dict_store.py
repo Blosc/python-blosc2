@@ -17,28 +17,38 @@ import numpy as np
 import blosc2
 from blosc2.c2array import C2Array
 from blosc2.embed_store import EmbedStore
+from blosc2.schunk import SChunk
 
 
 class DictStore:
     """
     A directory-based storage container for compressed data using Blosc2.
 
-    Manages a directory-based (`.b2d`) structure of NDArrays and SChunks,
-    with an embed store for in-memory data. It also supports creating
-    and reading `.b2z` files, which are zip archives that mirror the
-    directory structure.
+    Manages a directory-based (".b2d") structure of arrays with an embedded
+    store for small/in-memory data, and can also create/read ".b2z" archives
+    that mirror the directory structure.
+
+    Supported value types
+    ---------------------
+    - blosc2.NDArray: n-dimensional arrays. When persisted externally they
+      are stored as .b2nd files.
+    - blosc2.SChunk: super-chunks. When persisted externally they are stored
+      as .b2f files.
+    - blosc2.C2Array: columnar containers. These are always kept inside the
+      embedded store (never externalized).
+    - numpy.ndarray: converted to blosc2.NDArray on assignment.
 
     Parameters
     ----------
     localpath : str
-        Local path for the directory (`.b2d`) or file (`.b2z`); other extensions
+        Local path for the directory (".b2d") or file (".b2z"); other extensions
         are not supported. If a directory is specified, it will be treated as
         a Blosc2 directory format (B2DIR). If a file is specified, it
         will be treated as a Blosc2 zip format (B2ZIP).
     mode : str, optional
         File mode ('r', 'w', 'a'). Default is 'a'.
     tmpdir : str or None, optional
-        Temporary directory to use when working with `.b2z` files. If None,
+        Temporary directory to use when working with ".b2z" files. If None,
         a system temporary directory will be managed. Default is None.
     cparams : dict or None, optional
         Compression parameters for the internal embed store.
@@ -49,15 +59,17 @@ class DictStore:
     storage : blosc2.Storage or None, optional
         Storage properties for the internal embed store.
         If None, the default Blosc2 storage properties are used.
-    threshold : int, optional
-        Threshold for the array size (bytes) to be kept in the embed store.
-        If the *compressed* array size is below this threshold, it will be
-        stored in the embed store instead of as a separate file. If None,
-        in-memory arrays are stored in the embed store and on-disk arrays
-        are stored as separate files.
-        C2Array objects will always be stored in the embed store,
-        regardless of their size.
-        Default is 2**23 (8 MiB).
+    threshold : int or None, optional
+        Threshold (in bytes of compressed data) under which values are kept
+        in the embedded store. If None, in-memory arrays are stored in the
+        embedded store and on-disk arrays are stored as separate files.
+        C2Array objects will always be stored in the embedded store,
+        regardless of their size. Default is 2**23 (8 MiB).
+
+    Notes
+    -----
+    - External persistence uses the following file extensions:
+      .b2nd for NDArray and .b2f for SChunk.
 
     Examples
     --------
@@ -65,15 +77,14 @@ class DictStore:
     >>> dstore["/node1"] = np.array([1, 2, 3])  # goes to embed store
     >>> dstore["/node2"] = blosc2.ones(2)  # goes to embed store
     >>> arr_external = blosc2.arange(3, urlpath="ext_node3.b2nd", mode="w")
-    >>> dstore["/dir1/node3"] = arr_external  # external file in dir1
+    >>> dstore["/dir1/node3"] = arr_external  # external file in dir1 (.b2nd)
+    >>> schunk = blosc2.SChunk(chunksize=32)
+    >>> schunk.append_data(b"abcd")
+    4
+    >>> dstore["/dir1/schunk1"] = schunk  # externalized as .b2f if above threshold
     >>> dstore.to_b2z()  # persist to the zip file; external files are copied in
-    >>> print(list(dstore.keys()))
-    ['/node1', '/node2', '/dir1/node3']
-    >>> print(dstore["/node1"][:])
-    [1 2 3]
-    >>> with zipfile.ZipFile("my_dstore.b2z", "r") as zf:
-    ...     print(zf.namelist())
-    ['dir1/node3.b2nd','embed.b2e']
+    >>> print(sorted(dstore.keys()))
+    ['/dir1/node3', '/dir1/schunk1', '/node1', '/node2']
     """
 
     def __init__(
@@ -143,8 +154,8 @@ class DictStore:
             estore_offset = self.offsets["embed.b2e"]["offset"]
             schunk = blosc2.open(self.b2z_path, mode="r", offset=estore_offset)
             for filepath in self.offsets:
-                if filepath.endswith(".b2nd"):
-                    key = "/" + filepath[:-5]
+                if filepath.endswith((".b2nd", ".b2f")):
+                    key = "/" + filepath[: -5 if filepath.endswith(".b2nd") else -4]
                     self.map_tree[key] = filepath
         else:  # .b2d
             if not os.path.isdir(self.localpath):
@@ -178,16 +189,21 @@ class DictStore:
         self._update_map_tree()
 
     def _update_map_tree(self):
-        # Build map_tree from .b2nd files in working dir
+        # Build map_tree from .b2nd and .b2f files in working dir
         for root, _, files in os.walk(self.working_dir):
             for file in files:
                 filepath = os.path.join(root, file)
-                if filepath.endswith(".b2nd"):
-                    # Convert filename to key: remove .b2nd extension and ensure starts with /
+                if filepath.endswith((".b2nd", ".b2f")):
+                    # Convert filename to key: remove extension and ensure starts with /
                     rel_path = os.path.relpath(filepath, self.working_dir)
                     # Normalize path separators to forward slashes for cross-platform consistency
                     rel_path = rel_path.replace(os.sep, "/")
-                    key = rel_path[:-5]  # Remove .b2nd
+                    if rel_path.endswith(".b2nd"):
+                        key = rel_path[:-5]
+                    elif rel_path.endswith(".b2f"):
+                        key = rel_path[:-4]
+                    else:
+                        continue
                     if not key.startswith("/"):
                         key = "/" + key
                     self.map_tree[key] = rel_path
@@ -204,7 +220,7 @@ class DictStore:
         """
         return self._estore
 
-    def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray | C2Array) -> None:
+    def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray | SChunk | C2Array) -> None:
         """
         Add a node to the DictStore.
 
@@ -212,8 +228,12 @@ class DictStore:
         ----------
         key : str
             Node key.
-        value : np.ndarray or blosc2.NDArray or blosc2.C2Array
-            Array to store.
+        value : np.ndarray or blosc2.NDArray or blosc2.SChunk or blosc2.C2Array
+            Value to store. numpy.ndarray values are converted to NDArray.
+            C2Array values are always stored in the embedded store. NDArray and
+            SChunk values may be stored externally depending on the threshold
+            and whether they already reference an on-disk resource. Externally
+            persisted files use .b2nd for NDArray and .b2f for SChunk.
 
         Raises
         ------
@@ -222,12 +242,19 @@ class DictStore:
         """
         if isinstance(value, np.ndarray):
             value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)
-        exceeds_threshold = self.threshold is not None and value.cbytes >= self.threshold
-        external_file = isinstance(value, blosc2.NDArray) and getattr(value, "urlpath", None)
+        # C2Array should always go to embed store; let estore handle it directly
+        if isinstance(value, C2Array):
+            self._estore[key] = value
+            return
+        exceeds_threshold = self.threshold is not None and getattr(value, "cbytes", 0) >= self.threshold
+        # Consider both NDArray and SChunk external files (have urlpath)
+        external_file = isinstance(value, (blosc2.NDArray, SChunk)) and getattr(value, "urlpath", None)
         if exceeds_threshold or (external_file and self.threshold is None):
+            # Choose extension based on type
+            ext = ".b2f" if isinstance(value, SChunk) else ".b2nd"
             # Convert key to a proper file path within the tree directory
             rel_key = key.lstrip("/")
-            dest_path = os.path.join(self.working_dir, rel_key + ".b2nd")
+            dest_path = os.path.join(self.working_dir, rel_key + ext)
 
             # Ensure the parent directory exists
             parent_dir = os.path.dirname(dest_path)
@@ -243,13 +270,16 @@ class DictStore:
 
             # Store relative path from tree directory
             rel_path = os.path.relpath(dest_path, self.working_dir)
+            # Normalize to forward slashes
+            rel_path = rel_path.replace(os.sep, "/")
             self.map_tree[key] = rel_path
         else:
             if external_file:
+                # Embed a copy by using cframe
                 value = blosc2.from_cframe(value.to_cframe())
             self._estore[key] = value
 
-    def __getitem__(self, key: str) -> blosc2.NDArray:
+    def __getitem__(self, key: str) -> blosc2.NDArray | SChunk | C2Array:
         """
         Retrieve a node from the DictStore.
 
@@ -260,7 +290,7 @@ class DictStore:
 
         Returns
         -------
-        out : blosc2.NDArray
+        out : blosc2.NDArray or blosc2.SChunk or C2Array
             The stored array.
 
         Raises
@@ -284,7 +314,7 @@ class DictStore:
         # Fall back to EmbedStore
         return self._estore[key]
 
-    def get(self, key: str, default: Any = None) -> blosc2.NDArray | Any:
+    def get(self, key: str, default: Any = None) -> blosc2.NDArray | SChunk | C2Array | Any:
         """
         Retrieve a node, returning a default value if the key is not found.
 
@@ -297,8 +327,8 @@ class DictStore:
 
         Returns
         -------
-        out : blosc2.NDArray or Any
-            The stored array or default value.
+        out : blosc2.NDArray or blosc2.SChunk or C2Array or Any
+            The stored array (NDArray or SChunk) or the default value.
         """
         return self._estore.get(key, default)
 
@@ -382,7 +412,7 @@ class DictStore:
         """
         return self._estore.values()
 
-    def items(self) -> Iterator[tuple[str, blosc2.NDArray]]:
+    def items(self) -> Iterator[tuple[str, blosc2.NDArray | SChunk | C2Array]]:
         """
         Return an iterator over (key, value) pairs in the DictStore.
 

@@ -161,3 +161,62 @@ def test_without_embed(populated_dict_store):
         # Check that the value is read-only
         with pytest.raises(ValueError):
             node3[:] = np.arange(5)
+
+
+def test_store_and_retrieve_schunk_in_dict():
+    # Create a small SChunk and store it in a DictStore (embedded)
+    data = b"This is a tiny schunk"
+    schunk = blosc2.SChunk(chunksize=None, data=data)
+    vlmeta = "DictStore tiny schunk"
+    schunk.vlmeta["description"] = vlmeta
+
+    path = "test_dstore_schunk_embed.b2z"
+    with DictStore(path, mode="w") as dstore:
+        dstore["/schunk"] = schunk
+        value = dstore["/schunk"]
+        assert isinstance(value, blosc2.SChunk)
+        assert value.nbytes == len(data)
+        assert value[:] == data
+        assert value.vlmeta["description"] == vlmeta
+    if os.path.exists(path):
+        os.remove(path)
+
+
+essch_extern = "ext_schunk.b2f"
+
+
+def test_external_schunk_file_and_reopen():
+    # Ensure clean external file
+    if os.path.exists(essch_extern):
+        os.remove(essch_extern)
+
+    # Create an external SChunk on disk with '.b2f'
+    data = b"External schunk data"
+    storage = blosc2.Storage(urlpath=essch_extern, mode="w")
+    schunk_ext = blosc2.SChunk(chunksize=None, data=data, storage=storage)
+    schunk_ext.vlmeta["description"] = "External SChunk"
+
+    path = "test_dstore_schunk_external.b2z"
+    with DictStore(path, mode="w", threshold=None) as dstore:
+        # With threshold=None and external value, it should be stored as external file in map_tree
+        dstore["/dir1/schunk_ext"] = schunk_ext
+        assert "/dir1/schunk_ext" in dstore.map_tree
+        # It should point to a .b2f file
+        assert dstore.map_tree["/dir1/schunk_ext"].endswith(".b2f")
+
+    # Zip should contain the .b2f
+    with zipfile.ZipFile(path, "r") as zf:
+        assert "dir1/schunk_ext.b2f" in zf.namelist()
+
+    # Reopen and verify contents and type
+    with DictStore(path, mode="r") as dstore_read:
+        value = dstore_read["/dir1/schunk_ext"]
+        assert isinstance(value, blosc2.SChunk)
+        assert value[:] == data
+        assert value.vlmeta["description"] == "External SChunk"
+
+    # Cleanup
+    if os.path.exists(essch_extern):
+        os.remove(essch_extern)
+    if os.path.exists(path):
+        os.remove(path)

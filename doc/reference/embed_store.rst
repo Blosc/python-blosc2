@@ -8,7 +8,8 @@ Overview
 EmbedStore is a dictionary-like container that lets you pack many arrays into a single, compressed Blosc2 container file (recommended extension: ``.b2e``).
 It can hold:
 - NumPy arrays (their data is embedded as compressed bytes),
-- Blosc2 NDArrays (either in-memory or persisted in their own ``.b2nd`` files; when added to the store, their data is embedded), and
+- Blosc2 NDArrays (either in-memory or persisted in their own ``.b2nd`` files; when added to the store, their data is embedded),
+- Blosc2 SChunk objects (their frames are embedded), and
 - remote Blosc2 arrays (``C2Array``) addressed via URLs.
 
 Important: Only remote ``C2Array`` objects are stored as lightweight references (URL base and path). NumPy arrays and NDArrays are always embedded into the ``.b2e`` container, even if the NDArray originates from an external ``.b2nd`` file.
@@ -41,8 +42,9 @@ Quickstart
     # ['/node1', '/node2', '/node3', '/node4']
 
 .. note::
-   - Embedded arrays (NumPy and NDArray) increase the size of the ``.b2e`` container.
+   - Embedded arrays (NumPy, NDArray, and SChunk) increase the size of the ``.b2e`` container.
    - Remote ``C2Array`` nodes only store lightweight references; reading them requires access to the remote source. NDArrays coming from external ``.b2nd`` files are embedded into the store.
+   - When retrieving, ``estore[key]`` may return either an ``NDArray`` or an ``SChunk`` depending on what was originally stored; deserialization uses :func:`blosc2.from_cframe`.
 
 .. currentmodule:: blosc2
 
