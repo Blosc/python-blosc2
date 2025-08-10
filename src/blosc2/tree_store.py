@@ -505,6 +505,26 @@ class TreeStore(DictStore):
                 child_name = child.split("/")[-1]
                 leaf_nodes.append(child_name)
 
+        # Validate and normalize names to ensure robustness
+        # 1) Enforce that returned names are simple (no '/')
+        children_dirs = [
+            name for name in children_dirs if isinstance(name, str) and "/" not in name and name != ""
+        ]
+        leaf_nodes = [
+            name for name in leaf_nodes if isinstance(name, str) and "/" not in name and name != ""
+        ]
+
+        # 2) Ensure leaf nodes correspond to actual data nodes in the underlying store
+        valid_leaf_nodes: list[str] = []
+        for name in leaf_nodes:
+            # Compose subtree-relative child path
+            child_rel_path = path + "/" + name if path != "/" else "/" + name
+            # Translate to full key in the backing store and verify it's a data node
+            full_key = self._translate_key_to_full(child_rel_path)
+            if super().__contains__(full_key):
+                valid_leaf_nodes.append(name)
+        leaf_nodes = valid_leaf_nodes
+
         # Yield current level (always yield the current path being walked)
         yield path, children_dirs, leaf_nodes
 
