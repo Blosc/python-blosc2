@@ -14,6 +14,7 @@ import blosc2
 from blosc2.c2array import C2Array
 from blosc2.dict_store import DictStore
 from blosc2.ndarray import NDArray
+from blosc2.schunk import SChunk
 
 
 class vlmeta(MutableMapping):
@@ -222,7 +223,7 @@ class TreeStore(DictStore):
             if char in key:
                 raise ValueError(f"Key cannot contain invalid character {char!r}, got: {key}")
 
-    def __setitem__(self, key: str, value: np.ndarray | NDArray | C2Array) -> None:
+    def __setitem__(self, key: str, value: np.ndarray | NDArray | C2Array | SChunk) -> None:
         """
         Add a node to the TreeStore with hierarchical key validation.
 
@@ -230,8 +231,8 @@ class TreeStore(DictStore):
         ----------
         key : str
             Hierarchical node key (must start with '/' and use '/' as separator).
-        value : np.ndarray or blosc2.NDArray or blosc2.C2Array
-            Array to store.
+        value : np.ndarray or blosc2.NDArray or blosc2.C2Array or blosc2.SChunk
+            to store.
 
         Raises
         ------
@@ -265,13 +266,13 @@ class TreeStore(DictStore):
         full_key = self._translate_key_to_full(key)
         super().__setitem__(full_key, value)
 
-    def __getitem__(self, key: str) -> "NDArray | TreeStore":
+    def __getitem__(self, key: str) -> "NDArray | C2Array | SChunk | TreeStore":
         """
         Retrieve a node from the TreeStore with key validation.
 
         If the key points to a subtree (intermediate path with children),
         returns a TreeStore view of that subtree. If the key points to
-        a final node (leaf), returns the stored array.
+        a final node (leaf), returns the stored array or schunk.
 
         Parameters
         ----------
@@ -280,8 +281,8 @@ class TreeStore(DictStore):
 
         Returns
         -------
-        out : blosc2.NDArray or TreeStore
-            The stored array if key is a leaf node, or a TreeStore subtree view
+        out : blosc2.NDArray or blosc2.C2Array or blosc2.SChunk or TreeStore
+            The stored array/chunk if key is a leaf node, or a TreeStore subtree view
             if key is an intermediate path with children.
 
         Raises
@@ -403,7 +404,7 @@ class TreeStore(DictStore):
 
         return all_keys | structural_keys
 
-    def items(self) -> Iterator[tuple[str, "NDArray | TreeStore"]]:
+    def items(self) -> Iterator[tuple[str, "NDArray | C2Array | SChunk | TreeStore"]]:
         """Return key-value pairs in the current subtree view."""
         for key in self.keys():
             yield key, self[key]

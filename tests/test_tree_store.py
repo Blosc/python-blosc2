@@ -550,3 +550,33 @@ def test_subtree_can_use_vlmeta(storage_type):
             os.remove(path)
         else:
             shutil.rmtree(path)
+
+
+def test_schunk_support():
+    """Test that TreeStore supports SChunk objects."""
+    with TreeStore("test_schunk.b2z", mode="w") as tstore:
+        # Create an SChunk
+        data = b"This is a test SChunk with some data to compress and store."
+        schunk = blosc2.SChunk(chunksize=200 * 1000, data=data)
+        schunk.vlmeta["description"] = "Test SChunk for TreeStore"
+        # Store SChunk in TreeStore
+        tstore["/data/schunk1"] = schunk
+
+        # Retrieve and verify
+        retrieved_schunk = tstore["/data/schunk1"]
+        assert isinstance(retrieved_schunk, blosc2.SChunk)
+        assert len(retrieved_schunk) == len(schunk)
+        assert retrieved_schunk.nchunks == schunk.nchunks
+        assert retrieved_schunk.vlmeta["description"] == schunk.vlmeta["description"]
+        assert retrieved_schunk[:] == data
+
+        # Test structural behavior with SChunks
+        tstore["/data/schunk2"] = blosc2.SChunk(chunksize=100 * 1000)
+
+        # /data should return a subtree since it has children
+        data_subtree = tstore["/data"]
+        assert isinstance(data_subtree, TreeStore)
+        expected_keys = {"/schunk1", "/schunk2"}
+        assert set(data_subtree.keys()) == expected_keys
+
+    os.remove("test_schunk.b2z")
