@@ -58,19 +58,19 @@ class TreeStore(DictStore):
     --------
     >>> tstore = TreeStore(localpath="my_tstore.b2z", mode="w")
     >>> # Create a hierarchy. Data is stored in leaf nodes.
-    >>> # Structural nodes like /root and /root/child1 are created automatically.
-    >>> tstore["/root/leaf1"] = np.array([1, 2, 3])
-    >>> tstore["/root/child1/leaf2"] = np.array([4, 5, 6])
-    >>> tstore["/root/child2"] = np.array([7, 8, 9])
+    >>> # Structural nodes like /child0 and /child0/child1 are created automatically.
+    >>> tstore["/child0/leaf1"] = np.array([1, 2, 3])
+    >>> tstore["/child0/child1/leaf2"] = np.array([4, 5, 6])
+    >>> tstore["/child0/child2"] = np.array([7, 8, 9])
     >>>
     >>> # Walk the tree structure
-    >>> for path, children, nodes in tstore.walk("/root"):
+    >>> for path, children, nodes in tstore.walk("/child0"):
     ...     print(f"Path: {path}, Children: {sorted(children)}, Nodes: {sorted(nodes)}")
-    Path: /root, Children: ['/root/child1'], Nodes: ['/root/child2', '/root/leaf1']
-    Path: /root/child1, Children: [], Nodes: ['/root/child1/leaf2']
+    Path: /child0, Children: ['/child0/child1'], Nodes: ['/child0/child2', '/child0/leaf1']
+    Path: /child0/child1, Children: [], Nodes: ['/child0/child1/leaf2']
     >>>
     >>> # Get a subtree view
-    >>> subtree = tstore.get_subtree("/root")
+    >>> subtree = tstore.get_subtree("/child0")
     >>> sorted(list(subtree.keys()))
     ['/child1/leaf2', '/child2', '/leaf1']
     """
@@ -427,7 +427,7 @@ class TreeStore(DictStore):
 
         Examples
         --------
-        >>> for path, children, nodes in tstore.walk("/root"):
+        >>> for path, children, nodes in tstore.walk("/child0"):
         ...     print(f"Path: {path}, Children: {children}, Nodes: {nodes}")
         """
         self._validate_key(path)
@@ -475,9 +475,9 @@ class TreeStore(DictStore):
 
         Examples
         --------
-        >>> tstore["/root/child1/data"] = np.array([1, 2, 3])
-        >>> tstore["/root/child1/grandchild"] = np.array([4, 5, 6])
-        >>> subtree = tstore.get_subtree("/root/child1")
+        >>> tstore["/child0/child1/data"] = np.array([1, 2, 3])
+        >>> tstore["/child0/child1/grandchild"] = np.array([4, 5, 6])
+        >>> subtree = tstore.get_subtree("/child0/child1")
         >>> list(subtree.keys())
         ['/data', '/grandchild']
         >>> subtree["/grandchild"][:]
@@ -501,16 +501,16 @@ if __name__ == "__main__":
     with TreeStore(localpath, mode="w") as tstore:
         # Create a hierarchical structure.
         # Note: data is stored in leaf nodes, not structural nodes.
-        tstore["/root/data_node"] = np.array([1, 2, 3])
-        tstore["/root/child1/data_node"] = np.array([4, 5, 6])
-        tstore["/root/child2"] = np.array([7, 8, 9])
-        tstore["/root/child1/grandchild"] = np.array([10, 11, 12])
+        tstore["/child0/data_node"] = np.array([1, 2, 3])
+        tstore["/child0/child1/data_node"] = np.array([4, 5, 6])
+        tstore["/child0/child2"] = np.array([7, 8, 9])
+        tstore["/child0/child1/grandchild"] = np.array([10, 11, 12])
         tstore["/other"] = np.array([13, 14, 15])
 
         print("TreeStore keys:", sorted(tstore.keys()))
 
         # Test subtree view
-        root_subtree = tstore["/root"]
+        root_subtree = tstore["/child0"]
         print("Subtree keys:", sorted(root_subtree.keys()))
 
         # Walk the tree

@@ -9,7 +9,7 @@ Overview
 --------
 TreeStore builds on top of DictStore by enforcing a strict hierarchical key
 structure and by providing helpers to navigate the hierarchy. Keys are POSIX‑like
-paths that must start with a leading slash (e.g. ``"/root/child/leaf"``). Data is
+paths that must start with a leading slash (e.g. ``"/child0/child/leaf"``). Data is
 stored only at leaf nodes; intermediate path segments are considered structural
 nodes and are created implicitly as you assign arrays to leaves.
 
@@ -34,16 +34,16 @@ Quick example
    # Create a hierarchical store backed by a zip file
    with blosc2.TreeStore("my_tree.b2z", mode="w") as tstore:
        # Data is stored at leaves; structural nodes are created implicitly
-       tstore["/root/leaf1"] = np.array([1, 2, 3])
-       tstore["/root/child1/leaf2"] = np.array([4, 5, 6])
-       tstore["/root/child2"] = np.array([7, 8, 9])
+       tstore["/child0/leaf1"] = np.array([1, 2, 3])
+       tstore["/child0/child1/leaf2"] = np.array([4, 5, 6])
+       tstore["/child0/child2"] = np.array([7, 8, 9])
 
        # Inspect hierarchy
-       for path, children, nodes in tstore.walk("/root"):
+       for path, children, nodes in tstore.walk("/child0"):
            print(path, sorted(children), sorted(nodes))
 
-       # Work with a subtree view rooted at /root
-       subtree = tstore.get_subtree("/root")
+       # Work with a subtree view rooted at /child0
+       subtree = tstore.get_subtree("/child0")
        print(sorted(subtree.keys()))  # ['/child1/leaf2', '/child2', '/leaf1']
        print(subtree["/child1/leaf2"][:])  # [4 5 6]
 
