@@ -33,9 +33,9 @@ travel_dim = 2  # Dimension to travel through (0 for X, 1 for Y, 2 for Z)
 x = blosc2.linspace(0, n_frames, n_frames, dtype=dtype)
 y = blosc2.linspace(-4 * np.pi, 4 * np.pi, width, dtype=dtype)
 z = blosc2.linspace(-4 * np.pi, 4 * np.pi, height, dtype=dtype)
-X = blosc2.expand_dims(blosc2.expand_dims(x, 1), 2)  # Shape: (N, 1, 1)
-Y = blosc2.expand_dims(blosc2.expand_dims(y, 0), 2)  # Shape: (1, N, 1)
-Z = blosc2.expand_dims(blosc2.expand_dims(z, 0), 0)  # Shape: (1, 1, N)
+X = blosc2.expand_dims(x, (1, 2))  # Shape: (N, 1, 1)
+Y = blosc2.expand_dims(y, (0, 2))  # Shape: (1, N, 1)
+Z = blosc2.expand_dims(z, (0, 1))  # Shape: (1, 1, N)
 if not use_blosc2:
     # If not using Blosc2, convert to NumPy arrays
     # X, Y, Z = np.meshgrid(x, y, z)
