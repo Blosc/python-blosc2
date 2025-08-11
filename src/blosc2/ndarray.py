@@ -3730,13 +3730,33 @@ def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:
 
 
 def expand_dims(array: NDArray, axis=0) -> NDArray:
+    """
+    Expand the shape of an array by adding new axes at the specified positions.
+
+    Parameters
+    ----------
+    array: :ref:`NDArray`
+        The array to be expanded.
+    axis: int or list of int, optional
+        Position in the expanded axes where the new axis (or axes) is placed. Default is 0.
+
+    Returns
+    -------
+    out: :ref:`NDArray`
+        A new NDArray with the expanded shape.
+    """
     if not isinstance(array, blosc2.NDArray):
         raise TypeError("Argument array must be instance of blosc2.NDArray")
-    if axis < 0:
-        axis += array.ndim + 1  # Adjust axis to be within the new stacked array's dimensions
-    if axis > array.ndim:
-        raise ValueError(f"Axis {axis} is out of bounds for expanded array of dimension {array.ndim + 1}.")
-    return blosc2_ext.expand_dims(array, axis=axis)
+    axis = [axis] if isinstance(axis, int) else axis
+    final_dims = array.ndim + len(axis)
+    mask = [False for i in range(final_dims)]
+    for a in axis:
+        if a < 0:
+            a += final_dims  # Adjust axis to be within the new stacked array's dimensions
+        if mask[a]:
+            raise ValueError("Axis values must be unique.")
+        mask[a] = True
+    return blosc2_ext.expand_dims(array, axis_mask=mask, final_dims=final_dims)
 
 
 def stack(arrays: list[NDArray], axis=0, **kwargs: Any) -> NDArray:

@@ -509,7 +509,7 @@ cdef extern from "b2nd.h":
     int b2nd_copy(b2nd_context_t *ctx, b2nd_array_t *src, b2nd_array_t **array)
     int b2nd_concatenate(b2nd_context_t *ctx, b2nd_array_t *src1, b2nd_array_t *src2,
                          int8_t axis, c_bool copy, b2nd_array_t **array)
-    int b2nd_expand_dims(const b2nd_array_t *array, b2nd_array_t ** view, const int8_t axis)
+    int b2nd_expand_dims(const b2nd_array_t *array, b2nd_array_t ** view, const c_bool *axis, const uint8_t final_dims)
     int b2nd_get_orthogonal_selection(const b2nd_array_t *array, int64_t ** selection,
                                       int64_t *selection_size, void *buffer,
                                       int64_t *buffershape, int64_t buffersize)
@@ -2971,13 +2971,17 @@ def concat(arr1: NDArray, arr2: NDArray, axis: int, **kwargs):
         # Return the first array, which now contains the concatenated data
         return arr1
 
-def expand_dims(arr1: NDArray, axis: int):
+def expand_dims(arr1: NDArray, axis_mask: list[bool], final_dims: int) -> blosc2.NDArray:
     """
     Add new dummy axis to NDArray object at specified dimension.
     """
     cdef b2nd_array_t *view
-    _check_rc(b2nd_expand_dims(arr1.array, &view, axis),
-              "Error while concatenating the arrays")
+    cdef c_bool mask_[B2ND_MAX_DIM]
+    if final_dims > B2ND_MAX_DIM:
+        raise ValueError(f"Cannot expand dimensions beyond {B2ND_MAX_DIM} dimensions")
+    for i in range(final_dims):
+        mask_[i] = axis_mask[i]
+    _check_rc(b2nd_expand_dims(arr1.array, &view, mask_, final_dims),"Error while expanding the arrays")
 
     return blosc2.NDArray(_schunk=PyCapsule_New(view.sc, <char *> "blosc2_schunk*", NULL),
                               _array=PyCapsule_New(view, <char *> "b2nd_array_t*", NULL))
