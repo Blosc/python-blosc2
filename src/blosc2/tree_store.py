@@ -444,17 +444,6 @@ class TreeStore(DictStore):
             if key.startswith(prefix) and key != path:
                 descendants.add(key)
 
-        # Also get all intermediate structural paths
-        for key in self.keys():
-            if key.startswith(prefix) and key != path:
-                # For each leaf node, add all its parent paths
-                parts = key[len(prefix) :].split("/")
-                current_path = path
-                for part in parts[:-1]:  # Exclude the leaf itself
-                    current_path = current_path + "/" + part if current_path != "/" else "/" + part
-                    if current_path != path:
-                        descendants.add(current_path)
-
         return sorted(descendants)
 
     def walk(self, path: str = "/") -> Iterator[tuple[str, list[str], list[str]]]:

@@ -43,7 +43,7 @@ with blosc2.TreeStore("example_tree.b2z", mode="w") as tstore:
     print("Node '/dir1/node3' vlmeta.desc:", node3.vlmeta["desc"])  # NDArray metadata
 
     # Access a subtree view rooted at /root
-    root = tstore.get_subtree("/root")  # or tstore["/root"]
+    root = tstore["/root"]  # or tstore["/root"]
     print("Subtree '/root' keys:", sorted(root.keys()))
 
     # Walk the subtree structure top-down
