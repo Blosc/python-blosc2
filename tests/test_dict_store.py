@@ -281,3 +281,39 @@ def test_values_match_items_values(populated_dict_store):
 
     if os.path.exists(ext_path):
         os.remove(ext_path)
+
+
+def test_b2d_close_no_b2z_creation():
+    """Test that closing a .b2d DictStore doesn't create a .b2z file."""
+    b2d_path = "test_no_b2z.b2d"
+    expected_b2z_path = "test_no_b2z.b2z"
+
+    # Ensure clean state
+    if os.path.exists(b2d_path):
+        shutil.rmtree(b2d_path)
+    if os.path.exists(expected_b2z_path):
+        os.remove(expected_b2z_path)
+
+    try:
+        # Create and use a .b2d DictStore
+        with DictStore(b2d_path, mode="w") as dstore:
+            dstore["/node1"] = np.array([1, 2, 3])
+            dstore["/node2"] = blosc2.ones(5)
+
+        # After closing, the .b2d directory should exist but no .b2z file should be created
+        assert os.path.isdir(b2d_path), "The .b2d directory should exist"
+        assert not os.path.exists(expected_b2z_path), "No .b2z file should be created from .b2d directory"
+
+        # Verify we can reopen the directory store
+        with DictStore(b2d_path, mode="r") as dstore_read:
+            assert "/node1" in dstore_read
+            assert "/node2" in dstore_read
+            assert np.array_equal(dstore_read["/node1"][:], [1, 2, 3])
+            assert np.array_equal(dstore_read["/node2"][:], np.ones(5))
+
+    finally:
+        # Cleanup
+        if os.path.exists(b2d_path):
+            shutil.rmtree(b2d_path)
+        if os.path.exists(expected_b2z_path):
+            os.remove(expected_b2z_path)

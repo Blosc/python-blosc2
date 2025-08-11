@@ -400,7 +400,7 @@ class DictStore:
 
     def close(self) -> None:
         """Persist changes and cleanup."""
-        if self.mode in ("w", "a"):
+        if self.is_zip_store and self.mode in ("w", "a"):
             # Serialize to b2z file
             self.to_b2z(overwrite=True)
 
