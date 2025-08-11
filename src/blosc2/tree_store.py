@@ -554,6 +554,10 @@ class TreeStore(DictStore):
         ['/data', '/grandchild']
         >>> subtree["/grandchild"][:]
         array([4, 5, 6])
+
+        Notes
+        -----
+        This is equivalent to use `tstore[path]` when path is a structural path.
         """
         self._validate_key(path)
         full_path = self._translate_key_to_full(path)

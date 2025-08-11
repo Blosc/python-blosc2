@@ -23,10 +23,10 @@ def populated_tree_store(request):
     ext_path = "ext_node3.b2nd"
 
     with TreeStore(path, mode="w", threshold=None) as tstore:
-        tstore["/root/data"] = np.array([1, 2, 3])
-        tstore["/root/child1/data"] = np.array([4, 5, 6])
-        tstore["/root/child2"] = np.array([7, 8, 9])
-        tstore["/root/child1/grandchild"] = np.array([10, 11, 12])
+        tstore["/child0/data"] = np.array([1, 2, 3])
+        tstore["/child0/child1/data"] = np.array([4, 5, 6])
+        tstore["/child0/child2"] = np.array([7, 8, 9])
+        tstore["/child0/child1/grandchild"] = np.array([10, 11, 12])
         tstore["/other"] = np.array([13, 14, 15])
 
         # Add external file
@@ -51,24 +51,24 @@ def test_basic_tree_store(populated_tree_store):
 
     # Test key existence - should include both leaf and structural nodes
     expected_keys = {
-        "/root/data",
-        "/root/child1/data",
-        "/root/child2",
-        "/root/child1/grandchild",
+        "/child0/data",
+        "/child0/child1/data",
+        "/child0/child2",
+        "/child0/child1/grandchild",
         "/other",
         "/dir1/node3",
-        "/root",
-        "/root/child1",
+        "/child0",
+        "/child0/child1",
         "/dir1",
     }
     assert set(tstore.keys()) == expected_keys
 
     # Test data retrieval
-    assert np.all(tstore["/root/data"][:] == np.array([1, 2, 3]))
+    assert np.all(tstore["/child0/data"][:] == np.array([1, 2, 3]))
     assert np.all(tstore["/other"][:] == np.array([13, 14, 15]))
 
     # Test structural nodes return subtrees
-    assert isinstance(tstore["/root"], TreeStore)
+    assert isinstance(tstore["/child0"], TreeStore)
     assert isinstance(tstore["/dir1"], TreeStore)
 
     # Test vlmeta
@@ -134,18 +134,24 @@ def test_tree_navigation(populated_tree_store):
 
     # Test get_children
     root_children = sorted(tstore.get_children("/"))
-    expected = ["/dir1", "/other", "/root"]
+    expected = ["/child0", "/dir1", "/other"]
     assert root_children == expected
 
     # Test get_descendants
-    root_descendants = sorted(tstore.get_descendants("/root"))
-    expected = ["/root/child1", "/root/child1/data", "/root/child1/grandchild", "/root/child2", "/root/data"]
+    root_descendants = sorted(tstore.get_descendants("/child0"))
+    expected = [
+        "/child0/child1",
+        "/child0/child1/data",
+        "/child0/child1/grandchild",
+        "/child0/child2",
+        "/child0/data",
+    ]
     assert root_descendants == expected
 
     # Test walk
     walked_paths = [path for path, _, _ in tstore.walk("/")]
     assert "/" in walked_paths
-    assert "/root" in walked_paths
+    assert "/child0" in walked_paths
 
 
 def test_subtree_functionality(populated_tree_store):
@@ -153,7 +159,7 @@ def test_subtree_functionality(populated_tree_store):
     tstore, _ = populated_tree_store
 
     # Get subtree
-    root_subtree = tstore.get_subtree("/root")
+    root_subtree = tstore.get_subtree("/child0")
     expected_keys = {"/child1", "/child2", "/data", "/child1/data", "/child1/grandchild"}
     assert set(root_subtree.keys()) == expected_keys
 
@@ -251,16 +257,16 @@ def test_subtree_walk():  # noqa: C901
     """Test walking within a subtree."""
     with TreeStore("test_subtree_walk.b2z", mode="w") as tstore:
         # Create structure without assigning to structural paths
-        tstore["/root/data"] = np.array([1, 2, 3])
-        tstore["/root/branch1/data"] = np.array([4, 5, 6])
-        tstore["/root/branch1/leaf1"] = np.array([7, 8, 9])
-        tstore["/root/branch1/leaf2"] = np.array([10, 11, 12])
-        tstore["/root/leaf3"] = np.array([13, 14, 15])
-        tstore["/root/branch2/leaf4"] = np.array([113, 114, 115])
+        tstore["/child0/data"] = np.array([1, 2, 3])
+        tstore["/child0/branch1/data"] = np.array([4, 5, 6])
+        tstore["/child0/branch1/leaf1"] = np.array([7, 8, 9])
+        tstore["/child0/branch1/leaf2"] = np.array([10, 11, 12])
+        tstore["/child0/leaf3"] = np.array([13, 14, 15])
+        tstore["/child0/branch2/leaf4"] = np.array([113, 114, 115])
         tstore["/other"] = np.array([16, 17, 18])
 
         # Get subtree and walk it
-        root_subtree = tstore.get_subtree("/root")
+        root_subtree = tstore.get_subtree("/child0")
         walked_results = list(root_subtree.walk("/"))
 
         # Should not include /other (outside the subtree)
@@ -268,7 +274,7 @@ def test_subtree_walk():  # noqa: C901
         for _, _, nodes in walked_results:
             all_walked_nodes.extend(nodes)
 
-        # Verify only nodes within /root subtree are visited
+        # Verify only nodes within /child0 subtree are visited
         # These should be names only, not full paths
         for node in all_walked_nodes:
             assert "/" not in node  # Should be names only, not paths
@@ -288,17 +294,17 @@ def test_subtree_walk():  # noqa: C901
             # Build the path of nodes to check their values
             for node in nodes:
                 full_path = f"{path}/{node}"
-                if full_path == "/root/data":
+                if full_path == "/child0/data":
                     assert np.all(root_subtree[full_path][:] == np.array([1, 2, 3]))
-                elif full_path == "/root/branch1/data":
+                elif full_path == "/child0/branch1/data":
                     assert np.all(root_subtree[full_path][:] == np.array([4, 5, 6]))
-                elif full_path == "/root/branch1/leaf1":
+                elif full_path == "/child0/branch1/leaf1":
                     assert np.all(root_subtree[full_path][:] == np.array([7, 8, 9]))
-                elif full_path == "/root/branch1/leaf2":
+                elif full_path == "/child0/branch1/leaf2":
                     assert np.all(root_subtree[full_path][:] == np.array([10, 11, 12]))
-                elif full_path == "/root/leaf3":
+                elif full_path == "/child0/leaf3":
                     assert np.all(root_subtree[full_path][:] == np.array([13, 14, 15]))
-                elif full_path == "/root/branch2/leaf4":
+                elif full_path == "/child0/branch2/leaf4":
                     assert np.all(root_subtree[full_path][:] == np.array([113, 114, 115]))
 
     os.remove("test_subtree_walk.b2z")
@@ -608,10 +614,10 @@ def test_walk_topdown_argument_ordering():
 def test_walk_topdown_false_on_subtree():
     """Bottom-up walk should yield subtree root last."""
     with TreeStore("test_walk_subtree.b2z", mode="w") as tstore:
-        tstore["/root/child1/data"] = np.array([1])
-        tstore["/root/child2/data"] = np.array([2])
-        tstore["/root/data"] = np.array([3])
-        sub = tstore.get_subtree("/root")
+        tstore["/child0/child1/data"] = np.array([1])
+        tstore["/child0/child2/data"] = np.array([2])
+        tstore["/child0/data"] = np.array([3])
+        sub = tstore.get_subtree("/child0")
 
         paths_bottom = [p for p, _, _ in sub.walk("/", topdown=False)]
         assert paths_bottom[-1] == "/"  # subtree root yielded last
