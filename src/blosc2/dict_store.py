@@ -237,7 +237,12 @@ class DictStore:
 
             # Save the value to the destination path
             if not external_file:
-                value.save(urlpath=dest_path)
+                if hasattr(value, "save"):
+                    value.save(urlpath=dest_path)
+                else:
+                    # An SChunk does not have a save() method
+                    with open(dest_path, "wb") as f:
+                        f.write(value.to_cframe())
             else:
                 # This should be faster than using value.save() ?
                 shutil.copy2(value.urlpath, dest_path)
