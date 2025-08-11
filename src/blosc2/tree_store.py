@@ -19,7 +19,7 @@ from blosc2.schunk import SChunk
 
 
 class vlmetaProxy(MutableMapping):
-    """Proxy around SChunk.vlmeta to control slicing and access mode.
+    """Proxy for SChunk.vlmeta to control access and slicing.
 
     - Ensures `vlmeta[:]` returns a dict of {name: value} using decoded values.
     - Enforces TreeStore read-only mode for set/del operations.
@@ -140,7 +140,7 @@ class TreeStore(DictStore):
             self.subtree_path = ""  # Empty string means full tree
 
     def _translate_key_to_full(self, key: str) -> str:
-        """Translate a subtree-relative key to a full tree key."""
+        """Translate subtree-relative key to full tree key."""
         if not self.subtree_path:
             return key
         if key == "/":
@@ -149,7 +149,7 @@ class TreeStore(DictStore):
             return self.subtree_path + key
 
     def _translate_key_from_full(self, full_key: str) -> str | None:
-        """Translate a full tree key to a subtree-relative key."""
+        """Translate full tree key to subtree-relative key."""
         if not self.subtree_path:
             return full_key
         if full_key == self.subtree_path:
@@ -161,8 +161,7 @@ class TreeStore(DictStore):
             return None
 
     def _validate_key(self, key: str) -> None:
-        """
-        Validate that a key follows hierarchical structure rules.
+        """Validate hierarchical key structure.
 
         Parameters
         ----------
@@ -193,8 +192,7 @@ class TreeStore(DictStore):
                 raise ValueError(f"Key cannot contain invalid character {char!r}, got: {key}")
 
     def __setitem__(self, key: str, value: np.ndarray | NDArray | C2Array | SChunk) -> None:
-        """
-        Add a node to the TreeStore with hierarchical key validation.
+        """Add a node with hierarchical key validation.
 
         Parameters
         ----------
@@ -236,8 +234,7 @@ class TreeStore(DictStore):
         super().__setitem__(full_key, value)
 
     def __getitem__(self, key: str) -> "NDArray | C2Array | SChunk | TreeStore":
-        """
-        Retrieve a node from the TreeStore with key validation.
+        """Retrieve a node or subtree view.
 
         If the key points to a subtree (intermediate path with children),
         returns a TreeStore view of that subtree. If the key points to
@@ -281,8 +278,7 @@ class TreeStore(DictStore):
             raise KeyError(f"Key '{key}' not found")
 
     def __delitem__(self, key: str) -> None:
-        """
-        Remove a node or subtree from the TreeStore with key validation.
+        """Remove a node or subtree.
 
         If the key points to a subtree (intermediate path with children),
         removes all nodes in that subtree recursively. If the key points to a final
@@ -329,8 +325,7 @@ class TreeStore(DictStore):
             super().__delitem__(full_key_to_delete)
 
     def __contains__(self, key: str) -> bool:
-        """
-        Check if a key exists in the TreeStore with validation.
+        """Check if a key exists.
 
         Parameters
         ----------
@@ -379,8 +374,7 @@ class TreeStore(DictStore):
             yield key, self[key]
 
     def get_children(self, path: str) -> list[str]:
-        """
-        Get direct children of a given path within the current subtree.
+        """Get direct children of a given path.
 
         Parameters
         ----------
@@ -417,8 +411,7 @@ class TreeStore(DictStore):
             return sorted([path + "/" + name for name in children_names])
 
     def get_descendants(self, path: str) -> list[str]:
-        """
-        Get all descendants of a given path within the current subtree.
+        """Get all descendants of a given path.
 
         Parameters
         ----------
@@ -447,8 +440,7 @@ class TreeStore(DictStore):
         return sorted(descendants)
 
     def walk(self, path: str = "/", topdown: bool = True) -> Iterator[tuple[str, list[str], list[str]]]:
-        """
-        Walk the tree structure within the current subtree.
+        """Walk the tree structure.
 
         Similar to os.walk(), this visits all structural nodes in the hierarchy,
         yielding information about each level. Returns relative names, not full paths.
@@ -532,8 +524,7 @@ class TreeStore(DictStore):
             yield path, children_dirs, leaf_nodes
 
     def get_subtree(self, path: str) -> "TreeStore":
-        """
-        Create a view of a subtree with the specified path as the new root.
+        """Create a subtree view with the specified path as root.
 
         Parameters
         ----------
@@ -557,7 +548,7 @@ class TreeStore(DictStore):
 
         Notes
         -----
-        This is equivalent to use `tstore[path]` when path is a structural path.
+        This is equivalent to `tstore[path]` when path is a structural path.
         """
         self._validate_key(path)
         full_path = self._translate_key_to_full(path)
@@ -570,7 +561,7 @@ class TreeStore(DictStore):
         return subtree
 
     def _persist_vlmeta(self) -> None:
-        """Persist the current vlmeta SChunk into the underlying store.
+        """Persist current vlmeta SChunk into the store.
 
         This is needed because the EmbedStore keeps a serialized snapshot of
         stored objects; mutating the in-memory SChunk does not automatically
@@ -587,8 +578,7 @@ class TreeStore(DictStore):
 
     @property
     def vlmeta(self) -> MutableMapping | None:
-        """
-        Access to variable-length metadata for the TreeStore.
+        """Access variable-length metadata for the TreeStore.
 
         Returns a proxy to the vlmeta attribute of an internal SChunk stored at
         '/__vlmeta__'. The SChunk is created on-demand if it doesn't exist.

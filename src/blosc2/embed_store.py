@@ -69,11 +69,9 @@ class EmbedStore:
         dparams: blosc2.CParams | None = None,
         storage: blosc2.Storage | None = None,
         chunksize: int | None = 1024 * 1024,
-        _from_schunk: SChunk | None = None,  # for internal use only
+        _from_schunk: SChunk | None = None,
     ):
-        """
-        See :class:`EmbedStore` for full documentation of parameters.
-        """
+        """Initialize EmbedStore."""
 
         # For some reason, the SChunk store cannot achieve the same compression ratio as the NDArray store,
         # although it is more efficient in terms of CPU usage.
@@ -133,21 +131,7 @@ class EmbedStore:
         self._current_offset = 0
 
     def _validate_key(self, key: str) -> None:
-        """
-        Validate the node key.
-
-        Parameters
-        ----------
-        key : str
-            The key to validate.
-
-        Raises
-        ------
-        TypeError
-            If key is not a string.
-        ValueError
-            If key does not follow the required format or already exists.
-        """
+        """Validate node key."""
         if not isinstance(key, str):
             raise TypeError("Key must be a string.")
         if not key.startswith("/"):
@@ -163,35 +147,14 @@ class EmbedStore:
             raise ValueError(f"Key '{key}' already exists in store.")
 
     def _ensure_capacity(self, needed_bytes: int) -> None:
-        """
-        Ensure the backing storage has enough capacity.
-
-        Parameters
-        ----------
-        needed_bytes : int
-            Number of bytes needed.
-        """
+        """Ensure backing storage has enough capacity."""
         required_size = self._current_offset + needed_bytes
         if required_size > self._store.shape[0]:
             new_size = max(required_size, int(self._store.shape[0] * 1.5))
             self._store.resize((new_size,))
 
     def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray | SChunk | C2Array) -> None:
-        """
-        Add a node to the embed store.
-
-        Parameters
-        ----------
-        key : str
-            Node key.
-        value : np.ndarray or blosc2.NDArray or blosc2.SChunk or blosc2.C2Array
-            Array to store.
-
-        Raises
-        ------
-        ValueError
-            If key is invalid or already exists.
-        """
+        """Add a node to the embed store."""
         if self.mode == "r":
             raise ValueError("Cannot set items in read-only mode.")
         self._validate_key(key)
@@ -214,24 +177,7 @@ class EmbedStore:
         self._save_metadata()
 
     def __getitem__(self, key: str) -> blosc2.NDArray | SChunk:
-        """
-        Retrieve a node from the embed store.
-
-        Parameters
-        ----------
-        key : str
-            Node key.
-
-        Returns
-        -------
-        out : blosc2.NDArray or blosc2.SChunk
-            The stored array.
-
-        Raises
-        ------
-        KeyError
-            If key is not found.
-        """
+        """Retrieve a node from the embed store."""
         if key not in self._embed_map:
             raise KeyError(f"Key '{key}' not found in the embed store.")
         node_info = self._embed_map[key]
@@ -247,134 +193,49 @@ class EmbedStore:
         return blosc2.from_cframe(serialized_data, copy=True)
 
     def get(self, key: str, default: Any = None) -> blosc2.NDArray | SChunk | Any:
-        """
-        Retrieve a node, returning a default value if the key is not found.
-
-        Parameters
-        ----------
-        key : str
-            Node key.
-        default : Any, optional
-            Value to return if key is not found.
-
-        Returns
-        -------
-        out : blosc2.NDArray or blosc2.SChunk or Any
-            The stored array or default value.
-        """
+        """Retrieve a node, or default if not found."""
         return self[key] if key in self._embed_map else default
 
     def __delitem__(self, key: str) -> None:
-        """
-        Remove a node from the embed store.
-
-        Parameters
-        ----------
-        key : str
-            Node key.
-
-        Raises
-        ------
-        KeyError
-            If key is not found.
-        """
+        """Remove a node from the embed store."""
         if key not in self._embed_map:
             raise KeyError(f"Key '{key}' not found in the embed store.")
         del self._embed_map[key]
         self._save_metadata()
 
     def __contains__(self, key: str) -> bool:
-        """
-        Check if a key exists in the embed store.
-
-        Parameters
-        ----------
-        key : str
-            Node key.
-
-        Returns
-        -------
-        exists : bool
-            True if key exists, False otherwise.
-        """
+        """Check if a key exists."""
         return key in self._embed_map
 
     def __len__(self) -> int:
-        """
-        Return the number of nodes in the embed store.
-
-        Returns
-        -------
-        count : int
-            Number of nodes.
-        """
+        """Return number of nodes."""
         return len(self._embed_map)
 
     def __iter__(self) -> Iterator[str]:
-        """
-        Return an iterator over the keys in the embed store.
-
-        Returns
-        -------
-        iterator : Iterator[str]
-            Iterator over keys.
-        """
+        """Iterate over keys."""
         return iter(self._embed_map)
 
     def keys(self) -> KeysView[str]:
-        """
-        Return all keys in the embed store.
-
-        Returns
-        -------
-        keys : KeysView[str]
-            Keys of the embed store.
-        """
+        """Return all keys."""
         return self._embed_map.keys()
 
     def values(self) -> Iterator[blosc2.NDArray | SChunk]:
-        """
-        Return an iterator over all values in the embed store.
-
-        Returns
-        -------
-        values : Iterator[blosc2.NDArray | blosc2.SChunk]
-            Iterator over stored arrays.
-        """
+        """Iterate over all values."""
         for key in self._embed_map:
             yield self[key]
 
     def items(self) -> Iterator[tuple[str, blosc2.NDArray | SChunk]]:
-        """
-        Return an iterator over (key, value) pairs in the embed store.
-
-        Returns
-        -------
-        items : Iterator[tuple[str, blosc2.NDArray | blosc2.SChunk]]
-            Iterator over key-value pairs.
-        """
+        """Iterate over (key, value) pairs."""
         for key in self._embed_map:
             yield key, self[key]
 
     def _save_metadata(self) -> None:
-        """
-        Serialize and save the embed store map to the vlmeta of the storage array.
-
-        Returns
-        -------
-        None
-        """
+        """Save embed store map to vlmeta."""
         metadata = {"embed_map": self._embed_map, "current_offset": self._current_offset}
         self._store.vlmeta["estore_metadata"] = metadata
 
     def _load_metadata(self) -> None:
-        """
-        Load and deserialize the estore map from the vlmeta.
-
-        Returns
-        -------
-        None
-        """
+        """Load embed store map from vlmeta."""
         if "estore_metadata" in self._store.vlmeta:
             metadata = self._store.vlmeta["estore_metadata"]
             self._embed_map = metadata["embed_map"]
@@ -384,20 +245,13 @@ class EmbedStore:
             self._current_offset = 0
 
     def to_cframe(self) -> bytes:
-        """
-        Serialize the embed store to a CFrame format.
-
-        Returns
-        -------
-        cframe : bytes
-            Serialized CFrame representation of the embed store.
-        """
+        """Serialize embed store to CFrame format."""
         return self._store.to_cframe()
 
 
 def estore_from_cframe(cframe: bytes, copy: bool = False) -> EmbedStore:
     """
-    Deserialize a CFrame to a EmbedStore object.
+    Deserialize a CFrame to an EmbedStore object.
 
     Parameters
     ----------

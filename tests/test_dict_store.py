@@ -18,7 +18,7 @@ from blosc2.dict_store import DictStore
 
 @pytest.fixture(params=["b2d", "b2z"])
 def populated_dict_store(request):
-    """A fixture that creates and populates a DictStore.
+    """Create and populate a DictStore for tests.
 
     It is parametrized to use both zip (.b2z) and directory (.b2d)
     storage formats. It also handles cleanup of created files and
@@ -223,7 +223,7 @@ def test_external_schunk_file_and_reopen():
 
 
 def _digest_value(value):
-    """Return a bytes digest representative of a stored value content."""
+    """Return a bytes digest of a stored value."""
     if isinstance(value, blosc2.SChunk):
         return bytes(value[:])
     # NDArray and potentially C2Array expose slicing to get numpy array

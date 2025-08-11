@@ -22,11 +22,8 @@ from blosc2.schunk import SChunk
 
 class DictStore:
     """
-    A directory-based storage container for compressed data using Blosc2.
-
-    Manages a directory-based (".b2d") structure of arrays with an embedded
-    store for small/in-memory data, and can also create/read ".b2z" archives
-    that mirror the directory structure.
+    Directory-based storage for compressed data using Blosc2.
+    Manages arrays in a directory (.b2d) or zip (.b2z) format.
 
     Supported value types
     ---------------------
@@ -143,7 +140,7 @@ class DictStore:
         self.estore_path = os.path.join(self.working_dir, "embed.b2e")
 
     def _init_read_mode(self):
-        """Initialize the store in read mode."""
+        """Initialize store in read mode."""
         if not os.path.exists(self.localpath):
             raise FileNotFoundError(f"dir/zip file {self.localpath} does not exist.")
 
@@ -171,7 +168,7 @@ class DictStore:
         dparams: blosc2.DParams | None,
         storage: blosc2.Storage | None,
     ):
-        """Initialize the store in write or append mode."""
+        """Initialize store in write/append mode."""
         if self.mode == "a" and os.path.exists(self.localpath):
             if self.is_zip_store:
                 with zipfile.ZipFile(self.localpath, "r") as zf:
@@ -210,36 +207,11 @@ class DictStore:
 
     @property
     def estore(self) -> EmbedStore:
-        """
-        Access to the underlying EmbedStore object.
-
-        Returns
-        -------
-        estore : EmbedStore
-            The underlying EmbedStore object.
-        """
+        """Access the underlying EmbedStore."""
         return self._estore
 
     def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray | SChunk | C2Array) -> None:
-        """
-        Add a node to the DictStore.
-
-        Parameters
-        ----------
-        key : str
-            Node key.
-        value : np.ndarray or blosc2.NDArray or blosc2.SChunk or blosc2.C2Array
-            Value to store. numpy.ndarray values are converted to NDArray.
-            C2Array values are always stored in the embedded store. NDArray and
-            SChunk values may be stored externally depending on the threshold
-            and whether they already reference an on-disk resource. Externally
-            persisted files use .b2nd for NDArray and .b2f for SChunk.
-
-        Raises
-        ------
-        ValueError
-            If key is invalid or already exists.
-        """
+        """Add a node to the DictStore."""
         if isinstance(value, np.ndarray):
             value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)
         # C2Array should always go to embed store; let estore handle it directly
@@ -280,24 +252,7 @@ class DictStore:
             self._estore[key] = value
 
     def __getitem__(self, key: str) -> blosc2.NDArray | SChunk | C2Array:
-        """
-        Retrieve a node from the DictStore.
-
-        Parameters
-        ----------
-        key : str
-            Node key.
-
-        Returns
-        -------
-        out : blosc2.NDArray or blosc2.SChunk or C2Array
-            The stored array.
-
-        Raises
-        ------
-        KeyError
-            If key is not found.
-        """
+        """Retrieve a node from the DictStore."""
         # Check map_tree first
         if key in self.map_tree:
             filepath = self.map_tree[key]
@@ -315,100 +270,34 @@ class DictStore:
         return self._estore[key]
 
     def get(self, key: str, default: Any = None) -> blosc2.NDArray | SChunk | C2Array | Any:
-        """
-        Retrieve a node, returning a default value if the key is not found.
-
-        Parameters
-        ----------
-        key : str
-            Node key.
-        default : Any, optional
-            Value to return if key is not found.
-
-        Returns
-        -------
-        out : blosc2.NDArray or blosc2.SChunk or C2Array or Any
-            The stored array (NDArray or SChunk) or the default value.
-        """
+        """Retrieve a node, or default if not found."""
         return self._estore.get(key, default)
 
     def __delitem__(self, key: str) -> None:
-        """
-        Remove a node from the DictStore.
-
-        Parameters
-        ----------
-        key : str
-            Node key.
-
-        Raises
-        ------
-        KeyError
-            If key is not found.
-        """
+        """Remove a node from the DictStore."""
         del self._estore[key]
 
     def __contains__(self, key: str) -> bool:
-        """
-        Check if a key exists in the DictStore.
-
-        Parameters
-        ----------
-        key : str
-            Node key.
-
-        Returns
-        -------
-        exists : bool
-            True if key exists, False otherwise.
-        """
+        """Check if a key exists."""
         return key in self.map_tree or key in self._estore
 
     def __len__(self) -> int:
-        """
-        Return the number of nodes in the DictStore.
-
-        Returns
-        -------
-        count : int
-            Number of nodes.
-        """
+        """Return number of nodes."""
         return len(self.map_tree) + len(self._estore)
 
     def __iter__(self) -> Iterator[str]:
-        """
-        Return an iterator over the keys in the DictStore.
-
-        Returns
-        -------
-        iterator : Iterator[str]
-            Iterator over keys.
-        """
+        """Iterate over keys."""
         yield from self.map_tree.keys()
         for key in self._estore:
             if key not in self.map_tree:
                 yield key
 
     def keys(self) -> Set[str]:
-        """
-        Return all keys in the DictStore.
-
-        Returns
-        -------
-        keys : Set[str]
-            A set containing all unique keys of the DictStore.
-        """
+        """Return all keys."""
         return self.map_tree.keys() | self._estore.keys()
 
     def values(self) -> Iterator[blosc2.NDArray | SChunk | C2Array]:
-        """
-        Return an iterator over all values in the DictStore.
-
-        Returns
-        -------
-        values : Iterator[blosc2.NDArray | SChunk | C2Array]
-            Iterator over stored arrays.
-        """
+        """Iterate over all values."""
         # Get all unique keys from both map_tree and _estore, with map_tree taking precedence
         all_keys = set(self.map_tree.keys()) | set(self._estore.keys())
 
@@ -426,14 +315,7 @@ class DictStore:
                 yield self._estore[key]
 
     def items(self) -> Iterator[tuple[str, blosc2.NDArray | SChunk | C2Array]]:
-        """
-        Return an iterator over (key, value) pairs in the DictStore.
-
-        Returns
-        -------
-        items : Iterator[tuple[str, blosc2.NDArray]]
-            Iterator over key-value pairs.
-        """
+        """Iterate over (key, value) pairs."""
         # Get all unique keys from both map_tree and _estore, with map_tree taking precedence
         all_keys = set(self.map_tree.keys()) | set(self._estore.keys())
 
@@ -500,9 +382,7 @@ class DictStore:
         return os.path.abspath(self.b2z_path)
 
     def _get_zip_offsets(self) -> dict[str, dict[str, int]]:
-        """
-        Get the offset (and length) of all files in the zip archive.
-        """
+        """Get offset and length of all files in the zip archive."""
         self.offsets = {}  # Reset offsets
         with open(self.b2z_path, "rb") as f, zipfile.ZipFile(f) as zf:
             for info in zf.infolist():
@@ -517,13 +397,7 @@ class DictStore:
         return self.offsets
 
     def close(self) -> None:
-        """
-        Persist changes in the zip file if opened in write or append mode.
-
-        Yoy always need to call this method to ensure that the DictStore is properly
-        created or updated.  Use a context manager to ensure this is called automatically.
-        If the DictStore was opened in read mode, this method does nothing.
-        """
+        """Persist changes and cleanup."""
         if self.mode in ("w", "a"):
             # Serialize to b2z file
             self.to_b2z(overwrite=True)
@@ -533,15 +407,11 @@ class DictStore:
             self._temp_dir_obj.cleanup()
 
     def __enter__(self):
-        """
-        Enter the context manager.
-        """
+        """Context manager enter."""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """
-        Exit the context manager.
-        """
+        """Context manager exit."""
         self.close()
         # No need to handle exceptions, just close the DictStore
         return False
