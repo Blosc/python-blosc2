@@ -25,8 +25,8 @@ class DictStore:
     Directory-based storage for compressed data using Blosc2.
     Manages arrays in a directory (.b2d) or zip (.b2z) format.
 
-    Supported value types
-    ---------------------
+    Supports the following types:
+
     - blosc2.NDArray: n-dimensional arrays. When persisted externally they
       are stored as .b2nd files.
     - blosc2.SChunk: super-chunks. When persisted externally they are stored
@@ -82,6 +82,8 @@ class DictStore:
     >>> dstore.to_b2z()  # persist to the zip file; external files are copied in
     >>> print(sorted(dstore.keys()))
     ['/dir1/node3', '/dir1/schunk1', '/node1', '/node2']
+    >>> print(dstore["/node1"][:]))
+    array([1, 2, 3])
     """
 
     def __init__(
