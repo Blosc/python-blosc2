@@ -80,7 +80,5 @@ Quickstart
     .. automethod:: values
     .. automethod:: items
 
-    Utility Methods
-    ---------------
-    .. automethod:: get
-    .. automethod:: to_cframe
+    Public Members
+    --------------

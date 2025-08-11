@@ -74,12 +74,5 @@ Quick example
     .. automethod:: __enter__
     .. automethod:: __exit__
 
-    Utility Methods
-    ---------------
-    .. automethod:: get
-    .. automethod:: to_b2z
-    .. automethod:: close
-
-    Properties
-    ----------
-    .. autoattribute:: estore
+    Public Members
+    --------------

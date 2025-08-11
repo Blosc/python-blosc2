@@ -92,6 +92,9 @@ Quick example
     ----------
     .. autoattribute:: vlmeta
 
+    Public Members
+    --------------
+
 Notes
 -----
 - Keys must start with ``/``. The root is ``/``. Empty path segments (``//``) are not allowed.
