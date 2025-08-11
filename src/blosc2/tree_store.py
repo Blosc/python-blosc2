@@ -446,9 +446,9 @@ class TreeStore(DictStore):
 
         return sorted(descendants)
 
-    def walk(self, path: str = "/") -> Iterator[tuple[str, list[str], list[str]]]:
+    def walk(self, path: str = "/", topdown: bool = True) -> Iterator[tuple[str, list[str], list[str]]]:
         """
-        Walk the tree structure top-down within the current subtree.
+        Walk the tree structure within the current subtree.
 
         Similar to os.walk(), this visits all structural nodes in the hierarchy,
         yielding information about each level. Returns relative names, not full paths.
@@ -457,6 +457,9 @@ class TreeStore(DictStore):
         ----------
         path : str, optional
             The root path to start walking from. Default is "/".
+        topdown : bool, optional
+            If True (default), traverse top-down (yield parent before children).
+            If False, traverse bottom-up (yield children before parent), mimicking os.walk(topdown=False).
 
         Yields
         ------
@@ -471,7 +474,7 @@ class TreeStore(DictStore):
 
         Examples
         --------
-        >>> for path, children, nodes in tstore.walk("/child0"):
+        >>> for path, children, nodes in tstore.walk("/child0", topdown=True):
         ...     print(f"Path: {path}, Children: {children}, Nodes: {nodes}")
         """
         self._validate_key(path)
@@ -514,14 +517,19 @@ class TreeStore(DictStore):
                 valid_leaf_nodes.append(name)
         leaf_nodes = valid_leaf_nodes
 
-        # Yield current level (always yield the current path being walked)
-        yield path, children_dirs, leaf_nodes
+        if topdown:
+            # Yield current level first (pre-order)
+            yield path, children_dirs, leaf_nodes
 
         # Recursively walk child directories (structural nodes)
         for child in direct_children:
             child_descendants = self.get_descendants(child)
             if child_descendants:
-                yield from self.walk(child)
+                yield from self.walk(child, topdown=topdown)
+
+        if not topdown:
+            # Yield current level after children (post-order)
+            yield path, children_dirs, leaf_nodes
 
     def get_subtree(self, path: str) -> "TreeStore":
         """

@@ -580,3 +580,45 @@ def test_schunk_support():
         assert set(data_subtree.keys()) == expected_keys
 
     os.remove("test_schunk.b2z")
+
+
+def test_walk_topdown_argument_ordering():
+    """Ensure walk supports topdown argument mimicking os.walk order semantics."""
+    with TreeStore("test_walk_topdown.b2z", mode="w") as tstore:
+        # Build a small hierarchy
+        tstore["/a/x"] = np.array([1])
+        tstore["/a/b/y"] = np.array([2])
+        tstore["/c"] = np.array([3])
+
+        top_paths = [p for p, _, _ in tstore.walk("/", topdown=True)]
+        bot_paths = [p for p, _, _ in tstore.walk("/", topdown=False)]
+
+        # Same paths visited, but different order
+        assert set(top_paths) == set(bot_paths)
+        assert top_paths[0] == "/"
+        assert bot_paths[-1] == "/"  # root last in bottom-up
+
+        # In topdown, parent before child; in bottom-up, child before parent
+        assert top_paths.index("/a") < top_paths.index("/a/b")
+        assert bot_paths.index("/a") > bot_paths.index("/a/b")
+
+    os.remove("test_walk_topdown.b2z")
+
+
+def test_walk_topdown_false_on_subtree():
+    """Bottom-up walk should yield subtree root last."""
+    with TreeStore("test_walk_subtree.b2z", mode="w") as tstore:
+        tstore["/root/child1/data"] = np.array([1])
+        tstore["/root/child2/data"] = np.array([2])
+        tstore["/root/data"] = np.array([3])
+        sub = tstore.get_subtree("/root")
+
+        paths_bottom = [p for p, _, _ in sub.walk("/", topdown=False)]
+        assert paths_bottom[-1] == "/"  # subtree root yielded last
+
+        # Verify children and nodes contents are still names and consistent
+        for _, children, nodes in sub.walk("/", topdown=False):
+            for name in children + nodes:
+                assert "/" not in name
+
+    os.remove("test_walk_subtree.b2z")
