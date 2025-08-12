@@ -1789,6 +1789,45 @@ def ndarray_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.NDArr
     return blosc2_ext.ndarray_from_cframe(cframe, copy)
 
 
+def from_cframe(
+    cframe: bytes | str, copy: bool = True
+) -> blosc2.EmbedStore | blosc2.NDArray | blosc2.SChunk:
+    """Create a :ref:`EmbedStore <EmbedStore>`, :ref:`NDArray <NDArray>` or :ref:`SChunk <SChunk>` instance
+    from a contiguous frame buffer.
+
+    Parameters
+    ----------
+    cframe: bytes or str
+        The bytes object containing the in-memory cframe.
+    copy: bool
+        Whether to internally make a copy. If `False`,
+        the user is responsible for keeping a reference to `cframe`.
+        Default is `True`, which is safer.  If you need to save
+        time/memory, you can set it to `False`, but then you must
+        ensure that the `cframe` is not garbage collected while the
+        returned object is still in use.
+
+    Returns
+    -------
+    out: :ref:`EmbedStore <EmbedStore>`, :ref:`NDArray <NDArray>` or :ref:`SChunk <SChunk>`
+        A new instance of the appropriate type containing the data passed.
+
+    See Also
+    --------
+    :func:`~blosc2.EmbedStore.from_cframe`
+    :func:`~blosc2.NDArray.from_cframe`
+    :func:`~blosc2.schunk.SChunk.from_cframe`
+    """
+    # Retrieve the SChunk; not doing a copy is cheap
+    schunk = schunk_from_cframe(cframe, copy=False)
+    # Check the metalayer to determine the type
+    if "b2embed" in schunk.meta:
+        return blosc2.estore_from_cframe(cframe, copy=copy)
+    if "b2nd" in schunk.meta:
+        return ndarray_from_cframe(cframe, copy=copy)
+    return schunk_from_cframe(cframe, copy=copy)
+
+
 def register_codec(
     codec_name: str,
     id: int,

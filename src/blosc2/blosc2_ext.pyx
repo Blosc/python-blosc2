@@ -1464,6 +1464,8 @@ cdef class SChunk:
         PyObject_GetBuffer(value, &buf, PyBUF_SIMPLE)
         cdef uint8_t *buf_ptr = <uint8_t *> buf.buf
         cdef int64_t buf_pos = 0
+        cdef int64_t nbytes_copy = min(nbytes, buf.len - buf_pos)
+        cdef int64_t data_start
         cdef uint8_t *data
         cdef uint8_t *chunk
         if buf.len < nbytes:
@@ -1478,14 +1480,16 @@ cdef class SChunk:
                 # Update last chunk before appending any other
                 if stop * self.schunk.typesize >= self.schunk.chunksize * self.schunk.nchunks:
                     chunk_nbytes = self.schunk.chunksize
+                    nbytes_copy = min(nbytes_copy, self.schunk.chunksize * self.schunk.nchunks - nitems * self.schunk.typesize)
                 else:
                     chunk_nbytes = (stop * self.schunk.typesize) % self.schunk.chunksize
                 data  = <uint8_t *> malloc(chunk_nbytes)
                 rc = blosc2_schunk_decompress_chunk(self.schunk, self.schunk.nchunks - 1, data, chunk_nbytes)
                 if rc < 0:
                     free(data)
-                    raise RuntimeError("Error while decompressig the chunk")
-                memcpy(data + nitems * self.schunk.typesize, buf_ptr + buf_pos, chunk_nbytes - buf_pos)
+                    raise RuntimeError("Error while decompressing the chunk")
+                data_start = self.schunk.nbytes - (self.schunk.nchunks - 1) * self.schunk.chunksize
+                memcpy(data + data_start, buf_ptr + buf_pos, nbytes_copy)
                 chunk = <uint8_t *> malloc(chunk_nbytes + BLOSC2_MAX_OVERHEAD)
                 rc = blosc2_compress_ctx(self.schunk.cctx, data, chunk_nbytes, chunk, chunk_nbytes + BLOSC2_MAX_OVERHEAD)
                 free(data)
@@ -1496,7 +1500,7 @@ cdef class SChunk:
                 free(chunk)
                 if rc < 0:
                     raise RuntimeError("Error while updating the chunk")
-                buf_pos += chunk_nbytes - buf_pos
+                buf_pos += nbytes_copy
             # Append data if needed
             if buf_pos < buf.len:
                 nappends = int(stop * self.schunk.typesize / self.schunk.chunksize - self.schunk.nchunks)

@@ -271,6 +271,12 @@ class C2Array(blosc2.Operand):
         slice_ = slice_to_string(slice_)
         return fetch_data(self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token)
 
+    def __len__(self) -> int:
+        """Returns the length of the first dimension of the array.
+        This is equivalent to ``self.shape[0]``.
+        """
+        return self.shape[0]
+
     def get_chunk(self, nchunk: int) -> bytes:
         """
         Get the compressed unidimensional chunk of a :ref:`C2Array`.
