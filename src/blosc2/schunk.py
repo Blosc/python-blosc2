@@ -474,7 +474,7 @@ class SChunk(blosc2_ext.SChunk):
 
     @property
     def info_items(self) -> list:
-        """A list of tuples with the information about this array.
+        """A list of tuples with the information about this schunk.
         Each tuple contains the name of the attribute and its value.
         """
         items = []
