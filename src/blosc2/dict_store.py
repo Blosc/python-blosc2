@@ -57,7 +57,7 @@ class DictStore:
         Storage properties for the internal embed store.
         If None, the default Blosc2 storage properties are used.
     threshold : int or None, optional
-        Threshold (in bytes of compressed data) under which values are kept
+        Threshold (in bytes of uncompressed data) under which values are kept
         in the embedded store. If None, in-memory arrays are stored in the
         embedded store and on-disk arrays are stored as separate files.
         C2Array objects will always be stored in the embedded store,
@@ -220,7 +220,7 @@ class DictStore:
         if isinstance(value, C2Array):
             self._estore[key] = value
             return
-        exceeds_threshold = self.threshold is not None and value.cbytes >= self.threshold
+        exceeds_threshold = self.threshold is not None and value.nbytes >= self.threshold
         # Consider both NDArray and SChunk external files (have urlpath)
         external_file = isinstance(value, (blosc2.NDArray, SChunk)) and getattr(value, "urlpath", None)
         if exceeds_threshold or (external_file and self.threshold is None):
