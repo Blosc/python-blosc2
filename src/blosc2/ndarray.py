@@ -1305,9 +1305,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         items += [("dtype", self.dtype)]
         items += [("nbytes", self.nbytes)]
         items += [("cbytes", self.cbytes)]
-        items += [("cratio", f"{self.schunk.cratio:.2f}")]
-        items += [("cparams", self.schunk.cparams)]
-        items += [("dparams", self.schunk.dparams)]
+        items += [("cratio", f"{self.cratio:.2f}")]
+        items += [("cparams", self.cparams)]
+        items += [("dparams", self.dparams)]
         return items
 
     @property

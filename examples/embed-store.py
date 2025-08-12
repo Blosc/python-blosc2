@@ -22,7 +22,7 @@ urlpath = blosc2.URLPath("@public/examples/ds-1d.b2nd", "https://cat2.cloud/demo
 arr_remote = blosc2.open(urlpath, mode="r")
 estore["/dir1/node3"] = arr_remote
 arr_external = blosc2.arange(3, urlpath="external_node3.b2nd", mode="w")
-arr_external.vlmeta["description"] = "This is vlmeta for /dir1/node3"
+arr_external.vlmeta["description"] = "This is vlmeta for /dir1/node4"
 estore["/dir2/node4"] = arr_external
 
 print("EmbedStore keys:", list(estore.keys()))
@@ -40,8 +40,8 @@ else:
     estore_read = blosc2.from_cframe(estore.to_cframe())
 
 # Add another node to the tree
-estore_read["/node4"] = np.array([4, 5, 6])
-print("Node4 data:", estore_read["/node4"][:])
+estore_read["/node5"] = np.array([4, 5, 6])
+print("Node5 data:", estore_read["/node5"][:])
 
 print("Read keys:", list(estore_read.keys()))
 for key, value in estore_read.items():
