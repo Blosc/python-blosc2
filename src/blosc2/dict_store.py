@@ -283,11 +283,26 @@ class DictStore:
 
     def get(self, key: str, default: Any = None) -> blosc2.NDArray | SChunk | C2Array | Any:
         """Retrieve a node, or default if not found."""
-        return self._estore.get(key, default)
+        try:
+            return self[key]
+        except KeyError:
+            return default
 
     def __delitem__(self, key: str) -> None:
         """Remove a node from the DictStore."""
-        del self._estore[key]
+        if key in self.map_tree:
+            # Remove from map_tree and delete the external file
+            filepath = self.map_tree[key]
+            del self.map_tree[key]
+
+            # Delete the physical file if it exists
+            full_path = os.path.join(self.working_dir, filepath)
+            if os.path.exists(full_path):
+                os.remove(full_path)
+        elif key in self._estore:
+            del self._estore[key]
+        else:
+            raise KeyError(f"Key '{key}' not found")
 
     def __contains__(self, key: str) -> bool:
         """Check if a key exists."""

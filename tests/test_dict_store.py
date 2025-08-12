@@ -316,3 +316,123 @@ def test_b2d_close_no_b2z_creation():
             shutil.rmtree(b2d_path)
         if os.path.exists(expected_b2z_path):
             os.remove(expected_b2z_path)
+
+
+def test_get_method_with_map_tree(populated_dict_store):
+    """Test that get() method works with both map_tree and embed store keys."""
+    dstore, path = populated_dict_store
+
+    # Test getting existing keys from both stores
+    assert np.array_equal(dstore.get("/node1"), np.array([1, 2, 3]))  # embed store
+    assert np.array_equal(dstore.get("/dir1/node3"), np.arange(3))  # map_tree
+
+    # Test getting non-existent key returns default
+    assert dstore.get("/nonexistent") is None
+    assert dstore.get("/nonexistent", "default") == "default"
+
+    # Test after reopening
+    dstore.close()
+    with DictStore(path, mode="r") as dstore_read:
+        assert np.array_equal(dstore_read.get("/node2"), np.ones(2))  # embed store
+        assert np.array_equal(dstore_read.get("/dir1/node3"), np.arange(3))  # map_tree
+        assert dstore_read.get("/missing", 42) == 42
+
+
+def test_delitem_with_map_tree_keys(populated_dict_store):
+    """Test that __delitem__ properly handles both map_tree and embed store keys."""
+    dstore, path = populated_dict_store
+
+    # Verify initial state
+    assert "/dir1/node3" in dstore.map_tree
+    assert "/node1" in dstore._estore
+    assert len(dstore) == 3
+
+    # Delete external file (map_tree key)
+    del dstore["/dir1/node3"]
+    assert "/dir1/node3" not in dstore.map_tree
+    assert "/dir1/node3" not in dstore
+    assert len(dstore) == 2
+
+    # Delete embed store key
+    del dstore["/node1"]
+    assert "/node1" not in dstore._estore
+    assert "/node1" not in dstore
+    assert len(dstore) == 1
+
+    # Verify remaining key
+    assert "/node2" in dstore
+
+    # Test deleting non-existent key raises KeyError
+    with pytest.raises(KeyError, match="Key '/nonexistent' not found"):
+        del dstore["/nonexistent"]
+
+
+def test_delitem_removes_physical_files():
+    """Test that deleting map_tree keys removes the actual files from disk."""
+    path = "test_delitem_files.b2d"
+    ext_path = "test_external.b2nd"
+
+    # Clean up any existing files
+    if os.path.exists(path):
+        shutil.rmtree(path)
+    if os.path.exists(ext_path):
+        os.remove(ext_path)
+
+    try:
+        with DictStore(path, mode="w", threshold=None) as dstore:
+            # Create external file
+            arr_external = blosc2.arange(5, urlpath=ext_path, mode="w")
+            dstore["/external"] = arr_external
+
+            # Verify file exists in working directory
+            expected_file = os.path.join(dstore.working_dir, "external.b2nd")
+            assert os.path.exists(expected_file)
+
+            # Delete the key
+            del dstore["/external"]
+
+            # Verify file is removed
+            assert not os.path.exists(expected_file)
+            assert "/external" not in dstore.map_tree
+
+    finally:
+        # Cleanup
+        if os.path.exists(path):
+            shutil.rmtree(path)
+        if os.path.exists(ext_path):
+            os.remove(ext_path)
+
+
+def test_get_with_different_types():
+    """Test get() method with different value types (NDArray, SChunk, C2Array)."""
+    path = "test_get_types.b2z"
+
+    if os.path.exists(path):
+        os.remove(path)
+
+    try:
+        with DictStore(path, mode="w") as dstore:
+            # Store different types
+            dstore["/ndarray"] = np.array([1, 2, 3])
+            dstore["/ones"] = blosc2.ones(3)
+
+            # Create SChunk
+            schunk = blosc2.SChunk(chunksize=None, data=b"test data")
+            dstore["/schunk"] = schunk
+
+            # Test getting each type
+            ndarray_val = dstore.get("/ndarray")
+            assert isinstance(ndarray_val, blosc2.NDArray)
+            assert np.array_equal(ndarray_val[:], [1, 2, 3])
+
+            ones_val = dstore.get("/ones")
+            assert isinstance(ones_val, blosc2.NDArray)
+            assert np.array_equal(ones_val[:], np.ones(3))
+
+            schunk_val = dstore.get("/schunk")
+            assert isinstance(schunk_val, blosc2.SChunk)
+            assert schunk_val[:] == b"test data"
+
+    finally:
+        if os.path.exists(path):
+            os.remove(path)
