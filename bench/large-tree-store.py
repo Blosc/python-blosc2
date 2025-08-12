@@ -685,6 +685,28 @@ def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
     best_throughput_idx = np.argmax(throughputs)
     print(f"{time_labels[best_throughput_idx]:<12}")
 
+    # Read throughput
+    if tstore_read is not None:
+        read_throughputs = [total_data_mb/tstore_read]
+        print(f"{'Read throughput (MB/s)':<30} {total_data_mb/tstore_read:<15.1f} ", end="")
+
+        if has_h5py and h5py_read is not None:
+            h5py_read_throughput = total_data_mb / h5py_read
+            print(f"{h5py_read_throughput:<15.1f} ", end="")
+            read_throughputs.append(h5py_read_throughput)
+        else:
+            print(f"{'N/A':<15} ", end="")
+
+        if has_zarr and zarr_read is not None:
+            zarr_read_throughput = total_data_mb / zarr_read
+            print(f"{zarr_read_throughput:<15.1f} ", end="")
+            read_throughputs.append(zarr_read_throughput)
+        else:
+            print(f"{'N/A':<15} ", end="")
+
+        best_read_throughput_idx = np.argmax(read_throughputs)
+        print(f"{read_labels[best_read_throughput_idx]:<12}")
+
     # Access time
     if tstore_access is not None:
         access_times = [tstore_access]
