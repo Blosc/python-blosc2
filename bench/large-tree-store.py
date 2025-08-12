@@ -11,6 +11,8 @@ Benchmark for TreeStore vs h5py vs zarr with large arrays.
 
 This benchmark creates N numpy arrays with sizes following a normal distribution
 and measures the time and memory consumption for storing them in TreeStore, h5py, and zarr.
+
+Note: This requires zarr<3 if you want to use zarr for comparison.
 """
 
 import os
