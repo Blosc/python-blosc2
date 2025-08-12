@@ -84,6 +84,11 @@ class DictStore:
     ['/dir1/node3', '/dir1/schunk1', '/node1', '/node2']
     >>> print(dstore["/node1"][:]))
     array([1, 2, 3])
+
+    Notes
+    -----
+    The DictStore is still experimental and subject to change.
+    Please report any issues you may find.
     """
 
     def __init__(

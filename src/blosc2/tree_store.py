@@ -127,6 +127,11 @@ class TreeStore(DictStore):
     >>> subtree = tstore.get_subtree("/child0")
     >>> sorted(list(subtree.keys()))
     ['/child1/leaf2', '/child2', '/leaf1']
+
+    Notes
+    -----
+    The TreeStore is still experimental and subject to change.
+    Please report any issues you may find.
     """
 
     def __init__(self, *args, _from_parent_store=None, **kwargs):
