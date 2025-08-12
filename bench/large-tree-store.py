@@ -53,6 +53,7 @@ OUTPUT_FILE_H5PY = "large-h5py-store.h5"
 OUTPUT_DIR_ZARR = "large-zarr-store.zarr"
 MIN_SIZE_MB = 0.1  # Minimum array size in MB
 MAX_SIZE_MB = 32  # Maximum array size in MB
+CHECK_VALUES = True  # Set to False to disable value checking (it is fast anyway)
 
 
 def generate_array_sizes(n_arrays, peak_mb, stddev_mb, min_mb, max_mb):
@@ -324,8 +325,15 @@ def measure_access_time(arrays, results_tuple, backend_name):
                     end_idx = min(len(arr), start_idx + 10)
 
                     start_time = time.perf_counter()
-                    _ = store[key][start_idx:end_idx]
+                    retrieved_slice = store[key][start_idx:end_idx]
                     end_time = time.perf_counter()
+
+                    # Check values if enabled
+                    if CHECK_VALUES:
+                        expected_slice = arr[start_idx:end_idx]
+                        if not np.allclose(retrieved_slice, expected_slice):
+                            raise ValueError(f"Value mismatch for {backend_name} key {key}")
+
                     access_times.append(end_time - start_time)
 
         elif backend_name == "h5py" and HAS_H5PY:
@@ -341,8 +349,15 @@ def measure_access_time(arrays, results_tuple, backend_name):
                     end_idx = min(len(arr), start_idx + 10)
 
                     start_time = time.perf_counter()
-                    _ = f[group_name][dataset_name][start_idx:end_idx]
+                    retrieved_slice = f[group_name][dataset_name][start_idx:end_idx]
                     end_time = time.perf_counter()
+
+                    # Check values if enabled
+                    if CHECK_VALUES:
+                        expected_slice = arr[start_idx:end_idx]
+                        if not np.allclose(retrieved_slice, expected_slice):
+                            raise ValueError(f"Value mismatch for {backend_name} key {group_name}/{dataset_name}")
+
                     access_times.append(end_time - start_time)
 
         elif backend_name == "zarr" and HAS_ZARR:
@@ -363,8 +378,15 @@ def measure_access_time(arrays, results_tuple, backend_name):
                 end_idx = min(len(arr), start_idx + 10)
 
                 start_time = time.perf_counter()
-                _ = root[group_name][dataset_name][start_idx:end_idx]
+                retrieved_slice = root[group_name][dataset_name][start_idx:end_idx]
                 end_time = time.perf_counter()
+
+                # Check values if enabled
+                if CHECK_VALUES:
+                    expected_slice = arr[start_idx:end_idx]
+                    if not np.allclose(retrieved_slice, expected_slice):
+                        raise ValueError(f"Value mismatch for {backend_name} key {group_name}/{dataset_name}")
+
                 access_times.append(end_time - start_time)
 
     except Exception as e:
@@ -372,6 +394,10 @@ def measure_access_time(arrays, results_tuple, backend_name):
         return None
 
     avg_access_time = np.mean(access_times) * 1000  # Convert to milliseconds
+
+    if CHECK_VALUES:
+        print(f"  Value checking passed for {backend_name}")
+
     return avg_access_time
 
 
