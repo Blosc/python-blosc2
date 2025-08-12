@@ -24,6 +24,7 @@ import blosc2
 
 try:
     import h5py
+    import hdf5plugin
     HAS_H5PY = True
 except ImportError:
     HAS_H5PY = False
@@ -32,7 +33,7 @@ except ImportError:
 N_ARRAYS = 100  # Number of arrays to store
 NGROUPS_MAX = 10
 PEAK_SIZE_MB = 1  # Peak size in MB for the normal distribution
-STDDEV_MB = 2  # Standard deviation in MB
+STDDEV_MB = .2  # Standard deviation in MB
 OUTPUT_DIR_TSTORE = "large-tree-store.b2z"
 OUTPUT_FILE_H5PY = "large-h5py-store.h5"
 MIN_SIZE_MB = 0.1  # Minimum array size in MB
@@ -134,7 +135,12 @@ def store_arrays_in_h5py(arrays, output_file):
                 grp = f[group_name]
 
             # Store array with compression
-            grp.create_dataset(dataset_name, data=arr, compression="gzip", shuffle=True) #, compression_opts=9)
+            grp.create_dataset(dataset_name, data=arr,
+                               # compression="gzip", shuffle=True,
+                               # To compare apples with apples, use Blosc2 compression with Zstd compression
+                               compression=hdf5plugin.Blosc2(cname='zstd', clevel=5,
+                                                             filters=hdf5plugin.Blosc2.SHUFFLE)
+                               )
 
             if (i + 1) % 10 == 0:
                 elapsed = time.time() - start_time
