@@ -80,7 +80,7 @@ def create_test_arrays(sizes_elements):
 #@profile
 def store_arrays_in_treestore(arrays, output_dir):
     """Store arrays in TreeStore and measure performance."""
-    print(f"\nStoring {len(arrays)} arrays in TreeStore at {output_dir}...")
+    print(f"Storing {len(arrays)} arrays in TreeStore at {output_dir}...")
 
     # Clean up existing directory
     if os.path.exists(output_dir) and os.path.isdir(output_dir):
@@ -120,7 +120,7 @@ def store_arrays_in_h5py(arrays, output_file):
     if not HAS_H5PY:
         return None
 
-    print(f"\nStoring {len(arrays)} arrays in h5py at {output_file}...")
+    print(f"Storing {len(arrays)} arrays in h5py at {output_file}...")
 
     # Clean up existing file
     if os.path.exists(output_file):
@@ -171,7 +171,7 @@ def store_arrays_in_zarr(arrays, output_dir):
     if not HAS_ZARR:
         return None
 
-    print(f"\nStoring {len(arrays)} arrays in zarr at {output_dir}...")
+    print(f"Storing {len(arrays)} arrays in zarr at {output_dir}...")
 
     # Clean up existing directory
     if os.path.exists(output_dir):
@@ -237,17 +237,37 @@ def measure_memory_usage(func, *args, **kwargs):
 
 
 def get_storage_size(path):
-    """Get storage size in MB for a file or directory."""
+    """Get storage size in MB for a file or directory (cross-platform)."""
+    if not os.path.exists(path):
+        return 0
+
+    total_size = 0
     if os.path.isfile(path):
-        return os.path.getsize(path) / (1024 * 1024)
+        if os.name == 'nt':  # Windows
+            total_size = os.path.getsize(path)
+        else:  # macOS, Linux
+            # st_blocks is in 512-byte units
+            total_size = os.stat(path).st_blocks * 512
     elif os.path.isdir(path):
-        total_size = 0
         for dirpath, dirnames, filenames in os.walk(path):
-            for filename in filenames:
-                filepath = os.path.join(dirpath, filename)
-                total_size += os.path.getsize(filepath)
-        return total_size / (1024 * 1024)
-    return 0
+            for f in filenames:
+                filepath = os.path.join(dirpath, f)
+                if not os.path.islink(filepath):
+                    if os.name == 'nt': # Windows
+                        total_size += os.path.getsize(filepath)
+                    else: # macOS, Linux
+                        try:
+                            total_size += os.stat(filepath).st_blocks * 512
+                        except (FileNotFoundError, PermissionError):
+                            pass # Ignore broken symlinks or permission errors
+            # Add directory size itself on non-Windows systems
+            if os.name != 'nt':
+                try:
+                    total_size += os.stat(dirpath).st_blocks * 512
+                except (FileNotFoundError, PermissionError):
+                    pass
+
+    return total_size / (1024 * 1024)
 
 
 def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results):
