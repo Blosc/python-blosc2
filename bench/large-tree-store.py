@@ -20,6 +20,12 @@ import time
 from memory_profiler import profile, memory_usage
 import numpy as np
 
+try:
+    import matplotlib.pyplot as plt
+    HAS_MATPLOTLIB = True
+except ImportError:
+    HAS_MATPLOTLIB = False
+
 import blosc2
 
 try:
@@ -270,6 +276,109 @@ def get_storage_size(path):
     return total_size / (1024 * 1024)
 
 
+def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results):
+    """Create a bar plot comparing the three backends across different metrics."""
+    if not HAS_MATPLOTLIB:
+        print("Matplotlib not available - skipping plot generation")
+        return
+
+    # Extract data
+    total_data_mb = np.sum(sizes_mb)
+
+    # Prepare data for plotting
+    backends = []
+    times = []
+    memory_increases = []
+    storage_sizes = []
+
+    # TreeStore data
+    backends.append('TreeStore')
+    times.append(tstore_results[0])
+    memory_increases.append(tstore_results[1][2])  # memory increase
+    storage_sizes.append(tstore_results[2])
+
+    # h5py data
+    if h5py_results:
+        backends.append('h5py')
+        times.append(h5py_results[0])
+        memory_increases.append(h5py_results[1][2])
+        storage_sizes.append(h5py_results[2])
+
+    # zarr data
+    if zarr_results:
+        backends.append('zarr')
+        times.append(zarr_results[0])
+        memory_increases.append(zarr_results[1][2])
+        storage_sizes.append(zarr_results[2])
+
+    # Create figure with subplots
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(15, 6))
+
+    # Colors for each backend
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c']  # Blue, Orange, Green
+    backend_colors = {backend: colors[i] for i, backend in enumerate(['TreeStore', 'h5py', 'zarr'])}
+    plot_colors = [backend_colors[backend] for backend in backends]
+
+    # Plot 1: Total Time
+    bars1 = ax1.bar(backends, times, color=plot_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
+    ax1.set_title('Total Time', fontsize=14, fontweight='bold')
+    ax1.set_ylabel('Time (seconds)', fontsize=12)
+    ax1.grid(axis='y', alpha=0.3)
+
+    # Add value labels on bars
+    for bar, time_val in zip(bars1, times):
+        height = bar.get_height()
+        ax1.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
+                f'{time_val:.2f}s', ha='center', va='bottom', fontweight='bold')
+
+    # Plot 2: Memory Increase
+    bars2 = ax2.bar(backends, memory_increases, color=plot_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
+    ax2.set_title('Memory Increase', fontsize=14, fontweight='bold')
+    ax2.set_ylabel('Memory (MB)', fontsize=12)
+    ax2.grid(axis='y', alpha=0.3)
+
+    # Add value labels on bars
+    for bar, mem_val in zip(bars2, memory_increases):
+        height = bar.get_height()
+        ax2.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
+                f'{mem_val:.1f}MB', ha='center', va='bottom', fontweight='bold')
+
+    # Plot 3: Storage Size
+    bars3 = ax3.bar(backends, storage_sizes, color=plot_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
+    ax3.set_title('Storage Size', fontsize=14, fontweight='bold')
+    ax3.set_ylabel('Size (MB)', fontsize=12)
+    ax3.grid(axis='y', alpha=0.3)
+
+    # Add value labels on bars
+    for bar, size_val in zip(bars3, storage_sizes):
+        height = bar.get_height()
+        ax3.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
+                f'{size_val:.1f}MB', ha='center', va='bottom', fontweight='bold')
+
+    # Adjust layout and add overall title
+    plt.tight_layout()
+    fig.suptitle(f'Performance Comparison: {N_ARRAYS} arrays, {total_data_mb:.1f} MB total data',
+                 fontsize=16, fontweight='bold', y=0.98)
+
+    # Add extra space at the top for the title
+    plt.subplots_adjust(top=0.85)
+
+    # Add compression ratio annotations
+    for i, (backend, storage_size) in enumerate(zip(backends, storage_sizes)):
+        compression_ratio = total_data_mb / storage_size
+        ax3.text(i, storage_size/2, f'{compression_ratio:.1f}x',
+                ha='center', va='center', fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+
+    # Save plot
+    plot_filename = 'benchmark_comparison.png'
+    plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
+    print(f"Plot saved as: {plot_filename}")
+
+    # Show plot
+    plt.show()
+
+
 def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results):
     """Print a comparison table of TreeStore vs h5py vs zarr results."""
     total_data_mb = np.sum(sizes_mb)
@@ -458,15 +567,6 @@ def main():
     # Create test arrays
     arrays = create_test_arrays(sizes_elements)
 
-    # Benchmark TreeStore
-    print("\n" + "="*60)
-    print("BENCHMARKING TreeStore")
-    print("="*60)
-    tstore_memory_stats = measure_memory_usage(store_arrays_in_treestore, arrays, OUTPUT_DIR_TSTORE)
-    tstore_time = store_arrays_in_treestore(arrays, OUTPUT_DIR_TSTORE)
-    tstore_storage_size = get_storage_size(OUTPUT_DIR_TSTORE)
-    tstore_results = (tstore_time, tstore_memory_stats, tstore_storage_size)
-
     # Benchmark h5py if available
     h5py_results = None
     if HAS_H5PY:
@@ -497,8 +597,20 @@ def main():
         print("zarr not available - skipping zarr benchmark")
         print("="*60)
 
+    # Benchmark TreeStore (run last)
+    print("\n" + "="*60)
+    print("BENCHMARKING TreeStore")
+    print("="*60)
+    tstore_memory_stats = measure_memory_usage(store_arrays_in_treestore, arrays, OUTPUT_DIR_TSTORE)
+    tstore_time = store_arrays_in_treestore(arrays, OUTPUT_DIR_TSTORE)
+    tstore_storage_size = get_storage_size(OUTPUT_DIR_TSTORE)
+    tstore_results = (tstore_time, tstore_memory_stats, tstore_storage_size)
+
     # Print comparison table
     print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
+
+    # Create comparison plot
+    create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results)
 
     print(f"\nBenchmark completed.")
     print(f"TreeStore results saved to: {OUTPUT_DIR_TSTORE}")
