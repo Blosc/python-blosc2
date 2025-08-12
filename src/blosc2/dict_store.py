@@ -94,7 +94,7 @@ class DictStore:
         cparams: blosc2.CParams | None = None,
         dparams: blosc2.CParams | None = None,
         storage: blosc2.Storage | None = None,
-        threshold: int | None = 2**23,
+        threshold: int | None = 2**20,
     ):
         """
         See :class:`DictStore` for full documentation of parameters.

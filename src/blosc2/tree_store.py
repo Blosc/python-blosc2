@@ -107,7 +107,6 @@ class TreeStore(DictStore):
         are stored as separate files.
         C2Array objects will always be stored in the embed store,
         regardless of their size.
-        Default is 2**23 (8 MiB).
 
     Examples
     --------
