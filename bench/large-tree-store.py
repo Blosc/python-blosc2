@@ -459,44 +459,23 @@ def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
     print()
 
     # Memory metrics
-    memories = [tstore_memory[0]]
-    print(f"{'Peak memory (MB)':<25} {tstore_memory[0]:<15.1f} ", end="")
-
-    if has_h5py:
-        print(f"{h5py_memory[0]:<15.1f} ", end="")
-        memories.append(h5py_memory[0])
-    else:
-        print(f"{'N/A':<15} ", end="")
-
-    if has_zarr:
-        print(f"{zarr_memory[0]:<15.1f} ", end="")
-        memories.append(zarr_memory[0])
-    else:
-        print(f"{'N/A':<15} ", end="")
-
-    best_memory_idx = np.argmin(memories)
-    print(f"{time_labels[best_memory_idx]:<12}")
-
-    # Memory increase
-    mem_increases = [tstore_memory[2]]
+    memories = [tstore_memory[2]]  # Use memory increase instead of peak
     print(f"{'Memory increase (MB)':<25} {tstore_memory[2]:<15.1f} ", end="")
 
     if has_h5py:
         print(f"{h5py_memory[2]:<15.1f} ", end="")
-        mem_increases.append(h5py_memory[2])
+        memories.append(h5py_memory[2])
     else:
         print(f"{'N/A':<15} ", end="")
 
     if has_zarr:
         print(f"{zarr_memory[2]:<15.1f} ", end="")
-        mem_increases.append(zarr_memory[2])
+        memories.append(zarr_memory[2])
     else:
         print(f"{'N/A':<15} ", end="")
 
-    best_mem_inc_idx = np.argmin(mem_increases)
-    print(f"{time_labels[best_mem_inc_idx]:<12}")
-
-    print()
+    best_memory_idx = np.argmin(memories)
+    print(f"{time_labels[best_memory_idx]:<12}")
 
     # Storage metrics
     storages = [tstore_storage]
@@ -549,7 +528,7 @@ def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
     print(f"  Most compact: {best_storage} ({storages[best_storage_idx]:.1f} MB)")
 
     best_memory = time_labels[best_memory_idx]
-    print(f"  Lowest memory: {best_memory} ({memories[best_memory_idx]:.1f} MB)")
+    print(f"  Lowest memory increase: {best_memory} ({memories[best_memory_idx]:.1f} MB)")
 
 
 def main():
