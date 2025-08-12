@@ -401,6 +401,67 @@ def measure_access_time(arrays, results_tuple, backend_name):
     return avg_access_time
 
 
+def measure_complete_read_time(arrays, results_tuple, backend_name):
+    """Measure time to read all arrays completely into memory as numpy arrays."""
+    if results_tuple is None:
+        return None
+
+    print(f"\nMeasuring complete read time for {backend_name}...")
+
+    # Determine the path/file to open
+    if backend_name == "TreeStore":
+        store_path = OUTPUT_DIR_TSTORE
+    elif backend_name == "h5py":
+        store_path = OUTPUT_FILE_H5PY
+    elif backend_name == "zarr":
+        store_path = OUTPUT_DIR_ZARR
+    else:
+        return None
+
+    try:
+        start_time = time.perf_counter()
+
+        if backend_name == "TreeStore":
+            with blosc2.TreeStore(store_path, mode="r") as store:
+                for i, _ in enumerate(arrays):
+                    group_id = i % NGROUPS_MAX
+                    key = f"/group_{group_id:02d}/array_{i:04d}"
+                    # Read complete array into memory
+                    _ = np.array(store[key][:])
+
+        elif backend_name == "h5py" and HAS_H5PY:
+            with h5py.File(store_path, "r") as f:
+                for i, _ in enumerate(arrays):
+                    group_id = i % NGROUPS_MAX
+                    group_name = f"group_{group_id:02d}"
+                    dataset_name = f"array_{i:04d}"
+                    # Read complete array into memory
+                    _ = np.array(f[group_name][dataset_name][:])
+
+        elif backend_name == "zarr" and HAS_ZARR:
+            if zarr.__version__ >= "3":
+                store = zarr.storage.LocalStore(store_path)
+            else:
+                store = zarr.DirectoryStore(store_path)
+            root = zarr.group(store=store)
+
+            for i, _ in enumerate(arrays):
+                group_id = i % NGROUPS_MAX
+                group_name = f"group_{group_id:02d}"
+                dataset_name = f"array_{i:04d}"
+                # Read complete array into memory
+                _ = np.array(root[group_name][dataset_name][:])
+
+        end_time = time.perf_counter()
+        total_read_time = end_time - start_time
+
+    except Exception as e:
+        print(f"Error measuring complete read time for {backend_name}: {e}")
+        return None
+
+    return total_read_time
+
+
 def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results):
     """Create a bar plot comparing the three backends across different metrics."""
     if not HAS_MATPLOTLIB:
@@ -413,14 +474,14 @@ def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results)
     # Prepare data for plotting
     backends = []
     times = []
-    memory_increases = []
+    read_times = []
     storage_sizes = []
     access_times = []
 
     # TreeStore data
     backends.append('TreeStore')
     times.append(tstore_results[0])
-    memory_increases.append(tstore_results[1][2])  # memory increase
+    read_times.append(tstore_results[4] if len(tstore_results) > 4 else 0)
     storage_sizes.append(tstore_results[2])
     access_times.append(tstore_results[3] if len(tstore_results) > 3 else 0)
 
@@ -428,7 +489,7 @@ def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results)
     if h5py_results:
         backends.append('h5py')
         times.append(h5py_results[0])
-        memory_increases.append(h5py_results[1][2])
+        read_times.append(h5py_results[4] if len(h5py_results) > 4 else 0)
         storage_sizes.append(h5py_results[2])
         access_times.append(h5py_results[3] if len(h5py_results) > 3 else 0)
 
@@ -436,21 +497,21 @@ def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results)
     if zarr_results:
         backends.append('zarr')
         times.append(zarr_results[0])
-        memory_increases.append(zarr_results[1][2])
+        read_times.append(zarr_results[4] if len(zarr_results) > 4 else 0)
         storage_sizes.append(zarr_results[2])
         access_times.append(zarr_results[3] if len(zarr_results) > 3 else 0)
 
-    # Create figure with subplots (now 4 plots)
-    fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(20, 6))
+    # Create figure with 2x2 subplots
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
 
     # Colors for each backend
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c']  # Blue, Orange, Green
     backend_colors = {backend: colors[i] for i, backend in enumerate(['TreeStore', 'h5py', 'zarr'])}
     plot_colors = [backend_colors[backend] for backend in backends]
 
-    # Plot 1: Total Time
+    # Plot 1: Total Write Time (top-left)
     bars1 = ax1.bar(backends, times, color=plot_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
-    ax1.set_title('Total Time', fontsize=14, fontweight='bold')
+    ax1.set_title('Total Write Time', fontsize=14, fontweight='bold')
     ax1.set_ylabel('Time (seconds)', fontsize=12)
     ax1.grid(axis='y', alpha=0.3)
 
@@ -460,41 +521,48 @@ def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results)
         ax1.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
                 f'{time_val:.2f}s', ha='center', va='bottom', fontweight='bold')
 
-    # Plot 2: Memory Increase
-    bars2 = ax2.bar(backends, memory_increases, color=plot_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
-    ax2.set_title('Memory Increase', fontsize=14, fontweight='bold')
-    ax2.set_ylabel('Memory (MB)', fontsize=12)
+    # Plot 2: Total Read Time (top-right)
+    bars2 = ax2.bar(backends, read_times, color=plot_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
+    ax2.set_title('Total Read Time', fontsize=14, fontweight='bold')
+    ax2.set_ylabel('Time (seconds)', fontsize=12)
     ax2.grid(axis='y', alpha=0.3)
 
     # Add value labels on bars
-    for bar, mem_val in zip(bars2, memory_increases):
+    for bar, read_val in zip(bars2, read_times):
         height = bar.get_height()
         ax2.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
-                f'{mem_val:.1f}MB', ha='center', va='bottom', fontweight='bold')
+                f'{read_val:.2f}s', ha='center', va='bottom', fontweight='bold')
 
-    # Plot 3: Storage Size
-    bars3 = ax3.bar(backends, storage_sizes, color=plot_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
-    ax3.set_title('Storage Size', fontsize=14, fontweight='bold')
-    ax3.set_ylabel('Size (MB)', fontsize=12)
+    # Plot 3: Access Time (bottom-left)
+    bars3 = ax3.bar(backends, access_times, color=plot_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
+    ax3.set_title('Average Access Time', fontsize=14, fontweight='bold')
+    ax3.set_ylabel('Time (milliseconds)', fontsize=12)
     ax3.grid(axis='y', alpha=0.3)
 
     # Add value labels on bars
-    for bar, size_val in zip(bars3, storage_sizes):
+    for bar, access_val in zip(bars3, access_times):
         height = bar.get_height()
         ax3.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
-                f'{size_val:.1f}MB', ha='center', va='bottom', fontweight='bold')
+                f'{access_val:.3f}ms', ha='center', va='bottom', fontweight='bold')
 
-    # Plot 4: Access Time
-    bars4 = ax4.bar(backends, access_times, color=plot_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
-    ax4.set_title('Average Access Time', fontsize=14, fontweight='bold')
-    ax4.set_ylabel('Time (milliseconds)', fontsize=12)
+    # Plot 4: Storage Size (bottom-right)
+    bars4 = ax4.bar(backends, storage_sizes, color=plot_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
+    ax4.set_title('Storage Size', fontsize=14, fontweight='bold')
+    ax4.set_ylabel('Size (MB)', fontsize=12)
     ax4.grid(axis='y', alpha=0.3)
 
     # Add value labels on bars
-    for bar, access_val in zip(bars4, access_times):
+    for bar, size_val in zip(bars4, storage_sizes):
         height = bar.get_height()
         ax4.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
-                f'{access_val:.3f}ms', ha='center', va='bottom', fontweight='bold')
+                f'{size_val:.1f}MB', ha='center', va='bottom', fontweight='bold')
+
+    # Add compression ratio annotations
+    for i, (backend, storage_size) in enumerate(zip(backends, storage_sizes)):
+        compression_ratio = total_data_mb / storage_size
+        ax4.text(i, storage_size/2, f'{compression_ratio:.1f}x',
+                ha='center', va='center', fontweight='bold',
+                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
 
     # Adjust layout and add overall title
     plt.tight_layout()
@@ -502,14 +570,7 @@ def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results)
                  fontsize=16, fontweight='bold', y=0.98)
 
     # Add extra space at the top for the title
-    plt.subplots_adjust(top=0.85)
-
-    # Add compression ratio annotations
-    for i, (backend, storage_size) in enumerate(zip(backends, storage_sizes)):
-        compression_ratio = total_data_mb / storage_size
-        ax3.text(i, storage_size/2, f'{compression_ratio:.1f}x',
-                ha='center', va='center', fontweight='bold',
-                bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+    plt.subplots_adjust(top=0.90)
 
     # Save plot
     plot_filename = 'benchmark_comparison.png'
@@ -524,9 +585,9 @@ def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
     """Print a comparison table of TreeStore vs h5py vs zarr results."""
     total_data_mb = np.sum(sizes_mb)
 
-    print("\n" + "="*105)
+    print("\n" + "="*115)
     print("PERFORMANCE COMPARISON: TreeStore vs h5py vs zarr")
-    print("="*105)
+    print("="*115)
 
     # Configuration info
     print(f"Configuration:")
@@ -536,10 +597,12 @@ def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
     # Extract results
     tstore_time, tstore_memory, tstore_storage = tstore_results[:3]
     tstore_access = tstore_results[3] if len(tstore_results) > 3 else None
+    tstore_read = tstore_results[4] if len(tstore_results) > 4 else None
 
     if h5py_results:
         h5py_time, h5py_memory, h5py_storage = h5py_results[:3]
         h5py_access = h5py_results[3] if len(h5py_results) > 3 else None
+        h5py_read = h5py_results[4] if len(h5py_results) > 4 else None
         has_h5py = True
     else:
         has_h5py = False
@@ -547,18 +610,19 @@ def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
     if zarr_results:
         zarr_time, zarr_memory, zarr_storage = zarr_results[:3]
         zarr_access = zarr_results[3] if len(zarr_results) > 3 else None
+        zarr_read = zarr_results[4] if len(zarr_results) > 4 else None
         has_zarr = True
     else:
         has_zarr = False
 
     # Table header
     print(f"{'Metric':<30} {'TreeStore':<15} {'h5py':<15} {'zarr':<15} {'Best':<12}")
-    print("-" * 100)
+    print("-" * 110)
 
     # Time metrics
     times = [tstore_time]
     time_labels = ['TreeStore']
-    print(f"{'Total time (s)':<30} {tstore_time:<15.2f} ", end="")
+    print(f"{'Write time (s)':<30} {tstore_time:<15.2f} ", end="")
 
     if has_h5py:
         print(f"{h5py_time:<15.2f} ", end="")
@@ -577,9 +641,32 @@ def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
     best_time_idx = np.argmin(times)
     print(f"{time_labels[best_time_idx]:<12}")
 
+    # Complete read time
+    if tstore_read is not None:
+        read_times = [tstore_read]
+        read_labels = ['TreeStore']
+        print(f"{'Total read time (s)':<30} {tstore_read:<15.2f} ", end="")
+
+        if has_h5py and h5py_read is not None:
+            print(f"{h5py_read:<15.2f} ", end="")
+            read_times.append(h5py_read)
+            read_labels.append('h5py')
+        else:
+            print(f"{'N/A':<15} ", end="")
+
+        if has_zarr and zarr_read is not None:
+            print(f"{zarr_read:<15.2f} ", end="")
+            read_times.append(zarr_read)
+            read_labels.append('zarr')
+        else:
+            print(f"{'N/A':<15} ", end="")
+
+        best_read_idx = np.argmin(read_times)
+        print(f"{read_labels[best_read_idx]:<12}")
+
     # Throughput
     throughputs = [total_data_mb/tstore_time]
-    print(f"{'Throughput (MB/s)':<30} {total_data_mb/tstore_time:<15.1f} ", end="")
+    print(f"{'Write throughput (MB/s)':<30} {total_data_mb/tstore_time:<15.1f} ", end="")
 
     if has_h5py:
         h5py_throughput = total_data_mb / h5py_time
@@ -623,8 +710,8 @@ def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
 
     print()
 
-    # Memory metrics
-    memories = [tstore_memory[2]]  # Use memory increase instead of peak
+    # Memory metrics (kept in table)
+    memories = [tstore_memory[2]]
     print(f"{'Memory increase (MB)':<30} {tstore_memory[2]:<15.1f} ", end="")
 
     if has_h5py:
@@ -689,6 +776,10 @@ def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
     best_overall = time_labels[best_time_idx]
     print(f"  Fastest write: {best_overall} ({times[best_time_idx]:.2f}s)")
 
+    if tstore_read is not None:
+        best_read = read_labels[best_read_idx]
+        print(f"  Fastest total read: {best_read} ({read_times[best_read_idx]:.2f}s)")
+
     best_storage = time_labels[best_storage_idx]
     print(f"  Most compact: {best_storage} ({storages[best_storage_idx]:.1f} MB)")
 
@@ -727,7 +818,8 @@ def main():
         h5py_time = store_arrays_in_h5py(arrays, OUTPUT_FILE_H5PY)
         h5py_storage_size = get_storage_size(OUTPUT_FILE_H5PY)
         h5py_access_time = measure_access_time(arrays, (h5py_time, h5py_memory_stats, h5py_storage_size), "h5py")
-        h5py_results = (h5py_time, h5py_memory_stats, h5py_storage_size, h5py_access_time)
+        h5py_read_time = measure_complete_read_time(arrays, (h5py_time, h5py_memory_stats, h5py_storage_size), "h5py")
+        h5py_results = (h5py_time, h5py_memory_stats, h5py_storage_size, h5py_access_time, h5py_read_time)
     else:
         print("\n" + "="*60)
         print("h5py not available - skipping h5py benchmark")
@@ -743,7 +835,8 @@ def main():
         zarr_time = store_arrays_in_zarr(arrays, OUTPUT_DIR_ZARR)
         zarr_storage_size = get_storage_size(OUTPUT_DIR_ZARR)
         zarr_access_time = measure_access_time(arrays, (zarr_time, zarr_memory_stats, zarr_storage_size), "zarr")
-        zarr_results = (zarr_time, zarr_memory_stats, zarr_storage_size, zarr_access_time)
+        zarr_read_time = measure_complete_read_time(arrays, (zarr_time, zarr_memory_stats, zarr_storage_size), "zarr")
+        zarr_results = (zarr_time, zarr_memory_stats, zarr_storage_size, zarr_access_time, zarr_read_time)
     else:
         print("\n" + "="*60)
         print("zarr not available - skipping zarr benchmark")
@@ -757,7 +850,8 @@ def main():
     tstore_time = store_arrays_in_treestore(arrays, OUTPUT_DIR_TSTORE)
     tstore_storage_size = get_storage_size(OUTPUT_DIR_TSTORE)
     tstore_access_time = measure_access_time(arrays, (tstore_time, tstore_memory_stats, tstore_storage_size), "TreeStore")
-    tstore_results = (tstore_time, tstore_memory_stats, tstore_storage_size, tstore_access_time)
+    tstore_read_time = measure_complete_read_time(arrays, (tstore_time, tstore_memory_stats, tstore_storage_size), "TreeStore")
+    tstore_results = (tstore_time, tstore_memory_stats, tstore_storage_size, tstore_access_time, tstore_read_time)
 
     # Print comparison table
     print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
