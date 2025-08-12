@@ -63,11 +63,6 @@ class DictStore:
         C2Array objects will always be stored in the embedded store,
         regardless of their size.
 
-    Notes
-    -----
-    - External persistence uses the following file extensions:
-      .b2nd for NDArray and .b2f for SChunk.
-
     Examples
     --------
     >>> dstore = DictStore(localpath="my_dstore.b2z", mode="w")
@@ -87,8 +82,10 @@ class DictStore:
 
     Notes
     -----
-    The DictStore is still experimental and subject to change.
-    Please report any issues you may find.
+    - The DictStore is still experimental and subject to change.
+      Please report any issues you may find.
+    - External persistence uses the following file extensions:
+      .b2nd for NDArray and .b2f for SChunk.
     """
 
     def __init__(
