@@ -12,7 +12,7 @@ Benchmark for TreeStore vs h5py vs zarr with large arrays.
 This benchmark creates N numpy arrays with sizes following a normal distribution
 and measures the time and memory consumption for storing them in TreeStore, h5py, and zarr.
 
-Note: This requires zarr<3 if you want to use zarr for comparison.
+Note: This adapts to zarr v3+ API if available.
 """
 
 import os
@@ -98,7 +98,10 @@ def store_arrays_in_treestore(arrays, output_dir):
 
     start_time = time.time()
 
-    # with blosc2.TreeStore(output_dir, mode="w", threshold=2**13) as tstore:
+    # Setting cparams here is not good because storages use different defaults
+    # Better leave without specifying compression, although ZSTD level 5 should be used internally
+    # cparams = blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5, filters=[blosc2.Filter.SHUFFLE])
+    # with blosc2.TreeStore(output_dir, mode="w", cparams=cparams) as tstore:
     with blosc2.TreeStore(output_dir, mode="w") as tstore:
         for i, arr in enumerate(arrays):
             # Distribute arrays evenly across NGROUPS_MAX subdirectories
@@ -187,8 +190,12 @@ def store_arrays_in_zarr(arrays, output_dir):
 
     start_time = time.time()
 
-    # Create zarr store with blosc2 compression
-    store = zarr.DirectoryStore(output_dir)
+    # Create zarr store
+    if zarr.__version__ >= "3":
+        # (zarr v3+ API)
+        store = zarr.storage.LocalStore(output_dir)
+    else:
+        store = zarr.DirectoryStore(output_dir)
     root = zarr.group(store=store)
 
     for i, arr in enumerate(arrays):
@@ -204,12 +211,19 @@ def store_arrays_in_zarr(arrays, output_dir):
             grp = root[group_name]
 
         # Store array with blosc2 compression
-        grp.create_dataset(
-            dataset_name,
-            data=arr,
-            compressor=zarr.Blosc(cname='zstd', clevel=5, shuffle=zarr.Blosc.SHUFFLE),
-            chunks=True
-        )
+        if zarr.__version__ >= "3":
+            grp.create_array(
+                name=dataset_name,
+                data=arr,
+                compressors=zarr.codecs.BloscCodec(
+                    cname="zstd", clevel=5, shuffle=zarr.codecs.BloscShuffle.shuffle),
+            )
+        else:
+            grp.create_dataset(
+                name=dataset_name,
+                data=arr,
+                compressor=zarr.Blosc(cname='zstd', clevel=5, shuffle=zarr.Blosc.SHUFFLE),
+            )
 
         # if (i + 1) % 10 == 0:
         #     elapsed = time.time() - start_time
