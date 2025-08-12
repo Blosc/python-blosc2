@@ -7,10 +7,10 @@
 #######################################################################
 
 """
-Benchmark for TreeStore vs h5py with large arrays.
+Benchmark for TreeStore vs h5py vs zarr with large arrays.
 
 This benchmark creates N numpy arrays with sizes following a normal distribution
-and measures the time and memory consumption for storing them in both TreeStore and h5py.
+and measures the time and memory consumption for storing them in TreeStore, h5py, and zarr.
 """
 
 import os
@@ -29,13 +29,20 @@ try:
 except ImportError:
     HAS_H5PY = False
 
+try:
+    import zarr
+    HAS_ZARR = True
+except ImportError:
+    HAS_ZARR = False
+
 # Configuration
 N_ARRAYS = 100  # Number of arrays to store
 NGROUPS_MAX = 10
-PEAK_SIZE_MB = 1  # Peak size in MB for the normal distribution
-STDDEV_MB = .2  # Standard deviation in MB
-OUTPUT_DIR_TSTORE = "large-tree-store.b2z"
+PEAK_SIZE_MB = 10  # Peak size in MB for the normal distribution
+STDDEV_MB = 2  # Standard deviation in MB
+OUTPUT_DIR_TSTORE = "large-tree-store.b2d"
 OUTPUT_FILE_H5PY = "large-h5py-store.h5"
+OUTPUT_DIR_ZARR = "large-zarr-store.zarr"
 MIN_SIZE_MB = 0.1  # Minimum array size in MB
 MAX_SIZE_MB = 32  # Maximum array size in MB
 
@@ -64,8 +71,8 @@ def create_test_arrays(sizes_elements):
         arr = np.linspace(0, i, size, dtype=np.float64)
         arrays.append(arr)
 
-        if (i + 1) % 10 == 0:
-            print(f"  Created {i + 1}/{len(sizes_elements)} arrays")
+        # if (i + 1) % 10 == 0:
+        #     print(f"  Created {i + 1}/{len(sizes_elements)} arrays")
 
     return arrays
 
@@ -91,9 +98,9 @@ def store_arrays_in_treestore(arrays, output_dir):
             key = f"/group_{group_id:02d}/array_{i:04d}"
             tstore[key] = arr
 
-            if (i + 1) % 10 == 0:
-                elapsed = time.time() - start_time
-                print(f"  Stored {i + 1}/{len(arrays)} arrays ({elapsed:.2f}s)")
+            # if (i + 1) % 10 == 0:
+            #     elapsed = time.time() - start_time
+            #     print(f"  Stored {i + 1}/{len(arrays)} arrays ({elapsed:.2f}s)")
 
         # Add some metadata
         tstore.vlmeta["n_arrays"] = len(arrays)
@@ -142,15 +149,69 @@ def store_arrays_in_h5py(arrays, output_file):
                                                              filters=hdf5plugin.Blosc2.SHUFFLE)
                                )
 
-            if (i + 1) % 10 == 0:
-                elapsed = time.time() - start_time
-                print(f"  Stored {i + 1}/{len(arrays)} arrays ({elapsed:.2f}s)")
+            # if (i + 1) % 10 == 0:
+            #     elapsed = time.time() - start_time
+            #     print(f"  Stored {i + 1}/{len(arrays)} arrays ({elapsed:.2f}s)")
 
         # Add some metadata
         f.attrs["n_arrays"] = len(arrays)
         f.attrs["peak_size_mb"] = PEAK_SIZE_MB
         f.attrs["benchmark_timestamp"] = time.time()
         f.attrs["n_groups"] = NGROUPS_MAX
+
+    end_time = time.time()
+    total_time = end_time - start_time
+
+    return total_time
+
+
+#@profile
+def store_arrays_in_zarr(arrays, output_dir):
+    """Store arrays in zarr and measure performance."""
+    if not HAS_ZARR:
+        return None
+
+    print(f"\nStoring {len(arrays)} arrays in zarr at {output_dir}...")
+
+    # Clean up existing directory
+    if os.path.exists(output_dir):
+        shutil.rmtree(output_dir)
+
+    start_time = time.time()
+
+    # Create zarr store with blosc2 compression
+    store = zarr.DirectoryStore(output_dir)
+    root = zarr.group(store=store)
+
+    for i, arr in enumerate(arrays):
+        # Distribute arrays evenly across NGROUPS_MAX subdirectories
+        group_id = i % NGROUPS_MAX
+        group_name = f"group_{group_id:02d}"
+        dataset_name = f"array_{i:04d}"
+
+        # Create group if it doesn't exist
+        if group_name not in root:
+            grp = root.create_group(group_name)
+        else:
+            grp = root[group_name]
+
+        # Store array with blosc2 compression
+        grp.create_dataset(
+            dataset_name,
+            data=arr,
+            compressor=zarr.Blosc(cname='zstd', clevel=5, shuffle=zarr.Blosc.SHUFFLE),
+            chunks=True
+        )
+
+        # if (i + 1) % 10 == 0:
+        #     elapsed = time.time() - start_time
+        #     print(f"  Stored {i + 1}/{len(arrays)} arrays ({elapsed:.2f}s)")
+
+    # Add some metadata
+    root.attrs["n_arrays"] = len(arrays)
+    root.attrs["peak_size_mb"] = PEAK_SIZE_MB
+    root.attrs["benchmark_timestamp"] = time.time()
+    root.attrs["n_groups"] = NGROUPS_MAX
 
     end_time = time.time()
     total_time = end_time - start_time
@@ -189,13 +250,13 @@ def get_storage_size(path):
     return 0
 
 
-def print_comparison_table(sizes_mb, tstore_results, h5py_results):
-    """Print a comparison table of TreeStore vs h5py results."""
+def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results):
+    """Print a comparison table of TreeStore vs h5py vs zarr results."""
     total_data_mb = np.sum(sizes_mb)
 
-    print("\n" + "="*80)
-    print("PERFORMANCE COMPARISON: TreeStore vs h5py")
-    print("="*80)
+    print("\n" + "="*90)
+    print("PERFORMANCE COMPARISON: TreeStore vs h5py vs zarr")
+    print("="*90)
 
     # Configuration info
     print(f"Configuration:")
@@ -204,89 +265,166 @@ def print_comparison_table(sizes_mb, tstore_results, h5py_results):
 
     # Extract results
     tstore_time, tstore_memory, tstore_storage = tstore_results
+
     if h5py_results:
         h5py_time, h5py_memory, h5py_storage = h5py_results
         has_h5py = True
     else:
         has_h5py = False
 
+    if zarr_results:
+        zarr_time, zarr_memory, zarr_storage = zarr_results
+        has_zarr = True
+    else:
+        has_zarr = False
+
     # Table header
-    print(f"{'Metric':<25} {'TreeStore':<15} {'h5py':<15} {'Ratio (T/H)':<12}")
-    print("-" * 70)
+    print(f"{'Metric':<25} {'TreeStore':<15} {'h5py':<15} {'zarr':<15} {'Best':<12}")
+    print("-" * 85)
 
     # Time metrics
+    times = [tstore_time]
+    time_labels = ['TreeStore']
     print(f"{'Total time (s)':<25} {tstore_time:<15.2f} ", end="")
-    if has_h5py:
-        ratio = tstore_time / h5py_time if h5py_time > 0 else float('inf')
-        print(f"{h5py_time:<15.2f} {ratio:<12.2f}")
-    else:
-        print(f"{'N/A':<15} {'N/A':<12}")
 
+    if has_h5py:
+        print(f"{h5py_time:<15.2f} ", end="")
+        times.append(h5py_time)
+        time_labels.append('h5py')
+    else:
+        print(f"{'N/A':<15} ", end="")
+
+    if has_zarr:
+        print(f"{zarr_time:<15.2f} ", end="")
+        times.append(zarr_time)
+        time_labels.append('zarr')
+    else:
+        print(f"{'N/A':<15} ", end="")
+
+    best_time_idx = np.argmin(times)
+    print(f"{time_labels[best_time_idx]:<12}")
+
+    # Throughput
+    throughputs = [total_data_mb/tstore_time]
     print(f"{'Throughput (MB/s)':<25} {total_data_mb/tstore_time:<15.1f} ", end="")
+
     if has_h5py:
         h5py_throughput = total_data_mb / h5py_time
-        ratio = (total_data_mb/tstore_time) / h5py_throughput if h5py_throughput > 0 else float('inf')
-        print(f"{h5py_throughput:<15.1f} {ratio:<12.2f}")
+        print(f"{h5py_throughput:<15.1f} ", end="")
+        throughputs.append(h5py_throughput)
     else:
-        print(f"{'N/A':<15} {'N/A':<12}")
+        print(f"{'N/A':<15} ", end="")
+
+    if has_zarr:
+        zarr_throughput = total_data_mb / zarr_time
+        print(f"{zarr_throughput:<15.1f} ", end="")
+        throughputs.append(zarr_throughput)
+    else:
+        print(f"{'N/A':<15} ", end="")
+
+    best_throughput_idx = np.argmax(throughputs)
+    print(f"{time_labels[best_throughput_idx]:<12}")
 
     print()
 
     # Memory metrics
+    memories = [tstore_memory[0]]
     print(f"{'Peak memory (MB)':<25} {tstore_memory[0]:<15.1f} ", end="")
-    if has_h5py:
-        ratio = tstore_memory[0] / h5py_memory[0] if h5py_memory[0] > 0 else float('inf')
-        print(f"{h5py_memory[0]:<15.1f} {ratio:<12.2f}")
-    else:
-        print(f"{'N/A':<15} {'N/A':<12}")
 
-    print(f"{'Memory increase (MB)':<25} {tstore_memory[2]:<15.1f} ", end="")
     if has_h5py:
-        ratio = tstore_memory[2] / h5py_memory[2] if h5py_memory[2] > 0 else float('inf')
-        print(f"{h5py_memory[2]:<15.1f} {ratio:<12.2f}")
+        print(f"{h5py_memory[0]:<15.1f} ", end="")
+        memories.append(h5py_memory[0])
     else:
-        print(f"{'N/A':<15} {'N/A':<12}")
+        print(f"{'N/A':<15} ", end="")
+
+    if has_zarr:
+        print(f"{zarr_memory[0]:<15.1f} ", end="")
+        memories.append(zarr_memory[0])
+    else:
+        print(f"{'N/A':<15} ", end="")
+
+    best_memory_idx = np.argmin(memories)
+    print(f"{time_labels[best_memory_idx]:<12}")
+
+    # Memory increase
+    mem_increases = [tstore_memory[2]]
+    print(f"{'Memory increase (MB)':<25} {tstore_memory[2]:<15.1f} ", end="")
+
+    if has_h5py:
+        print(f"{h5py_memory[2]:<15.1f} ", end="")
+        mem_increases.append(h5py_memory[2])
+    else:
+        print(f"{'N/A':<15} ", end="")
+
+    if has_zarr:
+        print(f"{zarr_memory[2]:<15.1f} ", end="")
+        mem_increases.append(zarr_memory[2])
+    else:
+        print(f"{'N/A':<15} ", end="")
+
+    best_mem_inc_idx = np.argmin(mem_increases)
+    print(f"{time_labels[best_mem_inc_idx]:<12}")
 
     print()
 
     # Storage metrics
+    storages = [tstore_storage]
     print(f"{'Storage size (MB)':<25} {tstore_storage:<15.1f} ", end="")
-    if has_h5py:
-        ratio = tstore_storage / h5py_storage if h5py_storage > 0 else float('inf')
-        print(f"{h5py_storage:<15.1f} {ratio:<12.2f}")
-    else:
-        print(f"{'N/A':<15} {'N/A':<12}")
 
+    if has_h5py:
+        print(f"{h5py_storage:<15.1f} ", end="")
+        storages.append(h5py_storage)
+    else:
+        print(f"{'N/A':<15} ", end="")
+
+    if has_zarr:
+        print(f"{zarr_storage:<15.1f} ", end="")
+        storages.append(zarr_storage)
+    else:
+        print(f"{'N/A':<15} ", end="")
+
+    best_storage_idx = np.argmin(storages)
+    print(f"{time_labels[best_storage_idx]:<12}")
+
+    # Compression ratio
+    compressions = [total_data_mb/tstore_storage]
     print(f"{'Compression ratio':<25} {total_data_mb/tstore_storage:<15.2f} ", end="")
+
     if has_h5py:
         h5py_compression = total_data_mb / h5py_storage
-        ratio = (total_data_mb/tstore_storage) / h5py_compression if h5py_compression > 0 else float('inf')
-        print(f"{h5py_compression:<15.2f} {ratio:<12.2f}")
+        print(f"{h5py_compression:<15.2f} ", end="")
+        compressions.append(h5py_compression)
     else:
-        print(f"{'N/A':<15} {'N/A':<12}")
+        print(f"{'N/A':<15} ", end="")
+
+    if has_zarr:
+        zarr_compression = total_data_mb / zarr_storage
+        print(f"{zarr_compression:<15.2f} ", end="")
+        compressions.append(zarr_compression)
+    else:
+        print(f"{'N/A':<15} ", end="")
+
+    best_compression_idx = np.argmax(compressions)
+    print(f"{time_labels[best_compression_idx]:<12}")
 
     print()
 
     # Summary
     print("Summary:")
-    if has_h5py:
-        if tstore_time < h5py_time:
-            print(f"  TreeStore is {h5py_time/tstore_time:.1f}x faster")
-        else:
-            print(f"  h5py is {tstore_time/h5py_time:.1f}x faster")
+    best_overall = time_labels[best_time_idx]
+    print(f"  Fastest: {best_overall} ({times[best_time_idx]:.2f}s)")
 
-        if tstore_storage < h5py_storage:
-            print(f"  TreeStore uses {h5py_storage/tstore_storage:.1f}x less storage")
-        else:
-            print(f"  h5py uses {tstore_storage/h5py_storage:.1f}x less storage")
-    else:
-        print("  h5py not available for comparison")
+    best_storage = time_labels[best_storage_idx]
+    print(f"  Most compact: {best_storage} ({storages[best_storage_idx]:.1f} MB)")
+
+    best_memory = time_labels[best_memory_idx]
+    print(f"  Lowest memory: {best_memory} ({memories[best_memory_idx]:.1f} MB)")
 
 
 def main():
     """Run the benchmark."""
-    print("TreeStore vs h5py Large Array Benchmark")
-    print("="*60)
+    print("TreeStore vs h5py vs zarr Large Array Benchmark")
+    print("="*70)
 
     # Set random seed for reproducibility
     np.random.seed(42)
@@ -324,13 +462,30 @@ def main():
         print("h5py not available - skipping h5py benchmark")
         print("="*60)
 
+    # Benchmark zarr if available
+    zarr_results = None
+    if HAS_ZARR:
+        print("\n" + "="*60)
+        print("BENCHMARKING zarr")
+        print("="*60)
+        zarr_memory_stats = measure_memory_usage(store_arrays_in_zarr, arrays, OUTPUT_DIR_ZARR)
+        zarr_time = store_arrays_in_zarr(arrays, OUTPUT_DIR_ZARR)
+        zarr_storage_size = get_storage_size(OUTPUT_DIR_ZARR)
+        zarr_results = (zarr_time, zarr_memory_stats, zarr_storage_size)
+    else:
+        print("\n" + "="*60)
+        print("zarr not available - skipping zarr benchmark")
+        print("="*60)
+
     # Print comparison table
-    print_comparison_table(sizes_mb, tstore_results, h5py_results)
+    print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
 
     print(f"\nBenchmark completed.")
     print(f"TreeStore results saved to: {OUTPUT_DIR_TSTORE}")
     if HAS_H5PY:
         print(f"h5py results saved to: {OUTPUT_FILE_H5PY}")
+    if HAS_ZARR:
+        print(f"zarr results saved to: {OUTPUT_DIR_ZARR}")
 
 
 if __name__ == "__main__":
