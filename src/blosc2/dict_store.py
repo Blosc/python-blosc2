@@ -61,7 +61,7 @@ class DictStore:
         in the embedded store. If None, in-memory arrays are stored in the
         embedded store and on-disk arrays are stored as separate files.
         C2Array objects will always be stored in the embedded store,
-        regardless of their size. Default is 2**23 (8 MiB).
+        regardless of their size.
 
     Notes
     -----
@@ -94,7 +94,7 @@ class DictStore:
         cparams: blosc2.CParams | None = None,
         dparams: blosc2.CParams | None = None,
         storage: blosc2.Storage | None = None,
-        threshold: int | None = 2**23,  # Default threshold of 8 MiB (2**23 bytes) for embed store
+        threshold: int | None = 2**23,
     ):
         """
         See :class:`DictStore` for full documentation of parameters.
@@ -220,7 +220,7 @@ class DictStore:
         if isinstance(value, C2Array):
             self._estore[key] = value
             return
-        exceeds_threshold = self.threshold is not None and getattr(value, "cbytes", 0) >= self.threshold
+        exceeds_threshold = self.threshold is not None and value.cbytes >= self.threshold
         # Consider both NDArray and SChunk external files (have urlpath)
         external_file = isinstance(value, (blosc2.NDArray, SChunk)) and getattr(value, "urlpath", None)
         if exceeds_threshold or (external_file and self.threshold is None):
@@ -405,6 +405,13 @@ class DictStore:
 
     def close(self) -> None:
         """Persist changes and cleanup."""
+        # Repack estore
+        # TODO: for some reason this is not working
+        # if self.mode != "r":
+        #     cframe = self._estore.to_cframe()
+        #     with open(self._estore.urlpath, "wb") as f:
+        #         f.write(cframe)
+
         if self.is_zip_store and self.mode in ("w", "a"):
             # Serialize to b2z file
             self.to_b2z(overwrite=True)

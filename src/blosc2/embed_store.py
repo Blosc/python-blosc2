@@ -68,7 +68,7 @@ class EmbedStore:
         cparams: blosc2.CParams | None = None,
         dparams: blosc2.CParams | None = None,
         storage: blosc2.Storage | None = None,
-        chunksize: int | None = 1024 * 1024,
+        chunksize: int | None = 2**16,
         _from_schunk: SChunk | None = None,
     ):
         """Initialize EmbedStore."""

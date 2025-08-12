@@ -31,7 +31,7 @@ except ImportError:
 # Configuration
 N_ARRAYS = 100  # Number of arrays to store
 NGROUPS_MAX = 10
-PEAK_SIZE_MB = 10  # Peak size in MB for the normal distribution
+PEAK_SIZE_MB = 1  # Peak size in MB for the normal distribution
 STDDEV_MB = 2  # Standard deviation in MB
 OUTPUT_DIR_TSTORE = "large-tree-store.b2z"
 OUTPUT_FILE_H5PY = "large-h5py-store.h5"
@@ -69,7 +69,7 @@ def create_test_arrays(sizes_elements):
     return arrays
 
 
-@profile
+#@profile
 def store_arrays_in_treestore(arrays, output_dir):
     """Store arrays in TreeStore and measure performance."""
     print(f"\nStoring {len(arrays)} arrays in TreeStore at {output_dir}...")
@@ -82,7 +82,8 @@ def store_arrays_in_treestore(arrays, output_dir):
 
     start_time = time.time()
 
-    with blosc2.TreeStore(output_dir, mode="w", threshold=2**13) as tstore:
+    # with blosc2.TreeStore(output_dir, mode="w", threshold=2**13) as tstore:
+    with blosc2.TreeStore(output_dir, mode="w") as tstore:
         for i, arr in enumerate(arrays):
             # Distribute arrays evenly across NGROUPS_MAX subdirectories
             group_id = i % NGROUPS_MAX
@@ -105,7 +106,7 @@ def store_arrays_in_treestore(arrays, output_dir):
     return total_time
 
 
-@profile
+#@profile
 def store_arrays_in_h5py(arrays, output_file):
     """Store arrays in h5py and measure performance."""
     if not HAS_H5PY:
