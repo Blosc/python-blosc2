@@ -68,13 +68,12 @@ def test_basic_dstore(populated_dict_store):
         assert "/node2" in keys
         assert "/dir1/node3" in keys
         # for key, value in dstore_read.items():
-        for _, value in dstore_read.items():
+        for key, value in dstore_read.items():
             assert hasattr(value, "shape")
             assert hasattr(value, "dtype")
-            # TODO
-            # if key == "/dir1/node3":
-            #     node3 = dstore["/dir1/node3"]
-            #     assert node3.vlmeta["description"] == "This is vlmeta for /dir1/node3"
+            if key == "/dir1/node3":
+                node3 = dstore_read["/dir1/node3"]
+                assert node3.vlmeta["description"] == "This is vlmeta for /dir1/node3"
 
 
 def test_external_value_set(populated_dict_store):
