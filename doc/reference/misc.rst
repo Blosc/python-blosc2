@@ -143,4 +143,7 @@ This page documents the miscellaneous members of the ``blosc2`` module that do n
         VERSION_DATE,
         VERSION_STRING,
         __version__,
-        lazywhere
+        lazywhere,
+        TreeStore,
+        DictStore,
+        EmbedStore
