@@ -12,6 +12,9 @@ Main Classes
     NDField
     LazyArray
     C2Array
+    DictStore
+    TreeStore
+    EmbedStore
     Proxy
     ProxySource
     ProxyNDSource
@@ -23,6 +26,9 @@ Main Classes
     schunk
     ndarray
     ndfield
+    dict_store
+    tree_store
+    embed_store
     lazyarray
     c2array
     proxy

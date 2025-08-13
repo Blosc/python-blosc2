@@ -1,17 +1,19 @@
-Announcing Python-Blosc2 3.6.1
+Announcing Python-Blosc2 3.7.0
 ==============================
 
 In this release:
 
-✅ Blosc2 now suppports fancy indexing (and orthogonal indexing)
-✅ Added fast path for 1D fancy indexing
-✅ More complex slicing is now supported for lazy expressions
-✅ Blosc2 indexing more consistent with NumPy
-✅ Comprehensive ``squeeze`` function which squeezes only specified dimensions
-✅ Correctly point to most recent C-blosc2 version 2.19.1
+✅ Overhaul of documentation (API reference and Tutorials)
+✅ Improvements to lazy expression indexing and in particular much more efficient
+memory usage when applying non-unit steps
+✅ Extended functionality of ``expand_dims`` to match that of NumPy
+✅ 3(!) new data storage classes (``EmbedStore``, ``DictStore`` and ``TreeStore``)
+which allow for the efficient storage of heterogeneous array data
 
-We have blogged about the new fancy indexing support:
-https://www.blosc.org/posts/blosc2-fancy-indexing/
+See [here](https://github.com/Blosc/python-blosc2/pull/451#issuecomment-3178828765)
+for plots for the new data storage classes. And
+[here](https://github.com/Blosc/python-blosc2/pull/446#issuecomment-3167060686) for the improved performance
+of lazy expression slicing.
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 

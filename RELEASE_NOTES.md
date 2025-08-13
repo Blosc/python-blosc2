@@ -1,7 +1,17 @@
 # Release notes
-## Changes from 3.6.1 to 3.6.2
+## Changes from 3.7.0 to 3.7.1
 
 XXX version-specific blurb XXX
+
+## Changes from 3.6.1 to 3.7.0
+
+* Overhaul of documentation (API reference and Tutorials)
+
+* Improvements to lazy expression indexing and in particular much more efficient memory usage when applying non-unit steps (PR #446).
+
+* Extended functionality of ``expand_dims`` to match that of NumPy (note that this breaks the previous API) (PR #453).
+
+* The biggest change is in the form of three new data storage classes (``EmbedStore``, ``DictStore`` and ``TreeStore``) which allow for the efficient storage of heterogeneous array data (PR #451). ``EmbedStore`` is essentially an ``SChunk`` wrapper which can be stored on-disk or in-memory; ``DictStore`` allows for mixed storage across memory, disk or indeed remote; and ``TreeStore`` is a hieracrhically-formatted version of ``DictStore`` which mimics the HDF5 file format. Write, access and storage performance are all very competitive with other packages - see [plots here](https://github.com/Blosc/python-blosc2/pull/451#issuecomment-3178828765).
 
 ## Changes from 3.6.0 to 3.6.1
 
