@@ -12,6 +12,10 @@ Benchmark for TreeStore vs h5py vs zarr with large arrays.
 This benchmark creates N numpy arrays with sizes following a normal distribution
 and measures the time and memory consumption for storing them in TreeStore, h5py, and zarr.
 
+The arrays in h5py/zarr are compressed with the same defaults as in TreeStore.
+Moreover, the chunks for storing arrays in h5py/zarr are set to Blosc2's blocks
+(first partition) which should lead to same compression ratio as in TreeStore.
+
 Note: This adapts to zarr v3+ API if available.
 """
 
@@ -154,7 +158,7 @@ def store_arrays_in_h5py(arrays, output_file):
             else:
                 grp = f[group_name]
 
-            # Store array with compression
+            # Store array with compression; use arr.blocks (first partition in Blosc2) as chunks
             grp.create_dataset(dataset_name, data=arr[:],
                                # compression="gzip", shuffle=True,
                                # To compare apples with apples, use Blosc2 compression with Zstd compression
@@ -213,7 +217,7 @@ def store_arrays_in_zarr(arrays, output_dir):
         else:
             grp = root[group_name]
 
-        # Store array with blosc2 compression
+        # Store array with blosc2 compression; use arr.blocks (first partition in Blosc2) as chunks
         if zarr.__version__ >= "3":
             grp.create_array(
                 name=dataset_name,
