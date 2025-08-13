@@ -51,8 +51,8 @@ STDDEV_MB = 2  # Standard deviation in MB
 OUTPUT_DIR_TSTORE = "large-tree-store.b2z"
 OUTPUT_FILE_H5PY = "large-h5py-store.h5"
 OUTPUT_DIR_ZARR = "large-zarr-store.zarr"
-MIN_SIZE_MB = 0.1  # Minimum array size in MB
-MAX_SIZE_MB = 32  # Maximum array size in MB
+MIN_SIZE_MB = 0  # Minimum array size in MB
+MAX_SIZE_MB = PEAK_SIZE_MB * 10  # Maximum array size in MB
 CHECK_VALUES = True  # Set to False to disable value checking (it is fast anyway)
 
 
@@ -77,7 +77,8 @@ def create_test_arrays(sizes_elements):
 
     for i, size in enumerate(sizes_elements):
         # Create linearly spaced array from 0 to i
-        arr = np.linspace(0, i, size, dtype=np.float64)
+        # arr = np.linspace(0, i, size, dtype=np.float64)
+        arr = blosc2.linspace(0, i, size, dtype=np.float64)
         arrays.append(arr)
 
         # if (i + 1) % 10 == 0:
@@ -108,7 +109,7 @@ def store_arrays_in_treestore(arrays, output_dir):
             # Distribute arrays evenly across NGROUPS_MAX subdirectories
             group_id = i % NGROUPS_MAX
             key = f"/group_{group_id:02d}/array_{i:04d}"
-            tstore[key] = arr
+            tstore[key] = arr[:]
 
             # if (i + 1) % 10 == 0:
             #     elapsed = time.time() - start_time
@@ -154,11 +155,12 @@ def store_arrays_in_h5py(arrays, output_file):
                 grp = f[group_name]
 
             # Store array with compression
-            grp.create_dataset(dataset_name, data=arr,
+            grp.create_dataset(dataset_name, data=arr[:],
                                # compression="gzip", shuffle=True,
                                # To compare apples with apples, use Blosc2 compression with Zstd compression
                                compression=hdf5plugin.Blosc2(cname='zstd', clevel=5,
-                                                             filters=hdf5plugin.Blosc2.SHUFFLE)
+                                                             filters=hdf5plugin.Blosc2.SHUFFLE),
+                               chunks=arr.blocks,
                                )
 
             # if (i + 1) % 10 == 0:
@@ -215,15 +217,17 @@ def store_arrays_in_zarr(arrays, output_dir):
         if zarr.__version__ >= "3":
             grp.create_array(
                 name=dataset_name,
-                data=arr,
+                data=arr[:],
                 compressors=zarr.codecs.BloscCodec(
                     cname="zstd", clevel=5, shuffle=zarr.codecs.BloscShuffle.shuffle),
+                chunks=arr.blocks,
             )
         else:
             grp.create_dataset(
                 name=dataset_name,
-                data=arr,
-                compressor=zarr.Blosc(cname='zstd', clevel=5, shuffle=zarr.Blosc.SHUFFLE),
+                data=arr[:],
+                compressor=zarr.Blosc(cname="zstd", clevel=5, shuffle=zarr.Blosc.SHUFFLE),
+                chunks=arr.blocks,
             )
 
         # if (i + 1) % 10 == 0:
