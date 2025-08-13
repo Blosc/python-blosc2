@@ -529,6 +529,14 @@ def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results)
         ax1.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
                 f'{time_val:.2f}s', ha='center', va='bottom', fontweight='bold')
 
+    # Add write throughput annotations
+    for i, time_val in enumerate(times):
+        if time_val > 0:
+            write_throughput = total_data_mb / (time_val * 1024)
+            ax1.text(i, time_val / 2, f'{write_throughput:.2f} GB/s',
+                     ha='center', va='center', fontweight='bold',
+                     bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+
     # Plot 2: Total Read Time (top-right)
     bars2 = ax2.bar(backends, read_times, color=plot_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
     ax2.set_title('Total Read Time', fontsize=14, fontweight='bold')
@@ -540,6 +548,14 @@ def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results)
         height = bar.get_height()
         ax2.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
                 f'{read_val:.2f}s', ha='center', va='bottom', fontweight='bold')
+
+    # Add read throughput annotations
+    for i, read_val in enumerate(read_times):
+        if read_val > 0:
+            read_throughput = total_data_mb / (read_val * 1024)
+            ax2.text(i, read_val / 2, f'{read_throughput:.2f} GB/s',
+                     ha='center', va='center', fontweight='bold',
+                     bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
 
     # Plot 3: Access Time (bottom-left)
     bars3 = ax3.bar(backends, access_times, color=plot_colors, alpha=0.8, edgecolor='black', linewidth=0.5)
