@@ -250,21 +250,23 @@ def store_arrays_in_zarr(arrays, output_dir):
     return total_time
 
 
-def measure_memory_usage(func, *args, **kwargs):
-    """Measure memory usage of a function."""
-    print("\nMeasuring memory usage...")
+def measure_memory_and_time(func, *args, **kwargs):
+    """Measure memory usage and execution time of a function in a single run."""
+    print("\nMeasuring memory and time...")
 
     def wrapper():
         return func(*args, **kwargs)
 
-    # Measure memory usage during execution
-    mem_usage = memory_usage(wrapper, interval=0.1, timeout=None)
+    # Measure memory usage and get return value (execution time)
+    mem_usage, exec_time = memory_usage(wrapper, interval=0.1, timeout=None, retval=True)
 
     max_memory_mb = max(mem_usage)
     min_memory_mb = min(mem_usage)
     memory_increase_mb = max_memory_mb - min_memory_mb
 
-    return max_memory_mb, min_memory_mb, memory_increase_mb, mem_usage
+    memory_stats = (max_memory_mb, min_memory_mb, memory_increase_mb, mem_usage)
+
+    return exec_time, memory_stats
 
 
 def get_storage_size(path):
@@ -590,7 +592,8 @@ def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results)
 
     # Adjust layout and add overall title
     plt.tight_layout()
-    fig.suptitle(f'Performance Comparison: {N_ARRAYS} arrays, {total_data_mb:.1f} MB total data',
+    total_data_gb = total_data_mb / 1024
+    fig.suptitle(f'Performance Comparison: {N_ARRAYS} arrays, {total_data_gb:.2f} GB total data',
                  fontsize=16, fontweight='bold', y=0.98)
 
     # Add extra space at the top for the title
@@ -860,8 +863,7 @@ def main():
         print("\n" + "="*60)
         print("BENCHMARKING h5py")
         print("="*60)
-        h5py_memory_stats = measure_memory_usage(store_arrays_in_h5py, arrays, OUTPUT_FILE_H5PY)
-        h5py_time = store_arrays_in_h5py(arrays, OUTPUT_FILE_H5PY)
+        h5py_time, h5py_memory_stats = measure_memory_and_time(store_arrays_in_h5py, arrays, OUTPUT_FILE_H5PY)
         h5py_storage_size = get_storage_size(OUTPUT_FILE_H5PY)
         h5py_access_time = measure_access_time(arrays, (h5py_time, h5py_memory_stats, h5py_storage_size), "h5py")
         h5py_read_time = measure_complete_read_time(arrays, (h5py_time, h5py_memory_stats, h5py_storage_size), "h5py")
@@ -877,8 +879,7 @@ def main():
         print("\n" + "="*60)
         print("BENCHMARKING zarr")
         print("="*60)
-        zarr_memory_stats = measure_memory_usage(store_arrays_in_zarr, arrays, OUTPUT_DIR_ZARR)
-        zarr_time = store_arrays_in_zarr(arrays, OUTPUT_DIR_ZARR)
+        zarr_time, zarr_memory_stats = measure_memory_and_time(store_arrays_in_zarr, arrays, OUTPUT_DIR_ZARR)
         zarr_storage_size = get_storage_size(OUTPUT_DIR_ZARR)
         zarr_access_time = measure_access_time(arrays, (zarr_time, zarr_memory_stats, zarr_storage_size), "zarr")
         zarr_read_time = measure_complete_read_time(arrays, (zarr_time, zarr_memory_stats, zarr_storage_size), "zarr")
@@ -892,8 +893,7 @@ def main():
     print("\n" + "="*60)
     print("BENCHMARKING TreeStore")
     print("="*60)
-    tstore_memory_stats = measure_memory_usage(store_arrays_in_treestore, arrays, OUTPUT_DIR_TSTORE)
-    tstore_time = store_arrays_in_treestore(arrays, OUTPUT_DIR_TSTORE)
+    tstore_time, tstore_memory_stats = measure_memory_and_time(store_arrays_in_treestore, arrays, OUTPUT_DIR_TSTORE)
     tstore_storage_size = get_storage_size(OUTPUT_DIR_TSTORE)
     tstore_access_time = measure_access_time(arrays, (tstore_time, tstore_memory_stats, tstore_storage_size), "TreeStore")
     tstore_read_time = measure_complete_read_time(arrays, (tstore_time, tstore_memory_stats, tstore_storage_size), "TreeStore")
