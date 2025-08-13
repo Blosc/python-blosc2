@@ -1468,11 +1468,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
         _slice = ndindex.ndindex(key).expand(shape)
         out_shape = _slice.newshape(shape)
         out = np.empty(out_shape, dtype=self.dtype)
+        key = np.array(key)
 
-        if self.ndim == 1:
+        if self.ndim == 1 and len(key.shape) == 1:
             # Fast path so we can avoid the costly lines in slow path
             # (sub_idx = _slice.as_subindex(c).raw, sel_idx = c.as_subindex(_slice))
-            key = np.array(key)
             if np.any(np.diff(key) < 0):
                 idx_order = np.argsort(key)
                 sorted_idxs = key[idx_order]
