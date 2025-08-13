@@ -404,10 +404,11 @@ class C2Array(blosc2.Operand):
     #     """The meta of the remote array"""
     #     return
 
-    @property
-    def urlpath(self) -> str:
-        """The URL path of the remote array"""
-        return self.meta["schunk"]["urlpath"]
+    # TODO: This seems to cause problems for proxy sources (see tests/ndarray/test_proxy_c2array.py::test_open)
+    # @property
+    # def urlpath(self) -> str:
+    #     """The URL path of the remote array"""
+    #     return self.meta["schunk"]["urlpath"]
 
     @property
     def vlmeta(self) -> dict:
