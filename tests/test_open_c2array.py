@@ -36,6 +36,13 @@ def test_open_c2array(c2sub_context):
     a_open = blosc2.open(urlpath, mode="r")
     np.testing.assert_allclose(a1[:], a_open[:])
 
+    ## Test slicing
+    np.testing.assert_allclose(a1[:10], a_open[:10])
+    np.testing.assert_allclose(a1.slice(slice(1, 10, 1))[:], a_open.slice(slice(1, 10, 1))[:])
+
+    ## Test metadata
+    assert a1.cratio == a_open.cratio
+
     with pytest.raises(NotImplementedError):
         _ = blosc2.open(urlpath)
 

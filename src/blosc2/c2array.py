@@ -19,6 +19,7 @@ import numpy as np
 import requests
 
 import blosc2
+from blosc2.info import InfoReporter
 
 _subscriber_data = {
     "urlbase": os.environ.get("BLOSC_C2URLBASE"),
@@ -148,17 +149,22 @@ def subscribe(root, urlbase, auth_token):
     return _xpost(url, auth_token=auth_token)
 
 
-def fetch_data(path, urlbase, params, auth_token=None):
+def fetch_data(path, urlbase, params, auth_token=None, as_blosc2=False):
     url = _sub_url(urlbase, f"api/fetch/{path}")
     response = _xget(url, params=params, auth_token=auth_token)
     data = response.content
+    # Try different deserialization methods
     try:
         data = blosc2.ndarray_from_cframe(data)
-        data = data[:] if data.ndim == 1 else data[()]
     except RuntimeError:
         data = blosc2.schunk_from_cframe(data)
-        data = data[:]
-    return data
+    if as_blosc2:
+        return data
+    if hasattr(data, "ndim"):  # if b2nd or b2frame
+        # catch 0d case where [:] fails
+        return data[()] if data.ndim == 0 else data[:]
+    else:
+        return data[:]
 
 
 def slice_to_string(slice_):
@@ -243,7 +249,7 @@ class C2Array(blosc2.Operand):
 
     def __getitem__(self, slice_: int | slice | Sequence[slice]) -> np.ndarray:
         """
-        Get a slice of the array.
+        Get a slice of the array (returning NumPy array).
 
         Parameters
         ----------
@@ -269,7 +275,40 @@ class C2Array(blosc2.Operand):
                [81, 82, 83]], dtype=uint16)
         """
         slice_ = slice_to_string(slice_)
-        return fetch_data(self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token)
+        return fetch_data(
+            self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token, as_blosc2=False
+        )
+
+    def slice(self, slice_: int | slice | Sequence[slice]) -> blosc2.NDArray:
+        """
+        Get a slice of the array (returning blosc2 NDArray array).
+
+        Parameters
+        ----------
+        slice_ : int, slice, tuple of ints and slices, or None
+            The slice to fetch.
+
+        Returns
+        -------
+        out: blosc2.NDArray
+            A blosc2.NDArray containing the data slice.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> urlbase = "https://cat2.cloud/demo"
+        >>> path = "@public/examples/dir1/ds-2d.b2nd"
+        >>> remote_array = blosc2.C2Array(path, urlbase=urlbase)
+        >>> data_slice = remote_array.slice((slice(3,5), slice(1,4)))
+        >>> data_slice.shape
+        (2, 3)
+        >>> type(data_slice)
+        blosc2.ndarray.NDArray
+        """
+        slice_ = slice_to_string(slice_)
+        return fetch_data(
+            self.path, self.urlbase, {"slice_": slice_}, auth_token=self.auth_token, as_blosc2=True
+        )
 
     def __len__(self) -> int:
         """Returns the length of the first dimension of the array.
@@ -338,6 +377,87 @@ class C2Array(blosc2.Operand):
     def cparams(self) -> blosc2.CParams:
         """The compression parameters of the remote array"""
         return self._cparams
+
+    @property
+    def nbytes(self) -> int:
+        """The number of bytes of the remote array"""
+        return self.meta["schunk"]["nbytes"]
+
+    @property
+    def cbytes(self) -> int:
+        """The number of compressed bytes of the remote array"""
+        return self.meta["schunk"]["cbytes"]
+
+    @property
+    def cratio(self) -> float:
+        """The compression ratio of the remote array"""
+        return self.meta["schunk"]["cratio"]
+
+    # TODO: Add these to SChunk model in srv_utils and then access them here
+    # @property
+    # def dparams(self) -> float:
+    #     """The dparams of the remote array"""
+    #     return
+    #
+    # @property
+    # def meta(self) -> float:
+    #     """The meta of the remote array"""
+    #     return
+
+    # TODO: This seems to cause problems for proxy sources (see tests/ndarray/test_proxy_c2array.py::test_open)
+    # @property
+    # def urlpath(self) -> str:
+    #     """The URL path of the remote array"""
+    #     return self.meta["schunk"]["urlpath"]
+
+    @property
+    def vlmeta(self) -> dict:
+        """The variable-length metadata f the remote array"""
+        return self.meta["schunk"]["vlmeta"]
+
+    @property
+    def info(self) -> InfoReporter:
+        """
+        Print information about this remote array.
+        """
+        return InfoReporter(self)
+
+    @property
+    def info_items(self) -> list:
+        """A list of tuples with the information about the remote array.
+        Each tuple contains the name of the attribute and its value.
+        """
+        items = []
+        items += [("type", f"{self.__class__.__name__}")]
+        items += [("shape", self.shape)]
+        items += [("chunks", self.chunks)]
+        items += [("blocks", self.blocks)]
+        items += [("dtype", self.dtype)]
+        items += [("nbytes", self.nbytes)]
+        items += [("cbytes", self.cbytes)]
+        items += [("cratio", f"{self.cratio:.2f}")]
+        items += [("cparams", self.cparams)]
+        # items += [("dparams", self.dparams)]
+        return items
+
+    # TODO: Access chunksize, size, ext_chunks, etc.
+    # @property
+    # def size(self) -> int:
+    #     """The size (in bytes) for this container."""
+    #     return self.cbytes
+    # @property
+    # def chunksize(self) -> int:
+    #     """NOT the same as `SChunk.chunksize <blosc2.schunk.SChunk.chunksize>`
+    #     in case :attr:`chunks` is not multiple in
+    #     each dimension of :attr:`blocks` (or equivalently, if :attr:`chunks` is
+    #     not the same as :attr:`ext_chunks`).
+    #     """
+    #     return
+
+    @property
+    def blocksize(self) -> int:
+        """The block size (in bytes) for the remote container."""
+        return self.meta["schunk"]["blocksize"]
 
 
 class URLPath:
