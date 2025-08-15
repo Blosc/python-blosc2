@@ -305,6 +305,82 @@ def get_storage_size(path):
     return total_size / (1024 * 1024)
 
 
+# Helpers to reduce duplication
+
+def get_names(i):
+    """Return (group_id, group_name, dataset_name, key) for the i-th array."""
+    group_id = i % NGROUPS_MAX
+    group_name = f"group_{group_id:02d}"
+    dataset_name = f"array_{i:04d}"
+    key = f"/{group_name}/{dataset_name}"
+    return group_id, group_name, dataset_name, key
+
+
+def get_backend_path(backend_name):
+    if backend_name == "TreeStore":
+        return OUTPUT_DIR_TSTORE
+    if backend_name == "h5py":
+        return OUTPUT_FILE_H5PY if HAS_H5PY else None
+    if backend_name == "zarr":
+        return OUTPUT_DIR_ZARR if HAS_ZARR else None
+    return None
+
+
+def random_slice_indices(arr_len):
+    if arr_len <= 10:
+        return 0, arr_len
+    start_idx = random.randint(0, arr_len - 10)
+    end_idx = min(arr_len, start_idx + 10)
+    return start_idx, end_idx
+
+
+class BackendReader:
+    """Context manager to open a backend for reading and fetch nodes uniformly."""
+    def __init__(self, backend_name, store_path):
+        self.backend_name = backend_name
+        self.store_path = store_path
+        self.store = None
+        self.root = None
+
+    def __enter__(self):
+        if self.backend_name == "TreeStore":
+            self.store = blosc2.TreeStore(self.store_path, mode="r")
+        elif self.backend_name == "h5py":
+            if not HAS_H5PY:
+                raise RuntimeError("h5py not available")
+            self.store = h5py.File(self.store_path, "r")
+        elif self.backend_name == "zarr":
+            if not HAS_ZARR:
+                raise RuntimeError("zarr not available")
+            if zarr.__version__ >= "3":
+                s = zarr.storage.LocalStore(self.store_path)
+            else:
+                s = zarr.DirectoryStore(self.store_path)
+            self.root = zarr.group(store=s)
+        else:
+            raise ValueError(f"Unknown backend: {self.backend_name}")
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        # Close only those that need it
+        if self.store is not None:
+            try:
+                self.store.close()
+            except Exception:
+                pass
+        return False
+
+    def get_node(self, i):
+        group_id, group_name, dataset_name, key = get_names(i)
+        if self.backend_name == "TreeStore":
+            return self.store[key]
+        if self.backend_name == "h5py":
+            return self.store[group_name][dataset_name]
+        if self.backend_name == "zarr":
+            return self.root[group_name][dataset_name]
+        raise ValueError(f"Unknown backend: {self.backend_name}")
+
+
 def measure_access_time(arrays, results_tuple, backend_name):
     """Measure average access time for reading 10 random slices from each array."""
     if results_tuple is None:
@@ -312,133 +388,40 @@ def measure_access_time(arrays, results_tuple, backend_name):
 
     print(f"\nMeasuring access time for {backend_name}...")
 
-    # Determine the path/file to open
-    if backend_name == "TreeStore":
-        store_path = OUTPUT_DIR_TSTORE
-    elif backend_name == "h5py":
-        store_path = OUTPUT_FILE_H5PY
-    elif backend_name == "zarr":
-        store_path = OUTPUT_DIR_ZARR
-    else:
+    store_path = get_backend_path(backend_name)
+    if store_path is None:
         return None
 
     access_times = []
 
     try:
-        if backend_name == "TreeStore":
-            with blosc2.TreeStore(store_path, mode="r") as store:
-                for i, arr in enumerate(arrays):
-                    group_id = i % NGROUPS_MAX
-                    key = f"/group_{group_id:02d}/array_{i:04d}"
-                    node = store[key]
-
-                    # Perform 10 random accesses for this array
-                    array_access_times = []
-                    for _ in range(N_ACCESS):
-                        # Generate random slice indices
-                        arr_len = len(arr)
-                        if arr_len <= 10:
-                            start_idx = 0
-                            end_idx = arr_len
-                        else:
-                            start_idx = random.randint(0, arr_len - 10)
-                            end_idx = min(arr_len, start_idx + 10)
-
-                        start_time = time.perf_counter()
-                        retrieved_slice = node[start_idx:end_idx]
-                        end_time = time.perf_counter()
-
-                        # Check values if enabled
-                        if CHECK_VALUES:
-                            expected_slice = arr[start_idx:end_idx]
-                            if not np.allclose(retrieved_slice, expected_slice):
-                                raise ValueError(f"Value mismatch for {backend_name} key {key}")
-
-                        array_access_times.append(end_time - start_time)
-
-                    # Average access time for this array
-                    access_times.append(np.mean(array_access_times))
-
-        elif backend_name == "h5py" and HAS_H5PY:
-            with h5py.File(store_path, "r") as f:
-                for i, arr in enumerate(arrays):
-                    group_id = i % NGROUPS_MAX
-                    group_name = f"group_{group_id:02d}"
-                    dataset_name = f"array_{i:04d}"
-                    node = f[group_name][dataset_name]
-
-                    # Perform 10 random accesses for this array
-                    array_access_times = []
-                    for _ in range(N_ACCESS):
-                        # Generate random slice indices
-                        arr_len = len(arr)
-                        if arr_len <= 10:
-                            start_idx = 0
-                            end_idx = arr_len
-                        else:
-                            start_idx = random.randint(0, arr_len - 10)
-                            end_idx = min(arr_len, start_idx + 10)
-
-                        start_time = time.perf_counter()
-                        retrieved_slice = node[start_idx:end_idx]
-                        end_time = time.perf_counter()
-
-                        # Check values if enabled
-                        if CHECK_VALUES:
-                            expected_slice = arr[start_idx:end_idx]
-                            if not np.allclose(retrieved_slice, expected_slice):
-                                raise ValueError(f"Value mismatch for {backend_name} key {group_name}/{dataset_name}")
-
-                        array_access_times.append(end_time - start_time)
-
-                    # Average access time for this array
-                    access_times.append(np.mean(array_access_times))
-
-        elif backend_name == "zarr" and HAS_ZARR:
-            if zarr.__version__ >= "3":
-                store = zarr.storage.LocalStore(store_path)
-            else:
-                store = zarr.DirectoryStore(store_path)
-            root = zarr.group(store=store)
-
+        with BackendReader(backend_name, store_path) as reader:
             for i, arr in enumerate(arrays):
-                group_id = i % NGROUPS_MAX
-                group_name = f"group_{group_id:02d}"
-                dataset_name = f"array_{i:04d}"
-                node = root[group_name][dataset_name]
+                node = reader.get_node(i)
 
-                # Perform 10 random accesses for this array
                 array_access_times = []
                 for _ in range(N_ACCESS):
-                    # Generate random slice indices
-                    arr_len = len(arr)
-                    if arr_len <= 10:
-                        start_idx = 0
-                        end_idx = arr_len
-                    else:
-                        start_idx = random.randint(0, arr_len - 10)
-                        end_idx = min(arr_len, start_idx + 10)
+                    start_idx, end_idx = random_slice_indices(len(arr))
 
                     start_time = time.perf_counter()
                     retrieved_slice = node[start_idx:end_idx]
                     end_time = time.perf_counter()
 
-                    # Check values if enabled
                     if CHECK_VALUES:
                         expected_slice = arr[start_idx:end_idx]
                         if not np.allclose(retrieved_slice, expected_slice):
-                            raise ValueError(f"Value mismatch for {backend_name} key {group_name}/{dataset_name}")
+                            _, group_name, dataset_name, key = get_names(i)
+                            loc = key if backend_name == "TreeStore" else f"{group_name}/{dataset_name}"
+                            raise ValueError(f"Value mismatch for {backend_name} key {loc}")
 
                     array_access_times.append(end_time - start_time)
 
-                # Average access time for this array
                 access_times.append(np.mean(array_access_times))
 
     except Exception as e:
         print(f"Error measuring access time for {backend_name}: {e}")
         return None
 
-    # Overall average access time across all arrays (average of averages)
     avg_access_time = np.mean(access_times) * 1000  # Convert to milliseconds
 
     if CHECK_VALUES:
@@ -454,53 +437,18 @@ def measure_complete_read_time(arrays, results_tuple, backend_name):
 
     print(f"\nMeasuring complete read time for {backend_name}...")
 
-    # Determine the path/file to open
-    if backend_name == "TreeStore":
-        store_path = OUTPUT_DIR_TSTORE
-    elif backend_name == "h5py":
-        store_path = OUTPUT_FILE_H5PY
-    elif backend_name == "zarr":
-        store_path = OUTPUT_DIR_ZARR
-    else:
+    store_path = get_backend_path(backend_name)
+    if store_path is None:
         return None
 
     try:
         start_time = time.perf_counter()
-
-        if backend_name == "TreeStore":
-            with blosc2.TreeStore(store_path, mode="r") as store:
-                for i, _ in enumerate(arrays):
-                    group_id = i % NGROUPS_MAX
-                    key = f"/group_{group_id:02d}/array_{i:04d}"
-                    # Read complete array into memory
-                    _ = np.array(store[key][:])
-
-        elif backend_name == "h5py" and HAS_H5PY:
-            with h5py.File(store_path, "r") as f:
-                for i, _ in enumerate(arrays):
-                    group_id = i % NGROUPS_MAX
-                    group_name = f"group_{group_id:02d}"
-                    dataset_name = f"array_{i:04d}"
-                    # Read complete array into memory
-                    _ = np.array(f[group_name][dataset_name][:])
-
-        elif backend_name == "zarr" and HAS_ZARR:
-            if zarr.__version__ >= "3":
-                store = zarr.storage.LocalStore(store_path)
-            else:
-                store = zarr.DirectoryStore(store_path)
-            root = zarr.group(store=store)
-
+        with BackendReader(backend_name, store_path) as reader:
             for i, _ in enumerate(arrays):
-                group_id = i % NGROUPS_MAX
-                group_name = f"group_{group_id:02d}"
-                dataset_name = f"array_{i:04d}"
-                # Read complete array into memory
-                _ = np.array(root[group_name][dataset_name][:])
-
+                node = reader.get_node(i)
+                _ = np.array(node[:])  # Read complete array into memory
         end_time = time.perf_counter()
         total_read_time = end_time - start_time
-
     except Exception as e:
         print(f"Error measuring complete read time for {backend_name}: {e}")
         return None
