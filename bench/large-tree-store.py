@@ -51,8 +51,9 @@ except ImportError:
 # Configuration
 N_ARRAYS = 100  # Number of arrays to store
 NGROUPS_MAX = 10
-PEAK_SIZE_MB = 10  # Peak size in MB for the normal distribution
+PEAK_SIZE_MB = 100  # Peak size in MB for the normal distribution
 STDDEV_MB = 2  # Standard deviation in MB
+N_ACCESS = 10
 OUTPUT_DIR_TSTORE = "large-tree-store.b2z"
 OUTPUT_FILE_H5PY = "large-h5py-store.h5"
 OUTPUT_DIR_ZARR = "large-zarr-store.zarr"
@@ -333,7 +334,7 @@ def measure_access_time(arrays, results_tuple, backend_name):
 
                     # Perform 10 random accesses for this array
                     array_access_times = []
-                    for _ in range(10):
+                    for _ in range(N_ACCESS):
                         # Generate random slice indices
                         arr_len = len(arr)
                         if arr_len <= 10:
@@ -368,7 +369,7 @@ def measure_access_time(arrays, results_tuple, backend_name):
 
                     # Perform 10 random accesses for this array
                     array_access_times = []
-                    for _ in range(10):
+                    for _ in range(N_ACCESS):
                         # Generate random slice indices
                         arr_len = len(arr)
                         if arr_len <= 10:
@@ -408,7 +409,7 @@ def measure_access_time(arrays, results_tuple, backend_name):
 
                 # Perform 10 random accesses for this array
                 array_access_times = []
-                for _ in range(10):
+                for _ in range(N_ACCESS):
                     # Generate random slice indices
                     arr_len = len(arr)
                     if arr_len <= 10:
