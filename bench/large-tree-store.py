@@ -52,7 +52,7 @@ except ImportError:
 N_ARRAYS = 100  # Number of arrays to store
 NGROUPS_MAX = 10
 PEAK_SIZE_MB = 10  # Peak size in MB for the normal distribution
-STDDEV_MB = 2  # Standard deviation in MB
+STDDEV_MB = 5  # Standard deviation in MB
 N_ACCESS = 10
 OUTPUT_DIR_TSTORE = "large-tree-store.b2z"
 OUTPUT_FILE_H5PY = "large-h5py-store.h5"
@@ -484,7 +484,7 @@ def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results)
         access_times.append(zarr_results[3] if len(zarr_results) > 3 else 0)
 
     # Create figure with 2x2 subplots
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 10))
 
     # Colors for each backend
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c']  # Blue, Orange, Green
@@ -553,12 +553,12 @@ def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results)
     for bar, size_val in zip(bars4, storage_sizes):
         height = bar.get_height()
         ax4.text(bar.get_x() + bar.get_width()/2., height + height*0.01,
-                f'{size_val:.1f}MB', ha='center', va='bottom', fontweight='bold')
+                f'{size_val:.2f}MB', ha='center', va='bottom', fontweight='bold')
 
     # Add compression ratio annotations
     for i, (backend, storage_size) in enumerate(zip(backends, storage_sizes)):
         compression_ratio = total_data_mb / storage_size
-        ax4.text(i, storage_size/2, f'{compression_ratio:.1f}x',
+        ax4.text(i, storage_size/2, f'{compression_ratio:.2f}x',
                 ha='center', va='center', fontweight='bold',
                 bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
 
@@ -590,7 +590,7 @@ def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
 
     # Configuration info
     print(f"Configuration:")
-    print(f"  Arrays: {N_ARRAYS:,} | Peak size: {PEAK_SIZE_MB} MB | Total data: {total_data_mb:.1f} MB")
+    print(f"  Arrays: {N_ARRAYS:,} | Peak size: {PEAK_SIZE_MB} MB | Total data: {total_data_mb:.2f} MB")
     print()
 
     # Extract results
@@ -665,18 +665,18 @@ def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
 
     # Throughput
     throughputs = [total_data_mb/tstore_time]
-    print(f"{'Write throughput (MB/s)':<30} {total_data_mb/tstore_time:<15.1f} ", end="")
+    print(f"{'Write throughput (MB/s)':<30} {total_data_mb/tstore_time:<15.2f} ", end="")
 
     if has_h5py:
         h5py_throughput = total_data_mb / h5py_time
-        print(f"{h5py_throughput:<15.1f} ", end="")
+        print(f"{h5py_throughput:<15.2f} ", end="")
         throughputs.append(h5py_throughput)
     else:
         print(f"{'N/A':<15} ", end="")
 
     if has_zarr:
         zarr_throughput = total_data_mb / zarr_time
-        print(f"{zarr_throughput:<15.1f} ", end="")
+        print(f"{zarr_throughput:<15.2f} ", end="")
         throughputs.append(zarr_throughput)
     else:
         print(f"{'N/A':<15} ", end="")
@@ -687,18 +687,18 @@ def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
     # Read throughput
     if tstore_read is not None:
         read_throughputs = [total_data_mb/tstore_read]
-        print(f"{'Read throughput (MB/s)':<30} {total_data_mb/tstore_read:<15.1f} ", end="")
+        print(f"{'Read throughput (MB/s)':<30} {total_data_mb/tstore_read:<15.2f} ", end="")
 
         if has_h5py and h5py_read is not None:
             h5py_read_throughput = total_data_mb / h5py_read
-            print(f"{h5py_read_throughput:<15.1f} ", end="")
+            print(f"{h5py_read_throughput:<15.2f} ", end="")
             read_throughputs.append(h5py_read_throughput)
         else:
             print(f"{'N/A':<15} ", end="")
 
         if has_zarr and zarr_read is not None:
             zarr_read_throughput = total_data_mb / zarr_read
-            print(f"{zarr_read_throughput:<15.1f} ", end="")
+            print(f"{zarr_read_throughput:<15.2f} ", end="")
             read_throughputs.append(zarr_read_throughput)
         else:
             print(f"{'N/A':<15} ", end="")
@@ -733,16 +733,16 @@ def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
 
     # Memory metrics (kept in table)
     memories = [tstore_memory[2]]
-    print(f"{'Memory increase (MB)':<30} {tstore_memory[2]:<15.1f} ", end="")
+    print(f"{'Memory increase (MB)':<30} {tstore_memory[2]:<15.2f} ", end="")
 
     if has_h5py:
-        print(f"{h5py_memory[2]:<15.1f} ", end="")
+        print(f"{h5py_memory[2]:<15.2f} ", end="")
         memories.append(h5py_memory[2])
     else:
         print(f"{'N/A':<15} ", end="")
 
     if has_zarr:
-        print(f"{zarr_memory[2]:<15.1f} ", end="")
+        print(f"{zarr_memory[2]:<15.2f} ", end="")
         memories.append(zarr_memory[2])
     else:
         print(f"{'N/A':<15} ", end="")
@@ -752,16 +752,16 @@ def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
 
     # Storage metrics
     storages = [tstore_storage]
-    print(f"{'Storage size (MB)':<30} {tstore_storage:<15.1f} ", end="")
+    print(f"{'Storage size (MB)':<30} {tstore_storage:<15.2f} ", end="")
 
     if has_h5py:
-        print(f"{h5py_storage:<15.1f} ", end="")
+        print(f"{h5py_storage:<15.2f} ", end="")
         storages.append(h5py_storage)
     else:
         print(f"{'N/A':<15} ", end="")
 
     if has_zarr:
-        print(f"{zarr_storage:<15.1f} ", end="")
+        print(f"{zarr_storage:<15.2f} ", end="")
         storages.append(zarr_storage)
     else:
         print(f"{'N/A':<15} ", end="")
@@ -802,10 +802,10 @@ def print_comparison_table(sizes_mb, tstore_results, h5py_results, zarr_results)
         print(f"  Fastest total read: {best_read} ({read_times[best_read_idx]:.2f}s)")
 
     best_storage = time_labels[best_storage_idx]
-    print(f"  Most compact: {best_storage} ({storages[best_storage_idx]:.1f} MB)")
+    print(f"  Most compact: {best_storage} ({storages[best_storage_idx]:.2f} MB)")
 
     best_memory = time_labels[best_memory_idx]
-    print(f"  Lowest memory increase: {best_memory} ({memories[best_memory_idx]:.1f} MB)")
+    print(f"  Lowest memory increase: {best_memory} ({memories[best_memory_idx]:.2f} MB)")
 
     if tstore_access is not None:
         best_access = access_labels[best_access_idx]
