@@ -22,6 +22,7 @@ Note: This adapts to zarr v3+ API if available.
 import os
 import shutil
 import time
+import random
 
 from memory_profiler import profile, memory_usage
 import numpy as np
@@ -304,7 +305,7 @@ def get_storage_size(path):
 
 
 def measure_access_time(arrays, results_tuple, backend_name):
-    """Measure average access time for reading 10 elements from the middle of arrays."""
+    """Measure average access time for reading 10 random slices from each array."""
     if results_tuple is None:
         return None
 
@@ -328,23 +329,34 @@ def measure_access_time(arrays, results_tuple, backend_name):
                 for i, arr in enumerate(arrays):
                     group_id = i % NGROUPS_MAX
                     key = f"/group_{group_id:02d}/array_{i:04d}"
+                    node = store[key]
 
-                    # Get middle slice indices
-                    mid_point = len(arr) // 2
-                    start_idx = max(0, mid_point - 5)
-                    end_idx = min(len(arr), start_idx + 10)
+                    # Perform 10 random accesses for this array
+                    array_access_times = []
+                    for _ in range(10):
+                        # Generate random slice indices
+                        arr_len = len(arr)
+                        if arr_len <= 10:
+                            start_idx = 0
+                            end_idx = arr_len
+                        else:
+                            start_idx = random.randint(0, arr_len - 10)
+                            end_idx = min(arr_len, start_idx + 10)
 
-                    start_time = time.perf_counter()
-                    retrieved_slice = store[key][start_idx:end_idx]
-                    end_time = time.perf_counter()
+                        start_time = time.perf_counter()
+                        retrieved_slice = node[start_idx:end_idx]
+                        end_time = time.perf_counter()
 
-                    # Check values if enabled
-                    if CHECK_VALUES:
-                        expected_slice = arr[start_idx:end_idx]
-                        if not np.allclose(retrieved_slice, expected_slice):
-                            raise ValueError(f"Value mismatch for {backend_name} key {key}")
+                        # Check values if enabled
+                        if CHECK_VALUES:
+                            expected_slice = arr[start_idx:end_idx]
+                            if not np.allclose(retrieved_slice, expected_slice):
+                                raise ValueError(f"Value mismatch for {backend_name} key {key}")
 
-                    access_times.append(end_time - start_time)
+                        array_access_times.append(end_time - start_time)
+
+                    # Average access time for this array
+                    access_times.append(np.mean(array_access_times))
 
         elif backend_name == "h5py" and HAS_H5PY:
             with h5py.File(store_path, "r") as f:
@@ -352,23 +364,34 @@ def measure_access_time(arrays, results_tuple, backend_name):
                     group_id = i % NGROUPS_MAX
                     group_name = f"group_{group_id:02d}"
                     dataset_name = f"array_{i:04d}"
+                    node = f[group_name][dataset_name]
 
-                    # Get middle slice indices
-                    mid_point = len(arr) // 2
-                    start_idx = max(0, mid_point - 5)
-                    end_idx = min(len(arr), start_idx + 10)
+                    # Perform 10 random accesses for this array
+                    array_access_times = []
+                    for _ in range(10):
+                        # Generate random slice indices
+                        arr_len = len(arr)
+                        if arr_len <= 10:
+                            start_idx = 0
+                            end_idx = arr_len
+                        else:
+                            start_idx = random.randint(0, arr_len - 10)
+                            end_idx = min(arr_len, start_idx + 10)
 
-                    start_time = time.perf_counter()
-                    retrieved_slice = f[group_name][dataset_name][start_idx:end_idx]
-                    end_time = time.perf_counter()
+                        start_time = time.perf_counter()
+                        retrieved_slice = node[start_idx:end_idx]
+                        end_time = time.perf_counter()
 
-                    # Check values if enabled
-                    if CHECK_VALUES:
-                        expected_slice = arr[start_idx:end_idx]
-                        if not np.allclose(retrieved_slice, expected_slice):
-                            raise ValueError(f"Value mismatch for {backend_name} key {group_name}/{dataset_name}")
+                        # Check values if enabled
+                        if CHECK_VALUES:
+                            expected_slice = arr[start_idx:end_idx]
+                            if not np.allclose(retrieved_slice, expected_slice):
+                                raise ValueError(f"Value mismatch for {backend_name} key {group_name}/{dataset_name}")
 
-                    access_times.append(end_time - start_time)
+                        array_access_times.append(end_time - start_time)
+
+                    # Average access time for this array
+                    access_times.append(np.mean(array_access_times))
 
         elif backend_name == "zarr" and HAS_ZARR:
             if zarr.__version__ >= "3":
@@ -381,28 +404,40 @@ def measure_access_time(arrays, results_tuple, backend_name):
                 group_id = i % NGROUPS_MAX
                 group_name = f"group_{group_id:02d}"
                 dataset_name = f"array_{i:04d}"
+                node = root[group_name][dataset_name]
 
-                # Get middle slice indices
-                mid_point = len(arr) // 2
-                start_idx = max(0, mid_point - 5)
-                end_idx = min(len(arr), start_idx + 10)
+                # Perform 10 random accesses for this array
+                array_access_times = []
+                for _ in range(10):
+                    # Generate random slice indices
+                    arr_len = len(arr)
+                    if arr_len <= 10:
+                        start_idx = 0
+                        end_idx = arr_len
+                    else:
+                        start_idx = random.randint(0, arr_len - 10)
+                        end_idx = min(arr_len, start_idx + 10)
 
-                start_time = time.perf_counter()
-                retrieved_slice = root[group_name][dataset_name][start_idx:end_idx]
-                end_time = time.perf_counter()
+                    start_time = time.perf_counter()
+                    retrieved_slice = node[start_idx:end_idx]
+                    end_time = time.perf_counter()
 
-                # Check values if enabled
-                if CHECK_VALUES:
-                    expected_slice = arr[start_idx:end_idx]
-                    if not np.allclose(retrieved_slice, expected_slice):
-                        raise ValueError(f"Value mismatch for {backend_name} key {group_name}/{dataset_name}")
+                    # Check values if enabled
+                    if CHECK_VALUES:
+                        expected_slice = arr[start_idx:end_idx]
+                        if not np.allclose(retrieved_slice, expected_slice):
+                            raise ValueError(f"Value mismatch for {backend_name} key {group_name}/{dataset_name}")
 
-                access_times.append(end_time - start_time)
+                    array_access_times.append(end_time - start_time)
+
+                # Average access time for this array
+                access_times.append(np.mean(array_access_times))
 
     except Exception as e:
         print(f"Error measuring access time for {backend_name}: {e}")
         return None
 
+    # Overall average access time across all arrays (average of averages)
     avg_access_time = np.mean(access_times) * 1000  # Convert to milliseconds
 
     if CHECK_VALUES:
@@ -847,6 +882,7 @@ def main():
 
     # Set random seed for reproducibility
     np.random.seed(42)
+    random.seed(42)  # Also set seed for random access patterns
 
     # Generate array sizes
     print(f"Generating {N_ARRAYS} array sizes with peak at {PEAK_SIZE_MB} MB...")
