@@ -94,7 +94,7 @@ class DictStore:
         mode: str = "a",
         tmpdir: str | None = None,
         cparams: blosc2.CParams | None = None,
-        dparams: blosc2.CParams | None = None,
+        dparams: blosc2.DParams | None = None,
         storage: blosc2.Storage | None = None,
         threshold: int | None = 2**16,
     ):
@@ -120,7 +120,7 @@ class DictStore:
         self._setup_paths_and_dirs(tmpdir)
 
         if self.mode == "r":
-            self._init_read_mode()
+            self._init_read_mode(dparams)
         else:
             self._init_write_append_mode(cparams, dparams, storage)
 
@@ -143,7 +143,7 @@ class DictStore:
 
         self.estore_path = os.path.join(self.working_dir, "embed.b2e")
 
-    def _init_read_mode(self):
+    def _init_read_mode(self, dparams: blosc2.DParams | None = None):
         """Initialize store in read mode."""
         if not os.path.exists(self.localpath):
             raise FileNotFoundError(f"dir/zip file {self.localpath} does not exist.")
@@ -153,7 +153,7 @@ class DictStore:
             if "embed.b2e" not in self.offsets:
                 raise FileNotFoundError("Embed file embed.b2e not found in store.")
             estore_offset = self.offsets["embed.b2e"]["offset"]
-            schunk = blosc2.open(self.b2z_path, mode="r", offset=estore_offset)
+            schunk = blosc2.open(self.b2z_path, mode="r", offset=estore_offset, dparams=dparams)
             for filepath in self.offsets:
                 if filepath.endswith((".b2nd", ".b2f")):
                     key = "/" + filepath[: -5 if filepath.endswith(".b2nd") else -4]
@@ -161,7 +161,7 @@ class DictStore:
         else:  # .b2d
             if not os.path.isdir(self.localpath):
                 raise FileNotFoundError(f"Directory {self.localpath} does not exist for reading.")
-            schunk = blosc2.open(self.estore_path, mode="r")
+            schunk = blosc2.open(self.estore_path, mode="r", dparams=dparams)
             self._update_map_tree()
 
         self._estore = EmbedStore(_from_schunk=schunk)
@@ -267,11 +267,11 @@ class DictStore:
             filepath = self.map_tree[key]
             if filepath in self.offsets:
                 offset = self.offsets[filepath]["offset"]
-                return blosc2.open(self.b2z_path, mode="r", offset=offset)
+                return blosc2.open(self.b2z_path, mode="r", offset=offset, dparams=self.dparams)
             else:
                 urlpath = os.path.join(self.working_dir, filepath)
                 if os.path.exists(urlpath):
-                    return blosc2.open(urlpath, mode="r" if self.mode == "r" else "a")
+                    return blosc2.open(urlpath, mode="r" if self.mode == "r" else "a", dparams=self.dparams)
                 else:
                     raise KeyError(f"File for key '{key}' not found in offsets or temporary directory.")
 
@@ -331,10 +331,10 @@ class DictStore:
                 if self.is_zip_store:
                     if filepath in self.offsets:
                         offset = self.offsets[filepath]["offset"]
-                        yield blosc2.open(self.b2z_path, mode="r", offset=offset)
+                        yield blosc2.open(self.b2z_path, mode="r", offset=offset, dparams=self.dparams)
                 else:
                     urlpath = os.path.join(self.working_dir, filepath)
-                    yield blosc2.open(urlpath, mode="r" if self.mode == "r" else "a")
+                    yield blosc2.open(urlpath, mode="r" if self.mode == "r" else "a", dparams=self.dparams)
             elif key in self._estore:
                 yield self._estore[key]
 

@@ -3253,6 +3253,7 @@ class LazyUDF(LazyArray):
             kwargs = {}
         # Do copy to avoid modifying the original parameters
         aux_kwargs = copy.deepcopy(self.kwargs)
+
         # Update is not recursive
         aux_cparams = aux_kwargs.get("cparams", {})
         if isinstance(aux_cparams, blosc2.CParams):
@@ -3264,12 +3265,18 @@ class LazyUDF(LazyArray):
             cparams = asdict(cparams)
         aux_cparams.update(cparams)
         aux_kwargs["cparams"] = aux_cparams
-        dparams = aux_kwargs.get("dparams", {})
+
+        aux_dparams = aux_kwargs.get("dparams", {})
+        if isinstance(aux_dparams, blosc2.DParams):
+            # Convert to dictionary
+            aux_dparams = asdict(aux_dparams)
+        dparams = kwargs.get("dparams", {})
         if isinstance(dparams, blosc2.DParams):
             # Convert to dictionary
             dparams = asdict(dparams)
-        dparams.update(kwargs.get("dparams", {}))
-        aux_kwargs["dparams"] = dparams
+        aux_dparams.update(dparams)
+        aux_kwargs["dparams"] = aux_dparams
+
         _ = kwargs.pop("cparams", None)
         _ = kwargs.pop("dparams", None)
         urlpath = kwargs.get("urlpath")
