@@ -106,11 +106,12 @@ def store_arrays_in_treestore(arrays, output_dir):
 
     start_time = time.time()
 
-    # Setting cparams here is not good because storages use different defaults
-    # Better leave without specifying compression, although ZSTD level 5 should be used internally
-    # cparams = blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5, filters=[blosc2.Filter.SHUFFLE])
-    # with blosc2.TreeStore(output_dir, mode="w", cparams=cparams) as tstore:
-    with blosc2.TreeStore(output_dir, mode="w") as tstore:
+    # Setting cparams here to match h5py/zarr compression
+    # filters =  [blosc2.Filter.SHUFFLE]
+    # Curiously, the next performs up to ~25% better. TODO: investigate this
+    filters =  [blosc2.Filter.NOFILTER] * 5 + [blosc2.Filter.SHUFFLE]
+    cparams = blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5, filters=filters)
+    with blosc2.TreeStore(output_dir, mode="w", cparams=cparams) as tstore:
         for i, arr in enumerate(arrays):
             # Distribute arrays evenly across NGROUPS_MAX subdirectories
             group_id = i % NGROUPS_MAX
