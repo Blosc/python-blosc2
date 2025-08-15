@@ -51,7 +51,7 @@ except ImportError:
 # Configuration
 N_ARRAYS = 100  # Number of arrays to store
 NGROUPS_MAX = 10
-PEAK_SIZE_MB = 100  # Peak size in MB for the normal distribution
+PEAK_SIZE_MB = 10  # Peak size in MB for the normal distribution
 STDDEV_MB = 2  # Standard deviation in MB
 N_ACCESS = 10
 OUTPUT_DIR_TSTORE = "large-tree-store.b2z"
@@ -307,15 +307,6 @@ def get_storage_size(path):
 
 # Helpers to reduce duplication
 
-def get_names(i):
-    """Return (group_id, group_name, dataset_name, key) for the i-th array."""
-    group_id = i % NGROUPS_MAX
-    group_name = f"group_{group_id:02d}"
-    dataset_name = f"array_{i:04d}"
-    key = f"/{group_name}/{dataset_name}"
-    return group_id, group_name, dataset_name, key
-
-
 def get_backend_path(backend_name):
     if backend_name == "TreeStore":
         return OUTPUT_DIR_TSTORE
@@ -340,7 +331,6 @@ class BackendReader:
         self.backend_name = backend_name
         self.store_path = store_path
         self.store = None
-        self.root = None
 
     def __enter__(self):
         if self.backend_name == "TreeStore":
@@ -356,7 +346,7 @@ class BackendReader:
                 s = zarr.storage.LocalStore(self.store_path)
             else:
                 s = zarr.DirectoryStore(self.store_path)
-            self.root = zarr.group(store=s)
+            self.store = zarr.group(store=s)
         else:
             raise ValueError(f"Unknown backend: {self.backend_name}")
         return self
@@ -371,14 +361,11 @@ class BackendReader:
         return False
 
     def get_node(self, i):
-        group_id, group_name, dataset_name, key = get_names(i)
-        if self.backend_name == "TreeStore":
-            return self.store[key]
-        if self.backend_name == "h5py":
-            return self.store[group_name][dataset_name]
-        if self.backend_name == "zarr":
-            return self.root[group_name][dataset_name]
-        raise ValueError(f"Unknown backend: {self.backend_name}")
+        group_id = i % NGROUPS_MAX
+        group_name = f"group_{group_id:02d}"
+        dataset_name = f"array_{i:04d}"
+        key = f"/{group_name}/{dataset_name}"
+        return self.store[key]
 
 
 def measure_access_time(arrays, results_tuple, backend_name):
