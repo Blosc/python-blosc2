@@ -55,7 +55,7 @@ STDDEV_MB = 2  # Standard deviation in MB
 OUTPUT_DIR_TSTORE = "large-tree-store.b2z"
 OUTPUT_FILE_H5PY = "large-h5py-store.h5"
 OUTPUT_DIR_ZARR = "large-zarr-store.zarr"
-MIN_SIZE_MB = 0  # Minimum array size in MB
+MIN_SIZE_MB = .001  # Minimum array size in MB
 MAX_SIZE_MB = PEAK_SIZE_MB * 10  # Maximum array size in MB
 CHECK_VALUES = True  # Set to False to disable value checking (it is fast anyway)
 

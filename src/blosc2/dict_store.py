@@ -120,9 +120,9 @@ class DictStore:
         self._setup_paths_and_dirs(tmpdir)
 
         if self.mode == "r":
-            self._init_read_mode(dparams)
+            self._init_read_mode(self.dparams)
         else:
-            self._init_write_append_mode(cparams, dparams, storage)
+            self._init_write_append_mode(self.cparams, self.dparams, storage)
 
     def _setup_paths_and_dirs(self, tmpdir: str | None):
         """Set up working directories and paths."""
