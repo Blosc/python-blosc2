@@ -780,3 +780,102 @@ def test_vlmeta_read_only_subtrees(tmp_path):
 
         with pytest.raises(ValueError, match="read-only mode"):
             del subtree.vlmeta["subtree_key"]
+
+
+def test_vlmeta_subtree_read_write():
+    """Test that vlmeta added to a subtree can be read correctly."""
+    with TreeStore("test_vlmeta_subtree_rw.b2z", mode="w") as tstore:
+        # Create a hierarchical structure
+        tstore["/department/team1/project_a"] = np.array([1, 2, 3])
+        tstore["/department/team1/project_b"] = np.array([4, 5, 6])
+        tstore["/department/team2/project_c"] = np.array([7, 8, 9])
+
+        # Add vlmeta to the root
+        tstore.vlmeta["organization"] = "Blosc Development Team"
+        tstore.vlmeta["year"] = 2025
+
+        # Get subtree and add vlmeta to it
+        dept_subtree = tstore.get_subtree("/department")
+        dept_subtree.vlmeta["manager"] = "John Doe"
+        dept_subtree.vlmeta["budget"] = 100000
+        dept_subtree.vlmeta["projects"] = ["project_a", "project_b", "project_c"]
+
+        # Get nested subtree and add vlmeta
+        team1_subtree = tstore.get_subtree("/department/team1")
+        team1_subtree.vlmeta["lead"] = "Alice Smith"
+        team1_subtree.vlmeta["members"] = 5
+        team1_subtree.vlmeta["active_projects"] = 2
+
+        # Test reading vlmeta from different levels
+        # Root level
+        assert tstore.vlmeta["organization"] == "Blosc Development Team"
+        assert tstore.vlmeta["year"] == 2025
+        assert len(tstore.vlmeta) == 2
+
+        # Department level
+        assert dept_subtree.vlmeta["manager"] == "John Doe"
+        assert dept_subtree.vlmeta["budget"] == 100000
+        assert dept_subtree.vlmeta["projects"] == ["project_a", "project_b", "project_c"]
+        assert len(dept_subtree.vlmeta) == 3
+
+        # Team1 level
+        assert team1_subtree.vlmeta["lead"] == "Alice Smith"
+        assert team1_subtree.vlmeta["members"] == 5
+        assert team1_subtree.vlmeta["active_projects"] == 2
+        assert len(team1_subtree.vlmeta) == 3
+
+        # Verify independence - each level should only see its own vlmeta
+        assert "manager" not in tstore.vlmeta
+        assert "lead" not in tstore.vlmeta
+        assert "organization" not in dept_subtree.vlmeta
+        assert "lead" not in dept_subtree.vlmeta
+        assert "organization" not in team1_subtree.vlmeta
+        assert "manager" not in team1_subtree.vlmeta
+
+        # Test bulk read operations
+        root_all = tstore.vlmeta[:]
+        dept_all = dept_subtree.vlmeta[:]
+        team1_all = team1_subtree.vlmeta[:]
+
+        assert root_all == {"organization": "Blosc Development Team", "year": 2025}
+        assert dept_all == {
+            "manager": "John Doe",
+            "budget": 100000,
+            "projects": ["project_a", "project_b", "project_c"],
+        }
+        assert team1_all == {"lead": "Alice Smith", "members": 5, "active_projects": 2}
+
+        # Test iteration
+        root_keys = set(tstore.vlmeta.keys())
+        dept_keys = set(dept_subtree.vlmeta.keys())
+        team1_keys = set(team1_subtree.vlmeta.keys())
+
+        assert root_keys == {"organization", "year"}
+        assert dept_keys == {"manager", "budget", "projects"}
+        assert team1_keys == {"lead", "members", "active_projects"}
+
+        # Verify data integrity is maintained
+        assert np.array_equal(tstore["/department/team1/project_a"][:], np.array([1, 2, 3]))
+        assert np.array_equal(team1_subtree["/project_a"][:], np.array([1, 2, 3]))
+
+    # Test persistence by reopening
+    with TreeStore("test_vlmeta_subtree_rw.b2z", mode="r") as tstore:
+        # Re-verify all vlmeta after reopening
+        assert tstore.vlmeta["organization"] == "Blosc Development Team"
+        assert tstore.vlmeta["year"] == 2025
+
+        dept_subtree = tstore.get_subtree("/department")
+        assert dept_subtree.vlmeta["manager"] == "John Doe"
+        assert dept_subtree.vlmeta["budget"] == 100000
+
+        team1_subtree = tstore.get_subtree("/department/team1")
+        assert team1_subtree.vlmeta["lead"] == "Alice Smith"
+        assert team1_subtree.vlmeta["members"] == 5
+
+        # Verify independence is maintained after reopening
+        assert "manager" not in tstore.vlmeta
+        assert "organization" not in dept_subtree.vlmeta
+        assert "organization" not in team1_subtree.vlmeta
+
+    # Cleanup
+    os.remove("test_vlmeta_subtree_rw.b2z")
