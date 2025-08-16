@@ -361,12 +361,12 @@ class BackendReader:
                 pass
         return False
 
-    def get_node(self, i):
+    def get_key_node(self, i):
         group_id = i % NGROUPS_MAX
         group_name = f"group_{group_id:02d}"
         dataset_name = f"array_{i:04d}"
         key = f"/{group_name}/{dataset_name}"
-        return self.store[key]
+        return key, self.store[key]
 
 
 def measure_access_time(arrays, results_tuple, backend_name):
@@ -385,7 +385,7 @@ def measure_access_time(arrays, results_tuple, backend_name):
     try:
         with BackendReader(backend_name, store_path) as reader:
             for i, arr in enumerate(arrays):
-                node = reader.get_node(i)
+                key, node = reader.get_key_node(i)
 
                 array_access_times = []
                 for _ in range(N_ACCESS):
@@ -398,9 +398,7 @@ def measure_access_time(arrays, results_tuple, backend_name):
                     if CHECK_VALUES:
                         expected_slice = arr[start_idx:end_idx]
                         if not np.allclose(retrieved_slice, expected_slice):
-                            _, group_name, dataset_name, key = get_names(i)
-                            loc = key if backend_name == "TreeStore" else f"{group_name}/{dataset_name}"
-                            raise ValueError(f"Value mismatch for {backend_name} key {loc}")
+                            raise ValueError(f"Value mismatch for {backend_name} key {key}")
 
                     array_access_times.append(end_time - start_time)
 
@@ -433,7 +431,7 @@ def measure_complete_read_time(arrays, results_tuple, backend_name):
         start_time = time.perf_counter()
         with BackendReader(backend_name, store_path) as reader:
             for i, _ in enumerate(arrays):
-                node = reader.get_node(i)
+                _, node = reader.get_key_node(i)
                 _ = np.array(node[:])  # Read complete array into memory
         end_time = time.perf_counter()
         total_read_time = end_time - start_time
@@ -484,7 +482,7 @@ def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results)
         access_times.append(zarr_results[3] if len(zarr_results) > 3 else 0)
 
     # Create figure with 2x2 subplots
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 10))
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
 
     # Colors for each backend
     colors = ['#1f77b4', '#ff7f0e', '#2ca02c']  # Blue, Orange, Green
