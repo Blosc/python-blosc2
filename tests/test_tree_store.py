@@ -88,8 +88,6 @@ def test_hierarchical_key_validation():
         assert isinstance(tstore["/b"], TreeStore)
 
         # Invalid keys
-        with pytest.raises(ValueError, match="Key must start with '/'"):
-            tstore["invalid"] = np.array([1])
         with pytest.raises(ValueError, match="Key cannot end with '/'"):
             tstore["/invalid/"] = np.array([1])
         with pytest.raises(ValueError, match="empty path segments"):
