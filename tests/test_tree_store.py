@@ -879,3 +879,45 @@ def test_vlmeta_subtree_read_write():
 
     # Cleanup
     os.remove("test_vlmeta_subtree_rw.b2z")
+
+
+def test_key_normalization():
+    """Test that keys without leading '/' are automatically normalized."""
+    with TreeStore("test_key_normalization.b2z", mode="w") as tstore:
+        # Test assignment without leading '/'
+        tstore["data1"] = np.array([1, 2, 3])
+        tstore["group/data2"] = np.array([4, 5, 6])
+        tstore["group/subgroup/data3"] = np.array([7, 8, 9])
+
+        # Keys should be normalized internally
+        assert "/data1" in tstore
+        assert "/group/data2" in tstore
+        assert "/group/subgroup/data3" in tstore
+
+        # Access with and without leading '/' should work
+        assert np.array_equal(tstore["data1"][:], np.array([1, 2, 3]))
+        assert np.array_equal(tstore["/data1"][:], np.array([1, 2, 3]))
+        assert np.array_equal(tstore["group/data2"][:], np.array([4, 5, 6]))
+        assert np.array_equal(tstore["/group/data2"][:], np.array([4, 5, 6]))
+
+        # Structural access should also work
+        group_subtree = tstore["group"]
+        assert isinstance(group_subtree, TreeStore)
+        assert "/data2" in group_subtree
+        assert "/subgroup/data3" in group_subtree
+
+        # Test other methods work with non-leading '/' keys
+        children = tstore.get_children("group")
+        assert "/group/subgroup" in children
+
+        descendants = tstore.get_descendants("group")
+        assert "/group/data2" in descendants
+        assert "/group/subgroup/data3" in descendants
+
+        # Test contains with both formats
+        assert "data1" in tstore
+        assert "/data1" in tstore
+        assert "group/data2" in tstore
+        assert "/group/data2" in tstore
+
+    os.remove("test_key_normalization.b2z")

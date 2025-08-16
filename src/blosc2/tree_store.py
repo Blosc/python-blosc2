@@ -84,7 +84,8 @@ class TreeStore(DictStore):
 
     Extends DictStore with strict hierarchical key validation and tree traversal
     capabilities. Keys must follow a hierarchical structure using '/' as separator
-    and always start with '/'.
+    and always start with '/'. If user passes a key that doesn't start with '/',
+    it will be automatically added.
 
     Parameters
     ----------
@@ -195,13 +196,18 @@ class TreeStore(DictStore):
             # Key is not within this subtree
             return None
 
-    def _validate_key(self, key: str) -> None:
-        """Validate hierarchical key structure.
+    def _validate_key(self, key: str) -> str:
+        """Validate and normalize hierarchical key structure.
 
         Parameters
         ----------
         key : str
-            The key to validate.
+            The key to validate and normalize.
+
+        Returns
+        -------
+        normalized_key : str
+            The normalized key with leading '/' added if missing.
 
         Raises
         ------
@@ -211,8 +217,9 @@ class TreeStore(DictStore):
         if not isinstance(key, str):
             raise ValueError(f"Key must be a string, got {type(key)}")
 
+        # Auto-add leading '/' if missing
         if not key.startswith("/"):
-            raise ValueError(f"Key must start with '/', got: {key}")
+            key = "/" + key
 
         if key != "/" and key.endswith("/"):
             raise ValueError(f"Key cannot end with '/' (except for root), got: {key}")
@@ -226,13 +233,15 @@ class TreeStore(DictStore):
             if char in key:
                 raise ValueError(f"Key cannot contain invalid character {char!r}, got: {key}")
 
+        return key
+
     def __setitem__(self, key: str, value: np.ndarray | NDArray | C2Array | SChunk) -> None:
         """Add a node with hierarchical key validation.
 
         Parameters
         ----------
         key : str
-            Hierarchical node key (must start with '/' and use '/' as separator).
+            Hierarchical node key.
         value : np.ndarray or blosc2.NDArray or blosc2.C2Array or blosc2.SChunk
             to store.
 
@@ -243,7 +252,7 @@ class TreeStore(DictStore):
             assign to a structural path that already has children, or if trying
             to add a child to a path that already contains data.
         """
-        self._validate_key(key)
+        key = self._validate_key(key)
 
         # Check if this key already has children (is a structural subtree)
         children = self.get_children(key)
@@ -293,7 +302,7 @@ class TreeStore(DictStore):
         ValueError
             If key doesn't follow hierarchical structure rules.
         """
-        self._validate_key(key)
+        key = self._validate_key(key)
         if self._is_vlmeta_key(key):
             raise KeyError(f"Key '{key}' not found; vlmeta keys are not directly accessible.")
 
@@ -334,7 +343,7 @@ class TreeStore(DictStore):
         ValueError
             If key doesn't follow hierarchical structure rules.
         """
-        self._validate_key(key)
+        key = self._validate_key(key)
 
         if self._is_vlmeta_key(key):
             raise KeyError(f"Key '{key}' not found; vlmeta keys are not directly accessible.")
@@ -379,7 +388,7 @@ class TreeStore(DictStore):
             True if key exists, False otherwise.
         """
         try:
-            self._validate_key(key)
+            key = self._validate_key(key)
             if self._is_vlmeta_key(key):
                 return False
             full_key = self._translate_key_to_full(key)
@@ -436,7 +445,7 @@ class TreeStore(DictStore):
         children : list[str]
             List of direct child paths.
         """
-        self._validate_key(path)
+        path = self._validate_key(path)
 
         if path == "/":
             prefix = "/"
@@ -475,7 +484,7 @@ class TreeStore(DictStore):
         descendants : list[str]
             List of all descendant paths.
         """
-        self._validate_key(path)
+        path = self._validate_key(path)
 
         if path == "/":
             prefix = "/"
@@ -523,7 +532,7 @@ class TreeStore(DictStore):
         >>> for path, children, nodes in tstore.walk("/child0", topdown=True):
         ...     print(f"Path: {path}, Children: {children}, Nodes: {nodes}")
         """
-        self._validate_key(path)
+        path = self._validate_key(path)
 
         # Get all direct children of this path
         direct_children = self.get_children(path)
@@ -583,7 +592,8 @@ class TreeStore(DictStore):
         Parameters
         ----------
         path : str
-            The path that will become the root of the subtree view (relative to current subtree).
+            The path that will become the root of the subtree view (relative to current subtree,
+            will be normalized to start with '/' if missing).
 
         Returns
         -------
@@ -604,7 +614,7 @@ class TreeStore(DictStore):
         -----
         This is equivalent to `tstore[path]` when path is a structural path.
         """
-        self._validate_key(path)
+        path = self._validate_key(path)
         full_path = self._translate_key_to_full(path)
 
         # Create a new TreeStore instance that shares the same underlying storage
