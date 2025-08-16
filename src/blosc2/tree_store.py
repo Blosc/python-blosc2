@@ -134,13 +134,32 @@ class TreeStore(DictStore):
     Please report any issues you may find.
     """
 
-    def __init__(self, *args, _from_parent_store=None, **kwargs):
+    def __init__(
+        self,
+        localpath: str | None = None,
+        mode: str = "a",
+        tmpdir: str | None = None,
+        cparams: dict | None = None,
+        dparams: dict | None = None,
+        storage: blosc2.Storage | None = None,
+        threshold: int | None = None,
+        *,
+        _from_parent_store=None,
+    ):
         """Initialize TreeStore with subtree support."""
         if _from_parent_store is not None:
             # This is a subtree view, copy state from parent
             self.__dict__.update(_from_parent_store.__dict__)
         else:
-            super().__init__(*args, **kwargs)
+            super().__init__(
+                localpath=localpath,
+                mode=mode,
+                tmpdir=tmpdir,
+                cparams=cparams,
+                dparams=dparams,
+                storage=storage,
+                threshold=threshold,
+            )
             self.subtree_path = ""  # Empty string means full tree
 
     def _translate_key_to_full(self, key: str) -> str:
