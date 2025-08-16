@@ -36,7 +36,7 @@ class vlmetaProxy(MutableMapping):
         # Support bulk set via [:]
         if isinstance(key, slice):
             if key.start is None and key.stop is None:
-                # Expect value to be a dict-like
+                # Merge/update existing values instead of replacing
                 for k, v in value.items():
                     self._inner[k] = v
                 # Persist once after bulk update
@@ -583,28 +583,13 @@ class TreeStore(DictStore):
 
         return subtree
 
-    def _persist_vlmeta(self) -> None:
-        """Persist current vlmeta SChunk into the store.
-
-        This is needed because the EmbedStore keeps a serialized snapshot of
-        stored objects; mutating the in-memory SChunk does not automatically
-        update the snapshot. We emulate an update by deleting and re-adding
-        the object in the embed store.
-        """
-        full_key = self.full_vlmeta_key
-        # Only embedded case is expected; handle it safely.
-        if hasattr(self, "_estore") and full_key in self._estore:
-            # Replace the stored snapshot
-            with contextlib.suppress(KeyError):
-                del self._estore[full_key]
-            self._estore[full_key] = self._vlmeta
-
     @property
     def vlmeta(self) -> MutableMapping | None:
-        """Access variable-length metadata for the TreeStore.
+        """Access variable-length metadata for the TreeStore or current subtree.
 
         Returns a proxy to the vlmeta attribute of an internal SChunk stored at
-        '/__vlmeta__'. The SChunk is created on-demand if it doesn't exist.
+        '/__vlmeta__' for the root tree, or '<subtree_path>/__vlmeta__' for subtrees.
+        The SChunk is created on-demand if it doesn't exist.
 
         Notes
         -----
@@ -613,22 +598,48 @@ class TreeStore(DictStore):
         additional guarantees:
         - Bulk get via `[:]` always returns a dict with string keys and decoded values.
         - Read-only protection is enforced at the TreeStore level.
+        - Each subtree has its own independent vlmeta storage.
         """
-        # Always refer to the global vlmeta at the root scope (ignore subtree_path)
-        self.full_vlmeta_key = "/__vlmeta__"
+        # Create vlmeta key based on subtree_path
+        if not self.subtree_path:
+            # Root tree uses global vlmeta
+            vlmeta_key = "/__vlmeta__"
+        else:
+            # Subtree uses path-specific vlmeta: <subtree_path>/__vlmeta__
+            vlmeta_key = f"{self.subtree_path}/__vlmeta__"
 
-        if super().__contains__(self.full_vlmeta_key):
+        if super().__contains__(vlmeta_key):
             # Load the current snapshot from the store to ensure freshness
-            self._vlmeta = super().__getitem__(self.full_vlmeta_key)
+            self._vlmeta = super().__getitem__(vlmeta_key)
         elif self.mode != "r":
             # Create new vlmeta SChunk and persist it
             self._vlmeta = blosc2.SChunk()
-            super().__setitem__(self.full_vlmeta_key, self._vlmeta)
+            super().__setitem__(vlmeta_key, self._vlmeta)
         else:
             return None
 
+        # Store the key for _persist_vlmeta method
+        self._vlmeta_key = vlmeta_key
+
         # Return a fresh proxy that wraps the latest inner vlmeta
         return vlmetaProxy(self, self._vlmeta.vlmeta)
+
+    def _persist_vlmeta(self) -> None:
+        """Persist current vlmeta SChunk into the store.
+
+        This is needed because the EmbedStore keeps a serialized snapshot of
+        stored objects; mutating the in-memory SChunk does not automatically
+        update the snapshot. We emulate an update by deleting and re-adding
+        the object in the embed store.
+        """
+        if hasattr(self, "_vlmeta_key"):
+            vlmeta_key = self._vlmeta_key
+            # Only embedded case is expected; handle it safely.
+            if hasattr(self, "_estore") and vlmeta_key in self._estore:
+                # Replace the stored snapshot
+                with contextlib.suppress(KeyError):
+                    del self._estore[vlmeta_key]
+                self._estore[vlmeta_key] = self._vlmeta
 
 
 if __name__ == "__main__":
