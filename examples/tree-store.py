@@ -14,17 +14,17 @@ import blosc2
 
 # Create a hierarchical store backed by a zip file
 with blosc2.TreeStore("example_tree.b2z", mode="w") as tstore:
-    # Create a small hierarchy. Data must be stored at leaves.
-    tstore["/child0/data"] = np.array([1, 2, 3])  # embedded (numpy)
-    tstore["/child0/child1/data"] = blosc2.ones(3)  # embedded (NDArray)
-    tstore["/child0/child2"] = blosc2.arange(3)  # embedded (NDArray)
+    # Create a small hierarchy
+    tstore["/child0/data"] = np.array([1, 2, 3])
+    tstore["/child0/child1/data"] = blosc2.ones(3)
+    tstore["/child0/child2"] = blosc2.arange(3)
 
-    # External array stored as separate .b2nd file
+    # External arrays can also be included
     ext = blosc2.linspace(0, 1, 5, urlpath="external_leaf.b2nd", mode="w")
     ext.vlmeta["desc"] = "external /dir1/node3 metadata"  # NDArray-level metadata
     tstore["/dir1/node3"] = ext
 
-    # # Remote array (read-only), referenced via URLPath
+    # Remote array (read-only), referenced via URLPath
     urlpath = blosc2.URLPath("@public/examples/ds-1d.b2nd", "https://cat2.cloud/demo")
     arr_remote = blosc2.open(urlpath, mode="r")
     tstore["/dir2/remote"] = arr_remote
