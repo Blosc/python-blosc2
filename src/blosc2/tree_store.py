@@ -87,6 +87,8 @@ class TreeStore(DictStore):
     and always start with '/'. If user passes a key that doesn't start with '/',
     it will be automatically added.
 
+    It supports the same arguments as :class:`blosc2.DictStore`.
+
     Parameters
     ----------
     localpath : str
@@ -143,32 +145,18 @@ class TreeStore(DictStore):
     Please report any issues you may find.
     """
 
-    def __init__(
-        self,
-        localpath: str | None = None,
-        mode: str = "a",
-        tmpdir: str | None = None,
-        cparams: dict | None = None,
-        dparams: dict | None = None,
-        storage: blosc2.Storage | None = None,
-        threshold: int | None = None,
-        *,
-        _from_parent_store=None,
-    ):
-        """Initialize TreeStore with subtree support."""
+    # For some reason, we had to revert the explicit parametrisation of the
+    # constructor to make benchmarks wrok fine again.
+    def __init__(self, *args, _from_parent_store=None, **kwargs):
+        """Initialize TreeStore with subtree support.
+
+        It supports the same arguments as :class:`blosc2.DictStore`.
+        """
         if _from_parent_store is not None:
             # This is a subtree view, copy state from parent
             self.__dict__.update(_from_parent_store.__dict__)
         else:
-            super().__init__(
-                localpath=localpath,
-                mode=mode,
-                tmpdir=tmpdir,
-                cparams=cparams,
-                dparams=dparams,
-                storage=storage,
-                threshold=threshold,
-            )
+            super().__init__(*args, **kwargs)
             self.subtree_path = ""  # Empty string means full tree
 
     def _is_vlmeta_key(self, key: str) -> bool:
