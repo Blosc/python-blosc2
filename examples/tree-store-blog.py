@@ -14,36 +14,33 @@ import blosc2
 
 # --- 1. Creating and populating a TreeStore ---
 print("--- 1. Creating and populating a TreeStore ---")
-# Create a new TreeStore in write mode ('w')
+# Create a new TreeStore
 with blosc2.TreeStore("my_experiment.b2z", mode="w") as ts:
     # You can store numpy arrays, which are converted to blosc2.NDArray
-    ts["/group1/dataset1"] = np.arange(100)
+    ts["/dataset0"] = np.arange(100)
 
-    # You can also store blosc2 arrays directly
-    ts["/group1/dataset2"] = blosc2.full((5, 5), fill_value=3.14)
+    # Create a group with a dataset that can be a blosc2 NDArray
+    ts["/group1/dataset1"] = blosc2.zeros((10,))
 
-    # And external arrays with vlmeta attached (these are included internally too)
-    ext = blosc2.zeros((10,), urlpath="external_array.b2nd", mode="w")
-    ext.vlmeta["desc"] = "included array metadata"
-    ts["/group1/included_array"] = ext
-
-    # Create another group with a dataset
-    ts["/group2/another_dataset"] = blosc2.zeros((10,))
+    # You can also store blosc2 arrays directly (vlmeta included)
+    ext = blosc2.linspace(0, 1, 10_000, dtype=np.float32)
+    ext.vlmeta["desc"] = "dataset2 metadata"
+    ts["/group1/dataset2"] = ext
 print("Created 'my_experiment.b2z' with initial data.\n")
 
 
 # --- 2. Reading from a TreeStore ---
 print("--- 2. Reading from a TreeStore ---")
-# Open the TreeStore in read mode ('r')
+# Open the TreeStore in read-only mode ('r')
 with blosc2.TreeStore("my_experiment.b2z", mode="r") as ts:
     # Access a dataset
     dataset1 = ts["/group1/dataset1"]
     print("Dataset 1:", dataset1[:])  # Use [:] to decompress and get a NumPy array
 
-    # Access the external array that has been included internally
-    ext_array = ts["/group1/included_array"]
-    print("Included array:", ext_array[:])
-    print("Included array metadata:", ext_array.vlmeta[:])
+    # Access the external array that has been stored internally
+    dataset2 = ts["/group1/dataset2"]
+    print("Dataset 2", dataset2[:])
+    print("Dataset 2 metadata:", dataset2.vlmeta[:])
 
     # List all paths in the store
     print("Paths in TreeStore:", list(ts))
@@ -55,7 +52,7 @@ print("--- 3. Storing Metadata with `vlmeta` ---")
 with blosc2.TreeStore("my_experiment.b2z", mode="a") as ts:  # 'a' for append/modify
     # Add metadata to the root
     ts.vlmeta["author"] = "The Blosc Team"
-    ts.vlmeta["date"] = "2025-07-10"
+    ts.vlmeta["date"] = "2025-08-17"
 
     # Add metadata to a group
     ts["/group1"].vlmeta["description"] = "Data from the first run"
