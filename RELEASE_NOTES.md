@@ -1,4 +1,9 @@
 # Release notes
+
+## Changes from 3.7.1 to 3.7.2
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.7.0 to 3.7.1
 
 * Added `C2Array.slice()` method and `C2Array.nbytes`, `C2Array.cbytes`, `C2Array.cratio`, `C2Array.vlmeta` and `C2Array.info` properties (PR #455).
