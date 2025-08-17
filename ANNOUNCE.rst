@@ -1,19 +1,14 @@
-Announcing Python-Blosc2 3.7.0
+Announcing Python-Blosc2 3.7.1
 ==============================
 
 In this release:
 
-✅ Overhaul of documentation (API reference and Tutorials)
-✅ Improvements to lazy expression indexing and in particular much more efficient
-memory usage when applying non-unit steps
-✅ Extended functionality of ``expand_dims`` to match that of NumPy
-✅ 3(!) new data storage classes (``EmbedStore``, ``DictStore`` and ``TreeStore``)
-which allow for the efficient storage of heterogeneous array data
+✅ Many usability improvements to the ``TreeStore`` class and friends.
+✅ New section about ``TreeStore`` in basics NDArray tutorial.
+✅ Added ``C2Array.slice()`` method and other useful properties to ``C2Array`` class.
 
-See [here](https://github.com/Blosc/python-blosc2/pull/451#issuecomment-3178828765)
-for plots for the new data storage classes. And
-[here](https://github.com/Blosc/python-blosc2/pull/446#issuecomment-3167060686) for the improved performance
-of lazy expression slicing.
+Check our new blog post about ``TreeStore`` usage and performance at:
+https://www.blosc.org/posts/new-treestore-blosc2
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
