@@ -6,7 +6,7 @@
 
     <p style="text-align: center; color: black; background-color: rgba(230, 169, 9, 0.65);">
         <a href="https://github.com/Blosc/python-blosc2/blob/main/RELEASE_NOTES.md"
-           style="font-size: 1.5em;">Version 3.7.0 released on 2025-08-12!</a>
+           style="font-size: 1.5em;">Version 3.7.1 released on 2025-08-17!</a>
         <span style="display: inline-block; width: 20px;"></span>
         <span style="font-family: monospace;">pip install blosc2 -U</span>
     </p>
