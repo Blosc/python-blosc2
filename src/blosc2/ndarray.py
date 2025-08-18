@@ -27,6 +27,7 @@ from dataclasses import asdict
 
 import ndindex
 import numpy as np
+from ndindex.subindex_helpers import ceiling
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext, compute_chunks_blocks
@@ -1459,7 +1460,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             raise ValueError("This property only works for 2-dimensional arrays.")
         return permute_dims(self)
 
-    def get_fselection_numpy(self, key: list | np.ndarray) -> np.ndarray:
+    def get_fselection_numpy(self, key: list | np.ndarray) -> np.ndarray:  # noqa: C901
         """
         Select a slice from the array using a fancy index.
         Closely matches NumPy fancy indexing behaviour, except in
@@ -1482,60 +1483,131 @@ class NDArray(blosc2_ext.NDArray, Operand):
         #     return self[:][key]  # load into memory for smallish arrays
         shape = self.shape
         chunks = self.chunks
+        # after this, all indices are slices or arrays of integers
+        # moreover, all arrays are consecutive (otherwise an error is raised)
         _slice = ndindex.ndindex(key).expand(shape)
         out_shape = _slice.newshape(shape)
-        out = np.empty(out_shape, dtype=self.dtype)
-        key = np.array(key)
+        _slice = _slice.raw
+        shape = np.array(shape)
 
-        if self.ndim == 1 and len(key.shape) == 1:
-            # Fast path so we can avoid the costly lines in slow path
-            # (sub_idx = _slice.as_subindex(c).raw, sel_idx = c.as_subindex(_slice))
-            if np.any(np.diff(key) < 0):
-                idx_order = np.argsort(key)
-                sorted_idxs = key[idx_order]
-            else:
-                idx_order = None
-                sorted_idxs = key
-            chunk_nitems = np.bincount(
-                sorted_idxs // chunks[0], minlength=self.schunk.nchunks
-            )  # number of items per chunk
+        if np.all([isinstance(s, (slice, np.ndarray)) for s in _slice]) and np.all(
+            [s.dtype is not bool for s in _slice if isinstance(s, np.ndarray)]
+        ):
+            arr = []
+            chunks = np.array(chunks)
+            f_ = 0
+            #      |------|
+            # ------| arrs |------
+            #  f_=0  f_=1   f_=2
+            begin = 0
+            end = None
+            extradims = 0
+            flat_shape = ()
+            for num, i in enumerate(_slice):
+                if isinstance(i, np.ndarray):
+                    if f_ == 2:
+                        raise ValueError("Cannot use slices between arrays of integers in index")
+                    arr += [i.flatten()]
+                    extradims += i.ndim - 1
+                    if f_ == 0:
+                        begin = num
+                    f_ = 1
+                else:
+                    if f_ == 1:  # finished adding arrays
+                        arr = np.stack(arr)
+                        end = num
+                        f_ = 2
+                        flat_shape += (arr.shape[-1],)
+                    flat_shape += ((i.stop - i.start) // i.step,)
+            if not isinstance(arr, np.ndarray):  # might have missed last part of loop
+                arr = np.stack(arr)
+                flat_shape += (arr.shape[-1],)
+            # out_shape could have new dims if indexing arrays are not all 1D
+            # (we have just flattened them so need to handle accordingly)
+            idx_order = np.lexsort(
+                tuple(a for a in reversed(arr))
+            )  # sort by column with priority to first column
+            sorted_idxs = arr[:, idx_order]
+            out = np.empty(flat_shape, dtype=self.dtype)
+
+            divider = chunks[begin:end]
+            unique_chunks, chunk_nitems = np.unique(sorted_idxs.T // divider, axis=0, return_counts=True)
             chunk_nitems_cumsum = np.cumsum(chunk_nitems)
-            for chunk_i, c in enumerate(chunk_nitems):
-                if c == 0:
-                    continue  # no items in chunk
+            prior_tuple = _slice[:begin]
+            post_tuple = _slice[end:] if end is not None else ()
+            cprior_slices = [
+                slice_to_chunktuple(s, c) for s, c in zip(prior_tuple, chunks[:begin], strict=True)
+            ]
+            cpost_slices = (
+                [slice_to_chunktuple(s, c) for s, c in zip(post_tuple, chunks[end:], strict=True)]
+                if end is not None
+                else []
+            )
+            for chunk_i, chunk_idx in enumerate(unique_chunks):
                 start = 0 if chunk_i == 0 else chunk_nitems_cumsum[chunk_i - 1]
                 stop = chunk_nitems_cumsum[chunk_i]
-                selection = sorted_idxs[start:stop]
-                out_selection = idx_order[start:stop] if idx_order is not None else slice(start, stop)
-                to_be_loaded = np.empty((selection[-1] - selection[0] + 1,), dtype=self.dtype)
-                # if len(selection) < 10:
-                #     # TODO: optimise for case of few elements and go index-by-index
-                #     selector = out_selection.start + np.arange(out_selection.stop) if isinstance(out_selection, slice) else out_selection
-                #     for j, idx in enumerate(sorted_idxs[start:stop]):
-                #         out[out_selection[j]] = self[idx]
-                # else:
-                super().get_slice_numpy(
-                    to_be_loaded, ((selection[0],), (selection[-1] + 1,))
-                )  # get relevant section of chunk
-                loc_idx = selection - selection[0]
-                out[out_selection] = to_be_loaded[loc_idx]
+                selection = sorted_idxs[:, start:stop].T
+                out_selection = idx_order[start:stop].T
+                # loop over chunks coming from slices before and after array indices
+                for cprior_tuple in product(*cprior_slices):
+                    prior_selection = selector(cprior_tuple, prior_tuple, chunks[:begin])
+                    # selection relative to coordinates of out (necessarily step = 1)
+                    out_prior_selection = tuple(
+                        slice(ps.start - pt.start, ps.stop - pt.start, 1)
+                        for ps, pt in zip(prior_selection, prior_tuple, strict=True)
+                    )
+                    for cpost_tuple in product(*cpost_slices):
+                        post_selection = selector(
+                            cpost_tuple, post_tuple, chunks[end:] if end is not None else []
+                        )
+                        # selection relative to coordinates of out (necessarily step = 1)
+                        out_post_selection = tuple(
+                            slice(ps.start - pt.start, ps.stop - pt.start, 1)
+                            for ps, pt in zip(post_selection, post_tuple, strict=True)
+                        )
+                        chunk_begin = chunk_idx * chunks[begin:end]
+                        chunk_end = np.minimum((chunk_idx + 1) * chunks[begin:end], shape[begin:end])
+                        locbegin = np.hstack(
+                            (
+                                [s.start for s in prior_selection],
+                                chunk_begin,
+                                [s.start for s in post_selection],
+                            ),
+                            casting="unsafe",
+                            dtype="int64",
+                        )
+                        locend = np.hstack(
+                            ([s.stop for s in prior_selection], chunk_end, [s.stop for s in post_selection]),
+                            casting="unsafe",
+                            dtype="int64",
+                        )
+                        out_selection = out_prior_selection + (out_selection,) + out_post_selection
+                        to_be_loaded = np.empty(locend - locbegin, dtype=self.dtype)
+                        # basically load whole chunk, except for slice part at beginning and end
+                        super().get_slice_numpy(
+                            to_be_loaded, (locbegin, locend)
+                        )  # get relevant section of chunk
+                        loc_idx = (
+                            tuple(slice(0, s.stop - s.start, s.step) for s in prior_selection)
+                            + tuple(a for a in (selection - chunk_begin).T)
+                            + tuple(slice(0, s.stop - s.start, s.step) for s in post_selection)
+                        )
+                        out[out_selection] = to_be_loaded[loc_idx]
+            return out.reshape(out_shape)  # should have filled in correct order, just need to reshape
 
-        else:
-            chunk_size = ndindex.ChunkSize(chunks)
-            # repeated indices are grouped together
-            intersecting_chunks = chunk_size.as_subchunks(
-                _slice, shape
-            )  # if _slice is (), returns all chunks
-            for c in intersecting_chunks:
-                sub_idx = _slice.as_subindex(c).raw
-                sel_idx = c.as_subindex(_slice)
-                new_shape = sel_idx.newshape(out_shape)
-                start, stop, step = get_ndarray_start_stop(self.ndim, c.raw, shape)
-                chunk = np.empty(
-                    tuple(sp - st for st, sp in zip(start, stop, strict=True)), dtype=self.dtype
-                )
-                super().get_slice_numpy(chunk, (start, stop))
-                out[sel_idx.raw] = chunk[sub_idx].reshape(new_shape)
+        # Default when there are booleans
+        out = np.empty(out_shape, dtype=self.dtype)
+        chunk_size = ndindex.ChunkSize(chunks)
+        # repeated indices are grouped together
+        intersecting_chunks = chunk_size.as_subchunks(_slice, shape)  # if _slice is (), returns all chunks
+        for c in intersecting_chunks:
+            sub_idx = _slice.as_subindex(c).raw
+            sel_idx = c.as_subindex(_slice)
+            new_shape = sel_idx.newshape(out_shape)
+            start, stop, step = get_ndarray_start_stop(self.ndim, c.raw, shape)
+            chunk = np.empty(tuple(sp - st for st, sp in zip(start, stop, strict=True)), dtype=self.dtype)
+            super().get_slice_numpy(chunk, (start, stop))
+            out[sel_idx.raw] = chunk[sub_idx].reshape(new_shape)
 
         return out
 
@@ -4519,3 +4591,31 @@ class OIndex:
 
 #     def __setitem__(self, selection, input) -> np.ndarray:
 #         return NotImplementedError
+
+
+def slice_to_chunktuple(s, n):
+    """
+        # credit to ndindex for this function #
+    Parameters
+    ----------
+    s : slice
+        A slice object with start, stop, and step attributes.
+    n : int
+        The number of elements in the chunk axis
+
+    Returns
+    -------
+    out: tuple
+    """
+    start, stop, step = s.start, s.stop, s.step
+    if step > n:
+        return tuple((start + k * step) // n for k in range(ceiling(stop - start, step)))
+    else:
+        return tuple(range(start // n, ceiling(stop, n)))
+
+
+def selector(ctuple, _tuple, chunks):
+    return tuple(
+        slice(builtins.max(s.start, i * csize), builtins.min(csize * (i + 1), s.stop), s.step)
+        for i, s, csize in zip(ctuple, _tuple, chunks, strict=True)
+    )
