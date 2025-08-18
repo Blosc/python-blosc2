@@ -296,19 +296,18 @@ def test_findex():
     # Test 1d fast path
     ndim = 1
     dtype = np.dtype("float")
-    # d = 1 + int(blosc2.MAX_FAST_PATH_SIZE / dtype.itemsize)  # just over fast path size
-    d = 10
-    # shape = (d,) * ndim
-    # arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype=dtype)
-    # rng = np.random.default_rng()
-    # idx = rng.integers(low=0, high=d, size=(d // 4,))
-    # nparr = arr[:]
-    # b = arr[idx]
-    # n = nparr[idx]
-    # np.testing.assert_allclose(b, n)
+    d = 1 + int(blosc2.MAX_FAST_PATH_SIZE / dtype.itemsize)  # just over fast path size
+    shape = (d,) * ndim
+    arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype=dtype)
+    rng = np.random.default_rng()
+    idx = rng.integers(low=0, high=d, size=(d // 4,))
+    nparr = arr[:]
+    b = arr[idx]
+    n = nparr[idx]
+    np.testing.assert_allclose(b, n)
 
     ndim = 3
-    # d = 1 + int((blosc2.MAX_FAST_PATH_SIZE / 8) ** (1 / ndim))  # just over fast path size
+    d = 1 + int((blosc2.MAX_FAST_PATH_SIZE / 8) ** (1 / ndim))  # just over fast path size
     shape = (d,) * ndim
     arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype=dtype)
     rng = np.random.default_rng()
