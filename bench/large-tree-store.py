@@ -51,8 +51,8 @@ except ImportError:
 # Configuration
 N_ARRAYS = 100  # Number of arrays to store
 NGROUPS_MAX = 10
-PEAK_SIZE_MB = 10  # Peak size in MB for the normal distribution
-STDDEV_MB = 5  # Standard deviation in MB
+PEAK_SIZE_MB = 100  # Peak size in MB for the normal distribution
+STDDEV_MB = PEAK_SIZE_MB / 2  # Standard deviation in MB
 N_ACCESS = 10
 OUTPUT_DIR_TSTORE = "large-tree-store.b2z"
 OUTPUT_FILE_H5PY = "large-h5py-store.h5"
@@ -186,6 +186,36 @@ def store_arrays_in_h5py(arrays, output_file):
     return total_time
 
 
+def adjust_shards_to_blocks(shards, blocks):
+    """
+    Adjust shards to be the closest multiple of blocks in every dimension.
+
+    Zarr needs the shards to be multiple of the blocks in every dimension.
+
+    Args:
+        shards: tuple of integers representing the shard shape
+        blocks: tuple of integers representing the block shape
+
+    Returns:
+        tuple of integers representing the adjusted shard shape
+    """
+    if len(shards) != len(blocks):
+        raise ValueError("shards and blocks must have the same number of dimensions")
+
+    adjusted_shards = []
+    for shard_size, block_size in zip(shards, blocks):
+        if block_size <= 0:
+            raise ValueError("block sizes must be positive")
+
+        # Find the closest multiple of block_size to shard_size
+        quotient = round(shard_size / block_size)
+        # Ensure at least one block
+        quotient = max(1, quotient)
+        adjusted_size = quotient * block_size
+        adjusted_shards.append(adjusted_size)
+
+    return tuple(adjusted_shards)
+
 #@profile
 def store_arrays_in_zarr(arrays, output_dir):
     """Store arrays in zarr and measure performance."""
@@ -222,11 +252,14 @@ def store_arrays_in_zarr(arrays, output_dir):
 
         # Store array with blosc2 compression; use arr.blocks (first partition in Blosc2) as chunks
         if zarr.__version__ >= "3":
+            shards = adjust_shards_to_blocks(arr.chunks, arr.blocks)
+            # print(f"shards: {shards}, chunks: {arr.chunks}, blocks: {arr.blocks}")
             grp.create_array(
                 name=dataset_name,
                 data=arr[:],
                 compressors=zarr.codecs.BloscCodec(
                     cname="zstd", clevel=5, shuffle=zarr.codecs.BloscShuffle.shuffle),
+                # shards=shards,  # looks like this is not working for zarr<=3.1.1
                 chunks=arr.blocks,
             )
         else:
