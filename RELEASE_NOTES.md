@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.7.2 to 3.7.3
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.7.1 to 3.7.2
 
 * C-Blosc2 internal library updated to latest 2.21.1.
