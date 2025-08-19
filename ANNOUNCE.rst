@@ -1,11 +1,12 @@
-Announcing Python-Blosc2 3.7.1
+Announcing Python-Blosc2 3.7.2
 ==============================
 
-In this release:
+This is a maintenance release where:
 
-✅ Many usability improvements to the ``TreeStore`` class and friends.
-✅ New section about ``TreeStore`` in basics NDArray tutorial.
-✅ Added ``C2Array.slice()`` method and other useful properties to ``C2Array`` class.
+✅ We have updated the Blosc2 C library to 2.21.1, which fixes a regression
+  in the build system detected in Fedora and Gentoo.
+✅ We reverted signature of ``TreeStore.__init__(()`` for making benchmarks
+  to get back to normal performance.
 
 Check our new blog post about ``TreeStore`` usage and performance at:
 https://www.blosc.org/posts/new-treestore-blosc2

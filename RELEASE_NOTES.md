@@ -2,7 +2,10 @@
 
 ## Changes from 3.7.1 to 3.7.2
 
-XXX version-specific blurb XXX
+* C-Blosc2 internal library updated to latest 2.21.1.
+
+* Revert signature of `TreeStore.__init__` for making benchmarks to get back
+  to normal performance.
 
 ## Changes from 3.7.0 to 3.7.1
 
