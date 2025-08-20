@@ -1488,7 +1488,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
         _slice = ndindex.ndindex(key).expand(shape)
         out_shape = _slice.newshape(shape)
         _slice = _slice.raw
-        shape = np.array(shape)
 
         if np.all([isinstance(s, (slice, np.ndarray)) for s in _slice]) and np.all(
             [s.dtype is not bool for s in _slice if isinstance(s, np.ndarray)]
@@ -1518,20 +1517,24 @@ class NDArray(blosc2_ext.NDArray, Operand):
                         end = num
                         f_ = 2
                         flat_shape += (arr.shape[-1],)
-                    flat_shape += ((i.stop - i.start) // i.step,)
+                        # k in [1,step], stop = start + n*step + k
+                        # stop - start + step - 1 = (n+1)*step + k-1 = (n+1)*step + [0, step - 1]
+                    flat_shape += ((i.stop - i.start + (i.step - 1)) // i.step,)
             if not isinstance(arr, np.ndarray):  # might have missed last part of loop
                 arr = np.stack(arr)
                 flat_shape += (arr.shape[-1],)
             # out_shape could have new dims if indexing arrays are not all 1D
             # (we have just flattened them so need to handle accordingly)
+            divider = chunks[begin:end]
+            chunked_arr = arr.T // divider
+            unique_chunks, chunk_nitems = np.unique(chunked_arr, axis=0, return_counts=True)
             idx_order = np.lexsort(
-                tuple(a for a in reversed(arr))
+                tuple(a for a in reversed(chunked_arr.T))
             )  # sort by column with priority to first column
             sorted_idxs = arr[:, idx_order]
             out = np.empty(flat_shape, dtype=self.dtype)
+            shape = np.array(shape)
 
-            divider = chunks[begin:end]
-            unique_chunks, chunk_nitems = np.unique(sorted_idxs.T // divider, axis=0, return_counts=True)
             chunk_nitems_cumsum = np.cumsum(chunk_nitems)
             prior_tuple = _slice[:begin]
             post_tuple = _slice[end:] if end is not None else ()
@@ -1547,13 +1550,23 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 start = 0 if chunk_i == 0 else chunk_nitems_cumsum[chunk_i - 1]
                 stop = chunk_nitems_cumsum[chunk_i]
                 selection = sorted_idxs[:, start:stop].T
-                out_selection = idx_order[start:stop].T
+                mid_out_selection = idx_order[start:stop].T
+                chunk_begin = chunk_idx * chunks[begin:end]
+                chunk_end = np.minimum((chunk_idx + 1) * chunks[begin:end], shape[begin:end])
                 # loop over chunks coming from slices before and after array indices
                 for cprior_tuple in product(*cprior_slices):
                     prior_selection = selector(cprior_tuple, prior_tuple, chunks[:begin])
                     # selection relative to coordinates of out (necessarily step = 1)
+                    # stop = start + step * n + k => n = (stop - start - 1) // step
+                    # hence, out_stop = out_start + n + 1
+                    # ps.start = pt.start + out_start * step
                     out_prior_selection = tuple(
-                        slice(ps.start - pt.start, ps.stop - pt.start, 1)
+                        slice(
+                            (ps.start - pt.start + pt.step - 1) // pt.step,
+                            (ps.start - pt.start + pt.step - 1) // pt.step
+                            + (ps.stop - ps.start + ps.step - 1) // ps.step,
+                            1,
+                        )
                         for ps, pt in zip(prior_selection, prior_tuple, strict=True)
                     )
                     for cpost_tuple in product(*cpost_slices):
@@ -1562,11 +1575,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
                         )
                         # selection relative to coordinates of out (necessarily step = 1)
                         out_post_selection = tuple(
-                            slice(ps.start - pt.start, ps.stop - pt.start, 1)
+                            slice(
+                                (ps.start - pt.start + pt.step - 1) // pt.step,
+                                (ps.start - pt.start + pt.step - 1) // pt.step
+                                + (ps.stop - ps.start + ps.step - 1) // ps.step,
+                                1,
+                            )
                             for ps, pt in zip(post_selection, post_tuple, strict=True)
                         )
-                        chunk_begin = chunk_idx * chunks[begin:end]
-                        chunk_end = np.minimum((chunk_idx + 1) * chunks[begin:end], shape[begin:end])
                         locbegin = np.hstack(
                             (
                                 [s.start for s in prior_selection],
@@ -1581,7 +1597,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                             casting="unsafe",
                             dtype="int64",
                         )
-                        out_selection = out_prior_selection + (out_selection,) + out_post_selection
+                        out_selection = out_prior_selection + (mid_out_selection,) + out_post_selection
                         to_be_loaded = np.empty(locend - locbegin, dtype=self.dtype)
                         # basically load whole chunk, except for slice part at beginning and end
                         super().get_slice_numpy(
@@ -4615,7 +4631,21 @@ def slice_to_chunktuple(s, n):
 
 
 def selector(ctuple, _tuple, chunks):
-    return tuple(
-        slice(builtins.max(s.start, i * csize), builtins.min(csize * (i + 1), s.stop), s.step)
-        for i, s, csize in zip(ctuple, _tuple, chunks, strict=True)
-    )
+    # we assume that at least one element of chunk intersects with the slice
+    # (as a consequence of only looping over intersecting chunks)
+    result = ()
+    for i, s, csize in zip(ctuple, _tuple, chunks, strict=True):
+        # we need to advance to first element within chunk that intersects with slice, not
+        # necessarily the first element of chunk
+        # i * csize = s.start + n*step + k, already added n+1 elements, k in [1, step]
+        np1 = (i * csize - s.start + s.step - 1) // s.step  # gives (n + 1)
+        # can have n = -1 if s.start > i * csize, but never < -1 since have to intersect with chunk
+        result += (
+            slice(
+                builtins.max(s.start, s.start + np1 * s.step),  # start+(n+1)*step gives i*csize if k=step
+                builtins.min(csize * (i + 1), s.stop),
+                s.step,
+            ),
+        )
+
+    return result

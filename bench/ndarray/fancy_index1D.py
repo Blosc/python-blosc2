@@ -27,9 +27,9 @@ plt.style.use('seaborn-v0_8-paper')
 
 NUMPY = True
 BLOSC = True
-ZARR = True
-HDF5 = True
-SPARSE = True
+ZARR = False
+HDF5 = False
+SPARSE = False
 
 if HDF5:
     SPARSE = True # HDF5 takes too long for non-sparse indexing
@@ -50,7 +50,7 @@ def genarray(r, verbose=True):
     return arr, arrsize
 
 
-target_sizes = np.float64(np.array([.2, .5, 1, 2, 5, 10]))
+target_sizes = np.float64(np.array([.1, .2, .5, 1, 2]))
 rng = np.random.default_rng()
 blosctimes = []
 nptimes = []
@@ -61,12 +61,12 @@ for d in target_sizes:
     arr, arrsize = genarray(d)
     genuine_sizes += [arrsize]
     idx = rng.integers(low=0, high=arr.shape[0], size=(1000,)) if SPARSE else rng.integers(low=0, high=arr.shape[0], size=(arr.shape[0]//4,))
-    sorted_idx = np.unique(np.sort(idx))
+    sorted_idx = np.sort(np.unique(idx))
     ## Test fancy indexing for different use cases
     def timer(arr):
         time_list = []
         if not (HDF5 or ZARR):
-             b = arr[[[sorted_idx], [idx]]]
+             b = arr[[[idx[::-1]], [idx]]]
              time_list += [time.time() - t]
              t = time.time()
         t = time.time()
@@ -114,7 +114,8 @@ for i, r in enumerate(result_tuple):
         error_kw=dict(lw=2, capthick=2, ecolor='k'))
         labs+=label
 
-filename = f"results{labs}1Dsparse" if SPARSE else f"results{labs}1D"
+filename = f"{labs}1Dsparse" if SPARSE else f"{labs}1D"
+filename+=blosc2.__version__.replace('.','_')
 with open(filename+".pkl", 'wb') as f:
     pickle.dump({'times':result_tuple, 'sizes':genuine_sizes}, f)
 
@@ -122,7 +123,7 @@ plt.xlabel('Array size (GB)')
 plt.legend()
 plt.xticks(x-width, np.round(genuine_sizes, 2))
 plt.ylabel("Time (s)")
-plt.title(f"Fancy indexing performance comparison, 1D {' sparse' if SPARSE else ''}")
+plt.title(f"Fancy indexing {blosc2.__version__}, 1D {' sparse' if SPARSE else ''}")
 plt.gca().set_yscale('log')
 plt.savefig(f'plots/{filename}.png', format="png")
 plt.show()
