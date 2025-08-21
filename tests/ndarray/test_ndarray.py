@@ -292,34 +292,43 @@ def test_oindex():
     np.testing.assert_allclose(arr[:], nparr)
 
 
-def test_findex():
+@pytest.mark.parametrize("c", [None, 10])
+def test_findex(c):
     # Test 1d fast path
     ndim = 1
-    d = 1 + int(blosc2.MAX_FAST_PATH_SIZE / 8)  # just over fast path size
+    chunks = (c,) * ndim if c is not None else None
+    dtype = np.dtype("float")
+    d = 1 + int(blosc2.MAX_FAST_PATH_SIZE / dtype.itemsize) if c is None else 100  # just over fast path size
     shape = (d,) * ndim
-    arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype=np.float64)
+    arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype=dtype, chunks=chunks)
     rng = np.random.default_rng()
     idx = rng.integers(low=0, high=d, size=(d // 4,))
     nparr = arr[:]
     b = arr[idx]
     n = nparr[idx]
     np.testing.assert_allclose(b, n)
+    b = arr[[[idx[::-1]], [idx]]]
+    n = nparr[[[idx[::-1]], [idx]]]
+    np.testing.assert_allclose(b, n)
 
     ndim = 3
-    d = 1 + int((blosc2.MAX_FAST_PATH_SIZE / 8) ** (1 / ndim))  # just over fast path size
+    d = (
+        1 + int((blosc2.MAX_FAST_PATH_SIZE / 8) ** (1 / ndim)) if c is None else d
+    )  # just over fast path size
     shape = (d,) * ndim
-    arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype=np.float64)
+    chunks = (c,) * ndim if c is not None else None
+    arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype=dtype, chunks=chunks)
     rng = np.random.default_rng()
     idx = rng.integers(low=0, high=d, size=(100,))
 
     row = idx
     col = rng.permutation(idx)
     mask = rng.integers(low=0, high=2, size=(d,)) == 1
-
-    ## Test fancy indexing for different use cases
+    #
+    # ## Test fancy indexing for different use cases
     m, M = np.min(idx), np.max(idx)
     nparr = arr[:]
-    # i)
+    # # i)
     b = arr[[m, M // 2, M]]
     n = nparr[[m, M // 2, M]]
     np.testing.assert_allclose(b, n)
