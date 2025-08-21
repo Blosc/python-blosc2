@@ -1500,44 +1500,51 @@ class NDArray(blosc2_ext.NDArray, Operand):
             end = None
             flat_shape = ()
 
-            for num, i in enumerate(_slice):
-                if isinstance(i, np.ndarray):  # collecting arrays
-                    if end is not None:
-                        raise ValueError("Cannot use slices between arrays of integers in index")
-                    arrs.append(i.flatten())
-                    if begin is None:
-                        begin = num
-                else:  # slice
-                    if arrs:  # flush arrays
-                        arr = np.stack(arrs)
-                        arrs = []
-                        end = num
-                        flat_shape += (arr.shape[-1],)
-                    flat_shape += ((i.stop - i.start + (i.step - 1)) // i.step,)
-
-            # flush at the end if arrays remain
-            if arrs:
-                arr = np.stack(arrs)
+            if len(_slice) == 1:  # 1D fast path possible if no slices
+                arr = _slice[0].reshape(1, -1)
                 flat_shape += (arr.shape[-1],)
+                begin = 0
+            else:
+                for num, i in enumerate(_slice):
+                    if isinstance(i, np.ndarray):  # collecting arrays
+                        if end is not None:
+                            raise ValueError("Cannot use slices between arrays of integers in index")
+                        arrs.append(i.reshape(-1))  # flatten does copy
+                        if begin is None:
+                            begin = num
+                    else:  # slice
+                        if arrs:  # flush arrays
+                            arr = np.stack(arrs)
+                            arrs = []
+                            end = num
+                            flat_shape += (arr.shape[-1],)
+                        flat_shape += ((i.stop - i.start + (i.step - 1)) // i.step,)
+
+                # flush at the end if arrays remain
+                if arrs:
+                    arr = np.stack(arrs)
+                    flat_shape += (arr.shape[-1],)
+
             # out_shape could have new dims if indexing arrays are not all 1D
             # (we have just flattened them so need to handle accordingly)
+            prior_tuple = _slice[:begin]
+            post_tuple = _slice[end:] if end is not None else ()
             divider = chunks[begin:end]
             chunked_arr = arr.T // divider
             unique_chunks, chunk_nitems = np.unique(chunked_arr, axis=0, return_counts=True)
-            if len(arr) == 1:  # 1D chunks:
+            if len(arr) == 1:  # 1D chunks, can avoid loading whole chunks
                 idx_order = np.argsort(arr.squeeze(axis=0), axis=-1)  # sort by real index
             else:
                 idx_order = np.lexsort(
                     tuple(a for a in reversed(chunked_arr.T))
                 )  # sort by chunks (can't sort by index since larger index could belong to lower chunk)
                 # e.g. chunks of (100, 10) means (50, 15) has chunk idx (0,1) but (60,5) has (0, 0)
+            del chunked_arr  # no longer need this
             sorted_idxs = arr[:, idx_order]
             out = np.empty(flat_shape, dtype=self.dtype)
             shape = np.array(shape)
 
             chunk_nitems_cumsum = np.cumsum(chunk_nitems)
-            prior_tuple = _slice[:begin]
-            post_tuple = _slice[end:] if end is not None else ()
             cprior_slices = [
                 slice_to_chunktuple(s, c) for s, c in zip(prior_tuple, chunks[:begin], strict=True)
             ]
