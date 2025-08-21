@@ -50,7 +50,7 @@ def genarray(r, verbose=True):
     return arr, arrsize
 
 
-target_sizes = np.float64(np.array([.1, .2, .5, 1, 2]))
+target_sizes = np.float64(np.array([.1, .2, .5, 1, 2, 3]))
 rng = np.random.default_rng()
 blosctimes = []
 nptimes = []
@@ -66,9 +66,9 @@ for d in target_sizes:
     def timer(arr):
         time_list = []
         if not (HDF5 or ZARR):
-             b = arr[[[idx[::-1]], [idx]]]
-             time_list += [time.time() - t]
-             t = time.time()
+            t = time.time()
+            b = arr[[[idx[::-1]], [idx]]]
+            time_list += [time.time() - t]
         t = time.time()
         b = arr[sorted_idx] if HDF5 else arr[idx]
         time_list += [time.time() - t]
