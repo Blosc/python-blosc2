@@ -49,11 +49,12 @@ except ImportError:
     HAS_ZARR = False
 
 # Configuration
-N_ARRAYS = 100  # Number of arrays to store
+N_ARRAYS = 50  # Number of arrays to store
 NGROUPS_MAX = 10
 PEAK_SIZE_MB = 100  # Peak size in MB for the normal distribution
 STDDEV_MB = PEAK_SIZE_MB / 2  # Standard deviation in MB
 N_ACCESS = 10
+NTHREADS = None   # Set to None for automatic detection of threads (cores)
 OUTPUT_DIR_TSTORE = "large-tree-store.b2z"
 OUTPUT_FILE_H5PY = "large-h5py-store.h5"
 OUTPUT_DIR_ZARR = "large-zarr-store.zarr"
@@ -110,7 +111,10 @@ def store_arrays_in_treestore(arrays, output_dir):
     # filters =  [blosc2.Filter.SHUFFLE]
     # Curiously, the next performs up to ~25% better. TODO: investigate this
     filters =  [blosc2.Filter.NOFILTER] * 5 + [blosc2.Filter.SHUFFLE]
-    cparams = blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5, filters=filters)
+    if NTHREADS is not None:
+        cparams = blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5, filters=filters, nthreads=NTHREADS)
+    else:
+        cparams = blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5, filters=filters)
     with blosc2.TreeStore(output_dir, mode="w", cparams=cparams) as tstore:
         for i, arr in enumerate(arrays):
             # Distribute arrays evenly across NGROUPS_MAX subdirectories
@@ -368,7 +372,11 @@ class BackendReader:
 
     def __enter__(self):
         if self.backend_name == "TreeStore":
-            self.store = blosc2.TreeStore(self.store_path, mode="r")
+            if NTHREADS is not None:
+                dparams = blosc2.DParams(nthreads=NTHREADS)
+            else:
+                dparams = None
+            self.store = blosc2.TreeStore(self.store_path, mode="r", dparams=dparams)
         elif self.backend_name == "h5py":
             if not HAS_H5PY:
                 raise RuntimeError("h5py not available")
@@ -527,6 +535,10 @@ def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results)
     ax1.set_title('Total Write Time', fontsize=14, fontweight='bold')
     ax1.set_ylabel('Time (seconds)', fontsize=12)
     ax1.grid(axis='y', alpha=0.3)
+    # Make x-axis labels larger and bold
+    ax1.tick_params(axis='x', labelsize=24)
+    # for label in ax1.get_xticklabels():
+    #     label.set_fontweight('bold')
 
     # Add value labels on bars
     for bar, time_val in zip(bars1, times):
@@ -547,6 +559,10 @@ def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results)
     ax2.set_title('Total Read Time', fontsize=14, fontweight='bold')
     ax2.set_ylabel('Time (seconds)', fontsize=12)
     ax2.grid(axis='y', alpha=0.3)
+    # Make x-axis labels larger and bold
+    ax2.tick_params(axis='x', labelsize=24)
+    # for label in ax2.get_xticklabels():
+    #     label.set_fontweight('bold')
 
     # Add value labels on bars
     for bar, read_val in zip(bars2, read_times):
@@ -567,6 +583,10 @@ def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results)
     ax3.set_title('Average Access Time', fontsize=14, fontweight='bold')
     ax3.set_ylabel('Time (milliseconds)', fontsize=12)
     ax3.grid(axis='y', alpha=0.3)
+    # Make x-axis labels larger and bold
+    ax3.tick_params(axis='x', labelsize=24)
+    # for label in ax3.get_xticklabels():
+    #     label.set_fontweight('bold')
 
     # Add value labels on bars
     for bar, access_val in zip(bars3, access_times):
@@ -579,6 +599,10 @@ def create_comparison_plot(sizes_mb, tstore_results, h5py_results, zarr_results)
     ax4.set_title('Storage Size', fontsize=14, fontweight='bold')
     ax4.set_ylabel('Size (MB)', fontsize=12)
     ax4.grid(axis='y', alpha=0.3)
+    # Make x-axis labels larger and bold
+    ax4.tick_params(axis='x', labelsize=24)
+    # for label in ax4.get_xticklabels():
+    #     label.set_fontweight('bold')
 
     # Add value labels on bars
     for bar, size_val in zip(bars4, storage_sizes):
