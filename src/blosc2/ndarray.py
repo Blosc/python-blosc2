@@ -1485,6 +1485,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         chunks = self.chunks
         # after this, all indices are slices or arrays of integers
         # moreover, all arrays are consecutive (otherwise an error is raised)
+        # TODO: try to optimise and avoid this expand which seems to copy - maybe np.broadcast
         _slice = ndindex.ndindex(key).expand(shape)
         out_shape = _slice.newshape(shape)
         _slice = _slice.raw
@@ -1522,7 +1523,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
                 # flush at the end if arrays remain
                 if arrs:
-                    arr = np.stack(arrs)
+                    arr = np.stack(arrs)  # uses quite a bit of memory seemingly
                     flat_shape += (arr.shape[-1],)
 
             # out_shape could have new dims if indexing arrays are not all 1D
@@ -1531,10 +1532,16 @@ class NDArray(blosc2_ext.NDArray, Operand):
             post_tuple = _slice[end:] if end is not None else ()
             divider = chunks[begin:end]
             chunked_arr = arr.T // divider
-            unique_chunks, chunk_nitems = np.unique(chunked_arr, axis=0, return_counts=True)
             if len(arr) == 1:  # 1D chunks, can avoid loading whole chunks
                 idx_order = np.argsort(arr.squeeze(axis=0), axis=-1)  # sort by real index
+                chunk_nitems = np.bincount(
+                    chunked_arr.reshape(-1), minlength=self.schunk.nchunks
+                )  # only works for 1D but faster (no copy or sort)
+                unique_chunks = np.nonzero(chunk_nitems)
+                chunk_nitems = chunk_nitems[unique_chunks]
             else:
+                # does a copy and sorts - can this be avoided?
+                unique_chunks, chunk_nitems = np.unique(chunked_arr, axis=0, return_counts=True)
                 idx_order = np.lexsort(
                     tuple(a for a in reversed(chunked_arr.T))
                 )  # sort by chunks (can't sort by index since larger index could belong to lower chunk)
