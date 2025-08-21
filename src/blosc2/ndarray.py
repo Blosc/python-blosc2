@@ -1460,7 +1460,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             raise ValueError("This property only works for 2-dimensional arrays.")
         return permute_dims(self)
 
-    def get_fselection_numpy(self, key: list | np.ndarray) -> np.ndarray:  # noqa: C901
+    def get_fselection_numpy(self, key: list | np.ndarray) -> np.ndarray:
         """
         Select a slice from the array using a fancy index.
         Closely matches NumPy fancy indexing behaviour, except in
@@ -1477,7 +1477,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         out: np.ndarray
 
         """
-        # TODO: Make this faster and running out of memory - avoid broadcasting keys
+        # TODO: Make this faster and avoid running out of memory - avoid broadcasting keys
         ## Can't do this because ndindex doesn't support all the same indexing cases as Numpy
         # if math.prod(self.shape) * self.dtype.itemsize < blosc2.MAX_FAST_PATH_SIZE:
         #     return self[:][key]  # load into memory for smallish arrays
@@ -1496,58 +1496,43 @@ class NDArray(blosc2_ext.NDArray, Operand):
             chunks = np.array(chunks)
             #       |------|
             # ------| arrs |------
-            arrs = []
-            begin = None
-            end = None
-            flat_shape = ()
-
-            if len(_slice) == 1:  # 1D fast path possible if no slices
-                arr = _slice[0].reshape(1, -1)
-                flat_shape += (arr.shape[-1],)
-                begin = 0
-            else:
-                for num, i in enumerate(_slice):
-                    if isinstance(i, np.ndarray):  # collecting arrays
-                        if end is not None:
-                            raise ValueError("Cannot use slices between arrays of integers in index")
-                        arrs.append(i.reshape(-1))  # flatten does copy
-                        if begin is None:
-                            begin = num
-                    else:  # slice
-                        if arrs:  # flush arrays
-                            arr = np.stack(arrs)
-                            arrs = []
-                            end = num
-                            flat_shape += (arr.shape[-1],)
-                        flat_shape += ((i.stop - i.start + (i.step - 1)) // i.step,)
-
-                # flush at the end if arrays remain
-                if arrs:
-                    arr = np.stack(arrs)  # uses quite a bit of memory seemingly
-                    flat_shape += (arr.shape[-1],)
-
+            arridxs = [i for i, s in enumerate(_slice) if isinstance(s, np.ndarray)]
+            begin, end = arridxs[0], arridxs[-1] + 1
+            flat_shape = tuple((i.stop - i.start + (i.step - 1)) // i.step for i in _slice[:begin])
+            idx_dim = np.prod(_slice[begin].shape)
+            arr = np.empty((idx_dim, end - begin), dtype=_slice[begin].dtype)
+            for i, s in enumerate(_slice[begin:end]):
+                arr[:, i] = s.reshape(-1)  # have to do a copy
+            flat_shape += (idx_dim,)
+            flat_shape += tuple((i.stop - i.start + (i.step - 1)) // i.step for i in _slice[end:])
             # out_shape could have new dims if indexing arrays are not all 1D
             # (we have just flattened them so need to handle accordingly)
             prior_tuple = _slice[:begin]
-            post_tuple = _slice[end:] if end is not None else ()
+            post_tuple = _slice[end:]
             divider = chunks[begin:end]
-            chunked_arr = arr.T // divider
-            if len(arr) == 1:  # 1D chunks, can avoid loading whole chunks
-                idx_order = np.argsort(arr.squeeze(axis=0), axis=-1)  # sort by real index
-                chunk_nitems = np.bincount(
-                    chunked_arr.reshape(-1), minlength=self.schunk.nchunks
-                )  # only works for 1D but faster (no copy or sort)
-                unique_chunks = np.nonzero(chunk_nitems)
+            chunked_arr = arr // divider
+            if arr.shape[-1] == 1:  # 1D chunks, can avoid loading whole chunks
+                idx_order = np.argsort(arr.squeeze(axis=1), axis=-1)  # sort by real index
+                chunk_nitems = np.bincount(chunked_arr.reshape(-1), minlength=self.schunk.nchunks)
+                unique_chunks = np.nonzero(chunk_nitems)[0][:, None]  # add dummy axis
                 chunk_nitems = chunk_nitems[unique_chunks]
             else:
-                # does a copy and sorts - can this be avoided?
-                unique_chunks, chunk_nitems = np.unique(chunked_arr, axis=0, return_counts=True)
-                idx_order = np.lexsort(
-                    tuple(a for a in reversed(chunked_arr.T))
+                chunked_arr = np.ascontiguousarray(
+                    chunked_arr
+                )  # ensure C-order memory to allow structured dtype view
+                # use np.unique but avoid sort and copy
+                _, row_ids, idx_inv, chunk_nitems = np.unique(
+                    chunked_arr.view([("", chunked_arr.dtype)] * chunked_arr.shape[1]),
+                    return_counts=True,
+                    return_index=True,
+                    return_inverse=True,
+                )
+                unique_chunks = chunked_arr[row_ids]
+                idx_order = np.argsort(
+                    idx_inv.squeeze(-1)
                 )  # sort by chunks (can't sort by index since larger index could belong to lower chunk)
                 # e.g. chunks of (100, 10) means (50, 15) has chunk idx (0,1) but (60,5) has (0, 0)
-            del chunked_arr  # no longer need this
-            sorted_idxs = arr[:, idx_order]
+            sorted_idxs = arr[idx_order]
             out = np.empty(flat_shape, dtype=self.dtype)
             shape = np.array(shape)
 
@@ -1555,18 +1540,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
             cprior_slices = [
                 slice_to_chunktuple(s, c) for s, c in zip(prior_tuple, chunks[:begin], strict=True)
             ]
-            cpost_slices = (
-                [slice_to_chunktuple(s, c) for s, c in zip(post_tuple, chunks[end:], strict=True)]
-                if end is not None
-                else []
-            )
+            cpost_slices = [slice_to_chunktuple(s, c) for s, c in zip(post_tuple, chunks[end:], strict=True)]
             for chunk_i, chunk_idx in enumerate(unique_chunks):
                 start = 0 if chunk_i == 0 else chunk_nitems_cumsum[chunk_i - 1]
                 stop = chunk_nitems_cumsum[chunk_i]
-                selection = sorted_idxs[:, start:stop].T
-                out_mid_selection = (idx_order[start:stop].T,)
+                selection = sorted_idxs[start:stop]
+                out_mid_selection = (idx_order[start:stop],)
                 if (
-                    len(arr) == 1
+                    arr.shape[-1] == 1
                 ):  # can avoid loading in whole chunk if 1D for array indexed chunks, a bit faster
                     chunk_begin = selection[0]
                     chunk_end = selection[-1] + 1
