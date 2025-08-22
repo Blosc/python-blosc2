@@ -188,6 +188,56 @@ bytes_ = np.bytes_
 object_ = np.object_
 
 
+class Info:
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
+def __array_namespace_info__() -> Info:
+    """
+    Return information about the array namespace following the Array API specification.
+    """
+    return Info(
+        capabilities={
+            "boolean indexing": True,
+            "data-dependent shapes": False,
+            "max dimensions": 8,
+        },
+        default_device=None,
+        default_dtypes={
+            "real floating": np.float64,
+            "complex floating": np.complex128,
+            "integral": np.int64,
+            "indexing": np.int64,
+        },
+        dtypes={
+            "bool": np.bool_,
+            "int8": np.int8,
+            "int16": np.int16,
+            "int32": np.int32,
+            "int64": np.int64,
+            "uint8": np.uint8,
+            "uint16": np.uint16,
+            "uint32": np.uint32,
+            "uint64": np.uint64,
+            "float32": np.float32,
+            "float64": np.float64,
+            "complex64": np.complex64,
+            "complex128": np.complex128,
+        },
+        devices=lambda: ["cpu"],
+        name="blosc2",
+        version=__version__,
+    )
+
+
+from dataclasses import dataclass
+
+import numpy as np
+
+finfo = np.finfo
+
 # Public API for container module
 from .core import (
     clib_info,
