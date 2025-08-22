@@ -792,6 +792,10 @@ class Operand:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
+    def __array_namespace__(self, api_version: str | None = None) -> Any:
+        """Return an object with all the functions and attributes of the module."""
+        return blosc2
+
     # Provide minimal __array_interface__ to allow NumPy to work with this object
     @property
     def __array_interface__(self):
