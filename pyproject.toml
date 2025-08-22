@@ -42,6 +42,8 @@ dependencies = [
     "requests",
 ]
 version = "3.7.3.dev0"
+[project.entry-points."array_api"]
+blosc2 = "blosc2"
 
 
 [project.optional-dependencies]
