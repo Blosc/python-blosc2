@@ -75,8 +75,8 @@ You will find the documentation in the `../html` directory.
 
 You can test array API compatibility with the `array-api-tests` module.
 Use the `tests/array-api-xfails.txt` to skip the tests that are not supported
-and run the pytest like this:
+and run pytest from the `array-api-tests` source dir like this:
 
 ``` bash
-ARRAY_API_TESTS_MODULE=blosc2 pytest array_api_tests --xfails-file array-api-xfails.txt -xs
+ARRAY_API_TESTS_MODULE=blosc2 pytest array_api_tests --xfails-file ${BLOSC2_DIR}/tests/array-api-xfails.txt -xs
 ```
