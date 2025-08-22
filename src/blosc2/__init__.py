@@ -166,6 +166,8 @@ The C-Blosc2 version's string."""
 
 import numpy as np
 
+iinfo = np.iinfo # info class for integer datatypes (array-api compatibility)
+
 # dtypes for array-api
 bool_ = np.bool_
 int8 = np.int8
@@ -516,3 +518,4 @@ __all__ = [
     "var",
     "where",
 ]
+
