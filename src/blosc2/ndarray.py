@@ -3882,6 +3882,9 @@ def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: Any) -> NDArray:
     >>> # Create a NDArray from a NumPy array
     >>> nda = blosc2.asarray(a)
     """
+    # Convert scalars to numpy array
+    if not hasattr(array, "shape"):
+        array = np.array(array)
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
