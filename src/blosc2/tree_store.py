@@ -80,12 +80,12 @@ class vlmetaProxy(MutableMapping):
 
 class TreeStore(DictStore):
     """
-    A hierarchical tree-based storage container for compressed data using Blosc2.
+    A hierarchical tree-based storage container for Blosc2 data.
 
-    Extends DictStore with strict hierarchical key validation and tree traversal
-    capabilities. Keys must follow a hierarchical structure using '/' as separator
-    and always start with '/'. If user passes a key that doesn't start with '/',
-    it will be automatically added.
+    Extends :class:`blosc2.DictStore` with strict hierarchical key validation
+    and tree traversal capabilities. Keys must follow a hierarchical structure
+    using '/' as separator and always start with '/'. If user passes a key
+    that doesn't start with '/', it will be automatically added.
 
     It supports the same arguments as :class:`blosc2.DictStore`.
 

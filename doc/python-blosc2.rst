@@ -68,11 +68,11 @@
         .. raw:: html
 
             <div style="text-align: center;">
-                <i class="fas fa-th" style="font-size: 2em; color: #007acc; margin-bottom: 10px;"></i>
-                <h3 style="margin-top: 10px; margin-bottom: 15px;">Sparse Data Mastery</h3>
+                <i class="fas fa-sitemap" style="font-size: 2em; color: #007acc; margin-bottom: 10px;"></i>
+                <h3 style="margin-top: 10px; margin-bottom: 15px;">Hierarchical Structures</h3>
             </div>
 
-        Efficiently store and manipulate sparse data with `compact sparse constructs <https://www.blosc.org/docs/Exploring-MilkyWay-SciPy2023.pdf>`_ for optimized `performance <https://www.blosc.org/docs/Exploring-MilkyWay-SciPy2023-paper.pdf>`_.
+        Efficiently store data hierachically with the `TreeStore class <https://www.blosc.org/python-blosc2/reference/tree_store.html#blosc2.TreeStore>`_ for convenience and optimized `performance <https://www.blosc.org/posts/new-treestore-blosc2/>`_.
 
     .. grid-item-card::
         :class-card: intro-card text-center no-border
@@ -84,7 +84,7 @@
                 <h3 style="margin-top: 10px; margin-bottom: 15px;">Flexible Storage</h3>
             </div>
 
-        Access data from anywhere: read/write in `memory or disk <https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/01.ndarray-basics.ipynb>`_, stream from `the network <https://www.blosc.org/python-blosc2/reference/c2array.html>`_, or use `memory-mapped files <https://www.blosc.org/python-blosc2/reference/storage.html#blosc2.Storage.params.mmap_mode>`_ for high-performance I/O.
+        Access data from anywhere: read/write in `memory or disk <https://www.blosc.org/docs/Exploring-MilkyWay-SciPy2023-paper.pdf>`_, stream from `the network <https://www.blosc.org/python-blosc2/reference/c2array.html>`_, or use `memory-mapped files <https://www.blosc.org/python-blosc2/reference/storage.html#blosc2.Storage.params.mmap_mode>`_ for high-performance I/O.
 
     .. grid-item-card::
         :class-card: intro-card text-center no-border
