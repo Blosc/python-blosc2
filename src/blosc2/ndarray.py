@@ -63,17 +63,20 @@ def make_key_hashable(key):
 
 
 def process_key(key, shape):
-    if key is None:
-        key = tuple(slice(None) for _ in range(len(shape)))
     key = ndindex.ndindex(key).expand(shape).raw
-    mask = tuple(isinstance(k, int) for k in key)
-    key = tuple(k if isinstance(k, slice) else slice(k, k + 1, None) for k in key)
+    mask = tuple(isinstance(k, int) for k in key) # mask to track dummy dims introduced by int -> slice(k, k+1)
+    key = tuple(slice(k, k + 1, None) if isinstance(k, int) else k for k in key) # key is slice, None, int 
     return key, mask
 
 
 def get_ndarray_start_stop(ndim, key, shape):
-    start = [s.start if s.start is not None else 0 for s in key]
-    stop = [s.stop if s.stop is not None else sh for s, sh in zip(key, shape, strict=False)]
+    #key should be Nones and slices
+    none_mask, start, stop = [], [], []
+    for i, s in enumerate(key):
+        none_mask.append(s is None)
+        if s is not None:
+            start.append(s.start if s.start is not None else 0)
+            stop.append(s.stop if s.stop is not None else shape[i-np.sum(none_mask)])
     # Check that start and stop values do not exceed the shape
     for i in range(ndim):
         if start[i] < 0:
@@ -84,8 +87,8 @@ def get_ndarray_start_stop(ndim, key, shape):
             stop[i] = shape[i] + stop[i]
         if stop[i] > shape[i]:
             stop[i] = shape[i]
-    step = tuple(s.step if s.step is not None else 1 for s in key)
-    return start, stop, step
+    step = tuple(s.step if s.step is not None else 1 for s in key if isinstance(s, slice))
+    return start, stop, step, none_mask
 
 
 def are_partitions_aligned(shape, chunks, blocks):
@@ -1534,7 +1537,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 sub_idx = _slice.as_subindex(c).raw
                 sel_idx = c.as_subindex(_slice)
                 new_shape = sel_idx.newshape(out_shape)
-                start, stop, step = get_ndarray_start_stop(self.ndim, c.raw, shape)
+                start, stop, step, _ = get_ndarray_start_stop(self.ndim, c.raw, shape)
                 chunk = np.empty(
                     tuple(sp - st for st, sp in zip(start, stop, strict=True)), dtype=self.dtype
                 )
@@ -1563,7 +1566,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
     def __getitem__(  # noqa: C901
         self,
-        key: int | slice | Sequence[slice | int] | np.ndarray[np.bool_] | NDArray | blosc2.LazyExpr | str,
+        key: None | int | slice | Sequence[slice | int | np.bool_ | np.ndarray[int | np.bool_] | None] | NDArray[int | np.bool_] | 
+        blosc2.LazyExpr | str,
     ) -> np.ndarray | blosc2.LazyExpr:
         """
         Retrieve a (multidimensional) slice as specified by the key.
@@ -1608,15 +1612,19 @@ class NDArray(blosc2_ext.NDArray, Operand):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
         # First try some fast paths for common cases
-        key_, mask = key, None
+        # Check if there is a None = new axis
+        if key is None:
+            return expand_dims(self, axis=0)
+            
+        key_, mask, none_mask = key, None, []
         if isinstance(key, np.integer):
             # Massage the key to a tuple and go the fast path
             key_ = (slice(key, key + 1), *(slice(None),) * (self.ndim - 1))
         elif isinstance(key, tuple):
             if builtins.any(isinstance(k, (list, np.ndarray)) for k in key):
                 return self.get_fselection_numpy(key)  # fancy index
-            if builtins.sum(isinstance(k, (list, builtins.slice)) for k in key) != self.ndim:
-                key_, mask = process_key(key, self.shape)
+            if builtins.sum(isinstance(k, builtins.slice) for k in key) != self.ndim:
+                key_, mask = process_key(key, self.shape) # if not all elements are slices (some Nones or ints)
         elif isinstance(key, (list, np.ndarray, NDArray)):
             if isinstance(key, list):
                 key = np.array(key, dtype=np.int64)
@@ -1653,10 +1661,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 expr = blosc2.LazyExpr._new_expr(key, self.fields, guess=False)
                 return expr.where(self)
             key_, mask = process_key(key, self.shape)  # final resort for [:]
-        start, stop, step = get_ndarray_start_stop(self.ndim, key_, self.shape)
+        start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
         shape = np.array([sp - st for st, sp in zip(start, stop, strict=True)])
         if mask is not None:
-            shape = tuple(shape[[not m for m in mask]])
+            #only get mask for not Nones in key to have m_ same length as shape
+            m_ = [m for m,n in zip(mask, none_mask, strict=True) if not n] 
+            none_mask_ = [n for m,n in zip(mask, none_mask, strict=True) if not m] #have to make none_mask refer to sliced dims (which will be less if ints present)
+            none_mask = none_mask_
+            shape = tuple(shape[[not m for m in m_]])
 
         # Create the array to store the result
         arr = np.empty(shape, dtype=self.dtype)
@@ -1665,7 +1677,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
             if len(step) == 1:
                 return nparr[:: step[0]]
             slice_ = tuple(slice(None, None, st) for st in step)
-            return nparr[slice_]
+            nparr = nparr[slice_]
+        
+        if np.any(none_mask):
+            nparr = np.expand_dims(nparr, axis=[i for i,n in enumerate(none_mask) if n])
 
         if self._keep_last_read:
             self._last_read.clear()
@@ -1706,7 +1721,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
         key, _ = process_key(key, self.shape)
-        start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
+        start, stop, step, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
         if step != (1,) * self.ndim:
             raise ValueError("Step parameter is not supported yet")
         key = (start, stop)
@@ -2084,7 +2099,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             }
         kwargs = _check_ndarray_kwargs(**kwargs)  # sets cparams to defaults
         key, mask = process_key(key, self.shape)
-        start, stop, step = get_ndarray_start_stop(self.ndim, key, self.shape)
+        start, stop, step, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
 
         # Fast path for slices made with aligned chunks
         if step == (1,) * self.ndim:
@@ -4013,7 +4028,7 @@ def get_slice_nchunks(
     if isinstance(schunk, NDArray):
         array = schunk
         key, _ = process_key(key, array.shape)
-        start, stop, step = get_ndarray_start_stop(array.ndim, key, array.shape)
+        start, stop, step, _ = get_ndarray_start_stop(array.ndim, key, array.shape)
         if step != (1,) * array.ndim:
             raise IndexError("Step parameter is not supported yet")
         key = (start, stop)

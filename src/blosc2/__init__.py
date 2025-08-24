@@ -166,8 +166,6 @@ The C-Blosc2 version's string."""
 
 import numpy as np
 
-iinfo = np.iinfo # info class for integer datatypes (array-api compatibility)
-
 # dtypes for array-api
 bool_ = np.bool_
 int8 = np.int8
@@ -234,9 +232,8 @@ def __array_namespace_info__() -> Info:
 
 from dataclasses import dataclass
 
-import numpy as np
-
 finfo = np.finfo
+iinfo = np.iinfo # info class for integer datatypes (array-api compatibility)
 
 # Public API for container module
 from .core import (
