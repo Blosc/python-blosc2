@@ -48,7 +48,7 @@
                 <h3 style="margin-top: 10px; margin-bottom: 15px;">Full-Fledged NDArrays</h3>
             </div>
 
-        `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/01.ndarray-basics.html>`_ enable efficient storage and manipulation of arbitrarily large N-dimensional datasets, following the `Array API <https://data-apis.org/array-api/latest/>`_ standard, with an additional `C-API <https://www.blosc.org/posts/blosc2-ndim-intro/>`_.
+        `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/01.ndarray-basics.html>`_ enable efficient storage and manipulation of arbitrarily large N-dimensional datasets, following the `Array API <https://data-apis.org/array-api/latest/>`_ standard, with an additional `C API <https://www.blosc.org/posts/blosc2-ndim-intro/>`_.
 
     .. grid-item-card::
         :class-card: intro-card text-center no-border
