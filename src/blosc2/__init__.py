@@ -328,6 +328,7 @@ from .ndarray import (
     arctan,
     arctan2,
     arctanh,
+    array_from_ffi_ptr,
     conj,
     contains,
     cos,
