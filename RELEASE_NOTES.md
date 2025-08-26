@@ -1,7 +1,27 @@
 # Release notes
-## Changes from 3.7.0 to 3.7.1
+
+## Changes from 3.7.2 to 3.7.3
 
 XXX version-specific blurb XXX
+
+## Changes from 3.7.1 to 3.7.2
+
+* C-Blosc2 internal library updated to latest 2.21.1.
+
+* Revert signature of `TreeStore.__init__` for making benchmarks to get back
+  to normal performance.
+
+## Changes from 3.7.0 to 3.7.1
+
+* Added `C2Array.slice()` method and `C2Array.nbytes`, `C2Array.cbytes`, `C2Array.cratio`, `C2Array.vlmeta` and `C2Array.info` properties (PR #455).
+
+* Many usability improvements to the `TreeStore` class and friends.
+
+* New section about `TreeStore` in basics NDArray tutorial.
+
+* New blog post about `TreeStore` usage and performance at: https://www.blosc.org/posts/new-treestore-blosc2
+
+* C-Blosc2 internal library updated to latest 2.21.0.
 
 ## Changes from 3.6.1 to 3.7.0
 

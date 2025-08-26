@@ -88,8 +88,6 @@ def test_hierarchical_key_validation():
         assert isinstance(tstore["/b"], TreeStore)
 
         # Invalid keys
-        with pytest.raises(ValueError, match="Key must start with '/'"):
-            tstore["invalid"] = np.array([1])
         with pytest.raises(ValueError, match="Key cannot end with '/'"):
             tstore["/invalid/"] = np.array([1])
         with pytest.raises(ValueError, match="empty path segments"):
@@ -430,7 +428,7 @@ def test_treestore_vlmeta_basic_and_bulk(storage_type):
         assert tstore.vlmeta["version"] == 1
         assert tstore.vlmeta["shape"] == (3, 2)
 
-        # Bulk set via [:]
+        # Bulk set via [:] - should merge/update, not replace
         tstore.vlmeta[:] = {"desc": "test", "scale": 2.5}
         # Bulk get via [:]
         all_meta = tstore.vlmeta[:]
@@ -500,7 +498,7 @@ def test_treestore_vlmeta_does_not_interfere_with_data(storage_type):
 
 @pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
 def test_subtree_can_use_vlmeta(storage_type):
-    """A subtree view should be able to read/write vlmeta seamlessly."""
+    """A subtree view should be able to read/write vlmeta independently."""
     path = f"vlmeta_subtree.{storage_type}"
     with TreeStore(path, mode="w") as tstore:
         # Create some structure and a subtree view
@@ -508,30 +506,40 @@ def test_subtree_can_use_vlmeta(storage_type):
         tstore["/group/b"] = np.array([2])
         subtree = tstore.get_subtree("/group")
 
-        # Set metadata via subtree and read via root
+        # Set metadata via subtree - should be independent from root
         subtree.vlmeta["note"] = "from_subtree"
         subtree.vlmeta["level"] = 5
-        assert tstore.vlmeta["note"] == "from_subtree"
-        assert tstore.vlmeta["level"] == 5
 
-        # Set metadata via root and read via subtree
+        # Set metadata via root - should be independent from subtree
         tstore.vlmeta["rootmeta"] = 42
-        assert subtree.vlmeta["rootmeta"] == 42
 
-        # Bulk ops through subtree
+        # Verify independence - subtree vlmeta is separate from root vlmeta
+        assert subtree.vlmeta["note"] == "from_subtree"
+        assert subtree.vlmeta["level"] == 5
+        assert "rootmeta" not in subtree.vlmeta
+        assert "note" not in tstore.vlmeta
+        assert "level" not in tstore.vlmeta
+        assert tstore.vlmeta["rootmeta"] == 42
+
+        # Bulk ops through subtree - should only affect subtree vlmeta
         subtree.vlmeta[:] = {"owner": "team", "scale": 1.5}
         all_meta_sub = subtree.vlmeta[:]
-        assert all_meta_sub["note"] == "from_subtree"
-        assert all_meta_sub["level"] == 5
-        assert all_meta_sub["rootmeta"] == 42
-        assert all_meta_sub["owner"] == "team"
-        assert all_meta_sub["scale"] == 1.5
+        expected_subtree_meta = {"note": "from_subtree", "level": 5, "owner": "team", "scale": 1.5}
+        assert all_meta_sub == expected_subtree_meta
 
-        # Iteration from subtree matches names
+        # Root vlmeta should be unchanged
+        assert tstore.vlmeta["rootmeta"] == 42
+        assert "owner" not in tstore.vlmeta
+
+        # Iteration from subtree should only show subtree metadata
         names = set(iter(subtree.vlmeta))
-        for k in ("note", "level", "rootmeta", "owner", "scale"):
-            assert k in names
+        expected_names = {"note", "level", "owner", "scale"}
+        assert names == expected_names
         assert all("/" not in k for k in names)
+
+        # Root vlmeta iteration should only show root metadata
+        root_names = set(iter(tstore.vlmeta))
+        assert root_names == {"rootmeta"}
 
         # Ensure data remains unaffected
         assert "/group/a" in tstore
@@ -543,7 +551,12 @@ def test_subtree_can_use_vlmeta(storage_type):
     with TreeStore(path, mode="r") as tstore_ro:
         subtree_ro = tstore_ro.get_subtree("/group")
         assert subtree_ro.vlmeta["note"] == "from_subtree"
-        assert subtree_ro.vlmeta["rootmeta"] == 42
+        assert subtree_ro.vlmeta["owner"] == "team"
+        assert tstore_ro.vlmeta["rootmeta"] == 42
+        # Verify independence is maintained after reopening
+        assert "rootmeta" not in subtree_ro.vlmeta
+        assert "note" not in tstore_ro.vlmeta
+
         # Cannot modify via subtree in read-only
         with pytest.raises(ValueError, match="read-only"):
             subtree_ro.vlmeta["new"] = 1
@@ -628,3 +641,281 @@ def test_walk_topdown_false_on_subtree():
                 assert "/" not in name
 
     os.remove("test_walk_subtree.b2z")
+
+
+def test_vlmeta_subtree_specific(populated_tree_store):
+    """Test that each subtree has its own independent vlmeta."""
+    tstore, tmpdir = populated_tree_store
+
+    # Set vlmeta on root tree
+    tstore.vlmeta["root_meta"] = "root_value"
+
+    # Get subtree and set vlmeta on it
+    subtree = tstore.get_subtree("/child0")
+    subtree.vlmeta["subtree_meta"] = "subtree_value"
+
+    # Get another subtree and set vlmeta on it
+    subtree2 = tstore.get_subtree("/child0/child1")
+    subtree2.vlmeta["nested_subtree_meta"] = "nested_value"
+
+    # Verify that vlmeta are independent
+    assert tstore.vlmeta["root_meta"] == "root_value"
+    assert "subtree_meta" not in tstore.vlmeta
+    assert "nested_subtree_meta" not in tstore.vlmeta
+
+    assert subtree.vlmeta["subtree_meta"] == "subtree_value"
+    assert "root_meta" not in subtree.vlmeta
+    assert "nested_subtree_meta" not in subtree.vlmeta
+
+    assert subtree2.vlmeta["nested_subtree_meta"] == "nested_value"
+    assert "root_meta" not in subtree2.vlmeta
+    assert "subtree_meta" not in subtree2.vlmeta
+
+
+def test_vlmeta_persistence_subtrees(tmp_path):
+    """Test that subtree vlmeta persists across store reopening."""
+    store_path = tmp_path / "test_vlmeta_subtrees.b2z"
+
+    # Create store and add data with vlmeta
+    with TreeStore(str(store_path), mode="w") as tstore:
+        tstore["/child0/data"] = np.array([1, 2, 3])
+        tstore["/child1/data"] = np.array([4, 5, 6])
+
+        # Set root vlmeta
+        tstore.vlmeta["root_info"] = "root_data"
+
+        # Set subtree vlmeta
+        subtree0 = tstore.get_subtree("/child0")
+        subtree0.vlmeta["child0_info"] = "child0_data"
+
+        subtree1 = tstore.get_subtree("/child1")
+        subtree1.vlmeta["child1_info"] = "child1_data"
+
+    # Reopen and verify vlmeta persisted
+    with TreeStore(str(store_path), mode="r") as tstore:
+        assert tstore.vlmeta["root_info"] == "root_data"
+
+        subtree0 = tstore.get_subtree("/child0")
+        assert subtree0.vlmeta["child0_info"] == "child0_data"
+
+        subtree1 = tstore.get_subtree("/child1")
+        assert subtree1.vlmeta["child1_info"] == "child1_data"
+
+        # Verify independence
+        assert "child0_info" not in tstore.vlmeta
+        assert "child1_info" not in tstore.vlmeta
+        assert "root_info" not in subtree0.vlmeta
+        assert "root_info" not in subtree1.vlmeta
+
+
+def test_vlmeta_bulk_operations_subtrees(populated_tree_store):
+    """Test bulk vlmeta operations on subtrees."""
+    tstore, tmpdir = populated_tree_store
+
+    # Set up vlmeta on root and subtree
+    tstore.vlmeta["key1"] = "value1"
+    tstore.vlmeta["key2"] = "value2"
+
+    subtree = tstore.get_subtree("/child0")
+    subtree.vlmeta["sub_key1"] = "sub_value1"
+    subtree.vlmeta["sub_key2"] = "sub_value2"
+
+    # Test bulk get
+    root_bulk = tstore.vlmeta[:]
+    subtree_bulk = subtree.vlmeta[:]
+
+    assert root_bulk == {"key1": "value1", "key2": "value2"}
+    assert subtree_bulk == {"sub_key1": "sub_value1", "sub_key2": "sub_value2"}
+
+    # Test bulk set - should merge/update, not replace
+    new_root_meta = {"new_key1": "new_value1", "new_key2": "new_value2"}
+    new_subtree_meta = {"new_sub_key1": "new_sub_value1"}
+
+    tstore.vlmeta[:] = new_root_meta
+    subtree.vlmeta[:] = new_subtree_meta
+
+    # Verify bulk set merged with existing data
+    expected_root = {"key1": "value1", "key2": "value2", "new_key1": "new_value1", "new_key2": "new_value2"}
+    expected_subtree = {"sub_key1": "sub_value1", "sub_key2": "sub_value2", "new_sub_key1": "new_sub_value1"}
+
+    assert tstore.vlmeta[:] == expected_root
+    assert subtree.vlmeta[:] == expected_subtree
+
+    # Verify old keys are still there (merged behavior)
+    assert "key1" in tstore.vlmeta
+    assert "sub_key1" in subtree.vlmeta
+
+
+def test_vlmeta_read_only_subtrees(tmp_path):
+    """Test vlmeta read-only behavior in subtrees."""
+    store_path = tmp_path / "test_vlmeta_readonly_subtrees.b2z"
+
+    # Create store with vlmeta
+    with TreeStore(str(store_path), mode="w") as tstore:
+        tstore["/child0/data"] = np.array([1, 2, 3])
+        tstore.vlmeta["root_key"] = "root_value"
+
+        subtree = tstore.get_subtree("/child0")
+        subtree.vlmeta["subtree_key"] = "subtree_value"
+
+    # Open read-only and test
+    with TreeStore(str(store_path), mode="r") as tstore:
+        # Should be able to read
+        assert tstore.vlmeta["root_key"] == "root_value"
+
+        subtree = tstore.get_subtree("/child0")
+        assert subtree.vlmeta["subtree_key"] == "subtree_value"
+
+        # Should not be able to write
+        with pytest.raises(ValueError, match="read-only mode"):
+            tstore.vlmeta["new_key"] = "new_value"
+
+        with pytest.raises(ValueError, match="read-only mode"):
+            subtree.vlmeta["new_sub_key"] = "new_sub_value"
+
+        with pytest.raises(ValueError, match="read-only mode"):
+            del tstore.vlmeta["root_key"]
+
+        with pytest.raises(ValueError, match="read-only mode"):
+            del subtree.vlmeta["subtree_key"]
+
+
+def test_vlmeta_subtree_read_write():
+    """Test that vlmeta added to a subtree can be read correctly."""
+    with TreeStore("test_vlmeta_subtree_rw.b2z", mode="w") as tstore:
+        # Create a hierarchical structure
+        tstore["/department/team1/project_a"] = np.array([1, 2, 3])
+        tstore["/department/team1/project_b"] = np.array([4, 5, 6])
+        tstore["/department/team2/project_c"] = np.array([7, 8, 9])
+
+        # Add vlmeta to the root
+        tstore.vlmeta["organization"] = "Blosc Development Team"
+        tstore.vlmeta["year"] = 2025
+
+        # Get subtree and add vlmeta to it
+        dept_subtree = tstore.get_subtree("/department")
+        dept_subtree.vlmeta["manager"] = "John Doe"
+        dept_subtree.vlmeta["budget"] = 100000
+        dept_subtree.vlmeta["projects"] = ["project_a", "project_b", "project_c"]
+
+        # Get nested subtree and add vlmeta
+        team1_subtree = tstore.get_subtree("/department/team1")
+        team1_subtree.vlmeta["lead"] = "Alice Smith"
+        team1_subtree.vlmeta["members"] = 5
+        team1_subtree.vlmeta["active_projects"] = 2
+
+        # Test reading vlmeta from different levels
+        # Root level
+        assert tstore.vlmeta["organization"] == "Blosc Development Team"
+        assert tstore.vlmeta["year"] == 2025
+        assert len(tstore.vlmeta) == 2
+
+        # Department level
+        assert dept_subtree.vlmeta["manager"] == "John Doe"
+        assert dept_subtree.vlmeta["budget"] == 100000
+        assert dept_subtree.vlmeta["projects"] == ["project_a", "project_b", "project_c"]
+        assert len(dept_subtree.vlmeta) == 3
+
+        # Team1 level
+        assert team1_subtree.vlmeta["lead"] == "Alice Smith"
+        assert team1_subtree.vlmeta["members"] == 5
+        assert team1_subtree.vlmeta["active_projects"] == 2
+        assert len(team1_subtree.vlmeta) == 3
+
+        # Verify independence - each level should only see its own vlmeta
+        assert "manager" not in tstore.vlmeta
+        assert "lead" not in tstore.vlmeta
+        assert "organization" not in dept_subtree.vlmeta
+        assert "lead" not in dept_subtree.vlmeta
+        assert "organization" not in team1_subtree.vlmeta
+        assert "manager" not in team1_subtree.vlmeta
+
+        # Test bulk read operations
+        root_all = tstore.vlmeta[:]
+        dept_all = dept_subtree.vlmeta[:]
+        team1_all = team1_subtree.vlmeta[:]
+
+        assert root_all == {"organization": "Blosc Development Team", "year": 2025}
+        assert dept_all == {
+            "manager": "John Doe",
+            "budget": 100000,
+            "projects": ["project_a", "project_b", "project_c"],
+        }
+        assert team1_all == {"lead": "Alice Smith", "members": 5, "active_projects": 2}
+
+        # Test iteration
+        root_keys = set(tstore.vlmeta.keys())
+        dept_keys = set(dept_subtree.vlmeta.keys())
+        team1_keys = set(team1_subtree.vlmeta.keys())
+
+        assert root_keys == {"organization", "year"}
+        assert dept_keys == {"manager", "budget", "projects"}
+        assert team1_keys == {"lead", "members", "active_projects"}
+
+        # Verify data integrity is maintained
+        assert np.array_equal(tstore["/department/team1/project_a"][:], np.array([1, 2, 3]))
+        assert np.array_equal(team1_subtree["/project_a"][:], np.array([1, 2, 3]))
+
+    # Test persistence by reopening
+    with TreeStore("test_vlmeta_subtree_rw.b2z", mode="r") as tstore:
+        # Re-verify all vlmeta after reopening
+        assert tstore.vlmeta["organization"] == "Blosc Development Team"
+        assert tstore.vlmeta["year"] == 2025
+
+        dept_subtree = tstore.get_subtree("/department")
+        assert dept_subtree.vlmeta["manager"] == "John Doe"
+        assert dept_subtree.vlmeta["budget"] == 100000
+
+        team1_subtree = tstore.get_subtree("/department/team1")
+        assert team1_subtree.vlmeta["lead"] == "Alice Smith"
+        assert team1_subtree.vlmeta["members"] == 5
+
+        # Verify independence is maintained after reopening
+        assert "manager" not in tstore.vlmeta
+        assert "organization" not in dept_subtree.vlmeta
+        assert "organization" not in team1_subtree.vlmeta
+
+    # Cleanup
+    os.remove("test_vlmeta_subtree_rw.b2z")
+
+
+def test_key_normalization():
+    """Test that keys without leading '/' are automatically normalized."""
+    with TreeStore("test_key_normalization.b2z", mode="w") as tstore:
+        # Test assignment without leading '/'
+        tstore["data1"] = np.array([1, 2, 3])
+        tstore["group/data2"] = np.array([4, 5, 6])
+        tstore["group/subgroup/data3"] = np.array([7, 8, 9])
+
+        # Keys should be normalized internally
+        assert "/data1" in tstore
+        assert "/group/data2" in tstore
+        assert "/group/subgroup/data3" in tstore
+
+        # Access with and without leading '/' should work
+        assert np.array_equal(tstore["data1"][:], np.array([1, 2, 3]))
+        assert np.array_equal(tstore["/data1"][:], np.array([1, 2, 3]))
+        assert np.array_equal(tstore["group/data2"][:], np.array([4, 5, 6]))
+        assert np.array_equal(tstore["/group/data2"][:], np.array([4, 5, 6]))
+
+        # Structural access should also work
+        group_subtree = tstore["group"]
+        assert isinstance(group_subtree, TreeStore)
+        assert "/data2" in group_subtree
+        assert "/subgroup/data3" in group_subtree
+
+        # Test other methods work with non-leading '/' keys
+        children = tstore.get_children("group")
+        assert "/group/subgroup" in children
+
+        descendants = tstore.get_descendants("group")
+        assert "/group/data2" in descendants
+        assert "/group/subgroup/data3" in descendants
+
+        # Test contains with both formats
+        assert "data1" in tstore
+        assert "/data1" in tstore
+        assert "group/data2" in tstore
+        assert "/group/data2" in tstore
+
+    os.remove("test_key_normalization.b2z")

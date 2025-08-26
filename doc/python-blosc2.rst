@@ -6,7 +6,7 @@
 
     <p style="text-align: center; color: black; background-color: rgba(230, 169, 9, 0.65);">
         <a href="https://github.com/Blosc/python-blosc2/blob/main/RELEASE_NOTES.md"
-           style="font-size: 1.5em;">Version 3.7.0 released on 2025-08-12!</a>
+           style="font-size: 1.5em;">Version 3.7.2 released on 2025-08-19!</a>
         <span style="display: inline-block; width: 20px;"></span>
         <span style="font-family: monospace;">pip install blosc2 -U</span>
     </p>
@@ -36,7 +36,7 @@
                 <h3 style="margin-top: 10px; margin-bottom: 15px;">Top-Notch Compression</h3>
             </div>
 
-        `Combine advanced codecs and filters <https://blosc.org/docs/LEAPS-INNOV_WP7_D74_v1.pdf>`_ for efficient `lossless <https://www.blosc.org/posts/bytedelta-enhance-compression-toolset/>`_ and `lossy <https://www.blosc.org/posts/blosc2-lossy-compression/>`_ compression to reduce storage space while maintaining high performance.
+        `Combine advanced codecs and filters <https://www.blosc.org/docs/2025-EuroSciPy-Blosc2.pdf>`_ for efficient `lossless <https://www.blosc.org/posts/bytedelta-enhance-compression-toolset/>`_ and `lossy <https://www.blosc.org/posts/blosc2-lossy-compression/>`_ compression to reduce storage space while maintaining high performance.
 
     .. grid-item-card::
         :class-card: intro-card text-center no-border
@@ -48,7 +48,7 @@
                 <h3 style="margin-top: 10px; margin-bottom: 15px;">Full-Fledged NDArrays</h3>
             </div>
 
-        `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/01.ndarray-basics.html>`_ enable efficient storage and manipulation of arbitrarily large N-dimensional datasets, following the `Array API <https://data-apis.org/array-api/latest/>`_ standard, with an additional `C-API <https://www.blosc.org/posts/blosc2-ndim-intro/>`_ available.
+        `NDArray objects <https://www.blosc.org/python-blosc2/getting_started/tutorials/01.ndarray-basics.html>`_ enable efficient storage and manipulation of arbitrarily large N-dimensional datasets, following the `Array API <https://data-apis.org/array-api/latest/>`_ standard, with an additional `C API <https://www.blosc.org/posts/blosc2-ndim-intro/>`_.
 
     .. grid-item-card::
         :class-card: intro-card text-center no-border
@@ -60,7 +60,7 @@
                 <h3 style="margin-top: 10px; margin-bottom: 15px;">Compute Engine Inside</h3>
             </div>
 
-        Combines compression with high-speed computation of complex `mathematical expressions <https://ironarray.io/blog/blosc2-eval-expressions>`_ and `reductions <https://www.blosc.org/posts/ndim-reductions/>`_, while maintaining compatibility with NumPy.
+        Combines compression with high-speed computation of complex `mathematical expressions <https://ironarray.io/blog/blosc2-eval-expressions>`_ and `reductions <https://www.blosc.org/python-blosc2/getting_started/tutorials/04.reductions.html>`_, while maintaining compatibility with NumPy.
 
     .. grid-item-card::
         :class-card: intro-card text-center no-border
@@ -68,11 +68,11 @@
         .. raw:: html
 
             <div style="text-align: center;">
-                <i class="fas fa-th" style="font-size: 2em; color: #007acc; margin-bottom: 10px;"></i>
-                <h3 style="margin-top: 10px; margin-bottom: 15px;">Sparse Data Mastery</h3>
+                <i class="fas fa-sitemap" style="font-size: 2em; color: #007acc; margin-bottom: 10px;"></i>
+                <h3 style="margin-top: 10px; margin-bottom: 15px;">Hierarchical Structures</h3>
             </div>
 
-        Efficiently store and manipulate sparse data with `compact sparse constructs <https://www.blosc.org/docs/Exploring-MilkyWay-SciPy2023.pdf>`_ for optimized `performance <https://www.blosc.org/docs/Exploring-MilkyWay-SciPy2023-paper.pdf>`_.
+        Efficiently store data hierachically with the `TreeStore class <https://www.blosc.org/python-blosc2/reference/tree_store.html#blosc2.TreeStore>`_ for convenience and optimized `performance <https://www.blosc.org/posts/new-treestore-blosc2/>`_.
 
     .. grid-item-card::
         :class-card: intro-card text-center no-border
@@ -84,7 +84,7 @@
                 <h3 style="margin-top: 10px; margin-bottom: 15px;">Flexible Storage</h3>
             </div>
 
-        Access data from anywhere: read/write in `memory or disk <https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/tutorials/01.ndarray-basics.ipynb>`_, stream from `the network <https://www.blosc.org/python-blosc2/reference/c2array.html>`_, or use `memory-mapped files <https://www.blosc.org/python-blosc2/reference/storage.html#blosc2.Storage.params.mmap_mode>`_ for high-performance I/O.
+        Access data from anywhere: read/write in `memory or disk <https://www.blosc.org/docs/Exploring-MilkyWay-SciPy2023-paper.pdf>`_, stream from `the network <https://www.blosc.org/python-blosc2/reference/c2array.html>`_, or use `memory-mapped files <https://www.blosc.org/python-blosc2/reference/storage.html#blosc2.Storage.params.mmap_mode>`_ for high-performance I/O.
 
     .. grid-item-card::
         :class-card: intro-card text-center no-border

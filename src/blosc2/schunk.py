@@ -1469,7 +1469,7 @@ class SChunk(blosc2_ext.SChunk):
         super().__dealloc__()
 
 
-def open(
+def open(  # noqa: C901
     urlpath: str | pathlib.Path | blosc2.URLPath, mode: str = "a", offset: int = 0, **kwargs: dict
 ) -> blosc2.SChunk | blosc2.NDArray | blosc2.C2Array | blosc2.LazyArray | blosc2.Proxy:
     """Open a persistent :ref:`SChunk`, :ref:`NDArray`, a remote :ref:`C2Array`
@@ -1579,6 +1579,12 @@ def open(
     if not os.path.exists(urlpath):
         raise FileNotFoundError(f"No such file or directory: {urlpath}")
 
+    dparams = kwargs.get("dparams")
+    if dparams is None:
+        # Make the default 8 threads; more means more initialization time
+        # Also 8 is a reasonable queue depth for modern SSDs, so it is a good tradeoff.
+        dparams = blosc2.DParams(nthreads=8)
+        kwargs["dparams"] = dparams
     res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
 
     meta = getattr(res, "schunk", res).meta

@@ -2026,7 +2026,8 @@ def open(urlpath, mode, offset, **kwargs):
     if mode != "w" and kwargs is not None:
         check_schunk_params(schunk, kwargs)
     cparams = kwargs.get("cparams")
-    dparams = kwargs.get("dparams")
+    # For reading with the default number of threads
+    dparams = kwargs.get("dparams", blosc2.DParams())
 
     if is_ndarray:
         res = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),

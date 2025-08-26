@@ -33,16 +33,24 @@ class vlmetaProxy(MutableMapping):
     def __setitem__(self, key, value):
         if self._tstore.mode == "r":
             raise ValueError("TreeStore is in read-only mode")
+
+        # Ensure the vlmeta SChunk is persisted before any write operation.
+        # This handles the case where vlmeta is being created lazily.
+        # Use DictStore's methods directly to bypass TreeStore's vlmeta filtering
+        if not DictStore.__contains__(self._tstore, self._tstore._vlmeta_key):
+            DictStore.__setitem__(self._tstore, self._tstore._vlmeta_key, self._tstore._vlmeta)
+
         # Support bulk set via [:]
         if isinstance(key, slice):
             if key.start is None and key.stop is None:
-                # Expect value to be a dict-like
+                # Merge/update existing values instead of replacing
                 for k, v in value.items():
                     self._inner[k] = v
                 # Persist once after bulk update
                 self._tstore._persist_vlmeta()
                 return
             raise NotImplementedError("Slicing is not supported, unless [:]")
+
         self._inner[key] = value
         # Persist changes in the embed store snapshot
         self._tstore._persist_vlmeta()
@@ -72,11 +80,14 @@ class vlmetaProxy(MutableMapping):
 
 class TreeStore(DictStore):
     """
-    A hierarchical tree-based storage container for compressed data using Blosc2.
+    A hierarchical tree-based storage container for Blosc2 data.
 
-    Extends DictStore with strict hierarchical key validation and tree traversal
-    capabilities. Keys must follow a hierarchical structure using '/' as separator
-    and always start with '/'.
+    Extends :class:`blosc2.DictStore` with strict hierarchical key validation
+    and tree traversal capabilities. Keys must follow a hierarchical structure
+    using '/' as separator and always start with '/'. If user passes a key
+    that doesn't start with '/', it will be automatically added.
+
+    It supports the same arguments as :class:`blosc2.DictStore`.
 
     Parameters
     ----------
@@ -134,14 +145,23 @@ class TreeStore(DictStore):
     Please report any issues you may find.
     """
 
+    # For some reason, we had to revert the explicit parametrisation of the
+    # constructor to make benchmarks wrok fine again.
     def __init__(self, *args, _from_parent_store=None, **kwargs):
-        """Initialize TreeStore with subtree support."""
+        """Initialize TreeStore with subtree support.
+
+        It supports the same arguments as :class:`blosc2.DictStore`.
+        """
         if _from_parent_store is not None:
             # This is a subtree view, copy state from parent
             self.__dict__.update(_from_parent_store.__dict__)
         else:
             super().__init__(*args, **kwargs)
             self.subtree_path = ""  # Empty string means full tree
+
+    def _is_vlmeta_key(self, key: str) -> bool:
+        """Check if a key is a vlmeta key that should be hidden from regular access."""
+        return key.endswith("/__vlmeta__")
 
     def _translate_key_to_full(self, key: str) -> str:
         """Translate subtree-relative key to full tree key."""
@@ -164,13 +184,18 @@ class TreeStore(DictStore):
             # Key is not within this subtree
             return None
 
-    def _validate_key(self, key: str) -> None:
-        """Validate hierarchical key structure.
+    def _validate_key(self, key: str) -> str:
+        """Validate and normalize hierarchical key structure.
 
         Parameters
         ----------
         key : str
-            The key to validate.
+            The key to validate and normalize.
+
+        Returns
+        -------
+        normalized_key : str
+            The normalized key with leading '/' added if missing.
 
         Raises
         ------
@@ -180,8 +205,9 @@ class TreeStore(DictStore):
         if not isinstance(key, str):
             raise ValueError(f"Key must be a string, got {type(key)}")
 
+        # Auto-add leading '/' if missing
         if not key.startswith("/"):
-            raise ValueError(f"Key must start with '/', got: {key}")
+            key = "/" + key
 
         if key != "/" and key.endswith("/"):
             raise ValueError(f"Key cannot end with '/' (except for root), got: {key}")
@@ -195,13 +221,15 @@ class TreeStore(DictStore):
             if char in key:
                 raise ValueError(f"Key cannot contain invalid character {char!r}, got: {key}")
 
+        return key
+
     def __setitem__(self, key: str, value: np.ndarray | NDArray | C2Array | SChunk) -> None:
         """Add a node with hierarchical key validation.
 
         Parameters
         ----------
         key : str
-            Hierarchical node key (must start with '/' and use '/' as separator).
+            Hierarchical node key.
         value : np.ndarray or blosc2.NDArray or blosc2.C2Array or blosc2.SChunk
             to store.
 
@@ -212,7 +240,7 @@ class TreeStore(DictStore):
             assign to a structural path that already has children, or if trying
             to add a child to a path that already contains data.
         """
-        self._validate_key(key)
+        key = self._validate_key(key)
 
         # Check if this key already has children (is a structural subtree)
         children = self.get_children(key)
@@ -262,7 +290,10 @@ class TreeStore(DictStore):
         ValueError
             If key doesn't follow hierarchical structure rules.
         """
-        self._validate_key(key)
+        key = self._validate_key(key)
+        if self._is_vlmeta_key(key):
+            raise KeyError(f"Key '{key}' not found; vlmeta keys are not directly accessible.")
+
         full_key = self._translate_key_to_full(key)
 
         # Check if this key has children (is a subtree)
@@ -300,7 +331,10 @@ class TreeStore(DictStore):
         ValueError
             If key doesn't follow hierarchical structure rules.
         """
-        self._validate_key(key)
+        key = self._validate_key(key)
+
+        if self._is_vlmeta_key(key):
+            raise KeyError(f"Key '{key}' not found; vlmeta keys are not directly accessible.")
 
         # Check if the key exists (either as data or as a structural node with descendants)
         full_key = self._translate_key_to_full(key)
@@ -342,7 +376,9 @@ class TreeStore(DictStore):
             True if key exists, False otherwise.
         """
         try:
-            self._validate_key(key)
+            key = self._validate_key(key)
+            if self._is_vlmeta_key(key):
+                return False
             full_key = self._translate_key_to_full(key)
             return super().__contains__(full_key)
         except ValueError:
@@ -359,6 +395,9 @@ class TreeStore(DictStore):
                 if relative_key is not None:
                     all_keys.add(relative_key)
 
+        # Filter out vlmeta keys
+        all_keys = {key for key in all_keys if not self._is_vlmeta_key(key)}
+
         # Also include structural paths (intermediate nodes that have children but no data)
         structural_keys = set()
         for key in all_keys:
@@ -371,6 +410,10 @@ class TreeStore(DictStore):
                     structural_keys.add(current_path)
 
         return all_keys | structural_keys
+
+    def __iter__(self) -> Iterator[str]:
+        """Iterate over keys, excluding vlmeta keys."""
+        return iter(self.keys())
 
     def items(self) -> Iterator[tuple[str, "NDArray | C2Array | SChunk | TreeStore"]]:
         """Return key-value pairs in the current subtree view."""
@@ -390,7 +433,7 @@ class TreeStore(DictStore):
         children : list[str]
             List of direct child paths.
         """
-        self._validate_key(path)
+        path = self._validate_key(path)
 
         if path == "/":
             prefix = "/"
@@ -401,6 +444,8 @@ class TreeStore(DictStore):
         children_names = set()
 
         for key in self.keys():
+            if self._is_vlmeta_key(key):
+                continue  # Should be already filtered by self.keys(), but for safety
             if key.startswith(prefix):
                 # e.g. key = /hierarchy/level1/data, prefix = /hierarchy/
                 # rest = level1/data
@@ -427,7 +472,7 @@ class TreeStore(DictStore):
         descendants : list[str]
             List of all descendant paths.
         """
-        self._validate_key(path)
+        path = self._validate_key(path)
 
         if path == "/":
             prefix = "/"
@@ -438,6 +483,8 @@ class TreeStore(DictStore):
 
         # Get all leaf nodes under this path
         for key in self.keys():
+            if self._is_vlmeta_key(key):
+                continue  # Should be already filtered by self.keys(), but for safety
             if key.startswith(prefix) and key != path:
                 descendants.add(key)
 
@@ -473,7 +520,7 @@ class TreeStore(DictStore):
         >>> for path, children, nodes in tstore.walk("/child0", topdown=True):
         ...     print(f"Path: {path}, Children: {children}, Nodes: {nodes}")
         """
-        self._validate_key(path)
+        path = self._validate_key(path)
 
         # Get all direct children of this path
         direct_children = self.get_children(path)
@@ -533,7 +580,8 @@ class TreeStore(DictStore):
         Parameters
         ----------
         path : str
-            The path that will become the root of the subtree view (relative to current subtree).
+            The path that will become the root of the subtree view (relative to current subtree,
+            will be normalized to start with '/' if missing).
 
         Returns
         -------
@@ -554,7 +602,7 @@ class TreeStore(DictStore):
         -----
         This is equivalent to `tstore[path]` when path is a structural path.
         """
-        self._validate_key(path)
+        path = self._validate_key(path)
         full_path = self._translate_key_to_full(path)
 
         # Create a new TreeStore instance that shares the same underlying storage
@@ -564,28 +612,13 @@ class TreeStore(DictStore):
 
         return subtree
 
-    def _persist_vlmeta(self) -> None:
-        """Persist current vlmeta SChunk into the store.
-
-        This is needed because the EmbedStore keeps a serialized snapshot of
-        stored objects; mutating the in-memory SChunk does not automatically
-        update the snapshot. We emulate an update by deleting and re-adding
-        the object in the embed store.
-        """
-        full_key = self.full_vlmeta_key
-        # Only embedded case is expected; handle it safely.
-        if hasattr(self, "_estore") and full_key in self._estore:
-            # Replace the stored snapshot
-            with contextlib.suppress(KeyError):
-                del self._estore[full_key]
-            self._estore[full_key] = self._vlmeta
-
     @property
-    def vlmeta(self) -> MutableMapping | None:
-        """Access variable-length metadata for the TreeStore.
+    def vlmeta(self) -> MutableMapping:
+        """Access variable-length metadata for the TreeStore or current subtree.
 
         Returns a proxy to the vlmeta attribute of an internal SChunk stored at
-        '/__vlmeta__'. The SChunk is created on-demand if it doesn't exist.
+        '/__vlmeta__' for the root tree, or '<subtree_path>/__vlmeta__' for subtrees.
+        The SChunk is created on-demand if it doesn't exist.
 
         Notes
         -----
@@ -594,22 +627,46 @@ class TreeStore(DictStore):
         additional guarantees:
         - Bulk get via `[:]` always returns a dict with string keys and decoded values.
         - Read-only protection is enforced at the TreeStore level.
+        - Each subtree has its own independent vlmeta storage.
         """
-        # Always refer to the global vlmeta at the root scope (ignore subtree_path)
-        self.full_vlmeta_key = "/__vlmeta__"
-
-        if super().__contains__(self.full_vlmeta_key):
-            # Load the current snapshot from the store to ensure freshness
-            self._vlmeta = super().__getitem__(self.full_vlmeta_key)
-        elif self.mode != "r":
-            # Create new vlmeta SChunk and persist it
-            self._vlmeta = blosc2.SChunk()
-            super().__setitem__(self.full_vlmeta_key, self._vlmeta)
+        # Create vlmeta key based on subtree_path
+        if not self.subtree_path:
+            # Root tree uses global vlmeta
+            vlmeta_key = "/__vlmeta__"
         else:
-            return None
+            # Subtree uses path-specific vlmeta: <subtree_path>/__vlmeta__
+            vlmeta_key = f"{self.subtree_path}/__vlmeta__"
+
+        # Use super().__contains__ to bypass our own filtering logic
+        if super().__contains__(vlmeta_key):
+            # Load the current snapshot from the store to ensure freshness
+            self._vlmeta = super().__getitem__(vlmeta_key)
+        else:
+            # Create a new, empty SChunk in memory. It will be persisted on first write.
+            self._vlmeta = blosc2.SChunk()
+
+        # Store the key for _persist_vlmeta method
+        self._vlmeta_key = vlmeta_key
 
         # Return a fresh proxy that wraps the latest inner vlmeta
         return vlmetaProxy(self, self._vlmeta.vlmeta)
+
+    def _persist_vlmeta(self) -> None:
+        """Persist current vlmeta SChunk into the store.
+
+        This is needed because the EmbedStore keeps a serialized snapshot of
+        stored objects; mutating the in-memory SChunk does not automatically
+        update the snapshot. We emulate an update by deleting and re-adding
+        the object in the embed store.
+        """
+        if hasattr(self, "_vlmeta_key"):
+            vlmeta_key = self._vlmeta_key
+            # Only embedded case is expected; handle it safely.
+            if hasattr(self, "_estore") and vlmeta_key in self._estore:
+                # Replace the stored snapshot
+                with contextlib.suppress(KeyError):
+                    del self._estore[vlmeta_key]
+                self._estore[vlmeta_key] = self._vlmeta
 
 
 if __name__ == "__main__":

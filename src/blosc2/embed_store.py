@@ -5,6 +5,7 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
+import copy
 from collections.abc import Iterator, KeysView
 from typing import Any
 
@@ -73,7 +74,7 @@ class EmbedStore:
         cparams: blosc2.CParams | None = None,
         dparams: blosc2.CParams | None = None,
         storage: blosc2.Storage | None = None,
-        chunksize: int | None = 2**16,
+        chunksize: int | None = 2**13,
         _from_schunk: SChunk | None = None,
     ):
         """Initialize EmbedStore."""
@@ -111,7 +112,7 @@ class EmbedStore:
             self._load_metadata()
             return
 
-        _cparams = self.cparams
+        _cparams = copy.deepcopy(self.cparams)
         _cparams.typesize = 1  # ensure typesize is set to 1 for byte storage
         _storage = self.storage
         # Mark this storage as a b2embed object
