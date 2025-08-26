@@ -13,6 +13,8 @@
 import platform
 from enum import Enum
 
+import numpy as np
+
 # Do the platform check once at module level
 IS_WASM = platform.machine() == "wasm32"
 # IS_WASM = True  # for testing (comment this line out for production)
@@ -164,7 +166,12 @@ VERSION_STRING = VERSION_STRING
 """
 The C-Blosc2 version's string."""
 
-import numpy as np
+
+# For array-api compatibility
+iinfo = np.iinfo
+finfo = np.finfo
+isnan = np.isnan
+isfinite = np.isfinite
 
 # dtypes for array-api
 bool_ = np.bool_
@@ -229,11 +236,6 @@ def __array_namespace_info__() -> Info:
         version=__version__,
     )
 
-
-from dataclasses import dataclass
-
-finfo = np.finfo
-iinfo = np.iinfo # info class for integer datatypes (array-api compatibility)
 
 # Public API for container module
 from .core import (
@@ -565,4 +567,3 @@ __all__ = [
     "var",
     "where",
 ]
-
