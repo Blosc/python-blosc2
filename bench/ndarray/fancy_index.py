@@ -26,8 +26,8 @@ plt.style.use('seaborn-v0_8-paper')
 
 NUMPY = True
 BLOSC = True
-ZARR = False
-HDF5 = False
+ZARR = True
+HDF5 = True
 SPARSE = False
 
 NDIMS = 2 # must be at least 2
