@@ -2615,6 +2615,9 @@ cdef class NDArray:
         if self.array.shape[0] == 1 and self.ndim == 1:
             self.array.ndim = 0
 
+    def as_ffi_ptr(self):
+        return PyCapsule_New(self.array, <char *> "b2nd_array_t*", NULL)
+
     cdef udf_udata *_fill_udf_udata(self, func_id, inputs_id):
         cdef udf_udata *udata = <udf_udata *> malloc(sizeof(udf_udata))
         udata.py_func = <char *> malloc(strlen(func_id) + 1)
@@ -2901,6 +2904,10 @@ def asarray(ndarray, chunks, blocks, **kwargs):
 
     return ndarray
 
+def array_from_ffi_ptr(array_ptr):
+    array = <b2nd_array_t *> PyCapsule_GetPointer(array_ptr, <char *> "b2nd_array_t*")
+    return blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
+                             _array=array_ptr)
 
 def ndarray_from_cframe(cframe, copy=False):
     cdef Py_buffer buf

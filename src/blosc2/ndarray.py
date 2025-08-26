@@ -2169,6 +2169,24 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return sort(self, order, **kwargs)
 
+    def as_ffi_ptr(self):
+        """Returns the pointer to the raw FFI blosc2::b2nd_array_t object.
+
+        This function is useful for passing the array to C functions.
+        """
+        return super().as_ffi_ptr()
+
+
+def array_from_ffi_ptr(array_ptr) -> NDArray:
+    """
+    Create an NDArray from a raw FFI pointer.
+
+    This function is useful for passing arrays across FFI boundaries.
+    This function move the ownership of the underlying `b2nd_array_t*` object to the new NDArray, and it will be freed
+    when the object is destroyed.
+    """
+    return blosc2_ext.array_from_ffi_ptr(array_ptr)
+
 
 def sin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
