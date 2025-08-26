@@ -1478,17 +1478,19 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         """
         # TODO: Make this faster and avoid running out of memory - avoid broadcasting keys
+
         ## Can't do this because ndindex doesn't support all the same indexing cases as Numpy
         # if math.prod(self.shape) * self.dtype.itemsize < blosc2.MAX_FAST_PATH_SIZE:
         #     return self[:][key]  # load into memory for smallish arrays
         shape = self.shape
         chunks = self.chunks
-        # after this, all indices are slices or arrays of integers
-        # moreover, all arrays are consecutive (otherwise an error is raised)
+
         # TODO: try to optimise and avoid this expand which seems to copy - maybe np.broadcast
         _slice = ndindex.ndindex(key).expand(shape)
         out_shape = _slice.newshape(shape)
         _slice = _slice.raw
+        # now all indices are slices or arrays of integers (or booleans)
+        # moreover, all arrays are consecutive (otherwise an error is raised)
 
         if np.all([isinstance(s, (slice, np.ndarray)) for s in _slice]) and np.all(
             [s.dtype is not bool for s in _slice if isinstance(s, np.ndarray)]
@@ -1500,9 +1502,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
             begin, end = arridxs[0], arridxs[-1] + 1
             flat_shape = tuple((i.stop - i.start + (i.step - 1)) // i.step for i in _slice[:begin])
             idx_dim = np.prod(_slice[begin].shape)
+
+            # TODO: find a nicer way to do the copy maybe
             arr = np.empty((idx_dim, end - begin), dtype=_slice[begin].dtype)
             for i, s in enumerate(_slice[begin:end]):
                 arr[:, i] = s.reshape(-1)  # have to do a copy
+
             flat_shape += (idx_dim,)
             flat_shape += tuple((i.stop - i.start + (i.step - 1)) // i.step for i in _slice[end:])
             # out_shape could have new dims if indexing arrays are not all 1D
@@ -1520,7 +1525,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 chunked_arr = np.ascontiguousarray(
                     chunked_arr
                 )  # ensure C-order memory to allow structured dtype view
-                # use np.unique but avoid sort and copy
+                # TODO: check that avoids sort and copy (alternative: maybe do a bincount with structured data types?)
                 _, row_ids, idx_inv, chunk_nitems = np.unique(
                     chunked_arr.view([("", chunked_arr.dtype)] * chunked_arr.shape[1]),
                     return_counts=True,
@@ -1541,6 +1546,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 slice_to_chunktuple(s, c) for s, c in zip(prior_tuple, chunks[:begin], strict=True)
             ]
             cpost_slices = [slice_to_chunktuple(s, c) for s, c in zip(post_tuple, chunks[end:], strict=True)]
+            # TODO: rewrite to allow interleaved slices/array indexes
             for chunk_i, chunk_idx in enumerate(unique_chunks):
                 start = 0 if chunk_i == 0 else chunk_nitems_cumsum[chunk_i - 1]
                 stop = chunk_nitems_cumsum[chunk_i]
@@ -4576,7 +4582,7 @@ class OIndex:
 
 def slice_to_chunktuple(s, n):
     """
-        # credit to ndindex for this function #
+    Adapted from _slice_iter in ndindex.ChunkSize.as_subchunks.
     Parameters
     ----------
     s : slice

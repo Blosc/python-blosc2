@@ -39,8 +39,7 @@ def genarray(r, ndims=2, verbose=True):
     blocks = (max(d // 10, 1),) * ndims
     urlpath = f'linspace{r}{ndims}D.b2nd'
     t = time.time()
-    arr = blosc2.linspace(0, 1000, num=np.prod(shape), shape=shape, dtype=np.float64,
-                        urlpath=urlpath, mode='w')
+    arr = blosc2.linspace(0, 1000, num=np.prod(shape), shape=shape, dtype=np.float64, urlpath=urlpath, mode='w')
     t = time.time() - t
     arrsize = np.prod(arr.shape) * arr.dtype.itemsize / 2 ** 30
     if verbose:
@@ -135,10 +134,10 @@ for i, r in enumerate(result_tuple):
         err = (mean - times.min(axis=1), times.max(axis=1)-mean)
         plt.bar(x + w, mean , width, color=c, label=label, yerr=err, capsize=5, ecolor='k',
         error_kw=dict(lw=2, capthick=2, ecolor='k'))
-        labs+=label
+        labs += label
 
 filename = f"{labs}{NDIMS}D" + "sparse" if SPARSE else f"{labs}{NDIMS}D"
-filename+=blosc2.__version__.replace('.','_')
+filename += blosc2.__version__.replace('.','_')
 
 with open(f"{filename}.pkl", 'wb') as f:
     pickle.dump({'times':result_tuple, 'sizes':genuine_sizes}, f)
