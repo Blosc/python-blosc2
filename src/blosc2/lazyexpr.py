@@ -46,64 +46,65 @@ if not blosc2.IS_WASM:
     import numexpr
 
 
-def compute_slice_shape(shape, slice_obj, dont_squeeze=False):  # noqa: C901
-    # Handle None or empty slice case
-    if slice_obj is None or slice_obj == ():
-        return shape
+# No longer used
+# def compute_slice_shape(shape, slice_obj, dont_squeeze=False):
+#     # Handle None or empty slice case
+#     if slice_obj is None or slice_obj == ():
+#         return shape
 
-    # Use ndindex to handle slice calculations
-    try:
-        idx = ndindex.ndindex(slice_obj).expand(shape)
-        return idx.shape
-    except Exception:
-        # Fall back to manual processing
-        if not isinstance(slice_obj, tuple):
-            slice_obj = (slice_obj,)
+#     # Use ndindex to handle slice calculations
+#     try:
+#         idx = ndindex.ndindex(slice_obj).expand(shape)
+#         return idx.shape
+#     except Exception:
+#         # Fall back to manual processing
+#         if not isinstance(slice_obj, tuple):
+#             slice_obj = (slice_obj,)
 
-        result = []
-        shape_idx = 0
-        dims_reduced = 0
+#         result = []
+#         shape_idx = 0
+#         dims_reduced = 0
 
-        # Process slice components
-        for i, s in enumerate(slice_obj):
-            if i >= len(shape):
-                break
+#         # Process slice components
+#         for i, s in enumerate(slice_obj):
+#             if i >= len(shape):
+#                 break
 
-            if isinstance(s, slice):
-                start = 0 if s.start is None else max(0, s.start if s.start >= 0 else shape[i] + s.start)
-                stop = (
-                    shape[i]
-                    if s.stop is None
-                    else min(shape[i], s.stop if s.stop >= 0 else shape[i] + s.stop)
-                )
-                step = 1 if s.step is None else abs(s.step)
+#             if isinstance(s, slice):
+#                 start = 0 if s.start is None else max(0, s.start if s.start >= 0 else shape[i] + s.start)
+#                 stop = (
+#                     shape[i]
+#                     if s.stop is None
+#                     else min(shape[i], s.stop if s.stop >= 0 else shape[i] + s.stop)
+#                 )
+#                 step = 1 if s.step is None else abs(s.step)
 
-                if start < stop:
-                    result.append((stop - start - 1) // step + 1)
-                else:
-                    result.append(0)
-                shape_idx += 1
-            elif isinstance(s, int) or np.isscalar(s):
-                if dont_squeeze:
-                    result.append(1)
-                    shape_idx += 1
-                else:
-                    # Integer indexing reduces dimensionality
-                    dims_reduced += 1
-                    shape_idx += 1
-                    continue
-            elif s is Ellipsis:
-                # Fill in with remaining dimensions
-                remaining_dims = len(shape) - (len(slice_obj) - 1 + dims_reduced)
-                result.extend(shape[shape_idx : shape_idx + remaining_dims])
-                shape_idx += remaining_dims
-                continue
+#                 if start < stop:
+#                     result.append((stop - start - 1) // step + 1)
+#                 else:
+#                     result.append(0)
+#                 shape_idx += 1
+#             elif isinstance(s, int) or np.isscalar(s):
+#                 if dont_squeeze:
+#                     result.append(1)
+#                     shape_idx += 1
+#                 else:
+#                     # Integer indexing reduces dimensionality
+#                     dims_reduced += 1
+#                     shape_idx += 1
+#                     continue
+#             elif s is Ellipsis:
+#                 # Fill in with remaining dimensions
+#                 remaining_dims = len(shape) - (len(slice_obj) - 1 + dims_reduced)
+#                 result.extend(shape[shape_idx : shape_idx + remaining_dims])
+#                 shape_idx += remaining_dims
+#                 continue
 
-        # Add any remaining dimensions
-        if shape_idx < len(shape):
-            result.extend(shape[shape_idx:])
+#         # Add any remaining dimensions
+#         if shape_idx < len(shape):
+#             result.extend(shape[shape_idx:])
 
-        return tuple(result)
+#         return tuple(result)
 
 
 def ne_evaluate(expression, local_dict=None, **kwargs):
@@ -220,6 +221,8 @@ functions = [
     "all",
     "pow" if np.__version__.startswith("2.") else "power",
     "where",
+    "isnan",
+    "isfinite",
 ]
 
 # Gather all callable functions in numpy
@@ -2516,6 +2519,8 @@ class LazyExpr(LazyArray):
             np.real: "real",
             np.imag: "imag",
             np.bitwise_not: "~",
+            np.isnan: "isnan",
+            np.isfinite: "isfinite",
         }
 
         if ufunc in ufunc_map:

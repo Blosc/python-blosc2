@@ -64,19 +64,21 @@ def make_key_hashable(key):
 
 def process_key(key, shape):
     key = ndindex.ndindex(key).expand(shape).raw
-    mask = tuple(isinstance(k, int) for k in key) # mask to track dummy dims introduced by int -> slice(k, k+1)
-    key = tuple(slice(k, k + 1, None) if isinstance(k, int) else k for k in key) # key is slice, None, int 
+    mask = tuple(
+        isinstance(k, int) for k in key
+    )  # mask to track dummy dims introduced by int -> slice(k, k+1)
+    key = tuple(slice(k, k + 1, None) if isinstance(k, int) else k for k in key)  # key is slice, None, int
     return key, mask
 
 
 def get_ndarray_start_stop(ndim, key, shape):
-    #key should be Nones and slices
+    # key should be Nones and slices
     none_mask, start, stop = [], [], []
     for i, s in enumerate(key):
         none_mask.append(s is None)
         if s is not None:
             start.append(s.start if s.start is not None else 0)
-            stop.append(s.stop if s.stop is not None else shape[i-np.sum(none_mask)])
+            stop.append(s.stop if s.stop is not None else shape[i - np.sum(none_mask)])
     # Check that start and stop values do not exceed the shape
     for i in range(ndim):
         if start[i] < 0:
@@ -857,6 +859,8 @@ class Operand:
             np.real: "real",
             np.imag: "imag",
             np.bitwise_not: "~",
+            np.isnan: "isnan",
+            np.isfinite: "isfinite",
         }
 
         if ufunc in ufunc_map:
@@ -1006,44 +1010,45 @@ class LimitedSizeDict(OrderedDict):
         super().__setitem__(key, value)
 
 
-def extract_values(arr, indices: np.ndarray[np.int_], max_cache_size: int = 10) -> np.ndarray:
-    """
-    Extract values from a chunked and compressed array using an array of indices.
+# No longer used
+# def extract_values(arr, indices: np.ndarray[np.int_], max_cache_size: int = 10) -> np.ndarray:
+#     """
+#     Extract values from a chunked and compressed array using an array of indices.
 
-    Parameters
-    ----------
-    arr : blosc2.NDArray
-        The chunked and compressed array.
-    indices : np.ndarray
-        The array of indices to extract values from.
-    max_cache_size : int
-        The maximum number of chunks to cache.
+#     Parameters
+#     ----------
+#     arr : blosc2.NDArray
+#         The chunked and compressed array.
+#     indices : np.ndarray
+#         The array of indices to extract values from.
+#     max_cache_size : int
+#         The maximum number of chunks to cache.
 
-    Returns
-    -------
-    extracted_values : np.ndarray
-        The extracted values.
-    """
-    # Initialize the result array
-    extracted_values = np.empty(len(indices), dtype=arr.dtype)
+#     Returns
+#     -------
+#     extracted_values : np.ndarray
+#         The extracted values.
+#     """
+#     # Initialize the result array
+#     extracted_values = np.empty(len(indices), dtype=arr.dtype)
 
-    # Limited size dictionary to store decompressed chunks
-    chunk_cache = LimitedSizeDict(max_cache_size)
+#     # Limited size dictionary to store decompressed chunks
+#     chunk_cache = LimitedSizeDict(max_cache_size)
 
-    # Iterate through the indices and extract values
-    chunk_size = int(arr.chunks[0])
-    for i, idx in enumerate(indices):
-        chunk_idx = idx // chunk_size
-        if chunk_idx not in chunk_cache:
-            # Compute the bounds for this chunk
-            start = chunk_idx * chunk_size
-            end = start + chunk_size
-            chunk_cache[chunk_idx] = arr[start:end]
+#     # Iterate through the indices and extract values
+#     chunk_size = int(arr.chunks[0])
+#     for i, idx in enumerate(indices):
+#         chunk_idx = idx // chunk_size
+#         if chunk_idx not in chunk_cache:
+#             # Compute the bounds for this chunk
+#             start = chunk_idx * chunk_size
+#             end = start + chunk_size
+#             chunk_cache[chunk_idx] = arr[start:end]
 
-        local_idx = idx % chunk_size
-        extracted_values[i] = chunk_cache[chunk_idx][local_idx]
+#         local_idx = idx % chunk_size
+#         extracted_values[i] = chunk_cache[chunk_idx][local_idx]
 
-    return extracted_values
+#     return extracted_values
 
 
 def detect_aligned_chunks(  # noqa: C901
@@ -1489,7 +1494,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         #     return self[:][key]  # load into memory for smallish arrays
         shape = self.shape
         chunks = self.chunks
-        _slice = ndindex.ndindex(key).expand(shape)
+        _slice = (
+            key if isinstance(key, ndindex.Tuple) else ndindex.ndindex(key).expand(shape)
+        )  # should be in ndindex form
         out_shape = _slice.newshape(shape)
         out = np.empty(out_shape, dtype=self.dtype)
 
@@ -1566,8 +1573,13 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
     def __getitem__(  # noqa: C901
         self,
-        key: None | int | slice | Sequence[slice | int | np.bool_ | np.ndarray[int | np.bool_] | None] | NDArray[int | np.bool_] | 
-        blosc2.LazyExpr | str,
+        key: None
+        | int
+        | slice
+        | Sequence[slice | int | np.bool_ | np.ndarray[int | np.bool_] | None]
+        | NDArray[int | np.bool_]
+        | blosc2.LazyExpr
+        | str,
     ) -> np.ndarray | blosc2.LazyExpr:
         """
         Retrieve a (multidimensional) slice as specified by the key.
@@ -1615,20 +1627,13 @@ class NDArray(blosc2_ext.NDArray, Operand):
         # Check if there is a None = new axis
         if key is None:
             return expand_dims(self, axis=0)
-            
-        key_, mask, none_mask = key, None, []
-        if isinstance(key, np.integer):
-            # Massage the key to a tuple and go the fast path
-            key_ = (slice(key, key + 1), *(slice(None),) * (self.ndim - 1))
-        elif isinstance(key, tuple):
-            if builtins.any(isinstance(k, (list, np.ndarray)) for k in key):
-                return self.get_fselection_numpy(key)  # fancy index
-            if builtins.sum(isinstance(k, builtins.slice) for k in key) != self.ndim:
-                key_, mask = process_key(key, self.shape) # if not all elements are slices (some Nones or ints)
-        elif isinstance(key, (list, np.ndarray, NDArray)):
-            if isinstance(key, list):
-                key = np.array(key, dtype=np.int64)
-            if np.issubdtype(key.dtype, np.bool_):
+
+        key_ = (key,) if not isinstance(key, tuple) else key
+        key_ = tuple(k[:] if isinstance(k, NDArray) else k for k in key_)  # decompress NDArrays
+        key_, mask = process_key(key_, self.shape)  # internally handles key an integer
+
+        if builtins.any(isinstance(k, (list, np.ndarray)) for k in key_):
+            if np.issubdtype(key.dtype, np.bool_):  # check ORIGINAL key
                 # This can be interpreted as a boolean expression
                 if key.shape != self.shape:
                     raise ValueError("The shape of the boolean expression should match the array shape")
@@ -1639,13 +1644,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 # This behavior is consistent with NumPy, although different from e.g. ['expr']
                 # which returns a lazy expression.
                 return expr.where(self)[:]
-            if isinstance(key, NDArray):
-                key = key[:]
-            # This is a fast path for the case where the key is a short list of 1-d indices
-            # For the rest, use an array of booleans.
-            # if key.dtype == np.int64 and key.ndim == 1 and self.ndim == 1:
-            #     return extract_values(self, key)
-            return self.get_fselection_numpy(key)  # fancy index
+            return self.get_fselection_numpy(key_)  # fancy index
         else:
             # The more general case (this is quite slow)
             # If the key is a LazyExpr, decorate with ``where`` and return it
@@ -1660,13 +1659,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 # Assume that the key is a boolean expression
                 expr = blosc2.LazyExpr._new_expr(key, self.fields, guess=False)
                 return expr.where(self)
-            key_, mask = process_key(key, self.shape)  # final resort for [:]
         start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
         shape = np.array([sp - st for st, sp in zip(start, stop, strict=True)])
         if mask is not None:
-            #only get mask for not Nones in key to have m_ same length as shape
-            m_ = [m for m,n in zip(mask, none_mask, strict=True) if not n] 
-            none_mask_ = [n for m,n in zip(mask, none_mask, strict=True) if not m] #have to make none_mask refer to sliced dims (which will be less if ints present)
+            # only get mask for not Nones in key to have m_ same length as shape
+            m_ = [m for m, n in zip(mask, none_mask, strict=True) if not n]
+            none_mask_ = [
+                n for m, n in zip(mask, none_mask, strict=True) if not m
+            ]  # have to make none_mask refer to sliced dims (which will be less if ints present)
             none_mask = none_mask_
             shape = tuple(shape[[not m for m in m_]])
 
@@ -1678,9 +1678,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 return nparr[:: step[0]]
             slice_ = tuple(slice(None, None, st) for st in step)
             nparr = nparr[slice_]
-        
+
         if np.any(none_mask):
-            nparr = np.expand_dims(nparr, axis=[i for i,n in enumerate(none_mask) if n])
+            nparr = np.expand_dims(nparr, axis=[i for i, n in enumerate(none_mask) if n])
 
         if self._keep_last_read:
             self._last_read.clear()
@@ -3032,6 +3032,70 @@ def abs(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc
     return blosc2.LazyExpr(new_op=(ndarr, "abs", None))
 
 
+def isnan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Return True/False for not-a-number values element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated to get the True/False array of results.
+
+    References
+    ----------
+    `np.isnan <https://numpy.org/doc/stable/reference/generated/numpy.isnan.html#numpy.isnan>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([-5, -3, np.nan, 2, 4])
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_ = blosc2.isnan(ndarray)
+    >>> result = result_[:]
+    >>> print("isnan:", result)
+    isnan: [False, False, True, False, False]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "isnan", None))
+
+
+def isfinite(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Return True/False for finite values element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated to get the True/False array of results.
+
+    References
+    ----------
+    `np.isfinite <https://numpy.org/doc/stable/reference/generated/numpy.isfinite.html#numpy.isfinite>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([-5, -3, np.inf, 2, 4])
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_ = blosc2.isfinite(ndarray)
+    >>> result = result_[:]
+    >>> print("isfinite:", result)
+    isfinite: [True, True, False, True, True]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "isfinite", None))
+
+
 def where(
     condition: blosc2.LazyExpr,
     x: NDArray | NDField | np.ndarray | int | float | complex | bool | str | bytes | None = None,
@@ -3862,7 +3926,7 @@ def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
     array.save(urlpath, contiguous, **kwargs)
 
 
-def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: Any) -> NDArray:
+def asarray(array: Sequence | np.ndarray | blosc2.C2Array, **kwargs: Any) -> NDArray:  # noqa: C901
     """Convert the `array` to an `NDArray`.
 
     Parameters
@@ -3898,8 +3962,14 @@ def asarray(array: np.ndarray | blosc2.C2Array, **kwargs: Any) -> NDArray:
     >>> nda = blosc2.asarray(a)
     """
     # Convert scalars to numpy array
+    dtype = kwargs.pop("dtype", None)  # check if dtype provided
     if not hasattr(array, "shape"):
-        array = np.array(array)
+        array = np.array(array, dtype=dtype)  # defaults if dtype=None
+    if dtype is not None and array.dtype != dtype:
+        try:
+            array = array.astype(dtype)
+        except Exception as e:
+            raise ValueError("Cannot provide dtype argument for C2Arrays.") from e
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)

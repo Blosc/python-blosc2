@@ -170,8 +170,6 @@ The C-Blosc2 version's string."""
 # For array-api compatibility
 iinfo = np.iinfo
 finfo = np.finfo
-isnan = np.isnan
-isfinite = np.isfinite
 
 # dtypes for array-api
 bool_ = np.bool_
@@ -408,6 +406,8 @@ from .ndarray import (
     exp,
     expm1,
     imag,
+    isfinite,
+    isnan,
     lazywhere,
     log,
     log1p,
@@ -510,6 +510,8 @@ __all__ = [
     "get_expr_operands",
     "get_slice_nchunks",
     "indices",
+    "isfinite",
+    "isnan",
     "jit",
     "lazyexpr",
     "lazyudf",
