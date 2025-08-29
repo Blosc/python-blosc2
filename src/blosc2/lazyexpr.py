@@ -1803,7 +1803,7 @@ def reduce_slices(  # noqa: C901
     else:
         del kwargs["dtype"]
 
-    # Compute the shape and chunks of the output array, including broadcasting
+    # Compute the shape of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
 
     _slice = _slice.raw
@@ -1839,36 +1839,48 @@ def reduce_slices(  # noqa: C901
         return blosc2.zeros(reduced_shape, dtype=dtype)
 
     # Choose the array with the largest shape as the reference for chunks
-    operand = max((o for o in operands.values() if hasattr(o, "chunks")), key=lambda x: len(x.shape))
-    chunks = operand.chunks
-
-    # Check if the partitions are aligned (i.e. all operands have the same shape,
-    # chunks and blocks, and have no padding). This will allow us to take the fast path.
-    same_shape = all(operand.shape == o.shape for o in operands.values() if hasattr(o, "shape"))
-    same_chunks = all(operand.chunks == o.chunks for o in operands.values() if hasattr(o, "chunks"))
-    same_blocks = all(operand.blocks == o.blocks for o in operands.values() if hasattr(o, "blocks"))
-    fast_path = same_shape and same_chunks and same_blocks
+    # Note: we could have expr = blosc2.lazyexpr('numpy_array + 1') (i.e. no choice for chunks)
+    blosc2_arrs = tuple(o for o in operands.values() if hasattr(o, "chunks"))
     aligned, iter_disk = False, False
-    if fast_path:
-        # Check that all operands are NDArray for fast path
-        all_ndarray = all(
-            isinstance(value, blosc2.NDArray) and value.shape != () for value in operands.values()
+    fast_path = False
+    if blosc2_arrs:  # fast path only possible if all blosc2 arrays
+        operand = max(blosc2_arrs, key=lambda x: len(x.shape))
+        chunks = operand.chunks
+
+        # Check if the partitions are aligned (i.e. all operands have the same shape,
+        # chunks and blocks, and have no padding). This will allow us to take the fast path.
+        fast_path = all(
+            operand.shape == o.shape and operand.chunks == o.chunks and operand.blocks == o.blocks
+            for o in blosc2_arrs
         )
-        # Check that there is some NDArray that is persisted in the disk
-        any_persisted = any(
-            (isinstance(value, blosc2.NDArray) and value.shape != () and value.schunk.urlpath is not None)
-            for value in operands.values()
-        )
-        if not blosc2.IS_WASM:
-            iter_disk = all_ndarray and any_persisted
-            # Experiments say that iter_disk is faster than the regular path for reductions
-            # even when all operands are in memory, so no need to check any_persisted
-            # New benchmarks are saying the contrary (> 10% slower), so this needs more
-            # investigation
-            # iter_disk = all_ndarray
-        else:
-            # WebAssembly does not support threading, so we cannot use the iter_disk option
-            iter_disk = False
+        if fast_path:
+            # Check that all operands are NDArray for fast path
+            all_ndarray = all(
+                isinstance(value, blosc2.NDArray) and value.shape != () for value in operands.values()
+            )
+            # Check that there is some NDArray that is persisted in the disk
+            any_persisted = any(
+                (
+                    isinstance(value, blosc2.NDArray)
+                    and value.shape != ()
+                    and value.schunk.urlpath is not None
+                )
+                for value in operands.values()
+            )
+            if not blosc2.IS_WASM:
+                iter_disk = all_ndarray and any_persisted
+                # Experiments say that iter_disk is faster than the regular path for reductions
+                # even when all operands are in memory, so no need to check any_persisted
+                # New benchmarks are saying the contrary (> 10% slower), so this needs more
+                # investigation
+                # iter_disk = all_ndarray
+            else:
+                # WebAssembly does not support threading, so we cannot use the iter_disk option
+                iter_disk = False
+    else:  # have to calculate chunks (this is cheap as empty just creates a thin metalayer)
+        temp = blosc2.empty(shape, dtype=dtype)
+        chunks = temp.chunks
+        del temp
 
     # Iterate over the operands and get the chunks
     chunk_operands = {}
