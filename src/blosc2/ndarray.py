@@ -74,12 +74,13 @@ def process_key(key, shape):
 
 def get_ndarray_start_stop(ndim, key, shape):
     # key should be Nones and slices
-    none_mask, start, stop = [], [], []
+    none_mask, start, stop, step = [], [], [], []
     for i, s in enumerate(key):
         none_mask.append(s is None)
         if s is not None:
             start.append(s.start if s.start is not None else 0)
             stop.append(s.stop if s.stop is not None else shape[i - np.sum(none_mask)])
+            step.append(s.step if s.step is not None else 1)
     # Check that start and stop values do not exceed the shape
     for i in range(ndim):
         if start[i] < 0:
@@ -90,8 +91,12 @@ def get_ndarray_start_stop(ndim, key, shape):
             stop[i] = shape[i] + stop[i]
         if stop[i] > shape[i]:
             stop[i] = shape[i]
-    step = tuple(s.step if s.step is not None else 1 for s in key if isinstance(s, slice))
-    return start, stop, step, none_mask
+        if step[i] < 0:  # (start, stop, -1) => stop < start
+            temp = start[i]
+            start[i] = stop[i] + 1  # don't want to include stop
+            stop[i] = temp + 1  # want to include start
+
+    return start, stop, tuple(step), none_mask
 
 
 def are_partitions_aligned(shape, chunks, blocks):
@@ -1655,8 +1660,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
             of this array where the expression is True.
             When key is a (nd-)array of bools, the result will be the values of ``self``
             where the bool values are True (similar to NumPy).
-            If key is a 1-dim sequence of integers, the result will be the values of
-            this array at the specified indices. N-dim indices are not yet supported.
+            If key is an N-dim array of integers, the result will be the values of
+            this array at the specified indices with the shape of the index.
             If the key is a string, and it is a field name of self, a :ref:`NDField`
             accessor will be returned; if not, it will be attempted to convert to a
             :ref:`LazyExpr`, and will search for its operands in the fields of ``self``.
@@ -1719,22 +1724,19 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
         shape = np.array([sp - st for st, sp in zip(start, stop, strict=True)])
-        if mask is not None:
-            # only get mask for not Nones in key to have m_ same length as shape
-            m_ = [m for m, n in zip(mask, none_mask, strict=True) if not n]
-            none_mask_ = [
-                n for m, n in zip(mask, none_mask, strict=True) if not m
-            ]  # have to make none_mask refer to sliced dims (which will be less if ints present)
-            none_mask = none_mask_
-            shape = tuple(shape[[not m for m in m_]])
+        if mask is not None:  # there are some dummy dims from ints
+            # only get mask for not Nones in key to have nm_ same length as shape
+            nm_ = [not m for m, n in zip(mask, none_mask, strict=True) if not n]
+            # have to make none_mask refer to sliced dims (which will be less if ints present)
+            none_mask = [n for m, n in zip(mask, none_mask, strict=True) if not m]
+            shape = tuple(shape[nm_])
 
         # Create the array to store the result
         arr = np.empty(shape, dtype=self.dtype)
         nparr = super().get_slice_numpy(arr, (start, stop))
         if step != (1,) * self.ndim:
-            if len(step) == 1:
-                return nparr[:: step[0]]
-            slice_ = tuple(slice(None, None, st) for st in step)
+            # have to make step refer to sliced dims (which will be less if ints present)
+            slice_ = tuple(slice(None, None, st) for st, m in zip(step, nm_, strict=True) if m)
             nparr = nparr[slice_]
 
         if np.any(none_mask):
