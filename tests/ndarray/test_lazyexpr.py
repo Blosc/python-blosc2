@@ -1352,7 +1352,7 @@ def test_sort():
     ],
 )
 @pytest.mark.parametrize("getitem", [True, False])
-@pytest.mark.parametrize("item", [None, slice(10), slice(0, 10, 2)])
+@pytest.mark.parametrize("item", [(), slice(10), slice(0, 10, 2)])
 def test_only_ndarrays_or_constructors(obj, getitem, item):
     arr = blosc2.arange(10)  # is a test case
     larr = blosc2.lazyexpr(obj)
@@ -1365,7 +1365,7 @@ def test_only_ndarrays_or_constructors(obj, getitem, item):
     else:
         b = larr.compute(item)
         assert isinstance(b, blosc2.NDArray)
-    if item is None:
+    if item == ():
         assert b.shape == larr.shape
     assert b.dtype == larr.dtype
     if not isinstance(obj, str):

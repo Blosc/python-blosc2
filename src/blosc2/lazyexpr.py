@@ -965,7 +965,7 @@ def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C90
 
 def is_full_slice(item):
     """Check whether the slice represented by item is a full slice."""
-    if item is None:
+    if item == ():
         # This is the case when the user does not pass any slice in compute() method
         return True
     if isinstance(item, tuple):
@@ -1803,7 +1803,7 @@ def reduce_slices(  # noqa: C901
     else:
         del kwargs["dtype"]
 
-    # Compute the shape of the output array, including broadcasting
+    # Compute the shape and chunks of the output array, including broadcasting
     shape = compute_broadcast_shape(operands.values())
 
     _slice = _slice.raw
@@ -1841,18 +1841,18 @@ def reduce_slices(  # noqa: C901
     # Choose the array with the largest shape as the reference for chunks
     # Note: we could have expr = blosc2.lazyexpr('numpy_array + 1') (i.e. no choice for chunks)
     blosc2_arrs = tuple(o for o in operands.values() if hasattr(o, "chunks"))
-    aligned, iter_disk = False, False
     fast_path = False
-    if blosc2_arrs:  # fast path only possible if all blosc2 arrays
+    if blosc2_arrs:  # fast path only relevant if there are blosc2 arrays
         operand = max(blosc2_arrs, key=lambda x: len(x.shape))
         chunks = operand.chunks
 
         # Check if the partitions are aligned (i.e. all operands have the same shape,
         # chunks and blocks, and have no padding). This will allow us to take the fast path.
-        fast_path = all(
-            operand.shape == o.shape and operand.chunks == o.chunks and operand.blocks == o.blocks
-            for o in blosc2_arrs
-        )
+        same_shape = all(operand.shape == o.shape for o in operands.values() if hasattr(o, "shape"))
+        same_chunks = all(operand.chunks == o.chunks for o in operands.values() if hasattr(o, "chunks"))
+        same_blocks = all(operand.blocks == o.blocks for o in operands.values() if hasattr(o, "blocks"))
+        fast_path = same_shape and same_chunks and same_blocks
+        aligned, iter_disk = False, False
         if fast_path:
             # Check that all operands are NDArray for fast path
             all_ndarray = all(
@@ -2046,7 +2046,7 @@ def convert_none_out(dtype, reduce_op, reduced_shape):
 
 
 def chunked_eval(  # noqa: C901
-    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=None, **kwargs
+    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=(), **kwargs
 ):
     """
     Evaluate the expression in chunks of operands.
@@ -2702,7 +2702,7 @@ class LazyExpr(LazyArray):
         shape = self.shape
         if np.isscalar(axis):
             axis = (axis,)
-        if item is not None:
+        if item != ():
             # Compute the shape of the slice
             shape = ndindex.ndindex(item).newshape(shape)
         axis = tuple(range(len(shape))) if axis is None else axis
@@ -2710,7 +2710,7 @@ class LazyExpr(LazyArray):
         return math.prod([shape[i] for i in axis])
 
     def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
-        item = kwargs.pop("item", None)
+        item = kwargs.pop("item", ())
         total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims, item=item)
         num_elements = self.get_num_elements(axis, item)
         if num_elements == 0:
@@ -2725,8 +2725,8 @@ class LazyExpr(LazyArray):
         return out
 
     def std(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
-        item = kwargs.pop("item", None)
-        if item is None:  # fast path
+        item = kwargs.pop("item", ())
+        if item == ():  # fast path
             mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
             expr = (self - mean_value) ** 2
         else:
@@ -2749,8 +2749,8 @@ class LazyExpr(LazyArray):
         return out
 
     def var(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
-        item = kwargs.pop("item", None)
-        if item is None:  # fast path
+        item = kwargs.pop("item", ())
+        if item == ():  # fast path
             mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
             expr = (self - mean_value) ** 2
         else:
@@ -2943,7 +2943,7 @@ class LazyExpr(LazyArray):
             lazy_expr._order = order
         return lazy_expr
 
-    def compute(self, item=None, **kwargs) -> blosc2.NDArray:
+    def compute(self, item=(), **kwargs) -> blosc2.NDArray:
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
         if "out" in kwargs:
             kwargs["_output"] = kwargs.pop("out")
@@ -3264,7 +3264,7 @@ class LazyUDF(LazyArray):
             lazy_expr._order = order
         return lazy_expr
 
-    def compute(self, item=None, **kwargs):
+    def compute(self, item=(), **kwargs):
         # Get kwargs
         if kwargs is None:
             kwargs = {}
@@ -3304,7 +3304,7 @@ class LazyUDF(LazyArray):
         _ = aux_kwargs.pop("urlpath", None)
         aux_kwargs.update(kwargs)
 
-        if item is None:
+        if item == ():
             if self.chunked_eval:
                 res_eval = blosc2.empty(self.shape, self.dtype, **aux_kwargs)
                 chunked_eval(self.func, self.inputs_dict, None, _getitem=False, _output=res_eval)
