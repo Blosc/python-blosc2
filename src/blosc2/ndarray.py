@@ -233,6 +233,8 @@ def get_flat_slices(
         A list of slices that correspond to the slice `s`.
     """
     ndim = len(shape)
+    if ndim == 0:
+        return None  #### something
     start = [s[i].start if s[i].start is not None else 0 for i in range(ndim)]
     stop = [builtins.min(s[i].stop if s[i].stop is not None else shape[i], shape[i]) for i in range(ndim)]
     # Steps are not used in the computation, so raise an error if they are not None or 1
@@ -1685,11 +1687,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333],
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
-        # First try some fast paths for common cases
-        # Check if there is a None = new axis
-        if key is None:
-            return expand_dims(self, axis=0)
-
         # The more general case (this is quite slow)
         # If the key is a LazyExpr, decorate with ``where`` and return it
         if isinstance(key, blosc2.LazyExpr):
@@ -1749,7 +1746,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return nparr
 
-    def __setitem__(self, key: int | slice | Sequence[slice], value: object):
+    def __setitem__(
+        self,
+        key: None | int | slice | Sequence[slice | int | np.bool_ | np.ndarray[int | np.bool_] | None],
+        value: object,
+    ):
         """Set a slice of the array.
 
         Parameters
@@ -1780,8 +1781,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
                [3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333, 3.3333]])
         """
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
-        key, _ = process_key(key, self.shape)
-        start, stop, step, _ = get_ndarray_start_stop(self.ndim, key, self.shape)
+
+        key_ = (key,) if not isinstance(key, tuple) else key
+        key_ = tuple(k[:] if isinstance(k, NDArray) else k for k in key_)  # decompress NDArrays
+        key_, mask = process_key(key_, self.shape)  # internally handles key an integer
+        start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key, self.shape)
         if step != (1,) * self.ndim:
             raise ValueError("Step parameter is not supported yet")
         key = (start, stop)
@@ -4004,7 +4008,7 @@ def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
     array.save(urlpath, contiguous, **kwargs)
 
 
-def asarray(array: Sequence | np.ndarray | blosc2.C2Array, **kwargs: Any) -> NDArray:  # noqa: C901
+def asarray(array: Sequence | np.ndarray | blosc2.C2Array, copy=True, **kwargs: Any) -> NDArray:  # noqa: C901
     """Convert the `array` to an `NDArray`.
 
     Parameters
@@ -4039,6 +4043,8 @@ def asarray(array: Sequence | np.ndarray | blosc2.C2Array, **kwargs: Any) -> NDA
     >>> # Create a NDArray from a NumPy array
     >>> nda = blosc2.asarray(a)
     """
+    if not copy:
+        raise ValueError("asarray which avoids copy not implemented yet.")
     # Convert scalars to numpy array
     dtype = kwargs.pop("dtype", None)  # check if dtype provided
     if not hasattr(array, "shape"):
@@ -4066,7 +4072,7 @@ def asarray(array: Sequence | np.ndarray | blosc2.C2Array, **kwargs: Any) -> NDA
         if not isinstance(array, np.ndarray):
             if hasattr(array, "chunks"):
                 # A getitem operation should be enough to get a numpy array
-                array = array[:]
+                array = array[()]
         else:
             if not array.flags.contiguous:
                 array = np.ascontiguousarray(array)
