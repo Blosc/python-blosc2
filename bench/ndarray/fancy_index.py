@@ -26,8 +26,8 @@ plt.style.use('seaborn-v0_8-paper')
 
 NUMPY = True
 BLOSC = True
-ZARR = False
-HDF5 = False
+ZARR = True
+HDF5 = True
 SPARSE = False
 
 NDIMS = 2 # must be at least 2
@@ -37,9 +37,9 @@ def genarray(r, ndims=2, verbose=True):
     shape = (d,) * ndims
     chunks = (d // 4,) * ndims
     blocks = (max(d // 10, 1),) * ndims
+    urlpath = f'linspace{r}{ndims}D.b2nd'
     t = time.time()
-    arr = blosc2.linspace(0, 1000, num=np.prod(shape), shape=shape, dtype=np.float64,
-                          urlpath=f'linspace{r}{ndims}D.b2nd', mode='w')
+    arr = blosc2.linspace(0, 1000, num=np.prod(shape), shape=shape, dtype=np.float64, urlpath=urlpath, mode='w')
     t = time.time() - t
     arrsize = np.prod(arr.shape) * arr.dtype.itemsize / 2 ** 30
     if verbose:
@@ -134,18 +134,19 @@ for i, r in enumerate(result_tuple):
         err = (mean - times.min(axis=1), times.max(axis=1)-mean)
         plt.bar(x + w, mean , width, color=c, label=label, yerr=err, capsize=5, ecolor='k',
         error_kw=dict(lw=2, capthick=2, ecolor='k'))
-        labs+=label
+        labs += label
 
-filename = f"results{labs}{NDIMS}D" + "sparse" if SPARSE else f"results{labs}{NDIMS}D"
+filename = f"{labs}{NDIMS}D" + "sparse" if SPARSE else f"{labs}{NDIMS}D"
+filename += blosc2.__version__.replace('.','_')
 
 with open(f"{filename}.pkl", 'wb') as f:
-    pickle.dump(result_tuple, f)
+    pickle.dump({'times':result_tuple, 'sizes':genuine_sizes}, f)
 
 plt.xlabel('Array size (GB)')
 plt.legend()
 plt.xticks(x-width, np.round(genuine_sizes, 2))
 plt.ylabel("Time (s)")
-plt.title(f"Fancy indexing performance comparison, {NDIMS}D" +f"{" sparse" if SPARSE else ""}")
+plt.title(f"Fancy indexing {blosc2.__version__}, {NDIMS}D" +f"{" sparse" if SPARSE else ""}")
 plt.gca().set_yscale('log')
 plt.savefig(f'plots/fancyIdx{filename}.png', format="png")
 plt.show()

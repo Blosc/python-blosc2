@@ -45,13 +45,13 @@ def c2context(
     A parameter not specified or set to ``None`` will inherit the value from the
     previous context manager, defaulting to an environment variable (see
     below) if supported by that parameter.  Parameters set to an empty string
-    will not to be used in requests (with no default either).
+    will not be used in requests (without a default either).
 
     If the subscriber requires authorization for requests, you can either
     provide an `auth_token` (which you should have obtained previously from the
     subscriber), or both `username` and `password` to obtain the token by
     logging in to the subscriber.  The token will be reused until it is explicitly
-    reset or requested again in a subsequent context manager invocation.
+    reset or requested again in a later context manager invocation.
 
     Please note that this manager is reentrant but not safe for concurrent use.
 
@@ -189,6 +189,10 @@ def slice_to_string(slice_):
 class C2Array(blosc2.Operand):
     def __init__(self, path: str, /, urlbase: str | None = None, auth_token: str | None = None):
         """Create an instance of a remote NDArray.
+
+        Remote NDArrays can be accessed via HTTP from a Caterva2 server
+        (e.g., https://cat2.cloud). More information about Caterva2 at:
+        https://ironarray.io/caterva2.
 
         Parameters
         ----------

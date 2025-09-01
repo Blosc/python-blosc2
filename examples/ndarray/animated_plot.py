@@ -26,7 +26,7 @@ n_frames = int(1000 * scale)  # Raise this for more frames
 dtype = np.float64  # Data type for the grid
 use_blosc2 = True  # Set to False to use NumPy arrays instead
 realize_blosc2 = False  # Set to False to skip Blosc2 realization
-make_animation = False  # Set to False to skip animation creation
+make_animation = True  # Set to False to skip animation creation
 travel_dim = 2  # Dimension to travel through (0 for X, 1 for Y, 2 for Z)
 
 # --- Coordinate creation ---
