@@ -91,10 +91,6 @@ def get_ndarray_start_stop(ndim, key, shape):
             stop[i] = shape[i] + stop[i]
         if stop[i] > shape[i]:
             stop[i] = shape[i]
-        if step[i] < 0:  # (start, stop, -1) => stop < start
-            temp = start[i]
-            start[i] = stop[i] + 1  # don't want to include stop
-            stop[i] = temp + 1  # want to include start
 
     return start, stop, tuple(step), none_mask
 
@@ -234,7 +230,9 @@ def get_flat_slices(
     """
     ndim = len(shape)
     if ndim == 0:
-        return None  #### something
+        # this will likely cause failure since expected output is tuple of slices
+        # however, the list conversion in the last line causes the process to be killed for some reason if shape = ()
+        return ()
     start = [s[i].start if s[i].start is not None else 0 for i in range(ndim)]
     stop = [builtins.min(s[i].stop if s[i].stop is not None else shape[i], shape[i]) for i in range(ndim)]
     # Steps are not used in the computation, so raise an error if they are not None or 1
@@ -318,6 +316,10 @@ def reshape(
 
     if is_inside_new_expr():
         # We already have the dtype and shape, so return immediately
+        return dst
+
+    if shape == ():  # get_flat_slices fails for this case so just return directly
+        dst[()] = src[()] if src.shape == () else src[0]
         return dst
 
     # Copy the data chunk by chunk
@@ -1505,11 +1507,13 @@ class NDArray(blosc2_ext.NDArray, Operand):
         chunks = self.chunks
 
         # TODO: try to optimise and avoid this expand which seems to copy - maybe np.broadcast
-        _slice = ndindex.ndindex(key).expand(shape)
+        _slice = ndindex.ndindex(key).expand(shape)  # handles negative indices -> positive internally
         out_shape = _slice.newshape(shape)
         _slice = _slice.raw
         # now all indices are slices or arrays of integers (or booleans)
         # moreover, all arrays are consecutive (otherwise an error is raised)
+        if builtins.any(k.step < 0 for k in _slice if isinstance(k, slice)):
+            raise ValueError("Fancy indexing not supported for slices with negative steps.")
 
         if np.all([isinstance(s, (slice, np.ndarray)) for s in _slice]) and np.all(
             [s.dtype is not bool for s in _slice if isinstance(s, np.ndarray)]
@@ -1720,6 +1724,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
             return self.get_fselection_numpy(key_)  # fancy index
 
         start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
+        for i, s in enumerate(step):  # (start, stop, -1) => stop < start
+            if s < 0:
+                temp = start[i]
+                start[i] = stop[i] + 1  # don't want to include stop
+                stop[i] = temp + 1  # want to include start
         shape = np.array([sp - st for st, sp in zip(start, stop, strict=True)])
         if mask is not None:  # there are some dummy dims from ints
             # only get mask for not Nones in key to have nm_ same length as shape
@@ -1746,7 +1755,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return nparr
 
-    def __setitem__(
+    def __setitem__(  # noqa : C901
         self,
         key: None | int | slice | Sequence[slice | int | np.bool_ | np.ndarray[int | np.bool_] | None],
         value: object,
@@ -1785,15 +1794,54 @@ class NDArray(blosc2_ext.NDArray, Operand):
         key_ = (key,) if not isinstance(key, tuple) else key
         key_ = tuple(k[:] if isinstance(k, NDArray) else k for k in key_)  # decompress NDArrays
         key_, mask = process_key(key_, self.shape)  # internally handles key an integer
-        start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key, self.shape)
-        if step != (1,) * self.ndim:
-            raise ValueError("Step parameter is not supported yet")
-        key = (start, stop)
+        if builtins.any(isinstance(k, (list, np.ndarray)) for k in key_):
+            raise ValueError("Fancy indexing not supported for __setitem__.")
+
+        start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
+        if isinstance(value, NDArray):
+            value = value[...]  # convert to numpy
+
+        if step != (1,) * self.ndim:  # handle non-unit or negative steps
+            if np.any(none_mask):
+                raise ValueError("Cannot mix non-unit steps and None indexing for __setitem__.")
+            chunks = self.chunks
+            shape = self.shape
+            pos_key = tuple(
+                slice(s, st, stp) if stp > 0 else slice(st + 1, s + 1, -stp)
+                for s, st, stp in zip(start, stop, step, strict=True)
+            )  # get positive steps
+            _slice = tuple(slice(s, st, stp) for s, st, stp in zip(start, stop, step, strict=True))
+            # this will work only for positive steps
+            intersecting_chunks = [slice_to_chunktuple(s, c) for s, c in zip(pos_key, chunks, strict=True)]
+            if isinstance(value, int | float | bool):  # overwrite updater function for simple cases (faster)
+
+                def updater(sel_idx):
+                    return value
+            else:
+
+                def updater(sel_idx):
+                    return value[sel_idx]
+
+            for c in product(*intersecting_chunks):
+                sel_idx, _, sub_idx = _get_selection(c, _slice, chunks, shape, load_full=True)
+                sel_idx = tuple(s for s, m in zip(sel_idx, mask, strict=True) if not m)
+                sub_idx = tuple(s if not m else k.start for s, m, k in zip(sub_idx, mask, key_, strict=True))
+                locstart, locstop = (
+                    tuple(c_ * cs for c_, cs in zip(c, chunks, strict=True)),
+                    tuple((c_ + 1) * cs for c_, cs in zip(c, chunks, strict=True)),
+                )
+                chunk = np.empty(
+                    tuple(sp - st for st, sp in zip(locstart, locstop, strict=True)), dtype=self.dtype
+                )
+                super().get_slice_numpy(chunk, (locstart, locstop))  # copy whole chunk
+                chunk[sub_idx] = updater(sel_idx)  # update relevant parts of chunk
+                out = super().set_slice((locstart, locstop), chunk)  # load updated chunk into array
+            return out
 
         shape = [sp - st for sp, st in zip(stop, start, strict=False)]
         if isinstance(value, int | float | bool):
             value = np.full(shape, value, dtype=self.dtype)
-        elif isinstance(value, np.ndarray):
+        elif isinstance(value, np.ndarray):  # handles decompressed NDArray too
             if value.dtype != self.dtype:
                 try:
                     value = value.astype(self.dtype)
@@ -1803,10 +1851,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     value = value.real.astype(self.dtype)
             if value.shape == ():
                 value = np.full(shape, value, dtype=self.dtype)
-        elif isinstance(value, NDArray):
-            value = value[...]
 
-        return super().set_slice(key, value)
+        return super().set_slice((start, stop), value)
 
     def __iter__(self):
         """Iterate over the (outer) elements of the array.
@@ -4718,38 +4764,74 @@ def slice_to_chunktuple(s, n):
         return tuple(range(start // n, ceiling(stop, n)))
 
 
-def _get_selection(ctuple, ptuple, chunks):
+def _get_selection(ctuple, ptuple, chunks, shape, load_full=False):
     # we assume that at least one element of chunk intersects with the slice
     # (as a consequence of only looping over intersecting chunks)
+    # ptuple is global slice, ctuple is chunk coords (in units of chunks)
     pselection = ()
     for i, s, csize in zip(ctuple, ptuple, chunks, strict=True):
         # we need to advance to first element within chunk that intersects with slice, not
         # necessarily the first element of chunk
         # i * csize = s.start + n*step + k, already added n+1 elements, k in [1, step]
-        np1 = (i * csize - s.start + s.step - 1) // s.step  # gives (n + 1)
-        # can have n = -1 if s.start > i * csize, but never < -1 since have to intersect with chunk
-        pselection += (
+        if s.step > 0:
+            np1 = (i * csize - s.start + s.step - 1) // s.step  # gives (n + 1)
+            # can have n = -1 if s.start > i * csize, but never < -1 since have to intersect with chunk
+            pselection += (
+                slice(
+                    builtins.max(
+                        s.start, s.start + np1 * s.step
+                    ),  # start+(n+1)*step gives i*csize if k=step
+                    builtins.min(csize * (i + 1), s.stop),
+                    s.step,
+                ),
+            )
+        else:
+            # (i + 1) * csize = s.start + n*step + k, already added n+1 elements, k in [step+1, 0]
+            np1 = ((i + 1) * csize - s.start + s.step) // s.step  # gives (n + 1)
+            # can have n = -1 if s.start < (i + 1) * csize, but never < -1 since have to intersect with chunk
+            pselection += (
+                slice(
+                    builtins.min(s.start, s.start + np1 * s.step),  # start+n*step gives (i+1)*csize if k=0
+                    builtins.max(csize * i - 1, s.stop),  # want to include csize * i
+                    s.step,
+                ),
+            )
+
+    # selection relative to coordinates of out (necessarily out_step = +-1)
+    # when added n + 1 elements
+    # ps.start = pt.start + step * n + k => n = (ps.start - pt.start - sign) // step
+    # hence, out_start = n + 1 or shape(out) - 1 - (n + 1) if step < 0
+    # ps.stop = pt.start + step * out_stop + k
+    # => out_stop = (ps.stop - pt.start - sign) // step
+    out_pselection = ()
+    i = 0
+    for ps, pt in zip(pselection, ptuple, strict=True):
+        sign_ = pt.step // builtins.abs(pt.step)
+        n = (ps.start - pt.start - sign_) // pt.step
+        out_start = n + 1 if sign_ > 0 else shape[i] - (n + 1) - 1
+        # ps.stop always positive except for case where get full array (it is then -1 since desire 0th element)
+        out_stop = None if ps.stop == -1 else (ps.stop - pt.start - sign_) // pt.step
+        out_pselection += (
             slice(
-                builtins.max(s.start, s.start + np1 * s.step),  # start+(n+1)*step gives i*csize if k=step
-                builtins.min(csize * (i + 1), s.stop),
-                s.step,
+                out_start,
+                out_stop,
+                sign_,
             ),
         )
-
-    # selection relative to coordinates of out (necessarily step = 1)
-    # stop = start + step * n + k => n = (stop - start - 1) // step
-    # hence, out_stop = out_start + n + 1
-    # ps.start = pt.start + out_start * step
-    out_pselection = tuple(
-        slice(
-            (ps.start - pt.start + pt.step - 1) // pt.step,
-            (ps.start - pt.start + pt.step - 1) // pt.step + (ps.stop - ps.start + ps.step - 1) // ps.step,
-            1,
-        )
-        for ps, pt in zip(pselection, ptuple, strict=True)
-    )
-
-    loc_selection = tuple(slice(0, s.stop - s.start, s.step) for s in pselection)
+        i += 1
+    if load_full:
+        for i, s, csize in zip(ctuple, pselection, chunks, strict=True):
+            loc_selection = tuple(
+                slice(s.start - i * csize, s.stop - i * csize, s.step)
+                if s.step > 0
+                else slice(s.stop - i * csize + 1, s.start - i * csize + 1, -s.step)
+                for s in pselection
+            )  # local coords of full chunk (note not reversed for negative steps!)
+    else:
+        loc_selection = tuple(
+            slice(0, s.stop - s.start, s.step) if s.step > 0 else slice(s.start - s.stop, None, s.step)
+            for s in pselection
+        )  # local coords of loaded part of chunk
 
     return out_pselection, pselection, loc_selection
 

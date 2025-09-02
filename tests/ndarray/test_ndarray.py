@@ -57,6 +57,8 @@ def test_ndarray_cframe(contiguous, urlpath, cparams, dparams, nchunks, copy):
         ((200, 10), 2),
         ((200, 10, 10), 2),
         ((200, 10, 10), 40),
+        ((200, 10, 10), -1),
+        ((200, 10, 10), -3),
         ((200, 10, 10, 10), 9),
     ],
 )
@@ -321,7 +323,7 @@ def test_fancy_index(c):
     chunks = (c,) * ndim if c is not None else None
     arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype=dtype, chunks=chunks)
     rng = np.random.default_rng()
-    idx = rng.integers(low=0, high=d, size=(100,))
+    idx = rng.integers(low=-d, high=d, size=(100,))  # mix of +ve and -ve indices
 
     row = idx
     col = rng.permutation(idx)
@@ -358,6 +360,16 @@ def test_fancy_index(c):
     b = arr[row[:, None], mask]
     n = nparr[row[:, None], mask]
     np.testing.assert_allclose(b, n)
+
+    # indices and negative slice steps
+    # TODO: these currently fail
+    # b = arr[row, d//2::-1]
+    # n = nparr[row, d//2::-1]
+    # np.testing.assert_allclose(b, n)
+    # b = arr[row, d//2::-3]
+    # n = nparr[row, d//2::-3]
+    # np.testing.assert_allclose(b, n)
+
     # Transposition test (3rd example is transposed)
     b1 = arr[:, [0, 1], 0]
     b2 = arr[[0, 1], 0, :]
