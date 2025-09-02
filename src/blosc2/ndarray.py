@@ -1588,11 +1588,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 # loop over chunks coming from slices before and after array indices
                 for cprior_tuple in product(*cprior_slices):
                     out_prior_selection, prior_selection, loc_prior_selection = _get_selection(
-                        cprior_tuple, prior_tuple, chunks[:begin]
+                        cprior_tuple, prior_tuple, chunks[:begin], shape
                     )
                     for cpost_tuple in product(*cpost_slices):
                         out_post_selection, post_selection, loc_post_selection = _get_selection(
-                            cpost_tuple, post_tuple, chunks[end:] if end is not None else []
+                            cpost_tuple, post_tuple, chunks[end:] if end is not None else [], shape
                         )
                         locbegin, locend = _get_local_slice(
                             prior_selection, post_selection, (chunk_begin, chunk_end)
@@ -1813,6 +1813,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
             _slice = tuple(slice(s, st, stp) for s, st, stp in zip(start, stop, step, strict=True))
             # this will work only for positive steps
             intersecting_chunks = [slice_to_chunktuple(s, c) for s, c in zip(pos_key, chunks, strict=True)]
+            intersecting_chunks = [
+                (0,) if i == () else i for i in intersecting_chunks
+            ]  # special case of dims with 0 length
             if isinstance(value, int | float | bool):  # overwrite updater function for simple cases (faster)
 
                 def updater(sel_idx):
@@ -4799,10 +4802,10 @@ def _get_selection(ctuple, ptuple, chunks, shape, load_full=False):
 
     # selection relative to coordinates of out (necessarily out_step = +-1)
     # when added n + 1 elements
-    # ps.start = pt.start + step * n + k => n = (ps.start - pt.start - sign) // step
+    # ps.start = pt.start + step * (n+1) => n = (ps.start - pt.start - sign) // step
     # hence, out_start = n + 1 or shape(out) - 1 - (n + 1) if step < 0
-    # ps.stop = pt.start + step * out_stop + k
-    # => out_stop = (ps.stop - pt.start - sign) // step
+    # ps.stop = pt.start + step * (out_stop - 1) + k,  k in [step, -1] or [1, step]
+    # => out_stop = (ps.stop - pt.start - sign) // step + 1
     out_pselection = ()
     i = 0
     for ps, pt in zip(pselection, ptuple, strict=True):
@@ -4810,7 +4813,7 @@ def _get_selection(ctuple, ptuple, chunks, shape, load_full=False):
         n = (ps.start - pt.start - sign_) // pt.step
         out_start = n + 1 if sign_ > 0 else shape[i] - (n + 1) - 1
         # ps.stop always positive except for case where get full array (it is then -1 since desire 0th element)
-        out_stop = None if ps.stop == -1 else (ps.stop - pt.start - sign_) // pt.step
+        out_stop = None if ps.stop == -1 else (ps.stop - pt.start - sign_) // pt.step + 1
         out_pselection += (
             slice(
                 out_start,
