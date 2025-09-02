@@ -4822,14 +4822,14 @@ def _get_selection(ctuple, ptuple, chunks, shape, load_full=False):
             ),
         )
         i += 1
+    print(pselection, ptuple, out_pselection)
     if load_full:
-        for i, s, csize in zip(ctuple, pselection, chunks, strict=True):
-            loc_selection = tuple(
-                slice(s.start - i * csize, s.stop - i * csize, s.step)
-                if s.step > 0
-                else slice(s.stop - i * csize + 1, s.start - i * csize + 1, -s.step)
-                for s in pselection
-            )  # local coords of full chunk (note not reversed for negative steps!)
+        loc_selection = tuple(
+            slice(s.start - i * csize, s.stop - i * csize, s.step)
+            if s.step > 0
+            else slice(s.stop - i * csize + 1, s.start - i * csize + 1, -s.step)
+            for i, s, csize in zip(ctuple, pselection, chunks, strict=True)
+        )  # local coords of full chunk (note not reversed for negative steps!)
     else:
         loc_selection = tuple(
             slice(0, s.stop - s.start, s.step) if s.step > 0 else slice(s.start - s.stop, None, s.step)
