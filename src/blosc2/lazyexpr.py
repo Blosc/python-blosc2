@@ -3148,7 +3148,8 @@ class LazyUDF(LazyArray):
 
         self.res_getitem = blosc2.empty(self._shape, self._dtype, **kwargs_getitem)
         # Register a postfilter for getitem
-        self.res_getitem._set_postf_udf(self.func, id(self.inputs))
+        if 0 not in self._shape:
+            self.res_getitem._set_postf_udf(self.func, id(self.inputs))
 
         self.inputs_dict = {f"o{i}": obj for i, obj in enumerate(self.inputs)}
 

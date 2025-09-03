@@ -314,7 +314,7 @@ def reshape(
     # Create the new array
     dst = empty(shape, dtype=src.dtype, **kwargs)
 
-    if is_inside_new_expr():
+    if is_inside_new_expr() or 0 in shape:
         # We already have the dtype and shape, so return immediately
         return dst
 
@@ -1679,7 +1679,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             return expr.where(self)
 
         key_ = (key,) if not isinstance(key, tuple) else key
-        key_ = tuple(k[:] if isinstance(k, NDArray) else k for k in key_)  # decompress NDArrays
+        key_ = tuple(k[()] if isinstance(k, NDArray) else k for k in key_)  # decompress NDArrays
         key_, mask = process_key(key_, self.shape)  # internally handles key an integer
 
         if builtins.any(isinstance(k, (list, np.ndarray)) for k in key_):
