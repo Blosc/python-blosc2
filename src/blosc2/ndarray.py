@@ -963,6 +963,11 @@ class Operand:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "**", self))
 
+    def __bool__(self) -> bool:
+        if math.prod(self.shape) != 1:
+            raise ValueError("The truth value of an array of shape {self.shape} is ambiguous.")
+        return bool(self[()])
+
     @is_documented_by(sum)
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         expr = blosc2.LazyExpr(new_op=(self, None, None))
@@ -1579,19 +1584,39 @@ class NDArray(blosc2_ext.NDArray, Operand):
             return out.reshape(out_shape)  # should have filled in correct order, just need to reshape
 
         # Default when there are booleans
-        out = np.empty(out_shape, dtype=self.dtype)
-        chunk_size = ndindex.ChunkSize(chunks)
+        return self._get_set_findex_default(_slice, out_shape)
+
+    def _get_set_findex_default(self, _slice, out_shape=None, updater=None):
+        _get = False
+        if not ((out_shape is None) or (updater is None)):
+            raise ValueError("Cannot provide both out_shape and updater.")
+        # we have a getitem
+        if out_shape is not None:
+            _get = True
+            out = np.empty(out_shape, dtype=self.dtype)
+        elif updater is None:
+            raise ValueError("Must provide one of out_shape or updater.")
+        else:
+            out = self  # default return for no intersecting chunks
+        if 0 in self.shape:
+            return out
+        chunk_size = ndindex.ChunkSize(self.chunks)
         # repeated indices are grouped together
-        intersecting_chunks = chunk_size.as_subchunks(_slice, shape)  # if _slice is (), returns all chunks
+        intersecting_chunks = chunk_size.as_subchunks(
+            _slice, self.shape
+        )  # if _slice is (), returns all chunks
         for c in intersecting_chunks:
             sub_idx = _slice.as_subindex(c).raw
             sel_idx = c.as_subindex(_slice)
-            new_shape = sel_idx.newshape(out_shape)
-            start, stop, step = get_ndarray_start_stop(self.ndim, c.raw, shape)
+            start, stop, step, _ = get_ndarray_start_stop(self.ndim, c.raw, self.shape)
             chunk = np.empty(tuple(sp - st for st, sp in zip(start, stop, strict=True)), dtype=self.dtype)
             super().get_slice_numpy(chunk, (start, stop))
-            out[sel_idx.raw] = chunk[sub_idx].reshape(new_shape)
-
+            if _get:
+                new_shape = sel_idx.newshape(out_shape)
+                out[sel_idx.raw] = chunk[sub_idx].reshape(new_shape)
+            else:
+                chunk[sub_idx] = updater(sel_idx.raw)
+                out = super().set_slice((start, stop), chunk)
         return out
 
     def get_oselection_numpy(self, key: list | np.ndarray) -> np.ndarray:
@@ -1765,10 +1790,22 @@ class NDArray(blosc2_ext.NDArray, Operand):
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
 
         key_ = (key,) if not isinstance(key, tuple) else key
-        key_ = tuple(k[:] if isinstance(k, NDArray) else k for k in key_)  # decompress NDArrays
+        key_ = tuple(k[()] if isinstance(k, NDArray) else k for k in key_)  # decompress NDArrays
         key_, mask = process_key(key_, self.shape)  # internally handles key an integer
-        if builtins.any(isinstance(k, (list, np.ndarray)) for k in key_):
-            raise ValueError("Fancy indexing not supported for __setitem__.")
+
+        def updater(sel_idx):
+            return value[sel_idx]
+
+        if np.isscalar(value):  # overwrite updater function for simple cases (faster)
+
+            def updater(sel_idx):
+                return value
+
+        if builtins.any(isinstance(k, (list, np.ndarray)) for k in key_):  # fancy indexing
+            _slice = ndindex.ndindex(key_).expand(
+                self.shape
+            )  # handles negative indices -> positive internally
+            return self._get_set_findex_default(_slice, updater=updater)
 
         start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
         if isinstance(value, NDArray):
@@ -1783,15 +1820,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
             intersecting_chunks = [
                 slice_to_chunktuple(s, c) for s, c in zip(_slice, chunks, strict=True)
             ]  # internally handles negative steps
-            if np.isscalar(value):  # overwrite updater function for simple cases (faster)
-
-                def updater(sel_idx):
-                    return value
-            else:
-
-                def updater(sel_idx):
-                    return value[sel_idx]
-
             out = self  # for when shape has 0 (i.e. arr is empty, as then skip loop)
             for c in product(*intersecting_chunks):
                 sel_idx, glob_selection, sub_idx = _get_selection(c, _slice, chunks)
