@@ -362,13 +362,12 @@ def test_fancy_index(c):
     np.testing.assert_allclose(b, n)
 
     # indices and negative slice steps
-    # TODO: these currently fail
-    # b = arr[row, d//2::-1]
-    # n = nparr[row, d//2::-1]
-    # np.testing.assert_allclose(b, n)
-    # b = arr[row, d//2::-3]
-    # n = nparr[row, d//2::-3]
-    # np.testing.assert_allclose(b, n)
+    b = arr[row, d // 2 :: -1]
+    n = nparr[row, d // 2 :: -1]
+    np.testing.assert_allclose(b, n)
+    b = arr[M // 2 :: -4, row, d // 2 :: -3]
+    n = nparr[M // 2 :: -4, row, d // 2 :: -3]
+    np.testing.assert_allclose(b, n)
 
     # Transposition test (3rd example is transposed)
     b1 = arr[:, [0, 1], 0]

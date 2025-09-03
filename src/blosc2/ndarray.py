@@ -1511,9 +1511,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         out_shape = _slice.newshape(shape)
         _slice = _slice.raw
         # now all indices are slices or arrays of integers (or booleans)
-        # moreover, all arrays are consecutive (otherwise an error is raised)
-        if builtins.any(k.step < 0 for k in _slice if isinstance(k, slice)):
-            raise ValueError("Fancy indexing not supported for slices with negative steps.")
+        # # moreover, all arrays are consecutive (otherwise an error is raised)
+        # if builtins.any(k.step < 0 for k in _slice if isinstance(k, slice)):
+        #     raise ValueError("Fancy indexing not supported for slices with negative steps.")
 
         if np.all([isinstance(s, (slice, np.ndarray)) for s in _slice]) and np.all(
             [s.dtype is not bool for s in _slice if isinstance(s, np.ndarray)]
@@ -1523,7 +1523,21 @@ class NDArray(blosc2_ext.NDArray, Operand):
             # ------| arrs |------
             arridxs = [i for i, s in enumerate(_slice) if isinstance(s, np.ndarray)]
             begin, end = arridxs[0], arridxs[-1] + 1
-            flat_shape = tuple((i.stop - i.start + (i.step - 1)) // i.step for i in _slice[:begin])
+
+            start, stop, step, _ = get_ndarray_start_stop(begin, _slice[:begin], self.shape[:begin])
+            prior_tuple = tuple(
+                slice(s, st, stp) for s, st, stp in zip(start, stop, step, strict=True)
+            )  # convert to start and stop +ve
+            start, stop, step, _ = get_ndarray_start_stop(
+                len(self.shape[end:]), _slice[end:], self.shape[end:]
+            )
+            post_tuple = tuple(
+                slice(s, st, stp) for s, st, stp in zip(start, stop, step, strict=True)
+            )  # convert to start and stop +ve
+
+            flat_shape = tuple(
+                (i.stop - i.start - i.step // builtins.abs(i.step)) // i.step + 1 for i in prior_tuple
+            )
             idx_dim = np.prod(_slice[begin].shape)
 
             # TODO: find a nicer way to do the copy maybe
@@ -1532,11 +1546,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 arr[:, i] = s.reshape(-1)  # have to do a copy
 
             flat_shape += (idx_dim,)
-            flat_shape += tuple((i.stop - i.start + (i.step - 1)) // i.step for i in _slice[end:])
+            flat_shape += tuple(
+                (i.stop - i.start - i.step // builtins.abs(i.step)) // i.step + 1 for i in post_tuple
+            )
             # out_shape could have new dims if indexing arrays are not all 1D
             # (we have just flattened them so need to handle accordingly)
-            prior_tuple = _slice[:begin]
-            post_tuple = _slice[end:]
             divider = chunks[begin:end]
             chunked_arr = arr // divider
             if arr.shape[-1] == 1:  # 1D chunks, can avoid loading whole chunks
@@ -1592,7 +1606,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     )
                     for cpost_tuple in product(*cpost_slices):
                         out_post_selection, post_selection, loc_post_selection = _get_selection(
-                            cpost_tuple, post_tuple, chunks[end:] if end is not None else []
+                            cpost_tuple, post_tuple, chunks[end:]
                         )
                         locbegin, locend = _get_local_slice(
                             prior_selection, post_selection, (chunk_begin, chunk_end)
@@ -1806,13 +1820,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 raise ValueError("Cannot mix non-unit steps and None indexing for __setitem__.")
             chunks = self.chunks
             shape = self.shape
-            pos_key = tuple(
-                slice(s, st, stp) if stp > 0 else slice(st + 1, s + 1, -stp)
-                for s, st, stp in zip(start, stop, step, strict=True)
-            )  # get positive steps
             _slice = tuple(slice(s, st, stp) for s, st, stp in zip(start, stop, step, strict=True))
-            # this will work only for positive steps
-            intersecting_chunks = [slice_to_chunktuple(s, c) for s, c in zip(pos_key, chunks, strict=True)]
+            intersecting_chunks = [
+                slice_to_chunktuple(s, c) for s, c in zip(_slice, chunks, strict=True)
+            ]  # internally handles negative steps
             intersecting_chunks = [
                 (0,) if i == () else i for i in intersecting_chunks
             ]  # special case of dims with 0 length
@@ -1826,12 +1837,13 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     return value[sel_idx]
 
             for c in product(*intersecting_chunks):
-                sel_idx, _, sub_idx = _get_selection(c, _slice, chunks, load_full=True)
+                sel_idx, glob_selection, sub_idx = _get_selection(c, _slice, chunks)
                 sel_idx = tuple(s for s, m in zip(sel_idx, mask, strict=True) if not m)
                 sub_idx = tuple(s if not m else k.start for s, m, k in zip(sub_idx, mask, key_, strict=True))
-                locstart, locstop = (
-                    tuple(c_ * cs for c_, cs in zip(c, chunks, strict=True)),
-                    tuple((c_ + 1) * cs for c_, cs in zip(c, chunks, strict=True)),
+                locstart, locstop = _get_local_slice(
+                    glob_selection,
+                    (),
+                    ((), ()),  # switches start and stop for negative steps
                 )
                 chunk = np.empty(
                     tuple(sp - st for st, sp in zip(locstart, locstop, strict=True)), dtype=self.dtype
@@ -1870,6 +1882,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """Returns the length of the first dimension of the array.
         This is equivalent to ``self.shape[0]``.
         """
+        if self.shape == ():
+            raise TypeError("len() of unsized object")
         return self.shape[0]
 
     def get_chunk(self, nchunk: int) -> bytes:
@@ -4761,13 +4775,18 @@ def slice_to_chunktuple(s, n):
     out: tuple
     """
     start, stop, step = s.start, s.stop, s.step
+    if step < 0:
+        temp = stop
+        stop = start + 1
+        start = temp + 1
+        step = -step  # get positive steps
     if step > n:
         return tuple((start + k * step) // n for k in range(ceiling(stop - start, step)))
     else:
         return tuple(range(start // n, ceiling(stop, n)))
 
 
-def _get_selection(ctuple, ptuple, chunks, load_full=False):
+def _get_selection(ctuple, ptuple, chunks):
     # we assume that at least one element of chunk intersects with the slice
     # (as a consequence of only looping over intersecting chunks)
     # ptuple is global slice, ctuple is chunk coords (in units of chunks)
@@ -4803,7 +4822,7 @@ def _get_selection(ctuple, ptuple, chunks, load_full=False):
     # selection relative to coordinates of out (necessarily out_step = 1 as we work through out chunk-by-chunk of self)
     # when added n + 1 elements
     # ps.start = pt.start + step * (n+1) => n = (ps.start - pt.start - sign) // step
-    # hence, out_start = n + 1 or shape(out) - 1 - (n + 1) if step < 0
+    # hence, out_start = n + 1
     # ps.stop = pt.start + step * (out_stop - 1) + k,  k in [step, -1] or [1, step]
     # => out_stop = (ps.stop - pt.start - sign) // step + 1
     out_pselection = ()
@@ -4823,39 +4842,34 @@ def _get_selection(ctuple, ptuple, chunks, load_full=False):
         )
         i += 1
 
-    if load_full:
-
-        def my_checker_f(x):  # handle case -1 to get full chunk
-            return x if x >= 0 else None
-
-        loc_selection = tuple(
-            slice(s.start - i * csize, my_checker_f(s.stop - i * csize), s.step)
-            for i, s, csize in zip(
-                ctuple, pselection, chunks, strict=True
-            )  # if s.step < 0 then we match with out coords no problem
-        )  # local coords of full chunk
-    else:
-        loc_selection = tuple(
-            slice(0, s.stop - s.start, s.step) if s.step > 0 else slice(s.start - s.stop, None, s.step)
-            for s in pselection
-        )  # local coords of loaded part of chunk
+    loc_selection = tuple(  # is s.stop is None, get whole chunk so s.start - 0
+        slice(0, s.stop - s.start, s.step)
+        if s.step > 0
+        else slice(s.start if s.stop == -1 else s.start - s.stop, None, s.step)
+        for s in pselection
+    )  # local coords of loaded part of chunk
 
     return out_pselection, pselection, loc_selection
 
 
 def _get_local_slice(prior_selection, post_selection, chunk_bounds):
     chunk_begin, chunk_end = chunk_bounds
+    # +1 for negative steps as have to include start (exclude stop)
     locbegin = np.hstack(
         (
-            [s.start for s in prior_selection],
+            [s.start if s.step > 0 else s.stop + 1 for s in prior_selection],
             chunk_begin,
-            [s.start for s in post_selection],
+            [s.start if s.step > 0 else s.stop + 1 for s in post_selection],
         ),
         casting="unsafe",
         dtype="int64",
     )
     locend = np.hstack(
-        ([s.stop for s in prior_selection], chunk_end, [s.stop for s in post_selection]),
+        (
+            [s.stop if s.step > 0 else s.start + 1 for s in prior_selection],
+            chunk_end,
+            [s.stop if s.step > 0 else s.start + 1 for s in post_selection],
+        ),
         casting="unsafe",
         dtype="int64",
     )
