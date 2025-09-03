@@ -1020,47 +1020,6 @@ class LimitedSizeDict(OrderedDict):
         super().__setitem__(key, value)
 
 
-# No longer used
-# def extract_values(arr, indices: np.ndarray[np.int_], max_cache_size: int = 10) -> np.ndarray:
-#     """
-#     Extract values from a chunked and compressed array using an array of indices.
-
-#     Parameters
-#     ----------
-#     arr : blosc2.NDArray
-#         The chunked and compressed array.
-#     indices : np.ndarray
-#         The array of indices to extract values from.
-#     max_cache_size : int
-#         The maximum number of chunks to cache.
-
-#     Returns
-#     -------
-#     extracted_values : np.ndarray
-#         The extracted values.
-#     """
-#     # Initialize the result array
-#     extracted_values = np.empty(len(indices), dtype=arr.dtype)
-
-#     # Limited size dictionary to store decompressed chunks
-#     chunk_cache = LimitedSizeDict(max_cache_size)
-
-#     # Iterate through the indices and extract values
-#     chunk_size = int(arr.chunks[0])
-#     for i, idx in enumerate(indices):
-#         chunk_idx = idx // chunk_size
-#         if chunk_idx not in chunk_cache:
-#             # Compute the bounds for this chunk
-#             start = chunk_idx * chunk_size
-#             end = start + chunk_size
-#             chunk_cache[chunk_idx] = arr[start:end]
-
-#         local_idx = idx % chunk_size
-#         extracted_values[i] = chunk_cache[chunk_idx][local_idx]
-
-#     return extracted_values
-
-
 def detect_aligned_chunks(  # noqa: C901
     key: Sequence[slice], shape: Sequence[int], chunks: Sequence[int], consecutive: bool = False
 ) -> list[int]:
