@@ -1,2 +1,1 @@
-array_api_tests/test_array_object.py::test_setitem
 array_api_tests/test_array_object.py::test_getitem_masking

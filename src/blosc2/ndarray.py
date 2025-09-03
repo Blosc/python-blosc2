@@ -1796,7 +1796,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             for c in product(*intersecting_chunks):
                 sel_idx, glob_selection, sub_idx = _get_selection(c, _slice, chunks)
                 sel_idx = tuple(s for s, m in zip(sel_idx, mask, strict=True) if not m)
-                sub_idx = tuple(s if not m else k.start for s, m, k in zip(sub_idx, mask, key_, strict=True))
+                sub_idx = tuple(s if not m else s.start for s, m in zip(sub_idx, mask, strict=True))
                 locstart, locstop = _get_local_slice(
                     glob_selection,
                     (),
