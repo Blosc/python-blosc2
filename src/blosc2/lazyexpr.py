@@ -2882,7 +2882,7 @@ class LazyExpr(LazyArray):
             lazy_expr._order = order
         return lazy_expr
 
-    def compute(self, item=(), **kwargs) -> blosc2.NDArray:
+    def compute(self, item=(), **kwargs) -> blosc2.NDArray:  # noqa : C901
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
         if "out" in kwargs:
             kwargs["_output"] = kwargs.pop("out")
@@ -2899,7 +2899,15 @@ class LazyExpr(LazyArray):
             kwargs["_indices"] = self._indices
         if hasattr(self, "_order"):
             kwargs["_order"] = self._order
-        result = self._compute_expr(item, kwargs)
+        # handle empty arrays
+        if 0 in self.shape:
+            result = (
+                np.empty(self.shape, dtype=self.dtype)
+                if "_getitem" in kwargs
+                else blosc2.empty(self.shape, dtype=self.dtype)
+            )
+        else:
+            result = self._compute_expr(item, kwargs)
         if "_order" in kwargs and "_indices" not in kwargs:
             # We still need to apply the index in result
             x = self._where_args["_where_x"]

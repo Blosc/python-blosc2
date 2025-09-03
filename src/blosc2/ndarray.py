@@ -1783,10 +1783,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             intersecting_chunks = [
                 slice_to_chunktuple(s, c) for s, c in zip(_slice, chunks, strict=True)
             ]  # internally handles negative steps
-            intersecting_chunks = [
-                (0,) if i == () else i for i in intersecting_chunks
-            ]  # special case of dims with 0 length
-            if isinstance(value, int | float | bool):  # overwrite updater function for simple cases (faster)
+            if np.isscalar(value):  # overwrite updater function for simple cases (faster)
 
                 def updater(sel_idx):
                     return value
@@ -1795,6 +1792,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 def updater(sel_idx):
                     return value[sel_idx]
 
+            out = self  # for when shape has 0 (i.e. arr is empty, as then skip loop)
             for c in product(*intersecting_chunks):
                 sel_idx, glob_selection, sub_idx = _get_selection(c, _slice, chunks)
                 sel_idx = tuple(s for s, m in zip(sel_idx, mask, strict=True) if not m)
@@ -1813,7 +1811,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             return out
 
         shape = [sp - st for sp, st in zip(stop, start, strict=False)]
-        if isinstance(value, int | float | bool):
+        if np.isscalar(value):
             value = np.full(shape, value, dtype=self.dtype)
         elif isinstance(value, np.ndarray):  # handles decompressed NDArray too
             if value.dtype != self.dtype:
