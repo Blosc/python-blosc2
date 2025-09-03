@@ -1588,11 +1588,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 # loop over chunks coming from slices before and after array indices
                 for cprior_tuple in product(*cprior_slices):
                     out_prior_selection, prior_selection, loc_prior_selection = _get_selection(
-                        cprior_tuple, prior_tuple, chunks[:begin], shape
+                        cprior_tuple, prior_tuple, chunks[:begin]
                     )
                     for cpost_tuple in product(*cpost_slices):
                         out_post_selection, post_selection, loc_post_selection = _get_selection(
-                            cpost_tuple, post_tuple, chunks[end:] if end is not None else [], shape
+                            cpost_tuple, post_tuple, chunks[end:] if end is not None else []
                         )
                         locbegin, locend = _get_local_slice(
                             prior_selection, post_selection, (chunk_begin, chunk_end)
@@ -1826,7 +1826,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     return value[sel_idx]
 
             for c in product(*intersecting_chunks):
-                sel_idx, _, sub_idx = _get_selection(c, _slice, chunks, shape, load_full=True)
+                sel_idx, _, sub_idx = _get_selection(c, _slice, chunks, load_full=True)
                 sel_idx = tuple(s for s, m in zip(sel_idx, mask, strict=True) if not m)
                 sub_idx = tuple(s if not m else k.start for s, m, k in zip(sub_idx, mask, key_, strict=True))
                 locstart, locstop = (
@@ -4767,7 +4767,7 @@ def slice_to_chunktuple(s, n):
         return tuple(range(start // n, ceiling(stop, n)))
 
 
-def _get_selection(ctuple, ptuple, chunks, shape, load_full=False):
+def _get_selection(ctuple, ptuple, chunks, load_full=False):
     # we assume that at least one element of chunk intersects with the slice
     # (as a consequence of only looping over intersecting chunks)
     # ptuple is global slice, ctuple is chunk coords (in units of chunks)
@@ -4800,7 +4800,7 @@ def _get_selection(ctuple, ptuple, chunks, shape, load_full=False):
                 ),
             )
 
-    # selection relative to coordinates of out (necessarily out_step = +-1)
+    # selection relative to coordinates of out (necessarily out_step = 1 as we work through out chunk-by-chunk of self)
     # when added n + 1 elements
     # ps.start = pt.start + step * (n+1) => n = (ps.start - pt.start - sign) // step
     # hence, out_start = n + 1 or shape(out) - 1 - (n + 1) if step < 0
@@ -4811,25 +4811,29 @@ def _get_selection(ctuple, ptuple, chunks, shape, load_full=False):
     for ps, pt in zip(pselection, ptuple, strict=True):
         sign_ = pt.step // builtins.abs(pt.step)
         n = (ps.start - pt.start - sign_) // pt.step
-        out_start = n + 1 if sign_ > 0 else shape[i] - (n + 1) - 1
+        out_start = n + 1
         # ps.stop always positive except for case where get full array (it is then -1 since desire 0th element)
         out_stop = None if ps.stop == -1 else (ps.stop - pt.start - sign_) // pt.step + 1
         out_pselection += (
             slice(
                 out_start,
                 out_stop,
-                sign_,
+                1,
             ),
         )
         i += 1
-    print(pselection, ptuple, out_pselection)
+
     if load_full:
+
+        def my_checker_f(x):  # handle case -1 to get full chunk
+            return x if x >= 0 else None
+
         loc_selection = tuple(
-            slice(s.start - i * csize, s.stop - i * csize, s.step)
-            if s.step > 0
-            else slice(s.stop - i * csize + 1, s.start - i * csize + 1, -s.step)
-            for i, s, csize in zip(ctuple, pselection, chunks, strict=True)
-        )  # local coords of full chunk (note not reversed for negative steps!)
+            slice(s.start - i * csize, my_checker_f(s.stop - i * csize), s.step)
+            for i, s, csize in zip(
+                ctuple, pselection, chunks, strict=True
+            )  # if s.step < 0 then we match with out coords no problem
+        )  # local coords of full chunk
     else:
         loc_selection = tuple(
             slice(0, s.stop - s.start, s.step) if s.step > 0 else slice(s.start - s.stop, None, s.step)
