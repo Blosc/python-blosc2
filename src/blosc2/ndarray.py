@@ -965,7 +965,7 @@ class Operand:
 
     def __bool__(self) -> bool:
         if math.prod(self.shape) != 1:
-            raise ValueError("The truth value of an array of shape {self.shape} is ambiguous.")
+            raise ValueError(f"The truth value of an array of shape {self.shape} is ambiguous.")
         return bool(self[()])
 
     @is_documented_by(sum)
@@ -1476,8 +1476,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
         _slice = _slice.raw
         # now all indices are slices or arrays of integers (or booleans)
         # # moreover, all arrays are consecutive (otherwise an error is raised)
-        # if builtins.any(k.step < 0 for k in _slice if isinstance(k, slice)):
-        #     raise ValueError("Fancy indexing not supported for slices with negative steps.")
 
         if np.all([isinstance(s, (slice, np.ndarray)) for s in _slice]) and np.all(
             [s.dtype is not bool for s in _slice if isinstance(s, np.ndarray)]
@@ -1600,7 +1598,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             out = self  # default return for no intersecting chunks
         if 0 in self.shape:
             return out
-        chunk_size = ndindex.ChunkSize(self.chunks)
+        chunk_size = ndindex.ChunkSize(self.chunks)  # only works with nonzero chunks
         # repeated indices are grouped together
         intersecting_chunks = chunk_size.as_subchunks(
             _slice, self.shape

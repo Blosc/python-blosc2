@@ -1201,8 +1201,7 @@ def fast_eval(  # noqa: C901
 
     chunk_operands = {}
     # Check which chunks intersect with _slice
-    chunk_size = ndindex.ChunkSize(chunks)
-    all_chunks = chunk_size.as_subchunks((), shape)  # if _slice is (), returns all chunks
+    all_chunks = get_intersecting_chunks((), shape, chunks)  # if _slice is (), returns all chunks
     for nchunk, chunk_slice in enumerate(all_chunks):
         cslice = chunk_slice.raw
         offset = tuple(s.start for s in cslice)  # offset for the udf
@@ -1404,9 +1403,10 @@ def slices_eval(  # noqa: C901
 
     # Iterate over the operands and get the chunks
     chunk_operands = {}
-    # Check which chunks intersect with _slice
-    chunk_size = ndindex.ChunkSize(chunks)
-    intersecting_chunks = chunk_size.as_subchunks(_slice, shape)  # if _slice is (), returns all chunks
+    # Check which chunks intersect with _slice (handles zero chunks internally)
+    intersecting_chunks = get_intersecting_chunks(
+        _slice, shape, chunks
+    )  # if _slice is (), returns all chunks
 
     for nchunk, chunk_slice in enumerate(intersecting_chunks):
         # get intersection of chunk and target
@@ -1790,7 +1790,7 @@ def reduce_slices(  # noqa: C901
         same_shape = all(operand.shape == o.shape for o in operands.values() if hasattr(o, "shape"))
         same_chunks = all(operand.chunks == o.chunks for o in operands.values() if hasattr(o, "chunks"))
         same_blocks = all(operand.blocks == o.blocks for o in operands.values() if hasattr(o, "blocks"))
-        fast_path = same_shape and same_chunks and same_blocks
+        fast_path = same_shape and same_chunks and same_blocks and (0 not in chunks)
         aligned, iter_disk = False, False
         if fast_path:
             # Check that all operands are NDArray for fast path
@@ -1824,8 +1824,8 @@ def reduce_slices(  # noqa: C901
     # Iterate over the operands and get the chunks
     chunk_operands = {}
     # Check which chunks intersect with _slice
-    chunk_size = ndindex.ChunkSize(chunks)
-    intersecting_chunks = chunk_size.as_subchunks(_slice, shape)  # if _slice is (), returns all chunks
+    # if chunks has 0 we loop once but fast path is false as gives error (schunk has no chunks)
+    intersecting_chunks = get_intersecting_chunks(_slice, shape, chunks)
     out_init = False
 
     for nchunk, chunk_slice in enumerate(intersecting_chunks):
@@ -2882,7 +2882,7 @@ class LazyExpr(LazyArray):
             lazy_expr._order = order
         return lazy_expr
 
-    def compute(self, item=(), **kwargs) -> blosc2.NDArray:  # noqa : C901
+    def compute(self, item=(), **kwargs) -> blosc2.NDArray:
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
         if "out" in kwargs:
             kwargs["_output"] = kwargs.pop("out")
@@ -2900,14 +2900,7 @@ class LazyExpr(LazyArray):
         if hasattr(self, "_order"):
             kwargs["_order"] = self._order
         # handle empty arrays
-        if 0 in self.shape:
-            result = (
-                np.empty(self.shape, dtype=self.dtype)
-                if "_getitem" in kwargs
-                else blosc2.empty(self.shape, dtype=self.dtype)
-            )
-        else:
-            result = self._compute_expr(item, kwargs)
+        result = self._compute_expr(item, kwargs)
         if "_order" in kwargs and "_indices" not in kwargs:
             # We still need to apply the index in result
             x = self._where_args["_where_x"]
@@ -3616,6 +3609,16 @@ def evaluate(
         return lexpr.compute()
     # The user did not specify an output array, so return a NumPy array
     return lexpr[()]
+
+
+def get_intersecting_chunks(_slice, shape, chunks):
+    if 0 not in chunks:
+        chunk_size = ndindex.ChunkSize(chunks)
+        return chunk_size.as_subchunks(_slice, shape)  # if _slice is (), returns all chunks
+    else:
+        return (
+            ndindex.ndindex(...).expand(shape),
+        )  # chunk is whole array so just return full tuple to do loop once
 
 
 if __name__ == "__main__":
