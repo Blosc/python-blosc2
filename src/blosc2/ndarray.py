@@ -4071,7 +4071,7 @@ def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
     array.save(urlpath, contiguous, **kwargs)
 
 
-def asarray(array: Sequence | np.ndarray | blosc2.C2Array, copy=True, **kwargs: Any) -> NDArray:  # noqa: C901
+def asarray(array: Sequence | np.ndarray | blosc2.C2Array | NDArray, copy=True, **kwargs: Any) -> NDArray:  # noqa: C901
     """Convert the `array` to an `NDArray`.
 
     Parameters
@@ -4109,14 +4109,12 @@ def asarray(array: Sequence | np.ndarray | blosc2.C2Array, copy=True, **kwargs: 
     if not copy:
         raise ValueError("asarray which avoids copy not implemented yet.")
     # Convert scalars to numpy array
-    dtype = kwargs.pop("dtype", None)  # check if dtype provided
+    casting = kwargs.pop("casting", "unsafe")
+    if casting != "unsafe":
+        raise ValueError("Only unsafe casting is supported at the moment.")
     if not hasattr(array, "shape"):
-        array = np.array(array, dtype=dtype)  # defaults if dtype=None
-    if dtype is not None and array.dtype != dtype:
-        try:
-            array = array.astype(dtype)
-        except Exception as e:
-            raise ValueError("Cannot provide dtype argument for C2Arrays.") from e
+        array = np.asarray(array)  # defaults if dtype=None
+    dtype = kwargs.pop("dtype", array.dtype)  # check if dtype provided
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
@@ -4132,13 +4130,15 @@ def asarray(array: Sequence | np.ndarray | blosc2.C2Array, copy=True, **kwargs: 
     small_size = 2**24  # 16 MB
     array_nbytes = math.prod(shape) * array.dtype.itemsize
     if array_nbytes < small_size:
-        if not isinstance(array, np.ndarray):
-            if hasattr(array, "chunks"):
-                # A getitem operation should be enough to get a numpy array
-                array = array[()]
-        else:
-            if not array.flags.contiguous:
-                array = np.ascontiguousarray(array)
+        if not isinstance(array, np.ndarray) and hasattr(array, "chunks"):
+            # A getitem operation should be enough to get a numpy array
+            array = array[()]
+
+        if dtype != array.dtype:
+            array = array.astype(dtype=dtype, casting=casting)
+        if not array.flags.contiguous:
+            array = np.ascontiguousarray(array)
+
         return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
 
     # Create the empty array
@@ -4156,8 +4156,8 @@ def asarray(array: Sequence | np.ndarray | blosc2.C2Array, copy=True, **kwargs: 
             slice(c * s, builtins.min((c + 1) * s, shape[i]))
             for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
-        # Ensure the array slice is contiguous
-        array_slice = np.ascontiguousarray(array[slice_])
+        # Ensure the array slice is contiguous and of correct dtype
+        array_slice = np.ascontiguousarray(array[slice_], dtype=dtype)
         if behaved:
             # The whole chunk is to be updated, so this fastpath is safe
             ndarr.schunk.update_data(nchunk, array_slice, copy=False)
@@ -4165,6 +4165,16 @@ def asarray(array: Sequence | np.ndarray | blosc2.C2Array, copy=True, **kwargs: 
             ndarr[slice_] = array_slice
 
     return ndarr
+
+
+def astype(
+    array: Sequence | np.ndarray | NDArray | blosc2.C2Array,
+    dtype,
+    casting: str = "unsafe",
+    copy: bool = True,
+    **kwargs: Any,
+) -> NDArray:
+    return asarray(array, dtype=dtype, casting=casting, copy=copy, **kwargs)
 
 
 def _check_ndarray_kwargs(**kwargs):  # noqa: C901
