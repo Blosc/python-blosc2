@@ -968,6 +968,23 @@ class Operand:
             raise ValueError(f"The truth value of an array of shape {self.shape} is ambiguous.")
         return bool(self[()])
 
+    def __float__(self) -> float:
+        if math.prod(self.shape) != 1:
+            raise ValueError(f"Cannot convert array of shape {self.shape} to float.")
+        return float(self[()])
+
+    def __int__(self) -> bool:
+        if math.prod(self.shape) != 1:
+            raise ValueError(f"Cannot convert array of shape {self.shape} to int.")
+        return int(self[()])
+
+    def __index__(self) -> bool:
+        if not np.issubdtype(self.dtype, np.integer):
+            raise ValueError(
+                f"Cannot convert array of dtype {self.dtype} to index array (must have dtype int)."
+            )
+        return self.__int__()
+
     @is_documented_by(sum)
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         expr = blosc2.LazyExpr(new_op=(self, None, None))
