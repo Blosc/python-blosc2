@@ -1517,7 +1517,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             flat_shape = tuple(
                 (i.stop - i.start - i.step // builtins.abs(i.step)) // i.step + 1 for i in prior_tuple
             )
-            idx_dim = np.prod(_slice[begin].shape)
+            idx_dim = np.prod(_slice[begin].shape, dtype=np.int32)
 
             # TODO: find a nicer way to do the copy maybe
             arr = np.empty((idx_dim, end - begin), dtype=_slice[begin].dtype)
@@ -1718,15 +1718,28 @@ class NDArray(blosc2_ext.NDArray, Operand):
             expr = blosc2.LazyExpr._new_expr(key, self.fields, guess=False)
             return expr.where(self)
 
-        key_ = (key,) if not isinstance(key, tuple) else key
-        key_ = tuple(k[()] if isinstance(k, NDArray) else k for k in key_)  # decompress NDArrays
-        key_, mask = process_key(key_, self.shape)  # internally handles key an integer
+        # key not iterable
+        key = key[()] if isinstance(key, NDArray) else key
+        key = tuple(k[()] if isinstance(k, NDArray) else k for k in key) if isinstance(key, tuple) else key
 
-        if builtins.any(isinstance(k, (list, np.ndarray)) for k in key_):
-            if hasattr(key, "dtype") and np.issubdtype(key.dtype, np.bool_):  # check ORIGINAL key
+        # decompress NDArrays
+        key_, mask = process_key(key, self.shape)  # internally handles key an integer
+        key = key[()] if hasattr(key, "shape") and key.shape == () else key  # convert to scalar
+        # fancy indexing
+        if isinstance(key_, (list, np.ndarray)) or builtins.any(
+            isinstance(k, (list, np.ndarray)) for k in key_
+        ):
+            # check scalar booleans, which add 1 dim to beginning but which cause problems for ndindex.as_subindex
+            if np.issubdtype(type(key), bool) and np.isscalar(key):
+                if key:
+                    _slice = ndindex.ndindex(()).expand(self.shape)  # just get whole array
+                    out_shape = _slice.newshape(self.shape)
+                    return np.expand_dims(self._get_set_findex_default(_slice, out_shape=out_shape), 0)
+                else:  # do nothing
+                    return np.empty((0,) + self.shape, dtype=self.dtype)
+            elif hasattr(key, "dtype") and np.issubdtype(key.dtype, np.bool_):  # check ORIGINAL key
                 # This can be interpreted as a boolean expression
-                if key.shape != self.shape:
-                    raise ValueError("The shape of the boolean expression should match the array shape")
+                # elif key.shape == self.shape: # This is faster than the fancy indexing path
                 # expr = blosc2.lazyexpr(f"(key)")
                 # The next should be a bit faster
                 expr = blosc2.LazyExpr._new_expr("key", {"key": key}, guess=False)
@@ -1766,7 +1779,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             inmutable_key = make_key_hashable(key)
             self._last_read[inmutable_key] = nparr
 
-        return nparr
+        return nparr[()]  # [()] does nothing except for 0-dim arrays, for which returns a scalar
 
     def __setitem__(  # noqa : C901
         self,
@@ -1804,9 +1817,13 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
 
-        key_ = (key,) if not isinstance(key, tuple) else key
-        key_ = tuple(k[()] if isinstance(k, NDArray) else k for k in key_)  # decompress NDArrays
-        key_, mask = process_key(key_, self.shape)  # internally handles key an integer
+        # key not iterable
+        key = key[()] if isinstance(key, NDArray) else key
+        key = tuple(k[()] if isinstance(k, NDArray) else k for k in key) if isinstance(key, tuple) else key
+
+        key_, mask = process_key(key, self.shape)  # internally handles key an integer
+        if hasattr(value, "shape") and value.shape == ():
+            value = value[()]
 
         def updater(sel_idx):
             return value[sel_idx]
@@ -1820,11 +1837,17 @@ class NDArray(blosc2_ext.NDArray, Operand):
             _slice = ndindex.ndindex(key_).expand(
                 self.shape
             )  # handles negative indices -> positive internally
+            # check scalar booleans, which add 1 dim to beginning but which cause problems for ndindex.as_subindex
+            if (
+                key.shape == () and hasattr(key, "dtype") and np.issubdtype(key.dtype, np.bool_)
+            ):  # check ORIGINAL key after decompression
+                if key:
+                    _slice = ndindex.ndindex(()).expand(self.shape)  # just get whole array
+                else:  # do nothing
+                    return self
             return self._get_set_findex_default(_slice, updater=updater)
 
         start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
-        if isinstance(value, NDArray):
-            value = value[...]  # convert to numpy
 
         if step != (1,) * self.ndim:  # handle non-unit or negative steps
             if np.any(none_mask):
@@ -1848,12 +1871,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 chunk = np.empty(
                     tuple(sp - st for st, sp in zip(locstart, locstop, strict=True)), dtype=self.dtype
                 )
-                super().get_slice_numpy(chunk, (locstart, locstop))  # copy whole chunk
+                super().get_slice_numpy(chunk, (locstart, locstop))  # copy relevant slice of chunk
                 chunk[sub_idx] = updater(sel_idx)  # update relevant parts of chunk
-                out = super().set_slice((locstart, locstop), chunk)  # load updated chunk into array
+                out = super().set_slice((locstart, locstop), chunk)  # load updated partial chunk into array
             return out
 
         shape = [sp - st for sp, st in zip(stop, start, strict=False)]
+        if isinstance(value, NDArray):
+            value = value[...]  # convert to numpy
         if np.isscalar(value):
             value = np.full(shape, value, dtype=self.dtype)
         elif isinstance(value, np.ndarray):  # handles decompressed NDArray too
@@ -4174,6 +4199,30 @@ def astype(
     copy: bool = True,
     **kwargs: Any,
 ) -> NDArray:
+    """
+    Copy of the array, cast to a specified type. Does not support copy = False.
+
+    Parameters
+    ----------
+    array: Sequence | np.ndarray | NDArray | blosc2.C2Array
+        The array to be cast to a different type.
+    dtype: DType-like
+        The desired data type to cast to.
+    casting: str = 'unsafe'
+        Controls what kind of data casting may occur. Defaults to 'unsafe' for backwards compatibility.
+        * 'no' means the data types should not be cast at all.
+        * 'equiv' means only byte-order changes are allowed.
+        * 'safe' means only casts which can preserve values are allowed.
+        * 'same_kind' means only safe casts or casts within a kind, like float64 to float32, are allowed.
+        * 'unsafe' means any data conversions may be done.
+    copy: bool = True
+        Must always be True as copy is made by default. Will be changed in a future version
+
+    Returns
+    -------
+    out: NDArray
+        New array with specified data type.
+    """
     return asarray(array, dtype=dtype, casting=casting, copy=copy, **kwargs)
 
 
@@ -4884,3 +4933,24 @@ def _get_local_slice(prior_selection, post_selection, chunk_bounds):
         dtype="int64",
     )
     return locbegin, locend
+
+
+def broadcast_to(arr, shape):
+    """
+    Broadcast an array to a new shape.
+    Warning: Computes a lazyexpr, so probably a bit suboptimal
+
+    Parameters
+    ----------
+    array: NDArray
+        The array to broadcast.
+
+    shape: tuple
+        The shape of the desired array.
+
+    Returns
+    -------
+    broadcast: NDArray
+    A new array with the given shape.
+    """
+    return (arr + blosc2.zeros(shape, dtype=arr.dtype)).compute()  # return lazyexpr quickly

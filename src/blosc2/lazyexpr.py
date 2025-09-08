@@ -1506,8 +1506,11 @@ def slices_eval(  # noqa: C901
         if out is None:
             shape_ = shape_slice if shape_slice is not None else shape
             if where is not None and len(where) < 2:
-                # The result is a linear array
-                shape_ = math.prod(shape_)
+                # The result is a linear array in the first ndims
+                try:  # call from NDArray.__getitem__
+                    shape_ = (math.prod(operands["key"].shape),) + shape[operands["key"].ndim :]
+                except KeyError:
+                    shape_ = math.prod(shape_)
             if getitem or _order:
                 out = np.empty(shape_, dtype=dtype_)
                 if _order:
@@ -2899,7 +2902,6 @@ class LazyExpr(LazyArray):
             kwargs["_indices"] = self._indices
         if hasattr(self, "_order"):
             kwargs["_order"] = self._order
-        # handle empty arrays
         result = self._compute_expr(item, kwargs)
         if "_order" in kwargs and "_indices" not in kwargs:
             # We still need to apply the index in result
