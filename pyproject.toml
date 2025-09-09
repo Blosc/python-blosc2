@@ -38,6 +38,7 @@ dependencies = [
     "msgpack",
     "platformdirs",
     "numexpr; platform_machine != 'wasm32'",
+    "pydantic",
     "py-cpuinfo; platform_machine != 'wasm32'",
     "requests",
 ]
