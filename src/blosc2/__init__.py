@@ -172,23 +172,32 @@ iinfo = np.iinfo
 finfo = np.finfo
 
 # dtypes for array-api
-bool_ = np.bool_
-int8 = np.int8
-int16 = np.int16
-int32 = np.int32
-int64 = np.int64
-uint8 = np.uint8
-uint16 = np.uint16
-uint32 = np.uint32
-uint64 = np.uint64
-float16 = np.float16
-float32 = np.float32
-float64 = np.float64
-complex64 = np.complex64
-complex128 = np.complex128
 str_ = np.str_
 bytes_ = np.bytes_
 object_ = np.object_
+
+from numpy import (
+    bool_,
+    complex64,
+    complex128,
+    e,
+    euler_gamma,
+    float16,
+    float32,
+    float64,
+    inf,
+    int8,
+    int16,
+    int32,
+    int64,
+    nan,
+    newaxis,
+    pi,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+)
 
 
 class Info:
@@ -209,25 +218,25 @@ def __array_namespace_info__() -> Info:
         },
         default_device=None,
         default_dtypes={
-            "real floating": np.float64,
-            "complex floating": np.complex128,
-            "integral": np.int64,
-            "indexing": np.int64,
+            "real floating": float64,
+            "complex floating": complex128,
+            "integral": int64,
+            "indexing": int64,
         },
         dtypes={
-            "bool": np.bool_,
-            "int8": np.int8,
-            "int16": np.int16,
-            "int32": np.int32,
-            "int64": np.int64,
-            "uint8": np.uint8,
-            "uint16": np.uint16,
-            "uint32": np.uint32,
-            "uint64": np.uint64,
-            "float32": np.float32,
-            "float64": np.float64,
-            "complex64": np.complex64,
-            "complex128": np.complex128,
+            "bool": bool_,
+            "int8": int8,
+            "int16": int16,
+            "int32": int32,
+            "int64": int64,
+            "uint8": uint8,
+            "uint16": uint16,
+            "uint32": uint32,
+            "uint64": uint64,
+            "float32": float32,
+            "float64": float64,
+            "complex64": complex64,
+            "complex128": complex128,
         },
         devices=lambda: ["cpu"],
         name="blosc2",
@@ -321,14 +330,18 @@ from .ndarray import (
     concatenate,
     expand_dims,
     empty,
+    empty_like,
     frombuffer,
     fromiter,
     get_slice_nchunks,
     nans,
     uninit,
     zeros,
+    zeros_like,
     ones,
+    ones_like,
     full,
+    full_like,
     save,
     matmul,
     permute_dims,
@@ -407,10 +420,12 @@ from .ndarray import (
     contains,
     cos,
     cosh,
+    equal,
     exp,
     expm1,
     imag,
     isfinite,
+    isinf,
     isnan,
     lazywhere,
     log,
@@ -432,7 +447,7 @@ from .ndarray import (
     where,
 )
 
-__all__ = [
+__all__ = [  # noqa : RUF022
     # Constants
     "EXTENDED_HEADER_LENGTH",
     "MAX_BUFFERSIZE",
@@ -440,6 +455,12 @@ __all__ = [
     "MIN_HEADER_LENGTH",
     "VERSION_DATE",
     "VERSION_STRING",
+    # Mathematical constants
+    "e",
+    "pi",
+    "inf",
+    "nan",
+    "newaxis",
     # Classes
     "C2Array",
     "CParams",
@@ -498,6 +519,9 @@ __all__ = [
     "decompress2",
     "detect_number_of_cores",
     "dparams_dflts",
+    "empty",
+    "empty_like",
+    "equal",
     "estore_from_cframe",
     "expand_dims",
     "expm1",
@@ -507,6 +531,7 @@ __all__ = [
     "frombuffer",
     "fromiter",
     "full",
+    "full_like",
     "get_blocksize",
     "get_cbuffer_sizes",
     "get_clib",
@@ -516,6 +541,7 @@ __all__ = [
     "get_slice_nchunks",
     "indices",
     "isfinite",
+    "isinf",
     "isnan",
     "jit",
     "lazyexpr",
@@ -535,6 +561,7 @@ __all__ = [
     "nans",
     "ndarray_from_cframe",
     "ones",
+    "ones_like",
     "open",
     "pack",
     "pack_array",
@@ -573,4 +600,6 @@ __all__ = [
     "validate_expr",
     "var",
     "where",
+    "zeros",
+    "zeros_like",
 ]

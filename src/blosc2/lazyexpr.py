@@ -162,6 +162,7 @@ functions = [
     "where",
     "isnan",
     "isfinite",
+    "isinf",
 ]
 
 # Gather all callable functions in numpy
@@ -2472,6 +2473,7 @@ class LazyExpr(LazyArray):
             np.bitwise_not: "~",
             np.isnan: "isnan",
             np.isfinite: "isfinite",
+            np.isinf: "isinf",
         }
 
         if ufunc in ufunc_map:

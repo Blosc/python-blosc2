@@ -871,6 +871,7 @@ class Operand:
             np.bitwise_not: "~",
             np.isnan: "isnan",
             np.isfinite: "isfinite",
+            np.isinf: "isinf",
         }
 
         if ufunc in ufunc_map:
@@ -1781,7 +1782,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             inmutable_key = make_key_hashable(key)
             self._last_read[inmutable_key] = nparr
 
-        return nparr[()]  # [()] does nothing except for 0-dim arrays, for which returns a scalar
+        return nparr
 
     def __setitem__(  # noqa : C901
         self,
@@ -3268,6 +3269,66 @@ def isfinite(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> 
     return blosc2.LazyExpr(new_op=(ndarr, "isfinite", None))
 
 
+def isinf(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Return True/False for infinite values element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated to get the True/False array of results.
+
+    References
+    ----------
+    `np.isinf <https://numpy.org/doc/stable/reference/generated/numpy.isinf.html#numpy.isinf>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([-5, -3, np.inf, 2, 4])
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_ = blosc2.isinf(ndarray)
+    >>> result = result_[:]
+    >>> print("isinf:", result)
+    isinf: [False, False, True, False, False]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "isinf", None))
+
+
+def equal(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the truth value of x1_i == x2_i for each element x1_i of the input array x1
+    with the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.equal <https://numpy.org/doc/stable/reference/generated/numpy.equal.html#numpy.equal>`_
+    """
+    return blosc2.LazyExpr(new_op=(x1, "==", x2))
+
+
 def where(
     condition: blosc2.LazyExpr,
     x: NDArray | NDField | np.ndarray | int | float | complex | bool | str | bytes | None = None,
@@ -3543,7 +3604,7 @@ def full(
     return blosc2_ext.full(shape, chunks, blocks, fill_value, dtype, **kwargs)
 
 
-def ones(shape: int | tuple | list, dtype: np.dtype | str = np.float64, **kwargs: Any) -> NDArray:
+def ones(shape: int | tuple | list, dtype: np.dtype | str = None, **kwargs: Any) -> NDArray:
     """Create an array with one as values.
 
     The parameters and keyword arguments are the same as for the
@@ -3573,19 +3634,24 @@ def ones(shape: int | tuple | list, dtype: np.dtype | str = np.float64, **kwargs
     >>> array.dtype
     dtype('float64')
     """
+    if dtype is None:
+        dtype = blosc2.float64
     return full(shape, 1, dtype, **kwargs)
 
 
 def arange(
-    start: int | float = 0,
+    start: int | float,
     stop: int | float | None = None,
-    step: int | float | None = 1,
-    dtype: np.dtype | str = np.int64,
+    step: int | float = 1,
+    dtype: np.dtype | str = None,
     shape: int | tuple | list | None = None,
     c_order: bool = True,
     **kwargs: Any,
 ) -> NDArray:
-    """Return evenly spaced values within a given interval.
+    """
+    Return evenly spaced values within a given interval.
+    Due to rounding errors for chunkwise filling, may differ
+    from numpy.arange in edge cases.
 
     Parameters
     ----------
@@ -3596,9 +3662,11 @@ def arange(
     step: int, float, complex or np.number
         Spacing between values.
     dtype: np.dtype or list str
-        The data type of the array elements in NumPy format. Default is `np.uint8`.
-        This will override the `typesize`
-        in the compression parameters if they are provided.
+        The data type of the array elements in NumPy format. Default is
+        None.  If dtype is None, inferred from start, stop and step.
+        Output type is integer unless one or more have type float.
+        This will override the `typesize` in the compression parameters if
+        they are provided.
     shape: int, tuple or list
         The shape of the final array. If None, the shape will be computed.
     c_order: bool
@@ -3633,24 +3701,32 @@ def arange(
         start, _, step = inputs
         start += offset[0] * step
         stop = start + lout * step
-        output[:] = np.arange(start, stop, step, dtype=output.dtype)
+        # use linspace to have finer control over exclusion of endpoint
+        output[:] = np.linspace(start, stop, num=lout, endpoint=False, dtype=output.dtype)
 
     if stop is None:
         stop = start
         start = 0
-    if step is None:
-        step = 1
     if not shape:
         shape = (int((stop - start) / step),)
     else:
         # Check that the shape is consistent with the start, stop and step values
         if math.prod(shape) != int((stop - start) / step):
             raise ValueError("The shape is not consistent with the start, stop and step values")
+    if dtype is None:
+        dtype = (
+            blosc2.float64
+            if np.any([np.issubdtype(type(d), float) for d in (start, stop, step)])
+            else blosc2.int64
+        )
     dtype = _check_dtype(dtype)
 
     if is_inside_new_expr():
         # We already have the dtype and shape, so return immediately
         return blosc2.zeros(shape, dtype=dtype)
+
+    if (stop - start) / step < 0:  # return empty array
+        return blosc2.empty((0,), dtype=dtype)
 
     lshape = (math.prod(shape),)
     lazyarr = blosc2.lazyudf(arange_fill, (start, stop, step), dtype=dtype, shape=lshape)
@@ -4816,6 +4892,117 @@ class OIndex:
 
 #     def __setitem__(self, selection, input) -> np.ndarray:
 #         return NotImplementedError
+
+
+def empty_like(x: NDArray, dtype=None, **kwargs) -> NDArray:
+    """
+    Returns an uninitialized array with the same shape as an input array x.
+
+    Parameters
+    ----------
+    x : NDArray
+        Input array from which to derive the output array shape.
+
+    dtype (Optional):
+        Output array data type. If dtype is None, the output array data type
+        is inferred from x. Default: None.
+
+    kwargs: Any, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+        These arguments will be set in the resulting :ref:`NDArray`.
+
+    Returns
+    ------
+    out : NDArray
+        An array having the same shape as x and containing uninitialized data.
+    """
+    if dtype is None:
+        dtype = x.dtype
+    return blosc2.empty(shape=x.shape, dtype=dtype, **kwargs)
+
+
+def ones_like(x: NDArray, dtype=None, **kwargs) -> NDArray:
+    """
+    Returns an array of ones with the same shape as an input array x.
+
+    Parameters
+    ----------
+    x : NDArray
+        Input array from which to derive the output array shape.
+
+    dtype (Optional):
+        Output array data type. If dtype is None, the output array data type
+        is inferred from x. Default: None.
+
+    kwargs: Any, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+        These arguments will be set in the resulting :ref:`NDArray`.
+
+    Returns
+    ------
+    out : NDArray
+        An array having the same shape as x and containing ones.
+    """
+    if dtype is None:
+        dtype = x.dtype
+    return blosc2.ones(shape=x.shape, dtype=dtype, **kwargs)
+
+
+def zeros_like(x: NDArray, dtype=None, **kwargs) -> NDArray:
+    """
+    Returns an array of zeros with the same shape as an input array x.
+
+    Parameters
+    ----------
+    x : NDArray
+        Input array from which to derive the output array shape.
+
+    dtype (Optional):
+        Output array data type. If dtype is None, the output array data type
+        is inferred from x. Default: None.
+
+    kwargs: Any, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+        These arguments will be set in the resulting :ref:`NDArray`.
+
+    Returns
+    ------
+    out : NDArray
+        An array having the same shape as x and containing zeros.
+    """
+    if dtype is None:
+        dtype = x.dtype
+    return blosc2.zeros(shape=x.shape, dtype=dtype, **kwargs)
+
+
+def full_like(x: NDArray, fill_value: bool | int | float | complex, dtype=None, **kwargs) -> NDArray:
+    """
+    Returns an array filled with a value with the same shape as an input array x.
+
+    Parameters
+    ----------
+    x : NDArray
+        Input array from which to derive the output array shape.
+
+    fill_value: bool | int | float | complex
+        The fill value.
+
+    dtype (Optional):
+        Output array data type. If dtype is None, the output array data type
+        is inferred from x. Default: None.
+
+    kwargs: Any, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+        These arguments will be set in the resulting :ref:`NDArray`.
+
+    Returns
+    ------
+    out : NDArray
+        An array having the same shape as x and containing the fill value.
+    """
+    if dtype is None:
+        dtype = x.dtype
+    return blosc2.full(shape=x.shape, fill_value=fill_value, dtype=dtype, **kwargs)
 
 
 def slice_to_chunktuple(s, n):
