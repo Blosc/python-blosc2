@@ -1599,6 +1599,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
             return out.reshape(out_shape)  # should have filled in correct order, just need to reshape
 
         # Default when there are booleans
+        # TODO: for boolean indexing could be optimised by avoiding
+        # calculating out_shape prior to loop and keeping track on-the-fly (like in LazyExpr machinery)
         return self._get_set_findex_default(_slice, out_shape)
 
     def _get_set_findex_default(self, _slice, out_shape=None, updater=None):
@@ -1718,18 +1720,18 @@ class NDArray(blosc2_ext.NDArray, Operand):
             expr = blosc2.LazyExpr._new_expr(key, self.fields, guess=False)
             return expr.where(self)
 
-        # key not iterable
-        key = key[()] if isinstance(key, NDArray) else key
+        key = key[()] if isinstance(key, NDArray) else key  # key not iterable
         key = tuple(k[()] if isinstance(k, NDArray) else k for k in key) if isinstance(key, tuple) else key
 
         # decompress NDArrays
         key_, mask = process_key(key, self.shape)  # internally handles key an integer
         key = key[()] if hasattr(key, "shape") and key.shape == () else key  # convert to scalar
+
         # fancy indexing
         if isinstance(key_, (list, np.ndarray)) or builtins.any(
             isinstance(k, (list, np.ndarray)) for k in key_
         ):
-            # check scalar booleans, which add 1 dim to beginning but which cause problems for ndindex.as_subindex
+            # check scalar booleans, which add 1 dim to beginning
             if np.issubdtype(type(key), bool) and np.isscalar(key):
                 if key:
                     _slice = ndindex.ndindex(()).expand(self.shape)  # just get whole array
@@ -1737,17 +1739,17 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     return np.expand_dims(self._get_set_findex_default(_slice, out_shape=out_shape), 0)
                 else:  # do nothing
                     return np.empty((0,) + self.shape, dtype=self.dtype)
-            elif hasattr(key, "dtype") and np.issubdtype(key.dtype, np.bool_):  # check ORIGINAL key
-                # This can be interpreted as a boolean expression
-                # elif key.shape == self.shape: # This is faster than the fancy indexing path
-                # expr = blosc2.lazyexpr(f"(key)")
-                # The next should be a bit faster
-                expr = blosc2.LazyExpr._new_expr("key", {"key": key}, guess=False)
+            elif (
+                hasattr(key, "dtype") and np.issubdtype(key.dtype, np.bool_) and key.shape == self.shape
+            ):  # check ORIGINAL key
+                # This can be interpreted as a boolean expression but only for key shape same as self shape
+                expr = blosc2.LazyExpr._new_expr("key", {"key": key}, guess=False).where(self)
                 # Decorate with where and force a getitem operation to return actual values.
                 # This behavior is consistent with NumPy, although different from e.g. ['expr']
                 # which returns a lazy expression.
-                return expr.where(self)[:]
-            return self.get_fselection_numpy(key_)  # fancy index
+                # This is faster than the fancy indexing path
+                return expr[:]
+            return self.get_fselection_numpy(key)  # fancy index default, can be quite slow
 
         start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
         for i, s in enumerate(step):  # (start, stop, -1) => stop < start
@@ -4096,7 +4098,7 @@ def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
     array.save(urlpath, contiguous, **kwargs)
 
 
-def asarray(array: Sequence | np.ndarray | blosc2.C2Array | NDArray, copy=True, **kwargs: Any) -> NDArray:  # noqa: C901
+def asarray(array: Sequence | np.ndarray | blosc2.C2Array | NDArray, copy=True, **kwargs: Any) -> NDArray:
     """Convert the `array` to an `NDArray`.
 
     Parameters
@@ -4159,10 +4161,7 @@ def asarray(array: Sequence | np.ndarray | blosc2.C2Array | NDArray, copy=True, 
             # A getitem operation should be enough to get a numpy array
             array = array[()]
 
-        if dtype != array.dtype:
-            array = array.astype(dtype=dtype, casting=casting)
-        if not array.flags.contiguous:
-            array = np.ascontiguousarray(array)
+        array = np.require(array, dtype=dtype, requirements="C")  # require contiguous array
 
         return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
 
@@ -4182,7 +4181,7 @@ def asarray(array: Sequence | np.ndarray | blosc2.C2Array | NDArray, copy=True, 
             for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
         # Ensure the array slice is contiguous and of correct dtype
-        array_slice = np.ascontiguousarray(array[slice_], dtype=dtype)
+        array_slice = np.require(array[slice_], dtype=dtype, requirements="C")
         if behaved:
             # The whole chunk is to be updated, so this fastpath is safe
             ndarr.schunk.update_data(nchunk, array_slice, copy=False)
