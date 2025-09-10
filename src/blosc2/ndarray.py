@@ -3810,11 +3810,14 @@ def linspace(
         shape = (num,)
     else:
         num = math.prod(shape) if num is None else num
-        # check compatibility of shape and num
-    if math.prod(shape) != num:
-        raise ValueError("The specified shape is not consistent with the specified num value")
-    if num < 0:
-        raise ValueError("num must be nonnegative.")
+
+    # check compatibility of shape and num
+    if math.prod(shape) != num or num < 0:
+        raise ValueError(
+            f"Shape is not consistent with the specified num value {num}." + "num must be nonnegative."
+            if num < 0
+            else ""
+        )
 
     if dtype is None:
         dtype = (
