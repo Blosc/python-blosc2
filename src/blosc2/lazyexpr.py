@@ -1671,11 +1671,16 @@ def slices_eval_getitem(
 
 
 def infer_reduction_dtype(dtype, operation):
-    # It may change in the future, but for now, this mimics NumPy's (2.1) behavior pretty well
+    # It may change in the future, but mostly array-api compliant
+    my_float = np.result_type(
+        dtype, np.float32 if dtype == np.float32 or dtype == np.complex64 else blosc2.DEFAULT_FLOAT
+    )
     if operation in {ReduceOp.SUM, ReduceOp.PROD}:
-        return np.result_type(dtype, np.int64 if np.issubdtype(dtype, np.integer) else np.float64)
+        if np.issubdtype(dtype, np.unsignedinteger):
+            return np.result_type(dtype, np.uint64)
+        return np.result_type(dtype, np.int64 if np.issubdtype(dtype, np.integer) else my_float)
     elif operation in {ReduceOp.MEAN, ReduceOp.STD, ReduceOp.VAR}:
-        return np.float64
+        return my_float
     elif operation in {ReduceOp.MIN, ReduceOp.MAX}:
         return dtype
     elif operation in {ReduceOp.ANY, ReduceOp.ALL}:

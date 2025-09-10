@@ -2612,8 +2612,8 @@ cdef class NDArray:
                 mask_[i] = mask[i]
             _check_rc(b2nd_squeeze_index(self.array, mask_), "Error while squeezing array")
 
-        if self.array.shape[0] == 1 and self.ndim == 1:
-            self.array.ndim = 0
+        #if self.array.shape[0] == 1 and self.ndim == 1:
+        #    self.array.ndim = 0
 
     def as_ffi_ptr(self):
         return PyCapsule_New(self.array, <char *> "b2nd_array_t*", NULL)

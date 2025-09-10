@@ -986,6 +986,11 @@ class Operand:
             )
         return self.__int__()
 
+    def __complex__(self) -> complex:
+        if math.prod(self.shape) != 1:
+            raise ValueError(f"Cannot convert array of shape {self.shape} to complex float.")
+        return complex(self[()])
+
     @is_documented_by(sum)
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         expr = blosc2.LazyExpr(new_op=(self, None, None))
@@ -3701,7 +3706,7 @@ def arange(
         start, _, step = inputs
         start += offset[0] * step
         stop = start + lout * step
-        if (stop - start) // step == lout:  # USE ARANGE IF POSSIBLE (2X FASTER)
+        if math.ceil((stop - start) / step) == lout:  # USE ARANGE IF POSSIBLE (2X FASTER)
             output[:] = np.arange(start, stop, step, dtype=output.dtype)
         else:  # use linspace to have finer control over exclusion of endpoint for float types
             output[:] = np.linspace(start, stop, lout, endpoint=False, dtype=output.dtype)
@@ -4202,7 +4207,9 @@ def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
     array.save(urlpath, contiguous, **kwargs)
 
 
-def asarray(array: Sequence | np.ndarray | blosc2.C2Array | NDArray, copy=True, **kwargs: Any) -> NDArray:
+def asarray(  # noqa : C901
+    array: Sequence | np.ndarray | blosc2.C2Array | NDArray, copy: bool | None = None, **kwargs: Any
+) -> NDArray:
     """Convert the `array` to an `NDArray`.
 
     Parameters
@@ -4210,15 +4217,19 @@ def asarray(array: Sequence | np.ndarray | blosc2.C2Array | NDArray, copy=True, 
     array: array_like
         An array supporting numpy array interface.
 
-    Other Parameters
-    ----------------
+    copy: bool | None, optional
+        Whether or not to copy the input. If True, the function copies.
+        If False, raise a ValueError if copy is necessary. If None and
+        input is NDArray, avoid copy by returning lazyexpr.
+        Default: None.
+
     kwargs: dict, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
     Returns
     -------
-    out: :ref:`NDArray`
-        An new NDArray made of :paramref:`array`.
+    out: :ref:`NDArray` or :ref:`LazyExpr`
+        An new NDArray or LazyExpr made of :paramref:`array`.
 
     Notes
     -----
@@ -4237,8 +4248,7 @@ def asarray(array: Sequence | np.ndarray | blosc2.C2Array | NDArray, copy=True, 
     >>> # Create a NDArray from a NumPy array
     >>> nda = blosc2.asarray(a)
     """
-    if not copy:
-        raise ValueError("asarray which avoids copy not implemented yet.")
+
     # Convert scalars to numpy array
     casting = kwargs.pop("casting", "unsafe")
     if casting != "unsafe":
@@ -4256,41 +4266,49 @@ def asarray(array: Sequence | np.ndarray | blosc2.C2Array | NDArray, copy=True, 
         blocks = array.blocks
     chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, array.dtype, **kwargs)
 
-    # Fast path for small arrays. This is not too expensive in terms of memory consumption.
-    shape = array.shape
-    small_size = 2**24  # 16 MB
-    array_nbytes = math.prod(shape) * array.dtype.itemsize
-    if array_nbytes < small_size:
-        if not isinstance(array, np.ndarray) and hasattr(array, "chunks"):
-            # A getitem operation should be enough to get a numpy array
-            array = array[()]
+    copy = True if copy is None and not isinstance(array, NDArray) else copy
+    if copy:
+        # Fast path for small arrays. This is not too expensive in terms of memory consumption.
+        shape = array.shape
+        small_size = 2**24  # 16 MB
+        array_nbytes = math.prod(shape) * array.dtype.itemsize
+        if array_nbytes < small_size:
+            if not isinstance(array, np.ndarray) and hasattr(array, "chunks"):
+                # A getitem operation should be enough to get a numpy array
+                array = array[()]
 
-        array = np.require(array, dtype=dtype, requirements="C")  # require contiguous array
+            array = np.require(array, dtype=dtype, requirements="C")  # require contiguous array
 
-        return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
+            return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
 
-    # Create the empty array
-    ndarr = empty(shape, array.dtype, chunks=chunks, blocks=blocks, **kwargs)
-    behaved = are_partitions_behaved(shape, chunks, blocks)
+        # Create the empty array
+        ndarr = empty(shape, array.dtype, chunks=chunks, blocks=blocks, **kwargs)
+        behaved = are_partitions_behaved(shape, chunks, blocks)
 
-    # Get the coordinates of the chunks
-    chunks_idx, nchunks = get_chunks_idx(shape, chunks)
+        # Get the coordinates of the chunks
+        chunks_idx, nchunks = get_chunks_idx(shape, chunks)
 
-    # Iterate over the chunks and update the empty array
-    for nchunk in range(nchunks):
-        # Compute current slice coordinates
-        coords = tuple(np.unravel_index(nchunk, chunks_idx))
-        slice_ = tuple(
-            slice(c * s, builtins.min((c + 1) * s, shape[i]))
-            for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
-        )
-        # Ensure the array slice is contiguous and of correct dtype
-        array_slice = np.require(array[slice_], dtype=dtype, requirements="C")
-        if behaved:
-            # The whole chunk is to be updated, so this fastpath is safe
-            ndarr.schunk.update_data(nchunk, array_slice, copy=False)
-        else:
-            ndarr[slice_] = array_slice
+        # Iterate over the chunks and update the empty array
+        for nchunk in range(nchunks):
+            # Compute current slice coordinates
+            coords = tuple(np.unravel_index(nchunk, chunks_idx))
+            slice_ = tuple(
+                slice(c * s, builtins.min((c + 1) * s, shape[i]))
+                for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
+            )
+            # Ensure the array slice is contiguous and of correct dtype
+            array_slice = np.require(array[slice_], dtype=dtype, requirements="C")
+            if behaved:
+                # The whole chunk is to be updated, so this fastpath is safe
+                ndarr.schunk.update_data(nchunk, array_slice, copy=False)
+            else:
+                ndarr[slice_] = array_slice
+    else:
+        if not isinstance(array, NDArray):
+            raise ValueError("Must always do a copy for asarray unless NDArray provided.")
+        mask = [True] + [False for i in range(array.ndim)]
+        # TODO: make a direct view possible
+        return blosc2.expand_dims(array, axis=0).squeeze(mask)  # way to get a view
 
     return ndarr
 
@@ -5168,3 +5186,28 @@ def broadcast_to(arr, shape):
     A new array with the given shape.
     """
     return (arr + blosc2.zeros(shape, dtype=arr.dtype)).compute()  # return lazyexpr quickly
+
+
+def meshgrid(arrays: NDArray, indexing: str = "xy") -> Sequence[NDArray]:
+    """
+    Returns coordinate matrices from coordinate vectors.
+
+    Parameters
+    ---------
+    arrays: NDArray
+        An arbitrary number of one-dimensional arrays representing grid coordinates. Each array should have the same numeric data type.
+
+    indexing: str
+        Cartesian 'xy' or matrix 'ij' indexing of output. If provided zero or one one-dimensional vector(s) the indexing keyword is ignored.
+        Default: 'xy'.
+
+    Returns
+    --------
+    out: (List[NDArray])
+        List of N arrays, where N is the number of provided one-dimensional input arrays, with same dtype.
+        For N one-dimensional arrays having lengths Ni = len(xi),
+
+        * if matrix indexing ij, then each returned array has shape (N1, N2, N3, ..., Nn).
+        * if Cartesian indexing xy, then each returned array has shape (N2, N1, N3, ..., Nn).
+    """
+    raise NotImplementedError("Working on meshgrid")
