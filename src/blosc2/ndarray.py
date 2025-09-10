@@ -3706,15 +3706,14 @@ def arange(
         else:  # use linspace to have finer control over exclusion of endpoint for float types
             output[:] = np.linspace(start, stop, lout, endpoint=False, dtype=output.dtype)
 
-    NUM = int((stop - start) / step)
-
     if step is None:  # not array-api compliant but for backwards compatibility
         step = 1
     if stop is None:
         stop = start
         start = 0
+    NUM = int((stop - start) / step)
     if shape is None:
-        shape = (max(NUM, 0),)
+        shape = (builtins.max(NUM, 0),)
     else:
         # Check that the shape is consistent with the start, stop and step values
         if math.prod(shape) != NUM:
