@@ -37,7 +37,7 @@ dependencies = [
     "ndindex",
     "msgpack",
     "platformdirs",
-    "numexpr; platform_machine != 'wasm32'",
+    "numexpr>=2.12.0; platform_machine != 'wasm32'",
     "py-cpuinfo; platform_machine != 'wasm32'",
     "requests",
 ]
