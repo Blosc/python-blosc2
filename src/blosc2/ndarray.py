@@ -3701,19 +3701,23 @@ def arange(
         start, _, step = inputs
         start += offset[0] * step
         stop = start + lout * step
-        # use linspace to have finer control over exclusion of endpoint
-        output[:] = np.linspace(start, stop, num=lout, endpoint=False, dtype=output.dtype)
+        if (stop - start) // step == lout:  # USE ARANGE IF POSSIBLE (2X FASTER)
+            output[:] = np.arange(start, stop, step, dtype=output.dtype)
+        else:  # use linspace to have finer control over exclusion of endpoint for float types
+            output[:] = np.linspace(start, stop, lout, endpoint=False, dtype=output.dtype)
+
+    NUM = int((stop - start) / step)
 
     if step is None:  # not array-api compliant but for backwards compatibility
         step = 1
     if stop is None:
         stop = start
         start = 0
-    if not shape:
-        shape = (int((stop - start) / step),)
+    if shape is None:
+        shape = (max(NUM, 0),)
     else:
         # Check that the shape is consistent with the start, stop and step values
-        if math.prod(shape) != int((stop - start) / step):
+        if math.prod(shape) != NUM:
             raise ValueError("The shape is not consistent with the start, stop and step values")
     if dtype is None:
         dtype = (
@@ -3723,12 +3727,9 @@ def arange(
         )
     dtype = _check_dtype(dtype)
 
-    if is_inside_new_expr():
+    if is_inside_new_expr() or NUM < 0:
         # We already have the dtype and shape, so return immediately
         return blosc2.zeros(shape, dtype=dtype)
-
-    if (stop - start) / step < 0:  # return empty array
-        return blosc2.empty((0,), dtype=dtype)
 
     lshape = (math.prod(shape),)
     lazyarr = blosc2.lazyudf(arange_fill, (start, stop, step), dtype=dtype, shape=lshape)
@@ -3795,26 +3796,25 @@ def linspace(
         step = (stop - start) / (num - 1) if endpoint and num > 1 else (stop - start) / num
         # Compute proper start and stop values for the current chunk
         # except for 0th iter, have already included start_ in prev iter
-        start_ = start + offset[0] * step if offset[0] == 0 else start + (offset[0] + 1) * step
+        start_ = start + offset[0] * step
         stop_ = start_ + lout * step
-        if offset[0] + lout == num:  # reached end
+        if offset[0] + lout == num:  # reached end, include stop if necessary
             output[:] = np.linspace(start_, stop, lout, endpoint=endpoint, dtype=output.dtype)
-        else:  # always include start and stop
-            output[:] = np.linspace(start_, stop_, lout, endpoint=True, dtype=output.dtype)
+        else:
+            output[:] = np.linspace(start_, stop_, lout, endpoint=False, dtype=output.dtype)
 
-    if num < 0:
-        raise ValueError("num must be nonnegative.")
-
-    if shape is None and num is None:
-        raise ValueError("Either `shape` or `num` must be specified.")
-    if shape is None:  # num is not None
+    if shape is None:
+        if num is None:
+            raise ValueError("Either `shape` or `num` must be specified.")
+        # num is not None
         shape = (num,)
-    else:  # num is none
-        num = math.prod(shape)
-
-    # check compatibility of shape and num
+    else:
+        num = math.prod(shape) if num is None else num
+        # check compatibility of shape and num
     if math.prod(shape) != num:
         raise ValueError("The specified shape is not consistent with the specified num value")
+    if num < 0:
+        raise ValueError("num must be nonnegative.")
 
     if dtype is None:
         dtype = (
@@ -3829,10 +3829,8 @@ def linspace(
         # We already have the dtype and shape, so return immediately
         return blosc2.zeros(shape, dtype=dtype)  # will return empty array for num == 0
 
-    lshape = (math.prod(shape),)
-
     inputs = (start, stop, num, endpoint)
-    lazyarr = blosc2.lazyudf(linspace_fill, inputs, dtype=dtype, shape=lshape)
+    lazyarr = blosc2.lazyudf(linspace_fill, inputs, dtype=dtype, shape=(num,))
     if len(shape) == 1:
         # C order is guaranteed, and no reshape is needed
         return lazyarr.compute(**kwargs)

@@ -71,7 +71,6 @@ def test_initial_mapping_size(tmp_path, monkeypatch, capfd, initial_mapping_size
         mmap_mode="w+",
         initial_mapping_size=initial_mapping_size,
     )
-    assert a == nparray
     np.testing.assert_almost_equal(a[...], nparray)
 
     captured = capfd.readouterr()
