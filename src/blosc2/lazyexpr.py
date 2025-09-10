@@ -489,6 +489,11 @@ class LazyArray(ABC):
         """
         return self.compute().to_cframe()
 
+    def __bool__(self) -> bool:
+        if math.prod(self.shape) != 1:
+            raise ValueError(f"The truth value of a LazyArray of shape {self.shape} is ambiguous.")
+        return bool(self[()])
+
 
 def convert_inputs(inputs):
     if not inputs or len(inputs) == 0:
@@ -2540,7 +2545,7 @@ class LazyExpr(LazyArray):
         return self.update_expr(new_op=(value, "|", self))
 
     def __invert__(self):
-        return self.update_expr(new_op=(self, "~", None))
+        return self.update_expr(new_op=(None, "~", self))
 
     def __pow__(self, value):
         return self.update_expr(new_op=(self, "**", value))

@@ -199,6 +199,22 @@ from numpy import (
     uint64,
 )
 
+DEFAULT_COMPLEX = complex128
+"""
+Default complex floating dtype."""
+
+DEFAULT_FLOAT = float64
+"""
+Default real floating dtype."""
+
+DEFAULT_INT = int64
+"""
+Default integer dtype."""
+
+DEFAULT_INDEX = int64
+"""
+Default indexing dtype."""
+
 
 class Info:
     def __init__(self, **kwargs):
@@ -218,10 +234,10 @@ def __array_namespace_info__() -> Info:
         },
         default_device=None,
         default_dtypes={
-            "real floating": float64,
-            "complex floating": complex128,
-            "integral": int64,
-            "indexing": int64,
+            "real floating": DEFAULT_FLOAT,
+            "complex floating": DEFAULT_COMPLEX,
+            "integral": DEFAULT_INT,
+            "indexing": DEFAULT_INDEX,
         },
         dtypes={
             "bool": bool_,
@@ -455,6 +471,11 @@ __all__ = [  # noqa : RUF022
     "MIN_HEADER_LENGTH",
     "VERSION_DATE",
     "VERSION_STRING",
+    # Default dtypes
+    "DEFAULT_COMPLEX",
+    "DEFAULT_FLOAT",
+    "DEFAULT_INDEX",
+    "DEFAULT_INT",
     # Mathematical constants
     "e",
     "pi",

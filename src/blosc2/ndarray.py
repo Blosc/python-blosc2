@@ -3635,7 +3635,7 @@ def ones(shape: int | tuple | list, dtype: np.dtype | str = None, **kwargs: Any)
     dtype('float64')
     """
     if dtype is None:
-        dtype = blosc2.float64
+        dtype = blosc2.DEFAULT_FLOAT
     return full(shape, 1, dtype, **kwargs)
 
 
@@ -3655,11 +3655,11 @@ def arange(
 
     Parameters
     ----------
-    start: int, float, complex or np.number
+    start: int, float
         The starting value of the sequence.
-    stop: int, float, complex or np.number
+    stop: int, float
         The end value of the sequence.
-    step: int, float, complex or np.number
+    step: int, float or None
         Spacing between values.
     dtype: np.dtype or list str
         The data type of the array elements in NumPy format. Default is
@@ -3717,9 +3717,9 @@ def arange(
             raise ValueError("The shape is not consistent with the start, stop and step values")
     if dtype is None:
         dtype = (
-            blosc2.float64
+            blosc2.DEFAULT_FLOAT
             if np.any([np.issubdtype(type(d), float) for d in (start, stop, step)])
-            else blosc2.int64
+            else blosc2.DEFAULT_INT
         )
     dtype = _check_dtype(dtype)
 
@@ -3742,7 +3742,14 @@ def arange(
 
 # Define a numpy linspace-like function
 def linspace(
-    start, stop, num=None, endpoint=True, dtype=np.float64, shape=None, c_order=True, **kwargs: Any
+    start: int | float | complex,
+    stop: int | float | complex,
+    num: int | None = None,
+    dtype=None,
+    endpoint: bool = True,
+    shape=None,
+    c_order: bool = True,
+    **kwargs: Any,
 ) -> NDArray:
     """Return evenly spaced numbers over a specified interval.
 
@@ -3752,16 +3759,17 @@ def linspace(
 
     Parameters
     ----------
-    start: int, float, complex or np.number
+    start: int, float, complex
         The starting value of the sequence.
-    stop: int, float, complex or np.number
+    stop: int, float, complex
         The end value of the sequence.
-    num: int
-        Number of samples to generate.
+    num: int | None
+        Number of samples to generate. Default None.
+    dtype: np.dtype or list str
+        The data type of the array elements in NumPy format. If None, inferred from
+        start, stop, step. Default is None.
     endpoint: bool
         If True, `stop` is the last sample. Otherwise, it is not included.
-    dtype: np.dtype or list str
-        The data type of the array elements in NumPy format. Default is `np.float64`.
     shape: int, tuple or list
         The shape of the final array. If None, the shape will be guessed from `num`.
     c_order: bool
@@ -3769,7 +3777,10 @@ def linspace(
         Insertion order means that values will be stored in the array
         following the order of chunks in the array; this is more memory
         efficient, as it does not require an intermediate copy of the array.
-        Default is C order.
+        Default is True.
+    **kwargs: Any
+        Keyword arguments accepted by the :func:`empty` constructor.
+
 
     Returns
     -------
@@ -3779,33 +3790,48 @@ def linspace(
 
     def linspace_fill(inputs, output, offset):
         lout = len(output)
-        start, stop, num = inputs
+        start, stop, num, endpoint = inputs
+        # if num = 1 do nothing
+        step = (stop - start) / (num - 1) if endpoint and num > 1 else (stop - start) / num
         # Compute proper start and stop values for the current chunk
-        start_ = start + offset[0] / num * (stop - start)
-        stop_ = start_ + lout / num * (stop - start)
-        output[:] = np.linspace(start_, stop_, lout, endpoint=False, dtype=output.dtype)
+        # except for 0th iter, have already included start_ in prev iter
+        start_ = start + offset[0] * step if offset[0] == 0 else start + (offset[0] + 1) * step
+        stop_ = start_ + lout * step
+        if offset[0] + lout == num:  # reached end
+            output[:] = np.linspace(start_, stop, lout, endpoint=endpoint, dtype=output.dtype)
+        else:  # always include start and stop
+            output[:] = np.linspace(start_, stop_, lout, endpoint=True, dtype=output.dtype)
 
-    if shape is None or num is None:
-        if shape is None and num is None:
-            raise ValueError("Either `shape` or `num` must be specified.")
-        if shape is None:  # num is not None
-            shape = (num,)
-        else:  # num is none
-            num = math.prod(shape)
+    if num < 0:
+        raise ValueError("num must be nonnegative.")
+
+    if shape is None and num is None:
+        raise ValueError("Either `shape` or `num` must be specified.")
+    if shape is None:  # num is not None
+        shape = (num,)
+    else:  # num is none
+        num = math.prod(shape)
 
     # check compatibility of shape and num
     if math.prod(shape) != num:
         raise ValueError("The specified shape is not consistent with the specified num value")
+
+    if dtype is None:
+        dtype = (
+            blosc2.DEFAULT_COMPLEX
+            if np.any([np.issubdtype(type(d), complex) for d in (start, stop)])
+            else blosc2.DEFAULT_FLOAT
+        )
+
     dtype = _check_dtype(dtype)
 
-    if is_inside_new_expr():
+    if is_inside_new_expr() or num == 0:
         # We already have the dtype and shape, so return immediately
-        return blosc2.zeros(shape, dtype=dtype)
+        return blosc2.zeros(shape, dtype=dtype)  # will return empty array for num == 0
 
     lshape = (math.prod(shape),)
-    if endpoint:
-        stop += (stop - start) / (num - 1)
-    inputs = (start, stop, num)
+
+    inputs = (start, stop, num, endpoint)
     lazyarr = blosc2.lazyudf(linspace_fill, inputs, dtype=dtype, shape=lshape)
     if len(shape) == 1:
         # C order is guaranteed, and no reshape is needed
