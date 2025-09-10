@@ -3642,7 +3642,7 @@ def ones(shape: int | tuple | list, dtype: np.dtype | str = None, **kwargs: Any)
 def arange(
     start: int | float,
     stop: int | float | None = None,
-    step: int | float = 1,
+    step: int | float | None = 1,
     dtype: np.dtype | str = None,
     shape: int | tuple | list | None = None,
     c_order: bool = True,
@@ -3704,6 +3704,8 @@ def arange(
         # use linspace to have finer control over exclusion of endpoint
         output[:] = np.linspace(start, stop, num=lout, endpoint=False, dtype=output.dtype)
 
+    if step is None:  # not array-api compliant but for backwards compatibility
+        step = 1
     if stop is None:
         stop = start
         start = 0
