@@ -2612,6 +2612,7 @@ cdef class NDArray:
                 mask_[i] = mask[i]
             _check_rc(b2nd_squeeze_index(self.array, mask_), "Error while squeezing array")
 
+        #this squeezes even if not asked for by mask - may have to use in future though
         #if self.array.shape[0] == 1 and self.ndim == 1:
         #    self.array.ndim = 0
 

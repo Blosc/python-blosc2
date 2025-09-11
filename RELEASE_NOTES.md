@@ -1,8 +1,26 @@
 # Release notes
 
-## Changes from 3.7.2 to 3.7.3
+## Changes from 3.8.0 to 3.8.1
 
 XXX version-specific blurb XXX
+
+## Changes from 3.7.2 to 3.8.0
+
+* C-Blosc2 internal library updated to latest 2.21.2.
+
+* numexpr version requirement pushed to 2.12.1 to incorporate
+``isnan``, ``isfinite``, ``isinf`` functions.
+
+* Indexing is now supported extensively and reasonably optimally for slices
+with negative steps and general boolean arrays, with both get/setitem having
+equal functionality. In PR #459 we extended the 1D fast path to general N-D,
+with consequent speedups. In PR # we allowed fancy indexing and general slicing
+with negative steps for set and getitem, with a memory-optimised path for setitem.
+
+* Various attributes and methods for the ``NDArray`` class, as well as functions, have
+been added to increase compliance with the array-api standard. In addition,
+linspace and arange functions have been made more numerically stable and now strictly
+comply even with difficult floating-point edge cases.
 
 ## Changes from 3.7.1 to 3.7.2
 
