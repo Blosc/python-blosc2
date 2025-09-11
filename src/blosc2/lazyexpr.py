@@ -2804,7 +2804,7 @@ class LazyExpr(LazyArray):
 
         return value, expression[idx:idx2]
 
-    def _compute_expr(self, item, kwargs):  # noqa: C901
+    def _compute_expr(self, item, kwargs):
         if any(method in self.expression for method in reducers):
             # We have reductions in the expression (probably coming from a string lazyexpr)
             # Also includes slice

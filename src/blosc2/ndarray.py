@@ -1048,7 +1048,7 @@ class LimitedSizeDict(OrderedDict):
         super().__setitem__(key, value)
 
 
-def detect_aligned_chunks(  # noqa: C901
+def detect_aligned_chunks(
     key: Sequence[slice], shape: Sequence[int], chunks: Sequence[int], consecutive: bool = False
 ) -> list[int]:
     """
@@ -4026,7 +4026,7 @@ def copy(array: NDArray, dtype: np.dtype | str = None, **kwargs: Any) -> NDArray
     return array.copy(dtype, **kwargs)
 
 
-def concat(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:  # noqa: C901
+def concat(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:
     """Concatenate a list of arrays along a specified axis.
 
     Parameters
@@ -4207,7 +4207,7 @@ def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
     array.save(urlpath, contiguous, **kwargs)
 
 
-def asarray(  # noqa : C901
+def asarray(
     array: Sequence | np.ndarray | blosc2.C2Array | NDArray, copy: bool | None = None, **kwargs: Any
 ) -> NDArray:
     """Convert the `array` to an `NDArray`.
@@ -4347,7 +4347,7 @@ def astype(
     return asarray(array, dtype=dtype, casting=casting, copy=copy, **kwargs)
 
 
-def _check_ndarray_kwargs(**kwargs):  # noqa: C901
+def _check_ndarray_kwargs(**kwargs):
     storage = kwargs.get("storage")
     if storage is not None:
         for key in kwargs:

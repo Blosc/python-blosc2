@@ -365,7 +365,7 @@ def test_functions(function, dtype_fixture, shape_fixture):
         # ("scalar", "scalar") # Not supported by LazyExpr
     ],
 )
-def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, value2):  # noqa: C901
+def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, value2):
     nelems = np.prod(shape_fixture)
     if urlpath is None:
         urlpath1 = urlpath2 = urlpath_save = None

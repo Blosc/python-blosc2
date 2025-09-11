@@ -48,7 +48,7 @@ import blosc2
         ),
     ],
 )
-def test_fillers(  # noqa: C901
+def test_fillers(
     contiguous, urlpath, cparams, dparams, nchunks, nelem, func, op_dtype, op2_dtype, schunk_dtype, offset
 ):
     blosc2.remove_urlpath(urlpath)
