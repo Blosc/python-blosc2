@@ -31,7 +31,7 @@ class EmbedStore:
     Parameters
     ----------
     urlpath : str or None, optional
-        Path for persistent storage. Using a ' .b2e' extension is recommended.
+        Path for persistent storage. Using a '.b2e' extension is recommended.
         If None, the embed store will be in memory only, which can be
         deserialized later using the :func:`blosc2.from_cframe` function.
     mode : str, optional

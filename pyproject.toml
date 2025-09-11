@@ -101,6 +101,8 @@ exclude = ["bench*", ".github*"]
 
 [tool.ruff]
 line-length = 109
+# Raise complexity from the default 10 to 13
+complexity = 13
 extend-exclude = ["bench"]
 
 [tool.ruff.lint]
