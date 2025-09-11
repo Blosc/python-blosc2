@@ -1470,7 +1470,7 @@ class SChunk(blosc2_ext.SChunk):
         super().__dealloc__()
 
 
-def open(  # noqa: C901
+def open(
     urlpath: str | pathlib.Path | blosc2.URLPath, mode: str = "a", offset: int = 0, **kwargs: dict
 ) -> blosc2.SChunk | blosc2.NDArray | blosc2.C2Array | blosc2.LazyArray | blosc2.Proxy:
     """Open a persistent :ref:`SChunk`, :ref:`NDArray`, a remote :ref:`C2Array`

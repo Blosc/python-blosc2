@@ -657,7 +657,7 @@ def jit(func=None, *, out=None, disable=False, **kwargs):  # noqa: C901
     [5 5 5 5]
     """
 
-    def decorator(func):  # noqa: C901
+    def decorator(func):
         if disable:
             return func
 
