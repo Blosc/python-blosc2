@@ -1467,7 +1467,7 @@ def compute_chunks_blocks(  # noqa: C901
 
     # Return an arbitrary value for chunks and blocks when shape has any 0 dim
     if 0 in shape:
-        return (1,) * len(shape), (1,) * len(shape)
+        return shape, shape
 
     if blocks:
         if not isinstance(blocks, tuple | list):

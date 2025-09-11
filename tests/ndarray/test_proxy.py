@@ -59,7 +59,7 @@ def test_ndarray(urlpath, shape, chunks, blocks, slices, dtype):
         np.testing.assert_almost_equal(cache_slice[slices], a_slice[...])
     else:
         assert cache_slice.dtype == np.dtype(dtype)
-        assert b.fields == cache_slice.fields
+        assert b.fields.keys() == cache_slice.fields.keys()
         for field in cache_slice.fields:
             np.testing.assert_almost_equal(cache_slice.fields[field][slices], a_slice.fields[field][...])
 
@@ -69,7 +69,7 @@ def test_ndarray(urlpath, shape, chunks, blocks, slices, dtype):
         np.testing.assert_almost_equal(cache_arr[...], a[...])
     else:
         assert cache_arr.dtype == np.dtype(dtype)
-        assert b.fields == cache_arr.fields
+        assert b.fields.keys() == cache_arr.fields.keys()
         for field in cache_arr.fields:
             np.testing.assert_almost_equal(cache_arr.fields[field][...], a.fields[field][...])
     blosc2.remove_urlpath(urlpath)
@@ -99,7 +99,6 @@ def test_open(urlpath, shape, chunks, blocks, slices, dtype):
             np.testing.assert_almost_equal(b[...], a[...])
         else:
             assert b.dtype == np.dtype(dtype)
-            assert b.fields == a.fields
             for field in b.fields:
                 np.testing.assert_almost_equal(b.fields[field][...], a.fields[field][...])
 

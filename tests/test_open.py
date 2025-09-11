@@ -39,7 +39,7 @@ import blosc2
         (True, "a", "c"),
     ],
 )
-def test_open(contiguous, urlpath, cparams, dparams, nchunks, chunk_nitems, dtype, mode, mmap_mode):  # noqa: C901
+def test_open(contiguous, urlpath, cparams, dparams, nchunks, chunk_nitems, dtype, mode, mmap_mode):
     if os.name == "nt" and mmap_mode == "c":
         pytest.skip("Cannot test mmap_mode 'c' on Windows")
 

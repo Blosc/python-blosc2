@@ -866,7 +866,8 @@ class SChunk(blosc2_ext.SChunk):
         Number of chunks after update: 4
         """
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
-        return super().update_data(nchunk, data, copy)
+        nchunks = super().nchunks
+        return super().update_data(nchunk, data, copy) if nchunks > 0 else nchunks
 
     def get_slice(self, start: int = 0, stop: int | None = None, out: object = None) -> str | bytes | None:
         """Get a slice from :paramref:`start` to :paramref:`stop`.
@@ -1469,7 +1470,7 @@ class SChunk(blosc2_ext.SChunk):
         super().__dealloc__()
 
 
-def open(  # noqa: C901
+def open(
     urlpath: str | pathlib.Path | blosc2.URLPath, mode: str = "a", offset: int = 0, **kwargs: dict
 ) -> blosc2.SChunk | blosc2.NDArray | blosc2.C2Array | blosc2.LazyArray | blosc2.Proxy:
     """Open a persistent :ref:`SChunk`, :ref:`NDArray`, a remote :ref:`C2Array`

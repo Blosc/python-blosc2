@@ -46,66 +46,6 @@ if not blosc2.IS_WASM:
     import numexpr
 
 
-def compute_slice_shape(shape, slice_obj, dont_squeeze=False):  # noqa: C901
-    # Handle None or empty slice case
-    if slice_obj is None or slice_obj == ():
-        return shape
-
-    # Use ndindex to handle slice calculations
-    try:
-        idx = ndindex.ndindex(slice_obj).expand(shape)
-        return idx.shape
-    except Exception:
-        # Fall back to manual processing
-        if not isinstance(slice_obj, tuple):
-            slice_obj = (slice_obj,)
-
-        result = []
-        shape_idx = 0
-        dims_reduced = 0
-
-        # Process slice components
-        for i, s in enumerate(slice_obj):
-            if i >= len(shape):
-                break
-
-            if isinstance(s, slice):
-                start = 0 if s.start is None else max(0, s.start if s.start >= 0 else shape[i] + s.start)
-                stop = (
-                    shape[i]
-                    if s.stop is None
-                    else min(shape[i], s.stop if s.stop >= 0 else shape[i] + s.stop)
-                )
-                step = 1 if s.step is None else abs(s.step)
-
-                if start < stop:
-                    result.append((stop - start - 1) // step + 1)
-                else:
-                    result.append(0)
-                shape_idx += 1
-            elif isinstance(s, int) or np.isscalar(s):
-                if dont_squeeze:
-                    result.append(1)
-                    shape_idx += 1
-                else:
-                    # Integer indexing reduces dimensionality
-                    dims_reduced += 1
-                    shape_idx += 1
-                    continue
-            elif s is Ellipsis:
-                # Fill in with remaining dimensions
-                remaining_dims = len(shape) - (len(slice_obj) - 1 + dims_reduced)
-                result.extend(shape[shape_idx : shape_idx + remaining_dims])
-                shape_idx += remaining_dims
-                continue
-
-        # Add any remaining dimensions
-        if shape_idx < len(shape):
-            result.extend(shape[shape_idx:])
-
-        return tuple(result)
-
-
 def ne_evaluate(expression, local_dict=None, **kwargs):
     """Safely evaluate expressions using numexpr when possible, falling back to numpy."""
     if local_dict is None:
@@ -220,6 +160,9 @@ functions = [
     "all",
     "pow" if np.__version__.startswith("2.") else "power",
     "where",
+    "isnan",
+    "isfinite",
+    "isinf",
 ]
 
 # Gather all callable functions in numpy
@@ -545,6 +488,11 @@ class LazyArray(ABC):
             The buffer containing the serialized :ref:`NDArray` instance.
         """
         return self.compute().to_cframe()
+
+    def __bool__(self) -> bool:
+        if math.prod(self.shape) != 1:
+            raise ValueError(f"The truth value of a LazyArray of shape {self.shape} is ambiguous.")
+        return bool(self[()])
 
 
 def convert_inputs(inputs):
@@ -962,7 +910,7 @@ def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C90
 
 def is_full_slice(item):
     """Check whether the slice represented by item is a full slice."""
-    if item is None:
+    if item == ():
         # This is the case when the user does not pass any slice in compute() method
         return True
     if isinstance(item, tuple):
@@ -1259,8 +1207,7 @@ def fast_eval(  # noqa: C901
 
     chunk_operands = {}
     # Check which chunks intersect with _slice
-    chunk_size = ndindex.ChunkSize(chunks)
-    all_chunks = chunk_size.as_subchunks((), shape)  # if _slice is (), returns all chunks
+    all_chunks = get_intersecting_chunks((), shape, chunks)  # if _slice is (), returns all chunks
     for nchunk, chunk_slice in enumerate(all_chunks):
         cslice = chunk_slice.raw
         offset = tuple(s.start for s in cslice)  # offset for the udf
@@ -1462,9 +1409,10 @@ def slices_eval(  # noqa: C901
 
     # Iterate over the operands and get the chunks
     chunk_operands = {}
-    # Check which chunks intersect with _slice
-    chunk_size = ndindex.ChunkSize(chunks)
-    intersecting_chunks = chunk_size.as_subchunks(_slice, shape)  # if _slice is (), returns all chunks
+    # Check which chunks intersect with _slice (handles zero chunks internally)
+    intersecting_chunks = get_intersecting_chunks(
+        _slice, shape, chunks
+    )  # if _slice is (), returns all chunks
 
     for nchunk, chunk_slice in enumerate(intersecting_chunks):
         # get intersection of chunk and target
@@ -1723,11 +1671,16 @@ def slices_eval_getitem(
 
 
 def infer_reduction_dtype(dtype, operation):
-    # It may change in the future, but for now, this mimics NumPy's (2.1) behavior pretty well
+    # It may change in the future, but mostly array-api compliant
+    my_float = np.result_type(
+        dtype, np.float32 if dtype == np.float32 or dtype == np.complex64 else blosc2.DEFAULT_FLOAT
+    )
     if operation in {ReduceOp.SUM, ReduceOp.PROD}:
-        return np.result_type(dtype, np.int64 if np.issubdtype(dtype, np.integer) else np.float64)
+        if np.issubdtype(dtype, np.unsignedinteger):
+            return np.result_type(dtype, np.uint64)
+        return np.result_type(dtype, np.int64 if np.issubdtype(dtype, np.integer) else my_float)
     elif operation in {ReduceOp.MEAN, ReduceOp.STD, ReduceOp.VAR}:
-        return np.float64
+        return my_float
     elif operation in {ReduceOp.MIN, ReduceOp.MAX}:
         return dtype
     elif operation in {ReduceOp.ANY, ReduceOp.ALL}:
@@ -1836,42 +1789,54 @@ def reduce_slices(  # noqa: C901
         return blosc2.zeros(reduced_shape, dtype=dtype)
 
     # Choose the array with the largest shape as the reference for chunks
-    operand = max((o for o in operands.values() if hasattr(o, "chunks")), key=lambda x: len(x.shape))
-    chunks = operand.chunks
+    # Note: we could have expr = blosc2.lazyexpr('numpy_array + 1') (i.e. no choice for chunks)
+    blosc2_arrs = tuple(o for o in operands.values() if hasattr(o, "chunks"))
+    fast_path = False
+    if blosc2_arrs:  # fast path only relevant if there are blosc2 arrays
+        operand = max(blosc2_arrs, key=lambda x: len(x.shape))
+        chunks = operand.chunks
 
-    # Check if the partitions are aligned (i.e. all operands have the same shape,
-    # chunks and blocks, and have no padding). This will allow us to take the fast path.
-    same_shape = all(operand.shape == o.shape for o in operands.values() if hasattr(o, "shape"))
-    same_chunks = all(operand.chunks == o.chunks for o in operands.values() if hasattr(o, "chunks"))
-    same_blocks = all(operand.blocks == o.blocks for o in operands.values() if hasattr(o, "blocks"))
-    fast_path = same_shape and same_chunks and same_blocks
-    aligned, iter_disk = False, False
-    if fast_path:
-        # Check that all operands are NDArray for fast path
-        all_ndarray = all(
-            isinstance(value, blosc2.NDArray) and value.shape != () for value in operands.values()
-        )
-        # Check that there is some NDArray that is persisted in the disk
-        any_persisted = any(
-            (isinstance(value, blosc2.NDArray) and value.shape != () and value.schunk.urlpath is not None)
-            for value in operands.values()
-        )
-        if not blosc2.IS_WASM:
-            iter_disk = all_ndarray and any_persisted
-            # Experiments say that iter_disk is faster than the regular path for reductions
-            # even when all operands are in memory, so no need to check any_persisted
-            # New benchmarks are saying the contrary (> 10% slower), so this needs more
-            # investigation
-            # iter_disk = all_ndarray
-        else:
-            # WebAssembly does not support threading, so we cannot use the iter_disk option
-            iter_disk = False
+        # Check if the partitions are aligned (i.e. all operands have the same shape,
+        # chunks and blocks, and have no padding). This will allow us to take the fast path.
+        same_shape = all(operand.shape == o.shape for o in operands.values() if hasattr(o, "shape"))
+        same_chunks = all(operand.chunks == o.chunks for o in operands.values() if hasattr(o, "chunks"))
+        same_blocks = all(operand.blocks == o.blocks for o in operands.values() if hasattr(o, "blocks"))
+        fast_path = same_shape and same_chunks and same_blocks and (0 not in chunks)
+        aligned, iter_disk = False, False
+        if fast_path:
+            # Check that all operands are NDArray for fast path
+            all_ndarray = all(
+                isinstance(value, blosc2.NDArray) and value.shape != () for value in operands.values()
+            )
+            # Check that there is some NDArray that is persisted in the disk
+            any_persisted = any(
+                (
+                    isinstance(value, blosc2.NDArray)
+                    and value.shape != ()
+                    and value.schunk.urlpath is not None
+                )
+                for value in operands.values()
+            )
+            if not blosc2.IS_WASM:
+                iter_disk = all_ndarray and any_persisted
+                # Experiments say that iter_disk is faster than the regular path for reductions
+                # even when all operands are in memory, so no need to check any_persisted
+                # New benchmarks are saying the contrary (> 10% slower), so this needs more
+                # investigation
+                # iter_disk = all_ndarray
+            else:
+                # WebAssembly does not support threading, so we cannot use the iter_disk option
+                iter_disk = False
+    else:  # have to calculate chunks (this is cheap as empty just creates a thin metalayer)
+        temp = blosc2.empty(shape, dtype=dtype)
+        chunks = temp.chunks
+        del temp
 
     # Iterate over the operands and get the chunks
     chunk_operands = {}
     # Check which chunks intersect with _slice
-    chunk_size = ndindex.ChunkSize(chunks)
-    intersecting_chunks = chunk_size.as_subchunks(_slice, shape)  # if _slice is (), returns all chunks
+    # if chunks has 0 we loop once but fast path is false as gives error (schunk has no chunks)
+    intersecting_chunks = get_intersecting_chunks(_slice, shape, chunks)
     out_init = False
 
     for nchunk, chunk_slice in enumerate(intersecting_chunks):
@@ -2031,7 +1996,7 @@ def convert_none_out(dtype, reduce_op, reduced_shape):
 
 
 def chunked_eval(  # noqa: C901
-    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=None, **kwargs
+    expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=(), **kwargs
 ):
     """
     Evaluate the expression in chunks of operands.
@@ -2516,6 +2481,9 @@ class LazyExpr(LazyArray):
             np.real: "real",
             np.imag: "imag",
             np.bitwise_not: "~",
+            np.isnan: "isnan",
+            np.isfinite: "isfinite",
+            np.isinf: "isinf",
         }
 
         if ufunc in ufunc_map:
@@ -2685,7 +2653,7 @@ class LazyExpr(LazyArray):
         shape = self.shape
         if np.isscalar(axis):
             axis = (axis,)
-        if item is not None:
+        if item != ():
             # Compute the shape of the slice
             shape = ndindex.ndindex(item).newshape(shape)
         axis = tuple(range(len(shape))) if axis is None else axis
@@ -2693,7 +2661,7 @@ class LazyExpr(LazyArray):
         return math.prod([shape[i] for i in axis])
 
     def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
-        item = kwargs.pop("item", None)
+        item = kwargs.pop("item", ())
         total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims, item=item)
         num_elements = self.get_num_elements(axis, item)
         if num_elements == 0:
@@ -2708,8 +2676,8 @@ class LazyExpr(LazyArray):
         return out
 
     def std(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
-        item = kwargs.pop("item", None)
-        if item is None:  # fast path
+        item = kwargs.pop("item", ())
+        if item == ():  # fast path
             mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
             expr = (self - mean_value) ** 2
         else:
@@ -2732,8 +2700,8 @@ class LazyExpr(LazyArray):
         return out
 
     def var(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
-        item = kwargs.pop("item", None)
-        if item is None:  # fast path
+        item = kwargs.pop("item", ())
+        if item == ():  # fast path
             mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
             expr = (self - mean_value) ** 2
         else:
@@ -2836,7 +2804,7 @@ class LazyExpr(LazyArray):
 
         return value, expression[idx:idx2]
 
-    def _compute_expr(self, item, kwargs):  # noqa: C901
+    def _compute_expr(self, item, kwargs):
         if any(method in self.expression for method in reducers):
             # We have reductions in the expression (probably coming from a string lazyexpr)
             # Also includes slice
@@ -2926,7 +2894,7 @@ class LazyExpr(LazyArray):
             lazy_expr._order = order
         return lazy_expr
 
-    def compute(self, item=None, **kwargs) -> blosc2.NDArray:
+    def compute(self, item=(), **kwargs) -> blosc2.NDArray:
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
         if "out" in kwargs:
             kwargs["_output"] = kwargs.pop("out")
@@ -3184,7 +3152,8 @@ class LazyUDF(LazyArray):
 
         self.res_getitem = blosc2.empty(self._shape, self._dtype, **kwargs_getitem)
         # Register a postfilter for getitem
-        self.res_getitem._set_postf_udf(self.func, id(self.inputs))
+        if 0 not in self._shape:
+            self.res_getitem._set_postf_udf(self.func, id(self.inputs))
 
         self.inputs_dict = {f"o{i}": obj for i, obj in enumerate(self.inputs)}
 
@@ -3247,7 +3216,7 @@ class LazyUDF(LazyArray):
             lazy_expr._order = order
         return lazy_expr
 
-    def compute(self, item=None, **kwargs):
+    def compute(self, item=(), **kwargs):
         # Get kwargs
         if kwargs is None:
             kwargs = {}
@@ -3287,7 +3256,7 @@ class LazyUDF(LazyArray):
         _ = aux_kwargs.pop("urlpath", None)
         aux_kwargs.update(kwargs)
 
-        if item is None:
+        if item == ():
             if self.chunked_eval:
                 res_eval = blosc2.empty(self.shape, self.dtype, **aux_kwargs)
                 chunked_eval(self.func, self.inputs_dict, None, _getitem=False, _output=res_eval)
@@ -3651,6 +3620,16 @@ def evaluate(
         return lexpr.compute()
     # The user did not specify an output array, so return a NumPy array
     return lexpr[()]
+
+
+def get_intersecting_chunks(_slice, shape, chunks):
+    if 0 not in chunks:
+        chunk_size = ndindex.ChunkSize(chunks)
+        return chunk_size.as_subchunks(_slice, shape)  # if _slice is (), returns all chunks
+    else:
+        return (
+            ndindex.ndindex(...).expand(shape),
+        )  # chunk is whole array so just return full tuple to do loop once
 
 
 if __name__ == "__main__":

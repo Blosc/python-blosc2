@@ -13,6 +13,8 @@
 import platform
 from enum import Enum
 
+import numpy as np
+
 # Do the platform check once at module level
 IS_WASM = platform.machine() == "wasm32"
 # IS_WASM = True  # for testing (comment this line out for production)
@@ -23,9 +25,10 @@ Flag for WebAssembly platform.
 if not IS_WASM:
     import numexpr
 
-from .version import __version__
+from .version import __array_api_version__, __version__
 
 __version__ = __version__
+__array_api_version__ = __array_api_version__
 """
 Python-Blosc2 version.
 """
@@ -164,6 +167,94 @@ VERSION_STRING = VERSION_STRING
 """
 The C-Blosc2 version's string."""
 
+
+# For array-api compatibility
+iinfo = np.iinfo
+finfo = np.finfo
+
+# dtypes for array-api
+str_ = np.str_
+bytes_ = np.bytes_
+object_ = np.object_
+
+from numpy import (
+    bool_,
+    complex64,
+    complex128,
+    e,
+    euler_gamma,
+    float16,
+    float32,
+    float64,
+    inf,
+    int8,
+    int16,
+    int32,
+    int64,
+    nan,
+    newaxis,
+    pi,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+)
+
+DEFAULT_COMPLEX = complex128
+"""
+Default complex floating dtype."""
+
+DEFAULT_FLOAT = float64
+"""
+Default real floating dtype."""
+
+DEFAULT_INT = int64
+"""
+Default integer dtype."""
+
+DEFAULT_INDEX = int64
+"""
+Default indexing dtype."""
+
+
+class Info:
+    def __init__(self, **kwargs):
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
+
+def __array_namespace_info__() -> Info:
+    """
+    Return information about the array namespace following the Array API specification.
+    """
+
+    def _raise(exc):
+        raise exc
+
+    return Info(
+        capabilities=lambda: {
+            "boolean indexing": True,
+            "data-dependent shapes": False,
+            "max dimensions": MAX_DIM,
+        },
+        default_device=lambda: "cpu",
+        default_dtypes=lambda device=None: {
+            "real floating": DEFAULT_FLOAT,
+            "complex floating": DEFAULT_COMPLEX,
+            "integral": DEFAULT_INT,
+            "indexing": DEFAULT_INDEX,
+        }
+        if (device == "cpu" or device is None)
+        else _raise(ValueError("Only cpu devices allowed")),
+        dtypes=lambda device=None, kind=None: np.__array_namespace_info__().dtypes(kind=kind, device=device)
+        if (device == "cpu" or device is None)
+        else _raise(ValueError("Only cpu devices allowed")),
+        devices=lambda: ["cpu"],
+        name="blosc2",
+        version=__version__,
+    )
+
+
 # Public API for container module
 from .core import (
     clib_info,
@@ -237,9 +328,11 @@ from .ndarray import (
     are_partitions_aligned,
     are_partitions_behaved,
     arange,
+    broadcast_to,
     linspace,
     eye,
     asarray,
+    astype,
     indices,
     sort,
     reshape,
@@ -248,14 +341,19 @@ from .ndarray import (
     concatenate,
     expand_dims,
     empty,
+    empty_like,
     frombuffer,
     fromiter,
     get_slice_nchunks,
+    meshgrid,
     nans,
     uninit,
     zeros,
+    zeros_like,
     ones,
+    ones_like,
     full,
+    full_like,
     save,
     matmul,
     permute_dims,
@@ -278,6 +376,7 @@ from .lazyexpr import (
     get_expr_operands,
     validate_expr,
     evaluate,
+    slices_eval,
 )
 from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy, jit
 
@@ -333,9 +432,13 @@ from .ndarray import (
     contains,
     cos,
     cosh,
+    equal,
     exp,
     expm1,
     imag,
+    isfinite,
+    isinf,
+    isnan,
     lazywhere,
     log,
     log1p,
@@ -356,7 +459,7 @@ from .ndarray import (
     where,
 )
 
-__all__ = [
+__all__ = [  # noqa : RUF022
     # Constants
     "EXTENDED_HEADER_LENGTH",
     "MAX_BUFFERSIZE",
@@ -364,6 +467,17 @@ __all__ = [
     "MIN_HEADER_LENGTH",
     "VERSION_DATE",
     "VERSION_STRING",
+    # Default dtypes
+    "DEFAULT_COMPLEX",
+    "DEFAULT_FLOAT",
+    "DEFAULT_INDEX",
+    "DEFAULT_INT",
+    # Mathematical constants
+    "e",
+    "pi",
+    "inf",
+    "nan",
+    "newaxis",
     # Classes
     "C2Array",
     "CParams",
@@ -407,7 +521,8 @@ __all__ = [
     "are_partitions_aligned",
     "are_partitions_behaved",
     "asarray",
-    "clib_info",
+    "astypeclib_info",
+    "broadcast_to",
     "compress",
     "compress2",
     "compressor_list",
@@ -421,6 +536,9 @@ __all__ = [
     "decompress2",
     "detect_number_of_cores",
     "dparams_dflts",
+    "empty",
+    "empty_like",
+    "equal",
     "estore_from_cframe",
     "expand_dims",
     "expm1",
@@ -430,6 +548,7 @@ __all__ = [
     "frombuffer",
     "fromiter",
     "full",
+    "full_like",
     "get_blocksize",
     "get_cbuffer_sizes",
     "get_clib",
@@ -438,6 +557,9 @@ __all__ = [
     "get_expr_operands",
     "get_slice_nchunks",
     "indices",
+    "isfinite",
+    "isinf",
+    "isnan",
     "jit",
     "lazyexpr",
     "lazyudf",
@@ -452,10 +574,12 @@ __all__ = [
     "matrix_transpose",
     "max",
     "mean",
+    "meshgrid",
     "min",
     "nans",
     "ndarray_from_cframe",
     "ones",
+    "ones_like",
     "open",
     "pack",
     "pack_array",
@@ -494,4 +618,6 @@ __all__ = [
     "validate_expr",
     "var",
     "where",
+    "zeros",
+    "zeros_like",
 ]

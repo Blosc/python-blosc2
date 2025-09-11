@@ -37,11 +37,13 @@ dependencies = [
     "ndindex",
     "msgpack",
     "platformdirs",
-    "numexpr; platform_machine != 'wasm32'",
+    "numexpr>=2.12.1; platform_machine != 'wasm32'",
     "py-cpuinfo; platform_machine != 'wasm32'",
     "requests",
 ]
 version = "3.7.3.dev0"
+[project.entry-points."array_api"]
+blosc2 = "blosc2"
 
 
 [project.optional-dependencies]
@@ -99,8 +101,6 @@ exclude = ["bench*", ".github*"]
 
 [tool.ruff]
 line-length = 109
-# Raise complexity from the default 10 to 13
-complexity = 13
 extend-exclude = ["bench"]
 
 [tool.ruff.lint]
@@ -116,7 +116,7 @@ extend-select = [
     "SIM",
     "TC",
     "UP",
-]
+    "C901"]  # enable complexity rule
 ignore = [
     "B028",
     "PT011",
@@ -130,3 +130,7 @@ ignore = [
 
 [tool.ruff.lint.extend-per-file-ignores]
 "tests/**" = ["F841"]
+
+[tool.ruff.lint.mccabe]
+# Raise complexity from the default 10 to 13
+max-complexity = 13

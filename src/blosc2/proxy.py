@@ -257,7 +257,7 @@ class Proxy(blosc2.Operand):
             for key in vlmeta:
                 self._schunk_cache.vlmeta[key] = vlmeta[key]
 
-    def fetch(self, item: slice | list[slice] | None = None) -> blosc2.NDArray | blosc2.schunk.SChunk:
+    def fetch(self, item: slice | list[slice] | None = ()) -> blosc2.NDArray | blosc2.schunk.SChunk:
         """
         Get the container used as cache with the requested data updated.
 
@@ -285,7 +285,7 @@ class Proxy(blosc2.Operand):
         [2 3]
         [4 5]]
         """
-        if item is None:
+        if item == ():
             # Full realization
             for info in self._schunk_cache.iterchunks_info():
                 if info.special != blosc2.SpecialValue.NOT_SPECIAL:
@@ -301,7 +301,7 @@ class Proxy(blosc2.Operand):
 
         return self._cache
 
-    async def afetch(self, item: slice | list[slice] | None = None) -> blosc2.NDArray | blosc2.schunk.SChunk:
+    async def afetch(self, item: slice | list[slice] | None = ()) -> blosc2.NDArray | blosc2.schunk.SChunk:
         """
         Retrieve the cache container with the requested data updated asynchronously.
 
@@ -377,7 +377,7 @@ class Proxy(blosc2.Operand):
         """
         if not callable(getattr(self.src, "aget_chunk", None)):
             raise NotImplementedError("afetch is only available if the source has an aget_chunk method")
-        if item is None:
+        if item == ():
             # Full realization
             for info in self._schunk_cache.iterchunks_info():
                 if info.special != blosc2.SpecialValue.NOT_SPECIAL:
@@ -657,7 +657,7 @@ def jit(func=None, *, out=None, disable=False, **kwargs):  # noqa: C901
     [5 5 5 5]
     """
 
-    def decorator(func):  # noqa: C901
+    def decorator(func):
         if disable:
             return func
 

@@ -452,11 +452,19 @@ def test_save_constructor_reduce2(shape, disk, compute):
 def test_reduction_index():
     shape = (20, 20)
     a = blosc2.linspace(0, 20, num=np.prod(shape), shape=shape)
-    arr = blosc2.lazyexpr("sum(a,axis=0)", {"a": a})
+    arr = blosc2.lazyexpr("sum(a, axis=0)", {"a": a})
     newarr = arr.compute()
     assert arr[:10].shape == (10,)
     assert arr[0].shape == ()
     assert arr.shape == newarr.shape
+
+    a = blosc2.ones(shape=(0, 0))
+    arr = blosc2.lazyexpr("sum(a, axis=(0, 1, 2))", {"a": a})
+    with pytest.raises(np.exceptions.AxisError):
+        newarr = arr.compute()
+    arr = blosc2.lazyexpr("sum(a, axis=(0, 0))", {"a": a})
+    with pytest.raises(ValueError):
+        newarr = arr.compute()
 
 
 @pytest.mark.parametrize("idx", [0, 1, (0,), slice(1, 2), (slice(0, 1),), slice(0, 4), (0, 2)])
