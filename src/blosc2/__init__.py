@@ -25,9 +25,10 @@ Flag for WebAssembly platform.
 if not IS_WASM:
     import numexpr
 
-from .version import __version__
+from .version import __array_api_version__, __version__
 
 __version__ = __version__
+__array_api_version__ = __array_api_version__
 """
 Python-Blosc2 version.
 """
@@ -226,34 +227,28 @@ def __array_namespace_info__() -> Info:
     """
     Return information about the array namespace following the Array API specification.
     """
+
+    def _raise(exc):
+        raise exc
+
     return Info(
-        capabilities={
+        capabilities=lambda: {
             "boolean indexing": True,
             "data-dependent shapes": False,
-            "max dimensions": 8,
+            "max dimensions": MAX_DIM,
         },
-        default_device=None,
-        default_dtypes={
+        default_device=lambda: "cpu",
+        default_dtypes=lambda device=None: {
             "real floating": DEFAULT_FLOAT,
             "complex floating": DEFAULT_COMPLEX,
             "integral": DEFAULT_INT,
             "indexing": DEFAULT_INDEX,
-        },
-        dtypes={
-            "bool": bool_,
-            "int8": int8,
-            "int16": int16,
-            "int32": int32,
-            "int64": int64,
-            "uint8": uint8,
-            "uint16": uint16,
-            "uint32": uint32,
-            "uint64": uint64,
-            "float32": float32,
-            "float64": float64,
-            "complex64": complex64,
-            "complex128": complex128,
-        },
+        }
+        if (device == "cpu" or device is None)
+        else _raise(ValueError("Only cpu devices allowed")),
+        dtypes=lambda device=None, kind=None: np.__array_namespace_info__().dtypes(kind=kind, device=device)
+        if (device == "cpu" or device is None)
+        else _raise(ValueError("Only cpu devices allowed")),
         devices=lambda: ["cpu"],
         name="blosc2",
         version=__version__,

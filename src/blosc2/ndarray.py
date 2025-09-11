@@ -991,6 +991,12 @@ class Operand:
             raise ValueError(f"Cannot convert array of shape {self.shape} to complex float.")
         return complex(self[()])
 
+    def item(self) -> float | bool | complex | int:
+        """
+        Copy an element of an array to a standard Python scalar and return it.
+        """
+        return self[()].item()
+
     @is_documented_by(sum)
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         expr = blosc2.LazyExpr(new_op=(self, None, None))
@@ -1831,7 +1837,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         key_, mask = process_key(key, self.shape)  # internally handles key an integer
         if hasattr(value, "shape") and value.shape == ():
-            value = value[()]
+            value = value.item()
 
         def updater(sel_idx):
             return value[sel_idx]
@@ -4379,6 +4385,7 @@ def _check_ndarray_kwargs(**kwargs):
         "storage",
         "out",
     ]
+    _ = kwargs.pop("device", None)  # pop device (not used, but needs to be discarded)
     for key in kwargs:
         if key not in supported_keys:
             raise KeyError(
