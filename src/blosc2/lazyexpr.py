@@ -2269,76 +2269,77 @@ class LazyExpr(LazyArray):
         return out.schunk.get_chunk(nchunk)
 
     def update_expr(self, new_op):  # noqa: C901
-        original_disable = blosc2._disable_overloaded_equal
+        prev_flag = getattr(blosc2, "_disable_overloaded_equal", False)
         # We use a lot of the original NDArray.__eq__ as 'is', so deactivate the overloaded one
         blosc2._disable_overloaded_equal = True
         # One of the two operands are LazyExpr instances
-        value1, op, value2 = new_op
-        # The new expression and operands
-        expression = None
-        new_operands = {}
-        # where() handling requires evaluating the expression prior to merge.
-        # This is different from reductions, where the expression is evaluated
-        # and returned a NumPy array (for usability convenience).
-        # We do things like this to enable the fusion of operations like
-        # `a.where(0, 1).sum()`.
-        # Another possibility would have been to always evaluate where() and produce
-        # an NDArray, but that would have been less efficient for the case above.
-        if hasattr(value1, "_where_args"):
-            value1 = value1.compute()
-        if hasattr(value2, "_where_args"):
-            value2 = value2.compute()
+        try:
+            value1, op, value2 = new_op
+            # The new expression and operands
+            expression = None
+            new_operands = {}
+            # where() handling requires evaluating the expression prior to merge.
+            # This is different from reductions, where the expression is evaluated
+            # and returned a NumPy array (for usability convenience).
+            # We do things like this to enable the fusion of operations like
+            # `a.where(0, 1).sum()`.
+            # Another possibility would have been to always evaluate where() and produce
+            # an NDArray, but that would have been less efficient for the case above.
+            if hasattr(value1, "_where_args"):
+                value1 = value1.compute()
+            if hasattr(value2, "_where_args"):
+                value2 = value2.compute()
 
-        if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
-            # We converted some of the operands to NDArray (where() handling above)
-            new_operands = {"o0": value1, "o1": value2}
-            expression = f"(o0 {op} o1)"
-            blosc2._disable_overloaded_equal = original_disable
-            return self._new_expr(expression, new_operands, guess=False, out=None, where=None)
-        elif isinstance(value1, LazyExpr) and isinstance(value2, LazyExpr):
-            # Expression fusion
-            # Fuse operands in expressions and detect duplicates
-            new_operands, dup_op = fuse_operands(value1.operands, value2.operands)
-            # Take expression 2 and rebase the operands while removing duplicates
-            new_expr = fuse_expressions(value2.expression, len(value1.operands), dup_op)
-            expression = f"({self.expression} {op} {new_expr})"
-        elif isinstance(value1, LazyExpr):
-            if op == "~":
-                expression = f"({op}{self.expression})"
-            elif np.isscalar(value2):
-                expression = f"({self.expression} {op} {value2})"
-            elif hasattr(value2, "shape") and value2.shape == ():
-                expression = f"({self.expression} {op} {value2[()]})"
-            else:
-                operand_to_key = {id(v): k for k, v in value1.operands.items()}
-                try:
-                    op_name = operand_to_key[id(value2)]
-                except KeyError:
-                    op_name = f"o{len(self.operands)}"
-                    new_operands = {op_name: value2}
-                expression = f"({self.expression} {op} {op_name})"
-            self.operands = value1.operands
-        else:
-            if np.isscalar(value1):
-                expression = f"({value1} {op} {self.expression})"
-            elif hasattr(value1, "shape") and value1.shape == ():
-                expression = f"({value1[()]} {op} {self.expression})"
-            else:
-                operand_to_key = {id(v): k for k, v in value2.operands.items()}
-                try:
-                    op_name = operand_to_key[id(value1)]
-                except KeyError:
-                    op_name = f"o{len(value2.operands)}"
-                    new_operands = {op_name: value1}
-                if op == "[]":  # syntactic sugar for slicing
-                    expression = f"({op_name}[{self.expression}])"
+            if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
+                # We converted some of the operands to NDArray (where() handling above)
+                new_operands = {"o0": value1, "o1": value2}
+                expression = f"(o0 {op} o1)"
+                return self._new_expr(expression, new_operands, guess=False, out=None, where=None)
+            elif isinstance(value1, LazyExpr) and isinstance(value2, LazyExpr):
+                # Expression fusion
+                # Fuse operands in expressions and detect duplicates
+                new_operands, dup_op = fuse_operands(value1.operands, value2.operands)
+                # Take expression 2 and rebase the operands while removing duplicates
+                new_expr = fuse_expressions(value2.expression, len(value1.operands), dup_op)
+                expression = f"({self.expression} {op} {new_expr})"
+            elif isinstance(value1, LazyExpr):
+                if op == "~":
+                    expression = f"({op}{self.expression})"
+                elif np.isscalar(value2):
+                    expression = f"({self.expression} {op} {value2})"
+                elif hasattr(value2, "shape") and value2.shape == ():
+                    expression = f"({self.expression} {op} {value2[()]})"
                 else:
-                    expression = f"({op_name} {op} {self.expression})"
-                self.operands = value2.operands
-        blosc2._disable_overloaded_equal = original_disable
-        # Return a new expression
-        operands = self.operands | new_operands
-        return self._new_expr(expression, operands, guess=False, out=None, where=None)
+                    operand_to_key = {id(v): k for k, v in value1.operands.items()}
+                    try:
+                        op_name = operand_to_key[id(value2)]
+                    except KeyError:
+                        op_name = f"o{len(self.operands)}"
+                        new_operands = {op_name: value2}
+                    expression = f"({self.expression} {op} {op_name})"
+                self.operands = value1.operands
+            else:
+                if np.isscalar(value1):
+                    expression = f"({value1} {op} {self.expression})"
+                elif hasattr(value1, "shape") and value1.shape == ():
+                    expression = f"({value1[()]} {op} {self.expression})"
+                else:
+                    operand_to_key = {id(v): k for k, v in value2.operands.items()}
+                    try:
+                        op_name = operand_to_key[id(value1)]
+                    except KeyError:
+                        op_name = f"o{len(value2.operands)}"
+                        new_operands = {op_name: value1}
+                    if op == "[]":  # syntactic sugar for slicing
+                        expression = f"({op_name}[{self.expression}])"
+                    else:
+                        expression = f"({op_name} {op} {self.expression})"
+                    self.operands = value2.operands
+            # Return a new expression
+            operands = self.operands | new_operands
+            return self._new_expr(expression, operands, guess=False, out=None, where=None)
+        finally:
+            blosc2._disable_overloaded_equal = prev_flag
 
     @property
     def dtype(self):
