@@ -492,7 +492,7 @@ class LazyArray(ABC):
     def __bool__(self) -> bool:
         if math.prod(self.shape) != 1:
             raise ValueError(f"The truth value of a LazyArray of shape {self.shape} is ambiguous.")
-        return bool(self[()])
+        return self[()].__bool__()
 
 
 def convert_inputs(inputs):
@@ -2269,6 +2269,7 @@ class LazyExpr(LazyArray):
         return out.schunk.get_chunk(nchunk)
 
     def update_expr(self, new_op):  # noqa: C901
+        original_disable = blosc2._disable_overloaded_equal
         # We use a lot of the original NDArray.__eq__ as 'is', so deactivate the overloaded one
         blosc2._disable_overloaded_equal = True
         # One of the two operands are LazyExpr instances
@@ -2292,6 +2293,7 @@ class LazyExpr(LazyArray):
             # We converted some of the operands to NDArray (where() handling above)
             new_operands = {"o0": value1, "o1": value2}
             expression = f"(o0 {op} o1)"
+            blosc2._disable_overloaded_equal = original_disable
             return self._new_expr(expression, new_operands, guess=False, out=None, where=None)
         elif isinstance(value1, LazyExpr) and isinstance(value2, LazyExpr):
             # Expression fusion
@@ -2333,7 +2335,7 @@ class LazyExpr(LazyArray):
                 else:
                     expression = f"({op_name} {op} {self.expression})"
                 self.operands = value2.operands
-        blosc2._disable_overloaded_equal = False
+        blosc2._disable_overloaded_equal = original_disable
         # Return a new expression
         operands = self.operands | new_operands
         return self._new_expr(expression, operands, guess=False, out=None, where=None)
