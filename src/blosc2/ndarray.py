@@ -4622,13 +4622,15 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     return result.squeeze()
 
 
-def permute_dims(arr: NDArray, axes: tuple[int] | list[int] | None = None, **kwargs: Any) -> NDArray:
+def permute_dims(
+    arr: NDArray | np.ndarray, axes: tuple[int] | list[int] | None = None, **kwargs: Any
+) -> NDArray:
     """
     Permutes the axes (dimensions) of an array.
 
     Parameters
     ----------
-    arr: :ref:`NDArray`
+    arr: :ref:`NDArray` | np.ndarray
         The input array.
     axes: tuple[int], list[int], optional
         The desired permutation of axes. If None, the axes are reversed by default.
@@ -4694,6 +4696,8 @@ def permute_dims(arr: NDArray, axes: tuple[int] | list[int] | None = None, **kwa
     """
     if np.isscalar(arr) or arr.ndim < 2:
         return arr
+    if isinstance(arr, np.ndarray):  # for array-api test compliance (does getitem for comparison)
+        return np.permute_dims(arr, axes)
 
     ndim = arr.ndim
 
@@ -4768,13 +4772,13 @@ def transpose(x, **kwargs: Any) -> NDArray:
     return permute_dims(x, **kwargs)
 
 
-def matrix_transpose(arr: NDArray, **kwargs: Any) -> NDArray:
+def matrix_transpose(arr: NDArray | np.ndarray, **kwargs: Any) -> NDArray:
     """
     Transposes a matrix (or a stack of matrices).
 
     Parameters
     ----------
-    arr: :ref:`NDArray`
+    arr: :ref:`NDArray` | np.ndarray
         The input NDArray having shape ``(..., M, N)`` and whose innermost two dimensions form
         ``MxN`` matrices.
 
