@@ -13,19 +13,20 @@ import blosc2
 
 
 @pytest.mark.parametrize(
-    ("shape", "chunks", "blocks", "fill_value", "mask"),
+    ("shape", "chunks", "blocks", "fill_value", "axis"),
     [
-        ((1, 1230), (1, 100), (1, 3), b"0123", [True, False]),
-        ((23, 1, 1, 34), (20, 1, 1, 20), None, 1234, [False, False, True, False]),
-        ((80, 1, 51, 60, 1), None, (6, 1, 6, 26, 1), 3.333, [False] * 4 + [True]),
-        ((1, 1, 1), None, None, True, [False, True, True]),
+        ((1, 1230), (1, 100), (1, 3), b"0123", 0),
+        ((23, 1, 1, 34), (20, 1, 1, 20), None, 1234, 2),
+        ((80, 1, 51, 60, 1), None, (6, 1, 6, 26, 1), 3.333, 4),
+        ((1, 1, 1), None, None, True, (1, 2)),
+        ((1, 1, 1), None, None, True, None),
     ],
 )
-def test_squeeze(shape, chunks, blocks, fill_value, mask):
+def test_squeeze(shape, chunks, blocks, fill_value, axis):
     a = blosc2.full(shape, fill_value=fill_value, chunks=chunks, blocks=blocks)
 
-    b = np.squeeze(a[...], tuple(i for i, m in enumerate(mask) if m))
-    a_ = a.squeeze(mask)
+    b = np.squeeze(a[...], axis)
+    a_ = a.squeeze(axis)
 
     assert a_.shape == b.shape
     # TODO: this would work if squeeze returns a view

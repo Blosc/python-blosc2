@@ -9,6 +9,8 @@ import blosc2
     {
         ((12, 10), (7, 5), (3, 3)),
         ((10,), (9,), (7,)),
+        ((0,), (0,), (0,)),
+        ((40, 10, 10), (2, 3, 4), (1, 2, 2)),
     },
 )
 @pytest.mark.parametrize(
@@ -17,6 +19,9 @@ import blosc2
         ((10,), (4,), (2,)),
         ((10, 5), (3, 4), (1, 3)),
         ((10, 12), (2, 4), (1, 2)),
+        ((200, 10, 22), (23, 2, 4), (4, 1, 2)),
+        ((0,), (0,), (0,)),
+        ((20, 40, 10, 10), (5, 2, 3, 4), (2, 1, 2, 2)),
     },
 )
 @pytest.mark.parametrize(
@@ -26,13 +31,21 @@ import blosc2
 def test_matmul(ashape, achunks, ablocks, bshape, bchunks, bblocks, dtype):
     a = blosc2.linspace(0, 1, dtype=dtype, shape=ashape, chunks=achunks, blocks=ablocks)
     b = blosc2.linspace(0, 1, dtype=dtype, shape=bshape, chunks=bchunks, blocks=bblocks)
-    c = blosc2.matmul(a, b)
+    a_np = a[:]
+    b_np = b[:]
+    try:
+        np_res = np.matmul(a_np, b_np)
+        np_error = None
+    except ValueError as e:
+        np_res = None
+        np_error = e
 
-    na = a[:]
-    nb = b[:]
-    nc = np.matmul(na, nb)
-
-    np.testing.assert_allclose(c, nc, rtol=1e-6)
+    if np_error is not None:
+        with pytest.raises(type(np_error)):
+            blosc2.matmul(a, b)
+    else:
+        b2_res = blosc2.matmul(a, b)
+        np.testing.assert_allclose(b2_res[()], np_res, rtol=1e-6)
 
 
 @pytest.mark.parametrize(
@@ -147,12 +160,22 @@ def test_scalars(scalar):
 def test_dims(ashape, bshape):
     a = blosc2.linspace(0, 10, shape=ashape)
     b = blosc2.linspace(0, 1, shape=bshape)
+    a_np = a[:]
+    b_np = b[:]
 
-    with pytest.raises(ValueError):
-        blosc2.matmul(a, b)
+    try:
+        np_res = np.matmul(a_np, b_np)
+        np_error = None
+    except ValueError as e:
+        np_res = None
+        np_error = e
 
-    with pytest.raises(ValueError):
-        blosc2.matmul(b, a)
+    if np_error is not None:
+        with pytest.raises(type(np_error)):
+            blosc2.matmul(a, b)
+    else:
+        b2_res = blosc2.matmul(a, b)
+        np.testing.assert_allclose(b2_res[:], np_res)
 
 
 @pytest.mark.parametrize(

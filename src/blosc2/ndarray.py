@@ -2288,7 +2288,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 for order, nchunk in enumerate(aligned_chunks):
                     chunk = self.schunk.get_chunk(nchunk)
                     newarr.schunk.update_chunk(order, chunk)
-                newarr.squeeze(mask=mask)  # remove any dummy dims introduced
+                newarr.squeeze(axis=np.where(mask)[0])  # remove any dummy dims introduced
                 return newarr
 
         key = (start, stop)
@@ -2307,11 +2307,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return ndslice
 
-    def squeeze(self, mask=None) -> NDArray:
+    def squeeze(self, axis=None) -> NDArray:
         """Remove single-dimensional entries from the shape of the array.
 
         This method modifies the array in-place. If mask is None removes any dimensions with size 1.
-        If mask is provided, it should be a boolean array of the same shape as the array, and the corresponding
+        If axis is provided, it should be an int or tuple of ints and the corresponding
         dimensions (of size 1) will be removed.
 
         Returns
@@ -2331,7 +2331,18 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> a.shape
         (23, 11)
         """
-        super().squeeze(mask=mask)
+        if axis is None:
+            super().squeeze()
+        else:
+            axis = [axis] if isinstance(axis, int) else axis
+            mask = [False for i in range(self.ndim)]
+            for a in axis:
+                if a < 0:
+                    a += self.ndim  # Adjust axis to be within the array's dimensions
+                if mask[a]:
+                    raise ValueError("Axis values must be unique.")
+                mask[a] = True
+            super().squeeze(mask=mask)
         return self
 
     def indices(self, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
@@ -4312,9 +4323,8 @@ def asarray(
     else:
         if not isinstance(array, NDArray):
             raise ValueError("Must always do a copy for asarray unless NDArray provided.")
-        mask = [True] + [False for i in range(array.ndim)]
         # TODO: make a direct view possible
-        return blosc2.expand_dims(array, axis=0).squeeze(mask)  # way to get a view
+        return blosc2.expand_dims(array, axis=0).squeeze(axis=0)  # way to get a view
 
     return ndarr
 
@@ -4515,15 +4525,15 @@ def sort(array: NDArray, order: str | list[str] | None = None, **kwargs: Any) ->
     return larr.sort(order).compute(**kwargs)
 
 
-def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
+def matmul(x1: NDArray | np.ndarray, x2: NDArray, **kwargs: Any) -> NDArray | np.ndarray:  # noqa : C901
     """
     Computes the matrix product between two Blosc2 NDArrays.
 
     Parameters
     ----------
-    x1: :ref:`NDArray`
+    x1: :ref:`NDArray` | np.ndarray
         The first input array.
-    x2: :ref:`NDArray`
+    x2: :ref:`NDArray` | np.ndarray
         The second input array.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
@@ -4575,51 +4585,70 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     array([1, 5])
 
     """
+    # Added this to pass array-api tests (which use internal getitem to check results)
+    if isinstance(x1, np.ndarray) and isinstance(x2, np.ndarray):
+        return np.matmul(x1, x2)
 
     # Validate arguments are not scalars
     if np.isscalar(x1) or np.isscalar(x2):
         raise ValueError("Arguments can't be scalars.")
 
-    # Validate arguments are dimension 1 or 2
-    if x1.ndim > 2 or x2.ndim > 2:
-        raise ValueError("Multiplication of arrays with dimension greater than 2 is not supported yet.")
+    # Validate matrix multiplication compatibility
+    if x1.shape[-1] != x2.shape[builtins.max(-2, -len(x2.shape))]:
+        raise ValueError("Shapes are not aligned for matrix multiplication.")
 
     # Promote 1D arrays to 2D if necessary
     x1_is_vector = False
     x2_is_vector = False
     if x1.ndim == 1:
-        x1 = x1.reshape((1, x1.shape[0]))  # (N,) -> (1, N)
+        x1 = blosc2.expand_dims(x1, axis=0)  # (N,) -> (1, N)
         x1_is_vector = True
     if x2.ndim == 1:
-        x2 = x2.reshape((x2.shape[0], 1))  # (M,) -> (M, 1)
+        x2 = blosc2.expand_dims(x2, axis=1)  # (M,) -> (M, 1)
         x2_is_vector = True
-
-    # Validate matrix multiplication compatibility
-    if x1.shape[-1] != x2.shape[-2]:
-        raise ValueError("Shapes are not aligned for matrix multiplication.")
 
     n, k = x1.shape[-2:]
     m = x2.shape[-1]
+    result_shape = np.broadcast_shapes(x1.shape[:-2], x2.shape[:-2]) + (n, m)
+    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
 
-    result = blosc2.zeros((n, m), dtype=np.result_type(x1, x2), **kwargs)
+    if 0 in result.shape + x1.shape + x2.shape:  # if any array is empty, return array of 0s
+        if x1_is_vector:
+            result.squeeze(axis=-2)
+        if x2_is_vector:
+            result.squeeze(axis=-1)
+        return result
 
     p, q = result.chunks[-2:]
     r = x2.chunks[-1]
 
-    for row in range(0, n, p):
-        row_end = builtins.min(row + p, n)
-        for col in range(0, m, q):
-            col_end = builtins.min(col + q, m)
-            for aux in range(0, k, r):
-                aux_end = builtins.min(aux + r, k)
-                bx1 = x1[row:row_end, aux:aux_end]
-                bx2 = x2[aux:aux_end, col:col_end]
-                result[row:row_end, col:col_end] += np.matmul(bx1, bx2)
+    intersecting_chunks = get_intersecting_chunks((), result.shape[:-2], result.chunks[:-2])
+    for chunk in intersecting_chunks:
+        chunk = chunk.raw
+        for row in range(0, n, p):
+            row_end = builtins.min(row + p, n)
+            for col in range(0, m, q):
+                col_end = builtins.min(col + q, m)
+                for aux in range(0, k, r):
+                    aux_end = builtins.min(aux + r, k)
+                    bx1 = (
+                        x1[chunk[-x1.ndim + 2 :] + (slice(row, row_end), slice(aux, aux_end))]
+                        if x1.ndim > 2
+                        else x1[row:row_end, aux:aux_end]
+                    )
+                    bx2 = (
+                        x2[chunk[-x2.ndim + 2 :] + (slice(aux, aux_end), slice(col, col_end))]
+                        if x2.ndim > 2
+                        else x2[aux:aux_end, col:col_end]
+                    )
+                    result[chunk + (slice(row, row_end), slice(col, col_end))] += np.matmul(bx1, bx2)
 
-    if x1_is_vector and x2_is_vector:
-        return result[0][0]
+    if x1_is_vector:
+        result.squeeze(axis=-2)
+    if x2_is_vector:
+        result.squeeze(axis=-1)
 
-    return result.squeeze()
+    return result
 
 
 def permute_dims(
@@ -5176,6 +5205,16 @@ def _get_local_slice(prior_selection, post_selection, chunk_bounds):
         dtype="int64",
     )
     return locbegin, locend
+
+
+def get_intersecting_chunks(_slice, shape, chunks):
+    if 0 not in chunks:
+        chunk_size = ndindex.ChunkSize(chunks)
+        return chunk_size.as_subchunks(_slice, shape)  # if _slice is (), returns all chunks
+    else:
+        return (
+            ndindex.ndindex(...).expand(shape),
+        )  # chunk is whole array so just return full tuple to do loop once
 
 
 def broadcast_to(arr, shape):

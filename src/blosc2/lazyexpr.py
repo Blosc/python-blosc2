@@ -40,7 +40,13 @@ import numpy as np
 import blosc2
 from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
-from blosc2.ndarray import _check_allowed_dtypes, get_chunks_idx, is_inside_new_expr, process_key
+from blosc2.ndarray import (
+    _check_allowed_dtypes,
+    get_chunks_idx,
+    get_intersecting_chunks,
+    is_inside_new_expr,
+    process_key,
+)
 
 if not blosc2.IS_WASM:
     import numexpr
@@ -1575,7 +1581,7 @@ def slices_eval(  # noqa: C901
             elif isinstance(out, blosc2.NDArray):
                 # It *seems* better to choose an automatic chunks and blocks for the output array
                 # out = out.slice(_slice, chunks=out.chunks, blocks=out.blocks)
-                out = out.squeeze(mask_slice)
+                out = out.squeeze(np.where(mask_slice)[0])
             else:
                 raise ValueError("The output array is not a NumPy array or a NDArray")
 
@@ -3627,16 +3633,6 @@ def evaluate(
         return lexpr.compute()
     # The user did not specify an output array, so return a NumPy array
     return lexpr[()]
-
-
-def get_intersecting_chunks(_slice, shape, chunks):
-    if 0 not in chunks:
-        chunk_size = ndindex.ChunkSize(chunks)
-        return chunk_size.as_subchunks(_slice, shape)  # if _slice is (), returns all chunks
-    else:
-        return (
-            ndindex.ndindex(...).expand(shape),
-        )  # chunk is whole array so just return full tuple to do loop once
 
 
 if __name__ == "__main__":
