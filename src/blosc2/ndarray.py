@@ -385,7 +385,7 @@ def _check_allowed_dtypes(
     ):
         raise RuntimeError(
             "Expected LazyExpr, NDArray, NDField, C2Array, Proxy, np.ndarray or scalar instances"
-            f" and you provided a '{type(value)}' instance"
+            + f" and you provided a '{type(value)}' instance"
         )
 
 
@@ -5195,7 +5195,7 @@ def broadcast_to(arr, shape):
     return (arr + blosc2.zeros(shape, dtype=arr.dtype)).compute()  # return lazyexpr quickly
 
 
-def meshgrid(arrays: NDArray, indexing: str = "xy") -> Sequence[NDArray]:
+def meshgrid(*arrays: NDArray, indexing: str = "xy") -> Sequence[NDArray]:
     """
     Returns coordinate matrices from coordinate vectors.
 
@@ -5217,4 +5217,32 @@ def meshgrid(arrays: NDArray, indexing: str = "xy") -> Sequence[NDArray]:
         * if matrix indexing ij, then each returned array has shape (N1, N2, N3, ..., Nn).
         * if Cartesian indexing xy, then each returned array has shape (N2, N1, N3, ..., Nn).
     """
-    raise NotImplementedError("Working on meshgrid")
+    out = ()
+    shape = np.ones(len(arrays))
+    first_arr = arrays[0]
+    myarrs = ()
+    if indexing == "xy" and len(shape) > 1:
+        # switch 0th and 1st shapes around
+        def mygen(i):
+            if i not in (0, 1):
+                return (j for j in range(len(arrays)) if j != i)
+            else:
+                return (j for j in range(len(arrays)) if j != builtins.abs(i - 1))
+    else:
+        mygen = lambda i: (j for j in range(len(arrays)) if j != i)  # noqa : E731
+
+    for i, a in enumerate(arrays):
+        if len(a.shape) != 1 or a.dtype != first_arr.dtype:
+            raise ValueError("All arrays must be 1D and of same dtype.")
+        shape[i] = a.shape[0]
+        myarrs += (blosc2.expand_dims(a, tuple(mygen(i))),)  # cheap, creates a view
+
+    # handle Cartesian indexing
+    shape = tuple(shape)
+    if indexing == "xy" and len(shape) > 1:
+        shape = (shape[1], shape[0]) + shape[2:]
+
+    # do broadcast
+    for a in myarrs:
+        out += (broadcast_to(a, shape),)
+    return out

@@ -898,11 +898,15 @@ def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C90
             fast_path = False
         if first_input.blocks != out.blocks:
             fast_path = False
+        if 0 in out.chunks:  # fast_eval has zero division error for 0 shapes
+            fast_path = False
     # Then, the rest of the operands
     for input_ in NDinputs:
         if first_input.chunks != input_.chunks:
             fast_path = False
         if first_input.blocks != input_.blocks:
+            fast_path = False
+        if 0 in input_.chunks:  # fast_eval has zero division error for 0 shapes
             fast_path = False
 
     return first_input.shape, first_input.chunks, first_input.blocks, fast_path
@@ -2269,7 +2273,7 @@ class LazyExpr(LazyArray):
         return out.schunk.get_chunk(nchunk)
 
     def update_expr(self, new_op):  # noqa: C901
-        prev_flag = getattr(blosc2, "_disable_overloaded_equal", False)
+        prev_flag = blosc2._disable_overloaded_equal
         # We use a lot of the original NDArray.__eq__ as 'is', so deactivate the overloaded one
         blosc2._disable_overloaded_equal = True
         # One of the two operands are LazyExpr instances
