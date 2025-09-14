@@ -81,7 +81,6 @@ def linkcode_resolve(domain, info):
 
     import importlib
     import inspect
-    import os
 
     # Modify this to point to your package
     module_name = info["module"]
