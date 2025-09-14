@@ -521,7 +521,6 @@ __all__ = [  # noqa : RUF022
     "are_partitions_aligned",
     "are_partitions_behaved",
     "asarray",
-    "astypeclib_info",
     "broadcast_to",
     "compress",
     "compress2",
