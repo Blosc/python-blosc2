@@ -124,6 +124,7 @@ ignore = [
     "RET508",
     "RUF005",
     "RUF015",
+    "RUF059",
     "SIM108",
     "UP038",  # https://github.com/astral-sh/ruff/issues/7871
 ]
