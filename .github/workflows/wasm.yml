@@ -6,11 +6,12 @@ on:
   pull_request:
     branches:
       - main
+      - fix-wasm-build
 
 env:
   CIBW_BUILD_VERBOSITY: 1
   # cibuildwheel cannot choose for a specified version of pyodide yet
-  # PYODIDE_VERSION: 0.27.2
+  PYODIDE_VERSION: 0.28.2
 
 jobs:
   build_wheels_wasm:

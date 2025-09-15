@@ -4,8 +4,8 @@ on:
   # Trigger the workflow on push or pull request,
   # but only for the main branch
   push:
-    branches:
-      - '**'  # this matches all branches
+    tags:
+      - '*'
   pull_request:
     branches:
       - main
