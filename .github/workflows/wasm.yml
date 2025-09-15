@@ -28,8 +28,8 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        cibw_build: ["cp3{11,12,13}-*"]
-        p_ver: ["3.11-3.13"]
+        cibw_build: ["cp3{13,14}-*"]
+        p_ver: ["3.13-3.14"]
 
     steps:
       - name: Checkout repo
