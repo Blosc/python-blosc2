@@ -4651,6 +4651,114 @@ def matmul(x1: NDArray | np.ndarray, x2: NDArray, **kwargs: Any) -> NDArray | np
     return result
 
 
+def tensordot(
+    x1: NDArray, x2: NDArray, axes: int | tuple[Sequence[int], Sequence[int]] = 2, **kwargs: Any
+) -> NDArray:
+    """
+    Returns a tensor contraction of x1 and x2 over specific axes. The tensordot function corresponds to the generalized matrix product.
+
+    Parameters
+    ----------
+    x1: NDArray
+        First input array. Should have a numeric data type.
+
+    x2: NDArray
+        Second input array. Should have a numeric data type. Corresponding contracted axes of x1 and x2 must be equal.
+
+    axes: (Union[int, Tuple[Sequence[int], Sequence[int]]])
+        Number of axes (dimensions) to contract or explicit sequences of axis (dimension) indices for x1 and x2, respectively.
+        * If axes is an int equal to N, then contraction is performed over the last N axes of x1 and the first N axes of x2 in order.
+        The size of each corresponding axis (dimension) must match. Must be nonnegative.
+        - If N equals 0, the result is the tensor (outer) product.
+        - If N equals 1, the result is the tensor dot product.
+        - If N equals 2, the result is the tensor double contraction (default).
+        * If axes is a tuple of two sequences (x1_axes, x2_axes), the first sequence applies to x1 and the second sequence to x2.
+        Both sequences must have the same length. Each axis (dimension) x1_axes[i] for x1 must have the same size as the respective
+        axis (dimension) x2_axes[i] for x2. Each index referred to in a sequence must be unique. If x1 has rank (i.e, number of dimensions) N,
+        a valid x1 axis must reside on the half-open interval [-N, N). If x2 has rank M, a valid x2 axis must reside on the half-open interval [-M, M).
+
+    kwargs: Any, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Note: Neither argument is complex-conjugated or transposed. If conjugation and/or transposition is desired, these operations should be explicitly
+    performed prior to computing the generalized matrix product.
+
+    Returns
+    -------
+    out: NDArray
+        An array containing the tensor contraction whose shape consists of the non-contracted axes (dimensions) of the first array x1, followed by the non-contracted axes (dimensions) of the second array x2. The returned array must have a data type determined by Type Promotion Rules.
+    """
+    # Added this to pass array-api tests (which use internal getitem to check results)
+    if isinstance(x1, np.ndarray) and isinstance(x2, np.ndarray):
+        return np.tensordot(x1, x2, axes=axes)
+
+    if isinstance(axes, tuple):
+        a_axes, b_axes = axes
+        if len(a_axes) != len(b_axes):
+            raise ValueError("Lengths of reduction axes for x1 and x2 must be equal!")
+        order = np.argsort(a_axes)
+        a_red_axes = [(i - x1.ndim in a_axes) or (i in a_axes) for i in range(x1.ndim)]
+        b_red_axes = [(i - x2.ndim in b_axes) or (i in b_axes) for i in range(x2.ndim)]
+    elif isinstance(axes, int):
+        if axes < 0:
+            raise ValueError("Integer axes argument must be nonnegative!")
+        order = np.arange(axes, dtype=int)
+        a_red_axes = [i + axes >= x1.ndim for i in range(x1.ndim)]
+        b_red_axes = [i < axes for i in range(x2.ndim)]
+    else:
+        raise ValueError("Axes argument must be two element tuple of sequences or an integer.")
+    x1shape = np.array(x1.shape)
+    x2shape = np.array(x2.shape)
+    a_chunks_red = tuple(c for i, c in enumerate(x1.chunks) if a_red_axes[i])
+    if np.any(x1shape[a_red_axes] != x2shape[b_red_axes][order]):
+        raise ValueError("x1 and x2 must have same shapes along reduction dimensions")
+
+    a_axes = [not i for i in a_red_axes]
+    b_axes = [not i for i in b_red_axes]
+    result_shape = tuple(x1shape[a_axes]) + tuple(x2shape[b_axes])
+    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
+
+    op_chunks = [
+        slice_to_chunktuple(slice(0, s, 1), c)
+        for s, c in zip(x1shape[a_red_axes], a_chunks_red, strict=True)
+    ]
+    res_chunks = [
+        slice_to_chunktuple(s, c)
+        for s, c in zip([slice(0, r, 1) for r in result.shape], result.chunks, strict=True)
+    ]
+    a_selection = (slice(None, None, 1),) * x1.ndim
+    b_selection = (slice(None, None, 1),) * x2.ndim
+    for rchunk in product(*res_chunks):
+        res_chunk = tuple(
+            slice(rc * rcs, (rc + 1) * rcs, 1) for rc, rcs in zip(rchunk, result.chunks, strict=True)
+        )
+        rchunk_iter = iter(res_chunk)
+        a_selection = tuple(
+            next(rchunk_iter) if a else as_ for as_, a in zip(a_selection, a_axes, strict=True)
+        )
+        b_selection = tuple(
+            next(rchunk_iter) if b else bs_ for bs_, b in zip(b_selection, b_axes, strict=True)
+        )
+        for ochunk in product(*op_chunks):
+            op_chunk = tuple(
+                slice(rc * rcs, (rc + 1) * rcs, 1) for rc, rcs in zip(ochunk, a_chunks_red, strict=True)
+            )  # use x1 chunk shape to iterate over reduction axes
+            ochunk_iter = iter(op_chunk)
+            a_selection = tuple(
+                next(ochunk_iter) if not a else as_ for as_, a in zip(a_selection, a_axes, strict=True)
+            )
+            # have to permute to match order of a_axes
+            order_iter = iter(order)
+            b_selection = tuple(
+                op_chunk[next(order_iter)] if not b else bs_
+                for bs_, b in zip(b_selection, b_axes, strict=True)
+            )
+            bx1 = x1[a_selection]
+            bx2 = x2[b_selection]
+            result[res_chunk] += np.tensordot(bx1, bx2, axes=axes)
+    return result
+
+
 def permute_dims(
     arr: NDArray | np.ndarray, axes: tuple[int] | list[int] | None = None, **kwargs: Any
 ) -> NDArray:
@@ -5112,9 +5220,9 @@ def slice_to_chunktuple(s, n):
         start = temp + 1
         step = -step  # get positive steps
     if step > n:
-        return tuple((start + k * step) // n for k in range(ceiling(stop - start, step)))
+        return ((start + k * step) // n for k in range(ceiling(stop - start, step)))
     else:
-        return tuple(range(start // n, ceiling(stop, n)))
+        return range(start // n, ceiling(stop, n))
 
 
 def _get_selection(ctuple, ptuple, chunks):

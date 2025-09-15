@@ -219,3 +219,115 @@ def test_disk():
     blosc2.remove_urlpath("a_test.b2nd")
     blosc2.remove_urlpath("b_test.b2nd")
     blosc2.remove_urlpath("c_test.b2nd")
+
+
+@pytest.mark.parametrize(
+    ("shape1", "chunk1", "block1", "shape2", "chunk2", "block2", "axes"),
+    [
+        # 1Dx1D->scalar (uneven chunks)
+        ((50,), (17,), (5,), (50,), (13,), (5,), 1),
+        # 2Dx2D->matrix multiplication
+        (
+            (30, 40),
+            (17, 21),
+            (8, 10),  # chunks not multiples of shape
+            (40, 20),
+            (19, 20),
+            (9, 10),
+            ([1], [0]),
+        ),
+        # 3Dx3D->contraction along last/first
+        (
+            (10, 20, 30),
+            (9, 11, 17),
+            (5, 5, 5),  # uneven chunks
+            (30, 15, 5),
+            (16, 15, 5),
+            (8, 15, 5),
+            ([2], [0]),
+        ),
+        # 4Dx3D->contraction along two axes
+        ((6, 7, 8, 9), (5, 6, 7, 8), (3, 3, 3, 3), (8, 9, 5), (7, 9, 5), (3, 5, 5), ([2, 3], [0, 1])),
+        # 2Dx1D->matrix-vector multiplication
+        (
+            (12, 7),
+            (11, 7),
+            (5, 7),  # chunks not multiples
+            (7,),
+            (5,),
+            (5,),
+            ([1], [0]),
+        ),
+        # 3Dx2D->like batched matmul
+        (
+            (5, 6, 7),
+            (4, 5, 6),
+            (2, 3, 3),  # uneven chunks
+            (7, 4),
+            (6, 4),
+            (3, 4),
+            ([2], [0]),
+        ),
+        # 1Dx3D->tensor contraction
+        ((20,), (9,), (4,), (20, 4, 5), (19, 3, 5), (10, 2, 5), ([0], [0])),
+        # 4Dx4D->reduce over 3 axes
+        (
+            (5, 6, 7, 8),
+            (4, 5, 6, 7),
+            (2, 3, 3, 4),
+            (7, 8, 6, 10),
+            (6, 7, 5, 9),
+            (3, 4, 3, 5),
+            ([1, 2, 3], [0, 1, 2]),
+        ),
+        # 5Dx5D->reduce over 4 axes
+        (
+            (3, 4, 5, 6, 7),
+            (2, 3, 4, 5, 6),
+            (1, 2, 2, 3, 3),
+            (5, 6, 7, 4, 8),
+            (4, 5, 6, 3, 7),
+            (2, 3, 3, 2, 4),
+            ([1, 2, 3, 4], [0, 1, 2, 3]),
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        np.int32,
+        np.int64,
+        np.float32,
+        np.float64,
+    ],
+)
+def test_tensordot(shape1, chunk1, block1, shape2, chunk2, block2, axes, dtype):
+    # Create operands with requested dtype
+    a_b2 = blosc2.arange(0, np.prod(shape1), shape=shape1, chunks=chunk1, blocks=block1, dtype=dtype)
+    a_np = a_b2[()]  # decompress
+    b_b2 = blosc2.arange(0, np.prod(shape2), shape=shape2, chunks=chunk2, blocks=block2, dtype=dtype)
+    b_np = b_b2[()]  # decompress
+
+    # NumPy reference and Blosc2 comparison
+    np_raised = None
+    try:
+        res_np = np.tensordot(a_np, b_np, axes=axes)
+    except Exception as e:
+        np_raised = type(e)
+
+    if np_raised is not None:
+        # Expect Blosc2 to raise the same type
+        with pytest.raises(np_raised):
+            blosc2.tensordot(a_b2, b_b2, axes=axes)
+    else:
+        # Both should succeed
+        res_np = np.tensordot(a_np, b_np, axes=axes)
+        res_b2 = blosc2.tensordot(a_b2, b_b2, axes=axes)
+        res_b2_np = res_b2[...]
+
+        # Assertions
+        assert res_b2_np.shape == res_np.shape
+        if np.issubdtype(dtype, np.floating):
+            np.testing.assert_allclose(res_b2_np, res_np, rtol=1e-5, atol=1e-6)
+        else:
+            np.testing.assert_array_equal(res_b2_np, res_np)
