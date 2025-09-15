@@ -1584,7 +1584,7 @@ def open(
     if dparams is None:
         # Make the default 8 threads; more means more initialization time
         # Also 8 is a reasonable queue depth for modern SSDs, so it is a good tradeoff.
-        dparams = blosc2.DParams(nthreads=8)
+        dparams = blosc2.DParams(nthreads=8) if not blosc2.IS_WASM else blosc2.DParams(nthreads=1)
         kwargs["dparams"] = dparams
     res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
 
