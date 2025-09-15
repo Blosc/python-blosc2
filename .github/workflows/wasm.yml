@@ -9,8 +9,8 @@ on:
 
 env:
   CIBW_BUILD_VERBOSITY: 1
-  # cibuildwheel cannot choose for a specified version of pyodide yet
-  # PYODIDE_VERSION: 0.27.2
+  # In case you want to specify a version of pyodide
+  # PYODIDE_VERSION: 0.28.2
 
 jobs:
   build_wheels_wasm:
@@ -25,8 +25,8 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        cibw_build: ["cp3{11,12,13}-*"]
-        p_ver: ["3.11-3.13"]
+        cibw_build: ["cp3{12,13,14}-*"]
+        p_ver: ["3.12-3.14"]
 
     steps:
       - name: Checkout repo
