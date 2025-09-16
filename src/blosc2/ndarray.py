@@ -385,7 +385,7 @@ def _check_allowed_dtypes(
     ):
         raise RuntimeError(
             "Expected LazyExpr, NDArray, NDField, C2Array, Proxy, np.ndarray or scalar instances"
-            + f" and you provided a '{type(value)}' instance"
+            f" and you provided a '{type(value)}' instance"
         )
 
 
@@ -3348,7 +3348,35 @@ def equal(
     ----------
     `np.equal <https://numpy.org/doc/stable/reference/generated/numpy.equal.html#numpy.equal>`_
     """
-    return blosc2.LazyExpr(new_op=(x1, "==", x2))
+    return x1 == x2
+
+
+def multiply(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i * x2_i for each element x1_i of the input array x1
+    with the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.multiply <https://numpy.org/doc/stable/reference/generated/numpy.multiply.html#numpy.multiply>`_
+    """
+    return x1 * x2
 
 
 def where(
@@ -4651,7 +4679,6 @@ def matmul(x1: NDArray | np.ndarray, x2: NDArray, **kwargs: Any) -> NDArray | np
     return result
 
 
-# @profile
 def tensordot(
     x1: NDArray, x2: NDArray, axes: int | tuple[Sequence[int], Sequence[int]] = 2, **kwargs: Any
 ) -> NDArray:
@@ -4666,7 +4693,7 @@ def tensordot(
     x2: NDArray
         Second input array. Should have a numeric data type. Corresponding contracted axes of x1 and x2 must be equal.
 
-    axes: (Union[int, Tuple[Sequence[int], Sequence[int]]])
+    axes: int | tuple[Sequence[int], Sequence[int]]
         Number of axes (dimensions) to contract or explicit sequences of axis (dimension) indices for x1 and x2, respectively.
         * If axes is an int equal to N, then contraction is performed over the last N axes of x1 and the first N axes of x2 in order.
         The size of each corresponding axis (dimension) must match. Must be nonnegative.
@@ -4816,6 +4843,105 @@ def tensordot(
                 bt = bx2.transpose(newaxes_b).reshape(newshape_b)
                 res = np.dot(at, bt)
                 result[res_chunk] += res.reshape(res_chunks)
+    return result
+
+
+def vecdot(x1: NDArray, x2: NDArray, axis: int = -1, **kwargs) -> NDArray:
+    """
+    Computes the (vector) dot product of two arrays. Complex conjugates x1.
+
+    Parameters
+    ----------
+    x1: NDArray
+        First input array. Must have floating-point data type.
+
+    x2: NDArray
+        Second input array. Must be compatible with x1 for all non-contracted axes (via broadcasting).
+        The size of the axis over which to compute the dot product must be the same size as the respective axis in x1.
+        Must have a floating-point data type.
+
+    axis: int
+        The axis (dimension) of x1 and x2 containing the vectors for which to compute the dot product.
+        Should be an integer on the interval [-N, -1], where N is min(x1.ndim, x2.ndim). Default: -1.
+
+    Returns
+    -------
+    out: NDArray
+        If x1 and x2 are both one-dimensional arrays, a zero-dimensional containing the dot product;
+        otherwise, a non-zero-dimensional array containing the dot products and having rank N-1,
+        where N is the rank (number of dimensions) of the shape determined according to broadcasting
+        along the non-contracted axes.
+    """
+    fast_path = kwargs.pop("fast_path", None)  # for testing purposes
+    # Added this to pass array-api tests (which use internal getitem to check results)
+    if isinstance(x1, np.ndarray) and isinstance(x2, np.ndarray):
+        return np.vecdot(x1, x2, axis=axis)
+
+    x1, x2 = blosc2.asarray(x1), blosc2.asarray(x2)
+
+    N = builtins.min(x1.ndim, x2.ndim)
+    if axis < -N or axis > -1:
+        raise ValueError("axis must be on interval [-N,-1].")
+    a_axes = axis + x1.ndim
+    b_axes = axis + x2.ndim
+    a_keep = [True] * x1.ndim
+    a_keep[a_axes] = False
+    b_keep = [True] * x2.ndim
+    b_keep[b_axes] = False
+    if np.issubdtype(x1.dtype, complex):
+        x1 = blosc2.conj(x1)
+    x1shape = np.array(x1.shape)
+    x2shape = np.array(x2.shape)
+    result_shape = np.broadcast_shapes(x1shape[a_keep], x2shape[b_keep])
+    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
+
+    x1shape = np.array(x1.shape)
+    x2shape = np.array(x2.shape)
+    a_chunks_red = x1.chunks[a_axes]
+    a_shape_red = x1.shape[a_axes]
+
+    if np.any(x1shape[a_axes] != x2shape[b_axes]):
+        raise ValueError("x1 and x2 must have same shapes along reduction dimensions")
+
+    result_shape = np.broadcast_shapes(x1shape[a_keep], x2shape[b_keep])
+    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
+
+    res_chunks = [
+        slice_to_chunktuple(s, c)
+        for s, c in zip([slice(0, r, 1) for r in result.shape], result.chunks, strict=True)
+    ]
+    a_selection = (slice(None, None, 1),) * x1.ndim
+    b_selection = (slice(None, None, 1),) * x2.ndim
+
+    chunk_memory = np.prod(result.chunks) * (
+        x1shape[a_axes] * x1.dtype.itemsize + x2shape[b_axes] * x2.dtype.itemsize
+    )
+    if chunk_memory < blosc2.MAX_FAST_PATH_SIZE:
+        fast_path = True if fast_path is None else fast_path
+    fast_path = False if fast_path is None else fast_path  # fast_path set via kwargs for testing
+
+    for rchunk in product(*res_chunks):
+        res_chunk = tuple(
+            slice(rc * rcs, builtins.min((rc + 1) * rcs, rshape), 1)
+            for rc, rcs, rshape in zip(rchunk, result.chunks, result.shape, strict=True)
+        )
+        rchunk_iter = iter(res_chunk)
+        a_selection = tuple(next(rchunk_iter) if a else slice(None, None, 1) for a in a_keep)
+        rchunk_iter = iter(res_chunk)
+        b_selection = tuple(next(rchunk_iter) if b else slice(None, None, 1) for b in b_keep)
+
+        if fast_path:  # just load everything
+            bx1 = x1[a_selection]
+            bx2 = x2[b_selection]
+            result[res_chunk] += np.vecdot(bx1, bx2, axis=axis)
+        else:  # operands too big, have to go chunk-by-chunk
+            for ochunk in range(0, a_shape_red, a_chunks_red):
+                op_chunk = slice(ochunk, builtins.min(ochunk + a_chunks_red, x1.shape[a_axes]), 1)
+                a_selection[a_axes] = op_chunk
+                b_selection[b_axes] = op_chunk
+                bx1 = x1[a_selection]
+                bx2 = x2[b_selection]
+                result[res_chunk] += np.vecdot(bx1, bx2, axis=axis)
     return result
 
 
