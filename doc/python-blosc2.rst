@@ -72,7 +72,7 @@
                 <h3 style="margin-top: 10px; margin-bottom: 15px;">Hierarchical Structures</h3>
             </div>
 
-        Efficiently store data hierachically with the `TreeStore class <https://www.blosc.org/python-blosc2/reference/tree_store.html#blosc2.TreeStore>`_ for convenience and optimized `performance <https://www.blosc.org/posts/new-treestore-blosc2/>`_.
+        Efficiently store data hierarchically with the `TreeStore class <https://www.blosc.org/python-blosc2/reference/tree_store.html#blosc2.TreeStore>`_ for convenience and optimized `performance <https://www.blosc.org/posts/new-treestore-blosc2/>`_.
 
     .. grid-item-card::
         :class-card: intro-card text-center no-border
