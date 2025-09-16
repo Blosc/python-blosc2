@@ -392,7 +392,7 @@ class DictStore:
                     filepaths.append(filepath)
 
         # Sort filepaths by file size from largest to smallest
-        filepaths.sort(key=lambda f: os.path.getsize(f), reverse=True)
+        filepaths.sort(key=os.path.getsize, reverse=True)
 
         with zipfile.ZipFile(self.b2z_path, "w", zipfile.ZIP_STORED) as zf:
             # Write all files (except estore_path) first (sorted by size)
