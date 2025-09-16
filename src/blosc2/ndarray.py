@@ -4651,6 +4651,7 @@ def matmul(x1: NDArray | np.ndarray, x2: NDArray, **kwargs: Any) -> NDArray | np
     return result
 
 
+# @profile
 def tensordot(
     x1: NDArray, x2: NDArray, axes: int | tuple[Sequence[int], Sequence[int]] = 2, **kwargs: Any
 ) -> NDArray:
@@ -4688,39 +4689,56 @@ def tensordot(
     out: NDArray
         An array containing the tensor contraction whose shape consists of the non-contracted axes (dimensions) of the first array x1, followed by the non-contracted axes (dimensions) of the second array x2. The returned array must have a data type determined by Type Promotion Rules.
     """
+    fast_path = kwargs.pop("fast_path", None)  # for testing purposes
+
     # Added this to pass array-api tests (which use internal getitem to check results)
     if isinstance(x1, np.ndarray) and isinstance(x2, np.ndarray):
         return np.tensordot(x1, x2, axes=axes)
 
+    x1, x2 = blosc2.asarray(x1), blosc2.asarray(x2)
+
     if isinstance(axes, tuple):
         a_axes, b_axes = axes
+        a_axes = list(a_axes)
+        b_axes = list(b_axes)
         if len(a_axes) != len(b_axes):
             raise ValueError("Lengths of reduction axes for x1 and x2 must be equal!")
-        order = np.argsort(a_axes)
-        a_red_axes = [(i - x1.ndim in a_axes) or (i in a_axes) for i in range(x1.ndim)]
-        b_red_axes = [(i - x2.ndim in b_axes) or (i in b_axes) for i in range(x2.ndim)]
+        # need to track order of b_axes; later we cycle through a_axes sorted for op_chunk
+        # a_sorted[inv_sort][b_sort] matches b_sorted since b_axes matches a_axes
+        inv_sort = np.argsort(np.argsort(a_axes))
+        b_sort = np.argsort(b_axes)
+        order = inv_sort[b_sort]
+        a_keep, b_keep = [True] * x1.ndim, [True] * x2.ndim
+        for i, j in zip(a_axes, b_axes, strict=False):
+            i = x1.ndim + i if i < 0 else i
+            j = x2.ndim + j if j < 0 else j
+            a_keep[i] = False
+            b_keep[j] = False
+        a_axes = [] if a_axes == () else a_axes  # handle no reduction
+        b_axes = [] if b_axes == () else b_axes  # handle no reduction
     elif isinstance(axes, int):
         if axes < 0:
             raise ValueError("Integer axes argument must be nonnegative!")
-        order = np.arange(axes, dtype=int)
-        a_red_axes = [i + axes >= x1.ndim for i in range(x1.ndim)]
-        b_red_axes = [i < axes for i in range(x2.ndim)]
+        order = np.arange(axes, dtype=int)  # no reordering required
+        a_axes = list(range(x1.ndim - axes, x1.ndim))
+        b_axes = list(range(0, axes))
+        a_keep = [i + axes < x1.ndim for i in range(x1.ndim)]
+        b_keep = [i >= axes for i in range(x2.ndim)]
     else:
         raise ValueError("Axes argument must be two element tuple of sequences or an integer.")
     x1shape = np.array(x1.shape)
     x2shape = np.array(x2.shape)
-    a_chunks_red = tuple(c for i, c in enumerate(x1.chunks) if a_red_axes[i])
-    if np.any(x1shape[a_red_axes] != x2shape[b_red_axes][order]):
+    a_chunks_red = tuple(c for i, c in enumerate(x1.chunks) if not a_keep[i])
+    a_shape_red = tuple(c for i, c in enumerate(x1.shape) if not a_keep[i])
+
+    if np.any(x1shape[a_axes] != x2shape[b_axes]):
         raise ValueError("x1 and x2 must have same shapes along reduction dimensions")
 
-    a_axes = [not i for i in a_red_axes]
-    b_axes = [not i for i in b_red_axes]
-    result_shape = tuple(x1shape[a_axes]) + tuple(x2shape[b_axes])
+    result_shape = tuple(x1shape[a_keep]) + tuple(x2shape[b_keep])
     result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
 
     op_chunks = [
-        slice_to_chunktuple(slice(0, s, 1), c)
-        for s, c in zip(x1shape[a_red_axes], a_chunks_red, strict=True)
+        slice_to_chunktuple(slice(0, s, 1), c) for s, c in zip(x1shape[a_axes], a_chunks_red, strict=True)
     ]
     res_chunks = [
         slice_to_chunktuple(s, c)
@@ -4728,34 +4746,76 @@ def tensordot(
     ]
     a_selection = (slice(None, None, 1),) * x1.ndim
     b_selection = (slice(None, None, 1),) * x2.ndim
+
+    chunk_memory = np.prod(result.chunks) * (
+        np.prod(x1shape[a_axes]) * x1.dtype.itemsize + np.prod(x2shape[b_axes]) * x2.dtype.itemsize
+    )
+    if chunk_memory < blosc2.MAX_FAST_PATH_SIZE:
+        fast_path = True if fast_path is None else fast_path
+    fast_path = False if fast_path is None else fast_path  # fast_path set via kwargs for testing
+
+    # adapted from numpy.tensordot
+    a_keep_axes = [i for i, k in enumerate(a_keep) if k]
+    b_keep_axes = [i for i, k in enumerate(b_keep) if k]
+    newaxes_a = a_keep_axes + a_axes
+    newaxes_b = b_axes + b_keep_axes
+
     for rchunk in product(*res_chunks):
         res_chunk = tuple(
-            slice(rc * rcs, (rc + 1) * rcs, 1) for rc, rcs in zip(rchunk, result.chunks, strict=True)
+            slice(rc * rcs, builtins.min((rc + 1) * rcs, rshape), 1)
+            for rc, rcs, rshape in zip(rchunk, result.chunks, result.shape, strict=True)
         )
         rchunk_iter = iter(res_chunk)
-        a_selection = tuple(
-            next(rchunk_iter) if a else as_ for as_, a in zip(a_selection, a_axes, strict=True)
-        )
-        b_selection = tuple(
-            next(rchunk_iter) if b else bs_ for bs_, b in zip(b_selection, b_axes, strict=True)
-        )
-        for ochunk in product(*op_chunks):
-            op_chunk = tuple(
-                slice(rc * rcs, (rc + 1) * rcs, 1) for rc, rcs in zip(ochunk, a_chunks_red, strict=True)
-            )  # use x1 chunk shape to iterate over reduction axes
-            ochunk_iter = iter(op_chunk)
-            a_selection = tuple(
-                next(ochunk_iter) if not a else as_ for as_, a in zip(a_selection, a_axes, strict=True)
-            )
-            # have to permute to match order of a_axes
-            order_iter = iter(order)
-            b_selection = tuple(
-                op_chunk[next(order_iter)] if not b else bs_
-                for bs_, b in zip(b_selection, b_axes, strict=True)
-            )
+        a_selection = tuple(next(rchunk_iter) if a else slice(None, None, 1) for a in a_keep)
+        b_selection = tuple(next(rchunk_iter) if b else slice(None, None, 1) for b in b_keep)
+        res_chunks = tuple(s.stop - s.start for s in res_chunk)
+
+        if fast_path:  # just load everything
             bx1 = x1[a_selection]
             bx2 = x2[b_selection]
-            result[res_chunk] += np.tensordot(bx1, bx2, axes=axes)
+            newshape_a = (
+                math.prod([bx1.shape[i] for i in a_keep_axes]),
+                math.prod([bx1.shape[a] for a in a_axes]),
+            )
+            newshape_b = (
+                math.prod([bx2.shape[b] for b in b_axes]),
+                math.prod([bx2.shape[i] for i in b_keep_axes]),
+            )
+            at = bx1.transpose(newaxes_a).reshape(newshape_a)
+            bt = bx2.transpose(newaxes_b).reshape(newshape_b)
+            res = np.dot(at, bt)
+            result[res_chunk] += res.reshape(res_chunks)
+        else:  # operands too big, have to go chunk-by-chunk
+            for ochunk in product(*op_chunks):
+                op_chunk = tuple(
+                    slice(rc * rcs, builtins.min((rc + 1) * rcs, x1s), 1)
+                    for rc, rcs, x1s in zip(ochunk, a_chunks_red, a_shape_red, strict=True)
+                )  # use x1 chunk shape to iterate over reduction axes
+                ochunk_iter = iter(op_chunk)
+                a_selection = tuple(
+                    next(ochunk_iter) if not a else as_ for as_, a in zip(a_selection, a_keep, strict=True)
+                )
+                # have to permute to match order of a_axes
+                order_iter = iter(order)
+                b_selection = tuple(
+                    op_chunk[next(order_iter)] if not b else bs_
+                    for bs_, b in zip(b_selection, b_keep, strict=True)
+                )
+                bx1 = x1[a_selection]
+                bx2 = x2[b_selection]
+                # adapted from numpy tensordot
+                newshape_a = (
+                    math.prod([bx1.shape[i] for i in a_keep_axes]),
+                    math.prod([bx1.shape[a] for a in a_axes]),
+                )
+                newshape_b = (
+                    math.prod([bx2.shape[b] for b in b_axes]),
+                    math.prod([bx2.shape[i] for i in b_keep_axes]),
+                )
+                at = bx1.transpose(newaxes_a).reshape(newshape_a)
+                bt = bx2.transpose(newaxes_b).reshape(newshape_b)
+                res = np.dot(at, bt)
+                result[res_chunk] += res.reshape(res_chunks)
     return result
 
 
