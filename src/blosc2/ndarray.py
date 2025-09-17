@@ -367,7 +367,15 @@ def reshape(
 
 
 def _check_allowed_dtypes(
-    value: bool | int | float | str | blosc2.NDArray | blosc2.NDField | blosc2.C2Array | blosc2.Proxy,
+    value: bool
+    | int
+    | float
+    | str
+    | blosc2.NDArray
+    | blosc2.NDField
+    | blosc2.C2Array
+    | blosc2.Proxy
+    | blosc2.LazyExpr,
 ):
     if not (
         isinstance(
@@ -4925,23 +4933,31 @@ def vecdot(x1: NDArray, x2: NDArray, axis: int = -1, **kwargs) -> NDArray:
             slice(rc * rcs, builtins.min((rc + 1) * rcs, rshape), 1)
             for rc, rcs, rshape in zip(rchunk, result.chunks, result.shape, strict=True)
         )
-        rchunk_iter = iter(res_chunk)
+        # handle broadcasting - if x1, x2 different ndim, could have to prepend 1s
+        rchunk_iter = (
+            slice(0, 1, 1) if s == 1 else r
+            for r, s in zip(res_chunk[-x1.ndim + 1 :], x1shape[a_keep], strict=True)
+        )
         a_selection = tuple(next(rchunk_iter) if a else slice(None, None, 1) for a in a_keep)
-        rchunk_iter = iter(res_chunk)
+        rchunk_iter = (
+            slice(0, 1, 1) if s == 1 else r
+            for r, s in zip(res_chunk[-x2.ndim + 1 :], x2shape[b_keep], strict=True)
+        )
         b_selection = tuple(next(rchunk_iter) if b else slice(None, None, 1) for b in b_keep)
 
-        if fast_path:  # just load everything
+        if fast_path:  # just load everything, also handles case of 0 in shapes
             bx1 = x1[a_selection]
             bx2 = x2[b_selection]
             result[res_chunk] += np.vecdot(bx1, bx2, axis=axis)
         else:  # operands too big, have to go chunk-by-chunk
             for ochunk in range(0, a_shape_red, a_chunks_red):
-                op_chunk = slice(ochunk, builtins.min(ochunk + a_chunks_red, x1.shape[a_axes]), 1)
-                a_selection[a_axes] = op_chunk
-                b_selection[b_axes] = op_chunk
+                op_chunk = (slice(ochunk, builtins.min(ochunk + a_chunks_red, x1.shape[a_axes]), 1),)
+                a_selection = a_selection[:a_axes] + op_chunk + a_selection[a_axes + 1 :]
+                b_selection = b_selection[:b_axes] + op_chunk + b_selection[b_axes + 1 :]
                 bx1 = x1[a_selection]
                 bx2 = x2[b_selection]
-                result[res_chunk] += np.vecdot(bx1, bx2, axis=axis)
+                res = np.vecdot(bx1, bx2, axis=axis)
+                result[res_chunk] += res
     return result
 
 

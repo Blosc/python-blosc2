@@ -354,3 +354,138 @@ def test_tensordot(shape1, chunk1, block1, shape2, chunk2, block2, chunkres, axe
             np.testing.assert_allclose(res_b2_np, res_np, rtol=1e-5, atol=1e-6)
         else:
             np.testing.assert_array_equal(res_b2_np, res_np)
+
+
+@pytest.mark.parametrize(
+    ("shape1", "chunk1", "block1", "shape2", "chunk2", "block2", "chunkres", "axis"),
+    [
+        # 1Dx1D->scalar
+        ((50,), (17,), (5,), (50,), (13,), (5,), (), -1),
+        # 2Dx2D
+        (
+            (30, 40),
+            (17, 21),
+            (8, 10),
+            (30, 40),
+            (19, 20),
+            (9, 10),
+            (10,),
+            -1,
+        ),
+        # 3Dx3D
+        (
+            (10, 1, 5),
+            (9, 1, 1),
+            (5, 1, 1),
+            (10, 1, 1),
+            (4, 1, 1),
+            (3, 1, 1),
+            (3, 3),
+            -2,
+        ),
+        # 4Dx3D
+        (
+            (6, 7, 8, 9),
+            (5, 6, 7, 8),
+            (3, 3, 3, 3),
+            (1, 7, 8, 1),
+            (1, 7, 3, 1),
+            (1, 3, 2, 1),
+            (4, 5, 2),
+            -2,
+        ),
+        # 2Dx1D->broadcastable to (12, 7)
+        (
+            (12, 7),
+            (11, 7),
+            (5, 7),
+            (7,),
+            (5,),
+            (2,),
+            (5,),
+            -1,
+        ),
+        # 3Dx2D->broadcastable to (1, 6, 7)
+        (
+            (5, 6, 7),
+            (4, 5, 6),
+            (2, 3, 3),
+            (6, 7),
+            (6, 4),
+            (3, 4),
+            (3, 2),
+            -2,
+        ),
+        # 1Dx3D -> broadcastable to (1, 1, 20)
+        ((20,), (9,), (4,), (20, 4, 20), (19, 3, 5), (10, 2, 5), (10, 2), -1),
+        # 4Dx4D
+        (
+            (5, 8, 1, 8),
+            (4, 5, 1, 7),
+            (2, 3, 1, 4),
+            (1, 8, 6, 8),
+            (1, 7, 5, 5),
+            (1, 4, 3, 5),
+            (2, 2, 2),
+            -3,
+        ),
+        # 5Dx5D
+        (
+            (3, 4, 5, 6, 7),
+            (2, 3, 4, 5, 6),
+            (1, 2, 2, 3, 3),
+            (3, 1, 1, 6, 7),
+            (2, 1, 1, 3, 5),
+            (2, 1, 1, 2, 4),
+            (2, 2, 2, 5),
+            -2,
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        np.int32,
+        np.int64,
+        np.float32,
+        np.float64,
+    ],
+)
+def test_vecdot(shape1, chunk1, block1, shape2, chunk2, block2, chunkres, axis, dtype):
+    # Create operands with requested dtype
+    a_b2 = blosc2.arange(0, np.prod(shape1), shape=shape1, chunks=chunk1, blocks=block1, dtype=dtype)
+    a_np = a_b2[()]  # decompress
+    b_b2 = blosc2.arange(0, np.prod(shape2), shape=shape2, chunks=chunk2, blocks=block2, dtype=dtype)
+    b_np = b_b2[()]  # decompress
+
+    # NumPy reference and Blosc2 comparison
+    np_raised = None
+    try:
+        res_np = np.vecdot(a_np, b_np, axis=axis)
+    except Exception as e:
+        np_raised = type(e)
+
+    if np_raised is not None:
+        # Expect Blosc2 to raise the same type
+        with pytest.raises(np_raised):
+            blosc2.vecdot(a_b2, b_b2, axis=axis, chunks=chunkres)
+    else:
+        # Both should succeed
+        res_np = np.vecdot(a_np, b_np, axis=axis)
+        res_b2 = blosc2.vecdot(a_b2, b_b2, axis=axis, chunks=chunkres, fast_path=False)  # test slow path
+        res_b2_np = res_b2[...]
+
+        # Assertions
+        assert res_b2_np.shape == res_np.shape
+        if np.issubdtype(dtype, np.floating):
+            np.testing.assert_allclose(res_b2_np, res_np, rtol=1e-5, atol=1e-6)
+        else:
+            np.testing.assert_array_equal(res_b2_np, res_np)
+
+        res_b2 = blosc2.vecdot(a_b2, b_b2, axis=axis, chunks=chunkres, fast_path=True)  # test fast path
+        # Assertions
+        assert res_b2_np.shape == res_np.shape
+        if np.issubdtype(dtype, np.floating):
+            np.testing.assert_allclose(res_b2_np, res_np, rtol=1e-5, atol=1e-6)
+        else:
+            np.testing.assert_array_equal(res_b2_np, res_np)
