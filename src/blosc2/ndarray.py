@@ -800,6 +800,8 @@ def all(
 class Operand:
     """Base class for all operands in expressions."""
 
+    _device = "cpu"
+
     def __neg__(self) -> blosc2.LazyExpr:
         return blosc2.LazyExpr(new_op=(0, "-", self))
 
@@ -828,6 +830,15 @@ class Operand:
             "data": self[()],
             "version": 3,
         }
+
+    @property
+    def device(self):
+        return self._device
+
+    def to_device(self, device):
+        if device != "cpu":
+            raise ValueError(f"Unsupported device: {device}. Only 'cpu' is accepted.")
+        return self
 
     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
         # Handle operations at the array level
@@ -972,6 +983,9 @@ class Operand:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "**", self))
 
+    def __abs__(self) -> blosc2.LazyExpr:
+        return abs(self)
+
     def __bool__(self) -> bool:
         if math.prod(self.shape) != 1:
             raise ValueError(f"The truth value of an array of shape {self.shape} is ambiguous.")
@@ -1021,8 +1035,8 @@ class Operand:
         out: LazyExpr
             A new expression with the where condition applied.
         """
-        expr = blosc2.LazyExpr._new_expr("o0", {"o0": self}, guess=False).where(value1, value2)
-        return expr.compute()
+        expr = blosc2.LazyExpr._new_expr("o0", {"o0": self}, guess=False)
+        return expr.where(value1, value2)
 
     @is_documented_by(sum)
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
@@ -1500,6 +1514,19 @@ class NDArray(blosc2_ext.NDArray, Operand):
         if self.ndim != 2:
             raise ValueError("This property only works for 2-dimensional arrays.")
         return permute_dims(self)
+
+    @property
+    def mT(self):
+        """Transpose of a matrix (or a stack of matrices)."""
+        if self.ndim < 2:
+            raise ValueError("This property only works for N-dimensional arrays with N>=2.")
+        axes = np.arange(self.ndim)
+        axes[-1] = self.ndim - 2
+        axes[-2] = self.ndim - 1
+        return permute_dims(self, axes=axes)
+
+    def __matmul__(self, other):
+        return matmul(self, other)
 
     def get_fselection_numpy(self, key: list | np.ndarray) -> np.ndarray:
         """
@@ -3453,6 +3480,80 @@ def add(
     `np.add <https://numpy.org/doc/stable/reference/generated/numpy.add.html#numpy.add>`_
     """
     return x1 + x2
+
+
+def subtract(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i - x2_i for each element x1_i of the input array x1
+    with the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.subtract <https://numpy.org/doc/stable/reference/generated/numpy.subtract.html#numpy.subtract>`_
+    """
+    return x1 - x2
+
+
+def square(x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i**2 for each element x1_i of the input array x1.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    Returns
+    -------
+    out LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.square <https://numpy.org/doc/stable/reference/generated/numpy.square.html#numpy.square>`_
+    """
+    return x1 * x1
+
+
+def pow(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i**x2_i for each element x1_i of the input array x1 and x2_i
+    of x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    Returns
+    -------
+    out LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.pow <https://numpy.org/doc/stable/reference/generated/numpy.pow.html#numpy.pow>`_
+    """
+    return x1**x2
 
 
 def where(
