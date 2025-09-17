@@ -4427,7 +4427,7 @@ def asarray(
         if not isinstance(array, NDArray):
             raise ValueError("Must always do a copy for asarray unless NDArray provided.")
         # TODO: make a direct view possible
-        return blosc2.expand_dims(array, axis=0).squeeze(axis=0)  # way to get a view
+        return array
 
     return ndarr
 
