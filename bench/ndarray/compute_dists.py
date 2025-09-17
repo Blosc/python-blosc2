@@ -36,9 +36,10 @@ storage = blosc2.Storage(contiguous=True, mode="w")
 blosc2.storage_dflts["contiguous"] = storage.contiguous
 blosc2.storage_dflts["mode"] = storage.mode
 
-urlpath = dict((aname, None) for aname in ("a", "b", "c"))
 if persistent:
-    urlpath = dict((aname, f"{aname}.b2nd") for aname in ("a", "b", "c"))
+    urlpath = {aname: f"{aname}.b2nd" for aname in ("a", "b", "c")}
+else:
+    urlpath = {aname: None for aname in ("a", "b", "c")}
 
 btimes = []
 bspeeds = []

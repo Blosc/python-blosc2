@@ -1582,9 +1582,13 @@ def open(
 
     dparams = kwargs.get("dparams")
     if dparams is None:
-        # Make the default 8 threads; more means more initialization time
-        # Also 8 is a reasonable queue depth for modern SSDs, so it is a good tradeoff.
-        dparams = blosc2.DParams(nthreads=8)
+        # Use multiple threads for decompression by default, unless we are in WASM
+        # (does not support threads).  The only drawback for using multiple threads
+        # is that access time will be slower because of the overhead of spawning threads
+        # (but could be fixed in the future with more intelligent thread pools).
+        dparams = (
+            blosc2.DParams(nthreads=blosc2.nthreads) if not blosc2.IS_WASM else blosc2.DParams(nthreads=1)
+        )
         kwargs["dparams"] = dparams
     res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
 

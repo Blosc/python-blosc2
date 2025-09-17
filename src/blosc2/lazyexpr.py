@@ -1683,7 +1683,7 @@ def slices_eval_getitem(
 def infer_reduction_dtype(dtype, operation):
     # It may change in the future, but mostly array-api compliant
     my_float = np.result_type(
-        dtype, np.float32 if dtype == np.float32 or dtype == np.complex64 else blosc2.DEFAULT_FLOAT
+        dtype, np.float32 if dtype in (np.float32, np.complex64) else blosc2.DEFAULT_FLOAT
     )
     if operation in {ReduceOp.SUM, ReduceOp.PROD}:
         if np.issubdtype(dtype, np.unsignedinteger):
