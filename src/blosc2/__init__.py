@@ -178,6 +178,7 @@ bytes_ = np.bytes_
 object_ = np.object_
 
 from numpy import (
+    bool,
     bool_,
     complex64,
     complex128,
@@ -420,6 +421,9 @@ Disable the overloaded equal operator.
 # Delayed imports for avoiding overwriting of python builtins
 from .ndarray import (
     abs,
+    acos,
+    acosh,
+    add,
     all,
     any,
     arccos,
@@ -430,6 +434,11 @@ from .ndarray import (
     arctan2,
     arctanh,
     array_from_ffi_ptr,
+    asin,
+    asinh,
+    atan,
+    atan2,
+    atanh,
     conj,
     contains,
     cos,
@@ -511,6 +520,9 @@ __all__ = [  # noqa : RUF022
     "__version__",
     # Functions
     "abs",
+    "acos",
+    "acosh",
+    "add",
     "all",
     "any",
     "arange",
@@ -524,7 +536,12 @@ __all__ = [  # noqa : RUF022
     "are_partitions_aligned",
     "are_partitions_behaved",
     "asarray",
+    "asin",
+    "asinh",
     "astypeclib_info",
+    "atan",
+    "atan2",
+    "atanh",
     "broadcast_to",
     "compress",
     "compress2",

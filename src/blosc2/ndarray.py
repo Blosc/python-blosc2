@@ -1005,6 +1005,25 @@ class Operand:
         """
         return self[()].item()
 
+    def where(self, value1=None, value2=None):
+        """
+        Select ``value1`` or ``value2`` values based on ``True``/``False`` for ``self``.
+
+        Parameters
+        ----------
+        value1: array_like, optional
+            The value to select when element of ``self`` is True.
+        value2: array_like, optional
+            The value to select when element of ``self`` is False.
+
+        Returns
+        -------
+        out: LazyExpr
+            A new expression with the where condition applied.
+        """
+        expr = blosc2.LazyExpr._new_expr("o0", {"o0": self}, guess=False).where(value1, value2)
+        return expr.compute()
+
     @is_documented_by(sum)
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         expr = blosc2.LazyExpr(new_op=(self, None, None))
@@ -2673,6 +2692,9 @@ def arcsin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> bl
     return blosc2.LazyExpr(new_op=(ndarr, "arcsin", None))
 
 
+asin = arcsin  # alias
+
+
 def arccos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Compute the inverse cosine, element-wise.
@@ -2708,6 +2730,9 @@ def arccos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> bl
     return blosc2.LazyExpr(new_op=(ndarr, "arccos", None))
 
 
+acos = arccos  # alias
+
+
 def arctan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Compute the inverse tangent, element-wise.
@@ -2741,6 +2766,9 @@ def arctan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> bl
     Arctan: [-0.78539816 -0.46364761  0.          0.46364761  0.78539816]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "arctan", None))
+
+
+atan = arctan  # alias
 
 
 def arctan2(
@@ -2786,6 +2814,9 @@ def arctan2(
     return blosc2.LazyExpr(new_op=(ndarr1, "arctan2", ndarr2))
 
 
+atan2 = arctan2  # alias
+
+
 def arcsinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Compute the inverse hyperbolic sine, element-wise.
@@ -2819,6 +2850,9 @@ def arcsinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> b
     Arcsinh: [-1.44363548 -0.88137359  0.          0.88137359  1.44363548]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "arcsinh", None))
+
+
+asinh = arcsinh  # alias
 
 
 def arccosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
@@ -2856,6 +2890,9 @@ def arccosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> b
     return blosc2.LazyExpr(new_op=(ndarr, "arccosh", None))
 
 
+acosh = arccosh  # alias
+
+
 def arctanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Compute the inverse hyperbolic tangent, element-wise.
@@ -2889,6 +2926,9 @@ def arctanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> b
     Arctanh: [-1.47221949 -0.54930614  0.          0.54930614  1.47221949]
     """
     return blosc2.LazyExpr(new_op=(ndarr, "arctanh", None))
+
+
+atanh = arctanh  # alias
 
 
 def exp(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
@@ -3387,8 +3427,36 @@ def multiply(
     return x1 * x2
 
 
+def add(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i + x2_i for each element x1_i of the input array x1
+    with the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.add <https://numpy.org/doc/stable/reference/generated/numpy.add.html#numpy.add>`_
+    """
+    return x1 + x2
+
+
 def where(
-    condition: blosc2.LazyExpr,
+    condition: blosc2.LazyExpr | NDArray,
     x: NDArray | NDField | np.ndarray | int | float | complex | bool | str | bytes | None = None,
     y: NDArray | NDField | np.ndarray | int | float | complex | bool | str | bytes | None = None,
 ) -> blosc2.LazyExpr:
@@ -4301,7 +4369,6 @@ def asarray(
     >>> # Create a NDArray from a NumPy array
     >>> nda = blosc2.asarray(a)
     """
-
     # Convert scalars to numpy array
     casting = kwargs.pop("casting", "unsafe")
     if casting != "unsafe":
