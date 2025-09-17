@@ -24,6 +24,7 @@ from cpython cimport (
     PyObject_GetBuffer,
 )
 from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
+from cpython.ref cimport Py_INCREF, Py_DECREF
 from cython.operator cimport dereference
 from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free, malloc, realloc
@@ -2996,5 +2997,8 @@ def expand_dims(arr1: NDArray, axis_mask: list[bool], final_dims: int) -> blosc2
         mask_[i] = axis_mask[i]
     _check_rc(b2nd_expand_dims(arr1.array, &view, mask_, final_dims),"Error while expanding the arrays")
 
+    # Increase the reference count of the original array
+    Py_INCREF(arr1)
+
     return blosc2.NDArray(_schunk=PyCapsule_New(view.sc, <char *> "blosc2_schunk*", NULL),
-                              _array=PyCapsule_New(view, <char *> "b2nd_array_t*", NULL))
+                          _array=PyCapsule_New(view, <char *> "b2nd_array_t*", NULL))
