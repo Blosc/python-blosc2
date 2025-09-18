@@ -66,12 +66,12 @@ def test_expand_dims(shape, axis, chunks, blocks, fill_value):
 
     arr = np.arange(4)
     bloscarr_ = blosc2.asarray(arr)
-    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_)  # = 2
+    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 2
 
     view = np.expand_dims(arr, 0)
     bloscview = blosc2.expand_dims(bloscarr_, 0)
-    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_)  # = 3
+    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 3
 
     del view
     del bloscview
-    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_)  # = 2
+    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 2
