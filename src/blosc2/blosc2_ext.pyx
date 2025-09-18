@@ -24,7 +24,6 @@ from cpython cimport (
     PyObject_GetBuffer,
 )
 from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
-from cpython.ref cimport Py_INCREF, Py_DECREF
 from cython.operator cimport dereference
 from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free, malloc, realloc
