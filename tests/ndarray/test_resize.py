@@ -42,16 +42,21 @@ def test_resize(shape, new_shape, chunks, blocks, fill_value):
 )
 def test_expand_dims(shape, axis, chunks, blocks, fill_value):
     a = blosc2.full(shape, fill_value=fill_value, chunks=chunks, blocks=blocks)
-
+    npa = a[:]
     b = blosc2.expand_dims(a, axis=axis)
-    npa = np.expand_dims(a[:], axis)
-    assert npa.shape == b.shape
-    np.testing.assert_array_equal(npa, b[:])
+    npb = np.expand_dims(npa, axis)
+    assert npb.shape == b.shape
+    np.testing.assert_array_equal(npb, b[:])
 
     # Repeated expansion
     axis = (axis,) if isinstance(axis, int) else axis
     axis = axis[0] if (len(axis) + b.ndim) > blosc2.MAX_DIM else axis
     b = blosc2.expand_dims(b, axis=axis)
+    npb = np.expand_dims(npb, axis)
+    assert npb.shape == b.shape
+    np.testing.assert_array_equal(npb, b[:])
+
+    # Check that handling of views is correct
+    a = blosc2.expand_dims(a, axis=axis)  # could lose ref to original array and thus dealloc data
     npa = np.expand_dims(npa, axis)
-    assert npa.shape == b.shape
-    np.testing.assert_array_equal(npa, b[:])
+    assert a[()].shape == npa[()].shape  # getitem fails if deallocate has happened
