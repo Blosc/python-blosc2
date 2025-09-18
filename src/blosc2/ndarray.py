@@ -887,7 +887,7 @@ class Operand:
             np.conj: "conj",
             np.real: "real",
             np.imag: "imag",
-            np.bitwise_not: "~",
+            np.bitwise_invert: "~",
             np.isnan: "isnan",
             np.isfinite: "isfinite",
             np.isinf: "isinf",
@@ -2429,6 +2429,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
     def __xor__(self, other):
         return bitwise_xor(self, other)
 
+    def __or__(self, other):
+        return bitwise_or(self, other)
+
+    def __invert__(self):
+        return bitwise_invert(self)
+
 
 def array_from_ffi_ptr(array_ptr) -> NDArray:
     """
@@ -3547,6 +3553,9 @@ def pow(
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
     Returns
     -------
     out LazyExpr
@@ -3572,6 +3581,9 @@ def bitwise_xor(
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
     Returns
     -------
     out LazyExpr
@@ -3582,6 +3594,57 @@ def bitwise_xor(
     `np.bitwise_xor <https://numpy.org/doc/stable/reference/generated/numpy.bitwise_xor.html#numpy.bitwise_xor>`_
     """
     return x1 ^ x2
+
+
+def bitwise_or(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i | x2_i for each element x1_i of the input array x1 and x2_i
+    of x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.bitwise_or <https://numpy.org/doc/stable/reference/generated/numpy.bitwise_or.html#numpy.bitwise_or>`_
+    """
+    return x1 | x2
+
+
+def bitwise_invert(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of ~x1_i for each element x1_i of the input array x1.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    Returns
+    -------
+    out LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.bitwise_invert <https://numpy.org/doc/stable/reference/generated/numpy.bitwise_invert.html#numpy.bitwise_invert>`_
+    """
+    return ~x1
 
 
 def where(
