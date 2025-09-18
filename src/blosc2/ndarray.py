@@ -1170,7 +1170,6 @@ class NDOuterIterator:
 class NDArray(blosc2_ext.NDArray, Operand):
     def __init__(self, **kwargs):
         self._schunk = SChunk(_schunk=kwargs["_schunk"], _is_view=True)  # SChunk Python instance
-        self.base = SChunk(_schunk=kwargs["_schunk"], _is_view=True)  # SChunk Python instance
         self._keep_last_read = False
         # Where to store the last read data
         self._last_read = {}
