@@ -1525,9 +1525,6 @@ class NDArray(blosc2_ext.NDArray, Operand):
         axes[-2] = self.ndim - 1
         return permute_dims(self, axes=axes)
 
-    def __matmul__(self, other):
-        return matmul(self, other)
-
     def get_fselection_numpy(self, key: list | np.ndarray) -> np.ndarray:
         """
         Select a slice from the array using a fancy index.
@@ -2425,6 +2422,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
         This function is useful for passing the array to C functions.
         """
         return super().as_ffi_ptr()
+
+    def __matmul__(self, other):
+        return matmul(self, other)
+
+    def __xor__(self, other):
+        return bitwise_xor(self, other)
 
 
 def array_from_ffi_ptr(array_ptr) -> NDArray:
@@ -3556,6 +3559,31 @@ def pow(
     return x1**x2
 
 
+def bitwise_xor(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i ^ x2_i for each element x1_i of the input array x1 and x2_i
+    of x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    Returns
+    -------
+    out LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.bitwise_xor <https://numpy.org/doc/stable/reference/generated/numpy.bitwise_xor.html#numpy.bitwise_xor>`_
+    """
+    return x1 ^ x2
+
+
 def where(
     condition: blosc2.LazyExpr | NDArray,
     x: NDArray | NDField | np.ndarray | int | float | complex | bool | str | bytes | None = None,
@@ -3933,7 +3961,7 @@ def arange(
         else:  # use linspace to have finer control over exclusion of endpoint for float types
             output[:] = np.linspace(start, stop, lout, endpoint=False, dtype=output.dtype)
 
-    if step is None:  # not array-api compliant but for backwards compatibility
+    if step is None:  # not array-api compliant but for backwards compatility
         step = 1
     if stop is None:
         stop = start
