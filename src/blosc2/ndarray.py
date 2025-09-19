@@ -2612,7 +2612,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         self._keep_last_read = False
         # Where to store the last read data
         self._last_read = {}
-        super().__init__(kwargs["_array"])
+        base = kwargs.pop("_base", None)
+        super().__init__(kwargs["_array"], base=base)
         # Accessor to fields
         self._fields = {}
         if self.dtype.fields:
@@ -4588,7 +4589,7 @@ def concat(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:
     [0 1 2 3 4 5 6 7 8 9]
     """
     if len(arrays) < 2:
-        raise ValueError("At least two arrays are required for concatenation.")
+        return arrays[0]
     arr1 = arrays[0]
     if not isinstance(arr1, blosc2.NDArray):
         raise TypeError("All inputs must be instances of blosc2.NDArray")
@@ -4657,6 +4658,7 @@ def expand_dims(array: NDArray, axis=0) -> NDArray:
     out: :ref:`NDArray`
         A new NDArray with the expanded shape.
     """
+    array = blosc2.asarray(array)
     if not isinstance(array, blosc2.NDArray):
         raise TypeError("Argument array must be instance of blosc2.NDArray")
     axis = [axis] if isinstance(axis, int) else axis

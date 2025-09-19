@@ -42,16 +42,47 @@ def test_resize(shape, new_shape, chunks, blocks, fill_value):
 )
 def test_expand_dims(shape, axis, chunks, blocks, fill_value):
     a = blosc2.full(shape, fill_value=fill_value, chunks=chunks, blocks=blocks)
-
+    npa = a[:]
     b = blosc2.expand_dims(a, axis=axis)
-    npa = np.expand_dims(a[:], axis)
-    assert npa.shape == b.shape
-    np.testing.assert_array_equal(npa, b[:])
+    npb = np.expand_dims(npa, axis)
+    assert npb.shape == b.shape
+    np.testing.assert_array_equal(npb, b[:])
 
     # Repeated expansion
     axis = (axis,) if isinstance(axis, int) else axis
     axis = axis[0] if (len(axis) + b.ndim) > blosc2.MAX_DIM else axis
     b = blosc2.expand_dims(b, axis=axis)
+    npb = np.expand_dims(npb, axis)
+    assert npb.shape == b.shape
+    np.testing.assert_array_equal(npb, b[:])
+
+    # Check that handling of views is correct
+    a = blosc2.expand_dims(a, axis=axis)  # could lose ref to original array and thus dealloc data
     npa = np.expand_dims(npa, axis)
-    assert npa.shape == b.shape
-    np.testing.assert_array_equal(npa, b[:])
+    assert a[()].shape == npa[()].shape  # getitem fails if deallocate has happened
+
+    # Now check that garbage collecting works and there will be no memory leaks for views
+    import sys
+
+    arr = np.arange(4)
+    bloscarr_ = blosc2.asarray(arr)
+    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 2
+
+    view = np.expand_dims(arr, 0)
+    bloscview = blosc2.expand_dims(bloscarr_, 0)
+    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 3
+
+    del view
+    del bloscview
+    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 2
+
+    # view of a view
+    view = np.expand_dims(arr, 0)
+    bloscview = blosc2.expand_dims(bloscarr_, 0)
+    view2 = np.expand_dims(view, 0)
+    bloscview2 = blosc2.expand_dims(bloscview, 0)
+    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 4
+
+    del bloscview
+    del bloscarr_
+    assert bloscview2[()].shape == bloscview2.shape  # shouldn't fail because still have access to bloscarr_

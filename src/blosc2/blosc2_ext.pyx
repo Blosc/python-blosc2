@@ -2356,9 +2356,10 @@ cdef class slice_flatter:
 cdef class NDArray:
     cdef b2nd_array_t* array
 
-    def __init__(self, array):
+    def __init__(self, array, base=None):
         self._dtype = None
         self.array = <b2nd_array_t *> PyCapsule_GetPointer(array, <char *> "b2nd_array_t*")
+        self.base = base # add reference to base if NDArray is a view
 
     @property
     def shape(self) -> tuple[int]:
@@ -2996,5 +2997,7 @@ def expand_dims(arr1: NDArray, axis_mask: list[bool], final_dims: int) -> blosc2
         mask_[i] = axis_mask[i]
     _check_rc(b2nd_expand_dims(arr1.array, &view, mask_, final_dims),"Error while expanding the arrays")
 
+    # create view with reference to arr1 to hold onto
+    new_base = arr1 if arr1.base is None else arr1.base
     return blosc2.NDArray(_schunk=PyCapsule_New(view.sc, <char *> "blosc2_schunk*", NULL),
-                              _array=PyCapsule_New(view, <char *> "b2nd_array_t*", NULL))
+                          _array=PyCapsule_New(view, <char *> "b2nd_array_t*", NULL), _base=new_base)

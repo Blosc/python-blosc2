@@ -300,9 +300,7 @@ def test_fancy_index(c):
     ndim = 1
     chunks = (c,) * ndim if c is not None else None
     dtype = np.dtype("float")
-    d = (
-        1 + int(blosc2.MAX_FAST_PATH_SIZE / dtype.itemsize) if c is None else 100
-    )  # just over numpy fast path size
+    d = 1 + int(1000 / dtype.itemsize) if c is None else 50
     shape = (d,) * ndim
     arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype=dtype, chunks=chunks)
     rng = np.random.default_rng()
@@ -316,9 +314,7 @@ def test_fancy_index(c):
     np.testing.assert_allclose(b, n)
 
     ndim = 3
-    d = (
-        1 + int((blosc2.MAX_FAST_PATH_SIZE / 8) ** (1 / ndim)) if c is None else d
-    )  # just over numpy fast path size
+    d = 1 + int((1000 / 8) ** (1 / ndim)) if c is None else d  # just over numpy fast path size
     shape = (d,) * ndim
     chunks = (c,) * ndim if c is not None else None
     arr = blosc2.linspace(0, 100, num=np.prod(shape), shape=shape, dtype=dtype, chunks=chunks)

@@ -54,7 +54,7 @@ for axis in laxis:
     t0 = time()
     npres = eval(npexpr, vardict).sum(axis=axis)
     tref = time() - t0
-    print("NumPy took %.3f s" % tref)
+    print(f"NumPy took {tref:.3f} s")
     # ne.set_num_threads(1)
     # nb.set_num_threads(1)  # this does not work that well; better use the NUMBA_NUM_THREADS env var
     t0 = time()

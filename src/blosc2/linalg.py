@@ -44,7 +44,7 @@ def diagonal(x: blosc2.NDArray, offset: int = 0) -> blosc2.NDArray:
         rows = cols = np.arange(builtins.min(n_rows, n_cols))
     key = tuple(slice(None, None, 1) for i in range(x.ndim - 2)) + (rows, cols)
     # TODO: change to use slice to give optimised compressing
-    return blosc2.ndarray(x[key])
+    return blosc2.asarray(x[key])
 
 
 def outer(x1: blosc2.NDArray, x2: blosc2.NDArray) -> blosc2.NDArray:
