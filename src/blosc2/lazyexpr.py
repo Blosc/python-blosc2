@@ -1705,8 +1705,8 @@ def step_handler(cslice, _slice):
         s1start, s1stop = s1.start, s1.stop
         s2start, s2stop, s2step = s2.start, s2.stop, s2.step
         # assume s1step = 1
-        newstart = max(s1start, s2start)
-        newstop = min(s1stop, s2stop)
+        newstart = builtins.max(s1start, s2start)
+        newstop = builtins.min(s1stop, s2stop)
         rem = (newstart - s2start) % s2step
         if rem != 0:  # only pass through here if s2step is not 1
             newstart += s2step - rem

@@ -171,6 +171,7 @@ The C-Blosc2 version's string."""
 # For array-api compatibility
 iinfo = np.iinfo
 finfo = np.finfo
+isdtype = np.isdtype
 
 # dtypes for array-api
 str_ = np.str_
@@ -384,6 +385,8 @@ from .lazyexpr import (
 from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy, jit
 
 from .schunk import SChunk, open
+from . import linalg
+from . import fft
 
 # Registry for postfilters
 postfilter_funcs = {}
@@ -440,12 +443,15 @@ from .ndarray import (
     atan2,
     atanh,
     bitwise_invert,
+    bitwise_left_shift,
     bitwise_or,
+    bitwise_right_shift,
     bitwise_xor,
     conj,
     contains,
     cos,
     cosh,
+    divide,
     equal,
     exp,
     expm1,
@@ -461,16 +467,22 @@ from .ndarray import (
     mean,
     min,
     multiply,
+    negative,
+    positive,
     pow,
     prod,
     real,
+    remainder,
     sin,
     sinh,
     sqrt,
     square,
+    squeeze,
     std,
     subtract,
     sum,
+    take,
+    take_along_axis,
     tan,
     tanh,
     var,
@@ -549,7 +561,9 @@ __all__ = [  # noqa : RUF022
     "atan2",
     "atanh",
     "bitwise_invert",
+    "bitwise_left_shift",
     "bitwise_or",
+    "bitwise_right_shift",
     "bitwise_xor",
     "broadcast_to",
     "clib_info",
@@ -565,6 +579,7 @@ __all__ = [  # noqa : RUF022
     "decompress",
     "decompress2",
     "detect_number_of_cores",
+    "divide",
     "dparams_dflts",
     "empty",
     "empty_like",
@@ -573,6 +588,7 @@ __all__ = [  # noqa : RUF022
     "expand_dims",
     "expm1",
     "eye",
+    "finfo",
     "free_resources",
     "from_cframe",
     "frombuffer",
@@ -586,7 +602,9 @@ __all__ = [  # noqa : RUF022
     "get_cpu_info",
     "get_expr_operands",
     "get_slice_nchunks",
+    "iinfo",
     "indices",
+    "isdtype",
     "isfinite",
     "isinf",
     "isnan",
@@ -609,6 +627,7 @@ __all__ = [  # noqa : RUF022
     "multiply",
     "nans",
     "ndarray_from_cframe",
+    "negative",
     "ones",
     "ones_like",
     "open",
@@ -617,6 +636,7 @@ __all__ = [  # noqa : RUF022
     "pack_array2",
     "pack_tensor",
     "permute_dims",
+    "positive",
     "postfilter_funcs",
     "pow",
     "prefilter_funcs",
@@ -625,6 +645,7 @@ __all__ = [  # noqa : RUF022
     "real",
     "register_codec",
     "register_filter",
+    "remainder",
     "remove_urlpath",
     "reshape",
     "save",
@@ -637,10 +658,13 @@ __all__ = [  # noqa : RUF022
     "set_releasegil",
     "sort",
     "square",
+    "squeeze",
     "stack",
     "storage_dflts",
     "sum",
     "subtract",
+    "take",
+    "take_along_axis",
     "tan",
     "tanh",
     "tensordot",
