@@ -367,7 +367,15 @@ def reshape(
 
 
 def _check_allowed_dtypes(
-    value: bool | int | float | str | blosc2.NDArray | blosc2.NDField | blosc2.C2Array | blosc2.Proxy,
+    value: bool
+    | int
+    | float
+    | str
+    | blosc2.NDArray
+    | blosc2.NDField
+    | blosc2.C2Array
+    | blosc2.Proxy
+    | blosc2.LazyExpr,
 ):
     if not (
         isinstance(
@@ -789,11 +797,1375 @@ def all(
     return ndarr.all(axis=axis, keepdims=keepdims, **kwargs)
 
 
+def sin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Compute the trigonometric sine, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array containing angles in radians.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the sine of the input angles. The result can be evaluated.
+
+    References
+    ----------
+    `np.sin <https://numpy.org/doc/stable/reference/generated/numpy.sin.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> angles = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
+    >>> nd_array = blosc2.asarray(angles)
+    >>> result_ = blosc2.sin(nd_array)
+    >>> result = result_[:]
+    >>> print("Angles in radians:", angles)
+    Angles in radians: [0.         0.52359878 0.78539816 1.57079633 3.14159265]
+    >>> print("Sine of the angles:", result)
+    Sine of the angles: [0.00000000e+00 5.00000000e-01 7.07106781e-01 1.00000000e+00
+    1.22464680e-16]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "sin", None))
+
+
+def cos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Trigonometric cosine, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array containing angles in radians.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the cosine of the input angles. The result can be evaluated.
+
+    References
+    ----------
+    `np.cos <https://numpy.org/doc/stable/reference/generated/numpy.cos.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> angles = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
+    >>> nd_array = blosc2.asarray(angles)
+    >>> result_ = blosc2.cos(nd_array)
+    >>> result = result_[:]
+    >>> print("Angles in radians:", angles)
+    Angles in radians: [0.         0.52359878 0.78539816 1.57079633 3.14159265]
+    >>> print("Cosine of the angles:", result)
+    Cosine of the angles: [ 1.00000000e+00  8.66025404e-01  7.07106781e-01  6.12323400e-17
+    -1.00000000e+00]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "cos", None))
+
+
+def tan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Compute the trigonometric tangent, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array containing angles in radians.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the tangent of the input angles.
+        The result can be evaluated.
+
+    References
+    ----------
+    `np.tan <https://numpy.org/doc/stable/reference/generated/numpy.tan.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> angles = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
+    >>> nd_array = blosc2.asarray(angles)
+    >>> result_ = blosc2.tan(nd_array)
+    >>> result = result_[:]
+    >>> print("Angles in radians:", angles)
+    Angles in radians: [0.         0.52359878 0.78539816 1.57079633 3.14159265]
+    >>> print("Tangent of the angles:", result)
+    Tangent of the angles: [ 0.00000000e+00  5.77350269e-01  1.00000000e+00  1.63312394e+16
+    -1.22464680e-16]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "tan", None))
+
+
+def sqrt(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Return the non-negative square-root of an array, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the square root of the input array.
+        The result can be evaluated.
+
+    References
+    ----------
+    `np.sqrt <https://numpy.org/doc/stable/reference/generated/numpy.sqrt.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> data = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
+    >>> nd_array = blosc2.asarray(data)
+    >>> result_ = blosc2.sqrt(nd_array)
+    >>> result = result_[:]
+    >>> print("Original numbers:", data)
+    Original numbers: [ 0  1  4  9 16 25]
+    >>> print("Square roots:", result)
+    Square roots: [0. 1. 2. 3. 4. 5.]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "sqrt", None))
+
+
+def sinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Hyperbolic sine, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the hyperbolic sine of the input array.
+        The result can be evaluated.
+
+    References
+    ----------
+    `np.sinh <https://numpy.org/doc/stable/reference/generated/numpy.sinh.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> numbers = np.array([-2, -1, 0, 1, 2])
+    >>> ndarray = blosc2.asarray(numbers)
+    >>> result_lazy = blosc2.sinh(ndarray)
+    >>> result = result_lazy[:]
+    >>> print("Original numbers:", numbers)
+    Original numbers: [-2 -1  0  1  2]
+    >>> print("Hyperbolic sine:", result)
+    Hyperbolic sine: [-3.62686041 -1.17520119  0.          1.17520119  3.62686041]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "sinh", None))
+
+
+def cosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Compute the hyperbolic cosine, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the hyperbolic cosine of the input array.
+        The result can be evaluated.
+
+    References
+    ----------
+    `np.cosh <https://numpy.org/doc/stable/reference/generated/numpy.cosh.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> numbers = np.array([-2, -1, 0, 1, 2])
+    >>> ndarray = blosc2.asarray(numbers)
+    >>> result_lazy = blosc2.cosh(ndarray)
+    >>> result = result_lazy[:]
+    >>> print("Original numbers:", numbers)
+    Original numbers: [-2 -1  0  1  2]
+    >>> print("Hyperbolic cosine:", result)
+    Hyperbolic cosine: [3.76219569 1.54308063 1.         1.54308063 3.76219569]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "cosh", None))
+
+
+def tanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Compute the hyperbolic tangent, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the hyperbolic tangent of the input array.
+        The result can be evaluated.
+
+    References
+    ----------
+    `np.tanh <https://numpy.org/doc/stable/reference/generated/numpy.tanh.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> numbers = np.array([-2, -1, 0, 1, 2])
+    >>> ndarray = blosc2.asarray(numbers)
+    >>> result_lazy = blosc2.tanh(ndarray)
+    >>> result = result_lazy[:]
+    >>> print("Original numbers:", numbers)
+    Original numbers: [-2 -1  0  1  2]
+    >>> print("Hyperbolic tangent:", result)
+    Hyperbolic tangent: [-0.96402758 -0.76159416  0.          0.76159416  0.96402758]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "tanh", None))
+
+
+def arcsin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Compute the inverse sine, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the inverse sine of the input array.
+        The result can be evaluated.
+
+    References
+    ----------
+    `np.arcsin <https://numpy.org/doc/stable/reference/generated/numpy.arcsin.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> numbers = np.array([-1, -0.5, 0, 0.5, 1])
+    >>> ndarray = blosc2.asarray(numbers)
+    >>> result_lazy = blosc2.arcsin(ndarray)
+    >>> result = result_lazy[:]
+    >>> print("Original numbers:", numbers)
+    Original numbers: [-1.  -0.5  0.   0.5  1. ]
+    >>> print("Arcsin:", result)
+    Arcsin: [-1.57079633 -0.52359878  0.          0.52359878  1.57079633]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "arcsin", None))
+
+
+asin = arcsin  # alias
+
+
+def arccos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Compute the inverse cosine, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the inverse cosine of the input array.
+        The result can be evaluated.
+
+    References
+    ----------
+    `np.arccos <https://numpy.org/doc/stable/reference/generated/numpy.arccos.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> numbers = np.array([-1, -0.5, 0, 0.5, 1])
+    >>> ndarray = blosc2.asarray(numbers)
+    >>> result_lazy = blosc2.arccos(ndarray)
+    >>> result = result_lazy[:]
+    >>> print("Original numbers:", numbers)
+    Original numbers: [-1.  -0.5  0.   0.5  1. ]
+    >>> print("Arccos:", result)
+    Arccos: [3.14159265 2.0943951  1.57079633 1.04719755 0.        ]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "arccos", None))
+
+
+acos = arccos  # alias
+
+
+def arctan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Compute the inverse tangent, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the inverse tangent of the input array.
+        The result can be evaluated.
+
+    References
+    ----------
+    `np.arctan <https://numpy.org/doc/stable/reference/generated/numpy.arctan.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> numbers = np.array([-1, -0.5, 0, 0.5, 1])
+    >>> ndarray = blosc2.asarray(numbers)
+    >>> result_lazy = blosc2.arctan(ndarray)
+    >>> result = result_lazy[:]
+    >>> print("Original numbers:", numbers)
+    Original numbers: [-1.  -0.5  0.   0.5  1. ]
+    >>> print("Arctan:", result)
+    Arctan: [-0.78539816 -0.46364761  0.          0.46364761  0.78539816]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "arctan", None))
+
+
+atan = arctan  # alias
+
+
+def arctan2(
+    ndarr1: NDArray | NDField | blosc2.C2Array, ndarr2: NDArray | NDField | blosc2.C2Array, /
+) -> blosc2.LazyExpr:
+    """
+    Compute the element-wise arc tangent of ``ndarr1 / ndarr2`` choosing the quadrant correctly.
+
+    Parameters
+    ----------
+    ndarr1: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
+        The first input array.
+    ndarr2: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
+        The second input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the element-wise arc tangent of ``ndarr1 / ndarr2``.
+        The result can be evaluated.
+
+    References
+    ----------
+    `np.arctan2 <https://numpy.org/doc/stable/reference/generated/numpy.arctan2.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> y = np.array([0, 1, 0, -1, 1])
+    >>> x = np.array([1, 1, -1, -1, 0])
+    >>> ndarray_y = blosc2.asarray(y)
+    >>> ndarray_x = blosc2.asarray(x)
+    >>> result_lazy = blosc2.arctan2(ndarray_y, ndarray_x)
+    >>> result = result_lazy[:]
+    >>> print("y:", y)
+    y: [ 0  1  0 -1  1]
+    >>> print("x:", x)
+    x: [ 1  1 -1 -1  0]
+    >>> print("Arctan2(y, x):", result)
+    Arctan2(y, x): [ 0.          0.78539816  3.14159265 -2.35619449  1.57079633]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr1, "arctan2", ndarr2))
+
+
+atan2 = arctan2  # alias
+
+
+def arcsinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Compute the inverse hyperbolic sine, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the inverse hyperbolic sine of the input array.
+        The result can be evaluated.
+
+    References
+    ----------
+    `np.arcsinh <https://numpy.org/doc/stable/reference/generated/numpy.arcsinh.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([-2, -1, 0, 1, 2])
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_lazy = blosc2.arcsinh(ndarray)
+    >>> result = result_lazy[:]
+    >>> print("Original values:", values)
+    Original values: [-2 -1  0  1  2]
+    >>> print("Arcsinh:", result)
+    Arcsinh: [-1.44363548 -0.88137359  0.          0.88137359  1.44363548]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "arcsinh", None))
+
+
+asinh = arcsinh  # alias
+
+
+def arccosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Compute the inverse hyperbolic cosine, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the inverse hyperbolic cosine of the input array.
+        The result can be evaluated.
+
+    References
+    ----------
+    `np.arccosh <https://numpy.org/doc/stable/reference/generated/numpy.arccosh.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([1, 2, 3, 4, 5])
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_lazy = blosc2.arccosh(ndarray)
+    >>> result = result_lazy[:]
+    >>> print("Original values:", values)
+    Original values: [1 2 3 4 5]
+    >>> print("Arccosh:", result)
+    Arccosh: [0.         1.3169579  1.76274717 2.06343707 2.29243167]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "arccosh", None))
+
+
+acosh = arccosh  # alias
+
+
+def arctanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Compute the inverse hyperbolic tangent, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the inverse hyperbolic tangent of the input array.
+        The result can be evaluated.
+
+    References
+    ----------
+    `np.arctanh <https://numpy.org/doc/stable/reference/generated/numpy.arctanh.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([-0.9, -0.5, 0, 0.5, 0.9])
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_lazy = blosc2.arctanh(ndarray)
+    >>> result = result_lazy[:]
+    >>> print("Original values:", values)
+    Original values: [-0.9 -0.5  0.   0.5  0.9]
+    >>> print("Arctanh:", result)
+    Arctanh: [-1.47221949 -0.54930614  0.          0.54930614  1.47221949]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "arctanh", None))
+
+
+atanh = arctanh  # alias
+
+
+def exp(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Calculate the exponential of all elements in the input array.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the exponential of the input array.
+        The result can be evaluated.
+
+    References
+    ----------
+    `np.exp <https://numpy.org/doc/stable/reference/generated/numpy.exp.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([0, 1, 2, 3, 4])
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_lazy = blosc2.exp(ndarray)
+    >>> result = result_lazy[:]
+    >>> print("Original values:", values)
+    Original values: [0 1 2 3 4]
+    >>> print("Exponential:", result)
+    Exponential: [ 1.          2.71828183  7.3890561  20.08553692 54.59815003]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "exp", None))
+
+
+def expm1(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Calculate ``exp(ndarr) - 1`` for all elements in the array.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing ``exp(ndarr) - 1`` of the input array.
+        The result can be evaluated.
+
+    References
+    ----------
+    `np.expm1 <https://numpy.org/doc/stable/reference/generated/numpy.expm1.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([-1, -0.5, 0, 0.5, 1])
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_lazy = blosc2.expm1(ndarray)
+    >>> result = result_lazy[:]
+    >>> print("Original values:", values)
+    Original values: [-1.  -0.5  0.   0.5  1. ]
+    >>> print("Expm1:", result)
+    Expm1: [-0.63212056 -0.39346934  0.          0.64872127  1.71828183]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "expm1", None))
+
+
+def log(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Compute the natural logarithm, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the natural logarithm of the input array
+
+    References
+    ----------
+    `np.log <https://numpy.org/doc/stable/reference/generated/numpy.log.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([1, 2, 3, 4, 5])
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_lazy = blosc2.log(ndarray)
+    >>> result = result_lazy[:]
+    >>> print("Original values:", values)
+    Original values: [1 2 3 4 5]
+    >>> print("Logarithm (base e):", result)
+    Logarithm (base e): [0.         0.69314718 1.09861229 1.38629436 1.60943791]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "log", None))
+
+
+def log10(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Return the base 10 logarithm of the input array, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the base 10 logarithm of the input array.
+
+    References
+    ----------
+    `np.log10 <https://numpy.org/doc/stable/reference/generated/numpy.log10.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([1, 10, 100, 1000, 10000])
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_lazy = blosc2.log10(ndarray)
+    >>> result = result_lazy[:]
+    >>> print("Original values:", values)
+    Original values: [    1    10   100  1000 10000]
+    >>> print("Logarithm (base 10):", result)
+    Logarithm (base 10): [0. 1. 2. 3. 4.]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "log10", None))
+
+
+def log1p(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Return the natural logarithm of one plus the input array, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the natural logarithm of one plus the input array.
+
+    References
+    ----------
+    `np.log1p <https://numpy.org/doc/stable/reference/generated/numpy.log1p.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([-0.9, -0.5, 0, 0.5, 0.9])
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_lazy = blosc2.log1p(ndarray)
+    >>> result = result_lazy[:]
+    >>> print("Original values:", values)
+    Original values: [-0.9 -0.5  0.   0.5  0.9]
+    >>> print("Log1p (log(1 + x)):", result)
+    Log1p (log(1 + x)): [-2.30258509 -0.69314718  0.          0.40546511  0.64185389]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "log1p", None))
+
+
+def conj(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Return the complex conjugate, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the complex conjugate of the input array.
+
+    References
+    ----------
+    `np.conj <https://numpy.org/doc/stable/reference/generated/numpy.conj.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([1+2j, 3-4j, -5+6j, 7-8j])
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_ = blosc2.conj(ndarray)
+    >>> result = result_[:]
+    >>> print("Original values:", values)
+    Original values: [ 1.+2.j  3.-4.j -5.+6.j  7.-8.j]
+    >>> print("Complex conjugates:", result)
+    Complex conjugates: [ 1.-2.j  3.+4.j -5.-6.j  7.+8.j]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "conj", None))
+
+
+def real(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Return the real part of the complex array, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the real part of the input array.
+
+    References
+    ----------
+    `np.real <https://numpy.org/doc/stable/reference/generated/numpy.real.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> complex_values = np.array([1+2j, 3-4j, -5+6j, 7-8j])
+    >>> ndarray = blosc2.asarray(complex_values)
+    >>> result_ = blosc2.real(ndarray)
+    >>> result = result_[:]
+    >>> print("Original complex values:", complex_values)
+    Original values: [ 1.+2.j  3.-4.j -5.+6.j  7.-8.j]
+    >>> print("Real parts:", result)
+    Real parts: [ 1.  3. -5.  7.]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "real", None))
+
+
+def imag(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Return the imaginary part of the complex array, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the imaginary part of the input array.
+
+    References
+    ----------
+    `np.imag <https://numpy.org/doc/stable/reference/generated/numpy.imag.html>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> complex_values = np.array([2+3j, -1+4j, 0-2j, 5+6j])
+    >>> ndarray = blosc2.asarray(complex_values)
+    >>> result_ = blosc2.imag(ndarray)
+    >>> result = result_[:]
+    >>> print("Original complex values:", complex_values)
+    Original complex values: [ 2.+3.j -1.+4.j  0.-2.j  5.+6.j]
+    >>> print("Imaginary parts:", result)
+    Imaginary parts: [ 3.  4. -2.  6.]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "imag", None))
+
+
+def contains(
+    ndarr: NDArray | NDField | blosc2.C2Array, value: str | bytes | NDArray | NDField | blosc2.C2Array, /
+) -> blosc2.LazyExpr:
+    """
+    Check if the array contains a specified value.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
+        The input array.
+    value: str or bytes or :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
+        The value to be checked.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated to check if the value
+        is contained in the array.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([b"apple", b"xxbananaxxx", b"cherry", b"date"])
+    >>> text_values = blosc2.asarray(values)
+    >>> value_to_check = b"banana"
+    >>> expr = blosc2.contains(text_values, value_to_check)
+    >>> result = expr.compute()
+    >>> print("Contains 'banana':", result[:])
+    Contains 'banana': [False  True False False]
+    """
+    if not isinstance(value, str | bytes | NDArray):
+        raise TypeError("value should be a string, bytes or a NDArray!")
+    return blosc2.LazyExpr(new_op=(ndarr, "contains", value))
+
+
+def abs(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Calculate the absolute value element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated to get the absolute values.
+
+    References
+    ----------
+    `np.abs <https://numpy.org/doc/stable/reference/generated/numpy.absolute.html#numpy.absolute>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([-5, -3, 0, 2, 4])
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_ = blosc2.abs(ndarray)
+    >>> result = result_[:]
+    >>> print("Original values:", values)
+    Original values: [-5 -3  0  2  4]
+    >>> print("Absolute values:", result)
+    Absolute values: [5. 3. 0. 2. 4.]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "abs", None))
+
+
+def isnan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Return True/False for not-a-number values element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated to get the True/False array of results.
+
+    References
+    ----------
+    `np.isnan <https://numpy.org/doc/stable/reference/generated/numpy.isnan.html#numpy.isnan>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([-5, -3, np.nan, 2, 4])
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_ = blosc2.isnan(ndarray)
+    >>> result = result_[:]
+    >>> print("isnan:", result)
+    isnan: [False, False, True, False, False]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "isnan", None))
+
+
+def isfinite(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Return True/False for finite values element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated to get the True/False array of results.
+
+    References
+    ----------
+    `np.isfinite <https://numpy.org/doc/stable/reference/generated/numpy.isfinite.html#numpy.isfinite>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([-5, -3, np.inf, 2, 4])
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_ = blosc2.isfinite(ndarray)
+    >>> result = result_[:]
+    >>> print("isfinite:", result)
+    isfinite: [True, True, False, True, True]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "isfinite", None))
+
+
+def isinf(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Return True/False for infinite values element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated to get the True/False array of results.
+
+    References
+    ----------
+    `np.isinf <https://numpy.org/doc/stable/reference/generated/numpy.isinf.html#numpy.isinf>`_
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import blosc2
+    >>> values = np.array([-5, -3, np.inf, 2, 4])
+    >>> ndarray = blosc2.asarray(values)
+    >>> result_ = blosc2.isinf(ndarray)
+    >>> result = result_[:]
+    >>> print("isinf:", result)
+    isinf: [False, False, True, False, False]
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "isinf", None))
+
+
+def equal(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the truth value of x1_i == x2_i for each element x1_i of the input array x1
+    with the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.equal <https://numpy.org/doc/stable/reference/generated/numpy.equal.html#numpy.equal>`_
+    """
+    return x1 == x2
+
+
+def multiply(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i * x2_i for each element x1_i of the input array x1
+    with the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.multiply <https://numpy.org/doc/stable/reference/generated/numpy.multiply.html#numpy.multiply>`_
+    """
+    return x1 * x2
+
+
+def divide(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i / x2_i for each element x1_i of the input array x1
+    with the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.divide <https://numpy.org/doc/stable/reference/generated/numpy.divide.html#numpy.divide>`_
+    """
+    return x1 / x2
+
+
+def add(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i + x2_i for each element x1_i of the input array x1
+    with the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.add <https://numpy.org/doc/stable/reference/generated/numpy.add.html#numpy.add>`_
+    """
+    return x1 + x2
+
+
+def subtract(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i - x2_i for each element x1_i of the input array x1
+    with the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.subtract <https://numpy.org/doc/stable/reference/generated/numpy.subtract.html#numpy.subtract>`_
+    """
+    return x1 - x2
+
+
+def square(x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i**2 for each element x1_i of the input array x1.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.square <https://numpy.org/doc/stable/reference/generated/numpy.square.html#numpy.square>`_
+    """
+    return x1 * x1
+
+
+def pow(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i**x2_i for each element x1_i of the input array x1 and x2_i
+    of x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.pow <https://numpy.org/doc/stable/reference/generated/numpy.pow.html#numpy.pow>`_
+    """
+    return x1**x2
+
+
+def bitwise_xor(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i ^ x2_i for each element x1_i of the input array x1 and x2_i
+    of x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.bitwise_xor <https://numpy.org/doc/stable/reference/generated/numpy.bitwise_xor.html#numpy.bitwise_xor>`_
+    """
+    return x1 ^ x2
+
+
+def bitwise_or(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i | x2_i for each element x1_i of the input array x1 and x2_i
+    of x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.bitwise_or <https://numpy.org/doc/stable/reference/generated/numpy.bitwise_or.html#numpy.bitwise_or>`_
+    """
+    return x1 | x2
+
+
+def bitwise_invert(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of ~x1_i for each element x1_i of the input array x1.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.bitwise_invert <https://numpy.org/doc/stable/reference/generated/numpy.bitwise_invert.html#numpy.bitwise_invert>`_
+    """
+    return ~x1
+
+
+def bitwise_right_shift(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Shifts the bits of each element x1_i of the input array x1 to the right according to
+    the respective element x2_i of the input array x2.
+
+    Note: This operation is an arithmetic shift (i.e., sign-propagating) and thus equivalent to
+    floor division by a power of two.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.bitwise_right_shift <https://numpy.org/doc/stable/reference/generated/numpy.bitwise_right_shift.html#numpy.bitwise_right_shift>`_
+    """
+    return x1 >> x2
+
+
+def bitwise_left_shift(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Shifts the bits of each element x1_i of the input array x1 to the left by appending x2_i
+    (i.e., the respective element in the input array x2) zeros to the right of x1_i.
+
+    Note: this operation is equivalent to multiplying x1 by 2**x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.bitwise_left_shift <https://numpy.org/doc/stable/reference/generated/numpy.bitwise_left_shift.html#numpy.bitwise_left_shift>`_
+    """
+    return x1 << x2
+
+
+def positive(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Computes the numerical positive of each element x_i (i.e., out_i = +x_i) of the input array x.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.positive <https://numpy.org/doc/stable/reference/generated/numpy.positive.html#numpy.positive>`_
+    """
+    return blosc2.LazyExpr(new_op=(0, "+", x1))
+
+
+def negative(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Computes the numerical negative of each element x_i (i.e., out_i = -x_i) of the input array x.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.negative <https://numpy.org/doc/stable/reference/generated/numpy.negative.html#numpy.negative>`_
+    """
+    return blosc2.LazyExpr(new_op=(0, "-", x1))
+
+
+def remainder(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Returns the remainder of division for each element x1_i of the input array x1 and the
+    respective element x2_i of the input array x2.
+
+    Note: This function is equivalent to the Python modulus operator x1_i % x2_i.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.remainder <https://numpy.org/doc/stable/reference/generated/numpy.remainder.html#numpy.remainder>`_
+    """
+    return blosc2.LazyExpr(new_op=(x1, "%", x2))
+
+
 class Operand:
     """Base class for all operands in expressions."""
 
-    def __neg__(self) -> blosc2.LazyExpr:
-        return blosc2.LazyExpr(new_op=(0, "-", self))
+    _device = "cpu"
 
     def __and__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
@@ -821,6 +2193,15 @@ class Operand:
             "version": 3,
         }
 
+    @property
+    def device(self):
+        return self._device
+
+    def to_device(self, device):
+        if device != "cpu":
+            raise ValueError(f"Unsupported device: {device}. Only 'cpu' is accepted.")
+        return self
+
     def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
         # Handle operations at the array level
         if method != "__call__":
@@ -843,6 +2224,9 @@ class Operand:
             np.bitwise_or: "|",
             np.bitwise_xor: "^",
             np.arctan2: "arctan2",
+            np.bitwise_left_shift: "<<",
+            np.bitwise_right_shift: ">>",
+            np.remainder: "%",
         }
 
         ufunc_map_1param = {
@@ -868,7 +2252,7 @@ class Operand:
             np.conj: "conj",
             np.real: "real",
             np.imag: "imag",
-            np.bitwise_not: "~",
+            np.bitwise_invert: "~",
             np.isnan: "isnan",
             np.isfinite: "isfinite",
             np.isinf: "isinf",
@@ -885,6 +2269,18 @@ class Operand:
             return blosc2.LazyExpr(new_op=(value, ufunc_map_1param[ufunc], None))
 
         return NotImplemented
+
+    @is_documented_by(negative)
+    def __neg__(self) -> blosc2.LazyExpr:
+        return negative(self)
+
+    @is_documented_by(positive)
+    def __pos__(self) -> blosc2.LazyExpr:
+        return positive(self)
+
+    @is_documented_by(remainder)
+    def __mod__(self, other) -> blosc2.LazyExpr:
+        return remainder(self, other)
 
     def __radd__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
@@ -964,6 +2360,30 @@ class Operand:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "**", self))
 
+    @is_documented_by(abs)
+    def __abs__(self) -> blosc2.LazyExpr:
+        return abs(self)
+
+    @is_documented_by(bitwise_xor)
+    def __xor__(self, other) -> blosc2.LazyExpr:
+        return bitwise_xor(self, other)
+
+    @is_documented_by(bitwise_or)
+    def __or__(self, other) -> blosc2.LazyExpr:
+        return bitwise_or(self, other)
+
+    @is_documented_by(bitwise_invert)
+    def __invert__(self) -> blosc2.LazyExpr:
+        return bitwise_invert(self)
+
+    @is_documented_by(bitwise_right_shift)
+    def __rshift__(self, other) -> blosc2.LazyExpr:
+        return bitwise_right_shift(self, other)
+
+    @is_documented_by(bitwise_left_shift)
+    def __lshift__(self, other) -> blosc2.LazyExpr:
+        return bitwise_left_shift(self, other)
+
     def __bool__(self) -> bool:
         if math.prod(self.shape) != 1:
             raise ValueError(f"The truth value of an array of shape {self.shape} is ambiguous.")
@@ -996,6 +2416,25 @@ class Operand:
         Copy an element of an array to a standard Python scalar and return it.
         """
         return self[()].item()
+
+    def where(self, value1=None, value2=None):
+        """
+        Select ``value1`` or ``value2`` values based on ``True``/``False`` for ``self``.
+
+        Parameters
+        ----------
+        value1: array_like, optional
+            The value to select when element of ``self`` is True.
+        value2: array_like, optional
+            The value to select when element of ``self`` is False.
+
+        Returns
+        -------
+        out: LazyExpr
+            A new expression with the where condition applied.
+        """
+        expr = blosc2.LazyExpr._new_expr("o0", {"o0": self}, guess=False)
+        return expr.where(value1, value2)
 
     @is_documented_by(sum)
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
@@ -1474,6 +2913,16 @@ class NDArray(blosc2_ext.NDArray, Operand):
         if self.ndim != 2:
             raise ValueError("This property only works for 2-dimensional arrays.")
         return permute_dims(self)
+
+    @property
+    def mT(self):
+        """Transpose of a matrix (or a stack of matrices)."""
+        if self.ndim < 2:
+            raise ValueError("This property only works for N-dimensional arrays with N>=2.")
+        axes = np.arange(self.ndim)
+        axes[-1] = self.ndim - 2
+        axes[-2] = self.ndim - 1
+        return permute_dims(self, axes=axes)
 
     def get_fselection_numpy(self, key: list | np.ndarray) -> np.ndarray:
         """
@@ -2289,7 +3738,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 for order, nchunk in enumerate(aligned_chunks):
                     chunk = self.schunk.get_chunk(nchunk)
                     newarr.schunk.update_chunk(order, chunk)
-                newarr.squeeze(mask=mask)  # remove any dummy dims introduced
+                newarr.squeeze(axis=np.where(mask)[0])  # remove any dummy dims introduced
                 return newarr
 
         key = (start, stop)
@@ -2308,11 +3757,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return ndslice
 
-    def squeeze(self, mask=None) -> NDArray:
+    def squeeze(self, axis=None) -> NDArray:
         """Remove single-dimensional entries from the shape of the array.
 
         This method modifies the array in-place. If mask is None removes any dimensions with size 1.
-        If mask is provided, it should be a boolean array of the same shape as the array, and the corresponding
+        If axis is provided, it should be an int or tuple of ints and the corresponding
         dimensions (of size 1) will be removed.
 
         Returns
@@ -2332,7 +3781,18 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> a.shape
         (23, 11)
         """
-        super().squeeze(mask=mask)
+        if axis is None:
+            super().squeeze()
+        else:
+            axis = [axis] if isinstance(axis, int) else axis
+            mask = [False for i in range(self.ndim)]
+            for a in axis:
+                if a < 0:
+                    a += self.ndim  # Adjust axis to be within the array's dimensions
+                if mask[a]:
+                    raise ValueError("Axis values must be unique.")
+                mask[a] = True
+            super().squeeze(mask=mask)
         return self
 
     def indices(self, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
@@ -2362,6 +3822,38 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """
         return super().as_ffi_ptr()
 
+    def __matmul__(self, other):
+        return matmul(self, other)
+
+
+def squeeze(x: NDArray, axis: int | None = None) -> NDArray:
+    """
+    Remove single-dimensional entries from the shape of the array.
+
+    This method modifies the array in-place. If mask is None removes any dimensions with size 1.
+    If axis is provided, it should be an int or tuple of ints and the corresponding
+    dimensions (of size 1) will be removed.
+
+    Returns
+    -------
+    out: NDArray
+
+    Examples
+    --------
+    >>> import blosc2
+    >>> shape = [1, 23, 1, 11, 1]
+    >>> # Create an array
+    >>> b = blosc2.full(shape, 2**30)
+    >>> b.shape
+    (1, 23, 1, 11, 1)
+    >>> # Squeeze the array
+    >>> blosc2.squeeze(b)
+    >>> b.shape
+    (23, 11)
+    """
+    # TODO: implement squeeze as a view
+    return x.squeeze(axis)
+
 
 def array_from_ffi_ptr(array_ptr) -> NDArray:
     """
@@ -2374,975 +3866,8 @@ def array_from_ffi_ptr(array_ptr) -> NDArray:
     return blosc2_ext.array_from_ffi_ptr(array_ptr)
 
 
-def sin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Compute the trigonometric sine, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array containing angles in radians.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the sine of the input angles. The result can be evaluated.
-
-    References
-    ----------
-    `np.sin <https://numpy.org/doc/stable/reference/generated/numpy.sin.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> angles = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
-    >>> nd_array = blosc2.asarray(angles)
-    >>> result_ = blosc2.sin(nd_array)
-    >>> result = result_[:]
-    >>> print("Angles in radians:", angles)
-    Angles in radians: [0.         0.52359878 0.78539816 1.57079633 3.14159265]
-    >>> print("Sine of the angles:", result)
-    Sine of the angles: [0.00000000e+00 5.00000000e-01 7.07106781e-01 1.00000000e+00
-    1.22464680e-16]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "sin", None))
-
-
-def cos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Trigonometric cosine, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array containing angles in radians.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the cosine of the input angles. The result can be evaluated.
-
-    References
-    ----------
-    `np.cos <https://numpy.org/doc/stable/reference/generated/numpy.cos.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> angles = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
-    >>> nd_array = blosc2.asarray(angles)
-    >>> result_ = blosc2.cos(nd_array)
-    >>> result = result_[:]
-    >>> print("Angles in radians:", angles)
-    Angles in radians: [0.         0.52359878 0.78539816 1.57079633 3.14159265]
-    >>> print("Cosine of the angles:", result)
-    Cosine of the angles: [ 1.00000000e+00  8.66025404e-01  7.07106781e-01  6.12323400e-17
-    -1.00000000e+00]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "cos", None))
-
-
-def tan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Compute the trigonometric tangent, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array containing angles in radians.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the tangent of the input angles.
-        The result can be evaluated.
-
-    References
-    ----------
-    `np.tan <https://numpy.org/doc/stable/reference/generated/numpy.tan.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> angles = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
-    >>> nd_array = blosc2.asarray(angles)
-    >>> result_ = blosc2.tan(nd_array)
-    >>> result = result_[:]
-    >>> print("Angles in radians:", angles)
-    Angles in radians: [0.         0.52359878 0.78539816 1.57079633 3.14159265]
-    >>> print("Tangent of the angles:", result)
-    Tangent of the angles: [ 0.00000000e+00  5.77350269e-01  1.00000000e+00  1.63312394e+16
-    -1.22464680e-16]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "tan", None))
-
-
-def sqrt(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Return the non-negative square-root of an array, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the square root of the input array.
-        The result can be evaluated.
-
-    References
-    ----------
-    `np.sqrt <https://numpy.org/doc/stable/reference/generated/numpy.sqrt.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> data = np.array([0, np.pi/6, np.pi/4, np.pi/2, np.pi])
-    >>> nd_array = blosc2.asarray(data)
-    >>> result_ = blosc2.sqrt(nd_array)
-    >>> result = result_[:]
-    >>> print("Original numbers:", data)
-    Original numbers: [ 0  1  4  9 16 25]
-    >>> print("Square roots:", result)
-    Square roots: [0. 1. 2. 3. 4. 5.]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "sqrt", None))
-
-
-def sinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Hyperbolic sine, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the hyperbolic sine of the input array.
-        The result can be evaluated.
-
-    References
-    ----------
-    `np.sinh <https://numpy.org/doc/stable/reference/generated/numpy.sinh.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> numbers = np.array([-2, -1, 0, 1, 2])
-    >>> ndarray = blosc2.asarray(numbers)
-    >>> result_lazy = blosc2.sinh(ndarray)
-    >>> result = result_lazy[:]
-    >>> print("Original numbers:", numbers)
-    Original numbers: [-2 -1  0  1  2]
-    >>> print("Hyperbolic sine:", result)
-    Hyperbolic sine: [-3.62686041 -1.17520119  0.          1.17520119  3.62686041]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "sinh", None))
-
-
-def cosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Compute the hyperbolic cosine, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the hyperbolic cosine of the input array.
-        The result can be evaluated.
-
-    References
-    ----------
-    `np.cosh <https://numpy.org/doc/stable/reference/generated/numpy.cosh.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> numbers = np.array([-2, -1, 0, 1, 2])
-    >>> ndarray = blosc2.asarray(numbers)
-    >>> result_lazy = blosc2.cosh(ndarray)
-    >>> result = result_lazy[:]
-    >>> print("Original numbers:", numbers)
-    Original numbers: [-2 -1  0  1  2]
-    >>> print("Hyperbolic cosine:", result)
-    Hyperbolic cosine: [3.76219569 1.54308063 1.         1.54308063 3.76219569]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "cosh", None))
-
-
-def tanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Compute the hyperbolic tangent, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the hyperbolic tangent of the input array.
-        The result can be evaluated.
-
-    References
-    ----------
-    `np.tanh <https://numpy.org/doc/stable/reference/generated/numpy.tanh.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> numbers = np.array([-2, -1, 0, 1, 2])
-    >>> ndarray = blosc2.asarray(numbers)
-    >>> result_lazy = blosc2.tanh(ndarray)
-    >>> result = result_lazy[:]
-    >>> print("Original numbers:", numbers)
-    Original numbers: [-2 -1  0  1  2]
-    >>> print("Hyperbolic tangent:", result)
-    Hyperbolic tangent: [-0.96402758 -0.76159416  0.          0.76159416  0.96402758]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "tanh", None))
-
-
-def arcsin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Compute the inverse sine, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the inverse sine of the input array.
-        The result can be evaluated.
-
-    References
-    ----------
-    `np.arcsin <https://numpy.org/doc/stable/reference/generated/numpy.arcsin.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> numbers = np.array([-1, -0.5, 0, 0.5, 1])
-    >>> ndarray = blosc2.asarray(numbers)
-    >>> result_lazy = blosc2.arcsin(ndarray)
-    >>> result = result_lazy[:]
-    >>> print("Original numbers:", numbers)
-    Original numbers: [-1.  -0.5  0.   0.5  1. ]
-    >>> print("Arcsin:", result)
-    Arcsin: [-1.57079633 -0.52359878  0.          0.52359878  1.57079633]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "arcsin", None))
-
-
-def arccos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Compute the inverse cosine, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the inverse cosine of the input array.
-        The result can be evaluated.
-
-    References
-    ----------
-    `np.arccos <https://numpy.org/doc/stable/reference/generated/numpy.arccos.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> numbers = np.array([-1, -0.5, 0, 0.5, 1])
-    >>> ndarray = blosc2.asarray(numbers)
-    >>> result_lazy = blosc2.arccos(ndarray)
-    >>> result = result_lazy[:]
-    >>> print("Original numbers:", numbers)
-    Original numbers: [-1.  -0.5  0.   0.5  1. ]
-    >>> print("Arccos:", result)
-    Arccos: [3.14159265 2.0943951  1.57079633 1.04719755 0.        ]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "arccos", None))
-
-
-def arctan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Compute the inverse tangent, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the inverse tangent of the input array.
-        The result can be evaluated.
-
-    References
-    ----------
-    `np.arctan <https://numpy.org/doc/stable/reference/generated/numpy.arctan.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> numbers = np.array([-1, -0.5, 0, 0.5, 1])
-    >>> ndarray = blosc2.asarray(numbers)
-    >>> result_lazy = blosc2.arctan(ndarray)
-    >>> result = result_lazy[:]
-    >>> print("Original numbers:", numbers)
-    Original numbers: [-1.  -0.5  0.   0.5  1. ]
-    >>> print("Arctan:", result)
-    Arctan: [-0.78539816 -0.46364761  0.          0.46364761  0.78539816]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "arctan", None))
-
-
-def arctan2(
-    ndarr1: NDArray | NDField | blosc2.C2Array, ndarr2: NDArray | NDField | blosc2.C2Array, /
-) -> blosc2.LazyExpr:
-    """
-    Compute the element-wise arc tangent of ``ndarr1 / ndarr2`` choosing the quadrant correctly.
-
-    Parameters
-    ----------
-    ndarr1: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
-        The first input array.
-    ndarr2: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
-        The second input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the element-wise arc tangent of ``ndarr1 / ndarr2``.
-        The result can be evaluated.
-
-    References
-    ----------
-    `np.arctan2 <https://numpy.org/doc/stable/reference/generated/numpy.arctan2.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> y = np.array([0, 1, 0, -1, 1])
-    >>> x = np.array([1, 1, -1, -1, 0])
-    >>> ndarray_y = blosc2.asarray(y)
-    >>> ndarray_x = blosc2.asarray(x)
-    >>> result_lazy = blosc2.arctan2(ndarray_y, ndarray_x)
-    >>> result = result_lazy[:]
-    >>> print("y:", y)
-    y: [ 0  1  0 -1  1]
-    >>> print("x:", x)
-    x: [ 1  1 -1 -1  0]
-    >>> print("Arctan2(y, x):", result)
-    Arctan2(y, x): [ 0.          0.78539816  3.14159265 -2.35619449  1.57079633]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr1, "arctan2", ndarr2))
-
-
-def arcsinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Compute the inverse hyperbolic sine, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the inverse hyperbolic sine of the input array.
-        The result can be evaluated.
-
-    References
-    ----------
-    `np.arcsinh <https://numpy.org/doc/stable/reference/generated/numpy.arcsinh.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> values = np.array([-2, -1, 0, 1, 2])
-    >>> ndarray = blosc2.asarray(values)
-    >>> result_lazy = blosc2.arcsinh(ndarray)
-    >>> result = result_lazy[:]
-    >>> print("Original values:", values)
-    Original values: [-2 -1  0  1  2]
-    >>> print("Arcsinh:", result)
-    Arcsinh: [-1.44363548 -0.88137359  0.          0.88137359  1.44363548]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "arcsinh", None))
-
-
-def arccosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Compute the inverse hyperbolic cosine, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the inverse hyperbolic cosine of the input array.
-        The result can be evaluated.
-
-    References
-    ----------
-    `np.arccosh <https://numpy.org/doc/stable/reference/generated/numpy.arccosh.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> values = np.array([1, 2, 3, 4, 5])
-    >>> ndarray = blosc2.asarray(values)
-    >>> result_lazy = blosc2.arccosh(ndarray)
-    >>> result = result_lazy[:]
-    >>> print("Original values:", values)
-    Original values: [1 2 3 4 5]
-    >>> print("Arccosh:", result)
-    Arccosh: [0.         1.3169579  1.76274717 2.06343707 2.29243167]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "arccosh", None))
-
-
-def arctanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Compute the inverse hyperbolic tangent, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the inverse hyperbolic tangent of the input array.
-        The result can be evaluated.
-
-    References
-    ----------
-    `np.arctanh <https://numpy.org/doc/stable/reference/generated/numpy.arctanh.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> values = np.array([-0.9, -0.5, 0, 0.5, 0.9])
-    >>> ndarray = blosc2.asarray(values)
-    >>> result_lazy = blosc2.arctanh(ndarray)
-    >>> result = result_lazy[:]
-    >>> print("Original values:", values)
-    Original values: [-0.9 -0.5  0.   0.5  0.9]
-    >>> print("Arctanh:", result)
-    Arctanh: [-1.47221949 -0.54930614  0.          0.54930614  1.47221949]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "arctanh", None))
-
-
-def exp(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Calculate the exponential of all elements in the input array.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the exponential of the input array.
-        The result can be evaluated.
-
-    References
-    ----------
-    `np.exp <https://numpy.org/doc/stable/reference/generated/numpy.exp.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> values = np.array([0, 1, 2, 3, 4])
-    >>> ndarray = blosc2.asarray(values)
-    >>> result_lazy = blosc2.exp(ndarray)
-    >>> result = result_lazy[:]
-    >>> print("Original values:", values)
-    Original values: [0 1 2 3 4]
-    >>> print("Exponential:", result)
-    Exponential: [ 1.          2.71828183  7.3890561  20.08553692 54.59815003]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "exp", None))
-
-
-def expm1(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Calculate ``exp(ndarr) - 1`` for all elements in the array.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing ``exp(ndarr) - 1`` of the input array.
-        The result can be evaluated.
-
-    References
-    ----------
-    `np.expm1 <https://numpy.org/doc/stable/reference/generated/numpy.expm1.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> values = np.array([-1, -0.5, 0, 0.5, 1])
-    >>> ndarray = blosc2.asarray(values)
-    >>> result_lazy = blosc2.expm1(ndarray)
-    >>> result = result_lazy[:]
-    >>> print("Original values:", values)
-    Original values: [-1.  -0.5  0.   0.5  1. ]
-    >>> print("Expm1:", result)
-    Expm1: [-0.63212056 -0.39346934  0.          0.64872127  1.71828183]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "expm1", None))
-
-
-def log(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Compute the natural logarithm, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the natural logarithm of the input array
-
-    References
-    ----------
-    `np.log <https://numpy.org/doc/stable/reference/generated/numpy.log.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> values = np.array([1, 2, 3, 4, 5])
-    >>> ndarray = blosc2.asarray(values)
-    >>> result_lazy = blosc2.log(ndarray)
-    >>> result = result_lazy[:]
-    >>> print("Original values:", values)
-    Original values: [1 2 3 4 5]
-    >>> print("Logarithm (base e):", result)
-    Logarithm (base e): [0.         0.69314718 1.09861229 1.38629436 1.60943791]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "log", None))
-
-
-def log10(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Return the base 10 logarithm of the input array, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the base 10 logarithm of the input array.
-
-    References
-    ----------
-    `np.log10 <https://numpy.org/doc/stable/reference/generated/numpy.log10.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> values = np.array([1, 10, 100, 1000, 10000])
-    >>> ndarray = blosc2.asarray(values)
-    >>> result_lazy = blosc2.log10(ndarray)
-    >>> result = result_lazy[:]
-    >>> print("Original values:", values)
-    Original values: [    1    10   100  1000 10000]
-    >>> print("Logarithm (base 10):", result)
-    Logarithm (base 10): [0. 1. 2. 3. 4.]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "log10", None))
-
-
-def log1p(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Return the natural logarithm of one plus the input array, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the natural logarithm of one plus the input array.
-
-    References
-    ----------
-    `np.log1p <https://numpy.org/doc/stable/reference/generated/numpy.log1p.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> values = np.array([-0.9, -0.5, 0, 0.5, 0.9])
-    >>> ndarray = blosc2.asarray(values)
-    >>> result_lazy = blosc2.log1p(ndarray)
-    >>> result = result_lazy[:]
-    >>> print("Original values:", values)
-    Original values: [-0.9 -0.5  0.   0.5  0.9]
-    >>> print("Log1p (log(1 + x)):", result)
-    Log1p (log(1 + x)): [-2.30258509 -0.69314718  0.          0.40546511  0.64185389]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "log1p", None))
-
-
-def conj(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Return the complex conjugate, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the complex conjugate of the input array.
-
-    References
-    ----------
-    `np.conj <https://numpy.org/doc/stable/reference/generated/numpy.conj.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> values = np.array([1+2j, 3-4j, -5+6j, 7-8j])
-    >>> ndarray = blosc2.asarray(values)
-    >>> result_ = blosc2.conj(ndarray)
-    >>> result = result_[:]
-    >>> print("Original values:", values)
-    Original values: [ 1.+2.j  3.-4.j -5.+6.j  7.-8.j]
-    >>> print("Complex conjugates:", result)
-    Complex conjugates: [ 1.-2.j  3.+4.j -5.-6.j  7.+8.j]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "conj", None))
-
-
-def real(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Return the real part of the complex array, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the real part of the input array.
-
-    References
-    ----------
-    `np.real <https://numpy.org/doc/stable/reference/generated/numpy.real.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> complex_values = np.array([1+2j, 3-4j, -5+6j, 7-8j])
-    >>> ndarray = blosc2.asarray(complex_values)
-    >>> result_ = blosc2.real(ndarray)
-    >>> result = result_[:]
-    >>> print("Original complex values:", complex_values)
-    Original values: [ 1.+2.j  3.-4.j -5.+6.j  7.-8.j]
-    >>> print("Real parts:", result)
-    Real parts: [ 1.  3. -5.  7.]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "real", None))
-
-
-def imag(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Return the imaginary part of the complex array, element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression representing the imaginary part of the input array.
-
-    References
-    ----------
-    `np.imag <https://numpy.org/doc/stable/reference/generated/numpy.imag.html>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> complex_values = np.array([2+3j, -1+4j, 0-2j, 5+6j])
-    >>> ndarray = blosc2.asarray(complex_values)
-    >>> result_ = blosc2.imag(ndarray)
-    >>> result = result_[:]
-    >>> print("Original complex values:", complex_values)
-    Original complex values: [ 2.+3.j -1.+4.j  0.-2.j  5.+6.j]
-    >>> print("Imaginary parts:", result)
-    Imaginary parts: [ 3.  4. -2.  6.]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "imag", None))
-
-
-def contains(
-    ndarr: NDArray | NDField | blosc2.C2Array, value: str | bytes | NDArray | NDField | blosc2.C2Array, /
-) -> blosc2.LazyExpr:
-    """
-    Check if the array contains a specified value.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
-        The input array.
-    value: str or bytes or :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
-        The value to be checked.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated to check if the value
-        is contained in the array.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> values = np.array([b"apple", b"xxbananaxxx", b"cherry", b"date"])
-    >>> text_values = blosc2.asarray(values)
-    >>> value_to_check = b"banana"
-    >>> expr = blosc2.contains(text_values, value_to_check)
-    >>> result = expr.compute()
-    >>> print("Contains 'banana':", result[:])
-    Contains 'banana': [False  True False False]
-    """
-    if not isinstance(value, str | bytes | NDArray):
-        raise TypeError("value should be a string, bytes or a NDArray!")
-    return blosc2.LazyExpr(new_op=(ndarr, "contains", value))
-
-
-def abs(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Calculate the absolute value element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated to get the absolute values.
-
-    References
-    ----------
-    `np.abs <https://numpy.org/doc/stable/reference/generated/numpy.absolute.html#numpy.absolute>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> values = np.array([-5, -3, 0, 2, 4])
-    >>> ndarray = blosc2.asarray(values)
-    >>> result_ = blosc2.abs(ndarray)
-    >>> result = result_[:]
-    >>> print("Original values:", values)
-    Original values: [-5 -3  0  2  4]
-    >>> print("Absolute values:", result)
-    Absolute values: [5. 3. 0. 2. 4.]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "abs", None))
-
-
-def isnan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Return True/False for not-a-number values element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated to get the True/False array of results.
-
-    References
-    ----------
-    `np.isnan <https://numpy.org/doc/stable/reference/generated/numpy.isnan.html#numpy.isnan>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> values = np.array([-5, -3, np.nan, 2, 4])
-    >>> ndarray = blosc2.asarray(values)
-    >>> result_ = blosc2.isnan(ndarray)
-    >>> result = result_[:]
-    >>> print("isnan:", result)
-    isnan: [False, False, True, False, False]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "isnan", None))
-
-
-def isfinite(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Return True/False for finite values element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated to get the True/False array of results.
-
-    References
-    ----------
-    `np.isfinite <https://numpy.org/doc/stable/reference/generated/numpy.isfinite.html#numpy.isfinite>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> values = np.array([-5, -3, np.inf, 2, 4])
-    >>> ndarray = blosc2.asarray(values)
-    >>> result_ = blosc2.isfinite(ndarray)
-    >>> result = result_[:]
-    >>> print("isfinite:", result)
-    isfinite: [True, True, False, True, True]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "isfinite", None))
-
-
-def isinf(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Return True/False for infinite values element-wise.
-
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
-
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated to get the True/False array of results.
-
-    References
-    ----------
-    `np.isinf <https://numpy.org/doc/stable/reference/generated/numpy.isinf.html#numpy.isinf>`_
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import blosc2
-    >>> values = np.array([-5, -3, np.inf, 2, 4])
-    >>> ndarray = blosc2.asarray(values)
-    >>> result_ = blosc2.isinf(ndarray)
-    >>> result = result_[:]
-    >>> print("isinf:", result)
-    isinf: [False, False, True, False, False]
-    """
-    return blosc2.LazyExpr(new_op=(ndarr, "isinf", None))
-
-
-def equal(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-) -> blosc2.LazyExpr:
-    """
-    Computes the truth value of x1_i == x2_i for each element x1_i of the input array x1
-    with the respective element x2_i of the input array x2.
-
-    Parameters
-    -----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
-        First input array. May have any data type.
-
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
-        Second input array. Must be compatible with x1. May have any data type.
-
-    Returns
-    -------
-    out LazyExpr
-        A LazyArray containing the element-wise results.
-
-    References
-    ----------
-    `np.equal <https://numpy.org/doc/stable/reference/generated/numpy.equal.html#numpy.equal>`_
-    """
-    return blosc2.LazyExpr(new_op=(x1, "==", x2))
-
-
 def where(
-    condition: blosc2.LazyExpr,
+    condition: blosc2.LazyExpr | NDArray,
     x: NDArray | NDField | np.ndarray | int | float | complex | bool | str | bytes | None = None,
     y: NDArray | NDField | np.ndarray | int | float | complex | bool | str | bytes | None = None,
 ) -> blosc2.LazyExpr:
@@ -4255,7 +4780,6 @@ def asarray(
     >>> # Create a NDArray from a NumPy array
     >>> nda = blosc2.asarray(a)
     """
-
     # Convert scalars to numpy array
     casting = kwargs.pop("casting", "unsafe")
     if casting != "unsafe":
@@ -4313,9 +4837,8 @@ def asarray(
     else:
         if not isinstance(array, NDArray):
             raise ValueError("Must always do a copy for asarray unless NDArray provided.")
-        mask = [True] + [False for i in range(array.ndim)]
         # TODO: make a direct view possible
-        return blosc2.expand_dims(array, axis=0).squeeze(mask)  # way to get a view
+        return array
 
     return ndarr
 
@@ -4516,15 +5039,15 @@ def sort(array: NDArray, order: str | list[str] | None = None, **kwargs: Any) ->
     return larr.sort(order).compute(**kwargs)
 
 
-def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
+def matmul(x1: NDArray | np.ndarray, x2: NDArray, **kwargs: Any) -> NDArray | np.ndarray:  # noqa : C901
     """
     Computes the matrix product between two Blosc2 NDArrays.
 
     Parameters
     ----------
-    x1: :ref:`NDArray`
+    x1: :ref:`NDArray` | np.ndarray
         The first input array.
-    x2: :ref:`NDArray`
+    x2: :ref:`NDArray` | np.ndarray
         The second input array.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
@@ -4576,60 +5099,355 @@ def matmul(x1: NDArray, x2: NDArray, **kwargs: Any) -> NDArray:
     array([1, 5])
 
     """
+    # Added this to pass array-api tests (which use internal getitem to check results)
+    if isinstance(x1, np.ndarray) and isinstance(x2, np.ndarray):
+        return np.matmul(x1, x2)
 
     # Validate arguments are not scalars
     if np.isscalar(x1) or np.isscalar(x2):
         raise ValueError("Arguments can't be scalars.")
 
-    # Validate arguments are dimension 1 or 2
-    if x1.ndim > 2 or x2.ndim > 2:
-        raise ValueError("Multiplication of arrays with dimension greater than 2 is not supported yet.")
+    # Validate matrix multiplication compatibility
+    if x1.shape[-1] != x2.shape[builtins.max(-2, -len(x2.shape))]:
+        raise ValueError("Shapes are not aligned for matrix multiplication.")
 
     # Promote 1D arrays to 2D if necessary
     x1_is_vector = False
     x2_is_vector = False
     if x1.ndim == 1:
-        x1 = x1.reshape((1, x1.shape[0]))  # (N,) -> (1, N)
+        x1 = blosc2.expand_dims(x1, axis=0)  # (N,) -> (1, N)
         x1_is_vector = True
     if x2.ndim == 1:
-        x2 = x2.reshape((x2.shape[0], 1))  # (M,) -> (M, 1)
+        x2 = blosc2.expand_dims(x2, axis=1)  # (M,) -> (M, 1)
         x2_is_vector = True
-
-    # Validate matrix multiplication compatibility
-    if x1.shape[-1] != x2.shape[-2]:
-        raise ValueError("Shapes are not aligned for matrix multiplication.")
 
     n, k = x1.shape[-2:]
     m = x2.shape[-1]
+    result_shape = np.broadcast_shapes(x1.shape[:-2], x2.shape[:-2]) + (n, m)
+    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
 
-    result = blosc2.zeros((n, m), dtype=np.result_type(x1, x2), **kwargs)
+    if 0 in result.shape + x1.shape + x2.shape:  # if any array is empty, return array of 0s
+        if x1_is_vector:
+            result.squeeze(axis=-2)
+        if x2_is_vector:
+            result.squeeze(axis=-1)
+        return result
 
     p, q = result.chunks[-2:]
     r = x2.chunks[-1]
 
-    for row in range(0, n, p):
-        row_end = builtins.min(row + p, n)
-        for col in range(0, m, q):
-            col_end = builtins.min(col + q, m)
-            for aux in range(0, k, r):
-                aux_end = builtins.min(aux + r, k)
-                bx1 = x1[row:row_end, aux:aux_end]
-                bx2 = x2[aux:aux_end, col:col_end]
-                result[row:row_end, col:col_end] += np.matmul(bx1, bx2)
+    intersecting_chunks = get_intersecting_chunks((), result.shape[:-2], result.chunks[:-2])
+    for chunk in intersecting_chunks:
+        chunk = chunk.raw
+        for row in range(0, n, p):
+            row_end = builtins.min(row + p, n)
+            for col in range(0, m, q):
+                col_end = builtins.min(col + q, m)
+                for aux in range(0, k, r):
+                    aux_end = builtins.min(aux + r, k)
+                    bx1 = (
+                        x1[chunk[-x1.ndim + 2 :] + (slice(row, row_end), slice(aux, aux_end))]
+                        if x1.ndim > 2
+                        else x1[row:row_end, aux:aux_end]
+                    )
+                    bx2 = (
+                        x2[chunk[-x2.ndim + 2 :] + (slice(aux, aux_end), slice(col, col_end))]
+                        if x2.ndim > 2
+                        else x2[aux:aux_end, col:col_end]
+                    )
+                    result[chunk + (slice(row, row_end), slice(col, col_end))] += np.matmul(bx1, bx2)
 
-    if x1_is_vector and x2_is_vector:
-        return result[0][0]
+    if x1_is_vector:
+        result.squeeze(axis=-2)
+    if x2_is_vector:
+        result.squeeze(axis=-1)
 
-    return result.squeeze()
+    return result
 
 
-def permute_dims(arr: NDArray, axes: tuple[int] | list[int] | None = None, **kwargs: Any) -> NDArray:
+def tensordot(
+    x1: NDArray, x2: NDArray, axes: int | tuple[Sequence[int], Sequence[int]] = 2, **kwargs: Any
+) -> NDArray:
+    """
+    Returns a tensor contraction of x1 and x2 over specific axes. The tensordot function corresponds to the generalized matrix product.
+
+    Parameters
+    ----------
+    x1: NDArray
+        First input array. Should have a numeric data type.
+
+    x2: NDArray
+        Second input array. Should have a numeric data type. Corresponding contracted axes of x1 and x2 must be equal.
+
+    axes: int | tuple[Sequence[int], Sequence[int]]
+        Number of axes (dimensions) to contract or explicit sequences of axis (dimension) indices for x1 and x2, respectively.
+        * If axes is an int equal to N, then contraction is performed over the last N axes of x1 and the first N axes of x2 in order.
+        The size of each corresponding axis (dimension) must match. Must be nonnegative.
+        - If N equals 0, the result is the tensor (outer) product.
+        - If N equals 1, the result is the tensor dot product.
+        - If N equals 2, the result is the tensor double contraction (default).
+        * If axes is a tuple of two sequences (x1_axes, x2_axes), the first sequence applies to x1 and the second sequence to x2.
+        Both sequences must have the same length. Each axis (dimension) x1_axes[i] for x1 must have the same size as the respective
+        axis (dimension) x2_axes[i] for x2. Each index referred to in a sequence must be unique. If x1 has rank (i.e, number of dimensions) N,
+        a valid x1 axis must reside on the half-open interval [-N, N). If x2 has rank M, a valid x2 axis must reside on the half-open interval [-M, M).
+
+    kwargs: Any, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
+    Note: Neither argument is complex-conjugated or transposed. If conjugation and/or transposition is desired, these operations should be explicitly
+    performed prior to computing the generalized matrix product.
+
+    Returns
+    -------
+    out: NDArray
+        An array containing the tensor contraction whose shape consists of the non-contracted axes (dimensions) of the first array x1, followed by the non-contracted axes (dimensions) of the second array x2. The returned array must have a data type determined by Type Promotion Rules.
+    """
+    fast_path = kwargs.pop("fast_path", None)  # for testing purposes
+
+    # Added this to pass array-api tests (which use internal getitem to check results)
+    if isinstance(x1, np.ndarray) and isinstance(x2, np.ndarray):
+        return np.tensordot(x1, x2, axes=axes)
+
+    x1, x2 = blosc2.asarray(x1), blosc2.asarray(x2)
+
+    if isinstance(axes, tuple):
+        a_axes, b_axes = axes
+        a_axes = list(a_axes)
+        b_axes = list(b_axes)
+        if len(a_axes) != len(b_axes):
+            raise ValueError("Lengths of reduction axes for x1 and x2 must be equal!")
+        # need to track order of b_axes; later we cycle through a_axes sorted for op_chunk
+        # a_sorted[inv_sort][b_sort] matches b_sorted since b_axes matches a_axes
+        inv_sort = np.argsort(np.argsort(a_axes))
+        b_sort = np.argsort(b_axes)
+        order = inv_sort[b_sort]
+        a_keep, b_keep = [True] * x1.ndim, [True] * x2.ndim
+        for i, j in zip(a_axes, b_axes, strict=False):
+            i = x1.ndim + i if i < 0 else i
+            j = x2.ndim + j if j < 0 else j
+            a_keep[i] = False
+            b_keep[j] = False
+        a_axes = [] if a_axes == () else a_axes  # handle no reduction
+        b_axes = [] if b_axes == () else b_axes  # handle no reduction
+    elif isinstance(axes, int):
+        if axes < 0:
+            raise ValueError("Integer axes argument must be nonnegative!")
+        order = np.arange(axes, dtype=int)  # no reordering required
+        a_axes = list(range(x1.ndim - axes, x1.ndim))
+        b_axes = list(range(0, axes))
+        a_keep = [i + axes < x1.ndim for i in range(x1.ndim)]
+        b_keep = [i >= axes for i in range(x2.ndim)]
+    else:
+        raise ValueError("Axes argument must be two element tuple of sequences or an integer.")
+    x1shape = np.array(x1.shape)
+    x2shape = np.array(x2.shape)
+    a_chunks_red = tuple(c for i, c in enumerate(x1.chunks) if not a_keep[i])
+    a_shape_red = tuple(c for i, c in enumerate(x1.shape) if not a_keep[i])
+
+    if np.any(x1shape[a_axes] != x2shape[b_axes]):
+        raise ValueError("x1 and x2 must have same shapes along reduction dimensions")
+
+    result_shape = tuple(x1shape[a_keep]) + tuple(x2shape[b_keep])
+    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
+
+    op_chunks = [
+        slice_to_chunktuple(slice(0, s, 1), c) for s, c in zip(x1shape[a_axes], a_chunks_red, strict=True)
+    ]
+    res_chunks = [
+        slice_to_chunktuple(s, c)
+        for s, c in zip([slice(0, r, 1) for r in result.shape], result.chunks, strict=True)
+    ]
+    a_selection = (slice(None, None, 1),) * x1.ndim
+    b_selection = (slice(None, None, 1),) * x2.ndim
+
+    chunk_memory = np.prod(result.chunks) * (
+        np.prod(x1shape[a_axes]) * x1.dtype.itemsize + np.prod(x2shape[b_axes]) * x2.dtype.itemsize
+    )
+    if chunk_memory < blosc2.MAX_FAST_PATH_SIZE:
+        fast_path = True if fast_path is None else fast_path
+    fast_path = False if fast_path is None else fast_path  # fast_path set via kwargs for testing
+
+    # adapted from numpy.tensordot
+    a_keep_axes = [i for i, k in enumerate(a_keep) if k]
+    b_keep_axes = [i for i, k in enumerate(b_keep) if k]
+    newaxes_a = a_keep_axes + a_axes
+    newaxes_b = b_axes + b_keep_axes
+
+    for rchunk in product(*res_chunks):
+        res_chunk = tuple(
+            slice(rc * rcs, builtins.min((rc + 1) * rcs, rshape), 1)
+            for rc, rcs, rshape in zip(rchunk, result.chunks, result.shape, strict=True)
+        )
+        rchunk_iter = iter(res_chunk)
+        a_selection = tuple(next(rchunk_iter) if a else slice(None, None, 1) for a in a_keep)
+        b_selection = tuple(next(rchunk_iter) if b else slice(None, None, 1) for b in b_keep)
+        res_chunks = tuple(s.stop - s.start for s in res_chunk)
+
+        if fast_path:  # just load everything
+            bx1 = x1[a_selection]
+            bx2 = x2[b_selection]
+            newshape_a = (
+                math.prod([bx1.shape[i] for i in a_keep_axes]),
+                math.prod([bx1.shape[a] for a in a_axes]),
+            )
+            newshape_b = (
+                math.prod([bx2.shape[b] for b in b_axes]),
+                math.prod([bx2.shape[i] for i in b_keep_axes]),
+            )
+            at = bx1.transpose(newaxes_a).reshape(newshape_a)
+            bt = bx2.transpose(newaxes_b).reshape(newshape_b)
+            res = np.dot(at, bt)
+            result[res_chunk] += res.reshape(res_chunks)
+        else:  # operands too big, have to go chunk-by-chunk
+            for ochunk in product(*op_chunks):
+                op_chunk = tuple(
+                    slice(rc * rcs, builtins.min((rc + 1) * rcs, x1s), 1)
+                    for rc, rcs, x1s in zip(ochunk, a_chunks_red, a_shape_red, strict=True)
+                )  # use x1 chunk shape to iterate over reduction axes
+                ochunk_iter = iter(op_chunk)
+                a_selection = tuple(
+                    next(ochunk_iter) if not a else as_ for as_, a in zip(a_selection, a_keep, strict=True)
+                )
+                # have to permute to match order of a_axes
+                order_iter = iter(order)
+                b_selection = tuple(
+                    op_chunk[next(order_iter)] if not b else bs_
+                    for bs_, b in zip(b_selection, b_keep, strict=True)
+                )
+                bx1 = x1[a_selection]
+                bx2 = x2[b_selection]
+                # adapted from numpy tensordot
+                newshape_a = (
+                    math.prod([bx1.shape[i] for i in a_keep_axes]),
+                    math.prod([bx1.shape[a] for a in a_axes]),
+                )
+                newshape_b = (
+                    math.prod([bx2.shape[b] for b in b_axes]),
+                    math.prod([bx2.shape[i] for i in b_keep_axes]),
+                )
+                at = bx1.transpose(newaxes_a).reshape(newshape_a)
+                bt = bx2.transpose(newaxes_b).reshape(newshape_b)
+                res = np.dot(at, bt)
+                result[res_chunk] += res.reshape(res_chunks)
+    return result
+
+
+def vecdot(x1: NDArray, x2: NDArray, axis: int = -1, **kwargs) -> NDArray:
+    """
+    Computes the (vector) dot product of two arrays. Complex conjugates x1.
+
+    Parameters
+    ----------
+    x1: NDArray
+        First input array. Must have floating-point data type.
+
+    x2: NDArray
+        Second input array. Must be compatible with x1 for all non-contracted axes (via broadcasting).
+        The size of the axis over which to compute the dot product must be the same size as the respective axis in x1.
+        Must have a floating-point data type.
+
+    axis: int
+        The axis (dimension) of x1 and x2 containing the vectors for which to compute the dot product.
+        Should be an integer on the interval [-N, -1], where N is min(x1.ndim, x2.ndim). Default: -1.
+
+    Returns
+    -------
+    out: NDArray
+        If x1 and x2 are both one-dimensional arrays, a zero-dimensional containing the dot product;
+        otherwise, a non-zero-dimensional array containing the dot products and having rank N-1,
+        where N is the rank (number of dimensions) of the shape determined according to broadcasting
+        along the non-contracted axes.
+    """
+    fast_path = kwargs.pop("fast_path", None)  # for testing purposes
+    # Added this to pass array-api tests (which use internal getitem to check results)
+    if isinstance(x1, np.ndarray) and isinstance(x2, np.ndarray):
+        return np.vecdot(x1, x2, axis=axis)
+
+    x1, x2 = blosc2.asarray(x1), blosc2.asarray(x2)
+
+    N = builtins.min(x1.ndim, x2.ndim)
+    if axis < -N or axis > -1:
+        raise ValueError("axis must be on interval [-N,-1].")
+    a_axes = axis + x1.ndim
+    b_axes = axis + x2.ndim
+    a_keep = [True] * x1.ndim
+    a_keep[a_axes] = False
+    b_keep = [True] * x2.ndim
+    b_keep[b_axes] = False
+    if np.issubdtype(x1.dtype, complex):
+        x1 = blosc2.conj(x1)
+    x1shape = np.array(x1.shape)
+    x2shape = np.array(x2.shape)
+    result_shape = np.broadcast_shapes(x1shape[a_keep], x2shape[b_keep])
+    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
+
+    x1shape = np.array(x1.shape)
+    x2shape = np.array(x2.shape)
+    a_chunks_red = x1.chunks[a_axes]
+    a_shape_red = x1.shape[a_axes]
+
+    if np.any(x1shape[a_axes] != x2shape[b_axes]):
+        raise ValueError("x1 and x2 must have same shapes along reduction dimensions")
+
+    result_shape = np.broadcast_shapes(x1shape[a_keep], x2shape[b_keep])
+    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
+
+    res_chunks = [
+        slice_to_chunktuple(s, c)
+        for s, c in zip([slice(0, r, 1) for r in result.shape], result.chunks, strict=True)
+    ]
+    a_selection = (slice(None, None, 1),) * x1.ndim
+    b_selection = (slice(None, None, 1),) * x2.ndim
+
+    chunk_memory = np.prod(result.chunks) * (
+        x1shape[a_axes] * x1.dtype.itemsize + x2shape[b_axes] * x2.dtype.itemsize
+    )
+    if chunk_memory < blosc2.MAX_FAST_PATH_SIZE:
+        fast_path = True if fast_path is None else fast_path
+    fast_path = False if fast_path is None else fast_path  # fast_path set via kwargs for testing
+
+    for rchunk in product(*res_chunks):
+        res_chunk = tuple(
+            slice(rc * rcs, builtins.min((rc + 1) * rcs, rshape), 1)
+            for rc, rcs, rshape in zip(rchunk, result.chunks, result.shape, strict=True)
+        )
+        # handle broadcasting - if x1, x2 different ndim, could have to prepend 1s
+        rchunk_iter = (
+            slice(0, 1, 1) if s == 1 else r
+            for r, s in zip(res_chunk[-x1.ndim + 1 :], x1shape[a_keep], strict=True)
+        )
+        a_selection = tuple(next(rchunk_iter) if a else slice(None, None, 1) for a in a_keep)
+        rchunk_iter = (
+            slice(0, 1, 1) if s == 1 else r
+            for r, s in zip(res_chunk[-x2.ndim + 1 :], x2shape[b_keep], strict=True)
+        )
+        b_selection = tuple(next(rchunk_iter) if b else slice(None, None, 1) for b in b_keep)
+
+        if fast_path:  # just load everything, also handles case of 0 in shapes
+            bx1 = x1[a_selection]
+            bx2 = x2[b_selection]
+            result[res_chunk] += np.vecdot(bx1, bx2, axis=axis)
+        else:  # operands too big, have to go chunk-by-chunk
+            for ochunk in range(0, a_shape_red, a_chunks_red):
+                op_chunk = (slice(ochunk, builtins.min(ochunk + a_chunks_red, x1.shape[a_axes]), 1),)
+                a_selection = a_selection[:a_axes] + op_chunk + a_selection[a_axes + 1 :]
+                b_selection = b_selection[:b_axes] + op_chunk + b_selection[b_axes + 1 :]
+                bx1 = x1[a_selection]
+                bx2 = x2[b_selection]
+                res = np.vecdot(bx1, bx2, axis=axis)
+                result[res_chunk] += res
+    return result
+
+
+def permute_dims(
+    arr: NDArray | np.ndarray, axes: tuple[int] | list[int] | None = None, **kwargs: Any
+) -> NDArray:
     """
     Permutes the axes (dimensions) of an array.
 
     Parameters
     ----------
-    arr: :ref:`NDArray`
+    arr: :ref:`NDArray` | np.ndarray
         The input array.
     axes: tuple[int], list[int], optional
         The desired permutation of axes. If None, the axes are reversed by default.
@@ -4695,6 +5513,8 @@ def permute_dims(arr: NDArray, axes: tuple[int] | list[int] | None = None, **kwa
     """
     if np.isscalar(arr) or arr.ndim < 2:
         return arr
+    if isinstance(arr, np.ndarray):  # for array-api test compliance (does getitem for comparison)
+        return np.permute_dims(arr, axes)
 
     ndim = arr.ndim
 
@@ -4769,13 +5589,13 @@ def transpose(x, **kwargs: Any) -> NDArray:
     return permute_dims(x, **kwargs)
 
 
-def matrix_transpose(arr: NDArray, **kwargs: Any) -> NDArray:
+def matrix_transpose(arr: NDArray | np.ndarray, **kwargs: Any) -> NDArray:
     """
     Transposes a matrix (or a stack of matrices).
 
     Parameters
     ----------
-    arr: :ref:`NDArray`
+    arr: :ref:`NDArray` | np.ndarray
         The input NDArray having shape ``(..., M, N)`` and whose innermost two dimensions form
         ``MxN`` matrices.
 
@@ -5059,6 +5879,69 @@ def full_like(x: NDArray, fill_value: bool | int | float | complex, dtype=None, 
     return blosc2.full(shape=x.shape, fill_value=fill_value, dtype=dtype, **kwargs)
 
 
+def take(x: NDArray, indices: NDArray[int] | np.ndarray[int], axis: int | None = None) -> NDArray:
+    """
+    Returns elements of an array along an axis.
+
+    Parameters
+    ----------
+    x: NDArray
+        Input array. Should have one or more dimensions (axes).
+
+    indices: array-like
+        Array indices. The array must be one-dimensional and have an integer data type.
+
+    axis: int | None
+        Axis over which to select values.
+        If x is a one-dimensional array, providing an axis is optional; however, if x
+        has more than one dimension, providing an axis is required. Default: None.
+
+    Returns
+    -------
+    out: NDArray
+        Selected indices of x.
+    """
+    if axis is None:
+        axis = 0
+        if x.ndim != 1:
+            raise ValueError("Must specify axis parameter if x is not 1D.")
+    if not np.issubdtype(axis, int):
+        raise ValueError("Axis must be integer.")
+    if indices.ndim != 1:
+        raise ValueError("Indices must be 1D array.")
+    key = tuple(indices if i == axis else slice(None, None, 1) for i in range(x.ndim))
+    # TODO: Implement fancy indexing in slice so that this is more efficient
+    return blosc2.asarray(x[key])
+
+
+def take_along_axis(x: NDArray, indices: NDArray[int] | np.ndarray[int], axis: int = -1) -> NDArray:
+    """
+    Returns elements of an array along an axis.
+
+    Parameters
+    ----------
+    x: NDArray
+        Input array. Should have one or more dimensions (axes).
+
+    indices: array-like
+        Array indices. The array must number of dimensions as x and have an integer data type.
+
+    axis: int
+        Axis over which to select values. Default: -1.
+
+    Returns
+    -------
+    out: NDArray
+        Selected indices of x.
+    """
+    if not np.issubdtype(axis, int):
+        raise ValueError("Axis must be integer.")
+    if indices.ndim != x.ndim:
+        raise ValueError("Indices must have same dimensions as x.")
+    # TODO: Implement fancy indexing in slice so that this is more efficient
+    return blosc2.asarray(x[indices])
+
+
 def slice_to_chunktuple(s, n):
     """
     Adapted from _slice_iter in ndindex.ChunkSize.as_subchunks.
@@ -5080,9 +5963,9 @@ def slice_to_chunktuple(s, n):
         start = temp + 1
         step = -step  # get positive steps
     if step > n:
-        return tuple((start + k * step) // n for k in range(ceiling(stop - start, step)))
+        return ((start + k * step) // n for k in range(ceiling(stop - start, step)))
     else:
-        return tuple(range(start // n, ceiling(stop, n)))
+        return range(start // n, ceiling(stop, n))
 
 
 def _get_selection(ctuple, ptuple, chunks):
@@ -5175,6 +6058,16 @@ def _get_local_slice(prior_selection, post_selection, chunk_bounds):
     return locbegin, locend
 
 
+def get_intersecting_chunks(_slice, shape, chunks):
+    if 0 not in chunks:
+        chunk_size = ndindex.ChunkSize(chunks)
+        return chunk_size.as_subchunks(_slice, shape)  # if _slice is (), returns all chunks
+    else:
+        return (
+            ndindex.ndindex(...).expand(shape),
+        )  # chunk is whole array so just return full tuple to do loop once
+
+
 def broadcast_to(arr, shape):
     """
     Broadcast an array to a new shape.
@@ -5196,7 +6089,7 @@ def broadcast_to(arr, shape):
     return (arr + blosc2.zeros(shape, dtype=arr.dtype)).compute()  # return lazyexpr quickly
 
 
-def meshgrid(arrays: NDArray, indexing: str = "xy") -> Sequence[NDArray]:
+def meshgrid(*arrays: NDArray, indexing: str = "xy") -> Sequence[NDArray]:
     """
     Returns coordinate matrices from coordinate vectors.
 
@@ -5218,4 +6111,32 @@ def meshgrid(arrays: NDArray, indexing: str = "xy") -> Sequence[NDArray]:
         * if matrix indexing ij, then each returned array has shape (N1, N2, N3, ..., Nn).
         * if Cartesian indexing xy, then each returned array has shape (N2, N1, N3, ..., Nn).
     """
-    raise NotImplementedError("Working on meshgrid")
+    out = ()
+    shape = np.ones(len(arrays))
+    first_arr = arrays[0]
+    myarrs = ()
+    if indexing == "xy" and len(shape) > 1:
+        # switch 0th and 1st shapes around
+        def mygen(i):
+            if i not in (0, 1):
+                return (j for j in range(len(arrays)) if j != i)
+            else:
+                return (j for j in range(len(arrays)) if j != builtins.abs(i - 1))
+    else:
+        mygen = lambda i: (j for j in range(len(arrays)) if j != i)  # noqa : E731
+
+    for i, a in enumerate(arrays):
+        if len(a.shape) != 1 or a.dtype != first_arr.dtype:
+            raise ValueError("All arrays must be 1D and of same dtype.")
+        shape[i] = a.shape[0]
+        myarrs += (blosc2.expand_dims(a, tuple(mygen(i))),)  # cheap, creates a view
+
+    # handle Cartesian indexing
+    shape = tuple(shape)
+    if indexing == "xy" and len(shape) > 1:
+        shape = (shape[1], shape[0]) + shape[2:]
+
+    # do broadcast
+    for a in myarrs:
+        out += (broadcast_to(a, shape),)
+    return out
