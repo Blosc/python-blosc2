@@ -46,4 +46,4 @@ plt.ylabel('Memory usage (MiB)')
 lab = 'LARGE' if LARGE_SLICE else 'SMALL'
 plt.title(f'{lab} slice w/steps, Linux Blosc2 {blosc2.__version__}')
 plt.legend([f'expr.slice({_slice}', f'expr[{_slice}]'])
-plt.savefig(f'sliceexpr_{lab}_Blosc{blosc2.__version__.replace('.','_')}.png', format="png")
+plt.savefig(f'sliceexpr_{lab}_Blosc{blosc2.__version__.replace(".","_")}.png', format="png")
