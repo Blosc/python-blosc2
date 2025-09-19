@@ -3,7 +3,7 @@ import builtins
 import numpy as np
 
 import blosc2
-from blosc2.ndarray import tensordot
+from blosc2.ndarray import matmul, matrix_transpose, tensordot, vecdot  # noqa : F401
 
 
 def diagonal(x: blosc2.NDArray, offset: int = 0) -> blosc2.NDArray:
