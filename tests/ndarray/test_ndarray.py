@@ -294,7 +294,13 @@ def test_oindex():
     np.testing.assert_allclose(arr[:], nparr)
 
 
-@pytest.mark.parametrize("c", [None, 10])
+@pytest.mark.parametrize(
+    "c",
+    [
+        pytest.param(None, marks=pytest.mark.heavy),
+        pytest.param(10, marks=pytest.mark.heavy),
+    ],
+)
 def test_fancy_index(c):
     # Test 1d
     ndim = 1
