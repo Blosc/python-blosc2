@@ -1163,10 +1163,11 @@ def apple_silicon_cache_size(cache_level: int) -> int:
 
 
 def get_cache_info(cache_level: int) -> tuple:
-    result = subprocess.run(["lscpu", "--json"], capture_output=True, text=True)
-    lscpu_info = json.loads(result.stdout)
     if cache_level == 0:
         cache_level = "1d"
+
+    result = subprocess.run(["lscpu", "--json"], capture_output=True, check=True, text=True)
+    lscpu_info = json.loads(result.stdout)
     for entry in lscpu_info["lscpu"]:
         if entry["field"] == f"L{cache_level} cache:":
             size_str, instances_str = entry["data"].split(" (")
