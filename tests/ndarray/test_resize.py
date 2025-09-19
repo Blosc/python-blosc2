@@ -75,3 +75,14 @@ def test_expand_dims(shape, axis, chunks, blocks, fill_value):
     del view
     del bloscview
     assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 2
+
+    # view of a view
+    view = np.expand_dims(arr, 0)
+    bloscview = blosc2.expand_dims(bloscarr_, 0)
+    view2 = np.expand_dims(view, 0)
+    bloscview2 = blosc2.expand_dims(bloscview, 0)
+    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 4
+
+    del bloscview
+    del bloscarr_
+    assert bloscview2[()].shape == bloscview2.shape  # shouldn't fail because still have access to bloscarr_
