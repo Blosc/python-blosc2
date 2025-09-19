@@ -99,12 +99,12 @@ for n, expr in enumerate(exprs):
     npexpr = expr.replace("sin", "np.sin").replace("cos", "np.cos")
     t0 = time()
     npres = eval(npexpr, vardict)
-    print("NumPy took %.3f s" % (time() - t0))
+    print(f"NumPy took {time() - t0:.3f} s")
     # ne.set_num_threads(1)
     # nb.set_num_threads(1)  # this does not work that well; better use the NUMBA_NUM_THREADS env var
     t0 = time()
     ne.evaluate(expr, vardict, out=np.empty_like(npx))
-    print("NumExpr took %.3f s" % (time() - t0))
+    print(f"NumExpr took {time() - t0:.3f} s")
 
     # Compute the expression with Blosc2
     blosc2.cparams_dflts["codec"] = blosc2.Codec.LZ4
@@ -113,19 +113,19 @@ for n, expr in enumerate(exprs):
     c = eval(b2expr, b2vardict)
     t0 = time()
     d = c.compute()
-    print("LazyExpr+compute took %.3f s" % (time() - t0))
+    print(f"LazyExpr+compute took {time() - t0:.3f} s")
     # Check
     np.testing.assert_allclose(d[:], npres, rtol=rtol, atol=atol)
     t0 = time()
     d = c[:]
-    print("LazyExpr+getitem took %.3f s" % (time() - t0))
+    print(f"LazyExpr+getitem took {time() - t0:.3f} s")
     # Check
     np.testing.assert_allclose(d[:], npres, rtol=rtol, atol=atol)
 
     # nb.set_num_threads(1)
     t0 = time()
     res = func_numba(npx, npy, npz, n)
-    print("Numba took %.3f s" % (time() - t0))
+    print(f"Numba took {time() - t0:.3f} s")
     np.testing.assert_allclose(res, npres, rtol=rtol, atol=atol)
 
     inputs = (x,)
@@ -139,9 +139,9 @@ for n, expr in enumerate(exprs):
     # getitem but using chunked evaluation
     t0 = time()
     res = expr_.compute()
-    print("LazyUDF+compute took %.3f s" % (time() - t0))
+    print(f"LazyUDF+compute took {time() - t0:.3f} s")
     np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)
     t0 = time()
     res = expr_[:]
-    print("LazyUDF+getitem took %.3f s" % (time() - t0))
+    print(f"LazyUDF+getitem took {time() - t0:.3f} s")
     np.testing.assert_allclose(res[...], npres, rtol=rtol, atol=atol)
