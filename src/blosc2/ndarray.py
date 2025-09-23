@@ -2828,6 +2828,70 @@ def remainder(
     return blosc2.LazyExpr(new_op=(x1, "%", x2))
 
 
+def clip(
+    x: NDArray, min: int | float | NDArray | None = None, max: int | float | NDArray | None = None
+) -> NDArray:
+    """
+    Clamps each element x_i of the input array x to the range [min, max].
+
+    Parameters
+    ----------
+    x: NDArray
+        Input array. Should have a real-valued data type.
+
+    min: int | float | NDArray | None
+        Lower-bound of the range to which to clamp. If None, no lower bound must be applied.
+        Default: None.
+
+    max: int | float | NDArray | None
+        Upper-bound of the range to which to clamp. If None, no upper bound must be applied.
+        Default: None.
+
+    Returns
+    -------
+    out: NDArray
+        An array containing element-wise results.
+
+    """
+
+    def chunkwise_clip(inputs, output, offset):
+        x, min, max = inputs
+        output[:] = np.clip(x, min, max)
+
+    return blosc2.lazyudf(chunkwise_clip, (x, min, max), dtype=x.dtype, shape=x.shape)
+
+
+def logaddexp(x1: int | float | NDArray, x2: int | float | NDArray) -> NDArray:
+    """
+    Calculates the logarithm of the sum of exponentiations log(exp(x1) + exp(x2)) for
+    each element x1_i of the input array x1 with the respective element x2_i of the
+    input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any real-valued floating-point data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any
+        real-valued floating-point data type.
+
+    Returns
+    -------
+    out: NDArray
+        An array containing element-wise results.
+
+    """
+
+    def chunkwise_logaddexp(inputs, output, offset):
+        x1, x2 = inputs
+        output[:] = np.logaddexp(x1, x2)
+
+    dtype = blosc2.result_type(x1.dtype, x2.dtype)
+    dtype = blosc2.float32 if np.issubdtype(dtype, np.integer) else dtype
+    return blosc2.lazyudf(chunkwise_logaddexp, (x1, x2), dtype=dtype, shape=x1.shape)
+
+
 class Operand:
     """Base class for all operands in expressions."""
 
@@ -2891,6 +2955,7 @@ class Operand:
             np.minimum: "minimum",
         }
 
+        # implemented in numexpr
         ufunc_map_1param = {
             np.sqrt: "sqrt",
             np.sin: "sin",
@@ -2925,6 +2990,15 @@ class Operand:
             np.signbit: "signbit",
             np.round: "round",
         }
+
+        # implemented in python-blosc2
+        local_ufunc_map = {
+            np.clip: clip,
+            np.logaddexp: logaddexp,
+        }
+
+        if ufunc in local_ufunc_map:
+            return local_ufunc_map[ufunc](*inputs)
 
         if ufunc in ufunc_map:
             value = inputs[0] if inputs[1] is self else inputs[1]
