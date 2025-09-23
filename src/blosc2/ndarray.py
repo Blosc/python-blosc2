@@ -2993,10 +2993,8 @@ class Operand:
 
         # implemented in python-blosc2
         local_ufunc_map = {
-            np.clip: clip,
             np.logaddexp: logaddexp,
         }
-
         if ufunc in local_ufunc_map:
             return local_ufunc_map[ufunc](*inputs)
 
@@ -3010,7 +3008,7 @@ class Operand:
             _check_allowed_dtypes(value)
             return blosc2.LazyExpr(new_op=(value, ufunc_map_1param[ufunc], None))
 
-        return NotImplemented  # if not implemented in numexpr will default to chunkwise NumPy
+        return NotImplemented  # if not implemented in numexpr will default to NumPy
 
     def __add__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
@@ -6666,12 +6664,14 @@ def take(x: NDArray, indices: NDArray[int] | np.ndarray[int], axis: int | None =
         axis = 0
         if x.ndim != 1:
             raise ValueError("Must specify axis parameter if x is not 1D.")
-    if not np.issubdtype(axis, int):
+    if axis < 0:
+        axis += x.ndim
+    if not isinstance(axis, (int, np.integer)):
         raise ValueError("Axis must be integer.")
     if indices.ndim != 1:
         raise ValueError("Indices must be 1D array.")
     key = tuple(indices if i == axis else slice(None, None, 1) for i in range(x.ndim))
-    # TODO: Implement fancy indexing in slice so that this is more efficient
+    # TODO: Implement fancy indexing in .slice so that this is more efficient
     return blosc2.asarray(x[key])
 
 
@@ -6685,7 +6685,8 @@ def take_along_axis(x: NDArray, indices: NDArray[int] | np.ndarray[int], axis: i
         Input array. Should have one or more dimensions (axes).
 
     indices: array-like
-        Array indices. The array must number of dimensions as x and have an integer data type.
+        Array indices. The array must have same number of dimensions as x and
+        have an integer data type.
 
     axis: int
         Axis over which to select values. Default: -1.
@@ -6695,12 +6696,17 @@ def take_along_axis(x: NDArray, indices: NDArray[int] | np.ndarray[int], axis: i
     out: NDArray
         Selected indices of x.
     """
-    if not np.issubdtype(axis, int):
+    if not isinstance(axis, (int, np.integer)):
         raise ValueError("Axis must be integer.")
     if indices.ndim != x.ndim:
         raise ValueError("Indices must have same dimensions as x.")
-    # TODO: Implement fancy indexing in slice so that this is more efficient
-    return blosc2.asarray(x[indices])
+    if axis < 0:
+        axis += x.ndim
+    if indices.shape[axis] == 0:
+        return blosc2.empty(x.shape[:axis] + (0,) + x.shape[axis + 1 :], dtype=x.dtype)
+    key = tuple(indices[i] if i == axis else slice(None, None, 1) for i in range(x.ndim))
+    # TODO: Implement fancy indexing in .slice so that this is more efficient
+    return blosc2.asarray(x[key])
 
 
 def slice_to_chunktuple(s, n):

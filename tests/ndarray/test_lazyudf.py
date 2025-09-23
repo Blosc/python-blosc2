@@ -420,8 +420,15 @@ def test_clip_logaddexp(shape, chunks, blocks, slices):
     expr = blosc2.clip(b, np.prod(shape) // 3, npb - 10)
     res = expr.compute(item=slices)
     np.testing.assert_allclose(res[...], npc[slices])
+    # clip is not a ufunc so will return np.ndarray
+    expr = np.clip(b, np.prod(shape) // 3, npb - 10)
+    assert isinstance(expr, np.ndarray)
 
     npc = np.logaddexp(npb, npa)
     expr = blosc2.logaddexp(b, a)
     res = expr.compute(item=slices)
     np.testing.assert_allclose(res[...], npc[slices])
+    # test that ufunc has been overwritten successfully
+    # (i.e. doesn't return np.ndarray)
+    expr = np.logaddexp(b, a)
+    assert isinstance(expr, blosc2.LazyArray)
