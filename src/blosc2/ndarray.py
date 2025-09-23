@@ -1489,6 +1489,28 @@ def log1p(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blo
     return blosc2.LazyExpr(new_op=(ndarr, "log1p", None))
 
 
+def log2(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Return the base 2 logarithm of the input array, element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression representing the base 2 logarithm of the input array.
+
+    References
+    ----------
+    `np.log2 <https://numpy.org/doc/stable/reference/generated/numpy.log2.html>`_
+
+    """
+    return blosc2.LazyExpr(new_op=(ndarr, "log2", None))
+
+
 def conj(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
     """
     Return the complex conjugate, element-wise.
@@ -1757,6 +1779,55 @@ def isinf(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blo
     return blosc2.LazyExpr(new_op=(ndarr, "isinf", None))
 
 
+def nonzero(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+    """
+    Return True/False for nonzero values element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    Returns
+    -------
+    out: :ref:`LazyExpr`
+        A lazy expression that can be evaluated to get the True/False array of results.
+
+    References
+    ----------
+    `np.nonzero <https://numpy.org/doc/stable/reference/generated/numpy.nonzero.html#numpy.nonzero>`_
+    """
+    # TODO: Optimise this
+    return ndarr.__ne__(0)
+
+
+def count_nonzero(
+    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | Sequence[int] | None = None
+) -> int:
+    """
+    Return True/False for nonzero values element-wise.
+
+    Parameters
+    ----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array.
+
+    axis: int | Sequence[int] | None
+        Axes along which to count nonzero entries. If None, sum over whole array. Default: None.
+
+    Returns
+    -------
+    out: int
+        Number of nonzero elements.
+
+    References
+    ----------
+    `np.count_nonzero <https://numpy.org/doc/stable/reference/generated/numpy.count_nonzero.html#numpy.count_nonzero>`_
+    """
+    # TODO: Optimise this
+    return sum(ndarr.__ne__(0), axis=axis)
+
+
 def equal(
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
     x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
@@ -1782,7 +1853,147 @@ def equal(
     ----------
     `np.equal <https://numpy.org/doc/stable/reference/generated/numpy.equal.html#numpy.equal>`_
     """
-    return x1 == x2
+    return x1.__eq__(x2)
+
+
+def not_equal(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the truth value of x1_i != x2_i for each element x1_i of the input array x1
+    with the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.not_equal <https://numpy.org/doc/stable/reference/generated/numpy.not_equal.html#numpy.not_equal>`_
+    """
+    return x1.__ne__(x2)
+
+
+def less_equal(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the truth value of x1_i <= x2_i for each element x1_i of the input array x1
+    with the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.less_equal <https://numpy.org/doc/stable/reference/generated/numpy.less_equal.html#numpy.less_equal>`_
+    """
+    return x1.__le__(x2)
+
+
+def less(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the truth value of x1_i < x2_i for each element x1_i of the input array x1
+    with the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.less <https://numpy.org/doc/stable/reference/generated/numpy.less.html#numpy.less>`_
+    """
+    return x1.__lt__(x2)
+
+
+def greater_equal(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the truth value of x1_i >= x2_i for each element x1_i of the input array x1
+    with the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.greater_equal <https://numpy.org/doc/stable/reference/generated/numpy.greater_equal.html#numpy.greater_equal>`_
+    """
+    return x1.__ge__(x2)
+
+
+def greater(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the truth value of x1_i > x2_i for each element x1_i of the input array x1
+    with the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.greater <https://numpy.org/doc/stable/reference/generated/numpy.greater.html#numpy.greater>`_
+    """
+    return x1.__gt__(x2)
 
 
 def multiply(
@@ -1839,6 +2050,327 @@ def divide(
     `np.divide <https://numpy.org/doc/stable/reference/generated/numpy.divide.html#numpy.divide>`_
     """
     return x1 / x2
+
+
+def nextafter(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Returns the next representable floating-point value for each element x1_i of the input
+    array x1 in the direction of the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. Real-valued floating point dtype.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1 and have same data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.nextafter <https://numpy.org/doc/stable/reference/generated/numpy.nextafter.html#numpy.nextafter>`_
+    """
+    return blosc2.LazyExpr(new_op=(x1, "nextafter", x2))
+
+
+def hypot(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the square root of the sum of squares for each element x1_i of the input array
+    x1 with the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. Real-valued floating point dtype.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. Real-valued floating point dtype.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.hypot <https://numpy.org/doc/stable/reference/generated/numpy.hypot.html#numpy.hypot>`_
+    """
+    return blosc2.LazyExpr(new_op=(x1, "hypot", x2))
+
+
+def copysign(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Composes a floating-point value with the magnitude of x1_i and the sign of x2_i
+    for each element of the input array x1.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. Real-valued floating point dtype.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. Real-valued floating point dtype.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.copysign <https://numpy.org/doc/stable/reference/generated/numpy.copysign.html#numpy.copysign>`_
+    """
+    return blosc2.LazyExpr(new_op=(x1, "copysign", x2))
+
+
+def maximum(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the maximum value for each element x1_i of the input array x1 relative to the
+    respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. Real-valued dtype.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. Real-valued dtype.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.maximum <https://numpy.org/doc/stable/reference/generated/numpy.maximum.html#numpy.maximum>`_
+    """
+    return blosc2.LazyExpr(new_op=(x1, "maximum", x2))
+
+
+def minimum(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the minimum value for each element x1_i of the input array x1 relative to the
+    respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. Real-valued dtype.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. Real-valued dtype.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.minimum <https://numpy.org/doc/stable/reference/generated/numpy.minimum.html#numpy.minimum>`_
+    """
+    return blosc2.LazyExpr(new_op=(x1, "minimum", x2))
+
+
+def reciprocal(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+    """
+    Computes the value of 1/x1_i for each element x1_i of the input array x1.
+
+    Parameters
+    -----------
+    x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array, floating-point data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.reciprocal <https://numpy.org/doc/stable/reference/generated/numpy.reciprocal.html#numpy.reciprocal>`_
+    """
+    return 1 / x if np.issubdtype(x.dtype, int) else 1.0 / x
+
+
+def floor(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+    """
+    Rounds each element x_i of the input array x to the greatest (i.e., closest to +infinity)
+    integer-valued number that is not greater than x_i.
+
+    Parameters
+    -----------
+    x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any real-valued data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.floor <https://numpy.org/doc/stable/reference/generated/numpy.floor.html#numpy.floor>`_
+    """
+    return blosc2.LazyExpr(new_op=(x, "floor", None))
+
+
+def ceil(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+    """
+    Rounds each element x_i of the input array x to the smallest (i.e., closest to -infinity)
+    integer-valued number that is not smaller than x_i.
+
+    Parameters
+    -----------
+    x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any real-valued data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.ceil <https://numpy.org/doc/stable/reference/generated/numpy.ceil.html#numpy.ceil>`_
+    """
+    return blosc2.LazyExpr(new_op=(x, "ceil", None))
+
+
+def trunc(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+    """
+    Rounds each element x_i of the input array x to the closest to 0
+    integer-valued number.
+
+    Parameters
+    -----------
+    x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any real-valued data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.trunc <https://numpy.org/doc/stable/reference/generated/numpy.trunc.html#numpy.trunc>`_
+    """
+    return blosc2.LazyExpr(new_op=(x, "trunc", None))
+
+
+def signbit(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+    """
+    Determines whether the sign bit is set for each element x_i of the input array x.
+
+    The sign bit of a real-valued floating-point number x_i is set whenever x_i is either -0,
+    less than zero, or a signed NaN (i.e., a NaN value whose sign bit is 1).
+
+    Parameters
+    -----------
+    x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any real-valued floating-point data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.signbit <https://numpy.org/doc/stable/reference/generated/numpy.signbit.html#numpy.signbit>`_
+    """
+    return blosc2.LazyExpr(new_op=(x, "signbit", None))
+
+
+def sign(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+    """
+    Returns an indication of the sign of a number for each element x_i of the input array x.
+
+    Parameters
+    -----------
+    x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any numeric data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results (-1, 0 or 1).
+
+    References
+    ----------
+    `np.sign <https://numpy.org/doc/stable/reference/generated/numpy.sign.html#numpy.sign>`_
+    """
+    return blosc2.LazyExpr(new_op=(x, "sign", None))
+
+
+def round(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+    """
+    Rounds each element x_i of the input array x to the nearest integer-valued number.
+
+    Parameters
+    -----------
+    x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any numeric data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results (-1, 0 or 1).
+
+    References
+    ----------
+    `np.round <https://numpy.org/doc/stable/reference/generated/numpy.round.html#numpy.round>`_
+    """
+    return blosc2.LazyExpr(new_op=(x, "round", None))
+
+
+def floor_divide(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i // x2_i for each element x1_i of the input array x1
+    with the respective element x2_i of the input array x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array. May have any real-valued data type.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. May have any real-valued data type.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.floor_divide <https://numpy.org/doc/stable/reference/generated/numpy.floor_divide.html#numpy.floor_divide>`_
+    """
+    return x1 // x2
 
 
 def add(
@@ -1946,6 +2478,113 @@ def pow(
     return x1**x2
 
 
+def logical_xor(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i ^ x2_i for each element x1_i of the input array x1 and x2_i
+    of x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array, boolean.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1, boolean.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.logical_xor <https://numpy.org/doc/stable/reference/generated/numpy.logical_xor.html#numpy.logical_xor>`_
+    """
+    return x1 ^ x2
+
+
+def logical_and(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i & x2_i for each element x1_i of the input array x1 and x2_i
+    of x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array, boolean.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. Boolean.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.logical_and <https://numpy.org/doc/stable/reference/generated/numpy.logical_and.html#numpy.logical_and>`_
+    """
+    return x1 & x2
+
+
+def logical_or(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i | x2_i for each element x1_i of the input array x1 and x2_i
+    of x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array, boolean.
+
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1, boolean.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.logical_or <https://numpy.org/doc/stable/reference/generated/numpy.logical_or.html#numpy.logical_or>`_
+    """
+    return x1 | x2
+
+
+def logical_not(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of ~x1_i for each element x1_i of the input array x1.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Input array, boolean.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.logical_not <https://numpy.org/doc/stable/reference/generated/numpy.logical_not.html#numpy.logical_not>`_
+    """
+    return ~x1
+
+
 def bitwise_xor(
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
     x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
@@ -1957,10 +2596,10 @@ def bitwise_xor(
     Parameters
     -----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
-        First input array. May have any data type.
+        First input array, integer or boolean.
 
     x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
-        Second input array. Must be compatible with x1. May have any data type.
+        Second input array. Must be compatible with x1, integer or boolean.
 
     Returns
     -------
@@ -1974,6 +2613,34 @@ def bitwise_xor(
     return x1 ^ x2
 
 
+def bitwise_and(
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+) -> blosc2.LazyExpr:
+    """
+    Computes the value of x1_i & x2_i for each element x1_i of the input array x1 and x2_i
+    of x2.
+
+    Parameters
+    -----------
+    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        First input array, integer or boolean.
+
+    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+        Second input array. Must be compatible with x1. Integer or boolean.
+
+    Returns
+    -------
+    out: LazyExpr
+        A LazyArray containing the element-wise results.
+
+    References
+    ----------
+    `np.bitwise_and <https://numpy.org/doc/stable/reference/generated/numpy.bitwise_and.html#numpy.bitwise_and>`_
+    """
+    return x1 & x2
+
+
 def bitwise_or(
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
     x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
@@ -1985,10 +2652,10 @@ def bitwise_or(
     Parameters
     -----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
-        First input array. May have any data type.
+        First input array, integer or boolean.
 
     x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
-        Second input array. Must be compatible with x1. May have any data type.
+        Second input array. Must be compatible with x1, integer or boolean.
 
     Returns
     -------
@@ -2011,7 +2678,7 @@ def bitwise_invert(
     Parameters
     -----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
-        First input array. May have any data type.
+        Input array, integer or boolean.
 
     Returns
     -------
@@ -2039,11 +2706,10 @@ def bitwise_right_shift(
     Parameters
     -----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
-        First input array. May have any data type.
+        First input array, integer.
 
     x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
-        Second input array. Must be compatible with x1. May have any data type.
-
+        Second input array. Must be compatible with x1, integer.
     Returns
     -------
     out: LazyExpr
@@ -2069,10 +2735,10 @@ def bitwise_left_shift(
     Parameters
     -----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
-        First input array. May have any data type.
+        First input array, integer.
 
     x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
-        Second input array. Must be compatible with x1. May have any data type.
+        Second input array. Must be compatible with x1, integer.
 
     Returns
     -------
@@ -2167,18 +2833,6 @@ class Operand:
 
     _device = "cpu"
 
-    def __and__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
-        _check_allowed_dtypes(value)
-        return blosc2.LazyExpr(new_op=(self, "&", value))
-
-    def __add__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
-        _check_allowed_dtypes(value)
-        return blosc2.LazyExpr(new_op=(self, "+", value))
-
-    def __iadd__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
-        _check_allowed_dtypes(value)
-        return blosc2.LazyExpr(new_op=(self, "+", value))
-
     def __array_namespace__(self, api_version: str | None = None) -> Any:
         """Return an object with all the functions and attributes of the module."""
         return blosc2
@@ -2207,12 +2861,15 @@ class Operand:
         if method != "__call__":
             return NotImplemented
 
+        # These functions in ufunc_map in ufunc_map_1param are implemented in numexpr and so we call
+        # those instead (since numexpr uses multithreading it is faster)
         ufunc_map = {
             np.add: "+",
             np.subtract: "-",
             np.multiply: "*",
             np.divide: "/",
             np.true_divide: "/",
+            np.floor_divide: "//",
             np.power: "**",
             np.less: "<",
             np.less_equal: "<=",
@@ -2227,6 +2884,11 @@ class Operand:
             np.bitwise_left_shift: "<<",
             np.bitwise_right_shift: ">>",
             np.remainder: "%",
+            np.nextafter: "nextafter",
+            np.copysign: "copysign",
+            np.hypot: "hypot",
+            np.maximum: "maximum",
+            np.minimum: "minimum",
         }
 
         ufunc_map_1param = {
@@ -2248,6 +2910,7 @@ class Operand:
             np.log: "log",
             np.log10: "log10",
             np.log1p: "log1p",
+            np.log2: "log2",
             np.abs: "abs",
             np.conj: "conj",
             np.real: "real",
@@ -2256,6 +2919,11 @@ class Operand:
             np.isnan: "isnan",
             np.isfinite: "isfinite",
             np.isinf: "isinf",
+            np.floor: "floor",
+            np.ceil: "ceil",
+            np.trunc: "trunc",
+            np.signbit: "signbit",
+            np.round: "round",
         }
 
         if ufunc in ufunc_map:
@@ -2268,7 +2936,15 @@ class Operand:
             _check_allowed_dtypes(value)
             return blosc2.LazyExpr(new_op=(value, ufunc_map_1param[ufunc], None))
 
-        return NotImplemented
+        return NotImplemented  # if not implemented in numexpr will default to chunkwise NumPy
+
+    def __add__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+        _check_allowed_dtypes(value)
+        return blosc2.LazyExpr(new_op=(self, "+", value))
+
+    def __iadd__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+        _check_allowed_dtypes(value)
+        return blosc2.LazyExpr(new_op=(self, "+", value))
 
     @is_documented_by(negative)
     def __neg__(self) -> blosc2.LazyExpr:
@@ -2322,6 +2998,11 @@ class Operand:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "/", self))
 
+    @is_documented_by(floor_divide)
+    def __floordiv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+        _check_allowed_dtypes(value)
+        return blosc2.LazyExpr(new_op=(value, "//", self))
+
     def __lt__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "<", value))
@@ -2364,25 +3045,30 @@ class Operand:
     def __abs__(self) -> blosc2.LazyExpr:
         return abs(self)
 
+    @is_documented_by(bitwise_and)
+    def __and__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+        _check_allowed_dtypes(value)
+        return blosc2.LazyExpr(new_op=(self, "&", value))
+
     @is_documented_by(bitwise_xor)
     def __xor__(self, other) -> blosc2.LazyExpr:
-        return bitwise_xor(self, other)
+        return blosc2.LazyExpr(new_op=(self, "^", other))
 
     @is_documented_by(bitwise_or)
     def __or__(self, other) -> blosc2.LazyExpr:
-        return bitwise_or(self, other)
+        return blosc2.LazyExpr(new_op=(self, "|", other))
 
     @is_documented_by(bitwise_invert)
     def __invert__(self) -> blosc2.LazyExpr:
-        return bitwise_invert(self)
+        return blosc2.LazyExpr(new_op=(self, "~", None))
 
     @is_documented_by(bitwise_right_shift)
     def __rshift__(self, other) -> blosc2.LazyExpr:
-        return bitwise_right_shift(self, other)
+        return blosc2.LazyExpr(new_op=(self, ">>", other))
 
     @is_documented_by(bitwise_left_shift)
     def __lshift__(self, other) -> blosc2.LazyExpr:
-        return bitwise_left_shift(self, other)
+        return blosc2.LazyExpr(new_op=(self, "<<", other))
 
     def __bool__(self) -> bool:
         if math.prod(self.shape) != 1:

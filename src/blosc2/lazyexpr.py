@@ -2185,6 +2185,51 @@ def infer_dtype(op, value1, value2):
         return np.result_type(value1, value2)
 
 
+def result_type(
+    *arrays_and_dtypes: blosc2.NDArray | int | float | complex | bool | blosc2.dtype,
+) -> blosc2.dtype:
+    """
+    Returns the dtype that results from applying type promotion rules (see Type Promotion Rules) to the arguments.
+
+    Parameters
+    ----------
+    arrays_and_dtypes: Sequence[NDarray | int | float | complex | bool | blosc2.dtype])
+        An arbitrary number of input arrays, scalars, and/or dtypes.
+
+    Returns
+    -------
+    out: blosc2.dtype
+        The dtype resulting from an operation involving the input arrays, scalars, and/or dtypes.
+    """
+    # Follow NumPy rules for scalar-array operations
+    # Create small arrays with the same dtypes and let NumPy's type promotion determine the result type
+    arrs = [
+        np.array([0], dtype=value.dtype) if hasattr(value, "shape") else value for value in arrays_and_dtypes
+    ]
+    return np.result_type(*arrs)
+
+
+def can_cast(from_: blosc2.dtype | blosc2.NDArray, to: blosc2.dtype) -> bool:
+    """
+    Determines if one data type can be cast to another data type according to (NumPy) type promotion rules.
+
+    Parameters
+    ----------
+    from_: dtype | NDArray
+        Input data type or array from which to cast.
+
+    to: dtype
+    Desired data type.
+
+    Returns
+    -------
+    out:bool
+        True if the cast can occur according to type promotion rules; otherwise, False.
+    """
+    arrs = np.array([0], dtype=from_.dtype) if hasattr(from_, "shape") else from_
+    return np.result_type(arrs)
+
+
 class LazyExpr(LazyArray):
     """Class for hosting lazy expressions.
 
