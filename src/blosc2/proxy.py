@@ -546,7 +546,11 @@ class ProxyNDField(blosc2.Operand):
 
 class SimpleProxy(blosc2.Operand):
     """
-    Simple proxy for a NumPy array (or similar) that can be used with the Blosc2 compute engine.
+    Simple proxy for any data container to be used with the compute engine.
+
+    The source must have a `shape` and `dtype` attributes; if not,
+    it will be converted to a NumPy array via the `np.asarray` function.
+    It should also have a `__getitem__` method.
 
     This only supports the __getitem__ method. No caching is performed.
 
@@ -565,6 +569,8 @@ class SimpleProxy(blosc2.Operand):
         if not hasattr(src, "shape") or not hasattr(src, "dtype"):
             # If the source is not a NumPy array, convert it to one
             src = np.asarray(src)
+        if not hasattr(src, "__getitem__"):
+            raise TypeError("The source must have a __getitem__ method")
         self._src = src
         self._dtype = src.dtype
         self._shape = src.shape
