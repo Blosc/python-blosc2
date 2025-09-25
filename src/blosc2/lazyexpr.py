@@ -187,6 +187,7 @@ functions += constructors
 
 relational_ops = ["==", "!=", "<", "<=", ">", ">="]
 logical_ops = ["&", "|", "^", "~"]
+not_complex_ops = ["maximum", "minimum", "<", "<=", ">", ">="]
 
 
 def get_expr_globals(expression):
@@ -2162,27 +2163,31 @@ def fuse_expressions(expr, new_base, dup_op):
 
 
 def infer_dtype(op, value1, value2):
+    if op == "contains":
+        return np.dtype(np.bool_)
+
+    v1_dtype = blosc2.result_type(value1)
+    v2_dtype = v1_dtype if value2 is None else blosc2.result_type(value2)
+    if op in not_complex_ops and (v1_dtype == np.complex128 or v2_dtype == np.complex128):
+        # Ensure that throw exception for functions which don't support complex args
+        raise ValueError(f"Invalid operand type for {op}: {v1_dtype, v2_dtype}")
     if op in relational_ops:
         return np.dtype(np.bool_)
     if op in logical_ops:
-        # Ensure that both operands are boolean
-        if value1.dtype != np.bool_:
-            raise ValueError(f"Invalid operand type for {op}: {value1.dtype}")
-        if op != "~" and value2.dtype != np.bool_:
-            raise ValueError(f"Invalid operand type for {op}: {value2.dtype}")
-        return np.dtype(np.bool_)
+        # Ensure that both operands are booleans or ints
+        if v1_dtype not in (np.bool_, np.int32, np.int64):
+            raise ValueError(f"Invalid operand type for {op}: {v1_dtype}")
+        if v2_dtype not in (np.bool_, np.int32, np.int64):
+            raise ValueError(f"Invalid operand type for {op}: {v2_dtype}")
+
+    if op == "/":
+        if v1_dtype == np.int32 and v2_dtype == np.int32:
+            return blosc2.float32
+        if np.issubdtype(v1_dtype, np.integer) and np.issubdtype(v2_dtype, np.integer):
+            return blosc2.float64
 
     # Follow NumPy rules for scalar-array operations
-    # Create small arrays with the same dtypes and let NumPy's type promotion determine the result type
-    if np.isscalar(value1) and hasattr(value2, "shape"):
-        arr2 = np.array([0], dtype=value2.dtype)
-        return (value1 + arr2).dtype
-    elif np.isscalar(value2) and hasattr(value1, "shape"):
-        arr1 = np.array([0], dtype=value1.dtype)
-        return (arr1 + value2).dtype
-    else:
-        # Both are arrays or both are scalars, use NumPy's type promotion rules
-        return np.result_type(value1, value2)
+    return blosc2.result_type(value1, value2)
 
 
 def result_type(
@@ -2245,6 +2250,7 @@ class LazyExpr(LazyArray):
             self.operands = {}
             return
         value1, op, value2 = new_op
+        dtype_ = infer_dtype(op, value1, value2)  # perform some checks
         if value2 is None:
             if isinstance(value1, LazyExpr):
                 self.expression = f"{op}({value1.expression})"
@@ -2253,7 +2259,17 @@ class LazyExpr(LazyArray):
                 self.operands = {"o0": value1}
                 self.expression = "o0" if op is None else f"{op}(o0)"
             return
-        elif op in ("arctan2", "contains", "pow", "power"):
+        elif op in (
+            "arctan2",
+            "contains",
+            "pow",
+            "power",
+            "nextafter",
+            "copysign",
+            "hypot",
+            "maximum",
+            "minimum",
+        ):
             if np.isscalar(value1) and np.isscalar(value2):
                 self.expression = f"{op}(o0, o1)"
             elif np.isscalar(value2):
@@ -2267,7 +2283,7 @@ class LazyExpr(LazyArray):
                 self.expression = f"{op}(o0, o1)"
             return
 
-        self._dtype = infer_dtype(op, value1, value2)
+        self._dtype = dtype_
         if np.isscalar(value1) and np.isscalar(value2):
             self.expression = f"({value1} {op} {value2})"
         elif np.isscalar(value2):

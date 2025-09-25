@@ -2210,7 +2210,7 @@ def reciprocal(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc
     ----------
     `np.reciprocal <https://numpy.org/doc/stable/reference/generated/numpy.reciprocal.html#numpy.reciprocal>`_
     """
-    return 1 / x if np.issubdtype(x.dtype, int) else 1.0 / x
+    return 1.0 / x
 
 
 def floor(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
@@ -2503,6 +2503,8 @@ def logical_xor(
     ----------
     `np.logical_xor <https://numpy.org/doc/stable/reference/generated/numpy.logical_xor.html#numpy.logical_xor>`_
     """
+    if blosc2.result_type(x1, x2) != blosc2.bool_:
+        raise TypeError("Both operands must be boolean types for logical ops.")
     return x1 ^ x2
 
 
@@ -2531,6 +2533,8 @@ def logical_and(
     ----------
     `np.logical_and <https://numpy.org/doc/stable/reference/generated/numpy.logical_and.html#numpy.logical_and>`_
     """
+    if blosc2.result_type(x1, x2) != blosc2.bool_:
+        raise TypeError("Both operands must be boolean types for logical ops.")
     return x1 & x2
 
 
@@ -2559,6 +2563,8 @@ def logical_or(
     ----------
     `np.logical_or <https://numpy.org/doc/stable/reference/generated/numpy.logical_or.html#numpy.logical_or>`_
     """
+    if blosc2.result_type(x1, x2) != blosc2.bool_:
+        raise TypeError("Both operands must be boolean types for logical ops.")
     return x1 | x2
 
 
@@ -2582,6 +2588,8 @@ def logical_not(
     ----------
     `np.logical_not <https://numpy.org/doc/stable/reference/generated/numpy.logical_not.html#numpy.logical_not>`_
     """
+    if blosc2.result_type(x1) != blosc2.bool_:
+        raise TypeError("Operand must be boolean type for logical ops.")
     return ~x1
 
 
@@ -2888,7 +2896,11 @@ def logaddexp(x1: int | float | NDArray, x2: int | float | NDArray) -> NDArray:
         output[:] = np.logaddexp(x1, x2)
 
     dtype = blosc2.result_type(x1.dtype, x2.dtype)
-    dtype = blosc2.float32 if np.issubdtype(dtype, np.integer) else dtype
+    if dtype == blosc2.bool:
+        raise TypeError("logaddexp doesn't accept boolean arguments.")
+
+    if np.issubdtype(dtype, np.integer):
+        dtype = blosc2.float32
     return blosc2.lazyudf(chunkwise_logaddexp, (x1, x2), dtype=dtype, shape=x1.shape)
 
 
@@ -2994,6 +3006,10 @@ class Operand:
         # implemented in python-blosc2
         local_ufunc_map = {
             np.logaddexp: logaddexp,
+            np.logical_not: logical_not,
+            np.logical_and: logical_and,
+            np.logical_or: logical_or,
+            np.logical_xor: logical_xor,
         }
         if ufunc in local_ufunc_map:
             return local_ufunc_map[ufunc](*inputs)
@@ -3001,6 +3017,12 @@ class Operand:
         if ufunc in ufunc_map:
             value = inputs[0] if inputs[1] is self else inputs[1]
             _check_allowed_dtypes(value)
+            # catch special case of multiplying two bools (not implemented in numexpr)
+            if ufunc_map[ufunc] == "*" and blosc2.result_type(value, self) == blosc2.bool:
+                return blosc2.LazyExpr(new_op=(value, "&", self))
+            # catch special case of adding two bools (not implemented in numexpr)
+            if ufunc_map[ufunc] == "+" and blosc2.result_type(value, self) == blosc2.bool:
+                return blosc2.LazyExpr(new_op=(value, "|", self))
             return blosc2.LazyExpr(new_op=(value, ufunc_map[ufunc], self))
 
         if ufunc in ufunc_map_1param:
@@ -3012,11 +3034,12 @@ class Operand:
 
     def __add__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
+        if blosc2.result_type(value, self) == blosc2.bool:
+            return blosc2.LazyExpr(new_op=(value, "|", self))
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
     def __iadd__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
-        _check_allowed_dtypes(value)
-        return blosc2.LazyExpr(new_op=(self, "+", value))
+        return self.__add__(value)
 
     @is_documented_by(negative)
     def __neg__(self) -> blosc2.LazyExpr:
@@ -3031,8 +3054,7 @@ class Operand:
         return remainder(self, other)
 
     def __radd__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
-        _check_allowed_dtypes(value)
-        return blosc2.LazyExpr(new_op=(value, "+", self))
+        return self.__add__(value)
 
     def __sub__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
@@ -3046,25 +3068,26 @@ class Operand:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "-", self))
 
+    @is_documented_by(multiply)
     def __mul__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
+        # catch special case of multiplying two bools (not implemented in numexpr)
+        if blosc2.result_type(value, self) == blosc2.bool:
+            return blosc2.LazyExpr(new_op=(value, "&", self))
         return blosc2.LazyExpr(new_op=(self, "*", value))
 
     def __imul__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
-        _check_allowed_dtypes(value)
-        return blosc2.LazyExpr(new_op=(self, "*", value))
+        return self.__mul__(value)
 
     def __rmul__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
-        _check_allowed_dtypes(value)
-        return blosc2.LazyExpr(new_op=(value, "*", self))
+        return self.__mul__(value)
 
     def __truediv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "/", value))
 
     def __itruediv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
-        _check_allowed_dtypes(value)
-        return blosc2.LazyExpr(new_op=(self, "/", value))
+        return self.__truediv__(value)
 
     def __rtruediv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
@@ -3073,7 +3096,7 @@ class Operand:
     @is_documented_by(floor_divide)
     def __floordiv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
-        return blosc2.LazyExpr(new_op=(value, "//", self))
+        return blosc2.LazyExpr(new_op=(self, "//", value))
 
     def __lt__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
