@@ -1837,7 +1837,7 @@ def equal(
     with the respective element x2_i of the input array x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
@@ -1865,7 +1865,7 @@ def not_equal(
     with the respective element x2_i of the input array x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
@@ -1893,7 +1893,7 @@ def less_equal(
     with the respective element x2_i of the input array x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
@@ -1921,7 +1921,7 @@ def less(
     with the respective element x2_i of the input array x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
@@ -1949,7 +1949,7 @@ def greater_equal(
     with the respective element x2_i of the input array x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
@@ -1977,7 +1977,7 @@ def greater(
     with the respective element x2_i of the input array x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
@@ -2005,7 +2005,7 @@ def multiply(
     with the respective element x2_i of the input array x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
@@ -2033,7 +2033,7 @@ def divide(
     with the respective element x2_i of the input array x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
@@ -2061,7 +2061,7 @@ def nextafter(
     array x1 in the direction of the respective element x2_i of the input array x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. Real-valued floating point dtype.
 
@@ -2089,7 +2089,7 @@ def hypot(
     x1 with the respective element x2_i of the input array x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. Real-valued floating point dtype.
 
@@ -2117,7 +2117,7 @@ def copysign(
     for each element of the input array x1.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. Real-valued floating point dtype.
 
@@ -2145,7 +2145,7 @@ def maximum(
     respective element x2_i of the input array x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. Real-valued dtype.
 
@@ -2173,7 +2173,7 @@ def minimum(
     respective element x2_i of the input array x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. Real-valued dtype.
 
@@ -2197,7 +2197,7 @@ def reciprocal(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc
     Computes the value of 1/x1_i for each element x1_i of the input array x1.
 
     Parameters
-    -----------
+    ----------
     x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array, floating-point data type.
 
@@ -2219,7 +2219,7 @@ def floor(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.Laz
     integer-valued number that is not greater than x_i.
 
     Parameters
-    -----------
+    ----------
     x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any real-valued data type.
 
@@ -2241,7 +2241,7 @@ def ceil(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.Lazy
     integer-valued number that is not smaller than x_i.
 
     Parameters
-    -----------
+    ----------
     x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any real-valued data type.
 
@@ -2263,7 +2263,7 @@ def trunc(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.Laz
     integer-valued number.
 
     Parameters
-    -----------
+    ----------
     x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any real-valued data type.
 
@@ -2287,7 +2287,7 @@ def signbit(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.L
     less than zero, or a signed NaN (i.e., a NaN value whose sign bit is 1).
 
     Parameters
-    -----------
+    ----------
     x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any real-valued floating-point data type.
 
@@ -2308,7 +2308,7 @@ def sign(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.Lazy
     Returns an indication of the sign of a number for each element x_i of the input array x.
 
     Parameters
-    -----------
+    ----------
     x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any numeric data type.
 
@@ -2329,7 +2329,7 @@ def round(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.Laz
     Rounds each element x_i of the input array x to the nearest integer-valued number.
 
     Parameters
-    -----------
+    ----------
     x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any numeric data type.
 
@@ -2354,7 +2354,7 @@ def floor_divide(
     with the respective element x2_i of the input array x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any real-valued data type.
 
@@ -2382,7 +2382,7 @@ def add(
     with the respective element x2_i of the input array x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
@@ -2410,7 +2410,7 @@ def subtract(
     with the respective element x2_i of the input array x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
@@ -2434,7 +2434,7 @@ def square(x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.L
     Computes the value of x1_i**2 for each element x1_i of the input array x1.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
@@ -2459,7 +2459,7 @@ def pow(
     of x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
@@ -2487,7 +2487,7 @@ def logical_xor(
     of x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array, boolean.
 
@@ -2517,7 +2517,7 @@ def logical_and(
     of x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array, boolean.
 
@@ -2547,7 +2547,7 @@ def logical_or(
     of x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array, boolean.
 
@@ -2575,7 +2575,7 @@ def logical_not(
     Computes the value of ~x1_i for each element x1_i of the input array x1.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         Input array, boolean.
 
@@ -2602,7 +2602,7 @@ def bitwise_xor(
     of x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array, integer or boolean.
 
@@ -2630,7 +2630,7 @@ def bitwise_and(
     of x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array, integer or boolean.
 
@@ -2658,7 +2658,7 @@ def bitwise_or(
     of x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array, integer or boolean.
 
@@ -2684,7 +2684,7 @@ def bitwise_invert(
     Computes the value of ~x1_i for each element x1_i of the input array x1.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         Input array, integer or boolean.
 
@@ -2712,7 +2712,7 @@ def bitwise_right_shift(
     floor division by a power of two.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array, integer.
 
@@ -2741,7 +2741,7 @@ def bitwise_left_shift(
     Note: this operation is equivalent to multiplying x1 by 2**x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array, integer.
 
@@ -2767,7 +2767,7 @@ def positive(
     Computes the numerical positive of each element x_i (i.e., out_i = +x_i) of the input array x.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
@@ -2790,7 +2790,7 @@ def negative(
     Computes the numerical negative of each element x_i (i.e., out_i = -x_i) of the input array x.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
@@ -2817,7 +2817,7 @@ def remainder(
     Note: This function is equivalent to the Python modulus operator x1_i % x2_i.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any data type.
 
@@ -2876,7 +2876,7 @@ def logaddexp(x1: int | float | NDArray, x2: int | float | NDArray) -> NDArray:
     input array x2.
 
     Parameters
-    -----------
+    ----------
     x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
         First input array. May have any real-valued floating-point data type.
 
@@ -3693,7 +3693,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         """Return the transpose of a 2-dimensional array."""
         if self.ndim != 2:
             raise ValueError("This property only works for 2-dimensional arrays.")
-        return permute_dims(self)
+        return blosc2.linalg.permute_dims(self)
 
     @property
     def mT(self):
@@ -3703,7 +3703,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         axes = np.arange(self.ndim)
         axes[-1] = self.ndim - 2
         axes[-2] = self.ndim - 1
-        return permute_dims(self, axes=axes)
+        return blosc2.linalg.permute_dims(self, axes=axes)
 
     def get_fselection_numpy(self, key: list | np.ndarray) -> np.ndarray:
         """
@@ -4604,7 +4604,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return super().as_ffi_ptr()
 
     def __matmul__(self, other):
-        return matmul(self, other)
+        return blosc2.linalg.matmul(self, other)
 
 
 def squeeze(x: NDArray, axis: int | None = None) -> NDArray:
@@ -5821,579 +5821,6 @@ def sort(array: NDArray, order: str | list[str] | None = None, **kwargs: Any) ->
     return larr.sort(order).compute(**kwargs)
 
 
-def matmul(x1: NDArray | np.ndarray, x2: NDArray, **kwargs: Any) -> NDArray | np.ndarray:  # noqa : C901
-    """
-    Computes the matrix product between two Blosc2 NDArrays.
-
-    Parameters
-    ----------
-    x1: :ref:`NDArray` | np.ndarray
-        The first input array.
-    x2: :ref:`NDArray` | np.ndarray
-        The second input array.
-    kwargs: Any, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
-
-    Returns
-    -------
-    out: :ref:`NDArray`
-        The matrix product of the inputs. This is a scalar only when both x1,
-        x2 are 1-d vectors.
-
-    Raises
-    ------
-    ValueError
-        If the last dimension of ``x1`` is not the same size as
-        the second-to-last dimension of ``x2``.
-
-        If a scalar value is passed in.
-
-    References
-    ----------
-    `numpy.matmul <https://numpy.org/doc/stable/reference/generated/numpy.matmul.html>`_
-
-    Examples
-    --------
-    For 2-D arrays it is the matrix product:
-
-    >>> import numpy as np
-    >>> import blosc2
-    >>> a = np.array([[1, 2],
-    ...               [3, 4]])
-    >>> nd_a = blosc2.asarray(a)
-    >>> b = np.array([[2, 3],
-    ...               [2, 1]])
-    >>> nd_b = blosc2.asarray(b)
-    >>> blosc2.matmul(nd_a, nd_b)
-    array([[ 6,  5],
-           [14, 13]])
-
-    For 2-D mixed with 1-D, the result is the usual.
-
-    >>> a = np.array([[1, 3],
-    ...               [0, 1]])
-    >>> nd_a = blosc2.asarray(a)
-    >>> v = np.array([1, 2])
-    >>> nd_v = blosc2.asarray(v)
-    >>> blosc2.matmul(nd_a, nd_v)
-    array([7, 2])
-    >>> blosc2.matmul(nd_v, nd_a)
-    array([1, 5])
-
-    """
-    # Added this to pass array-api tests (which use internal getitem to check results)
-    if isinstance(x1, np.ndarray) and isinstance(x2, np.ndarray):
-        return np.matmul(x1, x2)
-
-    # Validate arguments are not scalars
-    if np.isscalar(x1) or np.isscalar(x2):
-        raise ValueError("Arguments can't be scalars.")
-
-    # Validate matrix multiplication compatibility
-    if x1.shape[-1] != x2.shape[builtins.max(-2, -len(x2.shape))]:
-        raise ValueError("Shapes are not aligned for matrix multiplication.")
-
-    # Promote 1D arrays to 2D if necessary
-    x1_is_vector = False
-    x2_is_vector = False
-    if x1.ndim == 1:
-        x1 = blosc2.expand_dims(x1, axis=0)  # (N,) -> (1, N)
-        x1_is_vector = True
-    if x2.ndim == 1:
-        x2 = blosc2.expand_dims(x2, axis=1)  # (M,) -> (M, 1)
-        x2_is_vector = True
-
-    n, k = x1.shape[-2:]
-    m = x2.shape[-1]
-    result_shape = np.broadcast_shapes(x1.shape[:-2], x2.shape[:-2]) + (n, m)
-    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
-
-    if 0 in result.shape + x1.shape + x2.shape:  # if any array is empty, return array of 0s
-        if x1_is_vector:
-            result.squeeze(axis=-2)
-        if x2_is_vector:
-            result.squeeze(axis=-1)
-        return result
-
-    p, q = result.chunks[-2:]
-    r = x2.chunks[-1]
-
-    intersecting_chunks = get_intersecting_chunks((), result.shape[:-2], result.chunks[:-2])
-    for chunk in intersecting_chunks:
-        chunk = chunk.raw
-        for row in range(0, n, p):
-            row_end = builtins.min(row + p, n)
-            for col in range(0, m, q):
-                col_end = builtins.min(col + q, m)
-                for aux in range(0, k, r):
-                    aux_end = builtins.min(aux + r, k)
-                    bx1 = (
-                        x1[chunk[-x1.ndim + 2 :] + (slice(row, row_end), slice(aux, aux_end))]
-                        if x1.ndim > 2
-                        else x1[row:row_end, aux:aux_end]
-                    )
-                    bx2 = (
-                        x2[chunk[-x2.ndim + 2 :] + (slice(aux, aux_end), slice(col, col_end))]
-                        if x2.ndim > 2
-                        else x2[aux:aux_end, col:col_end]
-                    )
-                    result[chunk + (slice(row, row_end), slice(col, col_end))] += np.matmul(bx1, bx2)
-
-    if x1_is_vector:
-        result.squeeze(axis=-2)
-    if x2_is_vector:
-        result.squeeze(axis=-1)
-
-    return result
-
-
-def tensordot(
-    x1: NDArray, x2: NDArray, axes: int | tuple[Sequence[int], Sequence[int]] = 2, **kwargs: Any
-) -> NDArray:
-    """
-    Returns a tensor contraction of x1 and x2 over specific axes. The tensordot function corresponds to the generalized matrix product.
-
-    Parameters
-    ----------
-    x1: NDArray
-        First input array. Should have a numeric data type.
-
-    x2: NDArray
-        Second input array. Should have a numeric data type. Corresponding contracted axes of x1 and x2 must be equal.
-
-    axes: int | tuple[Sequence[int], Sequence[int]]
-        Number of axes (dimensions) to contract or explicit sequences of axis (dimension) indices for x1 and x2, respectively.
-        * If axes is an int equal to N, then contraction is performed over the last N axes of x1 and the first N axes of x2 in order.
-        The size of each corresponding axis (dimension) must match. Must be nonnegative.
-        - If N equals 0, the result is the tensor (outer) product.
-        - If N equals 1, the result is the tensor dot product.
-        - If N equals 2, the result is the tensor double contraction (default).
-        * If axes is a tuple of two sequences (x1_axes, x2_axes), the first sequence applies to x1 and the second sequence to x2.
-        Both sequences must have the same length. Each axis (dimension) x1_axes[i] for x1 must have the same size as the respective
-        axis (dimension) x2_axes[i] for x2. Each index referred to in a sequence must be unique. If x1 has rank (i.e, number of dimensions) N,
-        a valid x1 axis must reside on the half-open interval [-N, N). If x2 has rank M, a valid x2 axis must reside on the half-open interval [-M, M).
-
-    kwargs: Any, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
-
-    Note: Neither argument is complex-conjugated or transposed. If conjugation and/or transposition is desired, these operations should be explicitly
-    performed prior to computing the generalized matrix product.
-
-    Returns
-    -------
-    out: NDArray
-        An array containing the tensor contraction whose shape consists of the non-contracted axes (dimensions) of the first array x1, followed by the non-contracted axes (dimensions) of the second array x2. The returned array must have a data type determined by Type Promotion Rules.
-    """
-    fast_path = kwargs.pop("fast_path", None)  # for testing purposes
-
-    # Added this to pass array-api tests (which use internal getitem to check results)
-    if isinstance(x1, np.ndarray) and isinstance(x2, np.ndarray):
-        return np.tensordot(x1, x2, axes=axes)
-
-    x1, x2 = blosc2.asarray(x1), blosc2.asarray(x2)
-
-    if isinstance(axes, tuple):
-        a_axes, b_axes = axes
-        a_axes = list(a_axes)
-        b_axes = list(b_axes)
-        if len(a_axes) != len(b_axes):
-            raise ValueError("Lengths of reduction axes for x1 and x2 must be equal!")
-        # need to track order of b_axes; later we cycle through a_axes sorted for op_chunk
-        # a_sorted[inv_sort][b_sort] matches b_sorted since b_axes matches a_axes
-        inv_sort = np.argsort(np.argsort(a_axes))
-        b_sort = np.argsort(b_axes)
-        order = inv_sort[b_sort]
-        a_keep, b_keep = [True] * x1.ndim, [True] * x2.ndim
-        for i, j in zip(a_axes, b_axes, strict=False):
-            i = x1.ndim + i if i < 0 else i
-            j = x2.ndim + j if j < 0 else j
-            a_keep[i] = False
-            b_keep[j] = False
-        a_axes = [] if a_axes == () else a_axes  # handle no reduction
-        b_axes = [] if b_axes == () else b_axes  # handle no reduction
-    elif isinstance(axes, int):
-        if axes < 0:
-            raise ValueError("Integer axes argument must be nonnegative!")
-        order = np.arange(axes, dtype=int)  # no reordering required
-        a_axes = list(range(x1.ndim - axes, x1.ndim))
-        b_axes = list(range(0, axes))
-        a_keep = [i + axes < x1.ndim for i in range(x1.ndim)]
-        b_keep = [i >= axes for i in range(x2.ndim)]
-    else:
-        raise ValueError("Axes argument must be two element tuple of sequences or an integer.")
-    x1shape = np.array(x1.shape)
-    x2shape = np.array(x2.shape)
-    a_chunks_red = tuple(c for i, c in enumerate(x1.chunks) if not a_keep[i])
-    a_shape_red = tuple(c for i, c in enumerate(x1.shape) if not a_keep[i])
-
-    if np.any(x1shape[a_axes] != x2shape[b_axes]):
-        raise ValueError("x1 and x2 must have same shapes along reduction dimensions")
-
-    result_shape = tuple(x1shape[a_keep]) + tuple(x2shape[b_keep])
-    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
-
-    op_chunks = [
-        slice_to_chunktuple(slice(0, s, 1), c) for s, c in zip(x1shape[a_axes], a_chunks_red, strict=True)
-    ]
-    res_chunks = [
-        slice_to_chunktuple(s, c)
-        for s, c in zip([slice(0, r, 1) for r in result.shape], result.chunks, strict=True)
-    ]
-    a_selection = (slice(None, None, 1),) * x1.ndim
-    b_selection = (slice(None, None, 1),) * x2.ndim
-
-    chunk_memory = np.prod(result.chunks) * (
-        np.prod(x1shape[a_axes]) * x1.dtype.itemsize + np.prod(x2shape[b_axes]) * x2.dtype.itemsize
-    )
-    if chunk_memory < blosc2.MAX_FAST_PATH_SIZE:
-        fast_path = True if fast_path is None else fast_path
-    fast_path = False if fast_path is None else fast_path  # fast_path set via kwargs for testing
-
-    # adapted from numpy.tensordot
-    a_keep_axes = [i for i, k in enumerate(a_keep) if k]
-    b_keep_axes = [i for i, k in enumerate(b_keep) if k]
-    newaxes_a = a_keep_axes + a_axes
-    newaxes_b = b_axes + b_keep_axes
-
-    for rchunk in product(*res_chunks):
-        res_chunk = tuple(
-            slice(rc * rcs, builtins.min((rc + 1) * rcs, rshape), 1)
-            for rc, rcs, rshape in zip(rchunk, result.chunks, result.shape, strict=True)
-        )
-        rchunk_iter = iter(res_chunk)
-        a_selection = tuple(next(rchunk_iter) if a else slice(None, None, 1) for a in a_keep)
-        b_selection = tuple(next(rchunk_iter) if b else slice(None, None, 1) for b in b_keep)
-        res_chunks = tuple(s.stop - s.start for s in res_chunk)
-
-        if fast_path:  # just load everything
-            bx1 = x1[a_selection]
-            bx2 = x2[b_selection]
-            newshape_a = (
-                math.prod([bx1.shape[i] for i in a_keep_axes]),
-                math.prod([bx1.shape[a] for a in a_axes]),
-            )
-            newshape_b = (
-                math.prod([bx2.shape[b] for b in b_axes]),
-                math.prod([bx2.shape[i] for i in b_keep_axes]),
-            )
-            at = bx1.transpose(newaxes_a).reshape(newshape_a)
-            bt = bx2.transpose(newaxes_b).reshape(newshape_b)
-            res = np.dot(at, bt)
-            result[res_chunk] += res.reshape(res_chunks)
-        else:  # operands too big, have to go chunk-by-chunk
-            for ochunk in product(*op_chunks):
-                op_chunk = tuple(
-                    slice(rc * rcs, builtins.min((rc + 1) * rcs, x1s), 1)
-                    for rc, rcs, x1s in zip(ochunk, a_chunks_red, a_shape_red, strict=True)
-                )  # use x1 chunk shape to iterate over reduction axes
-                ochunk_iter = iter(op_chunk)
-                a_selection = tuple(
-                    next(ochunk_iter) if not a else as_ for as_, a in zip(a_selection, a_keep, strict=True)
-                )
-                # have to permute to match order of a_axes
-                order_iter = iter(order)
-                b_selection = tuple(
-                    op_chunk[next(order_iter)] if not b else bs_
-                    for bs_, b in zip(b_selection, b_keep, strict=True)
-                )
-                bx1 = x1[a_selection]
-                bx2 = x2[b_selection]
-                # adapted from numpy tensordot
-                newshape_a = (
-                    math.prod([bx1.shape[i] for i in a_keep_axes]),
-                    math.prod([bx1.shape[a] for a in a_axes]),
-                )
-                newshape_b = (
-                    math.prod([bx2.shape[b] for b in b_axes]),
-                    math.prod([bx2.shape[i] for i in b_keep_axes]),
-                )
-                at = bx1.transpose(newaxes_a).reshape(newshape_a)
-                bt = bx2.transpose(newaxes_b).reshape(newshape_b)
-                res = np.dot(at, bt)
-                result[res_chunk] += res.reshape(res_chunks)
-    return result
-
-
-def vecdot(x1: NDArray, x2: NDArray, axis: int = -1, **kwargs) -> NDArray:
-    """
-    Computes the (vector) dot product of two arrays. Complex conjugates x1.
-
-    Parameters
-    ----------
-    x1: NDArray
-        First input array. Must have floating-point data type.
-
-    x2: NDArray
-        Second input array. Must be compatible with x1 for all non-contracted axes (via broadcasting).
-        The size of the axis over which to compute the dot product must be the same size as the respective axis in x1.
-        Must have a floating-point data type.
-
-    axis: int
-        The axis (dimension) of x1 and x2 containing the vectors for which to compute the dot product.
-        Should be an integer on the interval [-N, -1], where N is min(x1.ndim, x2.ndim). Default: -1.
-
-    Returns
-    -------
-    out: NDArray
-        If x1 and x2 are both one-dimensional arrays, a zero-dimensional containing the dot product;
-        otherwise, a non-zero-dimensional array containing the dot products and having rank N-1,
-        where N is the rank (number of dimensions) of the shape determined according to broadcasting
-        along the non-contracted axes.
-    """
-    fast_path = kwargs.pop("fast_path", None)  # for testing purposes
-    # Added this to pass array-api tests (which use internal getitem to check results)
-    if isinstance(x1, np.ndarray) and isinstance(x2, np.ndarray):
-        return np.vecdot(x1, x2, axis=axis)
-
-    x1, x2 = blosc2.asarray(x1), blosc2.asarray(x2)
-
-    N = builtins.min(x1.ndim, x2.ndim)
-    if axis < -N or axis > -1:
-        raise ValueError("axis must be on interval [-N,-1].")
-    a_axes = axis + x1.ndim
-    b_axes = axis + x2.ndim
-    a_keep = [True] * x1.ndim
-    a_keep[a_axes] = False
-    b_keep = [True] * x2.ndim
-    b_keep[b_axes] = False
-    if np.issubdtype(x1.dtype, complex):
-        x1 = blosc2.conj(x1)
-    x1shape = np.array(x1.shape)
-    x2shape = np.array(x2.shape)
-    result_shape = np.broadcast_shapes(x1shape[a_keep], x2shape[b_keep])
-    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
-
-    x1shape = np.array(x1.shape)
-    x2shape = np.array(x2.shape)
-    a_chunks_red = x1.chunks[a_axes]
-    a_shape_red = x1.shape[a_axes]
-
-    if np.any(x1shape[a_axes] != x2shape[b_axes]):
-        raise ValueError("x1 and x2 must have same shapes along reduction dimensions")
-
-    result_shape = np.broadcast_shapes(x1shape[a_keep], x2shape[b_keep])
-    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
-
-    res_chunks = [
-        slice_to_chunktuple(s, c)
-        for s, c in zip([slice(0, r, 1) for r in result.shape], result.chunks, strict=True)
-    ]
-    a_selection = (slice(None, None, 1),) * x1.ndim
-    b_selection = (slice(None, None, 1),) * x2.ndim
-
-    chunk_memory = np.prod(result.chunks) * (
-        x1shape[a_axes] * x1.dtype.itemsize + x2shape[b_axes] * x2.dtype.itemsize
-    )
-    if chunk_memory < blosc2.MAX_FAST_PATH_SIZE:
-        fast_path = True if fast_path is None else fast_path
-    fast_path = False if fast_path is None else fast_path  # fast_path set via kwargs for testing
-
-    for rchunk in product(*res_chunks):
-        res_chunk = tuple(
-            slice(rc * rcs, builtins.min((rc + 1) * rcs, rshape), 1)
-            for rc, rcs, rshape in zip(rchunk, result.chunks, result.shape, strict=True)
-        )
-        # handle broadcasting - if x1, x2 different ndim, could have to prepend 1s
-        rchunk_iter = (
-            slice(0, 1, 1) if s == 1 else r
-            for r, s in zip(res_chunk[-x1.ndim + 1 :], x1shape[a_keep], strict=True)
-        )
-        a_selection = tuple(next(rchunk_iter) if a else slice(None, None, 1) for a in a_keep)
-        rchunk_iter = (
-            slice(0, 1, 1) if s == 1 else r
-            for r, s in zip(res_chunk[-x2.ndim + 1 :], x2shape[b_keep], strict=True)
-        )
-        b_selection = tuple(next(rchunk_iter) if b else slice(None, None, 1) for b in b_keep)
-
-        if fast_path:  # just load everything, also handles case of 0 in shapes
-            bx1 = x1[a_selection]
-            bx2 = x2[b_selection]
-            result[res_chunk] += np.vecdot(bx1, bx2, axis=axis)
-        else:  # operands too big, have to go chunk-by-chunk
-            for ochunk in range(0, a_shape_red, a_chunks_red):
-                op_chunk = (slice(ochunk, builtins.min(ochunk + a_chunks_red, x1.shape[a_axes]), 1),)
-                a_selection = a_selection[:a_axes] + op_chunk + a_selection[a_axes + 1 :]
-                b_selection = b_selection[:b_axes] + op_chunk + b_selection[b_axes + 1 :]
-                bx1 = x1[a_selection]
-                bx2 = x2[b_selection]
-                res = np.vecdot(bx1, bx2, axis=axis)
-                result[res_chunk] += res
-    return result
-
-
-def permute_dims(
-    arr: NDArray | np.ndarray, axes: tuple[int] | list[int] | None = None, **kwargs: Any
-) -> NDArray:
-    """
-    Permutes the axes (dimensions) of an array.
-
-    Parameters
-    ----------
-    arr: :ref:`NDArray` | np.ndarray
-        The input array.
-    axes: tuple[int], list[int], optional
-        The desired permutation of axes. If None, the axes are reversed by default.
-        If specified, axes must be a tuple or list representing a permutation of
-        ``[0, 1, ..., N-1]``, where ``N`` is the number of dimensions of the input array.
-        Negative indices are also supported. The *i*-th axis of the result will correspond
-        to the axis numbered ``axes[i]`` of the input.
-    kwargs: Any, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
-
-    Returns
-    -------
-    out: :ref:`NDArray`
-        A Blosc2 :ref:`NDArray` with axes transposed.
-
-    Raises
-    ------
-    ValueError
-        If ``axes`` is not a valid permutation of the dimensions of ``arr``.
-
-    References
-    ----------
-    `numpy.transpose <https://numpy.org/doc/2.2/reference/generated/numpy.transpose.html>`_
-
-    `permute_dims <https://data-apis.org/array-api/latest/API_specification/generated/array_api.permute_dims.html#permute-dims>`_
-
-    Examples
-    --------
-    For 2-D arrays it is the matrix transposition as usual:
-
-    >>> import blosc2
-    >>> a = blosc2.arange(1, 10).reshape((3, 3))
-    >>> a[:]
-    array([[1, 2, 3],
-           [4, 5, 6],
-           [7, 8, 9]])
-    >>> at = blosc2.permute_dims(a)
-    >>> at[:]
-    array([[1, 4, 7],
-           [2, 5, 8],
-           [3, 6, 9]])
-
-    For 3-D arrays:
-
-    >>> import blosc2
-    >>> a = blosc2.arange(1, 25).reshape((2, 3, 4))
-    >>> a[:]
-    array([[[ 1,  2,  3,  4],
-            [ 5,  6,  7,  8],
-            [ 9, 10, 11, 12]],
-           [[13, 14, 15, 16],
-            [17, 18, 19, 20],
-            [21, 22, 23, 24]]])
-
-    >>> at = blosc2.permute_dims(a, axes=(1, 0, 2))
-    >>> at[:]
-    array([[[ 1,  2,  3,  4],
-            [13, 14, 15, 16]],
-           [[ 5,  6,  7,  8],
-            [17, 18, 19, 20]],
-           [[ 9, 10, 11, 12],
-            [21, 22, 23, 24]]])
-    """
-    if np.isscalar(arr) or arr.ndim < 2:
-        return arr
-    if isinstance(arr, np.ndarray):  # for array-api test compliance (does getitem for comparison)
-        return np.permute_dims(arr, axes)
-
-    ndim = arr.ndim
-
-    if axes is None:
-        axes = tuple(range(ndim))[::-1]
-    else:
-        axes = tuple(axis if axis >= 0 else ndim + axis for axis in axes)
-        if sorted(axes) != list(range(ndim)):
-            raise ValueError(f"axes {axes} is not a valid permutation of {ndim} dimensions")
-
-    new_shape = tuple(arr.shape[axis] for axis in axes)
-    if "chunks" not in kwargs or kwargs["chunks"] is None:
-        kwargs["chunks"] = tuple(arr.chunks[axis] for axis in axes)
-
-    result = blosc2.empty(shape=new_shape, dtype=arr.dtype, **kwargs)
-
-    chunks = arr.chunks
-    shape = arr.shape
-
-    for info in arr.iterchunks_info():
-        coords = info.coords
-        start_stop = [
-            (coord * chunk, builtins.min(chunk * (coord + 1), dim))
-            for coord, chunk, dim in zip(coords, chunks, shape, strict=False)
-        ]
-
-        src_slice = tuple(slice(start, stop) for start, stop in start_stop)
-        dst_slice = tuple(slice(start_stop[ax][0], start_stop[ax][1]) for ax in axes)
-
-        transposed = np.transpose(arr[src_slice], axes=axes)
-        result[dst_slice] = np.ascontiguousarray(transposed)
-
-    return result
-
-
-def transpose(x, **kwargs: Any) -> NDArray:
-    """
-    Returns a Blosc2 NDArray with axes transposed.
-
-    Only 2D arrays are supported for now.  Other dimensions raise an error.
-
-    Parameters
-    ----------
-    x: :ref:`NDArray`
-        The input array.
-    kwargs: Any, optional
-        Keyword arguments that are supported by the :func:`empty` constructor.
-
-    Returns
-    -------
-    out: :ref:`NDArray`
-        The Blosc2 NDArray with axes transposed.
-
-    References
-    ----------
-    `numpy.transpose <https://numpy.org/doc/2.2/reference/generated/numpy.transpose.html>`_
-    """
-    warnings.warn(
-        "transpose is deprecated and will be removed in a future version. "
-        "Use matrix_transpose or permute_dims instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-
-    # If arguments are dimension < 2, they are returned
-    if np.isscalar(x) or x.ndim < 2:
-        return x
-
-    # Validate arguments are dimension 2
-    if x.ndim > 2:
-        raise ValueError("Transposing arrays with dimension greater than 2 is not supported yet.")
-    return permute_dims(x, **kwargs)
-
-
-def matrix_transpose(arr: NDArray | np.ndarray, **kwargs: Any) -> NDArray:
-    """
-    Transposes a matrix (or a stack of matrices).
-
-    Parameters
-    ----------
-    arr: :ref:`NDArray` | np.ndarray
-        The input NDArray having shape ``(..., M, N)`` and whose innermost two dimensions form
-        ``MxN`` matrices.
-
-    Returns
-    -------
-    out: :ref:`NDArray`
-        A new :ref:`NDArray` containing the transpose for each matrix and having shape
-        ``(..., N, M)``.
-    """
-    axes = None
-    if not np.isscalar(arr) and arr.ndim > 2:
-        axes = list(range(arr.ndim))
-        axes[-2], axes[-1] = axes[-1], axes[-2]
-    return permute_dims(arr, axes, **kwargs)
-
-
 # Class for dealing with fields in an NDArray
 # This will allow to access fields by name in the dtype of the NDArray
 class NDField(Operand):
@@ -6733,19 +6160,7 @@ def take_along_axis(x: NDArray, indices: NDArray[int] | np.ndarray[int], axis: i
 
 
 def slice_to_chunktuple(s, n):
-    """
-    Adapted from _slice_iter in ndindex.ChunkSize.as_subchunks.
-    Parameters
-    ----------
-    s : slice
-        A slice object with start, stop, and step attributes.
-    n : int
-        The number of elements in the chunk axis
-
-    Returns
-    -------
-    out: tuple
-    """
+    # Adapted from _slice_iter in ndindex.ChunkSize.as_subchunks.
     start, stop, step = s.start, s.stop, s.step
     if step < 0:
         temp = stop
@@ -6884,7 +6299,7 @@ def meshgrid(*arrays: NDArray, indexing: str = "xy") -> Sequence[NDArray]:
     Returns coordinate matrices from coordinate vectors.
 
     Parameters
-    ---------
+    ----------
     arrays: NDArray
         An arbitrary number of one-dimensional arrays representing grid coordinates. Each array should have the same numeric data type.
 
@@ -6893,7 +6308,7 @@ def meshgrid(*arrays: NDArray, indexing: str = "xy") -> Sequence[NDArray]:
         Default: 'xy'.
 
     Returns
-    --------
+    -------
     out: (List[NDArray])
         List of N arrays, where N is the number of provided one-dimensional input arrays, with same dtype.
         For N one-dimensional arrays having lengths Ni = len(xi),

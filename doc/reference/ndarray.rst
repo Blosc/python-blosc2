@@ -41,35 +41,43 @@ Constructors
     concat
     copy
     empty
+    empty_like
     expand_dims
     eye
     frombuffer
     fromiter
     full
+    full_like
     linspace
     nans
     ndarray_from_cframe
     ones
+    ones_like
     reshape
     stack
     uninit
     zeros
+    zeros_like
 
 .. autofunction:: arange
 .. autofunction:: asarray
 .. autofunction:: concat
 .. autofunction:: copy
 .. autofunction:: empty
+.. autofunction:: empty_like
 .. autofunction:: expand_dims
 .. autofunction:: eye
 .. autofunction:: frombuffer
 .. autofunction:: fromiter
 .. autofunction:: full
+.. autofunction:: full_like
 .. autofunction:: linspace
 .. autofunction:: nans
 .. autofunction:: ndarray_from_cframe
 .. autofunction:: ones
+.. autofunction:: ones_like
 .. autofunction:: reshape
 .. autofunction:: stack
 .. autofunction:: uninit
 .. autofunction:: zeros
+.. autofunction:: zeros_like

@@ -357,12 +357,6 @@ from .ndarray import (
     full,
     full_like,
     save,
-    matmul,
-    tensordot,
-    vecdot,
-    permute_dims,
-    transpose,
-    matrix_transpose,
     stack,
 )
 from .embed_store import EmbedStore, estore_from_cframe

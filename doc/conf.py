@@ -1,6 +1,9 @@
 # -- Path setup --------------------------------------------------------------
+import inspect
 import os
 import sys
+
+import numpy as np
 
 import blosc2
 
@@ -69,6 +72,64 @@ exclude_patterns = ["_build", ".DS_Store", "**.ipynb_checkpoints"]
 html_show_sourcelink = False
 
 autosummary_generate_overwrite = False
+autosummary_generate = True
+
+# GENERATE ufuncs.rst
+blosc2_ufuncs = []
+for name, obj in vars(np).items():
+    if isinstance(obj, np.ufunc) and hasattr(blosc2, name):
+        blosc2_ufuncs.append(name)
+blosc2_ufuncs += ["conj", "real", "imag", "contains", "where"]
+
+with open("reference/ufuncs.rst", "w") as f:
+    f.write(
+        """Universal Functions (`ufuncs`)
+------------------------------
+
+The following elementwise functions can be used for computing with any of :ref:`NDArray <NDArray>`, :ref:`C2Array <C2Array>`, :ref:`NDField <NDField>` and :ref:`LazyExpr <LazyExpr>`.
+
+Their result is always a :ref:`LazyExpr` instance, which can be evaluated (with ``compute`` or ``__getitem__``) to get the actual values of the computation.
+
+Note: The functions ``conj``, ``real``, ``imag``, ``contains``, ``where`` are not technically ufuncs.
+
+.. currentmodule:: blosc2
+
+.. autosummary::
+
+"""
+    )
+    for func in blosc2_ufuncs:
+        f.write(f"    {func}\n")
+
+    f.write("\n\n\n")
+    for func in blosc2_ufuncs:
+        f.write(f".. autofunction:: blosc2.{func}\n\n")
+
+# GENERATE linear_algebra.rst
+functions = [
+    name
+    for name, obj in vars(blosc2.linalg).items()
+    if (inspect.isfunction(obj) and getattr(obj, "__doc__", None))
+]
+
+with open("reference/linalg.rst", "w") as f:
+    f.write(
+        """Linear Algebra
+-----------------
+The following functions can be used for computing linear algebra operations with :ref:`NDArray <NDArray>`.
+
+.. currentmodule:: blosc2.linalg
+
+.. autosummary::
+
+"""
+    )
+    for func in functions:
+        f.write(f"    {func}\n")
+
+    f.write("\n\n\n")
+    for func in functions:
+        f.write(f".. autofunction:: blosc2.linalg.{func}\n\n")
 
 hidden = "_ignore_multiple_size"
 
