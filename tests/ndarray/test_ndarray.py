@@ -405,3 +405,65 @@ def test_strided_output(arr):
     output_indices = [800, 74, 671, 132, 818]
     out = fancy_strided_output(arr, output_indices, stride=16)
     assert out.shape == (2, 12, 5, 10, 8, 3)
+
+
+dtypes = [np.int32, np.float32, np.float64, np.uint8]
+
+# Shapes for broadcast_to
+broadcast_shapes = [
+    ((10,), (50,), (4,), (3,)),
+    ((8, 6), (16, 12), (4, 3), (1, 3)),
+    ((2, 6), (2, 30), (3, 2), (1, 1)),
+    ((1, 1, 3), (2, 4, 3), (1, 1, 2), (1, 1, 1)),
+]
+
+meshgrid_shapes = [
+    ((10, 20), (3,), (1,)),
+    ((8, 6), (4,), (3,)),
+    ((2, 30), (2,), (1,)),
+    ((20, 4, 3), (4,), (1,)),
+]
+
+
+@pytest.mark.parametrize("dtype", dtypes)
+@pytest.mark.parametrize(("src_shape", "dst_shape", "chunks", "blocks"), broadcast_shapes)
+def test_broadcast_to(dtype, src_shape, dst_shape, chunks, blocks):
+    arr_np = np.arange(np.prod(src_shape), dtype=dtype).reshape(src_shape)
+    arr_b2 = blosc2.asarray(arr_np, chunks=chunks, blocks=blocks)
+
+    try:
+        np_broadcast = np.broadcast_to(arr_np, dst_shape)
+        np_error = None
+    except ValueError as e:
+        np_broadcast = None
+        np_error = e
+
+    if np_error is not None:
+        with pytest.raises(type(np_error)):
+            blosc2.broadcast_to(arr_b2, dst_shape)
+    else:
+        b2_broadcast = blosc2.broadcast_to(arr_b2, dst_shape)
+        assert np.array_equal(b2_broadcast[:], np_broadcast)
+
+
+@pytest.mark.parametrize("dtype", dtypes)
+@pytest.mark.parametrize(("shapes", "chunks", "blocks"), meshgrid_shapes)
+@pytest.mark.parametrize("indexing", ["xy", "ij"])
+def test_meshgrid(dtype, shapes, chunks, blocks, indexing):
+    arrays_np = [np.arange(np.prod(shape), dtype=dtype).reshape(shape) for shape in shapes]
+    arrays_b2 = [blosc2.asarray(a, chunks=chunks, blocks=blocks) for a in arrays_np]
+    try:
+        np_grids = np.meshgrid(*arrays_np, indexing=indexing)
+        np_error = None
+    except ValueError as e:
+        np_grids = None
+        np_error = e
+
+    if np_error is not None:
+        with pytest.raises(type(np_error)):
+            blosc2.meshgrid(*arrays_b2, indexing=indexing)
+    else:
+        b2_grids = blosc2.meshgrid(*arrays_b2, indexing=indexing)
+        assert len(b2_grids) == len(np_grids)
+        for g_b2, g_np in zip(b2_grids, np_grids, strict=False):
+            assert np.array_equal(g_b2[:], g_np)

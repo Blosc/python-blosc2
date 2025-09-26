@@ -4,6 +4,8 @@ Operations with arrays
 .. toctree::
     :maxdepth: 1
 
-    lazy_functions
+    ufuncs
     reduction_functions
-    linear_algebra
+    linalg
+    additional_funcs
+    index_funcs

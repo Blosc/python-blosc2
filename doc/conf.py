@@ -1,8 +1,21 @@
 # -- Path setup --------------------------------------------------------------
+import inspect
 import os
 import sys
 
+import numpy as np
+
 import blosc2
+
+
+def genbody(f, func_list, lib="blosc2"):
+    for func in func_list:
+        f.write(f"    {func}\n")
+
+    f.write("\n\n\n")
+    for func in func_list:
+        f.write(f".. autofunction:: {lib}.{func}\n\n")
+
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(blosc2.__file__)))
 
@@ -69,6 +82,120 @@ exclude_patterns = ["_build", ".DS_Store", "**.ipynb_checkpoints"]
 html_show_sourcelink = False
 
 autosummary_generate_overwrite = False
+autosummary_generate = True
+
+# GENERATE ufuncs.rst
+blosc2_ufuncs = []
+for name, obj in vars(np).items():
+    if isinstance(obj, np.ufunc) and hasattr(blosc2, name):
+        blosc2_ufuncs.append(name)
+
+with open("reference/ufuncs.rst", "w") as f:
+    f.write(
+        """Universal Functions (`ufuncs`)
+------------------------------
+
+The following elementwise functions can be used for computing with any of :ref:`NDArray <NDArray>`, :ref:`C2Array <C2Array>`, :ref:`NDField <NDField>` and :ref:`LazyExpr <LazyExpr>`.
+
+Their result is always a :ref:`LazyExpr` instance, which can be evaluated (with ``compute`` or ``__getitem__``) to get the actual values of the computation.
+
+Note: The functions ``conj``, ``real``, ``imag``, ``contains``, ``where`` are not technically ufuncs.
+
+.. currentmodule:: blosc2
+
+.. autosummary::
+
+"""
+    )
+    genbody(f, blosc2_ufuncs)
+
+# GENERATE additional_funcs.rst
+blosc2_addfuncs = sorted(["conj", "real", "imag", "contains", "where", "clip", "round"])
+blosc2_dtypefuncs = sorted(["astype", "can_cast", "result_type", "isdtype"])
+
+with open("reference/additional_funcs.rst", "w") as f:
+    f.write(
+        """Additional Functions and Type Utilities
+=======================================
+
+Functions
+---------
+
+The following functions can also be used for computing with any of :ref:`NDArray <NDArray>`, :ref:`C2Array <C2Array>`, :ref:`NDField <NDField>` and :ref:`LazyExpr <LazyExpr>`.
+
+Their result is typically a :ref:`LazyExpr` instance, which can be evaluated (with ``compute`` or ``__getitem__``) to get the actual values of the computation.
+
+.. currentmodule:: blosc2
+
+.. autosummary::
+
+"""
+    )
+    genbody(f, blosc2_addfuncs)
+    f.write(
+        """Type Utilities
+--------------
+
+The following functions are useful for working with datatypes.
+
+.. currentmodule:: blosc2
+
+.. autosummary::
+
+"""
+    )
+    genbody(f, blosc2_dtypefuncs)
+
+# GENERATE index_funcs.rst
+blosc2_indexfuncs = sorted(
+    [
+        "count_nonzero",
+        "squeeze",
+        "expand_dims",
+        "sort",
+        "take",
+        "take_along_axis",
+        "broadcast_to",
+        "meshgrid",
+        "indices",
+    ]
+)
+
+with open("reference/index_funcs.rst", "w") as f:
+    f.write(
+        """Indexing Functions and Utilities
+=======================================
+
+The following functions are useful for performing indexing and oter associated operations.
+
+.. currentmodule:: blosc2
+
+.. autosummary::
+
+"""
+    )
+    genbody(f, blosc2_indexfuncs)
+
+# GENERATE linear_algebra.rst
+linalg_funcs = [
+    name
+    for name, obj in vars(blosc2.linalg).items()
+    if (inspect.isfunction(obj) and getattr(obj, "__doc__", None))
+]
+
+with open("reference/linalg.rst", "w") as f:
+    f.write(
+        """Linear Algebra
+-----------------
+The following functions can be used for computing linear algebra operations with :ref:`NDArray <NDArray>`.
+
+.. currentmodule:: blosc2.linalg
+
+.. autosummary::
+
+"""
+    )
+    genbody(f, linalg_funcs, "blosc2.linalg")
 
 hidden = "_ignore_multiple_size"
 

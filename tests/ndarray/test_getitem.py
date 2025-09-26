@@ -161,3 +161,59 @@ def test_ndarray(dtype):
     nparray = np.arange(size - 1, -1, -1, dtype=np.int64).reshape(shape)
     na_slice = na[nparray]
     np.testing.assert_almost_equal(a_slice, na_slice)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunkshape", "axis", "indices"),
+    [
+        ((10, 10), (5, 5), 0, [0, 5, 9]),
+        ((20, 15), (6, 7), 1, [1, 3, 7, 14]),
+        ((30, 25), (10, 8), 0, [2, 10, 20]),
+    ],
+)
+def test_take(shape, chunkshape, axis, indices):
+    # Create predictable input
+    np_arr = np.arange(np.prod(shape), dtype=np.int32).reshape(shape)
+
+    # Wrap into Blosc2 NDArray
+    a = blosc2.asarray(np_arr, chunks=chunkshape)
+
+    # NumPy expected
+    expected = np.take(np_arr, indices, axis=axis)
+
+    # Blosc2 result
+    result = blosc2.take(a, indices, axis=axis)
+
+    # Compare
+    np.testing.assert_array_equal(result[:], expected)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunkshape", "axis"),
+    [
+        ((8, 6), (4, 3), 1),
+        ((12, 7), (6, 7), 0),
+        ((5, 9), (5, 3), 1),
+    ],
+)
+def test_take_along_axis(shape, chunkshape, axis):
+    # Create predictable input
+    np_arr = np.arange(np.prod(shape), dtype=np.int32).reshape(shape)
+
+    # Wrap into Blosc2 NDArray
+    a = blosc2.asarray(np_arr, chunks=chunkshape)
+
+    # Make some indices with same shape except for the given axis
+    indices_shape = list(shape)
+    indices_shape[axis] = 2  # we'll take 2 indices along that axis
+    rng = np.random.default_rng()
+    indices = rng.integers(0, shape[axis], size=indices_shape)
+
+    # NumPy expected
+    expected = np.take_along_axis(np_arr, indices, axis=axis)
+
+    # Blosc2 result
+    result = blosc2.take_along_axis(a, indices, axis=axis)
+
+    # Compare
+    np.testing.assert_array_equal(result[()], expected)

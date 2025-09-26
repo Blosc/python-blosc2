@@ -400,3 +400,35 @@ def test_offset(shape, chunks, blocks, slices, chunked_eval, eval_mode):
     else:
         res = expr[slices]
     np.testing.assert_allclose(res, out[slices])
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunks", "blocks", "slices"),
+    [
+        ((40, 20), (30, 10), (5, 5), (slice(0, 5), slice(5, 20))),
+        ((13, 13, 10), (10, 10, 5), (5, 5, 3), (slice(0, 12), slice(3, 13), ...)),
+        ((13, 13), (10, 10), (5, 5), (slice(3, 8), slice(9, 12))),
+    ],
+)
+def test_clip_logaddexp(shape, chunks, blocks, slices):
+    npa = np.arange(0, np.prod(shape)).reshape(shape)
+    npb = np.arange(1, np.prod(shape) + 1).reshape(shape)
+    b = blosc2.asarray(npb)
+    a = blosc2.asarray(npa)
+
+    npc = np.clip(npb, np.prod(shape) // 3, npb - 10)
+    expr = blosc2.clip(b, np.prod(shape) // 3, npb - 10)
+    res = expr.compute(item=slices)
+    np.testing.assert_allclose(res[...], npc[slices])
+    # clip is not a ufunc so will return np.ndarray
+    expr = np.clip(b, np.prod(shape) // 3, npb - 10)
+    assert isinstance(expr, np.ndarray)
+
+    npc = np.logaddexp(npb, npa)
+    expr = blosc2.logaddexp(b, a)
+    res = expr.compute(item=slices)
+    np.testing.assert_allclose(res[...], npc[slices])
+    # test that ufunc has been overwritten successfully
+    # (i.e. doesn't return np.ndarray)
+    expr = np.logaddexp(b, a)
+    assert isinstance(expr, blosc2.LazyArray)
