@@ -182,7 +182,7 @@ def tensordot(
         the non-contracted axes (dimensions) of the second array x2.
     """
     fast_path = kwargs.pop("fast_path", None)  # for testing purposes
-
+    # TODO: add fast path for when don't need to change chunkshapes
     # Added this to pass array-api tests (which use internal getitem to check results)
     if isinstance(x1, np.ndarray) and isinstance(x2, np.ndarray):
         return np.tensordot(x1, x2, axes=axes)
