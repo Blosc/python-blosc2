@@ -50,7 +50,7 @@ else()
     include(FetchContent)
     FetchContent_Declare(blosc2
         GIT_REPOSITORY https://github.com/Blosc/c-blosc2
-        GIT_TAG 4808890791a1cd2880d9c3f85d710fbee2c1df11  # increased MAX_DIM
+        GIT_TAG 0c853a639ba97997e33e29db9eed202459ebc6f0  # v2.21.3
     )
     FetchContent_MakeAvailable(blosc2)
     include_directories("${blosc2_SOURCE_DIR}/include")
