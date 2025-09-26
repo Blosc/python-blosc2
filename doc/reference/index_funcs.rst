@@ -12,7 +12,6 @@ The following functions are useful for performing indexing and oter associated o
     expand_dims
     indices
     meshgrid
-    nonzero
     sort
     squeeze
     take
@@ -29,8 +28,6 @@ The following functions are useful for performing indexing and oter associated o
 .. autofunction:: blosc2.indices
 
 .. autofunction:: blosc2.meshgrid
-
-.. autofunction:: blosc2.nonzero
 
 .. autofunction:: blosc2.sort
 

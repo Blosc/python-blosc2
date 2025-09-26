@@ -212,7 +212,6 @@ This page documents the miscellaneous members of the ``blosc2`` module that do n
         estore_from_cframe,
         squeeze,
         count_nonzero,
-        nonzero,
         take,
         take_along_axis,
         sort,

@@ -29,6 +29,7 @@ for name, obj in vars(np).items():
 # print("Binary functions supported:", [f[0].__name__ for f in BINARY_FUNC_PAIRS])
 # print("NumPy ufuncs not in Blosc2:", [f.__name__ for f in UNSUPPORTED_UFUNCS]) <- all not in array-api
 UNARY_FUNC_PAIRS.append((np.round, blosc2.round))
+UNARY_FUNC_PAIRS.append((np.count_nonzero, blosc2.count_nonzero))
 
 DTYPES = [np.bool_, np.int32, np.int64, np.float32, np.float64, np.complex128]
 SHAPES_CHUNKS = [((10,), (3,))]  # , ((20, 20), (4, 7)), ((10, 13, 13), (3, 5, 2))]

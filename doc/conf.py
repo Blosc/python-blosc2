@@ -156,7 +156,6 @@ blosc2_indexfuncs = sorted(
         "take",
         "take_along_axis",
         "broadcast_to",
-        "nonzero",
         "meshgrid",
         "indices",
     ]

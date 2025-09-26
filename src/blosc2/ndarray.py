@@ -1779,33 +1779,33 @@ def isinf(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blo
     return blosc2.LazyExpr(new_op=(ndarr, "isinf", None))
 
 
-def nonzero(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
-    """
-    Return True/False for nonzero values element-wise.
+# def nonzero(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+#     """
+#     Return indices of nonzero values.
 
-    Parameters
-    ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
-        The input array.
+#     Parameters
+#     ----------
+#     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+#         The input array.
 
-    Returns
-    -------
-    out: :ref:`LazyExpr`
-        A lazy expression that can be evaluated to get the True/False array of results.
+#     Returns
+#     -------
+#     out: :ref:`LazyExpr`
+#         A lazy expression that can be evaluated to get the array of results.
 
-    References
-    ----------
-    `np.nonzero <https://numpy.org/doc/stable/reference/generated/numpy.nonzero.html#numpy.nonzero>`_
-    """
-    # TODO: Optimise this
-    return ndarr.__ne__(0)
+#     References
+#     ----------
+#     `np.nonzero <https://numpy.org/doc/stable/reference/generated/numpy.nonzero.html#numpy.nonzero>`_
+#     """
+#     # FIXME: This is not correct
+#     return ndarr.__ne__(0)
 
 
 def count_nonzero(
     ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | Sequence[int] | None = None
 ) -> int:
     """
-    Return True/False for nonzero values element-wise.
+    Return number of nonzero values along axes.
 
     Parameters
     ----------
@@ -6118,6 +6118,8 @@ def take(x: NDArray, indices: NDArray[int] | np.ndarray[int], axis: int | None =
         axis += x.ndim
     if not isinstance(axis, (int, np.integer)):
         raise ValueError("Axis must be integer.")
+    if isinstance(indices, list):
+        indices = np.asarray(indices)
     if indices.ndim != 1:
         raise ValueError("Indices must be 1D array.")
     key = tuple(indices if i == axis else slice(None, None, 1) for i in range(x.ndim))
@@ -6154,8 +6156,12 @@ def take_along_axis(x: NDArray, indices: NDArray[int] | np.ndarray[int], axis: i
         axis += x.ndim
     if indices.shape[axis] == 0:
         return blosc2.empty(x.shape[:axis] + (0,) + x.shape[axis + 1 :], dtype=x.dtype)
-    key = tuple(indices[i] if i == axis else slice(None, None, 1) for i in range(x.ndim))
-    # TODO: Implement fancy indexing in .slice so that this is more efficient
+    ones = (1,) * x.ndim
+    # TODO: Implement fancy indexing in .slice so that this is more efficient and possibly use oindex(?)
+    key = tuple(
+        indices if i == axis else np.arange(x.shape[i]).reshape(ones[:i] + (-1,) + ones[i + 1 :])
+        for i in range(x.ndim)
+    )
     return blosc2.asarray(x[key])
 
 

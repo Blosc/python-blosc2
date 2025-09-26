@@ -619,20 +619,22 @@ def diagonal(x: blosc2.blosc2.NDArray, offset: int = 0) -> blosc2.blosc2.NDArray
     Reference: https://data-apis.org/array-api/latest/extensions/generated/array_api.linalg.diag.html#diag
     """
     n_rows, n_cols = x.shape[-2:]
+    min_idx = builtins.min(n_rows, n_cols)
     if offset < 0:
-        rows = np.arange(-offset, n_rows)
+        start = -offset
+        rows = np.arange(start, builtins.min(start + n_cols, n_rows))
         cols = np.arange(len(rows))
     elif offset > 0:
-        cols = np.arange(offset, n_cols)
+        cols = np.arange(offset, builtins.min(offset + n_rows, n_cols))
         rows = np.arange(len(cols))
     else:
-        rows = cols = np.arange(builtins.min(n_rows, n_cols))
+        rows = cols = np.arange(min_idx)
     key = tuple(slice(None, None, 1) for i in range(x.ndim - 2)) + (rows, cols)
     # TODO: change to use slice to give optimised compressing
     return blosc2.asarray(x[key])
 
 
-def outer(x1: blosc2.blosc2.NDArray, x2: blosc2.blosc2.NDArray) -> blosc2.blosc2.NDArray:
+def outer(x1: blosc2.blosc2.NDArray, x2: blosc2.blosc2.NDArray, **kwargs: Any) -> blosc2.blosc2.NDArray:
     """
     Returns the outer product of two vectors x1 and x2.
 
@@ -644,6 +646,9 @@ def outer(x1: blosc2.blosc2.NDArray, x2: blosc2.blosc2.NDArray) -> blosc2.blosc2
     x2: blosc2.NDArray
         Second one-dimensional input array of size M. Must have a numeric data type.
 
+    kwargs: Any, optional
+        Keyword arguments that are supported by the :func:`empty` constructor.
+
     Returns
     -------
     out: blosc2.NDArray
@@ -651,7 +656,7 @@ def outer(x1: blosc2.blosc2.NDArray, x2: blosc2.blosc2.NDArray) -> blosc2.blosc2
     """
     if (x1.ndim != 1) or (x2.ndim != 1):
         raise ValueError("outer only valid for 1D inputs.")
-    return tensordot(x1, x2, ((), ()))
+    return tensordot(x1, x2, ((), ()), **kwargs)  # for testing purposes
 
 
 def cholesky(x: blosc2.blosc2.NDArray, upper: bool = False) -> blosc2.blosc2.NDArray:

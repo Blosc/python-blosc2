@@ -359,6 +359,56 @@ def test_tensordot(shape1, chunk1, block1, shape2, chunk2, block2, chunkres, axe
 
 
 @pytest.mark.parametrize(
+    ("shape1", "chunk1", "block1", "shape2", "chunk2", "block2", "chunkres"),
+    [
+        # 1Dx1D->valid
+        ((50,), (17,), (5,), (21,), (13,), (5,), (10, 5)),
+        # 2Dx1D->error
+        ((50, 22), (17, 21), (5, 3), (50,), (13,), (5,), (12, 13, 10)),
+    ],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        np.int32,
+        np.int64,
+        np.float32,
+        np.float64,
+    ],
+)
+def test_outer(shape1, chunk1, block1, shape2, chunk2, block2, chunkres, dtype):
+    # test outer
+    # Create operands with requested dtype
+    a_b2 = blosc2.arange(0, np.prod(shape1), shape=shape1, chunks=chunk1, blocks=block1, dtype=dtype)
+    a_np = a_b2[()]  # decompress
+    b_b2 = blosc2.arange(0, np.prod(shape2), shape=shape2, chunks=chunk2, blocks=block2, dtype=dtype)
+    b_np = b_b2[()]  # decompress
+    # NumPy reference and Blosc2 comparison
+    res_np = np.outer(a_np, b_np)
+    if len(shape1) > 1 or len(shape2) > 1:
+        with pytest.raises(ValueError):
+            res_b2 = blosc2.outer(a_b2, b_b2, chunks=chunkres, fast_path=False)  # test slow path
+    else:
+        res_b2 = blosc2.outer(a_b2, b_b2, chunks=chunkres, fast_path=False)  # test slow path
+        res_b2_np = res_b2[...]
+
+        # Assertions
+        assert res_b2_np.shape == res_np.shape
+        if np.issubdtype(dtype, np.floating):
+            np.testing.assert_allclose(res_b2_np, res_np, rtol=1e-5, atol=1e-6)
+        else:
+            np.testing.assert_array_equal(res_b2_np, res_np)
+
+        res_b2 = blosc2.outer(a_b2, b_b2, chunks=chunkres, fast_path=True)  # test fast path
+        # Assertions
+        assert res_b2_np.shape == res_np.shape
+        if np.issubdtype(dtype, np.floating):
+            np.testing.assert_allclose(res_b2_np, res_np, rtol=1e-5, atol=1e-6)
+        else:
+            np.testing.assert_array_equal(res_b2_np, res_np)
+
+
+@pytest.mark.parametrize(
     ("shape1", "chunk1", "block1", "shape2", "chunk2", "block2", "chunkres", "axis"),
     [
         # 1Dx1D->scalar
@@ -731,3 +781,31 @@ def test_transpose(shape_chunks_blocks_2d, dtype_fixture):
     nat = np.transpose(na)
 
     np.testing.assert_allclose(at, nat)
+
+
+@pytest.mark.parametrize(
+    ("shape", "chunkshape", "offset"),
+    [
+        ((10, 10), (5, 5), 0),
+        ((20, 15), (6, 7), 2),
+        ((30, 25), (10, 8), -3),
+        ((2, 4, 30, 25), (1, 3, 10, 8), -3),
+    ],
+)
+def test_diagonal(shape, chunkshape, offset):
+    # Create a Blosc2 NDArray with given shape and chunkshape
+    a = blosc2.linspace(0, np.prod(shape), shape=shape, chunks=chunkshape)
+    # Create random input data
+    np_arr = a[()]
+
+    # Compute diagonal with NumPy
+    expected = np_arr.diagonal(offset=offset, axis1=-2, axis2=-1)
+
+    # Compute diagonal with Blosc2
+    result = blosc2.diagonal(a, offset=offset)
+
+    # Convert back to NumPy for comparison
+    result_np = result[:]
+
+    # Assert equality
+    np.testing.assert_array_equal(result_np, expected)

@@ -381,7 +381,7 @@ from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy,
 
 from .schunk import SChunk, open
 from . import linalg
-from .linalg import tensordot, vecdot, permute_dims, matrix_transpose, matmul, transpose
+from .linalg import tensordot, vecdot, permute_dims, matrix_transpose, matmul, transpose, diagonal, outer
 from . import fft
 
 # Registry for postfilters
@@ -485,7 +485,6 @@ from .ndarray import (
     multiply,
     negative,
     nextafter,
-    nonzero,
     not_equal,
     positive,
     pow,
@@ -674,7 +673,6 @@ __all__ = [  # noqa : RUF022
     "ndarray_from_cframe",
     "negative",
     "nextafter",
-    "nonzero",
     "not_equal",
     "ones",
     "ones_like",
