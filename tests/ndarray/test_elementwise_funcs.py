@@ -26,7 +26,7 @@ for name, obj in vars(np).items():
 
 # If you want to see which ones are enabled and which not, uncomment following
 # print("Unary functions supported:", [f[0].__name__ for f in UNARY_FUNC_PAIRS])
-print("Binary functions supported:", [f[0].__name__ for f in BINARY_FUNC_PAIRS])
+# print("Binary functions supported:", [f[0].__name__ for f in BINARY_FUNC_PAIRS])
 # print("NumPy ufuncs not in Blosc2:", [f.__name__ for f in UNSUPPORTED_UFUNCS]) <- all not in array-api
 UNARY_FUNC_PAIRS.append((np.round, blosc2.round))
 UNARY_FUNC_PAIRS.append((np.count_nonzero, blosc2.count_nonzero))
