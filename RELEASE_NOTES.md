@@ -1,8 +1,28 @@
 # Release notes
 
-## Changes from 3.8.0 to 3.8.1
+## Changes from 3.9.0 to 3.9.1
 
 XXX version-specific blurb XXX
+
+## Changes from 3.8.0 to 3.9.0
+Most changes come from PR #467 relating to array-api compliance.
+
+* C-Blosc2 internal library updated to latest 2.21.3, increasing MAX_DIMS from 8 to 16
+
+* numexpr version requirement pushed to 2.13.0 to incorporate
+``round``, ``sign``, ``signbit``, ``copysign``, ``nextafter``, ``hypot``,
+``maximum``, ``minimum``, ``trunc``, ``log2`` functions, as well as allow
+integer outputs for certain functions when integr arguments are passed.
+We also add floor division (``//``) and full dual bitwise (logical) AND, OR, XOR, NOT
+support for integer (bool) arrays.
+
+* Extended linear algebra functionality, offering generalised matrix multiplication
+for arrays of arbitrary dimension via ``tensordot`` and an improved ``matmul``. In addition,
+introduced ``vecdot``, ``diagonal`` and ``outer``, as well as useful indexing and associated functions such as ``take``, ``take_along_axis``, ``meshgrid`` and ``broadcast_to``.
+
+* Added many ufuncs and methods (around 60) to ``NDArray`` to bring the library into further alignment with the array-api. Introduced a chunkwise lazyudf paradigm which is very powerful in order to implement ``clip`` and ``logaddexp``.
+
+* Fixed a subtle but important bug for ``expand_dims`` (PR #479, PR #483) relating to reference counting for views.
 
 ## Changes from 3.7.2 to 3.8.0
 

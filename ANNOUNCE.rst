@@ -4,21 +4,20 @@ Announcing Python-Blosc2 3.8.0
 This is a minor version release where we have aimed to make the first steps
 towards complying fully with the array-api standard:
 
-✅ C-Blosc2 internal library updated to latest 2.21.2.
+✅ C-Blosc2 internal library updated to latest 2.21.3.
 
-✅ numexpr version requirement pushed to 2.12.1 to incorporate
-``isnan``, ``isfinite``, ``isinf`` functions.
+✅ numexpr version requirement pushed to 2.3.0 to incorporate
+``round``, ``sign``, ``signbit``, ``copysign``, ``nextafter``, ``hypot``,
+``maximum``, ``minimum``, ``trunc``, ``log2``, ``//`` and bitwise AND/OR/XOR/NOT.
 
-✅ Indexing is now supported extensively and reasonably optimally for slices
-with negative steps, general boolean arrays and fancy indices, with both get/setitem having
-equal functionality. In PR #459 we extended the 1D fast path to general N-D,
-with consequent speedups. In PR #461 we allowed fancy indexing and general slicing
-with negative steps for set and getitem, with a memory-optimised path for setitem.
+✅ Enhanced linear algebra via ``tensordot``, extended ``matmul``, ``vecdot``, ``diagonal``,
+``outer``, as well as ``broadcast_to`` and ``meshgrid``.
 
-✅ Various attributes and methods for the ``NDArray`` class, as well as functions, have
-been added to increase compliance with the array-api standard. In addition,
-linspace and arange functions have been made more numerically stable and now strictly
-comply even with difficult floating-point edge cases.
+✅ Roughly 60 attributes and methods for the ``NDArray`` class, as well as functions, have
+been added to increase compliance with the array-api standard, with ufuncs now very well supported.
+
+✅ A subtle bug which caused ``arr = blosc2.expand_dims(arr)`` to fail has been fixed.
+
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
