@@ -7,6 +7,16 @@ import numpy as np
 
 import blosc2
 
+
+def genbody(f, func_list, lib="blosc2"):
+    for func in func_list:
+        f.write(f"    {func}\n")
+
+    f.write("\n\n\n")
+    for func in func_list:
+        f.write(f".. autofunction:: {lib}.{func}\n\n")
+
+
 sys.path.insert(0, os.path.abspath(os.path.dirname(blosc2.__file__)))
 
 project = "Python-Blosc2"
@@ -79,7 +89,6 @@ blosc2_ufuncs = []
 for name, obj in vars(np).items():
     if isinstance(obj, np.ufunc) and hasattr(blosc2, name):
         blosc2_ufuncs.append(name)
-blosc2_ufuncs += ["conj", "real", "imag", "contains", "where"]
 
 with open("reference/ufuncs.rst", "w") as f:
     f.write(
@@ -98,15 +107,78 @@ Note: The functions ``conj``, ``real``, ``imag``, ``contains``, ``where`` are no
 
 """
     )
-    for func in blosc2_ufuncs:
-        f.write(f"    {func}\n")
+    genbody(f, blosc2_ufuncs)
 
-    f.write("\n\n\n")
-    for func in blosc2_ufuncs:
-        f.write(f".. autofunction:: blosc2.{func}\n\n")
+# GENERATE additional_funcs.rst
+blosc2_addfuncs = sorted(["conj", "real", "imag", "contains", "where", "clip", "round"])
+blosc2_dtypefuncs = sorted(["astype", "can_cast", "result_type", "isdtype"])
+
+with open("reference/additional_funcs.rst", "w") as f:
+    f.write(
+        """Additional Functions and Type Utilities
+=======================================
+
+Functions
+---------
+
+The following functions can also be used for computing with any of :ref:`NDArray <NDArray>`, :ref:`C2Array <C2Array>`, :ref:`NDField <NDField>` and :ref:`LazyExpr <LazyExpr>`.
+
+Their result is typically a :ref:`LazyExpr` instance, which can be evaluated (with ``compute`` or ``__getitem__``) to get the actual values of the computation.
+
+.. currentmodule:: blosc2
+
+.. autosummary::
+
+"""
+    )
+    genbody(f, blosc2_addfuncs)
+    f.write(
+        """Type Utilities
+--------------
+
+The following functions are useful for working with datatypes.
+
+.. currentmodule:: blosc2
+
+.. autosummary::
+
+"""
+    )
+    genbody(f, blosc2_dtypefuncs)
+
+# GENERATE index_funcs.rst
+blosc2_indexfuncs = sorted(
+    [
+        "count_nonzero",
+        "squeeze",
+        "expand_dims",
+        "sort",
+        "take",
+        "take_along_axis",
+        "broadcast_to",
+        "nonzero",
+        "meshgrid",
+        "indices",
+    ]
+)
+
+with open("reference/index_funcs.rst", "w") as f:
+    f.write(
+        """Indexing Functions and Utilities
+=======================================
+
+The following functions are useful for performing indexing and oter associated operations.
+
+.. currentmodule:: blosc2
+
+.. autosummary::
+
+"""
+    )
+    genbody(f, blosc2_indexfuncs)
 
 # GENERATE linear_algebra.rst
-functions = [
+linalg_funcs = [
     name
     for name, obj in vars(blosc2.linalg).items()
     if (inspect.isfunction(obj) and getattr(obj, "__doc__", None))
@@ -124,12 +196,7 @@ The following functions can be used for computing linear algebra operations with
 
 """
     )
-    for func in functions:
-        f.write(f"    {func}\n")
-
-    f.write("\n\n\n")
-    for func in functions:
-        f.write(f".. autofunction:: blosc2.linalg.{func}\n\n")
+    genbody(f, linalg_funcs, "blosc2.linalg")
 
 hidden = "_ignore_multiple_size"
 

@@ -7,3 +7,5 @@ Operations with arrays
     ufuncs
     reduction_functions
     linalg
+    additional_funcs
+    index_funcs

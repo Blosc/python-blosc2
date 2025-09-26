@@ -49,12 +49,14 @@ Constructors
     full
     full_like
     linspace
+    meshgrid
     nans
     ndarray_from_cframe
     ones
     ones_like
     reshape
     stack
+    squeeze
     uninit
     zeros
     zeros_like

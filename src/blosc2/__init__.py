@@ -381,6 +381,7 @@ from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy,
 
 from .schunk import SChunk, open
 from . import linalg
+from .linalg import tensordot, vecdot, permute_dims, matrix_transpose, matmul, transpose
 from . import fft
 
 # Registry for postfilters

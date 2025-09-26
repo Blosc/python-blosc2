@@ -75,16 +75,16 @@ def matmul(x1: blosc2.NDArray | np.ndarray, x2: blosc2.NDArray, **kwargs: Any) -
     array([1, 5])
 
     """
-    # Added this to pass array-api tests (which use internal getitem to check results)
-    x1 = blosc2.asarray(x1)
-    x2 = blosc2.asarray(x2)
-
     # Validate arguments are not scalars
     if np.isscalar(x1) or np.isscalar(x2):
         raise ValueError("Arguments can't be scalars.")
 
+    # Added this to pass array-api tests (which use internal getitem to check results)
+    x1 = blosc2.asarray(x1)
+    x2 = blosc2.asarray(x2)
+
     # Validate matrix multiplication compatibility
-    if x1.shape[-1] != x2.shape[builtins.max(-2, -len(x2.shape))]:
+    if x1.shape[builtins.max(-1, -len(x2.shape))] != x2.shape[builtins.max(-2, -len(x2.shape))]:
         raise ValueError("Shapes are not aligned for matrix multiplication.")
 
     # Promote 1D arrays to 2D if necessary

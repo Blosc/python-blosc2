@@ -83,11 +83,6 @@ Note: The functions ``conj``, ``real``, ``imag``, ``contains``, ``where`` are no
     tanh
     trunc
     vecdot
-    conj
-    real
-    imag
-    contains
-    where
 
 
 
@@ -234,13 +229,3 @@ Note: The functions ``conj``, ``real``, ``imag``, ``contains``, ``where`` are no
 .. autofunction:: blosc2.trunc
 
 .. autofunction:: blosc2.vecdot
-
-.. autofunction:: blosc2.conj
-
-.. autofunction:: blosc2.real
-
-.. autofunction:: blosc2.imag
-
-.. autofunction:: blosc2.contains
-
-.. autofunction:: blosc2.where
