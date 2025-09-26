@@ -206,7 +206,7 @@ def test_take_along_axis(shape, chunkshape, axis):
     # Make some indices with same shape except for the given axis
     indices_shape = list(shape)
     indices_shape[axis] = 2  # we'll take 2 indices along that axis
-    rng = np.random.Generator()
+    rng = np.random.default_rng()
     indices = rng.integers(0, shape[axis], size=indices_shape)
 
     # NumPy expected
