@@ -2,7 +2,7 @@
 requires = [
     "scikit-build-core",
     "cython>=3",
-    "numpy>=2.0.0",
+    "numpy>=2.1",
 ]
 build-backend = "scikit_build_core.build"
 
@@ -32,12 +32,11 @@ classifiers = [
 requires-python = ">=3.10"
 # Follow guidelines from https://scientific-python.org/specs/spec-0000/
 dependencies = [
-    "numpy>=1.26",
-    #"numpy>=2",
+    "numpy>=2.1",
     "ndindex",
     "msgpack",
     "platformdirs",
-    "numexpr>=2.13.0; platform_machine != 'wasm32'",
+    "numexpr>=2.13; platform_machine != 'wasm32'",
     "py-cpuinfo; platform_machine != 'wasm32'",
     "requests",
 ]
