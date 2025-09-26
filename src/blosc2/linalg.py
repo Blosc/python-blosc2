@@ -353,8 +353,6 @@ def vecdot(x1: blosc2.NDArray, x2: blosc2.NDArray, axis: int = -1, **kwargs) -> 
     a_keep[a_axes] = False
     b_keep = [True] * x2.ndim
     b_keep[b_axes] = False
-    if np.issubdtype(x1.dtype, complex):
-        x1 = blosc2.conj(x1)
     x1shape = np.array(x1.shape)
     x2shape = np.array(x2.shape)
     result_shape = np.broadcast_shapes(x1shape[a_keep], x2shape[b_keep])
@@ -405,7 +403,7 @@ def vecdot(x1: blosc2.NDArray, x2: blosc2.NDArray, axis: int = -1, **kwargs) -> 
         if fast_path:  # just load everything, also handles case of 0 in shapes
             bx1 = x1[a_selection]
             bx2 = x2[b_selection]
-            result[res_chunk] += np.vecdot(bx1, bx2, axis=axis)
+            result[res_chunk] += np.vecdot(bx1, bx2, axis=axis)  # handles conjugation of bx1
         else:  # operands too big, have to go chunk-by-chunk
             for ochunk in range(0, a_shape_red, a_chunks_red):
                 op_chunk = (slice(ochunk, builtins.min(ochunk + a_chunks_red, x1.shape[a_axes]), 1),)
@@ -413,7 +411,7 @@ def vecdot(x1: blosc2.NDArray, x2: blosc2.NDArray, axis: int = -1, **kwargs) -> 
                 b_selection = b_selection[:b_axes] + op_chunk + b_selection[b_axes + 1 :]
                 bx1 = x1[a_selection]
                 bx2 = x2[b_selection]
-                res = np.vecdot(bx1, bx2, axis=axis)
+                res = np.vecdot(bx1, bx2, axis=axis)  # handles conjugation of bx1
                 result[res_chunk] += res
     return result
 

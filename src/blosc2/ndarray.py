@@ -2727,7 +2727,7 @@ def bitwise_right_shift(
     ----------
     `np.bitwise_right_shift <https://numpy.org/doc/stable/reference/generated/numpy.bitwise_right_shift.html#numpy.bitwise_right_shift>`_
     """
-    return x1 >> x2
+    return x1.__rshift__(x2)
 
 
 def bitwise_left_shift(
@@ -2757,7 +2757,7 @@ def bitwise_left_shift(
     ----------
     `np.bitwise_left_shift <https://numpy.org/doc/stable/reference/generated/numpy.bitwise_left_shift.html#numpy.bitwise_left_shift>`_
     """
-    return x1 << x2
+    return x1.__lshift__(x2)
 
 
 def positive(
