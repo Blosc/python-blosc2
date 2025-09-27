@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
-def matmul(x1: blosc2.NDArray | np.ndarray, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArray:
+def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArray:
     """
     Computes the matrix product between two Blosc2 NDArrays.
 
@@ -417,7 +417,7 @@ def vecdot(x1: blosc2.NDArray, x2: blosc2.NDArray, axis: int = -1, **kwargs) -> 
 
 
 def permute_dims(
-    arr: blosc2.NDArray | np.ndarray, axes: tuple[int] | list[int] | None = None, **kwargs: Any
+    arr: blosc2.Array, axes: tuple[int] | list[int] | None = None, **kwargs: Any
 ) -> blosc2.NDArray:
     """
     Permutes the axes (dimensions) of an array.
@@ -566,7 +566,7 @@ def transpose(x, **kwargs: Any) -> blosc2.NDArray:
     return permute_dims(x, **kwargs)
 
 
-def matrix_transpose(arr: blosc2.NDArray | np.ndarray, **kwargs: Any) -> blosc2.NDArray:
+def matrix_transpose(arr: blosc2.Array, **kwargs: Any) -> blosc2.NDArray:
     """
     Transposes a matrix (or a stack of matrices).
 
