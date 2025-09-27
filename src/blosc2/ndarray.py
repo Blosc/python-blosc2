@@ -2845,21 +2845,23 @@ def remainder(
 
 
 def clip(
-    x: NDArray, min: int | float | NDArray | None = None, max: int | float | NDArray | None = None
+    x: blosc2.Array,
+    min: int | float | blosc2.Array | None = None,
+    max: int | float | blosc2.Array | None = None,
 ) -> NDArray:
     """
     Clamps each element x_i of the input array x to the range [min, max].
 
     Parameters
     ----------
-    x: NDArray
+    x: blosc2.Array
         Input array. Should have a real-valued data type.
 
-    min: int | float | NDArray | None
+    min: int | float | blosc2.Array | None
         Lower-bound of the range to which to clamp. If None, no lower bound must be applied.
         Default: None.
 
-    max: int | float | NDArray | None
+    max: int | float | blosc2.Array | None
         Upper-bound of the range to which to clamp. If None, no upper bound must be applied.
         Default: None.
 
@@ -2877,7 +2879,7 @@ def clip(
     return blosc2.lazyudf(chunkwise_clip, (x, min, max), dtype=x.dtype, shape=x.shape)
 
 
-def logaddexp(x1: int | float | NDArray, x2: int | float | NDArray) -> NDArray:
+def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array) -> NDArray:
     """
     Calculates the logarithm of the sum of exponentiations log(exp(x1) + exp(x2)) for
     each element x1_i of the input array x1 with the respective element x2_i of the
@@ -4615,7 +4617,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return blosc2.linalg.matmul(self, other)
 
 
-def squeeze(x: NDArray, axis: int | None = None) -> NDArray:
+def squeeze(x: blosc2.Array, axis: int | None = None) -> NDArray:
     """
     Remove single-dimensional entries from the shape of the array.
 
@@ -5983,13 +5985,13 @@ class OIndex:
 #         return NotImplementedError
 
 
-def empty_like(x: NDArray, dtype=None, **kwargs) -> NDArray:
+def empty_like(x: blosc2.Array, dtype=None, **kwargs) -> NDArray:
     """
     Returns an uninitialized array with the same shape as an input array x.
 
     Parameters
     ----------
-    x : NDArray
+    x : blosc2.Array
         Input array from which to derive the output array shape.
 
     dtype (Optional):
@@ -6010,13 +6012,13 @@ def empty_like(x: NDArray, dtype=None, **kwargs) -> NDArray:
     return blosc2.empty(shape=x.shape, dtype=dtype, **kwargs)
 
 
-def ones_like(x: NDArray, dtype=None, **kwargs) -> NDArray:
+def ones_like(x: blosc2.Array, dtype=None, **kwargs) -> NDArray:
     """
     Returns an array of ones with the same shape as an input array x.
 
     Parameters
     ----------
-    x : NDArray
+    x : blosc2.Array
         Input array from which to derive the output array shape.
 
     dtype (Optional):
@@ -6037,13 +6039,13 @@ def ones_like(x: NDArray, dtype=None, **kwargs) -> NDArray:
     return blosc2.ones(shape=x.shape, dtype=dtype, **kwargs)
 
 
-def zeros_like(x: NDArray, dtype=None, **kwargs) -> NDArray:
+def zeros_like(x: blosc2.Array, dtype=None, **kwargs) -> NDArray:
     """
     Returns an array of zeros with the same shape as an input array x.
 
     Parameters
     ----------
-    x : NDArray
+    x : blosc2.Array
         Input array from which to derive the output array shape.
 
     dtype (Optional):
@@ -6064,13 +6066,13 @@ def zeros_like(x: NDArray, dtype=None, **kwargs) -> NDArray:
     return blosc2.zeros(shape=x.shape, dtype=dtype, **kwargs)
 
 
-def full_like(x: NDArray, fill_value: bool | int | float | complex, dtype=None, **kwargs) -> NDArray:
+def full_like(x: blosc2.Array, fill_value: bool | int | float | complex, dtype=None, **kwargs) -> NDArray:
     """
     Returns an array filled with a value with the same shape as an input array x.
 
     Parameters
     ----------
-    x : NDArray
+    x : blosc2.Array
         Input array from which to derive the output array shape.
 
     fill_value: bool | int | float | complex
