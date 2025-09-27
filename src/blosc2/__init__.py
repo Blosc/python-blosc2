@@ -324,6 +324,7 @@ from .storage import (  # noqa: I001
 )
 
 from .ndarray import (
+    Array,
     NDArray,
     NDField,
     Operand,
