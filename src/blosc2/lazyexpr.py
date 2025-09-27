@@ -2027,7 +2027,7 @@ def chunked_eval(  # noqa: C901
         _getitem: bool, optional
             Indicates whether the expression is being evaluated for a getitem operation.
             Default is False.
-        _output: NDArray or np.ndarray, optional
+        _output: blosc2.Array, optional
             The output array to store the result.
         _ne_args: dict, optional
             Additional arguments to be passed to `numexpr.evaluate()` function.
@@ -3502,7 +3502,7 @@ def lazyexpr(
         The dictionary with operands. Supported values are NumPy.ndarray,
         Python scalars, :ref:`NDArray`, :ref:`NDField` or :ref:`C2Array` instances.
         If None, the operands will be seeked in the local and global dictionaries.
-    out: NDArray or np.ndarray, optional
+    out: blosc2.Array, optional
         The output array where the result will be stored. If not provided,
         a new NumPy array will be created and returned.
     where: tuple, list, optional
@@ -3657,7 +3657,7 @@ def evaluate(
     global_dict: dict, optional
         The global dictionary to use when looking for operands in the expression.
         If not provided, the global dictionary of the caller will be used.
-    out: NDArray or np.ndarray, optional
+    out: blosc2.Array, optional
         The output array where the result will be stored. If not provided,
         a new NumPy array will be created and returned.
     kwargs: Any, optional
