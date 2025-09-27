@@ -8,14 +8,17 @@
 import contextlib
 import os
 from collections.abc import Iterator, MutableMapping
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 import blosc2
-from blosc2.c2array import C2Array
 from blosc2.dict_store import DictStore
-from blosc2.ndarray import NDArray
 from blosc2.schunk import SChunk
+
+if TYPE_CHECKING:
+    from blosc2.c2array import C2Array
+    from blosc2.ndarray import NDArray
 
 
 class vlmetaProxy(MutableMapping):
@@ -223,7 +226,7 @@ class TreeStore(DictStore):
 
         return key
 
-    def __setitem__(self, key: str, value: np.ndarray | NDArray | C2Array | SChunk) -> None:
+    def __setitem__(self, key: str, value: blosc2.Array | SChunk) -> None:
         """Add a node with hierarchical key validation.
 
         Parameters

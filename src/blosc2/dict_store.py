@@ -214,7 +214,7 @@ class DictStore:
         """Access the underlying EmbedStore."""
         return self._estore
 
-    def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray | SChunk | C2Array) -> None:
+    def __setitem__(self, key: str, value: blosc2.Array | SChunk) -> None:
         """Add a node to the DictStore."""
         if isinstance(value, np.ndarray):
             value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)

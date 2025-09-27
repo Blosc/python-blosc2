@@ -420,7 +420,7 @@ def sum(
     dtype: np.dtype | str = None,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | blosc2.Array | int | float | complex | bool:
+) -> blosc2.Array | int | float | complex | bool:
     """
     Return the sum of array elements over a given axis.
 
@@ -477,7 +477,7 @@ def mean(
     dtype: np.dtype | str = None,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | blosc2.Array | int | float | complex | bool:
+) -> blosc2.Array | int | float | complex | bool:
     """
     Return the arithmetic mean along the specified axis.
 
@@ -514,7 +514,7 @@ def std(
     ddof: int = 0,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | blosc2.Array | int | float | bool:
+) -> blosc2.Array | int | float | bool:
     """
     Return the standard deviation along the specified axis.
 
@@ -573,7 +573,7 @@ def var(
     ddof: int = 0,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | blosc2.Array | int | float | bool:
+) -> blosc2.Array | int | float | bool:
     """
     Return the variance along the specified axis.
 
@@ -614,7 +614,7 @@ def prod(
     dtype: np.dtype | str = None,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | blosc2.Array | int | float | complex | bool:
+) -> blosc2.Array | int | float | complex | bool:
     """
     Return the product of array elements over a given axis.
 
@@ -653,7 +653,7 @@ def min(
     axis: int | tuple[int] | None = None,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | blosc2.Array | int | float | complex | bool:
+) -> blosc2.Array | int | float | complex | bool:
     """
     Return the minimum along a given axis.
 
@@ -701,7 +701,7 @@ def max(
     axis: int | tuple[int] | None = None,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | blosc2.Array | int | float | complex | bool:
+) -> blosc2.Array | int | float | complex | bool:
     """
     Return the maximum along a given axis.
 
@@ -744,7 +744,7 @@ def any(
     axis: int | tuple[int] | None = None,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | blosc2.Array | bool:
+) -> blosc2.Array | bool:
     """
     Test whether any array element along a given axis evaluates to True.
 
@@ -785,7 +785,7 @@ def all(
     axis: int | tuple[int] | None = None,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | blosc2.Array | bool:
+) -> blosc2.Array | bool:
     """
     Test whether all array elements along a given axis evaluate to True.
 
@@ -4689,8 +4689,8 @@ def array_from_ffi_ptr(array_ptr) -> NDArray:
 
 def where(
     condition: blosc2.LazyExpr | NDArray,
-    x: NDArray | NDField | np.ndarray | int | float | complex | bool | str | bytes | None = None,
-    y: NDArray | NDField | np.ndarray | int | float | complex | bool | str | bytes | None = None,
+    x: blosc2.Array | int | float | complex | bool | str | bytes | None = None,
+    y: blosc2.Array | int | float | complex | bool | str | bytes | None = None,
 ) -> blosc2.LazyExpr:
     """
     Return elements chosen from `x` or `y` depending on `condition`.
@@ -5561,7 +5561,7 @@ def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
     array.save(urlpath, contiguous, **kwargs)
 
 
-def asarray(array: Sequence | np.ndarray | blosc2.Array, copy: bool | None = None, **kwargs: Any) -> NDArray:
+def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: Any) -> NDArray:
     """Convert the `array` to an `NDArray`.
 
     Parameters
@@ -5664,7 +5664,7 @@ def asarray(array: Sequence | np.ndarray | blosc2.Array, copy: bool | None = Non
 
 
 def astype(
-    array: Sequence | np.ndarray | blosc2.Array,
+    array: Sequence | blosc2.Array,
     dtype,
     casting: str = "unsafe",
     copy: bool = True,
@@ -5675,7 +5675,7 @@ def astype(
 
     Parameters
     ----------
-    array: Sequence | np.ndarray | blosc2.Array
+    array: Sequence | blosc2.Array
         The array to be cast to a different type.
     dtype: DType-like
         The desired data type to cast to.
@@ -5953,7 +5953,7 @@ class NDField(Operand):
         # And return the field
         return nparr[self.field]
 
-    def __setitem__(self, key: int | slice | Sequence[slice], value: np.ndarray | NDArray | NDField) -> None:
+    def __setitem__(self, key: int | slice | Sequence[slice], value: blosc2.Array) -> None:
         """
         Set a slice of :paramref:`self` to a value.
 
@@ -6126,7 +6126,7 @@ def full_like(x: NDArray, fill_value: bool | int | float | complex, dtype=None, 
     return blosc2.full(shape=x.shape, fill_value=fill_value, dtype=dtype, **kwargs)
 
 
-def take(x: NDArray, indices: NDArray[int] | np.ndarray[int], axis: int | None = None) -> NDArray:
+def take(x: NDArray, indices: blosc2.Array, axis: int | None = None) -> NDArray:
     """
     Returns elements of an array along an axis.
 
@@ -6165,7 +6165,7 @@ def take(x: NDArray, indices: NDArray[int] | np.ndarray[int], axis: int | None =
     return blosc2.asarray(x[key])
 
 
-def take_along_axis(x: NDArray, indices: NDArray[int] | np.ndarray[int], axis: int = -1) -> NDArray:
+def take_along_axis(x: NDArray, indices: blosc2.Array, axis: int = -1) -> NDArray:
     """
     Returns elements of an array along an axis.
 
