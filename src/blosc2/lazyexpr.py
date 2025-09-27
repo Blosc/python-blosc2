@@ -286,7 +286,7 @@ class LazyArray(ABC):
         pass
 
     @abstractmethod
-    def compute(self, item: slice | list[slice] | None = None, **kwargs: Any) -> blosc2.NDArray:
+    def compute(self, item: slice | list[slice] | None = None, **kwargs: Any) -> blosc2.Array:
         """
         Return an :ref:`NDArray` containing the evaluation of the :ref:`LazyArray`.
 
@@ -337,7 +337,7 @@ class LazyArray(ABC):
         pass
 
     @abstractmethod
-    def __getitem__(self, item: int | slice | Sequence[slice]) -> blosc2.NDArray:
+    def __getitem__(self, item: int | slice | Sequence[slice]) -> blosc2.Array:
         """
         Return a NumPy.ndarray containing the evaluation of the :ref:`LazyArray`.
 
@@ -507,14 +507,12 @@ def convert_inputs(inputs):
         return []
     inputs_ = []
     for obj in inputs:
-        if not isinstance(
-            obj, np.ndarray | blosc2.NDArray | blosc2.NDField | blosc2.C2Array
-        ) and not np.isscalar(obj):
+        if not isinstance(obj, np.ndarray | blosc2.Array) and not np.isscalar(obj):
             try:
                 obj = np.asarray(obj)
             except Exception:
                 print(
-                    "Inputs not being np.ndarray, NDArray, NDField, C2Array or Python scalar objects"
+                    "Inputs not being np.ndarray, Array or Python scalar objects"
                     " should be convertible to np.ndarray."
                 )
                 raise
@@ -687,9 +685,9 @@ def get_expr_operands(expression: str) -> set:
 
 def conserve_functions(  # noqa: C901
     expression: str,
-    operands_old: dict[str, blosc2.NDArray | blosc2.LazyExpr],
-    operands_new: dict[str, blosc2.NDArray | blosc2.LazyExpr],
-) -> tuple[str, dict[str, blosc2.NDArray]]:
+    operands_old: dict[str, blosc2.Array],
+    operands_new: dict[str, blosc2.Array],
+) -> tuple[str, dict[str, blosc2.Array]]:
     """
     Given an expression in string form, return its operands.
 
@@ -1154,7 +1152,7 @@ def fast_eval(  # noqa: C901
     operands: dict,
     getitem: bool,
     **kwargs,
-) -> blosc2.NDArray | np.ndarray:
+) -> blosc2.Array | np.ndarray:
     """Evaluate the expression in chunks of operands using a fast path.
 
     Parameters
@@ -1321,7 +1319,7 @@ def slices_eval(  # noqa: C901
     getitem: bool,
     _slice=NDINDEX_EMPTY_TUPLE,
     **kwargs,
-) -> blosc2.NDArray | np.ndarray:
+) -> blosc2.Array | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
     This function can handle operands with different chunk shapes and
@@ -1724,7 +1722,7 @@ def reduce_slices(  # noqa: C901
     reduce_args,
     _slice=NDINDEX_EMPTY_TUPLE,
     **kwargs,
-) -> blosc2.NDArray | np.ndarray:
+) -> blosc2.Array | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
     This function can handle operands with different chunk shapes.
@@ -2969,7 +2967,7 @@ class LazyExpr(LazyArray):
             lazy_expr._order = order
         return lazy_expr
 
-    def compute(self, item=(), **kwargs) -> blosc2.NDArray:
+    def compute(self, item=(), **kwargs) -> blosc2.Array:
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
         if "out" in kwargs:
             kwargs["_output"] = kwargs.pop("out")
@@ -3252,7 +3250,7 @@ class LazyUDF(LazyArray):
     def info_items(self):
         inputs = {}
         for key, value in self.inputs_dict.items():
-            if isinstance(value, np.ndarray | blosc2.NDArray | blosc2.C2Array):
+            if isinstance(value, np.ndarray | blosc2.Array | blosc2.C2Array):
                 inputs[key] = f"<{value.__class__.__name__}> {value.shape} {value.dtype}"
             else:
                 inputs[key] = str(value)
@@ -3484,7 +3482,7 @@ def seek_operands(names, local_dict=None, global_dict=None, _frame_depth: int = 
 def lazyexpr(
     expression: str | bytes | LazyExpr | blosc2.NDArray,
     operands: dict | None = None,
-    out: blosc2.NDArray | np.ndarray = None,
+    out: blosc2.Array | np.ndarray = None,
     where: tuple | list | None = None,
     local_dict: dict | None = None,
     global_dict: dict | None = None,
@@ -3633,9 +3631,9 @@ def evaluate(
     ex: str,
     local_dict: dict | None = None,
     global_dict: dict | None = None,
-    out: np.ndarray | blosc2.NDArray = None,
+    out: np.ndarray | blosc2.Array = None,
     **kwargs: Any,
-) -> np.ndarray | blosc2.NDArray:
+) -> np.ndarray | blosc2.Array:
     """
     Evaluate a string expression using the Blosc2 compute engine.
 

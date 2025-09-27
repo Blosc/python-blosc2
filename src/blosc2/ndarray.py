@@ -16,7 +16,7 @@ import warnings
 from collections import OrderedDict, namedtuple
 from functools import reduce
 from itertools import product
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any, NamedTuple, Protocol, runtime_checkable
 
 from numpy.exceptions import ComplexWarning
 
@@ -36,6 +36,30 @@ from blosc2.schunk import SChunk
 
 # NumPy version and a convenient boolean flag
 NUMPY_GE_2_0 = np.__version__ >= "2.0"
+
+
+@runtime_checkable
+class Array(Protocol):
+    """
+    A typing protocol for array-like objects with basic array interface.
+
+    This protocol defines the minimal interface that array-like objects
+    must implement to be compatible with blosc2 functions.
+    """
+
+    @property
+    def dtype(self) -> Any:
+        """The data type of the array."""
+        ...
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """The shape of the array."""
+        ...
+
+    def __getitem__(self, key: Any) -> Any:
+        """Get items from the array."""
+        ...
 
 
 def is_documented_by(original):
@@ -264,7 +288,7 @@ def get_flat_slices(
 
 
 def reshape(
-    src: NDArray | NDField | blosc2.LazyArray | blosc2.C2Array,
+    src: blosc2.Array,
     shape: tuple | list,
     c_order: bool = True,
     **kwargs: Any,
@@ -370,23 +394,13 @@ def reshape(
 
 
 def _check_allowed_dtypes(
-    value: bool
-    | int
-    | float
-    | str
-    | blosc2.NDArray
-    | blosc2.NDField
-    | blosc2.C2Array
-    | blosc2.Proxy
-    | blosc2.LazyExpr,
+    value: bool | int | float | str | blosc2.Array | blosc2.Proxy | blosc2.LazyExpr,
 ):
     if not (
         isinstance(
             value,
             blosc2.LazyExpr
-            | blosc2.NDArray
-            | blosc2.NDField
-            | blosc2.C2Array
+            | blosc2.Array
             | blosc2.Proxy
             | blosc2.ProxyNDField
             | blosc2.SimpleProxy
@@ -395,18 +409,18 @@ def _check_allowed_dtypes(
         or np.isscalar(value)
     ):
         raise RuntimeError(
-            "Expected LazyExpr, NDArray, NDField, C2Array, Proxy, np.ndarray or scalar instances"
+            "Expected LazyExpr, Array, Proxy, np.ndarray or scalar instances"
             f" and you provided a '{type(value)}' instance"
         )
 
 
 def sum(
-    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    ndarr: blosc2.Array,
     axis: int | tuple[int] | None = None,
     dtype: np.dtype | str = None,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | NDArray | int | float | complex | bool:
+) -> np.ndarray | blosc2.Array | int | float | complex | bool:
     """
     Return the sum of array elements over a given axis.
 
@@ -458,12 +472,12 @@ def sum(
 
 
 def mean(
-    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    ndarr: blosc2.Array,
     axis: int | tuple[int] | None = None,
     dtype: np.dtype | str = None,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | NDArray | int | float | complex | bool:
+) -> np.ndarray | blosc2.Array | int | float | complex | bool:
     """
     Return the arithmetic mean along the specified axis.
 
@@ -494,13 +508,13 @@ def mean(
 
 
 def std(
-    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    ndarr: blosc2.Array,
     axis: int | tuple[int] | None = None,
     dtype: np.dtype | str = None,
     ddof: int = 0,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | NDArray | int | float | bool:
+) -> np.ndarray | blosc2.Array | int | float | bool:
     """
     Return the standard deviation along the specified axis.
 
@@ -553,13 +567,13 @@ def std(
 
 
 def var(
-    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    ndarr: blosc2.Array,
     axis: int | tuple[int] | None = None,
     dtype: np.dtype | str = None,
     ddof: int = 0,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | NDArray | int | float | bool:
+) -> np.ndarray | blosc2.Array | int | float | bool:
     """
     Return the variance along the specified axis.
 
@@ -595,12 +609,12 @@ def var(
 
 
 def prod(
-    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    ndarr: blosc2.Array,
     axis: int | tuple[int] | None = None,
     dtype: np.dtype | str = None,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | NDArray | int | float | complex | bool:
+) -> np.ndarray | blosc2.Array | int | float | complex | bool:
     """
     Return the product of array elements over a given axis.
 
@@ -635,11 +649,11 @@ def prod(
 
 
 def min(
-    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    ndarr: blosc2.Array,
     axis: int | tuple[int] | None = None,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | NDArray | int | float | complex | bool:
+) -> np.ndarray | blosc2.Array | int | float | complex | bool:
     """
     Return the minimum along a given axis.
 
@@ -683,11 +697,11 @@ def min(
 
 
 def max(
-    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    ndarr: blosc2.Array,
     axis: int | tuple[int] | None = None,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | NDArray | int | float | complex | bool:
+) -> np.ndarray | blosc2.Array | int | float | complex | bool:
     """
     Return the maximum along a given axis.
 
@@ -726,11 +740,11 @@ def max(
 
 
 def any(
-    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    ndarr: blosc2.Array,
     axis: int | tuple[int] | None = None,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | NDArray | bool:
+) -> np.ndarray | blosc2.Array | bool:
     """
     Test whether any array element along a given axis evaluates to True.
 
@@ -767,11 +781,11 @@ def any(
 
 
 def all(
-    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    ndarr: blosc2.Array,
     axis: int | tuple[int] | None = None,
     keepdims: bool = False,
     **kwargs: Any,
-) -> np.ndarray | NDArray | bool:
+) -> np.ndarray | blosc2.Array | bool:
     """
     Test whether all array elements along a given axis evaluate to True.
 
@@ -800,7 +814,7 @@ def all(
     return ndarr.all(axis=axis, keepdims=keepdims, **kwargs)
 
 
-def sin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def sin(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Compute the trigonometric sine, element-wise.
 
@@ -835,7 +849,7 @@ def sin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc
     return blosc2.LazyExpr(new_op=(ndarr, "sin", None))
 
 
-def cos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def cos(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Trigonometric cosine, element-wise.
 
@@ -870,7 +884,7 @@ def cos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc
     return blosc2.LazyExpr(new_op=(ndarr, "cos", None))
 
 
-def tan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def tan(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Compute the trigonometric tangent, element-wise.
 
@@ -906,7 +920,7 @@ def tan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc
     return blosc2.LazyExpr(new_op=(ndarr, "tan", None))
 
 
-def sqrt(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def sqrt(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Return the non-negative square-root of an array, element-wise.
 
@@ -941,7 +955,7 @@ def sqrt(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     return blosc2.LazyExpr(new_op=(ndarr, "sqrt", None))
 
 
-def sinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def sinh(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Hyperbolic sine, element-wise.
 
@@ -976,7 +990,7 @@ def sinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     return blosc2.LazyExpr(new_op=(ndarr, "sinh", None))
 
 
-def cosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def cosh(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Compute the hyperbolic cosine, element-wise.
 
@@ -1011,7 +1025,7 @@ def cosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     return blosc2.LazyExpr(new_op=(ndarr, "cosh", None))
 
 
-def tanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def tanh(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Compute the hyperbolic tangent, element-wise.
 
@@ -1046,7 +1060,7 @@ def tanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     return blosc2.LazyExpr(new_op=(ndarr, "tanh", None))
 
 
-def arcsin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def arcsin(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Compute the inverse sine, element-wise.
 
@@ -1084,7 +1098,7 @@ def arcsin(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> bl
 asin = arcsin  # alias
 
 
-def arccos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def arccos(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Compute the inverse cosine, element-wise.
 
@@ -1122,7 +1136,7 @@ def arccos(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> bl
 acos = arccos  # alias
 
 
-def arctan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def arctan(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Compute the inverse tangent, element-wise.
 
@@ -1160,9 +1174,7 @@ def arctan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> bl
 atan = arctan  # alias
 
 
-def arctan2(
-    ndarr1: NDArray | NDField | blosc2.C2Array, ndarr2: NDArray | NDField | blosc2.C2Array, /
-) -> blosc2.LazyExpr:
+def arctan2(ndarr1: blosc2.Array, ndarr2: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Compute the element-wise arc tangent of ``ndarr1 / ndarr2`` choosing the quadrant correctly.
 
@@ -1206,7 +1218,7 @@ def arctan2(
 atan2 = arctan2  # alias
 
 
-def arcsinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def arcsinh(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Compute the inverse hyperbolic sine, element-wise.
 
@@ -1244,7 +1256,7 @@ def arcsinh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> b
 asinh = arcsinh  # alias
 
 
-def arccosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def arccosh(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Compute the inverse hyperbolic cosine, element-wise.
 
@@ -1282,7 +1294,7 @@ def arccosh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> b
 acosh = arccosh  # alias
 
 
-def arctanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def arctanh(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Compute the inverse hyperbolic tangent, element-wise.
 
@@ -1320,7 +1332,7 @@ def arctanh(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> b
 atanh = arctanh  # alias
 
 
-def exp(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def exp(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Calculate the exponential of all elements in the input array.
 
@@ -1355,7 +1367,7 @@ def exp(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc
     return blosc2.LazyExpr(new_op=(ndarr, "exp", None))
 
 
-def expm1(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def expm1(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Calculate ``exp(ndarr) - 1`` for all elements in the array.
 
@@ -1390,7 +1402,7 @@ def expm1(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blo
     return blosc2.LazyExpr(new_op=(ndarr, "expm1", None))
 
 
-def log(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def log(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Compute the natural logarithm, element-wise.
 
@@ -1424,7 +1436,7 @@ def log(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc
     return blosc2.LazyExpr(new_op=(ndarr, "log", None))
 
 
-def log10(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def log10(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Return the base 10 logarithm of the input array, element-wise.
 
@@ -1458,7 +1470,7 @@ def log10(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blo
     return blosc2.LazyExpr(new_op=(ndarr, "log10", None))
 
 
-def log1p(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def log1p(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Return the natural logarithm of one plus the input array, element-wise.
 
@@ -1492,7 +1504,7 @@ def log1p(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blo
     return blosc2.LazyExpr(new_op=(ndarr, "log1p", None))
 
 
-def log2(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def log2(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Return the base 2 logarithm of the input array, element-wise.
 
@@ -1514,7 +1526,7 @@ def log2(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     return blosc2.LazyExpr(new_op=(ndarr, "log2", None))
 
 
-def conj(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def conj(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Return the complex conjugate, element-wise.
 
@@ -1548,7 +1560,7 @@ def conj(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     return blosc2.LazyExpr(new_op=(ndarr, "conj", None))
 
 
-def real(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def real(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Return the real part of the complex array, element-wise.
 
@@ -1582,7 +1594,7 @@ def real(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     return blosc2.LazyExpr(new_op=(ndarr, "real", None))
 
 
-def imag(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def imag(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Return the imaginary part of the complex array, element-wise.
 
@@ -1616,9 +1628,7 @@ def imag(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blos
     return blosc2.LazyExpr(new_op=(ndarr, "imag", None))
 
 
-def contains(
-    ndarr: NDArray | NDField | blosc2.C2Array, value: str | bytes | NDArray | NDField | blosc2.C2Array, /
-) -> blosc2.LazyExpr:
+def contains(ndarr: blosc2.Array, value: str | bytes | blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Check if the array contains a specified value.
 
@@ -1652,7 +1662,7 @@ def contains(
     return blosc2.LazyExpr(new_op=(ndarr, "contains", value))
 
 
-def abs(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def abs(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Calculate the absolute value element-wise.
 
@@ -1686,7 +1696,7 @@ def abs(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc
     return blosc2.LazyExpr(new_op=(ndarr, "abs", None))
 
 
-def isnan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def isnan(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Return True/False for not-a-number values element-wise.
 
@@ -1718,7 +1728,7 @@ def isnan(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blo
     return blosc2.LazyExpr(new_op=(ndarr, "isnan", None))
 
 
-def isfinite(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def isfinite(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Return True/False for finite values element-wise.
 
@@ -1750,7 +1760,7 @@ def isfinite(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> 
     return blosc2.LazyExpr(new_op=(ndarr, "isfinite", None))
 
 
-def isinf(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+def isinf(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Return True/False for infinite values element-wise.
 
@@ -1782,7 +1792,7 @@ def isinf(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blo
     return blosc2.LazyExpr(new_op=(ndarr, "isinf", None))
 
 
-# def nonzero(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blosc2.LazyExpr:
+# def nonzero(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
 #     """
 #     Return indices of nonzero values.
 
@@ -1804,9 +1814,7 @@ def isinf(ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, /) -> blo
 #     return ndarr.__ne__(0)
 
 
-def count_nonzero(
-    ndarr: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr, axis: int | Sequence[int] | None = None
-) -> int:
+def count_nonzero(ndarr: blosc2.Array, axis: int | Sequence[int] | None = None) -> int:
     """
     Return number of nonzero values along axes.
 
@@ -1832,8 +1840,8 @@ def count_nonzero(
 
 
 def equal(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x1: blosc2.Array,
+    x2: blosc2.Array,
 ) -> blosc2.LazyExpr:
     """
     Computes the truth value of x1_i == x2_i for each element x1_i of the input array x1
@@ -1841,10 +1849,10 @@ def equal(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any data type.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. May have any data type.
 
     Returns
@@ -1860,8 +1868,8 @@ def equal(
 
 
 def not_equal(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x1: blosc2.Array,
+    x2: blosc2.Array,
 ) -> blosc2.LazyExpr:
     """
     Computes the truth value of x1_i != x2_i for each element x1_i of the input array x1
@@ -1869,10 +1877,10 @@ def not_equal(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any data type.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. May have any data type.
 
     Returns
@@ -1888,8 +1896,8 @@ def not_equal(
 
 
 def less_equal(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x1: blosc2.Array,
+    x2: blosc2.Array,
 ) -> blosc2.LazyExpr:
     """
     Computes the truth value of x1_i <= x2_i for each element x1_i of the input array x1
@@ -1897,10 +1905,10 @@ def less_equal(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any data type.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. May have any data type.
 
     Returns
@@ -1916,8 +1924,8 @@ def less_equal(
 
 
 def less(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x1: blosc2.Array,
+    x2: blosc2.Array,
 ) -> blosc2.LazyExpr:
     """
     Computes the truth value of x1_i < x2_i for each element x1_i of the input array x1
@@ -1925,10 +1933,10 @@ def less(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any data type.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. May have any data type.
 
     Returns
@@ -1944,8 +1952,8 @@ def less(
 
 
 def greater_equal(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x1: blosc2.Array,
+    x2: blosc2.Array,
 ) -> blosc2.LazyExpr:
     """
     Computes the truth value of x1_i >= x2_i for each element x1_i of the input array x1
@@ -1953,10 +1961,10 @@ def greater_equal(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any data type.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. May have any data type.
 
     Returns
@@ -1972,8 +1980,8 @@ def greater_equal(
 
 
 def greater(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x1: blosc2.Array,
+    x2: blosc2.Array,
 ) -> blosc2.LazyExpr:
     """
     Computes the truth value of x1_i > x2_i for each element x1_i of the input array x1
@@ -1981,10 +1989,10 @@ def greater(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any data type.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. May have any data type.
 
     Returns
@@ -2000,8 +2008,8 @@ def greater(
 
 
 def multiply(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x1: blosc2.Array,
+    x2: blosc2.Array,
 ) -> blosc2.LazyExpr:
     """
     Computes the value of x1_i * x2_i for each element x1_i of the input array x1
@@ -2009,10 +2017,10 @@ def multiply(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any data type.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. May have any data type.
 
     Returns
@@ -2028,8 +2036,8 @@ def multiply(
 
 
 def divide(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x1: blosc2.Array,
+    x2: blosc2.Array,
 ) -> blosc2.LazyExpr:
     """
     Computes the value of x1_i / x2_i for each element x1_i of the input array x1
@@ -2037,10 +2045,10 @@ def divide(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any data type.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. May have any data type.
 
     Returns
@@ -2056,8 +2064,8 @@ def divide(
 
 
 def nextafter(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x1: blosc2.Array,
+    x2: blosc2.Array,
 ) -> blosc2.LazyExpr:
     """
     Returns the next representable floating-point value for each element x1_i of the input
@@ -2065,10 +2073,10 @@ def nextafter(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. Real-valued floating point dtype.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1 and have same data type.
 
     Returns
@@ -2084,8 +2092,8 @@ def nextafter(
 
 
 def hypot(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x1: blosc2.Array,
+    x2: blosc2.Array,
 ) -> blosc2.LazyExpr:
     """
     Computes the square root of the sum of squares for each element x1_i of the input array
@@ -2093,10 +2101,10 @@ def hypot(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. Real-valued floating point dtype.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. Real-valued floating point dtype.
 
     Returns
@@ -2112,8 +2120,8 @@ def hypot(
 
 
 def copysign(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x1: blosc2.Array,
+    x2: blosc2.Array,
 ) -> blosc2.LazyExpr:
     """
     Composes a floating-point value with the magnitude of x1_i and the sign of x2_i
@@ -2121,10 +2129,10 @@ def copysign(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. Real-valued floating point dtype.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. Real-valued floating point dtype.
 
     Returns
@@ -2140,8 +2148,8 @@ def copysign(
 
 
 def maximum(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x1: blosc2.Array,
+    x2: blosc2.Array,
 ) -> blosc2.LazyExpr:
     """
     Computes the maximum value for each element x1_i of the input array x1 relative to the
@@ -2149,10 +2157,10 @@ def maximum(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. Real-valued dtype.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. Real-valued dtype.
 
     Returns
@@ -2168,8 +2176,8 @@ def maximum(
 
 
 def minimum(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x1: blosc2.Array,
+    x2: blosc2.Array,
 ) -> blosc2.LazyExpr:
     """
     Computes the minimum value for each element x1_i of the input array x1 relative to the
@@ -2177,10 +2185,10 @@ def minimum(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. Real-valued dtype.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. Real-valued dtype.
 
     Returns
@@ -2195,13 +2203,13 @@ def minimum(
     return blosc2.LazyExpr(new_op=(x1, "minimum", x2))
 
 
-def reciprocal(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+def reciprocal(x: blosc2.Array) -> blosc2.LazyExpr:
     """
     Computes the value of 1/x1_i for each element x1_i of the input array x1.
 
     Parameters
     ----------
-    x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x: blosc2.Array
         First input array, floating-point data type.
 
     Returns
@@ -2216,14 +2224,14 @@ def reciprocal(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc
     return 1.0 / x
 
 
-def floor(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+def floor(x: blosc2.Array) -> blosc2.LazyExpr:
     """
     Rounds each element x_i of the input array x to the greatest (i.e., closest to +infinity)
     integer-valued number that is not greater than x_i.
 
     Parameters
     ----------
-    x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x: blosc2.Array
         First input array. May have any real-valued data type.
 
     Returns
@@ -2238,14 +2246,14 @@ def floor(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.Laz
     return blosc2.LazyExpr(new_op=(x, "floor", None))
 
 
-def ceil(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+def ceil(x: blosc2.Array) -> blosc2.LazyExpr:
     """
     Rounds each element x_i of the input array x to the smallest (i.e., closest to -infinity)
     integer-valued number that is not smaller than x_i.
 
     Parameters
     ----------
-    x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x: blosc2.Array
         First input array. May have any real-valued data type.
 
     Returns
@@ -2260,14 +2268,14 @@ def ceil(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.Lazy
     return blosc2.LazyExpr(new_op=(x, "ceil", None))
 
 
-def trunc(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+def trunc(x: blosc2.Array) -> blosc2.LazyExpr:
     """
     Rounds each element x_i of the input array x to the closest to 0
     integer-valued number.
 
     Parameters
     ----------
-    x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x: blosc2.Array
         First input array. May have any real-valued data type.
 
     Returns
@@ -2282,7 +2290,7 @@ def trunc(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.Laz
     return blosc2.LazyExpr(new_op=(x, "trunc", None))
 
 
-def signbit(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+def signbit(x: blosc2.Array) -> blosc2.LazyExpr:
     """
     Determines whether the sign bit is set for each element x_i of the input array x.
 
@@ -2291,7 +2299,7 @@ def signbit(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.L
 
     Parameters
     ----------
-    x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x: blosc2.Array
         First input array. May have any real-valued floating-point data type.
 
     Returns
@@ -2306,13 +2314,13 @@ def signbit(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.L
     return blosc2.LazyExpr(new_op=(x, "signbit", None))
 
 
-def sign(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+def sign(x: blosc2.Array) -> blosc2.LazyExpr:
     """
     Returns an indication of the sign of a number for each element x_i of the input array x.
 
     Parameters
     ----------
-    x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x: blosc2.Array
         First input array. May have any numeric data type.
 
     Returns
@@ -2327,13 +2335,13 @@ def sign(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.Lazy
     return blosc2.LazyExpr(new_op=(x, "sign", None))
 
 
-def round(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+def round(x: blosc2.Array) -> blosc2.LazyExpr:
     """
     Rounds each element x_i of the input array x to the nearest integer-valued number.
 
     Parameters
     ----------
-    x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x: blosc2.Array
         First input array. May have any numeric data type.
 
     Returns
@@ -2349,8 +2357,8 @@ def round(x: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.Laz
 
 
 def floor_divide(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x1: blosc2.Array,
+    x2: blosc2.Array,
 ) -> blosc2.LazyExpr:
     """
     Computes the value of x1_i // x2_i for each element x1_i of the input array x1
@@ -2358,10 +2366,10 @@ def floor_divide(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any real-valued data type.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. May have any real-valued data type.
 
     Returns
@@ -2377,8 +2385,8 @@ def floor_divide(
 
 
 def add(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x1: blosc2.Array,
+    x2: blosc2.Array,
 ) -> blosc2.LazyExpr:
     """
     Computes the value of x1_i + x2_i for each element x1_i of the input array x1
@@ -2386,10 +2394,10 @@ def add(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any data type.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. May have any data type.
 
     Returns
@@ -2405,8 +2413,8 @@ def add(
 
 
 def subtract(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr,
+    x1: blosc2.Array,
+    x2: blosc2.Array,
 ) -> blosc2.LazyExpr:
     """
     Computes the value of x1_i - x2_i for each element x1_i of the input array x1
@@ -2414,10 +2422,10 @@ def subtract(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any data type.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. May have any data type.
 
     Returns
@@ -2432,13 +2440,13 @@ def subtract(
     return x1 - x2
 
 
-def square(x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.LazyExpr:
+def square(x1: blosc2.Array) -> blosc2.LazyExpr:
     """
     Computes the value of x1_i**2 for each element x1_i of the input array x1.
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any data type.
 
     Returns
@@ -2454,8 +2462,8 @@ def square(x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr) -> blosc2.L
 
 
 def pow(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x1: blosc2.Array | int | float | complex,
+    x2: blosc2.Array | int | float | complex,
 ) -> blosc2.LazyExpr:
     """
     Computes the value of x1_i**x2_i for each element x1_i of the input array x1 and x2_i
@@ -2463,10 +2471,10 @@ def pow(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any data type.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. May have any data type.
 
     Returns
@@ -2482,8 +2490,8 @@ def pow(
 
 
 def logical_xor(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x1: blosc2.Array | int | float | complex,
+    x2: blosc2.Array | int | float | complex,
 ) -> blosc2.LazyExpr:
     """
     Computes the value of x1_i ^ x2_i for each element x1_i of the input array x1 and x2_i
@@ -2491,10 +2499,10 @@ def logical_xor(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array, boolean.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1, boolean.
 
     Returns
@@ -2512,8 +2520,8 @@ def logical_xor(
 
 
 def logical_and(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x1: blosc2.Array | int | float | complex,
+    x2: blosc2.Array | int | float | complex,
 ) -> blosc2.LazyExpr:
     """
     Computes the value of x1_i & x2_i for each element x1_i of the input array x1 and x2_i
@@ -2521,10 +2529,10 @@ def logical_and(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array, boolean.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. Boolean.
 
     Returns
@@ -2542,8 +2550,8 @@ def logical_and(
 
 
 def logical_or(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x1: blosc2.Array | int | float | complex,
+    x2: blosc2.Array | int | float | complex,
 ) -> blosc2.LazyExpr:
     """
     Computes the value of x1_i | x2_i for each element x1_i of the input array x1 and x2_i
@@ -2551,10 +2559,10 @@ def logical_or(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array, boolean.
 
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2: blosc2.Array
         Second input array. Must be compatible with x1, boolean.
 
     Returns
@@ -2572,14 +2580,14 @@ def logical_or(
 
 
 def logical_not(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x1: blosc2.Array | int | float | complex,
 ) -> blosc2.LazyExpr:
     """
     Computes the value of ~x1_i for each element x1_i of the input array x1.
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         Input array, boolean.
 
     Returns
@@ -2597,8 +2605,8 @@ def logical_not(
 
 
 def bitwise_xor(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x1: blosc2.Array | int | float | complex,
+    x2: blosc2.Array | int | float | complex,
 ) -> blosc2.LazyExpr:
     """
     Computes the value of x1_i ^ x2_i for each element x1_i of the input array x1 and x2_i
@@ -2606,10 +2614,10 @@ def bitwise_xor(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array, integer or boolean.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1, integer or boolean.
 
     Returns
@@ -2625,8 +2633,8 @@ def bitwise_xor(
 
 
 def bitwise_and(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x1: blosc2.Array | int | float | complex,
+    x2: blosc2.Array | int | float | complex,
 ) -> blosc2.LazyExpr:
     """
     Computes the value of x1_i & x2_i for each element x1_i of the input array x1 and x2_i
@@ -2634,10 +2642,10 @@ def bitwise_and(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array, integer or boolean.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. Integer or boolean.
 
     Returns
@@ -2653,8 +2661,8 @@ def bitwise_and(
 
 
 def bitwise_or(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x1: blosc2.Array | int | float | complex,
+    x2: blosc2.Array | int | float | complex,
 ) -> blosc2.LazyExpr:
     """
     Computes the value of x1_i | x2_i for each element x1_i of the input array x1 and x2_i
@@ -2662,10 +2670,10 @@ def bitwise_or(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array, integer or boolean.
 
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2: blosc2.Array
         Second input array. Must be compatible with x1, integer or boolean.
 
     Returns
@@ -2681,14 +2689,14 @@ def bitwise_or(
 
 
 def bitwise_invert(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x1: blosc2.Array | int | float | complex,
 ) -> blosc2.LazyExpr:
     """
     Computes the value of ~x1_i for each element x1_i of the input array x1.
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         Input array, integer or boolean.
 
     Returns
@@ -2704,8 +2712,8 @@ def bitwise_invert(
 
 
 def bitwise_right_shift(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x1: blosc2.Array | int | float | complex,
+    x2: blosc2.Array | int | float | complex,
 ) -> blosc2.LazyExpr:
     """
     Shifts the bits of each element x1_i of the input array x1 to the right according to
@@ -2716,10 +2724,10 @@ def bitwise_right_shift(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array, integer.
 
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2: blosc2.Array
         Second input array. Must be compatible with x1, integer.
     Returns
     -------
@@ -2734,8 +2742,8 @@ def bitwise_right_shift(
 
 
 def bitwise_left_shift(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x1: blosc2.Array | int | float | complex,
+    x2: blosc2.Array | int | float | complex,
 ) -> blosc2.LazyExpr:
     """
     Shifts the bits of each element x1_i of the input array x1 to the left by appending x2_i
@@ -2745,10 +2753,10 @@ def bitwise_left_shift(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array, integer.
 
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2: blosc2.Array
         Second input array. Must be compatible with x1, integer.
 
     Returns
@@ -2764,14 +2772,14 @@ def bitwise_left_shift(
 
 
 def positive(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x1: blosc2.Array | int | float | complex,
 ) -> blosc2.LazyExpr:
     """
     Computes the numerical positive of each element x_i (i.e., out_i = +x_i) of the input array x.
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any data type.
 
     Returns
@@ -2787,14 +2795,14 @@ def positive(
 
 
 def negative(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x1: blosc2.Array | int | float | complex,
 ) -> blosc2.LazyExpr:
     """
     Computes the numerical negative of each element x_i (i.e., out_i = -x_i) of the input array x.
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any data type.
 
     Returns
@@ -2810,8 +2818,8 @@ def negative(
 
 
 def remainder(
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr | int | float | complex,
+    x1: blosc2.Array | int | float | complex,
+    x2: blosc2.Array | int | float | complex,
 ) -> blosc2.LazyExpr:
     """
     Returns the remainder of division for each element x1_i of the input array x1 and the
@@ -2821,10 +2829,10 @@ def remainder(
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any data type.
 
-    x2: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2: blosc2.Array
         Second input array. Must be compatible with x1. May have any data type.
 
     Returns
@@ -2880,10 +2888,10 @@ def logaddexp(x1: int | float | NDArray, x2: int | float | NDArray) -> NDArray:
 
     Parameters
     ----------
-    x1: NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x1: blosc2.Array
         First input array. May have any real-valued floating-point data type.
 
-    x2:NDArray | NDField | blosc2.C2Array | blosc2.LazyExpr
+    x2:blosc2.Array
         Second input array. Must be compatible with x1. May have any
         real-valued floating-point data type.
 
@@ -3063,13 +3071,13 @@ class Operand:
 
         return NotImplemented  # if not implemented in numexpr will default to NumPy
 
-    def __add__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __add__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         if blosc2.result_type(value, self) == blosc2.bool_:
             return blosc2.LazyExpr(new_op=(value, "|", self))
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
-    def __iadd__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __iadd__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         return self.__add__(value)
 
     @is_documented_by(negative)
@@ -3084,86 +3092,86 @@ class Operand:
     def __mod__(self, other) -> blosc2.LazyExpr:
         return remainder(self, other)
 
-    def __radd__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __radd__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         return self.__add__(value)
 
-    def __sub__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __sub__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "-", value))
 
-    def __isub__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __isub__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "-", value))
 
-    def __rsub__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __rsub__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "-", self))
 
     @is_documented_by(multiply)
-    def __mul__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __mul__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         # catch special case of multiplying two bools (not implemented in numexpr)
         if blosc2.result_type(value, self) == blosc2.bool_:
             return blosc2.LazyExpr(new_op=(value, "&", self))
         return blosc2.LazyExpr(new_op=(self, "*", value))
 
-    def __imul__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __imul__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         return self.__mul__(value)
 
-    def __rmul__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __rmul__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         return self.__mul__(value)
 
-    def __truediv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __truediv__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "/", value))
 
-    def __itruediv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __itruediv__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         return self.__truediv__(value)
 
-    def __rtruediv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __rtruediv__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "/", self))
 
     @is_documented_by(floor_divide)
-    def __floordiv__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __floordiv__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "//", value))
 
-    def __lt__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __lt__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "<", value))
 
-    def __le__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __le__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "<=", value))
 
-    def __gt__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __gt__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, ">", value))
 
-    def __ge__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __ge__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, ">=", value))
 
-    def __eq__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /):
+    def __eq__(self, value: int | float | blosc2.Array, /):
         _check_allowed_dtypes(value)
         if blosc2._disable_overloaded_equal:
             return self is value
         return blosc2.LazyExpr(new_op=(self, "==", value))
 
-    def __ne__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __ne__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "!=", value))
 
-    def __pow__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __pow__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "**", value))
 
-    def __ipow__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __ipow__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "**", value))
 
-    def __rpow__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __rpow__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(value, "**", self))
 
@@ -3172,7 +3180,7 @@ class Operand:
         return abs(self)
 
     @is_documented_by(bitwise_and)
-    def __and__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
+    def __and__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "&", value))
 
@@ -5553,9 +5561,7 @@ def save(array: NDArray, urlpath: str, contiguous=True, **kwargs: Any) -> None:
     array.save(urlpath, contiguous, **kwargs)
 
 
-def asarray(
-    array: Sequence | np.ndarray | blosc2.C2Array | NDArray, copy: bool | None = None, **kwargs: Any
-) -> NDArray:
+def asarray(array: Sequence | np.ndarray | blosc2.Array, copy: bool | None = None, **kwargs: Any) -> NDArray:
     """Convert the `array` to an `NDArray`.
 
     Parameters
@@ -5658,7 +5664,7 @@ def asarray(
 
 
 def astype(
-    array: Sequence | np.ndarray | NDArray | blosc2.C2Array,
+    array: Sequence | np.ndarray | blosc2.Array,
     dtype,
     casting: str = "unsafe",
     copy: bool = True,
@@ -5669,7 +5675,7 @@ def astype(
 
     Parameters
     ----------
-    array: Sequence | np.ndarray | NDArray | blosc2.C2Array
+    array: Sequence | np.ndarray | blosc2.Array
         The array to be cast to a different type.
     dtype: DType-like
         The desired data type to cast to.
