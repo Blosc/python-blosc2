@@ -14,7 +14,7 @@ def genbody(f, func_list, lib="blosc2"):
 
     f.write("\n\n\n")
     for func in func_list:
-        f.write(f".. autofunction:: {lib}.{func}\n\n")
+        f.write(f".. autofunction:: {lib}.{func}\n")
 
 
 sys.path.insert(0, os.path.abspath(os.path.dirname(blosc2.__file__)))

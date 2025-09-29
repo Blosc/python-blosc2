@@ -20,19 +20,11 @@ The following functions are useful for performing indexing and oter associated o
 
 
 .. autofunction:: blosc2.broadcast_to
-
 .. autofunction:: blosc2.count_nonzero
-
 .. autofunction:: blosc2.expand_dims
-
 .. autofunction:: blosc2.indices
-
 .. autofunction:: blosc2.meshgrid
-
 .. autofunction:: blosc2.sort
-
 .. autofunction:: blosc2.squeeze
-
 .. autofunction:: blosc2.take
-
 .. autofunction:: blosc2.take_along_axis

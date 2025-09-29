@@ -2939,9 +2939,26 @@ class Operand:
 
     @property
     def device(self):
+        "Hardware device the array data resides on. Always equal to 'cpu'."
         return self._device
 
-    def to_device(self, device):
+    def to_device(self: NDArray, device: str):
+        """
+        Copy the array from the device on which it currently resides to the specified device.
+
+        Parameters
+        ----------
+        self: NDArray
+            Array instance.
+
+        device: str
+            Device to move array object to. Returns error except when device=='cpu'.
+
+        Returns
+        -------
+        out: NDArray
+            If device='cpu', the same array; else raises an Error.
+        """
         if device != "cpu":
             raise ValueError(f"Unsupported device: {device}. Only 'cpu' is accepted.")
         return self

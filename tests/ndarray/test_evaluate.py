@@ -96,12 +96,12 @@ def test_reduc_out(sample_data):
 @pytest.mark.parametrize("func", ["cumsum", "cumulative_sum", "cumprod"])
 def test_numpy_funcs(sample_data, func):
     a, b, c, shape = sample_data
-    d_blosc2 = blosc2.evaluate(f"{func}(((a**3 + sin(a * 2)) < c) & (b > 0), axis=0)")
-    a = a[:]
-    b = b[:]
-    c = c[:]  # ensure that all operands are numpy arrays
     try:
         npfunc = getattr(np, func)
+        d_blosc2 = blosc2.evaluate(f"{func}(((a**3 + sin(a * 2)) < c) & (b > 0), axis=0)")
+        a = a[:]
+        b = b[:]
+        c = c[:]  # ensure that all operands are numpy arrays
         d_numpy = npfunc(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=0)
         np.testing.assert_equal(d_blosc2, d_numpy)
     except AttributeError:
