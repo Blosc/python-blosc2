@@ -337,9 +337,9 @@ class LazyArray(ABC):
         pass
 
     @abstractmethod
-    def __getitem__(self, item: int | slice | Sequence[slice]) -> blosc2.Array:
+    def __getitem__(self, item: int | slice | Sequence[slice]) -> np.ndarray:
         """
-        Return a NumPy.ndarray containing the evaluation of the :ref:`LazyArray`.
+        Return a numpy.ndarray containing the evaluation of the :ref:`LazyArray`.
 
         Parameters
         ----------
@@ -1152,7 +1152,7 @@ def fast_eval(  # noqa: C901
     operands: dict,
     getitem: bool,
     **kwargs,
-) -> blosc2.Array:
+) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands using a fast path.
 
     Parameters
@@ -1319,7 +1319,7 @@ def slices_eval(  # noqa: C901
     getitem: bool,
     _slice=NDINDEX_EMPTY_TUPLE,
     **kwargs,
-) -> blosc2.Array:
+) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
     This function can handle operands with different chunk shapes and
@@ -1722,7 +1722,7 @@ def reduce_slices(  # noqa: C901
     reduce_args,
     _slice=NDINDEX_EMPTY_TUPLE,
     **kwargs,
-) -> blosc2.Array:
+) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
 
     This function can handle operands with different chunk shapes.
@@ -2967,7 +2967,7 @@ class LazyExpr(LazyArray):
             lazy_expr._order = order
         return lazy_expr
 
-    def compute(self, item=(), **kwargs) -> blosc2.Array:
+    def compute(self, item=(), **kwargs) -> blosc2.NDArray:
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
         if "out" in kwargs:
             kwargs["_output"] = kwargs.pop("out")
@@ -3250,7 +3250,7 @@ class LazyUDF(LazyArray):
     def info_items(self):
         inputs = {}
         for key, value in self.inputs_dict.items():
-            if isinstance(value, blosc2.Array | blosc2.C2Array):
+            if isinstance(value, blosc2.Array):
                 inputs[key] = f"<{value.__class__.__name__}> {value.shape} {value.dtype}"
             else:
                 inputs[key] = str(value)

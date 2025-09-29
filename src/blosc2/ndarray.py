@@ -406,7 +406,7 @@ def reshape(
 
 
 def _check_allowed_dtypes(
-    value: bool | int | float | str | blosc2.Array | blosc2.Proxy | blosc2.LazyExpr,
+    value: bool | int | float | str | blosc2.Array,
 ):
     def _is_array_like(v: Any) -> bool:
         try:
