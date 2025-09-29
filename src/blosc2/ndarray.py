@@ -408,21 +408,20 @@ def reshape(
 def _check_allowed_dtypes(
     value: bool | int | float | str | blosc2.Array | blosc2.Proxy | blosc2.LazyExpr,
 ):
-    if not (
-        isinstance(
-            value,
-            blosc2.LazyExpr
-            | blosc2.Array
-            | blosc2.Proxy
-            | blosc2.ProxyNDField
-            | blosc2.SimpleProxy
-            | np.ndarray,
-        )
-        or np.isscalar(value)
-    ):
+    def _is_array_like(v: Any) -> bool:
+        try:
+            # Try Protocol runtime check first (works when possible)
+            if isinstance(v, blosc2.Array):
+                return True
+        except Exception:
+            # Some runtime contexts may raise (or return False) — fall back to duck typing
+            pass
+        # Structural fallback: common minimal array interface
+        return hasattr(v, "shape") and hasattr(v, "dtype") and callable(getattr(v, "__getitem__", None))
+
+    if not (_is_array_like(value) or np.isscalar(value)):
         raise RuntimeError(
-            "Expected LazyExpr, Array, Proxy, np.ndarray or scalar instances"
-            f" and you provided a '{type(value)}' instance"
+            f"Expected blosc2.Array or scalar instances and you provided a '{type(value)}' instance"
         )
 
 
