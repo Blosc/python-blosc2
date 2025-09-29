@@ -34,6 +34,9 @@ from blosc2 import SpecialValue, blosc2_ext, compute_chunks_blocks
 from blosc2.info import InfoReporter
 from blosc2.schunk import SChunk
 
+# NumPy version and a convenient boolean flag
+NUMPY_GE_2_0 = np.__version__ >= "2.0"
+
 
 def is_documented_by(original):
     def wrapper(target):
@@ -2896,7 +2899,7 @@ def logaddexp(x1: int | float | NDArray, x2: int | float | NDArray) -> NDArray:
         output[:] = np.logaddexp(x1, x2)
 
     dtype = blosc2.result_type(x1.dtype, x2.dtype)
-    if dtype == blosc2.bool:
+    if dtype == blosc2.bool_:
         raise TypeError("logaddexp doesn't accept boolean arguments.")
 
     if np.issubdtype(dtype, np.integer):
@@ -2904,11 +2907,12 @@ def logaddexp(x1: int | float | NDArray, x2: int | float | NDArray) -> NDArray:
     return blosc2.lazyudf(chunkwise_logaddexp, (x1, x2), dtype=dtype, shape=x1.shape)
 
 
-try:  # handle different numpy versions
+# handle different numpy versions
+if NUMPY_GE_2_0:  # array-api compliant
     nplshift = np.bitwise_left_shift
     nprshift = np.bitwise_right_shift
     npbinvert = np.bitwise_invert
-except AttributeError:
+else:  # not array-api compliant
     nplshift = np.left_shift
     nprshift = np.right_shift
     npbinvert = np.bitwise_not
@@ -2967,8 +2971,8 @@ class Operand:
             np.bitwise_or: "|",
             np.bitwise_xor: "^",
             np.arctan2: "arctan2",
-            nplshift: "<<",
-            nprshift: ">>",
+            nplshift: "<<",  # nplshift selected above according to numpy version
+            nprshift: ">>",  # nprshift selected above according to numpy version
             np.remainder: "%",
             np.nextafter: "nextafter",
             np.copysign: "copysign",
@@ -3002,7 +3006,7 @@ class Operand:
             np.conj: "conj",
             np.real: "real",
             np.imag: "imag",
-            npbinvert: "~",
+            npbinvert: "~",  # npbinvert selected above according to numpy version
             np.isnan: "isnan",
             np.isfinite: "isfinite",
             np.isinf: "isinf",
@@ -3028,10 +3032,10 @@ class Operand:
             value = inputs[0] if inputs[1] is self else inputs[1]
             _check_allowed_dtypes(value)
             # catch special case of multiplying two bools (not implemented in numexpr)
-            if ufunc_map[ufunc] == "*" and blosc2.result_type(value, self) == blosc2.bool:
+            if ufunc_map[ufunc] == "*" and blosc2.result_type(value, self) == blosc2.bool_:
                 return blosc2.LazyExpr(new_op=(value, "&", self))
             # catch special case of adding two bools (not implemented in numexpr)
-            if ufunc_map[ufunc] == "+" and blosc2.result_type(value, self) == blosc2.bool:
+            if ufunc_map[ufunc] == "+" and blosc2.result_type(value, self) == blosc2.bool_:
                 return blosc2.LazyExpr(new_op=(value, "|", self))
             return blosc2.LazyExpr(new_op=(value, ufunc_map[ufunc], self))
 
@@ -3044,7 +3048,7 @@ class Operand:
 
     def __add__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
-        if blosc2.result_type(value, self) == blosc2.bool:
+        if blosc2.result_type(value, self) == blosc2.bool_:
             return blosc2.LazyExpr(new_op=(value, "|", self))
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
@@ -3082,7 +3086,7 @@ class Operand:
     def __mul__(self, value: int | float | NDArray | NDField | blosc2.C2Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         # catch special case of multiplying two bools (not implemented in numexpr)
-        if blosc2.result_type(value, self) == blosc2.bool:
+        if blosc2.result_type(value, self) == blosc2.bool_:
             return blosc2.LazyExpr(new_op=(value, "&", self))
         return blosc2.LazyExpr(new_op=(self, "*", value))
 
@@ -3801,7 +3805,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     return_index=True,
                     return_inverse=True,
                 )
-                idx_inv = idx_inv if chunked_arr.shape != idx_inv.shape else idx_inv.squeeze(-1)
+                # In some versions of Numpy, output of np.unique has dummy dimension
+                idx_inv = idx_inv if len(idx_inv.shape) == 1 else idx_inv.squeeze(-1)
                 unique_chunks = chunked_arr[row_ids]
                 # sort by chunks (can't sort by index since larger index could belong to lower chunk)
                 # e.g. chunks of (100, 10) means (50, 15) has chunk idx (0,1) but (60,5) has (0, 0)
