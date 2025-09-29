@@ -4649,7 +4649,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return blosc2.linalg.matmul(self, other)
 
 
-def squeeze(x: blosc2.Array, axis: int | None = None) -> NDArray:
+def squeeze(x: NDArray, axis: int | None = None) -> NDArray:
     """
     Remove single-dimensional entries from the shape of the array.
 
@@ -5572,7 +5572,7 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
         An array supporting numpy array interface.
 
     copy: bool | None, optional
-        Whether or not to copy the input. If True, the function copies.
+        Whether to copy the input. If True, the function copies.
         If False, raise a ValueError if copy is necessary. If None and
         input is NDArray, avoid copy by returning lazyexpr.
         Default: None.
@@ -5793,7 +5793,7 @@ def get_slice_nchunks(
         return blosc2_ext.schunk_get_slice_nchunks(schunk, key)
 
 
-def indices(array: NDArray, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
+def indices(array: blosc2.Array, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
     """
     Return the indices of a sorted array following the specified order.
 
@@ -5801,7 +5801,7 @@ def indices(array: NDArray, order: str | list[str] | None = None, **kwargs: Any)
 
     Parameters
     ----------
-    array: :ref:`NDArray`
+    array: :ref:`blosc2.Array`
         The (structured) array to be sorted.
     order: str, list of str, optional
         Specifies which fields to compare first, second, etc. A single
@@ -5828,7 +5828,7 @@ def indices(array: NDArray, order: str | list[str] | None = None, **kwargs: Any)
     return larr.indices(order).compute(**kwargs)
 
 
-def sort(array: NDArray, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
+def sort(array: blosc2.Array, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
     """
     Return a sorted array following the specified order.
 
@@ -5836,7 +5836,7 @@ def sort(array: NDArray, order: str | list[str] | None = None, **kwargs: Any) ->
 
     Parameters
     ----------
-    array: :ref:`NDArray`
+    array: :ref:`blosc2.Array`
         The (structured) array to be sorted.
     order: str, list of str, optional
         Specifies which fields to compare first, second, etc. A single
@@ -5963,12 +5963,12 @@ class NDField(Operand):
         ----------
         key: int or slice or Sequence[slice]
             The slice to be set.
-        value: np.ndarray or NDArray or NDField
+        value: blosc2.Array
             The value to be set.
         """
         if isinstance(key, str):
             raise TypeError("This array is a NDField; use a structured NDArray for bool expressions")
-        if isinstance(value, (NDField, NDArray)):
+        if not isinstance(value, np.ndarray):
             value = value[:]
         # Get the values in the parent NDArray
         nparr = self.ndarr[key]
@@ -6128,13 +6128,13 @@ def full_like(x: blosc2.Array, fill_value: bool | int | float | complex, dtype=N
     return blosc2.full(shape=x.shape, fill_value=fill_value, dtype=dtype, **kwargs)
 
 
-def take(x: NDArray, indices: blosc2.Array, axis: int | None = None) -> NDArray:
+def take(x: blosc2.Array, indices: blosc2.Array, axis: int | None = None) -> NDArray:
     """
     Returns elements of an array along an axis.
 
     Parameters
     ----------
-    x: NDArray
+    x: blosc2.Array
         Input array. Should have one or more dimensions (axes).
 
     indices: array-like
@@ -6167,13 +6167,13 @@ def take(x: NDArray, indices: blosc2.Array, axis: int | None = None) -> NDArray:
     return blosc2.asarray(x[key])
 
 
-def take_along_axis(x: NDArray, indices: blosc2.Array, axis: int = -1) -> NDArray:
+def take_along_axis(x: blosc2.Array, indices: blosc2.Array, axis: int = -1) -> NDArray:
     """
     Returns elements of an array along an axis.
 
     Parameters
     ----------
-    x: NDArray
+    x: blosc2.Array
         Input array. Should have one or more dimensions (axes).
 
     indices: array-like
@@ -6319,14 +6319,14 @@ def get_intersecting_chunks(_slice, shape, chunks):
         )  # chunk is whole array so just return full tuple to do loop once
 
 
-def broadcast_to(arr, shape):
+def broadcast_to(arr: blosc2.Array, shape: tuple[int, ...]) -> NDArray:
     """
     Broadcast an array to a new shape.
     Warning: Computes a lazyexpr, so probably a bit suboptimal
 
     Parameters
     ----------
-    array: NDArray
+    arr: blosc2.Array
         The array to broadcast.
 
     shape: tuple
@@ -6337,16 +6337,16 @@ def broadcast_to(arr, shape):
     broadcast: NDArray
     A new array with the given shape.
     """
-    return (arr + blosc2.zeros(shape, dtype=arr.dtype)).compute()  # return lazyexpr quickly
+    return (arr + blosc2.zeros(shape, dtype=arr.dtype)).compute()
 
 
-def meshgrid(*arrays: NDArray, indexing: str = "xy") -> Sequence[NDArray]:
+def meshgrid(*arrays: blosc2.Array, indexing: str = "xy") -> Sequence[NDArray]:
     """
     Returns coordinate matrices from coordinate vectors.
 
     Parameters
     ----------
-    arrays: NDArray
+    *arrays: blosc2.Array
         An arbitrary number of one-dimensional arrays representing grid coordinates. Each array should have the same numeric data type.
 
     indexing: str
