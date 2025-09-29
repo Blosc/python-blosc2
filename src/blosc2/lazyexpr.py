@@ -1382,7 +1382,7 @@ def slices_eval(  # noqa: C901
             # shape_slice in general not equal to final shape:
             # dummy dims (due to ints) will be dealt with by taking final_slice
             shape_slice = ndindex.ndindex(_slice).newshape(shape)
-            mask_slice = np.bool([isinstance(i, int) for i in orig_slice])
+            mask_slice = np.array([isinstance(i, int) for i in orig_slice], dtype=np.bool_)
     else:
         # # out should always have shape of full array
         # if shape is not None and shape != out.shape:
@@ -1769,7 +1769,7 @@ def reduce_slices(  # noqa: C901
 
     _slice = _slice.raw
     shape_slice = shape
-    mask_slice = np.bool([isinstance(i, int) for i in _slice])
+    mask_slice = np.array([isinstance(i, int) for i in _slice], dtype=np.bool_)
     if out is None and _slice != ():
         _slice = tuple(slice(i, i + 1, 1) if isinstance(i, int) else i for i in _slice)
         shape_slice = ndindex.ndindex(_slice).newshape(shape)
@@ -2209,7 +2209,7 @@ def result_type(
     # Follow NumPy rules for scalar-array operations
     # Create small arrays with the same dtypes and let NumPy's type promotion determine the result type
     arrs = [
-        value if not hasattr(value, "dtype") else np.array([0], dtype=value.dtype)
+        value if (np.isscalar(value) or not hasattr(value, "dtype")) else np.array([0], dtype=value.dtype)
         for value in arrays_and_dtypes
     ]
     return np.result_type(*arrs)

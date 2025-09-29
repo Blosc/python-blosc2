@@ -741,8 +741,11 @@ def test_matrix_transpose(shape):
 def test_mT(shape):
     arr = blosc2.linspace(0, 1, shape=shape)
     result = arr.mT
-    expected = arr[:].mT
-    np.testing.assert_allclose(result, expected)
+    try:
+        expected = arr[:].mT
+        np.testing.assert_allclose(result, expected)
+    except AttributeError:
+        pytest.skip("np.ndarray object in Numpy version {np.__version__} does not have .mT attribute.")
 
 
 @pytest.mark.parametrize(

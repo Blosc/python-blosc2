@@ -100,6 +100,9 @@ def test_numpy_funcs(sample_data, func):
     a = a[:]
     b = b[:]
     c = c[:]  # ensure that all operands are numpy arrays
-    npfunc = getattr(np, func)
-    d_numpy = npfunc(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=0)
-    np.testing.assert_equal(d_blosc2, d_numpy)
+    try:
+        npfunc = getattr(np, func)
+        d_numpy = npfunc(((a**3 + np.sin(a * 2)) < c) & (b > 0), axis=0)
+        np.testing.assert_equal(d_blosc2, d_numpy)
+    except AttributeError:
+        pytest.skip("NumPy version has no cumulative_sum function.")

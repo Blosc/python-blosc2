@@ -2904,6 +2904,16 @@ def logaddexp(x1: int | float | NDArray, x2: int | float | NDArray) -> NDArray:
     return blosc2.lazyudf(chunkwise_logaddexp, (x1, x2), dtype=dtype, shape=x1.shape)
 
 
+try:  # handle different numpy versions
+    nplshift = np.bitwise_left_shift
+    nprshift = np.bitwise_right_shift
+    npbinvert = np.bitwise_invert
+except AttributeError:
+    nplshift = np.left_shift
+    nprshift = np.right_shift
+    npbinvert = np.bitwise_not
+
+
 class Operand:
     """Base class for all operands in expressions."""
 
@@ -2957,8 +2967,8 @@ class Operand:
             np.bitwise_or: "|",
             np.bitwise_xor: "^",
             np.arctan2: "arctan2",
-            np.bitwise_left_shift: "<<",
-            np.bitwise_right_shift: ">>",
+            nplshift: "<<",
+            nprshift: ">>",
             np.remainder: "%",
             np.nextafter: "nextafter",
             np.copysign: "copysign",
@@ -2992,7 +3002,7 @@ class Operand:
             np.conj: "conj",
             np.real: "real",
             np.imag: "imag",
-            np.bitwise_invert: "~",
+            npbinvert: "~",
             np.isnan: "isnan",
             np.isfinite: "isfinite",
             np.isinf: "isinf",
@@ -3791,11 +3801,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     return_index=True,
                     return_inverse=True,
                 )
+                idx_inv = idx_inv if chunked_arr.shape != idx_inv.shape else idx_inv.squeeze(-1)
                 unique_chunks = chunked_arr[row_ids]
-                idx_order = np.argsort(
-                    idx_inv.squeeze(-1)
-                )  # sort by chunks (can't sort by index since larger index could belong to lower chunk)
+                # sort by chunks (can't sort by index since larger index could belong to lower chunk)
                 # e.g. chunks of (100, 10) means (50, 15) has chunk idx (0,1) but (60,5) has (0, 0)
+                idx_order = np.argsort(idx_inv)
             sorted_idxs = arr[idx_order]
             out = np.empty(flat_shape, dtype=self.dtype)
             shape = np.array(shape)

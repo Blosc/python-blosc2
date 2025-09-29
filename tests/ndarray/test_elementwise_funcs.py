@@ -31,7 +31,7 @@ for name, obj in vars(np).items():
 UNARY_FUNC_PAIRS.append((np.round, blosc2.round))
 UNARY_FUNC_PAIRS.append((np.count_nonzero, blosc2.count_nonzero))
 
-DTYPES = [np.bool_, np.int32, np.int64, np.float32, np.float64, np.complex128]
+DTYPES = [blosc2.bool_, blosc2.int32, blosc2.int64, blosc2.float32, blosc2.float64, blosc2.complex128]
 SHAPES_CHUNKS = [((10,), (3,)), ((20, 20), (4, 7)), ((10, 13, 13), (3, 5, 2))]
 
 
@@ -43,20 +43,20 @@ def test_unary_funcs(np_func, blosc_func, dtype, shape, chunkshape):  # noqa : C
         a_blosc = blosc2.linspace(
             0.01, stop=0.99, num=np.prod(shape), chunks=chunkshape, shape=shape, dtype=dtype
         )
-        if not np.issubdtype(dtype, np.integer):
+        if not blosc2.isdtype(dtype, "integral"):
             a_blosc[tuple(i // 2 for i in shape)] = blosc2.nan
-        if dtype == np.complex128:
+        if dtype == blosc2.complex128:
             a_blosc = (a_blosc * (1 + 1j)).compute()
             a_blosc[tuple(i // 2 for i in shape)] = blosc2.nan + blosc2.nan * 1j
-        if dtype == np.bool and np_func.__name__ == "arctanh":
+        if dtype == blosc2.bool_ and np_func.__name__ == "arctanh":
             a_blosc = blosc2.zeros(chunks=chunkshape, shape=shape, dtype=dtype)
     else:
         a_blosc = blosc2.linspace(
             1, stop=np.prod(shape), num=np.prod(shape), chunks=chunkshape, shape=shape, dtype=dtype
         )
-        if not np.issubdtype(dtype, np.integer):
+        if not blosc2.isdtype(dtype, "integral"):
             a_blosc[tuple(i // 2 for i in shape)] = blosc2.nan
-        if dtype == np.complex128:
+        if dtype == blosc2.complex128:
             a_blosc = (
                 a_blosc
                 + blosc2.linspace(
@@ -87,12 +87,16 @@ def test_unary_funcs(np_func, blosc_func, dtype, shape, chunkshape):  # noqa : C
             # some functions don't support certain dtypes and that's fine
             assert True
         except ValueError as e:
-            if np_func.__name__ == "logical_not" and dtype in (np.float32, np.float64, np.complex128):
+            if np_func.__name__ == "logical_not" and dtype in (
+                blosc2.float32,
+                blosc2.float64,
+                blosc2.complex128,
+            ):
                 assert True
             else:
                 raise e
         except AssertionError as e:
-            if np_func.__name__ in ("tan", "tanh") and dtype == np.complex128:
+            if np_func.__name__ in ("tan", "tanh") and dtype == blosc2.complex128:
                 warnings.showwarning(
                     "tan and tanh do not give correct NaN location",
                     UserWarning,
@@ -123,9 +127,9 @@ def test_binary_funcs(np_func, blosc_func, dtype, shape, chunkshape):  # noqa : 
             shape=shape,
             dtype=dtype,
         )
-    if not np.issubdtype(dtype, np.integer):
+    if not blosc2.isdtype(dtype, "integral"):
         a_blosc1[tuple(i // 2 for i in shape)] = blosc2.nan
-    if dtype == np.complex128:
+    if dtype == blosc2.complex128:
         a_blosc1 = (
             a_blosc1
             + blosc2.linspace(
@@ -151,23 +155,26 @@ def test_binary_funcs(np_func, blosc_func, dtype, shape, chunkshape):  # noqa : 
             # some functions don't support certain dtypes and that's fine
             assert True
         except ValueError as e:  # shouldn't be allowed for non-booleans
-            if np_func.__name__ in ("logical_and", "logical_or", "logical_xor", "minimum", "maximum"):
+            if np_func.__name__ in ("logical_and", "logical_or", "logical_xor"):
+                assert True
+            if (
+                np_func.__name__ in ("less", "less_equal", "greater", "greater_equal", "minimum", "maximum")
+                and dtype == blosc2.complex128
+            ):  # not supported for complex dtypes
                 assert True
             else:
                 raise e
-        except NotImplementedError as e:  # shouldn't be allowed for non-booleans
+        except NotImplementedError as e:
             if np_func.__name__ in ("left_shift", "right_shift", "floor_divide", "power", "remainder"):
                 assert True
             else:
                 raise e
         except AssertionError as e:
-            if np_func.__name__ == "power" and np.issubdtype(
-                dtype, np.integer
+            if np_func.__name__ == "power" and blosc2.isdtype(
+                dtype, "integral"
             ):  # overflow causes disagreement, no problem
                 assert True
-            elif np_func.__name__ in ("maximum", "minimum") and np.issubdtype(
-                dtype, np.floating
-            ):  # overflow causes disagreement, no problem
+            elif np_func.__name__ in ("maximum", "minimum") and blosc2.isdtype(dtype, "real floating"):
                 warnings.showwarning(
                     "minimum and maximum for numexpr do not match NaN behaviour for numpy",
                     UserWarning,

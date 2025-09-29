@@ -11,6 +11,11 @@ import pytest
 
 import blosc2
 
+try:  # handle different versions of numpy
+    npconcat = np.concat
+except AttributeError:
+    npconcat = np.concatenate
+
 
 @pytest.mark.parametrize(
     ("shape1", "shape2", "dtype", "axis"),
@@ -34,7 +39,7 @@ def test_concat2(shape1, shape2, dtype, axis):
     ndarr2 = blosc2.arange(0, int(np.prod(shape2)), 1, dtype=dtype, shape=shape2)
     cparams = blosc2.CParams(clevel=1)
     result = blosc2.concat([ndarr1, ndarr2], axis=axis, cparams=cparams)
-    nparray = np.concat([ndarr1[:], ndarr2[:]], axis=axis)
+    nparray = npconcat([ndarr1[:], ndarr2[:]], axis=axis)
     np.testing.assert_almost_equal(result[:], nparray)
 
 
@@ -60,7 +65,7 @@ def test_concat3(shape1, shape2, shape3, dtype, axis):
     ndarr3 = blosc2.arange(0, int(np.prod(shape3)), 1, dtype=dtype, shape=shape3)
     cparams = blosc2.CParams(codec=blosc2.Codec.BLOSCLZ)
     result = blosc2.concat([ndarr1, ndarr2, ndarr3], axis=axis, cparams=cparams)
-    nparray = np.concat([ndarr1[:], ndarr2[:], ndarr3[:]], axis=axis)
+    nparray = npconcat([ndarr1[:], ndarr2[:], ndarr3[:]], axis=axis)
     np.testing.assert_almost_equal(result[:], nparray)
 
 

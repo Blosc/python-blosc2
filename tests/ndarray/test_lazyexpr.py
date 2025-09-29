@@ -1375,11 +1375,13 @@ def test_only_ndarrays_or_constructors(obj, getitem, item):
 @pytest.mark.parametrize("func", ["cumsum", "cumulative_sum", "cumprod"])
 def test_numpy_funcs(array_fixture, func):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    npfunc = getattr(np, func)
-    d_blosc2 = npfunc(((a1**3 + blosc2.sin(na2 * 2)) < a3) & (na2 > 0), axis=0)
-    npfunc = getattr(np, func)
-    d_numpy = npfunc(((na1**3 + np.sin(na2 * 2)) < na3) & (na2 > 0), axis=0)
-    np.testing.assert_equal(d_blosc2, d_numpy)
+    try:
+        npfunc = getattr(np, func)
+        d_blosc2 = npfunc(((a1**3 + blosc2.sin(na2 * 2)) < a3) & (na2 > 0), axis=0)
+        d_numpy = npfunc(((na1**3 + np.sin(na2 * 2)) < na3) & (na2 > 0), axis=0)
+        np.testing.assert_equal(d_blosc2, d_numpy)
+    except AttributeError:
+        pytest.skip("NumPy version has no cumulative_sum function.")
 
 
 # Test the LazyExpr when some operands are missing (e.g. removed file)
@@ -1489,8 +1491,8 @@ def test_chain_persistentexpressions():
 def test_scalar_dtypes(values):
     value1, value2 = values
     dtype1 = (value1 + value2).dtype
-    avalue1 = blosc2.asarray(value1) if hasattr(value1, "shape") else value1
-    avalue2 = blosc2.asarray(value2) if hasattr(value2, "shape") else value2
+    avalue1 = blosc2.asarray(value1) if not np.isscalar(value1) else value1
+    avalue2 = blosc2.asarray(value2) if not np.isscalar(value2) else value2
     dtype2 = (avalue1 * avalue2).dtype
     assert dtype1 == dtype2, f"Expected {dtype1} but got {dtype2}"
 

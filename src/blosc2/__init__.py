@@ -171,7 +171,74 @@ The C-Blosc2 version's string."""
 # For array-api compatibility
 iinfo = np.iinfo
 finfo = np.finfo
-isdtype = np.isdtype
+
+
+def isdtype(a_dtype: np.dtype, kind: str | np.dtype | tuple):
+    """
+    Returns a boolean indicating whether a provided dtype is of a specified data type "kind".
+
+    Parameters
+    ----------
+    dtype: dtype
+        The input dtype.
+
+    kind: str | dtype | Tuple[str, dtype]
+        Data type kind.
+
+        If kind is a dtype, return boolean indicating whether the input dtype is equal to the dtype specified by kind.
+
+        If kind is a string, return boolean indicating whether the input dtype is of a specified data type kind.
+        The following dtype kinds are supporte:
+
+            * 'bool': boolean data types (e.g., bool).
+
+            * 'signed integer': signed integer data types (e.g., int8, int16, int32, int64).
+
+            * 'unsigned integer': unsigned integer data types (e.g., uint8, uint16, uint32, uint64).
+
+            * 'integral': integer data types. Shorthand for ('signed integer', 'unsigned integer').
+
+            * 'real floating': real-valued floating-point data types (e.g., float32, float64).
+
+            * 'complex floating': complex floating-point data types (e.g., complex64, complex128).
+
+            * 'numeric': numeric data types. Shorthand for ('integral', 'real floating', 'complex floating').
+
+    Returns
+    -------
+    out: bool
+        Boolean indicating whether a provided dtype is of a specified data type kind.
+    """
+    kind = (kind,) if not isinstance(kind, tuple) else kind
+    for _ in kind:
+        if a_dtype == kind:
+            return True
+
+    _complex, _signedint, _uint, _rfloat = False, False, False, False
+    if a_dtype in (complex64, complex128):
+        _complex = True
+        if "complex floating" in kind:
+            return True
+    if a_dtype == bool_ and "bool" in kind:
+        return True
+    if a_dtype in (int8, int16, int32, int64):
+        _signedint = True
+        if "signed integer" in kind:
+            return True
+    if a_dtype in (uint8, uint16, uint32, uint64):
+        _uint = True
+        if "unsigned integer" in kind:
+            return True
+    if a_dtype in (float16, float32, float64):
+        _rfloat = True
+        if "real floating" in kind:
+            return True
+    if "integral" in kind and (_signedint or _uint):
+        return True
+    return "numeric" in kind and (
+        _signedint or _uint or _rfloat or _complex
+    )  # checked everything, otherwise False
+
 
 # dtypes for array-api
 str_ = np.str_
@@ -179,7 +246,6 @@ bytes_ = np.bytes_
 object_ = np.object_
 
 from numpy import (
-    bool,
     bool_,
     complex64,
     complex128,
@@ -201,6 +267,8 @@ from numpy import (
     uint32,
     uint64,
 )
+
+bool = bool
 
 DEFAULT_COMPLEX = complex128
 """
