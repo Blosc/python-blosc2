@@ -43,8 +43,11 @@ class Array(Protocol):
     """
     A typing protocol for array-like objects with basic array interface.
 
-    This protocol defines the minimal interface that array-like objects
-    must implement to be compatible with blosc2 functions.
+    This protocol describes the basic interface required by blosc2 arrays.
+    It is implemented by blosc2 classes (:ref:`NDArray`, :ref:`NDField`,
+    :ref:`LazyArray`, :ref:`C2Array`, :ref:`ProxyNDSource`...)
+    and is compatible with NumPy arrays and other array-like containers
+    (e.g., PyTorch, TensorFlow, Dask, Zarr, ...).
     """
 
     @property
@@ -55,6 +58,15 @@ class Array(Protocol):
     @property
     def shape(self) -> tuple[int, ...]:
         """The shape of the array."""
+        ...
+
+    @property
+    def ndim(self) -> int:
+        """The number of dimensions of the array."""
+        ...
+
+    def __len__(self) -> int:
+        """The length of the array."""
         ...
 
     def __getitem__(self, key: Any) -> Any:
