@@ -159,7 +159,7 @@ class EmbedStore:
             new_size = max(required_size, int(self._store.shape[0] * 1.5))
             self._store.resize((new_size,))
 
-    def __setitem__(self, key: str, value: np.ndarray | blosc2.NDArray | SChunk | C2Array) -> None:
+    def __setitem__(self, key: str, value: blosc2.Array | SChunk) -> None:
         """Add a node to the embed store."""
         if self.mode == "r":
             raise ValueError("Cannot set items in read-only mode.")

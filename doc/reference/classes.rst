@@ -7,11 +7,12 @@ Main Classes
 ------------
 .. autosummary::
 
-    SChunk
     NDArray
     NDField
     LazyArray
     C2Array
+    Array
+    SChunk
     DictStore
     TreeStore
     EmbedStore
@@ -23,14 +24,15 @@ Main Classes
 .. toctree::
     :maxdepth: 1
 
-    schunk
     ndarray
     ndfield
+    lazyarray
+    c2array
+    array
+    schunk
     dict_store
     tree_store
     embed_store
-    lazyarray
-    c2array
     proxy
     proxysource
     proxyndsource

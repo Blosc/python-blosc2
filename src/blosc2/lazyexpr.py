@@ -288,7 +288,7 @@ class LazyArray(ABC):
     @abstractmethod
     def compute(self, item: slice | list[slice] | None = None, **kwargs: Any) -> blosc2.NDArray:
         """
-        Return an :ref:`NDArray` containing the evaluation of the :ref:`LazyArray`.
+        Return a :ref:`NDArray` containing the evaluation of the :ref:`LazyArray`.
 
         Parameters
         ----------
@@ -337,9 +337,9 @@ class LazyArray(ABC):
         pass
 
     @abstractmethod
-    def __getitem__(self, item: int | slice | Sequence[slice]) -> blosc2.NDArray:
+    def __getitem__(self, item: int | slice | Sequence[slice]) -> np.ndarray:
         """
-        Return a NumPy.ndarray containing the evaluation of the :ref:`LazyArray`.
+        Return a numpy.ndarray containing the evaluation of the :ref:`LazyArray`.
 
         Parameters
         ----------
@@ -392,7 +392,7 @@ class LazyArray(ABC):
 
         Notes
         -----
-        * All the operands of the LazyArray must be Python scalars, :ref:`NDArray`, :ref:`C2Array` or :ref:`Proxy`.
+        * All the operands of the LazyArray must be Python scalars, or :ref:`blosc2.Array` objects.
         * If an operand is a :ref:`Proxy`, keep in mind that Python-Blosc2 will only be able to reopen it as such
           if its source is a :ref:`SChunk`, :ref:`NDArray` or a :ref:`C2Array` (see :func:`blosc2.open` notes
           section for more info).
@@ -507,14 +507,12 @@ def convert_inputs(inputs):
         return []
     inputs_ = []
     for obj in inputs:
-        if not isinstance(
-            obj, np.ndarray | blosc2.NDArray | blosc2.NDField | blosc2.C2Array
-        ) and not np.isscalar(obj):
+        if not isinstance(obj, blosc2.Array) and not np.isscalar(obj):
             try:
                 obj = np.asarray(obj)
             except Exception:
                 print(
-                    "Inputs not being np.ndarray, NDArray, NDField, C2Array or Python scalar objects"
+                    "Inputs not being np.ndarray, Array or Python scalar objects"
                     " should be convertible to np.ndarray."
                 )
                 raise
@@ -687,9 +685,9 @@ def get_expr_operands(expression: str) -> set:
 
 def conserve_functions(  # noqa: C901
     expression: str,
-    operands_old: dict[str, blosc2.NDArray | blosc2.LazyExpr],
-    operands_new: dict[str, blosc2.NDArray | blosc2.LazyExpr],
-) -> tuple[str, dict[str, blosc2.NDArray]]:
+    operands_old: dict[str, blosc2.Array],
+    operands_new: dict[str, blosc2.Array],
+) -> tuple[str, dict[str, blosc2.Array]]:
     """
     Given an expression in string form, return its operands.
 
@@ -2029,7 +2027,7 @@ def chunked_eval(  # noqa: C901
         _getitem: bool, optional
             Indicates whether the expression is being evaluated for a getitem operation.
             Default is False.
-        _output: NDArray or np.ndarray, optional
+        _output: blosc2.Array, optional
             The output array to store the result.
         _ne_args: dict, optional
             Additional arguments to be passed to `numexpr.evaluate()` function.
@@ -3252,7 +3250,7 @@ class LazyUDF(LazyArray):
     def info_items(self):
         inputs = {}
         for key, value in self.inputs_dict.items():
-            if isinstance(value, np.ndarray | blosc2.NDArray | blosc2.C2Array):
+            if isinstance(value, blosc2.Array):
                 inputs[key] = f"<{value.__class__.__name__}> {value.shape} {value.dtype}"
             else:
                 inputs[key] = str(value)
@@ -3378,7 +3376,7 @@ class LazyUDF(LazyArray):
 
 def lazyudf(
     func: Callable[[tuple, np.ndarray, tuple[int]], None],
-    inputs: tuple | list | None,
+    inputs: Sequence[Any] | None,
     dtype: np.dtype,
     shape: tuple | list | None = None,
     chunked_eval: bool = True,
@@ -3396,11 +3394,11 @@ def lazyudf(
         in :paramref:`inputs`.
         - `output`: The buffer to be filled as a multidimensional numpy.ndarray.
         - `offset`: The multidimensional offset corresponding to the start of the block being computed.
-    inputs: tuple or list or None
-        The sequence of inputs. Supported inputs are:
-        NumPy.ndarray, :ref:`NDArray`, :ref:`NDField`, :ref:`C2Array`.
-        Any other object is supported too, and will be passed as is to the user-defined function.
-        If not needed, this can be empty, but `shape` must be provided.
+    inputs: Sequence[Any] or None
+        The sequence of inputs. Besides objects compliant with the blosc2.Array protocol,
+        any other object is supported too, and it will be passed as-is to the
+        user-defined function. If not needed, this can be empty, but `shape` must
+        be provided.
     dtype: np.dtype
         The resulting ndarray dtype in NumPy format.
     shape: tuple, optional
@@ -3482,9 +3480,9 @@ def seek_operands(names, local_dict=None, global_dict=None, _frame_depth: int = 
 
 
 def lazyexpr(
-    expression: str | bytes | LazyExpr | blosc2.NDArray,
+    expression: str | bytes | LazyArray | blosc2.NDArray,
     operands: dict | None = None,
-    out: blosc2.NDArray | np.ndarray = None,
+    out: blosc2.Array = None,
     where: tuple | list | None = None,
     local_dict: dict | None = None,
     global_dict: dict | None = None,
@@ -3496,15 +3494,15 @@ def lazyexpr(
 
     Parameters
     ----------
-    expression: str or bytes or LazyExpr
-        The expression to evaluate. This can be any valid expression that can be
-        ingested by numexpr. If a LazyExpr is passed, the expression will be
+    expression: str or bytes or LazyExpr or NDArray
+        The expression to evaluate. This can be any valid expression that numexpr
+        can ingest. If a LazyExpr is passed, the expression will be
         updated with the new operands.
-    operands: dict
-        The dictionary with operands. Supported values are NumPy.ndarray,
-        Python scalars, :ref:`NDArray`, :ref:`NDField` or :ref:`C2Array` instances.
+    operands: dict[blosc2.Array], optional
+        The dictionary with operands. Supported values are Python scalars,
+        or any instance that is blosc2.Array compliant.
         If None, the operands will be seeked in the local and global dictionaries.
-    out: NDArray or np.ndarray, optional
+    out: blosc2.Array, optional
         The output array where the result will be stored. If not provided,
         a new NumPy array will be created and returned.
     where: tuple, list, optional
@@ -3633,9 +3631,9 @@ def evaluate(
     ex: str,
     local_dict: dict | None = None,
     global_dict: dict | None = None,
-    out: np.ndarray | blosc2.NDArray = None,
+    out: blosc2.Array = None,
     **kwargs: Any,
-) -> np.ndarray | blosc2.NDArray:
+) -> blosc2.Array:
     """
     Evaluate a string expression using the Blosc2 compute engine.
 
@@ -3659,7 +3657,7 @@ def evaluate(
     global_dict: dict, optional
         The global dictionary to use when looking for operands in the expression.
         If not provided, the global dictionary of the caller will be used.
-    out: NDArray or np.ndarray, optional
+    out: blosc2.Array, optional
         The output array where the result will be stored. If not provided,
         a new NumPy array will be created and returned.
     kwargs: Any, optional
@@ -3667,7 +3665,7 @@ def evaluate(
 
     Returns
     -------
-    out: NumPy or NDArray
+    out: blosc2.Array
         The result of the expression evaluation.  If out is provided, the result
         will be stored in out and returned at the same time.
 
