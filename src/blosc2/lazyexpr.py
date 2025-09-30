@@ -45,7 +45,10 @@ from blosc2.ndarray import (
     get_chunks_idx,
     get_intersecting_chunks,
     is_inside_new_expr,
+    local_ufunc_map,
     process_key,
+    ufunc_map,
+    ufunc_map_1param,
 )
 
 if not blosc2.IS_WASM:
@@ -150,6 +153,7 @@ functions = [
     "log",
     "log10",
     "log1p",
+    "log2",
     "conj",
     "real",
     "imag",
@@ -169,6 +173,16 @@ functions = [
     "isnan",
     "isfinite",
     "isinf",
+    "nextafter",
+    "copysign",
+    "hypot",
+    "maximum",
+    "minimum",
+    "floor",
+    "ceil",
+    "trunc",
+    "signbit",
+    "round",
 ]
 
 # Gather all callable functions in numpy
@@ -2512,52 +2526,8 @@ class LazyExpr(LazyArray):
         if method != "__call__":
             return NotImplemented
 
-        ufunc_map = {
-            np.add: "+",
-            np.subtract: "-",
-            np.multiply: "*",
-            np.divide: "/",
-            np.true_divide: "/",
-            np.power: "**",
-            np.less: "<",
-            np.less_equal: "<=",
-            np.greater: ">",
-            np.greater_equal: ">=",
-            np.equal: "==",
-            np.not_equal: "!=",
-            np.bitwise_and: "&",
-            np.bitwise_or: "|",
-            np.bitwise_xor: "^",
-        }
-
-        ufunc_map_1param = {
-            np.sqrt: "sqrt",
-            np.sin: "sin",
-            np.cos: "cos",
-            np.tan: "tan",
-            np.arcsin: "arcsin",
-            np.arccos: "arccos",
-            np.arctan: "arctan",
-            np.sinh: "sinh",
-            np.cosh: "cosh",
-            np.tanh: "tanh",
-            np.arcsinh: "arcsinh",
-            np.arccosh: "arccosh",
-            np.arctanh: "arctanh",
-            np.exp: "exp",
-            np.expm1: "expm1",
-            np.log: "log",
-            np.log10: "log10",
-            np.log1p: "log1p",
-            np.abs: "abs",
-            np.conj: "conj",
-            np.real: "real",
-            np.imag: "imag",
-            np.bitwise_not: "~",
-            np.isnan: "isnan",
-            np.isfinite: "isfinite",
-            np.isinf: "isinf",
-        }
+        if ufunc in local_ufunc_map:
+            return local_ufunc_map[ufunc](*inputs)
 
         if ufunc in ufunc_map:
             value = inputs[0] if inputs[1] is self else inputs[1]
