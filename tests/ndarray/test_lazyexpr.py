@@ -1579,6 +1579,7 @@ def test_minimal_protocol():
 
     a = np.arange(100, dtype=np.int64).reshape(10, 10)
     b = NewObj(a)
-    lb = blosc2.lazyexpr("b + 1")
+    c = blosc2.asarray(a)
+    lb = blosc2.lazyexpr("b + c + 1")
 
-    np.testing.assert_array_equal(lb[:], a + 1)
+    np.testing.assert_array_equal(lb[:], a + a + 1)
