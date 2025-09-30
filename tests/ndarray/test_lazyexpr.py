@@ -1555,3 +1555,30 @@ def test_complex_lazy_expression_multiplication():
 
     # Also test getitem access
     np.testing.assert_allclose(result_expr[:], -expected, rtol=1e-14, atol=1e-14)
+
+
+# Test checking that objects following the blosc2.Array protocol can be operated with
+def test_minimal_protocol():
+    class NewObj:
+        def __init__(self, a):
+            self.a = a
+
+        @property
+        def shape(self):
+            return self.a.shape
+
+        @property
+        def dtype(self):
+            return self.a.dtype
+
+        def __getitem__(self, key):
+            return self.a[key]
+
+        def __len__(self):
+            return len(self.a)
+
+    a = np.arange(100, dtype=np.int64).reshape(10, 10)
+    b = NewObj(a)
+    lb = blosc2.lazyexpr("b + 1")
+
+    np.testing.assert_array_equal(lb[:], a + 1)

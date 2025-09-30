@@ -60,11 +60,6 @@ class Array(Protocol):
         """The shape of the array."""
         ...
 
-    @property
-    def ndim(self) -> int:
-        """The number of dimensions of the array."""
-        ...
-
     def __len__(self) -> int:
         """The length of the array."""
         ...
