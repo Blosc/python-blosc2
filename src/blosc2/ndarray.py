@@ -112,15 +112,6 @@ ufunc_map_1param = {
     np.round: "round",
 }
 
-# implemented in python-blosc2
-local_ufunc_map = {
-    np.logaddexp: blosc2.logaddexp,
-    np.logical_not: blosc2.logical_not,
-    np.logical_and: blosc2.logical_and,
-    np.logical_or: blosc2.logical_or,
-    np.logical_xor: blosc2.logical_xor,
-}
-
 
 @runtime_checkable
 class Array(Protocol):
@@ -3010,6 +3001,16 @@ def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array) ->
     if np.issubdtype(dtype, np.integer):
         dtype = blosc2.float32
     return blosc2.lazyudf(chunkwise_logaddexp, (x1, x2), dtype=dtype, shape=x1.shape)
+
+
+# implemented in python-blosc2
+local_ufunc_map = {
+    np.logaddexp: logaddexp,
+    np.logical_not: logical_not,
+    np.logical_and: logical_and,
+    np.logical_or: logical_or,
+    np.logical_xor: logical_xor,
+}
 
 
 class Operand:
