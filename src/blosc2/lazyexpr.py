@@ -3140,7 +3140,7 @@ class LazyExpr(LazyArray):
             # Check that operands are proper Operands, LazyArray or scalars; if not, convert to NDArray objects
             for op, val in _operands.items():
                 if not (isinstance(val, (blosc2.Operand, blosc2.LazyArray, np.ndarray)) or np.isscalar(val)):
-                    _operands[op] = blosc2.asarray(val)
+                    _operands[op] = blosc2.SimpleProxy(val)
             new_expr = eval(_expression, _globals, _operands)
             _dtype = new_expr.dtype
             _shape = new_expr.shape
