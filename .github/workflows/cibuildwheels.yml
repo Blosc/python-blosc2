@@ -83,7 +83,7 @@ jobs:
           arch: amd64
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v3.1
+        uses: pypa/cibuildwheel@v3.2
 
       - name: Make sdist
         if: ${{ matrix.os == 'ubuntu-latest' }}

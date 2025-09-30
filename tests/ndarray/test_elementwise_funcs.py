@@ -32,13 +32,12 @@ UNARY_FUNC_PAIRS.append((np.round, blosc2.round))
 UNARY_FUNC_PAIRS.append((np.count_nonzero, blosc2.count_nonzero))
 
 DTYPES = [blosc2.bool_, blosc2.int32, blosc2.int64, blosc2.float32, blosc2.float64, blosc2.complex128]
-SHAPES_CHUNKS = [((10,), (3,)), ((20, 20), (4, 7)), ((10, 13, 13), (3, 5, 2))]
+SHAPES_CHUNKS = [((10,), (3,)), ((20, 20), (4, 7))]
+SHAPES_CHUNKS_HEAVY = [((10, 13, 13), (3, 5, 2))]
 
 
-@pytest.mark.parametrize(("np_func", "blosc_func"), UNARY_FUNC_PAIRS)
-@pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize(("shape", "chunkshape"), SHAPES_CHUNKS)
-def test_unary_funcs(np_func, blosc_func, dtype, shape, chunkshape):  # noqa : C901
+def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):  # noqa: C901
+    """Helper function containing the actual test logic for unary functions."""
     if np_func.__name__ in ("arccos", "arcsin", "arctanh"):
         a_blosc = blosc2.linspace(
             0.01, stop=0.99, num=np.prod(shape), chunks=chunkshape, shape=shape, dtype=dtype
@@ -109,10 +108,8 @@ def test_unary_funcs(np_func, blosc_func, dtype, shape, chunkshape):  # noqa : C
                 raise e
 
 
-@pytest.mark.parametrize(("np_func", "blosc_func"), BINARY_FUNC_PAIRS)
-@pytest.mark.parametrize("dtype", DTYPES)
-@pytest.mark.parametrize(("shape", "chunkshape"), SHAPES_CHUNKS)
-def test_binary_funcs(np_func, blosc_func, dtype, shape, chunkshape):  # noqa : C901
+def _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):  # noqa: C901
+    """Helper function containing the actual test logic for binary functions."""
     a_blosc1 = blosc2.linspace(
         1, stop=np.prod(shape), num=np.prod(shape), chunks=chunkshape, shape=shape, dtype=dtype
     )
@@ -185,3 +182,33 @@ def test_binary_funcs(np_func, blosc_func, dtype, shape, chunkshape):  # noqa : 
                 pytest.skip("minimum and maximum for numexpr do not match NaN behaviour for numpy")
             else:
                 raise e
+
+
+@pytest.mark.parametrize(("np_func", "blosc_func"), UNARY_FUNC_PAIRS)
+@pytest.mark.parametrize("dtype", DTYPES)
+@pytest.mark.parametrize(("shape", "chunkshape"), SHAPES_CHUNKS)
+def test_unary_funcs(np_func, blosc_func, dtype, shape, chunkshape):
+    _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape)
+
+
+@pytest.mark.heavy
+@pytest.mark.parametrize(("np_func", "blosc_func"), UNARY_FUNC_PAIRS)
+@pytest.mark.parametrize("dtype", DTYPES)
+@pytest.mark.parametrize(("shape", "chunkshape"), SHAPES_CHUNKS_HEAVY)
+def test_unary_funcs_heavy(np_func, blosc_func, dtype, shape, chunkshape):
+    _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape)
+
+
+@pytest.mark.parametrize(("np_func", "blosc_func"), BINARY_FUNC_PAIRS)
+@pytest.mark.parametrize("dtype", DTYPES)
+@pytest.mark.parametrize(("shape", "chunkshape"), SHAPES_CHUNKS)
+def test_binary_funcs(np_func, blosc_func, dtype, shape, chunkshape):
+    _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape)
+
+
+@pytest.mark.heavy
+@pytest.mark.parametrize(("np_func", "blosc_func"), BINARY_FUNC_PAIRS)
+@pytest.mark.parametrize("dtype", DTYPES)
+@pytest.mark.parametrize(("shape", "chunkshape"), SHAPES_CHUNKS_HEAVY)
+def test_binary_funcs_heavy(np_func, blosc_func, dtype, shape, chunkshape):
+    _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape)
