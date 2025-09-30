@@ -1,23 +1,26 @@
 name: Tests
 
 on:
-  # Trigger the workflow on push or pull request,
-  # but only for the main branch
   push:
     branches:
-      - '**'  # this matches all branches
+      - '**'
   pull_request:
     branches:
       - main
 
 jobs:
   build_wheels:
-    name: Build and test on ${{ matrix.os }}
+    name: Build and test on ${{ matrix.os }}${{ matrix.numpy-version && format(' (numpy {0})', matrix.numpy-version) || '' }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         python-version: ["3.12"]
+        numpy-version: [null]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.12"
+            numpy-version: "1.26"
 
     steps:
     - uses: actions/checkout@v5
@@ -29,6 +32,10 @@ jobs:
 
     - name: Install Ninja
       uses: seanmiddleditch/gha-setup-ninja@master
+
+    - name: Install specific numpy version
+      if: matrix.numpy-version
+      run: pip install "numpy==${{ matrix.numpy-version }}.*"
 
     - name: Build
       run: pip install -e .[test]
