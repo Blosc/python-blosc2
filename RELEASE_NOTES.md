@@ -3,9 +3,9 @@
 ## Changes from 3.9.0 to 3.9.1
 
 * Bumped to numexpr 2.13.1 to incorporate new maximum/minimum NaN handling and +/* for booleans
-which matches NumPy behaviour.
+  which matches NumPy behaviour.
 * Refactoring in order to ensure Blosc2 functions with NumPy 1.26.
-* Streamlined documentation by introducing Array Protocol 
+* Streamlined documentation by introducing Array Protocol
 
 ## Changes from 3.8.0 to 3.9.0
 Most changes come from PR #467 relating to array-api compliance.
