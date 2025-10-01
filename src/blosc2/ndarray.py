@@ -5610,7 +5610,9 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
     # Use the chunks and blocks from the array if they are not passed
     if chunks is None and hasattr(array, "chunks"):
         chunks = array.chunks
-    if blocks is None and hasattr(array, "blocks"):
+    # Zarr adds a .blocks property that maps to a zarr.indexing.BlockIndex object
+    # Let's avoid this
+    if blocks is None and hasattr(array, "blocks") and isinstance(array.blocks, (tuple, list)):
         blocks = array.blocks
     chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, array.dtype, **kwargs)
 
