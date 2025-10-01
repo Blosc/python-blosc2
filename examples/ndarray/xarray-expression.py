@@ -44,7 +44,11 @@ b = NewObj(a)  #  minimal Array protocol implementation; no copies
 assert isinstance(b, blosc2.Array)  # any Array compliant object works
 c = blosc2.asarray(a)  # convert into a blosc2.NDArray; data is copied
 d = blosc2.SimpleProxy(a)  # SimpleProxy conversion; no copies
+# Define a lazy expression (defer computation until needed)
 lb = blosc2.lazyexpr("a + sin(b) + hypot(c, d) + 1")
 
 # Check!
 np.testing.assert_array_equal(lb[:], res)
+# One can also evaluate the expression directly (eager computation)
+resb2 = blosc2.evaluate("a + sin(b) + hypot(c, d) + 1")
+np.testing.assert_array_equal(resb2, res)
