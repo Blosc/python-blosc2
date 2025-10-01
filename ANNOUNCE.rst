@@ -3,10 +3,10 @@ Announcing Python-Blosc2 3.9.1
 
 This is a patch release where we have aimed to tidy up the code and improve robustness:
 
-✅ Bumped to numexpr 2.13.1 to incorporate new maximum/minimum NaN handling and +/* for booleans
+✅ Bumped to numexpr 2.13.1 to incorporate new maximum/minimum NaN handling and "+"/"*" for booleans
 which matches NumPy behaviour.
 ✅ Refactoring in order to ensure Blosc2 functions with NumPy 1.26.
-✅ Streamlined documentation by introducing Array Protocol 
+✅ Streamlined documentation by introducing Array Protocol
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
