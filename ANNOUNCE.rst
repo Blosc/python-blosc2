@@ -1,23 +1,12 @@
-Announcing Python-Blosc2 3.8.0
+Announcing Python-Blosc2 3.9.1
 ==============================
 
-This is a minor version release where we have aimed to make the first steps
-towards complying fully with the array-api standard:
+This is a patch release where we have aimed to tidy up the code and improve robustness:
 
-✅ C-Blosc2 internal library updated to latest 2.21.3.
-
-✅ numexpr version requirement pushed to 2.3.0 to incorporate
-``round``, ``sign``, ``signbit``, ``copysign``, ``nextafter``, ``hypot``,
-``maximum``, ``minimum``, ``trunc``, ``log2``, ``//`` and bitwise AND/OR/XOR/NOT.
-
-✅ Enhanced linear algebra via ``tensordot``, extended ``matmul``, ``vecdot``, ``diagonal``,
-``outer``, as well as ``broadcast_to`` and ``meshgrid``.
-
-✅ Roughly 60 attributes and methods for the ``NDArray`` class, as well as functions, have
-been added to increase compliance with the array-api standard, with ufuncs now very well supported.
-
-✅ A subtle bug which caused ``arr = blosc2.expand_dims(arr)`` to fail has been fixed.
-
+✅ Bumped to numexpr 2.13.1 to incorporate new maximum/minimum NaN handling and +/* for booleans
+which matches NumPy behaviour.
+✅ Refactoring in order to ensure Blosc2 functions with NumPy 1.26.
+✅ Streamlined documentation by introducing Array Protocol 
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
