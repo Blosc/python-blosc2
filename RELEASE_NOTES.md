@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.9.1 to 3.9.2
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.9.0 to 3.9.1
 
 * Bumped to numexpr 2.13.1 to incorporate new maximum/minimum NaN handling and +/* for booleans
