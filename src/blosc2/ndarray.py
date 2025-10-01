@@ -36,6 +36,81 @@ from blosc2.schunk import SChunk
 
 # NumPy version and a convenient boolean flag
 NUMPY_GE_2_0 = np.__version__ >= "2.0"
+# handle different numpy versions
+if NUMPY_GE_2_0:  # array-api compliant
+    nplshift = np.bitwise_left_shift
+    nprshift = np.bitwise_right_shift
+    npbinvert = np.bitwise_invert
+else:  # not array-api compliant
+    nplshift = np.left_shift
+    nprshift = np.right_shift
+    npbinvert = np.bitwise_not
+
+# These functions in ufunc_map in ufunc_map_1param are implemented in numexpr and so we call
+# those instead (since numexpr uses multithreading it is faster)
+ufunc_map = {
+    np.add: "+",
+    np.subtract: "-",
+    np.multiply: "*",
+    np.divide: "/",
+    np.true_divide: "/",
+    np.floor_divide: "//",
+    np.power: "**",
+    np.less: "<",
+    np.less_equal: "<=",
+    np.greater: ">",
+    np.greater_equal: ">=",
+    np.equal: "==",
+    np.not_equal: "!=",
+    np.bitwise_and: "&",
+    np.bitwise_or: "|",
+    np.bitwise_xor: "^",
+    np.arctan2: "arctan2",
+    nplshift: "<<",  # nplshift selected above according to numpy version
+    nprshift: ">>",  # nprshift selected above according to numpy version
+    np.remainder: "%",
+    np.nextafter: "nextafter",
+    np.copysign: "copysign",
+    np.hypot: "hypot",
+    np.maximum: "maximum",
+    np.minimum: "minimum",
+}
+
+# implemented in numexpr
+ufunc_map_1param = {
+    np.sqrt: "sqrt",
+    np.sin: "sin",
+    np.cos: "cos",
+    np.tan: "tan",
+    np.arcsin: "arcsin",
+    np.arccos: "arccos",
+    np.arctan: "arctan",
+    np.sinh: "sinh",
+    np.cosh: "cosh",
+    np.tanh: "tanh",
+    np.arcsinh: "arcsinh",
+    np.arccosh: "arccosh",
+    np.arctanh: "arctanh",
+    np.exp: "exp",
+    np.expm1: "expm1",
+    np.log: "log",
+    np.log10: "log10",
+    np.log1p: "log1p",
+    np.log2: "log2",
+    np.abs: "abs",
+    np.conj: "conj",
+    np.real: "real",
+    np.imag: "imag",
+    npbinvert: "~",  # npbinvert selected above according to numpy version
+    np.isnan: "isnan",
+    np.isfinite: "isfinite",
+    np.isinf: "isinf",
+    np.floor: "floor",
+    np.ceil: "ceil",
+    np.trunc: "trunc",
+    np.signbit: "signbit",
+    np.round: "round",
+}
 
 
 @runtime_checkable
@@ -2923,15 +2998,14 @@ def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array) ->
     return blosc2.lazyudf(chunkwise_logaddexp, (x1, x2), dtype=dtype, shape=x1.shape)
 
 
-# handle different numpy versions
-if NUMPY_GE_2_0:  # array-api compliant
-    nplshift = np.bitwise_left_shift
-    nprshift = np.bitwise_right_shift
-    npbinvert = np.bitwise_invert
-else:  # not array-api compliant
-    nplshift = np.left_shift
-    nprshift = np.right_shift
-    npbinvert = np.bitwise_not
+# implemented in python-blosc2
+local_ufunc_map = {
+    np.logaddexp: logaddexp,
+    np.logical_not: logical_not,
+    np.logical_and: logical_and,
+    np.logical_or: logical_or,
+    np.logical_xor: logical_xor,
+}
 
 
 class Operand:
@@ -2984,92 +3058,12 @@ class Operand:
         if method != "__call__":
             return NotImplemented
 
-        # These functions in ufunc_map in ufunc_map_1param are implemented in numexpr and so we call
-        # those instead (since numexpr uses multithreading it is faster)
-        ufunc_map = {
-            np.add: "+",
-            np.subtract: "-",
-            np.multiply: "*",
-            np.divide: "/",
-            np.true_divide: "/",
-            np.floor_divide: "//",
-            np.power: "**",
-            np.less: "<",
-            np.less_equal: "<=",
-            np.greater: ">",
-            np.greater_equal: ">=",
-            np.equal: "==",
-            np.not_equal: "!=",
-            np.bitwise_and: "&",
-            np.bitwise_or: "|",
-            np.bitwise_xor: "^",
-            np.arctan2: "arctan2",
-            nplshift: "<<",  # nplshift selected above according to numpy version
-            nprshift: ">>",  # nprshift selected above according to numpy version
-            np.remainder: "%",
-            np.nextafter: "nextafter",
-            np.copysign: "copysign",
-            np.hypot: "hypot",
-            np.maximum: "maximum",
-            np.minimum: "minimum",
-        }
-
-        # implemented in numexpr
-        ufunc_map_1param = {
-            np.sqrt: "sqrt",
-            np.sin: "sin",
-            np.cos: "cos",
-            np.tan: "tan",
-            np.arcsin: "arcsin",
-            np.arccos: "arccos",
-            np.arctan: "arctan",
-            np.sinh: "sinh",
-            np.cosh: "cosh",
-            np.tanh: "tanh",
-            np.arcsinh: "arcsinh",
-            np.arccosh: "arccosh",
-            np.arctanh: "arctanh",
-            np.exp: "exp",
-            np.expm1: "expm1",
-            np.log: "log",
-            np.log10: "log10",
-            np.log1p: "log1p",
-            np.log2: "log2",
-            np.abs: "abs",
-            np.conj: "conj",
-            np.real: "real",
-            np.imag: "imag",
-            npbinvert: "~",  # npbinvert selected above according to numpy version
-            np.isnan: "isnan",
-            np.isfinite: "isfinite",
-            np.isinf: "isinf",
-            np.floor: "floor",
-            np.ceil: "ceil",
-            np.trunc: "trunc",
-            np.signbit: "signbit",
-            np.round: "round",
-        }
-
-        # implemented in python-blosc2
-        local_ufunc_map = {
-            np.logaddexp: logaddexp,
-            np.logical_not: logical_not,
-            np.logical_and: logical_and,
-            np.logical_or: logical_or,
-            np.logical_xor: logical_xor,
-        }
         if ufunc in local_ufunc_map:
             return local_ufunc_map[ufunc](*inputs)
 
         if ufunc in ufunc_map:
             value = inputs[0] if inputs[1] is self else inputs[1]
             _check_allowed_dtypes(value)
-            # catch special case of multiplying two bools (not implemented in numexpr)
-            if ufunc_map[ufunc] == "*" and blosc2.result_type(value, self) == blosc2.bool_:
-                return blosc2.LazyExpr(new_op=(value, "&", self))
-            # catch special case of adding two bools (not implemented in numexpr)
-            if ufunc_map[ufunc] == "+" and blosc2.result_type(value, self) == blosc2.bool_:
-                return blosc2.LazyExpr(new_op=(value, "|", self))
             return blosc2.LazyExpr(new_op=(value, ufunc_map[ufunc], self))
 
         if ufunc in ufunc_map_1param:
@@ -3081,8 +3075,6 @@ class Operand:
 
     def __add__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
-        if blosc2.result_type(value, self) == blosc2.bool_:
-            return blosc2.LazyExpr(new_op=(value, "|", self))
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
     def __iadd__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
@@ -3118,9 +3110,6 @@ class Operand:
     @is_documented_by(multiply)
     def __mul__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
-        # catch special case of multiplying two bools (not implemented in numexpr)
-        if blosc2.result_type(value, self) == blosc2.bool_:
-            return blosc2.LazyExpr(new_op=(value, "&", self))
         return blosc2.LazyExpr(new_op=(self, "*", value))
 
     def __imul__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
