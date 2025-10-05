@@ -51,7 +51,9 @@ from blosc2.ndarray import (
     ufunc_map_1param,
 )
 
-from .shape_utils import constructors, infer_shape, reducers
+from .shape_utils import constructors, infer_shape, lin_alg_funcs, reducers
+
+lin_alg_funcs += ("clip", "logaddexp")
 
 if not blosc2.IS_WASM:
     import numexpr
@@ -2913,13 +2915,13 @@ class LazyExpr(LazyArray):
         return value, expression[idx:idx2]
 
     def _compute_expr(self, item, kwargs):
-        if any(method in self.expression for method in reducers):
+        if any(method in self.expression for method in reducers + lin_alg_funcs):
             # We have reductions in the expression (probably coming from a string lazyexpr)
             # Also includes slice
             _globals = get_expr_globals(self.expression)
             lazy_expr = eval(self.expression, _globals, self.operands)
             if not isinstance(lazy_expr, blosc2.LazyExpr):
-                key, mask = process_key(item, self.shape)
+                key, mask = process_key(item, lazy_expr.shape)
                 # An immediate evaluation happened (e.g. all operands are numpy arrays)
                 if hasattr(self, "_where_args"):
                     # We need to apply the where() operation

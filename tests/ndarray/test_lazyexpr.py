@@ -1583,3 +1583,19 @@ def test_minimal_protocol():
     lb = blosc2.lazyexpr("b + c + 1")
 
     np.testing.assert_array_equal(lb[:], a + a + 1)
+
+
+def test_not_numexpr():
+    shape = (20, 20)
+    a = blosc2.linspace(0, 20, num=np.prod(shape), shape=shape)
+    b = blosc2.ones((20, 1))
+    d_blosc2 = blosc2.evaluate("logaddexp(a, b) + a")
+    npa = a[()]
+    npb = b[()]
+    np.testing.assert_array_almost_equal(d_blosc2, np.logaddexp(npa, npb) + npa)
+    # TODO: Implement __add__ etc. for LazyUDF so this line works
+    # d_blosc2 = blosc2.evaluate(f"logaddexp(a, b) + clip(a, 6, 12)")
+    arr = blosc2.lazyexpr("matmul(a,b) + a ")
+    assert isinstance(arr, blosc2.LazyExpr)
+    assert arr.shape is None  # can't calculate shape for linalg funcs yet
+    np.testing.assert_array_almost_equal(arr[()], np.matmul(npa, npb) + a)

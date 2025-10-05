@@ -2,7 +2,21 @@ import ast
 
 from numpy import broadcast_shapes
 
-reducers = ("sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "slice")
+lin_alg_funcs = (
+    "concat",
+    "diagonal",
+    "expand_dims",
+    "matmul",
+    "matrix_transpose",
+    "outer",
+    "permute_dims",
+    "squeeze",
+    "stack",
+    "tensordot",
+    "transpose",
+    "vecdot",
+)
+reducers = ("sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "slice", "count_nonzero")
 
 # All the available constructors and reducers necessary for the (string) expression evaluator
 constructors = (
@@ -18,6 +32,7 @@ constructors = (
     "zeros_like",
     "ones_like",
     "empty_like",
+    "eye",
 )
 # Note that, as reshape is accepted as a method too, it should always come last in the list
 constructors += ("reshape",)
@@ -50,6 +65,8 @@ def reduce_shape(shape, axis, keepdims):
 
 def slice_shape(shape, slices):
     """Infer shape after slicing."""
+    if shape is None:
+        return None
     result = []
     for dim, sl in zip(shape, slices, strict=False):
         if isinstance(sl, int):  # indexing removes the axis
@@ -68,11 +85,9 @@ def slice_shape(shape, slices):
 
 def elementwise(*args):
     """All args must broadcast elementwise."""
-    shape = args[0]
-    shape = shape if shape is not None else ()
-    for s in args[1:]:
-        shape = broadcast_shapes(shape, s) if s is not None else shape
-    return shape
+    if None in args:
+        return None
+    return broadcast_shapes(*args)
 
 
 # --- Function registry ---
@@ -118,6 +133,9 @@ class ShapeInferencer(ast.NodeVisitor):
             else:
                 kwargs[kw.arg] = self._lookup_value(kw.value)
 
+        if func_name in lin_alg_funcs:
+            return None  # need to implement shape handling for these funcs
+
         # ------- handle constructors ---------------
         if func_name in constructors or attr_name == "reshape":
             # shape kwarg directly provided
@@ -139,7 +157,7 @@ class ShapeInferencer(ast.NodeVisitor):
                 if node.args:
                     shape_arg = node.args[0]
                     if isinstance(shape_arg, ast.Tuple):
-                        shape = tuple(self._const_or_lookup(e) for e in shape_arg.elts)
+                        shape = tuple(self._lookup_value(e) for e in shape_arg.elts)
                     elif isinstance(shape_arg, ast.Constant):
                         shape = (shape_arg.value,)
                     else:
@@ -149,10 +167,10 @@ class ShapeInferencer(ast.NodeVisitor):
 
             # ---- arange ----
             elif func_name == "arange":
-                start = self._const_or_lookup(node.args[0]) if node.args else 0
-                stop = self._const_or_lookup(node.args[1]) if len(node.args) > 1 else None
-                step = self._const_or_lookup(node.args[2]) if len(node.args) > 2 else 1
-                shape = self._const_or_lookup(node.args[4]) if len(node.args) > 4 else kwargs.get("shape")
+                start = self._lookup_value(node.args[0]) if node.args else 0
+                stop = self._lookup_value(node.args[1]) if len(node.args) > 1 else None
+                step = self._lookup_value(node.args[2]) if len(node.args) > 2 else 1
+                shape = self._lookup_value(node.args[4]) if len(node.args) > 4 else kwargs.get("shape")
 
                 if shape is not None:
                     return shape if isinstance(shape, tuple) else (shape,)
@@ -169,8 +187,8 @@ class ShapeInferencer(ast.NodeVisitor):
 
             # ---- linspace ----
             elif func_name == "linspace":
-                num = self._const_or_lookup(node.args[2]) if len(node.args) > 2 else kwargs.get("num")
-                shape = self._const_or_lookup(node.args[5]) if len(node.args) > 5 else kwargs.get("shape")
+                num = self._lookup_value(node.args[2]) if len(node.args) > 2 else kwargs.get("num")
+                shape = self._lookup_value(node.args[5]) if len(node.args) > 5 else kwargs.get("shape")
                 if shape is not None:
                     return shape if isinstance(shape, tuple) else (shape,)
                 if num is not None:
@@ -180,12 +198,16 @@ class ShapeInferencer(ast.NodeVisitor):
             elif func_name == "frombuffer" or func_name == "fromiter":
                 count = kwargs.get("count")
                 return (count,) if count else ()
+            elif func_name == "eye":
+                N = self._lookup_value(node.args[0])
+                M = self._lookup_value(node.args[1]) if len(node.args) > 1 else kwargs.get("M")
+                return (N, N) if M is None else (N, M)
 
             elif func_name == "reshape" or attr_name == "reshape":
                 if node.args:
                     shape_arg = node.args[-1]
                     if isinstance(shape_arg, ast.Tuple):
-                        return tuple(self._const_or_lookup(e) for e in shape_arg.elts)
+                        return tuple(self._lookup_value(e) for e in shape_arg.elts)
                 return ()
 
             else:
@@ -218,12 +240,13 @@ class ShapeInferencer(ast.NodeVisitor):
         shapes = [self.visit(node.left)] + [self.visit(c) for c in node.comparators]
         return elementwise(*shapes)
 
+    def visit_Constant(self, node):
+        return ()
+
     def visit_BinOp(self, node):
         left = self.visit(node.left)
         right = self.visit(node.right)
-        left = () if left is None else left
-        right = () if right is None else right
-        return broadcast_shapes(left, right)
+        return elementwise(left, right)
 
     def _eval_slice(self, node):
         if isinstance(node, ast.Slice):
@@ -247,15 +270,6 @@ class ShapeInferencer(ast.NodeVisitor):
             return self.shapes.get(node.id, None)
         elif isinstance(node, ast.Constant):
             return node.value
-        else:
-            return None
-
-    def _const_or_lookup(self, node):
-        """Return constant value or resolve name to scalar from shapes."""
-        if isinstance(node, ast.Constant):
-            return node.value
-        elif isinstance(node, ast.Name):
-            return self.shapes.get(node.id, None)
         else:
             return None
 
