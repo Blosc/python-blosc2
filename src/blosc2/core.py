@@ -893,9 +893,9 @@ def free_resources() -> None:
     resources when you are not going to use Blosc for a long time.
 
     The number of threads can also be set via the ``BLOSC_NTHREADS`` environment
-    variable (e.g., ``export BLOSC_NTHREADS=1``). Additionally, you may want to set 
-    ``NUMEXPR_NUM_THREADS`` as well since numexpr is used under
-    the hood (e.g., ``export NUMEXPR_NUM_THREADS=1``).
+    variable (e.g., ``export BLOSC_NTHREADS=1``). Additionally, you may want to set
+    ``NUMEXPR_NUM_THREADS`` as well since numexpr is used under the hood 
+    (e.g., ``export NUMEXPR_NUM_THREADS=1``).
 
     Examples
     --------
