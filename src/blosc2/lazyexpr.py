@@ -3421,21 +3421,29 @@ class LazyUDF(LazyArray):
 
 
 def _numpy_eval_expr(expression, operands, prefer_blosc=False):
-    ops = (
-        {
+    if prefer_blosc:
+        # convert blosc arrays to small dummies
+        ops = {
             key: blosc2.ones((1,) * len(value.shape), dtype=value.dtype)
             if hasattr(value, "chunks")
-            else value
+            else value  # some of these could be numpy arrays
             for key, value in operands.items()
         }
-        if prefer_blosc
-        else {
+        # change numpy arrays
+        ops = {
+            key: np.ones((1,) * len(value.shape), dtype=value.dtype)
+            if isinstance(value, np.ndarray)
+            else value
+            for key, value in ops.items()
+        }
+    else:
+        ops = {
             key: np.ones(np.ones(len(value.shape), dtype=int), dtype=value.dtype)
             if hasattr(value, "shape")
             else value
             for key, value in operands.items()
         }
-    )
+
     if "contains" in expression:
         _out = ne_evaluate(expression, local_dict=ops)
     else:
