@@ -353,10 +353,6 @@ def vecdot(x1: blosc2.NDArray, x2: blosc2.NDArray, axis: int = -1, **kwargs) -> 
     a_keep[a_axes] = False
     b_keep = [True] * x2.ndim
     b_keep[b_axes] = False
-    x1shape = np.array(x1.shape)
-    x2shape = np.array(x2.shape)
-    result_shape = np.broadcast_shapes(x1shape[a_keep], x2shape[b_keep])
-    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
 
     x1shape = np.array(x1.shape)
     x2shape = np.array(x2.shape)

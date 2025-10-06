@@ -1,4 +1,5 @@
 import ast
+import builtins
 
 from numpy import broadcast_shapes
 
@@ -15,6 +16,8 @@ lin_alg_funcs = (
     "tensordot",
     "transpose",
     "vecdot",
+    "T",
+    "mT",
 )
 reducers = ("sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "slice", "count_nonzero")
 
@@ -39,6 +42,152 @@ constructors += ("reshape",)
 
 
 # --- Shape utilities ---
+def linalg_shape(func_name, args, kwargs):  # noqa: C901
+    # --- Linear algebra and tensor manipulation ---
+    a = args[0] if args else None
+    if a is None or any(s is None for s in a):
+        return None
+    b = args[1] if len(args) > 1 else None
+    axis = kwargs.get("axis", None)
+    axes = kwargs.get("axes", None)
+    offset = kwargs.get("offset", 0)
+
+    # --- concat ---
+    if func_name == "concat":
+        shapes = args[0]
+        if axis is None and len(args) > 1:
+            axis = args[1]
+
+        # Coerce axis to int if tuple single-element
+        axis = 0 if axis is None else axis
+        # normalize negative axis
+        axis = axis + len(shapes[0]) if axis < 0 else axis
+        concat_dim = builtins.sum([s[axis] for s in shapes])
+        return tuple(s if i != axis else concat_dim for i, s in enumerate(shapes[0]))
+
+    # --- diagonal ---
+    elif func_name == "diagonal":
+        axis1 = len(a) - 2
+        axis2 = len(a) - 1
+        new_shape = [d for i, d in enumerate(a) if i not in (axis1, axis2)]
+        d1, d2 = a[axis1], a[axis2]
+        diag_len = builtins.max(0, min(d1, d2) - abs(offset))
+        new_shape.append(diag_len)
+        return tuple(new_shape)
+
+    # --- expand_dims ---
+    elif func_name == "expand_dims":
+        # positional axis may be second positional argument
+        if axis is None and len(args) > 1:
+            axis = args[1]
+        if axis is None:
+            axis = 0
+        axis = [axis] if isinstance(axis, int) else axis
+        new_shape = list(a)
+        for ax in sorted(axis):
+            ax = ax if ax >= 0 else len(new_shape) + ax + 1
+            new_shape.insert(ax, 1)
+        return tuple(new_shape)
+
+    # --- matmul ---
+    elif func_name == "matmul":
+        if b is None:
+            return None
+        x1_is_vector = False
+        x2_is_vector = False
+        if len(a) == 1:
+            a = (1,) + a  # (N,) -> (1, N)
+            x1_is_vector = True
+        if len(b) == 1:
+            b += (1,)  # (M,) -> (M, 1)
+            x2_is_vector = True
+        batch = broadcast_shapes(a[:-2], b[:-2])
+        shape = batch
+        if not x1_is_vector:
+            shape += a[-2]
+        if not x2_is_vector:
+            shape += b[-1]
+        return shape
+
+    # --- matrix_transpose ---
+    elif func_name == "matrix_transpose":
+        if len(a) < 2:
+            return a
+        return a[:-2] + (a[-1], a[-2])
+
+    # --- outer ---
+    elif func_name == "outer":
+        if b is None:
+            return None
+        return a + b
+
+    # --- permute_dims ---
+    elif func_name == "permute_dims":
+        if axes is None and len(args) > 1:
+            axes = args[1]
+        if axes is None:
+            axes = tuple(reversed(range(len(a))))
+        return tuple(a[i] for i in axes)
+
+    # --- squeeze ---
+    elif func_name == "squeeze":
+        if axis is None and len(args) > 1:
+            axis = args[1]
+        if axis is None:
+            return tuple(d for d in a if d != 1)
+        if isinstance(axis, int):
+            axis = (axis,)
+        axis = tuple(ax if ax >= 0 else len(a) + ax for ax in axis)
+        return tuple(d for i, d in enumerate(a) if i not in axis or d != 1)
+
+    # --- stack ---
+    elif func_name == "stack":
+        # detect axis as last positional if candidate
+        elems = args[0]
+        if axis is None and len(args) > 1:
+            axis = args[1]
+        if axis is None:
+            axis = 0
+        return elems[0][:axis] + (len(elems),) + elems[0][axis:]
+
+    # --- tensordot ---
+    elif func_name == "tensordot":
+        if axes is None and len(args) > 2:
+            axes = args[2]
+        if axis is None:
+            axes = 2
+        if b is None:
+            return None
+        if isinstance(axes, int):
+            a_rest = a[:-axes]
+            b_rest = b[axes:]
+        else:
+            a_axes, b_axes = axes
+            a_rest = tuple(d for i, d in enumerate(a) if i not in a_axes)
+            b_rest = tuple(d for i, d in enumerate(b) if i not in b_axes)
+        return a_rest + b_rest
+
+    # --- transpose ---
+    elif func_name == ("transpose", "T", "mT"):
+        return a[:-2] + (a[-1], a[-2])
+
+    # --- vecdot ---
+    elif func_name == "vecdot":
+        if axis is None and len(args) > 2:
+            axis = args[2]
+        if axis is None:
+            axis = -1
+        if b is None:
+            return None
+        a_axis = axis + len(a)
+        b_axis = axis + len(b)
+        a_rem = tuple(d for i, d in enumerate(a) if i != a_axis)
+        b_rem = tuple(d for i, d in enumerate(b) if i != b_axis)
+        return broadcast_shapes(a_rem, b_rem)
+    else:
+        return None
+
+
 def reduce_shape(shape, axis, keepdims):
     """Reduce shape along given axis or axes (collapse dimensions)."""
     if shape is None:
@@ -133,8 +282,18 @@ class ShapeInferencer(ast.NodeVisitor):
             else:
                 kwargs[kw.arg] = self._lookup_value(kw.value)
 
+        # ------- handle linear algebra ---------------
+        target = None
         if func_name in lin_alg_funcs:
-            return None  # need to implement shape handling for these funcs
+            target = func_name
+        if attr_name in lin_alg_funcs:
+            target = attr_name
+        if target is not None:
+            args = [self.visit(arg) for arg in node.args]
+            # If it's a method call, prepend the object shape
+            if obj_shape is not None and attr_name == target:
+                args.insert(0, obj_shape)
+            return linalg_shape(target, args, kwargs)
 
         # ------- handle constructors ---------------
         if func_name in constructors or attr_name == "reshape":
@@ -241,7 +400,10 @@ class ShapeInferencer(ast.NodeVisitor):
         return elementwise(*shapes)
 
     def visit_Constant(self, node):
-        return ()
+        return () if not hasattr(node.value, "shape") else node.value.shape
+
+    def visit_Tuple(self, node):
+        return tuple(self.visit(arg) for arg in node.elts)
 
     def visit_BinOp(self, node):
         left = self.visit(node.left)

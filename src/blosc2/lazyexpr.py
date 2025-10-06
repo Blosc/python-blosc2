@@ -620,6 +620,11 @@ valid_methods = {
 valid_methods |= {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64"}
 valid_methods |= {"float32", "float64", "complex64", "complex128"}
 valid_methods |= {"bool", "str", "bytes"}
+valid_methods |= {
+    name
+    for name in dir(blosc2.NDArray)
+    if callable(getattr(blosc2.NDArray, name)) and not name.startswith("_")
+}
 
 
 def validate_expr(expr: str) -> None:
@@ -2002,7 +2007,7 @@ def reduce_slices(  # noqa: C901
             continue
 
         if where is None:
-            if expression == "o0":
+            if expression == "o0" or expression == "(o0)":
                 # We don't have an actual expression, so avoid a copy except to make contiguous
                 result = np.require(chunk_operands["o0"], requirements="C")
             else:
@@ -3168,9 +3173,6 @@ class LazyExpr(LazyArray):
             # in guessing mode to avoid computing reductions
             # Extract possible numpy scalars
             _expression, local_vars = extract_numpy_scalars(expression)
-            # Let's include numpy and blosc2 as operands so that some functions can be used
-            # Most in particular, castings like np.int8 et al. can be very useful to allow
-            # for desired data types in the output.
             _operands = operands | local_vars
             # Check that operands are proper Operands, LazyArray or scalars; if not, convert to NDArray objects
             for op, val in _operands.items():
@@ -3179,10 +3181,10 @@ class LazyExpr(LazyArray):
             # for scalars just return value (internally converts to () if necessary)
             opshapes = {k: v if not hasattr(v, "shape") else v.shape for k, v in _operands.items()}
             _shape = infer_shape(_expression, opshapes)  # infer shape, includes constructors
-            # substitutes with numpy operands (cheap for reductions) and
-            # defaults to blosc2 functions (cheap for constructors)
             # have to handle slices since a[10] on a dummy variable of shape (1,1) doesn't work
             desliced_expr, desliced_ops = extract_and_replace_slices(_expression, _operands)
+            # substitutes with dummy operands (cheap for reductions) and
+            # defaults to blosc2 functions (cheap for constructors)
             new_expr = _numpy_eval_expr(desliced_expr, desliced_ops, prefer_blosc=True)
             _dtype = new_expr.dtype
             if isinstance(new_expr, blosc2.LazyExpr):
@@ -3205,24 +3207,16 @@ class LazyExpr(LazyArray):
                         if counter == 0 and char == ",":
                             break
                     expression_ = finalexpr[:-1]  # remove trailing comma
-                new_expr.expression = f"({expression_})"  # force parenthesis
-                new_expr.expression_tosave = expression
-                new_expr.operands = operands_
-                new_expr.operands_tosave = operands
-            elif isinstance(new_expr, blosc2.NDArray) and len(operands) == 1:
-                # passed "a", "a[:10]", 'sum(a)'
-                expression_, operands_ = conserve_functions(
-                    _expression, _operands, {"o0": list(operands.values())[0]} | local_vars
-                )
-                new_expr = cls(None)
-                new_expr.expression = expression_
-                new_expr.operands = operands_
             else:
+                new_expr = cls(None)
                 # An immediate evaluation happened
                 # (e.g. all operands are numpy arrays or constructors)
-                new_expr = cls(None)
-                new_expr.expression = expression
-                new_expr.operands = operands
+                # or passed "a", "a[:10]", 'sum(a)'
+                expression_, operands_ = conserve_functions(_expression, _operands, local_vars)
+            new_expr.expression = f"({expression_})"  # force parenthesis
+            new_expr.operands = operands_
+            new_expr.expression_tosave = expression
+            new_expr.operands_tosave = operands
             # Cache the dtype and shape (should be immutable)
             new_expr._dtype = _dtype
             new_expr._shape = _shape
