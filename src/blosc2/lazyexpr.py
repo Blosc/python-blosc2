@@ -53,7 +53,7 @@ from blosc2.ndarray import (
 
 from .shape_utils import constructors, infer_shape, lin_alg_funcs, reducers
 
-lin_alg_funcs += ("clip", "logaddexp")
+not_numexpr_funcs = lin_alg_funcs + ("clip", "logaddexp")
 
 if not blosc2.IS_WASM:
     import numexpr
@@ -645,8 +645,11 @@ def validate_expr(expr: str) -> None:
     skip_quotes = re.sub(r"(\'[^\']*\')", "", no_whitespace)
 
     # Check for forbidden patterns
-    if _blacklist_re.search(skip_quotes) is not None:
-        raise ValueError(f"'{expr}' is not a valid expression.")
+    forbiddens = _blacklist_re.search(skip_quotes)
+    if forbiddens is not None:
+        i = forbiddens.span()[0]
+        if expr[i : i + 2] != ".T" and expr[i : i + 3] != ".mT":  # allow tranpose methods
+            raise ValueError(f"'{expr}' is not a valid expression.")
 
     # Check for invalid characters not covered by the tokenizer
     invalid_chars = re.compile(r"[^\w\s+\-*/%()[].,=<>!&|~^]")
@@ -706,7 +709,7 @@ def extract_and_replace_slices(expr, operands):
                 try:
                     shape = infer_shape(full_expr, shapes)
                 except Exception as e:
-                    print(f"⚠️ Shape inference failed for {full_expr}: {e}")
+                    print(f"Shape inference failed for {full_expr}: {e}")
                     shape = ()
 
                 # Determine dtype
@@ -2920,7 +2923,7 @@ class LazyExpr(LazyArray):
         return value, expression[idx:idx2]
 
     def _compute_expr(self, item, kwargs):
-        if any(method in self.expression for method in reducers + lin_alg_funcs):
+        if any(method in self.expression for method in reducers + not_numexpr_funcs):
             # We have reductions in the expression (probably coming from a string lazyexpr)
             # Also includes slice
             _globals = get_expr_globals(self.expression)
@@ -3441,8 +3444,8 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
     if "contains" in expression:
         _out = ne_evaluate(expression, local_dict=ops)
     else:
-        # Create a globals dict with the functions of blosc2 preferentially
-        # (and numpy if can't find blosc2)
+        # Create a globals dict with blosc2 version of functions preferentially
+        # (default to numpy func if not implemented in blosc2)
         if prefer_blosc:
             _globals = get_expr_globals(expression)
             _globals |= dtype_symbols

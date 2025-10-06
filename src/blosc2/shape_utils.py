@@ -104,9 +104,9 @@ def linalg_shape(func_name, args, kwargs):  # noqa: C901
         batch = broadcast_shapes(a[:-2], b[:-2])
         shape = batch
         if not x1_is_vector:
-            shape += a[-2]
+            shape += (a[-2],)
         if not x2_is_vector:
-            shape += b[-1]
+            shape += (b[-1],)
         return shape
 
     # --- matrix_transpose ---
@@ -154,7 +154,7 @@ def linalg_shape(func_name, args, kwargs):  # noqa: C901
     elif func_name == "tensordot":
         if axes is None and len(args) > 2:
             axes = args[2]
-        if axis is None:
+        if axes is None:
             axes = 2
         if b is None:
             return None
@@ -168,7 +168,7 @@ def linalg_shape(func_name, args, kwargs):  # noqa: C901
         return a_rest + b_rest
 
     # --- transpose ---
-    elif func_name == ("transpose", "T", "mT"):
+    elif func_name in ("transpose", "T", "mT"):
         return a[:-2] + (a[-1], a[-2])
 
     # --- vecdot ---
@@ -261,9 +261,22 @@ class ShapeInferencer(ast.NodeVisitor):
         else:  # passed a scalar value
             return ()
 
+    def visit_Attribute(self, node):
+        obj_shape = self.visit(node.value)
+        attr = node.attr
+        if attr == "reshape":
+            if node.args:
+                shape_arg = node.args[-1]
+                if isinstance(shape_arg, ast.Tuple):
+                    return tuple(self._lookup_value(e) for e in shape_arg.elts)
+            return ()
+        elif attr in ("T", "mT"):
+            return linalg_shape(attr, (obj_shape,), {})
+        return None
+
     def visit_Call(self, node):  # noqa : C901
         func_name = getattr(node.func, "id", None)
-        attr_name = getattr(node.func, "attr", None)
+        attr_name = getattr(node.func, "attr", None)  # handle methods called on funcs
 
         # --- Recursive method-chain support ---
         obj_shape = None

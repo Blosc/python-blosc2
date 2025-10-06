@@ -1629,62 +1629,102 @@ def test_lazylinalg():
     npx = x[()]
     npy = y[()]
     npA = A[()]
+    npB = B[()]
+    npC = C[()]
+    npD = D[()]
 
     # --- concat ---
     out = blosc2.lazyexpr("concat((x, y), axis=0)")
-    assert out.shape == np.concat((npx, npy), axis=0).shape
+    npres = np.concatenate((npx, npy), axis=0)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
 
     # --- diagonal ---
     out = blosc2.lazyexpr("diagonal(A)")
-    assert out.shape == np.diagonal(npA).shape
+    npres = np.diagonal(npA)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
 
     # --- expand_dims ---
     out = blosc2.lazyexpr("expand_dims(x, axis=0)")
-    assert out.shape == (1,) + shapes["x"]
+    npres = np.expand_dims(npx, axis=0)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
 
     # --- matmul ---
     out = blosc2.lazyexpr("matmul(A, B)")
-    assert out.shape == (shapes["A"][0], shapes["B"][1])
+    npres = np.matmul(npA, npB)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
 
     # --- matrix_transpose ---
     out = blosc2.lazyexpr("matrix_transpose(A)")
-    assert out.shape == (shapes["A"][1], shapes["A"][0])
+    npres = np.matrix_transpose(npA)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+    out = blosc2.lazyexpr("C.mT")
+    npres = C.mT
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+    out = blosc2.lazyexpr("A.T")
+    npres = npA.T
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
 
     # --- outer ---
     out = blosc2.lazyexpr("outer(x, y)")
-    assert out.shape == shapes["x"] + shapes["y"]
+    npres = np.outer(npx, npy)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
 
     # --- permute_dims ---
     out = blosc2.lazyexpr("permute_dims(C, axes=(2,0,1))")
-    assert out.shape == (shapes["C"][2], shapes["C"][0], shapes["C"][1])
+    npres = np.transpose(npC, axes=(2, 0, 1))
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
 
     # --- squeeze ---
     out = blosc2.lazyexpr("squeeze(D)")
-    assert out.shape == (5,)
+    npres = np.squeeze(npD)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+
     out = blosc2.lazyexpr("D.squeeze()")
-    assert out.shape == (5,)
+    npres = np.squeeze(npD)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
 
     # --- stack ---
     out = blosc2.lazyexpr("stack((x, y), axis=0)")
-    assert out.shape == (2,) + shapes["x"]
+    npres = np.stack((npx, npy), axis=0)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
 
     # --- tensordot ---
     out = blosc2.lazyexpr("tensordot(A, B, axes=1)")
-    assert out.shape[0] == shapes["A"][0]
-    assert out.shape[-1] == shapes["B"][-1]
+    npres = np.tensordot(npA, npB, axes=1)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
 
     # --- vecdot ---
     out = blosc2.lazyexpr("vecdot(x, y)")
-    assert out.shape == np.vecdot(x[()], y[()]).shape
+    npres = np.vecdot(npx, npy)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
 
-    # batched matmul
+    # --- batched matmul ---
     shapes = {
         "A": (1, 3, 4),
         "B": (3, 4, 5),
     }
     s = shapes["A"]
     A = blosc2.linspace(0, np.prod(s), shape=s)
+    npA = A[()]  # actual numpy array
     s = shapes["B"]
     B = blosc2.linspace(0, np.prod(s), shape=s)
+    npB = B[()]  # actual numpy array
+
     out = blosc2.lazyexpr("matmul(A, B)")
-    assert out.shape == (3, 3, 5)
+    npres = np.matmul(npA, npB)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
