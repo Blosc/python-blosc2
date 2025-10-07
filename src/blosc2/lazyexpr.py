@@ -41,6 +41,7 @@ import blosc2
 from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
 from blosc2.ndarray import (
+    NUMPY_GE_2_0,
     _check_allowed_dtypes,
     get_chunks_idx,
     get_intersecting_chunks,
@@ -53,10 +54,35 @@ from blosc2.ndarray import (
 
 from .shape_utils import constructors, infer_shape, lin_alg_funcs, reducers
 
-not_numexpr_funcs = lin_alg_funcs + ("clip", "logaddexp")
-
 if not blosc2.IS_WASM:
     import numexpr
+
+global safe_blosc2_globals
+safe_blosc2_globals = {}
+global safe_numpy_globals
+# Use numpy eval when running in WebAssembly
+safe_numpy_globals = {"np": np}
+# Add all first-level numpy functions
+safe_numpy_globals.update(
+    {name: getattr(np, name) for name in dir(np) if callable(getattr(np, name)) and not name.startswith("_")}
+)
+
+if not NUMPY_GE_2_0:  # handle non-array-api compliance
+    safe_numpy_globals["acos"] = np.arccos
+    safe_numpy_globals["acosh"] = np.arccosh
+    safe_numpy_globals["asin"] = np.arcsin
+    safe_numpy_globals["asinh"] = np.arcsinh
+    safe_numpy_globals["atan"] = np.arctan
+    safe_numpy_globals["atanh"] = np.arctanh
+    safe_numpy_globals["atan2"] = np.arctan2
+    safe_numpy_globals["permute_dims"] = np.transpose
+    safe_numpy_globals["pow"] = np.power
+    safe_numpy_globals["bitwise_left_shift"] = np.left_shift
+    safe_numpy_globals["bitwise_right_shift"] = np.right_shift
+    safe_numpy_globals["bitwise_invert"] = np.bitwise_not
+    safe_numpy_globals["concat"] = np.concatenate
+    safe_numpy_globals["matrix_transpose"] = np.transpose
+    safe_numpy_globals["vecdot"] = blosc2.ndarray.npvecdot
 
 
 def ne_evaluate(expression, local_dict=None, **kwargs):
@@ -76,22 +102,24 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
         )
     }
     if blosc2.IS_WASM:
-        # Use numpy eval when running in WebAssembly
-        safe_globals = {"np": np}
-        # Add all first-level numpy functions
-        safe_globals.update(
-            {
-                name: getattr(np, name)
-                for name in dir(np)
-                if callable(getattr(np, name)) and not name.startswith("_")
-            }
-        )
+        global safe_numpy_globals
         if "out" in kwargs:
             out = kwargs.pop("out")
-            out[:] = eval(expression, safe_globals, local_dict)
+            out[:] = eval(expression, safe_numpy_globals, local_dict)
             return out
-        return eval(expression, safe_globals, local_dict)
-    return numexpr.evaluate(expression, local_dict=local_dict, **kwargs)
+        return eval(expression, safe_numpy_globals, local_dict)
+    try:
+        return numexpr.evaluate(expression, local_dict=local_dict, **kwargs)
+    except ValueError as e:
+        raise e  # unsafe expression
+    except Exception:  # non_numexpr functions present
+        global safe_blosc2_globals
+        res = eval(expression, safe_blosc2_globals, local_dict)
+        if "out" in kwargs:
+            out = kwargs.pop("out")
+            out[:] = res[()] if isinstance(res, blosc2.LazyArray) else res
+            return out
+        return res[()] if isinstance(res, blosc2.LazyArray) else res
 
 
 # Define empty ndindex tuple for function defaults
@@ -131,56 +159,116 @@ dtype_symbols = {
     "V": np.bytes_,
 }
 
-functions = [
-    "sin",
-    "cos",
-    "tan",
-    "sqrt",
-    "sinh",
-    "cosh",
-    "tanh",
-    "arcsin",
+blosc2_funcs = [
+    "abs",
+    "acos",
+    "acosh",
+    "add",
+    "all",
+    "any",
+    "arange",
     "arccos",
+    "arccosh",
+    "arcsin",
+    "arcsinh",
     "arctan",
     "arctan2",
-    "arcsinh",
-    "arccosh",
     "arctanh",
-    "exp",
+    "asin",
+    "asinh",
+    "atan",
+    "atan2",
+    "atanh",
+    "bitwise_and",
+    "bitwise_invert",
+    "bitwise_left_shift",
+    "bitwise_or",
+    "bitwise_right_shift",
+    "bitwise_xor",
+    "broadcast_to",
+    "ceil",
+    "clip",
+    "concat",
+    "concatenate",
+    "copy",
+    "copysign",
+    "count_nonzero",
+    "divide",
+    "empty",
+    "empty_like",
+    "equal",
+    "expand_dims",
     "expm1",
-    "log",
-    "log10",
-    "log1p",
-    "log2",
-    "conj",
-    "real",
-    "imag",
-    "contains",
-    "abs",
-    "sum",
-    "prod",
-    "mean",
-    "std",
-    "var",
-    "min",
-    "max",
-    "any",
-    "all",
-    "pow" if np.__version__.startswith("2.") else "power",
-    "where",
-    "isnan",
+    "eye",
+    "floor",
+    "floor_divide",
+    "frombuffer",
+    "fromiter",
+    "full",
+    "full_like",
+    "greater",
+    "greater_equal",
+    "hypot",
     "isfinite",
     "isinf",
-    "nextafter",
-    "copysign",
-    "hypot",
+    "isnan",
+    "less_equal",
+    "less_than",
+    "linspace",
+    "log",
+    "log1p",
+    "log2",
+    "log10",
+    "logaddexp",
+    "logical_and",
+    "logical_not",
+    "logical_or",
+    "logical_xor",
+    "matmul",
+    "matrix_transpose",
+    "max",
     "maximum",
+    "mean",
+    "meshgrid",
+    "min",
     "minimum",
-    "floor",
-    "ceil",
-    "trunc",
-    "signbit",
+    "multiply",
+    "nans",
+    "ndarray_from_cframe",
+    "negative",
+    "nextafter",
+    "not_equal",
+    "ones",
+    "ones_like",
+    "permute_dims",
+    "positive",
+    "pow",
+    "prod",
+    "real",
+    "reciprocal",
+    "remainder",
+    "reshape",
     "round",
+    "sign",
+    "signbit",
+    "sort",
+    "square",
+    "squeeze",
+    "stack",
+    "sum",
+    "subtract",
+    "take",
+    "take_along_axis",
+    "tan",
+    "tanh",
+    "tensordot",
+    "transpose",
+    "trunc",
+    "var",
+    "vecdot",
+    "where",
+    "zeros",
+    "zeros_like",
 ]
 
 # Gather all callable functions in numpy
@@ -192,10 +280,8 @@ numpy_funcs = {
 numpy_ufuncs = {name for name, member in inspect.getmembers(np, lambda x: isinstance(x, np.ufunc))}
 # Add these functions to the list of available functions
 # (will be evaluated via the array interface)
-additional_funcs = sorted((numpy_funcs | numpy_ufuncs) - set(functions))
-functions += additional_funcs
-
-functions += constructors
+additional_funcs = sorted((numpy_funcs | numpy_ufuncs) - set(blosc2_funcs))
+functions = blosc2_funcs + additional_funcs
 
 relational_ops = ["==", "!=", "<", "<=", ">", ">="]
 logical_ops = ["&", "|", "^", "~"]
@@ -204,8 +290,7 @@ not_complex_ops = ["maximum", "minimum", "<", "<=", ">", ">="]
 
 def get_expr_globals(expression):
     """Build a dictionary of functions needed for evaluating the expression."""
-    _globals = {}
-
+    _globals = {"np": np, "blosc2": blosc2}
     # Only check for functions that actually appear in the expression
     # This avoids many unnecessary string searches
     for func in functions:
@@ -2922,8 +3007,23 @@ class LazyExpr(LazyArray):
 
         return value, expression[idx:idx2]
 
-    def _compute_expr(self, item, kwargs):
-        if any(method in self.expression for method in reducers + not_numexpr_funcs):
+    def _compute_expr(self, item, kwargs):  # noqa : C901
+        # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp)
+        # that are implemenetd in python-blosc2 not in numexpr
+        global safe_blosc2_globals
+        if len(safe_blosc2_globals) == 0:
+            # First eval call, fill blosc2_safe_globals for ne_evaluate
+            safe_blosc2_globals = {"blosc2": blosc2}
+            # Add all first-level blosc2 functions
+            safe_blosc2_globals.update(
+                {
+                    name: getattr(blosc2, name)
+                    for name in dir(blosc2)
+                    if callable(getattr(blosc2, name)) and not name.startswith("_")
+                }
+            )
+
+        if any(method in self.expression for method in reducers + lin_alg_funcs):
             # We have reductions in the expression (probably coming from a string lazyexpr)
             # Also includes slice
             _globals = get_expr_globals(self.expression)
@@ -3450,7 +3550,7 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
             _globals = get_expr_globals(expression)
             _globals |= dtype_symbols
         else:
-            _globals = {f: getattr(np, f) for f in functions if f not in ("contains", "pow")}
+            _globals = safe_numpy_globals
         try:
             _out = eval(expression, _globals, ops)
         except RuntimeWarning:

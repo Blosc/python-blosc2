@@ -18,6 +18,8 @@ lin_alg_funcs = (
     "vecdot",
     "T",
     "mT",
+    "take",
+    "take_along_axis",
 )
 reducers = ("sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "slice", "count_nonzero")
 
@@ -275,13 +277,31 @@ class ShapeInferencer(ast.NodeVisitor):
         return None
 
     def visit_Call(self, node):  # noqa : C901
+        # Extract full function name (support np.func, blosc2.func)
         func_name = getattr(node.func, "id", None)
-        attr_name = getattr(node.func, "attr", None)  # handle methods called on funcs
+        attr_name = getattr(node.func, "attr", None)
+        module_name = getattr(getattr(node.func, "value", None), "id", None)
+
+        # Handle namespaced calls like np.func or blosc2.func
+        if module_name in ("np", "blosc2"):
+            qualified_name = f"{module_name}.{attr_name}"
+        else:
+            qualified_name = attr_name or func_name
+
+        base_name = qualified_name.split(".")[-1]
 
         # --- Recursive method-chain support ---
         obj_shape = None
-        if isinstance(node.func, ast.Attribute):
+        if isinstance(node.func, ast.Attribute) and module_name not in (
+            "np",
+            "blosc2",
+        ):  # check if genuine method and not module func
             obj_shape = self.visit(node.func.value)
+
+        args = [self.visit(arg) for arg in node.args]
+        # If it's a method call, prepend the object shape
+        if obj_shape is not None and attr_name == base_name:
+            args.insert(0, obj_shape)
 
         # --- Parse keyword args ---
         kwargs = {}
@@ -296,27 +316,18 @@ class ShapeInferencer(ast.NodeVisitor):
                 kwargs[kw.arg] = self._lookup_value(kw.value)
 
         # ------- handle linear algebra ---------------
-        target = None
-        if func_name in lin_alg_funcs:
-            target = func_name
-        if attr_name in lin_alg_funcs:
-            target = attr_name
-        if target is not None:
-            args = [self.visit(arg) for arg in node.args]
-            # If it's a method call, prepend the object shape
-            if obj_shape is not None and attr_name == target:
-                args.insert(0, obj_shape)
-            return linalg_shape(target, args, kwargs)
+        if base_name in lin_alg_funcs:
+            return linalg_shape(base_name, args, kwargs)
 
         # ------- handle constructors ---------------
-        if func_name in constructors or attr_name == "reshape":
+        if base_name in constructors:
             # shape kwarg directly provided
             if "shape" in kwargs:
                 val = kwargs["shape"]
                 return val if isinstance(val, tuple) else (val,)
 
             # ---- array constructors like zeros, ones, full, etc. ----
-            elif func_name in (
+            elif base_name in (
                 "zeros",
                 "ones",
                 "empty",
@@ -338,7 +349,7 @@ class ShapeInferencer(ast.NodeVisitor):
                     return shape
 
             # ---- arange ----
-            elif func_name == "arange":
+            elif base_name == "arange":
                 start = self._lookup_value(node.args[0]) if node.args else 0
                 stop = self._lookup_value(node.args[1]) if len(node.args) > 1 else None
                 step = self._lookup_value(node.args[2]) if len(node.args) > 2 else 1
@@ -358,7 +369,7 @@ class ShapeInferencer(ast.NodeVisitor):
                 return (max(NUM, 0),)
 
             # ---- linspace ----
-            elif func_name == "linspace":
+            elif base_name == "linspace":
                 num = self._lookup_value(node.args[2]) if len(node.args) > 2 else kwargs.get("num")
                 shape = self._lookup_value(node.args[5]) if len(node.args) > 5 else kwargs.get("shape")
                 if shape is not None:
@@ -367,15 +378,16 @@ class ShapeInferencer(ast.NodeVisitor):
                     return (num,)
                 raise ValueError("linspace requires either shape or num argument")
 
-            elif func_name == "frombuffer" or func_name == "fromiter":
+            elif base_name == "frombuffer" or base_name == "fromiter":
                 count = kwargs.get("count")
                 return (count,) if count else ()
-            elif func_name == "eye":
+
+            elif base_name == "eye":
                 N = self._lookup_value(node.args[0])
                 M = self._lookup_value(node.args[1]) if len(node.args) > 1 else kwargs.get("M")
                 return (N, N) if M is None else (N, M)
 
-            elif func_name == "reshape" or attr_name == "reshape":
+            elif base_name == "reshape":
                 if node.args:
                     shape_arg = node.args[-1]
                     if isinstance(shape_arg, ast.Tuple):
@@ -396,16 +408,10 @@ class ShapeInferencer(ast.NodeVisitor):
                 slices = [self._eval_slice(slice_arg)]
             return slice_shape(obj_shape, slices)
 
-        # --- Evaluate argument shapes normally ---
-        args = [self.visit(arg) for arg in node.args]
+        if base_name in FUNCTIONS:
+            return FUNCTIONS[base_name](*args, **kwargs)
 
-        if func_name in FUNCTIONS:
-            return FUNCTIONS[func_name](*args, **kwargs)
-        if attr_name in FUNCTIONS:
-            return FUNCTIONS[attr_name](obj_shape, **kwargs)
-
-        shapes = [obj_shape] + args if obj_shape is not None else args
-        shapes = [s for s in shapes if s is not None]
+        shapes = [s for s in args if s is not None]
         return elementwise(*shapes) if shapes else ()
 
     def visit_Compare(self, node):

@@ -13,7 +13,7 @@ import pytest
 
 import blosc2
 from blosc2.lazyexpr import ne_evaluate
-from blosc2.ndarray import get_chunks_idx
+from blosc2.ndarray import get_chunks_idx, npvecdot
 
 NITEMS_SMALL = 1_000
 NITEMS = 10_000
@@ -1659,7 +1659,7 @@ def test_lazylinalg():
 
     # --- matrix_transpose ---
     out = blosc2.lazyexpr("matrix_transpose(A)")
-    npres = np.matrix_transpose(npA)
+    npres = np.matrix_transpose(npA) if np.__version__.startswith("2.") else npA.T
     assert out.shape == npres.shape
     np.testing.assert_array_almost_equal(out[()], npres)
     out = blosc2.lazyexpr("C.mT")
@@ -1708,7 +1708,7 @@ def test_lazylinalg():
 
     # --- vecdot ---
     out = blosc2.lazyexpr("vecdot(x, y)")
-    npres = np.vecdot(npx, npy)
+    npres = npvecdot(npx, npy)
     assert out.shape == npres.shape
     np.testing.assert_array_almost_equal(out[()], npres)
 
