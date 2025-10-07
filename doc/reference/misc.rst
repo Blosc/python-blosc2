@@ -64,7 +64,6 @@ This page documents the miscellaneous members of the ``blosc2`` module that do n
         arange,
         asarray,
         concat,
-        concatenate,
         copy,
         empty,
         empty_like,

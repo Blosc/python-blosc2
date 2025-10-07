@@ -10,10 +10,11 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.ndarray import NUMPY_GE_2_0
 
-try:  # handle different versions of numpy
+if NUMPY_GE_2_0:  # handle different versions of numpy
     npconcat = np.concat
-except AttributeError:
+else:
     npconcat = np.concatenate
 
 

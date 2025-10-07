@@ -12,7 +12,6 @@ import builtins
 import inspect
 import math
 import tempfile
-import warnings
 from collections import OrderedDict, namedtuple
 from functools import reduce
 from itertools import product
@@ -5444,20 +5443,6 @@ def concat(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:
         copy = False
 
     return arr1
-
-
-# Previous concatenate function was renamed to concat.  Keep it with a DeprecationWarning
-def concatenate(arrays: list[NDArray], /, axis=0, **kwargs: Any) -> NDArray:
-    """Concatenate a list of arrays along a specified axis.
-
-    This is an alias for :func:`concat`.  It is kept for backward compatibility.
-    """
-    warnings.warn(
-        "blosc2.concatenate is deprecated, use blosc2.concat instead.",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    return concat(arrays, axis, **kwargs)
 
 
 def expand_dims(array: NDArray, axis=0) -> NDArray:

@@ -17,7 +17,7 @@ from matplotlib.ticker import ScalarFormatter
 def run_benchmark(num_arrays=10, size=500, aligned_chunks=False, axis=0,
                   dtype=np.float64, datadist="linspace", codec=blosc2.Codec.ZSTD):
     """
-    Benchmark blosc2.concatenate performance with different chunk alignments.
+    Benchmark blosc2.concat performance with different chunk alignments.
 
     Parameters:
     - num_arrays: Number of arrays to concatenate
