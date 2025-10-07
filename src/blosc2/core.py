@@ -920,6 +920,13 @@ def set_nthreads(nthreads: int) -> int:
 
     Notes
     -----
+    The number of threads can also be set via the ``BLOSC_NTHREADS`` environment
+    variable (e.g., ``export BLOSC_NTHREADS=1``). Additionally, you may want to set
+    ``NUMEXPR_NUM_THREADS`` (e.g., ``export NUMEXPR_NUM_THREADS=1``) as well since
+    numexpr is used under the hood when performing some operations.  Note that
+    this function only sets the number of threads used by Blosc, not the number
+    of threads used by numexpr.
+
     The maximum number of threads for Blosc is :math:`2^{31} - 1`. In some
     cases, Blosc gets better results if you set the number of threads
     to a value slightly below your number of cores
