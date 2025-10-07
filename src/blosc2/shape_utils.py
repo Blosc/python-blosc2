@@ -79,7 +79,7 @@ elementwise_funcs = [
     "zeros_like",
 ]
 
-lin_alg_funcs = [
+linalg_funcs = [
     "concat",
     "diagonal",
     "expand_dims",
@@ -94,7 +94,7 @@ lin_alg_funcs = [
     "vecdot",
 ]
 
-lin_alg_attrs = ["T", "mT"]
+linalg_attrs = ["T", "mT"]
 reducers = ["sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "count_nonzero"]
 
 # All the available constructors and reducers necessary for the (string) expression evaluator
@@ -317,7 +317,7 @@ def elementwise(*args):
 
 
 # --- Function registry ---
-FUNCTIONS = {  # ignore out arg
+REDUCTIONS = {  # ignore out arg
     func: lambda x, axis=None, keepdims=False, out=None: reduce_shape(x, axis, keepdims)
     for func in reducers
     # any unknown function will default to elementwise
@@ -391,7 +391,7 @@ class ShapeInferencer(ast.NodeVisitor):
                 kwargs[kw.arg] = self._lookup_value(kw.value)
 
         # ------- handle linear algebra ---------------
-        if base_name in lin_alg_funcs:
+        if base_name in linalg_funcs:
             return linalg_shape(base_name, args, kwargs)
 
         # ------- handle constructors ---------------
@@ -484,8 +484,8 @@ class ShapeInferencer(ast.NodeVisitor):
                 slices = [self._eval_slice(slice_arg)]
             return slice_shape(obj_shape, slices)
 
-        if base_name in FUNCTIONS:
-            return FUNCTIONS[base_name](*args, **kwargs)
+        if base_name in REDUCTIONS:
+            return REDUCTIONS[base_name](*args, **kwargs)
 
         shapes = [s for s in args if s is not None]
         if base_name not in elementwise_funcs:

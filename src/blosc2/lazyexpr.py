@@ -51,7 +51,7 @@ from blosc2.ndarray import (
     ufunc_map_1param,
 )
 
-from .shape_utils import constructors, elementwise_funcs, infer_shape, lin_alg_attrs, lin_alg_funcs, reducers
+from .shape_utils import constructors, elementwise_funcs, infer_shape, linalg_attrs, linalg_funcs, reducers
 
 if not blosc2.IS_WASM:
     import numexpr
@@ -157,9 +157,9 @@ dtype_symbols = {
     "S": np.str_,
     "V": np.bytes_,
 }
-blosc2_funcs = constructors + lin_alg_funcs + elementwise_funcs + reducers
+blosc2_funcs = constructors + linalg_funcs + elementwise_funcs + reducers
 # functions that have to be evaluated before chunkwise lazyexpr machinery
-eager_funcs = lin_alg_funcs + reducers + ["slice"] + lin_alg_attrs
+eager_funcs = linalg_funcs + reducers + ["slice"] + ["." + attr for attr in linalg_attrs]
 # Gather all callable functions in numpy
 numpy_funcs = {
     name
@@ -569,7 +569,7 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
 validation_patterns = [
     r"[\;]",  # Flow control characters
     r"(^|[^\w])__[\w]+__($|[^\w])",  # Dunder methods
-    r"\.\b(?!real|imag|(\d*[eE]?[+-]?\d+)|(\d*[eE]?[+-]?\d+j)|\d*j\b|(sum|prod|min|max|std|mean|var|any|all|where)"
+    r"\.\b(?!real|imag|T|mT|(\d*[eE]?[+-]?\d+)|(\d*[eE]?[+-]?\d+j)|\d*j\b|(sum|prod|min|max|std|mean|var|any|all|where)"
     r"\s*\([^)]*\)|[a-zA-Z_]\w*\s*\([^)]*\))",  # Attribute patterns
 ]
 
@@ -595,10 +595,8 @@ valid_methods |= {"int8", "int16", "int32", "int64", "uint8", "uint16", "uint32"
 valid_methods |= {"float32", "float64", "complex64", "complex128"}
 valid_methods |= {"bool", "str", "bytes"}
 valid_methods |= {
-    name
-    for name in dir(blosc2.NDArray)
-    if callable(getattr(blosc2.NDArray, name)) and not name.startswith("_")
-}
+    name for name in dir(blosc2.NDArray) if not name.startswith("_")
+}  # allow attributes and methods
 
 
 def validate_expr(expr: str) -> None:
@@ -621,9 +619,7 @@ def validate_expr(expr: str) -> None:
     # Check for forbidden patterns
     forbiddens = _blacklist_re.search(skip_quotes)
     if forbiddens is not None:
-        i = forbiddens.span()[0]
-        if expr[i : i + 2] != ".T" and expr[i : i + 3] != ".mT":  # allow tranpose methods
-            raise ValueError(f"'{expr}' is not a valid expression.")
+        raise ValueError(f"'{expr}' is not a valid expression.")
 
     # Check for invalid characters not covered by the tokenizer
     invalid_chars = re.compile(r"[^\w\s+\-*/%()[].,=<>!&|~^]")
