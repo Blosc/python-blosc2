@@ -1550,11 +1550,10 @@ def test_complex_lazy_expression_multiplication():
     theta_np = np.arctan2(Y_b2[:], X_b2[:])
     expected = np.sin(R_np * 4 - time_factor * 2) * np.cos(theta_np * 6)
 
-    # TODO: for some reason, the result is negative, so we assert against -expected
-    np.testing.assert_allclose(result, -expected, rtol=1e-14, atol=1e-14)
+    np.testing.assert_allclose(result, expected, rtol=1e-14, atol=1e-14)
 
     # Also test getitem access
-    np.testing.assert_allclose(result_expr[:], -expected, rtol=1e-14, atol=1e-14)
+    np.testing.assert_allclose(result_expr[:], expected, rtol=1e-14, atol=1e-14)
 
 
 # Test checking that objects following the blosc2.Array protocol can be operated with
