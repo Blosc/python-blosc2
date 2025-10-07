@@ -45,14 +45,13 @@ from blosc2.ndarray import (
     _check_allowed_dtypes,
     get_chunks_idx,
     get_intersecting_chunks,
-    is_inside_new_expr,
     local_ufunc_map,
     process_key,
     ufunc_map,
     ufunc_map_1param,
 )
 
-from .shape_utils import constructors, infer_shape, lin_alg_funcs, reducers
+from .shape_utils import constructors, elementwise_funcs, infer_shape, lin_alg_attrs, lin_alg_funcs, reducers
 
 if not blosc2.IS_WASM:
     import numexpr
@@ -158,119 +157,9 @@ dtype_symbols = {
     "S": np.str_,
     "V": np.bytes_,
 }
-
-blosc2_funcs = [
-    "abs",
-    "acos",
-    "acosh",
-    "add",
-    "all",
-    "any",
-    "arange",
-    "arccos",
-    "arccosh",
-    "arcsin",
-    "arcsinh",
-    "arctan",
-    "arctan2",
-    "arctanh",
-    "asin",
-    "asinh",
-    "atan",
-    "atan2",
-    "atanh",
-    "bitwise_and",
-    "bitwise_invert",
-    "bitwise_left_shift",
-    "bitwise_or",
-    "bitwise_right_shift",
-    "bitwise_xor",
-    "broadcast_to",
-    "ceil",
-    "clip",
-    "concat",
-    "concatenate",
-    "copy",
-    "copysign",
-    "count_nonzero",
-    "divide",
-    "empty",
-    "empty_like",
-    "equal",
-    "expand_dims",
-    "expm1",
-    "eye",
-    "floor",
-    "floor_divide",
-    "frombuffer",
-    "fromiter",
-    "full",
-    "full_like",
-    "greater",
-    "greater_equal",
-    "hypot",
-    "isfinite",
-    "isinf",
-    "isnan",
-    "less_equal",
-    "less_than",
-    "linspace",
-    "log",
-    "log1p",
-    "log2",
-    "log10",
-    "logaddexp",
-    "logical_and",
-    "logical_not",
-    "logical_or",
-    "logical_xor",
-    "matmul",
-    "matrix_transpose",
-    "max",
-    "maximum",
-    "mean",
-    "meshgrid",
-    "min",
-    "minimum",
-    "multiply",
-    "nans",
-    "ndarray_from_cframe",
-    "negative",
-    "nextafter",
-    "not_equal",
-    "ones",
-    "ones_like",
-    "permute_dims",
-    "positive",
-    "pow",
-    "prod",
-    "real",
-    "reciprocal",
-    "remainder",
-    "reshape",
-    "round",
-    "sign",
-    "signbit",
-    "sort",
-    "square",
-    "squeeze",
-    "stack",
-    "sum",
-    "subtract",
-    "take",
-    "take_along_axis",
-    "tan",
-    "tanh",
-    "tensordot",
-    "transpose",
-    "trunc",
-    "var",
-    "vecdot",
-    "where",
-    "zeros",
-    "zeros_like",
-]
-
+blosc2_funcs = constructors + lin_alg_funcs + elementwise_funcs + reducers
+# functions that have to be evaluated before chunkwise lazyexpr machinery
+eager_funcs = lin_alg_funcs + reducers + ["slice"] + lin_alg_attrs
 # Gather all callable functions in numpy
 numpy_funcs = {
     name
@@ -751,12 +640,7 @@ def validate_expr(expr: str) -> None:
 
 def extract_and_replace_slices(expr, operands):
     """
-    Replaces all var.slice(...).slice(...) chains in expr with oN temporary variables.
-    Infers shapes using infer_shape and creates placeholder arrays in new_ops.
-
-    Returns:
-        new_expr: expression string with oN replacements
-        new_ops: dictionary mapping variable names (original and oN) to arrays
+    Return new expression and operands with op.slice(...) replaced by temporary operands.
     """
     # Copy shapes and operands
     shapes = {k: () if not hasattr(v, "shape") else v.shape for k, v in operands.items()}
@@ -1976,11 +1860,6 @@ def reduce_slices(  # noqa: C901
     if out is not None and reduced_shape != out.shape:
         raise ValueError("Provided output shape does not match the reduced shape.")
 
-    if is_inside_new_expr():
-        # We already have the dtype and reduced_shape, so return immediately
-        # Use a blosc2 container, as it consumes less memory in general
-        return blosc2.zeros(reduced_shape, dtype=dtype)
-
     # Choose the array with the largest shape as the reference for chunks
     # Note: we could have expr = blosc2.lazyexpr('numpy_array + 1') (i.e. no choice for chunks)
     blosc2_arrs = tuple(o for o in operands.values() if hasattr(o, "chunks"))
@@ -3023,7 +2902,7 @@ class LazyExpr(LazyArray):
                 }
             )
 
-        if any(method in self.expression for method in reducers + lin_alg_funcs):
+        if any(method in self.expression for method in eager_funcs):
             # We have reductions in the expression (probably coming from a string lazyexpr)
             # Also includes slice
             _globals = get_expr_globals(self.expression)
@@ -3073,7 +2952,7 @@ class LazyExpr(LazyArray):
                     # Replace the constructor call by the new operand
                     newexpr = newexpr.replace(constexpr, newop)
 
-            _globals = {func: getattr(blosc2, func) for func in functions if func in newexpr}
+            _globals = get_expr_globals(newexpr)
             lazy_expr = eval(newexpr, _globals, newops)
             if isinstance(lazy_expr, blosc2.NDArray):
                 # Almost done (probably the expression is made of only constructors)

@@ -1,9 +1,85 @@
 import ast
 import builtins
+import warnings
 
 from numpy import broadcast_shapes
 
-lin_alg_funcs = (
+elementwise_funcs = [
+    "abs",
+    "acos",
+    "acosh",
+    "add",
+    "arccos",
+    "arccosh",
+    "arcsin",
+    "arcsinh",
+    "arctan",
+    "arctan2",
+    "arctanh",
+    "asin",
+    "asinh",
+    "atan",
+    "atan2",
+    "atanh",
+    "bitwise_and",
+    "bitwise_invert",
+    "bitwise_left_shift",
+    "bitwise_or",
+    "bitwise_right_shift",
+    "bitwise_xor",
+    "broadcast_to",
+    "ceil",
+    "clip",
+    "copysign",
+    "divide",
+    "equal",
+    "expm1",
+    "floor",
+    "floor_divide",
+    "greater",
+    "greater_equal",
+    "hypot",
+    "isfinite",
+    "isinf",
+    "isnan",
+    "less_equal",
+    "less_than",
+    "log",
+    "log1p",
+    "log2",
+    "log10",
+    "logaddexp",
+    "logical_and",
+    "logical_not",
+    "logical_or",
+    "logical_xor",
+    "maximum",
+    "minimum",
+    "multiply",
+    "negative",
+    "nextafter",
+    "not_equal",
+    "positive",
+    "pow",
+    "real",
+    "reciprocal",
+    "remainder",
+    "round",
+    "sign",
+    "signbit",
+    "square",
+    "sum",
+    "subtract",
+    "tan",
+    "tanh",
+    "trunc",
+    "var",
+    "where",
+    "zeros",
+    "zeros_like",
+]
+
+lin_alg_funcs = [
     "concat",
     "diagonal",
     "expand_dims",
@@ -16,15 +92,13 @@ lin_alg_funcs = (
     "tensordot",
     "transpose",
     "vecdot",
-    "T",
-    "mT",
-    "take",
-    "take_along_axis",
-)
-reducers = ("sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "slice", "count_nonzero")
+]
+
+lin_alg_attrs = ["T", "mT"]
+reducers = ["sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "count_nonzero"]
 
 # All the available constructors and reducers necessary for the (string) expression evaluator
-constructors = (
+constructors = [
     "arange",
     "linspace",
     "fromiter",
@@ -38,9 +112,10 @@ constructors = (
     "ones_like",
     "empty_like",
     "eye",
-)
+    "nans",
+]
 # Note that, as reshape is accepted as a method too, it should always come last in the list
-constructors += ("reshape",)
+constructors += ["reshape"]
 
 
 # --- Shape utilities ---
@@ -336,6 +411,7 @@ class ShapeInferencer(ast.NodeVisitor):
                 "zeros_like",
                 "empty_like",
                 "ones_like",
+                "nans",
             ):
                 if node.args:
                     shape_arg = node.args[0]
@@ -412,6 +488,11 @@ class ShapeInferencer(ast.NodeVisitor):
             return FUNCTIONS[base_name](*args, **kwargs)
 
         shapes = [s for s in args if s is not None]
+        if base_name not in elementwise_funcs:
+            warnings.warn(
+                f"Function shape parser not implemented for {base_name}.", UserWarning, stacklevel=2
+            )
+        # default to elementwise but print warning that function not defined explicitly
         return elementwise(*shapes) if shapes else ()
 
     def visit_Compare(self, node):
