@@ -3076,7 +3076,7 @@ class Operand:
         if ufunc in ufunc_map:
             value = inputs[0] if inputs[1] is self else inputs[1]
             _check_allowed_dtypes(value)
-            return blosc2.LazyExpr(new_op=(value, ufunc_map[ufunc], self))
+            return blosc2.LazyExpr(new_op=(inputs[0], ufunc_map[ufunc], inputs[1]))
 
         if ufunc in ufunc_map_1param:
             value = inputs[0]
