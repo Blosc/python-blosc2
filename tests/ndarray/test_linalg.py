@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.ndarray import npvecdot
 
 
 @pytest.mark.parametrize(
@@ -501,11 +502,15 @@ def test_outer(shape1, chunk1, block1, shape2, chunk2, block2, chunkres, dtype):
         np.int64,
         np.float32,
         np.float64,
+        np.complex128,
     ],
 )
 def test_vecdot(shape1, chunk1, block1, shape2, chunk2, block2, chunkres, axis, dtype):
     # Create operands with requested dtype
     a_b2 = blosc2.arange(0, np.prod(shape1), shape=shape1, chunks=chunk1, blocks=block1, dtype=dtype)
+    if dtype == np.complex128:
+        a_b2 += 1j
+        a_b2 = a_b2.compute()
     a_np = a_b2[()]  # decompress
     b_b2 = blosc2.arange(0, np.prod(shape2), shape=shape2, chunks=chunk2, blocks=block2, dtype=dtype)
     b_np = b_b2[()]  # decompress
@@ -513,7 +518,7 @@ def test_vecdot(shape1, chunk1, block1, shape2, chunk2, block2, chunkres, axis, 
     # NumPy reference and Blosc2 comparison
     np_raised = None
     try:
-        res_np = np.vecdot(a_np, b_np, axis=axis)
+        res_np = npvecdot(a_np, b_np, axis=axis)
     except Exception as e:
         np_raised = type(e)
 
@@ -523,7 +528,7 @@ def test_vecdot(shape1, chunk1, block1, shape2, chunk2, block2, chunkres, axis, 
             blosc2.vecdot(a_b2, b_b2, axis=axis, chunks=chunkres)
     else:
         # Both should succeed
-        res_np = np.vecdot(a_np, b_np, axis=axis)
+        res_np = npvecdot(a_np, b_np, axis=axis)
         res_b2 = blosc2.vecdot(a_b2, b_b2, axis=axis, chunks=chunkres, fast_path=False)  # test slow path
         res_b2_np = res_b2[...]
 

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 import blosc2
-from blosc2.ndarray import get_intersecting_chunks, slice_to_chunktuple
+from blosc2.ndarray import get_intersecting_chunks, npvecdot, slice_to_chunktuple
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -340,7 +340,7 @@ def vecdot(x1: blosc2.NDArray, x2: blosc2.NDArray, axis: int = -1, **kwargs) -> 
     fast_path = kwargs.pop("fast_path", None)  # for testing purposes
     # Added this to pass array-api tests (which use internal getitem to check results)
     if isinstance(x1, np.ndarray) and isinstance(x2, np.ndarray):
-        return np.vecdot(x1, x2, axis=axis)
+        return npvecdot(x1, x2, axis=axis)
 
     x1, x2 = blosc2.asarray(x1), blosc2.asarray(x2)
 
@@ -353,10 +353,6 @@ def vecdot(x1: blosc2.NDArray, x2: blosc2.NDArray, axis: int = -1, **kwargs) -> 
     a_keep[a_axes] = False
     b_keep = [True] * x2.ndim
     b_keep[b_axes] = False
-    x1shape = np.array(x1.shape)
-    x2shape = np.array(x2.shape)
-    result_shape = np.broadcast_shapes(x1shape[a_keep], x2shape[b_keep])
-    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
 
     x1shape = np.array(x1.shape)
     x2shape = np.array(x2.shape)
@@ -403,7 +399,7 @@ def vecdot(x1: blosc2.NDArray, x2: blosc2.NDArray, axis: int = -1, **kwargs) -> 
         if fast_path:  # just load everything, also handles case of 0 in shapes
             bx1 = x1[a_selection]
             bx2 = x2[b_selection]
-            result[res_chunk] += np.vecdot(bx1, bx2, axis=axis)  # handles conjugation of bx1
+            result[res_chunk] += npvecdot(bx1, bx2, axis=axis)  # handles conjugation of bx1
         else:  # operands too big, have to go chunk-by-chunk
             for ochunk in range(0, a_shape_red, a_chunks_red):
                 op_chunk = (slice(ochunk, builtins.min(ochunk + a_chunks_red, x1.shape[a_axes]), 1),)
@@ -411,7 +407,7 @@ def vecdot(x1: blosc2.NDArray, x2: blosc2.NDArray, axis: int = -1, **kwargs) -> 
                 b_selection = b_selection[:b_axes] + op_chunk + b_selection[b_axes + 1 :]
                 bx1 = x1[a_selection]
                 bx2 = x2[b_selection]
-                res = np.vecdot(bx1, bx2, axis=axis)  # handles conjugation of bx1
+                res = npvecdot(bx1, bx2, axis=axis)  # handles conjugation of bx1
                 result[res_chunk] += res
     return result
 
