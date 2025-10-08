@@ -3002,26 +3002,12 @@ class LazyExpr(LazyArray):
                 expression_, operands_ = conserve_functions(
                     _expression, _operands, new_expr.operands | local_vars
                 )
-                # if new_expr has where_args, must have come from where(...) - or possibly where(where(..
-                # since 5*where, where + ...  are evaluated eagerly
-                if hasattr(new_expr, "_where_args"):
-                    st = expression_.find("where(") + len(
-                        "where("
-                    )  # expr always begins where( - should have st = 6 always
-                    finalexpr = ""
-                    counter = 0
-                    for char in expression_[st:]:  # get rid of external where(...)
-                        finalexpr += char
-                        counter += 1 * (char == "(") - 1 * (char == ")")
-                        if counter == 0 and char == ",":
-                            break
-                    expression_ = finalexpr[:-1]  # remove trailing comma
             else:
-                new_expr = cls(None)
                 # An immediate evaluation happened
                 # (e.g. all operands are numpy arrays or constructors)
                 # or passed "a", "a[:10]", 'sum(a)'
                 expression_, operands_ = conserve_functions(_expression, _operands, local_vars)
+            new_expr = cls(None)
             new_expr.expression = f"({expression_})"  # force parenthesis
             new_expr.operands = operands_
             new_expr.expression_tosave = expression

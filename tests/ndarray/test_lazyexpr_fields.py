@@ -220,10 +220,16 @@ def test_where(array_fixture):
     res = expr.where(0, 1).compute()
     nres = ne_evaluate("where(na1**2 + na2**2 > 2 * na1 * na2 + 1, 0, 1)")
     np.testing.assert_allclose(res[:], nres)
+
     # Test with getitem
     sl = slice(100)
     res = expr.where(0, 1)[sl]
     np.testing.assert_allclose(res, nres[sl])
+
+    # Test with string
+    res = blosc2.evaluate("where(a1**2 + a2**2 > 2 * a1 * a2 + 1, a1 + 5, a2)")
+    nres = ne_evaluate("where(na1**2 + na2**2 > 2 * na1 * na2 + 1, na1 + 5, na2)")
+    np.testing.assert_allclose(res, nres)
 
 
 # Test expressions with where() and string comps
