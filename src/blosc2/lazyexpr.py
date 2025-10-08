@@ -2268,14 +2268,6 @@ class LazyExpr(LazyArray):
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"{op}(o0, o1)"
             return
-        elif value2 is None:
-            if isinstance(value1, LazyExpr):
-                self.expression = f"{op}({value1.expression})"
-                self.operands = value1.operands
-            else:
-                self.operands = {"o0": value1}
-                self.expression = "o0" if op is None else f"{op}(o0)"
-            return
         elif isinstance(value1, LazyExpr) or isinstance(value2, LazyExpr):
             if isinstance(value1, LazyExpr):
                 newexpr = value1.update_expr(new_op)
@@ -2283,6 +2275,7 @@ class LazyExpr(LazyArray):
                 newexpr = value2.update_expr(new_op)
             self.expression = newexpr.expression
             self.operands = newexpr.operands
+            self._dtype = newexpr.dtype
             return
 
         self._dtype = dtype_
@@ -2339,6 +2332,7 @@ class LazyExpr(LazyArray):
         # One of the two operands are LazyExpr instances
         try:
             value1, op, value2 = new_op
+            dtype_ = check_dtype(op, value1, value2)  # conserve dtype
             # The new expression and operands
             expression = None
             new_operands = {}
@@ -2402,7 +2396,9 @@ class LazyExpr(LazyArray):
                     self.operands = value2.operands
             # Return a new expression
             operands = self.operands | new_operands
-            return self._new_expr(expression, operands, guess=False, out=None, where=None)
+            expr = self._new_expr(expression, operands, guess=False, out=None, where=None)
+            expr._dtype = dtype_  # override dtype with preserved dtype
+            return expr
         finally:
             blosc2._disable_overloaded_equal = prev_flag
 
