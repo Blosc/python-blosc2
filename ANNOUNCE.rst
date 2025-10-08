@@ -1,12 +1,12 @@
-Announcing Python-Blosc2 3.9.1
+Announcing Python-Blosc2 3.10.0
 ==============================
 
-This is a patch release where we have aimed to tidy up the code and improve robustness:
+This is a minor version release where we have aimed to tidy up the code and extend functionality:
 
-✅ Bumped to numexpr 2.13.1 to incorporate new maximum/minimum NaN handling and "+"/"*" for booleans
-which matches NumPy behaviour.
-✅ Refactoring in order to ensure Blosc2 functions with NumPy 1.26.
-✅ Streamlined documentation by introducing Array Protocol
+✅ Improved documentation on thread management
+✅ Enabled direct ingestion of Zarr arrays, and added examples for xarray ingestion
+✅ Extended string-based lazy expression computation to support expressions like "matmul(a, b) + c"
+✅ Streamlined inheritance from ``Operand`` for all computable objects (``NDArray``, ``LazyExpr``, ``LazyArray`` etc.).
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 

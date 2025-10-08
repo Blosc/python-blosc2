@@ -1,8 +1,11 @@
 # Release notes
 
-## Changes from 3.9.1 to 3.9.2
+## Changes from 3.9.1 to 3.10.0
 
-XXX version-specific blurb XXX
+* Improved documentation on thread management (thanks to [@orena1](@orena1) in PR #495)
+* Enabled direct ingestion of Zarr arrays, and added examples for xarray ingestion
+* Extended string-based lazy expression computation using a shape parser and modified lazy expression machinery so that expressions like "matmul(a, b) + c" can now be handled (PR #496).
+* Streamlined inheritance from ``Operand`` to ensure access to basic methods like ``__add__`` for all computable objects (``NDArray``, ``LazyExpr``, ``LazyArray`` etc.) (PR ##500).
 
 ## Changes from 3.9.0 to 3.9.1
 
