@@ -538,7 +538,6 @@ class ProxyNDField(blosc2.Operand):
         return self._dtype
 
     @property
-    @abstractmethod
     def shape(self) -> tuple[int]:
         """
         Get the shape of the :ref:`ProxyNDField`.
