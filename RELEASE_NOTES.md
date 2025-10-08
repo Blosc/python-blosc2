@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.10.0 to 3.10.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.9.1 to 3.10.0
 
 * Improved documentation on thread management (thanks to [@orena1](@orena1) in PR #495)
