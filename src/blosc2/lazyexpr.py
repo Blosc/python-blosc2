@@ -112,9 +112,9 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
         res = eval(expression, safe_blosc2_globals, local_dict)
         if "out" in kwargs:
             out = kwargs.pop("out")
-            out[:] = res[()] if isinstance(res, blosc2.LazyArray) else res
+            out[:] = res  # will handle calc/decomp if res is lazyarray
             return out
-        return res[()] if isinstance(res, blosc2.LazyArray) else res
+        return res[()] if isinstance(res, blosc2.Operand) else res
 
 
 # Define empty ndindex tuple for function defaults
