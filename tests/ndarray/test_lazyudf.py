@@ -411,8 +411,8 @@ def test_offset(shape, chunks, blocks, slices, chunked_eval, eval_mode):
     ],
 )
 def test_clip_logaddexp(shape, chunks, blocks, slices):
-    npa = np.arange(0, np.prod(shape)).reshape(shape)
-    npb = np.arange(1, np.prod(shape) + 1).reshape(shape)
+    npa = np.arange(0, np.prod(shape), dtype=np.float64).reshape(shape)
+    npb = np.arange(1, np.prod(shape) + 1, dtype=np.int64).reshape(shape)
     b = blosc2.asarray(npb)
     a = blosc2.asarray(npa)
 
@@ -441,3 +441,17 @@ def test_clip_logaddexp(shape, chunks, blocks, slices):
     expr = blosc2.lazyexpr("logaddexp(a, b)")
     res = expr.compute(item=slices)
     np.testing.assert_allclose(res[...], npc[slices])
+
+    # Test LazyUDF has inherited __add__ from Operand class
+    expr = blosc2.logaddexp(b, a) + blosc2.clip(b, np.prod(shape) // 3, npb - 10)
+    npc = np.logaddexp(npb, npa) + np.clip(npb, np.prod(shape) // 3, npb - 10)
+    res = expr.compute(item=slices)
+    np.testing.assert_allclose(res[...], npc[slices])
+
+    # Test LazyUDF more
+    expr = blosc2.evaluate("logaddexp(b, a) + clip(b, np.prod(shape) // 3, npb - 10)")
+    np.testing.assert_allclose(expr, npc)
+    expr = blosc2.evaluate("sin(logaddexp(b, a))")
+    np.testing.assert_allclose(expr, np.sin(np.logaddexp(npb, npa)))
+    expr = blosc2.evaluate("clip(logaddexp(b, a), 6, 12)")
+    np.testing.assert_allclose(expr, np.clip(np.logaddexp(npb, npa), 6, 12))
