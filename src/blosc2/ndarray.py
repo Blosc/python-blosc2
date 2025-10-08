@@ -40,10 +40,15 @@ if NUMPY_GE_2_0:  # array-api compliant
     nplshift = np.bitwise_left_shift
     nprshift = np.bitwise_right_shift
     npbinvert = np.bitwise_invert
+    npvecdot = np.vecdot
 else:  # not array-api compliant
     nplshift = np.left_shift
     nprshift = np.right_shift
     npbinvert = np.bitwise_not
+
+    def npvecdot(a, b, axis=-1):
+        return np.einsum("...i,...i->...", np.moveaxis(np.conj(a), axis, -1), np.moveaxis(b, axis, -1))
+
 
 # These functions in ufunc_map in ufunc_map_1param are implemented in numexpr and so we call
 # those instead (since numexpr uses multithreading it is faster)
@@ -2931,6 +2936,7 @@ def clip(
     x: blosc2.Array,
     min: int | float | blosc2.Array | None = None,
     max: int | float | blosc2.Array | None = None,
+    **kwargs: Any,
 ) -> NDArray:
     """
     Clamps each element x_i of the input array x to the range [min, max].
@@ -2948,6 +2954,9 @@ def clip(
         Upper-bound of the range to which to clamp. If None, no upper bound must be applied.
         Default: None.
 
+    kwargs: Any
+        kwargs accepted by the :func:`empty` constructor
+
     Returns
     -------
     out: NDArray
@@ -2959,10 +2968,10 @@ def clip(
         x, min, max = inputs
         output[:] = np.clip(x, min, max)
 
-    return blosc2.lazyudf(chunkwise_clip, (x, min, max), dtype=x.dtype, shape=x.shape)
+    return blosc2.lazyudf(chunkwise_clip, (x, min, max), dtype=x.dtype, shape=x.shape, **kwargs)
 
 
-def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array) -> NDArray:
+def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array, **kwargs: Any) -> NDArray:
     """
     Calculates the logarithm of the sum of exponentiations log(exp(x1) + exp(x2)) for
     each element x1_i of the input array x1 with the respective element x2_i of the
@@ -2973,9 +2982,12 @@ def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array) ->
     x1: blosc2.Array
         First input array. May have any real-valued floating-point data type.
 
-    x2:blosc2.Array
+    x2: blosc2.Array
         Second input array. Must be compatible with x1. May have any
         real-valued floating-point data type.
+
+    kwargs: Any
+        kwargs accepted by the :func:`empty` constructor
 
     Returns
     -------
@@ -2994,7 +3006,7 @@ def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array) ->
 
     if np.issubdtype(dtype, np.integer):
         dtype = blosc2.float32
-    return blosc2.lazyudf(chunkwise_logaddexp, (x1, x2), dtype=dtype, shape=x1.shape)
+    return blosc2.lazyudf(chunkwise_logaddexp, (x1, x2), dtype=dtype, shape=x1.shape, **kwargs)
 
 
 # implemented in python-blosc2

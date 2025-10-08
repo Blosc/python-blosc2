@@ -13,7 +13,7 @@ import pytest
 
 import blosc2
 from blosc2.lazyexpr import ne_evaluate
-from blosc2.ndarray import get_chunks_idx
+from blosc2.ndarray import get_chunks_idx, npvecdot
 
 NITEMS_SMALL = 1_000
 NITEMS = 10_000
@@ -1129,10 +1129,10 @@ def test_rebasing(array_fixture):
     assert expr.expression == "(o0 + o1 - o2 * o3)"
 
     expr = blosc2.lazyexpr("a1")
-    assert expr.expression == "o0"
+    assert expr.expression == "(o0)"
 
     expr = blosc2.lazyexpr("a1[:10]")
-    assert expr.expression == "o0.slice((slice(None, 10, None),))"
+    assert expr.expression == "(o0.slice((slice(None, 10, None),)))"
 
 
 # Test get_chunk method
@@ -1582,3 +1582,148 @@ def test_minimal_protocol():
     lb = blosc2.lazyexpr("b + c + 1")
 
     np.testing.assert_array_equal(lb[:], a + a + 1)
+
+
+def test_not_numexpr():
+    shape = (20, 20)
+    a = blosc2.linspace(0, 20, num=np.prod(shape), shape=shape)
+    b = blosc2.ones((20, 1))
+    d_blosc2 = blosc2.evaluate("logaddexp(a, b) + a")
+    npa = a[()]
+    npb = b[()]
+    np.testing.assert_array_almost_equal(d_blosc2, np.logaddexp(npa, npb) + npa)
+    # TODO: Implement __add__ etc. for LazyUDF so this line works
+    # d_blosc2 = blosc2.evaluate(f"logaddexp(a, b) + clip(a, 6, 12)")
+    arr = blosc2.lazyexpr("matmul(a, b)")
+    assert isinstance(arr, blosc2.LazyExpr)
+    np.testing.assert_array_almost_equal(arr[()], np.matmul(npa, npb))
+
+
+def test_lazylinalg():
+    """
+    Test the shape parser for linear algebra funcs
+    """
+    # --- define base shapes ---
+    shapes = {
+        "A": (3, 4),
+        "B": (4, 5),
+        "C": (2, 3, 4),
+        "D": (1, 5, 1),
+        "x": (10,),
+        "y": (10,),
+    }
+    s = shapes["x"]
+    x = blosc2.linspace(0, np.prod(s), shape=s)
+    s = shapes["y"]
+    y = blosc2.linspace(0, np.prod(s), shape=s)
+    s = shapes["A"]
+    A = blosc2.linspace(0, np.prod(s), shape=s)
+    s = shapes["B"]
+    B = blosc2.linspace(0, np.prod(s), shape=s)
+    s = shapes["C"]
+    C = blosc2.linspace(0, np.prod(s), shape=s)
+    s = shapes["D"]
+    D = blosc2.linspace(0, np.prod(s), shape=s)
+
+    npx = x[()]
+    npy = y[()]
+    npA = A[()]
+    npB = B[()]
+    npC = C[()]
+    npD = D[()]
+
+    # --- concat ---
+    out = blosc2.lazyexpr("concat((x, y), axis=0)")
+    npres = np.concatenate((npx, npy), axis=0)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+
+    # --- diagonal ---
+    out = blosc2.lazyexpr("diagonal(A)")
+    npres = np.diagonal(npA)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+
+    # --- expand_dims ---
+    out = blosc2.lazyexpr("expand_dims(x, axis=0)")
+    npres = np.expand_dims(npx, axis=0)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+
+    # --- matmul ---
+    out = blosc2.lazyexpr("matmul(A, B)")
+    npres = np.matmul(npA, npB)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+
+    # --- matrix_transpose ---
+    out = blosc2.lazyexpr("matrix_transpose(A)")
+    npres = np.matrix_transpose(npA) if np.__version__.startswith("2.") else npA.T
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+    out = blosc2.lazyexpr("C.mT")
+    npres = C.mT
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+    out = blosc2.lazyexpr("A.T")
+    npres = npA.T
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+
+    # --- outer ---
+    out = blosc2.lazyexpr("outer(x, y)")
+    npres = np.outer(npx, npy)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+
+    # --- permute_dims ---
+    out = blosc2.lazyexpr("permute_dims(C, axes=(2,0,1))")
+    npres = np.transpose(npC, axes=(2, 0, 1))
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+
+    # --- squeeze ---
+    out = blosc2.lazyexpr("squeeze(D)")
+    npres = np.squeeze(npD)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+
+    out = blosc2.lazyexpr("D.squeeze()")
+    npres = np.squeeze(npD)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+
+    # --- stack ---
+    out = blosc2.lazyexpr("stack((x, y), axis=0)")
+    npres = np.stack((npx, npy), axis=0)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+
+    # --- tensordot ---
+    out = blosc2.lazyexpr("tensordot(A, B, axes=1)")
+    npres = np.tensordot(npA, npB, axes=1)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+
+    # --- vecdot ---
+    out = blosc2.lazyexpr("vecdot(x, y)")
+    npres = npvecdot(npx, npy)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+
+    # --- batched matmul ---
+    shapes = {
+        "A": (1, 3, 4),
+        "B": (3, 4, 5),
+    }
+    s = shapes["A"]
+    A = blosc2.linspace(0, np.prod(s), shape=s)
+    npA = A[()]  # actual numpy array
+    s = shapes["B"]
+    B = blosc2.linspace(0, np.prod(s), shape=s)
+    npB = B[()]  # actual numpy array
+
+    out = blosc2.lazyexpr("matmul(A, B)")
+    npres = np.matmul(npA, npB)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)

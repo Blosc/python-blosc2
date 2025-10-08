@@ -459,12 +459,10 @@ def test_reduction_index():
     assert arr.shape == newarr.shape
 
     a = blosc2.ones(shape=(0, 0))
-    arr = blosc2.lazyexpr("sum(a, axis=(0, 1, 2))", {"a": a})
     with pytest.raises(np.exceptions.AxisError):
-        newarr = arr.compute()
-    arr = blosc2.lazyexpr("sum(a, axis=(0, 0))", {"a": a})
+        arr = blosc2.lazyexpr("sum(a, axis=(0, 1, 2))", {"a": a})
     with pytest.raises(ValueError):
-        newarr = arr.compute()
+        arr = blosc2.lazyexpr("sum(a, axis=(0, 0))", {"a": a})
 
 
 @pytest.mark.parametrize("idx", [0, 1, (0,), slice(1, 2), (slice(0, 1),), slice(0, 4), (0, 2)])
@@ -491,15 +489,15 @@ def test_slice_lazy():
 def test_slicebrackets_lazy():
     shape = (20, 20)
     a = blosc2.linspace(0, 20, num=np.prod(shape), shape=shape)
-    arr = blosc2.lazyexpr("anarr[10:15] + 1", {"anarr": a})
+    arr = blosc2.lazyexpr("sum(anarr[10:15], axis=0) + anarr[10:15] + arange(20) + 1", {"anarr": a})
     newarr = arr.compute()
-    np.testing.assert_allclose(newarr[:], a[10:15] + 1)
+    np.testing.assert_allclose(newarr[:], np.sum(a[10:15], axis=0) + a[10:15] + np.arange(20) + 1)
 
     # Try with getitem
     a = blosc2.linspace(0, 20, num=np.prod(shape), shape=shape)
-    arr = blosc2.lazyexpr("anarr[10:15] + 1", {"anarr": a})
+    arr = blosc2.lazyexpr("sum(anarr[10:15], axis=0) + anarr[10:15] + arange(20) + 1", {"anarr": a})
     newarr = arr[:3]
-    res = a[10:15] + 1
+    res = np.sum(a[10:15], axis=0) + a[10:15] + np.arange(20) + 1
     np.testing.assert_allclose(newarr, res[:3])
 
     # Test other cases
@@ -510,6 +508,10 @@ def test_slicebrackets_lazy():
     arr = blosc2.lazyexpr("anarr[10:15][2:9] + 1", {"anarr": a})
     newarr = arr.compute()
     np.testing.assert_allclose(newarr[:], a[10:15][2:9] + 1)
+
+    arr = blosc2.lazyexpr("sum(anarr[10:15], axis=1) + 1", {"anarr": a})
+    newarr = arr.compute()
+    np.testing.assert_allclose(newarr[:], np.sum(a[10:15], axis=1) + 1)
 
     arr = blosc2.lazyexpr("anarr[10] + 1", {"anarr": a})
     newarr = arr.compute()
