@@ -522,8 +522,33 @@ class ProxyNDField(blosc2.Operand):
     def __init__(self, proxy: Proxy, field: str):
         self.proxy = proxy
         self.field = field
-        self.dtype = proxy.dtype[field]
-        self.shape = proxy.shape
+        self._dtype = proxy.dtype[field]
+        self._shape = proxy.shape
+
+    @property
+    def dtype(self) -> np.dtype:
+        """
+        Get the data type of the :ref:`ProxyNDField`.
+
+        Returns
+        -------
+        out: np.dtype
+            The data type of the :ref:`ProxyNDField`.
+        """
+        return self._dtype
+
+    @property
+    @abstractmethod
+    def shape(self) -> tuple[int]:
+        """
+        Get the shape of the :ref:`ProxyNDField`.
+
+        Returns
+        -------
+        out: tuple
+            The shape of the :ref:`ProxyNDField`.
+        """
+        return self._shape
 
     def __getitem__(self, item: slice | list[slice]) -> np.ndarray:
         """

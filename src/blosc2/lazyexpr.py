@@ -41,14 +41,10 @@ import blosc2
 from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
 from blosc2.ndarray import (
-    _check_allowed_dtypes,
     get_chunks_idx,
     get_intersecting_chunks,
     is_inside_new_expr,
-    local_ufunc_map,
     process_key,
-    ufunc_map,
-    ufunc_map_1param,
 )
 
 if not blosc2.IS_WASM:
@@ -256,7 +252,7 @@ class LazyArrayEnum(Enum):
     UDF = 1
 
 
-class LazyArray(ABC):
+class LazyArray(ABC, blosc2.Operand):
     @abstractmethod
     def indices(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
         """
@@ -436,68 +432,6 @@ class LazyArray(ABC):
         """
         pass
 
-    @property
-    @abstractmethod
-    def dtype(self) -> np.dtype:
-        """
-        Get the data type of the :ref:`LazyArray`.
-
-        Returns
-        -------
-        out: np.dtype
-            The data type of the :ref:`LazyArray`.
-        """
-        pass
-
-    @property
-    @abstractmethod
-    def shape(self) -> tuple[int]:
-        """
-        Get the shape of the :ref:`LazyArray`.
-
-        Returns
-        -------
-        out: tuple
-                The shape of the :ref:`LazyArray`.
-        """
-        pass
-
-    @property
-    @abstractmethod
-    def ndim(self) -> int:
-        """
-        Get the number of dimensions of the :ref:`LazyArray`.
-
-        Returns
-        -------
-        out: int
-            The number of dimensions of the :ref:`LazyArray`.
-        """
-        pass
-
-    @property
-    @abstractmethod
-    def info(self) -> InfoReporter:
-        """
-        Get information about the :ref:`LazyArray`.
-
-        Returns
-        -------
-        out: InfoReporter
-            A printable class with information about the :ref:`LazyArray`.
-        """
-        pass
-
-    # Provide minimal __array_interface__ to allow NumPy to work with this object
-    @property
-    def __array_interface__(self):
-        return {
-            "shape": self.shape,
-            "typestr": self.dtype.str,
-            "data": self[()],
-            "version": 3,
-        }
-
     # Provide a way to serialize the LazyArray
     def to_cframe(self) -> bytes:
         """
@@ -509,11 +443,6 @@ class LazyArray(ABC):
             The buffer containing the serialized :ref:`NDArray` instance.
         """
         return self.compute().to_cframe()
-
-    def __bool__(self) -> bool:
-        if math.prod(self.shape) != 1:
-            raise ValueError(f"The truth value of a LazyArray of shape {self.shape} is ambiguous.")
-        return self[()].__bool__()
 
 
 def convert_inputs(inputs):
@@ -2263,15 +2192,7 @@ class LazyExpr(LazyArray):
             return
         value1, op, value2 = new_op
         dtype_ = infer_dtype(op, value1, value2)  # perform some checks
-        if value2 is None:
-            if isinstance(value1, LazyExpr):
-                self.expression = f"{op}({value1.expression})"
-                self.operands = value1.operands
-            else:
-                self.operands = {"o0": value1}
-                self.expression = "o0" if op is None else f"{op}(o0)"
-            return
-        elif op in (
+        if op in (
             "arctan2",
             "contains",
             "pow",
@@ -2283,7 +2204,7 @@ class LazyExpr(LazyArray):
             "minimum",
         ):
             if np.isscalar(value1) and np.isscalar(value2):
-                self.expression = f"{op}(o0, o1)"
+                self.expression = f"{op}({value1}, {value2})"
             elif np.isscalar(value2):
                 self.operands = {"o0": value1}
                 self.expression = f"{op}(o0, {value2})"
@@ -2293,6 +2214,22 @@ class LazyExpr(LazyArray):
             else:
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"{op}(o0, o1)"
+            return
+        elif value2 is None:
+            if isinstance(value1, LazyExpr):
+                self.expression = f"{op}({value1.expression})"
+                self.operands = value1.operands
+            else:
+                self.operands = {"o0": value1}
+                self.expression = "o0" if op is None else f"{op}(o0)"
+            return
+        elif isinstance(value1, LazyExpr) or isinstance(value2, LazyExpr):
+            if isinstance(value1, LazyExpr):
+                newexpr = value1.update_expr(new_op)
+            else:
+                newexpr = value2.update_expr(new_op)
+            self.expression = newexpr.expression
+            self.operands = newexpr.operands
             return
 
         self._dtype = dtype_
@@ -2314,16 +2251,6 @@ class LazyExpr(LazyArray):
             if value1 is value2:
                 self.operands = {"o0": value1}
                 self.expression = f"(o0 {op} o0)"
-            elif isinstance(value1, LazyExpr) or isinstance(value2, LazyExpr):
-                if isinstance(value1, LazyExpr):
-                    self.expression = value1.expression
-                    self.operands = {"o0": value2}
-                else:
-                    self.expression = value2.expression
-                    self.operands = {"o0": value1}
-                newexpr = self.update_expr(new_op)
-                self.expression = newexpr.expression
-                self.operands = newexpr.operands
             else:
                 # This is the very first time that a LazyExpr is formed from two operands
                 # that are not LazyExpr themselves
@@ -2385,28 +2312,29 @@ class LazyExpr(LazyArray):
                 new_operands, dup_op = fuse_operands(value1.operands, value2.operands)
                 # Take expression 2 and rebase the operands while removing duplicates
                 new_expr = fuse_expressions(value2.expression, len(value1.operands), dup_op)
-                expression = f"({self.expression} {op} {new_expr})"
+                expression = f"({value1.expression} {op} {new_expr})"
+                self.operands = value1.operands
             elif isinstance(value1, LazyExpr):
                 if op == "~":
-                    expression = f"({op}{self.expression})"
+                    expression = f"({op}{value1.expression})"
                 elif np.isscalar(value2):
-                    expression = f"({self.expression} {op} {value2})"
+                    expression = f"({value1.expression} {op} {value2})"
                 elif hasattr(value2, "shape") and value2.shape == ():
-                    expression = f"({self.expression} {op} {value2[()]})"
+                    expression = f"({value1.expression} {op} {value2[()]})"
                 else:
                     operand_to_key = {id(v): k for k, v in value1.operands.items()}
                     try:
                         op_name = operand_to_key[id(value2)]
                     except KeyError:
-                        op_name = f"o{len(self.operands)}"
+                        op_name = f"o{len(value1.operands)}"
                         new_operands = {op_name: value2}
-                    expression = f"({self.expression} {op} {op_name})"
+                    expression = f"({value1.expression} {op} {op_name})"
                 self.operands = value1.operands
             else:
                 if np.isscalar(value1):
-                    expression = f"({value1} {op} {self.expression})"
+                    expression = f"({value1} {op} {value2.expression})"
                 elif hasattr(value1, "shape") and value1.shape == ():
-                    expression = f"({value1[()]} {op} {self.expression})"
+                    expression = f"({value1[()]} {op} {value2.expression})"
                 else:
                     operand_to_key = {id(v): k for k, v in value2.operands.items()}
                     try:
@@ -2415,9 +2343,9 @@ class LazyExpr(LazyArray):
                         op_name = f"o{len(value2.operands)}"
                         new_operands = {op_name: value1}
                     if op == "[]":  # syntactic sugar for slicing
-                        expression = f"({op_name}[{self.expression}])"
+                        expression = f"({op_name}[{value2.expression}])"
                     else:
-                        expression = f"({op_name} {op} {self.expression})"
+                        expression = f"({op_name} {op} {value2.expression})"
                     self.operands = value2.operands
             # Return a new expression
             operands = self.operands | new_operands
@@ -2520,107 +2448,6 @@ class LazyExpr(LazyArray):
             # Not using the fast path, so we need to compute the chunks/blocks automatically
             self._chunks, self._blocks = compute_chunks_blocks(self.shape, None, None, dtype=self.dtype)
         return self._blocks
-
-    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
-        # Handle operations at the array level
-        if method != "__call__":
-            return NotImplemented
-
-        if ufunc in local_ufunc_map:
-            return local_ufunc_map[ufunc](*inputs)
-
-        if ufunc in ufunc_map:
-            value = inputs[0] if inputs[1] is self else inputs[1]
-            _check_allowed_dtypes(value)
-            return blosc2.LazyExpr(new_op=(value, ufunc_map[ufunc], self))
-
-        if ufunc in ufunc_map_1param:
-            value = inputs[0]
-            _check_allowed_dtypes(value)
-            return blosc2.LazyExpr(new_op=(value, ufunc_map_1param[ufunc], None))
-
-        return NotImplemented
-
-    def __neg__(self):
-        return self.update_expr(new_op=(0, "-", self))
-
-    def __add__(self, value):
-        return self.update_expr(new_op=(self, "+", value))
-
-    def __iadd__(self, other):
-        return self.update_expr(new_op=(self, "+", other))
-
-    def __radd__(self, value):
-        return self.update_expr(new_op=(value, "+", self))
-
-    def __sub__(self, value):
-        return self.update_expr(new_op=(self, "-", value))
-
-    def __isub__(self, value):
-        return self.update_expr(new_op=(self, "-", value))
-
-    def __rsub__(self, value):
-        return self.update_expr(new_op=(value, "-", self))
-
-    def __mul__(self, value):
-        return self.update_expr(new_op=(self, "*", value))
-
-    def __imul__(self, value):
-        return self.update_expr(new_op=(self, "*", value))
-
-    def __rmul__(self, value):
-        return self.update_expr(new_op=(value, "*", self))
-
-    def __truediv__(self, value):
-        return self.update_expr(new_op=(self, "/", value))
-
-    def __itruediv__(self, value):
-        return self.update_expr(new_op=(self, "/", value))
-
-    def __rtruediv__(self, value):
-        return self.update_expr(new_op=(value, "/", self))
-
-    def __and__(self, value):
-        return self.update_expr(new_op=(self, "&", value))
-
-    def __rand__(self, value):
-        return self.update_expr(new_op=(value, "&", self))
-
-    def __or__(self, value):
-        return self.update_expr(new_op=(self, "|", value))
-
-    def __ror__(self, value):
-        return self.update_expr(new_op=(value, "|", self))
-
-    def __invert__(self):
-        return self.update_expr(new_op=(self, "~", None))
-
-    def __pow__(self, value):
-        return self.update_expr(new_op=(self, "**", value))
-
-    def __rpow__(self, value):
-        return self.update_expr(new_op=(value, "**", self))
-
-    def __ipow__(self, value):
-        return self.update_expr(new_op=(self, "**", value))
-
-    def __lt__(self, value):
-        return self.update_expr(new_op=(self, "<", value))
-
-    def __le__(self, value):
-        return self.update_expr(new_op=(self, "<=", value))
-
-    def __eq__(self, value):
-        return self.update_expr(new_op=(self, "==", value))
-
-    def __ne__(self, value):
-        return self.update_expr(new_op=(self, "!=", value))
-
-    def __gt__(self, value):
-        return self.update_expr(new_op=(self, ">", value))
-
-    def __ge__(self, value):
-        return self.update_expr(new_op=(self, ">=", value))
 
     def where(self, value1=None, value2=None):
         """

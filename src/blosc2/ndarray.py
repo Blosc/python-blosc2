@@ -12,6 +12,7 @@ import builtins
 import inspect
 import math
 import tempfile
+from abc import abstractmethod
 from collections import OrderedDict, namedtuple
 from functools import reduce
 from itertools import product
@@ -3027,6 +3028,58 @@ class Operand:
         }
 
     @property
+    @abstractmethod
+    def dtype(self) -> np.dtype:
+        """
+        Get the data type of the :ref:`Operand`.
+
+        Returns
+        -------
+        out: np.dtype
+            The data type of the :ref:`Operand`.
+        """
+        pass
+
+    @property
+    @abstractmethod
+    def shape(self) -> tuple[int]:
+        """
+        Get the shape of the :ref:`Operand`.
+
+        Returns
+        -------
+        out: tuple
+                The shape of the :ref:`Operand`.
+        """
+        pass
+
+    @property
+    @abstractmethod
+    def ndim(self) -> int:
+        """
+        Get the number of dimensions of the :ref:`Operand`.
+
+        Returns
+        -------
+        out: int
+            The number of dimensions of the :ref:`Operand`.
+        """
+        pass
+
+    @property
+    @abstractmethod
+    def info(self) -> InfoReporter:
+        """
+        Get information about the :ref:`Operand`.
+
+        Returns
+        -------
+        out: InfoReporter
+            A printable class with information about the :ref:`Operand`.
+        """
+        pass
+
+    @property
     def device(self):
         "Hardware device the array data resides on. Always equal to 'cpu'."
         return self._device
@@ -5875,7 +5928,7 @@ class NDField(Operand):
         self.chunks = ndarr.chunks
         self.blocks = ndarr.blocks
         self.field = field
-        self.dtype = ndarr.dtype.fields[field][0]
+        self._dtype = ndarr.dtype.fields[field][0]
         self.offset = ndarr.dtype.fields[field][1]
 
     def __repr__(self):
@@ -5892,6 +5945,11 @@ class NDField(Operand):
     def shape(self) -> tuple[int]:
         """The shape of the associated :ref:`NDArray`."""
         return self.ndarr.shape
+
+    @property
+    def dtype(self) -> np.dtype:
+        """The dtype of the field of associated :ref:`NDArray`."""
+        return self._dtype
 
     @property
     def schunk(self) -> blosc2.SChunk:

@@ -432,3 +432,9 @@ def test_clip_logaddexp(shape, chunks, blocks, slices):
     # (i.e. doesn't return np.ndarray)
     expr = np.logaddexp(b, a)
     assert isinstance(expr, blosc2.LazyArray)
+
+    # Test LazyUDF has inherited __add__ from Operand class
+    expr = blosc2.logaddexp(b, a) + blosc2.clip(b, np.prod(shape) // 3, npb - 10)
+    npc = np.logaddexp(npb, npa) + np.clip(npb, np.prod(shape) // 3, npb - 10)
+    res = expr.compute(item=slices)
+    np.testing.assert_allclose(res[...], npc[slices])
