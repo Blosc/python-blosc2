@@ -1,14 +1,15 @@
-import blosc2
 import time
+
+import blosc2
 
 N, M = 5_000, 10_000
 dtype = blosc2.float64
-working_set = dtype().itemsize * (2 * N * M + N * N) / 2 ** 30
+working_set = dtype().itemsize * (2 * N * M + N * N) / 2**30
 print(f"Working set size of {round(working_set, 2)} GB")
 shape1 = (N, M)
 shape2 = (M, N)
-a = blosc2.ones(shape=shape1, urlpath="a.b2nd", mode='w', dtype=dtype)
-b = blosc2.full(fill_value=2., shape=shape2, urlpath="b.b2nd", mode='w', dtype=dtype)
+a = blosc2.ones(shape=shape1, urlpath="a.b2nd", mode="w", dtype=dtype)
+b = blosc2.full(fill_value=2.0, shape=shape2, urlpath="b.b2nd", mode="w", dtype=dtype)
 
 # Expression
 t0 = time.time()
@@ -27,8 +28,8 @@ print(f"Defined expression, got metadata, and persisted it on disk in {round(dt 
 t0 = time.time()
 lexpr = blosc2.open(urlpath=url_path)
 dt = time.time() - t0
-print(f"In {round(dt*1000, 3)} ms opened lazy expression: shape = {lexpr.shape}, dtype = {lexpr.dtype}")
+print(f"In {round(dt * 1000, 3)} ms opened lazy expression: shape = {lexpr.shape}, dtype = {lexpr.dtype}")
 t1 = time.time()
-result1 = lexpr.compute(urlpath="result.b2nd", mode='w')
+result1 = lexpr.compute(urlpath="result.b2nd", mode="w")
 t2 = time.time()
 print(f"blosc2 fetched operands from disk, computed {expression}, wrote to disk in: {t2 - t1:.3f} s")
