@@ -2822,6 +2822,7 @@ class LazyExpr(LazyArray):
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
         if "out" in kwargs:
             kwargs["_output"] = kwargs.pop("out")
+            self._output = kwargs["_output"]
         if hasattr(self, "_output"):
             kwargs["_output"] = self._output
         if "ne_args" in kwargs:

@@ -1727,3 +1727,12 @@ def test_lazylinalg():
     npres = np.matmul(npA, npB)
     assert out.shape == npres.shape
     np.testing.assert_array_almost_equal(out[()], npres)
+
+
+# Test for issue #503 (LazyArray.compute() should honor out param)
+def test_lazyexpr_compute_out():
+    a = blosc2.ones(10)
+    out = blosc2.zeros(1)
+    lexpr = blosc2.lazyexpr("sum(a)")
+    assert lexpr.compute(out=out) is out
+    assert out[0] == 10
