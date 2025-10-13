@@ -2,7 +2,11 @@
 
 ## Changes from 3.10.0 to 3.10.1
 
-XXX version-specific blurb XXX
+* Bumped to numexpr 2.14.1 to improve overflow behaviour for complex arguments for ``tanh`` and ``tanh``
+* Bug fixes for lazy expression calculation
+* Optimised computation for non-blosc2 chunked array arguments (e.g. Zarr, HDF5)
+* Various cleanups and most importantly shipping of python 3.14 wheels due to @DimitriPapadopoulos!
+* Now able to use blosc2 in AWS Lambda
 
 ## Changes from 3.9.1 to 3.10.0
 
