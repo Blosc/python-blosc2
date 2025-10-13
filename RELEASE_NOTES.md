@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.10.1 to 3.10.2
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.10.0 to 3.10.1
 
 * Bumped to numexpr 2.14.1 to improve overflow behaviour for complex arguments for ``tanh`` and ``tanh``

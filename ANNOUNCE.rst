@@ -7,7 +7,7 @@ This is a patch version release where we have aimed to tidy up the code and fix 
 ✅ Bug fixes for lazy expression calculation
 ✅ Optimised computation for non-blosc2 chunked array arguments (e.g. Zarr, HDF5)
 ✅ Various cleanups and most importantly shipping of python 3.14 wheels due to @DimitriPapadopoulos!
-✅ Now able to use blosc2 in AWS Lambdab
+✅ Now able to use blosc2 in AWS Lambda
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
