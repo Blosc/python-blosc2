@@ -6,6 +6,7 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -600,6 +601,15 @@ class SimpleProxy(blosc2.Operand):
         self._shape = src.shape
         # Compute reasonable values for chunks and blocks
         cparams = blosc2.CParams(clevel=0)
+
+        def is_ints_sequence(src, attr):
+            seq = getattr(src, attr, None)
+            if not isinstance(seq, Sequence) or isinstance(seq, (str, bytes)):
+                return False
+            return all(isinstance(x, int) for x in seq)
+
+        chunks = src.chunks if chunks is None and is_ints_sequence(src, "chunks") else chunks
+        blocks = src.blocks if blocks is None and is_ints_sequence(src, "blocks") else blocks
         self.chunks, self.blocks = blosc2.compute_chunks_blocks(
             self.shape, chunks, blocks, self.dtype, **{"cparams": cparams}
         )
