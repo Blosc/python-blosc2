@@ -2713,9 +2713,8 @@ class LazyExpr(LazyArray):
 
         return value, expression[idx:idx2]
 
-        # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp)
-
     def _compute_expr(self, item, kwargs):  # noqa : C901
+        # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp)
         # that are implemenetd in python-blosc2 not in numexpr
         global safe_blosc2_globals
         if len(safe_blosc2_globals) == 0:
