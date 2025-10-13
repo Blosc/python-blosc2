@@ -36,13 +36,13 @@ jobs:
           # Linux x86_64 builds
           - os: ubuntu-latest
             arch: x86_64
-            cibw_pattern: "cp3{10,11,12,13}-manylinux*"
+            cibw_pattern: "cp3{10,11,12,13,14}-manylinux*"
             artifact_name: "linux-x86_64"
 
           # Linux ARM64 builds (native runners)
           - os: ubuntu-24.04-arm
             arch: aarch64
-            cibw_pattern: "cp3{10,11,12,13}-manylinux*"
+            cibw_pattern: "cp3{10,11,12,13,14}-manylinux*"
             artifact_name: "linux-aarch64"
             # Don't use native runners for now (looks like wait times are too long)
             #runs-on: ["ubuntu-latest", "arm64"]
@@ -50,13 +50,13 @@ jobs:
           # Windows builds
           - os: windows-latest
             arch: x86_64
-            cibw_pattern: "cp3{10,11,12,13}-win64"
+            cibw_pattern: "cp3{10,11,12,13,14}-win64"
             artifact_name: "windows-x86_64"
 
           # macOS builds (universal2)
           - os: macos-latest
             arch: x86_64
-            cibw_pattern: "cp3{10,11,12,13}-macosx*"
+            cibw_pattern: "cp3{10,11,12,13,14}-macosx*"
             artifact_name: "macos-universal2"
     steps:
       - name: Checkout repo
