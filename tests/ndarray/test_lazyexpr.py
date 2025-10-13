@@ -1731,8 +1731,18 @@ def test_lazylinalg():
 
 # Test for issue #503 (LazyArray.compute() should honor out param)
 def test_lazyexpr_compute_out():
+    # check reductions
     a = blosc2.ones(10)
     out = blosc2.zeros(1)
     lexpr = blosc2.lazyexpr("sum(a)")
     assert lexpr.compute(out=out) is out
     assert out[0] == 10
+    assert lexpr.compute() is not out
+
+    # check normal expression
+    a = blosc2.ones(10)
+    out = blosc2.zeros(10)
+    lexpr = blosc2.lazyexpr("sin(a)")
+    assert lexpr.compute(out=out) is out
+    assert out[0] == np.sin(1)
+    assert lexpr.compute() is not out
