@@ -171,6 +171,17 @@ functions = blosc2_funcs + additional_funcs
 relational_ops = ["==", "!=", "<", "<=", ">", ">="]
 logical_ops = ["&", "|", "^", "~"]
 not_complex_ops = ["maximum", "minimum", "<", "<=", ">", ">="]
+funcs_2args = (
+    "arctan2",
+    "contains",
+    "pow",
+    "power",
+    "nextafter",
+    "copysign",
+    "hypot",
+    "maximum",
+    "minimum",
+)
 
 
 def get_expr_globals(expression):
@@ -2239,23 +2250,22 @@ class LazyExpr(LazyArray):
         dtype_ = check_dtype(op, value1, value2)  # perform some checks
         if value2 is None:
             if isinstance(value1, LazyExpr):
-                self.expression = f"{op}({value1.expression})"
+                self.expression = value1.expression if op is None else f"{op}({value1.expression})"
                 self.operands = value1.operands
             else:
                 self.operands = {"o0": value1}
                 self.expression = "o0" if op is None else f"{op}(o0)"
             return
-        elif op in (
-            "arctan2",
-            "contains",
-            "pow",
-            "power",
-            "nextafter",
-            "copysign",
-            "hypot",
-            "maximum",
-            "minimum",
-        ):
+        elif isinstance(value1, LazyExpr) or isinstance(value2, LazyExpr):
+            if isinstance(value1, LazyExpr):
+                newexpr = value1.update_expr(new_op)
+            else:
+                newexpr = value2.update_expr(new_op)
+            self.expression = newexpr.expression
+            self.operands = newexpr.operands
+            self._dtype = newexpr.dtype
+            return
+        elif op in funcs_2args:
             if np.isscalar(value1) and np.isscalar(value2):
                 self.expression = f"{op}({value1}, {value2})"
             elif np.isscalar(value2):
@@ -2267,15 +2277,6 @@ class LazyExpr(LazyArray):
             else:
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"{op}(o0, o1)"
-            return
-        elif isinstance(value1, LazyExpr) or isinstance(value2, LazyExpr):
-            if isinstance(value1, LazyExpr):
-                newexpr = value1.update_expr(new_op)
-            else:
-                newexpr = value2.update_expr(new_op)
-            self.expression = newexpr.expression
-            self.operands = newexpr.operands
-            self._dtype = newexpr.dtype
             return
 
         self._dtype = dtype_
@@ -2351,7 +2352,7 @@ class LazyExpr(LazyArray):
             if not isinstance(value1, LazyExpr) and not isinstance(value2, LazyExpr):
                 # We converted some of the operands to NDArray (where() handling above)
                 new_operands = {"o0": value1, "o1": value2}
-                expression = f"(o0 {op} o1)"
+                expression = "op(o0, o1)" if op in funcs_2args else f"(o0 {op} o1)"
                 return self._new_expr(expression, new_operands, guess=False, out=None, where=None)
             elif isinstance(value1, LazyExpr) and isinstance(value2, LazyExpr):
                 # Expression fusion
@@ -2359,43 +2360,56 @@ class LazyExpr(LazyArray):
                 new_operands, dup_op = fuse_operands(value1.operands, value2.operands)
                 # Take expression 2 and rebase the operands while removing duplicates
                 new_expr = fuse_expressions(value2.expression, len(value1.operands), dup_op)
-                expression = f"({value1.expression} {op} {new_expr})"
-                self.operands = value1.operands
+                expression = (
+                    f"{op}({value1.expression}, {new_expr})"
+                    if op in funcs_2args
+                    else f"({value1.expression} {op} {new_expr})"
+                )
+                def_operands = value1.operands
             elif isinstance(value1, LazyExpr):
-                if op == "~":
-                    expression = f"({op}{value1.expression})"
-                elif np.isscalar(value2):
-                    expression = f"({value1.expression} {op} {value2})"
+                if np.isscalar(value2):
+                    v2 = value2
                 elif hasattr(value2, "shape") and value2.shape == ():
-                    expression = f"({value1.expression} {op} {value2[()]})"
+                    v2 = value2[()]
                 else:
                     operand_to_key = {id(v): k for k, v in value1.operands.items()}
                     try:
-                        op_name = operand_to_key[id(value2)]
+                        v2 = operand_to_key[id(value2)]
                     except KeyError:
-                        op_name = f"o{len(value1.operands)}"
-                        new_operands = {op_name: value2}
-                    expression = f"({value1.expression} {op} {op_name})"
-                self.operands = value1.operands
+                        v2 = f"o{len(value1.operands)}"
+                        new_operands = {v2: value2}
+                if op == "~":
+                    expression = f"({op}{value1.expression})"
+                else:
+                    expression = (
+                        f"{op}({value1.expression}, {v2})"
+                        if op in funcs_2args
+                        else f"({value1.expression} {op} {v2})"
+                    )
+                def_operands = value1.operands
             else:
                 if np.isscalar(value1):
-                    expression = f"({value1} {op} {value2.expression})"
+                    v1 = value1
                 elif hasattr(value1, "shape") and value1.shape == ():
-                    expression = f"({value1[()]} {op} {value2.expression})"
+                    v1 = value1[()]
                 else:
                     operand_to_key = {id(v): k for k, v in value2.operands.items()}
                     try:
-                        op_name = operand_to_key[id(value1)]
+                        v1 = operand_to_key[id(value1)]
                     except KeyError:
-                        op_name = f"o{len(value2.operands)}"
-                        new_operands = {op_name: value1}
-                    if op == "[]":  # syntactic sugar for slicing
-                        expression = f"({op_name}[{value2.expression}])"
-                    else:
-                        expression = f"({op_name} {op} {value2.expression})"
-                    self.operands = value2.operands
+                        v1 = f"o{len(value2.operands)}"
+                        new_operands = {v1: value1}
+                if op == "[]":  # syntactic sugar for slicing
+                    expression = f"({v1}[{value2.expression}])"
+                else:
+                    expression = (
+                        f"{op}({v1}, {value2.expression})"
+                        if op in funcs_2args
+                        else f"({v1} {op} {value2.expression})"
+                    )
+                    def_operands = value2.operands
             # Return a new expression
-            operands = self.operands | new_operands
+            operands = def_operands | new_operands
             expr = self._new_expr(expression, operands, guess=False, out=None, where=None)
             expr._dtype = dtype_  # override dtype with preserved dtype
             return expr

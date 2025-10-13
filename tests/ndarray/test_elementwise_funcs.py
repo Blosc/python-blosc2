@@ -36,7 +36,7 @@ SHAPES_CHUNKS = [((10,), (3,)), ((20, 20), (4, 7))]
 SHAPES_CHUNKS_HEAVY = [((10, 13, 13), (3, 5, 2))]
 
 
-def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):  # noqa: C901
+def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):
     """Helper function containing the actual test logic for unary functions."""
     if np_func.__name__ in ("arccos", "arcsin", "arctanh"):
         a_blosc = blosc2.linspace(
@@ -92,18 +92,6 @@ def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):  # noq
                 blosc2.complex128,
             ):
                 assert True
-            else:
-                raise e
-        except AssertionError as e:
-            if np_func.__name__ in ("tan", "tanh") and dtype == blosc2.complex128:
-                warnings.showwarning(
-                    "tan and tanh do not give correct NaN location",
-                    UserWarning,
-                    __file__,
-                    0,
-                    file=sys.stderr,
-                )
-                pytest.skip("tan and tanh do not give correct NaN location")
             else:
                 raise e
 

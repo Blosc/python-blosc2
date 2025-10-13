@@ -1173,7 +1173,10 @@ def get_cache_info(cache_level: int) -> tuple:
     if cache_level == 0:
         cache_level = "1d"
 
-    result = subprocess.run(["lscpu", "--json"], capture_output=True, check=True, text=True)
+    try:
+        result = subprocess.run(["lscpu", "--json"], capture_output=True, check=True, text=True)
+    except (FileNotFoundError, subprocess.CalledProcessError) as err:
+        raise ValueError("lscpu not found or error running lscpu") from err
     lscpu_info = json.loads(result.stdout)
     for entry in lscpu_info["lscpu"]:
         if entry["field"] == f"L{cache_level} cache:":

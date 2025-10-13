@@ -1440,6 +1440,20 @@ def test_chain_expressions():
     res = expr_final.compute()
     np.testing.assert_allclose(res[:], nres)
 
+    # Test that update_expr does not alter expr1
+    expr1 = "a + b"
+    expr2 = "sin(a) + tan(c)"
+    lexpr1 = blosc2.lazyexpr(expr1)
+    lexpr2 = blosc2.lazyexpr(expr2)
+    lexpr3 = lexpr1 + lexpr2
+    assert lexpr1.expression == lexpr1.expression
+    assert lexpr1.operands == lexpr1.operands
+    assert lexpr2.expression == lexpr2.expression
+    assert lexpr2.operands == lexpr2.operands
+    lexpr1 += lexpr2
+    assert lexpr1.expression == lexpr3.expression
+    assert lexpr1.operands == lexpr3.operands
+
 
 # Test the chaining of multiple persistent lazy expressions
 def test_chain_persistentexpressions():
@@ -1746,3 +1760,11 @@ def test_lazyexpr_compute_out():
     assert lexpr.compute(out=out) is out
     assert out[0] == np.sin(1)
     assert lexpr.compute() is not out
+
+
+def test_lazyexpr_2args():
+    a = blosc2.ones(10)
+    lexpr = blosc2.lazyexpr("sin(a)")
+    newexpr = blosc2.hypot(lexpr, 3)
+    assert newexpr.expression == "hypot((sin(o0)), 3)"
+    assert newexpr.operands["o0"] is a
