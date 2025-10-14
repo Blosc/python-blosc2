@@ -2762,10 +2762,11 @@ class LazyExpr(LazyArray):
                         where_x = self._where_args["_where_x"]
                         where_y = self._where_args["_where_y"]
                         return np.where(lazy_expr, where_x, where_y)[key]
-                if hasattr(self, "_output"):
+                out = kwargs.get("_output", None)
+                if out is not None:
                     # This is not exactly optimized, but it works for now
-                    self._output[:] = lazy_expr[key]
-                    return self._output
+                    out[:] = lazy_expr[key]
+                    return out
                 arr = lazy_expr[key]
                 if builtins.sum(mask) > 0:
                     # Correct shape to adjust to NumPy convention
@@ -2834,11 +2835,11 @@ class LazyExpr(LazyArray):
 
     def compute(self, item=(), **kwargs) -> blosc2.NDArray:
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
-        if "out" in kwargs:
+        if "out" in kwargs:  # use provided out preferentially
             kwargs["_output"] = kwargs.pop("out")
-            self._output = kwargs["_output"]
-        if hasattr(self, "_output"):
+        elif hasattr(self, "_output"):
             kwargs["_output"] = self._output
+
         if "ne_args" in kwargs:
             kwargs["_ne_args"] = kwargs.pop("ne_args")
         if hasattr(self, "_ne_args"):
