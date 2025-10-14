@@ -37,11 +37,11 @@ dependencies = [
     "ndindex",
     "msgpack",
     "platformdirs",
-    "numexpr>=2.14.0; platform_machine != 'wasm32'",
+    "numexpr>=2.14.1; platform_machine != 'wasm32'",
     "py-cpuinfo; platform_machine != 'wasm32'",
     "requests",
 ]
-version = "3.10.1.dev0"
+version = "3.10.2.dev0"
 [project.entry-points."array_api"]
 blosc2 = "blosc2"
 
