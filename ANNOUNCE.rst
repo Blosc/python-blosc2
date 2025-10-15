@@ -1,13 +1,9 @@
-Announcing Python-Blosc2 3.10.1
-==============================
+Announcing Python-Blosc2 3.10.2
+===============================
 
 This is a patch version release where we have aimed to tidy up the code and fix bugs:
 
-✅ Bumped to numexpr 2.14.1 to improve overflow behaviour for complex arguments for ``tanh`` and ``tanh``
-✅ Bug fixes for lazy expression calculation
-✅ Optimised computation for non-blosc2 chunked array arguments (e.g. Zarr, HDF5)
-✅ Various cleanups and most importantly shipping of python 3.14 wheels due to @DimitriPapadopoulos!
-✅ Now able to use blosc2 in AWS Lambda
+✅ LazyExpr.compute() now honors the ``out`` parameter for regular expressions (and not only for reductions).
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 

@@ -2,7 +2,7 @@
 
 ## Changes from 3.10.1 to 3.10.2
 
-XXX version-specific blurb XXX
+* LazyExpr.compute() now honors the `out` parameter for regular expressions (and not only for reductions).  See PR #506.
 
 ## Changes from 3.10.0 to 3.10.1
 
