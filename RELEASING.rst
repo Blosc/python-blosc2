@@ -39,7 +39,8 @@ Preliminaries
 
 * Double check that the supported Python versions for the wheels are the correct ones
   (``.github/workflows/cibuildwheels.yml``).  Add/remove Python version if needed.
-  Also, update the ``classifiers`` field for the supported Python versions.
+  Also, update the ``classifiers`` field in pyproject.toml for the supported Python
+  versions.
 
 * Check that the metainfo for the package is correct::
 
