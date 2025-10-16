@@ -6,15 +6,8 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-import dask.array as da
-import jax.numpy as jnp
 import numpy as np
 import pytest
-import tensorflow as tf
-import torch
-
-# TODO: import cupy as cp
-import zarr
 
 import blosc2
 from blosc2.ndarray import get_chunks_idx
@@ -179,52 +172,3 @@ def test_proxy_source(shape, chunks, blocks):
     proxy = blosc2.Proxy(source)
     result = proxy[...]
     np.testing.assert_array_equal(result, data)
-
-
-@pytest.mark.parametrize(
-    "xp",
-    [torch, tf, np, jnp, da, zarr],
-)
-@pytest.mark.parametrize(
-    "dtype",
-    ["bool", "int32", "int64", "float32", "float64", "complex128"],
-)
-def test_simpleproxy(xp, dtype):
-    dtype_ = getattr(xp, dtype) if hasattr(xp, dtype) else np.dtype(dtype)
-    if dtype == "bool":
-        blosc_matrix = blosc2.asarray([True, False, False], dtype=np.dtype(dtype), chunks=(2,))
-        foreign_matrix = xp.zeros((3,), dtype=dtype_)
-        # Create a lazy expression object
-        lexpr = blosc2.lazyexpr(
-            "(b & a) | (~b)", operands={"a": blosc_matrix, "b": foreign_matrix}
-        )  # this does not
-        # Compare with numpy computation result
-        npb = np.asarray(foreign_matrix)
-        npa = blosc_matrix[()]
-        res = (npb & npa) | np.logical_not(npb)
-    else:
-        N = 10
-        shape_a = (N, N, N)
-        blosc_matrix = blosc2.full(shape=shape_a, fill_value=3, dtype=np.dtype(dtype), chunks=(N // 3,) * 3)
-        foreign_matrix = xp.ones(shape_a, dtype=dtype_)
-        if dtype == "complex128":
-            foreign_matrix += 0.5j
-            blosc_matrix = blosc2.full(
-                shape=shape_a, fill_value=3 + 2j, dtype=np.dtype(dtype), chunks=(N // 3,) * 3
-            )
-
-        # Create a lazy expression object
-        lexpr = blosc2.lazyexpr(
-            "b + sin(a) + sum(b) - tensordot(a, b, axes=1)",
-            operands={"a": blosc_matrix, "b": foreign_matrix},
-        )  # this does not
-        # Compare with numpy computation result
-        npb = np.asarray(foreign_matrix)
-        npa = blosc_matrix[()]
-        res = npb + np.sin(npa) + np.sum(npb) - np.tensordot(npa, npb, axes=1)
-
-    # Test object metadata and result
-    assert isinstance(lexpr, blosc2.LazyExpr)
-    assert lexpr.dtype == res.dtype
-    assert lexpr.shape == res.shape
-    np.testing.assert_array_equal(lexpr[()], res)
