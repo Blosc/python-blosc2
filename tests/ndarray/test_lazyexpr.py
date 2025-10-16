@@ -1195,7 +1195,7 @@ def test_fill_disk_operands(chunks, blocks, disk, fill_value):
         b = blosc2.open("b.b2nd")
         c = blosc2.open("c.b2nd")
 
-    expr = ((a**3 + blosc2.sin(c * 2)) < b) & (c > 0)
+    expr = ((a**3 + blosc2.sin(c * 2)) < b) & ~(c > 0)
 
     out = expr.compute()
     assert out.shape == (N, N)

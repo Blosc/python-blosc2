@@ -520,6 +520,9 @@ class ShapeInferencer(ast.NodeVisitor):
         right = self.visit(node.right)
         return elementwise(left, right)
 
+    def visit_UnaryOp(self, node):
+        return self.visit(node.operand)
+
     def _eval_slice(self, node):
         if isinstance(node, ast.Slice):
             return slice(

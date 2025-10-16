@@ -579,6 +579,8 @@ def _convert_dtype(dt: str | DTypeLike):
     """
     Attempts to convert to blosc2.dtype (i.e. numpy dtype)
     """
+    if hasattr(dt, "as_numpy_dtype"):
+        dt = dt.as_numpy_dtype
     try:
         return np.dtype(dt)
     except TypeError:  # likely passed e.g. a torch.float64
@@ -616,7 +618,7 @@ class SimpleProxy(blosc2.Operand):
             raise TypeError("The source must have a __getitem__ method")
         self._src = src
         self._dtype = _convert_dtype(src.dtype)
-        self._shape = src.shape
+        self._shape = src.shape if isinstance(src.shape, tuple) else tuple(src.shape)
         # Compute reasonable values for chunks and blocks
         cparams = blosc2.CParams(clevel=0)
 
