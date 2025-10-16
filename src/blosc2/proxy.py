@@ -569,6 +569,18 @@ class ProxyNDField(blosc2.Operand):
         return nparr[self.field]
 
 
+def _convert_dtype(dt: str | np.typing.DTypeLike):
+    """
+    Attempts to convert to blosc2.dtype (i.e. numpy dtype)
+    """
+    try:
+        return np.dtype(dt)
+    except TypeError:  # likely passed e.g. a torch.float64
+        return np.dtype(str(dt).split(".")[1])
+    except Exception as e:
+        raise TypeError("Could not parse dtype arg {dt}.") from e
+
+
 class SimpleProxy(blosc2.Operand):
     """
     Simple proxy for any data container to be used with the compute engine.
@@ -597,7 +609,7 @@ class SimpleProxy(blosc2.Operand):
         if not hasattr(src, "__getitem__"):
             raise TypeError("The source must have a __getitem__ method")
         self._src = src
-        self._dtype = src.dtype
+        self._dtype = _convert_dtype(src.dtype)
         self._shape = src.shape
         # Compute reasonable values for chunks and blocks
         cparams = blosc2.CParams(clevel=0)

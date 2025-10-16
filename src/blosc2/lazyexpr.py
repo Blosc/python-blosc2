@@ -2530,7 +2530,7 @@ class LazyExpr(LazyArray):
         # This just acts as a 'decorator' for the existing expression
         if value1 is not None and value2 is not None:
             # Guess the outcome dtype for value1 and value2
-            dtype = np.result_type(value1, value2)
+            dtype = blosc2.result_type(value1, value2)
             args = {"_where_x": value1, "_where_y": value2}
         elif value1 is not None:
             if hasattr(value1, "dtype"):

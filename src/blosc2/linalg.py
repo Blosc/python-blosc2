@@ -100,7 +100,7 @@ def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArra
     n, k = x1.shape[-2:]
     m = x2.shape[-1]
     result_shape = np.broadcast_shapes(x1.shape[:-2], x2.shape[:-2]) + (n, m)
-    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
+    result = blosc2.zeros(result_shape, dtype=blosc2.result_type(x1, x2), **kwargs)
 
     if 0 not in result.shape + x1.shape + x2.shape:  # if any array is empty, return array of 0s
         p, q = result.chunks[-2:]
@@ -227,7 +227,7 @@ def tensordot(
         raise ValueError("x1 and x2 must have same shapes along reduction dimensions")
 
     result_shape = tuple(x1shape[a_keep]) + tuple(x2shape[b_keep])
-    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
+    result = blosc2.zeros(result_shape, dtype=blosc2.result_type(x1, x2), **kwargs)
 
     op_chunks = [
         slice_to_chunktuple(slice(0, s, 1), c) for s, c in zip(x1shape[a_axes], a_chunks_red, strict=True)
@@ -363,7 +363,7 @@ def vecdot(x1: blosc2.NDArray, x2: blosc2.NDArray, axis: int = -1, **kwargs) -> 
         raise ValueError("x1 and x2 must have same shapes along reduction dimensions")
 
     result_shape = np.broadcast_shapes(x1shape[a_keep], x2shape[b_keep])
-    result = blosc2.zeros(result_shape, dtype=np.result_type(x1, x2), **kwargs)
+    result = blosc2.zeros(result_shape, dtype=blosc2.result_type(x1, x2), **kwargs)
 
     res_chunks = [
         slice_to_chunktuple(s, c)
