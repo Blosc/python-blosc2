@@ -8,6 +8,12 @@
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
+try:
+    from numpy.typing import DTypeLike
+except (ImportError, AttributeError):
+    # fallback to internal module (use with caution)
+    from numpy._typing import DTypeLike
+
 import numpy as np
 
 import blosc2
@@ -569,7 +575,7 @@ class ProxyNDField(blosc2.Operand):
         return nparr[self.field]
 
 
-def _convert_dtype(dt: str | np.typing.DTypeLike):
+def _convert_dtype(dt: str | DTypeLike):
     """
     Attempts to convert to blosc2.dtype (i.e. numpy dtype)
     """
