@@ -1714,8 +1714,12 @@ def test_lazylinalg():
     np.testing.assert_array_almost_equal(out[()], npres)
 
     # --- tensordot ---
-    out = blosc2.lazyexpr("tensordot(A, B, axes=1)")
+    out = blosc2.lazyexpr("tensordot(A, B, axes=1)")  # test with int axes
     npres = np.tensordot(npA, npB, axes=1)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+    out = blosc2.lazyexpr("tensordot(A, B, axes=((1,) , (0,)))")  # test with tuple axes
+    npres = np.tensordot(npA, npB, axes=((1,), (0,)))
     assert out.shape == npres.shape
     np.testing.assert_array_almost_equal(out[()], npres)
 

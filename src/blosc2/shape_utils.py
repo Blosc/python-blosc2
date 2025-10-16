@@ -542,6 +542,8 @@ class ShapeInferencer(ast.NodeVisitor):
             return self.shapes.get(node.id, None)
         elif isinstance(node, ast.Constant):
             return node.value
+        elif isinstance(node, ast.Tuple):
+            return tuple(e.value for e in node.elts)
         else:
             return None
 
