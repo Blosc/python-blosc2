@@ -1000,7 +1000,8 @@ cdef class SChunk:
         if urlpath is not None:
             if isinstance(urlpath, pathlib.PurePath):
                 urlpath = str(urlpath)
-            self._urlpath = urlpath.encode() if isinstance(urlpath, str) else urlpath
+            # Use os.fsencode for proper platform-specific path encoding
+            self._urlpath = os.fsencode(urlpath) if isinstance(urlpath, str) else urlpath
             kwargs["urlpath"] = self._urlpath
 
         self.mode = blosc2.Storage().mode if kwargs.get("mode", None) is None else kwargs.get("mode")
@@ -1856,6 +1857,9 @@ cdef int general_prefilter(blosc2_prefilter_params *params):
 
 
 def remove_urlpath(path):
+    # Use os.fsencode for proper platform-specific path encoding
+    if isinstance(path, str):
+        path = os.fsencode(path)
     blosc2_remove_urlpath(path)
 
 
@@ -1972,7 +1976,12 @@ def meta_keys(self):
 
 
 def open(urlpath, mode, offset, **kwargs):
-    urlpath_ = urlpath.encode("utf-8") if isinstance(urlpath, str) else urlpath
+    # Use os.fsencode for proper platform-specific path encoding
+    # On Windows, this handles non-ASCII characters correctly
+    if isinstance(urlpath, str):
+        urlpath_ = os.fsencode(urlpath)
+    else:
+        urlpath_ = urlpath
     cdef blosc2_schunk* schunk
     cdef blosc2_stdio_mmap* mmap_file
     cdef blosc2_io* io
@@ -2731,7 +2740,8 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
     if urlpath is not None:
         if isinstance(urlpath, pathlib.PurePath):
             urlpath = str(urlpath)
-        _urlpath = urlpath.encode() if isinstance(urlpath, str) else urlpath
+        # Use os.fsencode for proper platform-specific path encoding
+        _urlpath = os.fsencode(urlpath) if isinstance(urlpath, str) else urlpath
         kwargs["urlpath"] = _urlpath
 
     if kwargs.get("mmap_mode") is not None:
