@@ -42,10 +42,12 @@ if NUMPY_GE_2_0:  # array-api compliant
     nprshift = np.bitwise_right_shift
     npbinvert = np.bitwise_invert
     npvecdot = np.vecdot
+    nptranspose = np.permute_dims
 else:  # not array-api compliant
     nplshift = np.left_shift
     nprshift = np.right_shift
     npbinvert = np.bitwise_not
+    nptranspose = np.transpose
 
     def npvecdot(a, b, axis=-1):
         return np.einsum("...i,...i->...", np.moveaxis(np.conj(a), axis, -1), np.moveaxis(b, axis, -1))
@@ -2969,7 +2971,8 @@ def clip(
         x, min, max = inputs
         output[:] = np.clip(x, min, max)
 
-    return blosc2.lazyudf(chunkwise_clip, (x, min, max), dtype=x.dtype, shape=x.shape, **kwargs)
+    dtype = blosc2.result_type(x)
+    return blosc2.lazyudf(chunkwise_clip, (x, min, max), dtype=dtype, shape=x.shape, **kwargs)
 
 
 def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array, **kwargs: Any) -> NDArray:
@@ -3001,7 +3004,7 @@ def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array, **
         x1, x2 = inputs
         output[:] = np.logaddexp(x1, x2)
 
-    dtype = blosc2.result_type(x1.dtype, x2.dtype)
+    dtype = blosc2.result_type(x1, x2)
     if dtype == blosc2.bool_:
         raise TypeError("logaddexp doesn't accept boolean arguments.")
 
@@ -5653,7 +5656,8 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
         raise ValueError("Only unsafe casting is supported at the moment.")
     if not hasattr(array, "shape"):
         array = np.asarray(array)  # defaults if dtype=None
-    dtype = kwargs.pop("dtype", array.dtype)  # check if dtype provided
+    dtype_ = blosc2.proxy._convert_dtype(array.dtype)
+    dtype = kwargs.pop("dtype", dtype_)  # check if dtype provided
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
@@ -5664,14 +5668,13 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
     # Let's avoid this
     if blocks is None and hasattr(array, "blocks") and isinstance(array.blocks, (tuple, list)):
         blocks = array.blocks
-    chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, array.dtype, **kwargs)
 
-    copy = True if copy is None and not isinstance(array, NDArray) else copy
     if copy:
+        chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, dtype_, **kwargs)
         # Fast path for small arrays. This is not too expensive in terms of memory consumption.
         shape = array.shape
         small_size = 2**24  # 16 MB
-        array_nbytes = math.prod(shape) * array.dtype.itemsize
+        array_nbytes = math.prod(shape) * dtype_.itemsize
         if array_nbytes < small_size:
             if not isinstance(array, np.ndarray) and hasattr(array, "chunks"):
                 # A getitem operation should be enough to get a numpy array
@@ -5682,7 +5685,7 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
             return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
 
         # Create the empty array
-        ndarr = empty(shape, array.dtype, chunks=chunks, blocks=blocks, **kwargs)
+        ndarr = empty(shape, dtype_, chunks=chunks, blocks=blocks, **kwargs)
         behaved = are_partitions_behaved(shape, chunks, blocks)
 
         # Get the coordinates of the chunks
@@ -5705,7 +5708,7 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
                 ndarr[slice_] = array_slice
     else:
         if not isinstance(array, NDArray):
-            raise ValueError("Must always do a copy for asarray unless NDArray provided.")
+            return blosc2.SimpleProxy(array, chunks, blocks)
         # TODO: make a direct view possible
         return array
 

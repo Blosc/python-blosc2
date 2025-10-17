@@ -649,6 +649,11 @@ class SimpleProxy(blosc2.Operand):
         """The data type of the source array."""
         return self._dtype
 
+    @property
+    def ndim(self):
+        """The number of dimensions of the source array."""
+        return len(self.shape)
+
     def __getitem__(self, item: slice | list[slice]) -> np.ndarray:
         """
         Get a slice as a numpy.ndarray (via this proxy).

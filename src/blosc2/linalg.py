@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 import blosc2
-from blosc2.ndarray import get_intersecting_chunks, npvecdot, slice_to_chunktuple
+from blosc2.ndarray import get_intersecting_chunks, nptranspose, npvecdot, slice_to_chunktuple
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -79,9 +79,8 @@ def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArra
     if np.isscalar(x1) or np.isscalar(x2):
         raise ValueError("Arguments can't be scalars.")
 
-    # Added this to pass array-api tests (which use internal getitem to check results)
-    x1 = blosc2.asarray(x1)
-    x2 = blosc2.asarray(x2)
+    # Makes a SimpleProxy if inputs are not blosc2 arrays
+    x1, x2 = blosc2.asarray(x1), blosc2.asarray(x2)
 
     # Validate matrix multiplication compatibility
     if x1.shape[builtins.max(-1, -len(x2.shape))] != x2.shape[builtins.max(-2, -len(x2.shape))]:
@@ -183,9 +182,6 @@ def tensordot(
     """
     fast_path = kwargs.pop("fast_path", None)  # for testing purposes
     # TODO: add fast path for when don't need to change chunkshapes
-    # Added this to pass array-api tests (which use internal getitem to check results)
-    if isinstance(x1, np.ndarray) and isinstance(x2, np.ndarray):
-        return np.tensordot(x1, x2, axes=axes)
 
     x1, x2 = blosc2.asarray(x1), blosc2.asarray(x2)
 
@@ -261,24 +257,8 @@ def tensordot(
         a_selection = tuple(next(rchunk_iter) if a else slice(None, None, 1) for a in a_keep)
         b_selection = tuple(next(rchunk_iter) if b else slice(None, None, 1) for b in b_keep)
         res_chunks = tuple(s.stop - s.start for s in res_chunk)
-
-        if fast_path:  # just load everything
-            bx1 = x1[a_selection]
-            bx2 = x2[b_selection]
-            newshape_a = (
-                math.prod([bx1.shape[i] for i in a_keep_axes]),
-                math.prod([bx1.shape[a] for a in a_axes]),
-            )
-            newshape_b = (
-                math.prod([bx2.shape[b] for b in b_axes]),
-                math.prod([bx2.shape[i] for i in b_keep_axes]),
-            )
-            at = bx1.transpose(newaxes_a).reshape(newshape_a)
-            bt = bx2.transpose(newaxes_b).reshape(newshape_b)
-            res = np.dot(at, bt)
-            result[res_chunk] += res.reshape(res_chunks)
-        else:  # operands too big, have to go chunk-by-chunk
-            for ochunk in product(*op_chunks):
+        for ochunk in product(*op_chunks):
+            if not fast_path:  # operands too big, have to go chunk-by-chunk
                 op_chunk = tuple(
                     slice(rc * rcs, builtins.min((rc + 1) * rcs, x1s), 1)
                     for rc, rcs, x1s in zip(ochunk, a_chunks_red, a_shape_red, strict=True)
@@ -293,21 +273,23 @@ def tensordot(
                     op_chunk[next(order_iter)] if not b else bs_
                     for bs_, b in zip(b_selection, b_keep, strict=True)
                 )
-                bx1 = x1[a_selection]
-                bx2 = x2[b_selection]
-                # adapted from numpy tensordot
-                newshape_a = (
-                    math.prod([bx1.shape[i] for i in a_keep_axes]),
-                    math.prod([bx1.shape[a] for a in a_axes]),
-                )
-                newshape_b = (
-                    math.prod([bx2.shape[b] for b in b_axes]),
-                    math.prod([bx2.shape[i] for i in b_keep_axes]),
-                )
-                at = bx1.transpose(newaxes_a).reshape(newshape_a)
-                bt = bx2.transpose(newaxes_b).reshape(newshape_b)
-                res = np.dot(at, bt)
-                result[res_chunk] += res.reshape(res_chunks)
+            bx1 = x1[a_selection]
+            bx2 = x2[b_selection]
+            # adapted from numpy tensordot
+            newshape_a = (
+                math.prod([bx1.shape[i] for i in a_keep_axes]),
+                math.prod([bx1.shape[a] for a in a_axes]),
+            )
+            newshape_b = (
+                math.prod([bx2.shape[b] for b in b_axes]),
+                math.prod([bx2.shape[i] for i in b_keep_axes]),
+            )
+            at = nptranspose(bx1, newaxes_a).reshape(newshape_a)
+            bt = nptranspose(bx2, newaxes_b).reshape(newshape_b)
+            res = np.dot(at, bt)
+            result[res_chunk] += res.reshape(res_chunks)
+            if fast_path:  # already done everything
+                break
     return result
 
 
@@ -396,19 +378,17 @@ def vecdot(x1: blosc2.NDArray, x2: blosc2.NDArray, axis: int = -1, **kwargs) -> 
         )
         b_selection = tuple(next(rchunk_iter) if b else slice(None, None, 1) for b in b_keep)
 
-        if fast_path:  # just load everything, also handles case of 0 in shapes
-            bx1 = x1[a_selection]
-            bx2 = x2[b_selection]
-            result[res_chunk] += npvecdot(bx1, bx2, axis=axis)  # handles conjugation of bx1
-        else:  # operands too big, have to go chunk-by-chunk
-            for ochunk in range(0, a_shape_red, a_chunks_red):
+        for ochunk in range(0, a_shape_red, a_chunks_red):
+            if not fast_path:  # operands too big, go chunk-by-chunk
                 op_chunk = (slice(ochunk, builtins.min(ochunk + a_chunks_red, x1.shape[a_axes]), 1),)
                 a_selection = a_selection[:a_axes] + op_chunk + a_selection[a_axes + 1 :]
                 b_selection = b_selection[:b_axes] + op_chunk + b_selection[b_axes + 1 :]
-                bx1 = x1[a_selection]
-                bx2 = x2[b_selection]
-                res = npvecdot(bx1, bx2, axis=axis)  # handles conjugation of bx1
-                result[res_chunk] += res
+            bx1 = x1[a_selection]
+            bx2 = x2[b_selection]
+            res = npvecdot(bx1, bx2, axis=axis)  # handles conjugation of bx1
+            result[res_chunk] += res
+            if fast_path:  # already done everything
+                break
     return result
 
 
@@ -517,7 +497,7 @@ def permute_dims(
         src_slice = tuple(slice(start, stop) for start, stop in start_stop)
         dst_slice = tuple(slice(start_stop[ax][0], start_stop[ax][1]) for ax in axes)
 
-        transposed = np.transpose(arr[src_slice], axes=axes)
+        transposed = nptranspose(arr[src_slice], axes=axes)
         result[dst_slice] = np.ascontiguousarray(transposed)
 
     return result
@@ -648,6 +628,7 @@ def outer(x1: blosc2.blosc2.NDArray, x2: blosc2.blosc2.NDArray, **kwargs: Any) -
     out: blosc2.NDArray
         A two-dimensional array containing the outer product and whose shape is (N, M).
     """
+    x1, x2 = blosc2.asarray(x1), blosc2.asarray(x2)
     if (x1.ndim != 1) or (x2.ndim != 1):
         raise ValueError("outer only valid for 1D inputs.")
     return tensordot(x1, x2, ((), ()), **kwargs)  # for testing purposes

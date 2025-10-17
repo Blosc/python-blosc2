@@ -2258,6 +2258,12 @@ class LazyExpr(LazyArray):
             return
         value1, op, value2 = new_op
         dtype_ = check_dtype(op, value1, value2)  # perform some checks
+        # Check that operands are proper Operands, LazyArray or scalars; if not, convert to NDArray objects
+        value1 = (
+            blosc2.SimpleProxy(value1)
+            if not (isinstance(value1, (blosc2.Operand, np.ndarray)) or np.isscalar(value1))
+            else value1
+        )
         if value2 is None:
             if isinstance(value1, LazyExpr):
                 self.expression = value1.expression if op is None else f"{op}({value1.expression})"
@@ -2266,7 +2272,12 @@ class LazyExpr(LazyArray):
                 self.operands = {"o0": value1}
                 self.expression = "o0" if op is None else f"{op}(o0)"
             return
-        elif isinstance(value1, LazyExpr) or isinstance(value2, LazyExpr):
+        value2 = (
+            blosc2.SimpleProxy(value2)
+            if not (isinstance(value2, (blosc2.Operand, np.ndarray)) or np.isscalar(value2))
+            else value2
+        )
+        if isinstance(value1, LazyExpr) or isinstance(value2, LazyExpr):
             if isinstance(value1, LazyExpr):
                 newexpr = value1.update_expr(new_op)
             else:
@@ -2739,7 +2750,7 @@ class LazyExpr(LazyArray):
 
     def _compute_expr(self, item, kwargs):  # noqa : C901
         # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp)
-        # that are implemenetd in python-blosc2 not in numexpr
+        # that are implemented in python-blosc2 not in numexpr
         global safe_blosc2_globals
         if len(safe_blosc2_globals) == 0:
             # First eval call, fill blosc2_safe_globals for ne_evaluate
@@ -3011,7 +3022,7 @@ class LazyExpr(LazyArray):
             _operands = operands | local_vars
             # Check that operands are proper Operands, LazyArray or scalars; if not, convert to NDArray objects
             for op, val in _operands.items():
-                if not (isinstance(val, (blosc2.Operand, blosc2.LazyArray, np.ndarray)) or np.isscalar(val)):
+                if not (isinstance(val, (blosc2.Operand, np.ndarray)) or np.isscalar(val)):
                     _operands[op] = blosc2.SimpleProxy(val)
             # for scalars just return value (internally converts to () if necessary)
             opshapes = {k: v if not hasattr(v, "shape") else v.shape for k, v in _operands.items()}
