@@ -136,7 +136,7 @@ def _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp): 
         assert True
     if success:
         try:
-            result = blosc_func(not_blosc1, a_blosc2)[...]
+            result = blosc_func(not_blosc1, a_blosc2)[()]
             np.testing.assert_allclose(result, expected, rtol=1e-6, atol=1e-6)
         except TypeError as e:
             # some functions don't support certain dtypes and that's fine

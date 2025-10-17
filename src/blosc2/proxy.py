@@ -667,7 +667,7 @@ class SimpleProxy(blosc2.Operand):
         out: numpy.ndarray
             An array with the data slice.
         """
-        return self._src[item]
+        return np.asarray(self._src[item])  # avoids copy for PyTorch at least
 
 
 def jit(func=None, *, out=None, disable=False, **kwargs):  # noqa: C901
