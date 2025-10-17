@@ -8,6 +8,12 @@
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
+try:
+    from numpy.typing import DTypeLike
+except (ImportError, AttributeError):
+    # fallback to internal module (use with caution)
+    from numpy._typing import DTypeLike
+
 import numpy as np
 
 import blosc2
@@ -569,6 +575,20 @@ class ProxyNDField(blosc2.Operand):
         return nparr[self.field]
 
 
+def _convert_dtype(dt: str | DTypeLike):
+    """
+    Attempts to convert to blosc2.dtype (i.e. numpy dtype)
+    """
+    if hasattr(dt, "as_numpy_dtype"):
+        dt = dt.as_numpy_dtype
+    try:
+        return np.dtype(dt)
+    except TypeError:  # likely passed e.g. a torch.float64
+        return np.dtype(str(dt).split(".")[1])
+    except Exception as e:
+        raise TypeError("Could not parse dtype arg {dt}.") from e
+
+
 class SimpleProxy(blosc2.Operand):
     """
     Simple proxy for any data container to be used with the compute engine.
@@ -597,8 +617,8 @@ class SimpleProxy(blosc2.Operand):
         if not hasattr(src, "__getitem__"):
             raise TypeError("The source must have a __getitem__ method")
         self._src = src
-        self._dtype = src.dtype
-        self._shape = src.shape
+        self._dtype = _convert_dtype(src.dtype)
+        self._shape = src.shape if isinstance(src.shape, tuple) else tuple(src.shape)
         # Compute reasonable values for chunks and blocks
         cparams = blosc2.CParams(clevel=0)
 
@@ -629,6 +649,11 @@ class SimpleProxy(blosc2.Operand):
         """The data type of the source array."""
         return self._dtype
 
+    @property
+    def ndim(self):
+        """The number of dimensions of the source array."""
+        return len(self.shape)
+
     def __getitem__(self, item: slice | list[slice]) -> np.ndarray:
         """
         Get a slice as a numpy.ndarray (via this proxy).
@@ -642,7 +667,7 @@ class SimpleProxy(blosc2.Operand):
         out: numpy.ndarray
             An array with the data slice.
         """
-        return self._src[item]
+        return np.asarray(self._src[item])  # avoids copy for PyTorch at least
 
 
 def jit(func=None, *, out=None, disable=False, **kwargs):  # noqa: C901

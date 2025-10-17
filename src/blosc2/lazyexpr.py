@@ -47,6 +47,7 @@ from blosc2.ndarray import (
     process_key,
 )
 
+from .proxy import _convert_dtype
 from .shape_utils import constructors, elementwise_funcs, infer_shape, linalg_attrs, linalg_funcs, reducers
 
 if not blosc2.IS_WASM:
@@ -2213,7 +2214,9 @@ def result_type(
     # Follow NumPy rules for scalar-array operations
     # Create small arrays with the same dtypes and let NumPy's type promotion determine the result type
     arrs = [
-        value if (np.isscalar(value) or not hasattr(value, "dtype")) else np.array([0], dtype=value.dtype)
+        value
+        if (np.isscalar(value) or not hasattr(value, "dtype"))
+        else np.array([0], dtype=_convert_dtype(value.dtype))
         for value in arrays_and_dtypes
     ]
     return np.result_type(*arrs)
@@ -2255,6 +2258,12 @@ class LazyExpr(LazyArray):
             return
         value1, op, value2 = new_op
         dtype_ = check_dtype(op, value1, value2)  # perform some checks
+        # Check that operands are proper Operands, LazyArray or scalars; if not, convert to NDArray objects
+        value1 = (
+            blosc2.SimpleProxy(value1)
+            if not (isinstance(value1, (blosc2.Operand, np.ndarray)) or np.isscalar(value1))
+            else value1
+        )
         if value2 is None:
             if isinstance(value1, LazyExpr):
                 self.expression = value1.expression if op is None else f"{op}({value1.expression})"
@@ -2263,7 +2272,12 @@ class LazyExpr(LazyArray):
                 self.operands = {"o0": value1}
                 self.expression = "o0" if op is None else f"{op}(o0)"
             return
-        elif isinstance(value1, LazyExpr) or isinstance(value2, LazyExpr):
+        value2 = (
+            blosc2.SimpleProxy(value2)
+            if not (isinstance(value2, (blosc2.Operand, np.ndarray)) or np.isscalar(value2))
+            else value2
+        )
+        if isinstance(value1, LazyExpr) or isinstance(value2, LazyExpr):
             if isinstance(value1, LazyExpr):
                 newexpr = value1.update_expr(new_op)
             else:
@@ -2530,7 +2544,7 @@ class LazyExpr(LazyArray):
         # This just acts as a 'decorator' for the existing expression
         if value1 is not None and value2 is not None:
             # Guess the outcome dtype for value1 and value2
-            dtype = np.result_type(value1, value2)
+            dtype = blosc2.result_type(value1, value2)
             args = {"_where_x": value1, "_where_y": value2}
         elif value1 is not None:
             if hasattr(value1, "dtype"):
@@ -2736,7 +2750,7 @@ class LazyExpr(LazyArray):
 
     def _compute_expr(self, item, kwargs):  # noqa : C901
         # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp)
-        # that are implemenetd in python-blosc2 not in numexpr
+        # that are implemented in python-blosc2 not in numexpr
         global safe_blosc2_globals
         if len(safe_blosc2_globals) == 0:
             # First eval call, fill blosc2_safe_globals for ne_evaluate
@@ -3008,7 +3022,7 @@ class LazyExpr(LazyArray):
             _operands = operands | local_vars
             # Check that operands are proper Operands, LazyArray or scalars; if not, convert to NDArray objects
             for op, val in _operands.items():
-                if not (isinstance(val, (blosc2.Operand, blosc2.LazyArray, np.ndarray)) or np.isscalar(val)):
+                if not (isinstance(val, (blosc2.Operand, np.ndarray)) or np.isscalar(val)):
                     _operands[op] = blosc2.SimpleProxy(val)
             # for scalars just return value (internally converts to () if necessary)
             opshapes = {k: v if not hasattr(v, "shape") else v.shape for k, v in _operands.items()}
