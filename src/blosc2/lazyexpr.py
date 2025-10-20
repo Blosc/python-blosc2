@@ -434,13 +434,13 @@ def convert_inputs(inputs):
         return []
     inputs_ = []
     for obj in inputs:
-        if not isinstance(obj, blosc2.Array) and not np.isscalar(obj):
+        if not isinstance(obj, (np.ndarray, blosc2.Operand)) and not np.isscalar(obj):
             try:
-                obj = np.asarray(obj)
+                obj = blosc2.SimpleProxy(obj)
             except Exception:
                 print(
                     "Inputs not being np.ndarray, Array or Python scalar objects"
-                    " should be convertible to np.ndarray."
+                    " should be convertible to SimpleProxy."
                 )
                 raise
         inputs_.append(obj)
@@ -1077,9 +1077,9 @@ def fill_chunk_operands(  # noqa: C901
         if nchunk == 0:
             # Initialize the iterator for reading the chunks
             # Take any operand (all should have the same shape and chunks)
-            arr = next(iter(operands.values()))
+            key, arr = next(iter(operands.items()))
             chunks_idx, _ = get_chunks_idx(arr.shape, arr.chunks)
-            info = (reduc, aligned, low_mem, chunks_idx)
+            info = (reduc, aligned[key], low_mem, chunks_idx)
             iter_chunks = read_nchunk(list(operands.values()), info)
         # Run the asynchronous file reading function from a synchronous context
         chunks = next(iter_chunks)
@@ -1095,7 +1095,7 @@ def fill_chunk_operands(  # noqa: C901
                 # The chunk is a special zero chunk, so we can treat it as a scalar
                 chunk_operands[key] = np.zeros((), dtype=value.dtype)
                 continue
-            if aligned:
+            if aligned[key]:
                 buff = blosc2.decompress2(chunks[i])
                 bsize = value.dtype.itemsize * math.prod(chunks_)
                 chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
@@ -1113,10 +1113,6 @@ def fill_chunk_operands(  # noqa: C901
             continue
         if value.shape == ():
             chunk_operands[key] = value[()]
-            continue
-
-        if isinstance(value, np.ndarray | blosc2.C2Array):
-            chunk_operands[key] = value[slice_]
             continue
 
         if not full_chunk or not isinstance(value, blosc2.NDArray):
@@ -1143,7 +1139,7 @@ def fill_chunk_operands(  # noqa: C901
             value.get_slice_numpy(chunk_operands[key], (starts, stops))
             continue
 
-        if aligned:
+        if aligned[key]:
             # Decompress the whole chunk and store it
             buff = value.schunk.decompress_chunk(nchunk)
             bsize = value.dtype.itemsize * math.prod(chunks_)
@@ -1203,7 +1199,10 @@ def fast_eval(  # noqa: C901
     if blocks is None:
         blocks = basearr.blocks
     # Check whether the partitions are aligned and behaved
-    aligned = blosc2.are_partitions_aligned(shape, chunks, blocks)
+    aligned = {
+        k: False if not hasattr(k, "chunks") else blosc2.are_partitions_aligned(k.shape, k.chunks, k.blocks)
+        for k in operands
+    }
     behaved = blosc2.are_partitions_behaved(shape, chunks, blocks)
 
     # Check that all operands are NDArray for fast path
@@ -1227,7 +1226,7 @@ def fast_eval(  # noqa: C901
         offset = tuple(s.start for s in cslice)  # offset for the udf
         chunks_ = tuple(s.stop - s.start for s in cslice)
 
-        full_chunk = chunks_ == chunks
+        full_chunk = chunks_ == chunks  # slice is same as chunk
         fill_chunk_operands(
             operands, cslice, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands
         )
@@ -1811,7 +1810,7 @@ def reduce_slices(  # noqa: C901
         same_chunks = all(operand.chunks == o.chunks for o in operands.values() if hasattr(o, "chunks"))
         same_blocks = all(operand.blocks == o.blocks for o in operands.values() if hasattr(o, "blocks"))
         fast_path = same_shape and same_chunks and same_blocks and (0 not in operand.chunks)
-        aligned, iter_disk = False, False
+        aligned, iter_disk = dict.fromkeys(operands.keys(), False), False
         if fast_path:
             chunks = operand.chunks
             # Check that all operands are NDArray for fast path

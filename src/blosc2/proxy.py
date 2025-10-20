@@ -670,6 +670,27 @@ class SimpleProxy(blosc2.Operand):
         return np.asarray(self._src[item])  # avoids copy for PyTorch at least
 
 
+def as_simpleproxy(x: blosc2.Array) -> SimpleProxy | blosc2.Operand:
+    """
+    Convert an Array object which fulfills Array protocol into SimpleProxy. If x is already a
+    blosc2.Operand simply returns object.
+
+    Parameters
+    ----------
+    x: blosc2.Array
+        Object fulfilling Array protocol.
+
+    Returns
+    -------
+    out: blosc2.SimpleProxy | blosc2.Operand
+        Object with minimal interface for blosc2 LazyExpr computations.
+    """
+    if isinstance(x, blosc2.Operand):
+        return x
+    else:
+        return SimpleProxy(x)
+
+
 def jit(func=None, *, out=None, disable=False, **kwargs):  # noqa: C901
     """
     Prepare a function so that it can be used with the Blosc2 compute engine.

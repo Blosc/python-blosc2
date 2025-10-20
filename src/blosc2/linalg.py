@@ -80,7 +80,7 @@ def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArra
         raise ValueError("Arguments can't be scalars.")
 
     # Makes a SimpleProxy if inputs are not blosc2 arrays
-    x1, x2 = blosc2.asarray(x1), blosc2.asarray(x2)
+    x1, x2 = blosc2.as_simpleproxy(x1), blosc2.as_simpleproxy(x2)
 
     # Validate matrix multiplication compatibility
     if x1.shape[builtins.max(-1, -len(x2.shape))] != x2.shape[builtins.max(-2, -len(x2.shape))]:
@@ -183,7 +183,8 @@ def tensordot(
     fast_path = kwargs.pop("fast_path", None)  # for testing purposes
     # TODO: add fast path for when don't need to change chunkshapes
 
-    x1, x2 = blosc2.asarray(x1), blosc2.asarray(x2)
+    # Makes a SimpleProxy if inputs are not blosc2 arrays
+    x1, x2 = blosc2.as_simpleproxy(x1), blosc2.as_simpleproxy(x2)
 
     if isinstance(axes, tuple):
         a_axes, b_axes = axes
@@ -324,7 +325,8 @@ def vecdot(x1: blosc2.NDArray, x2: blosc2.NDArray, axis: int = -1, **kwargs) -> 
     if isinstance(x1, np.ndarray) and isinstance(x2, np.ndarray):
         return npvecdot(x1, x2, axis=axis)
 
-    x1, x2 = blosc2.asarray(x1), blosc2.asarray(x2)
+    # Makes a SimpleProxy if inputs are not blosc2 arrays
+    x1, x2 = blosc2.as_simpleproxy(x1), blosc2.as_simpleproxy(x2)
 
     N = builtins.min(x1.ndim, x2.ndim)
     if axis < -N or axis > -1:
@@ -466,8 +468,9 @@ def permute_dims(
     """
     if np.isscalar(arr) or arr.ndim < 2:
         return arr
-    if isinstance(arr, np.ndarray):  # for array-api test compliance (does getitem for comparison)
-        return np.permute_dims(arr, axes)
+
+    # Makes a SimpleProxy if input is not blosc2 array
+    arr = blosc2.as_simpleproxy(arr)
 
     ndim = arr.ndim
 
@@ -535,7 +538,8 @@ def transpose(x, **kwargs: Any) -> blosc2.NDArray:
     # If arguments are dimension < 2, they are returned
     if np.isscalar(x) or x.ndim < 2:
         return x
-
+    # Makes a SimpleProxy if input is not blosc2 array
+    x = blosc2.as_simpleproxy(x)
     # Validate arguments are dimension 2
     if x.ndim > 2:
         raise ValueError("Transposing arrays with dimension greater than 2 is not supported yet.")
@@ -559,6 +563,8 @@ def matrix_transpose(arr: blosc2.Array, **kwargs: Any) -> blosc2.NDArray:
         ``(..., N, M)``.
     """
     axes = None
+    # Makes a SimpleProxy if input is not blosc2 array
+    arr = blosc2.as_simpleproxy(arr)
     if not np.isscalar(arr) and arr.ndim > 2:
         axes = list(range(arr.ndim))
         axes[-2], axes[-1] = axes[-1], axes[-2]
@@ -592,6 +598,8 @@ def diagonal(x: blosc2.blosc2.NDArray, offset: int = 0) -> blosc2.blosc2.NDArray
 
     Reference: https://data-apis.org/array-api/latest/extensions/generated/array_api.linalg.diag.html#diag
     """
+    # Makes a SimpleProxy if input is not blosc2 array
+    x = blosc2.as_simpleproxy(x)
     n_rows, n_cols = x.shape[-2:]
     min_idx = builtins.min(n_rows, n_cols)
     if offset < 0:
@@ -628,7 +636,7 @@ def outer(x1: blosc2.blosc2.NDArray, x2: blosc2.blosc2.NDArray, **kwargs: Any) -
     out: blosc2.NDArray
         A two-dimensional array containing the outer product and whose shape is (N, M).
     """
-    x1, x2 = blosc2.asarray(x1), blosc2.asarray(x2)
+    x1, x2 = blosc2.as_simpleproxy(x1), blosc2.as_simpleproxy(x2)
     if (x1.ndim != 1) or (x2.ndim != 1):
         raise ValueError("outer only valid for 1D inputs.")
     return tensordot(x1, x2, ((), ()), **kwargs)  # for testing purposes

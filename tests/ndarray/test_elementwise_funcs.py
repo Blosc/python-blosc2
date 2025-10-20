@@ -188,7 +188,7 @@ def _test_unary_func_proxy(np_func, blosc_func, dtype, shape, xp):
         a_blosc[tuple(i // 4 for i in shape)] = 1 + 1j
         a_blosc[tuple(i // 2 for i in shape)] = xp.nan + xp.nan * 1j
     if dtype == blosc2.bool_ and np_func.__name__ == "arctanh":
-        a_blosc = xp.zeros(shape=shape, dtype=dtype_)
+        a_blosc = xp.zeros(shape, dtype=dtype_)
 
     arr = np.asarray(a_blosc)
     success = False
@@ -223,7 +223,7 @@ def _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):  # no
         1, stop=np.prod(shape), num=np.prod(shape), chunks=chunkshape, shape=shape, dtype=dtype
     )
     if np_func.__name__ in ("right_shift", "left_shift"):
-        a_blosc2 = blosc2.asarray(2)
+        a_blosc2 = blosc2.asarray(2, copy=True)
     else:
         a_blosc2 = blosc2.linspace(
             start=np.prod(shape) * 2,
@@ -304,8 +304,8 @@ def test_unary_funcs(np_func, blosc_func, dtype, shape, chunkshape):
 @pytest.mark.parametrize("dtype", STR_DTYPES)
 @pytest.mark.parametrize("shape", [(10,), (20, 20)])
 @pytest.mark.parametrize("xp", [torch])
-def test_unfuncs_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp):
-    _test_unary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp)
+def test_unfuncs_proxy(np_func, blosc_func, dtype, shape, xp):
+    _test_unary_func_proxy(np_func, blosc_func, dtype, shape, xp)
 
 
 @pytest.mark.heavy

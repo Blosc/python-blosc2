@@ -5669,6 +5669,7 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
     if blocks is None and hasattr(array, "blocks") and isinstance(array.blocks, (tuple, list)):
         blocks = array.blocks
 
+    copy = True if copy is None and not isinstance(array, NDArray) else copy
     if copy:
         chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, dtype_, **kwargs)
         # Fast path for small arrays. This is not too expensive in terms of memory consumption.
@@ -5708,7 +5709,7 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
                 ndarr[slice_] = array_slice
     else:
         if not isinstance(array, NDArray):
-            return blosc2.SimpleProxy(array, chunks, blocks)
+            raise ValueError("Must always do a copy for asarray unless NDArray provided.")
         # TODO: make a direct view possible
         return array
 
