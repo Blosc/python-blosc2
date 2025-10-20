@@ -1800,18 +1800,19 @@ def reduce_slices(  # noqa: C901
     # Note: we could have expr = blosc2.lazyexpr('numpy_array + 1') (i.e. no choice for chunks)
     blosc2_arrs = tuple(o for o in operands.values() if hasattr(o, "chunks"))
     fast_path = False
+    chunks = None
     if blosc2_arrs:  # fast path only relevant if there are blosc2 arrays
         operand = max(blosc2_arrs, key=lambda x: len(x.shape))
-        chunks = operand.chunks
 
         # Check if the partitions are aligned (i.e. all operands have the same shape,
         # chunks and blocks, and have no padding). This will allow us to take the fast path.
         same_shape = all(operand.shape == o.shape for o in operands.values() if hasattr(o, "shape"))
         same_chunks = all(operand.chunks == o.chunks for o in operands.values() if hasattr(o, "chunks"))
         same_blocks = all(operand.blocks == o.blocks for o in operands.values() if hasattr(o, "blocks"))
-        fast_path = same_shape and same_chunks and same_blocks and (0 not in chunks)
+        fast_path = same_shape and same_chunks and same_blocks and (0 not in operand.chunks)
         aligned, iter_disk = False, False
         if fast_path:
+            chunks = operand.chunks
             # Check that all operands are NDArray for fast path
             all_ndarray = all(
                 isinstance(value, blosc2.NDArray) and value.shape != () for value in operands.values()
@@ -1835,7 +1836,12 @@ def reduce_slices(  # noqa: C901
             else:
                 # WebAssembly does not support threading, so we cannot use the iter_disk option
                 iter_disk = False
-    else:  # have to calculate chunks (this is cheap as empty just creates a thin metalayer)
+        else:
+            for arr in blosc2_arrs:
+                if arr.shape == shape:
+                    chunks = arr.chunks
+                    break
+    if chunks is None:  # have to calculate chunks (this is cheap as empty just creates a thin metalayer)
         temp = blosc2.empty(shape, dtype=dtype)
         chunks = temp.chunks
         del temp
@@ -1934,6 +1940,7 @@ def reduce_slices(  # noqa: C901
             if reduce_op == ReduceOp.SUM and result[()] == 0:
                 # Avoid a reduction when result is a zero scalar. Faster for sparse data.
                 continue
+            # Note that chunks_ refers to slice of operand chunks, not reduced_slice
             result = np.full(chunks_, result[()])
         if reduce_op == ReduceOp.ANY:
             result = np.any(result, **reduce_args)
