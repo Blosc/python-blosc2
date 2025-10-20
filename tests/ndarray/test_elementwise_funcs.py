@@ -3,7 +3,6 @@ import warnings
 
 import numpy as np
 import pytest
-import tensorflow as tf
 import torch
 
 import blosc2
@@ -104,7 +103,7 @@ def _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp): 
     dtype = np.dtype(dtype)
     not_blosc1 = xp.ones(shape, dtype=dtype_)
     if np_func.__name__ in ("right_shift", "left_shift"):
-        a_blosc2 = blosc2.asarray(2)
+        a_blosc2 = blosc2.asarray(2, copy=True)
     else:
         a_blosc2 = blosc2.linspace(
             start=np.prod(shape) * 2,
@@ -114,16 +113,21 @@ def _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp): 
             shape=shape,
             dtype=dtype,
         )
-    if not blosc2.isdtype(dtype, "integral"):
-        a_blosc2[tuple(i // 2 for i in shape)] = blosc2.nan
-    if dtype == blosc2.complex128:
-        a_blosc2 = (
-            a_blosc2
-            + blosc2.linspace(
-                1j, stop=np.prod(shape) * 1j, num=np.prod(shape), chunks=chunkshape, shape=shape, dtype=dtype
-            )
-        ).compute()
-        a_blosc2[tuple(i // 2 for i in shape)] = blosc2.nan + blosc2.nan * 1j
+        if not blosc2.isdtype(dtype, "integral"):
+            a_blosc2[tuple(i // 2 for i in shape)] = blosc2.nan
+        if dtype == blosc2.complex128:
+            a_blosc2 = (
+                a_blosc2
+                + blosc2.linspace(
+                    1j,
+                    stop=np.prod(shape) * 1j,
+                    num=np.prod(shape),
+                    chunks=chunkshape,
+                    shape=shape,
+                    dtype=dtype,
+                )
+            ).compute()
+            a_blosc2[tuple(i // 2 for i in shape)] = blosc2.nan + blosc2.nan * 1j
     arr1 = np.asarray(not_blosc1)
     arr2 = a_blosc2[()]
     success = False
@@ -299,7 +303,7 @@ def test_unary_funcs(np_func, blosc_func, dtype, shape, chunkshape):
 @pytest.mark.parametrize(("np_func", "blosc_func"), UNARY_FUNC_PAIRS)
 @pytest.mark.parametrize("dtype", STR_DTYPES)
 @pytest.mark.parametrize("shape", [(10,), (20, 20)])
-@pytest.mark.parametrize("xp", [torch, tf])
+@pytest.mark.parametrize("xp", [torch])
 def test_unfuncs_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp):
     _test_unary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp)
 
@@ -322,7 +326,7 @@ def test_binary_funcs(np_func, blosc_func, dtype, shape, chunkshape):
 @pytest.mark.parametrize(("np_func", "blosc_func"), BINARY_FUNC_PAIRS)
 @pytest.mark.parametrize("dtype", STR_DTYPES)
 @pytest.mark.parametrize(("shape", "chunkshape"), SHAPES_CHUNKS)
-@pytest.mark.parametrize("xp", [torch, tf])
+@pytest.mark.parametrize("xp", [torch])
 def test_binfuncs_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp):
     _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp)
 

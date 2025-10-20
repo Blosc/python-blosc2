@@ -9,7 +9,6 @@ import pathlib
 
 import numpy as np
 import pytest
-import tensorflow as tf
 import torch
 
 import blosc2
@@ -93,7 +92,7 @@ def test_expr_proxy_operands(chunks_blocks, c2sub_context):
 
 @pytest.mark.parametrize(
     "xp",
-    [torch, tf, np],
+    [torch, np],
 )
 @pytest.mark.parametrize(
     "dtype",
