@@ -10,6 +10,7 @@ import pathlib
 
 import numpy as np
 import pytest
+import torch
 
 import blosc2
 from blosc2.lazyexpr import ne_evaluate
@@ -1697,13 +1698,13 @@ def test_lazylinalg():
     np.testing.assert_array_almost_equal(out[()], npres)
 
     # --- squeeze ---
-    out = blosc2.lazyexpr("squeeze(D)")
-    npres = np.squeeze(npD)
+    out = blosc2.lazyexpr("squeeze(D, axis=-1)")
+    npres = np.squeeze(npD, -1)
     assert out.shape == npres.shape
     np.testing.assert_array_almost_equal(out[()], npres)
 
-    out = blosc2.lazyexpr("D.squeeze()")
-    npres = np.squeeze(npD)
+    out = blosc2.lazyexpr("D.squeeze(axis=-1)")
+    npres = np.squeeze(npD, -1)
     assert out.shape == npres.shape
     np.testing.assert_array_almost_equal(out[()], npres)
 
@@ -1772,3 +1773,52 @@ def test_lazyexpr_2args():
     newexpr = blosc2.hypot(lexpr, 3)
     assert newexpr.expression == "hypot((sin(o0)), 3)"
     assert newexpr.operands["o0"] is a
+
+
+@pytest.mark.parametrize(
+    "xp",
+    [torch, np],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    ["bool", "int32", "int64", "float32", "float64", "complex128"],
+)
+def test_simpleproxy(xp, dtype):
+    dtype_ = getattr(xp, dtype) if hasattr(xp, dtype) else np.dtype(dtype)
+    if dtype == "bool":
+        blosc_matrix = blosc2.asarray([True, False, False], dtype=np.dtype(dtype), chunks=(2,))
+        foreign_matrix = xp.zeros((3,), dtype=dtype_)
+        # Create a lazy expression object
+        lexpr = blosc2.lazyexpr(
+            "(b & a) | (~b)", operands={"a": blosc_matrix, "b": foreign_matrix}
+        )  # this does not
+        # Compare with numpy computation result
+        npb = np.asarray(foreign_matrix)
+        npa = blosc_matrix[()]
+        res = (npb & npa) | np.logical_not(npb)
+    else:
+        N = 10
+        shape_a = (N, N, N)
+        blosc_matrix = blosc2.full(shape=shape_a, fill_value=3, dtype=np.dtype(dtype), chunks=(N // 3,) * 3)
+        foreign_matrix = xp.ones(shape_a, dtype=dtype_)
+        if dtype == "complex128":
+            foreign_matrix += 0.5j
+            blosc_matrix = blosc2.full(
+                shape=shape_a, fill_value=3 + 2j, dtype=np.dtype(dtype), chunks=(N // 3,) * 3
+            )
+
+        # Create a lazy expression object
+        lexpr = blosc2.lazyexpr(
+            "b + sin(a) + sum(b) - tensordot(a, b, axes=1)",
+            operands={"a": blosc_matrix, "b": foreign_matrix},
+        )  # this does not
+        # Compare with numpy computation result
+        npb = np.asarray(foreign_matrix)
+        npa = blosc_matrix[()]
+        res = npb + np.sin(npa) + np.sum(npb) - np.tensordot(npa, npb, axes=1)
+
+    # Test object metadata and result
+    assert isinstance(lexpr, blosc2.LazyExpr)
+    assert lexpr.dtype == res.dtype
+    assert lexpr.shape == res.shape
+    np.testing.assert_array_equal(lexpr[()], res)

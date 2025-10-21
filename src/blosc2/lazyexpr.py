@@ -2900,7 +2900,7 @@ class LazyExpr(LazyArray):
         # Squeeze single-element dimensions when indexing with integers
         # See e.g. examples/ndarray/animated_plot.py
         if isinstance(item, int) or (hasattr(item, "__iter__") and any(isinstance(i, int) for i in item)):
-            result = result.squeeze()
+            result = result.squeeze(axis=tuple(i for i in range(result.ndim) if result.shape[i] == 1))
         return result
 
     def slice(self, item):

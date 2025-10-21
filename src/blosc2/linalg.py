@@ -80,7 +80,7 @@ def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArra
         raise ValueError("Arguments can't be scalars.")
 
     # Makes a SimpleProxy if inputs are not blosc2 arrays
-    x1, x2 = blosc2.as_simpleproxy(x1), blosc2.as_simpleproxy(x2)
+    x1, x2 = blosc2.as_simpleproxy(x1, x2)
 
     # Validate matrix multiplication compatibility
     if x1.shape[builtins.max(-1, -len(x2.shape))] != x2.shape[builtins.max(-2, -len(x2.shape))]:
@@ -184,7 +184,7 @@ def tensordot(
     # TODO: add fast path for when don't need to change chunkshapes
 
     # Makes a SimpleProxy if inputs are not blosc2 arrays
-    x1, x2 = blosc2.as_simpleproxy(x1), blosc2.as_simpleproxy(x2)
+    x1, x2 = blosc2.as_simpleproxy(x1, x2)
 
     if isinstance(axes, tuple):
         a_axes, b_axes = axes
@@ -326,7 +326,7 @@ def vecdot(x1: blosc2.NDArray, x2: blosc2.NDArray, axis: int = -1, **kwargs) -> 
         return npvecdot(x1, x2, axis=axis)
 
     # Makes a SimpleProxy if inputs are not blosc2 arrays
-    x1, x2 = blosc2.as_simpleproxy(x1), blosc2.as_simpleproxy(x2)
+    x1, x2 = blosc2.as_simpleproxy(x1, x2)
 
     N = builtins.min(x1.ndim, x2.ndim)
     if axis < -N or axis > -1:
@@ -489,9 +489,15 @@ def permute_dims(
 
     chunks = arr.chunks
     shape = arr.shape
-
-    for info in arr.iterchunks_info():
-        coords = info.coords
+    # handle SimpleProxy which doesn't have iterchunks_info
+    if hasattr(arr, "iterchunks_info"):
+        my_it = arr.iterchunks_info()
+        _get_el = lambda x: x.coords  # noqa: E731
+    else:
+        my_it = get_intersecting_chunks((), shape, chunks)
+        _get_el = lambda x: x.raw  # noqa: E731
+    for info in my_it:
+        coords = _get_el(info)
         start_stop = [
             (coord * chunk, builtins.min(chunk * (coord + 1), dim))
             for coord, chunk, dim in zip(coords, chunks, shape, strict=False)
@@ -636,7 +642,7 @@ def outer(x1: blosc2.blosc2.NDArray, x2: blosc2.blosc2.NDArray, **kwargs: Any) -
     out: blosc2.NDArray
         A two-dimensional array containing the outer product and whose shape is (N, M).
     """
-    x1, x2 = blosc2.as_simpleproxy(x1), blosc2.as_simpleproxy(x2)
+    x1, x2 = blosc2.as_simpleproxy(x1, x2)
     if (x1.ndim != 1) or (x2.ndim != 1):
         raise ValueError("outer only valid for 1D inputs.")
     return tensordot(x1, x2, ((), ()), **kwargs)  # for testing purposes

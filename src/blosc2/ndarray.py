@@ -4642,7 +4642,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return ndslice
 
-    def squeeze(self, axis=None) -> NDArray:
+    def squeeze(self, axis: int | Sequence[int]) -> NDArray:
         """Remove single-dimensional entries from the shape of the array.
 
         This method modifies the array in-place. If mask is None removes any dimensions with size 1.
@@ -4666,18 +4666,15 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> a.shape
         (23, 11)
         """
-        if axis is None:
-            super().squeeze()
-        else:
-            axis = [axis] if isinstance(axis, int) else axis
-            mask = [False for i in range(self.ndim)]
-            for a in axis:
-                if a < 0:
-                    a += self.ndim  # Adjust axis to be within the array's dimensions
-                if mask[a]:
-                    raise ValueError("Axis values must be unique.")
-                mask[a] = True
-            super().squeeze(mask=mask)
+        axis = [axis] if isinstance(axis, int) else axis
+        mask = [False for i in range(self.ndim)]
+        for a in axis:
+            if a < 0:
+                a += self.ndim  # Adjust axis to be within the array's dimensions
+            if mask[a]:
+                raise ValueError("Axis values must be unique.")
+            mask[a] = True
+        super().squeeze(mask=mask)
         return self
 
     def indices(self, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
@@ -4711,17 +4708,23 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return blosc2.linalg.matmul(self, other)
 
 
-def squeeze(x: NDArray, axis: int | None = None) -> NDArray:
+def squeeze(x: Array, axis: int | Sequence[int]) -> NDArray:
     """
     Remove single-dimensional entries from the shape of the array.
 
-    This method modifies the array in-place. If mask is None removes any dimensions with size 1.
-    If axis is provided, it should be an int or tuple of ints and the corresponding
-    dimensions (of size 1) will be removed.
+    This method modifies the array in-place.
+
+    Parameters
+    ----------
+    x: Array
+        input array.
+    axis: int | Sequence[int]
+        Axis (or axes) to squeeze.
 
     Returns
     -------
-    out: NDArray
+    out: Array
+        An output array having the same data type and elements as x.
 
     Examples
     --------

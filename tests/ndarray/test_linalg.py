@@ -1,9 +1,12 @@
+import inspect
 from itertools import permutations
 
 import numpy as np
 import pytest
+import torch
 
 import blosc2
+from blosc2.lazyexpr import linalg_funcs
 from blosc2.ndarray import npvecdot
 
 
@@ -817,3 +820,54 @@ def test_diagonal(shape, chunkshape, offset):
 
     # Assert equality
     np.testing.assert_array_equal(result_np, expected)
+
+
+@pytest.mark.parametrize(
+    "xp",
+    [torch, np],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    ["bool", "int32", "int64", "float32", "float64", "complex128"],
+)
+def test_linalgproxy(xp, dtype):
+    dtype_ = getattr(xp, dtype) if hasattr(xp, dtype) else np.dtype(dtype)
+    for name in linalg_funcs:
+        if name == "transpose":
+            continue  # deprecated
+        func = getattr(blosc2, name)
+        N = 10
+        shape_a = (N,)
+        chunks = (N // 3,)
+        if name != "outer":
+            shape_a *= 3
+            chunks *= 3
+        blosc_matrix = blosc2.full(shape=shape_a, fill_value=3, dtype=np.dtype(dtype), chunks=chunks)
+        foreign_matrix = xp.ones(shape_a, dtype=dtype_)
+        if dtype == "complex128":
+            foreign_matrix += 0.5j
+            blosc_matrix = blosc2.full(
+                shape=shape_a, fill_value=3 + 2j, dtype=np.dtype(dtype), chunks=chunks
+            )
+
+        # Check this works
+        argspec = inspect.getfullargspec(func)
+        num_args = len(argspec.args)
+        npfunc = blosc2.linalg.nptranspose if name == "permute_dims" else getattr(np, name)
+        if num_args > 2 or name in ("outer", "matmul"):
+            try:
+                lexpr = func(blosc_matrix, foreign_matrix)
+            except NotImplementedError:
+                continue
+            foreign_matrix = np.asarray(foreign_matrix)
+            res = npfunc(blosc_matrix[()], foreign_matrix)
+        else:
+            try:
+                lexpr = func(foreign_matrix)
+            except NotImplementedError:
+                continue
+            except TypeError:
+                continue
+            foreign_matrix = np.asarray(foreign_matrix)
+            res = npfunc(foreign_matrix, 0) if name == "expand_dims" else npfunc(foreign_matrix)
+        np.testing.assert_array_equal(res, lexpr[()])
