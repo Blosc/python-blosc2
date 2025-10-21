@@ -144,11 +144,6 @@ def info(path, urlbase, params=None, headers=None, model=None, auth_token=None):
     return json if model is None else model(**json)
 
 
-def subscribe(root, urlbase, auth_token):
-    url = _sub_url(urlbase, f"api/subscribe/{root}")
-    return _xpost(url, auth_token=auth_token)
-
-
 def fetch_data(path, urlbase, params, auth_token=None, as_blosc2=False):
     url = _sub_url(urlbase, f"api/fetch/{path}")
     response = _xget(url, params=params, auth_token=auth_token)
@@ -237,15 +232,8 @@ class C2Array(blosc2.Operand):
         # Try to 'open' the remote path
         try:
             self.meta = info(self.path, self.urlbase, auth_token=self.auth_token)
-        except requests.HTTPError:
-            # Subscribe to root and try again. It is less latency to subscribe directly
-            # than to check for the subscription.
-            root, _ = self.path.split("/", 1)
-            subscribe(root, self.urlbase, self.auth_token)
-            try:
-                self.meta = info(self.path, self.urlbase, auth_token=self.auth_token)
-            except requests.HTTPError as err:
-                raise FileNotFoundError(f"Remote path not found: {path}.\nError was: {err}") from err
+        except requests.HTTPError as err:
+            raise FileNotFoundError(f"Remote path not found: {path}.\nError was: {err}") from err
         cparams = self.meta["schunk"]["cparams"]
         # Remove "filters, meta" from cparams; this is an artifact from the server
         cparams.pop("filters, meta", None)

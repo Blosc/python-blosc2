@@ -12,7 +12,7 @@ import pytest
 
 import blosc2
 
-ROOT = "b2tests"
+ROOT = "@public"
 DIR = "expr/"
 
 pytestmark = pytest.mark.network

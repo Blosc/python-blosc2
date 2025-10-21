@@ -18,7 +18,7 @@ import blosc2
 pytestmark = pytest.mark.network
 
 NITEMS_SMALL = 1_000
-ROOT = "b2tests"
+ROOT = "@public"
 DIR = "expr/"
 
 
@@ -71,7 +71,7 @@ def c2sub_user():
     def rand32():
         return random.randint(0, 0x7FFFFFFF)
 
-    urlbase = "https://demo-auth.caterva2.net/"
+    urlbase = "https://cat2.cloud/testing/"
     username = f"user+{rand32():x}@example.com"
     password = hex(rand32())
 

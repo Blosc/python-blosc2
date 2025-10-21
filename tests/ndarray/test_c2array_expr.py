@@ -16,7 +16,7 @@ from blosc2.lazyexpr import ne_evaluate
 pytestmark = pytest.mark.network
 
 NITEMS_SMALL = 1_000
-ROOT = "b2tests"
+ROOT = "@public"
 DIR = "expr/"
 
 
