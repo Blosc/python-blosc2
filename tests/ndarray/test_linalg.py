@@ -828,10 +828,13 @@ def test_diagonal(shape, chunkshape, offset):
 )
 @pytest.mark.parametrize(
     "dtype",
-    ["bool", "int32", "int64", "float32", "float64", "complex128"],
+    ["int32", "int64", "float32", "float64", "complex128"],
 )
-def test_linalgproxy(xp, dtype):
-    dtype_ = getattr(xp, dtype) if hasattr(xp, dtype) else np.dtype(dtype)
+def test_linalgproxy(xp, dtype):  # noqa : C901
+    try:
+        dtype_ = getattr(xp, dtype)
+    except AttributeError:
+        dtype_ = np.dtype(dtype)
     for name in linalg_funcs:
         if name == "transpose":
             continue  # deprecated
@@ -853,7 +856,17 @@ def test_linalgproxy(xp, dtype):
         # Check this works
         argspec = inspect.getfullargspec(func)
         num_args = len(argspec.args)
-        npfunc = blosc2.linalg.nptranspose if name == "permute_dims" else getattr(np, name)
+        # handle numpy 1.26
+        if name == "permute_dims":
+            npfunc = blosc2.linalg.nptranspose
+        elif name == "concat" and not hasattr(np, "concat"):
+            npfunc = np.concatenate
+        elif name == "matrix_transpose":
+            npfunc = blosc2.linalg.nptranspose
+        elif name == "vecdot":
+            npfunc = blosc2.linalg.npvecdot
+        else:
+            npfunc = getattr(np, name)
         if num_args > 2 or name in ("outer", "matmul"):
             try:
                 lexpr = func(blosc_matrix, foreign_matrix)

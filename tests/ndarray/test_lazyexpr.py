@@ -1786,7 +1786,10 @@ def test_lazyexpr_2args():
     ["bool", "int32", "int64", "float32", "float64", "complex128"],
 )
 def test_simpleproxy(xp, dtype):
-    dtype_ = getattr(xp, dtype) if hasattr(xp, dtype) else np.dtype(dtype)
+    try:
+        dtype_ = getattr(xp, dtype)
+    except AttributeError:
+        dtype_ = np.dtype(dtype)
     if dtype == "bool":
         blosc_matrix = blosc2.asarray([True, False, False], dtype=np.dtype(dtype), chunks=(2,))
         foreign_matrix = xp.zeros((3,), dtype=dtype_)
