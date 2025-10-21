@@ -886,7 +886,13 @@ def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C90
         return shape, None, None, False
 
     # More checks specific of NDArray inputs
-    NDinputs = [input for input in inputs if hasattr(input, "chunks")]
+    # NDInputs are either non-SimpleProxy with chunks or are SimpleProxy with src having chunks
+    NDinputs = [
+        input
+        for input in inputs
+        if (hasattr(input, "chunks") and not isinstance(input, blosc2.SimpleProxy))
+        or (isinstance(input, blosc2.SimpleProxy) and hasattr(input.src, "chunks"))
+    ]
     if not NDinputs:
         # All inputs are NumPy arrays, so we cannot take the fast path
         if inputs and hasattr(inputs[0], "shape"):

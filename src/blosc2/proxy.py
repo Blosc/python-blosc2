@@ -667,7 +667,11 @@ class SimpleProxy(blosc2.Operand):
         out: numpy.ndarray
             An array with the data slice.
         """
-        return np.asarray(self._src[item])  # avoids copy for PyTorch at least
+        out = self._src[item]
+        if not hasattr(out, "shape") or out.shape == ():
+            return out
+        else:
+            return np.asarray(out)  # avoids copy for PyTorch at least
 
 
 def as_simpleproxy(x: blosc2.Array) -> SimpleProxy | blosc2.Operand:
