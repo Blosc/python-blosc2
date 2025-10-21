@@ -1787,8 +1787,8 @@ def test_lazyexpr_2args():
 )
 def test_simpleproxy(xp, dtype):
     try:
-        dtype_ = getattr(xp, dtype)
-    except AttributeError:
+        dtype_ = getattr(xp, dtype) if hasattr(xp, dtype) else np.dtype(dtype)
+    except FutureWarning:
         dtype_ = np.dtype(dtype)
     if dtype == "bool":
         blosc_matrix = blosc2.asarray([True, False, False], dtype=np.dtype(dtype), chunks=(2,))

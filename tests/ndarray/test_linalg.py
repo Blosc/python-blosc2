@@ -830,11 +830,8 @@ def test_diagonal(shape, chunkshape, offset):
     "dtype",
     ["int32", "int64", "float32", "float64", "complex128"],
 )
-def test_linalgproxy(xp, dtype):  # noqa : C901
-    try:
-        dtype_ = getattr(xp, dtype)
-    except AttributeError:
-        dtype_ = np.dtype(dtype)
+def test_linalgproxy(xp, dtype):
+    dtype_ = getattr(xp, dtype) if hasattr(xp, dtype) else np.dtype(dtype)
     for name in linalg_funcs:
         if name == "transpose":
             continue  # deprecated
