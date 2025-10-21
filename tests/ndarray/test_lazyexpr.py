@@ -1702,7 +1702,9 @@ def test_lazylinalg():
     npres = np.squeeze(npD, -1)
     assert out.shape == npres.shape
     np.testing.assert_array_almost_equal(out[()], npres)
-
+    # refresh D since squeeze is in-place
+    s = shapes["D"]
+    D = blosc2.linspace(0, np.prod(s), shape=s)
     out = blosc2.lazyexpr("D.squeeze(axis=-1)")
     npres = np.squeeze(npD, -1)
     assert out.shape == npres.shape

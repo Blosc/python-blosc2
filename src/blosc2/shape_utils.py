@@ -391,14 +391,7 @@ class ShapeInferencer(ast.NodeVisitor):
         # --- Parse keyword args ---
         kwargs = {}
         for kw in node.keywords:
-            if isinstance(kw.value, ast.Constant):
-                kwargs[kw.arg] = kw.value.value
-            elif isinstance(kw.value, ast.Tuple):
-                kwargs[kw.arg] = tuple(
-                    e.value if isinstance(e, ast.Constant) else self._lookup_value(e) for e in kw.value.elts
-                )
-            else:
-                kwargs[kw.arg] = self._lookup_value(kw.value)
+            kwargs[kw.arg] = self._lookup_value(kw.value)
 
         # ------- handle linear algebra ---------------
         if base_name in linalg_funcs:
@@ -539,16 +532,61 @@ class ShapeInferencer(ast.NodeVisitor):
         else:
             raise ValueError(f"Unsupported slice expression: {ast.dump(node)}")
 
-    def _lookup_value(self, node):
+    def _lookup_value(self, node):  # noqa : C901
         """Look up a value in self.shapes if node is a variable name, else constant value."""
+        # Name -> lookup in shapes mapping
         if isinstance(node, ast.Name):
             return self.shapes.get(node.id, None)
-        elif isinstance(node, ast.Constant):
+
+        # Constant -> return its value
+        if isinstance(node, ast.Constant):
             return node.value
-        elif isinstance(node, ast.Tuple):
-            return tuple(e.value for e in node.elts)
-        else:
+
+        # Tuple of constants / expressions
+        if isinstance(node, ast.Tuple):
+            vals = []
+            for e in node.elts:
+                v = self._lookup_value(e)
+                vals.append(v)
+            return tuple(vals)
+
+        # Unary operations (e.g. -1)
+        if isinstance(node, ast.UnaryOp):
+            # handle negative constants like -1
+            if isinstance(node.op, ast.USub):
+                val = self._lookup_value(node.operand)
+                if isinstance(val, (int, float)):
+                    return -val
+            # handle + (USub) if needed
+            if isinstance(node.op, ast.UAdd):
+                return self._lookup_value(node.operand)
             return None
+
+        # Simple binary ops with constant operands (e.g. 1+2)
+        if isinstance(node, ast.BinOp):
+            left = self._lookup_value(node.left)
+            right = self._lookup_value(node.right)
+            if left is None or right is None:
+                return None
+            try:
+                if isinstance(node.op, ast.Add):
+                    return left + right
+                if isinstance(node.op, ast.Sub):
+                    return left - right
+                if isinstance(node.op, ast.Mult):
+                    return left * right
+                if isinstance(node.op, ast.FloorDiv):
+                    return left // right
+                if isinstance(node.op, ast.Div):
+                    return left / right
+                if isinstance(node.op, ast.Mod):
+                    return left % right
+            except Exception:
+                return None
+            return None
+
+        # fallback
+        return None
 
 
 # --- Public API ---
