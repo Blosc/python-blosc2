@@ -359,12 +359,7 @@ def test_functions(function, dtype_fixture, shape_fixture):
 )
 @pytest.mark.parametrize(
     ("value1", "value2"),
-    [
-        ("NDArray", "scalar"),
-        ("NDArray", "NDArray"),
-        ("scalar", "NDArray"),
-        # ("scalar", "scalar") # Not supported by LazyExpr
-    ],
+    [("NDArray", "scalar"), ("NDArray", "NDArray"), ("scalar", "NDArray"), ("scalar", "scalar")],
 )
 def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, value2):
     nelems = np.prod(shape_fixture)
@@ -406,7 +401,7 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
             else:
                 expr_string = f"{function}(na1, value2)"
                 res_numexpr = ne_evaluate(expr_string)
-    else:  # ("scalar", "NDArray")
+    elif value2 == "NDArray":  # ("scalar", "NDArray")
         value1 = 12
         na2 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
         a2 = blosc2.asarray(na2, urlpath=urlpath2, mode="w")
@@ -422,9 +417,21 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
         else:
             expr_string = f"{function}(value1, na2)"
             res_numexpr = ne_evaluate(expr_string)
+    else:  # ("scalar", "scalar")
+        value1 = 12
+        value2 = 3
+        # Construct the lazy expression based on the function name
+        expr = blosc2.LazyExpr(new_op=(value1, function, value2))
+        res_lazyexpr = expr.compute()
+        # Evaluate using NumExpr
+        if function == "**":
+            res_numexpr = ne_evaluate("value1**value2")
+        else:
+            expr_string = f"{function}(value1, value2)"
+            res_numexpr = ne_evaluate(expr_string)
     # Compare the results
     tol = 1e-15 if dtype_fixture == "float64" else 1e-6
-    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, atol=tol, rtol=tol)
+    np.testing.assert_allclose(res_lazyexpr[()], res_numexpr, atol=tol, rtol=tol)
 
     for path in [urlpath1, urlpath2, urlpath_save]:
         blosc2.remove_urlpath(path)
@@ -1510,6 +1517,11 @@ def test_scalar_dtypes(values):
     avalue2 = blosc2.asarray(value2) if not np.isscalar(value2) else value2
     dtype2 = (avalue1 * avalue2).dtype
     assert dtype1 == dtype2, f"Expected {dtype1} but got {dtype2}"
+
+    # test scalars
+    value = value1 if np.isscalar(value1) else value2
+    assert blosc2.sin(value)[()] == np.sin(value)
+    assert (value + blosc2.sin(value))[()] == value + np.sin(value)
 
 
 def test_to_cframe():

@@ -2274,6 +2274,9 @@ class LazyExpr(LazyArray):
                 self.expression = value1.expression if op is None else f"{op}({value1.expression})"
                 self.operands = value1.operands
             else:
+                if np.isscalar(value1):
+                    value1 = ne_evaluate(f"{op}({value1})")
+                    op = None
                 self.operands = {"o0": value1}
                 self.expression = "o0" if op is None else f"{op}(o0)"
             return
@@ -2293,7 +2296,8 @@ class LazyExpr(LazyArray):
             return
         elif op in funcs_2args:
             if np.isscalar(value1) and np.isscalar(value2):
-                self.expression = f"{op}({value1}, {value2})"
+                self.expression = "o0"
+                self.operands = {"o0": ne_evaluate(f"{op}({value1}, {value2})")}  # eager evaluation
             elif np.isscalar(value2):
                 self.operands = {"o0": value1}
                 self.expression = f"{op}(o0, {value2})"
@@ -2307,7 +2311,8 @@ class LazyExpr(LazyArray):
 
         self._dtype = dtype_
         if np.isscalar(value1) and np.isscalar(value2):
-            self.expression = f"({value1} {op} {value2})"
+            self.expression = "o0"
+            self.operands = {"o0": ne_evaluate(f"({value1} {op} {value2})")}  # eager evaluation
         elif np.isscalar(value2):
             self.operands = {"o0": value1}
             self.expression = f"(o0 {op} {value2})"
