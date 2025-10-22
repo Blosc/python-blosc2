@@ -12,7 +12,7 @@ import pytest
 
 import blosc2
 
-ROOT = "b2tests"
+ROOT = "@public"
 DIR = "expr/"
 
 pytestmark = pytest.mark.network
@@ -34,7 +34,7 @@ def udf1p(inputs_tuple, output, offset):
         ),
     ],
 )
-def test_1p(chunks, blocks, chunked_eval, c2sub_context):
+def test_1p(chunks, blocks, chunked_eval, cat2_context):
     dtype = np.float64
     shape = (60, 60)
     urlpath = f"ds-0-10-linspace-{dtype.__name__}-(True, False)-a1-{shape}d.b2nd"
@@ -71,7 +71,7 @@ def udf2p(inputs_tuple, output, offset):
         pytest.param((53, 20), (10, 13), (slice(3, 8), slice(9, 12)), None, False),
     ],
 )
-def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, c2sub_context):
+def test_getitem(chunks, blocks, slices, urlpath, contiguous, chunked_eval, cat2_context):
     dtype = np.float64
     shape = (60, 60)
     blosc2.remove_urlpath(urlpath)

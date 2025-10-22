@@ -15,7 +15,7 @@ import blosc2
 pytestmark = pytest.mark.network
 
 NITEMS_SMALL = 1_000
-ROOT = "b2tests"
+ROOT = "@public"
 DIR = "expr/"
 
 
@@ -44,7 +44,7 @@ def get_array(shape, chunks_blocks):
         ("proxy", (slice(37, 53), slice(19, 233))),
     ],
 )
-def test_simple(chunks_blocks, c2sub_context, urlpath, slices):
+def test_simple(chunks_blocks, cat2_context, urlpath, slices):
     shape = (60, 60)
     a = get_array(shape, chunks_blocks)
     b = blosc2.Proxy(a, urlpath=urlpath, mode="w")
@@ -62,7 +62,7 @@ def test_simple(chunks_blocks, c2sub_context, urlpath, slices):
     blosc2.remove_urlpath(urlpath)
 
 
-def test_small(c2sub_context):
+def test_small(cat2_context):
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
     a = get_array(shape, chunks_blocks)
@@ -77,7 +77,7 @@ def test_small(c2sub_context):
     np.testing.assert_allclose(cache[...], a[...])
 
 
-def test_open(c2sub_context):
+def test_open(cat2_context):
     urlpath = "proxy.b2nd"
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"

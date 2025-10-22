@@ -18,11 +18,11 @@ import blosc2
 pytestmark = pytest.mark.network
 
 NITEMS_SMALL = 1_000
-ROOT = "b2tests"
+ROOT = "@public"
 DIR = "expr/"
 
 
-def test_open_c2array(c2sub_context):
+def test_open_c2array(cat2_context):
     dtype = np.float64
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
@@ -50,7 +50,7 @@ def test_open_c2array(c2sub_context):
         _ = blosc2.open(urlpath, mode="r", offset=0, cparams={})
 
 
-def test_open_c2array_args(c2sub_context):  # instance args prevail
+def test_open_c2array_args(cat2_context):  # instance args prevail
     dtype = np.float64
     shape = (NITEMS_SMALL,)
     chunks_blocks = "default"
@@ -58,8 +58,8 @@ def test_open_c2array_args(c2sub_context):  # instance args prevail
     path = pathlib.Path(f"{ROOT}/{DIR + path}").as_posix()
 
     with blosc2.c2context(urlbase="https://wrong.example.com/", auth_token="wrong-token"):
-        urlbase = c2sub_context["urlbase"]
-        auth_token = blosc2.c2array.login(**c2sub_context) if c2sub_context["username"] else None
+        urlbase = cat2_context["urlbase"]
+        auth_token = blosc2.c2array.login(**cat2_context) if cat2_context["username"] else None
         a1 = blosc2.C2Array(path, urlbase=urlbase, auth_token=auth_token)
         urlpath = blosc2.URLPath(path, urlbase=urlbase, auth_token=auth_token)
         a_open = blosc2.open(urlpath, mode="r", offset=0)
@@ -71,7 +71,7 @@ def c2sub_user():
     def rand32():
         return random.randint(0, 0x7FFFFFFF)
 
-    urlbase = "https://demo-auth.caterva2.net/"
+    urlbase = "https://cat2.cloud/testing/"
     username = f"user+{rand32():x}@example.com"
     password = hex(rand32())
 

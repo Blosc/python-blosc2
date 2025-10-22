@@ -15,7 +15,7 @@ from blosc2.lazyexpr import ne_evaluate
 
 pytestmark = pytest.mark.network
 
-ROOT = "b2tests"
+ROOT = "@public"
 DIR = "expr/"
 
 
@@ -60,7 +60,7 @@ def get_arrays(shape, chunks_blocks):
         (False, False),
     ],
 )
-def test_expr_proxy_operands(chunks_blocks, c2sub_context):
+def test_expr_proxy_operands(chunks_blocks, cat2_context):
     shape = (60, 60)
     a1, a2, a3, a4, na1, na2, na3, na4, cleanup_paths = get_arrays(shape, chunks_blocks)
 
