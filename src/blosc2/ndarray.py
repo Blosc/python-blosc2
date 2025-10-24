@@ -868,6 +868,60 @@ def any(
     return ndarr.any(axis=axis, keepdims=keepdims, **kwargs)
 
 
+def argmin(
+    ndarr: blosc2.Array, axis: int | None = None, keepdims: bool = False, **kwargs
+) -> blosc2.Array | int:
+    """
+    Returns the indices of the minimum values along a specified axis.
+
+    When the minimum value occurs multiple times, only the indices corresponding to the first occurrence are returned.
+
+    Parameters
+    ----------
+    x: blosc2.Array
+        Input array. Should have a real-valued data type.
+
+    axis: int | None
+        Axis along which to search. If None, return index of the minimum value of flattened array. Default: None.
+
+    keepdims: bool
+        If True, reduced axis included in the result as singleton dimension. Otherwise, axis not included in the result. Default: False.
+
+    Returns
+    -------
+    out: blosc2.Array
+        If axis is None, a zero-dimensional array containing the index of the first occurrence of the minimum value; otherwise, a non-zero-dimensional array containing the indices of the minimum values.
+    """
+    return ndarr.argmin(axis=axis, keepdims=keepdims, **kwargs)
+
+
+def argmax(
+    ndarr: blosc2.Array, axis: int | None = None, keepdims: bool = False, **kwargs
+) -> blosc2.Array | int:
+    """
+    Returns the indices of the maximum values along a specified axis.
+
+    When the maximum value occurs multiple times, only the indices corresponding to the first occurrence are returned.
+
+    Parameters
+    ----------
+    x: blosc2.Array
+        Input array. Should have a real-valued data type.
+
+    axis: int | None
+        Axis along which to search. If None, return index of the maximum value of flattened array. Default: None.
+
+    keepdims: bool
+        If True, reduced axis included in the result as singleton dimension. Otherwise, axis not included in the result. Default: False.
+
+    Returns
+    -------
+    out: blosc2.Array
+        If axis is None, a zero-dimensional array containing the index of the first occurrence of the maximum value; otherwise, a non-zero-dimensional array containing the indices of the maximum values.
+    """
+    return ndarr.argmax(axis=axis, keepdims=keepdims, **kwargs)
+
+
 def all(
     ndarr: blosc2.Array,
     axis: int | tuple[int] | None = None,
@@ -3354,6 +3408,16 @@ class Operand:
     def max(self, axis=None, keepdims=False, **kwargs):
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.max(axis=axis, keepdims=keepdims, **kwargs)
+
+    @is_documented_by(argmax)
+    def argmax(self, axis=None, keepdims=False, **kwargs):
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.argmax(axis=axis, keepdims=keepdims, **kwargs)
+
+    @is_documented_by(argmin)
+    def argmin(self, axis=None, keepdims=False, **kwargs):
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.argmin(axis=axis, keepdims=keepdims, **kwargs)
 
     @is_documented_by(any)
     def any(self, axis=None, keepdims=False, **kwargs):
