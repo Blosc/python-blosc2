@@ -10,6 +10,7 @@ import pathlib
 
 import numpy as np
 import pytest
+import torch
 
 import blosc2
 from blosc2.lazyexpr import ne_evaluate
@@ -358,12 +359,7 @@ def test_functions(function, dtype_fixture, shape_fixture):
 )
 @pytest.mark.parametrize(
     ("value1", "value2"),
-    [
-        ("NDArray", "scalar"),
-        ("NDArray", "NDArray"),
-        ("scalar", "NDArray"),
-        # ("scalar", "scalar") # Not supported by LazyExpr
-    ],
+    [("NDArray", "scalar"), ("NDArray", "NDArray"), ("scalar", "NDArray"), ("scalar", "scalar")],
 )
 def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, value2):
     nelems = np.prod(shape_fixture)
@@ -405,7 +401,7 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
             else:
                 expr_string = f"{function}(na1, value2)"
                 res_numexpr = ne_evaluate(expr_string)
-    else:  # ("scalar", "NDArray")
+    elif value2 == "NDArray":  # ("scalar", "NDArray")
         value1 = 12
         na2 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
         a2 = blosc2.asarray(na2, urlpath=urlpath2, mode="w")
@@ -421,9 +417,21 @@ def test_arctan2_pow(urlpath, shape_fixture, dtype_fixture, function, value1, va
         else:
             expr_string = f"{function}(value1, na2)"
             res_numexpr = ne_evaluate(expr_string)
+    else:  # ("scalar", "scalar")
+        value1 = 12
+        value2 = 3
+        # Construct the lazy expression based on the function name
+        expr = blosc2.LazyExpr(new_op=(value1, function, value2))
+        res_lazyexpr = expr.compute()
+        # Evaluate using NumExpr
+        if function == "**":
+            res_numexpr = ne_evaluate("value1**value2")
+        else:
+            expr_string = f"{function}(value1, value2)"
+            res_numexpr = ne_evaluate(expr_string)
     # Compare the results
     tol = 1e-15 if dtype_fixture == "float64" else 1e-6
-    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, atol=tol, rtol=tol)
+    np.testing.assert_allclose(res_lazyexpr[()], res_numexpr, atol=tol, rtol=tol)
 
     for path in [urlpath1, urlpath2, urlpath_save]:
         blosc2.remove_urlpath(path)
@@ -1195,7 +1203,7 @@ def test_fill_disk_operands(chunks, blocks, disk, fill_value):
         b = blosc2.open("b.b2nd")
         c = blosc2.open("c.b2nd")
 
-    expr = ((a**3 + blosc2.sin(c * 2)) < b) & (c > 0)
+    expr = ((a**3 + blosc2.sin(c * 2)) < b) & ~(c > 0)
 
     out = expr.compute()
     assert out.shape == (N, N)
@@ -1510,6 +1518,11 @@ def test_scalar_dtypes(values):
     dtype2 = (avalue1 * avalue2).dtype
     assert dtype1 == dtype2, f"Expected {dtype1} but got {dtype2}"
 
+    # test scalars
+    value = value1 if np.isscalar(value1) else value2
+    assert blosc2.sin(value)[()] == np.sin(value)
+    assert (value + blosc2.sin(value))[()] == value + np.sin(value)
+
 
 def test_to_cframe():
     N = 1_000
@@ -1697,13 +1710,15 @@ def test_lazylinalg():
     np.testing.assert_array_almost_equal(out[()], npres)
 
     # --- squeeze ---
-    out = blosc2.lazyexpr("squeeze(D)")
-    npres = np.squeeze(npD)
+    out = blosc2.lazyexpr("squeeze(D, axis=-1)")
+    npres = np.squeeze(npD, -1)
     assert out.shape == npres.shape
     np.testing.assert_array_almost_equal(out[()], npres)
-
-    out = blosc2.lazyexpr("D.squeeze()")
-    npres = np.squeeze(npD)
+    # refresh D since squeeze is in-place
+    s = shapes["D"]
+    D = blosc2.linspace(0, np.prod(s), shape=s)
+    out = blosc2.lazyexpr("D.squeeze(axis=-1)")
+    npres = np.squeeze(npD, -1)
     assert out.shape == npres.shape
     np.testing.assert_array_almost_equal(out[()], npres)
 
@@ -1714,8 +1729,12 @@ def test_lazylinalg():
     np.testing.assert_array_almost_equal(out[()], npres)
 
     # --- tensordot ---
-    out = blosc2.lazyexpr("tensordot(A, B, axes=1)")
+    out = blosc2.lazyexpr("tensordot(A, B, axes=1)")  # test with int axes
     npres = np.tensordot(npA, npB, axes=1)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+    out = blosc2.lazyexpr("tensordot(A, B, axes=((1,) , (0,)))")  # test with tuple axes
+    npres = np.tensordot(npA, npB, axes=((1,), (0,)))
     assert out.shape == npres.shape
     np.testing.assert_array_almost_equal(out[()], npres)
 
@@ -1768,3 +1787,55 @@ def test_lazyexpr_2args():
     newexpr = blosc2.hypot(lexpr, 3)
     assert newexpr.expression == "hypot((sin(o0)), 3)"
     assert newexpr.operands["o0"] is a
+
+
+@pytest.mark.parametrize(
+    "xp",
+    [torch, np],
+)
+@pytest.mark.parametrize(
+    "dtype",
+    ["bool", "int32", "int64", "float32", "float64", "complex128"],
+)
+def test_simpleproxy(xp, dtype):
+    try:
+        dtype_ = getattr(xp, dtype) if hasattr(xp, dtype) else np.dtype(dtype)
+    except FutureWarning:
+        dtype_ = np.dtype(dtype)
+    if dtype == "bool":
+        blosc_matrix = blosc2.asarray([True, False, False], dtype=np.dtype(dtype), chunks=(2,))
+        foreign_matrix = xp.zeros((3,), dtype=dtype_)
+        # Create a lazy expression object
+        lexpr = blosc2.lazyexpr(
+            "(b & a) | (~b)", operands={"a": blosc_matrix, "b": foreign_matrix}
+        )  # this does not
+        # Compare with numpy computation result
+        npb = np.asarray(foreign_matrix)
+        npa = blosc_matrix[()]
+        res = (npb & npa) | np.logical_not(npb)
+    else:
+        N = 10
+        shape_a = (N, N, N)
+        blosc_matrix = blosc2.full(shape=shape_a, fill_value=3, dtype=np.dtype(dtype), chunks=(N // 3,) * 3)
+        foreign_matrix = xp.ones(shape_a, dtype=dtype_)
+        if dtype == "complex128":
+            foreign_matrix += 0.5j
+            blosc_matrix = blosc2.full(
+                shape=shape_a, fill_value=3 + 2j, dtype=np.dtype(dtype), chunks=(N // 3,) * 3
+            )
+
+        # Create a lazy expression object
+        lexpr = blosc2.lazyexpr(
+            "b + sin(a) + sum(b) - tensordot(a, b, axes=1)",
+            operands={"a": blosc_matrix, "b": foreign_matrix},
+        )  # this does not
+        # Compare with numpy computation result
+        npb = np.asarray(foreign_matrix)
+        npa = blosc_matrix[()]
+        res = npb + np.sin(npa) + np.sum(npb) - np.tensordot(npa, npb, axes=1)
+
+    # Test object metadata and result
+    assert isinstance(lexpr, blosc2.LazyExpr)
+    assert lexpr.dtype == res.dtype
+    assert lexpr.shape == res.shape
+    np.testing.assert_array_equal(lexpr[()], res)

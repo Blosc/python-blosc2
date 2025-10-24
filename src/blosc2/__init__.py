@@ -445,7 +445,7 @@ from .lazyexpr import (
     result_type,
     can_cast,
 )
-from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy, jit
+from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy, jit, as_simpleproxy
 
 from .schunk import SChunk, open
 from . import linalg
@@ -648,6 +648,7 @@ __all__ = [  # noqa : RUF022
     "asarray",
     "asin",
     "asinh",
+    "as_simpleproxy",
     "astype",
     "atan",
     "atan2",

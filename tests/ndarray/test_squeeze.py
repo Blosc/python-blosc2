@@ -19,7 +19,6 @@ import blosc2
         ((23, 1, 1, 34), (20, 1, 1, 20), None, 1234, 2),
         ((80, 1, 51, 60, 1), None, (6, 1, 6, 26, 1), 3.333, 4),
         ((1, 1, 1), None, None, True, (1, 2)),
-        ((1, 1, 1), None, None, True, None),
     ],
 )
 def test_squeeze(shape, chunks, blocks, fill_value, axis):

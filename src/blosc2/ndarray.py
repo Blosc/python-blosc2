@@ -42,10 +42,12 @@ if NUMPY_GE_2_0:  # array-api compliant
     nprshift = np.bitwise_right_shift
     npbinvert = np.bitwise_invert
     npvecdot = np.vecdot
+    nptranspose = np.permute_dims
 else:  # not array-api compliant
     nplshift = np.left_shift
     nprshift = np.right_shift
     npbinvert = np.bitwise_not
+    nptranspose = np.transpose
 
     def npvecdot(a, b, axis=-1):
         return np.einsum("...i,...i->...", np.moveaxis(np.conj(a), axis, -1), np.moveaxis(b, axis, -1))
@@ -2969,7 +2971,8 @@ def clip(
         x, min, max = inputs
         output[:] = np.clip(x, min, max)
 
-    return blosc2.lazyudf(chunkwise_clip, (x, min, max), dtype=x.dtype, shape=x.shape, **kwargs)
+    dtype = blosc2.result_type(x)
+    return blosc2.lazyudf(chunkwise_clip, (x, min, max), dtype=dtype, shape=x.shape, **kwargs)
 
 
 def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array, **kwargs: Any) -> NDArray:
@@ -3001,7 +3004,7 @@ def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array, **
         x1, x2 = inputs
         output[:] = np.logaddexp(x1, x2)
 
-    dtype = blosc2.result_type(x1.dtype, x2.dtype)
+    dtype = blosc2.result_type(x1, x2)
     if dtype == blosc2.bool_:
         raise TypeError("logaddexp doesn't accept boolean arguments.")
 
@@ -4639,7 +4642,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return ndslice
 
-    def squeeze(self, axis=None) -> NDArray:
+    def squeeze(self, axis: int | Sequence[int]) -> NDArray:
         """Remove single-dimensional entries from the shape of the array.
 
         This method modifies the array in-place. If mask is None removes any dimensions with size 1.
@@ -4663,18 +4666,15 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> a.shape
         (23, 11)
         """
-        if axis is None:
-            super().squeeze()
-        else:
-            axis = [axis] if isinstance(axis, int) else axis
-            mask = [False for i in range(self.ndim)]
-            for a in axis:
-                if a < 0:
-                    a += self.ndim  # Adjust axis to be within the array's dimensions
-                if mask[a]:
-                    raise ValueError("Axis values must be unique.")
-                mask[a] = True
-            super().squeeze(mask=mask)
+        axis = [axis] if isinstance(axis, int) else axis
+        mask = [False for i in range(self.ndim)]
+        for a in axis:
+            if a < 0:
+                a += self.ndim  # Adjust axis to be within the array's dimensions
+            if mask[a]:
+                raise ValueError("Axis values must be unique.")
+            mask[a] = True
+        super().squeeze(mask=mask)
         return self
 
     def indices(self, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
@@ -4708,17 +4708,23 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return blosc2.linalg.matmul(self, other)
 
 
-def squeeze(x: NDArray, axis: int | None = None) -> NDArray:
+def squeeze(x: Array, axis: int | Sequence[int]) -> NDArray:
     """
     Remove single-dimensional entries from the shape of the array.
 
-    This method modifies the array in-place. If mask is None removes any dimensions with size 1.
-    If axis is provided, it should be an int or tuple of ints and the corresponding
-    dimensions (of size 1) will be removed.
+    This method modifies the array in-place.
+
+    Parameters
+    ----------
+    x: Array
+        input array.
+    axis: int | Sequence[int]
+        Axis (or axes) to squeeze.
 
     Returns
     -------
-    out: NDArray
+    out: Array
+        An output array having the same data type and elements as x.
 
     Examples
     --------
@@ -5653,7 +5659,8 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
         raise ValueError("Only unsafe casting is supported at the moment.")
     if not hasattr(array, "shape"):
         array = np.asarray(array)  # defaults if dtype=None
-    dtype = kwargs.pop("dtype", array.dtype)  # check if dtype provided
+    dtype_ = blosc2.proxy._convert_dtype(array.dtype)
+    dtype = kwargs.pop("dtype", dtype_)  # check if dtype provided
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
     blocks = kwargs.pop("blocks", None)
@@ -5664,14 +5671,14 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
     # Let's avoid this
     if blocks is None and hasattr(array, "blocks") and isinstance(array.blocks, (tuple, list)):
         blocks = array.blocks
-    chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, array.dtype, **kwargs)
 
     copy = True if copy is None and not isinstance(array, NDArray) else copy
     if copy:
+        chunks, blocks = compute_chunks_blocks(array.shape, chunks, blocks, dtype_, **kwargs)
         # Fast path for small arrays. This is not too expensive in terms of memory consumption.
         shape = array.shape
         small_size = 2**24  # 16 MB
-        array_nbytes = math.prod(shape) * array.dtype.itemsize
+        array_nbytes = math.prod(shape) * dtype_.itemsize
         if array_nbytes < small_size:
             if not isinstance(array, np.ndarray) and hasattr(array, "chunks"):
                 # A getitem operation should be enough to get a numpy array
@@ -5682,7 +5689,7 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
             return blosc2_ext.asarray(array, chunks, blocks, **kwargs)
 
         # Create the empty array
-        ndarr = empty(shape, array.dtype, chunks=chunks, blocks=blocks, **kwargs)
+        ndarr = empty(shape, dtype_, chunks=chunks, blocks=blocks, **kwargs)
         behaved = are_partitions_behaved(shape, chunks, blocks)
 
         # Get the coordinates of the chunks

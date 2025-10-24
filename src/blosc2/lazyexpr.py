@@ -47,6 +47,7 @@ from blosc2.ndarray import (
     process_key,
 )
 
+from .proxy import _convert_dtype
 from .shape_utils import constructors, elementwise_funcs, infer_shape, linalg_attrs, linalg_funcs, reducers
 
 if not blosc2.IS_WASM:
@@ -433,13 +434,13 @@ def convert_inputs(inputs):
         return []
     inputs_ = []
     for obj in inputs:
-        if not isinstance(obj, blosc2.Array) and not np.isscalar(obj):
+        if not isinstance(obj, (np.ndarray, blosc2.Operand)) and not np.isscalar(obj):
             try:
-                obj = np.asarray(obj)
+                obj = blosc2.SimpleProxy(obj)
             except Exception:
                 print(
                     "Inputs not being np.ndarray, Array or Python scalar objects"
-                    " should be convertible to np.ndarray."
+                    " should be convertible to SimpleProxy."
                 )
                 raise
         inputs_.append(obj)
@@ -885,7 +886,13 @@ def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C90
         return shape, None, None, False
 
     # More checks specific of NDArray inputs
-    NDinputs = [input for input in inputs if hasattr(input, "chunks")]
+    # NDInputs are either non-SimpleProxy with chunks or are SimpleProxy with src having chunks
+    NDinputs = [
+        input
+        for input in inputs
+        if (hasattr(input, "chunks") and not isinstance(input, blosc2.SimpleProxy))
+        or (isinstance(input, blosc2.SimpleProxy) and hasattr(input.src, "chunks"))
+    ]
     if not NDinputs:
         # All inputs are NumPy arrays, so we cannot take the fast path
         if inputs and hasattr(inputs[0], "shape"):
@@ -1076,9 +1083,9 @@ def fill_chunk_operands(  # noqa: C901
         if nchunk == 0:
             # Initialize the iterator for reading the chunks
             # Take any operand (all should have the same shape and chunks)
-            arr = next(iter(operands.values()))
+            key, arr = next(iter(operands.items()))
             chunks_idx, _ = get_chunks_idx(arr.shape, arr.chunks)
-            info = (reduc, aligned, low_mem, chunks_idx)
+            info = (reduc, aligned[key], low_mem, chunks_idx)
             iter_chunks = read_nchunk(list(operands.values()), info)
         # Run the asynchronous file reading function from a synchronous context
         chunks = next(iter_chunks)
@@ -1094,7 +1101,7 @@ def fill_chunk_operands(  # noqa: C901
                 # The chunk is a special zero chunk, so we can treat it as a scalar
                 chunk_operands[key] = np.zeros((), dtype=value.dtype)
                 continue
-            if aligned:
+            if aligned[key]:
                 buff = blosc2.decompress2(chunks[i])
                 bsize = value.dtype.itemsize * math.prod(chunks_)
                 chunk_operands[key] = np.frombuffer(buff[:bsize], dtype=value.dtype).reshape(chunks_)
@@ -1112,10 +1119,6 @@ def fill_chunk_operands(  # noqa: C901
             continue
         if value.shape == ():
             chunk_operands[key] = value[()]
-            continue
-
-        if isinstance(value, np.ndarray | blosc2.C2Array):
-            chunk_operands[key] = value[slice_]
             continue
 
         if not full_chunk or not isinstance(value, blosc2.NDArray):
@@ -1142,7 +1145,7 @@ def fill_chunk_operands(  # noqa: C901
             value.get_slice_numpy(chunk_operands[key], (starts, stops))
             continue
 
-        if aligned:
+        if aligned[key]:
             # Decompress the whole chunk and store it
             buff = value.schunk.decompress_chunk(nchunk)
             bsize = value.dtype.itemsize * math.prod(chunks_)
@@ -1202,7 +1205,10 @@ def fast_eval(  # noqa: C901
     if blocks is None:
         blocks = basearr.blocks
     # Check whether the partitions are aligned and behaved
-    aligned = blosc2.are_partitions_aligned(shape, chunks, blocks)
+    aligned = {
+        k: False if not hasattr(k, "chunks") else blosc2.are_partitions_aligned(k.shape, k.chunks, k.blocks)
+        for k in operands
+    }
     behaved = blosc2.are_partitions_behaved(shape, chunks, blocks)
 
     # Check that all operands are NDArray for fast path
@@ -1226,7 +1232,7 @@ def fast_eval(  # noqa: C901
         offset = tuple(s.start for s in cslice)  # offset for the udf
         chunks_ = tuple(s.stop - s.start for s in cslice)
 
-        full_chunk = chunks_ == chunks
+        full_chunk = chunks_ == chunks  # slice is same as chunk
         fill_chunk_operands(
             operands, cslice, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands
         )
@@ -1810,7 +1816,7 @@ def reduce_slices(  # noqa: C901
         same_chunks = all(operand.chunks == o.chunks for o in operands.values() if hasattr(o, "chunks"))
         same_blocks = all(operand.blocks == o.blocks for o in operands.values() if hasattr(o, "blocks"))
         fast_path = same_shape and same_chunks and same_blocks and (0 not in operand.chunks)
-        aligned, iter_disk = False, False
+        aligned, iter_disk = dict.fromkeys(operands.keys(), False), False
         if fast_path:
             chunks = operand.chunks
             # Check that all operands are NDArray for fast path
@@ -2213,7 +2219,9 @@ def result_type(
     # Follow NumPy rules for scalar-array operations
     # Create small arrays with the same dtypes and let NumPy's type promotion determine the result type
     arrs = [
-        value if (np.isscalar(value) or not hasattr(value, "dtype")) else np.array([0], dtype=value.dtype)
+        value
+        if (np.isscalar(value) or not hasattr(value, "dtype"))
+        else np.array([0], dtype=_convert_dtype(value.dtype))
         for value in arrays_and_dtypes
     ]
     return np.result_type(*arrs)
@@ -2255,15 +2263,29 @@ class LazyExpr(LazyArray):
             return
         value1, op, value2 = new_op
         dtype_ = check_dtype(op, value1, value2)  # perform some checks
+        # Check that operands are proper Operands, LazyArray or scalars; if not, convert to NDArray objects
+        value1 = (
+            blosc2.SimpleProxy(value1)
+            if not (isinstance(value1, (blosc2.Operand, np.ndarray)) or np.isscalar(value1))
+            else value1
+        )
         if value2 is None:
             if isinstance(value1, LazyExpr):
                 self.expression = value1.expression if op is None else f"{op}({value1.expression})"
                 self.operands = value1.operands
             else:
+                if np.isscalar(value1):
+                    value1 = ne_evaluate(f"{op}({value1})")
+                    op = None
                 self.operands = {"o0": value1}
                 self.expression = "o0" if op is None else f"{op}(o0)"
             return
-        elif isinstance(value1, LazyExpr) or isinstance(value2, LazyExpr):
+        value2 = (
+            blosc2.SimpleProxy(value2)
+            if not (isinstance(value2, (blosc2.Operand, np.ndarray)) or np.isscalar(value2))
+            else value2
+        )
+        if isinstance(value1, LazyExpr) or isinstance(value2, LazyExpr):
             if isinstance(value1, LazyExpr):
                 newexpr = value1.update_expr(new_op)
             else:
@@ -2274,7 +2296,8 @@ class LazyExpr(LazyArray):
             return
         elif op in funcs_2args:
             if np.isscalar(value1) and np.isscalar(value2):
-                self.expression = f"{op}({value1}, {value2})"
+                self.expression = "o0"
+                self.operands = {"o0": ne_evaluate(f"{op}({value1}, {value2})")}  # eager evaluation
             elif np.isscalar(value2):
                 self.operands = {"o0": value1}
                 self.expression = f"{op}(o0, {value2})"
@@ -2288,7 +2311,8 @@ class LazyExpr(LazyArray):
 
         self._dtype = dtype_
         if np.isscalar(value1) and np.isscalar(value2):
-            self.expression = f"({value1} {op} {value2})"
+            self.expression = "o0"
+            self.operands = {"o0": ne_evaluate(f"({value1} {op} {value2})")}  # eager evaluation
         elif np.isscalar(value2):
             self.operands = {"o0": value1}
             self.expression = f"(o0 {op} {value2})"
@@ -2530,7 +2554,7 @@ class LazyExpr(LazyArray):
         # This just acts as a 'decorator' for the existing expression
         if value1 is not None and value2 is not None:
             # Guess the outcome dtype for value1 and value2
-            dtype = np.result_type(value1, value2)
+            dtype = blosc2.result_type(value1, value2)
             args = {"_where_x": value1, "_where_y": value2}
         elif value1 is not None:
             if hasattr(value1, "dtype"):
@@ -2736,7 +2760,7 @@ class LazyExpr(LazyArray):
 
     def _compute_expr(self, item, kwargs):  # noqa : C901
         # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp)
-        # that are implemenetd in python-blosc2 not in numexpr
+        # that are implemented in python-blosc2 not in numexpr
         global safe_blosc2_globals
         if len(safe_blosc2_globals) == 0:
             # First eval call, fill blosc2_safe_globals for ne_evaluate
@@ -2881,7 +2905,7 @@ class LazyExpr(LazyArray):
         # Squeeze single-element dimensions when indexing with integers
         # See e.g. examples/ndarray/animated_plot.py
         if isinstance(item, int) or (hasattr(item, "__iter__") and any(isinstance(i, int) for i in item)):
-            result = result.squeeze()
+            result = result.squeeze(axis=tuple(i for i in range(result.ndim) if result.shape[i] == 1))
         return result
 
     def slice(self, item):
@@ -3008,7 +3032,7 @@ class LazyExpr(LazyArray):
             _operands = operands | local_vars
             # Check that operands are proper Operands, LazyArray or scalars; if not, convert to NDArray objects
             for op, val in _operands.items():
-                if not (isinstance(val, (blosc2.Operand, blosc2.LazyArray, np.ndarray)) or np.isscalar(val)):
+                if not (isinstance(val, (blosc2.Operand, np.ndarray)) or np.isscalar(val)):
                     _operands[op] = blosc2.SimpleProxy(val)
             # for scalars just return value (internally converts to () if necessary)
             opshapes = {k: v if not hasattr(v, "shape") else v.shape for k, v in _operands.items()}

@@ -5,6 +5,8 @@ Once you have written a (public API) function in Blosc2, it is important to:
 * Add it to the list of functions in ``__all__`` in the ``__init__.py`` file
 * If it is present in numpy, add it to the relevant dictionary (``local_ufunc_map``, ``ufunc_map`` ``ufunc_map_1param``) in ``ndarray.py``
 
+If your function is implemented at the Blosc2 level (and not via either the `LazyUDF` or `LazyExpr` classes), you will need to add some conversion of the inputs to SimpleProxy instances (see e.g. ``matmul`` for an example).
+
 Finally, you also need to deal with it correctly within ``shape_utils.py``.
 
 If the function does not change the shape of the output, simply add it to ``elementwise_funcs`` and you're done.
