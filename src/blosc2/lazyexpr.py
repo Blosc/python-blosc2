@@ -225,6 +225,8 @@ class ReduceOp(Enum):
     MIN = np.minimum
     ANY = np.any
     ALL = np.all
+    ARGMAX = np.argmax
+    ARGMIN = np.argmin
 
 
 class LazyArrayEnum(Enum):
@@ -1704,6 +1706,8 @@ def infer_reduction_dtype(dtype, operation):
         return dtype
     elif operation in {ReduceOp.ANY, ReduceOp.ALL}:
         return np.bool_
+    elif operation in {ReduceOp.ARGMAX, ReduceOp.ARGMIN}:
+        return np.int64
     else:
         raise ValueError(f"Unsupported operation: {operation}")
 
@@ -1758,6 +1762,7 @@ def reduce_slices(  # noqa: C901
         The resulting output array.
     """
     out = kwargs.pop("_output", None)
+    res_out_ = None  # temporary required to store max/min for argmax/argmin
     ne_args: dict = kwargs.pop("_ne_args", {})
     if ne_args is None:
         ne_args = {}
@@ -1787,12 +1792,14 @@ def reduce_slices(  # noqa: C901
     # after slicing, we reduce to calculate shape of output
     if axis is None:
         axis = tuple(range(len(shape_slice)))
-    elif not isinstance(axis, tuple):
+    elif np.isscalar(axis):
         axis = (axis,)
-    axis = np.array([a if a >= 0 else a + len(shape_slice) for a in axis])
+    axis = tuple(a if a >= 0 else a + len(shape_slice) for a in axis)
     if np.any(mask_slice):
-        axis = tuple(axis + np.cumsum(mask_slice)[axis])  # axis now refers to new shape with dummy dims
-        reduce_args["axis"] = axis
+        add_idx = np.cumsum(mask_slice)
+        axis = tuple(a + add_idx[a] for a in axis)  # axis now refers to new shape with dummy dims
+        if reduce_args["axis"] is not None:
+            reduce_args["axis"] = axis
     if keepdims:
         reduced_shape = tuple(1 if i in axis else s for i, s in enumerate(shape_slice))
     else:
@@ -1952,16 +1959,31 @@ def reduce_slices(  # noqa: C901
             result = np.any(result, **reduce_args)
         elif reduce_op == ReduceOp.ALL:
             result = np.all(result, **reduce_args)
+        elif reduce_op == ReduceOp.ARGMAX or reduce_op == ReduceOp.ARGMIN:
+            result_val = result
+            result = (
+                np.argmin(result, **reduce_args)
+                if reduce_op == ReduceOp.ARGMIN
+                else np.argmax(result, **reduce_args)
+            )
+            if reduce_args["axis"] is None:  # indexing into flattened array
+                result_val = result_val[np.unravel_index(result, shape=result_val.shape)]
+                result += np.ravel_multi_index(offset, shape)
+            else:  # axis is an integer
+                result_val = np.take_along_axis(
+                    result_val, np.expand_dims(result, axis=reduce_args["axis"]), axis=reduce_args["axis"]
+                )
+                result += offset[reduce_args["axis"]]
         else:
             result = reduce_op.value.reduce(result, **reduce_args)
 
         if not out_init:
-            if out is None:
-                out = convert_none_out(result.dtype, reduce_op, reduced_shape)
+            out_, res_out_ = convert_none_out(result.dtype, reduce_op, reduced_shape)
+            if out is not None:
+                out[:] = out_
+                del out_
             else:
-                out2 = convert_none_out(result.dtype, reduce_op, reduced_shape)
-                out[:] = out2
-                del out2
+                out = out_
             out_init = True
 
         # Update the output array with the result
@@ -1969,19 +1991,35 @@ def reduce_slices(  # noqa: C901
             out[reduced_slice] += result
         elif reduce_op == ReduceOp.ALL:
             out[reduced_slice] *= result
+        elif res_out_ is not None:  # i.e. ReduceOp.ARGMAX or ReduceOp.ARGMIN
+            # need lowest index for which optimum attained
+            cond = (res_out_[reduced_slice] == result_val) & (result < out[reduced_slice])
+            if reduce_op == ReduceOp.ARGMAX:
+                cond |= res_out_[reduced_slice] < result_val
+            else:  # ARGMIN
+                cond |= res_out_[reduced_slice] > result_val
+            if reduced_slice == ():
+                out = np.where(cond, result, out[reduced_slice])
+                res_out_ = np.where(cond, result_val, res_out_[reduced_slice])
+            else:
+                out[reduced_slice] = np.where(cond, result, out[reduced_slice])
+                res_out_[reduced_slice] = np.where(cond, result_val, res_out_[reduced_slice])
         else:
             if reduced_slice == ():
                 out = reduce_op.value(out, result)
             else:
                 out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
 
+    # No longer need res_out_
+    del res_out_
+
     if out is None:
-        if reduce_op in (ReduceOp.MIN, ReduceOp.MAX):
-            raise ValueError("zero-size array in min/max reduction operation is not supported")
+        if reduce_op in (ReduceOp.MIN, ReduceOp.MAX, ReduceOp.ARGMIN, ReduceOp.ARGMAX):
+            raise ValueError("zero-size array in (arg-)min/max reduction operation is not supported")
         if dtype is None:
             # We have no hint here, so choose a default dtype
             dtype = np.float64
-        out = convert_none_out(dtype, reduce_op, reduced_shape)
+        out, _ = convert_none_out(dtype, reduce_op, reduced_shape)
 
     final_mask = tuple(np.where(mask_slice)[0])
     if np.any(mask_slice):  # remove dummy dims
@@ -2013,7 +2051,19 @@ def convert_none_out(dtype, reduce_op, reduced_shape):
         out = np.zeros(reduced_shape, dtype=np.bool_)
     elif reduce_op == ReduceOp.ALL:
         out = np.ones(reduced_shape, dtype=np.bool_)
-    return out
+    elif reduce_op == ReduceOp.ARGMIN:
+        if np.issubdtype(dtype, np.integer):
+            res_out_ = np.iinfo(dtype).max * np.ones(reduced_shape, dtype=dtype)
+        else:
+            res_out_ = np.inf * np.ones(reduced_shape, dtype=dtype)
+        out = (np.zeros(reduced_shape, dtype=blosc2.DEFAULT_INDEX), res_out_)
+    elif reduce_op == ReduceOp.ARGMAX:
+        if np.issubdtype(dtype, np.integer):
+            res_out_ = np.iinfo(dtype).min * np.ones(reduced_shape, dtype=dtype)
+        else:
+            res_out_ = -np.inf * np.ones(reduced_shape, dtype=dtype)
+        out = (np.zeros(reduced_shape, dtype=blosc2.DEFAULT_INDEX), res_out_)
+    return out if isinstance(out, tuple) else (out, None)
 
 
 def chunked_eval(  # noqa: C901
@@ -2702,6 +2752,22 @@ class LazyExpr(LazyArray):
     def all(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
             "op": ReduceOp.ALL,
+            "axis": axis,
+            "keepdims": keepdims,
+        }
+        return self.compute(_reduce_args=reduce_args, **kwargs)
+
+    def argmax(self, axis=None, keepdims=False, **kwargs):
+        reduce_args = {
+            "op": ReduceOp.ARGMAX,
+            "axis": axis,
+            "keepdims": keepdims,
+        }
+        return self.compute(_reduce_args=reduce_args, **kwargs)
+
+    def argmin(self, axis=None, keepdims=False, **kwargs):
+        reduce_args = {
+            "op": ReduceOp.ARGMIN,
             "axis": axis,
             "keepdims": keepdims,
         }

@@ -51,21 +51,23 @@ def array_fixture(dtype_fixture, shape_fixture):
     return a1, a2, a3, a4, na1, na2, na3, na4
 
 
-# @pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all"])
-@pytest.mark.parametrize("reduce_op", ["sum"])
+# @pytest.mark.parametrize("reduce_op", ["sum"])
+@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "argmax", "argmin"])
 def test_reduce_bool(array_fixture, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    expr = a1 + a2 > a3 * a4
-    nres = ne_evaluate("na1 + na2 > na3 * na4")
-    # res = getattr(expr, reduce_op)()
-    res = expr.sum()
+    expr = (a1 + a2) > (a3 * a4)
+    nres = ne_evaluate("(na1 + na2) > (na3 * na4)")
+    res = getattr(expr, reduce_op)()
+    # res = expr.sum()
     # print("res:", res)
     nres = getattr(nres, reduce_op)()
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "mean", "std", "var", "min", "max", "any", "all"])
+@pytest.mark.parametrize(
+    "reduce_op", ["sum", "prod", "mean", "std", "var", "min", "max", "any", "all", "argmax", "argmin"]
+)
 @pytest.mark.parametrize("axis", [1, (0, 1), None])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize("dtype_out", [np.int16, np.float64])
@@ -78,7 +80,7 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwar
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     if axis is not None and np.isscalar(axis) and len(a1.shape) >= axis:
         return
-    if isinstance(axis, tuple) and len(a1.shape) < len(axis):
+    if isinstance(axis, tuple) and (len(a1.shape) < len(axis) or reduce_op in ("argmax", "argmin")):
         return
     if reduce_op == "prod":
         # To avoid overflow, create a1 and a2 with small values
@@ -110,7 +112,9 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwar
 
 
 # TODO: "prod" is not supported here because it overflows with current values
-@pytest.mark.parametrize("reduce_op", ["sum", "min", "max", "mean", "std", "var", "any", "all"])
+@pytest.mark.parametrize(
+    "reduce_op", ["sum", "min", "max", "mean", "std", "var", "any", "all", "argmax", "argmin"]
+)
 @pytest.mark.parametrize("axis", [0, 1, None])
 def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
@@ -125,7 +129,9 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
 
 
 # Test broadcasting
-@pytest.mark.parametrize("reduce_op", ["sum", "mean", "std", "var", "min", "max", "any", "all"])
+@pytest.mark.parametrize(
+    "reduce_op", ["sum", "mean", "std", "var", "min", "max", "any", "all", "argmax", "argmin"]
+)
 @pytest.mark.parametrize("axis", [0, (0, 1), None])
 @pytest.mark.parametrize("keepdims", [True, False])
 @pytest.mark.parametrize(
@@ -137,13 +143,14 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     ],
 )
 def test_broadcast_params(axis, keepdims, reduce_op, shapes):
+    if isinstance(axis, tuple) and (reduce_op in ("argmax", "argmin")):
+        axis = 1
     na1 = np.linspace(0, 1, np.prod(shapes[0])).reshape(shapes[0])
     na2 = np.linspace(1, 2, np.prod(shapes[1])).reshape(shapes[1])
     na3 = np.linspace(2, 3, np.prod(shapes[2])).reshape(shapes[2])
     a1 = blosc2.asarray(na1)
     a2 = blosc2.asarray(na2)
     a3 = blosc2.asarray(na3)
-
     expr1 = a1 + a2 - a3
     assert expr1.shape == shapes[0]
     expr2 = a1 * a2 + 1
@@ -158,7 +165,9 @@ def test_broadcast_params(axis, keepdims, reduce_op, shapes):
 
 
 # Test reductions with item parameter
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
+@pytest.mark.parametrize(
+    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
+)
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 @pytest.mark.parametrize("stripes", ["rows", "columns"])
 @pytest.mark.parametrize("stripe_len", [2, 10, 15, 100])
@@ -177,7 +186,7 @@ def test_reduce_item(reduce_op, dtype, stripes, stripe_len, shape, chunks):
         slice_ = na[_slice]
         if slice_.size == 0 and reduce_op not in ("sum", "prod"):
             # For mean, std, and var, numpy just raises a warning, so don't check
-            if reduce_op in ("min", "max"):
+            if reduce_op in ("min", "max", "argmin", "argmax"):
                 # Check that a ValueError is raised when the slice is empty
                 with pytest.raises(ValueError):
                     getattr(a, reduce_op)(item=_slice)
@@ -189,7 +198,9 @@ def test_reduce_item(reduce_op, dtype, stripes, stripe_len, shape, chunks):
             np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
+@pytest.mark.parametrize(
+    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
+)
 def test_reduce_slice(reduce_op):
     shape = (8, 12, 5)
     na = np.linspace(0, 1, num=np.prod(shape)).reshape(shape)
@@ -231,7 +242,9 @@ def test_reduce_slice(reduce_op):
 )
 @pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize("fill_value", [0, 1, 0.32])
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
+@pytest.mark.parametrize(
+    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
+)
 @pytest.mark.parametrize("axis", [0, 1, None])
 def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     shape = (20, 50, 100)
@@ -252,9 +265,13 @@ def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
 
 @pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize("fill_value", [0, 1, 0.32])
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
+@pytest.mark.parametrize(
+    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
+)
 @pytest.mark.parametrize("axis", [0, (0, 1), None])
 def test_save_version1(disk, fill_value, reduce_op, axis):
+    if isinstance(axis, tuple) and (reduce_op in ("argmax", "argmin")):
+        axis = 1
     shape = (20, 50, 100)
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
@@ -288,9 +305,13 @@ def test_save_version1(disk, fill_value, reduce_op, axis):
 
 @pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize("fill_value", [0, 1, 0.32])
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
+@pytest.mark.parametrize(
+    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
+)
 @pytest.mark.parametrize("axis", [0, (0, 1), None])
 def test_save_version2(disk, fill_value, reduce_op, axis):
+    if isinstance(axis, tuple) and (reduce_op in ("argmax", "argmin")):
+        axis = 1
     shape = (20, 50, 100)
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
@@ -323,9 +344,13 @@ def test_save_version2(disk, fill_value, reduce_op, axis):
 
 @pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize("fill_value", [0, 1, 0.32])
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
+@pytest.mark.parametrize(
+    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
+)
 @pytest.mark.parametrize("axis", [0, (0, 1), None])
 def test_save_version3(disk, fill_value, reduce_op, axis):
+    if isinstance(axis, tuple) and (reduce_op in ("argmax", "argmin")):
+        axis = 1
     shape = (20, 50, 100)
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
@@ -358,9 +383,13 @@ def test_save_version3(disk, fill_value, reduce_op, axis):
 
 @pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize("fill_value", [0, 1, 0.32])
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var"])
+@pytest.mark.parametrize(
+    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
+)
 @pytest.mark.parametrize("axis", [0, (0, 1), None])
 def test_save_version4(disk, fill_value, reduce_op, axis):
+    if isinstance(axis, tuple) and (reduce_op in ("argmax", "argmin")):
+        axis = 1
     shape = (20, 50, 100)
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
