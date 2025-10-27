@@ -1,4 +1,9 @@
 ### Matmul performance comparison between Blosc2 and PyTorch with persistent storage
+# It is important to force numpy to use mkl as it can speed up the
+# blosc2 matmul (which uses np.matmul as a backend) by a factor of 2x:
+# conda install numpy mkl
+# To download the kevlar.h5 dataset use:
+#  curl http://www.silx.org/pub/pyFAI/pyFAI_UM_2020/data_ID13/kevlar.h5 --output "kevlar.h5"
 import numpy as np
 import blosc2
 import matplotlib.pyplot as plt
@@ -70,21 +75,24 @@ if CREATE:
                                         row_gain_amplitude=row_gain_amp)
         out[i] = A
 
-
-
     fname_in = "kevlar.h5"  # input file with the kevlar dataset
-    fname_out = "my_kevlar.h5"
-    b2im = blosc2.empty(shape=(2000, 2167, 2070), dtype=dtype, cparams=cparams, urlpath="kevlar.b2nd", mode="w")
     with h5py.File(fname_in, "r") as fr:  # load file and process to blosc2 array
-        dset = fr["/entry/data/data"][:]
-        b2im[:1000] = dset
-        b2im[1000:] = dset
+        dset = fr["/entry/data/data"]
+        b2im = blosc2.empty(shape=(2*len(dset), 2167, 2070), dtype=dtype, cparams=cparams, urlpath="kevlar.b2nd", mode="w")
+        for i in tqdm(range(0, len(dset), batch_size), desc="Converting data matrices to Blosc2"):
+            end = min((i+batch_size), len(dset))
+            res = dset[i:end]
+            res = np.where(res>10, 0, res)
+            # For visibility, zero-out pixels
+            b2im[i:end] = res
+            b2im[i + 1000, end + 1000] = res
         del dset
     print("Saved data to Blosc2.")
 
     b2im = blosc2.open(urlpath="kevlar.b2nd", mode="r")
     b2im_trans = blosc2.open(urlpath="transform.b2nd", mode="r")
     s, d = b2im.shape, b2im.dtype
+    fname_out = "my_kevlar.h5"
     # Write to .h5 file #
     with h5py.File(fname_out, "w") as fw:
         b2comp = hdf5plugin.Blosc2(cname='lz4', clevel=1, filters=hdf5plugin.Blosc2.SHUFFLE) # just for identification, no compression algorithm specified
@@ -98,18 +106,15 @@ if CREATE:
             b2im_trans.shape, b2im_trans.dtype,
             **b2comp,
         )
-        # Write individual blosc2 chunks directly to hdf5
-        # hdf5 requires a cframe, which is only available via blosc2 schunks (not chunks)
-        for i in tqdm(range(len(b2im), batch_size), desc="Converting transform and data matrices to HDF5"):
-            dset_out1[i:i+32] = b2im[i:i+batch_size]
-            dset_out2[i:i+32] = b2im_trans[i:i+batch_size]
+        for i in tqdm(range(0, len(b2im), batch_size), desc="Converting transform and data matrices to HDF5"):
+            dset_out1[i:i+batch_size] = b2im[i:i+batch_size]
+            dset_out2[i:i+batch_size] = b2im_trans[i:i+batch_size]
 
 
 # Re-open the arrays
 dset_a = blosc2.open("transform.b2nd", mode="r")
 dset_b = blosc2.open("kevlar.b2nd", mode="r")
-print(f'Total working set size: {round((np.prod(dset_a.shape) + np.prod(dset_a.shape[:-1]+dset_b.shape[-1:])
-                                        + np.prod(dset_b.shape)) * dtype.itemsize / 2 ** 30, 1)} GB.')
+print(f'Total working set size: {round((np.prod(dset_a.shape)/ 2 ** 30 + np.prod(dset_a.shape[:-1]+dset_b.shape[-1:])/ 2 ** 30 + np.prod(dset_b.shape)/ 2 ** 30) * dset_b.dtype.itemsize, 1)} GB.')
 
 # --- Matmul Blosc2 ---
 t0 = time()
@@ -132,7 +137,7 @@ with h5py.File("my_kevlar.h5", "r+") as f:
     dset_b = f["data"]
     dset_out = f["out"]
 
-    for i in tqdm(range(0, len(dset_a), batch_size), desc="PyTorch Matmul"):  # batch of 32
+    for i in tqdm(range(0, len(dset_out), batch_size), desc="PyTorch Matmul"):  # batch of 32
         batch_a = torch.from_numpy(dset_a[i:i+batch_size])     # NumPy array slice
         batch_b = torch.from_numpy(dset_b[i:i+batch_size])      # NumPy array slice
         dset_out[i:i+batch_size] = torch.matmul(batch_a, batch_b)
