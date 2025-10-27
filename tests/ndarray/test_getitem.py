@@ -16,6 +16,7 @@ argnames = "shape, chunks, blocks, slices, dtype"
 argvalues = [
     ([456], [258], [73], slice(0, 1), np.int32),
     ([77, 134, 13], [31, 13, 5], [7, 8, 3], (slice(3, 7), slice(50, 100), 7), np.float64),
+    ([77, 134, 13], [31, 13, 5], [7, 8, 3], (slice(3, 56, 3), slice(100, 50, -4), 7), np.float64),
     ([12, 13, 14, 15, 16], [5, 5, 5, 5, 5], [2, 2, 2, 2, 2], (slice(1, 3), ..., slice(3, 6)), np.float32),
 ]
 
