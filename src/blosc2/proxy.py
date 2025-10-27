@@ -671,7 +671,9 @@ class SimpleProxy(blosc2.Operand):
         if not hasattr(out, "shape") or out.shape == ():
             return out
         else:
-            return np.asarray(out)  # avoids copy for PyTorch at least
+            # avoids copy for PyTorch (JAX/Tensorflow will always copy,
+            # no easy way around it)
+            return np.asarray(out)
 
 
 def as_simpleproxy(*arrs: Sequence[blosc2.Array]) -> tuple[SimpleProxy | blosc2.Operand]:
