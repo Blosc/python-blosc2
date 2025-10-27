@@ -1875,6 +1875,8 @@ def reduce_slices(  # noqa: C901
             cslice = step_handler(cslice, _slice)
         chunks_ = tuple(s.stop - s.start for s in cslice)
         unit_steps = np.all([s.step == 1 for s in cslice])
+        # Get the starts for the slice (needed for offset calculations when intra-chunk slicing)
+        starts = [s.start if s.start is not None else 0 for s in cslice]
         if _slice == () and fast_path and unit_steps:
             # Fast path
             full_chunk = chunks_ == chunks
@@ -1882,8 +1884,7 @@ def reduce_slices(  # noqa: C901
                 operands, cslice, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands, reduc=True
             )
         else:
-            # Get the starts and stops for the slice
-            starts = [s.start if s.start is not None else 0 for s in cslice]
+            # Get the stops for the slice
             stops = [s.stop if s.stop is not None else sh for s, sh in zip(cslice, chunks_, strict=True)]
             # Get the slice of each operand
             for key, value in operands.items():
@@ -1968,12 +1969,15 @@ def reduce_slices(  # noqa: C901
             )
             if reduce_args["axis"] is None:  # indexing into flattened array
                 result_val = result_val[np.unravel_index(result, shape=result_val.shape)]
-                result += np.ravel_multi_index(offset, shape)
+                idx_within_cslice = np.unravel_index(result, shape=chunks_)
+                result = np.ravel_multi_index(
+                    tuple(o + i for o, i in zip(starts, idx_within_cslice, strict=True)), shape
+                )
             else:  # axis is an integer
                 result_val = np.take_along_axis(
                     result_val, np.expand_dims(result, axis=reduce_args["axis"]), axis=reduce_args["axis"]
                 )
-                result += offset[reduce_args["axis"]]
+                result += starts[reduce_args["axis"]]
         else:
             result = reduce_op.value.reduce(result, **reduce_args)
 
