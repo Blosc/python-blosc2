@@ -1,8 +1,14 @@
 # Release notes
 
-## Changes from 3.10.2 to 3.10.3
+## Changes from 3.10.2 to 3.11.0
 
-XXX version-specific blurb XXX
+* Small optimisation for chunking in lazy expressions
+* Extend Blosc2 computation machinery to accept general array inputs (PR #510)
+* Refactoring and streamlining of get/setitem for non-unit steps (PR #513)
+* Remote array testing now performed with `cat2cloud` (PR #511)
+* Added argmax/argmin functions (PR #514)
+* Change `squeeze` to return view (rather than modify array in-place) (PR #518)
+* Modify `setitem` to load general array inputs into NDArrays (PR #517)
 
 ## Changes from 3.10.1 to 3.10.2
 
