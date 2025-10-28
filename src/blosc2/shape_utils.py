@@ -105,7 +105,20 @@ linalg_funcs = [
 ]
 
 linalg_attrs = ["T", "mT"]
-reducers = ["sum", "prod", "min", "max", "std", "mean", "var", "any", "all", "count_nonzero"]
+reducers = [
+    "sum",
+    "prod",
+    "min",
+    "max",
+    "std",
+    "mean",
+    "var",
+    "any",
+    "all",
+    "count_nonzero",
+    "argmax",
+    "argmin",
+]
 
 # All the available constructors and reducers necessary for the (string) expression evaluator
 constructors = [
