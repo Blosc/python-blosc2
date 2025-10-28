@@ -1,19 +1,24 @@
+#######################################################################
+# Copyright (c) 2019-present, Blosc Development Team <blosc@blosc.org>
+# All rights reserved.
+#
+# This source code is licensed under a BSD-style license (found in the
+# LICENSE file in the root directory of this source tree)
+#######################################################################
+
 ### Matmul performance comparison between Blosc2 and PyTorch with persistent storage
-# It is important to force numpy to use mkl as it can speed up the
-# blosc2 matmul (which uses np.matmul as a backend) by a factor of 2x:
-# conda install numpy mkl
-# To download the kevlar.h5 dataset use:
-#  curl http://www.silx.org/pub/pyFAI/pyFAI_UM_2020/data_ID13/kevlar.h5 --output "kevlar.h5"
+# For this bench to work, you first need to download the data file at:
+# http://www.silx.org/pub/pyFAI/pyFAI_UM_2020/data_ID13/kevlar.h5
+
 import numpy as np
 import blosc2
-import matplotlib.pyplot as plt
 import torch
 import pickle
 from time import time
 import h5py
 import hdf5plugin
-from tqdm import tqdm  # progress bar (pip install tqdm)
-import os
+from tqdm import tqdm  # progress bar
+
 cparams = {
     "codec": blosc2.Codec.LZ4,
     "filters": [blosc2.Filter.SHUFFLE],
@@ -22,6 +27,17 @@ cparams = {
 batch_size = 32
 CREATE = True
 dtype = np.float32
+
+# Check what's available
+print(f"MPS available: {torch.backends.mps.is_available()}")
+print(f"CUDA available: {torch.cuda.is_available()}")
+
+# GPU for PyTorch
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+device = torch.device("gpu" if torch.cuda.is_available() else "cpu")
+# device = torch.device("cpu")  # Force CPU usage
+print(f"Using device: {device}")
+
 if CREATE:
     def build_dense_rowwarp_matrix(out_h=2000, in_h=2167,
                                 scale=1.0,
@@ -136,9 +152,9 @@ with h5py.File("my_kevlar.h5", "r+") as f:
     dset_b = f["data"]
     dset_out = f["out"]
 
-    for i in range(0, len(dset_out), batch_size):  # batch of 32
-        batch_a = torch.from_numpy(dset_a[i:i+batch_size])     # NumPy array slice
-        batch_b = torch.from_numpy(dset_b[i:i+batch_size])      # NumPy array slice
+    for i in range(0, len(dset_out), batch_size):
+        batch_a = torch.from_numpy(dset_a[i:i+batch_size]).to(device)
+        batch_b = torch.from_numpy(dset_b[i:i+batch_size]).to(device)
         dset_out[i:i+batch_size] = torch.matmul(batch_a, batch_b)
     hdf5_chunks = [dset_a.chunks, dset_b.chunks]
     hdf5_chunks_out = dset_out.chunks
