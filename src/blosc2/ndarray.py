@@ -4291,7 +4291,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             value = value[()]  # convert to numpy
         if np.isscalar(value) or value.shape == ():
             value = np.full(shape, value, dtype=self.dtype)
-        if isinstance(value, np.ndarray) and value.dtype != self.dtype:  # handles decompressed NDArray too
+        if value.dtype != self.dtype:  # handles decompressed NDArray too
             try:
                 value = value.astype(self.dtype)
             except ComplexWarning:
