@@ -8,6 +8,7 @@
 
 import numpy as np
 import pytest
+import torch
 
 import blosc2
 
@@ -40,6 +41,14 @@ def test_setitem(shape, chunks, blocks, slices, dtype):
     # Object supporting the Buffer Protocol
     slice_shape = a[slices].shape
     val = np.ones(slice_shape, dtype=dtype)
+    a[slices] = val
+    nparray[slices] = val
+    np.testing.assert_almost_equal(a[...], nparray)
+
+    # Object called via SimpleProxy
+    slice_shape = a[slices].shape
+    dtype_ = {np.float32: torch.float32, np.int32: torch.int32, np.float64: torch.float64}[dtype]
+    val = torch.ones(slice_shape, dtype=dtype_)
     a[slices] = val
     nparray[slices] = val
     np.testing.assert_almost_equal(a[...], nparray)

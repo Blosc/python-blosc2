@@ -612,7 +612,7 @@ class SimpleProxy(blosc2.Operand):
 
     def __init__(self, src, chunks: tuple | None = None, blocks: tuple | None = None):
         if not hasattr(src, "shape") or not hasattr(src, "dtype"):
-            # If the source is not a NumPy array, convert it to one
+            # If the source is not an array, convert it to NumPy
             src = np.asarray(src)
         if not hasattr(src, "__getitem__"):
             raise TypeError("The source must have a __getitem__ method")

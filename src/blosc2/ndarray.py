@@ -4261,6 +4261,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         key_, mask = process_key(key, self.shape)  # internally handles key an integer
         if hasattr(value, "shape") and value.shape == ():
             value = value.item()
+        value = (
+            value if np.isscalar(value) else blosc2.as_simpleproxy(value)
+        )  # convert to SimpleProxy for e.g. JAX, Tensorflow, PyTorch
 
         if builtins.any(isinstance(k, (list, np.ndarray)) for k in key_):  # fancy indexing
             _slice = ndindex.ndindex(key_).expand(
@@ -4284,20 +4287,17 @@ class NDArray(blosc2_ext.NDArray, Operand):
             return self._get_set_nonunit_steps((start, stop, step, mask), value=value)
 
         shape = [sp - st for sp, st in zip(stop, start, strict=False)]
-        if isinstance(value, NDArray):
-            value = value[...]  # convert to numpy
-        if np.isscalar(value):
+        if isinstance(value, blosc2.Operand):  # handles SimpleProxy, NDArray, LazyExpr etc.
+            value = value[()]  # convert to numpy
+        if np.isscalar(value) or value.shape == ():
             value = np.full(shape, value, dtype=self.dtype)
-        elif isinstance(value, np.ndarray):  # handles decompressed NDArray too
-            if value.dtype != self.dtype:
-                try:
-                    value = value.astype(self.dtype)
-                except ComplexWarning:
-                    # numexpr type inference can lead to unnecessary type promotions
-                    # when using complex functions (e.g. conj) with real arrays
-                    value = value.real.astype(self.dtype)
-            if value.shape == ():
-                value = np.full(shape, value, dtype=self.dtype)
+        if isinstance(value, np.ndarray) and value.dtype != self.dtype:  # handles decompressed NDArray too
+            try:
+                value = value.astype(self.dtype)
+            except ComplexWarning:
+                # numexpr type inference can lead to unnecessary type promotions
+                # when using complex functions (e.g. conj) with real arrays
+                value = value.real.astype(self.dtype)
 
         return super().set_slice((start, stop), value)
 
