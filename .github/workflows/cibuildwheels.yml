@@ -110,7 +110,7 @@ jobs:
           source sdist_test_env/bin/activate
           python -m pytest tests/test_open.py tests/test_vlmeta.py tests/ndarray/test_evaluate.py
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: ${{ matrix.artifact_name }}
           path: |
