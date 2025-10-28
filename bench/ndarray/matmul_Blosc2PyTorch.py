@@ -87,7 +87,6 @@ if CREATE:
             b2im[i:end] = res
             b2im[i + 1000, end + 1000] = res
         del dset
-    print("Saved data to Blosc2.")
 
     b2im = blosc2.open(urlpath="kevlar.b2nd", mode="r")
     b2im_trans = blosc2.open(urlpath="transform.b2nd", mode="r")
@@ -137,7 +136,7 @@ with h5py.File("my_kevlar.h5", "r+") as f:
     dset_b = f["data"]
     dset_out = f["out"]
 
-    for i in tqdm(range(0, len(dset_out), batch_size), desc="PyTorch Matmul"):  # batch of 32
+    for i in range(0, len(dset_out), batch_size):  # batch of 32
         batch_a = torch.from_numpy(dset_a[i:i+batch_size])     # NumPy array slice
         batch_b = torch.from_numpy(dset_b[i:i+batch_size])      # NumPy array slice
         dset_out[i:i+batch_size] = torch.matmul(batch_a, batch_b)
