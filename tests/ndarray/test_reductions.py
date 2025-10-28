@@ -258,7 +258,7 @@ def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     na = a[:]
 
     res = getattr(a, reduce_op)(axis=axis)
-    nres = getattr(na[:], reduce_op)(axis=axis)
+    nres = getattr(na, reduce_op)(axis=axis)
 
     assert np.allclose(res, nres)
 
@@ -270,9 +270,10 @@ def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
 )
 @pytest.mark.parametrize("axis", [0, (0, 1), None])
 def test_save_version1(disk, fill_value, reduce_op, axis):
+    shape = (20, 50, 100)
     if isinstance(axis, tuple) and (reduce_op in ("argmax", "argmin")):
         axis = 1
-    shape = (20, 50, 100)
+        shape = (20, 20, 100)
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
         a = blosc2.full(shape, fill_value, urlpath=urlpath, mode="w")
@@ -310,9 +311,10 @@ def test_save_version1(disk, fill_value, reduce_op, axis):
 )
 @pytest.mark.parametrize("axis", [0, (0, 1), None])
 def test_save_version2(disk, fill_value, reduce_op, axis):
+    shape = (20, 50, 100)
     if isinstance(axis, tuple) and (reduce_op in ("argmax", "argmin")):
         axis = 1
-    shape = (20, 50, 100)
+        shape = (20, 20, 100)
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
         a = blosc2.full(shape, fill_value, urlpath=urlpath, mode="w")
@@ -349,9 +351,10 @@ def test_save_version2(disk, fill_value, reduce_op, axis):
 )
 @pytest.mark.parametrize("axis", [0, (0, 1), None])
 def test_save_version3(disk, fill_value, reduce_op, axis):
+    shape = (20, 50, 100)
     if isinstance(axis, tuple) and (reduce_op in ("argmax", "argmin")):
         axis = 1
-    shape = (20, 50, 100)
+        shape = (20, 20, 100)
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
         a = blosc2.full(shape, fill_value, urlpath=urlpath, mode="w")

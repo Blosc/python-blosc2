@@ -1799,7 +1799,8 @@ def reduce_slices(  # noqa: C901
         add_idx = np.cumsum(mask_slice)
         axis = tuple(a + add_idx[a] for a in axis)  # axis now refers to new shape with dummy dims
         if reduce_args["axis"] is not None:
-            reduce_args["axis"] = axis
+            # conserve as integer if was not tuple originally
+            reduce_args["axis"] = axis[0] if np.isscalar(reduce_args["axis"]) else axis
     if keepdims:
         reduced_shape = tuple(1 if i in axis else s for i, s in enumerate(shape_slice))
     else:
@@ -1875,7 +1876,7 @@ def reduce_slices(  # noqa: C901
             cslice = step_handler(cslice, _slice)
         chunks_ = tuple(s.stop - s.start for s in cslice)
         unit_steps = np.all([s.step == 1 for s in cslice])
-        # Get the starts for the slice (needed for offset calculations when intra-chunk slicing)
+        # Starts for slice
         starts = [s.start if s.start is not None else 0 for s in cslice]
         if _slice == () and fast_path and unit_steps:
             # Fast path
@@ -1961,23 +1962,34 @@ def reduce_slices(  # noqa: C901
         elif reduce_op == ReduceOp.ALL:
             result = np.all(result, **reduce_args)
         elif reduce_op == ReduceOp.ARGMAX or reduce_op == ReduceOp.ARGMIN:
-            result_val = result
-            result = (
+            # offset for start of slice
+            slice_ref = (
+                starts
+                if _slice == ()
+                else [
+                    (s - sl.start - np.sign(sl.step)) // sl.step + 1
+                    for s, sl in zip(starts, _slice, strict=True)
+                ]
+            )
+            result_idx = (
                 np.argmin(result, **reduce_args)
                 if reduce_op == ReduceOp.ARGMIN
                 else np.argmax(result, **reduce_args)
             )
             if reduce_args["axis"] is None:  # indexing into flattened array
-                result_val = result_val[np.unravel_index(result, shape=result_val.shape)]
-                idx_within_cslice = np.unravel_index(result, shape=chunks_)
-                result = np.ravel_multi_index(
-                    tuple(o + i for o, i in zip(starts, idx_within_cslice, strict=True)), shape
+                result = result[np.unravel_index(result_idx, shape=result.shape)]
+                idx_within_cslice = np.unravel_index(result_idx, shape=chunks_)
+                result_idx = np.ravel_multi_index(
+                    tuple(o + i for o, i in zip(slice_ref, idx_within_cslice, strict=True)), shape_slice
                 )
             else:  # axis is an integer
-                result_val = np.take_along_axis(
-                    result_val, np.expand_dims(result, axis=reduce_args["axis"]), axis=reduce_args["axis"]
+                result = np.take_along_axis(
+                    result,
+                    np.expand_dims(result_idx, axis=reduce_args["axis"]) if not keepdims else result_idx,
+                    axis=reduce_args["axis"],
                 )
-                result += starts[reduce_args["axis"]]
+                result = result if keepdims else result.squeeze(axis=reduce_args["axis"])
+                result_idx += slice_ref[reduce_args["axis"]]
         else:
             result = reduce_op.value.reduce(result, **reduce_args)
 
@@ -1997,17 +2009,17 @@ def reduce_slices(  # noqa: C901
             out[reduced_slice] *= result
         elif res_out_ is not None:  # i.e. ReduceOp.ARGMAX or ReduceOp.ARGMIN
             # need lowest index for which optimum attained
-            cond = (res_out_[reduced_slice] == result_val) & (result < out[reduced_slice])
+            cond = (res_out_[reduced_slice] == result) & (result_idx < out[reduced_slice])
             if reduce_op == ReduceOp.ARGMAX:
-                cond |= res_out_[reduced_slice] < result_val
+                cond |= res_out_[reduced_slice] < result
             else:  # ARGMIN
-                cond |= res_out_[reduced_slice] > result_val
+                cond |= res_out_[reduced_slice] > result
             if reduced_slice == ():
-                out = np.where(cond, result, out[reduced_slice])
-                res_out_ = np.where(cond, result_val, res_out_[reduced_slice])
+                out = np.where(cond, result_idx, out[reduced_slice])
+                res_out_ = np.where(cond, result, res_out_[reduced_slice])
             else:
-                out[reduced_slice] = np.where(cond, result, out[reduced_slice])
-                res_out_[reduced_slice] = np.where(cond, result_val, res_out_[reduced_slice])
+                out[reduced_slice] = np.where(cond, result_idx, out[reduced_slice])
+                res_out_[reduced_slice] = np.where(cond, result, res_out_[reduced_slice])
         else:
             if reduced_slice == ():
                 out = reduce_op.value(out, result)
