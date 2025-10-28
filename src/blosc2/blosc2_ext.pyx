@@ -2999,9 +2999,9 @@ def squeeze(arr1: NDArray, axis_mask: list[bool]) -> blosc2.NDArray:
         mask_[i] = axis_mask[i]
     _check_rc(b2nd_squeeze_index(arr1.array, &view, mask_), "Error while squeezing array")
 
-    #this squeezes even if not asked for by mask - may have to use in future though
-    #if arr1.array.shape[0] == 1 and arr1.ndim == 1:
-    #    arr1.array.ndim = 0
+    # this squeezes even if not asked for by mask - may have to use in future though
+    # if arr1.array.shape[0] == 1 and arr1.ndim == 1:
+    #     arr1.array.ndim = 0
 
     # create view with reference to self to hold onto
     new_base = arr1 if arr1.base is None else arr1.base
