@@ -127,9 +127,9 @@ def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArra
                         result[chunk + (slice(row, row_end), slice(col, col_end))] += np.matmul(bx1, bx2)
 
     if x1_is_vector:
-        result.squeeze(axis=-2)
+        result = result.squeeze(axis=-2)
     if x2_is_vector:
-        result.squeeze(axis=-1)
+        result = result.squeeze(axis=-1)
 
     return result
 

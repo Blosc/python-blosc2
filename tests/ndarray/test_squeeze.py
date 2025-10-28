@@ -25,8 +25,8 @@ def test_squeeze(shape, chunks, blocks, fill_value, axis):
     a = blosc2.full(shape, fill_value=fill_value, chunks=chunks, blocks=blocks)
 
     b = np.squeeze(a[...], axis)
-    a_ = a.squeeze(axis)
+    a_ = blosc2.squeeze(a, axis)
 
     assert a_.shape == b.shape
-    # TODO: this would work if squeeze returns a view
-    # assert a_.shape != a.shape
+    # Confirm squeeze returns a view (does not modify original array)
+    assert a_.shape != a.shape

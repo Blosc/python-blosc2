@@ -503,8 +503,8 @@ cdef extern from "b2nd.h":
     int b2nd_to_cframe(const b2nd_array_t *array, uint8_t ** cframe, int64_t *cframe_len,
                        c_bool *needs_free);
 
-    int b2nd_squeeze(b2nd_array_t *array)
-    int b2nd_squeeze_index(b2nd_array_t *array, const c_bool *index)
+    int b2nd_squeeze(b2nd_array_t *array, b2nd_array_t **view)
+    int b2nd_squeeze_index(b2nd_array_t *array, b2nd_array_t **view, const c_bool *index)
     int b2nd_resize(b2nd_array_t *array, const int64_t *new_shape, const int64_t *start)
     int b2nd_copy(b2nd_context_t *ctx, b2nd_array_t *src, b2nd_array_t **array)
     int b2nd_concatenate(b2nd_context_t *ctx, b2nd_array_t *src1, b2nd_array_t *src2,
@@ -2530,7 +2530,7 @@ cdef class NDArray:
         cdef c_bool mask_[B2ND_MAX_DIM]
         for i in range(ndim):
             mask_[i] = mask[i]
-        _check_rc(b2nd_squeeze_index(array, mask_), "Error while squeezing sliced array")
+        _check_rc(b2nd_squeeze_index(array, &array, mask_), "Error while squeezing sliced array")
         ndarray = blosc2.NDArray(_schunk=PyCapsule_New(array.sc, <char *> "blosc2_schunk*", NULL),
                                  _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
 
@@ -2603,19 +2603,6 @@ cdef class NDArray:
             new_shape_[i] = s
         _check_rc(b2nd_resize(self.array, new_shape_, NULL),
                   "Error while resizing the array")
-
-    def squeeze(self, mask=None):
-        cdef c_bool mask_[B2ND_MAX_DIM]
-        if mask is None:
-            _check_rc(b2nd_squeeze(self.array), "Error while performing the squeeze")
-        else:
-            for i in range(self.ndim):
-                mask_[i] = mask[i]
-            _check_rc(b2nd_squeeze_index(self.array, mask_), "Error while squeezing array")
-
-        #this squeezes even if not asked for by mask - may have to use in future though
-        #if self.array.shape[0] == 1 and self.ndim == 1:
-        #    self.array.ndim = 0
 
     def as_ffi_ptr(self):
         return PyCapsule_New(self.array, <char *> "b2nd_array_t*", NULL)
@@ -3001,3 +2988,22 @@ def expand_dims(arr1: NDArray, axis_mask: list[bool], final_dims: int) -> blosc2
     new_base = arr1 if arr1.base is None else arr1.base
     return blosc2.NDArray(_schunk=PyCapsule_New(view.sc, <char *> "blosc2_schunk*", NULL),
                           _array=PyCapsule_New(view, <char *> "b2nd_array_t*", NULL), _base=new_base)
+
+def squeeze(arr1: NDArray, axis_mask: list[bool]) -> blosc2.NDArray:
+    """
+    Remove axis from NDArray object at specified dimensions.
+    """
+    cdef b2nd_array_t *view
+    cdef c_bool mask_[B2ND_MAX_DIM]
+    for i in range(arr1.ndim):
+        mask_[i] = axis_mask[i]
+    _check_rc(b2nd_squeeze_index(arr1.array, &view, mask_), "Error while squeezing array")
+
+    # this squeezes even if not asked for by mask - may have to use in future though
+    # if arr1.array.shape[0] == 1 and arr1.ndim == 1:
+    #     arr1.array.ndim = 0
+
+    # create view with reference to self to hold onto
+    new_base = arr1 if arr1.base is None else arr1.base
+    return blosc2.NDArray(_schunk=PyCapsule_New(view.sc, <char *> "blosc2_schunk*", NULL),
+                        _array=PyCapsule_New(view, <char *> "b2nd_array_t*", NULL), _base=new_base)

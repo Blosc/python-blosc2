@@ -4681,8 +4681,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 for order, nchunk in enumerate(aligned_chunks):
                     chunk = self.schunk.get_chunk(nchunk)
                     newarr.schunk.update_chunk(order, chunk)
-                newarr.squeeze(axis=np.where(mask)[0])  # remove any dummy dims introduced
-                return newarr
+                return newarr.squeeze(axis=np.where(mask)[0])  # remove any dummy dims introduced
 
         key = (start, stop)
         ndslice = super().get_slice(key, mask, **kwargs)
@@ -4724,16 +4723,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> a.shape
         (23, 11)
         """
-        axis = [axis] if isinstance(axis, int) else axis
-        mask = [False for i in range(self.ndim)]
-        for a in axis:
-            if a < 0:
-                a += self.ndim  # Adjust axis to be within the array's dimensions
-            if mask[a]:
-                raise ValueError("Axis values must be unique.")
-            mask[a] = True
-        super().squeeze(mask=mask)
-        return self
+        return blosc2.squeeze(self, axis=axis)
 
     def indices(self, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
         """
@@ -4797,8 +4787,15 @@ def squeeze(x: Array, axis: int | Sequence[int]) -> NDArray:
     >>> b.shape
     (23, 11)
     """
-    # TODO: implement squeeze as a view
-    return x.squeeze(axis)
+    axis = [axis] if isinstance(axis, int) else axis
+    mask = [False for i in range(x.ndim)]
+    for a in axis:
+        if a < 0:
+            a += x.ndim  # Adjust axis to be within the array's dimensions
+        if mask[a]:
+            raise ValueError("Axis values must be unique.")
+        mask[a] = True
+    return blosc2_ext.squeeze(x, axis_mask=mask)
 
 
 def array_from_ffi_ptr(array_ptr) -> NDArray:
