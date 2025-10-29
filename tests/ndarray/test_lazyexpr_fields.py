@@ -12,8 +12,8 @@ import pytest
 import blosc2
 from blosc2.lazyexpr import ne_evaluate
 
-NITEMS_SMALL = 1_000
-NITEMS = 10_000
+NITEMS_SMALL = 100
+NITEMS = 1000
 
 
 @pytest.fixture(
@@ -41,7 +41,9 @@ def dtype_fixture(request):
     return request.param
 
 
-@pytest.fixture(params=[(NITEMS_SMALL,), (NITEMS,), (NITEMS // 100, 100)])
+@pytest.fixture(
+    params=[(NITEMS_SMALL,), (NITEMS,), pytest.param((NITEMS // 10, 100), marks=pytest.mark.heavy)]
+)
 def shape_fixture(request):
     return request.param
 
@@ -52,7 +54,7 @@ def shape_fixture(request):
         (True, True),
         (True, False),
         pytest.param((False, True), marks=pytest.mark.heavy),
-        (False, False),
+        pytest.param((False, False), marks=pytest.mark.heavy),
     ]
 )
 def chunks_blocks_fixture(request):

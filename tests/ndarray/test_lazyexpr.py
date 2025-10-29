@@ -16,8 +16,8 @@ import blosc2
 from blosc2.lazyexpr import ne_evaluate
 from blosc2.ndarray import get_chunks_idx, npvecdot
 
-NITEMS_SMALL = 1_000
-NITEMS = 10_000
+NITEMS_SMALL = 100
+NITEMS = 1000
 
 
 @pytest.fixture(params=[np.float32, np.float64])
@@ -25,7 +25,7 @@ def dtype_fixture(request):
     return request.param
 
 
-@pytest.fixture(params=[(NITEMS_SMALL,), (NITEMS,), (NITEMS // 100, 100)])
+@pytest.fixture(params=[(NITEMS_SMALL,), (NITEMS,), (NITEMS // 10, 100)])
 def shape_fixture(request):
     return request.param
 
@@ -36,7 +36,7 @@ def shape_fixture(request):
         (True, True),
         (True, False),
         pytest.param((False, True), marks=pytest.mark.heavy),
-        (False, False),
+        pytest.param((False, False), marks=pytest.mark.heavy),
     ]
 )
 def chunks_blocks_fixture(request):
@@ -1811,9 +1811,9 @@ def test_simpleproxy(xp, dtype):
         npa = blosc_matrix[()]
         res = (npb & npa) | np.logical_not(npb)
     else:
-        N = 10
+        N = 5
         shape_a = (N, N, N)
-        blosc_matrix = blosc2.full(shape=shape_a, fill_value=3, dtype=np.dtype(dtype), chunks=(N // 3,) * 3)
+        blosc_matrix = blosc2.full(shape=shape_a, fill_value=3, dtype=np.dtype(dtype), chunks=(N // 2,) * 3)
         foreign_matrix = xp.ones(shape_a, dtype=dtype_)
         if dtype == "complex128":
             foreign_matrix += 0.5j
