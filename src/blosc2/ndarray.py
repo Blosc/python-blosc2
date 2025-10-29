@@ -6319,6 +6319,18 @@ def take_along_axis(x: blosc2.Array, indices: blosc2.Array, axis: int = -1) -> N
     return blosc2.asarray(x[key])
 
 
+class MyChunkRange:
+    def __init__(self, start, stop, step=1, n=1):
+        self.start = start
+        self.stop = stop
+        self.step = step
+        self.n = n
+
+    def __iter__(self):
+        for k in range(math.ceil((self.stop - self.start) / self.step)):
+            yield (self.start + k * self.step) // self.n
+
+
 def slice_to_chunktuple(s, n):
     # Adapted from _slice_iter in ndindex.ChunkSize.as_subchunks.
     start, stop, step = s.start, s.stop, s.step
@@ -6328,7 +6340,7 @@ def slice_to_chunktuple(s, n):
         start = temp + 1
         step = -step  # get positive steps
     if step > n:
-        return ((start + k * step) // n for k in range(ceiling(stop - start, step)))
+        return MyChunkRange(start, stop, step, n)
     else:
         return range(start // n, ceiling(stop, n))
 

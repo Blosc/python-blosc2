@@ -361,7 +361,7 @@ def test_fancy_index(c):
     b = arr[row, d // 2 :: -1]
     n = nparr[row, d // 2 :: -1]
     np.testing.assert_allclose(b, n)
-    b = arr[M // 2 :: -4, row, d // 2 :: -3]
+    b = arr[M // 2 :: -4, row, d // 2 :: -3]  # test stepsize > chunk_shape
     n = nparr[M // 2 :: -4, row, d // 2 :: -3]
     np.testing.assert_allclose(b, n)
 
