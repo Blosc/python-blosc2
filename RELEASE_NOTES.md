@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.11.0 to 3.11.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.10.2 to 3.11.0
 
 * Small optimisation for chunking in lazy expressions
