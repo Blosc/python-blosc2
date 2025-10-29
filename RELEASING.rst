@@ -113,8 +113,8 @@ Checking packaging
 
 The wheels may be downloaded by going to "Actions->Python wheels for WASM"
 and selecting the completed workflow run for the version you are releasing.
-Then, go to the "Artifacts" dropdown and download the WASM wheel file.
-
+Then, go to the "Artifacts" dropdown and download the WASM wheel file(s).
+**Note**: be sure to upload the wheel files, not the zip file containing them.
 
 Announcing
 ----------
