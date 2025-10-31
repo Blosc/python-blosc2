@@ -143,6 +143,8 @@ This page documents the miscellaneous members of the ``blosc2`` module that do n
         arctan,
         arctan2,
         arctanh,
+        argmax,
+        argmin,
         asin,
         asinh,
         atan,

@@ -18,6 +18,8 @@ Reduction operations can be used with any of :ref:`NDArray <NDArray>`, :ref:`C2A
     var
     min
     max
+    argmin
+    argmax
 
 .. autofunction:: all
 .. autofunction:: any
@@ -28,3 +30,5 @@ Reduction operations can be used with any of :ref:`NDArray <NDArray>`, :ref:`C2A
 .. autofunction:: var
 .. autofunction:: min
 .. autofunction:: max
+.. autofunction:: argmin
+.. autofunction:: argmax
