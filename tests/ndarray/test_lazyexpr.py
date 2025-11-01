@@ -1404,7 +1404,7 @@ def test_missing_operator():
     with pytest.raises(blosc2.exceptions.MissingOperands) as excinfo:
         blosc2.open("expr.b2nd")
 
-    # Check that some operand is missing"
+    # Check that some operand is missing
     assert "a" not in excinfo.value.missing_ops
     assert excinfo.value.missing_ops["b"] == pathlib.Path("b.b2nd")
     assert excinfo.value.expr == "a + b"
