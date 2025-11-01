@@ -243,6 +243,8 @@ def test_matmul_disk():
             (10, 5),
             ([1], [0]),
         ),
+        # 2Dx2D->axes arg integer
+        ((10, 13), (7, 2), (3, 1), (12, 10), (4, 5), (3, 3), (3, 5), 1),
         # 3Dx3D->contraction along last/first
         (
             (10, 20, 30),
