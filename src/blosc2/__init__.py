@@ -450,6 +450,7 @@ from .proxy import Proxy, ProxySource, ProxyNDSource, ProxyNDField, SimpleProxy,
 from .schunk import SChunk, open
 from . import linalg
 from .linalg import tensordot, vecdot, permute_dims, matrix_transpose, matmul, transpose, diagonal, outer
+from .shape_utils import linalg_funcs as linalg_funcs_list
 from . import fft
 
 # Registry for postfilters
@@ -629,6 +630,8 @@ __all__ = [  # noqa : RUF022
     "URLPath",
     # Version
     "__version__",
+    # Utils
+    "linalg_funcs_list",
     # Functions
     "abs",
     "acos",
