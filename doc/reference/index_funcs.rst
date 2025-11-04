@@ -1,7 +1,7 @@
 Indexing Functions and Utilities
 =======================================
 
-The following functions are useful for performing indexing and oter associated operations.
+The following functions are useful for performing indexing and other associated operations.
 
 .. currentmodule:: blosc2
 

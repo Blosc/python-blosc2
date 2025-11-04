@@ -14,6 +14,8 @@ The following functions can be used for computing linear algebra operations with
     matrix_transpose
     diagonal
     outer
+    concat
+    stack
 
 
 
@@ -25,3 +27,5 @@ The following functions can be used for computing linear algebra operations with
 .. autofunction:: blosc2.linalg.matrix_transpose
 .. autofunction:: blosc2.linalg.diagonal
 .. autofunction:: blosc2.linalg.outer
+.. autofunction:: blosc2.concat
+.. autofunction:: blosc2.stack
