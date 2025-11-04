@@ -1343,6 +1343,17 @@ def test_sort():
         expr.sort().compute()
 
 
+def test_listargs():
+    # lazyexpr tries to convert [] to slice, but could
+    # have problems for argumetns which are lists
+    shape = (20,)
+    na = np.arange(shape[0])
+    a = blosc2.asarray(na)
+    b = blosc2.asarray(na)
+    expr = blosc2.lazyexpr("stack([a, b])")
+    np.testing.assert_array_equal(expr[:], np.stack([a[:], b[:]]))
+
+
 @pytest.mark.parametrize(
     "obj",
     [

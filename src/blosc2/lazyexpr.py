@@ -812,17 +812,20 @@ def convert_to_slice(expression):
         if expr_i == "[":
             k = expression[i:].find("]")  # start checking from after [
             slice_convert = expression[i : i + k + 1]  # include [ and ]
-            slicer = eval(f"np.s_{slice_convert}")
-            slicer = (slicer,) if not isinstance(slicer, tuple) else slicer  # standardise to tuple
-            if any(isinstance(el, str) for el in slicer):  # handle fields
-                raise ValueError("Cannot handle fields for slicing lazy expressions.")
-            slicer = str(slicer)
-            # use slice so that lazyexpr uses blosc arrays internally
-            # (and doesn't decompress according to getitem syntax)
-            new_expr += f".slice({slicer})"
-            skip_to_char = i + k + 1
-        else:
-            new_expr += expr_i
+            try:
+                slicer = eval(f"np.s_{slice_convert}")
+                slicer = (slicer,) if not isinstance(slicer, tuple) else slicer  # standardise to tuple
+                if any(isinstance(el, str) for el in slicer):  # handle fields
+                    raise ValueError("Cannot handle fields for slicing lazy expressions.")
+                slicer = str(slicer)
+                # use slice so that lazyexpr uses blosc arrays internally
+                # (and doesn't decompress according to getitem syntax)
+                new_expr += f".slice({slicer})"
+                skip_to_char = i + k + 1
+                continue
+            except Exception:
+                pass
+        new_expr += expr_i  # if slice_convert is e.g. a list, not a slice, do nothing
     return new_expr
 
 
