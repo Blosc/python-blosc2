@@ -25,8 +25,8 @@ Note: The functions ``conj``, ``real``, ``imag``, ``contains``, ``where`` are no
     asin
     asinh
     atan
-    atanh
     atan2
+    atanh
     bitwise_and
     bitwise_invert
     bitwise_left_shift
@@ -53,9 +53,9 @@ Note: The functions ``conj``, ``real``, ``imag``, ``contains``, ``where`` are no
     less
     less_equal
     log
-    log10
     log1p
     log2
+    log10
     logaddexp
     logical_and
     logical_not
@@ -100,8 +100,8 @@ Note: The functions ``conj``, ``real``, ``imag``, ``contains``, ``where`` are no
 .. autofunction:: blosc2.asin
 .. autofunction:: blosc2.asinh
 .. autofunction:: blosc2.atan
-.. autofunction:: blosc2.atanh
 .. autofunction:: blosc2.atan2
+.. autofunction:: blosc2.atanh
 .. autofunction:: blosc2.bitwise_and
 .. autofunction:: blosc2.bitwise_invert
 .. autofunction:: blosc2.bitwise_left_shift
@@ -128,9 +128,9 @@ Note: The functions ``conj``, ``real``, ``imag``, ``contains``, ``where`` are no
 .. autofunction:: blosc2.less
 .. autofunction:: blosc2.less_equal
 .. autofunction:: blosc2.log
-.. autofunction:: blosc2.log10
 .. autofunction:: blosc2.log1p
 .. autofunction:: blosc2.log2
+.. autofunction:: blosc2.log10
 .. autofunction:: blosc2.logaddexp
 .. autofunction:: blosc2.logical_and
 .. autofunction:: blosc2.logical_not

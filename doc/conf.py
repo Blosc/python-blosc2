@@ -150,6 +150,8 @@ The following functions are useful for working with datatypes.
 blosc2_indexfuncs = sorted(
     [
         "count_nonzero",
+        "concat",
+        "stack",
         "squeeze",
         "expand_dims",
         "sort",
@@ -166,7 +168,7 @@ with open("reference/index_funcs.rst", "w") as f:
         """Indexing Functions and Utilities
 =======================================
 
-The following functions are useful for performing indexing and oter associated operations.
+The following functions are useful for performing indexing and other associated operations.
 
 .. currentmodule:: blosc2
 
