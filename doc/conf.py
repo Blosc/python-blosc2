@@ -150,8 +150,6 @@ The following functions are useful for working with datatypes.
 blosc2_indexfuncs = sorted(
     [
         "count_nonzero",
-        "concat",
-        "stack",
         "squeeze",
         "expand_dims",
         "sort",
