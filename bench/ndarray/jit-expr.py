@@ -125,10 +125,6 @@ c = blosc2.asarray(nc, cparams=cparams)
 # c = blosc2.asarray(nc, cparams=cparams, chunks=chunks, blocks=blocks)
 print(f"{a.chunks=}, {a.blocks=}, {a.schunk.cratio=:.2f}x")
 
-@blosc2.jit(cparams=cparams_out)
-def compute_expression_compr(a, b, c):
-    return ((a ** 3 + np.sin(a * 2)) < c) & (b > 0)
-
 out = compute_expression_compr(a, b, c)
 t0 = time()
 for i in range(niter):
