@@ -1408,14 +1408,14 @@ def test_missing_operator():
     a = blosc2.arange(10, urlpath="a.b2nd", mode="w")
     b = blosc2.arange(10, urlpath="b.b2nd", mode="w")
     expr = blosc2.lazyexpr("a + b")
-    c = expr.save("expr.b2nd", mode="w")
+    expr.save("expr.b2nd", mode="w")
     # Remove the file for operand b
     blosc2.remove_urlpath("b.b2nd")
     # Re-open the lazy expression
     with pytest.raises(blosc2.exceptions.MissingOperands) as excinfo:
         blosc2.open("expr.b2nd")
 
-    # Check that some operand is missing"
+    # Check that some operand is missing
     assert "a" not in excinfo.value.missing_ops
     assert excinfo.value.missing_ops["b"] == pathlib.Path("b.b2nd")
     assert excinfo.value.expr == "a + b"
