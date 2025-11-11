@@ -267,9 +267,9 @@ def main():
 
             # Quick verification of result shape
             if axis == 0:
-                expected_shape = (size, size)  # After concatenation along axis 0
+                expected_shape = (size // num_arrays * num_arrays, size)  # After concatenation along axis 0
             else:
-                expected_shape = (size, size)  # After concatenation along axis 1
+                expected_shape = (size, size // num_arrays * num_arrays)  # After concatenation along axis 1
 
             # Verify shapes match
             shapes = [numpy_shape, shape1, shape2]
