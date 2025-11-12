@@ -1345,13 +1345,25 @@ def test_sort():
 
 def test_listargs():
     # lazyexpr tries to convert [] to slice, but could
-    # have problems for argumetns which are lists
+    # have problems for arguments which are lists
     shape = (20,)
     na = np.arange(shape[0])
     a = blosc2.asarray(na)
     b = blosc2.asarray(na)
     expr = blosc2.lazyexpr("stack([a, b])")
     np.testing.assert_array_equal(expr[:], np.stack([a[:], b[:]]))
+
+
+def test_str_constructors():
+    shape = (1000, 1)
+    chunks = (100, 1)
+    a = blosc2.lazyexpr(f"linspace(0, 100, {np.prod(shape)}, shape={shape}, chunks={chunks})")
+    assert a.chunks == chunks
+    b = blosc2.lazyexpr("a.T")  # this fails unless chunkshape is assigned to a on creation
+
+    b = blosc2.ones((1000, 10))
+    a = blosc2.lazyexpr(f"b + linspace(0, 100, {np.prod(shape)}, shape={shape}, chunks={chunks})")
+    assert a.shape == np.broadcast_shapes(shape, b.shape)
 
 
 @pytest.mark.parametrize(
@@ -1732,6 +1744,12 @@ def test_lazylinalg():
 
     # --- stack ---
     out = blosc2.lazyexpr("stack((x, y), axis=0)")
+    npres = np.stack((npx, npy), axis=0)
+    assert out.shape == npres.shape
+    np.testing.assert_array_almost_equal(out[()], npres)
+    # --- stack ---
+    # repeat with list arg instead of tuple
+    out = blosc2.lazyexpr("stack([x, y], axis=0)")
     npres = np.stack((npx, npy), axis=0)
     assert out.shape == npres.shape
     np.testing.assert_array_almost_equal(out[()], npres)

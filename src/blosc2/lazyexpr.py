@@ -3109,6 +3109,7 @@ class LazyExpr(LazyArray):
         # Validate the expression
         validate_expr(expression)
         expression = convert_to_slice(expression)
+        chunks, blocks = None, None
         if guess:
             # The expression has been validated, so we can evaluate it
             # in guessing mode to avoid computing reductions
@@ -3139,6 +3140,11 @@ class LazyExpr(LazyArray):
                 # (e.g. all operands are numpy arrays or constructors)
                 # or passed "a", "a[:10]", 'sum(a)'
                 expression_, operands_ = conserve_functions(_expression, _operands, local_vars)
+                if hasattr(new_expr, "chunks") and new_expr.chunks != (1,) * len(_shape):
+                    # for constructors with chunks in kwargs, chunks will be specified
+                    # for general expression new_expr is just with dummy scalar variables (so ignore)
+                    chunks = new_expr.chunks
+                    blocks = new_expr.blocks
             new_expr = cls(None)
             new_expr.expression = f"({expression_})"  # force parenthesis
             new_expr.operands = operands_
@@ -3147,6 +3153,8 @@ class LazyExpr(LazyArray):
             # Cache the dtype and shape (should be immutable)
             new_expr._dtype = _dtype
             new_expr._shape = _shape
+            if chunks is not None and blocks is not None:
+                new_expr._chunks, new_expr._blocks = chunks, blocks
         else:
             # Create a new LazyExpr object
             new_expr = cls(None)
