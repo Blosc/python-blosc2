@@ -521,6 +521,9 @@ class ShapeInferencer(ast.NodeVisitor):
     def visit_Tuple(self, node):
         return tuple(self.visit(arg) for arg in node.elts)
 
+    def visit_List(self, node):
+        return self.visit_Tuple(node)
+
     def visit_BinOp(self, node):
         left = self.visit(node.left)
         right = self.visit(node.right)
