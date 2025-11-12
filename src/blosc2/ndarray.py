@@ -5208,7 +5208,7 @@ def arange(
 
     if is_inside_new_expr() or NUM < 0:
         # We already have the dtype and shape, so return immediately
-        return blosc2.zeros(shape, dtype=dtype)
+        return blosc2.zeros(shape, dtype=dtype, **kwargs)
 
     lshape = (math.prod(shape),)
     lazyarr = blosc2.lazyudf(arange_fill, (start, stop, step), dtype=dtype, shape=lshape)
@@ -5309,7 +5309,7 @@ def linspace(
 
     if is_inside_new_expr() or num == 0:
         # We already have the dtype and shape, so return immediately
-        return blosc2.zeros(shape, dtype=dtype)  # will return empty array for num == 0
+        return blosc2.zeros(shape, dtype=dtype, **kwargs)  # will return empty array for num == 0
 
     inputs = (start, stop, num, endpoint)
     lazyarr = blosc2.lazyudf(linspace_fill, inputs, dtype=dtype, shape=(num,))
