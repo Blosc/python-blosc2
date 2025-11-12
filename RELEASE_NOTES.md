@@ -2,7 +2,10 @@
 
 ## Changes from 3.11.0 to 3.11.1
 
-XXX version-specific blurb XXX
+* Change the `NDArray.size` to return the number of elements in array,
+  instead of the size of the array in bytes. This follows the array
+  API, so it is considered a fix, and takes precedence over a possible
+  backward incompatibility.
 
 ## Changes from 3.10.2 to 3.11.0
 

@@ -2387,7 +2387,7 @@ cdef class NDArray:
 
     @property
     def size(self):
-        return self.array.nitems * self.array.sc.typesize
+        return self.array.nitems
 
     @property
     def chunksize(self):
@@ -2556,7 +2556,7 @@ cdef class NDArray:
         return self
 
     def tobytes(self):
-        buffersize = self.size
+        buffersize = self.size * self.array.sc.typesize
         buffer = bytes(buffersize)
         _check_rc(b2nd_to_cbuffer(self.array, <void *> <char *> buffer, buffersize),
                   "Error while filling the buffer")
