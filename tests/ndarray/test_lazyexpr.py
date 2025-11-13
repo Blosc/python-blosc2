@@ -1485,6 +1485,13 @@ def test_chain_expressions():
     assert lexpr1.expression == lexpr3.expression
     assert lexpr1.operands == lexpr3.operands
 
+    # chain constructors
+    expr1 = "linspace(0, 10, 100)"
+    lexpr1 = blosc2.lazyexpr(expr1)
+    lexpr1 *= 2
+    assert lexpr1.expression == "((linspace(0, 10, 100)) * 2)"
+    assert lexpr1.shape == (100,)
+
 
 # Test the chaining of multiple persistent lazy expressions
 def test_chain_persistentexpressions():
