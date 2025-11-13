@@ -99,6 +99,9 @@ def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArra
     n, k = x1.shape[-2:]
     m = x2.shape[-1]
     result_shape = np.broadcast_shapes(x1.shape[:-2], x2.shape[:-2]) + (n, m)
+    # For matmul, we don't want to reduce the chunksize, as experiments show that
+    # the larger, the better (as long as some limits are not exceeded).
+    kwargs["_chunksize_reduc_factor"] = 1
     result = blosc2.zeros(result_shape, dtype=blosc2.result_type(x1, x2), **kwargs)
 
     if 0 not in result.shape + x1.shape + x2.shape:  # if any array is empty, return array of 0s
