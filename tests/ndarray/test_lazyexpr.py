@@ -1365,6 +1365,10 @@ def test_str_constructors():
     a = blosc2.lazyexpr(f"b + linspace(0, 100, {np.prod(shape)}, shape={shape}, chunks={chunks})")
     assert a.shape == np.broadcast_shapes(shape, b.shape)
 
+    # failed before dtype handling improved
+    x = blosc2.lazyexpr("linspace(-1, 1, 10, shape=(1, 10))")
+    lexpr = blosc2.sin(blosc2.sqrt(x**2))
+
 
 @pytest.mark.parametrize(
     "obj",
