@@ -5839,6 +5839,7 @@ def _check_ndarray_kwargs(**kwargs):
         "initial_mapping_size",
         "storage",
         "out",
+        "_chunksize_reduc_factor",
     ]
     _ = kwargs.pop("device", None)  # pop device (not used, but needs to be discarded)
     for key in kwargs:
