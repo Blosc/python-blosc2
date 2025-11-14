@@ -2341,6 +2341,9 @@ class LazyExpr(LazyArray):
         if value2 is None:
             if isinstance(value1, LazyExpr):
                 self.expression = value1.expression if op is None else f"{op}({value1.expression})"
+                # handle constructors which can give empty operands
+                _out = _numpy_eval_expr(f"{op}(o0)", {"o0": value1}, prefer_blosc=False)
+                self._dtype = _out.dtype
                 self.operands = value1.operands
             else:
                 if np.isscalar(value1):
