@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.11.1 to 3.11.2
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.11.0 to 3.11.1
 
 * Change the `NDArray.size` to return the number of elements in array,
