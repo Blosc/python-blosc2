@@ -1,14 +1,13 @@
-Announcing Python-Blosc2 3.11.0
+Announcing Python-Blosc2 3.11.1
 ===============================
 
-This is a minor version release where we have aimed to tidy up the code and add some useful functionality:
+This is a patch release where we have aimed to tidy up the code, introduce optimisations, and fix some small bugs/:
 
-✅ Small optimisation for chunking in lazy expressions
-✅ Extend Blosc2 to accept general array inputs (PR #510, PR #517)
-✅ Refactoring and streamlining of get/setitem for non-unit steps (PR #513)
-✅ Remote array testing now performed with ``cat2cloud`` (PR #511)
-✅ Added argmax/argmin functions (PR #514)
-✅ Change ``squeeze`` to return view (rather than modify array in-place) (PR #518)
+✅ Change the ``NDArray.size`` to return the number of elements in array, instead of the size of the array in bytes
+✅ Bug fixes for lazy expressions to allow a wider range of functionality
+✅ Small bug fix for slice indexing with step larger than chunksize
+✅ Tweak automatic chunk sizing of results for certain (e.g. linalg) operations to enhance performance
+✅ Various cosmetic fixes and streamlining (thanks to the indefatigable @DimitriPapadopoulos)
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 

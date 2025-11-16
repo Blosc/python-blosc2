@@ -6,6 +6,11 @@
   instead of the size of the array in bytes. This follows the array
   API, so it is considered a fix, and takes precedence over a possible
   backward incompatibility.
+* Tweak automatic chunk sizing of results for certain (e.g. linalg) operations
+  to enhance performance
+* Bug fixes for lazy expressions to allow a wider range of functionality
+* Small bug fix for slice indexing with step larger than chunksize
+* Various cosmetic fixes and streamlining (thanks to the indefatigable @DimitriPapadopoulos)
 
 ## Changes from 3.10.2 to 3.11.0
 
