@@ -2573,19 +2573,17 @@ class LazyExpr(LazyArray):
             return None
 
         # Operands shape can change, so we always need to recompute this
-        try:
+        if any(constructor in self.expression for constructor in constructors):
+            # might have an expression with pure constructors
+            opshapes = {k: v if not hasattr(v, "shape") else v.shape for k, v in self.operands.items()}
+            _shape = infer_shape(self.expression, opshapes)  # infer shape, includes constructors
+
+        else:
             _shape, chunks, blocks, fast_path = validate_inputs(self.operands, getattr(self, "_out", None))
             if fast_path:
                 # fast_path ensure that all the operands have the same partitions
                 self._chunks = chunks
                 self._blocks = blocks
-        except ValueError as e:
-            if any(constructor in self.expression for constructor in constructors):
-                # might have an expression with pure constructors
-                opshapes = {k: v if not hasattr(v, "shape") else v.shape for k, v in self.operands.items()}
-                _shape = infer_shape(self.expression, opshapes)  # infer shape, includes constructors
-            else:
-                raise e
 
         self._shape_ = _shape
         self._expression_ = self.expression
