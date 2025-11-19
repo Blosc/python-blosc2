@@ -952,6 +952,21 @@ def test_broadcasting(broadcast_fixture):
     np.testing.assert_allclose(res, nres)
 
 
+def test_incompatible_shape():
+    shape1 = (1000,)
+    shape2 = (100,)
+    a = blosc2.ones(shape1)
+    b = blosc2.zeros(shape2)
+    expr = a + b
+    with pytest.raises(ValueError):
+        s = expr.shape
+
+    # Test constructor too
+    expr = a + blosc2.lazyexpr(f"linspace(0, 10, {np.prod(shape2)}, shape={shape2})")
+    with pytest.raises(ValueError):
+        s = expr.shape
+
+
 def test_broadcasting_str(broadcast_fixture):
     a1, a2, na1, na2 = broadcast_fixture
     expr1 = blosc2.lazyexpr("a1 + a2")
