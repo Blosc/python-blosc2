@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 import blosc2
-from blosc2.ndarray import NUMPY_GE_2_0
+from blosc2.utils import NUMPY_GE_2_0
 
 if NUMPY_GE_2_0:  # handle different versions of numpy
     npconcat = np.concat

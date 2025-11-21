@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 import blosc2
-from blosc2.ndarray import get_intersecting_chunks, nptranspose, npvecdot, slice_to_chunktuple
+
+from .utils import get_intersecting_chunks, nptranspose, npvecdot, slice_to_chunktuple
 
 if TYPE_CHECKING:
     from collections.abc import Sequence

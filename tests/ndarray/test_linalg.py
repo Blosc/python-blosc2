@@ -7,7 +7,7 @@ import torch
 
 import blosc2
 from blosc2.lazyexpr import linalg_funcs
-from blosc2.ndarray import npvecdot
+from blosc2.utils import npvecdot
 
 
 @pytest.mark.parametrize(
