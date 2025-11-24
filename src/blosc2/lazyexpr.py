@@ -3029,50 +3029,6 @@ class LazyExpr(LazyArray):
         items += [("dtype", self.dtype)]
         return items
 
-    def _save(self, urlpath=None, **kwargs):
-        if urlpath is None:
-            raise ValueError("To save a LazyArray you must provide an urlpath")
-
-        # Validate expression
-        validate_expr(self.expression)
-
-        meta = kwargs.get("meta", {})
-        meta["LazyArray"] = LazyArrayEnum.Expr.value
-        kwargs["urlpath"] = urlpath
-        kwargs["meta"] = meta
-        kwargs["mode"] = "w"  # always overwrite the file in urlpath
-
-        # Create an empty array; useful for providing the shape and dtype of the outcome
-        array = blosc2.empty(shape=self.shape, dtype=self.dtype, **kwargs)
-
-        # Save the expression and operands in the metadata
-        operands = {}
-        for key, value in self.operands.items():
-            if isinstance(value, blosc2.C2Array):
-                operands[key] = {
-                    "path": str(value.path),
-                    "urlbase": value.urlbase,
-                }
-                continue
-            if key in {"numpy", "np"}:
-                # Provide access to cast funcs like int8 et al.
-                continue
-            if isinstance(value, blosc2.Proxy):
-                # Take the required info from the Proxy._cache container
-                value = value._cache
-            if not hasattr(value, "schunk"):
-                raise ValueError(
-                    "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
-                )
-            if value.schunk.urlpath is None:
-                raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
-            operands[key] = value.schunk.urlpath
-        array.schunk.vlmeta["_LazyArray"] = {
-            "expression": self.expression,
-            "UDF": None,
-            "operands": operands,
-        }
-
     def save(self, urlpath=None, **kwargs):
         if urlpath is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
@@ -3357,8 +3313,44 @@ class LazyUDF(LazyArray):
             return output[item]
         return self.res_getitem[item]
 
-    def save(self, **kwargs):
-        raise NotImplementedError("For safety reasons, this is not implemented for UDFs")
+    def save(self, urlpath=None, **kwargs):
+        if urlpath is None:
+            raise ValueError("To save a LazyArray you must provide an urlpath")
+
+        meta = kwargs.get("meta", {})
+        meta["LazyArray"] = LazyArrayEnum.UDF.value
+        kwargs["urlpath"] = urlpath
+        kwargs["meta"] = meta
+        kwargs["mode"] = "w"  # always overwrite the file in urlpath
+
+        # Create an empty array; useful for providing the shape and dtype of the outcome
+        array = blosc2.empty(shape=self.shape, dtype=self.dtype, **kwargs)
+
+        # Save the expression and operands in the metadata
+        operands = {}
+        operands_ = self.inputs_dict
+        for key, value in operands_.items():
+            if isinstance(value, blosc2.C2Array):
+                operands[key] = {
+                    "path": str(value.path),
+                    "urlbase": value.urlbase,
+                }
+                continue
+            if isinstance(value, blosc2.Proxy):
+                # Take the required info from the Proxy._cache container
+                value = value._cache
+            if not hasattr(value, "schunk"):
+                raise ValueError(
+                    "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
+                )
+            if value.schunk.urlpath is None:
+                raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
+            operands[key] = value.schunk.urlpath
+        array.schunk.vlmeta["_LazyArray"] = {
+            "UDF": inspect.getsource(self.func),
+            "operands": operands,
+            "name": self.func.__name__,
+        }
 
 
 def _numpy_eval_expr(expression, operands, prefer_blosc=False):
@@ -3615,41 +3607,59 @@ def lazyexpr(
 
 def _open_lazyarray(array):
     value = array.schunk.meta["LazyArray"]
-    if value == LazyArrayEnum.UDF.value:
-        raise NotImplementedError("For safety reasons, persistent UDFs are not supported")
-
-    # LazyExpr
     lazyarray = array.schunk.vlmeta["_LazyArray"]
+    if value == LazyArrayEnum.Expr.value:
+        expr = lazyarray["expression"]
+    elif value == LazyArrayEnum.UDF.value:
+        expr = lazyarray["UDF"]
+    else:
+        raise ValueError("Argument `array` is not LazyExpr or LazyUDF instance.")
+
     operands = lazyarray["operands"]
     parent_path = Path(array.schunk.urlpath).parent
     operands_dict = {}
     missing_ops = {}
-    for key, value in operands.items():
-        if isinstance(value, str):
-            value = parent_path / value
+    for key, v in operands.items():
+        if isinstance(v, str):
+            v = parent_path / v
             try:
-                op = blosc2.open(value)
+                op = blosc2.open(v)
             except FileNotFoundError:
-                missing_ops[key] = value
+                missing_ops[key] = v
             else:
                 operands_dict[key] = op
-        elif isinstance(value, dict):
+        elif isinstance(v, dict):
             # C2Array
             operands_dict[key] = blosc2.C2Array(
-                pathlib.Path(value["path"]).as_posix(),
-                urlbase=value["urlbase"],
+                pathlib.Path(v["path"]).as_posix(),
+                urlbase=v["urlbase"],
             )
         else:
             raise TypeError("Error when retrieving the operands")
 
-    expr = lazyarray["expression"]
     if missing_ops:
         exc = exceptions.MissingOperands(expr, missing_ops)
         exc.expr = expr
         exc.missing_ops = missing_ops
         raise exc
 
-    new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
+    # LazyExpr
+    if value == LazyArrayEnum.Expr.value:
+        new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
+    elif value == LazyArrayEnum.UDF.value:
+        local_ns = {}
+        exec(expr, {"np": np, "blosc2": blosc2}, local_ns)
+        name = lazyarray["name"]
+        func = local_ns[name]
+        # TODO: make more robust for general kwargs (not just cparams)
+        new_expr = blosc2.lazyudf(
+            func,
+            tuple(operands_dict[f"o{n}"] for n in range(len(operands_dict))),
+            shape=array.shape,
+            dtype=array.dtype,
+            cparams=array.cparams,
+        )
+
     # Make the array info available for the user (only available when opened from disk)
     new_expr.array = array
     # We want to expose schunk too, so that .info() can be used on the LazyArray

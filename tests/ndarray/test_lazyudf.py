@@ -455,3 +455,25 @@ def test_clip_logaddexp(shape, chunks, blocks, slices):
     np.testing.assert_allclose(expr, np.sin(np.logaddexp(npb, npa)))
     expr = blosc2.evaluate("clip(logaddexp(b, a), 6, 12)")
     np.testing.assert_allclose(expr, np.clip(np.logaddexp(npb, npa), 6, 12))
+
+
+def test_save_ludf():
+    shape = (23,)
+    npa = np.arange(start=0, stop=np.prod(shape)).reshape(shape)
+    blosc2.remove_urlpath("a.b2nd")
+    array = blosc2.asarray(npa, urlpath="a.b2nd")
+
+    # Assert that shape is computed correctly
+    npc = npa + 1
+    cparams = {"nthreads": 4}
+    urlpath = "lazyarray.b2nd"
+    blosc2.remove_urlpath(urlpath)
+
+    expr = blosc2.lazyudf(udf1p, (array,), np.float64, cparams=cparams)
+
+    expr.save(urlpath=urlpath)
+    del expr
+    expr = blosc2.open(urlpath)
+    assert isinstance(expr, blosc2.LazyUDF)
+    res_lazyexpr = expr.compute()
+    np.testing.assert_array_equal(res_lazyexpr[:], npc)
