@@ -16,6 +16,7 @@ import ast
 # User selection
 # ---------------------------------------------------------------------
 # Valid machines: "Apple-M4-Pro", "AMD-7800X3D"
+# machine = "Apple-M4-Pro"
 machine = "AMD-7800X3D"
 # False -> on-disk benchmark, True -> in-memory benchmark
 mem_mode = False
