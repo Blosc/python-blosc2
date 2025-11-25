@@ -14,6 +14,7 @@ import builtins
 import concurrent.futures
 import copy
 import inspect
+import linecache
 import math
 import os
 import pathlib
@@ -3648,8 +3649,13 @@ def _open_lazyarray(array):
         new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
     elif value == LazyArrayEnum.UDF.value:
         local_ns = {}
-        exec(expr, {"np": np, "blosc2": blosc2}, local_ns)
         name = lazyarray["name"]
+        filename = f"<{name}>"  # any unique name
+
+        # Register the source so inspect can find it
+        linecache.cache[filename] = (len(expr), None, expr.splitlines(True), filename)
+
+        exec(compile(expr, filename, "exec"), {"np": np, "blosc2": blosc2}, local_ns)
         func = local_ns[name]
         # TODO: make more robust for general kwargs (not just cparams)
         new_expr = blosc2.lazyudf(
