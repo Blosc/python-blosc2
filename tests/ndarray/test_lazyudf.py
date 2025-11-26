@@ -5,7 +5,6 @@
 # This source code is licensed under a BSD-style license (found in the
 # LICENSE file in the root directory of this source tree)
 #######################################################################
-import math
 
 import numpy as np
 import pytest
@@ -152,7 +151,8 @@ def test_0p(shape, chunks, blocks, chunked_eval):
     expr = blosc2.lazyudf(
         udf0p, (), npa.dtype, shape=shape, chunked_eval=chunked_eval, chunks=chunks, blocks=blocks
     )
-    res = expr.compute()
+    out = blosc2.empty(dtype=expr.dtype, shape=expr.shape)
+    res = expr.compute(out=out)
 
     np.testing.assert_allclose(res[...], npa)
 
@@ -339,8 +339,13 @@ def test_eval_slice(shape, chunks, blocks, slices, urlpath, contiguous, chunked_
 
 
 def udf_offset(inputs_tuple, output, offset):
-    _ = inputs_tuple[0]
-    output[:] = sum(offset)
+    x = inputs_tuple[0]
+    coords = np.zeros_like(x)
+    for n in range(x.ndim):
+        for i in range(x.shape[n]):
+            _slice = tuple(slice(None, None) if n != n_ else i for n_ in range(x.ndim))
+            coords[_slice] += offset[n] + i
+    output[:] = np.sin(coords)
 
 
 @pytest.mark.parametrize("eval_mode", ["eval", "getitem"])
@@ -355,15 +360,11 @@ def udf_offset(inputs_tuple, output, offset):
         ((8, 8), (4, 4), (2, 2), (slice(None), slice(None))),
         ((9, 8), (4, 4), (2, 3), (slice(None), slice(None))),
         ((13, 13), (10, 10), (4, 3), (slice(None), slice(None))),
-        # TODO: make this work
-        # I think the issue is in how the offsets are calculated here, in the test.
-        # Other tests involving offset with slices are working fine
-        # (e.g. test_ndarray::test_arange)
-        # ((8, 8), (4, 4), (2, 2), (slice(0, 5), slice(5, 8))),
-        # ((9, 8), (4, 4), (2, 3), (slice(0, 5), slice(5, 8))),
-        # ((40, 20), (30, 10), (5, 5), (slice(0, 5), slice(5, 20))),
-        # ((13, 13), (10, 10), (4, 3), (slice(3, 8), slice(9, 12))),
-        # ((13, 13, 10), (10, 10, 5), (5, 5, 3), (slice(0, 12), slice(3, 13), ...)),
+        ((8, 8), (4, 4), (2, 2), (slice(0, 5), slice(5, 8))),
+        ((9, 8), (4, 4), (2, 3), (slice(0, 5), slice(5, 8))),
+        ((40, 20), (30, 10), (5, 5), (slice(0, 5), slice(5, 20))),
+        ((13, 13), (10, 10), (4, 3), (slice(3, 8), slice(9, 12))),
+        ((13, 13, 10), (10, 10, 5), (5, 5, 3), (slice(0, 12), slice(3, 13), ...)),
     ],
 )
 def test_offset(shape, chunks, blocks, slices, chunked_eval, eval_mode):
@@ -372,19 +373,12 @@ def test_offset(shape, chunks, blocks, slices, chunked_eval, eval_mode):
 
     # Compute the desired output
     out = np.zeros_like(x)
-    # Calculate the number of chunks in each dimension
-    if not chunked_eval:
-        # When using prefilters/postfilters, the computation is split in blocks, not chunks
-        chunks = blocks
-    nchunks = tuple(math.ceil(x.shape[i] / blocks[i]) for i in range(len(x.shape)))
-
-    # Iterate over the chunks for computing the output
-    for index in np.ndindex(nchunks):
-        # Calculate the offset for the current chunk
-        offset = [index[i] * chunks[i] for i in range(len(index))]
-        # Apply the offset to the chunk and store the result in the output array
-        out_slice = tuple(slice(index[i] * chunks[i], (index[i] + 1) * chunks[i]) for i in range(len(index)))
-        out[out_slice] = sum(offset)
+    coords = np.zeros_like(x)
+    for n in range(x.ndim):
+        for i in range(x.shape[n]):
+            _slice = tuple(slice(None, None) if n != n_ else i for n_ in range(x.ndim))
+            coords[_slice] += i
+    out = np.sin(coords)
 
     expr = blosc2.lazyudf(
         udf_offset,
@@ -395,7 +389,7 @@ def test_offset(shape, chunks, blocks, slices, chunked_eval, eval_mode):
         blocks=blocks,
     )
     if eval_mode == "eval":
-        res = expr.compute(slices)
+        res = expr.compute(slices)  # tests slices_eval
         res = res[:]
     else:
         res = expr[slices]
