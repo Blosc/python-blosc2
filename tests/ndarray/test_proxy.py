@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 import blosc2
-from blosc2.ndarray import get_chunks_idx
+from blosc2.utils import get_chunks_idx
 
 argnames = "urlpath, shape, chunks, blocks, slices, dtype"
 argvalues = [
