@@ -20,6 +20,8 @@ import ast
 machine = "AMD-7800X3D"
 # False -> on-disk benchmark, True -> in-memory benchmark
 mem_mode = False
+# Whether we want to compare just compressed Blosc2 in-memory vs on-disk
+compare_disk_mem = False
 
 # ---------------------------------------------------------------------
 # Benchmark dictionaries (raw string form, as produced by driver script)
@@ -273,72 +275,153 @@ results = ast.literal_eval(result_str)
 # ---------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------
-fig, ax = plt.subplots(figsize=(10, 6))
 
-styles = {
-    'numpy/numexpr': {'color': 'blue', 'marker': 'o', 'label': 'NumPy/NumExpr'},
-    'blosc2': {'color': 'red', 'marker': 's', 'label': 'Blosc2 (compressed)'},
-    'blosc2-nocomp': {'color': 'green', 'marker': '^', 'label': 'Blosc2 (uncompressed)'},
-}
+if compare_disk_mem:
+    # Comparison plot: Blosc2 disk vs memory for both machines
+    fig, ax = plt.subplots(figsize=(10, 6))
 
-# Plot each backend's results
-for backend, backend_results in results.items():
-    intensities = []
-    gflops = []
-    labels = []
-    for workload, metrics in backend_results.items():
-        intensities.append(metrics['Intensity'])
-        gflops.append(metrics['GFLOPS'])
-        labels.append(workload)
+    comp_styles = {
+        'AMD-7800X3D-mem': {'color': 'blue', 'marker': 'v', 'label': 'AMD 7800X3D (in-memory)', 'offset': 0.87},
+        'AMD-7800X3D-disk': {'color': 'red', 'marker': '^', 'label': 'AMD 7800X3D (on-disk)', 'offset': 0.87},
+        'Apple-M4-Pro-mem': {'color': 'blue', 'marker': 's', 'label': 'Apple M4 Pro (in-memory)', 'offset': 1.15},
+        'Apple-M4-Pro-disk': {'color': 'red', 'marker': 'o', 'label': 'Apple M4 Pro (on-disk)', 'offset': 1.15},
+    }
 
-    style = styles[backend]
-    ax.loglog(
-        intensities,
-        gflops,
-        marker=style['marker'],
-        color=style['color'],
-        label=style['label'],
-        markersize=8,
-        linestyle='',
-        alpha=0.7,
-    )
+    # Plot Blosc2 results for both machines and both modes (mem first, then disk)
+    for machine_name in ['AMD-7800X3D', 'Apple-M4-Pro']:
+        for mode_name in ['mem', 'disk']:
+            key = f'{machine_name}-{mode_name}'
+            data_str = BENCH_DATA[machine_name][mode_name]
+            data = ast.literal_eval(data_str)
 
-# Build a single annotation per unique x (Intensity)
-intensity_map = {}
-for backend_results in results.values():
-    for workload, metrics in backend_results.items():
+            # Extract only Blosc2 (compressed) data
+            if 'blosc2' in data:
+                blosc2_data = data['blosc2']
+                intensities = []
+                gflops = []
+
+                for workload, metrics in blosc2_data.items():
+                    intensities.append(metrics['Intensity'])
+                    gflops.append(metrics['GFLOPS'])
+
+                style = comp_styles[key]
+                # Apply horizontal offset to separate markers by machine
+                offset_intensities = [i * style['offset'] for i in intensities]
+
+                ax.loglog(
+                    offset_intensities,
+                    gflops,
+                    marker=style['marker'],
+                    color=style['color'],
+                    label=style['label'],
+                    markersize=8,
+                    linestyle='',
+                    alpha=0.7,
+                )
+
+    # Add single set of workload labels (from Apple M4 Pro disk data)
+    apple_disk = ast.literal_eval(BENCH_DATA['Apple-M4-Pro']['disk'])
+    intensity_map_comp = {}
+    for workload, metrics in apple_disk['blosc2'].items():
         intensity = metrics['Intensity']
         gflop = metrics['GFLOPS']
-        if intensity not in intensity_map:
-            intensity_map[intensity] = {'label': workload, 'gflops': []}
-        intensity_map[intensity]['gflops'].append(gflop)
+        if intensity not in intensity_map_comp:
+            intensity_map_comp[intensity] = {'label': workload, 'min_gflops': gflop}
+        else:
+            intensity_map_comp[intensity]['min_gflops'] = min(intensity_map_comp[intensity]['min_gflops'], gflop)
 
-# Axes limits
-ax.set_xlim(0.1, 5e4)
-ymin = 0.1 if mem_mode else 0.001
-ax.set_ylim(ymin, 2000.0)
+    ax.set_xlim(0.1, 5e4)
+    ax.set_ylim(0.1, 1000.0)
 
-# Annotate once per intensity, centered under the cluster of points
-for intensity, info in sorted(intensity_map.items()):
-    raw_ypos = min(info['gflops']) * 0.6
-    ymin_curr, ymax_curr = ax.get_ylim()
-    safe_ypos = max(raw_ypos, ymin_curr * 1.5 if ymin_curr > 0 else raw_ypos)
-    ax.annotate(
-        info['label'],
-        (intensity, safe_ypos),
-        ha='center',
-        va='top',
-        fontsize=10,
-        alpha=0.9,
-    )
+    for intensity, info in sorted(intensity_map_comp.items()):
+        safe_ypos = max(info['min_gflops'] * 0.3, 0.002)
+        ax.annotate(
+            info['label'],
+            (intensity, safe_ypos),
+            ha='center',
+            va='top',
+            fontsize=10,
+            alpha=0.9,
+        )
 
-ax.set_xlabel('Arithmetic Intensity (FLOPs/element)', fontsize=12)
-ax.set_ylabel('Performance (GFLOPS/sec)', fontsize=12)
-machine2 = machine.replace("-", " ")
-ax.set_title(f'Roofline Analysis: {machine2} ({legend})', fontsize=14, fontweight='bold')
-ax.legend(loc='upper left')
-ax.grid(False)
+    ax.set_xlabel('Arithmetic Intensity (FLOPs/element)', fontsize=12)
+    ax.set_ylabel('Performance (GFLOPS/sec)', fontsize=12)
+    ax.set_title('Roofline Comparison: Compressed Blosc2 Memory vs Disk', fontsize=14, fontweight='bold')
+    ax.legend(loc='upper left')
+    ax.grid(False)
 
-plt.tight_layout()
-plt.savefig(f'roofline_plot-{machine}-{legend}.png', dpi=300, bbox_inches='tight')
-plt.show()
+    plt.tight_layout()
+    plt.savefig('roofline_blosc2_comparison.png', dpi=300, bbox_inches='tight')
+    plt.show()
+
+else:
+    # Original single-mode plot
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    styles = {
+        'numpy/numexpr': {'color': 'blue', 'marker': 'o', 'label': 'NumPy/NumExpr'},
+        'blosc2': {'color': 'red', 'marker': 's', 'label': 'Blosc2 (compressed)'},
+        'blosc2-nocomp': {'color': 'green', 'marker': '^', 'label': 'Blosc2 (uncompressed)'},
+    }
+
+    # Plot each backend's results
+    for backend, backend_results in results.items():
+        intensities = []
+        gflops = []
+        labels = []
+        for workload, metrics in backend_results.items():
+            intensities.append(metrics['Intensity'])
+            gflops.append(metrics['GFLOPS'])
+            labels.append(workload)
+
+        style = styles[backend]
+        ax.loglog(
+            intensities,
+            gflops,
+            marker=style['marker'],
+            color=style['color'],
+            label=style['label'],
+            markersize=8,
+            linestyle='',
+            alpha=0.7,
+        )
+
+    # Build a single annotation per unique x (Intensity)
+    intensity_map = {}
+    for backend_results in results.values():
+        for workload, metrics in backend_results.items():
+            intensity = metrics['Intensity']
+            gflop = metrics['GFLOPS']
+            if intensity not in intensity_map:
+                intensity_map[intensity] = {'label': workload, 'gflops': []}
+            intensity_map[intensity]['gflops'].append(gflop)
+
+    # Axes limits
+    ax.set_xlim(0.1, 5e4)
+    ymin = 0.1 if mem_mode else 0.001
+    ax.set_ylim(ymin, 2000.0)
+
+    # Annotate once per intensity, centered under the cluster of points
+    for intensity, info in sorted(intensity_map.items()):
+        raw_ypos = min(info['gflops']) * 0.6
+        ymin_curr, ymax_curr = ax.get_ylim()
+        safe_ypos = max(raw_ypos, ymin_curr * 1.5 if ymin_curr > 0 else raw_ypos)
+        ax.annotate(
+            info['label'],
+            (intensity, safe_ypos),
+            ha='center',
+            va='top',
+            fontsize=10,
+            alpha=0.9,
+        )
+
+    ax.set_xlabel('Arithmetic Intensity (FLOPs/element)', fontsize=12)
+    ax.set_ylabel('Performance (GFLOPS/sec)', fontsize=12)
+    machine2 = machine.replace("-", " ")
+    ax.set_title(f'Roofline Analysis: {machine2} ({legend})', fontsize=14, fontweight='bold')
+    ax.legend(loc='upper left')
+    ax.grid(False)
+
+    plt.tight_layout()
+    plt.savefig(f'roofline_plot-{machine}-{legend}.png', dpi=300, bbox_inches='tight')
+    plt.show()
