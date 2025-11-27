@@ -1102,12 +1102,6 @@ def fill_chunk_operands(
                 chunk_operands[key] = chunks[i]
                 continue
             # Otherwise, we need to decompress them
-            # The following can cause bugs if e.g. the shape of the operand is used in a lazyUDF
-            # special = blosc2.SpecialValue((chunks[i][31] & 0x70) >> 4)
-            # if special == blosc2.SpecialValue.ZERO:
-            #     # The chunk is a special zero chunk, so we can treat it as a scalar
-            #     chunk_operands[key] = np.zeros((), dtype=value.dtype)
-            #     continue
             if aligned[key]:
                 buff = blosc2.decompress2(chunks[i])
                 bsize = value.dtype.itemsize * math.prod(chunks_)
@@ -1133,16 +1127,6 @@ def fill_chunk_operands(
             # so we need to go the slow path
             chunk_operands[key] = value[slice_]
             continue
-
-        # First check if the chunk is a special zero chunk.
-        # Using lazychunks is very effective here because we only need to read the header.
-        # chunk = value.schunk.get_lazychunk(nchunk)
-        # The following can cause bugs if e.g. the shape of the operand is used in a lazyUDF
-        # special = blosc2.SpecialValue((chunk[31] & 0x70) >> 4)
-        # if special == blosc2.SpecialValue.ZERO:
-        #     # The chunk is a special zero chunk, so we can treat it as a scalar
-        #     chunk_operands[key] = np.zeros((), dtype=value.dtype)
-        #     continue
 
         # If key is in operands, we can reuse the buffer
         if (
