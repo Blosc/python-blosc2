@@ -38,7 +38,7 @@ SHAPES_CHUNKS = [((10,), (3,)), ((20, 20), (4, 7))]
 SHAPES_CHUNKS_HEAVY = [((10, 13, 13), (3, 5, 2))]
 
 
-def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):
+def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):  # noqa : C901
     """Helper function containing the actual test logic for unary functions."""
     if np_func.__name__ in ("arccos", "arcsin", "arctanh"):
         a_blosc = blosc2.linspace(
@@ -82,8 +82,12 @@ def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):
         assert True
     if success:
         try:
-            result = blosc_func(a_blosc)[...]
-            np.testing.assert_allclose(result, expected, rtol=1e-6, atol=1e-6)
+            result = blosc_func(a_blosc)
+            np.testing.assert_allclose(result[()], expected, rtol=1e-6, atol=1e-6)
+            # test compute too
+            if hasattr(result, "compute"):
+                result = result.compute()
+                np.testing.assert_allclose(result, expected, rtol=1e-6, atol=1e-6)
         except TypeError as e:
             # some functions don't support certain dtypes and that's fine
             assert True
@@ -140,8 +144,12 @@ def _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp): 
         assert True
     if success:
         try:
-            result = blosc_func(not_blosc1, a_blosc2)[()]
-            np.testing.assert_allclose(result, expected, rtol=1e-6, atol=1e-6)
+            result = blosc_func(not_blosc1, a_blosc2)
+            np.testing.assert_allclose(result[()], expected, rtol=1e-6, atol=1e-6)
+            # test compute too
+            if hasattr(result, "compute"):
+                result = result.compute()
+                np.testing.assert_allclose(result, expected, rtol=1e-6, atol=1e-6)
         except TypeError as e:
             # some functions don't support certain dtypes and that's fine
             assert True

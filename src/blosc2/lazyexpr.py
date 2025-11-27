@@ -14,6 +14,7 @@ import builtins
 import concurrent.futures
 import copy
 import inspect
+import linecache
 import math
 import os
 import pathlib
@@ -920,7 +921,7 @@ def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C90
     # Check the out NDArray (if present) first
     if isinstance(out, blosc2.NDArray) and not reduce:
         if first_input.shape != out.shape:
-            raise ValueError("Output shape does not match the first input shape")
+            return None, None, None, False
         if first_input.chunks != out.chunks:
             fast_path = False
         if first_input.blocks != out.blocks:
@@ -1077,7 +1078,7 @@ def read_nchunk(arrs, info):
 iter_chunks = None
 
 
-def fill_chunk_operands(  # noqa: C901
+def fill_chunk_operands(
     operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands, reduc=False
 ):
     """Retrieve the chunk operands for evaluating an expression.
@@ -1107,11 +1108,6 @@ def fill_chunk_operands(  # noqa: C901
                 chunk_operands[key] = chunks[i]
                 continue
             # Otherwise, we need to decompress them
-            special = blosc2.SpecialValue((chunks[i][31] & 0x70) >> 4)
-            if special == blosc2.SpecialValue.ZERO:
-                # The chunk is a special zero chunk, so we can treat it as a scalar
-                chunk_operands[key] = np.zeros((), dtype=value.dtype)
-                continue
             if aligned[key]:
                 buff = blosc2.decompress2(chunks[i])
                 bsize = value.dtype.itemsize * math.prod(chunks_)
@@ -1136,15 +1132,6 @@ def fill_chunk_operands(  # noqa: C901
             # The chunk is not a full one, or has padding, or is not a blosc2.NDArray,
             # so we need to go the slow path
             chunk_operands[key] = value[slice_]
-            continue
-
-        # First check if the chunk is a special zero chunk.
-        # Using lazychunks is very effective here because we only need to read the header.
-        chunk = value.schunk.get_lazychunk(nchunk)
-        special = blosc2.SpecialValue((chunk[31] & 0x70) >> 4)
-        if special == blosc2.SpecialValue.ZERO:
-            # The chunk is a special zero chunk, so we can treat it as a scalar
-            chunk_operands[key] = np.zeros((), dtype=value.dtype)
             continue
 
         # If key is in operands, we can reuse the buffer
@@ -1257,6 +1244,13 @@ def fast_eval(  # noqa: C901
         #     else:
         #         ne_evaluate(expression, chunk_operands, out=out[slice_])
         #     continue
+        if out is None:
+            # We can enter here when using any of the compute() or __getitem__() methods
+            if getitem:
+                out = np.empty(shape, dtype=dtype)
+            else:
+                out = blosc2.empty(shape, chunks=chunks, blocks=blocks, dtype=dtype, **kwargs)
+
         if callable(expression):
             result = np.empty(chunks_, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
@@ -1271,13 +1265,6 @@ def fast_eval(  # noqa: C901
                 else:
                     # We do not support one or zero operands in the fast path yet
                     raise ValueError("Fast path: the where condition must be a tuple with two elements")
-
-            if out is None:
-                # We can enter here when using any of the compute() or __getitem__() methods
-                if getitem:
-                    out = np.empty(shape, dtype=dtype)
-                else:
-                    out = blosc2.empty(shape, chunks=chunks, blocks=blocks, dtype=dtype, **kwargs)
 
         # Store the result in the output array
         if getitem:
@@ -1339,6 +1326,7 @@ def slices_eval(  # noqa: C901
     operands: dict,
     getitem: bool,
     _slice=NDINDEX_EMPTY_TUPLE,
+    shape=None,
     **kwargs,
 ) -> blosc2.NDArray | np.ndarray:
     """Evaluate the expression in chunks of operands.
@@ -1360,6 +1348,9 @@ def slices_eval(  # noqa: C901
     _slice: ndindex.Tuple sequence of slices and ints. Default = ndindex.Tuple(), optional
         If provided, only the chunks that intersect with this slice
         will be evaluated.
+    shape: tuple | None
+        The shape of the full (unsliced result). Typically passed on from parent LazyArray.
+        If None, a guess is made from broadcasting the operands.
     kwargs: Any, optional
         Additional keyword arguments that are supported by the :func:`empty` constructor.
 
@@ -1391,22 +1382,22 @@ def slices_eval(  # noqa: C901
     orig_slice = _slice
 
     # Compute the shape and chunks of the output array, including broadcasting
-    shape = compute_broadcast_shape(operands.values())
-    if out is None:
-        if _slice != ():
-            # Check whether _slice contains an integer, or any step that are not None or 1
-            if any((isinstance(s, int)) for s in _slice):
-                need_final_slice = True
-            _slice = tuple(slice(i, i + 1, 1) if isinstance(i, int) else i for i in _slice)
-            # shape_slice in general not equal to final shape:
-            # dummy dims (due to ints) will be dealt with by taking final_slice
-            shape_slice = ndindex.ndindex(_slice).newshape(shape)
-            mask_slice = np.array([isinstance(i, int) for i in orig_slice], dtype=np.bool_)
-    else:
-        # # out should always have shape of full array
-        # if shape is not None and shape != out.shape:
-        #     raise ValueError("Provided output shape does not match the operands' shape.")
-        shape = out.shape
+    if shape is None:  # lazyudf provides shape kwarg
+        shape = compute_broadcast_shape(operands.values())
+
+    if _slice != ():
+        # Check whether _slice contains an integer, or any step that are not None or 1
+        if any((isinstance(s, int)) for s in _slice):
+            need_final_slice = True
+        _slice = tuple(slice(i, i + 1, 1) if isinstance(i, int) else i for i in _slice)
+        # shape_slice in general not equal to final shape:
+        # dummy dims (due to ints) will be dealt with by taking final_slice
+        shape_slice = ndindex.ndindex(_slice).newshape(shape)
+        mask_slice = np.array([isinstance(i, int) for i in orig_slice], dtype=np.bool_)
+    if out is not None:
+        shape_ = shape_slice if shape_slice is not None else shape
+        if shape_ != out.shape:
+            raise ValueError("Provided output shape does not match the slice shape.")
 
     if chunks is None:  # Guess chunk shape
         # Either out, or operand with `chunks`, can be used to get the chunks
@@ -1488,6 +1479,26 @@ def slices_eval(  # noqa: C901
 
             chunk_operands[key] = value[cslice]
 
+        if out is None:
+            shape_ = shape_slice if shape_slice is not None else shape
+            if where is not None and len(where) < 2:
+                # The result is a linear array
+                shape_ = math.prod(shape_)
+            if getitem or _order:
+                out = np.empty(shape_, dtype=dtype_)
+                if _order:
+                    indices_ = np.empty(shape_, dtype=np.int64)
+            else:
+                # if "chunks" not in kwargs and (where is None or len(where) == 2):
+                # Let's use the same chunks as the first operand (it could have been automatic too)
+                # out = blosc2.empty(shape_, chunks=chunks, dtype=dtype_, **kwargs)
+                # out = blosc2.empty(shape_, dtype=dtype_, **kwargs)
+                if "chunks" in kwargs and (where is not None and len(where) < 2 and len(shape_) > 1):
+                    # Remove the chunks argument if the where condition is not a tuple with two elements
+                    kwargs.pop("chunks")
+                out = blosc2.empty(shape_, dtype=dtype_, **kwargs)
+                # Check if the in out partitions are well-behaved (i.e. no padding)
+                behaved = blosc2.are_partitions_behaved(out.shape, out.chunks, out.blocks)
         # Evaluate the expression using chunks of operands
 
         if callable(expression):
@@ -1496,7 +1507,7 @@ def slices_eval(  # noqa: C901
             # Call the udf directly and use result as the output array
             offset = tuple(s.start for s in cslice)
             expression(tuple(chunk_operands.values()), result, offset=offset)
-            out[cslice] = result
+            out[cslice_subidx] = result
             continue
 
         if where is None:
@@ -1539,27 +1550,6 @@ def slices_eval(  # noqa: C901
         # but avoid copy if already contiguous
         result = np.require(result, requirements="C")
 
-        if out is None:
-            shape_ = shape_slice if shape_slice is not None else shape
-            if where is not None and len(where) < 2:
-                # The result is a linear array
-                shape_ = math.prod(shape_)
-            if getitem or _order:
-                out = np.empty(shape_, dtype=dtype_)
-                if _order:
-                    indices_ = np.empty(shape_, dtype=np.int64)
-            else:
-                # if "chunks" not in kwargs and (where is None or len(where) == 2):
-                # Let's use the same chunks as the first operand (it could have been automatic too)
-                # out = blosc2.empty(shape_, chunks=chunks, dtype=dtype_, **kwargs)
-                # out = blosc2.empty(shape_, dtype=dtype_, **kwargs)
-                if "chunks" in kwargs and (where is not None and len(where) < 2 and len(shape_) > 1):
-                    # Remove the chunks argument if the where condition is not a tuple with two elements
-                    kwargs.pop("chunks")
-                out = blosc2.empty(shape_, dtype=dtype_, **kwargs)
-                # Check if the in out partitions are well-behaved (i.e. no padding)
-                behaved = blosc2.are_partitions_behaved(out.shape, out.chunks, out.blocks)
-
         if where is None or len(where) == 2:
             if behaved and result.shape == out.chunks and result.dtype == out.dtype:
                 # Fast path
@@ -1597,7 +1587,9 @@ def slices_eval(  # noqa: C901
     else:  # Need to take final_slice since filled up array according to slice_ for each chunk
         if need_final_slice:  # only called if out was None
             if isinstance(out, np.ndarray):
-                out = np.squeeze(out, np.where(mask_slice)[0])
+                squeeze_axis = np.where(mask_slice)[0]
+                squeeze_axis = np.squeeze(squeeze_axis)  # handle 1d mask_slice
+                out = np.squeeze(out, squeeze_axis)
             elif isinstance(out, blosc2.NDArray):
                 # It *seems* better to choose an automatic chunks and blocks for the output array
                 # out = out.slice(_slice, chunks=out.chunks, blocks=out.blocks)
@@ -1651,16 +1643,19 @@ def slices_eval_getitem(
     where: dict | None = kwargs.pop("_where_args", None)
 
     dtype = kwargs.pop("dtype", None)
-    if out is None:
-        # Compute the shape and chunks of the output array, including broadcasting
-        shape = compute_broadcast_shape(operands.values())
-    else:
-        shape = out.shape
+    shape = kwargs.pop("shape", None)
+    if shape is None:
+        if out is None:
+            # Compute the shape and chunks of the output array, including broadcasting
+            shape = compute_broadcast_shape(operands.values())
+        else:
+            shape = out.shape
 
     # compute the shape of the output array
     _slice_bcast = tuple(slice(i, i + 1) if isinstance(i, int) else i for i in _slice.raw)
     slice_shape = ndindex.ndindex(_slice_bcast).newshape(shape)  # includes dummy dimensions
     _slice = _slice.raw
+    offset = tuple(s.start for s in _slice_bcast)  # offset for the udf
 
     # Get the slice of each operand
     slice_operands = {}
@@ -1680,12 +1675,16 @@ def slices_eval_getitem(
         slice_operands[key] = value[_slice]
 
     # Evaluate the expression using slices of operands
-    if where is None:
-        result = ne_evaluate(expression, slice_operands, **ne_args)
+    if callable(expression):
+        result = np.empty(slice_shape, dtype=dtype)
+        expression(tuple(slice_operands.values()), result, offset=offset)
     else:
-        # Apply the where condition (in result)
-        new_expr = f"where({expression}, _where_x, _where_y)"
-        result = ne_evaluate(new_expr, slice_operands, **ne_args)
+        if where is None:
+            result = ne_evaluate(expression, slice_operands, **ne_args)
+        else:
+            # Apply the where condition (in result)
+            new_expr = f"where({expression}, _where_x, _where_y)"
+            result = ne_evaluate(new_expr, slice_operands, **ne_args)
 
     if out is None:  # avoid copying unnecessarily
         try:
@@ -2124,9 +2123,14 @@ def chunked_eval(  # noqa: C901
     try:
         # standardise slice to be ndindex.Tuple
         item = () if item in (None, slice(None, None, None)) else item
+        item = item if isinstance(item, tuple) else (item,)
+        item = tuple(
+            slice(s.start, s.stop, 1 if s.step is None else s.step) if isinstance(s, slice) else s
+            for s in item
+        )
         item = ndindex.ndindex(item)
-        shape = compute_broadcast_shape(operands.values())
-        if (shape is not None) and (item.raw != ()):
+        shape = kwargs.pop("shape", None)
+        if item.raw != () and shape is not None:
             item = item.expand(shape)  # converts to standard tuple form
 
         getitem = kwargs.pop("_getitem", False)
@@ -2151,7 +2155,7 @@ def chunked_eval(  # noqa: C901
 
         if not is_full_slice(item.raw) or (where is not None and len(where) < 2):
             # The fast path is possible under a few conditions
-            if getitem and (where is None or len(where) == 2) and not callable(expression):
+            if getitem and (where is None or len(where) == 2):
                 # Compute the size of operands for the fast path
                 unit_steps = np.all([s.step == 1 for s in item.raw if isinstance(s, slice)])
                 # shape of slice, if non-unit steps have to decompress full array into memory
@@ -2160,10 +2164,11 @@ def chunked_eval(  # noqa: C901
                 size_operands = math.prod(shape_operands) * len(operands) * _dtype.itemsize
                 # Only take the fast path if the size of operands is relatively small
                 if size_operands < blosc2.MAX_FAST_PATH_SIZE:
-                    return slices_eval_getitem(expression, operands, _slice=item, **kwargs)
-            return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
+                    return slices_eval_getitem(expression, operands, _slice=item, shape=shape, **kwargs)
+            return slices_eval(expression, operands, getitem=getitem, _slice=item, shape=shape, **kwargs)
 
-        if fast_path:
+        fast_path = is_full_slice(item.raw) and fast_path
+        if fast_path:  # necessarily item is ()
             if getitem:
                 # When using getitem, taking the fast path is always possible
                 return fast_eval(expression, operands, getitem=True, **kwargs)
@@ -2176,7 +2181,7 @@ def chunked_eval(  # noqa: C901
                 return fast_eval(expression, operands, getitem=False, **kwargs)
 
         # End up here by default
-        return slices_eval(expression, operands, getitem=getitem, _slice=item, **kwargs)
+        return slices_eval(expression, operands, getitem=getitem, _slice=item, shape=shape, **kwargs)
 
     finally:
         # Deactivate cache for NDField instances
@@ -2418,25 +2423,24 @@ class LazyExpr(LazyArray):
 
     def get_chunk(self, nchunk):
         """Get the `nchunk` of the expression, evaluating only that one."""
-        # Create an empty array with the same shape and dtype; this is fast
-        out = blosc2.empty(shape=self.shape, dtype=self.dtype, chunks=self.chunks, blocks=self.blocks)
-        shape = out.shape
-        chunks = out.chunks
-        # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
+        # Create an empty array with the chunkshape and dtype; this is fast
+        shape = self.shape
+        chunks = self.chunks
+        # Calculate the shape of the (chunk) slice_ (especially at the end of the array)
         chunks_idx, _ = get_chunks_idx(shape, chunks)
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
             for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
-        # TODO: we need more metadata for treating reductions
-        # We want to fill a single chunk, so we need to evaluate the expression on out
-        expr = lazyexpr(self, out=out)
-        # The evals below produce arrays with different chunks and blocks;
-        # we choose the ones for LazyExpr main class
-        expr.compute(item=slice_)
-        # out = expr.compute(item=slice_)
-        return out.schunk.get_chunk(nchunk)
+        loc_chunks = tuple(s.stop - s.start for s in slice_)
+        out = blosc2.empty(shape=self.chunks, dtype=self.dtype, chunks=self.chunks, blocks=self.blocks)
+        if loc_chunks == self.chunks:
+            self.compute(item=slice_, out=out)
+        else:
+            _slice_ = tuple(slice(0, s) for s in loc_chunks)
+            out[_slice_] = self.compute(item=slice_)
+        return out.schunk.get_chunk(0)
 
     def update_expr(self, new_op):  # noqa: C901
         prev_flag = blosc2._disable_overloaded_equal
@@ -2981,6 +2985,7 @@ class LazyExpr(LazyArray):
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
         kwargs["dtype"] = self.dtype
+        kwargs["shape"] = self.shape
         if hasattr(self, "_indices"):
             kwargs["_indices"] = self._indices
         if hasattr(self, "_order"):
@@ -2997,7 +3002,7 @@ class LazyExpr(LazyArray):
             and not isinstance(result, blosc2.NDArray)
         ):
             # Get rid of all the extra kwargs that are not accepted by blosc2.asarray
-            kwargs_not_accepted = {"_where_args", "_indices", "_order", "_ne_args", "dtype"}
+            kwargs_not_accepted = {"_where_args", "_indices", "_order", "_ne_args", "dtype", "shape"}
             kwargs = {key: value for key, value in kwargs.items() if key not in kwargs_not_accepted}
             result = blosc2.asarray(result, **kwargs)
         return result
@@ -3034,50 +3039,6 @@ class LazyExpr(LazyArray):
         items += [("shape", self.shape)]
         items += [("dtype", self.dtype)]
         return items
-
-    def _save(self, urlpath=None, **kwargs):
-        if urlpath is None:
-            raise ValueError("To save a LazyArray you must provide an urlpath")
-
-        # Validate expression
-        validate_expr(self.expression)
-
-        meta = kwargs.get("meta", {})
-        meta["LazyArray"] = LazyArrayEnum.Expr.value
-        kwargs["urlpath"] = urlpath
-        kwargs["meta"] = meta
-        kwargs["mode"] = "w"  # always overwrite the file in urlpath
-
-        # Create an empty array; useful for providing the shape and dtype of the outcome
-        array = blosc2.empty(shape=self.shape, dtype=self.dtype, **kwargs)
-
-        # Save the expression and operands in the metadata
-        operands = {}
-        for key, value in self.operands.items():
-            if isinstance(value, blosc2.C2Array):
-                operands[key] = {
-                    "path": str(value.path),
-                    "urlbase": value.urlbase,
-                }
-                continue
-            if key in {"numpy", "np"}:
-                # Provide access to cast funcs like int8 et al.
-                continue
-            if isinstance(value, blosc2.Proxy):
-                # Take the required info from the Proxy._cache container
-                value = value._cache
-            if not hasattr(value, "schunk"):
-                raise ValueError(
-                    "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
-                )
-            if value.schunk.urlpath is None:
-                raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
-            operands[key] = value.schunk.urlpath
-        array.schunk.vlmeta["_LazyArray"] = {
-            "expression": self.expression,
-            "UDF": None,
-            "operands": operands,
-        }
 
     def save(self, urlpath=None, **kwargs):
         if urlpath is None:
@@ -3190,7 +3151,7 @@ class LazyUDF(LazyArray):
     def __init__(self, func, inputs, dtype, shape=None, chunked_eval=True, **kwargs):
         # After this, all the inputs should be np.ndarray or NDArray objects
         self.inputs = convert_inputs(inputs)
-        self.chunked_eval = chunked_eval
+        self.chunked_eval = True  # chunked_eval
         # Get res shape
         if shape is None:
             self._shape = compute_broadcast_shape(self.inputs)
@@ -3202,6 +3163,8 @@ class LazyUDF(LazyArray):
             self._shape = shape
 
         self.kwargs = kwargs
+        self.kwargs["dtype"] = dtype
+        self.kwargs["shape"] = self._shape
         self._dtype = dtype
         self.func = func
 
@@ -3216,10 +3179,11 @@ class LazyUDF(LazyArray):
             raise TypeError("dparams should be a dictionary")
         kwargs_getitem["dparams"] = dparams
 
-        self.res_getitem = blosc2.empty(self._shape, self._dtype, **kwargs_getitem)
-        # Register a postfilter for getitem
-        if 0 not in self._shape:
-            self.res_getitem._set_postf_udf(self.func, id(self.inputs))
+        # TODO: enable parallelism using python 3.14t
+        # self.res_getitem = blosc2.empty(self._shape, self._dtype, **kwargs_getitem)
+        # # Register a postfilter for getitem
+        # if 0 not in self._shape:
+        #     self.res_getitem._set_postf_udf(self.func, id(self.inputs))
 
         self.inputs_dict = {f"o{i}": obj for i, obj in enumerate(self.inputs)}
 
@@ -3320,51 +3284,86 @@ class LazyUDF(LazyArray):
         ):
             raise ValueError("Cannot use the same urlpath for LazyArray and eval NDArray")
         _ = aux_kwargs.pop("urlpath", None)
+
+        if "out" in kwargs:  # use provided out preferentially
+            aux_kwargs["_output"] = kwargs.pop("out")
+        elif hasattr(self, "_output"):
+            aux_kwargs["_output"] = self._output
         aux_kwargs.update(kwargs)
 
-        if item == ():
-            if self.chunked_eval:
-                res_eval = blosc2.empty(self.shape, self.dtype, **aux_kwargs)
-                chunked_eval(self.func, self.inputs_dict, None, _getitem=False, _output=res_eval)
-                return res_eval
+        if self.chunked_eval:
+            # aux_kwargs includes self.shape and self.dtype
+            return chunked_eval(self.func, self.inputs_dict, item, _getitem=False, **aux_kwargs)
 
-            # Cannot use multithreading when applying a prefilter, save nthreads to set them
-            # after the evaluation
-            cparams = aux_kwargs.get("cparams", {})
-            if isinstance(cparams, dict):
-                self._cnthreads = cparams.get("nthreads", blosc2.cparams_dflts["nthreads"])
-                cparams["nthreads"] = 1
-            else:
-                raise ValueError("cparams should be a dictionary")
-            aux_kwargs["cparams"] = cparams
+        # TODO: Implement multithreading
+        # # Cannot use multithreading when applying a prefilter, save nthreads to set them
+        # # after the evaluation
+        # cparams = aux_kwargs.get("cparams", {})
+        # if isinstance(cparams, dict):
+        #     self._cnthreads = cparams.get("nthreads", blosc2.cparams_dflts["nthreads"])
+        #     cparams["nthreads"] = 1
+        # else:
+        #     raise ValueError("cparams should be a dictionary")
+        # aux_kwargs["cparams"] = cparams
 
-            res_eval = blosc2.empty(self.shape, self.dtype, **aux_kwargs)
-            # Register a prefilter for eval
-            res_eval._set_pref_udf(self.func, id(self.inputs))
+        # res_eval = blosc2.empty(self.shape, self.dtype, **aux_kwargs)
+        # # Register a prefilter for eval
+        # res_eval._set_pref_udf(self.func, id(self.inputs))
 
-            aux = np.empty(res_eval.shape, res_eval.dtype)
-            res_eval[...] = aux
-            res_eval.schunk.remove_prefilter(self.func.__name__)
-            res_eval.schunk.cparams.nthreads = self._cnthreads
+        # aux = np.empty(res_eval.shape, res_eval.dtype)
+        # res_eval[...] = aux
+        # res_eval.schunk.remove_prefilter(self.func.__name__)
+        # res_eval.schunk.cparams.nthreads = self._cnthreads
 
-            return res_eval
-        else:
-            # Get only a slice
-            np_array = self.__getitem__(item)
-            return blosc2.asarray(np_array, **aux_kwargs)
+        # return res_eval
+        return None
 
     def __getitem__(self, item):
         if self.chunked_eval:
-            # TODO: as this creates a big array, this can potentially consume a lot of memory
-            output = np.empty(self.shape, self.dtype)
             # It is important to pass kwargs here, because chunks can be used internally
-            # fills numpy array with desired slice
-            chunked_eval(self.func, self.inputs_dict, item, _getitem=True, _output=output, **self.kwargs)
-            return output[item]
-        return self.res_getitem[item]
+            # self.kwargs includes self.shape and self.dtype
+            return chunked_eval(self.func, self.inputs_dict, item, _getitem=True, **self.kwargs)
+        # return self.res_getitem[item] # TODO: implement multithreading
+        return None
 
-    def save(self, **kwargs):
-        raise NotImplementedError("For safety reasons, this is not implemented for UDFs")
+    def save(self, urlpath=None, **kwargs):
+        if urlpath is None:
+            raise ValueError("To save a LazyArray you must provide an urlpath")
+
+        meta = kwargs.get("meta", {})
+        meta["LazyArray"] = LazyArrayEnum.UDF.value
+        kwargs["urlpath"] = urlpath
+        kwargs["meta"] = meta
+        kwargs["mode"] = "w"  # always overwrite the file in urlpath
+
+        # Create an empty array; useful for providing the shape and dtype of the outcome
+        array = blosc2.empty(shape=self.shape, dtype=self.dtype, **kwargs)
+
+        # Save the expression and operands in the metadata
+        operands = {}
+        operands_ = self.inputs_dict
+        for key, value in operands_.items():
+            if isinstance(value, blosc2.C2Array):
+                operands[key] = {
+                    "path": str(value.path),
+                    "urlbase": value.urlbase,
+                }
+                continue
+            if isinstance(value, blosc2.Proxy):
+                # Take the required info from the Proxy._cache container
+                value = value._cache
+            if not hasattr(value, "schunk"):
+                raise ValueError(
+                    "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
+                )
+            if value.schunk.urlpath is None:
+                raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
+            operands[key] = value.schunk.urlpath
+        array.schunk.vlmeta["_LazyArray"] = {
+            "UDF": inspect.getsource(self.func),
+            "operands": operands,
+            "name": self.func.__name__,
+        }
 
 
 def _numpy_eval_expr(expression, operands, prefer_blosc=False):
@@ -3621,41 +3620,64 @@ def lazyexpr(
 
 def _open_lazyarray(array):
     value = array.schunk.meta["LazyArray"]
-    if value == LazyArrayEnum.UDF.value:
-        raise NotImplementedError("For safety reasons, persistent UDFs are not supported")
-
-    # LazyExpr
     lazyarray = array.schunk.vlmeta["_LazyArray"]
+    if value == LazyArrayEnum.Expr.value:
+        expr = lazyarray["expression"]
+    elif value == LazyArrayEnum.UDF.value:
+        expr = lazyarray["UDF"]
+    else:
+        raise ValueError("Argument `array` is not LazyExpr or LazyUDF instance.")
+
     operands = lazyarray["operands"]
     parent_path = Path(array.schunk.urlpath).parent
     operands_dict = {}
     missing_ops = {}
-    for key, value in operands.items():
-        if isinstance(value, str):
-            value = parent_path / value
+    for key, v in operands.items():
+        if isinstance(v, str):
+            v = parent_path / v
             try:
-                op = blosc2.open(value)
+                op = blosc2.open(v)
             except FileNotFoundError:
-                missing_ops[key] = value
+                missing_ops[key] = v
             else:
                 operands_dict[key] = op
-        elif isinstance(value, dict):
+        elif isinstance(v, dict):
             # C2Array
             operands_dict[key] = blosc2.C2Array(
-                pathlib.Path(value["path"]).as_posix(),
-                urlbase=value["urlbase"],
+                pathlib.Path(v["path"]).as_posix(),
+                urlbase=v["urlbase"],
             )
         else:
             raise TypeError("Error when retrieving the operands")
 
-    expr = lazyarray["expression"]
     if missing_ops:
         exc = exceptions.MissingOperands(expr, missing_ops)
         exc.expr = expr
         exc.missing_ops = missing_ops
         raise exc
 
-    new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
+    # LazyExpr
+    if value == LazyArrayEnum.Expr.value:
+        new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
+    elif value == LazyArrayEnum.UDF.value:
+        local_ns = {}
+        name = lazyarray["name"]
+        filename = f"<{name}>"  # any unique name
+
+        # Register the source so inspect can find it
+        linecache.cache[filename] = (len(expr), None, expr.splitlines(True), filename)
+
+        exec(compile(expr, filename, "exec"), {"np": np, "blosc2": blosc2}, local_ns)
+        func = local_ns[name]
+        # TODO: make more robust for general kwargs (not just cparams)
+        new_expr = blosc2.lazyudf(
+            func,
+            tuple(operands_dict[f"o{n}"] for n in range(len(operands_dict))),
+            shape=array.shape,
+            dtype=array.dtype,
+            cparams=array.cparams,
+        )
+
     # Make the array info available for the user (only available when opened from disk)
     new_expr.array = array
     # We want to expose schunk too, so that .info() can be used on the LazyArray
