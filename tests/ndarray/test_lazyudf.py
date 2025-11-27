@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.ndarray import get_chunks_idx
 
 
 def udf1p(inputs_tuple, output, offset):
@@ -471,3 +472,23 @@ def test_save_ludf():
     assert isinstance(expr, blosc2.LazyUDF)
     res_lazyexpr = expr.compute()
     np.testing.assert_array_equal(res_lazyexpr[:], npc)
+
+
+# Test get_chunk method
+def test_get_chunk():
+    a = blosc2.linspace(0, 100, 100, shape=(10, 10), chunks=(3, 4), blocks=(2, 3))
+    expr = blosc2.lazyudf(udf1p, (a,), dtype=a.dtype, shape=a.shape)
+    nres = a[:] + 1
+    chunksize = np.prod(expr.chunks) * expr.dtype.itemsize
+    blocksize = np.prod(expr.blocks) * expr.dtype.itemsize
+    _, nchunks = get_chunks_idx(expr.shape, expr.chunks)
+    out = blosc2.empty(expr.shape, dtype=expr.dtype, chunks=expr.chunks, blocks=expr.blocks)
+    for nchunk in range(nchunks):
+        chunk = expr.get_chunk(nchunk)
+        out.schunk.update_chunk(nchunk, chunk)
+        chunksize_ = int.from_bytes(chunk[4:8], byteorder="little")
+        blocksize_ = int.from_bytes(chunk[8:12], byteorder="little")
+        # Sometimes the actual chunksize is smaller than the expected chunks due to padding
+        assert chunksize <= chunksize_
+        assert blocksize == blocksize_
+    np.testing.assert_allclose(out[:], nres)

@@ -21,7 +21,7 @@ import pathlib
 import re
 import sys
 import threading
-from abc import ABC, abstractmethod
+from abc import ABC, abstractmethod, abstractproperty
 from dataclasses import asdict
 from enum import Enum
 from pathlib import Path
@@ -430,6 +430,41 @@ class LazyArray(ABC, blosc2.Operand):
             The buffer containing the serialized :ref:`NDArray` instance.
         """
         return self.compute().to_cframe()
+
+    @abstractproperty
+    def chunks(self) -> tuple[int]:
+        """
+        Return :ref:`LazyArray` chunks.
+        """
+        pass
+
+    @abstractproperty
+    def blocks(self) -> tuple[int]:
+        """
+        Return :ref:`LazyArray` blocks.
+        """
+        pass
+
+    def get_chunk(self, nchunk):
+        """Get the `nchunk` of the expression, evaluating only that one."""
+        # Create an empty array with the chunkshape and dtype; this is fast
+        shape = self.shape
+        chunks = self.chunks
+        # Calculate the shape of the (chunk) slice_ (especially at the end of the array)
+        chunks_idx, _ = get_chunks_idx(shape, chunks)
+        coords = tuple(np.unravel_index(nchunk, chunks_idx))
+        slice_ = tuple(
+            slice(c * s, min((c + 1) * s, shape[i]))
+            for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
+        )
+        loc_chunks = tuple(s.stop - s.start for s in slice_)
+        out = blosc2.empty(shape=self.chunks, dtype=self.dtype, chunks=self.chunks, blocks=self.blocks)
+        if loc_chunks == self.chunks:
+            self.compute(item=slice_, out=out)
+        else:
+            _slice_ = tuple(slice(0, s) for s in loc_chunks)
+            out[_slice_] = self.compute(item=slice_)
+        return out.schunk.get_chunk(0)
 
 
 def convert_inputs(inputs):
@@ -2415,27 +2450,6 @@ class LazyExpr(LazyArray):
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"(o0 {op} o1)"
 
-    def get_chunk(self, nchunk):
-        """Get the `nchunk` of the expression, evaluating only that one."""
-        # Create an empty array with the chunkshape and dtype; this is fast
-        shape = self.shape
-        chunks = self.chunks
-        # Calculate the shape of the (chunk) slice_ (especially at the end of the array)
-        chunks_idx, _ = get_chunks_idx(shape, chunks)
-        coords = tuple(np.unravel_index(nchunk, chunks_idx))
-        slice_ = tuple(
-            slice(c * s, min((c + 1) * s, shape[i]))
-            for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
-        )
-        loc_chunks = tuple(s.stop - s.start for s in slice_)
-        out = blosc2.empty(shape=self.chunks, dtype=self.dtype, chunks=self.chunks, blocks=self.blocks)
-        if loc_chunks == self.chunks:
-            self.compute(item=slice_, out=out)
-        else:
-            _slice_ = tuple(slice(0, s) for s in loc_chunks)
-            out[_slice_] = self.compute(item=slice_)
-        return out.schunk.get_chunk(0)
-
     def update_expr(self, new_op):  # noqa: C901
         prev_flag = blosc2._disable_overloaded_equal
         # We use a lot of the original NDArray.__eq__ as 'is', so deactivate the overloaded one
@@ -3211,6 +3225,38 @@ class LazyUDF(LazyArray):
             ("shape", self.shape),
             ("dtype", self.dtype),
         ]
+
+    @property
+    def chunks(self):
+        if hasattr(self, "_chunks"):
+            return self._chunks
+        shape, self._chunks, self._blocks, fast_path = validate_inputs(
+            self.inputs_dict, getattr(self, "_out", None)
+        )
+        if not hasattr(self, "_shape"):
+            self._shape = shape
+        if self._shape != shape:  # validate inputs only works for elementwise funcs so returned shape might
+            fast_path = False  # be incompatible with true output shape
+        if not fast_path:
+            # Not using the fast path, so we need to compute the chunks/blocks automatically
+            self._chunks, self._blocks = compute_chunks_blocks(self.shape, None, None, dtype=self.dtype)
+        return self._chunks
+
+    @property
+    def blocks(self):
+        if hasattr(self, "_blocks"):
+            return self._blocks
+        shape, self._chunks, self._blocks, fast_path = validate_inputs(
+            self.inputs_dict, getattr(self, "_out", None)
+        )
+        if not hasattr(self, "_shape"):
+            self._shape = shape
+        if self._shape != shape:  # validate inputs only works for elementwise funcs so returned shape might
+            fast_path = False  # be incompatible with true output shape
+        if not fast_path:
+            # Not using the fast path, so we need to compute the chunks/blocks automatically
+            self._chunks, self._blocks = compute_chunks_blocks(self.shape, None, None, dtype=self.dtype)
+        return self._blocks
 
     # TODO: indices and sort are repeated in LazyExpr; refactor
     def indices(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
