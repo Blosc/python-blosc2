@@ -108,6 +108,54 @@ if __name__ == "__main__":
         va="top",
     )
 
+    # --- single workload label per workload name (avoid duplicates) ---
+    # Build a map: workload name -> list of (intensity, gflops) across mem_4800/mem_6000
+    workload_map: dict[str, dict[str, list[float]]] = {}
+
+    for workload, metrics in mem_4800.items():
+        intensity = metrics["Intensity"]
+        gflops = metrics["GFLOPS"]
+        if workload not in workload_map:
+            workload_map[workload] = {"intensity": [], "gflops": []}
+        workload_map[workload]["intensity"].append(intensity)
+        workload_map[workload]["gflops"].append(gflops)
+
+    for workload, metrics in mem_6000.items():
+        intensity = metrics["Intensity"]
+        gflops = metrics["GFLOPS"]
+        if workload not in workload_map:
+            workload_map[workload] = {"intensity": [], "gflops": []}
+        workload_map[workload]["intensity"].append(intensity)
+        workload_map[workload]["gflops"].append(gflops)
+
+    # Place a single label per workload at the average intensity and slightly below
+    # the minimum GFLOPS across both memory speeds for that workload.
+    for workload, vals in workload_map.items():
+        intensities = vals["intensity"]
+        gflops_list = vals["gflops"]
+        x_label = sum(intensities) / len(intensities)
+        y_min = min(gflops_list)
+        raw_ypos = y_min * 0.6
+
+        ymin_curr, _ = ax.get_ylim()
+        safe_ypos = max(raw_ypos, ymin_curr * 1.5 if ymin_curr > 0 else raw_ypos)
+
+        # Avoid overlap between matmul1 and matmul2 by using different vertical offsets
+        if workload == "matmul1":
+            safe_ypos *= .8   # push matmul1 a bit higher
+        elif workload == "matmul2":
+            safe_ypos *= 1.2   # keep matmul2 lower
+
+        ax.annotate(
+            workload,
+            (x_label, safe_ypos),
+            ha="center",
+            va="top",
+            fontsize=10,
+            alpha=0.9,
+        )
+    # --------------------------------------------------------------
+
     ax.set_xlabel("Arithmetic Intensity (FLOPs/element)")
     ax.set_ylabel("Performance (GFLOPS/sec)")
     ax.set_title("Memory speed impact on NumPy/NumExpr performance\nAMD 7800X3D (in-memory)")

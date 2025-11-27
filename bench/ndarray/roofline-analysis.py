@@ -153,8 +153,9 @@ def setup_arrays(mem_mode: bool):
         shape = (15_000, 15_000)
         large_shape = (2,) + shape
     else:
-        shape = (30_000, 30_000)
-        large_shape = (15,) + shape
+        # shape = (30_000, 30_000)
+        shape = (15_000, 15_000)
+        large_shape = (60,) + shape
 
     nelem = math.prod(shape)
     large_nelem = math.prod(large_shape)

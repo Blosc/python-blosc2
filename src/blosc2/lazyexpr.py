@@ -41,15 +41,21 @@ import numpy as np
 import blosc2
 from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
-from blosc2.ndarray import (
-    NUMPY_GE_2_0,
-    get_chunks_idx,
-    get_intersecting_chunks,
-    process_key,
-)
 
 from .proxy import _convert_dtype
-from .shape_utils import constructors, elementwise_funcs, infer_shape, linalg_attrs, linalg_funcs, reducers
+from .utils import (
+    NUMPY_GE_2_0,
+    constructors,
+    elementwise_funcs,
+    get_chunks_idx,
+    get_intersecting_chunks,
+    infer_shape,
+    linalg_attrs,
+    linalg_funcs,
+    npvecdot,
+    process_key,
+    reducers,
+)
 
 if not blosc2.IS_WASM:
     import numexpr
@@ -79,7 +85,7 @@ if not NUMPY_GE_2_0:  # handle non-array-api compliance
     safe_numpy_globals["bitwise_invert"] = np.bitwise_not
     safe_numpy_globals["concat"] = np.concatenate
     safe_numpy_globals["matrix_transpose"] = np.transpose
-    safe_numpy_globals["vecdot"] = blosc2.ndarray.npvecdot
+    safe_numpy_globals["vecdot"] = npvecdot
 
 
 def ne_evaluate(expression, local_dict=None, **kwargs):
