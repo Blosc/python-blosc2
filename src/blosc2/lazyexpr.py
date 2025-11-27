@@ -1665,6 +1665,7 @@ def slices_eval_getitem(
     _slice_bcast = tuple(slice(i, i + 1) if isinstance(i, int) else i for i in _slice.raw)
     slice_shape = ndindex.ndindex(_slice_bcast).newshape(shape)  # includes dummy dimensions
     _slice = _slice.raw
+    offset = tuple(s.start for s in _slice_bcast)  # offset for the udf
 
     # Get the slice of each operand
     slice_operands = {}
@@ -1686,7 +1687,6 @@ def slices_eval_getitem(
     # Evaluate the expression using slices of operands
     if callable(expression):
         result = np.empty(slice_shape, dtype=dtype)
-        offset = tuple(s.start for s in _slice)  # offset for the udf
         expression(tuple(slice_operands.values()), result, offset=offset)
     else:
         if where is None:
