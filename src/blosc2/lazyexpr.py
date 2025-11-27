@@ -915,7 +915,7 @@ def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C90
     # Check the out NDArray (if present) first
     if isinstance(out, blosc2.NDArray) and not reduce:
         if first_input.shape != out.shape:
-            raise ValueError("Output shape does not match the first input shape")
+            return None, None, None, False
         if first_input.chunks != out.chunks:
             fast_path = False
         if first_input.blocks != out.blocks:
@@ -2177,7 +2177,8 @@ def chunked_eval(  # noqa: C901
                     return slices_eval_getitem(expression, operands, _slice=item, shape=shape, **kwargs)
             return slices_eval(expression, operands, getitem=getitem, _slice=item, shape=shape, **kwargs)
 
-        if fast_path:
+        fast_path = is_full_slice(item.raw) and fast_path
+        if fast_path:  # necessarily item is ()
             if getitem:
                 # When using getitem, taking the fast path is always possible
                 return fast_eval(expression, operands, getitem=True, **kwargs)
@@ -2432,25 +2433,24 @@ class LazyExpr(LazyArray):
 
     def get_chunk(self, nchunk):
         """Get the `nchunk` of the expression, evaluating only that one."""
-        # Create an empty array with the same shape and dtype; this is fast
-        out = blosc2.empty(shape=self.shape, dtype=self.dtype, chunks=self.chunks, blocks=self.blocks)
-        shape = out.shape
-        chunks = out.chunks
-        # Calculate the shape of the (chunk) slice_ (specially at the end of the array)
+        # Create an empty array with the chunkshape and dtype; this is fast
+        shape = self.shape
+        chunks = self.chunks
+        # Calculate the shape of the (chunk) slice_ (especially at the end of the array)
         chunks_idx, _ = get_chunks_idx(shape, chunks)
         coords = tuple(np.unravel_index(nchunk, chunks_idx))
         slice_ = tuple(
             slice(c * s, min((c + 1) * s, shape[i]))
             for i, (c, s) in enumerate(zip(coords, chunks, strict=True))
         )
-        # TODO: we need more metadata for treating reductions
-        # We want to fill a single chunk, so we need to evaluate the expression on out
-        expr = lazyexpr(self, out=out)
-        # The evals below produce arrays with different chunks and blocks;
-        # we choose the ones for LazyExpr main class
-        expr.compute(item=slice_)
-        # out = expr.compute(item=slice_)
-        return out.schunk.get_chunk(nchunk)
+        loc_chunks = tuple(s.stop - s.start for s in slice_)
+        out = blosc2.empty(shape=self.chunks, dtype=self.dtype, chunks=self.chunks, blocks=self.blocks)
+        if loc_chunks == self.chunks:
+            self.compute(item=slice_, out=out)
+        else:
+            _slice_ = tuple(slice(0, s) for s in loc_chunks)
+            out[_slice_] = self.compute(item=slice_)
+        return out.schunk.get_chunk(0)
 
     def update_expr(self, new_op):  # noqa: C901
         prev_flag = blosc2._disable_overloaded_equal
