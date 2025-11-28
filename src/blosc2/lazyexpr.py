@@ -3121,7 +3121,7 @@ class LazyExpr(LazyArray):
             # substitutes with dummy operands (cheap for reductions) and
             # defaults to blosc2 functions (cheap for constructors)
             new_expr = _numpy_eval_expr(desliced_expr, desliced_ops, prefer_blosc=True)
-            _dtype = new_expr.dtype
+            _dtype = new_expr.dtype if hasattr(new_expr, "dtype") else np.dtype(type(new_expr))
             if isinstance(new_expr, blosc2.LazyExpr):
                 # DO NOT restore the original expression and operands
                 # Instead rebase operands and restore only constructors
