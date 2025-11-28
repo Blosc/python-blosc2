@@ -3128,6 +3128,9 @@ class LazyExpr(LazyArray):
                 expression_, operands_ = conserve_functions(
                     _expression, _operands, new_expr.operands | local_vars
                 )
+            elif _shape == () and not _operands:  # passed scalars
+                expression_ = "o0"
+                operands_ = {"o0": ne_evaluate(_expression)}
             else:
                 # An immediate evaluation happened
                 # (e.g. all operands are numpy arrays or constructors)
