@@ -14,6 +14,14 @@ import blosc2
 
 def pytest_configure(config):
     blosc2.print_versions()
+    # Using the defaults for nthreads can be very time consuming for tests.
+    # Fastest runtime (95 sec) for the whole test suite (Mac Mini M4 Pro)
+    # blosc2.set_nthreads(1)
+    # Second best runtime (101 sec), but still contained, and
+    # actually tests multithreading.
+    blosc2.set_nthreads(2)
+    # This makes the worst time (242 sec)
+    # blosc2.set_nthreads(blosc2.nthreads)  # worst runtime ()
 
 
 @pytest.fixture(scope="session")
