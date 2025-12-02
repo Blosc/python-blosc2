@@ -1,8 +1,12 @@
 # Release notes
 
-## Changes from 3.11.1 to 3.11.2
+## Changes from 3.11.1 to 3.12.0
 
-XXX version-specific blurb XXX
+* `LazyUDF` objects can now be saved to disk
+* Calls to ``__matmul__`` NumPy ufunc now passed to ``blosc2.matmul``
+* Streamlined ``LazyUDF.compute`` is now much more robust and functional
+* The ``get_chunk`` method for ``LazyExpr`` is more efficient and enabled for general ``LazyArray`` objects
+* ``LazyExpr`` calculation can now be done even with expressions with pure scalar operands, e.g ``10 * 3 +1.``.
 
 ## Changes from 3.11.0 to 3.11.1
 

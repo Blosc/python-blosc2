@@ -1,13 +1,13 @@
-Announcing Python-Blosc2 3.11.1
+Announcing Python-Blosc2 3.12.0
 ===============================
 
-This is a patch release where we have aimed to tidy up the code, introduce optimisations, and fix some small bugs/:
+This is a minor release where we have aimed to tidy up the code and fix some small bugs:
 
-✅ Change the ``NDArray.size`` to return the number of elements in array, instead of the size of the array in bytes
-✅ Bug fixes for lazy expressions to allow a wider range of functionality
-✅ Small bug fix for slice indexing with step larger than chunksize
-✅ Tweak automatic chunk sizing of results for certain (e.g. linalg) operations to enhance performance
-✅ Various cosmetic fixes and streamlining (thanks to the indefatigable @DimitriPapadopoulos)
+✅ ``LazyUDF`` objects can now be saved to disk
+✅ Calls to ``__matmul__`` NumPy ufunc now passed to ``blosc2.matmul``
+✅ Streamlined ``LazyUDF.compute`` is now much more robust and functional
+✅ The ``get_chunk`` method for ``LazyExpr`` is more efficient and enabled for general ``LazyArray`` objects
+✅ ``LazyExpr`` calculation can now be done even with expressions with pure scalar operands, e.g ``10 * 3 +1.``.
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
