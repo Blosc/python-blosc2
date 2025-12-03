@@ -69,7 +69,7 @@ jobs:
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
 
-          git add wheels
+          git add -f wheels
 
           git commit -a -m "Update wheels for release ${{ github.ref_name }}"
           git push origin main
