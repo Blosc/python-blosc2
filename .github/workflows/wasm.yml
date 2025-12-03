@@ -60,7 +60,6 @@ jobs:
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
 
-          git add -f wheels
           # Do nothing if no changes
           if git diff --cached --quiet; then
             echo "No new wheels to commit"
