@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.12.1 to 3.12.2
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.12.0 to 3.12.1
 
 * Hotfix for security - disallow ``import`` in (saved) ``LazyUDF`` objects
