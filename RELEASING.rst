@@ -107,10 +107,7 @@ Checking packaging
   https://github.com/Blosc/python-blosc2/releases/new
   Add the notes specific for this release.
 
-* Check the wasm32 wheels have been updated in ``wheels`` correctly. 
-Go to (https://cat2.cloud/demo), login and check that the first cell in 
-any of the notebooks runs correctly - this means the wheels have been 
-deployed to GitHub Pages successfully.
+* Check the wasm32 wheels have been updated in ``wheels`` correctly. Go to (https://cat2.cloud/demo), login and check that the first cell in any of the notebooks runs correctly - this means the wheels have been deployed to GitHub Pages successfully.
 
 Announcing
 ----------
