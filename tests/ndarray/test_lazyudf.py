@@ -18,6 +18,15 @@ def udf1p(inputs_tuple, output, offset):
     output[:] = x + 1
 
 
+if blosc2._NUMBA_:
+    import numba
+
+    @numba.jit(parallel=True)
+    def udf1p_numba(inputs_tuple, output, offset):
+        x = inputs_tuple[0]
+        output[:] = x + 1
+
+
 @pytest.mark.parametrize("chunked_eval", [True, False])
 @pytest.mark.parametrize(
     ("shape", "chunks", "blocks"),
@@ -472,6 +481,18 @@ def test_save_ludf():
     assert isinstance(expr, blosc2.LazyUDF)
     res_lazyexpr = expr.compute()
     np.testing.assert_array_equal(res_lazyexpr[:], npc)
+    blosc2.remove_urlpath(urlpath)
+
+    if blosc2._NUMBA_:
+        expr = blosc2.lazyudf(udf1p_numba, (array,), np.float64)
+        expr.save(urlpath=urlpath)
+        del expr
+        expr = blosc2.open(urlpath)
+        assert isinstance(expr, blosc2.LazyUDF)
+        res_lazyexpr = expr.compute()
+        np.testing.assert_array_equal(res_lazyexpr[:], npc)
+
+    blosc2.remove_urlpath("a.b2nd")
 
 
 # Test get_chunk method

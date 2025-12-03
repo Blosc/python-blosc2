@@ -20,6 +20,7 @@ import os
 import pathlib
 import re
 import sys
+import textwrap
 import threading
 from abc import ABC, abstractmethod, abstractproperty
 from dataclasses import asdict
@@ -39,6 +40,9 @@ import ndindex
 import numpy as np
 
 import blosc2
+
+if blosc2._NUMBA_:
+    import numba
 from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
 
@@ -3409,7 +3413,7 @@ class LazyUDF(LazyArray):
                 raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
             operands[key] = value.schunk.urlpath
         array.schunk.vlmeta["_LazyArray"] = {
-            "UDF": inspect.getsource(self.func),
+            "UDF": textwrap.dedent(inspect.getsource(self.func)).lstrip(),
             "operands": operands,
             "name": self.func.__name__,
         }
@@ -3712,11 +3716,20 @@ def _open_lazyarray(array):
         local_ns = {}
         name = lazyarray["name"]
         filename = f"<{name}>"  # any unique name
+        SAFE_GLOBALS = {
+            "__builtins__": {
+                name: value for name, value in builtins.__dict__.items() if name != "__import__"
+            },
+            "np": np,
+            "blosc2": blosc2,
+        }
+        if blosc2._NUMBA_:
+            SAFE_GLOBALS["numba"] = numba
 
         # Register the source so inspect can find it
         linecache.cache[filename] = (len(expr), None, expr.splitlines(True), filename)
 
-        exec(compile(expr, filename, "exec"), {"np": np, "blosc2": blosc2}, local_ns)
+        exec(compile(expr, filename, "exec"), SAFE_GLOBALS, local_ns)
         func = local_ns[name]
         # TODO: make more robust for general kwargs (not just cparams)
         new_expr = blosc2.lazyudf(
