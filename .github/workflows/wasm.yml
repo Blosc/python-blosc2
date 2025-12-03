@@ -58,7 +58,7 @@ jobs:
           ls -lh wheels/
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-          git commit -m "Update wheels for release ${{ github.ref_name }}"
+          git commit -a -m "Update wheels for release ${{ github.ref_name }}"
           git push
 
 # This is not working yet
