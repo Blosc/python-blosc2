@@ -2,7 +2,8 @@
 
 ## Changes from 3.12.0 to 3.12.1
 
-XXX version-specific blurb XXX
+* Hotfix for security - disallow ``import`` in (saved) ``LazyUDF`` objects
+* Automate WASM wheel upload via YAML file
 
 ## Changes from 3.11.1 to 3.12.0
 

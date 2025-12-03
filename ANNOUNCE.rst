@@ -1,17 +1,11 @@
-Announcing Python-Blosc2 3.12.0
+Announcing Python-Blosc2 3.12.1
 ===============================
 
-This is a minor release where we have aimed to tidy up the code and fix some small bugs:
+This is a patch release where we have aimed to close a security loophole:
 
-✅ ``LazyUDF`` objects can now be saved to disk
+✅ Hotfix for security - disallow ``import`` in (saved) ``LazyUDF`` objects
 
-✅ Calls to ``__matmul__`` NumPy ufunc now passed to ``blosc2.matmul``
-
-✅ Streamlined ``LazyUDF.compute`` is now much more robust and functional
-
-✅ The ``get_chunk`` method for ``LazyExpr`` is more efficient and enabled for general ``LazyArray`` objects
-
-✅ ``LazyExpr`` calculation can now be done even with expressions with pure scalar operands, e.g ``10 * 3 +1.``.
+✅ Automate WASM wheel upload via YAML file
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
