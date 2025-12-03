@@ -18,7 +18,7 @@ def udf1p(inputs_tuple, output, offset):
     output[:] = x + 1
 
 
-if blosc2._NUMBA_:
+if blosc2._HAS_NUMBA:
     import numba
 
     @numba.jit(parallel=True)
@@ -483,7 +483,7 @@ def test_save_ludf():
     np.testing.assert_array_equal(res_lazyexpr[:], npc)
     blosc2.remove_urlpath(urlpath)
 
-    if blosc2._NUMBA_:
+    if blosc2._HAS_NUMBA:
         expr = blosc2.lazyudf(udf1p_numba, (array,), np.float64)
         expr.save(urlpath=urlpath)
         del expr

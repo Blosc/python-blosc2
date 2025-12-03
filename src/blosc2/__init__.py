@@ -15,12 +15,13 @@ from enum import Enum
 
 import numpy as np
 
-_NUMBA_ = True
+_HAS_NUMBA = False
 try:
     import numba
-except ImportError:
-    _NUMBA_ = False
 
+    _HAS_NUMBA = True
+except ImportError:
+    pass
 # Do the platform check once at module level
 IS_WASM = platform.machine() == "wasm32"
 # IS_WASM = True  # for testing (comment this line out for production)

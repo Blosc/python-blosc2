@@ -41,7 +41,7 @@ import numpy as np
 
 import blosc2
 
-if blosc2._NUMBA_:
+if blosc2._HAS_NUMBA:
     import numba
 from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
@@ -3723,7 +3723,7 @@ def _open_lazyarray(array):
             "np": np,
             "blosc2": blosc2,
         }
-        if blosc2._NUMBA_:
+        if blosc2._HAS_NUMBA:
             SAFE_GLOBALS["numba"] = numba
 
         # Register the source so inspect can find it
