@@ -52,14 +52,27 @@ jobs:
       - name: Move wheels into /wheels directory for GitHub Pages and trigger gh pages redeploy
         if: startsWith(github.ref, 'refs/tags/')
         run: |
+          # Switch to real branch
+          git fetch origin main
+          git checkout main
+          git pull
+
+          # Copy new wheels
+          mkdir -p wheels
           rm -f wheels/*.whl || true
           cp wheelhouse/*.whl wheels/
+
           echo "Copied wheels:"
           ls -lh wheels/
+
+          # Commit
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
+
+          git add wheels
+
           git commit -a -m "Update wheels for release ${{ github.ref_name }}"
-          git push
+          git push origin main
 
 # This is not working yet
 #      - name: Upload wheel to release
