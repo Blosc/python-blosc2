@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 3.12.2 to 3.12.3
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.12.1 to 3.12.2
 
 * Hotfix to change WASM wheel hosting to separate repo
