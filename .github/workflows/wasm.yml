@@ -1,4 +1,4 @@
-name: Python wheels for WASM
+name: Python wheels for WASM upload
 on:
   push:
     tags:
@@ -50,7 +50,7 @@ jobs:
         run: cibuildwheel --platform pyodide
 
       - name: Publish wheels to orphan `wheels` branch
-        # if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -60,32 +60,28 @@ jobs:
           mkdir wheels-branch
           cd wheels-branch
 
-          # Fetch existing wheels branch if it exists
+          # Initialize git repo
           git init
-          git remote add origin https://github.com/${{ github.repository }}.git
+          git remote add origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}.git
           git fetch origin wheels || true
 
-          # Create an orphan branch (separate history)
+          # Create orphan branch
           git checkout --orphan wheels
-
-          # Clear all files in branch
           git reset --hard
 
-          # Add wheels
+          # Copy wheels
           mkdir -p wheels
           cp ../wheelhouse/*.whl wheels/
-
           echo "Wheels to publish:"
           ls -lh wheels/
 
           # Commit
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
-
           git add wheels
           git commit -m "Update wheels for release ${{ github.ref_name }}"
 
-          # Force push as this branch always resets
+          # Force push
           git push origin wheels --force
 
 
