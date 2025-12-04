@@ -67,6 +67,8 @@ Tagging
 
     git push --delete origin vX.Y.Z
 
+  You will have to return to the start and use a new tag (X.Y.(Z+1)).
+
 * Make sure that the tag is passing the tests in continuous integration (this
   may take about 30 min).
 
@@ -107,7 +109,7 @@ Checking packaging
   https://github.com/Blosc/python-blosc2/releases/new
   Add the notes specific for this release.
 
-* Check the wasm32 wheels have been updated in ``wheels`` correctly. Go to https://cat2.cloud/demo, login and check that the first cell in any of the notebooks runs correctly - this means the wheels have been deployed to GitHub Pages successfully. The printed output should also show the correct version number for the version you have just published.
+* Check the wasm32 wheels have been updated in the ``wheels`` branch correctly. Go to https://cat2.cloud/demo, login and check that the first cell in any of the notebooks runs correctly - this means the wheels have been deployed to GitHub Pages successfully. The printed output should also show the correct version number for the version you have just published.
 
 Announcing
 ----------
