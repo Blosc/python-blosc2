@@ -1,11 +1,7 @@
-Announcing Python-Blosc2 3.12.1
+Announcing Python-Blosc2 3.12.2
 ===============================
 
-This is a patch release where we have aimed to close a security loophole:
-
-✅ Hotfix for security - disallow ``import`` in (saved) ``LazyUDF`` objects
-
-✅ Automate WASM wheel upload via YAML file
+This is a patch release where we hotfix the WASM wheel upload to a separate repo to avoid history bloat.
 
 You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
 
