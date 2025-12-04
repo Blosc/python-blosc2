@@ -59,7 +59,7 @@ Tagging
 
     git push --tags
 
-* If you happen to have to delete the tag, such as artifacts demonstrates a fault, first delete it locally::
+* If you happen to have to delete the tag, such as artifacts demonstrates a fault, first delete it locally:
 
     git tag --delete vX.Y.Z
 
@@ -107,14 +107,7 @@ Checking packaging
   https://github.com/Blosc/python-blosc2/releases/new
   Add the notes specific for this release.
 
-  Also, upload the wasm32 wheels to release page in github::
-
-    [upload e.g.:] blosc2-3.2.0-cp312-cp312-pyodide_2024_0_wasm32.whl
-
-The wheels may be downloaded by going to "Actions->Python wheels for WASM"
-and selecting the completed workflow run for the version you are releasing.
-Then, go to the "Artifacts" dropdown and download the WASM wheel file(s).
-**Note**: be sure to upload the wheel files, not the zip file containing them.
+* Check the wasm32 wheels have been updated in ``wheels`` correctly. Go to https://cat2.cloud/demo, login and check that the first cell in any of the notebooks runs correctly - this means the wheels have been deployed to GitHub Pages successfully. The printed output should also show the correct version number for the version you have just published.
 
 Announcing
 ----------
