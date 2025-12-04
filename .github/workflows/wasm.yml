@@ -1,4 +1,4 @@
-name: Python wheels for WASM
+name: Python wheels for WASM upload
 on:
   push:
     tags:
