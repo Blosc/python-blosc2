@@ -75,6 +75,11 @@ jobs:
           echo "Wheels to publish:"
           ls -lh wheels/
 
+          # Generate latest.txt (name of newest wheel)
+          latest_wheel=$(ls -1 wheels/*.whl | sort | tail -n 1)
+          echo "$(basename $latest_wheel)" > wheels/latest.txt
+          echo "Latest wheel: $(cat wheels/latest.txt)"
+
           # Commit
           git config user.name "GitHub Actions"
           git config user.email "actions@github.com"
