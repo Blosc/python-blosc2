@@ -524,7 +524,7 @@ cdef extern from "b2nd.h":
                           const void *src, const int64_t *src_pad_shape,
                           const int64_t *src_start, const int64_t *src_stop,
                           void *dst, const int64_t *dst_pad_shape,
-                          const int64_t *dst_start);
+                          const int64_t *dst_start) nogil;
 
 
 # NumExpr C API declarations
@@ -1873,11 +1873,14 @@ cdef int aux_last_expr(udf_udata *udata, int64_t nchunk, int32_t nblock,
             slice_shape[i] = blockshape[i]
             blockshape_int64[i] = udata.array.blockshape[i]
         PyObject_GetBuffer(output, &buf, PyBUF_SIMPLE)
-        rc = b2nd_copy_buffer2(udata.array.ndim, typesize,
-                               buf.buf, slice_shape, start, slice_shape,
-                               params_output, blockshape_int64, start)
-        PyBuffer_Release(&buf)
+        # Release GIL for the buffer copy operation (useful for larger blocks)
+        with nogil:
+            rc = b2nd_copy_buffer2(udata.array.ndim, typesize,
+                                   buf.buf, slice_shape, start, slice_shape,
+                                   params_output, blockshape_int64, start)
+        # Check error after reacquiring GIL
         _check_rc(rc, "Could not copy the result into the buffer")
+        PyBuffer_Release(&buf)
 
     return 0
 
