@@ -492,7 +492,7 @@ cdef extern from "b2nd.h":
     int b2nd_free(b2nd_array_t *array)
     int b2nd_get_slice_cbuffer(b2nd_array_t *array,
                                int64_t *start, int64_t *stop,
-                               void *buffer, int64_t *buffershape, int64_t buffersize)
+                               void *buffer, int64_t *buffershape, int64_t buffersize) nogil
     int b2nd_set_slice_cbuffer(void *buffer, int64_t *buffershape, int64_t buffersize,
                                int64_t *start, int64_t *stop, b2nd_array_t *array)
     int b2nd_get_slice(b2nd_context_t *ctx, b2nd_array_t **array, b2nd_array_t *src, const int64_t *start,
@@ -1748,7 +1748,10 @@ cdef int aux_last_expr(udf_udata *udata, int64_t nchunk, int32_t nblock,
     blosc2_unidim_to_multidim(udata.array.ndim, udata.chunks_in_array, nchunk, chunk_ndim)
     cdef int64_t block_ndim[B2ND_MAX_DIM]
     blosc2_unidim_to_multidim(udata.array.ndim, udata.blocks_in_chunk, nblock, block_ndim)
+    cdef Py_buffer view
     cdef int64_t start_ndim[B2ND_MAX_DIM]
+    cdef int64_t stop_ndim[B2ND_MAX_DIM]
+    cdef int64_t[B2ND_MAX_DIM] buffershape_
     for i in range(udata.array.ndim):
         start_ndim[i] = chunk_ndim[i] * udata.array.chunkshape[i] + block_ndim[i] * udata.array.blockshape[i]
 
@@ -1779,11 +1782,33 @@ cdef int aux_last_expr(udf_udata *udata, int64_t nchunk, int32_t nblock,
     # Get slice of each operand
     l = []
     for i in range(udata.array.ndim):
-        l.append(slice(start_ndim[i], start_ndim[i] + blockshape[i]))
+        stop_ndim[i] = start_ndim[i] + dims[i]
+        l.append(slice(start_ndim[i], stop_ndim[i]))
     slices = tuple(l)
     #print("slices ->", slices)
+    cdef b2nd_array_t* ndarr
+    cdef int rc
     for key, obj in inputs_dict.items():
-        if isinstance(obj, blosc2.NDArray | np.ndarray | blosc2.C2Array):
+        if isinstance(obj, NDArray):
+            # inputs_slice[key] = obj[slices]
+            arr = np.empty(blockshape, dtype=obj.dtype)
+            # inputs_slice[key] = obj.get_slice_numpy(arr, (start_ndim, stop_ndim))
+            # This is *slightly* faster than using get_slice_numpy; my hope is that,
+            # with multithreading enabled, this should go faster.
+            ndarr = <b2nd_array_t*><uintptr_t>obj.c_array
+            PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
+            with nogil:
+                for i in range(udata.array.ndim):
+                    buffershape_[i] = stop_ndim[i] - start_ndim[i]
+
+                rc = b2nd_get_slice_cbuffer(ndarr, start_ndim, stop_ndim,
+                                                 <void *> view.buf,
+                                                 buffershape_, view.len)
+            _check_rc(rc, "Error while getting the buffer")
+            PyBuffer_Release(&view)
+            inputs_slice[key] = arr
+
+        elif isinstance(obj, np.ndarray | blosc2.C2Array):
             inputs_slice[key] = obj[slices]
         elif np.isscalar(obj):
             inputs_slice[key] = obj
@@ -2443,6 +2468,10 @@ cdef class NDArray:
         self._dtype = None
         self.array = <b2nd_array_t *> PyCapsule_GetPointer(array, <char *> "b2nd_array_t*")
         self.base = base # add reference to base if NDArray is a view
+
+    @property
+    def c_array(self):
+        return <uintptr_t> self.array
 
     @property
     def shape(self) -> tuple[int]:
