@@ -1741,6 +1741,84 @@ cdef int general_filler(blosc2_prefilter_params *params):
     return 0
 
 
+# Aux function for prefilter and postfilter for last expression
+cdef int aux_last_expr(udf_udata *udata, int64_t nchunk, int32_t nblock,
+                       c_bool is_postfilter, uint8_t *params_output, int32_t typesize):
+    cdef int64_t chunk_ndim[B2ND_MAX_DIM]
+    blosc2_unidim_to_multidim(udata.array.ndim, udata.chunks_in_array, nchunk, chunk_ndim)
+    cdef int64_t block_ndim[B2ND_MAX_DIM]
+    blosc2_unidim_to_multidim(udata.array.ndim, udata.blocks_in_chunk, nblock, block_ndim)
+    cdef int64_t start_ndim[B2ND_MAX_DIM]
+    for i in range(udata.array.ndim):
+        start_ndim[i] = chunk_ndim[i] * udata.array.chunkshape[i] + block_ndim[i] * udata.array.blockshape[i]
+
+    padding = False
+    blockshape = []
+    for i in range(udata.array.ndim):
+        if start_ndim[i] + udata.array.blockshape[i] > udata.array.shape[i]:
+            padding = True
+            blockshape.append(udata.array.shape[i] - start_ndim[i])
+            if blockshape[i] <= 0:
+                # This block contains only padding, skip it
+                return 0
+        else:
+            blockshape.append(udata.array.blockshape[i])
+    cdef np.npy_intp dims[B2ND_MAX_DIM]
+    for i in range(udata.array.ndim):
+        dims[i] = blockshape[i]
+    #print("blockshape ->", blockshape)
+
+    # if padding:
+    #     output = np.empty(blockshape, udata.array.dtype)
+    # else:
+    #     output = np.PyArray_SimpleNewFromData(udata.array.ndim, dims, udata.output_cdtype, <void*>params_output)
+
+    inputs_dict = _ctypes.PyObj_FromPtr(udata.inputs_id)
+    #print("inputs_dict ->", inputs_dict)
+    inputs_slice = {}
+    # Get slice of each operand
+    l = []
+    for i in range(udata.array.ndim):
+        l.append(slice(start_ndim[i], start_ndim[i] + blockshape[i]))
+    slices = tuple(l)
+    #print("slices ->", slices)
+    for key, obj in inputs_dict.items():
+        if isinstance(obj, blosc2.NDArray | np.ndarray | blosc2.C2Array):
+            inputs_slice[key] = obj[slices]
+        elif np.isscalar(obj):
+            inputs_slice[key] = obj
+        else:
+            raise ValueError("Unsupported operand")
+    #print("inputs_slice ->", inputs_slice)
+
+    # Call udf function
+    func_id = udata.py_func.decode("utf-8")
+    offset = tuple(start_ndim[i] for i in range(udata.array.ndim))
+    if is_postfilter:
+        output = blosc2.postfilter_funcs[func_id](inputs_slice)
+    else:
+        #print("offset ->", offset)
+        output = blosc2.prefilter_funcs[func_id](inputs_slice)
+
+    cdef int64_t start[B2ND_MAX_DIM]
+    cdef int64_t slice_shape[B2ND_MAX_DIM]
+    cdef int64_t blockshape_int64[B2ND_MAX_DIM]
+    cdef Py_buffer buf
+    if True:   # if padding:
+        for i in range(udata.array.ndim):
+            start[i] = 0
+            slice_shape[i] = blockshape[i]
+            blockshape_int64[i] = udata.array.blockshape[i]
+        PyObject_GetBuffer(output, &buf, PyBUF_SIMPLE)
+        rc = b2nd_copy_buffer2(udata.array.ndim, typesize,
+                               buf.buf, slice_shape, start, slice_shape,
+                               params_output, blockshape_int64, start)
+        PyBuffer_Release(&buf)
+        _check_rc(rc, "Could not copy the result into the buffer")
+
+    return 0
+
+
 # Aux function for prefilter and postfilter udf
 cdef int aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
                  c_bool is_postfilter, uint8_t *params_output, int32_t typesize):
@@ -1812,6 +1890,11 @@ cdef int aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
         _check_rc(rc, "Could not copy the result into the buffer")
 
     return 0
+
+
+cdef int last_expr_prefilter(blosc2_prefilter_params *params):
+    cdef udf_udata *udata = <udf_udata *> params.user_data
+    return aux_last_expr(udata, params.nchunk, params.nblock, False, params.output, params.output_typesize)
 
 
 cdef int general_udf_prefilter(blosc2_prefilter_params *params):
@@ -2620,6 +2703,25 @@ cdef class NDArray:
             udata.blocks_in_chunk[i] = udata.array.extchunkshape[i] // udata.array.blockshape[i]
 
         return udata
+
+    def _set_pref_last_expr(self, func, inputs_id):
+        func_id = func.__name__
+        blosc2.prefilter_funcs[func_id] = func
+        func_id = func_id.encode("utf-8") if isinstance(func_id, str) else func_id
+
+        # Set prefilter
+        cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
+        cparams.prefilter = <blosc2_prefilter_fn> last_expr_prefilter
+
+        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
+        preparams.user_data = self._fill_udf_udata(func_id, inputs_id)
+        cparams.preparams = preparams
+        _check_cparams(cparams)
+
+        blosc2_free_ctx(self.array.sc.cctx)
+        self.array.sc.cctx = blosc2_create_cctx(dereference(cparams))
+        if self.array.sc.cctx == NULL:
+            raise RuntimeError("Could not create compression context")
 
     def _set_pref_udf(self, func, inputs_id):
         if self.array.sc.storage.cparams.nthreads > 1:
