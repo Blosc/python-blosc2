@@ -23,6 +23,7 @@ from cpython cimport (
     PyBytes_FromStringAndSize,
     PyObject_GetBuffer,
 )
+from cpython.ref cimport Py_INCREF, Py_DECREF
 from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
 from cython.operator cimport dereference
 from libc.stdint cimport uintptr_t
@@ -553,6 +554,7 @@ ctypedef struct udf_udata:
     b2nd_array_t *array
     int64_t chunks_in_array[B2ND_MAX_DIM]
     int64_t blocks_in_chunk[B2ND_MAX_DIM]
+    void* numexpr_handle  # Cached numexpr compiled expression handle
 
 MAX_TYPESIZE = BLOSC2_MAXTYPESIZE
 MAX_BUFFERSIZE = BLOSC2_MAX_BUFFERSIZE
@@ -778,6 +780,9 @@ cdef _check_cparams(blosc2_cparams *cparams):
                 raise ValueError("Cannot use multi-threading with user defined Python filters")
 
         if cparams.prefilter != NULL:
+            # Note: last_expr_prefilter uses numexpr C API which is more thread-friendly,
+            # but we still access Python objects (dicts, lists) in aux_last_expr,
+            # so multi-threading can cause issues. Keep single-threaded for safety.
             raise ValueError("`nthreads` must be 1 when a prefilter is set")
 
 cdef _check_dparams(blosc2_dparams* dparams, blosc2_cparams* cparams=NULL):
@@ -1674,13 +1679,25 @@ cdef class SChunk:
             raise RuntimeError("Could not create compression context")
 
     cpdef remove_prefilter(self, func_name, _new_ctx=True):
+        cdef udf_udata* udf_data
+        cdef user_filters_udata* udata
+
         if func_name is not None and func_name in blosc2.prefilter_funcs:
             del blosc2.prefilter_funcs[func_name]
 
-        # From Python the preparams->udata with always have the field py_func
-        cdef user_filters_udata * udata = <user_filters_udata *>self.schunk.storage.cparams.preparams.user_data
-        free(udata.py_func)
-        free(self.schunk.storage.cparams.preparams.user_data)
+        # Clean up the numexpr handle if this is a last_expr_prefilter
+        if self.schunk.storage.cparams.prefilter == <blosc2_prefilter_fn>last_expr_prefilter:
+            udf_data = <udf_udata*>self.schunk.storage.cparams.preparams.user_data
+            if udf_data.numexpr_handle != NULL:
+                Py_DECREF(<object>udf_data.numexpr_handle)
+            free(udf_data.py_func)
+            free(udf_data)
+        else:
+            # From Python the preparams->udata with always have the field py_func
+            udata = <user_filters_udata*>self.schunk.storage.cparams.preparams.user_data
+            free(udata.py_func)
+            free(udata)
+
         free(self.schunk.storage.cparams.preparams)
         self.schunk.storage.cparams.preparams = NULL
         self.schunk.storage.cparams.prefilter = NULL
@@ -1837,7 +1854,9 @@ cdef int aux_last_expr(udf_udata *udata, int64_t nchunk, int32_t nblock,
     offset = tuple(start_ndim[i] for i in range(udata.array.ndim))
 
     # Use numexpr C API for faster evaluation
-    numexpr_handle = numexpr_get_last_compiled()
+    # Use the cached handle from udata (set during _set_pref_last_expr)
+    # This allows multi-threading since all threads share the same handle
+    numexpr_handle = udata.numexpr_handle
     if numexpr_handle != NULL:
         # Get the variable names order from the compiled expression
         compiled_ex = <object>numexpr_handle
@@ -2789,7 +2808,15 @@ cdef class NDArray:
         cparams.prefilter = <blosc2_prefilter_fn> last_expr_prefilter
 
         cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
-        preparams.user_data = self._fill_udf_udata(func_id, inputs_id)
+        cdef udf_udata* udata = self._fill_udf_udata(func_id, inputs_id)
+
+        # Get and cache the numexpr compiled expression handle for multi-threading
+        udata.numexpr_handle = numexpr_get_last_compiled()
+        # Increment reference count to keep the expression alive across threads
+        if udata.numexpr_handle != NULL:
+            Py_INCREF(<object>udata.numexpr_handle)
+
+        preparams.user_data = udata
         cparams.preparams = preparams
         _check_cparams(cparams)
 
