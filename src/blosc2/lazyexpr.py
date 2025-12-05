@@ -3363,7 +3363,9 @@ class LazyUDF(LazyArray):
         # # Register a prefilter for eval
         # res_eval._set_pref_udf(self.func, id(self.inputs))
 
+        # This line would NOT allocate physical RAM on any modern OS:
         # aux = np.empty(res_eval.shape, res_eval.dtype)
+        # Physical allocation happens here (when writing):
         # res_eval[...] = aux
         # res_eval.schunk.remove_prefilter(self.func.__name__)
         # res_eval.schunk.cparams.nthreads = self._cnthreads
