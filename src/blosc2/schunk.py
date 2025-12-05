@@ -1470,11 +1470,59 @@ class SChunk(blosc2_ext.SChunk):
         super().__dealloc__()
 
 
+def _open_special_store(urlpath, mode, offset, **kwargs):
+    if urlpath.endswith(".b2z") or urlpath.endswith(".b2d"):
+        if offset != 0:
+            raise ValueError("Offset must be 0 for DictStore")
+        from blosc2.dict_store import DictStore
+
+        return DictStore(urlpath, mode=mode, **kwargs)
+    elif urlpath.endswith(".b2e"):
+        if offset != 0:
+            raise ValueError("Offset must be 0 for EmbedStore")
+        from blosc2.embed_store import EmbedStore
+
+        return EmbedStore(urlpath, mode=mode, **kwargs)
+    return None
+
+
+def _set_default_dparams(kwargs):
+    dparams = kwargs.get("dparams")
+    if dparams is None:
+        # Use multiple threads for decompression by default, unless we are in WASM
+        # (does not support threads).  The only drawback for using multiple threads
+        # is that access time will be slower because of the overhead of spawning threads
+        # (but could be fixed in the future with more intelligent thread pools).
+        dparams = (
+            blosc2.DParams(nthreads=blosc2.nthreads) if not blosc2.IS_WASM else blosc2.DParams(nthreads=1)
+        )
+        kwargs["dparams"] = dparams
+
+
+def _process_opened_object(res):
+    meta = getattr(res, "schunk", res).meta
+    if "proxy-source" in meta:
+        proxy_src = meta["proxy-source"]
+        if proxy_src["local_abspath"] is not None:
+            src = blosc2.open(proxy_src["local_abspath"])
+            return blosc2.Proxy(src, _cache=res)
+        elif proxy_src["urlpath"] is not None:
+            src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
+            return blosc2.Proxy(src, _cache=res)
+        elif not proxy_src["caterva2_env"]:
+            raise RuntimeError("Could not find the source when opening a Proxy")
+
+    if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
+        return blosc2._open_lazyarray(res)
+    else:
+        return res
+
+
 def open(
     urlpath: str | pathlib.Path | blosc2.URLPath, mode: str = "a", offset: int = 0, **kwargs: dict
-) -> blosc2.SChunk | blosc2.NDArray | blosc2.C2Array | blosc2.LazyArray | blosc2.Proxy:
-    """Open a persistent :ref:`SChunk`, :ref:`NDArray`, a remote :ref:`C2Array`
-    or a :ref:`Proxy`
+) -> blosc2.SChunk | blosc2.NDArray | blosc2.C2Array | blosc2.LazyArray | blosc2.Proxy | Any:
+    """Open a persistent :ref:`SChunk`, :ref:`NDArray`, a remote :ref:`C2Array`,
+    a :ref:`Proxy`, a :ref:`DictStore` or an :ref:`EmbedStore`.
 
     See the `Notes` section for more info on opening `Proxy` objects.
 
@@ -1510,9 +1558,8 @@ def open(
 
     Returns
     -------
-    out: :ref:`SChunk`, :ref:`NDArray` or :ref:`C2Array`
-        The SChunk or NDArray (if there is a "b2nd" metalayer")
-        or the C2Array if :paramref:`urlpath` is a :ref:`blosc2.URLPath <URLPath>` instance.
+    out: :ref:`SChunk`, :ref:`NDArray`, :ref:`C2Array`, :ref:`DictStore` or :ref:`EmbedStore`
+        The object found in the path.
 
     Notes
     -----
@@ -1577,34 +1624,15 @@ def open(
 
     if isinstance(urlpath, pathlib.PurePath):
         urlpath = str(urlpath)
+
+    special = _open_special_store(urlpath, mode, offset, **kwargs)
+    if special is not None:
+        return special
+
     if not os.path.exists(urlpath):
         raise FileNotFoundError(f"No such file or directory: {urlpath}")
 
-    dparams = kwargs.get("dparams")
-    if dparams is None:
-        # Use multiple threads for decompression by default, unless we are in WASM
-        # (does not support threads).  The only drawback for using multiple threads
-        # is that access time will be slower because of the overhead of spawning threads
-        # (but could be fixed in the future with more intelligent thread pools).
-        dparams = (
-            blosc2.DParams(nthreads=blosc2.nthreads) if not blosc2.IS_WASM else blosc2.DParams(nthreads=1)
-        )
-        kwargs["dparams"] = dparams
+    _set_default_dparams(kwargs)
     res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
 
-    meta = getattr(res, "schunk", res).meta
-    if "proxy-source" in meta:
-        proxy_src = meta["proxy-source"]
-        if proxy_src["local_abspath"] is not None:
-            src = blosc2.open(proxy_src["local_abspath"])
-            return blosc2.Proxy(src, _cache=res)
-        elif proxy_src["urlpath"] is not None:
-            src = blosc2.C2Array(proxy_src["urlpath"][0], proxy_src["urlpath"][1], proxy_src["urlpath"][2])
-            return blosc2.Proxy(src, _cache=res)
-        elif not proxy_src["caterva2_env"]:
-            raise RuntimeError("Could not find the source when opening a Proxy")
-
-    if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
-        return blosc2._open_lazyarray(res)
-    else:
-        return res
+    return _process_opened_object(res)

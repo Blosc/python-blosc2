@@ -436,3 +436,16 @@ def test_get_with_different_types():
     finally:
         if os.path.exists(path):
             os.remove(path)
+
+
+def test_open_context_manager(populated_dict_store):
+    """Test opening via blosc2.open as a context manager."""
+    dstore_fixture, path = populated_dict_store
+    # Close the fixture store to ensure data is written to disk
+    dstore_fixture.close()
+
+    # Test opening via blosc2.open as a context manager
+    with blosc2.open(path, mode="r") as dstore:
+        assert isinstance(dstore, DictStore)
+        assert "/node1" in dstore
+        assert np.array_equal(dstore["/node1"][:], np.array([1, 2, 3]))
