@@ -108,7 +108,7 @@ class EmbedStore:
             self.storage = storage
 
         if mode in ("r", "a") and urlpath:
-            self._store = blosc2.open(urlpath, mode=mode)
+            self._store = blosc2.blosc2_ext.open(urlpath, mode=mode, offset=0)
             self._load_metadata()
             return
 
@@ -253,6 +253,15 @@ class EmbedStore:
     def to_cframe(self) -> bytes:
         """Serialize embed store to CFrame format."""
         return self._store.to_cframe()
+
+    def __enter__(self):
+        """Context manager enter."""
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Context manager exit."""
+        # No need to close anything as SChunk/NDArray handles persistence automatically
+        return False
 
 
 def estore_from_cframe(cframe: bytes, copy: bool = False) -> EmbedStore:
