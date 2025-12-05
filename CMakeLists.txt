@@ -28,6 +28,20 @@ Python_add_library(blosc2_ext MODULE blosc2_ext.c WITH_SOABI)
 # We need to link against NumPy
 target_link_libraries(blosc2_ext PRIVATE Python::NumPy)
 
+# Find numexpr for C API integration
+execute_process(
+    COMMAND ${Python_EXECUTABLE} -c "import numexpr; import os; print(os.path.dirname(numexpr.__file__))"
+    OUTPUT_VARIABLE NUMEXPR_DIR
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+)
+if(NUMEXPR_DIR)
+    message(STATUS "Found numexpr at: ${NUMEXPR_DIR}")
+    target_include_directories(blosc2_ext PRIVATE ${NUMEXPR_DIR})
+    target_compile_definitions(blosc2_ext PRIVATE HAVE_NUMEXPR_CAPI=1)
+else()
+    message(WARNING "numexpr not found - lazy expression C API will not be available")
+endif()
+
 if(DEFINED ENV{USE_SYSTEM_BLOSC2})
     set(USE_SYSTEM_BLOSC2 ON)
 endif()

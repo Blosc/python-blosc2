@@ -527,6 +527,13 @@ cdef extern from "b2nd.h":
                           const int64_t *dst_start);
 
 
+# NumExpr C API declarations
+cdef extern from "numexpr_capi.h":
+    void* numexpr_get_last_compiled()
+    # Use void** since we can't directly use PyArrayObject** in Cython
+    object numexpr_run_compiled_simple(void *handle, void **input_arrays, int n_arrays)
+
+
 ctypedef struct user_filters_udata:
     char* py_func
     int input_cdtype
@@ -1667,7 +1674,7 @@ cdef class SChunk:
             raise RuntimeError("Could not create compression context")
 
     cpdef remove_prefilter(self, func_name, _new_ctx=True):
-        if func_name is not None:
+        if func_name is not None and func_name in blosc2.prefilter_funcs:
             del blosc2.prefilter_funcs[func_name]
 
         # From Python the preparams->udata with always have the field py_func
@@ -1744,14 +1751,26 @@ cdef int general_filler(blosc2_prefilter_params *params):
 # Aux function for prefilter and postfilter for last expression
 cdef int aux_last_expr(udf_udata *udata, int64_t nchunk, int32_t nblock,
                        c_bool is_postfilter, uint8_t *params_output, int32_t typesize):
+    # Declare all C variables at the beginning
     cdef int64_t chunk_ndim[B2ND_MAX_DIM]
-    blosc2_unidim_to_multidim(udata.array.ndim, udata.chunks_in_array, nchunk, chunk_ndim)
     cdef int64_t block_ndim[B2ND_MAX_DIM]
-    blosc2_unidim_to_multidim(udata.array.ndim, udata.blocks_in_chunk, nblock, block_ndim)
     cdef Py_buffer view
     cdef int64_t start_ndim[B2ND_MAX_DIM]
     cdef int64_t stop_ndim[B2ND_MAX_DIM]
     cdef int64_t[B2ND_MAX_DIM] buffershape_
+    cdef np.npy_intp dims[B2ND_MAX_DIM]
+    cdef b2nd_array_t* ndarr
+    cdef int rc
+    cdef void* numexpr_handle
+    cdef int n_inputs
+    cdef void** input_arrays
+    cdef int64_t start[B2ND_MAX_DIM]
+    cdef int64_t slice_shape[B2ND_MAX_DIM]
+    cdef int64_t blockshape_int64[B2ND_MAX_DIM]
+    cdef Py_buffer buf
+
+    blosc2_unidim_to_multidim(udata.array.ndim, udata.chunks_in_array, nchunk, chunk_ndim)
+    blosc2_unidim_to_multidim(udata.array.ndim, udata.blocks_in_chunk, nblock, block_ndim)
     for i in range(udata.array.ndim):
         start_ndim[i] = chunk_ndim[i] * udata.array.chunkshape[i] + block_ndim[i] * udata.array.blockshape[i]
 
@@ -1766,7 +1785,6 @@ cdef int aux_last_expr(udf_udata *udata, int64_t nchunk, int32_t nblock,
                 return 0
         else:
             blockshape.append(udata.array.blockshape[i])
-    cdef np.npy_intp dims[B2ND_MAX_DIM]
     for i in range(udata.array.ndim):
         dims[i] = blockshape[i]
     #print("blockshape ->", blockshape)
@@ -1786,8 +1804,6 @@ cdef int aux_last_expr(udf_udata *udata, int64_t nchunk, int32_t nblock,
         l.append(slice(start_ndim[i], stop_ndim[i]))
     slices = tuple(l)
     #print("slices ->", slices)
-    cdef b2nd_array_t* ndarr
-    cdef int rc
     for key, obj in inputs_dict.items():
         if isinstance(obj, NDArray):
             # inputs_slice[key] = obj[slices]
@@ -1816,19 +1832,41 @@ cdef int aux_last_expr(udf_udata *udata, int64_t nchunk, int32_t nblock,
             raise ValueError("Unsupported operand")
     #print("inputs_slice ->", inputs_slice)
 
-    # Call udf function
+    # Call numexpr C API directly instead of Python callback
     func_id = udata.py_func.decode("utf-8")
     offset = tuple(start_ndim[i] for i in range(udata.array.ndim))
-    if is_postfilter:
-        output = blosc2.postfilter_funcs[func_id](inputs_slice)
-    else:
-        #print("offset ->", offset)
-        output = blosc2.prefilter_funcs[func_id](inputs_slice)
 
-    cdef int64_t start[B2ND_MAX_DIM]
-    cdef int64_t slice_shape[B2ND_MAX_DIM]
-    cdef int64_t blockshape_int64[B2ND_MAX_DIM]
-    cdef Py_buffer buf
+    # Use numexpr C API for faster evaluation
+    numexpr_handle = numexpr_get_last_compiled()
+    if numexpr_handle != NULL:
+        # Get the variable names order from the compiled expression
+        compiled_ex = <object>numexpr_handle
+        input_names = compiled_ex.input_names  # tuple of variable names in order
+
+        # Build list of input arrays in the correct order
+        n_inputs = len(input_names)
+        input_list = []
+        for i in range(n_inputs):
+            var_name = input_names[i]
+            input_list.append(inputs_slice[var_name])
+
+        # Convert to array of void pointers (PyObject*)
+        input_arrays = <void**>malloc(n_inputs * sizeof(void*))
+        try:
+            for i in range(n_inputs):
+                input_arrays[i] = <void*>input_list[i]
+
+            # Call numexpr C API
+            output = numexpr_run_compiled_simple(numexpr_handle, input_arrays, n_inputs)
+        finally:
+            free(input_arrays)
+    else:
+        # Fallback to Python callback if C API not available
+        if is_postfilter:
+            output = blosc2.postfilter_funcs[func_id](inputs_slice)
+        else:
+            output = blosc2.prefilter_funcs[func_id](inputs_slice)
+
     if True:   # if padding:
         for i in range(udata.array.ndim):
             start[i] = 0
@@ -2734,8 +2772,13 @@ cdef class NDArray:
         return udata
 
     def _set_pref_last_expr(self, func, inputs_id):
-        func_id = func.__name__
-        blosc2.prefilter_funcs[func_id] = func
+        # Support both function objects and string identifiers
+        if isinstance(func, str):
+            func_id = func
+            # No need to register in prefilter_funcs - C API will be used directly
+        else:
+            func_id = func.__name__
+            blosc2.prefilter_funcs[func_id] = func
         func_id = func_id.encode("utf-8") if isinstance(func_id, str) else func_id
 
         # Set prefilter

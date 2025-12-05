@@ -1267,17 +1267,19 @@ def fast_eval(  # noqa: C901
             prev_nthreads = cparams.nthreads
             cparams.nthreads = 1
         res_eval = blosc2.empty(shape, dtype, cparams=cparams, **kwargs)
-        # Validate expression so that it will be cached too
+        # Validate expression so that it will be cached in numexpr
         numexpr.validate(expression, local_dict=operands)
-        # Register a prefilter for last expression
-        func = numexpr.re_evaluate
-        res_eval._set_pref_last_expr(func, id(operands))
+        # Register a prefilter for last expression using C API
+        # We use a placeholder function name since the actual evaluation
+        # is done directly via numexpr C API in blosc2_ext.pyx
+        func_name = "numexpr_last_compiled"
+        res_eval._set_pref_last_expr(func_name, id(operands))
 
         # This line would NOT allocate physical RAM on any modern OS:
         aux = np.empty(res_eval.shape, res_eval.dtype)
         # Physical allocation happens here (when writing):
         res_eval[...] = aux
-        res_eval.schunk.remove_prefilter(func.__name__)
+        res_eval.schunk.remove_prefilter(func_name)
         res_eval.schunk.cparams.nthreads = prev_nthreads
 
         return res_eval
