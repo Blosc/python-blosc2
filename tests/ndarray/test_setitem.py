@@ -110,3 +110,15 @@ def test_ndfield():
     fb[:] = blosc2.full(shape, fill_value=1, dtype=np.float64)
     assert np.allclose(sa["a"][:], nsa["a"])
     assert np.allclose(sa["b"][:], nsa["b"])
+
+
+def test_setitem_fancy_index():
+    out = blosc2.zeros(10)
+    idx = np.array([1, 6, 7])
+    value = np.arange(0, 3)
+    out[idx] = value
+
+    out_numpy = np.zeros(10)
+    out_numpy[idx] = value
+
+    np.testing.assert_array_equal(out[:], out_numpy)
