@@ -24,9 +24,13 @@ add_custom_command(
   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/blosc2_ext.pyx"
   VERBATIM)
 # ...and add it to the target
-Python_add_library(blosc2_ext MODULE blosc2_ext.c WITH_SOABI)
+Python_add_library(blosc2_ext MODULE blosc2_ext.c
+                   "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/miniexpr.c" WITH_SOABI)
 # We need to link against NumPy
 target_link_libraries(blosc2_ext PRIVATE Python::NumPy)
+
+# Add include directory for miniexpr.h
+target_include_directories(blosc2_ext PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2")
 
 if(DEFINED ENV{USE_SYSTEM_BLOSC2})
     set(USE_SYSTEM_BLOSC2 ON)

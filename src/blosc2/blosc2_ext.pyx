@@ -23,6 +23,7 @@ from cpython cimport (
     PyBytes_FromStringAndSize,
     PyObject_GetBuffer,
 )
+from cpython.ref cimport Py_INCREF, Py_DECREF
 from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
 from cython.operator cimport dereference
 from libc.stdint cimport uintptr_t
@@ -492,7 +493,7 @@ cdef extern from "b2nd.h":
     int b2nd_free(b2nd_array_t *array)
     int b2nd_get_slice_cbuffer(b2nd_array_t *array,
                                int64_t *start, int64_t *stop,
-                               void *buffer, int64_t *buffershape, int64_t buffersize)
+                               void *buffer, int64_t *buffershape, int64_t buffersize) nogil
     int b2nd_set_slice_cbuffer(void *buffer, int64_t *buffershape, int64_t buffersize,
                                int64_t *start, int64_t *stop, b2nd_array_t *array)
     int b2nd_get_slice(b2nd_context_t *ctx, b2nd_array_t **array, b2nd_array_t *src, const int64_t *start,
@@ -524,7 +525,56 @@ cdef extern from "b2nd.h":
                           const void *src, const int64_t *src_pad_shape,
                           const int64_t *src_start, const int64_t *src_stop,
                           void *dst, const int64_t *dst_pad_shape,
-                          const int64_t *dst_start);
+                          const int64_t *dst_start) nogil;
+
+
+# miniexpr C API declarations
+cdef extern from "miniexpr.h":
+    ctypedef enum me_dtype:
+        ME_BOOL
+        ME_INT8
+        ME_INT16
+        ME_INT32
+        ME_INT64
+        ME_UINT8
+        ME_UINT16
+        ME_UINT32
+        ME_UINT64
+        ME_FLOAT32
+        ME_FLOAT64
+        ME_COMPLEX64
+        ME_COMPLEX128
+
+    # typedef struct me_variable
+    ctypedef struct me_variable:
+        const char *name
+        const void *address
+        int type
+        void *context
+        me_dtype dtype
+
+    ctypedef struct me_expr:
+        int type
+        double value
+        const double *bound
+        const void *function
+        void *output
+        int nitems
+        me_dtype dtype
+        me_dtype input_dtype
+        void *bytecode
+        int ncode
+        void *parameters[1]
+
+
+    me_expr *me_compile(const char *expression, const me_variable *variables,
+                        int var_count, void *output, int nitems, me_dtype dtype,
+                        int *error) nogil
+
+    void me_eval(const me_expr *n) nogil
+    void me_eval_fused(const me_expr *n) nogil
+    void me_print(const me_expr *n) nogil
+    void me_free(me_expr *n) nogil
 
 
 ctypedef struct user_filters_udata:
@@ -546,6 +596,7 @@ ctypedef struct udf_udata:
     b2nd_array_t *array
     int64_t chunks_in_array[B2ND_MAX_DIM]
     int64_t blocks_in_chunk[B2ND_MAX_DIM]
+    void* miniexpr_handle  # Cached miniexpr compiled expression handle
 
 MAX_TYPESIZE = BLOSC2_MAXTYPESIZE
 MAX_BUFFERSIZE = BLOSC2_MAX_BUFFERSIZE
@@ -770,7 +821,8 @@ cdef _check_cparams(blosc2_cparams *cparams):
             if ufilters[i] and cparams.filters[i] in blosc2.ufilters_registry.keys():
                 raise ValueError("Cannot use multi-threading with user defined Python filters")
 
-        if cparams.prefilter != NULL:
+        if cparams.prefilter != NULL and cparams.prefilter != <blosc2_prefilter_fn>miniexpr_prefilter:
+            # Note: miniexpr_prefilter uses miniexpr C API which is thread-friendly,
             raise ValueError("`nthreads` must be 1 when a prefilter is set")
 
 cdef _check_dparams(blosc2_dparams* dparams, blosc2_cparams* cparams=NULL):
@@ -1667,13 +1719,25 @@ cdef class SChunk:
             raise RuntimeError("Could not create compression context")
 
     cpdef remove_prefilter(self, func_name, _new_ctx=True):
-        if func_name is not None:
+        cdef udf_udata* udf_data
+        cdef user_filters_udata* udata
+
+        if func_name is not None and func_name in blosc2.prefilter_funcs:
             del blosc2.prefilter_funcs[func_name]
 
-        # From Python the preparams->udata with always have the field py_func
-        cdef user_filters_udata * udata = <user_filters_udata *>self.schunk.storage.cparams.preparams.user_data
-        free(udata.py_func)
-        free(self.schunk.storage.cparams.preparams.user_data)
+        # Clean up the miniexpr handle if this is a miniexpr_prefilter
+        if self.schunk.storage.cparams.prefilter == <blosc2_prefilter_fn>miniexpr_prefilter:
+            udf_data = <udf_udata*>self.schunk.storage.cparams.preparams.user_data
+            if udf_data.miniexpr_handle != NULL:
+                Py_DECREF(<object>udf_data.miniexpr_handle)
+            free(udf_data.py_func)
+            free(udf_data)
+        else:
+            # From Python the preparams->udata with always have the field py_func
+            udata = <user_filters_udata*>self.schunk.storage.cparams.preparams.user_data
+            free(udata.py_func)
+            free(udata)
+
         free(self.schunk.storage.cparams.preparams)
         self.schunk.storage.cparams.preparams = NULL
         self.schunk.storage.cparams.prefilter = NULL
@@ -1737,6 +1801,133 @@ cdef int general_filler(blosc2_prefilter_params *params):
 
     func_id = udata.py_func.decode("utf-8")
     blosc2.prefilter_funcs[func_id](tuple(inputs), output, offset)
+
+    return 0
+
+
+# Aux function for prefilter and postfilter for last expression
+cdef int aux_miniexpr(udf_udata *udata, int64_t nchunk, int32_t nblock,
+                      c_bool is_postfilter, uint8_t *params_output, int32_t typesize):
+    # Declare all C variables at the beginning
+    cdef int64_t chunk_ndim[B2ND_MAX_DIM]
+    cdef int64_t block_ndim[B2ND_MAX_DIM]
+    cdef Py_buffer view
+    cdef int64_t start_ndim[B2ND_MAX_DIM]
+    cdef int64_t stop_ndim[B2ND_MAX_DIM]
+    cdef int64_t[B2ND_MAX_DIM] buffershape_
+    cdef np.npy_intp dims[B2ND_MAX_DIM]
+    cdef b2nd_array_t* ndarr
+    cdef int rc
+    cdef void* miniexpr_handle
+    cdef int n_inputs
+    cdef void** input_arrays
+    cdef int64_t start[B2ND_MAX_DIM]
+    cdef int64_t slice_shape[B2ND_MAX_DIM]
+    cdef int64_t blockshape_int64[B2ND_MAX_DIM]
+    cdef Py_buffer buf
+
+    blosc2_unidim_to_multidim(udata.array.ndim, udata.chunks_in_array, nchunk, chunk_ndim)
+    blosc2_unidim_to_multidim(udata.array.ndim, udata.blocks_in_chunk, nblock, block_ndim)
+    for i in range(udata.array.ndim):
+        start_ndim[i] = chunk_ndim[i] * udata.array.chunkshape[i] + block_ndim[i] * udata.array.blockshape[i]
+
+    padding = False
+    blockshape = []
+    for i in range(udata.array.ndim):
+        if start_ndim[i] + udata.array.blockshape[i] > udata.array.shape[i]:
+            padding = True
+            blockshape.append(udata.array.shape[i] - start_ndim[i])
+            if blockshape[i] <= 0:
+                # This block contains only padding, skip it
+                return 0
+        else:
+            blockshape.append(udata.array.blockshape[i])
+    for i in range(udata.array.ndim):
+        dims[i] = blockshape[i]
+    #print("blockshape ->", blockshape)
+
+    # if padding:
+    #     output = np.empty(blockshape, udata.array.dtype)
+    # else:
+    #     output = np.PyArray_SimpleNewFromData(udata.array.ndim, dims, udata.output_cdtype, <void*>params_output)
+
+    inputs_dict = _ctypes.PyObj_FromPtr(udata.inputs_id)
+    #print("inputs_dict ->", inputs_dict)
+    inputs_slice = {}
+    # Get slice of each operand
+    l = []
+    for i in range(udata.array.ndim):
+        stop_ndim[i] = start_ndim[i] + dims[i]
+        l.append(slice(start_ndim[i], stop_ndim[i]))
+    slices = tuple(l)
+    #print("slices ->", slices)
+    for key, obj in inputs_dict.items():
+        if isinstance(obj, NDArray):
+            # inputs_slice[key] = obj[slices]
+            arr = np.empty(blockshape, dtype=obj.dtype)
+            # inputs_slice[key] = obj.get_slice_numpy(arr, (start_ndim, stop_ndim))
+            # This is *slightly* faster than using get_slice_numpy; my hope is that,
+            # with multithreading enabled, this should go faster.
+            ndarr = <b2nd_array_t*><uintptr_t>obj.c_array
+            PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
+            with nogil:
+                for i in range(udata.array.ndim):
+                    buffershape_[i] = stop_ndim[i] - start_ndim[i]
+
+                rc = b2nd_get_slice_cbuffer(ndarr, start_ndim, stop_ndim,
+                                                 <void *> view.buf,
+                                                 buffershape_, view.len)
+            _check_rc(rc, "Error while getting the buffer")
+            PyBuffer_Release(&view)
+            inputs_slice[key] = arr
+
+        elif isinstance(obj, np.ndarray | blosc2.C2Array):
+            inputs_slice[key] = obj[slices]
+        elif np.isscalar(obj):
+            inputs_slice[key] = obj
+        else:
+            raise ValueError("Unsupported operand")
+    #print("inputs_slice ->", inputs_slice)
+
+    # Call miniexpr C API directly
+    func_id = udata.py_func.decode("utf-8")
+    offset = tuple(start_ndim[i] for i in range(udata.array.ndim))
+    cdef int linear_offset = sum(start_ndim) * typesize + nblock * udata.array.sc.blocksize
+
+    # Use miniexpr C API for faster evaluation
+    # Use the cached handle from udata (set during _set_pref_expr)
+    # This allows multi-threading since all threads share the same handle
+    miniexpr_handle = udata.miniexpr_handle
+    if miniexpr_handle != NULL:
+        # Get the variable names order from the compiled expression
+        compiled_ex = <object>miniexpr_handle
+        input_names = compiled_ex.input_names  # tuple of variable names in order
+
+        # Build list of input arrays in the correct order
+        n_inputs = len(input_names)
+        input_list = []
+        for i in range(n_inputs):
+            var_name = input_names[i]
+            input_list.append(inputs_slice[var_name])
+
+        # Convert to array of void pointers (PyObject*)
+        input_arrays = <void**>malloc(n_inputs * sizeof(void*))
+        try:
+            for i in range(n_inputs):
+                input_arrays[i] = <void*>input_list[i]
+
+            # XXX Call numexpr C API  XXXX
+            # output = numexpr_run_compiled_simple(miniexpr_handle, input_arrays, n_inputs)
+            # Call miniexpr C API
+            # me_eval_expr(miniexpr_handle, input_arrays, n_inputs, <void*>output, typesize)
+        finally:
+            free(input_arrays)
+    else:
+        # Fallback to Python callback if C API not available
+        if is_postfilter:
+            output = blosc2.postfilter_funcs[func_id](inputs_slice)
+        else:
+            output = blosc2.prefilter_funcs[func_id](inputs_slice)
 
     return 0
 
@@ -1812,6 +2003,11 @@ cdef int aux_udf(udf_udata *udata, int64_t nchunk, int32_t nblock,
         _check_rc(rc, "Could not copy the result into the buffer")
 
     return 0
+
+
+cdef int miniexpr_prefilter(blosc2_prefilter_params *params):
+    cdef udf_udata *udata = <udf_udata *> params.user_data
+    return aux_miniexpr(udata, params.nchunk, params.nblock, False, params.output, params.output_typesize)
 
 
 cdef int general_udf_prefilter(blosc2_prefilter_params *params):
@@ -2362,6 +2558,10 @@ cdef class NDArray:
         self.base = base # add reference to base if NDArray is a view
 
     @property
+    def c_array(self):
+        return <uintptr_t> self.array
+
+    @property
     def shape(self) -> tuple[int]:
         return tuple([self.array.shape[i] for i in range(self.array.ndim)])
 
@@ -2620,6 +2820,38 @@ cdef class NDArray:
             udata.blocks_in_chunk[i] = udata.array.extchunkshape[i] // udata.array.blockshape[i]
 
         return udata
+
+    def _set_pref_expr(self, func, expression, inputs_id):
+        # Support both function objects and string identifiers
+        if isinstance(func, str):
+            func_id = func
+            # No need to register in prefilter_funcs - C API will be used directly
+        else:
+            func_id = func.__name__
+            blosc2.prefilter_funcs[func_id] = func
+        func_id = func_id.encode("utf-8") if isinstance(func_id, str) else func_id
+
+        # Set prefilter
+        cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
+        cparams.prefilter = <blosc2_prefilter_fn> miniexpr_prefilter
+
+        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
+        cdef udf_udata* udata = self._fill_udf_udata(func_id, inputs_id)
+
+        # XXX Get the compiled expression handle for multi-threading
+        # udata.miniexpr_handle = me_compile(expression, inputs_id)
+        # # Increment reference count to keep the expression alive across threads
+        # if udata.miniexpr_handle != NULL:
+        #     Py_INCREF(<object>udata.miniexpr_handle)
+
+        preparams.user_data = udata
+        cparams.preparams = preparams
+        _check_cparams(cparams)
+
+        blosc2_free_ctx(self.array.sc.cctx)
+        self.array.sc.cctx = blosc2_create_cctx(dereference(cparams))
+        if self.array.sc.cctx == NULL:
+            raise RuntimeError("Could not create compression context")
 
     def _set_pref_udf(self, func, inputs_id):
         if self.array.sc.storage.cparams.nthreads > 1:

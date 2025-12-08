@@ -1261,6 +1261,35 @@ def fast_eval(  # noqa: C901
         # WebAssembly does not support threading, so we cannot use the iter_disk option
         iter_disk = False
 
+    if True:
+        cparams = kwargs.pop("cparams", blosc2.CParams())
+        # Force single-threaded execution for prefilter evaluation
+        # The prefilter callback accesses Python objects which aren't thread-safe
+        # across blosc2's C threads. numexpr does its own multi-threading internally.
+        if cparams.nthreads > 1:
+            prev_nthreads = cparams.nthreads
+            cparams.nthreads = 1
+        res_eval = blosc2.empty(shape, dtype, cparams=cparams, **kwargs)
+        # Validate expression so that it will be cached in numexpr
+        # numexpr.validate(expression, local_dict=operands)
+        # Register a prefilter for last expression using C API
+        # We use a placeholder function name since the actual evaluation
+        # is done directly via numexpr C API in blosc2_ext.pyx
+        # func_name = "numexpr_last_compiled"
+        # res_eval._set_pref_expr(func_name, id(operands))
+        func_name = "miniexpr"
+        res_eval._set_pref_expr(func_name, expression, id(operands))
+
+        # This line would NOT allocate physical RAM on any modern OS:
+        aux = np.empty(res_eval.shape, res_eval.dtype)
+        # Physical allocation happens here (when writing):
+        res_eval[...] = aux
+        res_eval.schunk.remove_prefilter(func_name)
+        if cparams.nthreads > 1:
+            res_eval.schunk.cparams.nthreads = prev_nthreads
+
+        return res_eval
+
     chunk_operands = {}
     # Check which chunks intersect with _slice
     all_chunks = get_intersecting_chunks((), shape, chunks)  # if _slice is (), returns all chunks
@@ -3363,7 +3392,9 @@ class LazyUDF(LazyArray):
         # # Register a prefilter for eval
         # res_eval._set_pref_udf(self.func, id(self.inputs))
 
+        # This line would NOT allocate physical RAM on any modern OS:
         # aux = np.empty(res_eval.shape, res_eval.dtype)
+        # Physical allocation happens here (when writing):
         # res_eval[...] = aux
         # res_eval.schunk.remove_prefilter(self.func.__name__)
         # res_eval.schunk.cparams.nthreads = self._cnthreads
