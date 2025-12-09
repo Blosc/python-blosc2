@@ -259,7 +259,7 @@ def test_params(chunked_eval):
     [
         ((40, 20), (30, 10), (5, 5), (slice(0, 5), slice(5, 20)), "eval.b2nd", False),
         ((13, 13, 10), (10, 10, 5), (5, 5, 3), (slice(0, 12), slice(3, 13), ...), "eval.b2nd", True),
-        ((13, 13), (10, 10), (5, 5), (slice(3, 8), slice(9, 12)), None, False),
+        ((13, 13), (10, 10), (5, 5), (slice(3, 8), None, slice(9, 12)), None, False),
     ],
 )
 def test_getitem(shape, chunks, blocks, slices, urlpath, contiguous, chunked_eval):

@@ -90,6 +90,11 @@ def test_simple_getitem(array_fixture):
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
 
+    # Test None indexing
+    sl = (None, slice(3, 8), None)
+    res = expr[sl]
+    np.testing.assert_allclose(res, nres[sl])
+
 
 # Mix Proxy and NDArray operands
 def test_proxy_simple_getitem(array_fixture):
@@ -114,14 +119,13 @@ def test_mix_operands(array_fixture):
     np.testing.assert_allclose(expr[:], nres)
     np.testing.assert_allclose(expr.compute()[:], nres)
 
-    # TODO: fix this
-    # expr = na2 + a1
-    # nres = ne_evaluate("na2 + na1")
-    # sl = slice(100)
-    # res = expr[sl]
-    # np.testing.assert_allclose(res, nres[sl])
-    # np.testing.assert_allclose(expr[:], nres)
-    # np.testing.assert_allclose(expr.compute()[:], nres)
+    expr = na2 + a1
+    nres = ne_evaluate("na2 + na1")
+    sl = slice(100)
+    res = expr[sl]
+    np.testing.assert_allclose(res, nres[sl])
+    np.testing.assert_allclose(expr[:], nres)
+    np.testing.assert_allclose(expr.compute()[:], nres)
 
     expr = a1 + na2 + a3
     nres = ne_evaluate("na1 + na2 + na3")
@@ -151,19 +155,13 @@ def test_mix_operands(array_fixture):
     np.testing.assert_allclose(expr[:], nres)
     np.testing.assert_allclose(expr.compute()[:], nres)
 
-    # TODO: support this case
-    # expr = a1 + na2 * a3
-    # print("--------------------------------------------------------")
-    # print(type(expr))
-    # print(expr.expression)
-    # print(expr.operands)
-    # print("--------------------------------------------------------")
-    # nres = ne_evaluate("na1 + na2 * na3")
-    # sl = slice(100)
-    # res = expr[sl]
-    # np.testing.assert_allclose(res, nres[sl])
-    # np.testing.assert_allclose(expr[:], nres)
-    # np.testing.assert_allclose(expr.compute()[:], nres)
+    expr = a1 + na2 * a3
+    nres = ne_evaluate("na1 + na2 * na3")
+    sl = slice(100)
+    res = expr[sl]
+    np.testing.assert_allclose(res, nres[sl])
+    np.testing.assert_allclose(expr[:], nres)
+    np.testing.assert_allclose(expr.compute()[:], nres)
 
 
 # Add more test functions to test different aspects of the code
