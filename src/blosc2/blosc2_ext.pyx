@@ -576,11 +576,14 @@ cdef extern from "miniexpr.h":
 
     void me_eval(const me_expr *n) nogil
     void me_eval_fused(const me_expr *n) nogil
+    void me_eval_chunk_threadsafe(const me_expr *expr, const void ** vars_chunk,
+                                  int n_vars, void *output_chunk,
+                                  int chunk_nitems) nogil
     void me_print(const me_expr *n) nogil
     void me_free(me_expr *n) nogil
 
 
-cdef extern from "miniexpr-numpy.h":
+cdef extern from "miniexpr_numpy.h":
     me_dtype me_dtype_from_numpy(int numpy_type_num)
 
 
@@ -603,7 +606,7 @@ ctypedef struct udf_udata:
     b2nd_array_t *array
     int64_t chunks_in_array[B2ND_MAX_DIM]
     int64_t blocks_in_chunk[B2ND_MAX_DIM]
-    void* miniexpr_handle  # Cached miniexpr compiled expression handle
+    me_expr* miniexpr_handle
 
 MAX_TYPESIZE = BLOSC2_MAXTYPESIZE
 MAX_BUFFERSIZE = BLOSC2_MAX_BUFFERSIZE
@@ -1735,9 +1738,9 @@ cdef class SChunk:
         # Clean up the miniexpr handle if this is a miniexpr_prefilter
         if self.schunk.storage.cparams.prefilter == <blosc2_prefilter_fn>miniexpr_prefilter:
             udf_data = <udf_udata*>self.schunk.storage.cparams.preparams.user_data
-            if udf_data.miniexpr_handle != NULL:
-                Py_DECREF(<object>udf_data.miniexpr_handle)
             free(udf_data.py_func)
+            if udf_data.miniexpr_handle != NULL:
+                free(udf_data.miniexpr_handle)
             free(udf_data)
         else:
             # From Python the preparams->udata with always have the field py_func
@@ -1825,9 +1828,7 @@ cdef int aux_miniexpr(udf_udata *udata, int64_t nchunk, int32_t nblock,
     cdef np.npy_intp dims[B2ND_MAX_DIM]
     cdef b2nd_array_t* ndarr
     cdef int rc
-    cdef void* miniexpr_handle
     cdef int n_inputs
-    cdef void** input_arrays
     cdef int64_t start[B2ND_MAX_DIM]
     cdef int64_t slice_shape[B2ND_MAX_DIM]
     cdef int64_t blockshape_int64[B2ND_MAX_DIM]
@@ -1867,6 +1868,7 @@ cdef int aux_miniexpr(udf_udata *udata, int64_t nchunk, int32_t nblock,
         stop_ndim[i] = start_ndim[i] + dims[i]
         l.append(slice(start_ndim[i], stop_ndim[i]))
     slices = tuple(l)
+    cdef int nelems_block
     #print("slices ->", slices)
     for key, obj in inputs_dict.items():
         if isinstance(obj, NDArray):
@@ -1878,14 +1880,17 @@ cdef int aux_miniexpr(udf_udata *udata, int64_t nchunk, int32_t nblock,
             ndarr = <b2nd_array_t*><uintptr_t>obj.c_array
             PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
             with nogil:
+                nelems_block = 1
                 for i in range(udata.array.ndim):
                     buffershape_[i] = stop_ndim[i] - start_ndim[i]
+                    nelems_block *= buffershape_[i]
 
                 rc = b2nd_get_slice_cbuffer(ndarr, start_ndim, stop_ndim,
                                                  <void *> view.buf,
                                                  buffershape_, view.len)
             _check_rc(rc, "Error while getting the buffer")
             PyBuffer_Release(&view)
+            print(f"nelems_block -> {nelems_block}")
             inputs_slice[key] = arr
 
         elif isinstance(obj, np.ndarray | blosc2.C2Array):
@@ -1894,7 +1899,7 @@ cdef int aux_miniexpr(udf_udata *udata, int64_t nchunk, int32_t nblock,
             inputs_slice[key] = obj
         else:
             raise ValueError("Unsupported operand")
-    #print("inputs_slice ->", inputs_slice)
+    print("inputs_slice ->", inputs_slice)
 
     # Call miniexpr C API directly
     func_id = udata.py_func.decode("utf-8")
@@ -1902,41 +1907,37 @@ cdef int aux_miniexpr(udf_udata *udata, int64_t nchunk, int32_t nblock,
     cdef int linear_offset = sum(start_ndim) * typesize + nblock * udata.array.sc.blocksize
 
     # Use miniexpr C API for faster evaluation
-    # Use the cached handle from udata (set during _set_pref_expr)
+    # Use the expression handle from udata (set during _set_pref_expr)
     # This allows multi-threading since all threads share the same handle
-    miniexpr_handle = udata.miniexpr_handle
-    if miniexpr_handle != NULL:
-        # Get the variable names order from the compiled expression
-        compiled_ex = <object>miniexpr_handle
-        input_names = compiled_ex.input_names  # tuple of variable names in order
+    cdef me_expr* miniexpr_handle = udata.miniexpr_handle
+    if miniexpr_handle == NULL:
+        raise ValueError("miniexpr handle not assigned")
+    # Get the variable names order from the compiled expression
+    input_names = list(inputs_dict)  # list of variable names. XXX Check order.
+    print(f"input_names -> {input_names}")
 
-        # Build list of input arrays in the correct order
-        n_inputs = len(input_names)
-        input_list = []
+    # Build list of input arrays in the correct order
+    n_inputs = len(input_names)
+    input_list = []
+    for i in range(n_inputs):
+        var_name = input_names[i]
+        input_list.append(inputs_slice[var_name])
+
+    # Convert to array of void pointers
+    cdef void** input_arrays = <void**>malloc(n_inputs * sizeof(void*))
+    cdef np.ndarray nparr
+    try:
         for i in range(n_inputs):
-            var_name = input_names[i]
-            input_list.append(inputs_slice[var_name])
+            nparr = <np.ndarray> input_list[i]
+            if not nparr.flags['C_CONTIGUOUS']:
+                raise ValueError("All input arrays must be C-contiguous")
+            input_arrays[i] = <const void*>nparr.data
 
-        # Convert to array of void pointers (PyObject*)
-        input_arrays = <void**>malloc(n_inputs * sizeof(void*))
-        try:
-            for i in range(n_inputs):
-                input_arrays[i] = <void*>input_list[i]
+        # Call miniexpr C API
+        me_eval_chunk_threadsafe(miniexpr_handle, input_arrays, n_inputs, <void*>params_output, nelems_block)
 
-            # XXX Call numexpr C API  XXXX
-            # output = numexpr_run_compiled_simple(miniexpr_handle, input_arrays, n_inputs)
-            # Call miniexpr C API
-            # me_eval_expr(miniexpr_handle, input_arrays, n_inputs, <void*>output, typesize)
-            me_eval_chunk_threadsafe("", input_arrays, n_inputs, <void*>output, chunk_nitems)  # XXX remove expression
-
-            finally:
-                free(input_arrays)
-    else:
-        # Fallback to Python callback if C API not available
-        if is_postfilter:
-            output = blosc2.postfilter_funcs[func_id](inputs_slice)
-        else:
-            output = blosc2.prefilter_funcs[func_id](inputs_slice)
+    finally:
+        free(input_arrays)
 
     return 0
 
@@ -2840,23 +2841,31 @@ cdef class NDArray:
 
         # Get the compiled expression handle for multi-threading
         cdef Py_ssize_t n = len(inputs)
-        cdef me_variable **variables = <me_variable **> malloc(sizeof(me_variable *) * n)
+        cdef me_variable* variables = <me_variable *> malloc(sizeof(me_variable) * n)
         if variables == NULL:
             raise MemoryError()
         cdef me_variable *var
+        print(f"variables: {inputs.keys()}")
         for i, (k, v) in enumerate(inputs.items()):
-            var = <me_variable *> malloc(sizeof(me_variable))  # XXX devise a way to free this
-            if var == NULL:
-                raise MemoryError()
+            var = &variables[i]
             var_name = k.encode("utf-8") if isinstance(k, str) else k
             var.name = <char *> malloc(strlen(var_name) + 1)
             strcpy(var.name, var_name)
             var.dtype = me_dtype_from_numpy(v.dtype.num)
-            variables[i] = var
+            var.address = NULL  # chunked compile: addresses provided later
+            var.type = 0  # auto-set to ME_VARIABLE inside compiler
+            var.context = NULL
+
         cdef int error = 0
+        expression = expression.encode("utf-8") if isinstance(expression, str) else expression
         udata.miniexpr_handle = me_compile_chunk(expression, variables, n, ME_AUTO, &error)
         if udata.miniexpr_handle == NULL:
             raise ValueError(f"Cannot compile expression: {expression}")
+
+        # Free resources
+        for i in range(len(inputs)):
+            free(variables[i].name)
+        free(variables)
 
         # # Increment reference count to keep the expression alive across threads
         # if udata.miniexpr_handle != NULL:

@@ -29,7 +29,7 @@ Python_add_library(blosc2_ext MODULE blosc2_ext.c
 # We need to link against NumPy
 target_link_libraries(blosc2_ext PRIVATE Python::NumPy)
 
-# Add include directory for miniexpr.h
+# Add include directory for miniexpr.h and others
 target_include_directories(blosc2_ext PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2")
 
 if(DEFINED ENV{USE_SYSTEM_BLOSC2})

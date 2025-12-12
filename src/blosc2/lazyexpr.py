@@ -1278,7 +1278,7 @@ def fast_eval(  # noqa: C901
         # func_name = "numexpr_last_compiled"
         # res_eval._set_pref_expr(func_name, id(operands))
         func_name = "miniexpr"
-        res_eval._set_pref_expr(func_name, expression, id(operands))
+        res_eval._set_pref_expr(func_name, expression, operands)
 
         # This line would NOT allocate physical RAM on any modern OS:
         aux = np.empty(res_eval.shape, res_eval.dtype)
