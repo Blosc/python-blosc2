@@ -531,6 +531,7 @@ cdef extern from "b2nd.h":
 # miniexpr C API declarations
 cdef extern from "miniexpr.h":
     ctypedef enum me_dtype:
+        ME_AUTO,
         ME_BOOL
         ME_INT8
         ME_INT16
@@ -548,10 +549,10 @@ cdef extern from "miniexpr.h":
     # typedef struct me_variable
     ctypedef struct me_variable:
         const char *name
+        me_dtype dtype
         const void *address
         int type
         void *context
-        me_dtype dtype
 
     ctypedef struct me_expr:
         int type
@@ -566,10 +567,12 @@ cdef extern from "miniexpr.h":
         int ncode
         void *parameters[1]
 
+    # me_expr *me_compile(const char *expression, const me_variable *variables,
+    #                     int var_count, void *output, int nitems, me_dtype dtype,
+    #                     int *error) nogil
 
-    me_expr *me_compile(const char *expression, const me_variable *variables,
-                        int var_count, void *output, int nitems, me_dtype dtype,
-                        int *error) nogil
+    me_expr *me_compile_chunk(const char *expression, const me_variable *variables,
+                              int var_count, me_dtype dtype, int *error)
 
     void me_eval(const me_expr *n) nogil
     void me_eval_fused(const me_expr *n) nogil
@@ -2807,11 +2810,11 @@ cdef class NDArray:
     def as_ffi_ptr(self):
         return PyCapsule_New(self.array, <char *> "b2nd_array_t*", NULL)
 
-    cdef udf_udata *_fill_udf_udata(self, func_id, inputs_id):
+    cdef udf_udata *_fill_udf_udata(self, func_id, inputs):
         cdef udf_udata *udata = <udf_udata *> malloc(sizeof(udf_udata))
         udata.py_func = <char *> malloc(strlen(func_id) + 1)
         strcpy(udata.py_func, func_id)
-        udata.inputs_id = inputs_id
+        udata.inputs_id = id(inputs)
         udata.output_cdtype = np.dtype(self.dtype).num
         udata.array = self.array
         # Save these in udf_udata to avoid computing them for each block
@@ -2821,29 +2824,39 @@ cdef class NDArray:
 
         return udata
 
-    def _set_pref_expr(self, func, expression, inputs_id):
-        # Support both function objects and string identifiers
-        if isinstance(func, str):
-            func_id = func
-            # No need to register in prefilter_funcs - C API will be used directly
-        else:
-            func_id = func.__name__
-            blosc2.prefilter_funcs[func_id] = func
-        func_id = func_id.encode("utf-8") if isinstance(func_id, str) else func_id
-
-        # Set prefilter
+    def _set_pref_expr(self, func, expression, inputs):
+        # Set prefilter for miniexpr
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> miniexpr_prefilter
 
-        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
-        cdef udf_udata* udata = self._fill_udf_udata(func_id, inputs_id)
+        func_id = func.encode("utf-8") if isinstance(func, str) else func
+        cdef udf_udata* udata = self._fill_udf_udata(func_id, inputs)
 
-        # XXX Get the compiled expression handle for multi-threading
-        # udata.miniexpr_handle = me_compile(expression, inputs_id)
+        # Get the compiled expression handle for multi-threading
+        cdef Py_ssize_t n = len(inputs)
+        cdef me_variable **variables = <me_variable **> malloc(sizeof(me_variable *) * n)
+        if variables == NULL:
+            raise MemoryError()
+        cdef me_variable *var
+        for i, (k, v) in enumerate(inputs.items()):
+            var = <me_variable *> malloc(sizeof(me_variable))  # XXX devise a way to free this
+            if var == NULL:
+                raise MemoryError()
+            var_name = k.encode("utf-8") if isinstance(k, str) else k
+            var.name = <char *> malloc(strlen(var_name) + 1)
+            strcpy(var.name, var_name)
+            var.dtype = v.dtype.num
+            variables[i] = var
+        cdef int error = 0
+        udata.miniexpr_handle = me_compile_chunk(expression, variables, n, ME_AUTO, &error)
+        if udata.miniexpr_handle == NULL:
+            raise ValueError(f"Cannot compile expression: {expression}")
+
         # # Increment reference count to keep the expression alive across threads
         # if udata.miniexpr_handle != NULL:
         #     Py_INCREF(<object>udata.miniexpr_handle)
 
+        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
         preparams.user_data = udata
         cparams.preparams = preparams
         _check_cparams(cparams)
