@@ -56,6 +56,7 @@ For log = natural log uncomment the next line. */
 #include <stdint.h>
 #include <stdbool.h>
 #include <complex.h>
+#include <assert.h>
 
 #ifndef NAN
 #define NAN (0.0/0.0)
@@ -76,6 +77,7 @@ enum {
 
 
 /* Type promotion table following NumPy rules */
+/* Note: ME_AUTO (0) should never appear in type promotion, so we index from 1 */
 static const me_dtype type_promotion_table[13][13] = {
     /* Rows: left operand, Columns: right operand */
     /* BOOL,  INT8,    INT16,   INT32,   INT64,   UINT8,   UINT16,  UINT32,  UINT64,  FLOAT32, FLOAT64, COMPLEX64, COMPLEX128 */
@@ -135,10 +137,24 @@ static const me_dtype type_promotion_table[13][13] = {
 
 /* Promote two types according to NumPy rules */
 static me_dtype promome_types(me_dtype a, me_dtype b) {
-    if (a >= 0 && a < 13 && b >= 0 && b < 13) {
-        return type_promotion_table[a][b];
+    // ME_AUTO should have been resolved during compilation
+    if (a == ME_AUTO || b == ME_AUTO) {
+        fprintf(stderr, "FATAL: ME_AUTO in type promotion (a=%d, b=%d). This is a bug.\n", a, b);
+#ifdef NDEBUG
+        abort(); // Release build: terminate immediately
+#else
+        assert(0 && "ME_AUTO should be resolved during compilation"); // Debug: trigger debugger
+#endif
     }
-    return ME_FLOAT64; // Fallback
+
+    // Adjust indices since table starts at ME_BOOL (index 1), not ME_AUTO (index 0)
+    int a_idx = a - 1;
+    int b_idx = b - 1;
+    if (a_idx >= 0 && a_idx < 13 && b_idx >= 0 && b_idx < 13) {
+        return type_promotion_table[a_idx][b_idx];
+    }
+    fprintf(stderr, "WARNING: Invalid dtype in type promotion (a=%d, b=%d). Falling back to FLOAT64.\n", a, b);
+    return ME_FLOAT64; // Fallback for out-of-range types
 }
 
 /* Get size of a type in bytes */
@@ -417,35 +433,36 @@ static double npr(double n, double r) { return ncr(n, r) * fac(r); }
 
 static const me_variable functions[] = {
     /* must be in alphabetical order */
-    {"abs", fabs, ME_FUNCTION1 | ME_FLAG_PURE, 0},
-    {"acos", acos, ME_FUNCTION1 | ME_FLAG_PURE, 0},
-    {"asin", asin, ME_FUNCTION1 | ME_FLAG_PURE, 0},
-    {"atan", atan, ME_FUNCTION1 | ME_FLAG_PURE, 0},
-    {"atan2", atan2, ME_FUNCTION2 | ME_FLAG_PURE, 0},
-    {"ceil", ceil, ME_FUNCTION1 | ME_FLAG_PURE, 0},
-    {"cos", cos, ME_FUNCTION1 | ME_FLAG_PURE, 0},
-    {"cosh", cosh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
-    {"e", e, ME_FUNCTION0 | ME_FLAG_PURE, 0},
-    {"exp", exp, ME_FUNCTION1 | ME_FLAG_PURE, 0},
-    {"fac", fac, ME_FUNCTION1 | ME_FLAG_PURE, 0},
-    {"floor", floor, ME_FUNCTION1 | ME_FLAG_PURE, 0},
-    {"ln", log, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    /* Format: {name, dtype, address, type, context} */
+    {"abs", 0, fabs, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"acos", 0, acos, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"asin", 0, asin, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"atan", 0, atan, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"atan2", 0, atan2, ME_FUNCTION2 | ME_FLAG_PURE, 0},
+    {"ceil", 0, ceil, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"cos", 0, cos, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"cosh", 0, cosh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"e", 0, e, ME_FUNCTION0 | ME_FLAG_PURE, 0},
+    {"exp", 0, exp, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"fac", 0, fac, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"floor", 0, floor, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"ln", 0, log, ME_FUNCTION1 | ME_FLAG_PURE, 0},
 #ifdef ME_NAT_LOG
-    {"log", log, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"log", 0, log, ME_FUNCTION1 | ME_FLAG_PURE, 0},
 #else
-    {"log", log10, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"log", 0, log10, ME_FUNCTION1 | ME_FLAG_PURE, 0},
 #endif
-    {"log10", log10, ME_FUNCTION1 | ME_FLAG_PURE, 0},
-    {"ncr", ncr, ME_FUNCTION2 | ME_FLAG_PURE, 0},
-    {"npr", npr, ME_FUNCTION2 | ME_FLAG_PURE, 0},
-    {"pi", pi, ME_FUNCTION0 | ME_FLAG_PURE, 0},
-    {"pow", pow, ME_FUNCTION2 | ME_FLAG_PURE, 0},
-    {"sin", sin, ME_FUNCTION1 | ME_FLAG_PURE, 0},
-    {"sinh", sinh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
-    {"sqrt", sqrt, ME_FUNCTION1 | ME_FLAG_PURE, 0},
-    {"tan", tan, ME_FUNCTION1 | ME_FLAG_PURE, 0},
-    {"tanh", tanh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
-    {0, 0, 0, 0}
+    {"log10", 0, log10, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"ncr", 0, ncr, ME_FUNCTION2 | ME_FLAG_PURE, 0},
+    {"npr", 0, npr, ME_FUNCTION2 | ME_FLAG_PURE, 0},
+    {"pi", 0, pi, ME_FUNCTION0 | ME_FLAG_PURE, 0},
+    {"pow", 0, pow, ME_FUNCTION2 | ME_FLAG_PURE, 0},
+    {"sin", 0, sin, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"sinh", 0, sinh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"sqrt", 0, sqrt, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"tan", 0, tan, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"tanh", 0, tanh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {0, 0, 0, 0, 0}
 };
 
 static const me_variable *find_builtin(const char *name, int len) {
@@ -2357,6 +2374,14 @@ void me_eval(const me_expr *n) {
     bool all_match = all_variables_match_type(n, result_type);
     if (result_type == n->dtype && all_match) {
         // Fast path: no promotion needed
+        if (n->dtype == ME_AUTO) {
+            fprintf(stderr, "FATAL: ME_AUTO dtype in evaluation. This is a bug.\n");
+#ifdef NDEBUG
+            abort(); // Release build: terminate immediately
+#else
+            assert(0 && "ME_AUTO should be resolved during compilation"); // Debug: trigger debugger
+#endif
+        }
         switch (n->dtype) {
             case ME_BOOL: me_eval_i8(n);
                 break;
@@ -2384,6 +2409,13 @@ void me_eval(const me_expr *n) {
                 break;
             case ME_COMPLEX128: me_eval_c128(n);
                 break;
+            default:
+                fprintf(stderr, "FATAL: Invalid dtype %d in evaluation.\n", n->dtype);
+#ifdef NDEBUG
+                abort(); // Release build: terminate immediately
+#else
+                assert(0 && "Invalid dtype"); // Debug: trigger debugger
+#endif
         }
         return;
     }
@@ -2408,6 +2440,14 @@ void me_eval(const me_expr *n) {
     ((me_expr *) n)->dtype = result_type;
 
     // Evaluate with promoted types
+    if (result_type == ME_AUTO) {
+        fprintf(stderr, "FATAL: ME_AUTO result type in evaluation. This is a bug.\n");
+#ifdef NDEBUG
+        abort(); // Release build: terminate immediately
+#else
+        assert(0 && "ME_AUTO should be resolved during compilation"); // Debug: trigger debugger
+#endif
+    }
     switch (result_type) {
         case ME_BOOL: me_eval_i8(n);
             break;
@@ -2435,6 +2475,13 @@ void me_eval(const me_expr *n) {
             break;
         case ME_COMPLEX128: me_eval_c128(n);
             break;
+        default:
+            fprintf(stderr, "FATAL: Invalid result type %d in evaluation.\n", result_type);
+#ifdef NDEBUG
+            abort(); // Release build: terminate immediately
+#else
+            assert(0 && "Invalid dtype"); // Debug: trigger debugger
+#endif
     }
 
     // Restore original variable bindings
@@ -2831,6 +2878,37 @@ static void optimize(me_expr *n) {
 
 me_expr *me_compile(const char *expression, const me_variable *variables, int var_count,
                     void *output, int nitems, me_dtype dtype, int *error) {
+    // Validate dtype usage: either all vars are ME_AUTO (use dtype), or dtype is ME_AUTO (use var dtypes)
+    if (variables && var_count > 0) {
+        int auto_count = 0;
+        int specified_count = 0;
+
+        for (int i = 0; i < var_count; i++) {
+            if (variables[i].dtype == ME_AUTO) {
+                auto_count++;
+            } else {
+                specified_count++;
+            }
+        }
+
+        // Check the two valid modes
+        if (dtype == ME_AUTO) {
+            // Mode 1: Output dtype is ME_AUTO, all variables must have explicit dtypes
+            if (auto_count > 0) {
+                fprintf(stderr, "Error: When output dtype is ME_AUTO, all variable dtypes must be specified (not ME_AUTO)\n");
+                if (error) *error = -1;
+                return NULL;
+            }
+        } else {
+            // Mode 2: Output dtype is specified, all variables must be ME_AUTO
+            if (specified_count > 0) {
+                fprintf(stderr, "Error: When output dtype is specified, all variable dtypes must be ME_AUTO\n");
+                if (error) *error = -1;
+                return NULL;
+            }
+        }
+    }
+
     // Create a copy of variables with dtype filled in (if not already set)
     me_variable *vars_copy = NULL;
     if (variables && var_count > 0) {
@@ -2841,9 +2919,8 @@ me_expr *me_compile(const char *expression, const me_variable *variables, int va
         }
         for (int i = 0; i < var_count; i++) {
             vars_copy[i] = variables[i];
-            // If dtype not set (0 = ME_BOOL, which is unlikely for user variables),
-            // use the expression's dtype
-            if (vars_copy[i].dtype == 0 && vars_copy[i].type == 0) {
+            // If dtype not set (ME_AUTO), use the provided dtype
+            if (vars_copy[i].dtype == ME_AUTO && vars_copy[i].type == 0) {
                 vars_copy[i].dtype = dtype;
                 vars_copy[i].type = ME_VARIABLE;
             }
@@ -2854,7 +2931,7 @@ me_expr *me_compile(const char *expression, const me_variable *variables, int va
     s.start = s.next = expression;
     s.lookup = vars_copy ? vars_copy : variables;
     s.lookup_len = var_count;
-    s.target_dtype = dtype; // Set target dtype for constants
+    s.target_dtype = (dtype != ME_AUTO) ? dtype : ME_FLOAT64; // Set target dtype for constants
 
     next_token(&s);
     me_expr *root = list(&s);
@@ -2877,10 +2954,62 @@ me_expr *me_compile(const char *expression, const me_variable *variables, int va
         optimize(root);
         root->output = output;
         root->nitems = nitems;
-        root->dtype = dtype;
+
+        // If dtype is ME_AUTO, infer from expression; otherwise use provided dtype
+        if (dtype == ME_AUTO) {
+            root->dtype = infer_result_type(root);
+        } else {
+            root->dtype = dtype;
+        }
+
         if (error) *error = 0;
         return root;
     }
+}
+
+// Synthetic addresses for ordinal matching (when user provides NULL addresses)
+static char synthetic_var_addresses[100];
+
+me_expr *me_compile_chunk(const char *expression, const me_variable *variables,
+                          int var_count, me_dtype dtype, int *error) {
+    // For chunked evaluation, we compile without specific output/nitems
+    // If variables have NULL addresses, assign synthetic unique addresses for ordinal matching
+    me_variable *vars_copy = NULL;
+    int needs_synthetic = 0;
+
+    if (variables && var_count > 0) {
+        // Check if any variables have NULL addresses
+        for (int i = 0; i < var_count; i++) {
+            if (variables[i].address == NULL) {
+                needs_synthetic = 1;
+                break;
+            }
+        }
+
+        if (needs_synthetic) {
+            // Create copy with synthetic addresses
+            vars_copy = malloc(var_count * sizeof(me_variable));
+            if (!vars_copy) {
+                if (error) *error = -1;
+                return NULL;
+            }
+
+            for (int i = 0; i < var_count; i++) {
+                vars_copy[i] = variables[i];
+                if (vars_copy[i].address == NULL) {
+                    // Use address in synthetic array (each index is unique)
+                    vars_copy[i].address = &synthetic_var_addresses[i];
+                }
+            }
+
+            me_expr *result = me_compile(expression, vars_copy, var_count, NULL, 0, dtype, error);
+            free(vars_copy);
+            return result;
+        }
+    }
+
+    // No NULL addresses, use variables as-is
+    return me_compile(expression, variables, var_count, NULL, 0, dtype, error);
 }
 
 static void pn(const me_expr *n, int depth) {

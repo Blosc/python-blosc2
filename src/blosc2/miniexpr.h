@@ -46,6 +46,9 @@ extern "C" {
 
 /* Data type enumeration - Full C99 support */
 typedef enum {
+    /* Automatic type inference */
+    ME_AUTO,
+
     /* Boolean */
     ME_BOOL,
 
@@ -105,19 +108,64 @@ enum {
 
 typedef struct me_variable {
     const char *name;
-    const void *address;
-    int type;
-    void *context;
-    me_dtype dtype; // Data type of this variable
+    me_dtype dtype;      // Data type of this variable (ME_AUTO = use output dtype)
+    const void *address; // Pointer to data (NULL for me_compile_chunk)
+    int type;            // ME_VARIABLE for user variables (0 = auto-set to ME_VARIABLE)
+    void *context;       // For closures/functions (NULL for normal variables)
 } me_variable;
+
+/* Note: When initializing variables, only name/dtype/address are typically needed.
+ * Unspecified fields default to 0/NULL, which is correct for normal use:
+ *   {"varname"}                          → defaults all fields
+ *   {"varname", ME_FLOAT64}              → for me_compile_chunk with mixed types
+ *   {"varname", ME_FLOAT64, var_array}   → for me_compile with address
+ * Advanced users can specify type for closures/functions if needed.
+ */
 
 
 /* Parses the input expression and binds variables. */
 /* Returns NULL on error. */
-/* dtype parameter is ignored - result type is inferred from variable types */
-/* The actual result type is returned in n->dtype */
+/*
+ * The dtype parameter controls variable type handling:
+ *   - If dtype is ME_AUTO: All variables must have explicit dtypes (not ME_AUTO).
+ *                          Output dtype is inferred from the expression.
+ *   - If dtype is specified: All variables must be ME_AUTO.
+ *                            Both variables and output use this dtype.
+ * The actual result type is available in expr->dtype after compilation.
+ */
 me_expr *me_compile(const char *expression, const me_variable *variables, int var_count,
                     void *output, int nitems, me_dtype dtype, int *error);
+
+/* Compile expression for chunked evaluation.
+ * This variant is optimized for use with me_eval_chunk() and me_eval_chunk_threadsafe(),
+ * where variable and output pointers are provided later during evaluation.
+ *
+ * Parameters:
+ *   expression: The expression string to compile
+ *   variables: Array of variable definitions. Only the 'name' field is required.
+ *              Variables will be matched by position (ordinal order) during me_eval_chunk().
+ *   var_count: Number of variables
+ *   dtype: Data type handling (same rules as me_compile):
+ *          - ME_AUTO: All variables must specify their dtypes, output is inferred
+ *          - Specific type: All variables must be ME_AUTO, this type is used for all
+ *   error: Optional pointer to receive error position (0 on success, >0 on error)
+ *
+ * Returns: Compiled expression ready for chunked evaluation, or NULL on error
+ *
+ * Example 1 (simple - all same type):
+ *   me_variable vars[] = {{"x"}, {"y"}};  // Both ME_AUTO
+ *   me_expr *expr = me_compile_chunk("x + y", vars, 2, ME_FLOAT64, &err);
+ *
+ * Example 2 (mixed types):
+ *   me_variable vars[] = {{"x", ME_INT32}, {"y", ME_FLOAT64}};
+ *   me_expr *expr = me_compile_chunk("x + y", vars, 2, ME_AUTO, &err);
+ *
+ *   // Later, provide data in same order as variable definitions
+ *   const void *data[] = {x_array, y_array};  // x first, y second
+ *   me_eval_chunk(expr, data, 2, output, nitems);
+ */
+me_expr *me_compile_chunk(const char *expression, const me_variable *variables,
+                          int var_count, me_dtype dtype, int *error);
 
 /* Evaluates the expression on vectors. */
 void me_eval(const me_expr *n);
