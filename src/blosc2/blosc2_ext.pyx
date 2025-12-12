@@ -580,6 +580,10 @@ cdef extern from "miniexpr.h":
     void me_free(me_expr *n) nogil
 
 
+cdef extern from "miniexpr-numpy.h":
+    me_dtype me_dtype_from_numpy(int numpy_type_num)
+
+
 ctypedef struct user_filters_udata:
     char* py_func
     int input_cdtype
@@ -1869,8 +1873,8 @@ cdef int aux_miniexpr(udf_udata *udata, int64_t nchunk, int32_t nblock,
             # inputs_slice[key] = obj[slices]
             arr = np.empty(blockshape, dtype=obj.dtype)
             # inputs_slice[key] = obj.get_slice_numpy(arr, (start_ndim, stop_ndim))
-            # This is *slightly* faster than using get_slice_numpy; my hope is that,
-            # with multithreading enabled, this should go faster.
+            # This is *slightly* faster than using get_slice_numpy;
+            # hopefully, with multithreading enabled, this should go faster.
             ndarr = <b2nd_array_t*><uintptr_t>obj.c_array
             PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
             with nogil:
@@ -1923,8 +1927,10 @@ cdef int aux_miniexpr(udf_udata *udata, int64_t nchunk, int32_t nblock,
             # output = numexpr_run_compiled_simple(miniexpr_handle, input_arrays, n_inputs)
             # Call miniexpr C API
             # me_eval_expr(miniexpr_handle, input_arrays, n_inputs, <void*>output, typesize)
-        finally:
-            free(input_arrays)
+            me_eval_chunk_threadsafe("", input_arrays, n_inputs, <void*>output, chunk_nitems)  # XXX remove expression
+
+            finally:
+                free(input_arrays)
     else:
         # Fallback to Python callback if C API not available
         if is_postfilter:
@@ -2845,7 +2851,7 @@ cdef class NDArray:
             var_name = k.encode("utf-8") if isinstance(k, str) else k
             var.name = <char *> malloc(strlen(var_name) + 1)
             strcpy(var.name, var_name)
-            var.dtype = v.dtype.num
+            var.dtype = me_dtype_from_numpy(v.dtype.num)
             variables[i] = var
         cdef int error = 0
         udata.miniexpr_handle = me_compile_chunk(expression, variables, n, ME_AUTO, &error)
