@@ -1885,7 +1885,8 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         raise ValueError("miniexpr: handle not assigned")
     # Call thread-safe miniexpr C API
     # XXX Add error checking inside the function?
-    me_eval_chunk_threadsafe(miniexpr_handle, input_buffers, udata.ninputs, <void*>params_output, ndarr.blocknitems)
+    me_eval_chunk_threadsafe(miniexpr_handle, <const void**>input_buffers, udata.ninputs,
+                             <void*>params_output, ndarr.blocknitems)
 
     # Free resources
     for i in range(udata.ninputs):
