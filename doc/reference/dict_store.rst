@@ -29,8 +29,8 @@ Quick example
        arr_ext = blosc2.arange(3, urlpath="n3.b2nd", mode="w")
        dstore["/dir1/node3"] = arr_ext  # external file referenced
 
-   # Reopen and read
-   with blosc2.DictStore("my_dstore.b2z", mode="r") as dstore:
+   # Reopen and read using blosc2.open
+   with blosc2.open("my_dstore.b2z", mode="r") as dstore:
        print(sorted(dstore.keys()))  # ['/dir1/node3', '/node1', '/node2']
        print(dstore["/node1"][:])  # [1 2 3]
 

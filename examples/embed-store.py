@@ -35,7 +35,7 @@ print("After deletion, keys:", list(estore.keys()))
 
 # Reading back the tree
 if persistent:
-    estore_read = blosc2.EmbedStore(urlpath="example_estore.b2e", mode="a")
+    estore_read = blosc2.open("example_estore.b2e", mode="a")
 else:
     estore_read = blosc2.from_cframe(estore.to_cframe())
 

@@ -31,7 +31,7 @@ with blosc2.DictStore("example_dstore.b2z", mode="w") as dstore:
     print("After deletion, keys:", list(dstore.keys()))
 
 # Reading back the dstore
-with blosc2.DictStore("example_dstore.b2z", mode="a") as dstore2:
+with blosc2.open("example_dstore.b2z", mode="a") as dstore2:
     # Add another node to the dstore
     dstore2["/dir2/node5"] = np.array([4, 5, 6])
     print("Node5 data:", dstore2["/dir2/node5"][:])

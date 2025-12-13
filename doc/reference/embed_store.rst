@@ -41,6 +41,10 @@ Quickstart
     print(list(estore.keys()))
     # ['/node1', '/node2', '/node3', '/node4']
 
+    # Reopen using blosc2.open
+    estore = blosc2.open("example_estore.b2e", mode="r")
+    print(list(estore.keys()))
+
 .. note::
    - Embedded arrays (NumPy, NDArray, and SChunk) increase the size of the ``.b2e`` container.
    - Remote ``C2Array`` nodes only store lightweight references; reading them requires access to the remote source. NDArrays coming from external ``.b2nd`` files are embedded into the store.

@@ -47,6 +47,10 @@ Quick example
        print(sorted(subtree.keys()))  # ['/child1/leaf2', '/child2', '/leaf1']
        print(subtree["/child1/leaf2"][:])  # [4 5 6]
 
+   # Reopen using blosc2.open
+   with blosc2.open("my_tree.b2z", mode="r") as tstore:
+       print(sorted(tstore.keys()))
+
 .. currentmodule:: blosc2
 
 .. autoclass:: TreeStore
