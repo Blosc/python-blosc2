@@ -55,6 +55,8 @@ else()
     FetchContent_Declare(blosc2
         GIT_REPOSITORY https://github.com/Blosc/c-blosc2
         GIT_TAG 5a2b0ed9c4d801230c118fbc5811817055b5a3f5  # v2.22.0
+        # in case you want to use a local copy of c-blosc2 for development, uncomment the line below
+        # SOURCE_DIR "/Users/faltet/blosc/c-blosc2"
     )
     FetchContent_MakeAvailable(blosc2)
     include_directories("${blosc2_SOURCE_DIR}/include")

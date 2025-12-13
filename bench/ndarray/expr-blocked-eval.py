@@ -6,7 +6,8 @@ N = 10_000
 dtype= np.float32
 
 t0 = time()
-a = blosc2.ones((N, N), dtype=dtype)
+#a = blosc2.ones((N, N), dtype=dtype)
+a = blosc2.arange(np.prod((N, N)), shape=(N, N), dtype=dtype)
 print(f"Time to create data: {(time() - t0) * 1000 :.4f} ms")
 t0 = time()
 b = a.copy()
@@ -18,4 +19,4 @@ res = ((a + b) * c).compute()
 print(f"Time to evaluate: {(time() - t0) * 1000 :.4f} ms")
 # print(res.info)
 
-np.testing.assert_allclose(res, a[:] * 2)
+np.testing.assert_allclose(res, (a[:] + b[:]) * c[:])

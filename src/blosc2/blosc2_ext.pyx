@@ -27,7 +27,7 @@ from cpython.ref cimport Py_INCREF, Py_DECREF
 from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_New
 from cython.operator cimport dereference
 from libc.stdint cimport uintptr_t
-from libc.stdlib cimport free, malloc, realloc
+from libc.stdlib cimport free, malloc, realloc, calloc
 from libc.stdlib cimport abs as c_abs
 from libc.string cimport memcpy, strcpy, strdup, strlen
 from libcpp cimport bool as c_bool
@@ -180,7 +180,7 @@ cdef extern from "blosc2.h":
     int blosc2_free_resources()
 
     int blosc2_cbuffer_sizes(const void* cbuffer, int32_t* nbytes,
-                             int32_t* cbytes, int32_t* blocksize)
+                             int32_t* cbytes, int32_t* blocksize) nogil
 
     int blosc1_cbuffer_validate(const void* cbuffer, size_t cbytes, size_t* nbytes)
 
@@ -258,7 +258,7 @@ cdef extern from "blosc2.h":
 
     blosc2_context* blosc2_create_cctx(blosc2_cparams cparams) nogil
 
-    blosc2_context* blosc2_create_dctx(blosc2_dparams dparams)
+    blosc2_context* blosc2_create_dctx(blosc2_dparams dparams) nogil
 
     void blosc2_free_ctx(blosc2_context * context) nogil
 
@@ -281,7 +281,7 @@ cdef extern from "blosc2.h":
 
     int blosc2_getitem_ctx(blosc2_context* context, const void* src,
                            int32_t srcsize, int start, int nitems, void* dest,
-                           int32_t destsize)
+                           int32_t destsize) nogil
 
 
 
@@ -1846,28 +1846,55 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     cdef b2nd_array_t* ndarr
     cdef int rc
     cdef void** input_buffers = <void**> malloc(udata.ninputs * sizeof(uint8_t*))
+    cdef float *buf
+    cdef void* src
+    cdef int32_t chunk_nbytes, chunk_cbytes, block_nbytes
+    cdef int start
+    cdef blosc2_context** input_dctxs = <blosc2_context**> calloc(udata.ninputs, sizeof(blosc2_context*))
+    cdef blosc2_context* dctx
     for i in range(udata.ninputs):
         ndarr = udata.inputs[i]
         input_buffers[i] = malloc(ndarr.sc.blocksize)
-        rc = b2nd_get_slice_cbuffer(
-                ndarr, start_ndim, stop_ndim, input_buffers[i],
-                buffershape, ndarr.sc.blocksize)
-        if rc < 0:
-            return rc
-    #print("nelems in block:", ndarr.blocknitems)
+        # A way to check for top speed
+        if False:
+            buf = <float *>input_buffers[i]
+            for j in range(ndarr.blocknitems):
+                buf[j] = 1.
+        else:
+            src = ndarr.sc.data[nchunk]
+            rc = blosc2_cbuffer_sizes(src, &chunk_nbytes, &chunk_cbytes, &block_nbytes)
+            if rc < 0:
+                raise ValueError("miniexpr: error getting cbuffer sizes")
+            start = nblock * ndarr.blocknitems
+            # A way to check for top speed
+            if False:
+                # Unsafe, but it works for special arrays (e.g. blosc2.ones), and can be fast
+                dctx = ndarr.sc.dctx
+            else:
+                # This can add a significant overhead, but it is needed for thread safety.
+                # Perhaps one can create a specific (serial) context just for blosc2_getitem_ctx?
+                input_dctxs[i] = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
+                dctx = input_dctxs[i]
+            rc = blosc2_getitem_ctx(dctx, src, chunk_cbytes, start, ndarr.blocknitems,
+                                    input_buffers[i], block_nbytes)
+            if rc < 0:
+                raise ValueError("miniexpr: error decompressing the chunk")
 
-    # Use miniexpr C API for faster evaluation
-    # Use the expression handle from udata (set during _set_pref_expr)
-    # This allows multi-threading since all threads share the same handle
     cdef me_expr* miniexpr_handle = udata.miniexpr_handle
     if miniexpr_handle == NULL:
-        raise ValueError("miniexpr handle not assigned")
-    # Call miniexpr C API
+        raise ValueError("miniexpr: handle not assigned")
+    # Call thread-safe miniexpr C API
+    # XXX Add error checking inside the function?
     me_eval_chunk_threadsafe(miniexpr_handle, input_buffers, udata.ninputs, <void*>params_output, ndarr.blocknitems)
 
+    # Free resources
     for i in range(udata.ninputs):
         free(input_buffers[i])
+        if input_dctxs[i] != NULL:
+            # When doing profiling (see above code), this can be NULL
+            blosc2_free_ctx(input_dctxs[i])
     free(input_buffers)
+    free(input_dctxs)
 
     return 0
 

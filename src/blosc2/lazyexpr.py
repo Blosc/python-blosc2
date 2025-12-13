@@ -1266,9 +1266,9 @@ def fast_eval(  # noqa: C901
         # Force single-threaded execution for prefilter evaluation
         # The prefilter callback accesses Python objects which aren't thread-safe
         # across blosc2's C threads. numexpr does its own multi-threading internally.
-        if cparams.nthreads > 1:
-            prev_nthreads = cparams.nthreads
-            cparams.nthreads = 1
+        # if cparams.nthreads > 1:
+        #     prev_nthreads = cparams.nthreads
+        #     cparams.nthreads = 1
         res_eval = blosc2.empty(shape, dtype, cparams=cparams, **kwargs)
         # XXX Validate expression before using it
         # numexpr.validate(expression, local_dict=operands)
@@ -1279,8 +1279,8 @@ def fast_eval(  # noqa: C901
         # Physical allocation happens here (when writing):
         res_eval[...] = aux
         res_eval.schunk.remove_prefilter("miniexpr")
-        if cparams.nthreads > 1:
-            res_eval.schunk.cparams.nthreads = prev_nthreads
+        # if cparams.nthreads > 1:
+        #     res_eval.schunk.cparams.nthreads = prev_nthreads
 
         return res_eval
 
