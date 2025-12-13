@@ -1471,12 +1471,18 @@ class SChunk(blosc2_ext.SChunk):
 
 
 def _open_special_store(urlpath, mode, offset, **kwargs):
-    if urlpath.endswith(".b2z") or urlpath.endswith(".b2d"):
+    if urlpath.endswith(".b2d"):
         if offset != 0:
             raise ValueError("Offset must be 0 for DictStore")
         from blosc2.dict_store import DictStore
 
         return DictStore(urlpath, mode=mode, **kwargs)
+    elif urlpath.endswith(".b2z"):
+        if offset != 0:
+            raise ValueError("Offset must be 0 for TreeStore")
+        from blosc2.tree_store import TreeStore
+
+        return TreeStore(urlpath, mode=mode, **kwargs)
     elif urlpath.endswith(".b2e"):
         if offset != 0:
             raise ValueError("Offset must be 0 for EmbedStore")
@@ -1520,9 +1526,18 @@ def _process_opened_object(res):
 
 def open(
     urlpath: str | pathlib.Path | blosc2.URLPath, mode: str = "a", offset: int = 0, **kwargs: dict
-) -> blosc2.SChunk | blosc2.NDArray | blosc2.C2Array | blosc2.LazyArray | blosc2.Proxy | Any:
+) -> (
+    blosc2.SChunk
+    | blosc2.NDArray
+    | blosc2.C2Array
+    | blosc2.LazyArray
+    | blosc2.Proxy
+    | blosc2.DictStore
+    | blosc2.TreeStore
+    | blosc2.EmbedStore
+):
     """Open a persistent :ref:`SChunk`, :ref:`NDArray`, a remote :ref:`C2Array`,
-    a :ref:`Proxy`, a :ref:`DictStore` or an :ref:`EmbedStore`.
+    a :ref:`Proxy`, a :ref:`DictStore`, :ref:`EmbedStore`, or :ref:`TreeStore`.
 
     See the `Notes` section for more info on opening `Proxy` objects.
 
@@ -1558,7 +1573,7 @@ def open(
 
     Returns
     -------
-    out: :ref:`SChunk`, :ref:`NDArray`, :ref:`C2Array`, :ref:`DictStore` or :ref:`EmbedStore`
+    out: :ref:`SChunk`, :ref:`NDArray`, :ref:`C2Array`, :ref:`DictStore`, :ref:`EmbedStore`, or :ref:`TreeStore`
         The object found in the path.
 
     Notes
