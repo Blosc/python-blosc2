@@ -124,7 +124,7 @@ jobs:
     # Only upload wheels when tagging (typically a release)
     if: startsWith(github.event.ref, 'refs/tags')
     steps:
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v7
         with:
           path: ./wheelhouse
           merge-multiple: true  # Merge all the wheels artifacts into one directory
