@@ -1740,7 +1740,7 @@ cdef class SChunk:
             me_data = <me_udata*>self.schunk.storage.cparams.preparams.user_data
             free(me_data.inputs)
             if me_data.miniexpr_handle != NULL:  # XXX do we really need the conditional?
-                free(me_data.miniexpr_handle)
+                me_free(me_data.miniexpr_handle)
             free(me_data)
         else:
             # From Python the preparams->udata with always have the field py_func
