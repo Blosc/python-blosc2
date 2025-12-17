@@ -567,18 +567,11 @@ cdef extern from "miniexpr.h":
         int ncode
         void *parameters[1]
 
-    # me_expr *me_compile(const char *expression, const me_variable *variables,
-    #                     int var_count, void *output, int nitems, me_dtype dtype,
-    #                     int *error) nogil
+    me_expr *me_compile(const char *expression, const me_variable *variables,
+                        int var_count, me_dtype dtype, int *error)
 
-    me_expr *me_compile_chunk(const char *expression, const me_variable *variables,
-                              int var_count, me_dtype dtype, int *error)
-
-    void me_eval(const me_expr *n) nogil
-    void me_eval_fused(const me_expr *n) nogil
-    void me_eval_chunk_threadsafe(const me_expr *expr, const void ** vars_chunk,
-                                  int n_vars, void *output_chunk,
-                                  int chunk_nitems) nogil
+    void me_eval(const me_expr *expr, const void ** vars_chunk,
+                 int n_vars, void *output_chunk, int chunk_nitems) nogil
     void me_print(const me_expr *n) nogil
     void me_free(me_expr *n) nogil
 
@@ -1885,8 +1878,8 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         raise ValueError("miniexpr: handle not assigned")
     # Call thread-safe miniexpr C API
     # XXX Add error checking inside the function?
-    me_eval_chunk_threadsafe(miniexpr_handle, <const void**>input_buffers, udata.ninputs,
-                             <void*>params_output, ndarr.blocknitems)
+    me_eval(miniexpr_handle, <const void**>input_buffers, udata.ninputs,
+            <void*>params_output, ndarr.blocknitems)
 
     # Free resources
     for i in range(udata.ninputs):
@@ -2833,7 +2826,7 @@ cdef class NDArray:
 
         cdef int error = 0
         expression = expression.encode("utf-8") if isinstance(expression, str) else expression
-        udata.miniexpr_handle = me_compile_chunk(expression, variables, n, ME_AUTO, &error)
+        udata.miniexpr_handle = me_compile(expression, variables, n, ME_AUTO, &error)
         if udata.miniexpr_handle == NULL:
             raise ValueError(f"Cannot compile expression: {expression}")
 

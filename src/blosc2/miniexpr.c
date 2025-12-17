@@ -75,6 +75,27 @@ enum {
     TOK_BITWISE, TOK_SHIFT, TOK_COMPARE, TOK_POW
 };
 
+/* Internal definition of me_expr (opaque to users) */
+struct me_expr {
+    int type;
+
+    union {
+        double value;
+        const void *bound;
+        const void *function;
+    };
+
+    /* Vector operation info */
+    void *output; // Generic pointer (can be float* or double*)
+    int nitems;
+    me_dtype dtype; // Data type for this expression (result type after promotion)
+    me_dtype input_dtype; // Original input type (for variables/constants)
+    /* Bytecode info (for fused evaluation) */
+    void *bytecode; // Pointer to compiled bytecode
+    int ncode; // Number of instructions
+    void *parameters[1]; // Must be last (flexible array member)
+};
+
 
 /* Type promotion table following NumPy rules */
 /* Note: ME_AUTO (0) should never appear in type promotion, so we index from 1 */
@@ -136,7 +157,7 @@ static const me_dtype type_promotion_table[13][13] = {
 };
 
 /* Promote two types according to NumPy rules */
-static me_dtype promome_types(me_dtype a, me_dtype b) {
+static me_dtype promote_types(me_dtype a, me_dtype b) {
     // ME_AUTO should have been resolved during compilation
     if (a == ME_AUTO || b == ME_AUTO) {
         fprintf(stderr, "FATAL: ME_AUTO in type promotion (a=%d, b=%d). This is a bug.\n", a, b);
@@ -245,7 +266,7 @@ static me_dtype infer_result_type(const me_expr *n) {
 
             for (int i = 0; i < arity; i++) {
                 me_dtype param_type = infer_result_type((const me_expr *) n->parameters[i]);
-                result = promome_types(result, param_type);
+                result = promote_types(result, param_type);
             }
 
             return result;
@@ -256,7 +277,7 @@ static me_dtype infer_result_type(const me_expr *n) {
 }
 
 /* Apply type promotion to a binary operation node */
-static me_expr *creame_conversion_node(me_expr *source, me_dtype target_dtype) {
+static me_expr *create_conversion_node(me_expr *source, me_dtype target_dtype) {
     /* Create a unary conversion node that converts source to target_dtype */
     me_expr *conv = NEW_EXPR(ME_FUNCTION1 | ME_FLAG_PURE, source);
     if (conv) {
@@ -276,7 +297,7 @@ static void apply_type_promotion(me_expr *node) {
     if (left && right) {
         me_dtype left_type = left->dtype;
         me_dtype right_type = right->dtype;
-        me_dtype promoted = promome_types(left_type, right_type);
+        me_dtype promoted = promote_types(left_type, right_type);
 
         // Store the promoted output type
         node->dtype = promoted;
@@ -533,150 +554,179 @@ static double logical_or(double a, double b) { return ((int) a) || ((int) b) ? 1
 static double logical_not(double a) { return !(int) a ? 1.0 : 0.0; }
 static double logical_xor(double a, double b) { return ((int) a) != ((int) b) ? 1.0 : 0.0; }
 
+static bool is_identifier_start(char c) {
+    return isalpha((unsigned char) c) || c == '_';
+}
+
+static bool is_identifier_char(char c) {
+    return isalnum((unsigned char) c) || c == '_';
+}
+
+static void skip_whitespace(state *s) {
+    while (*s->next && isspace((unsigned char) *s->next)) {
+        s->next++;
+    }
+}
+
+static void read_number_token(state *s) {
+    s->value = strtod(s->next, (char **) &s->next);
+    s->type = TOK_NUMBER;
+}
+
+static void read_identifier_token(state *s) {
+    const char *start = s->next;
+    while (is_identifier_char(*s->next)) {
+        s->next++;
+    }
+
+    const me_variable *var = find_lookup(s, start, s->next - start);
+    if (!var) {
+        var = find_builtin(start, s->next - start);
+    }
+
+    if (!var) {
+        s->type = TOK_ERROR;
+        return;
+    }
+
+    switch (TYPE_MASK(var->type)) {
+        case ME_VARIABLE:
+            s->type = TOK_VARIABLE;
+            s->bound = var->address;
+            s->dtype = var->dtype;
+            break;
+
+        case ME_CLOSURE0:
+        case ME_CLOSURE1:
+        case ME_CLOSURE2:
+        case ME_CLOSURE3:
+        case ME_CLOSURE4:
+        case ME_CLOSURE5:
+        case ME_CLOSURE6:
+        case ME_CLOSURE7:
+            s->context = var->context;
+        /* Falls through. */
+        case ME_FUNCTION0:
+        case ME_FUNCTION1:
+        case ME_FUNCTION2:
+        case ME_FUNCTION3:
+        case ME_FUNCTION4:
+        case ME_FUNCTION5:
+        case ME_FUNCTION6:
+        case ME_FUNCTION7:
+            s->type = var->type;
+            s->function = var->address;
+            break;
+    }
+}
+
+typedef struct {
+    const char *literal;
+    int token_type;
+    me_fun2 function;
+} operator_spec;
+
+static bool handle_multi_char_operator(state *s) {
+    static const operator_spec multi_ops[] = {
+        {"**", TOK_POW, pow},
+        {"<<", TOK_SHIFT, bit_shl},
+        {">>", TOK_SHIFT, bit_shr},
+        {"==", TOK_COMPARE, cmp_eq},
+        {"!=", TOK_COMPARE, cmp_ne},
+        {"<=", TOK_COMPARE, cmp_le},
+        {">=", TOK_COMPARE, cmp_ge},
+    };
+
+    for (size_t i = 0; i < sizeof(multi_ops) / sizeof(multi_ops[0]); i++) {
+        const operator_spec *op = &multi_ops[i];
+        size_t len = strlen(op->literal);
+        if (strncmp(s->next, op->literal, len) == 0) {
+            s->type = op->token_type;
+            s->function = op->function;
+            s->next += len;
+            return true;
+        }
+    }
+    return false;
+}
+
+static void handle_single_char_operator(state *s, char c) {
+    s->next++;
+    switch (c) {
+        case '+': s->type = TOK_INFIX;
+            s->function = add;
+            break;
+        case '-': s->type = TOK_INFIX;
+            s->function = sub;
+            break;
+        case '*': s->type = TOK_INFIX;
+            s->function = mul;
+            break;
+        case '/': s->type = TOK_INFIX;
+            s->function = divide;
+            break;
+        case '%': s->type = TOK_INFIX;
+            s->function = fmod;
+            break;
+        case '&': s->type = TOK_BITWISE;
+            s->function = bit_and;
+            break;
+        case '|': s->type = TOK_BITWISE;
+            s->function = bit_or;
+            break;
+        case '^': s->type = TOK_BITWISE;
+            s->function = bit_xor;
+            break;
+        case '~': s->type = TOK_BITWISE;
+            s->function = bit_not;
+            break;
+        case '<': s->type = TOK_COMPARE;
+            s->function = cmp_lt;
+            break;
+        case '>': s->type = TOK_COMPARE;
+            s->function = cmp_gt;
+            break;
+        case '(': s->type = TOK_OPEN;
+            break;
+        case ')': s->type = TOK_CLOSE;
+            break;
+        case ',': s->type = TOK_SEP;
+            break;
+        default: s->type = TOK_ERROR;
+            break;
+    }
+}
+
+static void read_operator_token(state *s) {
+    if (handle_multi_char_operator(s)) {
+        return;
+    }
+
+    if (!*s->next) {
+        s->type = TOK_END;
+        return;
+    }
+
+    handle_single_char_operator(s, *s->next);
+}
 
 void next_token(state *s) {
     s->type = TOK_NULL;
 
     do {
+        skip_whitespace(s);
+
         if (!*s->next) {
             s->type = TOK_END;
             return;
         }
 
-        /* Try reading a number. */
         if ((s->next[0] >= '0' && s->next[0] <= '9') || s->next[0] == '.') {
-            s->value = strtod(s->next, (char **) &s->next);
-            s->type = TOK_NUMBER;
+            read_number_token(s);
+        } else if (is_identifier_start(s->next[0])) {
+            read_identifier_token(s);
         } else {
-            /* Look for a variable or builtin function call. */
-            if (isalpha(s->next[0])) {
-                const char *start;
-                start = s->next;
-                while (isalpha(s->next[0]) || isdigit(s->next[0]) || (s->next[0] == '_')) s->next++;
-
-                const me_variable *var = find_lookup(s, start, s->next - start);
-                if (!var) var = find_builtin(start, s->next - start);
-
-                if (!var) {
-                    s->type = TOK_ERROR;
-                } else {
-                    switch (TYPE_MASK(var->type)) {
-                        case ME_VARIABLE:
-                            s->type = TOK_VARIABLE;
-                            s->bound = var->address;
-                            s->dtype = var->dtype; // Store the variable's type
-                            break;
-
-                        case ME_CLOSURE0:
-                        case ME_CLOSURE1:
-                        case ME_CLOSURE2:
-                        case ME_CLOSURE3: /* Falls through. */
-                        case ME_CLOSURE4:
-                        case ME_CLOSURE5:
-                        case ME_CLOSURE6:
-                        case ME_CLOSURE7: /* Falls through. */
-                            s->context = var->context; /* Falls through. */
-
-                        case ME_FUNCTION0:
-                        case ME_FUNCTION1:
-                        case ME_FUNCTION2:
-                        case ME_FUNCTION3: /* Falls through. */
-                        case ME_FUNCTION4:
-                        case ME_FUNCTION5:
-                        case ME_FUNCTION6:
-                        case ME_FUNCTION7: /* Falls through. */
-                            s->type = var->type;
-                            s->function = var->address;
-                            break;
-                    }
-                }
-            } else {
-                /* Look for an operator or special character. */
-                char c = s->next[0];
-                char next_c = s->next[1];
-
-                /* Multi-character operators */
-                if (c == '*' && next_c == '*') {
-                    s->type = TOK_POW;
-                    s->function = (const void *) pow;
-                    s->next += 2;
-                } else if (c == '<' && next_c == '<') {
-                    s->type = TOK_SHIFT;
-                    s->function = bit_shl;
-                    s->next += 2;
-                } else if (c == '>' && next_c == '>') {
-                    s->type = TOK_SHIFT;
-                    s->function = bit_shr;
-                    s->next += 2;
-                } else if (c == '=' && next_c == '=') {
-                    s->type = TOK_COMPARE;
-                    s->function = cmp_eq;
-                    s->next += 2;
-                } else if (c == '!' && next_c == '=') {
-                    s->type = TOK_COMPARE;
-                    s->function = cmp_ne;
-                    s->next += 2;
-                } else if (c == '<' && next_c == '=') {
-                    s->type = TOK_COMPARE;
-                    s->function = cmp_le;
-                    s->next += 2;
-                } else if (c == '>' && next_c == '=') {
-                    s->type = TOK_COMPARE;
-                    s->function = cmp_ge;
-                    s->next += 2;
-                } else {
-                    /* Single-character operators */
-                    s->next++;
-                    switch (c) {
-                        case '+': s->type = TOK_INFIX;
-                            s->function = add;
-                            break;
-                        case '-': s->type = TOK_INFIX;
-                            s->function = sub;
-                            break;
-                        case '*': s->type = TOK_INFIX;
-                            s->function = mul;
-                            break;
-                        case '/': s->type = TOK_INFIX;
-                            s->function = divide;
-                            break;
-                        case '%': s->type = TOK_INFIX;
-                            s->function = fmod;
-                            break;
-                        case '&': s->type = TOK_BITWISE;
-                            s->function = bit_and;
-                            break;
-                        case '|': s->type = TOK_BITWISE;
-                            s->function = bit_or;
-                            break;
-                        case '^': s->type = TOK_BITWISE;
-                            s->function = bit_xor;
-                            break; /* XOR for ints/bools */
-                        case '~': s->type = TOK_BITWISE;
-                            s->function = bit_not;
-                            break;
-                        case '<': s->type = TOK_COMPARE;
-                            s->function = cmp_lt;
-                            break;
-                        case '>': s->type = TOK_COMPARE;
-                            s->function = cmp_gt;
-                            break;
-                        case '(': s->type = TOK_OPEN;
-                            break;
-                        case ')': s->type = TOK_CLOSE;
-                            break;
-                        case ',': s->type = TOK_SEP;
-                            break;
-                        case ' ':
-                        case '\t':
-                        case '\n':
-                        case '\r': s->type = TOK_NULL;
-                            break;
-                        default: s->type = TOK_ERROR;
-                            break;
-                    }
-                }
-            }
+            read_operator_token(s);
         }
     } while (s->type == TOK_NULL);
 }
@@ -1086,7 +1136,7 @@ static double me_eval_scalar(const me_expr *n) {
 
     switch (TYPE_MASK(n->type)) {
         case ME_CONSTANT: return n->value;
-        case ME_VARIABLE: return *n->bound;
+        case ME_VARIABLE: return *(const double *) n->bound;
 
         case ME_FUNCTION0:
         case ME_FUNCTION1:
@@ -2223,7 +2273,7 @@ static void save_variable_bindings(const me_expr *node,
 }
 
 /* Recursively promote variables in expression tree */
-static void promome_variables_in_tree(me_expr *n, me_dtype target_type,
+static void promote_variables_in_tree(me_expr *n, me_dtype target_type,
                                       promoted_var_t *promotions, int *promo_count,
                                       int nitems) {
     if (!n) return;
@@ -2276,7 +2326,7 @@ static void promome_variables_in_tree(me_expr *n, me_dtype target_type,
         case ME_CLOSURE7: {
             const int arity = ARITY(n->type);
             for (int i = 0; i < arity; i++) {
-                promome_variables_in_tree((me_expr *) n->parameters[i], target_type,
+                promote_variables_in_tree((me_expr *) n->parameters[i], target_type,
                                           promotions, promo_count, nitems);
             }
             break;
@@ -2316,8 +2366,7 @@ static void restore_variables_in_tree(me_expr *n, const void **original_bounds,
         case ME_CLOSURE7: {
             const int arity = ARITY(n->type);
             for (int i = 0; i < arity; i++) {
-                restore_variables_in_tree((me_expr *) n->parameters[i],
-                                          original_bounds, original_types, restore_idx);
+                restore_variables_in_tree((me_expr *) n->parameters[i], original_bounds, original_types, restore_idx);
             }
             break;
         }
@@ -2364,7 +2413,7 @@ static bool all_variables_match_type(const me_expr *n, me_dtype target_type) {
     return true;
 }
 
-void me_eval(const me_expr *n) {
+static void private_eval(const me_expr *n) {
     if (!n) return;
 
     // Infer the result type from the expression tree
@@ -2433,7 +2482,7 @@ void me_eval(const me_expr *n) {
     save_variable_bindings(n, original_bounds, original_types, &save_idx);
 
     // Promote variables
-    promome_variables_in_tree((me_expr *) n, result_type, promotions, &promo_count, n->nitems);
+    promote_variables_in_tree((me_expr *) n, result_type, promotions, &promo_count, n->nitems);
 
     // Update expression type
     me_dtype saved_dtype = n->dtype;
@@ -2723,57 +2772,6 @@ static void update_variable_bindings(me_expr *node, const void **new_bounds, int
 }
 
 /* Evaluate compiled expression with new variable and output pointers */
-void me_eval_chunk(const me_expr *expr, const void **vars_chunk, int n_vars,
-                   void *output_chunk, int chunk_nitems) {
-    if (!expr) return;
-
-    // Save original variable pointers (unique list)
-    const void *original_var_pointers[100];
-    int actual_var_count = 0;
-    save_variable_pointers(expr, original_var_pointers, &actual_var_count);
-
-    // Verify variable count matches
-    if (actual_var_count != n_vars) {
-        // Mismatch in variable count
-        return;
-    }
-
-    // Save original state
-    int original_nitems_array[100];
-    void *original_output = expr->output;
-
-    // Save original nitems for all nodes
-    int nitems_idx = 0;
-    save_nitems_in_tree(expr, original_nitems_array, &nitems_idx);
-
-    // Free intermediate buffers so they can be reallocated with correct size
-    free_intermediate_buffers((me_expr *) expr);
-
-    // Update variable bindings to new chunk pointers (by matching old pointers)
-    update_vars_by_pointer((me_expr *) expr, original_var_pointers, vars_chunk, n_vars);
-
-    // Update nitems throughout the tree
-    int update_idx = 0; // dummy variable
-    update_variable_bindings((me_expr *) expr, NULL, &update_idx, chunk_nitems);
-
-    // Update output pointer
-    ((me_expr *) expr)->output = output_chunk;
-
-    // Evaluate with new pointers
-    me_eval(expr);
-
-    // Restore original variable bindings
-    update_vars_by_pointer((me_expr *) expr, vars_chunk, original_var_pointers, n_vars);
-
-    // Restore output
-    ((me_expr *) expr)->output = original_output;
-
-    // Restore nitems for all nodes
-    nitems_idx = 0;
-    restore_nitems_in_tree((me_expr *) expr, original_nitems_array, &nitems_idx);
-}
-
-/* Clone an expression tree (deep copy of structure, shallow copy of data) */
 static me_expr *clone_expr(const me_expr *src) {
     if (!src) return NULL;
 
@@ -2814,8 +2812,8 @@ static me_expr *clone_expr(const me_expr *src) {
  * This function is safe to call from multiple threads simultaneously,
  * even on the same expression object. Each call creates a temporary
  * clone of the expression tree to avoid race conditions. */
-void me_eval_chunk_threadsafe(const me_expr *expr, const void **vars_chunk,
-                              int n_vars, void *output_chunk, int chunk_nitems) {
+void me_eval(const me_expr *expr, const void **vars_chunk,
+             int n_vars, void *output_chunk, int chunk_nitems) {
     if (!expr) return;
 
     // Verify variable count matches
@@ -2842,7 +2840,7 @@ void me_eval_chunk_threadsafe(const me_expr *expr, const void **vars_chunk,
     clone->output = output_chunk;
 
     // Evaluate the clone
-    me_eval(clone);
+    private_eval(clone);
 
     // Free the clone (including any intermediate buffers it allocated)
     me_free(clone);
@@ -2876,8 +2874,8 @@ static void optimize(me_expr *n) {
 }
 
 
-me_expr *me_compile(const char *expression, const me_variable *variables, int var_count,
-                    void *output, int nitems, me_dtype dtype, int *error) {
+static me_expr *private_compile(const char *expression, const me_variable *variables, int var_count,
+                                void *output, int nitems, me_dtype dtype, int *error) {
     // Validate dtype usage: either all vars are ME_AUTO (use dtype), or dtype is ME_AUTO (use var dtypes)
     if (variables && var_count > 0) {
         int auto_count = 0;
@@ -2895,7 +2893,9 @@ me_expr *me_compile(const char *expression, const me_variable *variables, int va
         if (dtype == ME_AUTO) {
             // Mode 1: Output dtype is ME_AUTO, all variables must have explicit dtypes
             if (auto_count > 0) {
-                fprintf(stderr, "Error: When output dtype is ME_AUTO, all variable dtypes must be specified (not ME_AUTO)\n");
+                fprintf(
+                    stderr,
+                    "Error: When output dtype is ME_AUTO, all variable dtypes must be specified (not ME_AUTO)\n");
                 if (error) *error = -1;
                 return NULL;
             }
@@ -2970,8 +2970,8 @@ me_expr *me_compile(const char *expression, const me_variable *variables, int va
 // Synthetic addresses for ordinal matching (when user provides NULL addresses)
 static char synthetic_var_addresses[100];
 
-me_expr *me_compile_chunk(const char *expression, const me_variable *variables,
-                          int var_count, me_dtype dtype, int *error) {
+me_expr *me_compile(const char *expression, const me_variable *variables,
+                    int var_count, me_dtype dtype, int *error) {
     // For chunked evaluation, we compile without specific output/nitems
     // If variables have NULL addresses, assign synthetic unique addresses for ordinal matching
     me_variable *vars_copy = NULL;
@@ -3002,14 +3002,14 @@ me_expr *me_compile_chunk(const char *expression, const me_variable *variables,
                 }
             }
 
-            me_expr *result = me_compile(expression, vars_copy, var_count, NULL, 0, dtype, error);
+            me_expr *result = private_compile(expression, vars_copy, var_count, NULL, 0, dtype, error);
             free(vars_copy);
             return result;
         }
     }
 
     // No NULL addresses, use variables as-is
-    return me_compile(expression, variables, var_count, NULL, 0, dtype, error);
+    return private_compile(expression, variables, var_count, NULL, 0, dtype, error);
 }
 
 static void pn(const me_expr *n, int depth) {
@@ -3056,417 +3056,10 @@ static void pn(const me_expr *n, int depth) {
     }
 }
 
-
 void me_print(const me_expr *n) {
     pn(n, 0);
 }
 
-
-/* ============================================================================
- * BYTECODE COMPILER AND FUSED EXECUTOR
- * ============================================================================
- * This implements expression flattening for optimal performance.
- * The bytecode is type-agnostic and enables loop fusion.
- */
-
-typedef enum {
-    BC_LOAD_VAR, // Load from variable array: reg[dst] = vars[src1][i]
-    BC_LOAD_CONST, // Load constant: reg[dst] = constant
-    BC_ADD, // reg[dst] = reg[src1] + reg[src2]
-    BC_SUB, // reg[dst] = reg[src1] - reg[src2]
-    BC_MUL, // reg[dst] = reg[src1] * reg[src2]
-    BC_DIV, // reg[dst] = reg[src1] / reg[src2]
-    BC_POW, // reg[dst] = pow(reg[src1], reg[src2])
-    BC_NEG, // reg[dst] = -reg[src1]
-    BC_SQRT, // reg[dst] = sqrt(reg[src1])
-    BC_SIN, // reg[dst] = sin(reg[src1])
-    BC_COS, // reg[dst] = cos(reg[src1])
-    BC_EXP, // reg[dst] = exp(reg[src1])
-    BC_LOG, // reg[dst] = log(reg[src1])
-    BC_ABS, // reg[dst] = fabs(reg[src1])
-    BC_CALL1, // reg[dst] = function(reg[src1])
-    BC_CALL2, // reg[dst] = function(reg[src1], reg[src2])
-    BC_STORE, // output[i] = reg[src1]
-    BC_CONVERT // Type conversion: reg[dst] = convert(reg[src1])
-} bc_opcode;
-
-typedef struct {
-    bc_opcode op;
-    int src1; // First source register/variable index
-    int src2; // Second source register (for binary ops)
-    int dst; // Destination register
-    union {
-        double constant; // For BC_LOAD_CONST
-        const void *function; // For BC_CALL1/BC_CALL2
-        struct {
-            me_dtype from_type;
-            me_dtype to_type;
-        } convert; // For BC_CONVERT
-    } data;
-} bc_instruction;
-
-typedef struct {
-    bc_instruction *code;
-    int capacity;
-    int count;
-    int next_reg; // Next available register
-    const double **var_ptrs; // Array of variable pointers
-    int var_count; // Number of variables
-    int var_capacity;
-} bc_compiler;
-
-static bc_compiler *bc_new() {
-    bc_compiler *bc = malloc(sizeof(bc_compiler));
-    bc->capacity = 16;
-    bc->code = malloc(bc->capacity * sizeof(bc_instruction));
-    bc->count = 0;
-    bc->next_reg = 0;
-    bc->var_capacity = 16;
-    bc->var_ptrs = malloc(bc->var_capacity * sizeof(double *));
-    bc->var_count = 0;
-    return bc;
-}
-
-static void bc_free(bc_compiler *bc) {
-    if (bc) {
-        free(bc->code);
-        free(bc->var_ptrs);
-        free(bc);
-    }
-}
-
-static void bc_emit(bc_compiler *bc, bc_instruction inst) {
-    if (bc->count >= bc->capacity) {
-        bc->capacity *= 2;
-        bc->code = realloc(bc->code, bc->capacity * sizeof(bc_instruction));
-    }
-    bc->code[bc->count++] = inst;
-}
-
-static int bc_alloc_reg(bc_compiler *bc) {
-    return bc->next_reg++;
-}
-
-/* Find or add variable to mapping */
-static int bc_get_var_index(bc_compiler *bc, const double *var_ptr) {
-    for (int i = 0; i < bc->var_count; i++) {
-        if (bc->var_ptrs[i] == var_ptr) {
-            return i;
-        }
-    }
-    // Add new variable
-    if (bc->var_count >= bc->var_capacity) {
-        bc->var_capacity *= 2;
-        bc->var_ptrs = realloc(bc->var_ptrs, bc->var_capacity * sizeof(double *));
-    }
-    bc->var_ptrs[bc->var_count] = var_ptr;
-    return bc->var_count++;
-}
-
-/* Compile expression tree to bytecode */
-static int bc_compile_expr(bc_compiler *bc, const me_expr *n) {
-    if (!n) return -1;
-
-    int dst_reg;
-
-    switch (TYPE_MASK(n->type)) {
-        case ME_CONSTANT:
-            dst_reg = bc_alloc_reg(bc);
-            bc_emit(bc, (bc_instruction){BC_LOAD_CONST, -1, -1, dst_reg, {.constant = n->value}});
-            return dst_reg;
-
-        case ME_VARIABLE:
-            dst_reg = bc_alloc_reg(bc); {
-                int var_idx = bc_get_var_index(bc, n->bound);
-                bc_emit(bc, (bc_instruction){BC_LOAD_VAR, var_idx, -1, dst_reg, {.constant = 0}});
-            }
-            return dst_reg;
-
-        case ME_FUNCTION0:
-        case ME_FUNCTION0 | ME_FLAG_PURE:
-            // Constants like pi(), e()
-            dst_reg = bc_alloc_reg(bc); {
-                double (*func)(void) = (double(*)(void)) n->function;
-                double val = func();
-                bc_emit(bc, (bc_instruction){BC_LOAD_CONST, -1, -1, dst_reg, {.constant = val}});
-            }
-            return dst_reg;
-
-        case ME_FUNCTION1:
-        case ME_FUNCTION1 | ME_FLAG_PURE: {
-            int src = bc_compile_expr(bc, n->parameters[0]);
-            dst_reg = bc_alloc_reg(bc);
-
-            const void *func_ptr = n->function;
-
-            // Recognize common functions
-            if (func_ptr == (void *) sqrt) {
-                bc_emit(bc, (bc_instruction){BC_SQRT, src, -1, dst_reg, {.constant = 0}});
-            } else if (func_ptr == (void *) sin) {
-                bc_emit(bc, (bc_instruction){BC_SIN, src, -1, dst_reg, {.constant = 0}});
-            } else if (func_ptr == (void *) cos) {
-                bc_emit(bc, (bc_instruction){BC_COS, src, -1, dst_reg, {.constant = 0}});
-            } else if (func_ptr == (void *) exp) {
-                bc_emit(bc, (bc_instruction){BC_EXP, src, -1, dst_reg, {.constant = 0}});
-            } else if (func_ptr == (void *) log) {
-                bc_emit(bc, (bc_instruction){BC_LOG, src, -1, dst_reg, {.constant = 0}});
-            } else if (func_ptr == (void *) fabs) {
-                bc_emit(bc, (bc_instruction){BC_ABS, src, -1, dst_reg, {.constant = 0}});
-            } else if (func_ptr == (void *) negate) {
-                bc_emit(bc, (bc_instruction){BC_NEG, src, -1, dst_reg, {.constant = 0}});
-            } else {
-                // Generic call
-                bc_emit(bc, (bc_instruction){BC_CALL1, src, -1, dst_reg, {.function = func_ptr}});
-            }
-            return dst_reg;
-        }
-
-        case ME_FUNCTION2:
-        case ME_FUNCTION2 | ME_FLAG_PURE: {
-            int src1 = bc_compile_expr(bc, n->parameters[0]);
-            int src2 = bc_compile_expr(bc, n->parameters[1]);
-            dst_reg = bc_alloc_reg(bc);
-
-            me_fun2 func = (me_fun2) n->function;
-
-            // Recognize common functions
-            if (func == add) {
-                bc_emit(bc, (bc_instruction){BC_ADD, src1, src2, dst_reg, {.constant = 0}});
-            } else if (func == sub) {
-                bc_emit(bc, (bc_instruction){BC_SUB, src1, src2, dst_reg, {.constant = 0}});
-            } else if (func == mul) {
-                bc_emit(bc, (bc_instruction){BC_MUL, src1, src2, dst_reg, {.constant = 0}});
-            } else if (func == divide) {
-                bc_emit(bc, (bc_instruction){BC_DIV, src1, src2, dst_reg, {.constant = 0}});
-            } else if (func == (me_fun2) pow) {
-                bc_emit(bc, (bc_instruction){BC_POW, src1, src2, dst_reg, {.constant = 0}});
-            } else {
-                // Generic call
-                bc_emit(bc, (bc_instruction){BC_CALL2, src1, src2, dst_reg, {.function = (void *) func}});
-            }
-            return dst_reg;
-        }
-
-        default:
-            // For more complex cases, fall back to tree evaluation
-            return -1;
-    }
-}
-
-/* Compile expression to bytecode and attach to me_expr */
-static void me_compile_bytecode(me_expr *n) {
-    if (!n) return;
-
-    bc_compiler *bc = bc_new();
-
-    // Compile expression
-    int result_reg = bc_compile_expr(bc, n);
-
-    if (result_reg >= 0) {
-        // Emit store instruction
-        bc_emit(bc, (bc_instruction){BC_STORE, result_reg, -1, 0, {.constant = 0}});
-
-        // Attach to expression
-        n->bytecode = bc->code;
-        n->ncode = bc->count;
-
-        // Free compiler but keep code and var mapping
-        free((void *) bc->var_ptrs);
-        free(bc);
-    } else {
-        // Compilation failed, clean up
-        bc_free(bc);
-        n->bytecode = NULL;
-        n->ncode = 0;
-    }
-}
-
-/* Recursive helper for building variable array */
-static void me_traverse_vars(const me_expr *node, const double **vars, int *var_count, int max_vars) {
-    if (!node || *var_count >= max_vars) return;
-
-    if (node->type == ME_VARIABLE) {
-        // Check if already in array
-        for (int i = 0; i < *var_count; i++) {
-            if (vars[i] == node->bound) return;
-        }
-        vars[*var_count] = node->bound;
-        (*var_count)++;
-        return;
-    }
-
-    if (IS_FUNCTION(node->type) || IS_CLOSURE(node->type)) {
-        int arity = ARITY(node->type);
-        for (int i = 0; i < arity; i++) {
-            me_traverse_vars(node->parameters[i], vars, var_count, max_vars);
-        }
-    }
-}
-
-/* Build variable array from expression tree */
-static int me_build_var_array(const me_expr *n, const double **vars, int max_vars) {
-    int var_count = 0;
-    me_traverse_vars(n, vars, &var_count, max_vars);
-    return var_count;
-}
-
-/* Execute bytecode with fused loop - OPTIMIZED VERSION */
-void me_eval_fused(const me_expr *n) {
-    if (!n || !n->output || n->nitems <= 0) return;
-
-    // Compile bytecode if not already done
-    if (!n->bytecode) {
-        me_compile_bytecode((me_expr *) n);
-    }
-
-    // Fall back to regular eval if compilation failed
-    if (!n->bytecode) {
-        me_eval(n);
-        return;
-    }
-
-    const bc_instruction *code = n->bytecode;
-    const int ncode = n->ncode;
-    const int nitems = n->nitems;
-
-    // Build variable array - same order as during compilation
-    const double *vars[16];
-    me_build_var_array(n, vars, 16);
-
-    // Determine max register used
-    int max_reg = 0;
-    for (int pc = 0; pc < ncode; pc++) {
-        if (code[pc].dst > max_reg) max_reg = code[pc].dst;
-        if (code[pc].src1 > max_reg && code[pc].src1 >= 0) max_reg = code[pc].src1;
-        if (code[pc].src2 > max_reg && code[pc].src2 >= 0) max_reg = code[pc].src2;
-    }
-    max_reg++; // Convert to count
-
-    // Allocate temporary arrays for registers
-    double **temps = malloc(max_reg * sizeof(double *));
-    for (int r = 0; r < max_reg; r++) {
-        temps[r] = malloc(nitems * sizeof(double));
-    }
-
-    // Execute each instruction across ALL elements (loop fusion!)
-    for (int pc = 0; pc < ncode; pc++) {
-        bc_instruction inst = code[pc];
-        int i;
-
-        switch (inst.op) {
-            case BC_LOAD_VAR:
-                // Copy variable data to temp register
-                memcpy(temps[inst.dst], vars[inst.src1], nitems * sizeof(double));
-                break;
-
-            case BC_LOAD_CONST:
-                // Broadcast constant to all elements
-#pragma GCC ivdep
-                for (i = 0; i < nitems; i++) {
-                    temps[inst.dst][i] = inst.data.constant;
-                }
-                break;
-
-            case BC_ADD:
-                vec_add(temps[inst.src1], temps[inst.src2], temps[inst.dst], nitems);
-                break;
-
-            case BC_SUB:
-                vec_sub(temps[inst.src1], temps[inst.src2], temps[inst.dst], nitems);
-                break;
-
-            case BC_MUL:
-                vec_mul(temps[inst.src1], temps[inst.src2], temps[inst.dst], nitems);
-                break;
-
-            case BC_DIV:
-                vec_div(temps[inst.src1], temps[inst.src2], temps[inst.dst], nitems);
-                break;
-
-            case BC_POW:
-                vec_pow(temps[inst.src1], temps[inst.src2], temps[inst.dst], nitems);
-                break;
-
-            case BC_NEG:
-                vec_negate(temps[inst.src1], temps[inst.dst], nitems);
-                break;
-
-            case BC_SQRT:
-                vec_sqrt(temps[inst.src1], temps[inst.dst], nitems);
-                break;
-
-            case BC_SIN:
-                vec_sin(temps[inst.src1], temps[inst.dst], nitems);
-                break;
-
-            case BC_COS:
-                vec_cos(temps[inst.src1], temps[inst.dst], nitems);
-                break;
-
-            case BC_EXP:
-#pragma GCC ivdep
-                for (i = 0; i < nitems; i++) {
-                    temps[inst.dst][i] = exp(temps[inst.src1][i]);
-                }
-                break;
-
-            case BC_LOG:
-#pragma GCC ivdep
-                for (i = 0; i < nitems; i++) {
-                    temps[inst.dst][i] = log(temps[inst.src1][i]);
-                }
-                break;
-
-            case BC_ABS:
-#pragma GCC ivdep
-                for (i = 0; i < nitems; i++) {
-                    temps[inst.dst][i] = fabs(temps[inst.src1][i]);
-                }
-                break;
-
-            case BC_CALL1: {
-                double (*func)(double) = inst.data.function;
-#pragma GCC ivdep
-                for (i = 0; i < nitems; i++) {
-                    temps[inst.dst][i] = func(temps[inst.src1][i]);
-                }
-                break;
-            }
-
-            case BC_CALL2: {
-                double (*func)(double, double) = inst.data.function;
-#pragma GCC ivdep
-                for (i = 0; i < nitems; i++) {
-                    temps[inst.dst][i] = func(temps[inst.src1][i], temps[inst.src2][i]);
-                }
-                break;
-            }
-
-            case BC_CONVERT: {
-                // Type conversion - for now, this is a placeholder
-                // Full implementation requires type-aware bytecode execution
-                convert_func_t conv_func = get_convert_func(inst.data.convert.from_type,
-                                                            inst.data.convert.to_type);
-                if (conv_func) {
-                    conv_func(temps[inst.src1], temps[inst.dst], nitems);
-                } else {
-                    // No conversion needed or unsupported
-                    memcpy(temps[inst.dst], temps[inst.src1],
-                           nitems * dtype_size(inst.data.convert.from_type));
-                }
-                break;
-            }
-
-            case BC_STORE:
-                // Copy result to output
-                memcpy(n->output, temps[inst.src1], nitems * sizeof(double));
-                break;
-        }
-    }
-
-    // Free temporary arrays
-    for (int r = 0; r < max_reg; r++) {
-        free(temps[r]);
-    }
-    free(temps);
+me_dtype me_get_dtype(const me_expr *expr) {
+    return expr ? expr->dtype : ME_AUTO;
 }
