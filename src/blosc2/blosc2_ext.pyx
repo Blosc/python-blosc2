@@ -2828,7 +2828,7 @@ cdef class NDArray:
         expression = expression.encode("utf-8") if isinstance(expression, str) else expression
         udata.miniexpr_handle = me_compile(expression, variables, n, ME_AUTO, &error)
         if udata.miniexpr_handle == NULL:
-            raise ValueError(f"Cannot compile expression: {expression}")
+            raise NotImplementedError(f"Cannot compile expression: {expression}")
 
         # Free resources
         for i in range(len(inputs)):

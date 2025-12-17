@@ -457,6 +457,10 @@ static const me_variable functions[] = {
     /* Format: {name, dtype, address, type, context} */
     {"abs", 0, fabs, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"acos", 0, acos, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"arccos", 0, acos, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"arcsin", 0, asin, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"arctan", 0, atan, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"arctan2", 0, atan2, ME_FUNCTION2 | ME_FLAG_PURE, 0},
     {"asin", 0, asin, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"atan", 0, atan, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"atan2", 0, atan2, ME_FUNCTION2 | ME_FLAG_PURE, 0},

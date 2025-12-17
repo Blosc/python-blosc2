@@ -91,6 +91,9 @@ if not NUMPY_GE_2_0:  # handle non-array-api compliance
     safe_numpy_globals["matrix_transpose"] = np.transpose
     safe_numpy_globals["vecdot"] = npvecdot
 
+# Set this to False if miniexpr should not be tried out
+try_miniexpr = True
+
 
 def ne_evaluate(expression, local_dict=None, **kwargs):
     """Safely evaluate expressions using numexpr when possible, falling back to numpy."""
@@ -1216,6 +1219,8 @@ def fast_eval(  # noqa: C901
     :ref:`NDArray` or np.ndarray
         The output array.
     """
+    global try_miniexpr
+
     out = kwargs.pop("_output", None)
     ne_args: dict = kwargs.pop("_ne_args", {})
     if ne_args is None:
@@ -1261,7 +1266,12 @@ def fast_eval(  # noqa: C901
         # WebAssembly does not support threading, so we cannot use the iter_disk option
         iter_disk = False
 
-    if True:
+    # Check whether we can use miniexpr
+    for op in operands.values():
+        if not isinstance(op, blosc2.NDArray):
+            try_miniexpr = False
+
+    if try_miniexpr:
         cparams = kwargs.pop("cparams", blosc2.CParams())
         # Force single-threaded execution for prefilter evaluation
         # The prefilter callback accesses Python objects which aren't thread-safe
@@ -1272,17 +1282,21 @@ def fast_eval(  # noqa: C901
         res_eval = blosc2.empty(shape, dtype, cparams=cparams, **kwargs)
         # XXX Validate expression before using it
         # numexpr.validate(expression, local_dict=operands)
-        res_eval._set_pref_expr(expression, operands)
-
-        # This line would NOT allocate physical RAM on any modern OS:
-        aux = np.empty(res_eval.shape, res_eval.dtype)
-        # Physical allocation happens here (when writing):
-        res_eval[...] = aux
-        res_eval.schunk.remove_prefilter("miniexpr")
-        # if cparams.nthreads > 1:
-        #     res_eval.schunk.cparams.nthreads = prev_nthreads
-
-        return res_eval
+        try:
+            res_eval._set_pref_expr(expression, operands)
+            # This line would NOT allocate physical RAM on any modern OS:
+            aux = np.empty(res_eval.shape, res_eval.dtype)
+            # Physical allocation happens here (when writing):
+            res_eval[...] = aux
+            res_eval.schunk.remove_prefilter("miniexpr")
+            # if cparams.nthreads > 1:
+            #     res_eval.schunk.cparams.nthreads = prev_nthreads
+            return res_eval
+        except Exception:
+            # print(f"Error setting prefilter expression: {e}")
+            # This expression is not supported; clean up the prefilter and continue
+            # res_eval.schunk.remove_prefilter("miniexpr")  # XXX
+            pass
 
     chunk_operands = {}
     # Check which chunks intersect with _slice
