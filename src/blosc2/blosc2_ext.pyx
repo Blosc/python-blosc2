@@ -1843,7 +1843,6 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     cdef void* src
     cdef int32_t chunk_nbytes, chunk_cbytes, block_nbytes
     cdef int start
-    cdef blosc2_context** input_dctxs = <blosc2_context**> calloc(udata.ninputs, sizeof(blosc2_context*))
     cdef blosc2_context* dctx
     for i in range(udata.ninputs):
         ndarr = udata.inputs[i]
@@ -1866,10 +1865,10 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
             else:
                 # This can add a significant overhead, but it is needed for thread safety.
                 # Perhaps one can create a specific (serial) context just for blosc2_getitem_ctx?
-                input_dctxs[i] = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
-                dctx = input_dctxs[i]
+                dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
             rc = blosc2_getitem_ctx(dctx, src, chunk_cbytes, start, ndarr.blocknitems,
                                     input_buffers[i], block_nbytes)
+            blosc2_free_ctx(dctx)
             if rc < 0:
                 raise ValueError("miniexpr: error decompressing the chunk")
 
@@ -1884,11 +1883,7 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     # Free resources
     for i in range(udata.ninputs):
         free(input_buffers[i])
-        if input_dctxs[i] != NULL:
-            # When doing profiling (see above code), this can be NULL
-            blosc2_free_ctx(input_dctxs[i])
     free(input_buffers)
-    free(input_dctxs)
 
     return 0
 
