@@ -21,7 +21,10 @@ def udf1p(inputs_tuple, output, offset):
 if blosc2._HAS_NUMBA:
     import numba
 
-    @numba.jit(parallel=True)
+    # We should avoid parallel=True here because the fast_eval path in
+    # lazyexpr.py may use background threads for reading chunks, and
+    # having nested parallelism can lead to crashes (e.g. on macOS with Python 3.13)
+    @numba.jit(nopython=True)
     def udf1p_numba(inputs_tuple, output, offset):
         x = inputs_tuple[0]
         output[:] = x + 1
