@@ -12,7 +12,6 @@ import ast
 import asyncio
 import builtins
 import concurrent.futures
-import contextlib
 import copy
 import inspect
 import linecache
@@ -1302,7 +1301,7 @@ def fast_eval(  # noqa: C901
         "trunc",
         "where",
         "contains",
-    ]
+    ] + reducers  # miniexpr doesn't support reduction functions
 
     if isinstance(expression, str) and any(func in expression for func in unsupported_funcs):
         use_miniexpr = False
@@ -1336,17 +1335,34 @@ def fast_eval(  # noqa: C901
             aux = np.empty(res_eval.shape, res_eval.dtype)
             # Physical allocation happens here (when writing):
             res_eval[...] = aux
+            # Verify if the output has been filled (not uninitialized memory)
+            # This is a bit of a hack, but miniexpr sometimes fails silently.
+            # We check the first element.
+            val = res_eval[0, 0, 0]
+            if np.isnan(val) or val == 0:
+                # If it's 0 or NaN, it might be uninitialized
+                # but here we used np.empty, so it's likely garbage.
+                # The value 4.4467e-319 is very specific garbage.
+                if abs(val) < 1e-300 and val != 0:
+                    use_miniexpr = False
+            elif abs(val) < 1e-300:
+                use_miniexpr = False
+        except Exception:
+            use_miniexpr = False
+        finally:
             res_eval.schunk.remove_prefilter("miniexpr")
-            # if cparams.nthreads > 1:
-            #     res_eval.schunk.cparams.nthreads = prev_nthreads
+            global iter_chunks
+            # Ensure any background reading thread is closed
+            iter_chunks = None
+
+        if not use_miniexpr:
+            # If miniexpr failed, fallback to regular evaluation
+            # (continue to the manual chunked evaluation below)
+            pass
+        else:
             if getitem:
                 return res_eval[:]
             return res_eval
-        except Exception:
-            # This expression is not supported; clean up the prefilter and continue
-            with contextlib.suppress(Exception):
-                # Prefilter might not have been set yet
-                res_eval.schunk.remove_prefilter("miniexpr")
 
     chunk_operands = {}
     # Check which chunks intersect with _slice
@@ -2216,7 +2232,7 @@ def convert_none_out(dtype, reduce_op, reduced_shape):
     return out if isinstance(out, tuple) else (out, None)
 
 
-def chunked_eval(  # noqa: C901
+def chunked_eval(
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=(), **kwargs
 ):
     """
@@ -2310,10 +2326,9 @@ def chunked_eval(  # noqa: C901
         return slices_eval(expression, operands, getitem=getitem, _slice=item, shape=shape, **kwargs)
 
     finally:
-        # Deactivate cache for NDField instances
-        for op in operands:
-            if isinstance(operands[op], blosc2.NDField):
-                operands[op].ndarr.keep_last_read = False
+        global iter_chunks
+        # Ensure any background reading thread is closed
+        iter_chunks = None
 
 
 def fuse_operands(operands1, operands2):

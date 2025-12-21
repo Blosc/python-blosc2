@@ -1723,7 +1723,9 @@ cdef class SChunk:
         cparams.preparams = preparams
         _check_cparams(cparams)
 
-        blosc2_free_ctx(self.schunk.cctx)
+        if self.schunk.cctx != NULL:
+            # Freeing NULL context can lead to segmentation fault
+            blosc2_free_ctx(self.schunk.cctx)
         self.schunk.cctx = blosc2_create_cctx(dereference(cparams))
         if self.schunk.cctx == NULL:
             raise RuntimeError("Could not create compression context")
@@ -1737,22 +1739,31 @@ cdef class SChunk:
 
         # Clean up the miniexpr handle if this is a miniexpr_prefilter
         if self.schunk.storage.cparams.prefilter == <blosc2_prefilter_fn>miniexpr_prefilter:
-            me_data = <me_udata*>self.schunk.storage.cparams.preparams.user_data
-            free(me_data.inputs)
-            if me_data.miniexpr_handle != NULL:  # XXX do we really need the conditional?
-                me_free(me_data.miniexpr_handle)
-            free(me_data)
-        else:
+            if self.schunk.storage.cparams.preparams != NULL:
+                me_data = <me_udata*>self.schunk.storage.cparams.preparams.user_data
+                if me_data != NULL:
+                    if me_data.inputs != NULL:
+                        free(me_data.inputs)
+                    if me_data.miniexpr_handle != NULL:  # XXX do we really need the conditional?
+                        me_free(me_data.miniexpr_handle)
+                    free(me_data)
+        elif self.schunk.storage.cparams.prefilter != NULL:
             # From Python the preparams->udata with always have the field py_func
-            udata = <user_filters_udata*>self.schunk.storage.cparams.preparams.user_data
-            free(udata.py_func)
-            free(udata)
+            if self.schunk.storage.cparams.preparams != NULL:
+                udata = <user_filters_udata*>self.schunk.storage.cparams.preparams.user_data
+                if udata != NULL:
+                    if udata.py_func != NULL:
+                        free(udata.py_func)
+                    free(udata)
 
-        free(self.schunk.storage.cparams.preparams)
+        if self.schunk.storage.cparams.preparams != NULL:
+            free(self.schunk.storage.cparams.preparams)
         self.schunk.storage.cparams.preparams = NULL
         self.schunk.storage.cparams.prefilter = NULL
 
-        blosc2_free_ctx(self.schunk.cctx)
+        if self.schunk.cctx != NULL:
+            # Freeing NULL context can lead to segmentation fault
+            blosc2_free_ctx(self.schunk.cctx)
         if _new_ctx:
             self.schunk.cctx = blosc2_create_cctx(dereference(self.schunk.storage.cparams))
             if self.schunk.cctx == NULL:
@@ -2833,7 +2844,9 @@ cdef class NDArray:
         cparams.preparams = preparams
         _check_cparams(cparams)
 
-        blosc2_free_ctx(self.array.sc.cctx)
+        if self.array.sc.cctx != NULL:
+            # Freeing NULL context can lead to segmentation fault
+            blosc2_free_ctx(self.array.sc.cctx)
         self.array.sc.cctx = blosc2_create_cctx(dereference(cparams))
         if self.array.sc.cctx == NULL:
             raise RuntimeError("Could not create compression context")
@@ -2878,7 +2891,9 @@ cdef class NDArray:
         dparams.postparams = postparams
         _check_dparams(dparams, self.array.sc.storage.cparams)
 
-        blosc2_free_ctx(self.array.sc.dctx)
+        if self.array.sc.dctx != NULL:
+            # Freeing NULL context can lead to segmentation fault
+            blosc2_free_ctx(self.array.sc.dctx)
         self.array.sc.dctx = blosc2_create_dctx(dereference(dparams))
         if self.array.sc.dctx == NULL:
             raise RuntimeError("Could not create decompression context")
