@@ -493,7 +493,7 @@ cdef extern from "b2nd.h":
     int b2nd_free(b2nd_array_t *array)
     int b2nd_get_slice_cbuffer(b2nd_array_t *array,
                                int64_t *start, int64_t *stop,
-                               void *buffer, int64_t *buffershape, int64_t buffersize) nogil
+                               void *buffer, int64_t *buffershape, int64_t buffersize)
     int b2nd_set_slice_cbuffer(void *buffer, int64_t *buffershape, int64_t buffersize,
                                int64_t *start, int64_t *stop, b2nd_array_t *array)
     int b2nd_get_slice(b2nd_context_t *ctx, b2nd_array_t **array, b2nd_array_t *src, const int64_t *start,
@@ -525,7 +525,7 @@ cdef extern from "b2nd.h":
                           const void *src, const int64_t *src_pad_shape,
                           const int64_t *src_start, const int64_t *src_stop,
                           void *dst, const int64_t *dst_pad_shape,
-                          const int64_t *dst_start) nogil
+                          const int64_t *dst_start)
 
 
 # miniexpr C API declarations
@@ -1876,7 +1876,6 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     if miniexpr_handle == NULL:
         raise ValueError("miniexpr: handle not assigned")
     # Call thread-safe miniexpr C API
-    # XXX Add error checking inside the function?
     me_eval(miniexpr_handle, <const void**>input_buffers, udata.ninputs,
             <void*>params_output, ndarr.blocknitems)
 
@@ -2808,7 +2807,6 @@ cdef class NDArray:
         if variables == NULL:
             raise MemoryError()
         cdef me_variable *var
-        print(f"variables: {inputs.keys()}")
         for i, (k, v) in enumerate(inputs.items()):
             var = &variables[i]
             var_name = k.encode("utf-8") if isinstance(k, str) else k

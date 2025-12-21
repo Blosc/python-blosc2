@@ -12,6 +12,7 @@ import ast
 import asyncio
 import builtins
 import concurrent.futures
+import contextlib
 import copy
 import inspect
 import linecache
@@ -92,6 +93,7 @@ if not NUMPY_GE_2_0:  # handle non-array-api compliance
     safe_numpy_globals["vecdot"] = npvecdot
 
 # Set this to False if miniexpr should not be tried out
+# Disabled: miniexpr has critical bugs with scalar constants in expressions
 try_miniexpr = True
 
 
@@ -1221,6 +1223,13 @@ def fast_eval(  # noqa: C901
     """
     global try_miniexpr
 
+    # Use a local copy so we don't modify the global
+    use_miniexpr = try_miniexpr
+
+    # Disable miniexpr for UDFs (callable expressions)
+    if callable(expression):
+        use_miniexpr = False
+
     out = kwargs.pop("_output", None)
     ne_args: dict = kwargs.pop("_ne_args", {})
     if ne_args is None:
@@ -1267,11 +1276,49 @@ def fast_eval(  # noqa: C901
         iter_disk = False
 
     # Check whether we can use miniexpr
-    for op in operands.values():
-        if not isinstance(op, blosc2.NDArray):
-            try_miniexpr = False
+    # Miniexpr only supports a subset of functions - disable for unsupported ones
+    unsupported_funcs = [
+        "acosh",
+        "arctan2",  # miniexpr C library works, but Python bindings have issues
+        "arccosh",
+        "arcsinh",
+        "arctanh",
+        "asinh",
+        "atanh",
+        "clip",
+        "conj",
+        "expm1",
+        "imag",
+        "log",  # miniexpr uses log10 by default, but blosc2 expects ln
+        "log1p",
+        "log2",
+        "logaddexp",
+        "maximum",
+        "minimum",
+        "real",
+        "round",
+        "sign",
+        "square",
+        "trunc",
+        "where",
+        "contains",
+    ]
 
-    if try_miniexpr:
+    if isinstance(expression, str) and any(func in expression for func in unsupported_funcs):
+        use_miniexpr = False
+
+    if use_miniexpr:
+        for op in operands.values():
+            # Only NDArray in-memory operands
+            if not (isinstance(op, blosc2.NDArray) and op.urlpath is None and out is None):
+                use_miniexpr = False
+                break
+            # Check that partitions are well-behaved (no padding)
+            if not blosc2.are_partitions_behaved(op.shape, op.chunks, op.blocks):
+                use_miniexpr = False
+                break
+
+    if use_miniexpr:
         cparams = kwargs.pop("cparams", blosc2.CParams())
         # Force single-threaded execution for prefilter evaluation
         # The prefilter callback accesses Python objects which aren't thread-safe
@@ -1279,7 +1326,8 @@ def fast_eval(  # noqa: C901
         # if cparams.nthreads > 1:
         #     prev_nthreads = cparams.nthreads
         #     cparams.nthreads = 1
-        res_eval = blosc2.empty(shape, dtype, cparams=cparams, **kwargs)
+        # Use the same chunks/blocks as the input operands for consistency
+        res_eval = blosc2.empty(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         # XXX Validate expression before using it
         # numexpr.validate(expression, local_dict=operands)
         try:
@@ -1291,12 +1339,14 @@ def fast_eval(  # noqa: C901
             res_eval.schunk.remove_prefilter("miniexpr")
             # if cparams.nthreads > 1:
             #     res_eval.schunk.cparams.nthreads = prev_nthreads
+            if getitem:
+                return res_eval[:]
             return res_eval
         except Exception:
-            # print(f"Error setting prefilter expression: {e}")
             # This expression is not supported; clean up the prefilter and continue
-            # res_eval.schunk.remove_prefilter("miniexpr")  # XXX
-            pass
+            with contextlib.suppress(Exception):
+                # Prefilter might not have been set yet
+                res_eval.schunk.remove_prefilter("miniexpr")
 
     chunk_operands = {}
     # Check which chunks intersect with _slice
