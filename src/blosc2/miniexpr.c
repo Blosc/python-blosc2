@@ -234,7 +234,7 @@ typedef struct state {
 /* Forward declaration */
 static me_expr *new_expr(const int type, const me_expr *parameters[]);
 
-/* Infer result type from expression tree */
+/* Infer computation type from expression tree (for evaluation) */
 static me_dtype infer_result_type(const me_expr *n) {
     if (!n) return ME_FLOAT64;
 
@@ -261,11 +261,65 @@ static me_dtype infer_result_type(const me_expr *n) {
         case ME_CLOSURE5:
         case ME_CLOSURE6:
         case ME_CLOSURE7: {
+            // For comparisons with ME_BOOL output, we still need to infer the
+            // computation type from operands (e.g., float64 for float inputs).
+            // Don't return ME_BOOL early - let the operand types determine
+            // the computation type.
+
             const int arity = ARITY(n->type);
             me_dtype result = ME_BOOL;
 
             for (int i = 0; i < arity; i++) {
                 me_dtype param_type = infer_result_type((const me_expr *) n->parameters[i]);
+                result = promote_types(result, param_type);
+            }
+
+            return result;
+        }
+    }
+
+    return ME_FLOAT64;
+}
+
+/* Infer logical output type from expression tree (for compilation with ME_AUTO) */
+static me_dtype infer_output_type(const me_expr *n) {
+    if (!n) return ME_FLOAT64;
+
+    switch (TYPE_MASK(n->type)) {
+        case ME_CONSTANT:
+            return n->dtype;
+
+        case ME_VARIABLE:
+            return n->dtype;
+
+        case ME_FUNCTION0:
+        case ME_FUNCTION1:
+        case ME_FUNCTION2:
+        case ME_FUNCTION3:
+        case ME_FUNCTION4:
+        case ME_FUNCTION5:
+        case ME_FUNCTION6:
+        case ME_FUNCTION7:
+        case ME_CLOSURE0:
+        case ME_CLOSURE1:
+        case ME_CLOSURE2:
+        case ME_CLOSURE3:
+        case ME_CLOSURE4:
+        case ME_CLOSURE5:
+        case ME_CLOSURE6:
+        case ME_CLOSURE7: {
+            // If this node is a comparison (dtype == ME_BOOL set during parsing),
+            // the output type is ME_BOOL
+            if (n->dtype == ME_BOOL) {
+                return ME_BOOL;
+            }
+
+            // Otherwise, infer from operands
+            const int arity = ARITY(n->type);
+            me_dtype result = ME_BOOL;
+
+            for (int i = 0; i < arity; i++) {
+                me_dtype param_type = infer_output_type((const me_expr *) n->parameters[i]);
                 result = promote_types(result, param_type);
             }
 
@@ -1694,6 +1748,7 @@ static void vec_convert_##FROM_SUFFIX##_to_##TO_SUFFIX(const FROM_TYPE *in, TO_T
 }
 
 /* Generate all conversion functions */
+/* Conversions FROM bool TO other types */
 DEFINE_VEC_CONVERT(bool, i8, bool, int8_t)
 DEFINE_VEC_CONVERT(bool, i16, bool, int16_t)
 DEFINE_VEC_CONVERT(bool, i32, bool, int32_t)
@@ -1704,6 +1759,18 @@ DEFINE_VEC_CONVERT(bool, u32, bool, uint32_t)
 DEFINE_VEC_CONVERT(bool, u64, bool, uint64_t)
 DEFINE_VEC_CONVERT(bool, f32, bool, float)
 DEFINE_VEC_CONVERT(bool, f64, bool, double)
+
+/* Conversions FROM other types TO bool */
+DEFINE_VEC_CONVERT(i8, bool, int8_t, bool)
+DEFINE_VEC_CONVERT(i16, bool, int16_t, bool)
+DEFINE_VEC_CONVERT(i32, bool, int32_t, bool)
+DEFINE_VEC_CONVERT(i64, bool, int64_t, bool)
+DEFINE_VEC_CONVERT(u8, bool, uint8_t, bool)
+DEFINE_VEC_CONVERT(u16, bool, uint16_t, bool)
+DEFINE_VEC_CONVERT(u32, bool, uint32_t, bool)
+DEFINE_VEC_CONVERT(u64, bool, uint64_t, bool)
+DEFINE_VEC_CONVERT(f32, bool, float, bool)
+DEFINE_VEC_CONVERT(f64, bool, double, bool)
 
 DEFINE_VEC_CONVERT(i8, i16, int8_t, int16_t)
 DEFINE_VEC_CONVERT(i8, i32, int8_t, int32_t)
@@ -1772,6 +1839,17 @@ static convert_func_t get_convert_func(me_dtype from, me_dtype to) {
     CONV_CASE(ME_BOOL, ME_UINT64, bool, u64)
     CONV_CASE(ME_BOOL, ME_FLOAT32, bool, f32)
     CONV_CASE(ME_BOOL, ME_FLOAT64, bool, f64)
+
+    CONV_CASE(ME_INT8, ME_BOOL, i8, bool)
+    CONV_CASE(ME_INT16, ME_BOOL, i16, bool)
+    CONV_CASE(ME_INT32, ME_BOOL, i32, bool)
+    CONV_CASE(ME_INT64, ME_BOOL, i64, bool)
+    CONV_CASE(ME_UINT8, ME_BOOL, u8, bool)
+    CONV_CASE(ME_UINT16, ME_BOOL, u16, bool)
+    CONV_CASE(ME_UINT32, ME_BOOL, u32, bool)
+    CONV_CASE(ME_UINT64, ME_BOOL, u64, bool)
+    CONV_CASE(ME_FLOAT32, ME_BOOL, f32, bool)
+    CONV_CASE(ME_FLOAT64, ME_BOOL, f64, bool)
 
     CONV_CASE(ME_INT8, ME_INT16, i8, i16)
     CONV_CASE(ME_INT8, ME_INT32, i8, i32)
@@ -2488,8 +2566,20 @@ static void private_eval(const me_expr *n) {
     // Promote variables
     promote_variables_in_tree((me_expr *) n, result_type, promotions, &promo_count, n->nitems);
 
-    // Update expression type
+    // Check if we need output type conversion (e.g., computation in float64, output in bool)
     me_dtype saved_dtype = n->dtype;
+    void *original_output = n->output;
+    void *temp_output = NULL;
+
+    if (saved_dtype != result_type) {
+        // Allocate temp buffer for computation
+        temp_output = malloc(n->nitems * dtype_size(result_type));
+        if (temp_output) {
+            ((me_expr *) n)->output = temp_output;
+        }
+    }
+
+    // Update expression type for evaluation
     ((me_expr *) n)->dtype = result_type;
 
     // Evaluate with promoted types
@@ -2535,6 +2625,17 @@ static void private_eval(const me_expr *n) {
 #else
             assert(0 && "Invalid dtype"); // Debug: trigger debugger
 #endif
+    }
+
+    // If we used a temp buffer, convert to final output type
+    if (temp_output) {
+        convert_func_t conv = get_convert_func(result_type, saved_dtype);
+        if (conv) {
+            conv(temp_output, original_output, n->nitems);
+        }
+        // Restore original output pointer
+        ((me_expr *) n)->output = original_output;
+        free(temp_output);
     }
 
     // Restore original variable bindings
@@ -2904,9 +3005,11 @@ static me_expr *private_compile(const char *expression, const me_variable *varia
                 return NULL;
             }
         } else {
-            // Mode 2: Output dtype is specified, all variables must be ME_AUTO
-            if (specified_count > 0) {
-                fprintf(stderr, "Error: When output dtype is specified, all variable dtypes must be ME_AUTO\n");
+            // Mode 2: Output dtype is specified
+            // Two sub-modes: all ME_AUTO (homogeneous), or all explicit (heterogeneous with conversion)
+            if (auto_count > 0 && specified_count > 0) {
+                // Mixed mode not allowed
+                fprintf(stderr, "Error: Variable dtypes must be all ME_AUTO or all explicitly specified\n");
                 if (error) *error = -1;
                 return NULL;
             }
@@ -2961,8 +3064,9 @@ static me_expr *private_compile(const char *expression, const me_variable *varia
 
         // If dtype is ME_AUTO, infer from expression; otherwise use provided dtype
         if (dtype == ME_AUTO) {
-            root->dtype = infer_result_type(root);
+            root->dtype = infer_output_type(root);
         } else {
+            // User explicitly requested a dtype - use it (will cast if needed)
             root->dtype = dtype;
         }
 
