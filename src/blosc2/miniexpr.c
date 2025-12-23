@@ -46,6 +46,13 @@ For log = natural log do nothing (NumPy compatible)
 For log = base 10 log comment the next line. */
 #define ME_NAT_LOG
 
+#if defined(_MSC_VER)
+// Enable C99 complex support on MSVC
+#ifndef _CRT_USE_C99_COMPLEX
+#define _CRT_USE_C99_COMPLEX
+#endif
+#endif
+
 #include "miniexpr.h"
 #include <stdlib.h>
 #include <math.h>
