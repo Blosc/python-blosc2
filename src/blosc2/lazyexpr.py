@@ -1279,11 +1279,6 @@ def fast_eval(  # noqa: C901
         "clip",
         "maximum",
         "minimum",
-        "real",
-        "round",
-        "sign",
-        "square",
-        "trunc",
         "where",
         "contains",
     ] + reducers  # miniexpr doesn't support reduction functions

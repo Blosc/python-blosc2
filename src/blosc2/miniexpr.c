@@ -247,6 +247,11 @@ typedef struct state {
 static me_expr *new_expr(const int type, const me_expr *parameters[]);
 static double conj_wrapper(double x);
 static double imag_wrapper(double x);
+static double real_wrapper(double x);
+static double round_wrapper(double x);
+static double sign(double x);
+static double square(double x);
+static double trunc_wrapper(double x);
 
 /* Infer computation type from expression tree (for evaluation) */
 static me_dtype infer_result_type(const me_expr *n) {
@@ -275,16 +280,18 @@ static me_dtype infer_result_type(const me_expr *n) {
         case ME_CLOSURE5:
         case ME_CLOSURE6:
         case ME_CLOSURE7: {
-            // Special case: imag() returns real type from complex input
-            if (IS_FUNCTION(n->type) && ARITY(n->type) == 1 && n->function == (void*)imag_wrapper) {
-                me_dtype param_type = infer_result_type((const me_expr *) n->parameters[0]);
-                if (param_type == ME_COMPLEX64) {
-                    return ME_FLOAT32;
-                } else if (param_type == ME_COMPLEX128) {
-                    return ME_FLOAT64;
+            // Special case: imag() and real() return real type from complex input
+            if (IS_FUNCTION(n->type) && ARITY(n->type) == 1) {
+                if (n->function == (void*)imag_wrapper || n->function == (void*)real_wrapper) {
+                    me_dtype param_type = infer_result_type((const me_expr *) n->parameters[0]);
+                    if (param_type == ME_COMPLEX64) {
+                        return ME_FLOAT32;
+                    } else if (param_type == ME_COMPLEX128) {
+                        return ME_FLOAT64;
+                    }
+                    // If input is not complex, return as-is (shouldn't happen, but be safe)
+                    return param_type;
                 }
-                // If input is not complex, return as-is (shouldn't happen, but be safe)
-                return param_type;
             }
 
             // For comparisons with ME_BOOL output, we still need to infer the
@@ -334,16 +341,18 @@ static me_dtype infer_output_type(const me_expr *n) {
         case ME_CLOSURE5:
         case ME_CLOSURE6:
         case ME_CLOSURE7: {
-            // Special case: imag() returns real type from complex input
-            if (IS_FUNCTION(n->type) && ARITY(n->type) == 1 && n->function == (void*)imag_wrapper) {
-                me_dtype param_type = infer_output_type((const me_expr *) n->parameters[0]);
-                if (param_type == ME_COMPLEX64) {
-                    return ME_FLOAT32;
-                } else if (param_type == ME_COMPLEX128) {
-                    return ME_FLOAT64;
+            // Special case: imag() and real() return real type from complex input
+            if (IS_FUNCTION(n->type) && ARITY(n->type) == 1) {
+                if (n->function == (void*)imag_wrapper || n->function == (void*)real_wrapper) {
+                    me_dtype param_type = infer_output_type((const me_expr *) n->parameters[0]);
+                    if (param_type == ME_COMPLEX64) {
+                        return ME_FLOAT32;
+                    } else if (param_type == ME_COMPLEX128) {
+                        return ME_FLOAT64;
+                    }
+                    // If input is not complex, return as-is (shouldn't happen, but be safe)
+                    return param_type;
                 }
-                // If input is not complex, return as-is (shouldn't happen, but be safe)
-                return param_type;
             }
 
             // If this node is a comparison (dtype == ME_BOOL set during parsing),
@@ -526,8 +535,7 @@ static double logaddexp(double a, double b) {
 }
 
 /* Forward declarations for complex operations */
-static double conj_wrapper(double x);
-static double imag_wrapper(double x);
+/* (Already declared above) */
 
 /* Wrapper functions for complex operations (for function pointer compatibility) */
 /* These are placeholders - actual implementation is in vector functions */
@@ -538,6 +546,28 @@ static double conj_wrapper(double x) {
 }
 
 static double imag_wrapper(double x) {
+    /* This should never be called for real numbers */
+    (void)x;
+    return NAN;
+}
+
+/* Wrapper for round: round to nearest integer */
+static double round_wrapper(double x) { return round(x); }
+
+/* sign: returns -1.0, 0.0, or 1.0 based on sign of x */
+static double sign(double x) {
+    if (x > 0.0) return 1.0;
+    if (x < 0.0) return -1.0;
+    return 0.0;
+}
+
+/* square: x * x */
+static double square(double x) { return x * x; }
+
+/* Wrapper for trunc: truncate towards zero */
+static double trunc_wrapper(double x) { return trunc(x); }
+
+static double real_wrapper(double x) {
     /* This should never be called for real numbers */
     (void)x;
     return NAN;
@@ -623,11 +653,16 @@ static const me_variable functions[] = {
     {"npr", 0, npr, ME_FUNCTION2 | ME_FLAG_PURE, 0},
     {"pi", 0, pi, ME_FUNCTION0 | ME_FLAG_PURE, 0},
     {"pow", 0, pow, ME_FUNCTION2 | ME_FLAG_PURE, 0},
+    {"real", 0, real_wrapper, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"round", 0, round_wrapper, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"sign", 0, sign, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"sin", 0, sin, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"sinh", 0, sinh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"sqrt", 0, sqrt, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"square", 0, square, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"tan", 0, tan, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"tanh", 0, tanh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"trunc", 0, trunc_wrapper, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {0, 0, 0, 0, 0}
 };
 
@@ -2199,6 +2234,20 @@ static void me_eval_##SUFFIX(const me_expr *n) { \
                     if (adata) VEC_COS(adata, output, n->nitems); \
                 } else if (func_ptr == (void*)negate) { \
                     if (adata) VEC_NEGATE(adata, output, n->nitems); \
+                } else if (func_ptr == (void*)imag_wrapper) { \
+                    /* NumPy semantics: imag(real) == 0 with same dtype */ \
+                    if (adata) { \
+                        for (i = 0; i < n->nitems; i++) { \
+                            output[i] = (TYPE)0; \
+                        } \
+                    } \
+                } else if (func_ptr == (void*)real_wrapper) { \
+                    /* NumPy semantics: real(real) == real with same dtype */ \
+                    if (adata) { \
+                        for (i = 0; i < n->nitems; i++) { \
+                            output[i] = adata[i]; \
+                        } \
+                    } \
                 } else if (func_ptr == (void*)conj_wrapper) { \
                     if (adata) VEC_CONJ(adata, output, n->nitems); \
                 } else { \
@@ -2276,6 +2325,7 @@ static void me_eval_##SUFFIX(const me_expr *n) { \
 #define vec_sin(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = sin((a)[_i]); } while(0)
 #define vec_cos(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = cos((a)[_i]); } while(0)
 #define vec_negate(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = -(a)[_i]; } while(0)
+#define vec_copy(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = (a)[_i]; } while(0)
 
 #define vec_add_f32(a, b, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = (a)[_i] + (b)[_i]; } while(0)
 #define vec_sub_f32(a, b, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = (a)[_i] - (b)[_i]; } while(0)
@@ -2390,6 +2440,7 @@ static void me_eval_##SUFFIX(const me_expr *n) { \
 #define vec_negame_c64(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = -(a)[_i]; } while(0)
 #define vec_conj_c64(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = conjf((a)[_i]); } while(0)
 #define vec_imag_c64(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = cimagf((a)[_i]); } while(0)
+#define vec_real_c64(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = crealf((a)[_i]); } while(0)
 #define vec_conj_noop(a, out, n) do { (void)(a); (void)(out); (void)(n); } while(0)
 
 #define vec_add_c128(a, b, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = (a)[_i] + (b)[_i]; } while(0)
@@ -2404,6 +2455,7 @@ static void me_eval_##SUFFIX(const me_expr *n) { \
 #define vec_negame_c128(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = -(a)[_i]; } while(0)
 #define vec_conj_c128(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = conj((a)[_i]); } while(0)
 #define vec_imag_c128(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = cimag((a)[_i]); } while(0)
+#define vec_real_c128(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = creal((a)[_i]); } while(0)
 
 /* Generate float32 evaluator */
 DEFINE_ME_EVAL(f32, float,
@@ -2411,7 +2463,7 @@ DEFINE_ME_EVAL(f32, float,
                vec_add_scalar_f32, vec_mul_scalar_f32, vec_pow_scalar_f32,
                vec_sqrt_f32, vec_sin_f32, vec_cos_f32, vec_negame_f32,
                sqrtf, sinf, cosf, expf, logf, fabsf, powf,
-               vec_conj_noop)
+               vec_copy)
 
 /* Generate float64 (double) evaluator */
 DEFINE_ME_EVAL(f64, double,
@@ -2419,7 +2471,7 @@ DEFINE_ME_EVAL(f64, double,
                vec_add_scalar, vec_mul_scalar, vec_pow_scalar,
                vec_sqrt, vec_sin, vec_cos, vec_negate,
                sqrt, sin, cos, exp, log, fabs, pow,
-               vec_conj_noop)
+               vec_copy)
 
 /* Generate integer evaluators - sin/cos cast to double and back */
 DEFINE_ME_EVAL(i8, int8_t,
@@ -2683,45 +2735,59 @@ static bool all_variables_match_type(const me_expr *n, me_dtype target_type) {
 static void private_eval(const me_expr *n) {
     if (!n) return;
 
-    // Special case: imag() function returns real from complex input
-    if (IS_FUNCTION(n->type) && ARITY(n->type) == 1 && n->function == (void*)imag_wrapper) {
-        me_expr *arg = (me_expr*)n->parameters[0];
-        me_dtype arg_type = infer_result_type(arg);
+    // Special case: imag() and real() functions return real from complex input
+    if (IS_FUNCTION(n->type) && ARITY(n->type) == 1) {
+        if (n->function == (void*)imag_wrapper || n->function == (void*)real_wrapper) {
+            me_expr *arg = (me_expr*)n->parameters[0];
+            me_dtype arg_type = infer_result_type(arg);
 
-        if (arg_type == ME_COMPLEX64) {
-            // Evaluate argument as complex64
-            if (!arg->output) {
-                arg->output = malloc(n->nitems * sizeof(float complex));
-                arg->nitems = n->nitems;
-                ((me_expr*)arg)->dtype = ME_COMPLEX64;
-            }
-            me_eval_c64(arg);
+            if (arg_type == ME_COMPLEX64) {
+                // Evaluate argument as complex64
+                if (!arg->output) {
+                    arg->output = malloc(n->nitems * sizeof(float complex));
+                    arg->nitems = n->nitems;
+                    ((me_expr*)arg)->dtype = ME_COMPLEX64;
+                }
+                me_eval_c64(arg);
 
-            // Extract imaginary part to float32 output
-            const float complex *cdata = (const float complex*)arg->output;
-            float *output = (float*)n->output;
-            for (int i = 0; i < n->nitems; i++) {
-                output[i] = cimagf(cdata[i]);
-            }
-            return;
-        } else if (arg_type == ME_COMPLEX128) {
-            // Evaluate argument as complex128
-            if (!arg->output) {
-                arg->output = malloc(n->nitems * sizeof(double complex));
-                arg->nitems = n->nitems;
-                ((me_expr*)arg)->dtype = ME_COMPLEX128;
-            }
-            me_eval_c128(arg);
+                // Extract real/imaginary part to float32 output
+                const float complex *cdata = (const float complex*)arg->output;
+                float *output = (float*)n->output;
+                if (n->function == (void*)imag_wrapper) {
+                    for (int i = 0; i < n->nitems; i++) {
+                        output[i] = cimagf(cdata[i]);
+                    }
+                } else { // real_wrapper
+                    for (int i = 0; i < n->nitems; i++) {
+                        output[i] = crealf(cdata[i]);
+                    }
+                }
+                return;
+            } else if (arg_type == ME_COMPLEX128) {
+                // Evaluate argument as complex128
+                if (!arg->output) {
+                    arg->output = malloc(n->nitems * sizeof(double complex));
+                    arg->nitems = n->nitems;
+                    ((me_expr*)arg)->dtype = ME_COMPLEX128;
+                }
+                me_eval_c128(arg);
 
-            // Extract imaginary part to float64 output
-            const double complex *cdata = (const double complex*)arg->output;
-            double *output = (double*)n->output;
-            for (int i = 0; i < n->nitems; i++) {
-                output[i] = cimag(cdata[i]);
+                // Extract real/imaginary part to float64 output
+                const double complex *cdata = (const double complex*)arg->output;
+                double *output = (double*)n->output;
+                if (n->function == (void*)imag_wrapper) {
+                    for (int i = 0; i < n->nitems; i++) {
+                        output[i] = cimag(cdata[i]);
+                    }
+                } else { // real_wrapper
+                    for (int i = 0; i < n->nitems; i++) {
+                        output[i] = creal(cdata[i]);
+                    }
+                }
+                return;
             }
-            return;
+            // If not complex, fall through to normal evaluation
         }
-        // If not complex, fall through to normal evaluation
     }
 
     // Infer the result type from the expression tree
