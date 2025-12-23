@@ -2830,7 +2830,8 @@ cdef class NDArray:
 
         cdef int error = 0
         expression = expression.encode("utf-8") if isinstance(expression, str) else expression
-        udata.miniexpr_handle = me_compile(expression, variables, n, ME_AUTO, &error)
+        cdef me_dtype = me_dtype_from_numpy(self.dtype.num)
+        udata.miniexpr_handle = me_compile(expression, variables, n, me_dtype, &error)
         if udata.miniexpr_handle == NULL:
             raise NotImplementedError(f"Cannot compile expression: {expression}")
 

@@ -178,6 +178,18 @@ static me_dtype promote_types(me_dtype a, me_dtype b) {
     return ME_FLOAT64; // Fallback for out-of-range types
 }
 
+static bool is_integer_dtype(me_dtype dt) {
+    return dt >= ME_INT8 && dt <= ME_UINT64;
+}
+
+static bool is_float_dtype(me_dtype dt) {
+    return dt == ME_FLOAT32 || dt == ME_FLOAT64;
+}
+
+static bool is_complex_dtype(me_dtype dt) {
+    return dt == ME_COMPLEX64 || dt == ME_COMPLEX128;
+}
+
 /* Get size of a type in bytes */
 static size_t dtype_size(me_dtype dtype) {
     switch (dtype) {
@@ -627,8 +639,40 @@ static void skip_whitespace(state *s) {
 }
 
 static void read_number_token(state *s) {
+    const char *start = s->next;
     s->value = strtod(s->next, (char **) &s->next);
     s->type = TOK_NUMBER;
+
+    // Determine if it is a floating point or integer constant
+    bool is_float = false;
+    for (const char *p = start; p < s->next; p++) {
+        if (*p == '.' || *p == 'e' || *p == 'E') {
+            is_float = true;
+            break;
+        }
+    }
+
+    if (is_float) {
+        // Match NumPy conventions: float constants match target_dtype when it's a float type
+        // This ensures FLOAT32 arrays + float constants -> FLOAT32 (NumPy behavior)
+        if (s->target_dtype == ME_FLOAT32) {
+            s->dtype = ME_FLOAT32;
+        } else {
+            s->dtype = ME_FLOAT64;
+        }
+    } else {
+        // For integers, we use a heuristic
+        if (s->value > INT_MAX || s->value < INT_MIN) {
+            s->dtype = ME_INT64;
+        } else {
+            // Use target_dtype if it's an integer type, otherwise default to INT32
+            if (is_integer_dtype(s->target_dtype)) {
+                s->dtype = s->target_dtype;
+            } else {
+                s->dtype = ME_INT32;
+            }
+        }
+    }
 }
 
 static void read_identifier_token(state *s) {
@@ -818,7 +862,27 @@ static me_expr *base(state *s) {
             CHECK_NULL(ret);
 
             ret->value = s->value;
-            ret->dtype = s->target_dtype; // Use target dtype for constants
+            // Use inferred type for constants (floating point vs integer)
+            if (s->target_dtype == ME_AUTO) {
+                ret->dtype = s->dtype;
+            } else {
+                // If target_dtype is integer but constant is float/complex, we must use float/complex
+                if (is_integer_dtype(s->target_dtype)) {
+                    if (is_float_dtype(s->dtype) || is_complex_dtype(s->dtype)) {
+                        ret->dtype = s->dtype;
+                    } else if (is_integer_dtype(s->dtype) && dtype_size(s->dtype) > dtype_size(s->target_dtype)) {
+                        // Use larger integer type if needed
+                        ret->dtype = s->dtype;
+                    } else {
+                        ret->dtype = s->target_dtype;
+                    }
+                } else {
+                    // For float/complex target types, use target_dtype to match NumPy conventions
+                    // Float constants are typed based on target_dtype (FLOAT32 or FLOAT64)
+                    // This ensures FLOAT32 arrays + float constants -> FLOAT32 (NumPy behavior)
+                    ret->dtype = s->target_dtype;
+                }
+            }
             next_token(s);
             break;
 
@@ -1812,6 +1876,7 @@ DEFINE_VEC_CONVERT(u32, f64, uint32_t, double)
 DEFINE_VEC_CONVERT(u64, f64, uint64_t, double)
 
 DEFINE_VEC_CONVERT(f32, f64, float, double)
+DEFINE_VEC_CONVERT(f64, f32, double, float)
 DEFINE_VEC_CONVERT(f32, c64, float, float complex)
 DEFINE_VEC_CONVERT(f32, c128, float, double complex)
 
@@ -1891,6 +1956,7 @@ static convert_func_t get_convert_func(me_dtype from, me_dtype to) {
     CONV_CASE(ME_UINT64, ME_FLOAT64, u64, f64)
 
     CONV_CASE(ME_FLOAT32, ME_FLOAT64, f32, f64)
+    CONV_CASE(ME_FLOAT64, ME_FLOAT32, f64, f32)
     CONV_CASE(ME_FLOAT32, ME_COMPLEX64, f32, c64)
     CONV_CASE(ME_FLOAT32, ME_COMPLEX128, f32, c128)
 
@@ -3046,7 +3112,7 @@ static me_expr *private_compile(const char *expression, const me_variable *varia
         // This prevents type promotion issues when mixing float32 vars with float64 constants
         s.target_dtype = variables[0].dtype;
     } else {
-        s.target_dtype = ME_FLOAT64; // Fallback to double
+        s.target_dtype = ME_AUTO;
     }
 
     next_token(&s);

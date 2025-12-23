@@ -92,7 +92,6 @@ if not NUMPY_GE_2_0:  # handle non-array-api compliance
     safe_numpy_globals["vecdot"] = npvecdot
 
 # Set this to False if miniexpr should not be tried out
-# Disabled: miniexpr has critical bugs with scalar constants in expressions
 try_miniexpr = True
 
 
@@ -1278,7 +1277,6 @@ def fast_eval(  # noqa: C901
     # Miniexpr only supports a subset of functions - disable for unsupported ones
     unsupported_funcs = [
         "acosh",
-        "arctan2",  # miniexpr C library works, but Python bindings have issues
         "arccosh",
         "arcsinh",
         "arctanh",
@@ -1288,7 +1286,6 @@ def fast_eval(  # noqa: C901
         "conj",
         "expm1",
         "imag",
-        "log",  # miniexpr uses log10 by default, but blosc2 expects ln
         "log1p",
         "log2",
         "logaddexp",
@@ -1319,34 +1316,14 @@ def fast_eval(  # noqa: C901
 
     if use_miniexpr:
         cparams = kwargs.pop("cparams", blosc2.CParams())
-        # Force single-threaded execution for prefilter evaluation
-        # The prefilter callback accesses Python objects which aren't thread-safe
-        # across blosc2's C threads. numexpr does its own multi-threading internally.
-        # if cparams.nthreads > 1:
-        #     prev_nthreads = cparams.nthreads
-        #     cparams.nthreads = 1
         # Use the same chunks/blocks as the input operands for consistency
         res_eval = blosc2.empty(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
-        # XXX Validate expression before using it
-        # numexpr.validate(expression, local_dict=operands)
         try:
             res_eval._set_pref_expr(expression, operands)
             # This line would NOT allocate physical RAM on any modern OS:
             aux = np.empty(res_eval.shape, res_eval.dtype)
             # Physical allocation happens here (when writing):
             res_eval[...] = aux
-            # Verify if the output has been filled (not uninitialized memory)
-            # This is a bit of a hack, but miniexpr sometimes fails silently.
-            # We check the first element.
-            val = res_eval[0, 0, 0]
-            if np.isnan(val) or val == 0:
-                # If it's 0 or NaN, it might be uninitialized
-                # but here we used np.empty, so it's likely garbage.
-                # The value 4.4467e-319 is very specific garbage.
-                if abs(val) < 1e-300 and val != 0:
-                    use_miniexpr = False
-            elif abs(val) < 1e-300:
-                use_miniexpr = False
         except Exception:
             use_miniexpr = False
         finally:
@@ -1361,7 +1338,7 @@ def fast_eval(  # noqa: C901
             pass
         else:
             if getitem:
-                return res_eval[:]
+                return res_eval[()]
             return res_eval
 
     chunk_operands = {}
