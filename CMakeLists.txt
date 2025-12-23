@@ -32,6 +32,15 @@ target_link_libraries(blosc2_ext PRIVATE Python::NumPy)
 # Add include directory for miniexpr.h and others
 target_include_directories(blosc2_ext PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2")
 
+# Compiler-specific settings for clang-cl on Windows
+if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+    # clang-cl mimics MSVC, so set flags to ensure compatibility
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-command-line-argument -Wno-microsoft-enum-value")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-command-line-argument -Wno-microsoft-enum-value")
+    # Link clang runtime library for miniexpr sources
+    target_link_libraries(blosc2_ext PRIVATE clang_rt.builtins-x86_64.lib)
+endif()
+
 if(DEFINED ENV{USE_SYSTEM_BLOSC2})
     set(USE_SYSTEM_BLOSC2 ON)
 endif()
