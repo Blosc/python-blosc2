@@ -1277,12 +1277,6 @@ def fast_eval(  # noqa: C901
     # Miniexpr only supports a subset of functions - disable for unsupported ones
     unsupported_funcs = [
         "clip",
-        "conj",
-        "expm1",
-        "imag",
-        "log1p",
-        "log2",
-        "logaddexp",
         "maximum",
         "minimum",
         "real",

@@ -243,8 +243,10 @@ typedef struct state {
 #define NEW_EXPR(type, ...) new_expr((type), (const me_expr*[]){__VA_ARGS__})
 #define CHECK_NULL(ptr, ...) if ((ptr) == NULL) { __VA_ARGS__; return NULL; }
 
-/* Forward declaration */
+/* Forward declarations */
 static me_expr *new_expr(const int type, const me_expr *parameters[]);
+static double conj_wrapper(double x);
+static double imag_wrapper(double x);
 
 /* Infer computation type from expression tree (for evaluation) */
 static me_dtype infer_result_type(const me_expr *n) {
@@ -273,6 +275,18 @@ static me_dtype infer_result_type(const me_expr *n) {
         case ME_CLOSURE5:
         case ME_CLOSURE6:
         case ME_CLOSURE7: {
+            // Special case: imag() returns real type from complex input
+            if (IS_FUNCTION(n->type) && ARITY(n->type) == 1 && n->function == (void*)imag_wrapper) {
+                me_dtype param_type = infer_result_type((const me_expr *) n->parameters[0]);
+                if (param_type == ME_COMPLEX64) {
+                    return ME_FLOAT32;
+                } else if (param_type == ME_COMPLEX128) {
+                    return ME_FLOAT64;
+                }
+                // If input is not complex, return as-is (shouldn't happen, but be safe)
+                return param_type;
+            }
+
             // For comparisons with ME_BOOL output, we still need to infer the
             // computation type from operands (e.g., float64 for float inputs).
             // Don't return ME_BOOL early - let the operand types determine
@@ -320,6 +334,18 @@ static me_dtype infer_output_type(const me_expr *n) {
         case ME_CLOSURE5:
         case ME_CLOSURE6:
         case ME_CLOSURE7: {
+            // Special case: imag() returns real type from complex input
+            if (IS_FUNCTION(n->type) && ARITY(n->type) == 1 && n->function == (void*)imag_wrapper) {
+                me_dtype param_type = infer_output_type((const me_expr *) n->parameters[0]);
+                if (param_type == ME_COMPLEX64) {
+                    return ME_FLOAT32;
+                } else if (param_type == ME_COMPLEX128) {
+                    return ME_FLOAT64;
+                }
+                // If input is not complex, return as-is (shouldn't happen, but be safe)
+                return param_type;
+            }
+
             // If this node is a comparison (dtype == ME_BOOL set during parsing),
             // the output type is ME_BOOL
             if (n->dtype == ME_BOOL) {
@@ -480,6 +506,43 @@ void me_free(me_expr *n) {
 static double pi(void) { return 3.14159265358979323846; }
 static double e(void) { return 2.71828182845904523536; }
 
+/* Wrapper for expm1: exp(x) - 1, more accurate for small x */
+static double expm1_wrapper(double x) { return expm1(x); }
+
+/* Wrapper for log1p: log(1 + x), more accurate for small x */
+static double log1p_wrapper(double x) { return log1p(x); }
+
+/* Wrapper for log2: base-2 logarithm */
+static double log2_wrapper(double x) { return log2(x); }
+
+/* logaddexp: log(exp(a) + exp(b)), numerically stable */
+static double logaddexp(double a, double b) {
+    if (a == b) {
+        return a + log1p(1.0);  // log(2*exp(a)) = a + log(2)
+    }
+    double max_val = (a > b) ? a : b;
+    double min_val = (a > b) ? b : a;
+    return max_val + log1p(exp(min_val - max_val));
+}
+
+/* Forward declarations for complex operations */
+static double conj_wrapper(double x);
+static double imag_wrapper(double x);
+
+/* Wrapper functions for complex operations (for function pointer compatibility) */
+/* These are placeholders - actual implementation is in vector functions */
+static double conj_wrapper(double x) {
+    /* This should never be called for real numbers */
+    (void)x;
+    return NAN;
+}
+
+static double imag_wrapper(double x) {
+    /* This should never be called for real numbers */
+    (void)x;
+    return NAN;
+}
+
 static double fac(double a) {
     /* simplest version of fac */
     if (a < 0.0)
@@ -537,12 +600,15 @@ static const me_variable functions[] = {
     {"atan2", 0, atan2, ME_FUNCTION2 | ME_FLAG_PURE, 0},
     {"atanh", 0, atanh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"ceil", 0, ceil, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"conj", 0, conj_wrapper, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"cos", 0, cos, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"cosh", 0, cosh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"e", 0, e, ME_FUNCTION0 | ME_FLAG_PURE, 0},
     {"exp", 0, exp, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"expm1", 0, expm1_wrapper, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"fac", 0, fac, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"floor", 0, floor, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"imag", 0, imag_wrapper, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"ln", 0, log, ME_FUNCTION1 | ME_FLAG_PURE, 0},
 #ifdef ME_NAT_LOG
     {"log", 0, log, ME_FUNCTION1 | ME_FLAG_PURE, 0},
@@ -550,6 +616,9 @@ static const me_variable functions[] = {
     {"log", 0, log10, ME_FUNCTION1 | ME_FLAG_PURE, 0},
 #endif
     {"log10", 0, log10, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"log1p", 0, log1p_wrapper, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"log2", 0, log2_wrapper, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"logaddexp", 0, logaddexp, ME_FUNCTION2 | ME_FLAG_PURE, 0},
     {"ncr", 0, ncr, ME_FUNCTION2 | ME_FLAG_PURE, 0},
     {"npr", 0, npr, ME_FUNCTION2 | ME_FLAG_PURE, 0},
     {"pi", 0, pi, ME_FUNCTION0 | ME_FLAG_PURE, 0},
@@ -1744,6 +1813,18 @@ static void vec_negame_c64(const float complex *a, float complex *out, int n) {
     for (i = 0; i < n; i++) out[i] = -a[i];
 }
 
+static void vec_conj_c64(const float complex *a, float complex *out, int n) {
+    int i;
+#pragma GCC ivdep
+    for (i = 0; i < n; i++) out[i] = conjf(a[i]);
+}
+
+static void vec_imag_c64(const float complex *a, float *out, int n) {
+    int i;
+#pragma GCC ivdep
+    for (i = 0; i < n; i++) out[i] = cimagf(a[i]);
+}
+
 static void vec_add_c128(const double complex *a, const double complex *b, double complex *out, int n) {
     int i;
 #pragma GCC ivdep
@@ -1802,6 +1883,18 @@ static void vec_negame_c128(const double complex *a, double complex *out, int n)
     int i;
 #pragma GCC ivdep
     for (i = 0; i < n; i++) out[i] = -a[i];
+}
+
+static void vec_conj_c128(const double complex *a, double complex *out, int n) {
+    int i;
+#pragma GCC ivdep
+    for (i = 0; i < n; i++) out[i] = conj(a[i]);
+}
+
+static void vec_imag_c128(const double complex *a, double *out, int n) {
+    int i;
+#pragma GCC ivdep
+    for (i = 0; i < n; i++) out[i] = cimag(a[i]);
 }
 
 /* ============================================================================
@@ -1984,7 +2077,8 @@ typedef float (*me_fun1_f32)(float);
 #define DEFINE_ME_EVAL(SUFFIX, TYPE, VEC_ADD, VEC_SUB, VEC_MUL, VEC_DIV, VEC_POW, \
     VEC_ADD_SCALAR, VEC_MUL_SCALAR, VEC_POW_SCALAR, \
     VEC_SQRT, VEC_SIN, VEC_COS, VEC_NEGATE, \
-    SQRT_FUNC, SIN_FUNC, COS_FUNC, EXP_FUNC, LOG_FUNC, FABS_FUNC, POW_FUNC) \
+    SQRT_FUNC, SIN_FUNC, COS_FUNC, EXP_FUNC, LOG_FUNC, FABS_FUNC, POW_FUNC, \
+    VEC_CONJ) \
 static void me_eval_##SUFFIX(const me_expr *n) { \
     if (!n || !n->output || n->nitems <= 0) return; \
     \
@@ -2105,6 +2199,8 @@ static void me_eval_##SUFFIX(const me_expr *n) { \
                     if (adata) VEC_COS(adata, output, n->nitems); \
                 } else if (func_ptr == (void*)negate) { \
                     if (adata) VEC_NEGATE(adata, output, n->nitems); \
+                } else if (func_ptr == (void*)conj_wrapper) { \
+                    if (adata) VEC_CONJ(adata, output, n->nitems); \
                 } else { \
                     me_fun1 func = (me_fun1)func_ptr; \
                     if (arg->type == ME_CONSTANT) { \
@@ -2292,6 +2388,9 @@ static void me_eval_##SUFFIX(const me_expr *n) { \
 #define vec_pow_scalar_c64(a, b, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = cpowf((a)[_i], (b)); } while(0)
 #define vec_sqrt_c64(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = csqrtf((a)[_i]); } while(0)
 #define vec_negame_c64(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = -(a)[_i]; } while(0)
+#define vec_conj_c64(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = conjf((a)[_i]); } while(0)
+#define vec_imag_c64(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = cimagf((a)[_i]); } while(0)
+#define vec_conj_noop(a, out, n) do { (void)(a); (void)(out); (void)(n); } while(0)
 
 #define vec_add_c128(a, b, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = (a)[_i] + (b)[_i]; } while(0)
 #define vec_sub_c128(a, b, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = (a)[_i] - (b)[_i]; } while(0)
@@ -2303,82 +2402,96 @@ static void me_eval_##SUFFIX(const me_expr *n) { \
 #define vec_pow_scalar_c128(a, b, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = cpow((a)[_i], (b)); } while(0)
 #define vec_sqrt_c128(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = csqrt((a)[_i]); } while(0)
 #define vec_negame_c128(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = -(a)[_i]; } while(0)
+#define vec_conj_c128(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = conj((a)[_i]); } while(0)
+#define vec_imag_c128(a, out, n) do { for (int _i = 0; _i < (n); _i++) (out)[_i] = cimag((a)[_i]); } while(0)
 
 /* Generate float32 evaluator */
 DEFINE_ME_EVAL(f32, float,
                vec_add_f32, vec_sub_f32, vec_mul_f32, vec_div_f32, vec_pow_f32,
                vec_add_scalar_f32, vec_mul_scalar_f32, vec_pow_scalar_f32,
                vec_sqrt_f32, vec_sin_f32, vec_cos_f32, vec_negame_f32,
-               sqrtf, sinf, cosf, expf, logf, fabsf, powf)
+               sqrtf, sinf, cosf, expf, logf, fabsf, powf,
+               vec_conj_noop)
 
 /* Generate float64 (double) evaluator */
 DEFINE_ME_EVAL(f64, double,
                vec_add, vec_sub, vec_mul, vec_div, vec_pow,
                vec_add_scalar, vec_mul_scalar, vec_pow_scalar,
                vec_sqrt, vec_sin, vec_cos, vec_negate,
-               sqrt, sin, cos, exp, log, fabs, pow)
+               sqrt, sin, cos, exp, log, fabs, pow,
+               vec_conj_noop)
 
 /* Generate integer evaluators - sin/cos cast to double and back */
 DEFINE_ME_EVAL(i8, int8_t,
                vec_add_i8, vec_sub_i8, vec_mul_i8, vec_div_i8, vec_pow_i8,
                vec_add_scalar_i8, vec_mul_scalar_i8, vec_pow_scalar_i8,
                vec_sqrt_i8, vec_sqrt_i8, vec_sqrt_i8, vec_negame_i8,
-               sqrt, sin, cos, exp, log, fabs, pow)
+               sqrt, sin, cos, exp, log, fabs, pow,
+               vec_conj_noop)
 
 DEFINE_ME_EVAL(i16, int16_t,
                vec_add_i16, vec_sub_i16, vec_mul_i16, vec_div_i16, vec_pow_i16,
                vec_add_scalar_i16, vec_mul_scalar_i16, vec_pow_scalar_i16,
                vec_sqrt_i16, vec_sqrt_i16, vec_sqrt_i16, vec_negame_i16,
-               sqrt, sin, cos, exp, log, fabs, pow)
+               sqrt, sin, cos, exp, log, fabs, pow,
+               vec_conj_noop)
 
 DEFINE_ME_EVAL(i32, int32_t,
                vec_add_i32, vec_sub_i32, vec_mul_i32, vec_div_i32, vec_pow_i32,
                vec_add_scalar_i32, vec_mul_scalar_i32, vec_pow_scalar_i32,
                vec_sqrt_i32, vec_sqrt_i32, vec_sqrt_i32, vec_negame_i32,
-               sqrt, sin, cos, exp, log, fabs, pow)
+               sqrt, sin, cos, exp, log, fabs, pow,
+               vec_conj_noop)
 
 DEFINE_ME_EVAL(i64, int64_t,
                vec_add_i64, vec_sub_i64, vec_mul_i64, vec_div_i64, vec_pow_i64,
                vec_add_scalar_i64, vec_mul_scalar_i64, vec_pow_scalar_i64,
                vec_sqrt_i64, vec_sqrt_i64, vec_sqrt_i64, vec_negame_i64,
-               sqrt, sin, cos, exp, log, fabs, pow)
+               sqrt, sin, cos, exp, log, fabs, pow,
+               vec_conj_noop)
 
 DEFINE_ME_EVAL(u8, uint8_t,
                vec_add_u8, vec_sub_u8, vec_mul_u8, vec_div_u8, vec_pow_u8,
                vec_add_scalar_u8, vec_mul_scalar_u8, vec_pow_scalar_u8,
                vec_sqrt_u8, vec_sqrt_u8, vec_sqrt_u8, vec_negame_u8,
-               sqrt, sin, cos, exp, log, fabs, pow)
+               sqrt, sin, cos, exp, log, fabs, pow,
+               vec_conj_noop)
 
 DEFINE_ME_EVAL(u16, uint16_t,
                vec_add_u16, vec_sub_u16, vec_mul_u16, vec_div_u16, vec_pow_u16,
                vec_add_scalar_u16, vec_mul_scalar_u16, vec_pow_scalar_u16,
                vec_sqrt_u16, vec_sqrt_u16, vec_sqrt_u16, vec_negame_u16,
-               sqrt, sin, cos, exp, log, fabs, pow)
+               sqrt, sin, cos, exp, log, fabs, pow,
+               vec_conj_noop)
 
 DEFINE_ME_EVAL(u32, uint32_t,
                vec_add_u32, vec_sub_u32, vec_mul_u32, vec_div_u32, vec_pow_u32,
                vec_add_scalar_u32, vec_mul_scalar_u32, vec_pow_scalar_u32,
                vec_sqrt_u32, vec_sqrt_u32, vec_sqrt_u32, vec_negame_u32,
-               sqrt, sin, cos, exp, log, fabs, pow)
+               sqrt, sin, cos, exp, log, fabs, pow,
+               vec_conj_noop)
 
 DEFINE_ME_EVAL(u64, uint64_t,
                vec_add_u64, vec_sub_u64, vec_mul_u64, vec_div_u64, vec_pow_u64,
                vec_add_scalar_u64, vec_mul_scalar_u64, vec_pow_scalar_u64,
                vec_sqrt_u64, vec_sqrt_u64, vec_sqrt_u64, vec_negame_u64,
-               sqrt, sin, cos, exp, log, fabs, pow)
+               sqrt, sin, cos, exp, log, fabs, pow,
+               vec_conj_noop)
 
 /* Generate complex evaluators */
 DEFINE_ME_EVAL(c64, float complex,
                vec_add_c64, vec_sub_c64, vec_mul_c64, vec_div_c64, vec_pow_c64,
                vec_add_scalar_c64, vec_mul_scalar_c64, vec_pow_scalar_c64,
                vec_sqrt_c64, vec_sqrt_c64, vec_sqrt_c64, vec_negame_c64,
-               csqrtf, csqrtf, csqrtf, cexpf, clogf, cabsf, cpowf)
+               csqrtf, csqrtf, csqrtf, cexpf, clogf, cabsf, cpowf,
+               vec_conj_c64)
 
 DEFINE_ME_EVAL(c128, double complex,
                vec_add_c128, vec_sub_c128, vec_mul_c128, vec_div_c128, vec_pow_c128,
                vec_add_scalar_c128, vec_mul_scalar_c128, vec_pow_scalar_c128,
                vec_sqrt_c128, vec_sqrt_c128, vec_sqrt_c128, vec_negame_c128,
-               csqrt, csqrt, csqrt, cexp, clog, cabs, cpow)
+               csqrt, csqrt, csqrt, cexp, clog, cabs, cpow,
+               vec_conj_c128)
 
 /* Public API - dispatches to correct type-specific evaluator */
 /* Structure to track promoted variables */
@@ -2569,6 +2682,47 @@ static bool all_variables_match_type(const me_expr *n, me_dtype target_type) {
 
 static void private_eval(const me_expr *n) {
     if (!n) return;
+
+    // Special case: imag() function returns real from complex input
+    if (IS_FUNCTION(n->type) && ARITY(n->type) == 1 && n->function == (void*)imag_wrapper) {
+        me_expr *arg = (me_expr*)n->parameters[0];
+        me_dtype arg_type = infer_result_type(arg);
+
+        if (arg_type == ME_COMPLEX64) {
+            // Evaluate argument as complex64
+            if (!arg->output) {
+                arg->output = malloc(n->nitems * sizeof(float complex));
+                arg->nitems = n->nitems;
+                ((me_expr*)arg)->dtype = ME_COMPLEX64;
+            }
+            me_eval_c64(arg);
+
+            // Extract imaginary part to float32 output
+            const float complex *cdata = (const float complex*)arg->output;
+            float *output = (float*)n->output;
+            for (int i = 0; i < n->nitems; i++) {
+                output[i] = cimagf(cdata[i]);
+            }
+            return;
+        } else if (arg_type == ME_COMPLEX128) {
+            // Evaluate argument as complex128
+            if (!arg->output) {
+                arg->output = malloc(n->nitems * sizeof(double complex));
+                arg->nitems = n->nitems;
+                ((me_expr*)arg)->dtype = ME_COMPLEX128;
+            }
+            me_eval_c128(arg);
+
+            // Extract imaginary part to float64 output
+            const double complex *cdata = (const double complex*)arg->output;
+            double *output = (double*)n->output;
+            for (int i = 0; i < n->nitems; i++) {
+                output[i] = cimag(cdata[i]);
+            }
+            return;
+        }
+        // If not complex, fall through to normal evaluation
+    }
 
     // Infer the result type from the expression tree
     me_dtype result_type = infer_result_type(n);
