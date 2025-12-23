@@ -1279,7 +1279,6 @@ def fast_eval(  # noqa: C901
         "clip",
         "maximum",
         "minimum",
-        "where",
         "contains",
     ] + reducers  # miniexpr doesn't support reduction functions
 
@@ -1302,6 +1301,7 @@ def fast_eval(  # noqa: C901
         # Use the same chunks/blocks as the input operands for consistency
         res_eval = blosc2.empty(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         try:
+            # print("expr->miniexpr:", expression)
             res_eval._set_pref_expr(expression, operands)
             # This line would NOT allocate physical RAM on any modern OS:
             aux = np.empty(res_eval.shape, res_eval.dtype)

@@ -252,6 +252,7 @@ static double round_wrapper(double x);
 static double sign(double x);
 static double square(double x);
 static double trunc_wrapper(double x);
+static double where_scalar(double c, double x, double y);
 
 /* Infer computation type from expression tree (for evaluation) */
 static me_dtype infer_result_type(const me_expr *n) {
@@ -353,6 +354,14 @@ static me_dtype infer_output_type(const me_expr *n) {
                     // If input is not complex, return as-is (shouldn't happen, but be safe)
                     return param_type;
                 }
+            }
+
+            // Special case: where(cond, x, y) -> promote(x, y), regardless of cond type.
+            if (IS_FUNCTION(n->type) && ARITY(n->type) == 3 &&
+                n->function == (void*)where_scalar) {
+                me_dtype x_type = infer_output_type((const me_expr *) n->parameters[1]);
+                me_dtype y_type = infer_output_type((const me_expr *) n->parameters[2]);
+                return promote_types(x_type, y_type);
             }
 
             // If this node is a comparison (dtype == ME_BOOL set during parsing),
@@ -567,6 +576,11 @@ static double square(double x) { return x * x; }
 /* Wrapper for trunc: truncate towards zero */
 static double trunc_wrapper(double x) { return trunc(x); }
 
+/* Scalar helper for where(), used only in generic slow path */
+static double where_scalar(double c, double x, double y) {
+    return (c != 0.0) ? x : y;
+}
+
 static double real_wrapper(double x) {
     /* This should never be called for real numbers */
     (void)x;
@@ -663,6 +677,7 @@ static const me_variable functions[] = {
     {"tan", 0, tan, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"tanh", 0, tanh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"trunc", 0, trunc_wrapper, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"where", 0, where_scalar, ME_FUNCTION3 | ME_FLAG_PURE, 0},
     {0, 0, 0, 0, 0}
 };
 
@@ -2216,6 +2231,19 @@ static void me_eval_##SUFFIX(const me_expr *n) { \
                                   (right->type == ME_VARIABLE) ? (double)rdata[i] : (double)rdata[i]; \
                         output[i] = (TYPE)func(a, b); \
                     } \
+                } \
+            } else if (arity == 3 && IS_FUNCTION(n->type) && n->function == (void*)where_scalar) { \
+                /* where(cond, x, y) – NumPy-like semantics: cond != 0 selects x else y */ \
+                me_expr *cond = (me_expr*)n->parameters[0]; \
+                me_expr *xexpr = (me_expr*)n->parameters[1]; \
+                me_expr *yexpr = (me_expr*)n->parameters[2]; \
+                \
+                const TYPE *cdata = (const TYPE*)((cond->type == ME_VARIABLE) ? cond->bound : cond->output); \
+                const TYPE *xdata = (const TYPE*)((xexpr->type == ME_VARIABLE) ? xexpr->bound : xexpr->output); \
+                const TYPE *ydata = (const TYPE*)((yexpr->type == ME_VARIABLE) ? yexpr->bound : yexpr->output); \
+                \
+                for (i = 0; i < n->nitems; i++) { \
+                    output[i] = (cdata[i] != (TYPE)0) ? xdata[i] : ydata[i]; \
                 } \
             } \
             else if (arity == 1 && IS_FUNCTION(n->type)) { \
