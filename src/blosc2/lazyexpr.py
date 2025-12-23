@@ -1276,12 +1276,6 @@ def fast_eval(  # noqa: C901
     # Check whether we can use miniexpr
     # Miniexpr only supports a subset of functions - disable for unsupported ones
     unsupported_funcs = [
-        "acosh",
-        "arccosh",
-        "arcsinh",
-        "arctanh",
-        "asinh",
-        "atanh",
         "clip",
         "conj",
         "expm1",

@@ -118,7 +118,8 @@ typedef struct me_variable {
  *   var_count: Number of variables
  *   dtype: Data type handling:
  *          - ME_AUTO: All variables must specify their dtypes, output is inferred
- *          - Specific type: All variables must be ME_AUTO, this type is used for all
+ *          - Specific type: Either all variables are ME_AUTO (homogeneous, all use this type),
+ *            OR all variables have explicit dtypes (heterogeneous, result cast to this type)
  *   error: Optional pointer to receive error position (0 on success, >0 on error)
  *
  * Returns: Compiled expression ready for chunked evaluation, or NULL on error
@@ -127,9 +128,14 @@ typedef struct me_variable {
  *   me_variable vars[] = {{"x"}, {"y"}};  // Both ME_AUTO
  *   me_expr *expr = me_compile("x + y", vars, 2, ME_FLOAT64, &err);
  *
- * Example 2 (mixed types):
+ * Example 2 (mixed types with ME_AUTO):
  *   me_variable vars[] = {{"x", ME_INT32}, {"y", ME_FLOAT64}};
  *   me_expr *expr = me_compile("x + y", vars, 2, ME_AUTO, &err);
+ *
+ * Example 3 (mixed types with explicit output):
+ *   me_variable vars[] = {{"x", ME_INT32}, {"y", ME_FLOAT64}};
+ *   me_expr *expr = me_compile("x + y", vars, 2, ME_FLOAT32, &err);
+ *   // Variables keep their types, result is cast to FLOAT32
  *
  *   // Later, provide data in same order as variable definitions
  *   const void *data[] = {x_array, y_array};  // x first, y second

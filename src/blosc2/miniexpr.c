@@ -523,13 +523,19 @@ static const me_variable functions[] = {
     /* Format: {name, dtype, address, type, context} */
     {"abs", 0, fabs, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"acos", 0, acos, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"acosh", 0, acosh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"arccos", 0, acos, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"arccosh", 0, acosh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"arcsin", 0, asin, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"arcsinh", 0, asinh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"arctan", 0, atan, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"arctan2", 0, atan2, ME_FUNCTION2 | ME_FLAG_PURE, 0},
+    {"arctanh", 0, atanh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"asin", 0, asin, ME_FUNCTION1 | ME_FLAG_PURE, 0},
+    {"asinh", 0, asinh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"atan", 0, atan, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"atan2", 0, atan2, ME_FUNCTION2 | ME_FLAG_PURE, 0},
+    {"atanh", 0, atanh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"ceil", 0, ceil, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"cos", 0, cos, ME_FUNCTION1 | ME_FLAG_PURE, 0},
     {"cosh", 0, cosh, ME_FUNCTION1 | ME_FLAG_PURE, 0},
@@ -1835,6 +1841,7 @@ DEFINE_VEC_CONVERT(u32, bool, uint32_t, bool)
 DEFINE_VEC_CONVERT(u64, bool, uint64_t, bool)
 DEFINE_VEC_CONVERT(f32, bool, float, bool)
 DEFINE_VEC_CONVERT(f64, bool, double, bool)
+DEFINE_VEC_CONVERT(f64, f32, double, float)
 
 DEFINE_VEC_CONVERT(i8, i16, int8_t, int16_t)
 DEFINE_VEC_CONVERT(i8, i32, int8_t, int32_t)
@@ -1876,7 +1883,6 @@ DEFINE_VEC_CONVERT(u32, f64, uint32_t, double)
 DEFINE_VEC_CONVERT(u64, f64, uint64_t, double)
 
 DEFINE_VEC_CONVERT(f32, f64, float, double)
-DEFINE_VEC_CONVERT(f64, f32, double, float)
 DEFINE_VEC_CONVERT(f32, c64, float, float complex)
 DEFINE_VEC_CONVERT(f32, c128, float, double complex)
 
@@ -1956,10 +1962,10 @@ static convert_func_t get_convert_func(me_dtype from, me_dtype to) {
     CONV_CASE(ME_UINT64, ME_FLOAT64, u64, f64)
 
     CONV_CASE(ME_FLOAT32, ME_FLOAT64, f32, f64)
-    CONV_CASE(ME_FLOAT64, ME_FLOAT32, f64, f32)
     CONV_CASE(ME_FLOAT32, ME_COMPLEX64, f32, c64)
     CONV_CASE(ME_FLOAT32, ME_COMPLEX128, f32, c128)
 
+    CONV_CASE(ME_FLOAT64, ME_FLOAT32, f64, f32)
     CONV_CASE(ME_FLOAT64, ME_COMPLEX128, f64, c128)
 
     CONV_CASE(ME_COMPLEX64, ME_COMPLEX128, c64, c128)
