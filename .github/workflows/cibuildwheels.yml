@@ -90,20 +90,6 @@ jobs:
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.3
-        continue-on-error: true
-
-      - name: Dump CMakeInit.txt (Windows)
-        if: ${{ runner.os == 'Windows' }}
-        run: |
-          $files = Get-ChildItem -Path $env:TEMP -Recurse -Filter CMakeInit.txt -ErrorAction SilentlyContinue
-          if ($files.Count -eq 0) {
-            Write-Host "No CMakeInit.txt files found under $env:TEMP"
-            exit 0
-          }
-          foreach ($f in $files) {
-            Write-Host "---- $($f.FullName) ----"
-            Get-Content $f.FullName
-          }
 
       - name: Make sdist
         if: ${{ matrix.os == 'ubuntu-latest' }}
