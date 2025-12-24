@@ -51,8 +51,8 @@ target_link_libraries(blosc2_ext PRIVATE Python::NumPy)
 
 # Add include directory for miniexpr.h and others
 target_include_directories(blosc2_ext PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2")
-# Enforce a C standard that miniexpr relies on.
-target_compile_features(blosc2_ext PRIVATE c_std_99)
+# Enforce a C standard that bundled deps rely on (e.g. OpenZL requires C11).
+target_compile_features(blosc2_ext PRIVATE c_std_11)
 if(WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
     execute_process(
         COMMAND "${CMAKE_C_COMPILER}" -print-resource-dir
