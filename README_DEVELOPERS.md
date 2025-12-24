@@ -22,6 +22,16 @@ You are done!
     pip install .   # add -e for editable mode
 ```
 
+On Windows, clang-cl is required (OpenZL depends on C11 support). Make sure LLVM
+is on PATH and build with Ninja, for example:
+
+```bash
+CMAKE_GENERATOR=Ninja \
+CC=clang-cl \
+CXX=clang-cl \
+pip install -e .
+```
+
 There are situations where you may want to build the C-Blosc2 library separately, for example, when debugging issues in the C library. In that case, let's assume you have the C-Blosc2 library installed in `/usr/local`:
 
 ```bash
