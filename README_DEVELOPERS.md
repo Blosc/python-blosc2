@@ -56,8 +56,12 @@ CMAKE_C_COMPILER_LAUNCHER=sccache \
 CMAKE_CXX_COMPILER_LAUNCHER=sccache \
 CMAKE_BUILD_PARALLEL_LEVEL=8 \
 SKBUILD_PARALLEL_LEVEL=8 \
+SKBUILD_BUILD_DIR=build \
 pip install -e .
 ```
+
+Using `SKBUILD_BUILD_DIR` keeps a stable build directory between runs, which
+improves incremental rebuilds and sccache hit rates.
 
 Check cache stats with:
 
