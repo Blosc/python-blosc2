@@ -50,8 +50,9 @@ jobs:
       id: build_windows
       run: pip install -e .[test]
       env:
-        CMAKE_ARGS: "-G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl"
-        SKBUILD_CMAKE_ARGS: "-G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl"
+        CMAKE_GENERATOR: Ninja
+        CMAKE_C_COMPILER: clang-cl
+        CMAKE_CXX_COMPILER: clang-cl
         CC: clang-cl
         CXX: clang-cl
       continue-on-error: true
