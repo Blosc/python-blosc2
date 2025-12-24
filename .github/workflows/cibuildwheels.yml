@@ -17,6 +17,7 @@ env:
   # Skip PyPy wheels for now (numexpr needs some adjustments first)
   # musllinux takes too long to build, and it's not worth it for now
   CIBW_SKIP: "pp* *musllinux* *-win32"
+  CIBW_ENVIRONMENT_WINDOWS: "CC=clang-cl CXX=clang-cl CMAKE_GENERATOR=Ninja CMAKE_C_COMPILER=clang-cl CMAKE_CXX_COMPILER=clang-cl"
 
 jobs:
 
@@ -76,6 +77,10 @@ jobs:
       - name: Install Ninja
         id: ninja
         uses: turtlesec-no/get-ninja@main
+
+      - name: Install LLVM (clang-cl)
+        if: ${{ matrix.os == 'windows-latest' }}
+        run: choco install llvm --yes
 
       - name: Install MSVC amd64
         uses: ilammy/msvc-dev-cmd@v1

@@ -1,5 +1,19 @@
 cmake_minimum_required(VERSION 3.15.0)
+
+if(WIN32)
+    if(NOT DEFINED CMAKE_C_COMPILER AND NOT DEFINED ENV{CC})
+        set(CMAKE_C_COMPILER clang-cl CACHE STRING "Use clang-cl for C99 support on Windows." FORCE)
+    endif()
+    if(NOT DEFINED CMAKE_CXX_COMPILER AND NOT DEFINED ENV{CXX})
+        set(CMAKE_CXX_COMPILER clang-cl CACHE STRING "Use clang-cl for C99 support on Windows." FORCE)
+    endif()
+endif()
+
 project(python-blosc2)
+
+if(WIN32 AND NOT CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    message(FATAL_ERROR "Windows builds require clang-cl for C99 support. Set CC/CXX to clang-cl or use the ClangCL toolset.")
+endif()
 # Specifying Python version below is tricky, but if you don't specify the minimum version here,
 # it would not consider python3 when looking for the executable. This is problematic since Fedora
 # does not include a python symbolic link to python3.
@@ -31,15 +45,6 @@ target_link_libraries(blosc2_ext PRIVATE Python::NumPy)
 
 # Add include directory for miniexpr.h and others
 target_include_directories(blosc2_ext PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2")
-
-# Compiler-specific settings for clang-cl on Windows
-if(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    # clang-cl mimics MSVC, so set flags to ensure compatibility
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-command-line-argument -Wno-microsoft-enum-value")
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-command-line-argument -Wno-microsoft-enum-value")
-    # Link clang runtime library for miniexpr sources
-    target_link_libraries(blosc2_ext PRIVATE clang_rt.builtins-x86_64.lib)
-endif()
 
 if(DEFINED ENV{USE_SYSTEM_BLOSC2})
     set(USE_SYSTEM_BLOSC2 ON)
