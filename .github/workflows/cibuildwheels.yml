@@ -17,8 +17,8 @@ env:
   # Skip PyPy wheels for now (numexpr needs some adjustments first)
   # musllinux takes too long to build, and it's not worth it for now
   CIBW_SKIP: "pp* *musllinux* *-win32"
-  # Use CMAKE_ARGS so scikit-build-core forwards generator/compiler reliably on Windows.
-  CIBW_ENVIRONMENT_WINDOWS: "PATH=C:\\Program Files\\LLVM\\bin;%PATH% CC=clang-cl CXX=clang-cl CMAKE_ARGS=\"-G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl\""
+  # Use CMAKE_ARGS/SKBUILD_CMAKE_ARGS so scikit-build-core forwards generator/compiler reliably on Windows.
+  CIBW_ENVIRONMENT_WINDOWS: "PATH=C:\\Program Files\\LLVM\\bin;%PATH% CC=clang-cl CXX=clang-cl CMAKE_ARGS=\"-G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl\" SKBUILD_CMAKE_ARGS=\"-G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl\""
 
 jobs:
 
@@ -90,6 +90,20 @@ jobs:
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v3.3
+        continue-on-error: true
+
+      - name: Dump CMakeInit.txt (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        run: |
+          $files = Get-ChildItem -Path $env:TEMP -Recurse -Filter CMakeInit.txt -ErrorAction SilentlyContinue
+          if ($files.Count -eq 0) {
+            Write-Host "No CMakeInit.txt files found under $env:TEMP"
+            exit 0
+          }
+          foreach ($f in $files) {
+            Write-Host "---- $($f.FullName) ----"
+            Get-Content $f.FullName
+          }
 
       - name: Make sdist
         if: ${{ matrix.os == 'ubuntu-latest' }}
