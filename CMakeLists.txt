@@ -51,6 +51,8 @@ target_link_libraries(blosc2_ext PRIVATE Python::NumPy)
 
 # Add include directory for miniexpr.h and others
 target_include_directories(blosc2_ext PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2")
+# Enforce a C standard that miniexpr relies on.
+target_compile_features(blosc2_ext PRIVATE c_std_99)
 
 if(DEFINED ENV{USE_SYSTEM_BLOSC2})
     set(USE_SYSTEM_BLOSC2 ON)
@@ -81,6 +83,16 @@ else()
     FetchContent_MakeAvailable(blosc2)
     include_directories("${blosc2_SOURCE_DIR}/include")
     target_link_libraries(blosc2_ext PRIVATE blosc2_static)
+    if(WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        set(_blosc2_ssse3_flag "-mssse3")
+        if(CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+            set(_blosc2_ssse3_flag "/clang:-mssse3")
+        endif()
+        if(TARGET blosc2_static)
+            target_compile_options(blosc2_static PRIVATE "${_blosc2_ssse3_flag}")
+        endif()
+        unset(_blosc2_ssse3_flag)
+    endif()
 endif()
 
 add_custom_command(
