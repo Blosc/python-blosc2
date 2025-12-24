@@ -30,6 +30,28 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
+    - name: Install sccache (Windows)
+      if: runner.os == 'Windows'
+      run: choco install sccache --yes
+
+    - name: Cache sccache (Windows)
+      if: runner.os == 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: C:\Users\runneradmin\AppData\Local\sccache
+        key: sccache-${{ runner.os }}-${{ github.sha }}
+        restore-keys: |
+          sccache-${{ runner.os }}-
+
+    - name: Cache pip (Windows)
+      if: runner.os == 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: C:\Users\runneradmin\AppData\Local\pip\Cache
+        key: pip-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+        restore-keys: |
+          pip-${{ runner.os }}-
+
     - name: Install Ninja
       uses: seanmiddleditch/gha-setup-ninja@master
 
@@ -49,8 +71,13 @@ jobs:
         CMAKE_GENERATOR: Ninja
         CMAKE_C_COMPILER: clang-cl
         CMAKE_CXX_COMPILER: clang-cl
+        CMAKE_C_COMPILER_LAUNCHER: sccache
+        CMAKE_CXX_COMPILER_LAUNCHER: sccache
+        SCCACHE_DIR: C:\Users\runneradmin\AppData\Local\sccache
         CC: clang-cl
         CXX: clang-cl
+        CMAKE_BUILD_PARALLEL_LEVEL: 8
+        SKBUILD_PARALLEL_LEVEL: 8
 
     - name: Build (non-Windows)
       if: runner.os != 'Windows'
