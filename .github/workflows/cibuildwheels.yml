@@ -19,7 +19,7 @@ env:
   CIBW_SKIP: "pp* *musllinux* *-win32"
   # Keep generator/toolset settings here to avoid quoting pitfalls in CIBW_ENVIRONMENT_WINDOWS.
   CIBW_ENVIRONMENT_WINDOWS: "PATH=C:\\Program Files\\LLVM\\bin;%PATH% CC=clang-cl CXX=clang-cl"
-  CIBW_CONFIG_SETTINGS_WINDOWS: "cmake.generator=Visual Studio 17 2022;cmake.define.CMAKE_GENERATOR_TOOLSET=ClangCL"
+  CIBW_CONFIG_SETTINGS_WINDOWS: "cmake.generator=Visual Studio 17 2022;cmake.args=-T ClangCL"
 
 jobs:
 
