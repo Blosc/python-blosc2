@@ -33,10 +33,6 @@ jobs:
     - name: Install Ninja
       uses: seanmiddleditch/gha-setup-ninja@master
 
-    - name: Install LLVM (Windows)
-      if: runner.os == 'Windows'
-      run: choco install llvm --yes
-
     - name: Add LLVM to PATH (Windows)
       if: runner.os == 'Windows'
       run: echo "C:\\Program Files\\LLVM\\bin" >> $env:GITHUB_PATH

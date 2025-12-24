@@ -79,10 +79,6 @@ jobs:
         id: ninja
         uses: turtlesec-no/get-ninja@main
 
-      - name: Install LLVM (clang-cl)
-        if: ${{ matrix.os == 'windows-latest' }}
-        run: choco install llvm --yes
-
       - name: Install MSVC amd64
         uses: ilammy/msvc-dev-cmd@v1
         with:
