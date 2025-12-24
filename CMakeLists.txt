@@ -76,7 +76,7 @@ else()
     include(FetchContent)
     FetchContent_Declare(blosc2
         GIT_REPOSITORY https://github.com/Blosc/c-blosc2
-        GIT_TAG openzl
+        GIT_TAG 290853dc15dc0e0e887cc72fbaac692cefd75014  # openzl
         # in case you want to use a local copy of c-blosc2 for development, uncomment the line below
         # SOURCE_DIR "/Users/faltet/blosc/c-blosc2"
     )
