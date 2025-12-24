@@ -53,6 +53,26 @@ target_link_libraries(blosc2_ext PRIVATE Python::NumPy)
 target_include_directories(blosc2_ext PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2")
 # Enforce a C standard that miniexpr relies on.
 target_compile_features(blosc2_ext PRIVATE c_std_99)
+if(WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    execute_process(
+        COMMAND "${CMAKE_C_COMPILER}" -print-resource-dir
+        OUTPUT_VARIABLE _clang_resource_dir
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    if(_clang_resource_dir)
+        if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+            set(_clang_builtins "${_clang_resource_dir}/lib/windows/clang_rt.builtins-x86_64.lib")
+        else()
+            set(_clang_builtins "${_clang_resource_dir}/lib/windows/clang_rt.builtins-i386.lib")
+        endif()
+        if(EXISTS "${_clang_builtins}")
+            target_link_libraries(blosc2_ext PRIVATE "${_clang_builtins}")
+        endif()
+        unset(_clang_builtins)
+    endif()
+    unset(_clang_resource_dir)
+endif()
 
 if(DEFINED ENV{USE_SYSTEM_BLOSC2})
     set(USE_SYSTEM_BLOSC2 ON)
