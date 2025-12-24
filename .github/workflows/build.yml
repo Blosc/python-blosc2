@@ -33,12 +33,51 @@ jobs:
     - name: Install Ninja
       uses: seanmiddleditch/gha-setup-ninja@master
 
+    - name: Install LLVM (Windows)
+      if: runner.os == 'Windows'
+      run: choco install llvm --yes
+
+    - name: Add LLVM to PATH (Windows)
+      if: runner.os == 'Windows'
+      run: echo "C:\\Program Files\\LLVM\\bin" >> $env:GITHUB_PATH
+
     - name: Install specific numpy version
       if: matrix.numpy-version
       run: pip install "numpy==${{ matrix.numpy-version }}.*"
 
-    - name: Build
+    - name: Build (Windows)
+      if: runner.os == 'Windows'
+      id: build_windows
+      run: pip install -e .[test]
+      env:
+        CMAKE_ARGS: "-G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl"
+        SKBUILD_CMAKE_ARGS: "-G Ninja -DCMAKE_C_COMPILER=clang-cl -DCMAKE_CXX_COMPILER=clang-cl"
+        CC: clang-cl
+        CXX: clang-cl
+      continue-on-error: true
+
+    - name: Build (non-Windows)
+      if: runner.os != 'Windows'
+      id: build_non_windows
       run: pip install -e .[test]
 
+    - name: Dump CMakeInit.txt (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        $files = Get-ChildItem -Path $env:TEMP -Recurse -Filter CMakeInit.txt -ErrorAction SilentlyContinue
+        if ($files.Count -eq 0) {
+          Write-Host "No CMakeInit.txt files found under $env:TEMP"
+          exit 0
+        }
+        foreach ($f in $files) {
+          Write-Host "---- $($f.FullName) ----"
+          Get-Content $f.FullName
+        }
+
+    - name: Fail if Windows build failed
+      if: runner.os == 'Windows' && steps.build_windows.outcome == 'failure'
+      run: exit 1
+
     - name: Test
+      if: runner.os != 'Windows' || steps.build_windows.outcome == 'success'
       run: python -m pytest -m "not heavy and (network or not network)"
