@@ -1296,6 +1296,10 @@ def fast_eval(  # noqa: C901
                 use_miniexpr = False
                 break
 
+    if sys.platform == "win32":
+        # Miniexpr has issues on Windows; still investigating
+        use_miniexpr = False
+
     if use_miniexpr:
         cparams = kwargs.pop("cparams", blosc2.CParams())
         # Use the same chunks/blocks as the input operands for consistency
