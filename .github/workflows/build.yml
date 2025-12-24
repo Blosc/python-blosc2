@@ -12,6 +12,8 @@ jobs:
   build_wheels:
     name: Build and test on ${{ matrix.os }}${{ matrix.numpy-version && format(' (numpy {0})', matrix.numpy-version) || '' }}
     runs-on: ${{ matrix.os }}
+    env:
+      CMAKE_GENERATOR: Ninja
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
@@ -68,9 +70,6 @@ jobs:
       id: build_windows
       run: pip install -e .[test]
       env:
-        CMAKE_GENERATOR: Ninja
-        CMAKE_C_COMPILER: clang-cl
-        CMAKE_CXX_COMPILER: clang-cl
         CMAKE_C_COMPILER_LAUNCHER: sccache
         CMAKE_CXX_COMPILER_LAUNCHER: sccache
         SCCACHE_DIR: C:\Users\runneradmin\AppData\Local\sccache

@@ -18,7 +18,7 @@ env:
   # musllinux takes too long to build, and it's not worth it for now
   CIBW_SKIP: "pp* *musllinux* *-win32"
   # Use explicit generator/compiler env vars; CMAKE_ARGS with spaces is not split on Windows.
-  CIBW_ENVIRONMENT_WINDOWS: "PATH=C:\\Program Files\\LLVM\\bin;%PATH% CC=clang-cl CXX=clang-cl CMAKE_GENERATOR=Ninja CMAKE_C_COMPILER=clang-cl CMAKE_CXX_COMPILER=clang-cl CMAKE_C_COMPILER_LAUNCHER=sccache CMAKE_CXX_COMPILER_LAUNCHER=sccache CMAKE_BUILD_PARALLEL_LEVEL=8 SKBUILD_PARALLEL_LEVEL=8 SCCACHE_DIR=C:\\Users\\runneradmin\\AppData\\Local\\sccache"
+  CIBW_ENVIRONMENT_WINDOWS: "PATH=C:\\Program Files\\LLVM\\bin;%PATH% CMAKE_GENERATOR=Ninja CC=clang-cl CXX=clang-cl"
 
 jobs:
 
@@ -82,28 +82,6 @@ jobs:
       - name: Add LLVM to PATH (Windows)
         if: ${{ matrix.os == 'windows-latest' }}
         run: echo "C:\\Program Files\\LLVM\\bin" >> $env:GITHUB_PATH
-
-      - name: Install sccache (Windows)
-        if: ${{ matrix.os == 'windows-latest' }}
-        run: choco install sccache --yes
-
-      - name: Cache sccache (Windows)
-        if: ${{ matrix.os == 'windows-latest' }}
-        uses: actions/cache@v4
-        with:
-          path: C:\Users\runneradmin\AppData\Local\sccache
-          key: sccache-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            sccache-${{ runner.os }}-
-
-      - name: Cache pip (Windows)
-        if: ${{ matrix.os == 'windows-latest' }}
-        uses: actions/cache@v4
-        with:
-          path: C:\Users\runneradmin\AppData\Local\pip\Cache
-          key: pip-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
-          restore-keys: |
-            pip-${{ runner.os }}-
 
       - name: Install MSVC amd64
         uses: ilammy/msvc-dev-cmd@v1
