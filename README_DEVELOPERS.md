@@ -38,6 +38,33 @@ LD_LIBRARY_PATH=/usr/local/lib pytest
 
 That's it! You can now proceed to the testing section.
 
+### Speeding up local builds (sccache + Ninja)
+
+If you do frequent local rebuilds, sccache can significantly speed up C/C++ rebuilds.
+
+```bash
+brew install sccache ninja
+```
+
+Then run:
+
+```bash
+CMAKE_GENERATOR=Ninja \
+CMAKE_C_COMPILER=clang \
+CMAKE_CXX_COMPILER=clang++ \
+CMAKE_C_COMPILER_LAUNCHER=sccache \
+CMAKE_CXX_COMPILER_LAUNCHER=sccache \
+CMAKE_BUILD_PARALLEL_LEVEL=8 \
+SKBUILD_PARALLEL_LEVEL=8 \
+pip install -e .
+```
+
+Check cache stats with:
+
+```bash
+sccache --show-stats
+```
+
 ## Testing
 
 We are using pytest for testing.  You can run the tests by executing
