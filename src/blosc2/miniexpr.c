@@ -3145,13 +3145,13 @@ static void private_eval(const me_expr *n) {
     }
 
     // Slow path: need to promote variables
-    // Allocate tracking structures (max 100 variables)
-    promoted_var_t promotions[100];
+    // Allocate tracking structures (max ME_MAX_VARS variables)
+    promoted_var_t promotions[ME_MAX_VARS];
     int promo_count = 0;
 
     // Save original variable bindings
-    const void *original_bounds[100];
-    me_dtype original_types[100];
+    const void *original_bounds[ME_MAX_VARS];
+    me_dtype original_types[ME_MAX_VARS];
     int save_idx = 0;
 
     save_variable_bindings(n, original_bounds, original_types, &save_idx);
@@ -3354,7 +3354,7 @@ static void free_intermediate_buffers(me_expr *node) {
 }
 
 /* Helper to save original variable bindings with their pointers */
-static void save_variable_pointers(const me_expr *node, const void **var_pointers, int *var_count) {
+static void save_variable_metadata(const me_expr *node, const void **var_pointers, size_t *var_sizes, int *var_count) {
     if (!node) return;
     switch (TYPE_MASK(node->type)) {
         case ME_VARIABLE:
@@ -3363,6 +3363,7 @@ static void save_variable_pointers(const me_expr *node, const void **var_pointer
                 if (var_pointers[i] == node->bound) return; // Already saved
             }
             var_pointers[*var_count] = node->bound;
+            var_sizes[*var_count] = dtype_size(node->input_dtype);
             (*var_count)++;
             break;
         case ME_FUNCTION0:
@@ -3383,7 +3384,84 @@ static void save_variable_pointers(const me_expr *node, const void **var_pointer
         case ME_CLOSURE7: {
             const int arity = ARITY(node->type);
             for (int i = 0; i < arity; i++) {
-                save_variable_pointers((const me_expr *) node->parameters[i], var_pointers, var_count);
+                save_variable_metadata((const me_expr *) node->parameters[i], var_pointers, var_sizes, var_count);
+            }
+            break;
+        }
+    }
+}
+
+static int count_variable_nodes(const me_expr *node) {
+    if (!node) return 0;
+    switch (TYPE_MASK(node->type)) {
+        case ME_VARIABLE:
+            return 1;
+        case ME_FUNCTION0:
+        case ME_FUNCTION1:
+        case ME_FUNCTION2:
+        case ME_FUNCTION3:
+        case ME_FUNCTION4:
+        case ME_FUNCTION5:
+        case ME_FUNCTION6:
+        case ME_FUNCTION7:
+        case ME_CLOSURE0:
+        case ME_CLOSURE1:
+        case ME_CLOSURE2:
+        case ME_CLOSURE3:
+        case ME_CLOSURE4:
+        case ME_CLOSURE5:
+        case ME_CLOSURE6:
+        case ME_CLOSURE7: {
+            int count = 0;
+            const int arity = ARITY(node->type);
+            for (int i = 0; i < arity; i++) {
+                count += count_variable_nodes((const me_expr *) node->parameters[i]);
+            }
+            return count;
+        }
+    }
+    return 0;
+}
+
+static void collect_variable_nodes(me_expr *node, const void **var_pointers, int n_vars,
+                                   me_expr **var_nodes, int *var_indices, int *node_count) {
+    if (!node) return;
+    switch (TYPE_MASK(node->type)) {
+        case ME_VARIABLE: {
+            int idx = -1;
+            for (int i = 0; i < n_vars; i++) {
+                if (node->bound == var_pointers[i]) {
+                    idx = i;
+                    break;
+                }
+            }
+            if (idx >= 0) {
+                var_nodes[*node_count] = node;
+                var_indices[*node_count] = idx;
+                (*node_count)++;
+            }
+            break;
+        }
+        case ME_FUNCTION0:
+        case ME_FUNCTION1:
+        case ME_FUNCTION2:
+        case ME_FUNCTION3:
+        case ME_FUNCTION4:
+        case ME_FUNCTION5:
+        case ME_FUNCTION6:
+        case ME_FUNCTION7:
+        case ME_CLOSURE0:
+        case ME_CLOSURE1:
+        case ME_CLOSURE2:
+        case ME_CLOSURE3:
+        case ME_CLOSURE4:
+        case ME_CLOSURE5:
+        case ME_CLOSURE6:
+        case ME_CLOSURE7: {
+            const int arity = ARITY(node->type);
+            for (int i = 0; i < arity; i++) {
+                collect_variable_nodes((me_expr *) node->parameters[i], var_pointers, n_vars,
+                                       var_nodes, var_indices, node_count);
             }
             break;
         }
@@ -3515,9 +3593,15 @@ void me_eval(const me_expr *expr, const void **vars_chunk,
     if (!expr) return;
 
     // Verify variable count matches
-    const void *original_var_pointers[100];
+    const void *original_var_pointers[ME_MAX_VARS];
+    size_t var_sizes[ME_MAX_VARS];
     int actual_var_count = 0;
-    save_variable_pointers(expr, original_var_pointers, &actual_var_count);
+    save_variable_metadata(expr, original_var_pointers, var_sizes, &actual_var_count);
+    if (actual_var_count > ME_MAX_VARS) {
+        fprintf(stderr, "Error: Expression uses %d variables, exceeds ME_MAX_VARS=%d\n",
+                actual_var_count, ME_MAX_VARS);
+        return;
+    }
 
     if (actual_var_count != n_vars) {
         return;
@@ -3527,18 +3611,72 @@ void me_eval(const me_expr *expr, const void **vars_chunk,
     me_expr *clone = clone_expr(expr);
     if (!clone) return;
 
-    // Update clone's variable bindings
-    update_vars_by_pointer(clone, original_var_pointers, vars_chunk, n_vars);
+    const int block_nitems = ME_EVAL_BLOCK_NITEMS;
 
-    // Update clone's nitems throughout the tree
-    int update_idx = 0;
-    update_variable_bindings(clone, NULL, &update_idx, chunk_nitems);
+    if (!ME_EVAL_ENABLE_BLOCKING || chunk_nitems <= block_nitems) {
+        // Update clone's variable bindings
+        update_vars_by_pointer(clone, original_var_pointers, vars_chunk, n_vars);
 
-    // Set output pointer
-    clone->output = output_chunk;
+        // Update clone's nitems throughout the tree
+        int update_idx = 0;
+        update_variable_bindings(clone, NULL, &update_idx, chunk_nitems);
 
-    // Evaluate the clone
-    private_eval(clone);
+        // Set output pointer
+        clone->output = output_chunk;
+
+        // Evaluate the clone
+        private_eval(clone);
+    } else {
+        const size_t output_item_size = dtype_size(clone->dtype);
+        const int max_var_nodes = count_variable_nodes(clone);
+        me_expr **var_nodes = NULL;
+        int *var_indices = NULL;
+        int var_node_count = 0;
+
+        if (max_var_nodes > 0) {
+            var_nodes = malloc((size_t)max_var_nodes * sizeof(*var_nodes));
+            var_indices = malloc((size_t)max_var_nodes * sizeof(*var_indices));
+            if (!var_nodes || !var_indices) {
+                free(var_nodes);
+                free(var_indices);
+                me_free(clone);
+                return;
+            }
+            collect_variable_nodes(clone, original_var_pointers, n_vars,
+                                   var_nodes, var_indices, &var_node_count);
+        }
+
+#if defined(__clang__)
+#pragma clang loop unroll_count(4)
+#elif defined(__GNUC__) && !defined(__clang__)
+#pragma GCC unroll 4
+#endif
+        for (int offset = 0; offset < chunk_nitems; offset += block_nitems) {
+            int current = block_nitems;
+            if (offset + current > chunk_nitems) {
+                current = chunk_nitems - offset;
+            }
+
+            const void *block_vars[ME_MAX_VARS];
+            for (int i = 0; i < n_vars; i++) {
+                const unsigned char *base = (const unsigned char *)vars_chunk[i];
+                block_vars[i] = base + (size_t)offset * var_sizes[i];
+            }
+
+            for (int i = 0; i < var_node_count; i++) {
+                var_nodes[i]->bound = block_vars[var_indices[i]];
+            }
+
+            int update_idx = 0;
+            update_variable_bindings(clone, NULL, &update_idx, current);
+
+            clone->output = (unsigned char *)output_chunk + (size_t)offset * output_item_size;
+            private_eval(clone);
+        }
+
+        free(var_nodes);
+        free(var_indices);
+    }
 
     // Free the clone (including any intermediate buffers it allocated)
     me_free(clone);
@@ -3678,7 +3816,7 @@ static me_expr *private_compile(const char *expression, const me_variable *varia
 }
 
 // Synthetic addresses for ordinal matching (when user provides NULL addresses)
-static char synthetic_var_addresses[100];
+static char synthetic_var_addresses[ME_MAX_VARS];
 
 me_expr *me_compile(const char *expression, const me_variable *variables,
                     int var_count, me_dtype dtype, int *error) {

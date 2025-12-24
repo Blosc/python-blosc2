@@ -44,6 +44,21 @@ extern "C" {
 
 #endif
 
+/* Internal eval block size (elements). Compile-time fixed. */
+#ifndef ME_EVAL_BLOCK_NITEMS
+#define ME_EVAL_BLOCK_NITEMS 1024
+#endif
+
+/* Maximum number of variables supported in a single expression. */
+#ifndef ME_MAX_VARS
+#define ME_MAX_VARS 128
+#endif
+
+/* Enable internal eval blocking for large chunks (1 = on, 0 = off). */
+#ifndef ME_EVAL_ENABLE_BLOCKING
+#define ME_EVAL_ENABLE_BLOCKING 1
+#endif
+
 
 /* Data type enumeration - Full C99 support */
 typedef enum {
