@@ -567,11 +567,12 @@ cdef extern from "miniexpr.h":
         int ncode
         void *parameters[1]
 
-    me_expr *me_compile(const char *expression, const me_variable *variables,
-                        int var_count, me_dtype dtype, int *error)
+    int me_compile(const char *expression, const me_variable *variables,
+                   int var_count, me_dtype dtype, int *error, me_expr **out)
 
-    void me_eval(const me_expr *expr, const void ** vars_chunk,
-                 int n_vars, void *output_chunk, int chunk_nitems) nogil
+    int me_eval(const me_expr *expr, const void ** vars_chunk,
+                int n_vars, void *output_chunk, int chunk_nitems) nogil
+
     void me_print(const me_expr *n) nogil
     void me_free(me_expr *n) nogil
 
@@ -1887,8 +1888,10 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     if miniexpr_handle == NULL:
         raise ValueError("miniexpr: handle not assigned")
     # Call thread-safe miniexpr C API
-    me_eval(miniexpr_handle, <const void**>input_buffers, udata.ninputs,
-            <void*>params_output, ndarr.blocknitems)
+    rc = me_eval(miniexpr_handle, <const void**>input_buffers, udata.ninputs,
+                 <void*>params_output, ndarr.blocknitems)
+    if rc != 0:
+        raise RuntimeError(f"miniexpr: issues during evaluation; error code: {rc}")
 
     # Free resources
     for i in range(udata.ninputs):
@@ -2831,9 +2834,11 @@ cdef class NDArray:
         cdef int error = 0
         expression = expression.encode("utf-8") if isinstance(expression, str) else expression
         cdef me_dtype = me_dtype_from_numpy(self.dtype.num)
-        udata.miniexpr_handle = me_compile(expression, variables, n, me_dtype, &error)
-        if udata.miniexpr_handle == NULL:
+        cdef me_expr *out_expr
+        error = me_compile(expression, variables, n, me_dtype, &error, &out_expr)
+        if error != 0:
             raise NotImplementedError(f"Cannot compile expression: {expression}")
+        udata.miniexpr_handle = out_expr
 
         # Free resources
         for i in range(len(inputs)):
