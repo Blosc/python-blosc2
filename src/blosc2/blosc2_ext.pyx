@@ -1894,7 +1894,7 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         offset_bytes = <uintptr_t> typesize * (nchunk * nblocks_per_chunk + nblock)
         aux_reduc_ptr = <void *> (<uintptr_t> udata.aux_reduc_ptr + offset_bytes)
         rc = me_eval(miniexpr_handle, <const void**>input_buffers, udata.ninputs, aux_reduc_ptr, ndarr.blocknitems)
-        memset(<char *>params_output, 0, udata.array.sc.blocksize)  # clear output buffer
+        #memset(<char *>params_output, 0, udata.array.sc.blocksize)  # clear output buffer
     if rc != 0:
         raise RuntimeError(f"miniexpr: issues during evaluation; error code: {rc}")
 
