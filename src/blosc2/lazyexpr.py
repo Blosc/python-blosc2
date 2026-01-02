@@ -1297,7 +1297,7 @@ def fast_eval(  # noqa: C901
                 break
 
     if sys.platform == "win32":
-        # Miniexpr has issues on Windows; still investigating
+        # Miniexpr has issues on Windows, but only with complex types; still investigating
         use_miniexpr = False
 
     if use_miniexpr:
@@ -1875,6 +1875,11 @@ def reduce_slices(  # noqa: C901
     :ref:`NDArray` or np.ndarray
         The resulting output array.
     """
+    global try_miniexpr
+
+    # Use a local copy so we don't modify the global
+    use_miniexpr = try_miniexpr  # & False
+
     out = kwargs.pop("_output", None)
     res_out_ = None  # temporary required to store max/min for argmax/argmin
     ne_args: dict = kwargs.pop("_ne_args", {})
@@ -1882,6 +1887,7 @@ def reduce_slices(  # noqa: C901
         ne_args = {}
     where: dict | None = kwargs.pop("_where_args", None)
     reduce_op = reduce_args.pop("op")
+    reduce_op_str = reduce_args.pop("op_str", None)
     axis = reduce_args["axis"]
     keepdims = reduce_args["keepdims"]
     dtype = reduce_args.get("dtype", None)
@@ -1928,7 +1934,9 @@ def reduce_slices(  # noqa: C901
     # Note: we could have expr = blosc2.lazyexpr('numpy_array + 1') (i.e. no choice for chunks)
     blosc2_arrs = tuple(o for o in operands.values() if hasattr(o, "chunks"))
     fast_path = False
+    all_ndarray = False
     chunks = None
+    blocks = None
     if blosc2_arrs:  # fast path only relevant if there are blosc2 arrays
         operand = max(blosc2_arrs, key=lambda x: len(x.shape))
 
@@ -1941,6 +1949,7 @@ def reduce_slices(  # noqa: C901
         aligned, iter_disk = dict.fromkeys(operands.keys(), False), False
         if fast_path:
             chunks = operand.chunks
+            blocks = operand.blocks
             # Check that all operands are NDArray for fast path
             all_ndarray = all(
                 isinstance(value, blosc2.NDArray) and value.shape != () for value in operands.values()
@@ -1973,6 +1982,58 @@ def reduce_slices(  # noqa: C901
         temp = blosc2.empty(shape, dtype=dtype)
         chunks = temp.chunks
         del temp
+
+    if (where is None and fast_path and all_ndarray and expression == "o0") or expression == "(o0)":
+        # Only this case is supported so far
+        if use_miniexpr:
+            for op in operands.values():
+                # Only NDArray in-memory operands
+                if not (isinstance(op, blosc2.NDArray) and op.urlpath is None and out is None):
+                    use_miniexpr = False
+                    break
+                # Check that partitions are well-behaved (no padding)
+                if not blosc2.are_partitions_behaved(op.shape, op.chunks, op.blocks):
+                    use_miniexpr = False
+                    break
+
+        if use_miniexpr:
+            cparams = kwargs.pop("cparams", blosc2.CParams())
+            # Use the same chunks/blocks as the input operands for consistency
+            res_eval = blosc2.empty(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
+            # Compute the number of blocks in the result
+            nblocks = res_eval.nbytes // res_eval.blocksize
+            print("nblocks:", nblocks, dtype)
+            aux_reduc = np.empty(nblocks, dtype=dtype)
+            try:
+                print("expr->miniexpr:", expression, reduce_op)
+                if reduce_op_str is None:
+                    use_miniexpr = False
+                expression = f"{reduce_op_str}({expression})"
+                res_eval._set_pref_expr(expression, operands, aux_reduc)
+                # This line would NOT allocate physical RAM on any modern OS:
+                aux = np.empty(res_eval.shape, res_eval.dtype)
+                # Physical allocation happens here (when writing):
+                res_eval[...] = aux
+            except Exception:
+                use_miniexpr = False
+            finally:
+                res_eval.schunk.remove_prefilter("miniexpr")
+                global iter_chunks
+                # Ensure any background reading thread is closed
+                iter_chunks = None
+
+            if not use_miniexpr:
+                # If miniexpr failed, fallback to regular evaluation
+                # (continue to the manual chunked evaluation below)
+                pass
+            else:
+                from time import time
+
+                t0 = time()
+                result = reduce_op.value.reduce(aux_reduc, **reduce_args)
+                t = time() - t0
+                print(f"reduction of aux_reduc took {t * 1e6:.6f} us")
+                return result
 
     # Iterate over the operands and get the chunks
     chunk_operands = {}
@@ -2754,6 +2815,7 @@ class LazyExpr(LazyArray):
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         reduce_args = {
             "op": ReduceOp.SUM,
+            "op_str": "sum",
             "axis": axis,
             "dtype": dtype,
             "keepdims": keepdims,
@@ -2763,6 +2825,7 @@ class LazyExpr(LazyArray):
     def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
         reduce_args = {
             "op": ReduceOp.PROD,
+            "op_str": "prod",
             "axis": axis,
             "dtype": dtype,
             "keepdims": keepdims,
@@ -2853,6 +2916,7 @@ class LazyExpr(LazyArray):
     def min(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
             "op": ReduceOp.MIN,
+            "op_str": "min",
             "axis": axis,
             "keepdims": keepdims,
         }
@@ -2861,6 +2925,7 @@ class LazyExpr(LazyArray):
     def max(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
             "op": ReduceOp.MAX,
+            "op_str": "max",
             "axis": axis,
             "keepdims": keepdims,
         }
@@ -2869,6 +2934,7 @@ class LazyExpr(LazyArray):
     def any(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
             "op": ReduceOp.ANY,
+            "op_str": "any",
             "axis": axis,
             "keepdims": keepdims,
         }
@@ -2877,6 +2943,7 @@ class LazyExpr(LazyArray):
     def all(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
             "op": ReduceOp.ALL,
+            "op_str": "all",
             "axis": axis,
             "keepdims": keepdims,
         }

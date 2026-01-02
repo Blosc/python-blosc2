@@ -29,7 +29,7 @@ from cython.operator cimport dereference
 from libc.stdint cimport uintptr_t
 from libc.stdlib cimport free, malloc, realloc, calloc
 from libc.stdlib cimport abs as c_abs
-from libc.string cimport memcpy, strcpy, strdup, strlen
+from libc.string cimport memcpy, memset, strcpy, strdup, strlen
 from libcpp cimport bool as c_bool
 
 from enum import Enum
@@ -54,6 +54,8 @@ cdef extern from "<stdint.h>":
     ctypedef unsigned int   uint32_t
     ctypedef unsigned long long uint64_t
 
+cdef extern from "<stdio.h>":
+    int printf(const char *format, ...) nogil
 
 cdef extern from "blosc2.h":
 
@@ -605,6 +607,7 @@ ctypedef struct me_udata:
     b2nd_array_t** inputs
     int ninputs
     b2nd_array_t *array
+    void* aux_reduc_ptr
     int64_t chunks_in_array[B2ND_MAX_DIM]
     int64_t blocks_in_chunk[B2ND_MAX_DIM]
     me_expr* miniexpr_handle
@@ -1840,14 +1843,6 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     cdef int64_t stop_ndim[B2ND_MAX_DIM]
     cdef int64_t buffershape[B2ND_MAX_DIM]
 
-    # Get the right slice for each operand
-    blosc2_unidim_to_multidim(udata.array.ndim, udata.chunks_in_array, nchunk, chunk_ndim)
-    blosc2_unidim_to_multidim(udata.array.ndim, udata.blocks_in_chunk, nblock, block_ndim)
-    for i in range(udata.array.ndim):
-        start_ndim[i] = chunk_ndim[i] * udata.array.chunkshape[i] + block_ndim[i] * udata.array.blockshape[i]
-        stop_ndim[i] = start_ndim[i] + udata.array.blockshape[i]
-        buffershape[i] = udata.array.blockshape[i]
-
     cdef b2nd_array_t* ndarr
     cdef int rc
     cdef void** input_buffers = <void**> malloc(udata.ninputs * sizeof(uint8_t*))
@@ -1885,11 +1880,21 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
                 raise ValueError("miniexpr: error decompressing the chunk")
 
     cdef me_expr* miniexpr_handle = udata.miniexpr_handle
+    cdef void* aux_reduc_ptr
+    cdef uintptr_t offset_bytes
+    cdef int nblocks_per_chunk = udata.array.chunknitems // udata.array.blocknitems
     if miniexpr_handle == NULL:
         raise ValueError("miniexpr: handle not assigned")
     # Call thread-safe miniexpr C API
-    rc = me_eval(miniexpr_handle, <const void**>input_buffers, udata.ninputs,
-                 <void*>params_output, ndarr.blocknitems)
+    if udata.aux_reduc_ptr == NULL:
+        rc = me_eval(miniexpr_handle, <const void**>input_buffers, udata.ninputs,
+                     <void*>params_output, ndarr.blocknitems)
+    else:
+        # Reduction operation
+        offset_bytes = <uintptr_t> typesize * (nchunk * nblocks_per_chunk + nblock)
+        aux_reduc_ptr = <void *> (<uintptr_t> udata.aux_reduc_ptr + offset_bytes)
+        rc = me_eval(miniexpr_handle, <const void**>input_buffers, udata.ninputs, aux_reduc_ptr, ndarr.blocknitems)
+        memset(<char *>params_output, 0, udata.array.sc.blocksize)  # clear output buffer
     if rc != 0:
         raise RuntimeError(f"miniexpr: issues during evaluation; error code: {rc}")
 
@@ -2790,7 +2795,7 @@ cdef class NDArray:
 
         return udata
 
-    cdef me_udata *_fill_me_udata(self, inputs):
+    cdef me_udata *_fill_me_udata(self, inputs, aux_reduc):
         cdef me_udata *udata = <me_udata *> malloc(sizeof(me_udata))
         operands = list(inputs.values())
         ninputs = len(operands)
@@ -2800,6 +2805,12 @@ cdef class NDArray:
         udata.inputs = inputs_
         udata.ninputs = ninputs
         udata.array = self.array
+        cdef void* aux_reduc_ptr = NULL
+        if aux_reduc is not None:
+            if not isinstance(aux_reduc, np.ndarray):
+                raise TypeError("aux_reduc must be a NumPy array")
+            aux_reduc_ptr = <void *> np.PyArray_DATA(<np.ndarray> aux_reduc)
+        udata.aux_reduc_ptr = aux_reduc_ptr
         # Save these in udf_udata to avoid computing them for each block
         for i in range(self.array.ndim):
             udata.chunks_in_array[i] = udata.array.extshape[i] // udata.array.chunkshape[i]
@@ -2807,13 +2818,12 @@ cdef class NDArray:
 
         return udata
 
-    def _set_pref_expr(self, expression, inputs):
+    def _set_pref_expr(self, expression, inputs, aux_reduc=None):
         # Set prefilter for miniexpr
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> miniexpr_prefilter
 
-        # cdef udf_udata* udata = self._fill_udf_udata(func_id, inputs)
-        cdef me_udata* udata = self._fill_me_udata(inputs)
+        cdef me_udata* udata = self._fill_me_udata(inputs, aux_reduc)
 
         # Get the compiled expression handle for multi-threading
         cdef Py_ssize_t n = len(inputs)
