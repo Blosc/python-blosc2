@@ -1998,6 +1998,7 @@ def reduce_slices(  # noqa: C901
 
         if use_miniexpr:
             cparams = kwargs.pop("cparams", blosc2.CParams())
+            # print(f"cparams: {cparams}")
             # Use the same chunks/blocks as the input operands for consistency
             res_eval = blosc2.empty(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
             # Compute the number of blocks in the result
@@ -2033,6 +2034,7 @@ def reduce_slices(  # noqa: C901
                 result = reduce_op.value.reduce(aux_reduc, **reduce_args)
                 t = time() - t0
                 print(f"reduction of aux_reduc took {t * 1e6:.6f} us")
+                # print(f"res_eval.info:", res_eval.info)
                 return result
 
     # Iterate over the operands and get the chunks
