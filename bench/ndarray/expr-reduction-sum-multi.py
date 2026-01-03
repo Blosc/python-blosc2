@@ -23,18 +23,24 @@ print(f"Time to copy data: {(time() - t0) * 1000 :.4f} ms")
 
 t0 = time()
 res = blosc2.sum(a + b + c, cparams=cparams)
-print(f"Time to evaluate: {(time() - t0) * 1000 :.4f} ms")
+t = time() - t0
+print(f"Time to evaluate: {t * 1000 :.4f} ms", end=" ")
+print(f"Speed (GB/s): {(a.nbytes * 3 / 1e9) / t:.2f}")
 print("Result:", res, "Mean:", res / (N * N))
 
 na = a[:]
 nb = b[:]
 nc = c[:]
 #np.testing.assert_allclose(res, np.sum(na + nb + nc))
-#
-#t0 = time()
-#res = ne.evaluate("sum(na)")
-#print(f"Time to evaluate with NumExpr: {(time() - t0) * 1000 :.4f} ms")
 
 t0 = time()
 res = np.sum(na + nb + nc)
-print(f"Time to evaluate with NumPy: {(time() - t0) * 1000 :.4f} ms")
+t = time() - t0
+print(f"Time to evaluate with NumPy: {t * 1000 :.4f} ms", end=" ")
+print(f"Speed (GB/s): {(na.nbytes * 3 / 1e9) / t:.2f}")
+
+t0 = time()
+res = ne.evaluate("sum(na)")
+t = time() - t0
+print(f"Time to evaluate with NumExpr: {t * 1000 :.4f} ms", end=" ")
+print(f"Speed (GB/s): {(na.nbytes / 1e9) / t:.2f}")

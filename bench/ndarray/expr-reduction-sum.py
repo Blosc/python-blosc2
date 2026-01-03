@@ -36,11 +36,11 @@ nc = c[:]
 t0 = time()
 res = np.sum(na)
 t = time() - t0
-print(f"Time to evaluate with NumPy: {t * 1000 :.4f} ms")
+print(f"Time to evaluate with NumPy: {t * 1000 :.4f} ms", end=" ")
 print(f"Speed (GB/s): {(na.nbytes / 1e9) / t:.2f}")
 
 t0 = time()
 res = ne.evaluate("sum(na)")
 t = time() - t0
-print(f"Time to evaluate with NumExpr: {t * 1000 :.4f} ms")
+print(f"Time to evaluate with NumExpr: {t * 1000 :.4f} ms", end=" ")
 print(f"Speed (GB/s): {(na.nbytes / 1e9) / t:.2f}")
