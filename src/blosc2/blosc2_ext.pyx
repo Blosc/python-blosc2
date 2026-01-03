@@ -209,6 +209,7 @@ cdef extern from "blosc2.h":
         uint8_t* ttmp
         size_t ttmp_nbytes
         blosc2_context* ctx
+        c_bool output_is_disposable
 
     ctypedef struct blosc2_postfilter_params:
         void *user_data
@@ -1682,7 +1683,7 @@ cdef class SChunk:
         cdef blosc2_cparams* cparams = self.schunk.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> general_filler
 
-        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
+        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> calloc(1, sizeof(blosc2_prefilter_params))
         cdef filler_udata* fill_udata = <filler_udata *> malloc(sizeof(filler_udata))
         fill_udata.py_func = <char *> malloc(strlen(func_id) + 1)
         strcpy(fill_udata.py_func, func_id)
@@ -1715,7 +1716,7 @@ cdef class SChunk:
 
         cdef blosc2_cparams* cparams = self.schunk.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> general_prefilter
-        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
+        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> calloc(1, sizeof(blosc2_prefilter_params))
         cdef user_filters_udata* pref_udata = <user_filters_udata*> malloc(sizeof(user_filters_udata))
         pref_udata.py_func = <char *> malloc(strlen(func_id) + 1)
         strcpy(pref_udata.py_func, func_id)
@@ -2856,8 +2857,9 @@ cdef class NDArray:
             free(variables[i].name)
         free(variables)
 
-        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
+        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> calloc(1, sizeof(blosc2_prefilter_params))
         preparams.user_data = udata
+        preparams.output_is_disposable = False if aux_reduc is None else True
         cparams.preparams = preparams
         _check_cparams(cparams)
 
@@ -2880,7 +2882,7 @@ cdef class NDArray:
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> general_udf_prefilter
 
-        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> malloc(sizeof(blosc2_prefilter_params))
+        cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> calloc(1, sizeof(blosc2_prefilter_params))
         preparams.user_data = self._fill_udf_udata(func_id, inputs_id)
         cparams.preparams = preparams
         _check_cparams(cparams)
