@@ -1983,7 +1983,11 @@ def reduce_slices(  # noqa: C901
         chunks = temp.chunks
         del temp
 
-    if (where is None and fast_path and all_ndarray) and (expression == "o0" or expression == "(o0)"):
+    # if (where is None and fast_path and all_ndarray) and (expression == "o0" or expression == "(o0)"):
+    # miniexpr does not shine specially for single operand reductions
+    if (where is None and fast_path and all_ndarray) and not (
+        expression == "o0" or expression == "(o0)"
+    ):  # or 1:  # XXX make tests pass
         # Only this case is supported so far
         if use_miniexpr:
             for op in operands.values():

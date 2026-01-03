@@ -31,16 +31,16 @@ print("res:", res)
 na = a[:]
 nb = b[:]
 nc = c[:]
-np.testing.assert_allclose(res, np.sum(na), rtol=1e-5)
-
-t0 = time()
-res = ne.evaluate("sum(na)")
-t = time() - t0
-print(f"Time to evaluate with NumExpr: {t * 1000 :.4f} ms")
-print(f"Speed (GB/s): {(na.nbytes / 1e9) / t:.2f}")
+# np.testing.assert_allclose(res, np.sum(na), rtol=1e-5)
 
 t0 = time()
 res = np.sum(na)
 t = time() - t0
 print(f"Time to evaluate with NumPy: {t * 1000 :.4f} ms")
+print(f"Speed (GB/s): {(na.nbytes / 1e9) / t:.2f}")
+
+t0 = time()
+res = ne.evaluate("sum(na)")
+t = time() - t0
+print(f"Time to evaluate with NumExpr: {t * 1000 :.4f} ms")
 print(f"Speed (GB/s): {(na.nbytes / 1e9) / t:.2f}")

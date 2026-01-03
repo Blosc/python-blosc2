@@ -569,6 +569,9 @@ typedef struct state {
 
 /* Forward declarations */
 static me_expr* new_expr(const int type, const me_expr* parameters[]);
+static me_dtype infer_output_type(const me_expr* n);
+static void private_eval(const me_expr* n);
+static void eval_reduction(const me_expr* n, int output_nitems);
 static double conj_wrapper(double x);
 static double imag_wrapper(double x);
 static double real_wrapper(double x);
@@ -631,15 +634,49 @@ static bool contains_reduction(const me_expr* n) {
 }
 
 static bool reduction_usage_is_valid(const me_expr* n) {
-    if (!is_reduction_node(n)) return false;
-    me_expr* arg = (me_expr*)n->parameters[0];
-    if (!arg) return false;
-    if (n->function == (void*)min_reduce || n->function == (void*)max_reduce) {
-        if (arg->dtype == ME_COMPLEX64 || arg->dtype == ME_COMPLEX128) {
-            return false;
+    if (!n) return true;
+    if (is_reduction_node(n)) {
+        me_expr* arg = (me_expr*)n->parameters[0];
+        if (!arg) return false;
+        if (contains_reduction(arg)) return false;
+        me_dtype arg_type = infer_output_type(arg);
+        if (n->function == (void*)min_reduce || n->function == (void*)max_reduce) {
+            if (arg_type == ME_COMPLEX64 || arg_type == ME_COMPLEX128) {
+                return false;
+            }
         }
+        return true;
     }
-    return TYPE_MASK(arg->type) == ME_VARIABLE || TYPE_MASK(arg->type) == ME_CONSTANT;
+
+    switch (TYPE_MASK(n->type)) {
+    case ME_FUNCTION0:
+    case ME_FUNCTION1:
+    case ME_FUNCTION2:
+    case ME_FUNCTION3:
+    case ME_FUNCTION4:
+    case ME_FUNCTION5:
+    case ME_FUNCTION6:
+    case ME_FUNCTION7:
+    case ME_CLOSURE0:
+    case ME_CLOSURE1:
+    case ME_CLOSURE2:
+    case ME_CLOSURE3:
+    case ME_CLOSURE4:
+    case ME_CLOSURE5:
+    case ME_CLOSURE6:
+    case ME_CLOSURE7:
+        {
+            const int arity = ARITY(n->type);
+            for (int i = 0; i < arity; i++) {
+                if (!reduction_usage_is_valid((const me_expr*)n->parameters[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    default:
+        return true;
+    }
 }
 
 /* Infer computation type from expression tree (for evaluation) */
@@ -3698,7 +3735,12 @@ typedef float (*me_fun1_f32)(float);
     SQRT_FUNC, SIN_FUNC, COS_FUNC, EXP_FUNC, LOG_FUNC, FABS_FUNC, POW_FUNC, \
     VEC_CONJ) \
 static void me_eval_##SUFFIX(const me_expr *n) { \
-    if (!n || !n->output || n->nitems <= 0) return; \
+    if (!n || !n->output) return; \
+    if (is_reduction_node(n)) { \
+        eval_reduction(n, n->nitems); \
+        return; \
+    } \
+    if (n->nitems <= 0) return; \
     \
     int i, j; \
     const int arity = ARITY(n->type); \
@@ -4364,14 +4406,139 @@ static bool all_variables_match_type(const me_expr* n, me_dtype target_type) {
     return true;
 }
 
-static void eval_reduction(const me_expr* n) {
+static void broadcast_reduction_output(void* output, me_dtype dtype, int output_nitems) {
+    if (!output || output_nitems <= 1) return;
+    switch (dtype) {
+    case ME_BOOL:
+        {
+            bool val = ((bool*)output)[0];
+            for (int i = 1; i < output_nitems; i++) {
+                ((bool*)output)[i] = val;
+            }
+            break;
+        }
+    case ME_INT8:
+        {
+            int8_t val = ((int8_t*)output)[0];
+            for (int i = 1; i < output_nitems; i++) {
+                ((int8_t*)output)[i] = val;
+            }
+            break;
+        }
+    case ME_INT16:
+        {
+            int16_t val = ((int16_t*)output)[0];
+            for (int i = 1; i < output_nitems; i++) {
+                ((int16_t*)output)[i] = val;
+            }
+            break;
+        }
+    case ME_INT32:
+        {
+            int32_t val = ((int32_t*)output)[0];
+            for (int i = 1; i < output_nitems; i++) {
+                ((int32_t*)output)[i] = val;
+            }
+            break;
+        }
+    case ME_INT64:
+        {
+            int64_t val = ((int64_t*)output)[0];
+            for (int i = 1; i < output_nitems; i++) {
+                ((int64_t*)output)[i] = val;
+            }
+            break;
+        }
+    case ME_UINT8:
+        {
+            uint8_t val = ((uint8_t*)output)[0];
+            for (int i = 1; i < output_nitems; i++) {
+                ((uint8_t*)output)[i] = val;
+            }
+            break;
+        }
+    case ME_UINT16:
+        {
+            uint16_t val = ((uint16_t*)output)[0];
+            for (int i = 1; i < output_nitems; i++) {
+                ((uint16_t*)output)[i] = val;
+            }
+            break;
+        }
+    case ME_UINT32:
+        {
+            uint32_t val = ((uint32_t*)output)[0];
+            for (int i = 1; i < output_nitems; i++) {
+                ((uint32_t*)output)[i] = val;
+            }
+            break;
+        }
+    case ME_UINT64:
+        {
+            uint64_t val = ((uint64_t*)output)[0];
+            for (int i = 1; i < output_nitems; i++) {
+                ((uint64_t*)output)[i] = val;
+            }
+            break;
+        }
+    case ME_FLOAT32:
+        {
+            float val = ((float*)output)[0];
+            for (int i = 1; i < output_nitems; i++) {
+                ((float*)output)[i] = val;
+            }
+            break;
+        }
+    case ME_FLOAT64:
+        {
+            double val = ((double*)output)[0];
+            for (int i = 1; i < output_nitems; i++) {
+                ((double*)output)[i] = val;
+            }
+            break;
+        }
+    case ME_COMPLEX64:
+        {
+            float _Complex val = ((float _Complex*)output)[0];
+            for (int i = 1; i < output_nitems; i++) {
+                ((float _Complex*)output)[i] = val;
+            }
+            break;
+        }
+    case ME_COMPLEX128:
+        {
+            double _Complex val = ((double _Complex*)output)[0];
+            for (int i = 1; i < output_nitems; i++) {
+                ((double _Complex*)output)[i] = val;
+            }
+            break;
+        }
+    default:
+        break;
+    }
+}
+
+static void eval_reduction(const me_expr* n, int output_nitems) {
     if (!n || !n->output || !is_reduction_node(n)) return;
+    if (output_nitems <= 0) return;
 
     me_expr* arg = (me_expr*)n->parameters[0];
     if (!arg) return;
 
     const int nitems = n->nitems;
     me_dtype arg_type = arg->dtype;
+    if (arg->type != ME_CONSTANT && arg->type != ME_VARIABLE) {
+        arg_type = infer_output_type(arg);
+        if (nitems > 0) {
+            if (!arg->output) {
+                arg->output = malloc((size_t)nitems * dtype_size(arg_type));
+                if (!arg->output) return;
+            }
+            arg->nitems = nitems;
+            arg->dtype = arg_type;
+            private_eval(arg);
+        }
+    }
     me_dtype result_type = reduction_output_dtype(arg_type, n->function);
     me_dtype output_type = n->dtype;
     bool is_prod = n->function == (void*)prod_reduce;
@@ -4383,7 +4550,7 @@ static void eval_reduction(const me_expr* n) {
     void* write_ptr = n->output;
     void* temp_output = NULL;
     if (output_type != result_type) {
-        temp_output = malloc(dtype_size(result_type));
+        temp_output = malloc((size_t)output_nitems * dtype_size(result_type));
         if (!temp_output) return;
         write_ptr = temp_output;
     }
@@ -4627,7 +4794,13 @@ static void eval_reduction(const me_expr* n) {
             }
         }
     }
-    else if (arg->type == ME_VARIABLE) {
+    else {
+        const void* saved_bound = arg->bound;
+        int saved_type = arg->type;
+        if (arg->type != ME_VARIABLE) {
+            ((me_expr*)arg)->bound = arg->output;
+            ((me_expr*)arg)->type = ME_VARIABLE;
+        }
         switch (arg_type) {
         case ME_BOOL:
             {
@@ -5140,12 +5313,21 @@ static void eval_reduction(const me_expr* n) {
         default:
             break;
         }
+        if (saved_type != ME_VARIABLE) {
+            ((me_expr*)arg)->bound = saved_bound;
+            ((me_expr*)arg)->type = saved_type;
+        }
+    }
+
+    {
+        me_dtype write_type = temp_output ? result_type : output_type;
+        broadcast_reduction_output(write_ptr, write_type, output_nitems);
     }
 
     if (temp_output) {
         convert_func_t conv = get_convert_func(result_type, output_type);
         if (conv) {
-            conv(temp_output, n->output, 1);
+            conv(temp_output, n->output, output_nitems);
         }
         free(temp_output);
     }
@@ -5155,7 +5337,7 @@ static void private_eval(const me_expr* n) {
     if (!n) return;
 
     if (is_reduction_node(n)) {
-        eval_reduction(n);
+        eval_reduction(n, 1);
         return;
     }
 
