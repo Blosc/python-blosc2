@@ -31,7 +31,7 @@ print("Result:", res, "Mean:", res / (N * N))
 na = a[:]
 nb = b[:]
 nc = c[:]
-#np.testing.assert_allclose(res, np.sum(2 * a**2 - 3 * b + c + 1.2))
+#np.testing.assert_allclose(res, np.sum(2 * na**2 - 3 * nb + nc + 1.2))
 
 t0 = time()
 res = np.sum(2 * na**2 - 3 * nb + nc + 1.2)
