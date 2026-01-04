@@ -1987,8 +1987,12 @@ def reduce_slices(  # noqa: C901
     if where is None and fast_path and all_ndarray and reduced_shape == ():
         if reduce_op in (ReduceOp.ARGMAX, ReduceOp.ARGMIN):
             use_miniexpr = False  # not supported yet
-        elif len(operands) <= 2:
+        elif len(operands) < 2:
             # This is supported, but performance is generally worse than manual chunked evaluation
+            # Determining the exact number of operands that gives better performance is tricky;
+            # for example, apple silicon CPUs seem to benefit from miniexpr starting with 3 operands,
+            # whereas Intel CPUs seem to do better with just 2 operands.
+            # TODO: more benchmarks needed
             use_miniexpr = False
         # Only this case is supported so far
         if use_miniexpr:
