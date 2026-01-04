@@ -1983,11 +1983,13 @@ def reduce_slices(  # noqa: C901
         chunks = temp.chunks
         del temp
 
-    # if (where is None and fast_path and all_ndarray) and (expression == "o0" or expression == "(o0)"):
-    # miniexpr does not shine specially for single operand reductions
-    if (where is None and fast_path and all_ndarray) and not (
-        expression == "o0" or expression == "(o0)"
-    ):  # or 1:  # XXX make tests pass
+    # miniexpr reduction path only supported for some cases so far
+    if where is None and fast_path and all_ndarray and reduced_shape == ():
+        if reduce_op in (ReduceOp.ARGMAX, ReduceOp.ARGMIN):
+            use_miniexpr = False  # not supported yet
+        elif len(operands) <= 2:
+            # This is supported, but performance is generally worse than manual chunked evaluation
+            use_miniexpr = False
         # Only this case is supported so far
         if use_miniexpr:
             for op in operands.values():
@@ -2007,7 +2009,6 @@ def reduce_slices(  # noqa: C901
             res_eval = blosc2.empty(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
             # Compute the number of blocks in the result
             nblocks = res_eval.nbytes // res_eval.blocksize
-            print("nblocks:", nblocks, dtype)
             aux_reduc = np.empty(nblocks, dtype=dtype)
             try:
                 print("expr->miniexpr:", expression, reduce_op)
@@ -2032,13 +2033,12 @@ def reduce_slices(  # noqa: C901
                 # (continue to the manual chunked evaluation below)
                 pass
             else:
-                from time import time
-
-                t0 = time()
-                result = reduce_op.value.reduce(aux_reduc, **reduce_args)
-                t = time() - t0
-                print(f"reduction of aux_reduc took {t * 1e6:.6f} us")
-                # print(f"res_eval.info:", res_eval.info)
+                if reduce_op == ReduceOp.ANY:
+                    result = np.any(aux_reduc, **reduce_args)
+                elif reduce_op == ReduceOp.ALL:
+                    result = np.all(aux_reduc, **reduce_args)
+                else:
+                    result = reduce_op.value.reduce(aux_reduc, **reduce_args)
                 return result
 
     # Iterate over the operands and get the chunks
