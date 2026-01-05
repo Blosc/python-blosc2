@@ -1435,6 +1435,7 @@ cdef class SChunk:
         cdef int size
         cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC2_MAX_OVERHEAD)
         cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)
+        self.schunk.current_nchunk = nchunk  # prefilter needs this value to be set
         if RELEASEGIL:
             with nogil:
                 # No need to create another cctx
@@ -1473,6 +1474,7 @@ cdef class SChunk:
         cdef int size
         cdef int32_t len_chunk = <int32_t> (buf.len + BLOSC2_MAX_OVERHEAD)
         cdef uint8_t* chunk = <uint8_t*> malloc(len_chunk)
+        self.schunk.current_nchunk = nchunk  # prefilter needs this value to be set
         if RELEASEGIL:
             with nogil:
                 size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk, len_chunk)
@@ -1494,6 +1496,22 @@ cdef class SChunk:
         if rc < 0:
             raise RuntimeError("Could not update the desired chunk")
         return rc
+
+    # This is used internally for prefiltering
+    def _prefilter_data(self, nchunk, data, chunk_data):
+        cdef Py_buffer buf
+        PyObject_GetBuffer(data, &buf, PyBUF_SIMPLE)
+        cdef Py_buffer chunk_buf
+        PyObject_GetBuffer(chunk_data, &chunk_buf, PyBUF_SIMPLE)
+        self.schunk.current_nchunk = nchunk  # prefilter needs this value to be set
+        cdef int size = blosc2_compress_ctx(self.schunk.cctx, buf.buf, <int32_t> buf.len, chunk_buf.buf, chunk_buf.len)
+        PyBuffer_Release(&buf)
+        PyBuffer_Release(&chunk_buf)
+        if size < 0:
+            raise RuntimeError("Could not compress the data")
+        elif size == 0:
+            raise RuntimeError("The result could not fit ")
+        return size
 
     def get_slice(self, start=0, stop=None, out=None):
         cdef int64_t nitems = self.schunk.nbytes // self.schunk.typesize

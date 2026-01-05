@@ -1302,15 +1302,16 @@ def fast_eval(  # noqa: C901
 
     if use_miniexpr:
         cparams = kwargs.pop("cparams", blosc2.CParams())
-        # Use the same chunks/blocks as the input operands for consistency
-        res_eval = blosc2.empty(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
+        # All values will be overwritten, so we can use an uninitialized array
+        res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         try:
             # print("expr->miniexpr:", expression)
             res_eval._set_pref_expr(expression, operands)
-            # This line would NOT allocate physical RAM on any modern OS:
-            aux = np.empty(res_eval.shape, res_eval.dtype)
-            # Physical allocation happens here (when writing):
-            res_eval[...] = aux
+            # Data to compress is fetched from operands, so it can be uninitialized here
+            data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
+            # Exercise prefilter for each chunk
+            for nchunk in range(res_eval.schunk.nchunks):
+                res_eval.schunk.update_data(nchunk, data, copy=False)
         except Exception:
             use_miniexpr = False
         finally:
@@ -1935,6 +1936,7 @@ def reduce_slices(  # noqa: C901
     blosc2_arrs = tuple(o for o in operands.values() if hasattr(o, "chunks"))
     fast_path = False
     all_ndarray = False
+    any_persisted = False
     chunks = None
     blocks = None
     if blosc2_arrs:  # fast path only relevant if there are blosc2 arrays
@@ -1946,7 +1948,8 @@ def reduce_slices(  # noqa: C901
         same_chunks = all(operand.chunks == o.chunks for o in operands.values() if hasattr(o, "chunks"))
         same_blocks = all(operand.blocks == o.blocks for o in operands.values() if hasattr(o, "blocks"))
         fast_path = same_shape and same_chunks and same_blocks and (0 not in operand.chunks)
-        aligned, iter_disk = dict.fromkeys(operands.keys(), False), False
+        aligned = dict.fromkeys(operands.keys(), False)
+        iter_disk = False
         if fast_path:
             chunks = operand.chunks
             blocks = operand.blocks
@@ -1984,66 +1987,59 @@ def reduce_slices(  # noqa: C901
         del temp
 
     # miniexpr reduction path only supported for some cases so far
-    if where is None and fast_path and all_ndarray and reduced_shape == ():
-        if reduce_op in (ReduceOp.ARGMAX, ReduceOp.ARGMIN):
-            use_miniexpr = False  # not supported yet
-        elif len(operands) < 2:
-            # This is supported, but performance is generally worse than manual chunked evaluation
-            # Determining the exact number of operands that gives better performance is tricky;
-            # for example, apple silicon CPUs seem to benefit from miniexpr starting with 3 operands,
-            # whereas Intel CPUs seem to do better with just 2 operands.
-            # TODO: more benchmarks needed
-            use_miniexpr = False
-        # Only this case is supported so far
-        if use_miniexpr:
-            for op in operands.values():
-                # Only NDArray in-memory operands
-                if not (isinstance(op, blosc2.NDArray) and op.urlpath is None and out is None):
-                    use_miniexpr = False
-                    break
-                # Check that partitions are well-behaved (no padding)
-                if not blosc2.are_partitions_behaved(op.shape, op.chunks, op.blocks):
-                    use_miniexpr = False
-                    break
+    if not (where is None and fast_path and all_ndarray and not any_persisted and reduced_shape == ()):
+        use_miniexpr = False
 
-        if use_miniexpr:
-            cparams = kwargs.pop("cparams", blosc2.CParams())
-            # print(f"cparams: {cparams}")
-            # Use the same chunks/blocks as the input operands for consistency
-            res_eval = blosc2.empty(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
-            # Compute the number of blocks in the result
-            nblocks = res_eval.nbytes // res_eval.blocksize
-            aux_reduc = np.empty(nblocks, dtype=dtype)
-            try:
-                print("expr->miniexpr:", expression, reduce_op)
-                if reduce_op_str is None:
-                    use_miniexpr = False
-                expression = f"{reduce_op_str}({expression})"
-                res_eval._set_pref_expr(expression, operands, aux_reduc)
-                # This line would NOT allocate physical RAM on any modern OS:
-                aux = np.empty(res_eval.shape, res_eval.dtype)
-                # Physical allocation happens here (when writing):
-                res_eval[...] = aux
-            except Exception:
+    # Some reductions are not supported yet in miniexpr
+    if reduce_op in (ReduceOp.ARGMAX, ReduceOp.ARGMIN):
+        use_miniexpr = False
+
+    # Only behaved partitions are supported in miniexpr reductions
+    if use_miniexpr:
+        for op in operands.values():
+            # Check that partitions are well-behaved (no padding)
+            if not blosc2.are_partitions_behaved(op.shape, op.chunks, op.blocks):
                 use_miniexpr = False
-            finally:
-                res_eval.schunk.remove_prefilter("miniexpr")
-                global iter_chunks
-                # Ensure any background reading thread is closed
-                iter_chunks = None
+                break
 
-            if not use_miniexpr:
-                # If miniexpr failed, fallback to regular evaluation
-                # (continue to the manual chunked evaluation below)
-                pass
+    if use_miniexpr:
+        # Experiments say that not splitting is best (at least on Apple Silicon M4 Pro)
+        cparams = kwargs.pop("cparams", blosc2.CParams(splitmode=blosc2.SplitMode.NEVER_SPLIT))
+        # Create a fake NDArray just to drive the miniexpr evaluation (values won't be used)
+        res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
+        # Compute the number of blocks in the result
+        nblocks = res_eval.nbytes // res_eval.blocksize
+        aux_reduc = np.empty(nblocks, dtype=dtype)
+        try:
+            # print("expr->miniexpr:", expression, reduce_op)
+            expression = f"{reduce_op_str}({expression})"
+            res_eval._set_pref_expr(expression, operands, aux_reduc)
+            # Data won't even try to be compressed, so buffers can be unitialized and reused
+            data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
+            chunk_data = np.empty(res_eval.schunk.chunksize + blosc2.MAX_OVERHEAD, dtype=np.uint8)
+            # Exercise prefilter for each chunk
+            for nchunk in range(res_eval.schunk.nchunks):
+                res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
+        except Exception:
+            use_miniexpr = False
+        finally:
+            res_eval.schunk.remove_prefilter("miniexpr")
+            global iter_chunks
+            # Ensure any background reading thread is closed
+            iter_chunks = None
+
+        if not use_miniexpr:
+            # If miniexpr failed, fallback to regular evaluation
+            # (continue to the manual chunked evaluation below)
+            pass
+        else:
+            if reduce_op == ReduceOp.ANY:
+                result = np.any(aux_reduc, **reduce_args)
+            elif reduce_op == ReduceOp.ALL:
+                result = np.all(aux_reduc, **reduce_args)
             else:
-                if reduce_op == ReduceOp.ANY:
-                    result = np.any(aux_reduc, **reduce_args)
-                elif reduce_op == ReduceOp.ALL:
-                    result = np.all(aux_reduc, **reduce_args)
-                else:
-                    result = reduce_op.value.reduce(aux_reduc, **reduce_args)
-                return result
+                result = reduce_op.value.reduce(aux_reduc, **reduce_args)
+            return result
 
     # Iterate over the operands and get the chunks
     chunk_operands = {}
