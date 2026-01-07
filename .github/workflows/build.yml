@@ -10,7 +10,7 @@ on:
 
 jobs:
   build_wheels:
-    name: Build and test on ${{ matrix.os }}${{ matrix.numpy-version && ' (numpy {0}, python {1})'.format(matrix.numpy-version, matrix.python-version) || '' }}
+    name: Build and test on ${{ matrix.os }}${{ matrix.numpy-version && format(' (numpy {0}, python {1})', matrix.numpy-version, matrix.python-version) || '' }}
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
