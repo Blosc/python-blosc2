@@ -66,22 +66,24 @@ def test_expand_dims(shape, axis, chunks, blocks, fill_value):
 
     arr = np.arange(4)
     bloscarr_ = blosc2.asarray(arr)
-    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 2
+    # In python 3.14, sys.getrefcount no longer creates "extra" dummy reference itself
+    py314 = sys.version >= "3.14"
+    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 2 - py314
 
     view = np.expand_dims(arr, 0)
     bloscview = blosc2.expand_dims(bloscarr_, 0)
-    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 3
+    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 3 - py314
 
     del view
     del bloscview
-    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 2
+    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 2 - py314
 
     # view of a view
     view = np.expand_dims(arr, 0)
     bloscview = blosc2.expand_dims(bloscarr_, 0)
     view2 = np.expand_dims(view, 0)
     bloscview2 = blosc2.expand_dims(bloscview, 0)
-    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 4
+    assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 4 - py314
 
     del bloscview
     del bloscarr_
