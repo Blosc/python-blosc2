@@ -21,6 +21,9 @@ jobs:
           - os: ubuntu-latest
             python-version: "3.12"
             numpy-version: "1.26"
+          - os: ubuntu-latest
+            python-version: "3.14"
+            numpy-version: null
 
     steps:
     - uses: actions/checkout@v6
