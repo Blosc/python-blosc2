@@ -15,7 +15,14 @@ import blosc2
 from blosc2.lazyexpr import ne_evaluate
 from blosc2.utils import get_chunks_idx, npvecdot
 
-torch = pytest.importorskip("torch", reason="torch not available")
+# Conditionally import torch for proxy tests
+try:
+    import torch
+
+    PROXY_TEST_XP = [torch, np]
+except ImportError:
+    torch = None
+    PROXY_TEST_XP = [np]
 
 NITEMS_SMALL = 100
 NITEMS = 1000
@@ -1848,7 +1855,7 @@ def test_lazyexpr_2args():
 
 @pytest.mark.parametrize(
     "xp",
-    [torch, np],
+    PROXY_TEST_XP,
 )
 @pytest.mark.parametrize(
     "dtype",

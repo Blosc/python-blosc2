@@ -11,8 +11,6 @@ import pytest
 
 import blosc2
 
-torch = pytest.importorskip("torch", reason="torch not available")
-
 argnames = "shape, chunks, blocks, slices, dtype"
 argvalues = [
     ([456], [258], [73], slice(0, 1), np.int32),
@@ -46,14 +44,6 @@ def test_setitem(shape, chunks, blocks, slices, dtype):
     nparray[slices] = val
     np.testing.assert_almost_equal(a[...], nparray)
 
-    # Object called via SimpleProxy
-    slice_shape = a[slices].shape
-    dtype_ = {np.float32: torch.float32, np.int32: torch.int32, np.float64: torch.float64}[dtype]
-    val = torch.ones(slice_shape, dtype=dtype_)
-    a[slices] = val
-    nparray[slices] = val
-    np.testing.assert_almost_equal(a[...], nparray)
-
     # blosc2.NDArray
     if np.prod(slice_shape) == 1 or len(slice_shape) != len(blocks):
         chunks = None
@@ -62,6 +52,22 @@ def test_setitem(shape, chunks, blocks, slices, dtype):
     b = blosc2.full(slice_shape, fill_value=1234567, chunks=chunks, blocks=blocks, dtype=dtype)
     a[slices] = b
     nparray[slices] = b[...]
+    np.testing.assert_almost_equal(a[...], nparray)
+
+
+@pytest.mark.parametrize(argnames, argvalues)
+def test_setitem_torch_proxy(shape, chunks, blocks, slices, dtype):
+    torch = pytest.importorskip("torch")
+    size = int(np.prod(shape))
+    nparray = np.arange(size, dtype=dtype).reshape(shape)
+    a = blosc2.frombuffer(bytes(nparray), nparray.shape, dtype=dtype, chunks=chunks, blocks=blocks)
+
+    # Object called via SimpleProxy (torch tensor)
+    slice_shape = a[slices].shape
+    dtype_ = {np.float32: torch.float32, np.int32: torch.int32, np.float64: torch.float64}[dtype]
+    val = torch.ones(slice_shape, dtype=dtype_)
+    a[slices] = val
+    nparray[slices] = val
     np.testing.assert_almost_equal(a[...], nparray)
 
 
