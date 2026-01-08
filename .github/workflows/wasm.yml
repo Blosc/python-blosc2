@@ -21,6 +21,7 @@ jobs:
     env:
       CIBW_BUILD: ${{ matrix.cibw_build }}
       CMAKE_ARGS: "-DWITH_OPTIM=OFF"
+      DEACTIVATE_OPENZL: "1"
       CIBW_TEST_COMMAND: "pytest {project}/tests/ndarray/test_reductions.py"
     strategy:
       matrix:
