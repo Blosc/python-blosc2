@@ -50,6 +50,7 @@ target_link_libraries(blosc2_ext PRIVATE Python::NumPy)
 # Fetch and build miniexpr library
 include(FetchContent)
 
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(MINIEXPR_BUILD_SHARED OFF CACHE BOOL "Build miniexpr shared library" FORCE)
 set(MINIEXPR_BUILD_TESTS OFF CACHE BOOL "Build miniexpr tests" FORCE)
 set(MINIEXPR_BUILD_EXAMPLES OFF CACHE BOOL "Build miniexpr examples" FORCE)
