@@ -95,6 +95,8 @@ if not NUMPY_GE_2_0:  # handle non-array-api compliance
 try_miniexpr = True
 if blosc2.IS_WASM:
     try_miniexpr = False
+if sys.platform == "win32":
+    try_miniexpr = False
 
 
 def ne_evaluate(expression, local_dict=None, **kwargs):
@@ -1297,10 +1299,6 @@ def fast_eval(  # noqa: C901
             if not blosc2.are_partitions_behaved(op.shape, op.chunks, op.blocks):
                 use_miniexpr = False
                 break
-
-    if sys.platform == "win32":
-        # Miniexpr has issues on Windows, but only with complex types; still investigating
-        use_miniexpr = False
 
     if use_miniexpr:
         cparams = kwargs.pop("cparams", blosc2.CParams())
