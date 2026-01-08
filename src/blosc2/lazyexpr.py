@@ -93,6 +93,8 @@ if not NUMPY_GE_2_0:  # handle non-array-api compliance
 
 # Set this to False if miniexpr should not be tried out
 try_miniexpr = True
+if blosc2.IS_WASM:
+    try_miniexpr = False
 
 
 def ne_evaluate(expression, local_dict=None, **kwargs):
