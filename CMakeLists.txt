@@ -40,14 +40,25 @@ add_custom_command(
           "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/blosc2_ext.pyx" --output-file blosc2_ext.c
   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/blosc2_ext.pyx"
   VERBATIM)
+
 # ...and add it to the target
-Python_add_library(blosc2_ext MODULE blosc2_ext.c
-                   "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/miniexpr.c" WITH_SOABI)
+Python_add_library(blosc2_ext MODULE blosc2_ext.c WITH_SOABI)
+
 # We need to link against NumPy
 target_link_libraries(blosc2_ext PRIVATE Python::NumPy)
 
-# Add include directory for miniexpr.h and others
-target_include_directories(blosc2_ext PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2")
+# Fetch and build miniexpr library
+include(FetchContent)
+
+FetchContent_Declare(miniexpr
+    GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
+    GIT_TAG 3e0ad9f2800cfb46729da88553a9228845eaa731  # latest SIMD additions
+)
+FetchContent_MakeAvailable(miniexpr)
+
+# Link against miniexpr static library
+target_link_libraries(blosc2_ext PRIVATE miniexpr_static)
+
 target_compile_features(blosc2_ext PRIVATE c_std_11)
 if(WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
     execute_process(
