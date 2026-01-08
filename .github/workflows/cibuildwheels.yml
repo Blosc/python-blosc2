@@ -19,7 +19,6 @@ env:
   CIBW_SKIP: "pp* *musllinux* *-win32"
   # Use explicit generator/compiler env vars; CMAKE_ARGS with spaces is not split on Windows.
   CIBW_ENVIRONMENT_WINDOWS: >-
-    PATH=C:\\Program Files\\LLVM\\bin;%PATH%
     CMAKE_GENERATOR=Ninja
     CC=clang-cl
     CXX=clang-cl
