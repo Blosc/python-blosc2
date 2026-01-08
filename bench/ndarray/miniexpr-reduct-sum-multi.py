@@ -36,7 +36,7 @@ nres = np.sum(2 * na**2 - 3 * nb + nc + 1.2)
 nt = time() - t0
 print(f"Time to evaluate with NumPy: {nt * 1000 :.4f} ms", end=" ")
 print(f"Speed (GB/s): {(na.nbytes * 3 / 1e9) / nt:.2f}")
-print("Result:", res, "Mean:", res / (N * N))
+print("Result:", nres, "Mean:", nres / (N * N))
 print(f"Speedup Blosc2 vs NumPy: {nt / t:.2f}x")
 assert np.allclose(res, nres)
 
@@ -45,5 +45,5 @@ neres = ne.evaluate("sum(2 * na**2 - 3 * nb + nc + 1.2)")
 net = time() - t0
 print(f"Time to evaluate with NumExpr: {net * 1000 :.4f} ms", end=" ")
 print(f"Speed (GB/s): {(na.nbytes * 3 / 1e9) / net:.2f}")
-print("Result:", res, "Mean:", res / (N * N))
+print("Result:", neres, "Mean:", neres / (N * N))
 print(f"Speedup Blosc2 vs NumExpr: {net / t:.2f}x")
