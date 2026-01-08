@@ -50,6 +50,11 @@ target_link_libraries(blosc2_ext PRIVATE Python::NumPy)
 # Fetch and build miniexpr library
 include(FetchContent)
 
+set(MINIEXPR_BUILD_SHARED OFF CACHE BOOL "Build miniexpr shared library" FORCE)
+set(MINIEXPR_BUILD_TESTS OFF CACHE BOOL "Build miniexpr tests" FORCE)
+set(MINIEXPR_BUILD_EXAMPLES OFF CACHE BOOL "Build miniexpr examples" FORCE)
+set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
+
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
     GIT_TAG 3e0ad9f2800cfb46729da88553a9228845eaa731  # latest SIMD additions
