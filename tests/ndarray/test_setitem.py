@@ -8,9 +8,10 @@
 
 import numpy as np
 import pytest
-import torch
 
 import blosc2
+
+torch = pytest.importorskip("torch", reason="torch not available")
 
 argnames = "shape, chunks, blocks, slices, dtype"
 argvalues = [

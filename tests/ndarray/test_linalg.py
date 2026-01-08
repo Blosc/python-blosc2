@@ -3,11 +3,12 @@ from itertools import permutations
 
 import numpy as np
 import pytest
-import torch
 
 import blosc2
 from blosc2.lazyexpr import linalg_funcs
 from blosc2.utils import npvecdot
+
+torch = pytest.importorskip("torch", reason="torch not available")
 
 
 @pytest.mark.parametrize(

@@ -10,11 +10,12 @@ import pathlib
 
 import numpy as np
 import pytest
-import torch
 
 import blosc2
 from blosc2.lazyexpr import ne_evaluate
 from blosc2.utils import get_chunks_idx, npvecdot
+
+torch = pytest.importorskip("torch", reason="torch not available")
 
 NITEMS_SMALL = 100
 NITEMS = 1000
