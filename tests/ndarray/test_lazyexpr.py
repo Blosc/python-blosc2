@@ -338,7 +338,11 @@ def test_functions(function, dtype_fixture, shape_fixture):
     expr_string = f"na1 + {function}(na2)"
     res_numexpr = ne_evaluate(expr_string)
     # Compare the results
-    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=1e-5)
+    if function == "tan":
+        # tan in miniexpr has not a lot of precision for values that are close to 0
+        np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=5e-4)
+    else:
+        np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=1e-5)
 
     # Functions of the form np.function(a1 + a2)
     expr = eval(f"np.{function}(a1 + a2)", {"a1": a1, "a2": a2, "np": np})
