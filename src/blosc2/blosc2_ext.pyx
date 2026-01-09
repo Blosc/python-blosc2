@@ -1868,8 +1868,10 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     cdef float *buf
     cdef void* src
     cdef int32_t chunk_nbytes, chunk_cbytes, block_nbytes
-    cdef int start
+    cdef int start, blocknitems, expected_blocknitems
+    cdef int32_t input_typesize
     cdef blosc2_context* dctx
+    expected_blocknitems = -1
     for i in range(udata.ninputs):
         ndarr = udata.inputs[i]
         input_buffers[i] = malloc(ndarr.sc.blocksize)
@@ -1883,7 +1885,13 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
             rc = blosc2_cbuffer_sizes(src, &chunk_nbytes, &chunk_cbytes, &block_nbytes)
             if rc < 0:
                 raise ValueError("miniexpr: error getting cbuffer sizes")
-            start = nblock * ndarr.blocknitems
+            input_typesize = ndarr.sc.typesize
+            blocknitems = block_nbytes // input_typesize
+            if expected_blocknitems == -1:
+                expected_blocknitems = blocknitems
+            elif blocknitems != expected_blocknitems:
+                raise ValueError("miniexpr: inconsistent block element counts across inputs")
+            start = nblock * blocknitems
             # A way to check for top speed
             if False:
                 # Unsafe, but it works for special arrays (e.g. blosc2.ones), and can be fast
@@ -1892,7 +1900,12 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
                 # This can add a significant overhead, but it is needed for thread safety.
                 # Perhaps one can create a specific (serial) context just for blosc2_getitem_ctx?
                 dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
-            rc = blosc2_getitem_ctx(dctx, src, chunk_cbytes, start, ndarr.blocknitems,
+            if nchunk * ndarr.chunknitems + start + blocknitems > ndarr.nitems:
+                blocknitems = ndarr.nitems - (nchunk * ndarr.chunknitems + start)
+                if blocknitems <= 0:
+                    # Should never happen, but anyway
+                    continue
+            rc = blosc2_getitem_ctx(dctx, src, chunk_cbytes, start, blocknitems,
                                     input_buffers[i], block_nbytes)
             blosc2_free_ctx(dctx)
             if rc < 0:
@@ -1907,12 +1920,12 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     # Call thread-safe miniexpr C API
     if udata.aux_reduc_ptr == NULL:
         rc = me_eval(miniexpr_handle, <const void**>input_buffers, udata.ninputs,
-                     <void*>params_output, ndarr.blocknitems)
+                     <void*>params_output, blocknitems)
     else:
         # Reduction operation
         offset_bytes = <uintptr_t> typesize * (nchunk * nblocks_per_chunk + nblock)
         aux_reduc_ptr = <void *> (<uintptr_t> udata.aux_reduc_ptr + offset_bytes)
-        rc = me_eval(miniexpr_handle, <const void**>input_buffers, udata.ninputs, aux_reduc_ptr, ndarr.blocknitems)
+        rc = me_eval(miniexpr_handle, <const void**>input_buffers, udata.ninputs, aux_reduc_ptr, blocknitems)
         # The output buffer is cleared in the prefilter function
         # memset(<void *>params_output, 0, udata.array.sc.blocksize)  # clear output buffer
     if rc != 0:

@@ -1299,6 +1299,11 @@ def fast_eval(  # noqa: C901
             if not blosc2.are_partitions_behaved(op.shape, op.chunks, op.blocks):
                 use_miniexpr = False
                 break
+            # Ensure blocks fit exactly in chunks
+            blocks_fit = builtins.all(c % b == 0 for c, b in zip(op.chunks, op.blocks, strict=True))
+            if not blocks_fit:
+                use_miniexpr = False
+                break
 
     if use_miniexpr:
         cparams = kwargs.pop("cparams", blosc2.CParams())
@@ -1997,8 +2002,9 @@ def reduce_slices(  # noqa: C901
     # Only behaved partitions are supported in miniexpr reductions
     if use_miniexpr:
         for op in operands.values():
-            # Check that partitions are well-behaved (no padding)
-            if not blosc2.are_partitions_behaved(op.shape, op.chunks, op.blocks):
+            # Check that chunksize is multiple of blocksize and blocks fit exactly in chunks
+            blocks_fit = builtins.all(c % b == 0 for c, b in zip(op.chunks, op.blocks, strict=True))
+            if not blocks_fit:
                 use_miniexpr = False
                 break
 
@@ -2011,7 +2017,7 @@ def reduce_slices(  # noqa: C901
         nblocks = res_eval.nbytes // res_eval.blocksize
         aux_reduc = np.empty(nblocks, dtype=dtype)
         try:
-            # print("expr->miniexpr:", expression, reduce_op)
+            print("expr->miniexpr:", expression, reduce_op)
             expression = f"{reduce_op_str}({expression})"
             res_eval._set_pref_expr(expression, operands, aux_reduc)
             # Data won't even try to be compressed, so buffers can be unitialized and reused
