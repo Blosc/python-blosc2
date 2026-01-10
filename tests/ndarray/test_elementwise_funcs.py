@@ -3,7 +3,6 @@ import warnings
 
 import numpy as np
 import pytest
-import torch
 
 import blosc2
 
@@ -311,9 +310,10 @@ def test_unary_funcs(np_func, blosc_func, dtype, shape, chunkshape):
 @pytest.mark.parametrize(("np_func", "blosc_func"), UNARY_FUNC_PAIRS)
 @pytest.mark.parametrize("dtype", STR_DTYPES)
 @pytest.mark.parametrize("shape", [(10,), (20, 20)])
-@pytest.mark.parametrize("xp", [torch])
-def test_unfuncs_proxy(np_func, blosc_func, dtype, shape, xp):
-    _test_unary_func_proxy(np_func, blosc_func, dtype, shape, xp)
+def test_unary_funcs_torch_proxy(np_func, blosc_func, dtype, shape):
+    """Test unary functions with torch tensors as input (via proxy)."""
+    torch = pytest.importorskip("torch")
+    _test_unary_func_proxy(np_func, blosc_func, dtype, shape, torch)
 
 
 @pytest.mark.heavy
@@ -334,9 +334,10 @@ def test_binary_funcs(np_func, blosc_func, dtype, shape, chunkshape):
 @pytest.mark.parametrize(("np_func", "blosc_func"), BINARY_FUNC_PAIRS)
 @pytest.mark.parametrize("dtype", STR_DTYPES)
 @pytest.mark.parametrize(("shape", "chunkshape"), SHAPES_CHUNKS)
-@pytest.mark.parametrize("xp", [torch])
-def test_binfuncs_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp):
-    _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp)
+def test_binary_funcs_torch_proxy(np_func, blosc_func, dtype, shape, chunkshape):
+    """Test binary functions with torch tensors as input (via proxy)."""
+    torch = pytest.importorskip("torch")
+    _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, torch)
 
 
 @pytest.mark.heavy

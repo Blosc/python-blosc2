@@ -53,6 +53,17 @@ Conda users can install from conda-forge:
 
     conda install -c conda-forge python-blosc2
 
+Windows note
+============
+
+When building from source on Windows, clang-cl is required (OpenZL depends on C11 support).
+Make sure LLVM is on PATH and use the Ninja generator, for example::
+
+    CMAKE_GENERATOR=Ninja
+    CC=clang-cl
+    CXX=clang-cl
+    pip install -e .
+
 Documentation
 =============
 

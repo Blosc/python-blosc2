@@ -17,6 +17,11 @@ env:
   # Skip PyPy wheels for now (numexpr needs some adjustments first)
   # musllinux takes too long to build, and it's not worth it for now
   CIBW_SKIP: "pp* *musllinux* *-win32"
+  # Use explicit generator/compiler env vars; CMAKE_ARGS with spaces is not split on Windows.
+  CIBW_ENVIRONMENT_WINDOWS: >-
+    CMAKE_GENERATOR=Ninja
+    CC=clang-cl
+    CXX=clang-cl
 
 jobs:
 
@@ -76,6 +81,10 @@ jobs:
       - name: Install Ninja
         id: ninja
         uses: turtlesec-no/get-ninja@main
+
+      - name: Add LLVM to PATH (Windows)
+        if: ${{ matrix.os == 'windows-latest' }}
+        run: echo "C:\\Program Files\\LLVM\\bin" >> $env:GITHUB_PATH
 
       - name: Install MSVC amd64
         uses: ilammy/msvc-dev-cmd@v1

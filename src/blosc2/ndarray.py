@@ -3773,7 +3773,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
     @property
     def size(self) -> int:
-        """The size (in bytes) for this container."""
+        """The size (in elements) for this container."""
         return super().size
 
     @property

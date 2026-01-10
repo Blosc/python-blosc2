@@ -91,6 +91,13 @@ if not NUMPY_GE_2_0:  # handle non-array-api compliance
     safe_numpy_globals["matrix_transpose"] = np.transpose
     safe_numpy_globals["vecdot"] = npvecdot
 
+# Set this to False if miniexpr should not be tried out
+try_miniexpr = True
+if blosc2.IS_WASM:
+    try_miniexpr = False
+if sys.platform == "win32":
+    try_miniexpr = False
+
 
 def ne_evaluate(expression, local_dict=None, **kwargs):
     """Safely evaluate expressions using numexpr when possible, falling back to numpy."""
@@ -1239,12 +1246,24 @@ def fast_eval(  # noqa: C901
     :ref:`NDArray` or np.ndarray
         The output array.
     """
+    global try_miniexpr
+
+    # Use a local copy so we don't modify the global
+    use_miniexpr = try_miniexpr
+
+    # Disable miniexpr for UDFs (callable expressions)
+    if callable(expression):
+        use_miniexpr = False
+
     out = kwargs.pop("_output", None)
     ne_args: dict = kwargs.pop("_ne_args", {})
     if ne_args is None:
         ne_args = {}
     dtype = kwargs.pop("dtype", None)
     where: dict | None = kwargs.pop("_where_args", None)
+    if where is not None:
+        # miniexpr does not support where(); use the regular path.
+        use_miniexpr = False
     if isinstance(out, blosc2.NDArray):
         # If 'out' has been passed, and is a NDArray, use it as the base array
         basearr = out
@@ -1283,6 +1302,68 @@ def fast_eval(  # noqa: C901
     else:
         # WebAssembly does not support threading, so we cannot use the iter_disk option
         iter_disk = False
+
+    # Check whether we can use miniexpr
+    # Miniexpr only supports a subset of functions - disable for unsupported ones
+    unsupported_funcs = [
+        "clip",
+        "maximum",
+        "minimum",
+        "contains",
+    ] + reducers  # miniexpr doesn't support reduction functions
+
+    if isinstance(expression, str) and any(func in expression for func in unsupported_funcs):
+        use_miniexpr = False
+
+    if use_miniexpr:
+        op_dtypes = {op.dtype for op in operands.values() if isinstance(op, blosc2.NDArray)}
+        # This is for avoiding type casting issues in miniexpr, like in:
+        # tests/ndarray/test_lazyexpr_fields.py::test_where_fusion6[dtype_fixture0-shape_fixture0-chunks_blocks_fixture0]
+        # TODO: remove this restriction when miniexpr supports type casting better
+        if len(op_dtypes) > 1:
+            use_miniexpr = False
+        # Avoid padding issues except for 1D arrays (contiguous along the only axis).
+        if len(shape) != 1 and builtins.any(s % c != 0 for s, c in zip(shape, chunks, strict=True)):
+            use_miniexpr = False
+        for op in operands.values():
+            # Only NDArray in-memory operands
+            if not (isinstance(op, blosc2.NDArray) and op.urlpath is None and out is None):
+                use_miniexpr = False
+                break
+            # Ensure blocks fit exactly in chunks
+            blocks_fit = builtins.all(c % b == 0 for c, b in zip(op.chunks, op.blocks, strict=True))
+            if not blocks_fit:
+                use_miniexpr = False
+                break
+
+    if use_miniexpr:
+        cparams = kwargs.pop("cparams", blosc2.CParams())
+        # All values will be overwritten, so we can use an uninitialized array
+        res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
+        try:
+            print("expr->miniexpr:", expression)
+            res_eval._set_pref_expr(expression, operands)
+            # Data to compress is fetched from operands, so it can be uninitialized here
+            data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
+            # Exercise prefilter for each chunk
+            for nchunk in range(res_eval.schunk.nchunks):
+                res_eval.schunk.update_data(nchunk, data, copy=False)
+        except Exception:
+            use_miniexpr = False
+        finally:
+            res_eval.schunk.remove_prefilter("miniexpr")
+            global iter_chunks
+            # Ensure any background reading thread is closed
+            iter_chunks = None
+
+        if not use_miniexpr:
+            # If miniexpr failed, fallback to regular evaluation
+            # (continue to the manual chunked evaluation below)
+            pass
+        else:
+            if getitem:
+                return res_eval[()]
+            return res_eval
 
     chunk_operands = {}
     # Check which chunks intersect with _slice
@@ -1831,6 +1912,11 @@ def reduce_slices(  # noqa: C901
     :ref:`NDArray` or np.ndarray
         The resulting output array.
     """
+    global try_miniexpr
+
+    # Use a local copy so we don't modify the global
+    use_miniexpr = try_miniexpr  # & False
+
     out = kwargs.pop("_output", None)
     res_out_ = None  # temporary required to store max/min for argmax/argmin
     ne_args: dict = kwargs.pop("_ne_args", {})
@@ -1838,6 +1924,7 @@ def reduce_slices(  # noqa: C901
         ne_args = {}
     where: dict | None = kwargs.pop("_where_args", None)
     reduce_op = reduce_args.pop("op")
+    reduce_op_str = reduce_args.pop("op_str", None)
     axis = reduce_args["axis"]
     keepdims = reduce_args["keepdims"]
     dtype = reduce_args.get("dtype", None)
@@ -1884,7 +1971,10 @@ def reduce_slices(  # noqa: C901
     # Note: we could have expr = blosc2.lazyexpr('numpy_array + 1') (i.e. no choice for chunks)
     blosc2_arrs = tuple(o for o in operands.values() if hasattr(o, "chunks"))
     fast_path = False
+    all_ndarray = False
+    any_persisted = False
     chunks = None
+    blocks = None
     if blosc2_arrs:  # fast path only relevant if there are blosc2 arrays
         operand = max(blosc2_arrs, key=lambda x: len(x.shape))
 
@@ -1894,9 +1984,11 @@ def reduce_slices(  # noqa: C901
         same_chunks = all(operand.chunks == o.chunks for o in operands.values() if hasattr(o, "chunks"))
         same_blocks = all(operand.blocks == o.blocks for o in operands.values() if hasattr(o, "blocks"))
         fast_path = same_shape and same_chunks and same_blocks and (0 not in operand.chunks)
-        aligned, iter_disk = dict.fromkeys(operands.keys(), False), False
+        aligned = dict.fromkeys(operands.keys(), False)
+        iter_disk = False
         if fast_path:
             chunks = operand.chunks
+            blocks = operand.blocks
             # Check that all operands are NDArray for fast path
             all_ndarray = all(
                 isinstance(value, blosc2.NDArray) and value.shape != () for value in operands.values()
@@ -1929,6 +2021,72 @@ def reduce_slices(  # noqa: C901
         temp = blosc2.empty(shape, dtype=dtype)
         chunks = temp.chunks
         del temp
+
+    # miniexpr reduction path only supported for some cases so far
+    if not (where is None and fast_path and all_ndarray and not any_persisted and reduced_shape == ()):
+        use_miniexpr = False
+
+    # Some reductions are not supported yet in miniexpr
+    if reduce_op in (ReduceOp.ARGMAX, ReduceOp.ARGMIN):
+        use_miniexpr = False
+
+    # Only behaved partitions are supported in miniexpr reductions
+    if use_miniexpr:
+        # Avoid padding issues except for 1D arrays (contiguous along the only axis).
+        if len(shape) != 1 and builtins.any(s % c != 0 for s, c in zip(shape, chunks, strict=True)):
+            use_miniexpr = False
+        if use_miniexpr and isinstance(expression, str):
+            has_complex = any(
+                isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
+                for op in operands.values()
+            )
+            if has_complex and any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
+                use_miniexpr = False
+        for op in operands.values():
+            # Check that chunksize is multiple of blocksize and blocks fit exactly in chunks
+            blocks_fit = builtins.all(c % b == 0 for c, b in zip(op.chunks, op.blocks, strict=True))
+            if not blocks_fit:
+                use_miniexpr = False
+                break
+
+    if use_miniexpr:
+        # Experiments say that not splitting is best (at least on Apple Silicon M4 Pro)
+        cparams = kwargs.pop("cparams", blosc2.CParams(splitmode=blosc2.SplitMode.NEVER_SPLIT))
+        # Create a fake NDArray just to drive the miniexpr evaluation (values won't be used)
+        res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
+        # Compute the number of blocks in the result
+        nblocks = res_eval.nbytes // res_eval.blocksize
+        aux_reduc = np.empty(nblocks, dtype=dtype)
+        try:
+            print("expr->miniexpr:", expression, reduce_op)
+            expression = f"{reduce_op_str}({expression})"
+            res_eval._set_pref_expr(expression, operands, aux_reduc)
+            # Data won't even try to be compressed, so buffers can be unitialized and reused
+            data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
+            chunk_data = np.empty(res_eval.schunk.chunksize + blosc2.MAX_OVERHEAD, dtype=np.uint8)
+            # Exercise prefilter for each chunk
+            for nchunk in range(res_eval.schunk.nchunks):
+                res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
+        except Exception:
+            use_miniexpr = False
+        finally:
+            res_eval.schunk.remove_prefilter("miniexpr")
+            global iter_chunks
+            # Ensure any background reading thread is closed
+            iter_chunks = None
+
+        if not use_miniexpr:
+            # If miniexpr failed, fallback to regular evaluation
+            # (continue to the manual chunked evaluation below)
+            pass
+        else:
+            if reduce_op == ReduceOp.ANY:
+                result = np.any(aux_reduc, **reduce_args)
+            elif reduce_op == ReduceOp.ALL:
+                result = np.all(aux_reduc, **reduce_args)
+            else:
+                result = reduce_op.value.reduce(aux_reduc, **reduce_args)
+            return result
 
     # Iterate over the operands and get the chunks
     chunk_operands = {}
@@ -2152,7 +2310,7 @@ def convert_none_out(dtype, reduce_op, reduced_shape):
     return out if isinstance(out, tuple) else (out, None)
 
 
-def chunked_eval(  # noqa: C901
+def chunked_eval(
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=(), **kwargs
 ):
     """
@@ -2246,10 +2404,9 @@ def chunked_eval(  # noqa: C901
         return slices_eval(expression, operands, getitem=getitem, _slice=item, shape=shape, **kwargs)
 
     finally:
-        # Deactivate cache for NDField instances
-        for op in operands:
-            if isinstance(operands[op], blosc2.NDField):
-                operands[op].ndarr.keep_last_read = False
+        global iter_chunks
+        # Ensure any background reading thread is closed
+        iter_chunks = None
 
 
 def fuse_operands(operands1, operands2):
@@ -2711,6 +2868,7 @@ class LazyExpr(LazyArray):
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         reduce_args = {
             "op": ReduceOp.SUM,
+            "op_str": "sum",
             "axis": axis,
             "dtype": dtype,
             "keepdims": keepdims,
@@ -2720,6 +2878,7 @@ class LazyExpr(LazyArray):
     def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
         reduce_args = {
             "op": ReduceOp.PROD,
+            "op_str": "prod",
             "axis": axis,
             "dtype": dtype,
             "keepdims": keepdims,
@@ -2810,6 +2969,7 @@ class LazyExpr(LazyArray):
     def min(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
             "op": ReduceOp.MIN,
+            "op_str": "min",
             "axis": axis,
             "keepdims": keepdims,
         }
@@ -2818,6 +2978,7 @@ class LazyExpr(LazyArray):
     def max(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
             "op": ReduceOp.MAX,
+            "op_str": "max",
             "axis": axis,
             "keepdims": keepdims,
         }
@@ -2826,6 +2987,7 @@ class LazyExpr(LazyArray):
     def any(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
             "op": ReduceOp.ANY,
+            "op_str": "any",
             "axis": axis,
             "keepdims": keepdims,
         }
@@ -2834,6 +2996,7 @@ class LazyExpr(LazyArray):
     def all(self, axis=None, keepdims=False, **kwargs):
         reduce_args = {
             "op": ReduceOp.ALL,
+            "op_str": "all",
             "axis": axis,
             "keepdims": keepdims,
         }
@@ -3386,7 +3549,9 @@ class LazyUDF(LazyArray):
         # # Register a prefilter for eval
         # res_eval._set_pref_udf(self.func, id(self.inputs))
 
+        # This line would NOT allocate physical RAM on any modern OS:
         # aux = np.empty(res_eval.shape, res_eval.dtype)
+        # Physical allocation happens here (when writing):
         # res_eval[...] = aux
         # res_eval.schunk.remove_prefilter(self.func.__name__)
         # res_eval.schunk.cparams.nthreads = self._cnthreads

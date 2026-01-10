@@ -571,4 +571,4 @@ def test_reduce_string():
     d = blosc2.lazyexpr("sl + c.sum() + a.std()", operands={"a": a, "c": c, "sl": a.slice((1, 1))})
     sum = d.compute()[()]
     npsum = npa[1, 1] + np.sum(npc) + np.std(npa)
-    assert np.allclose(sum, npsum)
+    np.testing.assert_allclose(sum, npsum)

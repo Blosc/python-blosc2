@@ -9,6 +9,7 @@ import os
 import sys
 
 import pytest
+import requests
 
 import blosc2
 
@@ -36,15 +37,11 @@ def cat2_context():
         yield c2params
 
 
-# This is to avoid sporadic failures in the CI when reaching network,
-# but this makes the tests to stuck in local.  Perhaps move this to
-# every test module that needs it?
-# def pytest_runtest_call(item):
-#     try:
-#         item.runtest()
-#     except requests.ConnectTimeout:
-#         pytest.skip("Skipping test due to sporadic requests.ConnectTimeout")
-#     except requests.ReadTimeout:
-#         pytest.skip("Skipping test due to sporadic requests.ReadTimeout")
-#     except requests.Timeout:
-#         pytest.skip("Skipping test due to sporadic requests.Timeout")
+def pytest_runtest_call(item):
+    # Skip network-marked tests on transient request failures to keep CI stable.
+    if item.get_closest_marker("network") is None:
+        return
+    try:
+        item.runtest()
+    except requests.exceptions.RequestException as exc:
+        pytest.skip(f"Skipping network test due to request failure: {exc}")
