@@ -573,6 +573,17 @@ cdef extern from "miniexpr.h":
     int me_compile(const char *expression, const me_variable *variables,
                    int var_count, me_dtype dtype, int *error, me_expr **out)
 
+    cdef enum me_compile_status:
+        ME_COMPILE_SUCCESS
+        ME_COMPILE_ERR_OOM
+        ME_COMPILE_ERR_PARSE
+        ME_COMPILE_ERR_INVALID_ARG
+        ME_COMPILE_ERR_COMPLEX_UNSUPPORTED
+        ME_COMPILE_ERR_REDUCTION_INVALID
+        ME_COMPILE_ERR_VAR_MIXED
+        ME_COMPILE_ERR_VAR_UNSPECIFIED
+        ME_COMPILE_ERR_INVALID_ARG_TYPE
+
     int me_eval(const me_expr *expr, const void ** vars_chunk,
                 int n_vars, void *output_chunk, int chunk_nitems) nogil
 
@@ -2878,8 +2889,10 @@ cdef class NDArray:
         expression = expression.encode("utf-8") if isinstance(expression, str) else expression
         cdef me_dtype = me_dtype_from_numpy(self.dtype.num)
         cdef me_expr *out_expr
-        error = me_compile(expression, variables, n, me_dtype, &error, &out_expr)
-        if error != 0:
+        cdef int rc = me_compile(expression, variables, n, me_dtype, &error, &out_expr)
+        if rc == ME_COMPILE_ERR_INVALID_ARG_TYPE:
+            raise TypeError(f"miniexpr does not support operand or output dtype: {expression}")
+        if rc != ME_COMPILE_SUCCESS:
             raise NotImplementedError(f"Cannot compile expression: {expression}")
         udata.miniexpr_handle = out_expr
 

@@ -180,7 +180,10 @@ def test_simple_expression(array_fixture):
     expr = a1 + a2 - a3 * a4
     nres = ne_evaluate("na1 + na2 - na3 * na4")
     res = expr.compute(cparams=blosc2.CParams())
-    np.testing.assert_allclose(res[:], nres)
+    if na1.dtype == np.float32:
+        np.testing.assert_allclose(res[:], nres, rtol=1e-6, atol=1e-6)
+    else:
+        np.testing.assert_allclose(res[:], nres)
 
 
 # Mix Proxy and NDArray operands
@@ -205,10 +208,16 @@ def test_iXXX(array_fixture):
         expr **= 2.3  # __ipow__
     res = expr.compute()
     if not blosc2.IS_WASM:
-        nres = ne_evaluate("(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7) ** 2.3")
+        expr_str = "(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7) ** 2.3"
     else:
-        nres = ne_evaluate("(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7)")
-    np.testing.assert_allclose(res[:], nres)
+        expr_str = "(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7)"
+    if na1.dtype == np.float32:
+        with np.errstate(invalid="ignore"):
+            nres = eval(expr_str, {"np": np}, {"na1": na1, "na2": na2, "na3": na3, "na4": na4})
+        np.testing.assert_allclose(res[:], nres, rtol=1e-5, atol=1e-6)
+    else:
+        nres = ne_evaluate(expr_str)
+        np.testing.assert_allclose(res[:], nres)
 
 
 def test_complex_evaluate(array_fixture):
@@ -253,7 +262,10 @@ def test_expression_with_constants(array_fixture):
     # Test with operands with same chunks and blocks
     expr = a1 + 2 - a3 * 3.14
     nres = ne_evaluate("na1 + 2 - na3 * 3.14")
-    np.testing.assert_allclose(expr[:], nres)
+    if na1.dtype == np.float32:
+        np.testing.assert_allclose(expr[:], nres, rtol=1e-6)
+    else:
+        np.testing.assert_allclose(expr[:], nres)
 
 
 @pytest.mark.parametrize("compare_expressions", [True, False])

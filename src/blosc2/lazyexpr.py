@@ -1238,6 +1238,9 @@ def fast_eval(  # noqa: C901
         ne_args = {}
     dtype = kwargs.pop("dtype", None)
     where: dict | None = kwargs.pop("_where_args", None)
+    if where is not None:
+        # miniexpr does not support where(); use the regular path.
+        use_miniexpr = False
     if isinstance(out, blosc2.NDArray):
         # If 'out' has been passed, and is a NDArray, use it as the base array
         basearr = out
@@ -1290,13 +1293,15 @@ def fast_eval(  # noqa: C901
         use_miniexpr = False
 
     if use_miniexpr:
+        op_dtypes = {op.dtype for op in operands.values() if isinstance(op, blosc2.NDArray)}
+        if len(op_dtypes) > 1:
+            use_miniexpr = False
+        # Avoid padding issues except for 1D arrays (contiguous along the only axis).
+        if len(shape) != 1 and builtins.any(s % c != 0 for s, c in zip(shape, chunks, strict=True)):
+            use_miniexpr = False
         for op in operands.values():
             # Only NDArray in-memory operands
             if not (isinstance(op, blosc2.NDArray) and op.urlpath is None and out is None):
-                use_miniexpr = False
-                break
-            # Check that partitions are well-behaved (no padding)
-            if not blosc2.are_partitions_behaved(op.shape, op.chunks, op.blocks):
                 use_miniexpr = False
                 break
             # Ensure blocks fit exactly in chunks
@@ -1310,7 +1315,7 @@ def fast_eval(  # noqa: C901
         # All values will be overwritten, so we can use an uninitialized array
         res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         try:
-            # print("expr->miniexpr:", expression)
+            print("expr->miniexpr:", expression)
             res_eval._set_pref_expr(expression, operands)
             # Data to compress is fetched from operands, so it can be uninitialized here
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
@@ -2001,6 +2006,16 @@ def reduce_slices(  # noqa: C901
 
     # Only behaved partitions are supported in miniexpr reductions
     if use_miniexpr:
+        # Avoid padding issues except for 1D arrays (contiguous along the only axis).
+        if len(shape) != 1 and builtins.any(s % c != 0 for s, c in zip(shape, chunks, strict=True)):
+            use_miniexpr = False
+        if use_miniexpr and isinstance(expression, str):
+            has_complex = any(
+                isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
+                for op in operands.values()
+            )
+            if has_complex and any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
+                use_miniexpr = False
         for op in operands.values():
             # Check that chunksize is multiple of blocksize and blocks fit exactly in chunks
             blocks_fit = builtins.all(c % b == 0 for c, b in zip(op.chunks, op.blocks, strict=True))
