@@ -1293,12 +1293,6 @@ def fast_eval(  # noqa: C901
         use_miniexpr = False
 
     if use_miniexpr:
-        op_dtypes = {op.dtype for op in operands.values() if isinstance(op, blosc2.NDArray)}
-        # This is for avoiding type casting issues in miniexpr, like in:
-        # tests/ndarray/test_lazyexpr_fields.py::test_where_fusion6[dtype_fixture0-shape_fixture0-chunks_blocks_fixture0]
-        # TODO: remove this restriction when miniexpr supports type casting better
-        if len(op_dtypes) > 1:
-            use_miniexpr = False
         # Avoid padding issues except for 1D arrays (contiguous along the only axis).
         if len(shape) != 1 and builtins.any(s % c != 0 for s, c in zip(shape, chunks, strict=True)):
             use_miniexpr = False
