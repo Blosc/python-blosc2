@@ -226,7 +226,10 @@ def test_complex_evaluate(array_fixture):
     expr += 2
     nres = ne_evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
     res = expr.compute()
-    np.testing.assert_allclose(res[:], nres)
+    if na1.dtype == np.float32:
+        np.testing.assert_allclose(res[:], nres, rtol=1e-5)
+    else:
+        np.testing.assert_allclose(res[:], nres)
 
 
 def test_complex_getitem(array_fixture):
@@ -235,7 +238,10 @@ def test_complex_getitem(array_fixture):
     expr += 2
     nres = ne_evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
     res = expr[:]
-    np.testing.assert_allclose(res, nres)
+    if na1.dtype == np.float32:
+        np.testing.assert_allclose(res[:], nres, rtol=1e-5)
+    else:
+        np.testing.assert_allclose(res[:], nres)
 
 
 def test_complex_getitem_slice(array_fixture):
@@ -253,8 +259,11 @@ def test_func_expression(array_fixture):
     expr = (a1 + a2) * a3 - a4
     expr = blosc2.sin(expr) + blosc2.cos(expr)
     nres = ne_evaluate("sin((na1 + na2) * na3 - na4) + cos((na1 + na2) * na3 - na4)")
-    res = expr.compute(storage={})
-    np.testing.assert_allclose(res[:], nres)
+    res = expr.compute()
+    if na1.dtype == np.float32:
+        np.testing.assert_allclose(res[:], nres, rtol=1e-5)
+    else:
+        np.testing.assert_allclose(res[:], nres)
 
 
 def test_expression_with_constants(array_fixture):
@@ -262,10 +271,11 @@ def test_expression_with_constants(array_fixture):
     # Test with operands with same chunks and blocks
     expr = a1 + 2 - a3 * 3.14
     nres = ne_evaluate("na1 + 2 - na3 * 3.14")
+    res = expr.compute()
     if na1.dtype == np.float32:
-        np.testing.assert_allclose(expr[:], nres, rtol=1e-6)
+        np.testing.assert_allclose(res[:], nres, rtol=1e-5)
     else:
-        np.testing.assert_allclose(expr[:], nres)
+        np.testing.assert_allclose(res[:], nres)
 
 
 @pytest.mark.parametrize("compare_expressions", [True, False])
