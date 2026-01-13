@@ -2029,7 +2029,8 @@ def reduce_slices(  # noqa: C901
         res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         # Compute the number of blocks in the result
         nblocks = res_eval.nbytes // res_eval.blocksize
-        aux_reduc = np.empty(nblocks, dtype=dtype)
+        # Initialize to zeros since some blocks may be padding and won't be written
+        aux_reduc = np.zeros(nblocks, dtype=dtype)
         try:
             print("expr->miniexpr:", expression, reduce_op)
             expression = f"{reduce_op_str}({expression})"

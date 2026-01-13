@@ -1924,21 +1924,32 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
 
     cdef me_expr* miniexpr_handle = udata.miniexpr_handle
     cdef void* aux_reduc_ptr
-    cdef uintptr_t offset_bytes
-    cdef int nblocks_per_chunk = udata.array.chunknitems // udata.array.blocknitems
+    # Calculate blocks per chunk using CEILING division (chunks are padded to fit whole blocks)
+    cdef int nblocks_per_chunk = (udata.array.chunknitems + udata.array.blocknitems - 1) // udata.array.blocknitems
+    # Calculate the global linear block index: nchunk * blocks_per_chunk + nblock
+    # This works because blocks never span chunks (chunks are padded to block boundaries)
+    cdef int64_t linear_block_index = nchunk * nblocks_per_chunk + nblock
+    cdef uintptr_t offset_bytes = typesize * linear_block_index
+
     if miniexpr_handle == NULL:
         raise ValueError("miniexpr: handle not assigned")
+
+    # Skip evaluation if blocknitems is invalid (can happen for padding blocks beyond data)
+    if blocknitems <= 0:
+        # Free resources
+        for i in range(udata.ninputs):
+            free(input_buffers[i])
+        free(input_buffers)
+        return 0
+
     # Call thread-safe miniexpr C API
     if udata.aux_reduc_ptr == NULL:
         rc = me_eval(miniexpr_handle, <const void**>input_buffers, udata.ninputs,
                      <void*>params_output, blocknitems)
     else:
         # Reduction operation
-        offset_bytes = <uintptr_t> typesize * (nchunk * nblocks_per_chunk + nblock)
         aux_reduc_ptr = <void *> (<uintptr_t> udata.aux_reduc_ptr + offset_bytes)
         rc = me_eval(miniexpr_handle, <const void**>input_buffers, udata.ninputs, aux_reduc_ptr, blocknitems)
-        # The output buffer is cleared in the prefilter function
-        # memset(<void *>params_output, 0, udata.array.sc.blocksize)  # clear output buffer
     if rc != 0:
         raise RuntimeError(f"miniexpr: issues during evaluation; error code: {rc}")
 
