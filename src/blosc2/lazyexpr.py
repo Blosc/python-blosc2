@@ -1819,6 +1819,8 @@ def infer_reduction_dtype(dtype, operation):
         dtype, np.float32 if dtype in (np.float32, np.complex64) else blosc2.DEFAULT_FLOAT
     )
     if operation in {ReduceOp.SUM, ReduceOp.PROD}:
+        if np.issubdtype(dtype, np.bool_):
+            return np.int64
         if np.issubdtype(dtype, np.unsignedinteger):
             return np.result_type(dtype, np.uint64)
         return np.result_type(dtype, np.int64 if np.issubdtype(dtype, np.integer) else my_float)
