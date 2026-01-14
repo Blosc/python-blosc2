@@ -1303,8 +1303,8 @@ def fast_eval(  # noqa: C901
             if not (isinstance(op, blosc2.NDArray) and op.urlpath is None and out is None):
                 use_miniexpr = False
                 break
-            # Ensure blocks fit exactly in chunks for the n-dim case
-            blocks_fit = builtins.all(c % b == 0 for c, b in zip(op.chunks, op.blocks, strict=True))
+            # Ensure blocks fit exactly in chunks for the n-dim case, except for the first dimension
+            blocks_fit = builtins.all(c % b == 0 for c, b in zip(op.chunks[1:], op.blocks[1:], strict=True))
             if len(op.shape) != 1 and not blocks_fit:
                 use_miniexpr = False
                 break
@@ -2018,8 +2018,8 @@ def reduce_slices(  # noqa: C901
             if has_complex and any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
                 use_miniexpr = False
         for op in operands.values():
-            # Ensure blocks fit exactly in chunks for the n-dim case
-            blocks_fit = builtins.all(c % b == 0 for c, b in zip(op.chunks, op.blocks, strict=True))
+            # Ensure blocks fit exactly in chunks for the n-dim case, except for the first dimension
+            blocks_fit = builtins.all(c % b == 0 for c, b in zip(op.chunks[1:], op.blocks[1:], strict=True))
             if len(op.shape) != 1 and not blocks_fit:
                 use_miniexpr = False
                 break
