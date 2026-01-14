@@ -1908,8 +1908,9 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
                 # Unsafe, but it works for special arrays (e.g. blosc2.ones), and can be fast
                 dctx = ndarr.sc.dctx
             else:
-                # This can add a significant overhead, but it is needed for thread safety.
-                # Perhaps one can create a specific (serial) context just for blosc2_getitem_ctx?
+                # This is needed for thread safety, but adds a pretty low overhead (< 400ns on a modern CPU)
+                # In the future, perhaps one can create a specific (serial) context just for
+                # blosc2_getitem_ctx, but this is probably never going to be necessary.
                 dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
             if nchunk * ndarr.chunknitems + start + blocknitems > ndarr.nitems:
                 blocknitems = ndarr.nitems - (nchunk * ndarr.chunknitems + start)
