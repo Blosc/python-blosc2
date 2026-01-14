@@ -1303,11 +1303,6 @@ def fast_eval(  # noqa: C901
             if not (isinstance(op, blosc2.NDArray) and op.urlpath is None and out is None):
                 use_miniexpr = False
                 break
-            # Ensure blocks fit exactly in chunks for the n-dim case, except for the first dimension
-            blocks_fit = builtins.all(c % b == 0 for c, b in zip(op.chunks[1:], op.blocks[1:], strict=True))
-            if len(op.shape) != 1 and not blocks_fit:
-                use_miniexpr = False
-                break
 
     if use_miniexpr:
         cparams = kwargs.pop("cparams", blosc2.CParams())
