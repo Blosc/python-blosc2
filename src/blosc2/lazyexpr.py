@@ -1294,7 +1294,7 @@ def fast_eval(  # noqa: C901
 
     if use_miniexpr:
         # Avoid padding issues except for 1D arrays (contiguous along the only axis).
-        if len(shape) != 1 and builtins.any(s % c != 0 for s, c in zip(shape, chunks, strict=True)):
+        if len(shape) != 1 and builtins.any(s % c != 0 for s, c in zip(shape[1:], chunks[1:], strict=True)):
             use_miniexpr = False
         for op in operands.values():
             # Only NDArray in-memory operands
