@@ -1283,17 +1283,6 @@ def fast_eval(  # noqa: C901
         iter_disk = False
 
     # Check whether we can use miniexpr
-    # Miniexpr only supports a subset of functions - disable for unsupported ones
-    unsupported_funcs = [
-        "clip",
-        "maximum",
-        "minimum",
-        "contains",
-    ] + reducers  # miniexpr doesn't support reduction functions
-
-    if isinstance(expression, str) and any(func in expression for func in unsupported_funcs):
-        use_miniexpr = False
-
     if use_miniexpr:
         # Avoid padding issues except for 1D arrays (contiguous along the only axis).
         if len(shape) != 1 and builtins.any(s % c != 0 for s, c in zip(shape[1:], chunks[1:], strict=True)):
