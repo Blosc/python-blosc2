@@ -2031,8 +2031,25 @@ def reduce_slices(  # noqa: C901
         res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         # Compute the number of blocks in the result
         nblocks = res_eval.nbytes // res_eval.blocksize
-        # Initialize to zeros since some blocks may be padding and won't be written
-        aux_reduc = np.zeros(nblocks, dtype=dtype)
+        # Initialize aux_reduc based on the reduction operation
+        # Padding blocks won't be written, so initial values matter for the final reduction
+        if reduce_op == ReduceOp.SUM or reduce_op == ReduceOp.ANY:
+            aux_reduc = np.zeros(nblocks, dtype=dtype)
+        elif reduce_op == ReduceOp.PROD or reduce_op == ReduceOp.ALL:
+            aux_reduc = np.ones(nblocks, dtype=dtype)
+        elif reduce_op == ReduceOp.MIN:
+            if np.issubdtype(dtype, np.integer):
+                aux_reduc = np.full(nblocks, np.iinfo(dtype).max, dtype=dtype)
+            else:
+                aux_reduc = np.full(nblocks, np.inf, dtype=dtype)
+        elif reduce_op == ReduceOp.MAX:
+            if np.issubdtype(dtype, np.integer):
+                aux_reduc = np.full(nblocks, np.iinfo(dtype).min, dtype=dtype)
+            else:
+                aux_reduc = np.full(nblocks, -np.inf, dtype=dtype)
+        else:
+            # For other operations, zeros should be safe
+            aux_reduc = np.zeros(nblocks, dtype=dtype)
         try:
             print("expr->miniexpr:", expression, reduce_op)
             expression = f"{reduce_op_str}({expression})"

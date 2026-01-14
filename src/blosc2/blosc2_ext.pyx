@@ -1925,8 +1925,11 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
 
     cdef me_expr* miniexpr_handle = udata.miniexpr_handle
     cdef void* aux_reduc_ptr
-    # Calculate blocks per chunk using CEILING division (chunks are padded to fit whole blocks)
-    cdef int nblocks_per_chunk = (udata.array.chunknitems + udata.array.blocknitems - 1) // udata.array.blocknitems
+    # For reduction operations, we need to track which block we're processing
+    # The linear_block_index should be based on the INPUT array structure, not the output array
+    # Get the first input array's chunk and block structure
+    cdef b2nd_array_t* first_input = udata.inputs[0]
+    cdef int nblocks_per_chunk = (first_input.chunknitems + first_input.blocknitems - 1) // first_input.blocknitems
     # Calculate the global linear block index: nchunk * blocks_per_chunk + nblock
     # This works because blocks never span chunks (chunks are padded to block boundaries)
     cdef int64_t linear_block_index = nchunk * nblocks_per_chunk + nblock
