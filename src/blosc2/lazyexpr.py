@@ -1284,14 +1284,14 @@ def fast_eval(  # noqa: C901
 
     # Check whether we can use miniexpr
     if use_miniexpr:
-        # Avoid padding issues except for 1D arrays (contiguous along the only axis).
-        if len(shape) != 1 and builtins.any(s % c != 0 for s, c in zip(shape[1:], chunks[1:], strict=True)):
+        # Require aligned NDArray operands with identical chunk/block grid.
+        same_shape = all(hasattr(op, "shape") and op.shape == shape for op in operands.values())
+        same_chunks = all(hasattr(op, "chunks") and op.chunks == chunks for op in operands.values())
+        same_blocks = all(hasattr(op, "blocks") and op.blocks == blocks for op in operands.values())
+        if not (same_shape and same_chunks and same_blocks):
             use_miniexpr = False
-        for op in operands.values():
-            # Only NDArray in-memory operands
-            if not (isinstance(op, blosc2.NDArray) and op.urlpath is None and out is None):
-                use_miniexpr = False
-                break
+        if not (all_ndarray and not any_persisted and out is None):
+            use_miniexpr = False
 
     if use_miniexpr:
         cparams = kwargs.pop("cparams", blosc2.CParams())
@@ -1989,10 +1989,12 @@ def reduce_slices(  # noqa: C901
     if reduce_op in (ReduceOp.ARGMAX, ReduceOp.ARGMIN):
         use_miniexpr = False
 
-    # Only behaved partitions are supported in miniexpr reductions
+    # Check whether we can use miniexpr
     if use_miniexpr:
-        # Avoid padding issues except for 1D arrays (contiguous along the only axis).
-        if len(shape) != 1 and builtins.any(s % c != 0 for s, c in zip(shape[1:], chunks[1:], strict=True)):
+        same_shape = all(hasattr(op, "shape") and op.shape == shape for op in operands.values())
+        same_chunks = all(hasattr(op, "chunks") and op.chunks == chunks for op in operands.values())
+        same_blocks = all(hasattr(op, "blocks") and op.blocks == blocks for op in operands.values())
+        if not (same_shape and same_chunks and same_blocks):
             use_miniexpr = False
         if use_miniexpr and isinstance(expression, str):
             has_complex = any(
@@ -2001,12 +2003,6 @@ def reduce_slices(  # noqa: C901
             )
             if has_complex and any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
                 use_miniexpr = False
-        for op in operands.values():
-            # Ensure blocks fit exactly in chunks for the n-dim case, except for the first dimension
-            blocks_fit = builtins.all(c % b == 0 for c, b in zip(op.chunks[1:], op.blocks[1:], strict=True))
-            if len(op.shape) != 1 and not blocks_fit:
-                use_miniexpr = False
-                break
 
     if use_miniexpr:
         # Experiments say that not splitting is best (at least on Apple Silicon M4 Pro)

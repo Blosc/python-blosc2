@@ -573,6 +573,11 @@ cdef extern from "miniexpr.h":
     int me_compile(const char *expression, const me_variable *variables,
                    int var_count, me_dtype dtype, int *error, me_expr **out)
 
+    int me_compile_nd(const char *expression, const me_variable *variables,
+                      int var_count, me_dtype dtype, int ndims,
+                      const int64_t *shape, const int32_t *chunkshape,
+                      const int32_t *blockshape, int *error, me_expr **out)
+
     cdef enum me_compile_status:
         ME_COMPILE_SUCCESS
         ME_COMPILE_ERR_OOM
@@ -583,9 +588,26 @@ cdef extern from "miniexpr.h":
         ME_COMPILE_ERR_VAR_MIXED
         ME_COMPILE_ERR_VAR_UNSPECIFIED
         ME_COMPILE_ERR_INVALID_ARG_TYPE
+        ME_COMPILE_ERR_MIXED_TYPE_NESTED
 
-    int me_eval(const me_expr *expr, const void ** vars_chunk,
-                int n_vars, void *output_chunk, int chunk_nitems) nogil
+    cdef enum me_simd_ulp_mode:
+        ME_SIMD_ULP_DEFAULT
+        ME_SIMD_ULP_1
+        ME_SIMD_ULP_3_5
+
+    ctypedef struct me_eval_params:
+        c_bool disable_simd
+        me_simd_ulp_mode simd_ulp_mode
+
+    int me_eval(const me_expr *expr, const void **vars_block,
+                int n_vars, void *output_block, int chunk_nitems,
+                const me_eval_params *params) nogil
+
+    int me_eval_nd(const me_expr *expr, const void **vars_block,
+                   int n_vars, void *output_block, int block_nitems,
+                   int64_t nchunk, int64_t nblock, const me_eval_params *params) nogil
+
+    int me_nd_valid_nitems(const me_expr *expr, int64_t nchunk, int64_t nblock, int64_t *valid_nitems) nogil
 
     void me_print(const me_expr *n) nogil
     void me_free(me_expr *n) nogil
@@ -1860,10 +1882,8 @@ cdef int general_filler(blosc2_prefilter_params *params):
     return 0
 
 
-# Auxiliary function for just miniexpr as a prefilter
-# Only meant for (input and output) arrays that:
-# 1) Are blosc2.NDArray objects
-# 2) Do not have padding
+# Auxiliary function for miniexpr as a prefilter
+# Only meant for (input and output) arrays that are blosc2.NDArray objects.
 cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
                       c_bool is_postfilter, uint8_t *params_output, int32_t typesize) nogil:
     # Declare all C variables at the beginning
@@ -1880,9 +1900,29 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     cdef void* src
     cdef int32_t chunk_nbytes, chunk_cbytes, block_nbytes
     cdef int start, blocknitems, expected_blocknitems
+    cdef int64_t valid_nitems
     cdef int32_t input_typesize
     cdef blosc2_context* dctx
     expected_blocknitems = -1
+    valid_nitems = 0
+
+    cdef me_expr* miniexpr_handle = udata.miniexpr_handle
+    cdef void* aux_reduc_ptr
+
+    if miniexpr_handle == NULL:
+        raise ValueError("miniexpr: handle not assigned")
+
+    # Query valid (unpadded) items for this block
+    rc = me_nd_valid_nitems(miniexpr_handle, nchunk, nblock, &valid_nitems)
+    if rc != 0:
+        raise RuntimeError(f"miniexpr: invalid block; error code: {rc}")
+    if valid_nitems <= 0:
+        # Nothing to compute for this block.
+        # For reductions, keep aux_reduc neutral values untouched.
+        if udata.aux_reduc_ptr == NULL:
+            memset(params_output, 0, udata.array.blocknitems * typesize)
+        free(input_buffers)
+        return 0
     for i in range(udata.ninputs):
         ndarr = udata.inputs[i]
         input_buffers[i] = malloc(ndarr.sc.blocksize)
@@ -1912,48 +1952,35 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
                 # In the future, perhaps one can create a specific (serial) context just for
                 # blosc2_getitem_ctx, but this is probably never going to be necessary.
                 dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
-            if nchunk * ndarr.chunknitems + start + blocknitems > ndarr.nitems:
-                blocknitems = ndarr.nitems - (nchunk * ndarr.chunknitems + start)
-                if blocknitems <= 0:
-                    # Should never happen, but anyway
-                    continue
+            if valid_nitems > blocknitems:
+                raise ValueError("miniexpr: valid items exceed padded block size")
             rc = blosc2_getitem_ctx(dctx, src, chunk_cbytes, start, blocknitems,
                                     input_buffers[i], block_nbytes)
             blosc2_free_ctx(dctx)
             if rc < 0:
                 raise ValueError("miniexpr: error decompressing the chunk")
-
-    cdef me_expr* miniexpr_handle = udata.miniexpr_handle
-    cdef void* aux_reduc_ptr
     # For reduction operations, we need to track which block we're processing
     # The linear_block_index should be based on the INPUT array structure, not the output array
     # Get the first input array's chunk and block structure
     cdef b2nd_array_t* first_input = udata.inputs[0]
-    cdef int nblocks_per_chunk = (first_input.chunknitems + first_input.blocknitems - 1) // first_input.blocknitems
+    cdef int nblocks_per_chunk = 1
+    for i in range(first_input.ndim):
+        nblocks_per_chunk *= <int>udata.blocks_in_chunk[i]
     # Calculate the global linear block index: nchunk * blocks_per_chunk + nblock
     # This works because blocks never span chunks (chunks are padded to block boundaries)
     cdef int64_t linear_block_index = nchunk * nblocks_per_chunk + nblock
     cdef uintptr_t offset_bytes = typesize * linear_block_index
 
-    if miniexpr_handle == NULL:
-        raise ValueError("miniexpr: handle not assigned")
-
-    # Skip evaluation if blocknitems is invalid (can happen for padding blocks beyond data)
-    if blocknitems <= 0:
-        # Free resources
-        for i in range(udata.ninputs):
-            free(input_buffers[i])
-        free(input_buffers)
-        return 0
-
     # Call thread-safe miniexpr C API
     if udata.aux_reduc_ptr == NULL:
-        rc = me_eval(miniexpr_handle, <const void**>input_buffers, udata.ninputs,
-                     <void*>params_output, blocknitems)
+        rc = me_eval_nd(miniexpr_handle, <const void**>input_buffers, udata.ninputs,
+                        <void*>params_output, blocknitems, nchunk, nblock, NULL)
     else:
-        # Reduction operation
+        # Reduction operation: evaluate only valid items into a single output element.
+        # NOTE: miniexpr handles scalar outputs in me_eval_nd without touching tail bytes.
         aux_reduc_ptr = <void *> (<uintptr_t> udata.aux_reduc_ptr + offset_bytes)
-        rc = me_eval(miniexpr_handle, <const void**>input_buffers, udata.ninputs, aux_reduc_ptr, blocknitems)
+        rc = me_eval_nd(miniexpr_handle, <const void**>input_buffers, udata.ninputs,
+                        aux_reduc_ptr, blocknitems, nchunk, nblock, NULL)
     if rc != 0:
         raise RuntimeError(f"miniexpr: issues during evaluation; error code: {rc}")
 
@@ -2904,7 +2931,12 @@ cdef class NDArray:
         expression = expression.encode("utf-8") if isinstance(expression, str) else expression
         cdef me_dtype = me_dtype_from_numpy(self.dtype.num)
         cdef me_expr *out_expr
-        cdef int rc = me_compile(expression, variables, n, me_dtype, &error, &out_expr)
+        cdef int ndims = self.array.ndim
+        cdef int64_t* shape = &self.array.shape[0]
+        cdef int32_t* chunkshape = &self.array.chunkshape[0]
+        cdef int32_t* blockshape = &self.array.blockshape[0]
+        cdef int rc = me_compile_nd(expression, variables, n, me_dtype, ndims,
+                                    shape, chunkshape, blockshape, &error, &out_expr)
         if rc == ME_COMPILE_ERR_INVALID_ARG_TYPE:
             raise TypeError(f"miniexpr does not support operand or output dtype: {expression}")
         if rc != ME_COMPILE_SUCCESS:
