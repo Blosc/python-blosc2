@@ -141,3 +141,7 @@ doc/_build/
 
 
 .*.swp
+
+# Files generated during editable install & test
+blosc2
+lazyarray.b2nd
