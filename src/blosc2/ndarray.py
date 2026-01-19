@@ -6403,3 +6403,36 @@ def cumulative_sum(x, /, *, axis=None, dtype=None, include_initial=False):
     res = np.cumulative_sum(arr, axis=axis, dtype=dtype, include_initial=include_initial)
 
     return blosc2.asarray(res)
+
+
+def cumulative_prod(x, /, *, axis=None, dtype=None, include_initial=False):
+    """Array API cumulative_prod.
+
+    Parameters
+    ----------
+    x : array-like or NDArray
+        Input array.
+    axis : int or None
+        Axis along which to compute the cumulative product. For ndim > 1, this
+        must be provided. Default: None (flatten).
+    dtype : dtype or None
+        Accumulator/output dtype. If None, follow type-promotion rules.
+    include_initial : bool, default False
+        If True, include the multiplicative identity (one) as the first value along
+        the reduced axis (output length N+1).
+
+    Returns
+    -------
+    NDArray
+        Array containing the cumulative products.
+    """
+    # Accept blosc2.NDArray or array-like
+    if isinstance(x, NDArray):
+        arr = x[:]  # read into NumPy array
+    else:
+        arr = np.asarray(x)
+
+    # Use NumPy's Array API compatible cumulative_prod function
+    res = np.cumulative_prod(arr, axis=axis, dtype=dtype, include_initial=include_initial)
+
+    return blosc2.asarray(res)
