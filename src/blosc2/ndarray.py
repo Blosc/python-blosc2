@@ -6371,6 +6371,7 @@ def meshgrid(*arrays: blosc2.Array, indexing: str = "xy") -> Sequence[NDArray]:
         out += (broadcast_to(a, shape),)
     return out
 
+
 def cumulative_sum(x, /, *, axis=None, dtype=None, include_initial=False):
     """Array API cumulative_sum.
 
