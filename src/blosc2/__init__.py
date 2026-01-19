@@ -434,6 +434,7 @@ from .ndarray import (
     save,
     stack,
     cumulative_sum,
+    cumulative_prod,
 )
 from .embed_store import EmbedStore, estore_from_cframe
 from .dict_store import DictStore
