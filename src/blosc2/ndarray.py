@@ -6370,3 +6370,35 @@ def meshgrid(*arrays: blosc2.Array, indexing: str = "xy") -> Sequence[NDArray]:
     for a in myarrs:
         out += (broadcast_to(a, shape),)
     return out
+
+def cumulative_sum(x, /, *, axis=None, dtype=None, include_initial=False):
+    """Array API cumulative_sum.
+
+    Parameters
+    ----------
+    x : array-like or NDArray
+        Input array.
+    axis : int or None
+        Axis along which to compute the cumulative sum. For ndim > 1, this
+        must be provided. Default: None (flatten).
+    dtype : dtype or None
+        Accumulator/output dtype. If None, follow type-promotion rules.
+    include_initial : bool, default False
+        If True, include the additive identity (zero) as the first value along
+        the reduced axis (output length N+1).
+
+    Returns
+    -------
+    NDArray
+        Array containing the cumulative sums.
+    """
+    # Accept blosc2.NDArray or array-like
+    if isinstance(x, NDArray):
+        arr = x[:]  # read into NumPy array
+    else:
+        arr = np.asarray(x)
+
+    # Use NumPy's Array API compatible cumulative_sum function
+    res = np.cumulative_sum(arr, axis=axis, dtype=dtype, include_initial=include_initial)
+
+    return blosc2.asarray(res)
