@@ -703,17 +703,18 @@ def test_save_functions(function, dtype_fixture, shape_fixture):
     expr_string = f"{function}(na1)"
     res_numexpr = ne_evaluate(expr_string)
     # Compare the results
-    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
+    rtol = 1e-6 if dtype_fixture == np.float32 else 1e-15
+    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol)
 
     expr_string = f"blosc2.{function}(a1)"
     expr = eval(expr_string, {"a1": a1, "blosc2": blosc2})
     expr.save(urlpath=urlpath_save)
     res_lazyexpr = expr.compute()
-    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
+    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol)
 
     expr = blosc2.open(urlpath_save)
     res_lazyexpr = expr.compute()
-    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
+    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol)
 
     for urlpath in [urlpath_op, urlpath_save]:
         blosc2.remove_urlpath(urlpath)

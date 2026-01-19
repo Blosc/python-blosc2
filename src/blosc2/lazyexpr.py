@@ -1290,7 +1290,7 @@ def fast_eval(  # noqa: C901
         same_blocks = all(hasattr(op, "blocks") and op.blocks == blocks for op in operands.values())
         if not (same_shape and same_chunks and same_blocks):
             use_miniexpr = False
-        if not (all_ndarray and not any_persisted and out is None):
+        if not (all_ndarray and out is None):
             use_miniexpr = False
 
     if use_miniexpr:
@@ -1982,7 +1982,7 @@ def reduce_slices(  # noqa: C901
         del temp
 
     # miniexpr reduction path only supported for some cases so far
-    if not (where is None and fast_path and all_ndarray and not any_persisted and reduced_shape == ()):
+    if not (where is None and fast_path and all_ndarray and reduced_shape == ()):
         use_miniexpr = False
 
     # Some reductions are not supported yet in miniexpr
