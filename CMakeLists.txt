@@ -115,8 +115,8 @@ else()
     include(FetchContent)
     FetchContent_Declare(blosc2
         GIT_REPOSITORY https://github.com/Blosc/c-blosc2
-        # GIT_TAG 9d250c2201f6e385c56a372b08037f7debc6fa1b  # openzl (disposable output)
-        GIT_TAG add_openzl
+        GIT_TAG 011c9e537f28299c536294d842e1a3d0e41db24f  # openzl_plugin + miniexpr
+        # GIT_TAG main
         GIT_SHALLOW TRUE  # fetch only the latest commit (only works with a branch in GIT_TAG)
         # in case you want to use a local copy of c-blosc2 for development, uncomment the line below
         # SOURCE_DIR "/Users/faltet/blosc/c-blosc2"
