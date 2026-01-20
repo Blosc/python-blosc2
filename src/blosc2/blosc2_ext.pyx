@@ -252,6 +252,7 @@ cdef extern from "blosc2.h":
         void* schunk
         blosc2_postfilter_fn postfilter
         blosc2_postfilter_params *postparams
+        int32_t typesize
 
     cdef const blosc2_dparams BLOSC2_DPARAMS_DEFAULTS
 
@@ -888,6 +889,7 @@ cdef create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs, blosc2_cparams*
     dparams.postparams = NULL
     # TODO: support the next ones in the future
     #dparams.schunk = kwargs.get('schunk', blosc2.dparams_dflts['schunk'])
+    #dparams.typesize = typesize = kwargs.get('typesize', blosc2.dparams_dflts['typesize'])
     _check_dparams(dparams, cparams)
 
 def decompress2(src, dst=None, **kwargs):
