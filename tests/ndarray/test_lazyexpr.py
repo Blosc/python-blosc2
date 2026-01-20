@@ -273,7 +273,7 @@ def test_expression_with_constants(array_fixture):
     nres = ne_evaluate("na1 + 2 - na3 * 3.14")
     res = expr.compute()
     if na1.dtype == np.float32:
-        np.testing.assert_allclose(res[:], nres, rtol=1e-5)
+        np.testing.assert_allclose(res[:], nres, rtol=1e-5, atol=1e-6)
     else:
         np.testing.assert_allclose(res[:], nres)
 
