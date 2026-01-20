@@ -270,7 +270,7 @@ def test_expression_with_constants(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     # Test with operands with same chunks and blocks
     expr = a1 + 2 - a3 * 3.14
-    nres = na1 + 2 - na3 * 3.14
+    nres = ne_evaluate("na1 + 2 - na3 * 3.14")
     res = expr.compute()
     if na1.dtype == np.float32:
         np.testing.assert_allclose(res[:], nres, rtol=1e-5)
