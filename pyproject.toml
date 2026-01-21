@@ -1,6 +1,6 @@
 [build-system]
 requires = [
-    "scikit-build-core",
+    "scikit-build-core>=0.11.0",
     "cython>=3",
     "numpy>=2.1",
 ]
@@ -12,13 +12,13 @@ description = "A fast & compressed ndarray library with a flexible compute engin
 readme = {file = "README.rst", content-type = "text/x-rst"}
 authors = [{name = "Blosc Development Team", email = "blosc@blosc.org"}]
 maintainers = [{ name = "Blosc Development Team", email = "blosc@blosc.org"}]
-license = {text = "BSD-3-Clause"}
+license = "BSD-3-Clause"
+license-files = ["LICENSE.txt"]
 classifiers = [
     "Development Status :: 6 - Mature",
     "Intended Audience :: Developers",
     "Intended Audience :: Information Technology",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: BSD License",
     "Programming Language :: Python",
     "Topic :: Software Development :: Libraries :: Python Modules",
     "Operating System :: Microsoft :: Windows",
