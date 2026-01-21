@@ -1945,64 +1945,58 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     for i in range(udata.ninputs):
         ndarr = udata.inputs[i]
         input_buffers[i] = malloc(ndarr.sc.blocksize)
+        if ndarr.sc.storage.urlpath == NULL:
+            src = ndarr.sc.data[nchunk]
+        else:
+            # We need to get the chunk from disk/network
+            if ndarr.chunk_cache.nchunk != nchunk:
+                PyThread_acquire_lock(chunk_cache_lock, 1)
+                if ndarr.chunk_cache.nchunk != nchunk:
+                    if ndarr.chunk_cache.data != NULL:
+                        free(ndarr.chunk_cache.data)
+                        ndarr.chunk_cache.data = NULL
+                    rc = blosc2_schunk_get_chunk(ndarr.sc, nchunk, &chunk, &needs_free)
+                    if rc < 0:
+                        PyThread_release_lock(chunk_cache_lock)
+                        raise ValueError("miniexpr: error getting chunk")
+                    if not needs_free:
+                        src = <uint8_t*> malloc(rc)
+                        if src == NULL:
+                            PyThread_release_lock(chunk_cache_lock)
+                            raise MemoryError("miniexpr: cannot allocate chunk copy")
+                        memcpy(src, chunk, rc)
+                    else:
+                        src = chunk
+                    ndarr.chunk_cache.data = src
+                    ndarr.chunk_cache.nchunk = nchunk
+                PyThread_release_lock(chunk_cache_lock)
+            src = ndarr.chunk_cache.data
+        rc = blosc2_cbuffer_sizes(src, &chunk_nbytes, &chunk_cbytes, &block_nbytes)
+        if rc < 0:
+            raise ValueError("miniexpr: error getting cbuffer sizes")
+        input_typesize = ndarr.sc.typesize
+        blocknitems = block_nbytes // input_typesize
+        if expected_blocknitems == -1:
+            expected_blocknitems = blocknitems
+        elif blocknitems != expected_blocknitems:
+            raise ValueError("miniexpr: inconsistent block element counts across inputs")
+        start = nblock * blocknitems
         # A way to check for top speed
         if False:
-            buf = <float *>input_buffers[i]
-            for j in range(ndarr.blocknitems):
-                buf[j] = 1.
+            # Unsafe, but it works for special arrays (e.g. blosc2.ones), and can be fast
+            dctx = ndarr.sc.dctx
         else:
-            if ndarr.sc.storage.urlpath == NULL:
-                src = ndarr.sc.data[nchunk]
-            else:
-                # We need to get the chunk from disk/network
-                if ndarr.chunk_cache.nchunk != nchunk:
-                    PyThread_acquire_lock(chunk_cache_lock, 1)
-                    if ndarr.chunk_cache.nchunk != nchunk:
-                        if ndarr.chunk_cache.data != NULL:
-                            free(ndarr.chunk_cache.data)
-                            ndarr.chunk_cache.data = NULL
-                        rc = blosc2_schunk_get_chunk(ndarr.sc, nchunk, &chunk, &needs_free)
-                        if rc < 0:
-                            PyThread_release_lock(chunk_cache_lock)
-                            raise ValueError("miniexpr: error getting chunk")
-                        if not needs_free:
-                            src = <uint8_t*> malloc(rc)
-                            if src == NULL:
-                                PyThread_release_lock(chunk_cache_lock)
-                                raise MemoryError("miniexpr: cannot allocate chunk copy")
-                            memcpy(src, chunk, rc)
-                        else:
-                            src = chunk
-                        ndarr.chunk_cache.data = src
-                        ndarr.chunk_cache.nchunk = nchunk
-                    PyThread_release_lock(chunk_cache_lock)
-                src = ndarr.chunk_cache.data
-            rc = blosc2_cbuffer_sizes(src, &chunk_nbytes, &chunk_cbytes, &block_nbytes)
-            if rc < 0:
-                raise ValueError("miniexpr: error getting cbuffer sizes")
-            input_typesize = ndarr.sc.typesize
-            blocknitems = block_nbytes // input_typesize
-            if expected_blocknitems == -1:
-                expected_blocknitems = blocknitems
-            elif blocknitems != expected_blocknitems:
-                raise ValueError("miniexpr: inconsistent block element counts across inputs")
-            start = nblock * blocknitems
-            # A way to check for top speed
-            if False:
-                # Unsafe, but it works for special arrays (e.g. blosc2.ones), and can be fast
-                dctx = ndarr.sc.dctx
-            else:
-                # This is needed for thread safety, but adds a pretty low overhead (< 400ns on a modern CPU)
-                # In the future, perhaps one can create a specific (serial) context just for
-                # blosc2_getitem_ctx, but this is probably never going to be necessary.
-                dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
-            if valid_nitems > blocknitems:
-                raise ValueError("miniexpr: valid items exceed padded block size")
-            rc = blosc2_getitem_ctx(dctx, src, chunk_cbytes, start, blocknitems,
-                                    input_buffers[i], block_nbytes)
-            blosc2_free_ctx(dctx)
-            if rc < 0:
-                raise ValueError("miniexpr: error decompressing the chunk")
+            # This is needed for thread safety, but adds a pretty low overhead (< 400ns on a modern CPU)
+            # In the future, perhaps one can create a specific (serial) context just for
+            # blosc2_getitem_ctx, but this is probably never going to be necessary.
+            dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
+        if valid_nitems > blocknitems:
+            raise ValueError("miniexpr: valid items exceed padded block size")
+        rc = blosc2_getitem_ctx(dctx, src, chunk_cbytes, start, blocknitems,
+                                input_buffers[i], block_nbytes)
+        blosc2_free_ctx(dctx)
+        if rc < 0:
+            raise ValueError("miniexpr: error decompressing the chunk")
     # For reduction operations, we need to track which block we're processing
     # The linear_block_index should be based on the INPUT array structure, not the output array
     # Get the first input array's chunk and block structure
