@@ -1990,19 +1990,13 @@ def reduce_slices(  # noqa: C901
         use_miniexpr = False
 
     # Check whether we can use miniexpr
-    if use_miniexpr:
-        same_shape = all(hasattr(op, "shape") and op.shape == shape for op in operands.values())
-        same_chunks = all(hasattr(op, "chunks") and op.chunks == chunks for op in operands.values())
-        same_blocks = all(hasattr(op, "blocks") and op.blocks == blocks for op in operands.values())
-        if not (same_shape and same_chunks and same_blocks):
+    if use_miniexpr and isinstance(expression, str):
+        has_complex = any(
+            isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
+            for op in operands.values()
+        )
+        if has_complex and any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
             use_miniexpr = False
-        if use_miniexpr and isinstance(expression, str):
-            has_complex = any(
-                isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
-                for op in operands.values()
-            )
-            if has_complex and any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
-                use_miniexpr = False
 
     if use_miniexpr:
         # Experiments say that not splitting is best (at least on Apple Silicon M4 Pro)
