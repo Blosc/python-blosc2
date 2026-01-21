@@ -54,11 +54,28 @@ else()
     include(FetchContent)
     FetchContent_Declare(blosc2
         GIT_REPOSITORY https://github.com/Blosc/c-blosc2
-        GIT_TAG 5a2b0ed9c4d801230c118fbc5811817055b5a3f5  # v2.22.0
+        GIT_TAG 2effe806e318f4d474705460b0a9a172b8e07ff9  # v2.22.0
     )
     FetchContent_MakeAvailable(blosc2)
     include_directories("${blosc2_SOURCE_DIR}/include")
     target_link_libraries(blosc2_ext PRIVATE blosc2_static)
+endif()
+
+# TODO
+# CHECK THIS
+if(UNIX)
+  set_target_properties(blosc2_ext PROPERTIES
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "$<IF:$<PLATFORM_ID:Darwin>,@loader_path/lib,\$ORIGIN/lib>"
+  )
+endif()
+
+if(WIN32)
+  add_custom_command(TARGET blosc2_ext POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:blosc2_shared>
+            $<TARGET_FILE_DIR:blosc2_ext>
+  )
 endif()
 
 # Python extension -> site-packages/blosc2
