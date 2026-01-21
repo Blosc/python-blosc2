@@ -53,7 +53,7 @@ else()
     include(FetchContent)
     FetchContent_Declare(blosc2
         GIT_REPOSITORY https://github.com/Blosc/c-blosc2
-        GIT_TAG 011c9e537f28299c536294d842e1a3d0e41db24f  # openzl_plugin + miniexpr
+        GIT_TAG 5a2b0ed9c4d801230c118fbc5811817055b5a3f5  # v2.22.0
     )
     FetchContent_MakeAvailable(blosc2)
     include_directories("${blosc2_SOURCE_DIR}/include")
