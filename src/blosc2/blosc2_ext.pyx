@@ -2009,14 +2009,13 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
 
     # Call thread-safe miniexpr C API
     if udata.aux_reduc_ptr == NULL:
-        rc = me_eval_nd(miniexpr_handle, <const void**>input_buffers, udata.ninputs,
-                        <void*>params_output, blocknitems, nchunk, nblock, NULL)
+        aux_reduc_ptr = <void *> params_output
     else:
         # Reduction operation: evaluate only valid items into a single output element.
         # NOTE: miniexpr handles scalar outputs in me_eval_nd without touching tail bytes.
         aux_reduc_ptr = <void *> (<uintptr_t> udata.aux_reduc_ptr + offset_bytes)
-        rc = me_eval_nd(miniexpr_handle, <const void**>input_buffers, udata.ninputs,
-                        aux_reduc_ptr, blocknitems, nchunk, nblock, NULL)
+    rc = me_eval_nd(miniexpr_handle, <const void**> input_buffers, udata.ninputs,
+                    aux_reduc_ptr, blocknitems, nchunk, nblock, NULL)
     if rc != 0:
         raise RuntimeError(f"miniexpr: issues during evaluation; error code: {rc}")
 
