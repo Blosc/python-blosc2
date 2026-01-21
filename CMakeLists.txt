@@ -45,21 +45,23 @@ else()
     set(BUILD_BENCHMARKS OFF CACHE BOOL "Build C-Blosc2 benchmarks")
     set(BUILD_FUZZERS OFF CACHE BOOL "Build C-Blosc2 fuzzers")
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-    # we want the binaries of the C-Blosc2 library to go into the wheels
+    set(CMAKE_INSTALL_INCLUDEDIR ${SKBUILD_PLATLIB_DIR}/blosc2/include) # directory for include files
+    set(CMAKE_INSTALL_LIBDIR ${SKBUILD_PLATLIB_DIR}/blosc2/lib) # directory for libblosc2 and pkgconfig
+    set(Blosc2_INSTALL_CMAKEDIR ${CMAKE_INSTALL_LIBDIR}/cmake/blosc2) #directory for cmake files
+    # we will put the binaries of the C-Blosc2 library into the wheels according to PEP
     set(BLOSC_INSTALL ON)
     include(FetchContent)
     FetchContent_Declare(blosc2
         GIT_REPOSITORY https://github.com/Blosc/c-blosc2
-        GIT_TAG 5a2b0ed9c4d801230c118fbc5811817055b5a3f5  # v2.22.0
+        GIT_TAG 011c9e537f28299c536294d842e1a3d0e41db24f  # openzl_plugin + miniexpr
     )
     FetchContent_MakeAvailable(blosc2)
     include_directories("${blosc2_SOURCE_DIR}/include")
     target_link_libraries(blosc2_ext PRIVATE blosc2_static)
 endif()
 
-add_custom_command(
-    TARGET blosc2_ext POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:blosc2_ext> ${CMAKE_SOURCE_DIR}/blosc2
+# Python extension -> site-packages/blosc2
+install(
+  TARGETS blosc2_ext
+  LIBRARY DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2
 )
-
-install(TARGETS blosc2_ext LIBRARY DESTINATION blosc2)
