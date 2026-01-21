@@ -1951,6 +1951,7 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
             # We need to get the chunk from disk/network
             if ndarr.chunk_cache.nchunk != nchunk:
                 PyThread_acquire_lock(chunk_cache_lock, 1)
+                # We need to check again, as another thread may have updated the cache already
                 if ndarr.chunk_cache.nchunk != nchunk:
                     if ndarr.chunk_cache.data != NULL:
                         free(ndarr.chunk_cache.data)
