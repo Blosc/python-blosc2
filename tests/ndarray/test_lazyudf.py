@@ -492,7 +492,7 @@ def test_save_ludf():
         res_lazyexpr = expr.compute()
         np.testing.assert_array_equal(res_lazyexpr[:], npc)
 
-    blosc2.remove_urlpath("a.b2nd")
+    blosc2.remove_urlpath(urlpath)
 
 
 # Test get_chunk method
