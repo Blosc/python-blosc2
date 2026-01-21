@@ -278,6 +278,20 @@ def test_expression_with_constants(array_fixture):
         np.testing.assert_allclose(res[:], nres)
 
 
+@pytest.mark.parametrize("accuracy", [blosc2.FPAccuracy.LOW, blosc2.FPAccuracy.HIGH])
+def test_fp_precision(array_fixture, accuracy):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    # Test with operands with same chunks and blocks
+    expr = blosc2.sin(a1) ** 2 - blosc2.cos(a2) ** 2 + blosc2.sqrt(a3)
+    # All precisions in miniexpr should be quite good for this expression
+    res = expr.compute(fp_accuracy=accuracy)
+    nres = ne_evaluate("sin(na1) ** 2 - cos(na2) ** 2 + sqrt(na3)")
+    if na1.dtype == np.float32:
+        np.testing.assert_allclose(res[:], nres, rtol=1e-6, atol=1e-6)
+    else:
+        np.testing.assert_allclose(res[:], nres)
+
+
 @pytest.mark.parametrize("compare_expressions", [True, False])
 @pytest.mark.parametrize("comparison_operator", ["==", "!=", ">=", ">", "<=", "<"])
 def test_comparison_operators(dtype_fixture, compare_expressions, comparison_operator):

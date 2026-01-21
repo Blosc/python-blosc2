@@ -302,7 +302,12 @@ class LazyArray(ABC, blosc2.Operand):
         pass
 
     @abstractmethod
-    def compute(self, item: slice | list[slice] | None = None, **kwargs: Any) -> blosc2.NDArray:
+    def compute(
+        self,
+        item: slice | list[slice] | None = None,
+        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        **kwargs: Any,
+    ) -> blosc2.NDArray:
         """
         Return a :ref:`NDArray` containing the evaluation of the :ref:`LazyArray`.
 
@@ -313,9 +318,14 @@ class LazyArray(ABC, blosc2.Operand):
             the evaluated result. This difference between slicing operands and slicing the final expression
             is important when reductions or a where clause are used in the expression.
 
+        fp_accuracy: :ref:`blosc2.FPAccuracy`, optional
+            Specifies the floating-point accuracy to be used during computation.
+            By default, :ref:`blosc2.FPAccuracy.DEFAULT` is used.
+
         kwargs: Any, optional
             Keyword arguments that are supported by the :func:`empty` constructor.
             These arguments will be set in the resulting :ref:`NDArray`.
+            Additionally, the following special kwargs are supported:
 
         Returns
         -------
@@ -1296,10 +1306,11 @@ def fast_eval(  # noqa: C901
     if use_miniexpr:
         cparams = kwargs.pop("cparams", blosc2.CParams())
         # All values will be overwritten, so we can use an uninitialized array
+        fp_accuracy = kwargs.pop("fp_accuracy", blosc2.FPAccuracy.DEFAULT)
         res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         try:
             print("expr->miniexpr:", expression)
-            res_eval._set_pref_expr(expression, operands)
+            res_eval._set_pref_expr(expression, operands, fp_accuracy=fp_accuracy)
             # Data to compress is fetched from operands, so it can be uninitialized here
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
             # Exercise prefilter for each chunk
@@ -2001,6 +2012,7 @@ def reduce_slices(  # noqa: C901
     if use_miniexpr:
         # Experiments say that not splitting is best (at least on Apple Silicon M4 Pro)
         cparams = kwargs.pop("cparams", blosc2.CParams(splitmode=blosc2.SplitMode.NEVER_SPLIT))
+        fp_accuracy = kwargs.pop("fp_accuracy", blosc2.FPAccuracy.DEFAULT)
         # Create a fake NDArray just to drive the miniexpr evaluation (values won't be used)
         res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         # Compute the number of blocks in the result
@@ -2027,7 +2039,7 @@ def reduce_slices(  # noqa: C901
         try:
             print("expr->miniexpr:", expression, reduce_op)
             expression = f"{reduce_op_str}({expression})"
-            res_eval._set_pref_expr(expression, operands, aux_reduc)
+            res_eval._set_pref_expr(expression, operands, fp_accuracy, aux_reduc)
             # Data won't even try to be compressed, so buffers can be unitialized and reused
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
             chunk_data = np.empty(res_eval.schunk.chunksize + blosc2.MAX_OVERHEAD, dtype=np.uint8)
@@ -3142,7 +3154,9 @@ class LazyExpr(LazyArray):
             lazy_expr._order = order
         return lazy_expr
 
-    def compute(self, item=(), **kwargs) -> blosc2.NDArray:
+    def compute(
+        self, item=(), fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT, **kwargs
+    ) -> blosc2.NDArray:
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
         if "out" in kwargs:  # use provided out preferentially
             kwargs["_output"] = kwargs.pop("out")
@@ -3452,7 +3466,7 @@ class LazyUDF(LazyArray):
             lazy_expr._order = order
         return lazy_expr
 
-    def compute(self, item=(), **kwargs):
+    def compute(self, item=(), fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT, **kwargs):
         # Get kwargs
         if kwargs is None:
             kwargs = {}

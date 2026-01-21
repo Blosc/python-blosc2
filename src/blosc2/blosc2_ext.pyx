@@ -578,7 +578,7 @@ cdef extern from "miniexpr.h":
                       const int64_t *shape, const int32_t *chunkshape,
                       const int32_t *blockshape, int *error, me_expr **out)
 
-    cdef enum me_compile_status:
+    ctypedef enum me_compile_status:
         ME_COMPILE_SUCCESS
         ME_COMPILE_ERR_OOM
         ME_COMPILE_ERR_PARSE
@@ -590,7 +590,7 @@ cdef extern from "miniexpr.h":
         ME_COMPILE_ERR_INVALID_ARG_TYPE
         ME_COMPILE_ERR_MIXED_TYPE_NESTED
 
-    cdef enum me_simd_ulp_mode:
+    ctypedef enum me_simd_ulp_mode:
         ME_SIMD_ULP_DEFAULT
         ME_SIMD_ULP_1
         ME_SIMD_ULP_3_5
@@ -647,7 +647,8 @@ ctypedef struct udf_udata:
 ctypedef struct me_udata:
     b2nd_array_t** inputs
     int ninputs
-    b2nd_array_t *array
+    me_eval_params* eval_params
+    b2nd_array_t* array
     void* aux_reduc_ptr
     int64_t chunks_in_array[B2ND_MAX_DIM]
     int64_t blocks_in_chunk[B2ND_MAX_DIM]
@@ -1819,6 +1820,8 @@ cdef class SChunk:
                         free(me_data.inputs)
                     if me_data.miniexpr_handle != NULL:  # XXX do we really need the conditional?
                         me_free(me_data.miniexpr_handle)
+                    if me_data.eval_params != NULL:
+                        free(me_data.eval_params)
                     free(me_data)
         elif self.schunk.storage.cparams.prefilter != NULL:
             # From Python the preparams->udata with always have the field py_func
@@ -2015,7 +2018,7 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         # NOTE: miniexpr handles scalar outputs in me_eval_nd without touching tail bytes.
         aux_reduc_ptr = <void *> (<uintptr_t> udata.aux_reduc_ptr + offset_bytes)
     rc = me_eval_nd(miniexpr_handle, <const void**> input_buffers, udata.ninputs,
-                    aux_reduc_ptr, blocknitems, nchunk, nblock, NULL)
+                    aux_reduc_ptr, blocknitems, nchunk, nblock, udata.eval_params)
     if rc != 0:
         raise RuntimeError(f"miniexpr: issues during evaluation; error code: {rc}")
 
@@ -2916,7 +2919,7 @@ cdef class NDArray:
 
         return udata
 
-    cdef me_udata *_fill_me_udata(self, inputs, aux_reduc):
+    cdef me_udata *_fill_me_udata(self, inputs, fp_accuracy, aux_reduc):
         cdef me_udata *udata = <me_udata *> malloc(sizeof(me_udata))
         operands = list(inputs.values())
         ninputs = len(operands)
@@ -2927,6 +2930,10 @@ cdef class NDArray:
             inputs_[i].chunk_cache.data = NULL
         udata.inputs = inputs_
         udata.ninputs = ninputs
+        cdef me_eval_params* eval_params = <me_eval_params*> malloc(sizeof(me_eval_params))
+        eval_params.disable_simd = False
+        eval_params.simd_ulp_mode = ME_SIMD_ULP_3_5 if fp_accuracy == blosc2.FPAccuracy.LOW else ME_SIMD_ULP_1
+        udata.eval_params = eval_params
         udata.array = self.array
         cdef void* aux_reduc_ptr = NULL
         if aux_reduc is not None:
@@ -2941,12 +2948,12 @@ cdef class NDArray:
 
         return udata
 
-    def _set_pref_expr(self, expression, inputs, aux_reduc=None):
+    def _set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None):
         # Set prefilter for miniexpr
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> miniexpr_prefilter
 
-        cdef me_udata* udata = self._fill_me_udata(inputs, aux_reduc)
+        cdef me_udata* udata = self._fill_me_udata(inputs, fp_accuracy, aux_reduc)
 
         # Get the compiled expression handle for multi-threading
         cdef Py_ssize_t n = len(inputs)

@@ -113,6 +113,21 @@ class Tuner(Enum):
     BTUNE = 32
 
 
+class FPAccuracy(Enum):
+    """
+    Floating point accuracy modes for Blosc2 computing with lazy expressions.
+
+    This is only relevant when using floating point dtypes with miniexpr.
+    """
+
+    #: Use 1.0 ULPs (Units in the Last Place) for floating point functions
+    HIGH = 1
+    #: Use 3.5 ULPs (Units in the Last Place) for floating point functions
+    LOW = 2
+    #: Use default accuracy. This is LOW, which is enough for most applications.
+    DEFAULT = LOW
+
+
 from .blosc2_ext import (
     DEFINED_CODECS_STOP,
     EXTENDED_HEADER_LENGTH,
