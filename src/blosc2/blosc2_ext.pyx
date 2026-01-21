@@ -1982,15 +1982,12 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         elif blocknitems != expected_blocknitems:
             raise ValueError("miniexpr: inconsistent block element counts across inputs")
         start = nblock * blocknitems
-        # A way to check for top speed
-        if False:
-            # Unsafe, but it works for special arrays (e.g. blosc2.ones), and can be fast
-            dctx = ndarr.sc.dctx
-        else:
-            # This is needed for thread safety, but adds a pretty low overhead (< 400ns on a modern CPU)
-            # In the future, perhaps one can create a specific (serial) context just for
-            # blosc2_getitem_ctx, but this is probably never going to be necessary.
-            dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
+        # This is needed for thread safety, but adds a pretty low overhead (< 400ns on a modern CPU)
+        # In the future, perhaps one can create a specific (serial) context just for
+        # blosc2_getitem_ctx, but this is probably never going to be necessary.
+        dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
+        # Unsafe, but it works for special arrays (e.g. blosc2.ones), and can be used for profiling
+        # dctx = ndarr.sc.dctx
         if valid_nitems > blocknitems:
             raise ValueError("miniexpr: valid items exceed padded block size")
         rc = blosc2_getitem_ctx(dctx, src, chunk_cbytes, start, blocknitems,
