@@ -58,7 +58,9 @@ set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    GIT_TAG ndim  # latest me_compile_nd()/me_eval_nd() APIs
+    # GIT_TAG 979573da618e0443c3984bad8db3ed5d9ce72f75  # latest commit in main
+    GIT_TAG main
+    GIT_SHALLOW TRUE  # fetch only the latest commit (only works with a branch in GIT_TAG)
     # In case you want to use a local copy of miniexpr for development, uncomment the line below
     # SOURCE_DIR "/Users/faltet/blosc/miniexpr"
 )
@@ -118,7 +120,7 @@ else()
     include(FetchContent)
     FetchContent_Declare(blosc2
         GIT_REPOSITORY https://github.com/Blosc/c-blosc2
-        GIT_TAG 2effe806e318f4d474705460b0a9a172b8e07ff9  # v2.22.0
+        GIT_TAG 7fca7713fe77ab03ffbe31c30c3af5d7f0287bbc  # latest commit in main
     )
     FetchContent_MakeAvailable(blosc2)
     include_directories("${blosc2_SOURCE_DIR}/include")
