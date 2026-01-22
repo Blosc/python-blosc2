@@ -87,6 +87,23 @@ def test_reduce_where(array_fixture, reduce_op):
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("accuracy", [blosc2.FPAccuracy.LOW, blosc2.FPAccuracy.HIGH])
+def test_fp_accuracy(accuracy, dtype):
+    a1 = blosc2.linspace(0, 10, NITEMS, dtype=dtype, chunks=(1000,), blocks=(500,))
+    a2 = blosc2.linspace(0, 10, NITEMS, dtype=dtype, chunks=(1000,), blocks=(500,))
+    a3 = blosc2.linspace(0, 10, NITEMS, dtype=dtype, chunks=(1000,), blocks=(500,))
+    expr = blosc2.sin(a1) ** 2 - blosc2.cos(a2) ** 2 + blosc2.sqrt(a3)
+    res = expr.sum(fp_accuracy=accuracy)
+    na1 = a1[:]
+    na2 = a2[:]
+    na3 = a3[:]
+    nres = eval("np.sin(na1) ** 2 - np.cos(na2) ** 2 + np.sqrt(na3)").sum()
+    # print("res:", res, nres, type(res), type(nres))
+    tol = 1e-6 if a1.dtype == "float32" else 1e-15
+    np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
+
+
 @pytest.mark.parametrize(
     "reduce_op", ["sum", "prod", "mean", "std", "var", "min", "max", "any", "all", "argmax", "argmin"]
 )
