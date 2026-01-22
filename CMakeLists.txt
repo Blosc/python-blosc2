@@ -116,7 +116,10 @@ else()
     include(FetchContent)
     FetchContent_Declare(blosc2
         GIT_REPOSITORY https://github.com/Blosc/c-blosc2
-        GIT_TAG 7fca7713fe77ab03ffbe31c30c3af5d7f0287bbc  # latest commit in main
+        GIT_TAG main  # latest commit in main
+        GIT_SHALLOW TRUE  # fetch only the latest commit (only works with a branch in GIT_TAG)
+        # in case you want to use a local copy of c-blosc2 for development, uncomment the line below
+        # SOURCE_DIR "/Users/faltet/blosc/c-blosc2"
     )
     FetchContent_MakeAvailable(blosc2)
     include_directories("${blosc2_SOURCE_DIR}/include")
