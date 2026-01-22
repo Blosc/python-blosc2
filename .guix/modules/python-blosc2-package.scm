@@ -94,8 +94,7 @@
                             (when tests?
                               (invoke "env" "PYTHONPATH=." "pytest")))))))
     (inputs (list c-blosc2))
-    (propagated-inputs (list python-msgpack python-ndindex python-numpy
-                             python-py-cpuinfo))
+    (propagated-inputs (list python-msgpack python-ndindex python-numpy))
     (native-inputs (list cmake-minimal pkg-config python-cython-3
                          python-pytest python-scikit-build))
     (home-page "https://github.com/blosc/python-blosc2")

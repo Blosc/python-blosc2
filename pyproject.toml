@@ -36,9 +36,7 @@ dependencies = [
     "numpy>=1.26",
     "ndindex",
     "msgpack",
-    "platformdirs",
     "numexpr>=2.14.1; platform_machine != 'wasm32'",
-    "py-cpuinfo; platform_machine != 'wasm32'",
     "requests",
 ]
 version = "4.0.0-b2.dev0"
