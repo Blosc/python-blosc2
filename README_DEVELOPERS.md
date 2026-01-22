@@ -80,3 +80,70 @@ and run pytest from the `array-api-tests` source dir like this:
 ``` bash
 ARRAY_API_TESTS_MODULE=blosc2 pytest array_api_tests --xfails-file ${BLOSC2_DIR}/tests/array-api-xfails.txt -xs
 ```
+
+# Using the C-library
+Since C-blosc2 is shipped as a compiled binary with python-blosc2, one can compile and run C code using C-blosc2 functions. As of python-blosc2 version 4.0, one can find the location of the ``include`` files and binaries as follows. Run the following command in the terminal, which will give as output the path to the ``__init__.py`` file within the blosc2 folder.
+```bash
+python -c "import blosc2; print(blosc2.__file__)"
+path/to/blosc2/__init__.py
+```
+## Using CMake
+One may then access the include files via ``path/to/blosc2/include`` and the binaries via ``path/to/blosc2/lib``. Thus one may link a C-app via a ``CMakelists.txt`` file with the following snippet
+```
+# Add directory to search list for find_package
+set(CMAKE_PREFIX_PATH "$(python - <<EOF
+import blosc2, pathlib
+print(pathlib.Path(blosc2.__file__).parent)
+EOF)")
+
+find_package(Blosc2 CONFIG REQUIRED)
+
+target_link_libraries(myapp PRIVATE Blosc2::blosc2_shared)
+```
+
+## Using pkg-config
+If one prefers to avoid using CMake, one can also use the pkg-config that is shipped with the wheel by running the following sequence of commands
+
+First
+```
+BLOSC2_PREFIX=$(python - <<'EOF'
+import blosc2, pathlib
+print(pathlib.Path(blosc2.__file__).parent)
+EOF
+)\
+export PKG_CONFIG_PATH="$BLOSC2_PREFIX/lib/pkgconfig"
+```
+
+We can check that the .pc file has the required info and has been found via
+``bash
+pkg-config --modversion blosc2
+``
+
+Then define a test program
+```bash
+cat > test.c <<'EOF'
+#include <stdio.h>
+#include <blosc2.h>
+
+int main(void) {
+    printf(blosc2_get_version_string());
+    return 0;
+}
+EOF
+```
+and compile it to an executable
+```bash
+gcc test.c \
+  $(pkg-config --cflags --libs blosc2) \
+  -Wl,--enable-new-dtags \
+  -Wl,-rpath,"\$ORIGIN" \
+  -o test_blosc2
+```
+The executable has to have access to the C library, so we copy the shared library to the executable directory
+```bash
+cp "$BLOSC2_PREFIX/lib/"libblosc2.so .
+```
+and run the executable
+```bash
+./test_blosc2
+```
