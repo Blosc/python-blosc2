@@ -1,3 +1,11 @@
+#######################################################################
+# Copyright (c) 2019-present, Blosc Development Team <blosc@blosc.org>
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#######################################################################
+
+
 class MissingOperands(ValueError):
     def __init__(self, expr, missing_ops):
         self.expr = expr

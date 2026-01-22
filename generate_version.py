@@ -1,3 +1,10 @@
+#######################################################################
+# Copyright (c) 2019-present, Blosc Development Team <blosc@blosc.org>
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#######################################################################
+
 import tomllib as toml
 
 with open("pyproject.toml", "rb") as f:
