@@ -58,11 +58,8 @@ set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    # GIT_TAG 979573da618e0443c3984bad8db3ed5d9ce72f75  # latest commit in main
-    GIT_TAG main
-    GIT_SHALLOW TRUE  # fetch only the latest commit (only works with a branch in GIT_TAG)
-    # In case you want to use a local copy of miniexpr for development, uncomment the line below
-    # SOURCE_DIR "/Users/faltet/blosc/miniexpr"
+    GIT_TAG main  # latest commit in main
+    GIT_SHALLOW True
 )
 FetchContent_MakeAvailable(miniexpr)
 
@@ -111,7 +108,11 @@ else()
         set(DEACTIVATE_OPENZL ON CACHE BOOL "Do not include support for the OpenZL library.")
     endif()
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-    # we want the binaries of the C-Blosc2 library to go into the wheels
+    set(CMAKE_INSTALL_INCLUDEDIR ${SKBUILD_PLATLIB_DIR}/blosc2/include) # directory for include files
+    set(CMAKE_INSTALL_LIBDIR ${SKBUILD_PLATLIB_DIR}/blosc2/lib) # directory for libblosc2 and pkgconfig
+    set(Blosc2_INSTALL_CMAKEDIR ${CMAKE_INSTALL_LIBDIR}/cmake/blosc2) # directory for cmake files
+    set(CMAKE_INSTALL_BINDIR ${SKBUILD_PLATLIB_DIR}/blosc2/lib) # directory for libblosc2.dll on windows
+    # we will put the binaries of the C-Blosc2 library into the wheels according to PEP
     set(BLOSC_INSTALL ON)
     include(FetchContent)
     FetchContent_Declare(blosc2
@@ -126,9 +127,25 @@ else()
     target_link_libraries(blosc2_ext PRIVATE blosc2_static)
 endif()
 
-add_custom_command(
-    TARGET blosc2_ext POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:blosc2_ext> ${CMAKE_SOURCE_DIR}/blosc2
-)
+# TODO
+# CHECK THIS
+if(UNIX)
+  set_target_properties(blosc2_ext PROPERTIES
+    BUILD_WITH_INSTALL_RPATH TRUE
+    INSTALL_RPATH "$<IF:$<PLATFORM_ID:Darwin>,@loader_path/lib,\$ORIGIN/lib>"
+  )
+endif()
 
-install(TARGETS blosc2_ext LIBRARY DESTINATION blosc2)
+if(WIN32)
+  add_custom_command(TARGET blosc2_ext POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:blosc2_shared>
+            $<TARGET_FILE_DIR:blosc2_ext>
+  )
+endif()
+
+# Python extension -> site-packages/blosc2
+install(
+  TARGETS blosc2_ext
+  LIBRARY DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2
+)
