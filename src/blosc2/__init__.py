@@ -59,6 +59,8 @@ class Codec(Enum):
     OPENHTJ2K = 36
     #: Needs to be installed with ``pip install blosc2-grok``
     GROK = 37
+    #: Needs to be installed with ``pip install blosc2-openzl``
+    OPENZL = 38
 
 
 class Filter(Enum):
