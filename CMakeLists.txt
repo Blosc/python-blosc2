@@ -58,7 +58,7 @@ set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    GIT_TAG main  # latest commit in main
+    GIT_TAG 979573da618e0443c3984bad8db3ed5d9ce72f75  # latest commit in main
     # In case you want to use a local copy of miniexpr for development, uncomment the line below
     # SOURCE_DIR "/Users/faltet/blosc/miniexpr"
 )
