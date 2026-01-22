@@ -1,8 +1,12 @@
 # Release notes
 
-## Changes from 3.12.2 to 3.12.3
+## Changes from 3.12.2 to 4.0.0-b1
 
-XXX version-specific blurb XXX
+- PEP 427 compatibility changes to ensure C-blosc2 files and binaries are stored under blosc2/ subdirectories in shipped Python wheels
+- Introduce miniexpr for hyper-fast multithreaded element-wise computations and reductions (on macOS and Linux). This justifies the major version number bump.
+- Indexing with None for LazyExpr now matches Numpy behaviour (i.e. newaxis)
+- Improvements to open and generally handle Treestore objects and b2z, .b2d, .b2e files. Thanks @bossbeagle1509!
+- Minor changes to support new blosc2-openzl plugin
 
 ## Changes from 3.12.1 to 3.12.2
 
