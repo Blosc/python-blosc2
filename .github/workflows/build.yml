@@ -12,6 +12,8 @@ jobs:
   build_wheels:
     name: Build and test on ${{ matrix.os }}${{ matrix.numpy-version && format(' (numpy {0})', matrix.numpy-version) || matrix.python-version && format(' (python {0})', matrix.python-version) || '' }}
     runs-on: ${{ matrix.os }}
+    env:
+      CMAKE_GENERATOR: Ninja
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
@@ -33,15 +35,65 @@ jobs:
       with:
         python-version: ${{ matrix.python-version }}
 
+    - name: Install sccache (Windows)
+      if: runner.os == 'Windows'
+      run: choco install sccache --yes
+
+    - name: Cache sccache (Windows)
+      if: runner.os == 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: C:\Users\runneradmin\AppData\Local\sccache
+        key: sccache-${{ runner.os }}-${{ github.sha }}
+        restore-keys: |
+          sccache-${{ runner.os }}-
+
+    - name: Cache pip (Windows)
+      if: runner.os == 'Windows'
+      uses: actions/cache@v4
+      with:
+        path: C:\Users\runneradmin\AppData\Local\pip\Cache
+        key: pip-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+        restore-keys: |
+          pip-${{ runner.os }}-
+
     - name: Install Ninja
       uses: seanmiddleditch/gha-setup-ninja@master
+
+    - name: Add LLVM to PATH (Windows)
+      if: runner.os == 'Windows'
+      run: echo "C:\\Program Files\\LLVM\\bin" >> $env:GITHUB_PATH
 
     - name: Install specific numpy version
       if: matrix.numpy-version
       run: pip install "numpy==${{ matrix.numpy-version }}.*"
 
-    - name: Build
+    - name: Build (Windows)
+      if: runner.os == 'Windows'
+      id: build_windows
+      run: pip install -e .[test]
+      env:
+        CMAKE_C_COMPILER_LAUNCHER: sccache
+        CMAKE_CXX_COMPILER_LAUNCHER: sccache
+        SCCACHE_DIR: C:\Users\runneradmin\AppData\Local\sccache
+        CC: clang-cl
+        CXX: clang-cl
+        CMAKE_BUILD_PARALLEL_LEVEL: 8
+        SKBUILD_PARALLEL_LEVEL: 8
+
+    - name: Build (non-Windows)
+      if: runner.os != 'Windows'
+      id: build_non_windows
       run: pip install -e .[test]
 
-    - name: Test
+    - name: Test (Windows)
+      if: runner.os == 'Windows'
+      run: python -m pytest -m "not heavy and (network or not network)"
+#      env:
+#        BLOSC_NTHREADS: "1"
+#        NUMEXPR_NUM_THREADS: "1"
+#        OMP_NUM_THREADS: "1"
+
+    - name: Test (non-Windows)
+      if: runner.os != 'Windows'
       run: python -m pytest -m "not heavy and (network or not network)"

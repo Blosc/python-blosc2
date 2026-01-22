@@ -57,6 +57,7 @@ This page documents the miscellaneous members of the ``blosc2`` module that do n
         SpecialValue,
         SplitMode,
         Tuner,
+        FPAccuracy,
         compute_chunks_blocks,
         get_slice_nchunks,
         remove_urlpath,

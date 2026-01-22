@@ -91,6 +91,15 @@ if not NUMPY_GE_2_0:  # handle non-array-api compliance
     safe_numpy_globals["matrix_transpose"] = np.transpose
     safe_numpy_globals["vecdot"] = npvecdot
 
+# Set this to False if miniexpr should not be tried out
+try_miniexpr = True
+if blosc2.IS_WASM:
+    try_miniexpr = False
+if sys.platform == "win32":
+    # Although miniexpr has support for windows, the integration with Blosc2
+    # still has some rough edges.
+    try_miniexpr = False
+
 
 def ne_evaluate(expression, local_dict=None, **kwargs):
     """Safely evaluate expressions using numexpr when possible, falling back to numpy."""
@@ -293,7 +302,12 @@ class LazyArray(ABC, blosc2.Operand):
         pass
 
     @abstractmethod
-    def compute(self, item: slice | list[slice] | None = None, **kwargs: Any) -> blosc2.NDArray:
+    def compute(
+        self,
+        item: slice | list[slice] | None = None,
+        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        **kwargs: Any,
+    ) -> blosc2.NDArray:
         """
         Return a :ref:`NDArray` containing the evaluation of the :ref:`LazyArray`.
 
@@ -304,9 +318,14 @@ class LazyArray(ABC, blosc2.Operand):
             the evaluated result. This difference between slicing operands and slicing the final expression
             is important when reductions or a where clause are used in the expression.
 
+        fp_accuracy: :ref:`blosc2.FPAccuracy`, optional
+            Specifies the floating-point accuracy to be used during computation.
+            By default, :ref:`blosc2.FPAccuracy.DEFAULT` is used.
+
         kwargs: Any, optional
             Keyword arguments that are supported by the :func:`empty` constructor.
             These arguments will be set in the resulting :ref:`NDArray`.
+            Additionally, the following special kwargs are supported:
 
         Returns
         -------
@@ -1239,12 +1258,25 @@ def fast_eval(  # noqa: C901
     :ref:`NDArray` or np.ndarray
         The output array.
     """
+    global try_miniexpr
+
+    # Use a local copy so we don't modify the global
+    use_miniexpr = try_miniexpr
+
+    # Disable miniexpr for UDFs (callable expressions)
+    if callable(expression):
+        use_miniexpr = False
+
     out = kwargs.pop("_output", None)
     ne_args: dict = kwargs.pop("_ne_args", {})
     if ne_args is None:
         ne_args = {}
+    fp_accuracy = kwargs.pop("fp_accuracy", blosc2.FPAccuracy.DEFAULT)
     dtype = kwargs.pop("dtype", None)
     where: dict | None = kwargs.pop("_where_args", None)
+    if where is not None:
+        # miniexpr does not support where(); use the regular path.
+        use_miniexpr = False
     if isinstance(out, blosc2.NDArray):
         # If 'out' has been passed, and is a NDArray, use it as the base array
         basearr = out
@@ -1283,6 +1315,46 @@ def fast_eval(  # noqa: C901
     else:
         # WebAssembly does not support threading, so we cannot use the iter_disk option
         iter_disk = False
+
+    # Check whether we can use miniexpr
+    if use_miniexpr:
+        # Require aligned NDArray operands with identical chunk/block grid.
+        same_shape = all(hasattr(op, "shape") and op.shape == shape for op in operands.values())
+        same_chunks = all(hasattr(op, "chunks") and op.chunks == chunks for op in operands.values())
+        same_blocks = all(hasattr(op, "blocks") and op.blocks == blocks for op in operands.values())
+        if not (same_shape and same_chunks and same_blocks):
+            use_miniexpr = False
+        if not (all_ndarray and out is None):
+            use_miniexpr = False
+
+    if use_miniexpr:
+        cparams = kwargs.pop("cparams", blosc2.CParams())
+        # All values will be overwritten, so we can use an uninitialized array
+        res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
+        try:
+            res_eval._set_pref_expr(expression, operands, fp_accuracy=fp_accuracy)
+            print("expr->miniexpr:", expression, fp_accuracy)
+            # Data to compress is fetched from operands, so it can be uninitialized here
+            data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
+            # Exercise prefilter for each chunk
+            for nchunk in range(res_eval.schunk.nchunks):
+                res_eval.schunk.update_data(nchunk, data, copy=False)
+        except Exception:
+            use_miniexpr = False
+        finally:
+            res_eval.schunk.remove_prefilter("miniexpr")
+            global iter_chunks
+            # Ensure any background reading thread is closed
+            iter_chunks = None
+
+        if not use_miniexpr:
+            # If miniexpr failed, fallback to regular evaluation
+            # (continue to the manual chunked evaluation below)
+            pass
+        else:
+            if getitem:
+                return res_eval[()]
+            return res_eval
 
     chunk_operands = {}
     # Check which chunks intersect with _slice
@@ -1473,7 +1545,10 @@ def slices_eval(  # noqa: C901
             # Typically, we enter here when using UDFs, and out is a NumPy array.
             # Use operands to get the shape and chunks
             # operand will be a 'fake' NDArray just to get the necessary chunking information
+            fp_accuracy = kwargs.pop("fp_accuracy", None)
             temp = blosc2.empty(shape, dtype=dtype)
+            if fp_accuracy is not None:
+                kwargs["fp_accuracy"] = fp_accuracy
             chunks = temp.chunks
             del temp
 
@@ -1558,7 +1633,10 @@ def slices_eval(  # noqa: C901
                 if "chunks" in kwargs and (where is not None and len(where) < 2 and len(shape_) > 1):
                     # Remove the chunks argument if the where condition is not a tuple with two elements
                     kwargs.pop("chunks")
+                fp_accuracy = kwargs.pop("fp_accuracy", None)
                 out = blosc2.empty(shape_, dtype=dtype_, **kwargs)
+                if fp_accuracy is not None:
+                    kwargs["fp_accuracy"] = fp_accuracy
                 # Check if the in out partitions are well-behaved (i.e. no padding)
                 behaved = blosc2.are_partitions_behaved(out.shape, out.chunks, out.blocks)
         # Evaluate the expression using chunks of operands
@@ -1767,6 +1845,8 @@ def infer_reduction_dtype(dtype, operation):
         dtype, np.float32 if dtype in (np.float32, np.complex64) else blosc2.DEFAULT_FLOAT
     )
     if operation in {ReduceOp.SUM, ReduceOp.PROD}:
+        if np.issubdtype(dtype, np.bool_):
+            return np.int64
         if np.issubdtype(dtype, np.unsignedinteger):
             return np.result_type(dtype, np.uint64)
         return np.result_type(dtype, np.int64 if np.issubdtype(dtype, np.integer) else my_float)
@@ -1831,13 +1911,20 @@ def reduce_slices(  # noqa: C901
     :ref:`NDArray` or np.ndarray
         The resulting output array.
     """
+    global try_miniexpr
+
+    # Use a local copy so we don't modify the global
+    use_miniexpr = try_miniexpr  # & False
+
     out = kwargs.pop("_output", None)
     res_out_ = None  # temporary required to store max/min for argmax/argmin
     ne_args: dict = kwargs.pop("_ne_args", {})
     if ne_args is None:
         ne_args = {}
+    fp_accuracy = kwargs.pop("fp_accuracy", blosc2.FPAccuracy.DEFAULT)
     where: dict | None = kwargs.pop("_where_args", None)
     reduce_op = reduce_args.pop("op")
+    reduce_op_str = reduce_args.pop("op_str", None)
     axis = reduce_args["axis"]
     keepdims = reduce_args["keepdims"]
     dtype = reduce_args.get("dtype", None)
@@ -1884,7 +1971,10 @@ def reduce_slices(  # noqa: C901
     # Note: we could have expr = blosc2.lazyexpr('numpy_array + 1') (i.e. no choice for chunks)
     blosc2_arrs = tuple(o for o in operands.values() if hasattr(o, "chunks"))
     fast_path = False
+    all_ndarray = False
+    any_persisted = False
     chunks = None
+    blocks = None
     if blosc2_arrs:  # fast path only relevant if there are blosc2 arrays
         operand = max(blosc2_arrs, key=lambda x: len(x.shape))
 
@@ -1894,9 +1984,11 @@ def reduce_slices(  # noqa: C901
         same_chunks = all(operand.chunks == o.chunks for o in operands.values() if hasattr(o, "chunks"))
         same_blocks = all(operand.blocks == o.blocks for o in operands.values() if hasattr(o, "blocks"))
         fast_path = same_shape and same_chunks and same_blocks and (0 not in operand.chunks)
-        aligned, iter_disk = dict.fromkeys(operands.keys(), False), False
+        aligned = dict.fromkeys(operands.keys(), False)
+        iter_disk = False
         if fast_path:
             chunks = operand.chunks
+            blocks = operand.blocks
             # Check that all operands are NDArray for fast path
             all_ndarray = all(
                 isinstance(value, blosc2.NDArray) and value.shape != () for value in operands.values()
@@ -1929,6 +2021,85 @@ def reduce_slices(  # noqa: C901
         temp = blosc2.empty(shape, dtype=dtype)
         chunks = temp.chunks
         del temp
+
+    # miniexpr reduction path only supported for some cases so far
+    if not (fast_path and all_ndarray and reduced_shape == ()):
+        use_miniexpr = False
+
+    # Some reductions are not supported yet in miniexpr
+    if reduce_op in (ReduceOp.ARGMAX, ReduceOp.ARGMIN):
+        use_miniexpr = False
+
+    # Check whether we can use miniexpr
+    if use_miniexpr and isinstance(expression, str):
+        has_complex = any(
+            isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
+            for op in operands.values()
+        )
+        if has_complex and any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
+            use_miniexpr = False
+        if where is not None and len(where) != 2:
+            use_miniexpr = False
+
+    if use_miniexpr:
+        # Experiments say that not splitting is best (at least on Apple Silicon M4 Pro)
+        cparams = kwargs.pop("cparams", blosc2.CParams(splitmode=blosc2.SplitMode.NEVER_SPLIT))
+        # Create a fake NDArray just to drive the miniexpr evaluation (values won't be used)
+        res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
+        # Compute the number of blocks in the result
+        nblocks = res_eval.nbytes // res_eval.blocksize
+        # Initialize aux_reduc based on the reduction operation
+        # Padding blocks won't be written, so initial values matter for the final reduction
+        if reduce_op == ReduceOp.SUM or reduce_op == ReduceOp.ANY:
+            aux_reduc = np.zeros(nblocks, dtype=dtype)
+        elif reduce_op == ReduceOp.PROD or reduce_op == ReduceOp.ALL:
+            aux_reduc = np.ones(nblocks, dtype=dtype)
+        elif reduce_op == ReduceOp.MIN:
+            if np.issubdtype(dtype, np.integer):
+                aux_reduc = np.full(nblocks, np.iinfo(dtype).max, dtype=dtype)
+            else:
+                aux_reduc = np.full(nblocks, np.inf, dtype=dtype)
+        elif reduce_op == ReduceOp.MAX:
+            if np.issubdtype(dtype, np.integer):
+                aux_reduc = np.full(nblocks, np.iinfo(dtype).min, dtype=dtype)
+            else:
+                aux_reduc = np.full(nblocks, -np.inf, dtype=dtype)
+        else:
+            # For other operations, zeros should be safe
+            aux_reduc = np.zeros(nblocks, dtype=dtype)
+        try:
+            if where is not None:
+                expression_miniexpr = f"{reduce_op_str}(where({expression}, _where_x, _where_y))"
+            else:
+                expression_miniexpr = f"{reduce_op_str}({expression})"
+            res_eval._set_pref_expr(expression_miniexpr, operands, fp_accuracy, aux_reduc)
+            print("expr->miniexpr:", expression, reduce_op, fp_accuracy)
+            # Data won't even try to be compressed, so buffers can be unitialized and reused
+            data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
+            chunk_data = np.empty(res_eval.schunk.chunksize + blosc2.MAX_OVERHEAD, dtype=np.uint8)
+            # Exercise prefilter for each chunk
+            for nchunk in range(res_eval.schunk.nchunks):
+                res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
+        except Exception:
+            use_miniexpr = False
+        finally:
+            res_eval.schunk.remove_prefilter("miniexpr")
+            global iter_chunks
+            # Ensure any background reading thread is closed
+            iter_chunks = None
+
+        if not use_miniexpr:
+            # If miniexpr failed, fallback to regular evaluation
+            # (continue to the manual chunked evaluation below)
+            pass
+        else:
+            if reduce_op == ReduceOp.ANY:
+                result = np.any(aux_reduc, **reduce_args)
+            elif reduce_op == ReduceOp.ALL:
+                result = np.all(aux_reduc, **reduce_args)
+            else:
+                result = reduce_op.value.reduce(aux_reduc, **reduce_args)
+            return result
 
     # Iterate over the operands and get the chunks
     chunk_operands = {}
@@ -2152,7 +2323,7 @@ def convert_none_out(dtype, reduce_op, reduced_shape):
     return out if isinstance(out, tuple) else (out, None)
 
 
-def chunked_eval(  # noqa: C901
+def chunked_eval(
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=(), **kwargs
 ):
     """
@@ -2246,10 +2417,9 @@ def chunked_eval(  # noqa: C901
         return slices_eval(expression, operands, getitem=getitem, _slice=item, shape=shape, **kwargs)
 
     finally:
-        # Deactivate cache for NDField instances
-        for op in operands:
-            if isinstance(operands[op], blosc2.NDField):
-                operands[op].ndarr.keep_last_read = False
+        global iter_chunks
+        # Ensure any background reading thread is closed
+        iter_chunks = None
 
 
 def fuse_operands(operands1, operands2):
@@ -2708,23 +2878,39 @@ class LazyExpr(LazyArray):
         new_expr._dtype = dtype
         return new_expr
 
-    def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
+    def sum(
+        self,
+        axis=None,
+        dtype=None,
+        keepdims=False,
+        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        **kwargs,
+    ):
         reduce_args = {
             "op": ReduceOp.SUM,
+            "op_str": "sum",
             "axis": axis,
             "dtype": dtype,
             "keepdims": keepdims,
         }
-        return self.compute(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
-    def prod(self, axis=None, dtype=None, keepdims=False, **kwargs):
+    def prod(
+        self,
+        axis=None,
+        dtype=None,
+        keepdims=False,
+        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        **kwargs,
+    ):
         reduce_args = {
             "op": ReduceOp.PROD,
+            "op_str": "prod",
             "axis": axis,
             "dtype": dtype,
             "keepdims": keepdims,
         }
-        return self.compute(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
     def get_num_elements(self, axis, item):
         if hasattr(self, "_where_args") and len(self._where_args) == 1:
@@ -2746,9 +2932,22 @@ class LazyExpr(LazyArray):
         axis = tuple(a if a >= 0 else a + len(shape) for a in axis)  # handle negative indexing
         return math.prod([shape[i] for i in axis])
 
-    def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
+    def mean(
+        self,
+        axis=None,
+        dtype=None,
+        keepdims=False,
+        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        **kwargs,
+    ):
         item = kwargs.pop("item", ())
-        total_sum = self.sum(axis=axis, dtype=dtype, keepdims=keepdims, item=item)
+        total_sum = self.sum(
+            axis=axis,
+            dtype=dtype,
+            keepdims=keepdims,
+            item=item,
+            fp_accuracy=fp_accuracy,
+        )
         num_elements = self.get_num_elements(axis, item)
         if num_elements == 0:
             raise ValueError("mean of an empty array is not defined")
@@ -2761,17 +2960,25 @@ class LazyExpr(LazyArray):
             out = blosc2.asarray(out, **kwargs)
         return out
 
-    def std(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
+    def std(
+        self,
+        axis=None,
+        dtype=None,
+        keepdims=False,
+        ddof=0,
+        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        **kwargs,
+    ):
         item = kwargs.pop("item", ())
         if item == ():  # fast path
-            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
+            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, fp_accuracy=fp_accuracy)
             expr = (self - mean_value) ** 2
         else:
-            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, item=item)
+            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, item=item, fp_accuracy=fp_accuracy)
             # TODO: Not optimal because we load the whole slice in memory. Would have to write
             #  a bespoke std function that executed within slice_eval to avoid this probably.
             expr = (self.slice(item) - mean_value) ** 2
-        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
+        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, fp_accuracy=fp_accuracy)
         if ddof != 0:
             num_elements = self.get_num_elements(axis, item)
             out = np.sqrt(out * num_elements / (num_elements - ddof))
@@ -2785,17 +2992,25 @@ class LazyExpr(LazyArray):
             out = blosc2.asarray(out, **kwargs)
         return out
 
-    def var(self, axis=None, dtype=None, keepdims=False, ddof=0, **kwargs):
+    def var(
+        self,
+        axis=None,
+        dtype=None,
+        keepdims=False,
+        ddof=0,
+        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        **kwargs,
+    ):
         item = kwargs.pop("item", ())
         if item == ():  # fast path
-            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True)
+            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, fp_accuracy=fp_accuracy)
             expr = (self - mean_value) ** 2
         else:
-            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, item=item)
+            mean_value = self.mean(axis=axis, dtype=dtype, keepdims=True, item=item, fp_accuracy=fp_accuracy)
             # TODO: Not optimal because we load the whole slice in memory. Would have to write
             #  a bespoke var function that executed within slice_eval to avoid this probably.
             expr = (self.slice(item) - mean_value) ** 2
-        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims)
+        out = expr.mean(axis=axis, dtype=dtype, keepdims=keepdims, fp_accuracy=fp_accuracy)
         if ddof != 0:
             num_elements = self.get_num_elements(axis, item)
             out = out * num_elements / (num_elements - ddof)
@@ -2807,53 +3022,93 @@ class LazyExpr(LazyArray):
             out = blosc2.asarray(out, **kwargs)
         return out
 
-    def min(self, axis=None, keepdims=False, **kwargs):
+    def min(
+        self,
+        axis=None,
+        keepdims=False,
+        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        **kwargs,
+    ):
         reduce_args = {
             "op": ReduceOp.MIN,
+            "op_str": "min",
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.compute(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
-    def max(self, axis=None, keepdims=False, **kwargs):
+    def max(
+        self,
+        axis=None,
+        keepdims=False,
+        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        **kwargs,
+    ):
         reduce_args = {
             "op": ReduceOp.MAX,
+            "op_str": "max",
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.compute(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
-    def any(self, axis=None, keepdims=False, **kwargs):
+    def any(
+        self,
+        axis=None,
+        keepdims=False,
+        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        **kwargs,
+    ):
         reduce_args = {
             "op": ReduceOp.ANY,
+            "op_str": "any",
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.compute(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
-    def all(self, axis=None, keepdims=False, **kwargs):
+    def all(
+        self,
+        axis=None,
+        keepdims=False,
+        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        **kwargs,
+    ):
         reduce_args = {
             "op": ReduceOp.ALL,
+            "op_str": "all",
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.compute(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
-    def argmax(self, axis=None, keepdims=False, **kwargs):
+    def argmax(
+        self,
+        axis=None,
+        keepdims=False,
+        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        **kwargs,
+    ):
         reduce_args = {
             "op": ReduceOp.ARGMAX,
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.compute(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
-    def argmin(self, axis=None, keepdims=False, **kwargs):
+    def argmin(
+        self,
+        axis=None,
+        keepdims=False,
+        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        **kwargs,
+    ):
         reduce_args = {
             "op": ReduceOp.ARGMIN,
             "axis": axis,
             "keepdims": keepdims,
         }
-        return self.compute(_reduce_args=reduce_args, **kwargs)
+        return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
     def _eval_constructor(self, expression, constructor, operands):
         """Evaluate a constructor function inside a string expression."""
@@ -3012,7 +3267,9 @@ class LazyExpr(LazyArray):
             lazy_expr._order = order
         return lazy_expr
 
-    def compute(self, item=(), **kwargs) -> blosc2.NDArray:
+    def compute(
+        self, item=(), fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT, **kwargs
+    ) -> blosc2.NDArray:
         # When NumPy ufuncs are called, the user may add an `out` parameter to kwargs
         if "out" in kwargs:  # use provided out preferentially
             kwargs["_output"] = kwargs.pop("out")
@@ -3025,6 +3282,7 @@ class LazyExpr(LazyArray):
             kwargs["_ne_args"] = self._ne_args
         if hasattr(self, "_where_args"):
             kwargs["_where_args"] = self._where_args
+        kwargs.setdefault("fp_accuracy", fp_accuracy)
         kwargs["dtype"] = self.dtype
         kwargs["shape"] = self.shape
         if hasattr(self, "_indices"):
@@ -3043,7 +3301,15 @@ class LazyExpr(LazyArray):
             and not isinstance(result, blosc2.NDArray)
         ):
             # Get rid of all the extra kwargs that are not accepted by blosc2.asarray
-            kwargs_not_accepted = {"_where_args", "_indices", "_order", "_ne_args", "dtype", "shape"}
+            kwargs_not_accepted = {
+                "_where_args",
+                "_indices",
+                "_order",
+                "_ne_args",
+                "dtype",
+                "shape",
+                "fp_accuracy",
+            }
             kwargs = {key: value for key, value in kwargs.items() if key not in kwargs_not_accepted}
             result = blosc2.asarray(result, **kwargs)
         return result
@@ -3322,7 +3588,7 @@ class LazyUDF(LazyArray):
             lazy_expr._order = order
         return lazy_expr
 
-    def compute(self, item=(), **kwargs):
+    def compute(self, item=(), fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT, **kwargs):
         # Get kwargs
         if kwargs is None:
             kwargs = {}
@@ -3386,7 +3652,9 @@ class LazyUDF(LazyArray):
         # # Register a prefilter for eval
         # res_eval._set_pref_udf(self.func, id(self.inputs))
 
+        # This line would NOT allocate physical RAM on any modern OS:
         # aux = np.empty(res_eval.shape, res_eval.dtype)
+        # Physical allocation happens here (when writing):
         # res_eval[...] = aux
         # res_eval.schunk.remove_prefilter(self.func.__name__)
         # res_eval.schunk.cparams.nthreads = self._cnthreads
