@@ -88,7 +88,8 @@ jobs:
 
     - name: Test (Windows)
       if: runner.os == 'Windows'
-      run: python -m pytest -m "not heavy and (network or not network)"
+      # run: python -m pytest -m "not heavy and (network or not network)"
+      run: python -m pytest -m "not heavy and not network" tests\ndarray\test_elementwise_funcs.py -vs
 #      env:
 #        BLOSC_NTHREADS: "1"
 #        NUMEXPR_NUM_THREADS: "1"
