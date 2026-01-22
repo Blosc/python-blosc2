@@ -1309,8 +1309,8 @@ def fast_eval(  # noqa: C901
         fp_accuracy = kwargs.pop("fp_accuracy", blosc2.FPAccuracy.DEFAULT)
         res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         try:
-            print("expr->miniexpr:", expression)
             res_eval._set_pref_expr(expression, operands, fp_accuracy=fp_accuracy)
+            print("expr->miniexpr:", expression)
             # Data to compress is fetched from operands, so it can be uninitialized here
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
             # Exercise prefilter for each chunk
@@ -1993,7 +1993,7 @@ def reduce_slices(  # noqa: C901
         del temp
 
     # miniexpr reduction path only supported for some cases so far
-    if not (where is None and fast_path and all_ndarray and reduced_shape == ()):
+    if not (fast_path and all_ndarray and reduced_shape == ()):
         use_miniexpr = False
 
     # Some reductions are not supported yet in miniexpr
@@ -2007,6 +2007,8 @@ def reduce_slices(  # noqa: C901
             for op in operands.values()
         )
         if has_complex and any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
+            use_miniexpr = False
+        if where is not None and len(where) != 2:
             use_miniexpr = False
 
     if use_miniexpr:
@@ -2037,9 +2039,12 @@ def reduce_slices(  # noqa: C901
             # For other operations, zeros should be safe
             aux_reduc = np.zeros(nblocks, dtype=dtype)
         try:
+            if where is not None:
+                expression_miniexpr = f"{reduce_op_str}(where({expression}, _where_x, _where_y))"
+            else:
+                expression_miniexpr = f"{reduce_op_str}({expression})"
+            res_eval._set_pref_expr(expression_miniexpr, operands, fp_accuracy, aux_reduc)
             print("expr->miniexpr:", expression, reduce_op)
-            expression = f"{reduce_op_str}({expression})"
-            res_eval._set_pref_expr(expression, operands, fp_accuracy, aux_reduc)
             # Data won't even try to be compressed, so buffers can be unitialized and reused
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
             chunk_data = np.empty(res_eval.schunk.chunksize + blosc2.MAX_OVERHEAD, dtype=np.uint8)

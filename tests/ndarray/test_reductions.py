@@ -65,15 +65,24 @@ def test_reduce_bool(array_fixture, reduce_op):
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 
-def test_reduce_where(array_fixture):
+# @pytest.mark.parametrize("reduce_op", ["sum"])
+@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "argmax", "argmin"])
+def test_reduce_where(array_fixture, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    # The next works
-    # res = blosc2.where(a1 < a2, a2, 0).sum()
-    # nres = ne_evaluate("sum(where(na1 < na2, na2, 0))")
-    # This does not work yet (it currently hangs)
-    res = blosc2.where(a1 < a2, a2, a1).sum()
-    nres = ne_evaluate("sum(where(na1 < na2, na2, na1))")
-    print("res:", res, nres)
+    if reduce_op == "prod":
+        # To avoid overflow, create a1 and a2 with small values
+        na1 = np.linspace(0, 0.1, np.prod(a1.shape), dtype=np.float32).reshape(a1.shape)
+        a1 = blosc2.asarray(na1)
+        na2 = np.linspace(0, 0.5, np.prod(a1.shape), dtype=np.float32).reshape(a1.shape)
+        a2 = blosc2.asarray(na2)
+        expr = a1 + a2 - 0.2
+        nres = eval("na1 + na2 - .2")
+    else:
+        expr = blosc2.where(a1 < a2, a2, a1)
+        nres = eval("np.where(na1 < na2, na2, na1)")
+    res = getattr(expr, reduce_op)()
+    nres = getattr(nres, reduce_op)()
+    # print("res:", res, nres, type(res), type(nres))
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
