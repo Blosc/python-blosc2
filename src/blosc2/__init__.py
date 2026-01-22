@@ -123,9 +123,9 @@ class FPAccuracy(Enum):
     #: Use 1.0 ULPs (Units in the Last Place) for floating point functions
     HIGH = 1
     #: Use 3.5 ULPs (Units in the Last Place) for floating point functions
-    LOW = 2
-    #: Use default accuracy. This is LOW, which is enough for most applications.
-    DEFAULT = LOW
+    MEDIUM = 2
+    #: Use default accuracy. This is MEDIUM, which should be enough for most applications.
+    DEFAULT = MEDIUM
 
 
 from .blosc2_ext import (

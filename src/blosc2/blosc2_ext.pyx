@@ -2932,7 +2932,7 @@ cdef class NDArray:
         udata.ninputs = ninputs
         cdef me_eval_params* eval_params = <me_eval_params*> malloc(sizeof(me_eval_params))
         eval_params.disable_simd = False
-        eval_params.simd_ulp_mode = ME_SIMD_ULP_3_5 if fp_accuracy == blosc2.FPAccuracy.LOW else ME_SIMD_ULP_1
+        eval_params.simd_ulp_mode = ME_SIMD_ULP_3_5 if fp_accuracy == blosc2.FPAccuracy.MEDIUM else ME_SIMD_ULP_1
         udata.eval_params = eval_params
         udata.array = self.array
         cdef void* aux_reduc_ptr = NULL

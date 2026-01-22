@@ -279,7 +279,7 @@ def test_expression_with_constants(array_fixture):
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
-@pytest.mark.parametrize("accuracy", [blosc2.FPAccuracy.LOW, blosc2.FPAccuracy.HIGH])
+@pytest.mark.parametrize("accuracy", [blosc2.FPAccuracy.MEDIUM, blosc2.FPAccuracy.HIGH])
 def test_fp_accuracy(accuracy, dtype):
     a1 = blosc2.linspace(0, 10, NITEMS, dtype=dtype, chunks=(1000,), blocks=(500,))
     a2 = blosc2.linspace(0, 10, NITEMS, dtype=dtype, chunks=(1000,), blocks=(500,))
