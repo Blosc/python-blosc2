@@ -65,6 +65,45 @@ def test_reduce_bool(array_fixture, reduce_op):
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 
+# @pytest.mark.parametrize("reduce_op", ["sum"])
+@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "argmax", "argmin"])
+def test_reduce_where(array_fixture, reduce_op):
+    a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    if reduce_op == "prod":
+        # To avoid overflow, create a1 and a2 with small values
+        na1 = np.linspace(0, 0.1, np.prod(a1.shape), dtype=np.float32).reshape(a1.shape)
+        a1 = blosc2.asarray(na1)
+        na2 = np.linspace(0, 0.5, np.prod(a1.shape), dtype=np.float32).reshape(a1.shape)
+        a2 = blosc2.asarray(na2)
+        expr = a1 + a2 - 0.2
+        nres = eval("na1 + na2 - .2")
+    else:
+        expr = blosc2.where(a1 < a2, a2, a1)
+        nres = eval("np.where(na1 < na2, na2, na1)")
+    res = getattr(expr, reduce_op)()
+    nres = getattr(nres, reduce_op)()
+    # print("res:", res, nres, type(res), type(nres))
+    tol = 1e-15 if a1.dtype == "float64" else 1e-6
+    np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("accuracy", [blosc2.FPAccuracy.MEDIUM, blosc2.FPAccuracy.HIGH])
+def test_fp_accuracy(accuracy, dtype):
+    a1 = blosc2.linspace(0, 10, NITEMS, dtype=dtype, chunks=(1000,), blocks=(500,))
+    a2 = blosc2.linspace(0, 10, NITEMS, dtype=dtype, chunks=(1000,), blocks=(500,))
+    a3 = blosc2.linspace(0, 10, NITEMS, dtype=dtype, chunks=(1000,), blocks=(500,))
+    expr = blosc2.sin(a1) ** 2 - blosc2.cos(a2) ** 2 + blosc2.sqrt(a3)
+    res = expr.sum(fp_accuracy=accuracy)
+    na1 = a1[:]
+    na2 = a2[:]
+    na3 = a3[:]
+    nres = eval("np.sin(na1) ** 2 - np.cos(na2) ** 2 + np.sqrt(na3)").sum()
+    # print("res:", res, nres, type(res), type(nres))
+    tol = 1e-6 if a1.dtype == "float32" else 1e-15
+    np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
+
+
 @pytest.mark.parametrize(
     "reduce_op", ["sum", "prod", "mean", "std", "var", "min", "max", "any", "all", "argmax", "argmin"]
 )
@@ -571,4 +610,4 @@ def test_reduce_string():
     d = blosc2.lazyexpr("sl + c.sum() + a.std()", operands={"a": a, "c": c, "sl": a.slice((1, 1))})
     sum = d.compute()[()]
     npsum = npa[1, 1] + np.sum(npc) + np.std(npa)
-    assert np.allclose(sum, npsum)
+    np.testing.assert_allclose(sum, npsum)

@@ -53,6 +53,17 @@ Conda users can install from conda-forge:
 
     conda install -c conda-forge python-blosc2
 
+Windows note
+============
+
+When building from source on Windows, clang-cl is required (OpenZL depends on C11 support).
+Make sure LLVM is on PATH and use the Ninja generator, for example::
+
+    CMAKE_GENERATOR=Ninja
+    CC=clang-cl
+    CXX=clang-cl
+    pip install -e .
+
 Documentation
 =============
 
@@ -64,9 +75,11 @@ You can find examples at:
 
 https://github.com/Blosc/python-blosc2/tree/main/examples
 
-A tutorial from PyData Global 2024 is available at:
+A tutorial from PyData Global 2025 is available at:
 
-https://github.com/Blosc/Python-Blosc2-3.0-tutorial
+https://github.com/Blosc/PyData-Global-2025-Tutorial
+
+(`Clik here <https://www.youtube.com/watch?v=tUvSI3EpTBQ&list=PLGVZCDnMOq0qmerwB1eITnr5AfYRGm0DF&index=81>`_ to watch the video recording of the tutorial)
 
 It contains Jupyter notebooks explaining the main features of Python-Blosc2.
 

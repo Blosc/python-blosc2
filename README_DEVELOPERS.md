@@ -22,6 +22,16 @@ You are done!
     pip install .   # add -e for editable mode
 ```
 
+On Windows, clang-cl is required (OpenZL depends on C11 support). Make sure LLVM
+is on PATH and build with Ninja, for example:
+
+```bash
+CMAKE_GENERATOR=Ninja \
+CC=clang-cl \
+CXX=clang-cl \
+pip install -e .
+```
+
 There are situations where you may want to build the C-Blosc2 library separately, for example, when debugging issues in the C library. In that case, let's assume you have the C-Blosc2 library installed in `/usr/local`:
 
 ```bash
@@ -37,6 +47,31 @@ LD_LIBRARY_PATH=/usr/local/lib pytest
 [replace `LD_LIBRARY_PATH` with the appropriate environment variable for your system, such as `DYLD_LIBRARY_PATH` on macOS or `PATH` on Windows, if necessary].
 
 That's it! You can now proceed to the testing section.
+
+### Speeding up local builds (sccache + Ninja)
+
+If you do frequent local rebuilds, sccache can significantly speed up C/C++ rebuilds.
+
+```bash
+brew install sccache ninja
+```
+
+Then run:
+
+```bash
+CMAKE_C_COMPILER_LAUNCHER=sccache \
+SKBUILD_BUILD_DIR=build \
+pip install -e . --no-build-isolation
+```
+
+Using `SKBUILD_BUILD_DIR` keeps a stable build directory between runs, which
+improves incremental rebuilds and sccache hit rates.
+
+Check cache stats with:
+
+```bash
+sccache --show-stats
+```
 
 ## Testing
 

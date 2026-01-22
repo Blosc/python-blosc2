@@ -54,3 +54,4 @@ Other Classes
     Storage
     Tuner
     URLPath
+    FPAccuracy
