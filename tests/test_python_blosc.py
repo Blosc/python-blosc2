@@ -5,7 +5,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-
 # Test the python-blosc API
 
 import ctypes

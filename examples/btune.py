@@ -3,12 +3,12 @@
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
-#
+#######################################################################
+
 # This example can only be run if blosc2-btune is installed. You can
 # get it from https://pypi.org/project/blosc2-btune/
 # For more info on this tuner plugin see
 # https://github.com/Blosc/blosc2_btune/blob/main/README.md
-#######################################################################
 
 import blosc2_btune
 import numpy as np

@@ -5,7 +5,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-
 """
 Benchmark that compares compressing real data copy using different filters
 and codecs in Blosc2.  You need to download the data first by using the

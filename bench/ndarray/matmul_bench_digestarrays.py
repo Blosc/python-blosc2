@@ -4,6 +4,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
+
 # It is important to force numpy to use mkl as it can speed up the
 # blosc2 matmul (which uses np.matmul as a backend) by a factor of 2x:
 # conda install numpy mkl

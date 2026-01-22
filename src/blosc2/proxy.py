@@ -4,6 +4,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
+
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 

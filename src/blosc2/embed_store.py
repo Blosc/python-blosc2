@@ -4,6 +4,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
+
 import copy
 from collections.abc import Iterator, KeysView
 from typing import Any

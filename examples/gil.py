@@ -5,7 +5,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-
 import blosc2
 
 print(blosc2.set_releasegil(True))

@@ -5,7 +5,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-
 # Example for writing and reading memory-mapped files
 
 import numpy as np

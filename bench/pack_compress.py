@@ -5,7 +5,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-
 """
 Small benchmark that compares a plain NumPy array copy against
 compression through different compressors in blosc2.

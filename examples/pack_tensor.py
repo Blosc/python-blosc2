@@ -5,7 +5,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-
 # A simple example using the pack_tensor and unpack_tensor functions
 
 import numpy as np

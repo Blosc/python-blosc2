@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-
 # A simple example using the pack and unpack functions
+
 import numpy as np
 
 import blosc2

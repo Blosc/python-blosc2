@@ -4,6 +4,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
+
 # Avoid checking the name of type annotations at run time
 from __future__ import annotations
 

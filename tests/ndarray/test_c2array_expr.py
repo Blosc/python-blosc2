@@ -4,6 +4,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
+
 import pathlib
 
 import numpy as np

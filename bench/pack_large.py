@@ -5,7 +5,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-
 """
 Small benchmark that exercises packaging of arrays larger than 2 GB.
 """
