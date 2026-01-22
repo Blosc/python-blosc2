@@ -41,7 +41,7 @@ dependencies = [
     "py-cpuinfo; platform_machine != 'wasm32'",
     "requests",
 ]
-version = "4.0.0-b1"
+version = "4.0.0-b2.dev0"
 [project.entry-points."array_api"]
 blosc2 = "blosc2"
 

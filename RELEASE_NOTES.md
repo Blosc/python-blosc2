@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.0.0-b1 to 4.0.0-b2
+
+XXX version-specific blurb XXX
+
 ## Changes from 3.12.2 to 4.0.0-b1
 
 - PEP 427 compatibility changes to ensure C-blosc2 files and binaries are stored under blosc2/ subdirectories in shipped Python wheels
