@@ -10,11 +10,19 @@ import pathlib
 
 import numpy as np
 import pytest
-import torch
 
 import blosc2
 from blosc2.lazyexpr import ne_evaluate
 from blosc2.utils import get_chunks_idx, npvecdot
+
+# Conditionally import torch for proxy tests
+try:
+    import torch
+
+    PROXY_TEST_XP = [torch, np]
+except ImportError:
+    torch = None
+    PROXY_TEST_XP = [np]
 
 NITEMS_SMALL = 100
 NITEMS = 1000
@@ -170,7 +178,10 @@ def test_simple_expression(array_fixture):
     expr = a1 + a2 - a3 * a4
     nres = ne_evaluate("na1 + na2 - na3 * na4")
     res = expr.compute(cparams=blosc2.CParams())
-    np.testing.assert_allclose(res[:], nres)
+    if na1.dtype == np.float32:
+        np.testing.assert_allclose(res[:], nres, rtol=1e-6, atol=1e-6)
+    else:
+        np.testing.assert_allclose(res[:], nres)
 
 
 # Mix Proxy and NDArray operands
@@ -195,10 +206,16 @@ def test_iXXX(array_fixture):
         expr **= 2.3  # __ipow__
     res = expr.compute()
     if not blosc2.IS_WASM:
-        nres = ne_evaluate("(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7) ** 2.3")
+        expr_str = "(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7) ** 2.3"
     else:
-        nres = ne_evaluate("(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7)")
-    np.testing.assert_allclose(res[:], nres)
+        expr_str = "(((((na1 ** 3 + na2 ** 2 + na3 ** 3 - na4 + 3) + 5) - 15) * 2) / 7)"
+    if na1.dtype == np.float32:
+        with np.errstate(invalid="ignore"):
+            nres = eval(expr_str, {"np": np}, {"na1": na1, "na2": na2, "na3": na3, "na4": na4})
+        np.testing.assert_allclose(res[:], nres, rtol=1e-5, atol=1e-6)
+    else:
+        nres = ne_evaluate(expr_str)
+        np.testing.assert_allclose(res[:], nres)
 
 
 def test_complex_evaluate(array_fixture):
@@ -207,7 +224,10 @@ def test_complex_evaluate(array_fixture):
     expr += 2
     nres = ne_evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
     res = expr.compute()
-    np.testing.assert_allclose(res[:], nres)
+    if na1.dtype == np.float32:
+        np.testing.assert_allclose(res[:], nres, rtol=1e-5)
+    else:
+        np.testing.assert_allclose(res[:], nres)
 
 
 def test_complex_getitem(array_fixture):
@@ -216,7 +236,10 @@ def test_complex_getitem(array_fixture):
     expr += 2
     nres = ne_evaluate("tan(na1) * (sin(na2) * sin(na2) + cos(na3)) + (sqrt(na4) * 2) + 2")
     res = expr[:]
-    np.testing.assert_allclose(res, nres)
+    if na1.dtype == np.float32:
+        np.testing.assert_allclose(res[:], nres, rtol=1e-5)
+    else:
+        np.testing.assert_allclose(res[:], nres)
 
 
 def test_complex_getitem_slice(array_fixture):
@@ -234,8 +257,11 @@ def test_func_expression(array_fixture):
     expr = (a1 + a2) * a3 - a4
     expr = blosc2.sin(expr) + blosc2.cos(expr)
     nres = ne_evaluate("sin((na1 + na2) * na3 - na4) + cos((na1 + na2) * na3 - na4)")
-    res = expr.compute(storage={})
-    np.testing.assert_allclose(res[:], nres)
+    res = expr.compute()
+    if na1.dtype == np.float32:
+        np.testing.assert_allclose(res[:], nres, rtol=1e-5)
+    else:
+        np.testing.assert_allclose(res[:], nres)
 
 
 def test_expression_with_constants(array_fixture):
@@ -243,7 +269,28 @@ def test_expression_with_constants(array_fixture):
     # Test with operands with same chunks and blocks
     expr = a1 + 2 - a3 * 3.14
     nres = ne_evaluate("na1 + 2 - na3 * 3.14")
-    np.testing.assert_allclose(expr[:], nres)
+    res = expr.compute()
+    if na1.dtype == np.float32:
+        np.testing.assert_allclose(res[:], nres, rtol=1e-5, atol=1e-6)
+    else:
+        np.testing.assert_allclose(res[:], nres)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("accuracy", [blosc2.FPAccuracy.MEDIUM, blosc2.FPAccuracy.HIGH])
+def test_fp_accuracy(accuracy, dtype):
+    a1 = blosc2.linspace(0, 10, NITEMS, dtype=dtype, chunks=(1000,), blocks=(500,))
+    a2 = blosc2.linspace(0, 10, NITEMS, dtype=dtype, chunks=(1000,), blocks=(500,))
+    a3 = blosc2.linspace(0, 10, NITEMS, dtype=dtype, chunks=(1000,), blocks=(500,))
+    expr = blosc2.sin(a1) ** 2 - blosc2.cos(a2) ** 2 + blosc2.sqrt(a3)
+    res = expr.compute(fp_accuracy=accuracy)
+    na1 = a1[:]
+    na2 = a2[:]
+    na3 = a3[:]
+    nres = eval("np.sin(na1) ** 2 - np.cos(na2) ** 2 + np.sqrt(na3)")
+    # print("res dtypes:", res.dtype, nres.dtype)
+    tol = 1e-6 if a1.dtype == "float32" else 1e-15
+    np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 
 @pytest.mark.parametrize("compare_expressions", [True, False])
@@ -310,9 +357,9 @@ def test_functions(function, dtype_fixture, shape_fixture):
     expr_string = f"{function}(na1)"
     res_numexpr = ne_evaluate(expr_string)
     # Compare the results
-    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
-    np.testing.assert_allclose(expr.slice(slice(0, 10, 1)), res_numexpr[:10])  # slice test
-    np.testing.assert_allclose(expr[:10], res_numexpr[:10])  # getitem test
+    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=1e-5)
+    np.testing.assert_allclose(expr.slice(slice(0, 10, 1)), res_numexpr[:10], rtol=1e-5)  # slice test
+    np.testing.assert_allclose(expr[:10], res_numexpr[:10], rtol=1e-5)  # getitem test
 
     # For some reason real and imag are not supported by numpy's assert_allclose
     # (TypeError: bad operand type for abs(): 'LazyExpr' and segfaults are observed)
@@ -322,7 +369,7 @@ def test_functions(function, dtype_fixture, shape_fixture):
     # Using numpy functions
     expr = eval(f"np.{function}(a1)", {"a1": a1, "np": np})
     # Compare the results
-    np.testing.assert_allclose(expr[()], res_numexpr)
+    np.testing.assert_allclose(expr[()], res_numexpr, rtol=1e-5)
 
     # In combination with other operands
     na2 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
@@ -336,7 +383,11 @@ def test_functions(function, dtype_fixture, shape_fixture):
     expr_string = f"na1 + {function}(na2)"
     res_numexpr = ne_evaluate(expr_string)
     # Compare the results
-    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
+    if function == "tan":
+        # tan in miniexpr has not a lot of precision for values that are close to 0
+        np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=5e-4)
+    else:
+        np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=1e-5)
 
     # Functions of the form np.function(a1 + a2)
     expr = eval(f"np.{function}(a1 + a2)", {"a1": a1, "a2": a2, "np": np})
@@ -344,7 +395,7 @@ def test_functions(function, dtype_fixture, shape_fixture):
     expr_string = f"{function}(na1 + na2)"
     res_numexpr = ne_evaluate(expr_string)
     # Compare the results
-    np.testing.assert_allclose(expr[()], res_numexpr)
+    np.testing.assert_allclose(expr[()], res_numexpr, rtol=1e-5)
 
 
 @pytest.mark.parametrize(
@@ -667,17 +718,18 @@ def test_save_functions(function, dtype_fixture, shape_fixture):
     expr_string = f"{function}(na1)"
     res_numexpr = ne_evaluate(expr_string)
     # Compare the results
-    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
+    rtol = 1e-6 if dtype_fixture == np.float32 else 1e-15
+    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol)
 
     expr_string = f"blosc2.{function}(a1)"
     expr = eval(expr_string, {"a1": a1, "blosc2": blosc2})
     expr.save(urlpath=urlpath_save)
     res_lazyexpr = expr.compute()
-    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
+    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol)
 
     expr = blosc2.open(urlpath_save)
     res_lazyexpr = expr.compute()
-    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr)
+    np.testing.assert_allclose(res_lazyexpr[:], res_numexpr, rtol=rtol)
 
     for urlpath in [urlpath_op, urlpath_save]:
         blosc2.remove_urlpath(urlpath)
@@ -1841,7 +1893,7 @@ def test_lazyexpr_2args():
 
 @pytest.mark.parametrize(
     "xp",
-    [torch, np],
+    PROXY_TEST_XP,
 )
 @pytest.mark.parametrize(
     "dtype",

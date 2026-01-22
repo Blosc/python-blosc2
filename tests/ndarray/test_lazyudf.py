@@ -21,7 +21,13 @@ def udf1p(inputs_tuple, output, offset):
 if blosc2._HAS_NUMBA:
     import numba
 
-    @numba.jit(parallel=True)
+    # We should avoid parallel=True here because makes the complete test suite crash
+    # in test_save_ludf.  I am not sure why, but it might be some interference with
+    # a previous test, leaving the threading state in a bad way.
+    # But all the examples and benchmarks seem to work with parallel=True.
+    # XXX Investigate more.
+    # @numba.jit(parallel=True)
+    @numba.jit(nopython=True)
     def udf1p_numba(inputs_tuple, output, offset):
         x = inputs_tuple[0]
         output[:] = x + 1
