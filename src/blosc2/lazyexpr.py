@@ -1352,7 +1352,7 @@ def fast_eval(  # noqa: C901
         res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         try:
             res_eval._set_pref_expr(expression, operands, fp_accuracy=fp_accuracy)
-            print("expr->miniexpr:", expression, fp_accuracy)
+            # print("expr->miniexpr:", expression, fp_accuracy)
             # Data to compress is fetched from operands, so it can be uninitialized here
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
             # Exercise prefilter for each chunk
@@ -2104,7 +2104,7 @@ def reduce_slices(  # noqa: C901
             else:
                 expression_miniexpr = f"{reduce_op_str}({expression})"
             res_eval._set_pref_expr(expression_miniexpr, operands, fp_accuracy, aux_reduc)
-            print("expr->miniexpr:", expression, reduce_op, fp_accuracy)
+            # print("expr->miniexpr:", expression, reduce_op, fp_accuracy)
             # Data won't even try to be compressed, so buffers can be unitialized and reused
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
             chunk_data = np.empty(res_eval.schunk.chunksize + blosc2.MAX_OVERHEAD, dtype=np.uint8)
