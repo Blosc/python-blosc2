@@ -133,6 +133,12 @@ aspects:
 - And many others that have contributed with bug reports, suggestions and
   improvements.
 
+Developed using JetBrains IDEs.
+
+.. image:: https://resources.jetbrains.com/storage/products/company/brand/logos/jetbrains.svg
+   :target: https://jb.gg/OpenSource
+   :alt: JetBrains logo.
+
 Citing Blosc
 ============
 
