@@ -2,7 +2,8 @@
 
 ## Changes from 4.0.0-b1 to 4.0.0-b2
 
-XXX version-specific blurb XXX
+- On Windows, miniexpr is temporarily disabled for integral outputs and mixed-dtype expressions.
+  Set `BLOSC2_ENABLE_MINIEXPR_WINDOWS=1` to override this for testing.
 
 ## Changes from 3.12.2 to 4.0.0-b1
 

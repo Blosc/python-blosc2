@@ -95,10 +95,9 @@ if not NUMPY_GE_2_0:  # handle non-array-api compliance
 try_miniexpr = True
 if blosc2.IS_WASM:
     try_miniexpr = False
-if sys.platform == "win32":
-    # Although miniexpr has support for windows, the integration with Blosc2
-    # still has some rough edges.
-    try_miniexpr = False
+
+_MINIEXPR_WINDOWS_OVERRIDE = os.environ.get("BLOSC2_ENABLE_MINIEXPR_WINDOWS", "").strip().lower()
+_MINIEXPR_WINDOWS_OVERRIDE = _MINIEXPR_WINDOWS_OVERRIDE not in ("", "0", "false", "no", "off")
 
 
 def ne_evaluate(expression, local_dict=None, **kwargs):
@@ -1326,6 +1325,26 @@ def fast_eval(  # noqa: C901
             use_miniexpr = False
         if not (all_ndarray and out is None):
             use_miniexpr = False
+        has_complex = any(
+            isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
+            for op in operands.values()
+        )
+        if isinstance(expression, str) and has_complex:
+            if sys.platform == "win32":
+                # On Windows, miniexpr has issues with complex numbers
+                use_miniexpr = False
+            if any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
+                use_miniexpr = False
+        if sys.platform == "win32" and use_miniexpr and not _MINIEXPR_WINDOWS_OVERRIDE:
+            # Work around Windows miniexpr issues for integer outputs and dtype conversions.
+            if blosc2.isdtype(dtype, "integral"):
+                use_miniexpr = False
+            else:
+                dtype_mismatch = any(
+                    isinstance(op, blosc2.NDArray) and op.dtype != dtype for op in operands.values()
+                )
+                if dtype_mismatch:
+                    use_miniexpr = False
 
     if use_miniexpr:
         cparams = kwargs.pop("cparams", blosc2.CParams())
@@ -1333,7 +1352,7 @@ def fast_eval(  # noqa: C901
         res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         try:
             res_eval._set_pref_expr(expression, operands, fp_accuracy=fp_accuracy)
-            print("expr->miniexpr:", expression, fp_accuracy)
+            # print("expr->miniexpr:", expression, fp_accuracy)
             # Data to compress is fetched from operands, so it can be uninitialized here
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
             # Exercise prefilter for each chunk
@@ -2036,6 +2055,18 @@ def reduce_slices(  # noqa: C901
             isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
             for op in operands.values()
         )
+        if has_complex and sys.platform == "win32":
+            # On Windows, miniexpr has issues with complex numbers
+            use_miniexpr = False
+        if sys.platform == "win32" and use_miniexpr and not _MINIEXPR_WINDOWS_OVERRIDE:
+            if blosc2.isdtype(dtype, "integral"):
+                use_miniexpr = False
+            else:
+                dtype_mismatch = any(
+                    isinstance(op, blosc2.NDArray) and op.dtype != dtype for op in operands.values()
+                )
+                if dtype_mismatch:
+                    use_miniexpr = False
         if has_complex and any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
             use_miniexpr = False
         if where is not None and len(where) != 2:
@@ -2073,7 +2104,7 @@ def reduce_slices(  # noqa: C901
             else:
                 expression_miniexpr = f"{reduce_op_str}({expression})"
             res_eval._set_pref_expr(expression_miniexpr, operands, fp_accuracy, aux_reduc)
-            print("expr->miniexpr:", expression, reduce_op, fp_accuracy)
+            # print("expr->miniexpr:", expression, reduce_op, fp_accuracy)
             # Data won't even try to be compressed, so buffers can be unitialized and reused
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
             chunk_data = np.empty(res_eval.schunk.chunksize + blosc2.MAX_OVERHEAD, dtype=np.uint8)
