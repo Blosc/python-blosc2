@@ -1947,6 +1947,7 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
             memset(params_output, 0, udata.array.blocknitems * typesize)
         free(input_buffers)
         return 0
+
     for i in range(udata.ninputs):
         ndarr = udata.inputs[i]
         input_buffers[i] = malloc(ndarr.sc.blocksize)
@@ -2013,6 +2014,11 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     cdef uintptr_t offset_bytes = typesize * linear_block_index
 
     # Call thread-safe miniexpr C API
+    # NOTE: me_eval_nd expects the OUTPUT block size (in items), not the input block size.
+    # For element-wise operations with same dtypes, they're equal, but for type-changing
+    # operations (e.g., arccos(int32) -> float64), we must use the output's block item count.
+    cdef int output_blocknitems = udata.array.blocknitems
+
     if udata.aux_reduc_ptr == NULL:
         aux_reduc_ptr = <void *> params_output
     else:
@@ -2020,7 +2026,7 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         # NOTE: miniexpr handles scalar outputs in me_eval_nd without touching tail bytes.
         aux_reduc_ptr = <void *> (<uintptr_t> udata.aux_reduc_ptr + offset_bytes)
     rc = me_eval_nd(miniexpr_handle, <const void**> input_buffers, udata.ninputs,
-                    aux_reduc_ptr, blocknitems, nchunk, nblock, udata.eval_params)
+                    aux_reduc_ptr, output_blocknitems, nchunk, nblock, udata.eval_params)
     if rc != 0:
         raise RuntimeError(f"miniexpr: issues during evaluation; error code: {rc}")
 
