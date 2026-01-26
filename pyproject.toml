@@ -38,6 +38,7 @@ dependencies = [
     "msgpack",
     "numexpr>=2.14.1; platform_machine != 'wasm32'",
     "requests",
+    "pydantic"
 ]
 version = "4.0.0-b2.dev0"
 [project.entry-points."array_api"]
