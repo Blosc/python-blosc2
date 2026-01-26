@@ -9,6 +9,8 @@
 # ruff: noqa: E402 - Module level import not at top of file
 # ruff: noqa: F401 - `var` imported but unused
 
+import contextlib
+import os
 import platform
 from enum import Enum
 
@@ -402,7 +404,14 @@ if nthreads > 16:
     nthreads -= nthreads // 8
 if not IS_WASM:
     # WASM does not support threading
-    numexpr.set_num_threads(nthreads)
+    # Only call set_num_threads if within NUMEXPR_MAX_THREADS limit to avoid warning
+    numexpr_max_env = os.environ.get("NUMEXPR_MAX_THREADS")
+    numexpr_max: int | None = None
+    if numexpr_max_env is not None:
+        with contextlib.suppress(ValueError):
+            numexpr_max = int(numexpr_max_env)
+    if numexpr_max is None or nthreads <= numexpr_max:
+        numexpr.set_num_threads(nthreads)
 
 # This import must be before ndarray and schunk
 from .storage import (  # noqa: I001
