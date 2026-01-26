@@ -41,7 +41,7 @@ jobs:
 
     - name: Cache sccache (Windows)
       if: runner.os == 'Windows'
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: C:\Users\runneradmin\AppData\Local\sccache
         key: sccache-${{ runner.os }}-${{ github.sha }}
@@ -50,7 +50,7 @@ jobs:
 
     - name: Cache pip (Windows)
       if: runner.os == 'Windows'
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: C:\Users\runneradmin\AppData\Local\pip\Cache
         key: pip-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
