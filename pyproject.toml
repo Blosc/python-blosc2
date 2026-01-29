@@ -39,7 +39,7 @@ dependencies = [
     "numexpr>=2.14.1; platform_machine != 'wasm32'",
     "requests",
 ]
-version = "4.0.0-b2.dev0"
+version = "4.0.0"
 [project.entry-points."array_api"]
 blosc2 = "blosc2"
 

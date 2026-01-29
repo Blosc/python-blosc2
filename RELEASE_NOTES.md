@@ -1,9 +1,10 @@
 # Release notes
 
-## Changes from 4.0.0-b1 to 4.0.0-b2
+## Changes from 4.0.0-b1 to 4.0.0
 
 - On Windows, miniexpr is temporarily disabled for integral outputs and mixed-dtype expressions.
   Set `BLOSC2_ENABLE_MINIEXPR_WINDOWS=1` to override this for testing.
+- Handle thread workers for computation to ensure never exceeds NUMEXPR_MAX_THREADS. Thanks @skmendez!
 
 ## Changes from 3.12.2 to 4.0.0-b1
 

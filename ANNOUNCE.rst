@@ -1,9 +1,11 @@
-Announcing Python-Blosc2 3.12.2
+Announcing Python-Blosc2 4.0.0
 ===============================
 
-This is a patch release where we hotfix the WASM wheel upload to a separate repo to avoid history bloat.
+This is major version release where we have accelerated computation via multithreading using the
+[miniexpr library](https://github.com/Blosc/miniexpr/tree/main). We have also changed the wheel layout to comply with PEP 427
+and added support for the [blosc2-openzl plugin](https://github.com/Blosc/blosc2-openzl).
 
-You can think of Python-Blosc2 3.x as an extension of NumPy/numexpr that:
+You can think of Python-Blosc2 4.x as an extension of NumPy/numexpr that:
 
 - Can deal with NDArray compressed objects using first-class codecs & filters.
 - Performs many kind of math expressions, including reductions, indexing...
