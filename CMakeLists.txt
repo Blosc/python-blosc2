@@ -58,7 +58,7 @@ set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    GIT_TAG 979573da618e0443c3984bad8db3ed5d9ce72f75
+    GIT_TAG 77d633cb2c134552da045b8d2cc0ad23908e6b9e
 )
 FetchContent_MakeAvailable(miniexpr)
 
@@ -116,7 +116,7 @@ else()
     include(FetchContent)
     FetchContent_Declare(blosc2
         GIT_REPOSITORY https://github.com/Blosc/c-blosc2
-        GIT_TAG f057d1519c0a990f6351cd39c6a659c752fb84e9
+        GIT_TAG bf21f84680542e680fd94fdc05c5a76259df1345
     )
     FetchContent_MakeAvailable(blosc2)
     include_directories("${blosc2_SOURCE_DIR}/include")
