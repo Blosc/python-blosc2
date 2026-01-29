@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.0.0 to 4.0.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.0.0-b1 to 4.0.0
 
 - On Windows, miniexpr is temporarily disabled for integral outputs and mixed-dtype expressions.
