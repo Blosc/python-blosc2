@@ -103,9 +103,6 @@ else()
     set(BUILD_EXAMPLES OFF CACHE BOOL "Build C-Blosc2 examples")
     set(BUILD_BENCHMARKS OFF CACHE BOOL "Build C-Blosc2 benchmarks")
     set(BUILD_FUZZERS OFF CACHE BOOL "Build C-Blosc2 fuzzers")
-    if(DEFINED ENV{DEACTIVATE_OPENZL})
-        set(DEACTIVATE_OPENZL ON CACHE BOOL "Do not include support for the OpenZL library.")
-    endif()
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
     set(CMAKE_INSTALL_INCLUDEDIR ${SKBUILD_PLATLIB_DIR}/blosc2/include) # directory for include files
     set(CMAKE_INSTALL_LIBDIR ${SKBUILD_PLATLIB_DIR}/blosc2/lib) # directory for libblosc2 and pkgconfig
