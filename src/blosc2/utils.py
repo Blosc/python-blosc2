@@ -15,6 +15,8 @@ import numpy as np
 from ndindex.subindex_helpers import ceiling
 from numpy import broadcast_shapes
 
+import blosc2
+
 # NumPy version and a convenient boolean flag
 NUMPY_GE_2_0 = np.__version__ >= "2.0"
 # handle different numpy versions
@@ -781,3 +783,107 @@ def process_key(key, shape):
     )  # mask to track dummy dims introduced by int -> slice(k, k+1)
     key = tuple(slice(k, k + 1, None) if isinstance(k, int) else k for k in key)  # key is slice, None, int
     return key, mask
+
+
+def check_smaller_shape(value_shape, shape, slice_shape, slice_):
+    """Check whether the shape of the value is smaller than the shape of the array.
+
+    This follows the NumPy broadcasting rules.
+    """
+    # slice_shape must be as long as shape
+    if len(slice_shape) != len(slice_):
+        raise ValueError("slice_shape must be as long as slice_")
+    no_nones_shape = tuple(sh for sh, s in zip(slice_shape, slice_, strict=True) if s is not None)
+    no_nones_slice = tuple(s for sh, s in zip(slice_shape, slice_, strict=True) if s is not None)
+    is_smaller_shape = any(
+        s > (1 if i >= len(value_shape) else value_shape[i]) for i, s in enumerate(no_nones_shape)
+    )
+    slice_past_bounds = any(
+        s.stop > (1 if i >= len(value_shape) else value_shape[i]) for i, s in enumerate(no_nones_slice)
+    )
+    return len(value_shape) < len(shape) or is_smaller_shape or slice_past_bounds
+
+
+def _compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
+    smaller_slice = []
+    diff_dims = len(larger_shape) - len(smaller_shape)
+
+    for i in range(len(larger_shape)):
+        if i < diff_dims:
+            # For leading dimensions of the larger array that the smaller array doesn't have,
+            # we don't add anything to the smaller slice
+            pass
+        else:
+            # For dimensions that both arrays have, the slice for the smaller array should be
+            # the same as the larger array unless the smaller array's size along that dimension
+            # is 1, in which case we use None to indicate the full slice
+            if smaller_shape[i - diff_dims] != 1:
+                smaller_slice.append(larger_slice[i])
+            else:
+                smaller_slice.append(slice(0, larger_shape[i]))
+
+    return tuple(smaller_slice)
+
+
+# A more compact version of the function above, albeit less readable
+def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
+    """
+    Returns the slice of the smaller array that corresponds to the slice of the larger array.
+    """
+    j_small = len(smaller_shape) - 1
+    j_large = len(larger_shape) - 1
+    smaller_shape_nones = []
+    larger_shape_nones = []
+    for s in reversed(larger_slice):
+        if s is None:
+            smaller_shape_nones.append(1)
+            larger_shape_nones.append(1)
+        else:
+            if j_small >= 0:
+                smaller_shape_nones.append(smaller_shape[j_small])
+                j_small -= 1
+            if j_large >= 0:
+                larger_shape_nones.append(larger_shape[j_large])
+                j_large -= 1
+    smaller_shape_nones.reverse()
+    larger_shape_nones.reverse()
+    diff_dims = len(larger_shape_nones) - len(smaller_shape_nones)
+    return tuple(
+        None
+        if larger_slice[i] is None
+        else (
+            larger_slice[i] if smaller_shape_nones[i - diff_dims] != 1 else slice(0, larger_shape_nones[i])
+        )
+        for i in range(diff_dims, len(larger_shape_nones))
+    )
+
+
+def _get_chunk_operands(operands, cslice, chunk_operands, shape):
+    # Get the starts and stops for the slice
+    cslice_shape = tuple(s.stop - s.start for s in cslice)
+    starts = [s.start if s.start is not None else 0 for s in cslice]
+    stops = [s.stop if s.stop is not None else sh for s, sh in zip(cslice, cslice_shape, strict=True)]
+    unit_steps = np.all([s.step == 1 for s in cslice])
+    # Get the slice of each operand
+    for key, value in operands.items():
+        if np.isscalar(value):
+            chunk_operands[key] = value
+            continue
+        if value.shape == ():
+            chunk_operands[key] = value[()]
+            continue
+        if check_smaller_shape(value.shape, shape, cslice_shape, cslice):
+            # We need to fetch the part of the value that broadcasts with the operand
+            smaller_slice = compute_smaller_slice(shape, value.shape, cslice)
+            chunk_operands[key] = value[smaller_slice]
+            continue
+        # If key is in operands, we can reuse the buffer
+        if (
+            key in chunk_operands
+            and cslice_shape == chunk_operands[key].shape
+            and isinstance(value, blosc2.NDArray)
+            and unit_steps
+        ):
+            value.get_slice_numpy(chunk_operands[key], (starts, stops))
+            continue
+        chunk_operands[key] = value[cslice]
