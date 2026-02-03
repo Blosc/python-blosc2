@@ -9,12 +9,12 @@ You can think of Python-Blosc2 4.x as an extension of NumPy/numexpr that:
 
 - Can deal with NDArray compressed objects using first-class codecs & filters.
 - Performs many kind of math expressions, including reductions, indexing...
-- Supports multi-threading and SIMD acceleration (via numexpr).
+- Supports multi-threading and SIMD acceleration (via numexpr/miniexpr).
 - Can operate with data from other libraries (like PyTables, h5py, Zarr, Dask, etc).
 - Supports NumPy ufunc mechanism: mix and match NumPy and Blosc2 computations.
 - Integrates with Numba and Cython via UDFs (User Defined Functions).
-- Adheres to modern NumPy casting rules way better than numexpr.
-- Performs linear algebra operations (like ``blosc2.tensordot()``).
+- Adheres to modern array API standard conventions (https://data-apis.org/array-api/).
+- Can perform linear algebra operations (like ``blosc2.tensordot()``).
 
 Install it with::
 
