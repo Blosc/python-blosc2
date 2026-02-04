@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 import blosc2
-from blosc2.lazyexpr import ne_evaluate
+from blosc2.lazyexpr import ne_evaluate, npcumsum
 
 NITEMS_SMALL = 1000
 NITEMS = 10_000
@@ -63,7 +63,8 @@ def test_reduce_bool(array_fixture, reduce_op):
     axis = None
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
         axis = 0
-        nres = eval(f"np.{reduce_op}(nres, axis={axis})")
+        oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
+        nres = eval(f"{oploc}(nres, axis={axis})")
     else:
         nres = getattr(nres, reduce_op)(axis=axis)
     res = getattr(expr, reduce_op)(axis=axis)
@@ -92,7 +93,8 @@ def test_reduce_where(array_fixture, reduce_op):
     axis = None
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
         axis = 0
-        nres = eval(f"np.{reduce_op}(nres, axis={axis})")
+        oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
+        nres = eval(f"{oploc}(nres, axis={axis})")
     else:
         nres = getattr(nres, reduce_op)(axis=axis)
     res = getattr(expr, reduce_op)(axis=axis)
@@ -197,7 +199,7 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     nres = eval("na1 + na2 - na3 * na4")
     if reduce_op == "cumulative_sum":
         axis = 0 if axis is None else axis
-        nres = nres.cumsum(axis=axis) + na1.cumsum(axis=axis)
+        nres = npcumsum(nres, axis=axis) + npcumsum(na1, axis=axis)
     else:
         nres = getattr(nres, reduce_op)(axis=axis) + getattr(na1, reduce_op)(axis=axis)
     res = getattr(expr, reduce_op)(axis=axis) + getattr(a1, reduce_op)(axis=axis)
@@ -236,7 +238,7 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
 def test_broadcast_params(axis, keepdims, reduce_op, shapes):
     if reduce_op in ("argmax", "argmin", "cumulative_sum", "cumulative_prod"):
         axis = 1 if isinstance(axis, tuple) else axis
-        axis = 0 if (reduce_op[:3] == "cum" and axis is None) else axis
+        axis = 0 if reduce_op[:3] == "cum" else axis
     reduce_args = {"axis": axis}
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
         reduce_args["include_initial"] = keepdims
@@ -250,15 +252,16 @@ def test_broadcast_params(axis, keepdims, reduce_op, shapes):
     a3 = blosc2.asarray(na3)
     expr1 = a1 + a2 - a3
     assert expr1.shape == shapes[0]
-    expr2 = a1 * a2 + 1
-    assert expr2.shape == shapes[0]
-    res = expr1 - getattr(expr2, reduce_op)(**reduce_args)
-    assert res.shape == shapes[0]
+    expr2 = a2 * a3 + 1
+    assert expr2.shape == shapes[1]
     # print(f"res: {res.shape} expr1: {expr1.shape} expr2: {expr2.shape}")
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
-        expr = f"na1 + na2 - na3 - np.{reduce_op}(na1 * na2 + 1, axis={axis}, include_initial={keepdims})"
+        res = expr2 - getattr(expr1, reduce_op)(**reduce_args)
+        oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
+        expr = f"na2 * na3 + 1 - {oploc}(na1 + na2 - na3, axis={axis}, include_initial={keepdims})"
     else:
-        expr = f"na1 + na2 - na3 - (na1 * na2 + 1).{reduce_op}(axis={axis}, keepdims={keepdims})"
+        res = expr1 - getattr(expr2, reduce_op)(**reduce_args)
+        expr = f"na1 + na2 - na3 - (na2 * na3 + 1).{reduce_op}(axis={axis}, keepdims={keepdims})"
     nres = eval(expr)
 
     tol = 1e-14 if a1.dtype == "float64" else 1e-5
@@ -339,24 +342,30 @@ def test_reduce_slice(reduce_op):
     tol = 1e-6 if na.dtype == np.float32 else 1e-15
     _slice = (slice(1, 2, 1), slice(3, 7, 1))
     res = getattr(a, reduce_op)(item=_slice, axis=-1)
-    nres = getattr(na[_slice], reduce_op)(axis=-1)
+    if reduce_op == "cumulative_sum":
+        oploc = "npcumsum"
+    elif reduce_op == "cumulative_prod":
+        oploc = "npcumprod"
+    else:
+        oploc = f"np.{reduce_op}"
+    nres = eval(f"{oploc}(na[_slice], axis=-1)")
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
     # Test reductions with slices and strides
     _slice = (slice(1, 2, 1), slice(1, 9, 2))
     res = getattr(a, reduce_op)(item=_slice, axis=1)
-    nres = getattr(na[_slice], reduce_op)(axis=1)
+    nres = eval(f"{oploc}(na[_slice], axis=1)")
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
     # Test reductions with ints
     _slice = (0, slice(1, 9, 1))
     res = getattr(a, reduce_op)(item=_slice, axis=1)
-    nres = getattr(na[_slice], reduce_op)(axis=1)
+    nres = eval(f"{oploc}(na[_slice], axis=1)")
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
     _slice = (0, slice(1, 9, 2))
     res = getattr(a, reduce_op)(item=_slice, axis=1)
-    nres = getattr(na[_slice], reduce_op)(axis=1)
+    nres = eval(f"{oploc}(na[_slice], axis=1)")
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 
@@ -404,7 +413,8 @@ def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     na = a[:]
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
         axis = 0 if axis is None else axis
-        nres = eval(f"np.{reduce_op}(na, axis={axis})")
+        oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
+        nres = eval(f"{oploc}(na, axis={axis})")
     else:
         nres = getattr(na, reduce_op)(axis=axis)
     res = getattr(a, reduce_op)(axis=axis)
@@ -460,7 +470,8 @@ def test_save_version1(disk, fill_value, reduce_op, axis):
         lexpr = blosc2.open("out.b2nd")
     res = lexpr.compute()
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
-        nres = na + eval(f"np.{reduce_op}(nb, axis={axis})") + 1
+        oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
+        nres = na + eval(f"{oploc}(nb, axis={axis})") + 1
     else:
         nres = na + getattr(nb, reduce_op)(axis=axis) + 1
     assert np.allclose(res[()], nres)
@@ -519,7 +530,8 @@ def test_save_version2(disk, fill_value, reduce_op, axis):
         lexpr = blosc2.open("out.b2nd")
     res = lexpr.compute()
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
-        nres = eval(f"np.{reduce_op}(na, axis={axis})") + nb
+        oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
+        nres = eval(f"{oploc}(na, axis={axis})") + nb
     else:
         nres = getattr(na, reduce_op)(axis=axis) + nb
     assert np.allclose(res[()], nres)
@@ -578,7 +590,8 @@ def test_save_version3(disk, fill_value, reduce_op, axis):
         lexpr = blosc2.open("out.b2nd")
     res = lexpr.compute()
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
-        nres = eval(f"np.{reduce_op}(na, axis={axis})") + nb
+        oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
+        nres = eval(f"{oploc}(na, axis={axis})") + nb
     else:
         nres = getattr(na, reduce_op)(axis=axis) + nb
     assert np.allclose(res[()], nres)
@@ -636,7 +649,8 @@ def test_save_version4(disk, fill_value, reduce_op, axis):
         lexpr = blosc2.open("out.b2nd")
     res = lexpr.compute()
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
-        nres = eval(f"np.{reduce_op}(na, axis={axis})")
+        oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
+        nres = eval(f"{oploc}(na, axis={axis})")
     else:
         nres = getattr(na, reduce_op)(axis=axis)
     assert np.allclose(res[()], nres)

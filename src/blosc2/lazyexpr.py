@@ -1860,7 +1860,7 @@ def reduce_slices(  # noqa: C901
     reduce_op_str = reduce_args.pop("op_str", None)
     axis = reduce_args["axis"]
     keepdims = reduce_args.get("keepdims", False)
-    include_initial = reduce_args.get("include_initial", False)
+    include_initial = reduce_args.pop("include_initial", False)
     dtype = reduce_args.get("dtype", None)
     if dtype is None:
         dtype = kwargs.pop("dtype", None)
@@ -1894,8 +1894,8 @@ def reduce_slices(  # noqa: C901
             reduce_args["axis"] = axis[0] if np.isscalar(reduce_args["axis"]) else axis
     if reduce_op in {ReduceOp.CUMULATIVE_SUM, ReduceOp.CUMULATIVE_PROD}:
         reduced_shape = (np.prod(shape_slice),) if reduce_args["axis"] is None else shape_slice
-        # if reduce_args["axis"] is None, have to have 1D input array
-        reduce_args["axis"] = 0 if reduce_args["axis"] is None else reduce_args["axis"]
+        # if reduce_args["axis"] is None, have to have 1D input array; otherwise, ensure positive scalar
+        reduce_args["axis"] = 0 if reduce_args["axis"] is None else axis[0]
         if include_initial:
             reduced_shape = tuple(
                 s + 1 if i == reduce_args["axis"] else s for i, s in enumerate(shape_slice)
@@ -2093,7 +2093,7 @@ def reduce_slices(  # noqa: C901
         if reduce_op in {ReduceOp.CUMULATIVE_PROD, ReduceOp.CUMULATIVE_SUM}:
             reduced_slice = (
                 tuple(
-                    slice(sl.start + 1, sl.stop + 1, sl.step) if i in axis else sl
+                    slice(sl.start + 1, sl.stop + 1, sl.step) if i == reduce_args["axis"] else sl
                     for i, sl in enumerate(cslice_subidx)
                 )
                 if include_initial
@@ -2161,7 +2161,11 @@ def reduce_slices(  # noqa: C901
             result = reduce_op.value.reduce(result, **reduce_args)
 
         if not out_init:
-            out_, res_out_ = convert_none_out(result.dtype, reduce_op, reduced_shape, axis=axis)
+            out_, res_out_ = convert_none_out(
+                result.dtype, reduce_op, reduced_shape, axis=reduce_args["axis"]
+            )
+            # if reduce_op == ReduceOp.CUMULATIVE_SUM:
+            #     kahan_sum = np.zeros_like(res_out_)
             if out is not None:
                 out[:] = out_
                 del out_
@@ -2188,12 +2192,17 @@ def reduce_slices(  # noqa: C901
             else:  # CUMULATIVE_SUM or CUMULATIVE_PROD
                 idx_result = tuple(
                     slice(-1, None) if i == reduce_args["axis"] else slice(None, None)
-                    for i, c in enumerate(cslice)
+                    for i, c in enumerate(reduced_slice)
                 )
                 idx_lastval = tuple(
-                    slice(0, 1) if i == reduce_args["axis"] else c for i, c in enumerate(cslice)
+                    slice(0, 1) if i == reduce_args["axis"] else c for i, c in enumerate(reduced_slice)
                 )
                 if reduce_op == ReduceOp.CUMULATIVE_SUM:
+                    # use Kahan summation algorithm for better precision
+                    # y = res_out_[idx_lastval] - kahan_sum[idx_lastval]
+                    # t = result + y
+                    # kahan_sum[idx_lastval] = ((t - result) - y)[idx_result]
+                    # result = t
                     result += res_out_[idx_lastval]
                 else:  # CUMULATIVE_PROD
                     result *= res_out_[idx_lastval]
