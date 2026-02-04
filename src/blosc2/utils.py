@@ -26,8 +26,12 @@ if NUMPY_GE_2_0:  # array-api compliant
     npbinvert = np.bitwise_invert
     npvecdot = np.vecdot
     nptranspose = np.permute_dims
-    npcumsum = np.cumulative_sum
-    npcumprod = np.cumulative_prod
+    if np.__version__ >= "2.1":
+        npcumsum = np.cumulative_sum
+        npcumprod = np.cumulative_prod
+    else:
+        npcumsum = np.cumsum
+        npcumprod = np.cumprod
 else:  # not array-api compliant
     nplshift = np.left_shift
     nprshift = np.right_shift
