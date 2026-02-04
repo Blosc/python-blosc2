@@ -26,11 +26,15 @@ if NUMPY_GE_2_0:  # array-api compliant
     npbinvert = np.bitwise_invert
     npvecdot = np.vecdot
     nptranspose = np.permute_dims
+    npcumsum = np.cumulative_sum
+    npcumprod = np.cumulative_prod
 else:  # not array-api compliant
     nplshift = np.left_shift
     nprshift = np.right_shift
     npbinvert = np.bitwise_not
     nptranspose = np.transpose
+    npcumsum = np.cumsum
+    npcumprod = np.cumprod
 
     def npvecdot(a, b, axis=-1):
         return np.einsum("...i,...i->...", np.moveaxis(np.conj(a), axis, -1), np.moveaxis(b, axis, -1))

@@ -553,7 +553,7 @@ def cumulative_sum(
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int
-        Axis along which a cumulative sum must be computed. If axis is None, result is equivalent to cumulative sum of flattened array.
+        Axis along which a cumulative sum must be computed. If array is 1D, axis may be None; otherwise the axis must be specified.
     dtype: dtype
         Data type of the returned array.
     include_initial : bool
@@ -589,7 +589,7 @@ def cumulative_prod(
     ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
         The input array or expression.
     axis: int
-        Axis along which a cumulative product must be computed. If axis is None, result is equivalent to cumulative product of flattened array.
+        Axis along which a cumulative product must be computed. If array is 1D, axis may be None; otherwise the axis must be specified.
     dtype: dtype
         Data type of the returned array.
     include_initial : bool

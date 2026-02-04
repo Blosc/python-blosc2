@@ -52,24 +52,33 @@ def array_fixture(dtype_fixture, shape_fixture):
 
 
 # @pytest.mark.parametrize("reduce_op", ["sum"])
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "argmax", "argmin"])
+@pytest.mark.parametrize(
+    "reduce_op",
+    ["sum", "prod", "min", "max", "any", "all", "argmax", "argmin", "cumulative_sum", "cumulative_prod"],
+)
 def test_reduce_bool(array_fixture, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = (a1 + a2) > (a3 * a4)
     nres = ne_evaluate("(na1 + na2) > (na3 * na4)")
-    res = getattr(expr, reduce_op)()
-    # res = expr.sum()
-    # print("res:", res)
-    nres = getattr(nres, reduce_op)()
+    axis = None
+    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+        axis = 0
+        nres = eval(f"np.{reduce_op}(nres, axis={axis})")
+    else:
+        nres = getattr(nres, reduce_op)(axis=axis)
+    res = getattr(expr, reduce_op)(axis=axis)
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 
 # @pytest.mark.parametrize("reduce_op", ["sum"])
-@pytest.mark.parametrize("reduce_op", ["sum", "prod", "min", "max", "any", "all", "argmax", "argmin"])
+@pytest.mark.parametrize(
+    "reduce_op",
+    ["sum", "prod", "min", "max", "any", "all", "argmax", "argmin", "cumulative_sum", "cumulative_prod"],
+)
 def test_reduce_where(array_fixture, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    if reduce_op == "prod":
+    if reduce_op in {"prod", "cumulative_prod"}:
         # To avoid overflow, create a1 and a2 with small values
         na1 = np.linspace(0, 0.1, np.prod(a1.shape), dtype=np.float32).reshape(a1.shape)
         a1 = blosc2.asarray(na1)
@@ -80,8 +89,13 @@ def test_reduce_where(array_fixture, reduce_op):
     else:
         expr = blosc2.where(a1 < a2, a2, a1)
         nres = eval("np.where(na1 < na2, na2, na1)")
-    res = getattr(expr, reduce_op)()
-    nres = getattr(nres, reduce_op)()
+    axis = None
+    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+        axis = 0
+        nres = eval(f"np.{reduce_op}(nres, axis={axis})")
+    else:
+        nres = getattr(nres, reduce_op)(axis=axis)
+    res = getattr(expr, reduce_op)(axis=axis)
     # print("res:", res, nres, type(res), type(nres))
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
@@ -105,7 +119,22 @@ def test_fp_accuracy(accuracy, dtype):
 
 
 @pytest.mark.parametrize(
-    "reduce_op", ["sum", "prod", "mean", "std", "var", "min", "max", "any", "all", "argmax", "argmin"]
+    "reduce_op",
+    [
+        "sum",
+        "prod",
+        "mean",
+        "std",
+        "var",
+        "min",
+        "max",
+        "any",
+        "all",
+        "argmax",
+        "argmin",
+        "cumulative_sum",
+        "cumulative_prod",
+    ],
 )
 @pytest.mark.parametrize("axis", [1, (0, 1), None])
 @pytest.mark.parametrize("keepdims", [True, False])
@@ -117,11 +146,21 @@ def test_fp_accuracy(accuracy, dtype):
 @pytest.mark.heavy
 def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwargs):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
+    reduce_args = {"axis": axis}
+    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+        reduce_args["include_initial"] = keepdims
+    else:
+        reduce_args["keepdims"] = keepdims
+    if reduce_op in ("mean", "std") and dtype_out == np.int16:
+        # mean and std need float dtype as output
+        dtype_out = np.float64
+    if reduce_op in ("sum", "prod", "mean", "std"):
+        reduce_args["dtype"] = dtype_out
     if axis is not None and np.isscalar(axis) and len(a1.shape) >= axis:
         return
     if isinstance(axis, tuple) and (len(a1.shape) < len(axis) or reduce_op in ("argmax", "argmin")):
         return
-    if reduce_op == "prod":
+    if reduce_op in {"prod", "cumulative_prod"}:
         # To avoid overflow, create a1 and a2 with small values
         na1 = np.linspace(0, 0.1, np.prod(a1.shape), dtype=np.float32).reshape(a1.shape)
         a1 = blosc2.asarray(na1)
@@ -132,15 +171,9 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwar
     else:
         expr = a1 + a2 - a3 * a4
         nres = eval("na1 + na2 - na3 * na4")
-    if reduce_op in ("sum", "prod", "mean", "std"):
-        if reduce_op in ("mean", "std") and dtype_out == np.int16:
-            # mean and std need float dtype as output
-            dtype_out = np.float64
-        res = getattr(expr, reduce_op)(axis=axis, keepdims=keepdims, dtype=dtype_out, **kwargs)
-        nres = getattr(nres, reduce_op)(axis=axis, keepdims=keepdims, dtype=dtype_out)
-    else:
-        res = getattr(expr, reduce_op)(axis=axis, keepdims=keepdims, **kwargs)
-        nres = getattr(nres, reduce_op)(axis=axis, keepdims=keepdims)
+
+    res = getattr(expr, reduce_op)(**reduce_args, **kwargs)
+    nres = getattr(nres, reduce_op)(**reduce_args)
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
     if kwargs != {}:
         if not np.isscalar(res):
@@ -152,7 +185,8 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwar
 
 # TODO: "prod" is not supported here because it overflows with current values
 @pytest.mark.parametrize(
-    "reduce_op", ["sum", "min", "max", "mean", "std", "var", "any", "all", "argmax", "argmin"]
+    "reduce_op",
+    ["sum", "min", "max", "mean", "std", "var", "any", "all", "argmax", "argmin", "cumulative_sum"],
 )
 @pytest.mark.parametrize("axis", [0, 1, None])
 def test_reduce_expr_arr(array_fixture, axis, reduce_op):
@@ -161,15 +195,33 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
         return
     expr = a1 + a2 - a3 * a4
     nres = eval("na1 + na2 - na3 * na4")
+    if reduce_op == "cumulative_sum":
+        axis = 0 if axis is None else axis
+        nres = nres.cumsum(axis=axis) + na1.cumsum(axis=axis)
+    else:
+        nres = getattr(nres, reduce_op)(axis=axis) + getattr(na1, reduce_op)(axis=axis)
     res = getattr(expr, reduce_op)(axis=axis) + getattr(a1, reduce_op)(axis=axis)
-    nres = getattr(nres, reduce_op)(axis=axis) + getattr(na1, reduce_op)(axis=axis)
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 
 # Test broadcasting
 @pytest.mark.parametrize(
-    "reduce_op", ["sum", "mean", "std", "var", "min", "max", "any", "all", "argmax", "argmin"]
+    "reduce_op",
+    [
+        "sum",
+        "mean",
+        "std",
+        "var",
+        "min",
+        "max",
+        "any",
+        "all",
+        "argmax",
+        "argmin",
+        "cumulative_sum",
+        "cumulative_prod",
+    ],
 )
 @pytest.mark.parametrize("axis", [0, (0, 1), None])
 @pytest.mark.parametrize("keepdims", [True, False])
@@ -182,8 +234,14 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     ],
 )
 def test_broadcast_params(axis, keepdims, reduce_op, shapes):
-    if isinstance(axis, tuple) and (reduce_op in ("argmax", "argmin")):
-        axis = 1
+    if reduce_op in ("argmax", "argmin", "cumulative_sum", "cumulative_prod"):
+        axis = 1 if isinstance(axis, tuple) else axis
+        axis = 0 if (reduce_op[:3] == "cum" and axis is None) else axis
+    reduce_args = {"axis": axis}
+    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+        reduce_args["include_initial"] = keepdims
+    else:
+        reduce_args["keepdims"] = keepdims
     na1 = np.linspace(0, 1, np.prod(shapes[0])).reshape(shapes[0])
     na2 = np.linspace(1, 2, np.prod(shapes[1])).reshape(shapes[1])
     na3 = np.linspace(2, 3, np.prod(shapes[2])).reshape(shapes[2])
@@ -194,10 +252,14 @@ def test_broadcast_params(axis, keepdims, reduce_op, shapes):
     assert expr1.shape == shapes[0]
     expr2 = a1 * a2 + 1
     assert expr2.shape == shapes[0]
-    res = expr1 - getattr(expr2, reduce_op)(axis=axis, keepdims=keepdims)
+    res = expr1 - getattr(expr2, reduce_op)(**reduce_args)
     assert res.shape == shapes[0]
     # print(f"res: {res.shape} expr1: {expr1.shape} expr2: {expr2.shape}")
-    nres = eval(f"na1 + na2 - na3 - (na1 * na2 + 1).{reduce_op}(axis={axis}, keepdims={keepdims})")
+    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+        expr = f"na1 + na2 - na3 - np.{reduce_op}(na1 * na2 + 1, axis={axis}, include_initial={keepdims})"
+    else:
+        expr = f"na1 + na2 - na3 - (na1 * na2 + 1).{reduce_op}(axis={axis}, keepdims={keepdims})"
+    nres = eval(expr)
 
     tol = 1e-14 if a1.dtype == "float64" else 1e-5
     np.testing.assert_allclose(res[:], nres, atol=tol, rtol=tol)
@@ -205,7 +267,22 @@ def test_broadcast_params(axis, keepdims, reduce_op, shapes):
 
 # Test reductions with item parameter
 @pytest.mark.parametrize(
-    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
+    "reduce_op",
+    [
+        "sum",
+        "prod",
+        "min",
+        "max",
+        "any",
+        "all",
+        "mean",
+        "std",
+        "var",
+        "argmax",
+        "argmin",
+        "cumulative_sum",
+        "cumulative_prod",
+    ],
 )
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 @pytest.mark.parametrize("stripes", ["rows", "columns"])
@@ -223,7 +300,7 @@ def test_reduce_item(reduce_op, dtype, stripes, stripe_len, shape, chunks):
         else:
             _slice = (slice(None), slice(i, i + stripe_len))
         slice_ = na[_slice]
-        if slice_.size == 0 and reduce_op not in ("sum", "prod"):
+        if slice_.size == 0 and reduce_op not in ("sum", "prod", "cumulative_sum", "cumulative_prod"):
             # For mean, std, and var, numpy just raises a warning, so don't check
             if reduce_op in ("min", "max", "argmin", "argmax"):
                 # Check that a ValueError is raised when the slice is empty
@@ -238,7 +315,22 @@ def test_reduce_item(reduce_op, dtype, stripes, stripe_len, shape, chunks):
 
 
 @pytest.mark.parametrize(
-    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
+    "reduce_op",
+    [
+        "sum",
+        "prod",
+        "min",
+        "max",
+        "any",
+        "all",
+        "mean",
+        "std",
+        "var",
+        "argmax",
+        "argmin",
+        "cumulative_sum",
+        "cumulative_prod",
+    ],
 )
 def test_reduce_slice(reduce_op):
     shape = (8, 12, 5)
@@ -282,7 +374,22 @@ def test_reduce_slice(reduce_op):
 @pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize("fill_value", [0, 1, 0.32])
 @pytest.mark.parametrize(
-    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
+    "reduce_op",
+    [
+        "sum",
+        "prod",
+        "min",
+        "max",
+        "any",
+        "all",
+        "mean",
+        "std",
+        "var",
+        "argmax",
+        "argmin",
+        "cumulative_sum",
+        "cumulative_prod",
+    ],
 )
 @pytest.mark.parametrize("axis", [0, 1, None])
 def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
@@ -295,23 +402,41 @@ def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     if disk:
         a = blosc2.open(urlpath)
     na = a[:]
-
+    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+        axis = 0 if axis is None else axis
+        nres = eval(f"np.{reduce_op}(na, axis={axis})")
+    else:
+        nres = getattr(na, reduce_op)(axis=axis)
     res = getattr(a, reduce_op)(axis=axis)
-    nres = getattr(na, reduce_op)(axis=axis)
-
     assert np.allclose(res, nres)
 
 
 @pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize("fill_value", [0, 1, 0.32])
 @pytest.mark.parametrize(
-    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
+    "reduce_op",
+    [
+        "sum",
+        "prod",
+        "min",
+        "max",
+        "any",
+        "all",
+        "mean",
+        "std",
+        "var",
+        "argmax",
+        "argmin",
+        "cumulative_sum",
+        "cumulative_prod",
+    ],
 )
 @pytest.mark.parametrize("axis", [0, (0, 1), None])
 def test_save_version1(disk, fill_value, reduce_op, axis):
     shape = (20, 50, 100)
-    if isinstance(axis, tuple) and (reduce_op in ("argmax", "argmin")):
-        axis = 1
+    if reduce_op in ("argmax", "argmin", "cumulative_sum", "cumulative_prod"):
+        axis = 1 if isinstance(axis, tuple) else axis
+        axis = 0 if (reduce_op[:3] == "cum" and axis is None) else axis
         shape = (20, 20, 100)
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
@@ -334,7 +459,10 @@ def test_save_version1(disk, fill_value, reduce_op, axis):
         lexpr.save("out.b2nd")
         lexpr = blosc2.open("out.b2nd")
     res = lexpr.compute()
-    nres = na + getattr(nb[()], reduce_op)(axis=axis) + 1
+    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+        nres = na + eval(f"np.{reduce_op}(nb, axis={axis})") + 1
+    else:
+        nres = na + getattr(nb, reduce_op)(axis=axis) + 1
     assert np.allclose(res[()], nres)
 
     if disk:
@@ -346,13 +474,29 @@ def test_save_version1(disk, fill_value, reduce_op, axis):
 @pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize("fill_value", [0, 1, 0.32])
 @pytest.mark.parametrize(
-    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
+    "reduce_op",
+    [
+        "sum",
+        "prod",
+        "min",
+        "max",
+        "any",
+        "all",
+        "mean",
+        "std",
+        "var",
+        "argmax",
+        "argmin",
+        "cumulative_sum",
+        "cumulative_prod",
+    ],
 )
 @pytest.mark.parametrize("axis", [0, (0, 1), None])
 def test_save_version2(disk, fill_value, reduce_op, axis):
     shape = (20, 50, 100)
-    if isinstance(axis, tuple) and (reduce_op in ("argmax", "argmin")):
-        axis = 1
+    if reduce_op in ("argmax", "argmin", "cumulative_sum", "cumulative_prod"):
+        axis = 1 if isinstance(axis, tuple) else axis
+        axis = 0 if (reduce_op[:3] == "cum" and axis is None) else axis
         shape = (20, 20, 100)
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
@@ -374,7 +518,10 @@ def test_save_version2(disk, fill_value, reduce_op, axis):
         lexpr.save("out.b2nd")
         lexpr = blosc2.open("out.b2nd")
     res = lexpr.compute()
-    nres = getattr(na[()], reduce_op)(axis=axis) + nb
+    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+        nres = eval(f"np.{reduce_op}(na, axis={axis})") + nb
+    else:
+        nres = getattr(na, reduce_op)(axis=axis) + nb
     assert np.allclose(res[()], nres)
 
     if disk:
@@ -386,13 +533,29 @@ def test_save_version2(disk, fill_value, reduce_op, axis):
 @pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize("fill_value", [0, 1, 0.32])
 @pytest.mark.parametrize(
-    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
+    "reduce_op",
+    [
+        "sum",
+        "prod",
+        "min",
+        "max",
+        "any",
+        "all",
+        "mean",
+        "std",
+        "var",
+        "argmax",
+        "argmin",
+        "cumulative_sum",
+        "cumulative_prod",
+    ],
 )
 @pytest.mark.parametrize("axis", [0, (0, 1), None])
 def test_save_version3(disk, fill_value, reduce_op, axis):
     shape = (20, 50, 100)
-    if isinstance(axis, tuple) and (reduce_op in ("argmax", "argmin")):
-        axis = 1
+    if reduce_op in ("argmax", "argmin", "cumulative_sum", "cumulative_prod"):
+        axis = 1 if isinstance(axis, tuple) else axis
+        axis = 0 if (reduce_op[:3] == "cum" and axis is None) else axis
         shape = (20, 20, 100)
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
@@ -414,7 +577,10 @@ def test_save_version3(disk, fill_value, reduce_op, axis):
         lexpr.save("out.b2nd")
         lexpr = blosc2.open("out.b2nd")
     res = lexpr.compute()
-    nres = getattr(na[()], reduce_op)(axis=axis) + nb
+    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+        nres = eval(f"np.{reduce_op}(na, axis={axis})") + nb
+    else:
+        nres = getattr(na, reduce_op)(axis=axis) + nb
     assert np.allclose(res[()], nres)
 
     if disk:
@@ -426,12 +592,29 @@ def test_save_version3(disk, fill_value, reduce_op, axis):
 @pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize("fill_value", [0, 1, 0.32])
 @pytest.mark.parametrize(
-    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
+    "reduce_op",
+    [
+        "sum",
+        "prod",
+        "min",
+        "max",
+        "any",
+        "all",
+        "mean",
+        "std",
+        "var",
+        "argmax",
+        "argmin",
+        "cumulative_sum",
+        "cumulative_prod",
+    ],
 )
 @pytest.mark.parametrize("axis", [0, (0, 1), None])
 def test_save_version4(disk, fill_value, reduce_op, axis):
-    if isinstance(axis, tuple) and (reduce_op in ("argmax", "argmin")):
-        axis = 1
+    if reduce_op in ("argmax", "argmin", "cumulative_sum", "cumulative_prod"):
+        axis = 1 if isinstance(axis, tuple) else axis
+        axis = 0 if (reduce_op[:3] == "cum" and axis is None) else axis
+        shape = (20, 20, 100)
     shape = (20, 50, 100)
     urlpath = "a1.b2nd" if disk else None
     if fill_value != 0:
@@ -452,7 +635,10 @@ def test_save_version4(disk, fill_value, reduce_op, axis):
         lexpr.save("out.b2nd")
         lexpr = blosc2.open("out.b2nd")
     res = lexpr.compute()
-    nres = getattr(na[()], reduce_op)(axis=axis)
+    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+        nres = eval(f"np.{reduce_op}(na, axis={axis})")
+    else:
+        nres = getattr(na, reduce_op)(axis=axis)
     assert np.allclose(res[()], nres)
 
     if disk:

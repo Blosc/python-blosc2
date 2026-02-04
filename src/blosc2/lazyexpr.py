@@ -13,6 +13,7 @@ import asyncio
 import builtins
 import concurrent.futures
 import copy
+import enum
 import inspect
 import linecache
 import math
@@ -59,6 +60,8 @@ from .utils import (
     infer_shape,
     linalg_attrs,
     linalg_funcs,
+    npcumprod,
+    npcumsum,
     npvecdot,
     process_key,
     reducers,
@@ -93,6 +96,8 @@ if not NUMPY_GE_2_0:  # handle non-array-api compliance
     safe_numpy_globals["concat"] = np.concatenate
     safe_numpy_globals["matrix_transpose"] = np.transpose
     safe_numpy_globals["vecdot"] = npvecdot
+    safe_numpy_globals["cumulative_sum"] = npcumsum
+    safe_numpy_globals["cumulative_prod"] = npcumprod
 
 # Set this to False if miniexpr should not be tried out
 try_miniexpr = True
@@ -271,25 +276,27 @@ class ReduceOp(Enum):
     Available reduce operations.
     """
 
-    SUM = np.add
-    PROD = np.multiply
-    MEAN = np.mean
-    STD = np.std
-    VAR = np.var
+    # wrap as enum.member so that Python doesn't treat some funcs
+    # as class methods (rather than Enum members)
+    SUM = enum.member(np.add)
+    PROD = enum.member(np.multiply)
+    MEAN = enum.member(np.mean)
+    STD = enum.member(np.std)
+    VAR = enum.member(np.var)
     # Computing a median from partial results is not straightforward because the median
     # is a positional statistic, which means it depends on the relative ordering of all
     # the data points. Unlike statistics such as the sum or mean, you can't compute a median
     # from partial results without knowing the entire dataset, and this is way too expensive
     # for arrays that cannot typically fit in-memory (e.g. disk-based NDArray).
     # MEDIAN = np.median
-    MAX = np.maximum
-    MIN = np.minimum
-    ANY = np.any
-    ALL = np.all
-    ARGMAX = np.argmax
-    ARGMIN = np.argmin
-    CUMULATIVE_SUM = np.cumulative_sum
-    CUMULATIVE_PROD = np.cumulative_prod
+    MAX = enum.member(np.maximum)
+    MIN = enum.member(np.minimum)
+    ANY = enum.member(np.any)
+    ALL = enum.member(np.all)
+    ARGMAX = enum.member(np.argmax)
+    ARGMIN = enum.member(np.argmin)
+    CUMULATIVE_SUM = enum.member(npcumsum)
+    CUMULATIVE_PROD = enum.member(npcumprod)
 
 
 class LazyArrayEnum(Enum):
@@ -1887,9 +1894,12 @@ def reduce_slices(  # noqa: C901
             reduce_args["axis"] = axis[0] if np.isscalar(reduce_args["axis"]) else axis
     if reduce_op in {ReduceOp.CUMULATIVE_SUM, ReduceOp.CUMULATIVE_PROD}:
         reduced_shape = (np.prod(shape_slice),) if reduce_args["axis"] is None else shape_slice
-        temp_axis = 0 if reduce_args["axis"] is None else reduce_args["axis"]
+        # if reduce_args["axis"] is None, have to have 1D input array
+        reduce_args["axis"] = 0 if reduce_args["axis"] is None else reduce_args["axis"]
         if include_initial:
-            reduced_shape = tuple(s + 1 if i == temp_axis else s for i, s in enumerate(shape_slice))
+            reduced_shape = tuple(
+                s + 1 if i == reduce_args["axis"] else s for i, s in enumerate(shape_slice)
+            )
     else:
         if keepdims:
             reduced_shape = tuple(1 if i in axis else s for i, s in enumerate(shape_slice))
@@ -1997,7 +2007,7 @@ def reduce_slices(  # noqa: C901
         # Padding blocks won't be written, so initial values matter for the final reduction
         if reduce_op in {ReduceOp.SUM, ReduceOp.ANY, ReduceOp.CUMULATIVE_SUM}:
             aux_reduc = np.zeros(nblocks, dtype=dtype)
-        elif reduce_op in {ReduceOp.PROD, ReduceOp.ALL, ReduceOp.CUMULATIVE_SUM}:
+        elif reduce_op in {ReduceOp.PROD, ReduceOp.ALL, ReduceOp.CUMULATIVE_PROD}:
             aux_reduc = np.ones(nblocks, dtype=dtype)
         elif reduce_op == ReduceOp.MIN:
             if np.issubdtype(dtype, np.integer):
@@ -2038,10 +2048,8 @@ def reduce_slices(  # noqa: C901
             # (continue to the manual chunked evaluation below)
             pass
         else:
-            if reduce_op == ReduceOp.ANY:
-                result = np.any(aux_reduc, **reduce_args)
-            elif reduce_op == ReduceOp.ALL:
-                result = np.all(aux_reduc, **reduce_args)
+            if reduce_op in {ReduceOp.ANY, ReduceOp.ALL}:
+                result = reduce_op.value(aux_reduc, **reduce_args)
             else:
                 result = reduce_op.value.reduce(aux_reduc, **reduce_args)
             return result
@@ -2054,30 +2062,6 @@ def reduce_slices(  # noqa: C901
     out_init = False
 
     for nchunk, chunk_slice in enumerate(intersecting_chunks):
-        # Special case for cumulative operations with axis = None
-        if reduce_args["axis"] is None and reduce_op in {ReduceOp.CUMULATIVE_PROD, ReduceOp.CUMULATIVE_SUM}:
-            # res_out_ is just None, out set to all 0s (sum) or 1s (prod)
-            out, res_out_ = convert_none_out(dtype, reduce_op, reduced_shape)
-            # reduced_shape is just one-element tuple
-            chunklen = out.chunks[0] if hasattr(out, "chunks") else chunks[-1]
-            carry = 0
-            for cidx in range(0, reduced_shape[0] // chunklen):
-                slice_starts = np.unravel_index(cidx * chunklen, shape)
-                slice_stops = np.unravel_index((cidx + 1) * chunklen, shape)
-                cslice = tuple(
-                    slice(start, stop) for start, stop in zip(slice_starts, slice_stops, strict=True)
-                )
-                _get_chunk_operands(operands, cslice, chunk_operands, shape)
-                result, _ = _get_result(expression, chunk_operands, ne_args, where)
-                result = np.require(result, requirements="C")
-                if reduce_op == ReduceOp.CUMULATIVE_SUM:
-                    res = np.cumulative_sum(result, axis=None) + carry
-                else:
-                    res = np.cumulative_prod(result, axis=None) * carry
-                carry = res[-1]
-                out[cidx * chunklen + include_initial : (cidx + 1) * chunklen + include_initial] = res
-            break  # skip looping over chunks
-
         cslice = chunk_slice.raw
         # Check whether current cslice intersects with _slice
         if cslice != () and _slice != ():
@@ -2146,16 +2130,8 @@ def reduce_slices(  # noqa: C901
                 continue
             # Note that cslice_shape refers to slice of operand chunks, not reduced_slice
             result = np.full(cslice_shape, result[()])
-        if reduce_op == ReduceOp.ANY:
-            result = np.any(result, **reduce_args)
-        elif reduce_op == ReduceOp.ALL:
-            result = np.all(result, **reduce_args)
-        elif reduce_op in {ReduceOp.CUMULATIVE_SUM, ReduceOp.CUMULATIVE_PROD}:
-            result = (
-                np.cumulative_sum(result, axis=reduce_args["axis"])
-                if reduce_op == ReduceOp.CUMULATIVE_SUM
-                else np.cumulative_prod(result, axis=reduce_args["axis"])
-            )
+        if reduce_op in {ReduceOp.ANY, ReduceOp.ALL, ReduceOp.CUMULATIVE_SUM, ReduceOp.CUMULATIVE_PROD}:
+            result = reduce_op.value(result, **reduce_args)
         elif reduce_op in {ReduceOp.ARGMAX, ReduceOp.ARGMIN}:
             # offset for start of slice
             slice_ref = (
@@ -2166,11 +2142,7 @@ def reduce_slices(  # noqa: C901
                     for s, sl in zip(starts, _slice, strict=True)
                 ]
             )
-            result_idx = (
-                np.argmin(result, **reduce_args)
-                if reduce_op == ReduceOp.ARGMIN
-                else np.argmax(result, **reduce_args)
-            )
+            result_idx = reduce_op.value(result, **reduce_args)
             if reduce_args["axis"] is None:  # indexing into flattened array
                 result = result[np.unravel_index(result_idx, shape=result.shape)]
                 idx_within_cslice = np.unravel_index(result_idx, shape=cslice_shape)
@@ -2189,7 +2161,7 @@ def reduce_slices(  # noqa: C901
             result = reduce_op.value.reduce(result, **reduce_args)
 
         if not out_init:
-            out_, res_out_ = convert_none_out(result.dtype, reduce_op, reduced_shape)
+            out_, res_out_ = convert_none_out(result.dtype, reduce_op, reduced_shape, axis=axis)
             if out is not None:
                 out[:] = out_
                 del out_
@@ -2262,11 +2234,15 @@ def convert_none_out(dtype, reduce_op, reduced_shape, axis=None):
             else np.ones(reduced_shape, dtype=dtype)
         )
         # Get res_out to hold running sums along axes for chunks when doing cumulative sums/prods with axis not None
-        res_out_ = (
-            None
-            if axis is None
-            else np.empty(tuple(1 if i == axis else s for i, s in enumerate(reduced_shape)), dtype=dtype)
-        )
+        if reduce_op in {ReduceOp.SUM, ReduceOp.PROD}:
+            res_out_ = None
+        else:
+            temp_shape = tuple(1 if i == axis else s for i, s in enumerate(reduced_shape))
+            res_out_ = (
+                np.zeros(temp_shape, dtype=dtype)
+                if reduce_op == ReduceOp.CUMULATIVE_SUM
+                else np.ones(temp_shape, dtype=dtype)
+            )
         out = (out, res_out_)
     elif reduce_op == ReduceOp.MIN:
         if np.issubdtype(dtype, np.integer):
@@ -3093,6 +3069,8 @@ class LazyExpr(LazyArray):
             "axis": axis,
             "include_initial": include_initial,
         }
+        if self.ndim != 1 and axis is None:
+            raise ValueError("axis must be specified for cumulative_sum of non-1D array.")
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
     def cumulative_prod(
@@ -3107,6 +3085,8 @@ class LazyExpr(LazyArray):
             "axis": axis,
             "include_initial": include_initial,
         }
+        if self.ndim != 1 and axis is None:
+            raise ValueError("axis must be specified for cumulative_prod of non-1D array.")
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
     def _eval_constructor(self, expression, constructor, operands):
