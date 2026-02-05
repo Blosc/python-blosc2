@@ -2058,8 +2058,14 @@ def reduce_slices(  # noqa: C901
     chunk_operands = {}
     # Check which chunks intersect with _slice
     # if chunks has 0 we loop once but fast path is false as gives error (schunk has no chunks)
-    intersecting_chunks = get_intersecting_chunks(_slice, shape, chunks)
+    if (
+        np.isscalar(reduce_args["axis"]) and not fast_path
+    ):  # iterate over chunks incrementing along reduction axis
+        intersecting_chunks = get_intersecting_chunks(_slice, shape, chunks, axis=reduce_args["axis"])
+    else:  # iterate over chunks incrementing along last axis
+        intersecting_chunks = get_intersecting_chunks(_slice, shape, chunks)
     out_init = False
+    res_out_init = False
 
     for nchunk, chunk_slice in enumerate(intersecting_chunks):
         cslice = chunk_slice.raw
@@ -2161,9 +2167,7 @@ def reduce_slices(  # noqa: C901
             result = reduce_op.value.reduce(result, **reduce_args)
 
         if not out_init:
-            out_, res_out_ = convert_none_out(
-                result.dtype, reduce_op, reduced_shape, axis=reduce_args["axis"]
-            )
+            out_ = convert_none_out(result.dtype, reduce_op, reduced_shape)
             # if reduce_op == ReduceOp.CUMULATIVE_SUM:
             #     kahan_sum = np.zeros_like(res_out_)
             if out is not None:
@@ -2173,6 +2177,12 @@ def reduce_slices(  # noqa: C901
                 out = out_
             out_init = True
 
+        if (reduce_args["axis"] is None and not res_out_init) or (
+            np.isscalar(reduce_args["axis"]) and cslice_subidx[reduce_args["axis"]].start == 0
+        ):  # starting reduction again along axis
+            res_out_ = _get_res_out(result.shape, reduce_args["axis"], dtype, reduce_op)
+            res_out_init = True
+
         # Update the output array with the result
         if reduce_op == ReduceOp.ANY:
             out[reduced_slice] += result
@@ -2181,33 +2191,29 @@ def reduce_slices(  # noqa: C901
         elif res_out_ is not None:
             # need lowest index for which optimum attained
             if reduce_op in {ReduceOp.ARGMAX, ReduceOp.ARGMIN}:
-                cond = (res_out_[reduced_slice] == result) & (result_idx < out[reduced_slice])
-                cond |= (
-                    res_out_[reduced_slice] < result
-                    if reduce_op == ReduceOp.ARGMAX
-                    else res_out_[reduced_slice] > result
-                )
+                cond = (res_out_ == result) & (result_idx < out[reduced_slice])
+                cond |= res_out_ < result if reduce_op == ReduceOp.ARGMAX else res_out_ > result
                 out[reduced_slice] = np.where(cond, result_idx, out[reduced_slice])
-                res_out_[reduced_slice] = np.where(cond, result, res_out_[reduced_slice])
+                res_out_ = np.where(cond, result, res_out_)
             else:  # CUMULATIVE_SUM or CUMULATIVE_PROD
                 idx_result = tuple(
                     slice(-1, None) if i == reduce_args["axis"] else slice(None, None)
                     for i, c in enumerate(reduced_slice)
                 )
-                idx_lastval = tuple(
-                    slice(0, 1) if i == reduce_args["axis"] else c for i, c in enumerate(reduced_slice)
-                )
+                # idx_lastval = tuple(
+                #     slice(0, 1) if i == reduce_args["axis"] else c for i, c in enumerate(reduced_slice)
+                # )
                 if reduce_op == ReduceOp.CUMULATIVE_SUM:
                     # use Kahan summation algorithm for better precision
                     # y = res_out_[idx_lastval] - kahan_sum[idx_lastval]
                     # t = result + y
                     # kahan_sum[idx_lastval] = ((t - result) - y)[idx_result]
                     # result = t
-                    result += res_out_[idx_lastval]
+                    result += res_out_
                 else:  # CUMULATIVE_PROD
-                    result *= res_out_[idx_lastval]
+                    result *= res_out_
                 out[reduced_slice] = result
-                res_out_[idx_lastval] = result[idx_result]
+                res_out_ = result[idx_result]
         else:
             out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
 
@@ -2220,7 +2226,7 @@ def reduce_slices(  # noqa: C901
         if dtype is None:
             # We have no hint here, so choose a default dtype
             dtype = np.float64
-        out, _ = convert_none_out(dtype, reduce_op, reduced_shape)
+        out = convert_none_out(dtype, reduce_op, reduced_shape)
 
     out = out[()] if reduced_shape == () else out  # undo dummy dim from inside convert_none_out
     final_mask = tuple(np.where(mask_slice)[0])
@@ -2232,8 +2238,31 @@ def reduce_slices(  # noqa: C901
     return out
 
 
-def convert_none_out(dtype, reduce_op, reduced_shape, axis=None):
-    out = None
+def _get_res_out(reduced_shape, axis, dtype, reduce_op):
+    reduced_shape = (1,) if reduced_shape == () else reduced_shape
+    # Get res_out to hold running sums along axes for chunks when doing cumulative sums/prods with axis not None
+    if reduce_op in {ReduceOp.CUMULATIVE_SUM, ReduceOp.CUMULATIVE_PROD}:
+        temp_shape = tuple(1 if i == axis else s for i, s in enumerate(reduced_shape))
+        res_out_ = (
+            np.zeros(temp_shape, dtype=dtype)
+            if reduce_op == ReduceOp.CUMULATIVE_SUM
+            else np.ones(temp_shape, dtype=dtype)
+        )
+    elif reduce_op in {ReduceOp.ARGMIN, ReduceOp.ARGMAX}:
+        temp_shape = reduced_shape
+        res_out_ = np.ones(temp_shape, dtype=dtype)
+        if np.issubdtype(dtype, np.integer):
+            res_out_ *= np.iinfo(dtype).max if reduce_op == ReduceOp.ARGMIN else np.iinfo(dtype).min
+        elif np.issubdtype(dtype, np.bool):
+            res_out_ = res_out_ if reduce_op == ReduceOp.ARGMIN else np.zeros(temp_shape, dtype=dtype)
+        else:
+            res_out_ *= np.inf if reduce_op == ReduceOp.ARGMIN else -np.inf
+    else:
+        res_out_ = None
+    return res_out_
+
+
+def convert_none_out(dtype, reduce_op, reduced_shape):
     reduced_shape = (1,) if reduced_shape == () else reduced_shape
     # out will be a proper numpy.ndarray
     if reduce_op in {ReduceOp.SUM, ReduceOp.CUMULATIVE_SUM, ReduceOp.PROD, ReduceOp.CUMULATIVE_PROD}:
@@ -2242,17 +2271,6 @@ def convert_none_out(dtype, reduce_op, reduced_shape, axis=None):
             if reduce_op in {ReduceOp.SUM, ReduceOp.CUMULATIVE_SUM}
             else np.ones(reduced_shape, dtype=dtype)
         )
-        # Get res_out to hold running sums along axes for chunks when doing cumulative sums/prods with axis not None
-        if reduce_op in {ReduceOp.SUM, ReduceOp.PROD}:
-            res_out_ = None
-        else:
-            temp_shape = tuple(1 if i == axis else s for i, s in enumerate(reduced_shape))
-            res_out_ = (
-                np.zeros(temp_shape, dtype=dtype)
-                if reduce_op == ReduceOp.CUMULATIVE_SUM
-                else np.ones(temp_shape, dtype=dtype)
-            )
-        out = (out, res_out_)
     elif reduce_op == ReduceOp.MIN:
         if np.issubdtype(dtype, np.integer):
             out = np.iinfo(dtype).max * np.ones(reduced_shape, dtype=dtype)
@@ -2268,15 +2286,8 @@ def convert_none_out(dtype, reduce_op, reduced_shape, axis=None):
     elif reduce_op == ReduceOp.ALL:
         out = np.ones(reduced_shape, dtype=np.bool_)
     elif reduce_op in {ReduceOp.ARGMIN, ReduceOp.ARGMAX}:
-        res_out_ = np.ones(reduced_shape, dtype=dtype)
-        if np.issubdtype(dtype, np.integer):
-            res_out_ *= np.iinfo(dtype).max if reduce_op == ReduceOp.ARGMIN else np.iinfo(dtype).min
-        elif np.issubdtype(dtype, np.bool):
-            res_out_ = res_out_ if reduce_op == ReduceOp.ARGMIN else np.zeros(reduced_shape, dtype=dtype)
-        else:
-            res_out_ *= np.inf if reduce_op == ReduceOp.ARGMIN else -np.inf
-        out = (np.zeros(reduced_shape, dtype=blosc2.DEFAULT_INDEX), res_out_)
-    return out if isinstance(out, tuple) else (out, None)
+        out = np.zeros(reduced_shape, dtype=blosc2.DEFAULT_INDEX)
+    return out
 
 
 def chunked_eval(

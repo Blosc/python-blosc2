@@ -9,6 +9,7 @@ import ast
 import builtins
 import math
 import warnings
+from itertools import product
 
 import ndindex
 import numpy as np
@@ -768,14 +769,65 @@ def _get_local_slice(prior_selection, post_selection, chunk_bounds):
     return locbegin, locend
 
 
-def get_intersecting_chunks(_slice, shape, chunks):
-    if 0 not in chunks:
-        chunk_size = ndindex.ChunkSize(chunks)
-        return chunk_size.as_subchunks(_slice, shape)  # if _slice is (), returns all chunks
-    else:
-        return (
-            ndindex.ndindex(...).expand(shape),
-        )  # chunk is whole array so just return full tuple to do loop once
+def get_intersecting_chunks(idx, shape, chunks, axis=None):
+    if 0 in chunks:  # chunk is whole array so just return full tuple to do loop once
+        return (ndindex.ndindex(...).expand(shape),)
+    chunk_size = ndindex.ChunkSize(chunks)
+    if axis is None:
+        return chunk_size.as_subchunks(idx, shape)  # if _slice is (), returns all chunks
+
+    def return_my_it(chunk_size, idx, shape, axis):
+        # special algorithm to iterate over axis first (adapted from ndindex source)
+        shape = ndindex.shapetools.asshape(shape)
+
+        idx = ndindex.ndindex(idx).expand(shape)
+
+        iters = []
+        idx_args = tuple(a for i, a in enumerate(idx.args) if i != axis) + (idx.args[axis],)
+        idx_args = iter(idx_args)  # iterate over tuple of slices in order
+        self_ = tuple(a for i, a in enumerate(chunk_size) if i != axis) + (chunk_size[axis],)
+        self_ = iter(self_)  # iterate over chunk_shape in order
+        while True:
+            try:
+                i = next(idx_args)  # slice along axis
+                n = next(self_)  # chunklen along dimension
+            except StopIteration:
+                break
+            if not isinstance(i, ndindex.Slice):
+                raise ValueError("Only slices may be used with axis arg")
+
+            def _slice_iter(s, n):
+                a, N, m = s.args
+                if m > n:
+                    yield from ((a + k * m) // n for k in range(ceiling(N - a, m)))
+                else:
+                    yield from range(a // n, ceiling(N, n))
+
+            iters.append(_slice_iter(i, n))
+
+        def _indices(iters):
+            my_list = [ndindex.Slice(None, None)] * len(chunk_size)
+            for p in product(*iters):
+                # p increments over arg axis first before other axes
+                # p = (...., -1, axis)
+                my_list[:axis] = [
+                    ndindex.Slice(cs * ci, min(cs * (ci + 1), n), 1)
+                    for n, cs, ci in zip(shape[:axis], chunk_size[:axis], p[:axis], strict=True)
+                ]
+                n, cs, ci = shape[-1], chunk_size[-1], p[-1]
+                my_list[axis] = ndindex.Slice(cs * ci, min(cs * (ci + 1), n), 1)
+                my_list[axis + 1 :] = [
+                    ndindex.Slice(cs * ci, min(cs * (ci + 1), n), 1)
+                    for n, cs, ci in zip(shape[axis:-1], chunk_size[axis:-1], p[axis:-1], strict=True)
+                ]
+                yield ndindex.Tuple(*my_list)
+
+        for c in _indices(iters):
+            # Empty indices should be impossible by the construction of the
+            # iterators above.
+            yield from c
+
+    return return_my_it(chunk_size, idx, shape, axis)
 
 
 def get_chunks_idx(shape, chunks):
