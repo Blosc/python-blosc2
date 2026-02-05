@@ -126,15 +126,18 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
     try:
         return numexpr.evaluate(expression, local_dict=local_dict, **kwargs)
     except ValueError as e:
-        raise e  # unsafe expression
-    except Exception:  # non_numexpr functions present
-        global safe_blosc2_globals
-        res = eval(expression, safe_blosc2_globals, local_dict)
-        if "out" in kwargs:
-            out = kwargs.pop("out")
-            out[:] = res  # will handle calc/decomp if res is lazyarray
-            return out
-        return res[()] if isinstance(res, blosc2.Operand) else res
+        if e.args and e.args[0] == "NumExpr 2 does not support Unicode as a dtype.":
+            pass
+        else:
+            raise e  # unsafe expression
+    # Try with blosc2 funcs as presence of non-numexpr funcs probably caused failure
+    global safe_blosc2_globals
+    res = eval(expression, safe_blosc2_globals, local_dict)
+    if "out" in kwargs:
+        out = kwargs.pop("out")
+        out[:] = res  # will handle calc/decomp if res is lazyarray
+        return out
+    return res[()] if isinstance(res, blosc2.Operand) else res
 
 
 # Define empty ndindex tuple for function defaults
@@ -2544,7 +2547,7 @@ def check_dtype(op, value1, value2):
 
 
 def result_type(
-    *arrays_and_dtypes: blosc2.NDArray | int | float | complex | bool | blosc2.dtype,
+    *arrays_and_dtypes: blosc2.NDArray | int | float | complex | bool | str | blosc2.dtype,
 ) -> blosc2.dtype:
     """
     Returns the dtype that results from applying type promotion rules (see Type Promotion Rules) to the arguments.
@@ -2562,7 +2565,7 @@ def result_type(
     # Follow NumPy rules for scalar-array operations
     # Create small arrays with the same dtypes and let NumPy's type promotion determine the result type
     arrs = [
-        value
+        np.array(value).dtype
         if (np.isscalar(value) or not hasattr(value, "dtype"))
         else np.array([0], dtype=_convert_dtype(value.dtype))
         for value in arrays_and_dtypes
@@ -2624,7 +2627,7 @@ class LazyExpr(LazyArray):
                 self.operands = value1.operands
             else:
                 if np.isscalar(value1):
-                    value1 = ne_evaluate(f"{op}({value1})")
+                    value1 = ne_evaluate(f"{op}({value1!r})")
                     op = None
                 self.operands = {"o0": value1}
                 self.expression = "o0" if op is None else f"{op}(o0)"
@@ -2646,13 +2649,13 @@ class LazyExpr(LazyArray):
         elif op in funcs_2args:
             if np.isscalar(value1) and np.isscalar(value2):
                 self.expression = "o0"
-                self.operands = {"o0": ne_evaluate(f"{op}({value1}, {value2})")}  # eager evaluation
+                self.operands = {"o0": ne_evaluate(f"{op}({value1!r}, {value2!r})")}  # eager evaluation
             elif np.isscalar(value2):
                 self.operands = {"o0": value1}
-                self.expression = f"{op}(o0, {value2})"
+                self.expression = f"{op}(o0, {value2!r})"
             elif np.isscalar(value1):
                 self.operands = {"o0": value2}
-                self.expression = f"{op}({value1}, o0)"
+                self.expression = f"{op}({value1!r}, o0)"
             else:
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"{op}(o0, o1)"
@@ -2661,16 +2664,16 @@ class LazyExpr(LazyArray):
         self._dtype = dtype_
         if np.isscalar(value1) and np.isscalar(value2):
             self.expression = "o0"
-            self.operands = {"o0": ne_evaluate(f"({value1} {op} {value2})")}  # eager evaluation
+            self.operands = {"o0": ne_evaluate(f"({value1!r} {op} {value2!r})")}  # eager evaluation
         elif np.isscalar(value2):
             self.operands = {"o0": value1}
-            self.expression = f"(o0 {op} {value2})"
+            self.expression = f"(o0 {op} {value2!r})"
         elif hasattr(value2, "shape") and value2.shape == ():
             self.operands = {"o0": value1}
             self.expression = f"(o0 {op} {value2[()]})"
         elif np.isscalar(value1):
             self.operands = {"o0": value2}
-            self.expression = f"({value1} {op} o0)"
+            self.expression = f"({value1!r} {op} o0)"
         elif hasattr(value1, "shape") and value1.shape == ():
             self.operands = {"o0": value2}
             self.expression = f"({value1[()]} {op} o0)"

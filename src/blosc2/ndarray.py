@@ -5064,7 +5064,7 @@ def full(
     if isinstance(fill_value, bytes):
         dtype = np.dtype(f"S{len(fill_value)}")
     if dtype is None:
-        dtype = np.dtype(type(fill_value))
+        dtype = np.array(fill_value).dtype
     else:
         dtype = np.dtype(dtype)
     dtype = _check_dtype(dtype)
