@@ -159,6 +159,15 @@ def is_inside_new_expr() -> bool:
     return builtins.any(frame_info.function in {"_new_expr", "_open_lazyarray"} for frame_info in stack)
 
 
+def is_inside_ne_evaluate() -> bool:
+    """
+    Whether the current code is being executed from an ne_evaluate call
+    """
+    # Get the current call stack
+    stack = inspect.stack()
+    return builtins.any(frame_info.function in {"ne_evaluate"} for frame_info in stack)
+
+
 def make_key_hashable(key):
     if isinstance(key, slice):
         return (key.start, key.stop, key.step)
@@ -3014,10 +3023,11 @@ def clip(
 
     def chunkwise_clip(inputs, output, offset):
         x, min, max = inputs
-        output[:] = np.clip(x, min, max)
+        output[...] = np.clip(x, min, max)
 
     dtype = blosc2.result_type(x)
-    return blosc2.lazyudf(chunkwise_clip, (x, min, max), dtype=dtype, shape=x.shape, **kwargs)
+    shape = () if np.isscalar(x) else None
+    return blosc2.lazyudf(chunkwise_clip, (x, min, max), dtype=dtype, shape=shape, **kwargs)
 
 
 def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array, **kwargs: Any) -> NDArray:
@@ -3047,7 +3057,7 @@ def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array, **
 
     def chunkwise_logaddexp(inputs, output, offset):
         x1, x2 = inputs
-        output[:] = np.logaddexp(x1, x2)
+        output[...] = np.logaddexp(x1, x2)
 
     dtype = blosc2.result_type(x1, x2)
     if dtype == blosc2.bool_:
@@ -3055,7 +3065,8 @@ def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array, **
 
     if np.issubdtype(dtype, np.integer):
         dtype = blosc2.float32
-    return blosc2.lazyudf(chunkwise_logaddexp, (x1, x2), dtype=dtype, shape=x1.shape, **kwargs)
+    shape = () if np.isscalar(x1) and np.isscalar(x2) else None
+    return blosc2.lazyudf(chunkwise_logaddexp, (x1, x2), dtype=dtype, shape=shape, **kwargs)
 
 
 # implemented in python-blosc2
@@ -4823,6 +4834,146 @@ def where(
     `np.where <https://numpy.org/doc/stable/reference/generated/numpy.where.html>`_
     """
     return condition.where(x, y)
+
+
+def isin(
+    element: str | int | float | blosc2.Array,
+    test_elements: str | int | float | blosc2.Array,
+    assume_unique=False,
+    invert=False,
+    kind=None,
+    **kwargs,
+) -> NDArray:
+    """
+    Copy-pasted from numpy documentation: https://numpy.org/doc/stable/reference/generated/numpy.isin.html
+    Calculates element in test_elements, broadcasting over element only. Returns a boolean array of the same shape as element that is True where an element of element is in test_elements and False otherwise.
+
+    Parameters
+    ----------
+    element : blosc2.Array
+        Input array.
+
+    test_elements : blosc2.Array
+        The values against which to test each value of element. This argument is flattened if it is an array or array_like.
+
+    assume_unique: bool, optional
+        If True, the input arrays are both assumed to be unique, which can speed up the calculation. Default is False.
+
+    invert: bool, optional
+        If True, the values in the returned array are inverted, as if calculating element not in test_elements. Default is False. np.isin(a, b, invert=True) is equivalent to (but faster than) np.invert(np.isin(a, b)).
+
+    kind: {None, 'sort', 'table'}, optional
+        The algorithm to use. This will not affect the final result, but will affect the speed and memory use. The default, None, will select automatically based on memory considerations.
+        If 'sort', will use a mergesort-based approach. This will have a memory usage of roughly 6 times the sum of the sizes of element and test_elements, not accounting for size of dtypes.
+        If 'table', will use a lookup table approach similar to a counting sort. This is only available for boolean and integer arrays. This will have a memory usage of the size of element plus the max-min value of test_elements. assume_unique has no effect when the 'table' option is used.
+        If None, will automatically choose 'table' if the required memory allocation is less than or equal to 6 times the sum of the sizes of element and test_elements, otherwise will use 'sort'. This is done to not use a large amount of memory by default, even though 'table' may be faster in most cases. If 'table' is chosen, assume_unique will have no effect.
+
+    kwargs: Any
+        kwargs accepted by the :func:`empty` constructor
+
+    Returns
+    -------
+    isin: blosc2.Array, bool
+        Has the same shape as element. The values element[isin] are in test_elements.
+
+    """
+
+    def chunkwise_isin(inputs, output, offset):
+        x1, x2 = inputs
+        # output[...] = np.isin(x1, x2, assume_unique=assume_unique, invert=invert, kind=kind)
+        output[...] = np.isin(x1, x2)
+
+    if is_inside_ne_evaluate():  # haven't been able to use miniexpr
+        shape = () if np.isscalar(element) else None
+        return blosc2.lazyudf(chunkwise_isin, (element, test_elements), dtype=blosc2.bool_, shape=shape)
+
+    return blosc2.LazyExpr(new_op=(element, "isin", test_elements))
+
+
+def startswith(
+    a: str | blosc2.Array, prefix: str | blosc2.Array
+) -> NDArray:  # start: int = 0, end: int | None = None, **kwargs)
+    """
+    Copy-pasted from numpy documentation: https://numpy.org/doc/stable/reference/generated/numpy.char.startswith.html
+    Returns a boolean array which is True where the string element in a starts with prefix, otherwise False.
+
+    Parameters
+    ----------
+    a : blosc2.Array
+        Input array of bytes_ or str_ dtype
+
+    prefix : blosc2.Array
+        Prefix array of bytes_ or str_ dtype
+
+    start: int | blosc2.Array
+        With start, test beginning at that position.
+
+    end: int | blosc2.Array
+        With end, stop comparing at that position.
+
+    kwargs: Any
+        kwargs accepted by the :func:`empty` constructor
+
+    Returns
+    -------
+    out: blosc2.Array, bool
+        Has the same shape as element.
+
+    """
+
+    def chunkwise_startswith(inputs, output, offset):
+        x1, x2 = inputs
+        # output[...] = np.char.startswith(x1, x2, start=start, end=end)
+        output[...] = np.char.startswith(x1, x2)
+
+    if is_inside_ne_evaluate():  # haven't been able to use miniexpr
+        shape = () if np.isscalar(a) else None
+        return blosc2.lazyudf(chunkwise_startswith, (a, prefix), dtype=blosc2.bool_, shape=shape)
+
+    return blosc2.LazyExpr(new_op=(a, "startswith", prefix))
+
+
+def endswith(
+    a: str | blosc2.Array, suffix: str | blosc2.Array
+) -> NDArray:  # start: int = 0, end: int | None = None, **kwargs) -> NDArray:
+    """
+    Copy-pasted from numpy documentation: https://numpy.org/doc/stable/reference/generated/numpy.char.endswith.html
+    Returns a boolean array which is True where the string element in a ends with suffix, otherwise False.
+
+    Parameters
+    ----------
+    a : blosc2.Array
+        Input array of bytes_ or str_ dtype
+
+    suffix : blosc2.Array
+        suffix array of bytes_ or str_ dtype
+
+    start: int | blosc2.Array
+        With start, test beginning at that position.
+
+    end: int | blosc2.Array
+        With end, stop comparing at that position.
+
+    kwargs: Any
+        kwargs accepted by the :func:`empty` constructor
+
+    Returns
+    -------
+    out: blosc2.Array, bool
+        Has the same shape as element.
+
+    """
+
+    def chunkwise_endswith(inputs, output, offset):
+        x1, x2 = inputs
+        # output[...] = np.char.endswith(x1, x2, start=start, end=end)
+        output[...] = np.char.endswith(x1, x2)
+
+    if is_inside_ne_evaluate():  # haven't been able to use miniexpr
+        shape = () if np.isscalar(a) else None
+        return blosc2.lazyudf(chunkwise_endswith, (a, suffix), dtype=blosc2.bool_, shape=shape)
+
+    return blosc2.LazyExpr(new_op=(a, "endswith", suffix))
 
 
 def lazywhere(value1=None, value2=None):
