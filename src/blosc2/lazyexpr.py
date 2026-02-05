@@ -130,6 +130,8 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
             pass
         else:
             raise e  # unsafe expression
+    except Exception:
+        pass
     # Try with blosc2 funcs as presence of non-numexpr funcs probably caused failure
     global safe_blosc2_globals
     res = eval(expression, safe_blosc2_globals, local_dict)
@@ -2565,11 +2567,12 @@ def result_type(
     # Follow NumPy rules for scalar-array operations
     # Create small arrays with the same dtypes and let NumPy's type promotion determine the result type
     arrs = [
-        np.array(value).dtype
+        value
         if (np.isscalar(value) or not hasattr(value, "dtype"))
         else np.array([0], dtype=_convert_dtype(value.dtype))
         for value in arrays_and_dtypes
     ]
+    arrs = [np.array(a).dtype if isinstance(a, str) else a for a in arrs]
     return np.result_type(*arrs)
 
 
@@ -2615,6 +2618,8 @@ class LazyExpr(LazyArray):
             if not (isinstance(value1, (blosc2.Operand, np.ndarray)) or np.isscalar(value1))
             else value1
         )
+        # Reset values represented as np.int64 etc. to be set as Python natives
+        value1 = value1.item() if np.isscalar(value1) and hasattr(value1, "item") else value1
         if value2 is None:
             if isinstance(value1, LazyExpr):
                 self.expression = value1.expression if op is None else f"{op}({value1.expression})"
@@ -2637,6 +2642,9 @@ class LazyExpr(LazyArray):
             if not (isinstance(value2, (blosc2.Operand, np.ndarray)) or np.isscalar(value2))
             else value2
         )
+        # Reset values represented as np.int64 etc. to be set as Python natives
+        value2 = value2.item() if np.isscalar(value2) and hasattr(value2, "item") else value2
+
         if isinstance(value1, LazyExpr) or isinstance(value2, LazyExpr):
             if isinstance(value1, LazyExpr):
                 newexpr = value1.update_expr(new_op)
