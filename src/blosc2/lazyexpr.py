@@ -133,7 +133,20 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
     except Exception:
         pass
     # Try with blosc2 funcs as presence of non-numexpr funcs probably caused failure
+    # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp)
+    # that are implemented in python-blosc2 not in numexpr
     global safe_blosc2_globals
+    if len(safe_blosc2_globals) == 0:
+        # First eval call, fill blosc2_safe_globals
+        safe_blosc2_globals = {"blosc2": blosc2}
+        # Add all first-level blosc2 functions
+        safe_blosc2_globals.update(
+            {
+                name: getattr(blosc2, name)
+                for name in dir(blosc2)
+                if callable(getattr(blosc2, name)) and not name.startswith("_")
+            }
+        )
     res = eval(expression, safe_blosc2_globals, local_dict)
     if "out" in kwargs:
         out = kwargs.pop("out")
@@ -206,7 +219,6 @@ funcs_2args = (
     "hypot",
     "maximum",
     "minimum",
-    "isin",
     "startswith",
     "endswith",
 )
@@ -3205,22 +3217,7 @@ class LazyExpr(LazyArray):
 
         return value, expression[idx:idx2]
 
-    def _compute_expr(self, item, kwargs):  # noqa : C901
-        # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp)
-        # that are implemented in python-blosc2 not in numexpr
-        global safe_blosc2_globals
-        if len(safe_blosc2_globals) == 0:
-            # First eval call, fill blosc2_safe_globals for ne_evaluate
-            safe_blosc2_globals = {"blosc2": blosc2}
-            # Add all first-level blosc2 functions
-            safe_blosc2_globals.update(
-                {
-                    name: getattr(blosc2, name)
-                    for name in dir(blosc2)
-                    if callable(getattr(blosc2, name)) and not name.startswith("_")
-                }
-            )
-
+    def _compute_expr(self, item, kwargs):
         if any(method in self.expression for method in eager_funcs):
             # We have reductions in the expression (probably coming from a string lazyexpr)
             # Also includes slice
@@ -3778,7 +3775,7 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
             for key, value in operands.items()
         }
 
-    if "contains" in expression:
+    if np.any([a in expression for a in ["contains", "startswith", "endswith"]]):
         _out = ne_evaluate(expression, local_dict=ops)
     else:
         # Create a globals dict with blosc2 version of functions preferentially

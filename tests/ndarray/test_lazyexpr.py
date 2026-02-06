@@ -501,39 +501,77 @@ def test_abs(shape_fixture, dtype_fixture):
     np.testing.assert_allclose(res_lazyexpr[:], res_np)
 
 
-@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize("values", [("NDArray", "str"), ("NDArray", "NDArray"), ("str", "NDArray")])
 def test_contains(values):
     # Unpack the value fixture
     value1, value2 = values
     if value1 == "NDArray":
-        a1 = np.array([b"abc", b"def", b"aterr", b"oot", b"zu", b"ab c"])
+        a1 = np.array(["abc", "def", "aterr", "oot", "zu", "ab c"])
         a1_blosc = blosc2.asarray(a1)
         if value2 == "str":  # ("NDArray", "str")
-            value2 = b"test abc here"
+            value2 = "test abc here"
             # Construct the lazy expression
-            expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", value2))
-            # Evaluate using NumExpr
-            expr_numexpr = f"{'contains'}(a1, value2)"
-            res_numexpr = ne_evaluate(expr_numexpr)
+            expr_lazy = blosc2.contains(a1_blosc, value2)
+            # Evaluate using NumPy
+            res_numexpr = np.char.find(a1, value2) != -1
         else:  # ("NDArray", "NDArray")
-            a2 = np.array([b"abc", b"ab c", b" abc", b" abc ", b"\tabc", b"c h"])
+            a2 = np.array(["abc", "ab c", " abc", " abc ", "\tabc", "c h"])
             a2_blosc = blosc2.asarray(a2)
             # Construct the lazy expression
-            expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", a2_blosc))
+            expr_lazy = blosc2.contains(a1_blosc, a2_blosc)
             # Evaluate using NumExpr
-            res_numexpr = ne_evaluate("contains(a2, a1)")
+            res_numexpr = np.char.find(a1, a2) != -1
     else:  # ("str", "NDArray")
-        value1 = b"abc"
-        a2 = np.array([b"abc", b"def", b"aterr", b"oot", b"zu", b"ab c"])
+        value1 = "abc"
+        a2 = np.array(["abc", "def", "aterr", "oot", "zu", "ab c"])
         a2_blosc = blosc2.asarray(a2)
         # Construct the lazy expression
-        expr_lazy = blosc2.LazyExpr(new_op=(value1, "contains", a2_blosc))
+        expr_lazy = blosc2.contains(value1, a2_blosc)
         # Evaluate using NumExpr
-        res_numexpr = ne_evaluate("contains(value1, a2)")
-    res_lazyexpr = expr_lazy.compute()
+        res_numexpr = np.char.find(value1, a2) != -1
     # Compare the results
-    np.testing.assert_array_equal(res_lazyexpr[:], res_numexpr)
+    np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
+
+
+@pytest.mark.parametrize("values", [("NDArray", "str"), ("NDArray", "NDArray"), ("str", "NDArray")])
+def test_stringops(values):
+    # Unpack the value fixture
+    value1, value2 = values
+    if value1 == "NDArray":
+        a1 = np.array(["abc", "def", "aterr", "oot", "zu", "ab c"])
+        a1_blosc = blosc2.asarray(a1)
+        if value2 == "str":  # ("NDArray", "str")
+            value2 = "a"
+            expr_lazy = blosc2.startswith(a1_blosc, value2)
+            res_numexpr = np.char.startswith(a1, value2)
+            np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
+            value2 = "c"
+            expr_lazy = blosc2.endswith(a1_blosc, value2)
+            res_numexpr = np.char.endswith(a1, value2)
+            np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
+        else:  # ("NDArray", "NDArray")
+            a2 = np.array(["ba", "ef", "rr", "o ", "\tz", "c h"])
+            a2_blosc = blosc2.asarray(a2)
+            expr_lazy = blosc2.startswith(a1_blosc, a2_blosc)
+            res_numexpr = np.char.startswith(a1, a2)
+            np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
+            a2 = np.array(["ab", "d", " ath", "oo", "\tabc", " c"])
+            a2_blosc = blosc2.asarray(a2)
+            expr_lazy = blosc2.endswith(a1, a2_blosc)
+            res_numexpr = np.char.endswith(a1, a2)
+            np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
+    else:  # ("str", "NDArray")
+        value1 = "abc"
+        a2 = np.array(["ab", "def", "a", "oot", "zu", "ab "])
+        a2_blosc = blosc2.asarray(a2)
+        expr_lazy = blosc2.startswith(value1, a2_blosc)
+        res_numexpr = np.char.startswith(value1, a2)
+        np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
+
+        value1 = "b"
+        expr_lazy = blosc2.endswith(value1, a2_blosc)
+        res_numexpr = np.char.endswith(value1, a2)
+        np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
 
 
 def test_negate(dtype_fixture, shape_fixture):
