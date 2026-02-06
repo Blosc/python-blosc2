@@ -57,9 +57,9 @@ set(MINIEXPR_BUILD_EXAMPLES OFF CACHE BOOL "Build miniexpr examples" FORCE)
 set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
 
 FetchContent_Declare(miniexpr
-    #GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    #GIT_TAG 77d633cb2c134552da045b8d2cc0ad23908e6b9e
-    SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
+    GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
+    GIT_TAG b4cfa9c2dc26772ad2126e6a611f93daf050915f
+    #SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
 
