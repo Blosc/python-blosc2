@@ -18,7 +18,7 @@ _PRINT_DSL_KERNEL = os.environ.get("PRINT_DSL_KERNEL", "").strip().lower()
 _PRINT_DSL_KERNEL = _PRINT_DSL_KERNEL not in ("", "0", "false", "no", "off")
 
 
-def _normalize_dsl_scalar(value):
+def _normalize_miniexpr_scalar(value):
     # NumPy scalar-like values expose .item(); plain Python scalars do not.
     if hasattr(value, "item") and callable(value.item):
         with contextlib.suppress(Exception):
@@ -27,10 +27,10 @@ def _normalize_dsl_scalar(value):
         return int(value)
     if isinstance(value, int | float):
         return value
-    raise TypeError("Unsupported scalar type for DSL miniexpr specialization")
+    raise TypeError("Unsupported scalar type for miniexpr specialization")
 
 
-class _DSLScalarSpecializer(ast.NodeTransformer):
+class _MiniexprScalarSpecializer(ast.NodeTransformer):
     def __init__(self, replacements: dict[str, int | float]):
         self.replacements = replacements
 
@@ -54,17 +54,17 @@ class _DSLScalarSpecializer(ast.NodeTransformer):
         return node
 
 
-def specialize_dsl_miniexpr_inputs(expr_string: str, operands: dict):
-    """Inline scalar DSL operands as constants for miniexpr compilation."""
+def specialize_miniexpr_inputs(expr_string: str, operands: dict):
+    """Inline scalar operands as constants for miniexpr compilation."""
     scalar_replacements = {}
     array_operands = {}
     for name, value in operands.items():
         if hasattr(value, "shape") and value.shape == ():
-            scalar_replacements[name] = _normalize_dsl_scalar(value[()])
+            scalar_replacements[name] = _normalize_miniexpr_scalar(value[()])
             continue
         if isinstance(value, int | float | bool) or (hasattr(value, "item") and callable(value.item)):
             try:
-                scalar_replacements[name] = _normalize_dsl_scalar(value)
+                scalar_replacements[name] = _normalize_miniexpr_scalar(value)
                 continue
             except TypeError:
                 pass
@@ -74,13 +74,18 @@ def specialize_dsl_miniexpr_inputs(expr_string: str, operands: dict):
         return expr_string, operands
 
     tree = ast.parse(expr_string)
-    tree = _DSLScalarSpecializer(scalar_replacements).visit(tree)
+    tree = _MiniexprScalarSpecializer(scalar_replacements).visit(tree)
     for node in tree.body:
         if isinstance(node, ast.FunctionDef):
             node.args.posonlyargs = [a for a in node.args.posonlyargs if a.arg not in scalar_replacements]
             node.args.args = [a for a in node.args.args if a.arg not in scalar_replacements]
     ast.fix_missing_locations(tree)
     return ast.unparse(tree), array_operands
+
+
+def specialize_dsl_miniexpr_inputs(expr_string: str, operands: dict):
+    """Backward-compatible alias for DSL-specific callers."""
+    return specialize_miniexpr_inputs(expr_string, operands)
 
 
 class DSLKernel:

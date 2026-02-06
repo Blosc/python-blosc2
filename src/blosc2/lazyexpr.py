@@ -41,7 +41,7 @@ import numpy as np
 
 import blosc2
 
-from .dsl_kernel import DSLKernel, specialize_dsl_miniexpr_inputs
+from .dsl_kernel import DSLKernel, specialize_miniexpr_inputs
 
 if blosc2._HAS_NUMBA:
     import numba
@@ -1322,9 +1322,9 @@ def fast_eval(  # noqa: C901
 
     expr_string_miniexpr = expr_string
     operands_miniexpr = operands
-    if use_miniexpr and is_dsl:
+    if use_miniexpr and isinstance(expr_string, str):
         try:
-            expr_string_miniexpr, operands_miniexpr = specialize_dsl_miniexpr_inputs(expr_string, operands)
+            expr_string_miniexpr, operands_miniexpr = specialize_miniexpr_inputs(expr_string, operands)
         except Exception:
             # If specialization fails, keep original expression/operands and let normal checks decide.
             expr_string_miniexpr = expr_string
