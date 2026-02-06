@@ -73,6 +73,14 @@ def kernel_control_flow_full(x, y):
 
 
 @blosc2.dsl_kernel
+def kernel_loop_param(x, y, niter):
+    acc = x
+    for _i in range(niter):
+        acc = np.where(acc < y, acc + 1, acc - 1)
+    return acc
+
+
+@blosc2.dsl_kernel
 def kernel_fallback_kw_call(x, y):
     return np.clip(x + y, a_min=0.5, a_max=2.5)
 
@@ -146,6 +154,71 @@ def test_dsl_kernel_full_control_flow_kept_as_dsl_function():
     expected = kernel_control_flow_full.func(a, b)
 
     np.testing.assert_allclose(res[...], expected, rtol=1e-5, atol=1e-6)
+
+
+def test_dsl_kernel_accepts_scalar_param_per_call():
+    assert kernel_loop_param.dsl_source is not None
+    assert "def kernel_loop_param(x, y, niter):" in kernel_loop_param.dsl_source
+    assert "for _i in range(niter):" in kernel_loop_param.dsl_source
+    assert kernel_loop_param.input_names == ["x", "y", "niter"]
+
+    a, b, a2, b2 = _make_arrays()
+    niter = 3
+    expr = blosc2.lazyudf(
+        kernel_loop_param,
+        (a2, b2, niter),
+        dtype=a2.dtype,
+        chunks=a2.chunks,
+        blocks=a2.blocks,
+    )
+    res = expr.compute()
+    expected = kernel_loop_param.func(a, b, niter)
+
+    np.testing.assert_allclose(res[...], expected, rtol=1e-5, atol=1e-6)
+
+
+def test_dsl_kernel_scalar_param_keeps_miniexpr_fast_path(monkeypatch):
+    if blosc2.IS_WASM:
+        pytest.skip("miniexpr fast path is not available on WASM")
+
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    captured = {"calls": 0, "expr": None, "keys": None}
+
+    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None):
+        captured["calls"] += 1
+        captured["expr"] = expression.decode("utf-8") if isinstance(expression, bytes) else expression
+        captured["keys"] = tuple(inputs.keys())
+        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc)
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+
+    try:
+        a, b, a2, b2 = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))
+        niter = 3
+        expr = blosc2.lazyudf(
+            kernel_loop_param,
+            (a2, b2, niter),
+            dtype=a2.dtype,
+        )
+        res = expr.compute()
+        expected = kernel_loop_param.func(a, b, niter)
+
+        np.testing.assert_allclose(res[...], expected, rtol=1e-5, atol=1e-6)
+        assert captured["calls"] >= 1
+        assert captured["keys"] == ("x", "y")
+        assert "def kernel_loop_param(x, y):" in captured["expr"]
+        assert "for it in range(3):" not in captured["expr"]
+        assert "for _i in range(3):" in captured["expr"]
+        assert "range(niter)" not in captured["expr"]
+        assert "float(niter)" not in captured["expr"]
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
 @pytest.mark.parametrize(

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import ast
+import contextlib
 import inspect
 import os
 import textwrap
@@ -15,6 +16,71 @@ from typing import ClassVar
 
 _PRINT_DSL_KERNEL = os.environ.get("PRINT_DSL_KERNEL", "").strip().lower()
 _PRINT_DSL_KERNEL = _PRINT_DSL_KERNEL not in ("", "0", "false", "no", "off")
+
+
+def _normalize_dsl_scalar(value):
+    # NumPy scalar-like values expose .item(); plain Python scalars do not.
+    if hasattr(value, "item") and callable(value.item):
+        with contextlib.suppress(Exception):
+            value = value.item()
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int | float):
+        return value
+    raise TypeError("Unsupported scalar type for DSL miniexpr specialization")
+
+
+class _DSLScalarSpecializer(ast.NodeTransformer):
+    def __init__(self, replacements: dict[str, int | float]):
+        self.replacements = replacements
+
+    def visit_Name(self, node):
+        if isinstance(node.ctx, ast.Load) and node.id in self.replacements:
+            return ast.copy_location(ast.Constant(value=self.replacements[node.id]), node)
+        return node
+
+    def visit_Call(self, node):
+        node = self.generic_visit(node)
+        if (
+            isinstance(node.func, ast.Name)
+            and node.func.id in {"float", "int"}
+            and len(node.args) == 1
+            and not node.keywords
+            and isinstance(node.args[0], ast.Constant)
+            and isinstance(node.args[0].value, int | float | bool)
+        ):
+            folded = float(node.args[0].value) if node.func.id == "float" else int(node.args[0].value)
+            return ast.copy_location(ast.Constant(value=folded), node)
+        return node
+
+
+def specialize_dsl_miniexpr_inputs(expr_string: str, operands: dict):
+    """Inline scalar DSL operands as constants for miniexpr compilation."""
+    scalar_replacements = {}
+    array_operands = {}
+    for name, value in operands.items():
+        if hasattr(value, "shape") and value.shape == ():
+            scalar_replacements[name] = _normalize_dsl_scalar(value[()])
+            continue
+        if isinstance(value, int | float | bool) or (hasattr(value, "item") and callable(value.item)):
+            try:
+                scalar_replacements[name] = _normalize_dsl_scalar(value)
+                continue
+            except TypeError:
+                pass
+        array_operands[name] = value
+
+    if not scalar_replacements:
+        return expr_string, operands
+
+    tree = ast.parse(expr_string)
+    tree = _DSLScalarSpecializer(scalar_replacements).visit(tree)
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef):
+            node.args.posonlyargs = [a for a in node.args.posonlyargs if a.arg not in scalar_replacements]
+            node.args.args = [a for a in node.args.args if a.arg not in scalar_replacements]
+    ast.fix_missing_locations(tree)
+    return ast.unparse(tree), array_operands
 
 
 class DSLKernel:
@@ -32,12 +98,17 @@ class DSLKernel:
         self._sig = sig
         self._sig_has_varargs = False
         self._sig_npositional = None
+        self._legacy_udf_signature = False
         if sig is not None:
             params = list(sig.parameters.values())
+            positional_params = [p for p in params if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
             self._sig_has_varargs = any(p.kind == p.VAR_POSITIONAL for p in params)
-            self._sig_npositional = sum(
-                1 for p in params if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
-            )
+            self._sig_npositional = len(positional_params)
+            # Preserve support for classic lazyudf signature: (inputs_tuple, output, offset)
+            if not self._sig_has_varargs and len(positional_params) == 3:
+                p2 = positional_params[1].name.lower()
+                p3 = positional_params[2].name.lower()
+                self._legacy_udf_signature = p2 in {"output", "out"} and p3 == "offset"
         self.dsl_source = None
         self.input_names = None
         try:
@@ -92,7 +163,7 @@ class DSLKernel:
         return builder.build(func_node)
 
     def __call__(self, inputs_tuple, output, offset=None):
-        if self._sig is not None and not self._sig_has_varargs and self._sig_npositional == 3:
+        if self._legacy_udf_signature:
             return self.func(inputs_tuple, output, offset)
 
         n_inputs = len(inputs_tuple)

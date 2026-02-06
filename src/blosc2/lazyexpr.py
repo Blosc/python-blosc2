@@ -41,7 +41,7 @@ import numpy as np
 
 import blosc2
 
-from .dsl_kernel import DSLKernel
+from .dsl_kernel import DSLKernel, specialize_dsl_miniexpr_inputs
 
 if blosc2._HAS_NUMBA:
     import numba
@@ -1320,25 +1320,38 @@ def fast_eval(  # noqa: C901
         # WebAssembly does not support threading, so we cannot use the iter_disk option
         iter_disk = False
 
+    expr_string_miniexpr = expr_string
+    operands_miniexpr = operands
+    if use_miniexpr and is_dsl:
+        try:
+            expr_string_miniexpr, operands_miniexpr = specialize_dsl_miniexpr_inputs(expr_string, operands)
+        except Exception:
+            # If specialization fails, keep original expression/operands and let normal checks decide.
+            expr_string_miniexpr = expr_string
+            operands_miniexpr = operands
+
     # Check whether we can use miniexpr
     if use_miniexpr:
+        all_ndarray_miniexpr = all(
+            isinstance(value, blosc2.NDArray) and value.shape != () for value in operands_miniexpr.values()
+        )
         # Require aligned NDArray operands with identical chunk/block grid.
-        same_shape = all(hasattr(op, "shape") and op.shape == shape for op in operands.values())
-        same_chunks = all(hasattr(op, "chunks") and op.chunks == chunks for op in operands.values())
-        same_blocks = all(hasattr(op, "blocks") and op.blocks == blocks for op in operands.values())
+        same_shape = all(hasattr(op, "shape") and op.shape == shape for op in operands_miniexpr.values())
+        same_chunks = all(hasattr(op, "chunks") and op.chunks == chunks for op in operands_miniexpr.values())
+        same_blocks = all(hasattr(op, "blocks") and op.blocks == blocks for op in operands_miniexpr.values())
         if not (same_shape and same_chunks and same_blocks):
             use_miniexpr = False
-        if not (all_ndarray and out is None):
+        if not (all_ndarray_miniexpr and out is None):
             use_miniexpr = False
         has_complex = any(
             isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
-            for op in operands.values()
+            for op in operands_miniexpr.values()
         )
-        if isinstance(expr_string, str) and has_complex:
+        if isinstance(expr_string_miniexpr, str) and has_complex:
             if sys.platform == "win32":
                 # On Windows, miniexpr has issues with complex numbers
                 use_miniexpr = False
-            if any(tok in expr_string for tok in ("!=", "==", "<=", ">=", "<", ">")):
+            if any(tok in expr_string_miniexpr for tok in ("!=", "==", "<=", ">=", "<", ">")):
                 use_miniexpr = False
         if sys.platform == "win32" and use_miniexpr and not _MINIEXPR_WINDOWS_OVERRIDE:
             # Work around Windows miniexpr issues for integer outputs and dtype conversions.
@@ -1346,7 +1359,7 @@ def fast_eval(  # noqa: C901
                 use_miniexpr = False
             else:
                 dtype_mismatch = any(
-                    isinstance(op, blosc2.NDArray) and op.dtype != dtype for op in operands.values()
+                    isinstance(op, blosc2.NDArray) and op.dtype != dtype for op in operands_miniexpr.values()
                 )
                 if dtype_mismatch:
                     use_miniexpr = False
@@ -1356,7 +1369,7 @@ def fast_eval(  # noqa: C901
         # All values will be overwritten, so we can use an uninitialized array
         res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         try:
-            res_eval._set_pref_expr(expr_string, operands, fp_accuracy=fp_accuracy)
+            res_eval._set_pref_expr(expr_string_miniexpr, operands_miniexpr, fp_accuracy=fp_accuracy)
             # print("expr->miniexpr:", expression, fp_accuracy)
             # Data to compress is fetched from operands, so it can be uninitialized here
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
