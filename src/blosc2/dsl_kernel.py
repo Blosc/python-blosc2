@@ -213,8 +213,34 @@ class _DSLBuilder:
     def _stmt_block(self, body, indent: int):
         if not body:
             raise ValueError("Empty blocks are not supported in DSL kernels")
-        for stmt in body:
+        i = 0
+        while i < len(body):
+            stmt = body[i]
+            if (
+                isinstance(stmt, ast.If)
+                and not stmt.orelse
+                and self._block_terminates(stmt.body)
+                and i + 1 < len(body)
+                and isinstance(body[i + 1], ast.If)
+            ):
+                merged = ast.If(test=stmt.test, body=stmt.body, orelse=[body[i + 1]])
+                self._if_stmt(merged, indent)
+                i += 2
+                continue
             self._stmt(stmt, indent)
+            i += 1
+
+    def _block_terminates(self, body) -> bool:
+        if not body:
+            return False
+        return self._stmt_terminates(body[-1])
+
+    def _stmt_terminates(self, node: ast.stmt) -> bool:
+        if isinstance(node, (ast.Return, ast.Break, ast.Continue)):
+            return True
+        if isinstance(node, ast.If) and node.orelse:
+            return self._block_terminates(node.body) and self._block_terminates(node.orelse)
+        return False
 
     def _if_stmt(self, node: ast.If, indent: int):
         current = node
