@@ -465,6 +465,7 @@ from .tree_store import TreeStore
 
 from .c2array import c2context, C2Array, URLPath
 
+from .dsl_kernel import DSLKernel, dsl_kernel
 from .lazyexpr import (
     LazyExpr,
     lazyudf,
@@ -645,6 +646,7 @@ __all__ = [  # noqa : RUF022
     "EmbedStore",
     "Filter",
     "LazyArray",
+    "DSLKernel",
     "LazyExpr",
     "LazyUDF",
     "NDArray",
@@ -760,6 +762,7 @@ __all__ = [  # noqa : RUF022
     "isnan",
     "jit",
     "lazyexpr",
+    "dsl_kernel",
     "lazyudf",
     "lazywhere",
     "less",

@@ -41,6 +41,8 @@ import numpy as np
 
 import blosc2
 
+from .dsl_kernel import DSLKernel
+
 if blosc2._HAS_NUMBA:
     import numba
 from blosc2 import compute_chunks_blocks
@@ -1262,8 +1264,11 @@ def fast_eval(  # noqa: C901
     # Use a local copy so we don't modify the global
     use_miniexpr = try_miniexpr
 
-    # Disable miniexpr for UDFs (callable expressions)
-    if callable(expression):
+    is_dsl = isinstance(expression, DSLKernel) and expression.dsl_source
+    expr_string = expression.dsl_source if is_dsl else expression
+
+    # Disable miniexpr for UDFs (callable expressions), except DSL kernels
+    if callable(expression) and not is_dsl:
         use_miniexpr = False
 
     out = kwargs.pop("_output", None)
@@ -1329,11 +1334,11 @@ def fast_eval(  # noqa: C901
             isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
             for op in operands.values()
         )
-        if isinstance(expression, str) and has_complex:
+        if isinstance(expr_string, str) and has_complex:
             if sys.platform == "win32":
                 # On Windows, miniexpr has issues with complex numbers
                 use_miniexpr = False
-            if any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
+            if any(tok in expr_string for tok in ("!=", "==", "<=", ">=", "<", ">")):
                 use_miniexpr = False
         if sys.platform == "win32" and use_miniexpr and not _MINIEXPR_WINDOWS_OVERRIDE:
             # Work around Windows miniexpr issues for integer outputs and dtype conversions.
@@ -1351,7 +1356,7 @@ def fast_eval(  # noqa: C901
         # All values will be overwritten, so we can use an uninitialized array
         res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
         try:
-            res_eval._set_pref_expr(expression, operands, fp_accuracy=fp_accuracy)
+            res_eval._set_pref_expr(expr_string, operands, fp_accuracy=fp_accuracy)
             # print("expr->miniexpr:", expression, fp_accuracy)
             # Data to compress is fetched from operands, so it can be uninitialized here
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
@@ -3526,7 +3531,13 @@ class LazyUDF(LazyArray):
         # if 0 not in self._shape:
         #     self.res_getitem._set_postf_udf(self.func, id(self.inputs))
 
-        self.inputs_dict = {f"o{i}": obj for i, obj in enumerate(self.inputs)}
+        if isinstance(self.func, DSLKernel) and self.func.input_names:
+            if len(self.func.input_names) == len(self.inputs):
+                self.inputs_dict = dict(zip(self.func.input_names, self.inputs, strict=True))
+            else:
+                self.inputs_dict = {f"o{i}": obj for i, obj in enumerate(self.inputs)}
+        else:
+            self.inputs_dict = {f"o{i}": obj for i, obj in enumerate(self.inputs)}
 
     @property
     def dtype(self):
@@ -3734,10 +3745,16 @@ class LazyUDF(LazyArray):
             if value.schunk.urlpath is None:
                 raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
             operands[key] = value.schunk.urlpath
+        udf_func = self.func.func if isinstance(self.func, DSLKernel) else self.func
+        udf_name = getattr(udf_func, "__name__", self.func.__name__)
+        try:
+            udf_source = textwrap.dedent(inspect.getsource(udf_func)).lstrip()
+        except Exception:
+            udf_source = None
         array.schunk.vlmeta["_LazyArray"] = {
-            "UDF": textwrap.dedent(inspect.getsource(self.func)).lstrip(),
+            "UDF": udf_source,
             "operands": operands,
-            "name": self.func.__name__,
+            "name": udf_name,
         }
 
 
