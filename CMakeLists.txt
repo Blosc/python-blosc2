@@ -58,7 +58,7 @@ set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    GIT_TAG 77d633cb2c134552da045b8d2cc0ad23908e6b9e
+    GIT_TAG b4cfa9c2dc26772ad2126e6a611f93daf050915f # dsl funcs
 )
 FetchContent_MakeAvailable(miniexpr)
 
