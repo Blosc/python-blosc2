@@ -373,15 +373,15 @@ def test_reduce_slice(reduce_op):
 @pytest.mark.parametrize(
     ("chunks", "blocks"),
     [
+        ((10, 50, 70), (10, 25, 50)),
         ((20, 50, 100), (10, 50, 100)),
-        ((10, 25, 70), (10, 25, 50)),
         ((10, 50, 100), (6, 25, 75)),
         ((15, 30, 75), (7, 20, 50)),
-        ((20, 50, 100), (10, 50, 60)),
+        ((1, 50, 100), (1, 50, 60)),
     ],
 )
 @pytest.mark.parametrize("disk", [True, False])
-@pytest.mark.parametrize("fill_value", [0, 1, 0.32])
+@pytest.mark.parametrize("fill_value", [1, 0, 0.32])
 @pytest.mark.parametrize(
     "reduce_op",
     [
@@ -400,7 +400,7 @@ def test_reduce_slice(reduce_op):
         "cumulative_prod",
     ],
 )
-@pytest.mark.parametrize("axis", [0, 1, None])
+@pytest.mark.parametrize("axis", [None, 0, 1])
 def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     shape = (20, 50, 100)
     urlpath = "a1.b2nd" if disk else None
@@ -418,6 +418,19 @@ def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     else:
         nres = getattr(na, reduce_op)(axis=axis)
     res = getattr(a, reduce_op)(axis=axis)
+    assert np.allclose(res, nres)
+
+    # Try with a slice
+    b = blosc2.arange(0, np.prod(shape), blocks=blocks, chunks=chunks, shape=shape)
+    nb = b[:]
+    slice_ = (slice(10, 20),)
+    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+        axis = 0 if axis is None else axis
+        oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
+        nres = eval(f"{oploc}((na + nb)[{slice_}], axis={axis})")
+    else:
+        nres = getattr((na + nb)[slice_], reduce_op)(axis=axis)
+    res = getattr(a + b, reduce_op)(axis=axis, item=slice_)
     assert np.allclose(res, nres)
 
 

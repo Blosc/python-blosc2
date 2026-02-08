@@ -51,6 +51,7 @@ from .proxy import _convert_dtype
 from .utils import (
     NUMPY_GE_2_0,
     _get_chunk_operands,
+    _sliced_chunk_iter,
     check_smaller_shape,
     compute_smaller_slice,
     constructors,
@@ -1084,10 +1085,14 @@ def get_chunk(arr, info, nchunk):
 
 async def async_read_chunks(arrs, info, queue):
     loop = asyncio.get_event_loop()
-    nchunks = arrs[0].schunk.nchunks
-
+    shape, chunks_ = arrs[0].shape, arrs[0].chunks
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        for nchunk in range(nchunks):
+        my_chunk_iter = range(arrs[0].schunk.nchunks)
+        if len(info) == 5:
+            if info[-1] is not None:
+                my_chunk_iter = _sliced_chunk_iter(chunks_, (), shape, axis=info[-1], nchunk=True)
+            info = info[:4]
+        for i, nchunk in enumerate(my_chunk_iter):
             futures = [
                 (index, loop.run_in_executor(executor, get_chunk, arr, info, nchunk))
                 for index, arr in enumerate(arrs)
@@ -1100,7 +1105,7 @@ async def async_read_chunks(arrs, info, queue):
                     print(f"Exception occurred: {chunk}")
                     raise chunk
                 chunks_sorted.append(chunk)
-            queue.put((nchunk, chunks_sorted))  # use non-async queue.put()
+            queue.put((i, chunks_sorted))  # use non-async queue.put()
 
     queue.put(None)  # signal the end of the chunks
 
@@ -1137,7 +1142,7 @@ iter_chunks = None
 
 
 def fill_chunk_operands(
-    operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands, reduc=False
+    operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands, reduc=False, axis=None
 ):
     """Retrieve the chunk operands for evaluating an expression.
 
@@ -1150,12 +1155,12 @@ def fill_chunk_operands(
         low_mem = os.environ.get("BLOSC_LOW_MEM", False)
         # This method is only useful when all operands are NDArray and shows better
         # performance only when at least one of them is persisted on disk
-        if nchunk == 0:
+        if iter_chunks is None:
             # Initialize the iterator for reading the chunks
             # Take any operand (all should have the same shape and chunks)
             key, arr = next(iter(operands.items()))
             chunks_idx, _ = get_chunks_idx(arr.shape, arr.chunks)
-            info = (reduc, aligned[key], low_mem, chunks_idx)
+            info = (reduc, aligned[key], low_mem, chunks_idx, axis)
             iter_chunks = read_nchunk(list(operands.values()), info)
         # Run the asynchronous file reading function from a synchronous context
         chunks = next(iter_chunks)
@@ -1163,7 +1168,10 @@ def fill_chunk_operands(
         for i, (key, value) in enumerate(operands.items()):
             # Chunks are already decompressed, so we can use them directly
             if not low_mem:
-                chunk_operands[key] = chunks[i]
+                if full_chunk:
+                    chunk_operands[key] = chunks[i]
+                else:
+                    chunk_operands[key] = value[slice_]
                 continue
             # Otherwise, we need to decompress them
             if aligned[key]:
@@ -1568,10 +1576,12 @@ def slices_eval(  # noqa: C901
     intersecting_chunks = get_intersecting_chunks(
         _slice, shape, chunks
     )  # if _slice is (), returns all chunks
+    ratio = np.ceil(np.asarray(shape) / np.asarray(chunks)).astype(np.int64)
 
-    for nchunk, chunk_slice in enumerate(intersecting_chunks):
+    for chunk_slice in intersecting_chunks:
         # Check whether current cslice intersects with _slice
         cslice = chunk_slice.raw
+        nchunk = builtins.sum([c.start // chunks[i] * np.prod(ratio[i + 1 :]) for i, c in enumerate(cslice)])
         if cslice != () and _slice != ():
             # get intersection of chunk and target
             cslice = step_handler(cslice, _slice)
@@ -1889,9 +1899,9 @@ def reduce_slices(  # noqa: C901
     if np.any(mask_slice):
         add_idx = np.cumsum(mask_slice)
         axis = tuple(a + add_idx[a] for a in axis)  # axis now refers to new shape with dummy dims
-        if reduce_args["axis"] is not None:
-            # conserve as integer if was not tuple originally
-            reduce_args["axis"] = axis[0] if np.isscalar(reduce_args["axis"]) else axis
+    if reduce_args["axis"] is not None:
+        # conserve as integer if was not tuple originally
+        reduce_args["axis"] = axis[0] if np.isscalar(reduce_args["axis"]) else axis
     if reduce_op in {ReduceOp.CUMULATIVE_SUM, ReduceOp.CUMULATIVE_PROD}:
         reduced_shape = (np.prod(shape_slice),) if reduce_args["axis"] is None else shape_slice
         # if reduce_args["axis"] is None, have to have 1D input array; otherwise, ensure positive scalar
@@ -2057,18 +2067,17 @@ def reduce_slices(  # noqa: C901
     # Iterate over the operands and get the chunks
     chunk_operands = {}
     # Check which chunks intersect with _slice
-    # if chunks has 0 we loop once but fast path is false as gives error (schunk has no chunks)
-    if (
-        np.isscalar(reduce_args["axis"]) and not fast_path
-    ):  # iterate over chunks incrementing along reduction axis
+    if np.isscalar(reduce_args["axis"]):  # iterate over chunks incrementing along reduction axis
         intersecting_chunks = get_intersecting_chunks(_slice, shape, chunks, axis=reduce_args["axis"])
     else:  # iterate over chunks incrementing along last axis
         intersecting_chunks = get_intersecting_chunks(_slice, shape, chunks)
     out_init = False
     res_out_init = False
+    ratio = np.ceil(np.asarray(shape) / np.asarray(chunks)).astype(np.int64)
 
-    for nchunk, chunk_slice in enumerate(intersecting_chunks):
+    for chunk_slice in intersecting_chunks:
         cslice = chunk_slice.raw
+        nchunk = builtins.sum([c.start // chunks[i] * np.prod(ratio[i + 1 :]) for i, c in enumerate(cslice)])
         # Check whether current cslice intersects with _slice
         if cslice != () and _slice != ():
             # get intersection of chunk and target
@@ -2077,6 +2086,8 @@ def reduce_slices(  # noqa: C901
         starts = [s.start if s.start is not None else 0 for s in cslice]
         unit_steps = np.all([s.step == 1 for s in cslice])
         cslice_shape = tuple(s.stop - s.start for s in cslice)
+        # get local index of part of out that is to be updated
+        cslice_subidx = ndindex.ndindex(cslice).as_subindex(_slice).raw  # if _slice is (), just gives cslice
         if _slice == () and fast_path and unit_steps:
             # Fast path
             full_chunk = cslice_shape == chunks
@@ -2090,12 +2101,11 @@ def reduce_slices(  # noqa: C901
                 iter_disk,
                 chunk_operands,
                 reduc=True,
+                axis=reduce_args["axis"] if np.isscalar(reduce_args["axis"]) else None,
             )
         else:
             _get_chunk_operands(operands, cslice, chunk_operands, shape)
 
-        # get local index of part of out that is to be updated
-        cslice_subidx = ndindex.ndindex(cslice).as_subindex(_slice).raw  # if _slice is (), just gives cslice
         if reduce_op in {ReduceOp.CUMULATIVE_PROD, ReduceOp.CUMULATIVE_SUM}:
             reduced_slice = (
                 tuple(
@@ -3160,22 +3170,7 @@ class LazyExpr(LazyArray):
 
         return value, expression[idx:idx2]
 
-    def _compute_expr(self, item, kwargs):  # noqa : C901
-        # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp)
-        # that are implemented in python-blosc2 not in numexpr
-        global safe_blosc2_globals
-        if len(safe_blosc2_globals) == 0:
-            # First eval call, fill blosc2_safe_globals for ne_evaluate
-            safe_blosc2_globals = {"blosc2": blosc2}
-            # Add all first-level blosc2 functions
-            safe_blosc2_globals.update(
-                {
-                    name: getattr(blosc2, name)
-                    for name in dir(blosc2)
-                    if callable(getattr(blosc2, name)) and not name.startswith("_")
-                }
-            )
-
+    def _compute_expr(self, item, kwargs):
         if any(method in self.expression for method in eager_funcs):
             # We have reductions in the expression (probably coming from a string lazyexpr)
             # Also includes slice
