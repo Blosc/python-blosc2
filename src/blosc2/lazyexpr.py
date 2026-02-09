@@ -1353,7 +1353,8 @@ def fast_eval(  # noqa: C901
             # Exercise prefilter for each chunk
             for nchunk in range(res_eval.schunk.nchunks):
                 res_eval.schunk.update_data(nchunk, data, copy=False)
-        except Exception:
+        except Exception as e:
+            raise e
             use_miniexpr = False
         finally:
             res_eval.schunk.remove_prefilter("miniexpr")
