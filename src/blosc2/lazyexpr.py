@@ -48,7 +48,6 @@ from blosc2.info import InfoReporter
 
 from .proxy import _convert_dtype
 from .utils import (
-    NUMPY_GE_2_0,
     constructors,
     elementwise_funcs,
     get_chunks_idx,
@@ -56,9 +55,9 @@ from .utils import (
     infer_shape,
     linalg_attrs,
     linalg_funcs,
-    npvecdot,
     process_key,
     reducers,
+    safe_numpy_globals,
 )
 
 if not blosc2.IS_WASM:
@@ -66,30 +65,6 @@ if not blosc2.IS_WASM:
 
 global safe_blosc2_globals
 safe_blosc2_globals = {}
-global safe_numpy_globals
-# Use numpy eval when running in WebAssembly
-safe_numpy_globals = {"np": np}
-# Add all first-level numpy functions
-safe_numpy_globals.update(
-    {name: getattr(np, name) for name in dir(np) if callable(getattr(np, name)) and not name.startswith("_")}
-)
-
-if not NUMPY_GE_2_0:  # handle non-array-api compliance
-    safe_numpy_globals["acos"] = np.arccos
-    safe_numpy_globals["acosh"] = np.arccosh
-    safe_numpy_globals["asin"] = np.arcsin
-    safe_numpy_globals["asinh"] = np.arcsinh
-    safe_numpy_globals["atan"] = np.arctan
-    safe_numpy_globals["atanh"] = np.arctanh
-    safe_numpy_globals["atan2"] = np.arctan2
-    safe_numpy_globals["permute_dims"] = np.transpose
-    safe_numpy_globals["pow"] = np.power
-    safe_numpy_globals["bitwise_left_shift"] = np.left_shift
-    safe_numpy_globals["bitwise_right_shift"] = np.right_shift
-    safe_numpy_globals["bitwise_invert"] = np.bitwise_not
-    safe_numpy_globals["concat"] = np.concatenate
-    safe_numpy_globals["matrix_transpose"] = np.transpose
-    safe_numpy_globals["vecdot"] = npvecdot
 
 # Set this to False if miniexpr should not be tried out
 try_miniexpr = True
@@ -133,8 +108,8 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
     except Exception:
         pass
     # Try with blosc2 funcs as presence of non-numexpr funcs probably caused failure
-    # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp)
-    # that are implemented in python-blosc2 not in numexpr
+    # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp,
+    # startswith) that are implemented incompletely in numexpr/miniexpr or not implemented at all
     global safe_blosc2_globals
     if len(safe_blosc2_globals) == 0:
         # First eval call, fill blosc2_safe_globals

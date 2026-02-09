@@ -36,6 +36,7 @@ from .linalg import matmul
 from .utils import (
     _get_local_slice,
     _get_selection,
+    _incomplete_lazyfunc,
     get_chunks_idx,
     npbinvert,
     nplshift,
@@ -157,15 +158,6 @@ def is_inside_new_expr() -> bool:
     # Get the current call stack
     stack = inspect.stack()
     return builtins.any(frame_info.function in {"_new_expr", "_open_lazyarray"} for frame_info in stack)
-
-
-def is_inside_ne_evaluate() -> bool:
-    """
-    Whether the current code is being executed from an ne_evaluate call
-    """
-    # Get the current call stack
-    stack = inspect.stack()
-    return builtins.any(frame_info.function in {"ne_evaluate"} for frame_info in stack)
 
 
 def make_key_hashable(key):
@@ -1770,6 +1762,7 @@ def imag(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     return blosc2.LazyExpr(new_op=(ndarr, "imag", None))
 
 
+@_incomplete_lazyfunc
 def contains(ndarr: blosc2.Array, value: str | bytes | blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Check if the array contains a specified value.
@@ -1803,9 +1796,6 @@ def contains(ndarr: blosc2.Array, value: str | bytes | blosc2.Array, /) -> blosc
     #     x1, x2 = inputs
     #     # output[...] = np.isin(x1, x2, assume_unique=assume_unique, invert=invert, kind=kind)
     #     output[...] = np.char.find(x1, x2) != -1
-
-    if is_inside_ne_evaluate():  # haven't been able to use miniexpr
-        return np.char.find(ndarr, value) != -1
 
     if not isinstance(value, str | bytes | NDArray):
         raise TypeError("value should be a string, bytes or a NDArray!")
@@ -2998,6 +2988,7 @@ def remainder(
     return blosc2.LazyExpr(new_op=(x1, "%", x2))
 
 
+@_incomplete_lazyfunc
 def clip(
     x: blosc2.Array,
     min: int | float | blosc2.Array | None = None,
@@ -3029,8 +3020,6 @@ def clip(
         An array containing element-wise results.
 
     """
-    if is_inside_ne_evaluate():  # already chunked
-        return np.clip(x, min, max)
 
     def chunkwise_clip(inputs, output, offset):
         x, min, max = inputs
@@ -3041,6 +3030,7 @@ def clip(
     return blosc2.lazyudf(chunkwise_clip, (x, min, max), dtype=dtype, shape=shape, **kwargs)
 
 
+@_incomplete_lazyfunc
 def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array, **kwargs: Any) -> NDArray:
     """
     Calculates the logarithm of the sum of exponentiations log(exp(x1) + exp(x2)) for
@@ -3065,8 +3055,6 @@ def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array, **
         An array containing element-wise results.
 
     """
-    if is_inside_ne_evaluate():  # already chunked
-        return np.logaddexp(x1, x2)
 
     def chunkwise_logaddexp(inputs, output, offset):
         x1, x2 = inputs
@@ -4903,6 +4891,7 @@ def where(
 #     return blosc2.LazyExpr(new_op=(element, "isin", test_elements))
 
 
+@_incomplete_lazyfunc
 def startswith(
     a: str | blosc2.Array, prefix: str | blosc2.Array
 ) -> NDArray:  # start: int = 0, end: int | None = None, **kwargs)
@@ -4939,12 +4928,10 @@ def startswith(
     #     # output[...] = np.char.startswith(x1, x2, start=start, end=end)
     #     output[...] = np.char.startswith(x1, x2)
 
-    if is_inside_ne_evaluate():  # haven't been able to use miniexpr
-        return np.char.startswith(a, prefix)
-
     return blosc2.LazyExpr(new_op=(a, "startswith", prefix))
 
 
+@_incomplete_lazyfunc
 def endswith(
     a: str | blosc2.Array, suffix: str | blosc2.Array
 ) -> NDArray:  # start: int = 0, end: int | None = None, **kwargs) -> NDArray:
@@ -4979,9 +4966,6 @@ def endswith(
     #     x1, x2 = inputs
     #     # output[...] = np.char.endswith(x1, x2, start=start, end=end)
     #     output[...] = np.char.endswith(x1, x2)
-
-    if is_inside_ne_evaluate():  # haven't been able to use miniexpr
-        return np.char.endswith(a, suffix)
 
     return blosc2.LazyExpr(new_op=(a, "endswith", suffix))
 

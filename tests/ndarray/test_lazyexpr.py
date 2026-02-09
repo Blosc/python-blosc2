@@ -543,6 +543,7 @@ def test_stringops(values):
         if value2 == "str":  # ("NDArray", "str")
             value2 = "a"
             expr_lazy = blosc2.startswith(a1_blosc, value2)
+            assert expr_lazy.shape == a1_blosc.shape
             res_numexpr = np.char.startswith(a1, value2)
             np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
             value2 = "c"
@@ -553,6 +554,7 @@ def test_stringops(values):
             a2 = np.array(["ba", "ef", "rr", "o ", "\tz", "c h"])
             a2_blosc = blosc2.asarray(a2)
             expr_lazy = blosc2.startswith(a1_blosc, a2_blosc)
+            assert expr_lazy.shape == a1_blosc.shape
             res_numexpr = np.char.startswith(a1, a2)
             np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
             a2 = np.array(["ab", "d", " ath", "oo", "\tabc", " c"])
@@ -565,6 +567,8 @@ def test_stringops(values):
         a2 = np.array(["ab", "def", "a", "oot", "zu", "ab "])
         a2_blosc = blosc2.asarray(a2)
         expr_lazy = blosc2.startswith(value1, a2_blosc)
+        assert expr_lazy.shape == a2_blosc.shape
+        assert expr_lazy.dtype == blosc2.bool_
         res_numexpr = np.char.startswith(value1, a2)
         np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
 
