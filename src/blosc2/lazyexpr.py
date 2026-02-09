@@ -2081,9 +2081,9 @@ def reduce_slices(  # noqa: C901
         nblocks = res_eval.nbytes // res_eval.blocksize
         # Initialize aux_reduc based on the reduction operation
         # Padding blocks won't be written, so initial values matter for the final reduction
-        if reduce_op == ReduceOp.SUM or reduce_op == ReduceOp.ANY:
+        if reduce_op in {ReduceOp.SUM, ReduceOp.ANY}:
             aux_reduc = np.zeros(nblocks, dtype=dtype)
-        elif reduce_op == ReduceOp.PROD or reduce_op == ReduceOp.ALL:
+        elif reduce_op in {ReduceOp.PROD, ReduceOp.ALL}:
             aux_reduc = np.ones(nblocks, dtype=dtype)
         elif reduce_op == ReduceOp.MIN:
             if np.issubdtype(dtype, np.integer):
@@ -2203,7 +2203,7 @@ def reduce_slices(  # noqa: C901
             continue
 
         if where is None:
-            if expression == "o0" or expression == "(o0)":
+            if expression in {"o0", "(o0)"}:
                 # We don't have an actual expression, so avoid a copy except to make contiguous
                 result = np.require(chunk_operands["o0"], requirements="C")
             else:
@@ -2233,7 +2233,7 @@ def reduce_slices(  # noqa: C901
             result = np.any(result, **reduce_args)
         elif reduce_op == ReduceOp.ALL:
             result = np.all(result, **reduce_args)
-        elif reduce_op == ReduceOp.ARGMAX or reduce_op == ReduceOp.ARGMIN:
+        elif reduce_op in {ReduceOp.ARGMAX, ReduceOp.ARGMIN}:
             # offset for start of slice
             slice_ref = (
                 starts

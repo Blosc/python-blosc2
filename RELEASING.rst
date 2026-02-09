@@ -55,11 +55,11 @@ Tagging
 
     git tag -a vX.Y.Z -m "Tagging python-blosc2 version X.Y.Z"
 
-* Push the tag to the github repo::
+* Push the tag to the GitHub repo::
 
     git push --tags
 
-* If you happen to have to delete the tag, such as artifacts demonstrates a fault, first delete it locally:
+* If you happen to have to delete the tag, such as when artifacts demonstrate a fault, first delete it locally:
 
     git tag --delete vX.Y.Z
 
@@ -77,7 +77,7 @@ Tagging
   an empty dir (say dist), and upload to PyPI with::
 
     rm wheelhouse/*
-    # download artifacts from the tag in github
+    # download artifacts from the tag in GitHub
     twine upload --repository blosc2 wheelhouse/*
 
 * Update the latest release in the ``doc/python-blosc2.rst`` file with the new version
@@ -105,7 +105,7 @@ Checking packaging
     python -c "import blosc2; blosc2.print_versions()"
     pytest
 
-* Do an actual release in github by visiting:
+* Do an actual release in GitHub by visiting:
   https://github.com/Blosc/python-blosc2/releases/new
   Add the notes specific for this release.
 
