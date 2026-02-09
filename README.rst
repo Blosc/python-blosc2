@@ -79,7 +79,7 @@ A tutorial from PyData Global 2025 is available at:
 
 https://github.com/Blosc/PyData-Global-2025-Tutorial
 
-(`Clik here <https://www.youtube.com/watch?v=tUvSI3EpTBQ&list=PLGVZCDnMOq0qmerwB1eITnr5AfYRGm0DF&index=81>`_ to watch the video recording of the tutorial)
+(`Click here <https://www.youtube.com/watch?v=tUvSI3EpTBQ&list=PLGVZCDnMOq0qmerwB1eITnr5AfYRGm0DF&index=81>`_ to watch the video recording of the tutorial)
 
 It contains Jupyter notebooks explaining the main features of Python-Blosc2.
 
@@ -111,7 +111,7 @@ Thanks
 Blosc2 is supported by the `NumFOCUS foundation <https://numfocus.org>`_, the
 `LEAPS-INNOV project <https://www.leaps-innov.eu>`_
 and `ironArray SLU <https://ironarray.io>`_, among many other donors.
-This allowed the following people have contributed in an important way
+This allowed the following people to have contributed in an important way
 to the core development of the Blosc2 library:
 
 - Francesc Alted
@@ -124,7 +124,7 @@ to the core development of the Blosc2 library:
 - Oumaima Ech.Chdig
 - Ricardo Sales Piquer
 
-In addition, other people have participated to the project in different
+In addition, other people have participated in the project in different
 aspects:
 
 - Jan Sellner, contributed the mmap support for NDArray/SChunk objects.
@@ -158,7 +158,7 @@ Support Blosc for a Sustainable Future
 
 If you find Blosc useful and want to support its development, please consider
 making a `donation or contract to the Blosc Development Team
-<https://www.blosc.org/pages/blosc-in-depth/#support-blosc>`_
+<https://www.blosc.org/pages/blosc-in-depth/#support-blosc>`_.
 Thank you!
 
 

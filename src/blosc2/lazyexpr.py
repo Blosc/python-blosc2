@@ -1976,7 +1976,7 @@ def reduce_slices(  # noqa: C901
         del temp
 
     # miniexpr reduction path only supported for some cases so far
-    if not (fast_path and all_ndarray and reduced_shape == ()):
+    if not (fast_path and all_ndarray and reduced_shape == () and _slice == ()):
         use_miniexpr = False
 
     # Some reductions are not supported yet in miniexpr
@@ -2178,8 +2178,6 @@ def reduce_slices(  # noqa: C901
 
         if not out_init:
             out_ = convert_none_out(result.dtype, reduce_op, reduced_shape)
-            # if reduce_op == ReduceOp.CUMULATIVE_SUM:
-            #     kahan_sum = np.zeros_like(res_out_)
             if out is not None:
                 out[:] = out_
                 del out_
@@ -2187,11 +2185,15 @@ def reduce_slices(  # noqa: C901
                 out = out_
             out_init = True
 
-        if (reduce_args["axis"] is None and not res_out_init) or (
+        # res_out only used be argmin/max and cumulative_sum/prod which only accept axis=int argument
+        if (not res_out_init) or (
             np.isscalar(reduce_args["axis"]) and cslice_subidx[reduce_args["axis"]].start == 0
         ):  # starting reduction again along axis
             res_out_ = _get_res_out(result.shape, reduce_args["axis"], dtype, reduce_op)
             res_out_init = True
+            kahan_sum = (
+                np.zeros_like(res_out_) if reduce_op == ReduceOp.CUMULATIVE_SUM else np.zeros_like(result)
+            )  # for SUM
 
         # Update the output array with the result
         if reduce_op == ReduceOp.ANY:
@@ -2206,24 +2208,27 @@ def reduce_slices(  # noqa: C901
                 out[reduced_slice] = np.where(cond, result_idx, out[reduced_slice])
                 res_out_ = np.where(cond, result, res_out_)
             else:  # CUMULATIVE_SUM or CUMULATIVE_PROD
-                idx_result = tuple(
+                idx_lastval = tuple(
                     slice(-1, None) if i == reduce_args["axis"] else slice(None, None)
                     for i, c in enumerate(reduced_slice)
                 )
-                # idx_lastval = tuple(
-                #     slice(0, 1) if i == reduce_args["axis"] else c for i, c in enumerate(reduced_slice)
-                # )
                 if reduce_op == ReduceOp.CUMULATIVE_SUM:
                     # use Kahan summation algorithm for better precision
-                    # y = res_out_[idx_lastval] - kahan_sum[idx_lastval]
-                    # t = result + y
-                    # kahan_sum[idx_lastval] = ((t - result) - y)[idx_result]
-                    # result = t
+                    y = result[idx_lastval] - kahan_sum
+                    t = res_out_ + y
+                    kahan_sum = (t - res_out_) - y
                     result += res_out_
+                    res_out_ = t
                 else:  # CUMULATIVE_PROD
                     result *= res_out_
+                    res_out_ = result[idx_lastval]
                 out[reduced_slice] = result
-                res_out_ = result[idx_result]
+        elif reduce_op == ReduceOp.SUM:
+            # use Kahan summation algorithm for better precision
+            y = result - kahan_sum
+            t = out[reduced_slice] + y
+            kahan_sum = (t - out[reduced_slice]) - y
+            out[reduced_slice] = t
         else:
             out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
 

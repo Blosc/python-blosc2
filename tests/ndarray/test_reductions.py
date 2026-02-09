@@ -188,22 +188,35 @@ def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwar
 # TODO: "prod" is not supported here because it overflows with current values
 @pytest.mark.parametrize(
     "reduce_op",
-    ["sum", "min", "max", "mean", "std", "var", "any", "all", "argmax", "argmin", "cumulative_sum"],
+    ["cumulative_sum", "sum", "min", "max", "mean", "std", "var", "any", "all", "argmax", "argmin"],
 )
-@pytest.mark.parametrize("axis", [0, 1, None])
+@pytest.mark.parametrize("axis", [None, 0, 1])
 def test_reduce_expr_arr(array_fixture, axis, reduce_op):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
-    if axis is not None and len(a1.shape) >= axis:
-        return
+    if axis is not None:
+        if len(a1.shape) <= axis:
+            return
+    else:
+        if reduce_op == "cumulative_sum":
+            return
     expr = a1 + a2 - a3 * a4
     nres = eval("na1 + na2 - na3 * na4")
-    if reduce_op == "cumulative_sum":
-        axis = 0 if axis is None else axis
-        nres = npcumsum(nres, axis=axis) + npcumsum(na1, axis=axis)
-    else:
-        nres = getattr(nres, reduce_op)(axis=axis) + getattr(na1, reduce_op)(axis=axis)
-    res = getattr(expr, reduce_op)(axis=axis) + getattr(a1, reduce_op)(axis=axis)
     tol = 1e-15 if a1.dtype == "float64" else 1e-6
+    np.testing.assert_allclose(expr[()], nres, atol=tol, rtol=tol)
+    part1 = getattr(expr, reduce_op)(axis=axis)
+    part2 = getattr(a1, reduce_op)(axis=axis)
+    if reduce_op == "cumulative_sum":
+        npart1 = npcumsum(nres, axis=axis)
+        np.testing.assert_allclose(part1, npart1, atol=tol, rtol=tol)
+        npart2 = npcumsum(na1, axis=axis)
+        np.testing.assert_allclose(part2, npart2, atol=tol, rtol=tol)
+    else:
+        npart1 = getattr(nres, reduce_op)(axis=axis)
+        np.testing.assert_allclose(part1, npart1, atol=tol, rtol=tol)
+        npart2 = getattr(na1, reduce_op)(axis=axis)
+        np.testing.assert_allclose(part2, npart2, atol=tol, rtol=tol)
+    res = part1 + part2
+    nres = npart1 + npart2
     np.testing.assert_allclose(res, nres, atol=tol, rtol=tol)
 
 
@@ -421,9 +434,9 @@ def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     assert np.allclose(res, nres)
 
     # Try with a slice
-    b = blosc2.arange(0, np.prod(shape), blocks=blocks, chunks=chunks, shape=shape)
+    b = blosc2.linspace(0, 1, blocks=blocks, chunks=chunks, shape=shape, dtype=a.dtype)
     nb = b[:]
-    slice_ = (slice(10, 20),)
+    slice_ = (slice(5, 7),)
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
         axis = 0 if axis is None else axis
         oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
@@ -431,6 +444,41 @@ def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     else:
         nres = getattr((na + nb)[slice_], reduce_op)(axis=axis)
     res = getattr(a + b, reduce_op)(axis=axis, item=slice_)
+    assert np.allclose(res, nres)
+
+
+# Test miniexpr with slice
+@pytest.mark.parametrize(
+    ("chunks", "blocks"),
+    [
+        ((2, 5, 10), (1, 5, 10)),
+        ((1, 3, 7), (1, 3, 5)),
+        ((5, 6, 10), (3, 3, 7)),
+    ],
+)
+@pytest.mark.parametrize("disk", [True, False])
+@pytest.mark.parametrize("fill_value", [0, 1, 0.32])
+@pytest.mark.parametrize(
+    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
+)
+def test_miniexpr_slice(chunks, blocks, disk, fill_value, reduce_op):
+    shape = (10, 10, 12)
+    axis = None
+    urlpath = "a1.b2nd" if disk else None
+    if fill_value != 0:
+        a = blosc2.full(shape, fill_value, chunks=chunks, blocks=blocks, urlpath=urlpath, mode="w")
+    else:
+        a = blosc2.zeros(shape, dtype=np.float64, chunks=chunks, blocks=blocks, urlpath=urlpath, mode="w")
+    if disk:
+        a = blosc2.open(urlpath)
+    na = a[:]
+    # Test slice
+    # TODO: Make this work with miniexpr (currently just skips to normal reduction eval)
+    slice_ = slice(2, 6)
+    b = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks, dtype=a.dtype)
+    nb = b[:]
+    res = getattr(a + b, reduce_op)(axis=axis, item=slice_)
+    nres = getattr((na + nb)[slice_], reduce_op)(axis=axis)
     assert np.allclose(res, nres)
 
 
