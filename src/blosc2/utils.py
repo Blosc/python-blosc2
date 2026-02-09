@@ -848,7 +848,7 @@ def _incomplete_lazyfunc(func) -> None:
     """
 
     def wrapper(*args, **kwargs):
-        if is_inside_ne_evaluate():  # haven't been able to use miniexpr
+        if is_inside_ne_evaluate():  # haven't been able to use miniexpr so use numpy
             return incomplete_lazyfunc_map[func.__name__](*args, **kwargs)
         return func(*args, **kwargs)
 

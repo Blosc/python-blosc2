@@ -109,7 +109,7 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
         pass
     # Try with blosc2 funcs as presence of non-numexpr funcs probably caused failure
     # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp,
-    # startswith) that are implemented incompletely in numexpr/miniexpr or not implemented at all
+    # startswith, matmul) that are implemented incompletely in numexpr/miniexpr or not implemented at all
     global safe_blosc2_globals
     if len(safe_blosc2_globals) == 0:
         # First eval call, fill blosc2_safe_globals
