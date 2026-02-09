@@ -434,6 +434,41 @@ def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     assert np.allclose(res, nres)
 
 
+# Test miniexpr with slice
+@pytest.mark.parametrize(
+    ("chunks", "blocks"),
+    [
+        ((2, 5, 10), (1, 5, 10)),
+        ((1, 3, 7), (1, 3, 5)),
+        ((5, 6, 10), (3, 3, 7)),
+    ],
+)
+@pytest.mark.parametrize("disk", [True, False])
+@pytest.mark.parametrize("fill_value", [0, 1, 0.32])
+@pytest.mark.parametrize(
+    "reduce_op", ["sum", "prod", "min", "max", "any", "all", "mean", "std", "var", "argmax", "argmin"]
+)
+def test_miniexpr_slice(chunks, blocks, disk, fill_value, reduce_op):
+    shape = (10, 10, 12)
+    axis = None
+    urlpath = "a1.b2nd" if disk else None
+    if fill_value != 0:
+        a = blosc2.full(shape, fill_value, chunks=chunks, blocks=blocks, urlpath=urlpath, mode="w")
+    else:
+        a = blosc2.zeros(shape, dtype=np.float64, chunks=chunks, blocks=blocks, urlpath=urlpath, mode="w")
+    if disk:
+        a = blosc2.open(urlpath)
+    na = a[:]
+    # Test slice
+    # TODO: Make this work with miniexpr (currently just skips to normal reduction eval)
+    slice_ = slice(2, 6)
+    b = blosc2.linspace(0, 1, shape=shape, chunks=chunks, blocks=blocks, dtype=a.dtype)
+    nb = b[:]
+    res = getattr(a + b, reduce_op)(axis=axis, item=slice_)
+    nres = getattr((na + nb)[slice_], reduce_op)(axis=axis)
+    assert np.allclose(res, nres)
+
+
 @pytest.mark.parametrize("disk", [True, False])
 @pytest.mark.parametrize("fill_value", [0, 1, 0.32])
 @pytest.mark.parametrize(

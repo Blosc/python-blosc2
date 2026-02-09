@@ -1976,7 +1976,7 @@ def reduce_slices(  # noqa: C901
         del temp
 
     # miniexpr reduction path only supported for some cases so far
-    if not (fast_path and all_ndarray and reduced_shape == ()):
+    if not (fast_path and all_ndarray and reduced_shape == () and _slice == ()):
         use_miniexpr = False
 
     # Some reductions are not supported yet in miniexpr
