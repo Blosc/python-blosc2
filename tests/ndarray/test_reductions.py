@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 import blosc2
-from blosc2.lazyexpr import ne_evaluate, npcumsum
+from blosc2.lazyexpr import ne_evaluate, npcumprod, npcumsum  # noqa: F401
 
 NITEMS_SMALL = 1000
 NITEMS = 10_000
