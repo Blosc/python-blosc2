@@ -138,6 +138,19 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
         raise e  # unsafe expression
     except Exception:  # non_numexpr functions present
         global safe_blosc2_globals
+        # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp)
+        # that are implemented in python-blosc2 not in numexpr
+        if len(safe_blosc2_globals) == 0:
+            # First eval call, fill blosc2_safe_globals for ne_evaluate
+            safe_blosc2_globals = {"blosc2": blosc2}
+            # Add all first-level blosc2 functions
+            safe_blosc2_globals.update(
+                {
+                    name: getattr(blosc2, name)
+                    for name in dir(blosc2)
+                    if callable(getattr(blosc2, name)) and not name.startswith("_")
+                }
+            )
         res = eval(expression, safe_blosc2_globals, local_dict)
         if "out" in kwargs:
             out = kwargs.pop("out")
@@ -2204,9 +2217,6 @@ def reduce_slices(  # noqa: C901
         ):  # starting reduction again along axis
             res_out_ = _get_res_out(result.shape, reduce_args["axis"], dtype, reduce_op)
             res_out_init = True
-            kahan_sum = (
-                np.zeros_like(res_out_) if reduce_op == ReduceOp.CUMULATIVE_SUM else np.zeros_like(result)
-            )  # for SUM
 
         # Update the output array with the result
         if reduce_op == ReduceOp.ANY:
@@ -2226,22 +2236,11 @@ def reduce_slices(  # noqa: C901
                     for i, c in enumerate(reduced_slice)
                 )
                 if reduce_op == ReduceOp.CUMULATIVE_SUM:
-                    # use Kahan summation algorithm for better precision
-                    y = result[idx_lastval] - kahan_sum
-                    t = res_out_ + y
-                    kahan_sum = (t - res_out_) - y
                     result += res_out_
-                    res_out_ = t
                 else:  # CUMULATIVE_PROD
                     result *= res_out_
-                    res_out_ = result[idx_lastval]
+                res_out_ = result[idx_lastval]
                 out[reduced_slice] = result
-        elif reduce_op == ReduceOp.SUM:
-            # use Kahan summation algorithm for better precision
-            y = result - kahan_sum
-            t = out[reduced_slice] + y
-            kahan_sum = (t - out[reduced_slice]) - y
-            out[reduced_slice] = t
         else:
             out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
 
