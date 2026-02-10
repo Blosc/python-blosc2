@@ -75,6 +75,11 @@ _MINIEXPR_WINDOWS_OVERRIDE = os.environ.get("BLOSC2_ENABLE_MINIEXPR_WINDOWS", ""
 _MINIEXPR_WINDOWS_OVERRIDE = _MINIEXPR_WINDOWS_OVERRIDE not in ("", "0", "false", "no", "off")
 
 
+def _toggle_miniexpr(FLAG):
+    global try_miniexpr
+    try_miniexpr = FLAG
+
+
 def ne_evaluate(expression, local_dict=None, **kwargs):
     """Safely evaluate expressions using numexpr when possible, falling back to numpy."""
     if local_dict is None:
