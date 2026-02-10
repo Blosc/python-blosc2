@@ -272,6 +272,19 @@ def get_expr_globals(expression):
     return _globals
 
 
+if not hasattr(enum, "member"):
+    # copy-pasted from Lib/enum.py
+    class _mymember:
+        """
+        Forces item to become an Enum member during class creation.
+        """
+
+        def __init__(self, value):
+            self.value = value
+else:
+    _mymember = enum.member  # only available after python 3.11
+
+
 class ReduceOp(Enum):
     """
     Available reduce operations.
@@ -279,25 +292,25 @@ class ReduceOp(Enum):
 
     # wrap as enum.member so that Python doesn't treat some funcs
     # as class methods (rather than Enum members)
-    SUM = enum.member(np.add)
-    PROD = enum.member(np.multiply)
-    MEAN = enum.member(np.mean)
-    STD = enum.member(np.std)
-    VAR = enum.member(np.var)
+    SUM = _mymember(np.add)
+    PROD = _mymember(np.multiply)
+    MEAN = _mymember(np.mean)
+    STD = _mymember(np.std)
+    VAR = _mymember(np.var)
     # Computing a median from partial results is not straightforward because the median
     # is a positional statistic, which means it depends on the relative ordering of all
     # the data points. Unlike statistics such as the sum or mean, you can't compute a median
     # from partial results without knowing the entire dataset, and this is way too expensive
     # for arrays that cannot typically fit in-memory (e.g. disk-based NDArray).
     # MEDIAN = np.median
-    MAX = enum.member(np.maximum)
-    MIN = enum.member(np.minimum)
-    ANY = enum.member(np.any)
-    ALL = enum.member(np.all)
-    ARGMAX = enum.member(np.argmax)
-    ARGMIN = enum.member(np.argmin)
-    CUMULATIVE_SUM = enum.member(npcumsum)
-    CUMULATIVE_PROD = enum.member(npcumprod)
+    MAX = _mymember(np.maximum)
+    MIN = _mymember(np.minimum)
+    ANY = _mymember(np.any)
+    ALL = _mymember(np.all)
+    ARGMAX = _mymember(np.argmax)
+    ARGMIN = _mymember(np.argmin)
+    CUMULATIVE_SUM = _mymember(npcumsum)
+    CUMULATIVE_PROD = _mymember(npcumprod)
 
 
 class LazyArrayEnum(Enum):
