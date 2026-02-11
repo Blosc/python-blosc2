@@ -159,6 +159,8 @@ reducers = [
     "count_nonzero",
     "argmax",
     "argmin",
+    "cumulative_sum",
+    "cumulative_prod",
 ]
 
 # All the available constructors and reducers necessary for the (string) expression evaluator
@@ -380,9 +382,20 @@ def elementwise(*args):
     return broadcast_shapes(*args)
 
 
+def cumulative_shape(x, axis=None, include_initial=False, out=None):
+    if axis is None:
+        if len(x) == 1:
+            axis = 0
+        else:
+            raise ValueError("axis can only be None for 1D arrays")
+    return tuple(d + 1 if (i == axis and include_initial) else d for i, d in enumerate(x))
+
+
 # --- Function registry ---
 REDUCTIONS = {  # ignore out arg
-    func: lambda x, axis=None, keepdims=False, out=None: reduce_shape(x, axis, keepdims)
+    func: cumulative_shape
+    if func in {"cumulative_sum", "cumulative_prod"}
+    else lambda x, axis=None, keepdims=False, out=None: reduce_shape(x, axis, keepdims)
     for func in reducers
     # any unknown function will default to elementwise
 }

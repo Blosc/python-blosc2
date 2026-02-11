@@ -149,8 +149,9 @@ def test_fp_accuracy(accuracy, dtype):
 def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwargs):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     reduce_args = {"axis": axis}
-    if reduce_op in {"cumulative_sum", "cumulative_prod"} and npcumprod.__name__ == "cumulative_prod":
-        reduce_args["include_initial"] = keepdims  # include_initial only available in cumulative_
+    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+        if npcumprod.__name__ == "cumulative_prod":
+            reduce_args["include_initial"] = keepdims  # include_initial only available in cumulative_
     else:
         reduce_args["keepdims"] = keepdims
     if reduce_op in ("mean", "std") and dtype_out == np.int16:
@@ -254,8 +255,9 @@ def test_broadcast_params(axis, keepdims, reduce_op, shapes):
         axis = 1 if isinstance(axis, tuple) else axis
         axis = 0 if reduce_op[:3] == "cum" else axis
     reduce_args = {"axis": axis}
-    if reduce_op in {"cumulative_sum", "cumulative_prod"} and npcumprod.__name__ == "cumulative_prod":
-        reduce_args["include_initial"] = keepdims
+    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+        if npcumprod.__name__ == "cumulative_prod":
+            reduce_args["include_initial"] = keepdims  # include_initial only available in cumulative_
     else:
         reduce_args["keepdims"] = keepdims
     na1 = np.linspace(0, 1, np.prod(shapes[0])).reshape(shapes[0])
