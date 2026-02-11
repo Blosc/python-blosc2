@@ -118,16 +118,11 @@ elementwise_funcs = [
     "sinh",
     "sqrt",
     "square",
-    "std",
     "subtract",
-    "sum",
     "tan",
     "tanh",
     "trunc",
-    "var",
     "where",
-    "zeros",
-    "zeros_like",
 ]
 
 linalg_funcs = [
@@ -165,7 +160,9 @@ reducers = [
 
 # All the available constructors and reducers necessary for the (string) expression evaluator
 constructors = [
+    "asarray",
     "arange",
+    "copy",
     "linspace",
     "fromiter",
     "zeros",
@@ -173,13 +170,18 @@ constructors = [
     "empty",
     "full",
     "frombuffer",
+    "fromiter",
     "full_like",
     "zeros_like",
     "ones_like",
     "empty_like",
     "eye",
     "nans",
+    "ndarray_from_cframe",
+    "uninit",
+    "meshgrid",
 ]
+
 # Note that, as reshape is accepted as a method too, it should always come last in the list
 constructors += ["reshape"]
 
