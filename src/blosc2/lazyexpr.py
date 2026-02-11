@@ -278,7 +278,7 @@ def get_expr_globals(expression):
             # Fall back to numpy
             else:
                 try:
-                    _globals[func] = safe_numpy_globals[func.__name__]
+                    _globals[func] = safe_numpy_globals[func]
                 # Function not found in either module
                 except KeyError as e:
                     raise AttributeError(f"Function {func} not found in blosc2 or numpy") from e

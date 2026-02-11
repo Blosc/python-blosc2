@@ -273,7 +273,8 @@ def test_broadcast_params(axis, keepdims, reduce_op, shapes):
         res = expr2 - getattr(expr1, reduce_op)(**reduce_args)
         oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
         expr = f"na2 * na3 + 1 - {oploc}(na1 + na2 - na3, axis={axis}"
-        expr += ", include_initial={keepdims})" if npcumprod.__name__ == "cumulative_prod" else ")"
+        include_inital = reduce_args.get("include_initial", False)
+        expr += f", include_initial={keepdims})" if include_inital else ")"
     else:
         res = expr1 - getattr(expr2, reduce_op)(**reduce_args)
         expr = f"na1 + na2 - na3 - (na2 * na3 + 1).{reduce_op}(axis={axis}, keepdims={keepdims})"
