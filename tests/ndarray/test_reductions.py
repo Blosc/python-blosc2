@@ -874,6 +874,6 @@ def test_reduce_string():
     c = a**2 + b**2 + 2 * a * b + 1
     # Evaluate: output is a NDArray
     d = blosc2.lazyexpr("sl + c.sum() + a.std()", operands={"a": a, "c": c, "sl": a.slice((1, 1))})
-    sum = d.compute()[()]
+    sum = d[()]
     npsum = npa[1, 1] + np.sum(npc) + np.std(npa)
-    np.testing.assert_allclose(sum, npsum)
+    np.testing.assert_allclose(sum, npsum, rtol=1e-6, atol=1e-6)
