@@ -5,7 +5,7 @@ The following elementwise functions can be used for computing with any of :ref:`
 
 Their result is always a :ref:`LazyExpr` instance, which can be evaluated (with ``compute`` or ``__getitem__``) to get the actual values of the computation.
 
-Note: The functions ``conj``, ``real``, ``imag``, ``contains``, ``where`` are not technically ufuncs.
+Note: The functions ``real``, ``imag``, ``contains``, ``where`` are not technically ufuncs.
 
 .. currentmodule:: blosc2
 

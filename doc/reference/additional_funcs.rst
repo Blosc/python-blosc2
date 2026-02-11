@@ -12,8 +12,8 @@ Their result is typically a :ref:`LazyExpr` instance, which can be evaluated (wi
 
 .. autosummary::
 
+    broadcast_to
     clip
-    conj
     contains
     imag
     real
@@ -22,13 +22,15 @@ Their result is typically a :ref:`LazyExpr` instance, which can be evaluated (wi
 
 
 
+.. autofunction:: blosc2.broadcast_to
 .. autofunction:: blosc2.clip
-.. autofunction:: blosc2.conj
 .. autofunction:: blosc2.contains
 .. autofunction:: blosc2.imag
 .. autofunction:: blosc2.real
 .. autofunction:: blosc2.round
 .. autofunction:: blosc2.where
+
+
 Type Utilities
 --------------
 

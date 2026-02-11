@@ -38,13 +38,12 @@ Constructors
 
     arange
     asarray
-    concat
     copy
     empty
     empty_like
-    expand_dims
     eye
     frombuffer
+    fromiter
     fromiter
     full
     full_like
@@ -55,31 +54,30 @@ Constructors
     ones
     ones_like
     reshape
-    stack
-    squeeze
     uninit
     zeros
     zeros_like
 
-.. autofunction:: arange
-.. autofunction:: asarray
-.. autofunction:: concat
-.. autofunction:: copy
-.. autofunction:: empty
-.. autofunction:: empty_like
-.. autofunction:: expand_dims
-.. autofunction:: eye
-.. autofunction:: frombuffer
-.. autofunction:: fromiter
-.. autofunction:: full
-.. autofunction:: full_like
-.. autofunction:: linspace
-.. autofunction:: nans
-.. autofunction:: ndarray_from_cframe
-.. autofunction:: ones
-.. autofunction:: ones_like
-.. autofunction:: reshape
-.. autofunction:: stack
-.. autofunction:: uninit
-.. autofunction:: zeros
-.. autofunction:: zeros_like
+
+
+.. autofunction:: blosc2.arange
+.. autofunction:: blosc2.asarray
+.. autofunction:: blosc2.copy
+.. autofunction:: blosc2.empty
+.. autofunction:: blosc2.empty_like
+.. autofunction:: blosc2.eye
+.. autofunction:: blosc2.frombuffer
+.. autofunction:: blosc2.fromiter
+.. autofunction:: blosc2.fromiter
+.. autofunction:: blosc2.full
+.. autofunction:: blosc2.full_like
+.. autofunction:: blosc2.linspace
+.. autofunction:: blosc2.meshgrid
+.. autofunction:: blosc2.nans
+.. autofunction:: blosc2.ndarray_from_cframe
+.. autofunction:: blosc2.ones
+.. autofunction:: blosc2.ones_like
+.. autofunction:: blosc2.reshape
+.. autofunction:: blosc2.uninit
+.. autofunction:: blosc2.zeros
+.. autofunction:: blosc2.zeros_like
