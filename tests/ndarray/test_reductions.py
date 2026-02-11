@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 import blosc2
-from blosc2.lazyexpr import ne_evaluate, npcumprod, npcumsum  # noqa: F401
+from blosc2.lazyexpr import ne_evaluate, npcumprod, npcumsum
 
 NITEMS_SMALL = 1000
 NITEMS = 10_000
@@ -149,8 +149,8 @@ def test_fp_accuracy(accuracy, dtype):
 def test_reduce_params(array_fixture, axis, keepdims, dtype_out, reduce_op, kwargs):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     reduce_args = {"axis": axis}
-    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
-        reduce_args["include_initial"] = keepdims
+    if reduce_op in {"cumulative_sum", "cumulative_prod"} and npcumprod.__name__ == "cumulative_prod":
+        reduce_args["include_initial"] = keepdims  # include_initial only available in cumulative_
     else:
         reduce_args["keepdims"] = keepdims
     if reduce_op in ("mean", "std") and dtype_out == np.int16:
@@ -254,7 +254,7 @@ def test_broadcast_params(axis, keepdims, reduce_op, shapes):
         axis = 1 if isinstance(axis, tuple) else axis
         axis = 0 if reduce_op[:3] == "cum" else axis
     reduce_args = {"axis": axis}
-    if reduce_op in {"cumulative_sum", "cumulative_prod"}:
+    if reduce_op in {"cumulative_sum", "cumulative_prod"} and npcumprod.__name__ == "cumulative_prod":
         reduce_args["include_initial"] = keepdims
     else:
         reduce_args["keepdims"] = keepdims
@@ -272,7 +272,8 @@ def test_broadcast_params(axis, keepdims, reduce_op, shapes):
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
         res = expr2 - getattr(expr1, reduce_op)(**reduce_args)
         oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
-        expr = f"na2 * na3 + 1 - {oploc}(na1 + na2 - na3, axis={axis}, include_initial={keepdims})"
+        expr = f"na2 * na3 + 1 - {oploc}(na1 + na2 - na3, axis={axis}"
+        expr += ", include_initial={keepdims})" if npcumprod.__name__ == "cumulative_prod" else ")"
     else:
         res = expr1 - getattr(expr2, reduce_op)(**reduce_args)
         expr = f"na1 + na2 - na3 - (na2 * na3 + 1).{reduce_op}(axis={axis}, keepdims={keepdims})"
