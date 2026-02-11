@@ -276,11 +276,12 @@ def get_expr_globals(expression):
             if hasattr(blosc2, func):
                 _globals[func] = getattr(blosc2, func)
             # Fall back to numpy
-            elif hasattr(np, func):
-                _globals[func] = getattr(np, func)
-            # Function not found in either module
             else:
-                raise AttributeError(f"Function {func} not found in blosc2 or numpy")
+                try:
+                    _globals[func] = safe_numpy_globals[func.__name__]
+                # Function not found in either module
+                except KeyError as e:
+                    raise AttributeError(f"Function {func} not found in blosc2 or numpy") from e
 
     return _globals
 
