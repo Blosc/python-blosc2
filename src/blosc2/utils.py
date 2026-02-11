@@ -170,7 +170,6 @@ constructors = [
     "empty",
     "full",
     "frombuffer",
-    "fromiter",
     "full_like",
     "zeros_like",
     "ones_like",
