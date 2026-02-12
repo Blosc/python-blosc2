@@ -70,13 +70,13 @@ class Filter(Enum):
     For each of the filters, the integer value passed to  ``filters_meta`` has the following meaning:
 
     - NOFILTER: Not used
-    - SHUFFLE: Not used
+    - SHUFFLE: Number of byte streams for shuffle (if 0 defaults to typesize of array).
     - BITSHUFFLE: Not used
-    - DELTA: Not used
+    - DELTA: Not used (bitwise XOR)
     - TRUNC_PREC: Number of bits to which to truncate float
     - NDCELL: Cellshape (i.e. for a 3-dim dataset, meta = 4 implies cellshape is 4x4x4)
     - NDMEAN: Cellshape (i.e. for a 3-dim dataset, meta = 4 implies cellshape is 4x4x4)
-    - BYTEDELTA: Typesize for byteshuffle + delta
+    - BYTEDELTA: Number of byte streams for delta
     - INT_TRUNC: Number of bits to which to truncate integer
 
     For TRUNC_PREC and INT_TRUNC, positive values specify number of bits to keep; negative values specify number of bits to zero.
