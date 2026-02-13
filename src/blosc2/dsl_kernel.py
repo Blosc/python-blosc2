@@ -278,6 +278,9 @@ class _DSLBuilder:
         if isinstance(node, ast.For):
             self._for_stmt(node, indent)
             return
+        if isinstance(node, ast.While):
+            self._while_stmt(node, indent)
+            return
         if isinstance(node, ast.Break):
             self._emit("break", indent)
             return
@@ -349,6 +352,13 @@ class _DSLBuilder:
             raise ValueError("DSL range() must take a single argument")
         limit = self._expr(node.iter.args[0])
         self._emit(f"for {node.target.id} in range({limit}):", indent)
+        self._stmt_block(node.body, indent + 4)
+
+    def _while_stmt(self, node: ast.While, indent: int):
+        if node.orelse:
+            raise ValueError("while/else is not supported in DSL kernels")
+        cond = self._expr(node.test)
+        self._emit(f"while {cond}:", indent)
         self._stmt_block(node.body, indent + 4)
 
     def _expr(self, node: ast.AST) -> str:  # noqa: C901

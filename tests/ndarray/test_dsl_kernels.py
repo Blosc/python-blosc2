@@ -73,6 +73,16 @@ def kernel_control_flow_full(x, y):
 
 
 @blosc2.dsl_kernel
+def kernel_while_full(x, y):
+    acc = x
+    i = 0
+    while i < 3:
+        acc = np.where(acc < y, acc + 1, acc - 1)
+        i = i + 1
+    return acc
+
+
+@blosc2.dsl_kernel
 def kernel_loop_param(x, y, niter):
     acc = x
     for _i in range(niter):
@@ -152,6 +162,25 @@ def test_dsl_kernel_full_control_flow_kept_as_dsl_function():
     )
     res = expr.compute()
     expected = kernel_control_flow_full.func(a, b)
+
+    np.testing.assert_allclose(res[...], expected, rtol=1e-5, atol=1e-6)
+
+
+def test_dsl_kernel_while_kept_as_dsl_function():
+    assert kernel_while_full.dsl_source is not None
+    assert "def kernel_while_full(x, y):" in kernel_while_full.dsl_source
+    assert "while (i < 3):" in kernel_while_full.dsl_source
+
+    a, b, a2, b2 = _make_arrays()
+    expr = blosc2.lazyudf(
+        kernel_while_full,
+        (a2, b2),
+        dtype=a2.dtype,
+        chunks=a2.chunks,
+        blocks=a2.blocks,
+    )
+    res = expr.compute()
+    expected = kernel_while_full.func(a, b)
 
     np.testing.assert_allclose(res[...], expected, rtol=1e-5, atol=1e-6)
 
