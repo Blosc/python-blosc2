@@ -573,10 +573,11 @@ cdef extern from "miniexpr.h":
     int me_compile(const char *expression, const me_variable *variables,
                    int var_count, me_dtype dtype, int *error, me_expr **out)
 
-    int me_compile_nd(const char *expression, const me_variable *variables,
-                      int var_count, me_dtype dtype, int ndims,
-                      const int64_t *shape, const int32_t *chunkshape,
-                      const int32_t *blockshape, int *error, me_expr **out)
+    int me_compile_nd_jit(const char *expression, const me_variable *variables,
+                          int var_count, me_dtype dtype, int ndims,
+                          const int64_t *shape, const int32_t *chunkshape,
+                          const int32_t *blockshape, int jit_mode,
+                          int *error, me_expr **out)
 
     ctypedef enum me_compile_status:
         ME_COMPILE_SUCCESS
@@ -595,9 +596,15 @@ cdef extern from "miniexpr.h":
         ME_SIMD_ULP_1
         ME_SIMD_ULP_3_5
 
+    ctypedef enum me_jit_mode:
+        ME_JIT_DEFAULT
+        ME_JIT_ON
+        ME_JIT_OFF
+
     ctypedef struct me_eval_params:
         c_bool disable_simd
         me_simd_ulp_mode simd_ulp_mode
+        me_jit_mode jit_mode
 
     int me_eval(const me_expr *expr, const void **vars_block,
                 int n_vars, void *output_block, int chunk_nitems,
@@ -2926,7 +2933,7 @@ cdef class NDArray:
 
         return udata
 
-    cdef me_udata *_fill_me_udata(self, inputs, fp_accuracy, aux_reduc):
+    cdef me_udata *_fill_me_udata(self, inputs, fp_accuracy, aux_reduc, jit=None):
         cdef me_udata *udata = <me_udata *> malloc(sizeof(me_udata))
         operands = list(inputs.values())
         ninputs = len(operands)
@@ -2940,6 +2947,12 @@ cdef class NDArray:
         cdef me_eval_params* eval_params = <me_eval_params*> malloc(sizeof(me_eval_params))
         eval_params.disable_simd = False
         eval_params.simd_ulp_mode = ME_SIMD_ULP_3_5 if fp_accuracy == blosc2.FPAccuracy.MEDIUM else ME_SIMD_ULP_1
+        if jit is None:
+            eval_params.jit_mode = ME_JIT_DEFAULT
+        elif jit:
+            eval_params.jit_mode = ME_JIT_ON
+        else:
+            eval_params.jit_mode = ME_JIT_OFF
         udata.eval_params = eval_params
         udata.array = self.array
         cdef void* aux_reduc_ptr = NULL
@@ -2955,12 +2968,18 @@ cdef class NDArray:
 
         return udata
 
-    def _set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None):
+    def _set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
         # Set prefilter for miniexpr
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> miniexpr_prefilter
 
-        cdef me_udata* udata = self._fill_me_udata(inputs, fp_accuracy, aux_reduc)
+        cdef int jit_mode = ME_JIT_DEFAULT
+        if jit is True:
+            jit_mode = ME_JIT_ON
+        elif jit is False:
+            jit_mode = ME_JIT_OFF
+
+        cdef me_udata* udata = self._fill_me_udata(inputs, fp_accuracy, aux_reduc, jit=jit)
 
         # Get the compiled expression handle for multi-threading
         cdef Py_ssize_t n = len(inputs)
@@ -2986,8 +3005,9 @@ cdef class NDArray:
         cdef int64_t* shape = &self.array.shape[0]
         cdef int32_t* chunkshape = &self.array.chunkshape[0]
         cdef int32_t* blockshape = &self.array.blockshape[0]
-        cdef int rc = me_compile_nd(expression, variables, n, me_dtype, ndims,
-                                    shape, chunkshape, blockshape, &error, &out_expr)
+        cdef int rc = me_compile_nd_jit(expression, variables, n, me_dtype, ndims,
+                                        shape, chunkshape, blockshape, jit_mode,
+                                        &error, &out_expr)
         if rc == ME_COMPILE_ERR_INVALID_ARG_TYPE:
             raise TypeError(f"miniexpr does not support operand or output dtype: {expression}")
         if rc != ME_COMPILE_SUCCESS:

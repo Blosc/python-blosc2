@@ -58,8 +58,8 @@ set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    GIT_TAG ac97332c61b4ef5136fbb348ac610d73e8682b89  # new tcc jit is available for all platforms
-    #SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
+    GIT_TAG 473f8a1841802e699c38b93cfc32f4acab83b1c3
+    # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
 

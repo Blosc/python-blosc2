@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.lazyexpr import _apply_jit_backend_pragma
 
 
 def _make_arrays(shape=(8, 8), chunks=(4, 4), blocks=(2, 2)):
@@ -219,11 +220,11 @@ def test_dsl_kernel_scalar_param_keeps_miniexpr_fast_path(monkeypatch):
     original_set_pref_expr = blosc2.NDArray._set_pref_expr
     captured = {"calls": 0, "expr": None, "keys": None}
 
-    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None):
+    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
         captured["calls"] += 1
         captured["expr"] = expression.decode("utf-8") if isinstance(expression, bytes) else expression
         captured["keys"] = tuple(inputs.keys())
-        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc)
+        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc, jit=jit)
 
     monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
 
@@ -248,6 +249,48 @@ def test_dsl_kernel_scalar_param_keeps_miniexpr_fast_path(monkeypatch):
         assert "float(niter)" not in captured["expr"]
     finally:
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
+
+
+def test_lazyudf_jit_policy_forwarding(monkeypatch):
+    if blosc2.IS_WASM:
+        pytest.skip("miniexpr fast path is not available on WASM")
+
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    seen = []
+
+    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        seen.append(jit)
+        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc, jit=jit)
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+
+    try:
+        _, _, a2, b2 = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))
+        expr = blosc2.lazyudf(kernel_loop, (a2, b2), dtype=a2.dtype, jit=False)
+        _ = expr.compute()
+        _ = expr.compute(jit=True)
+        assert seen[0] is False
+        assert seen[1] is True
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
+
+
+def test_jit_backend_pragma_wrapping_plain_expression():
+    expr = _apply_jit_backend_pragma("sin((a + 0.5))", {"a": np.empty(1, dtype=np.float64)}, "cc")
+    assert expr.startswith("# me:compiler=cc\ndef __me_auto(a):")
+    assert "return sin((a + 0.5))" in expr
+
+
+def test_jit_backend_pragma_wrapping_dsl_source():
+    dsl_src = "def k(a):\n    return sin((a + 0.5))"
+    wrapped = _apply_jit_backend_pragma(dsl_src, {"a": np.empty(1, dtype=np.float64)}, "tcc")
+    assert wrapped.startswith("# me:compiler=tcc\ndef k(a):")
 
 
 @pytest.mark.parametrize(
