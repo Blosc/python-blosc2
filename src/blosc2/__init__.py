@@ -10,9 +10,11 @@
 # ruff: noqa: F401 - `var` imported but unused
 
 import contextlib
+import importlib.util
 import os
 import platform
 from enum import Enum
+from pathlib import Path
 
 import numpy as np
 
@@ -34,6 +36,42 @@ if not IS_WASM:
     import numexpr
 
 from .version import __array_api_version__, __version__
+
+
+def _configure_libtcc_runtime_path():
+    """Best-effort configuration so miniexpr can find bundled libtcc at runtime."""
+    if IS_WASM:
+        return
+    if os.environ.get("ME_DSL_JIT_LIBTCC_PATH"):
+        return
+
+    spec = importlib.util.find_spec("blosc2.blosc2_ext")
+    origin = None if spec is None else spec.origin
+    if not origin:
+        return
+
+    ext_dir = Path(origin).resolve().parent
+    candidate_dirs = (
+        ext_dir,
+        ext_dir / "lib",
+        ext_dir.parent / "lib",
+    )
+    if platform.system() == "Darwin":
+        names = ("libtcc.dylib",)
+    elif platform.system() == "Windows":
+        names = ("tcc.dll", "libtcc.dll")
+    else:
+        names = ("libtcc.so", "libtcc.so.1")
+
+    for cdir in candidate_dirs:
+        for name in names:
+            candidate = cdir / name
+            if candidate.is_file():
+                os.environ["ME_DSL_JIT_LIBTCC_PATH"] = str(candidate)
+                return
+
+
+_configure_libtcc_runtime_path()
 
 __version__ = __version__
 __array_api_version__ = __array_api_version__

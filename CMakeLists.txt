@@ -58,7 +58,7 @@ set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    GIT_TAG b77ca278a13044873076a290793bd303390f6969  # new tcc jit is available for all platforms
+    GIT_TAG ac97332c61b4ef5136fbb348ac610d73e8682b89  # new tcc jit is available for all platforms
     #SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
@@ -145,3 +145,33 @@ install(
   TARGETS blosc2_ext
   LIBRARY DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2
 )
+
+# Install bundled libtcc next to the Python package (separate LGPL artifact).
+if(MINIEXPR_ENABLE_TCC_JIT)
+  if(APPLE)
+    install(
+      FILES "${miniexpr_BINARY_DIR}/libtcc.dylib"
+      DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2/lib
+      OPTIONAL
+    )
+  elseif(WIN32)
+    install(
+      FILES
+        "${miniexpr_BINARY_DIR}/tcc.dll"
+        "${miniexpr_BINARY_DIR}/Debug/tcc.dll"
+        "${miniexpr_BINARY_DIR}/Release/tcc.dll"
+        "${miniexpr_BINARY_DIR}/RelWithDebInfo/tcc.dll"
+        "${miniexpr_BINARY_DIR}/MinSizeRel/tcc.dll"
+      DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2/lib
+      OPTIONAL
+    )
+  else()
+    install(
+      FILES
+        "${miniexpr_BINARY_DIR}/libtcc.so"
+        "${miniexpr_BINARY_DIR}/libtcc.so.1"
+      DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2/lib
+      OPTIONAL
+    )
+  endif()
+endif()
