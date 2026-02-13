@@ -18,12 +18,12 @@ from blosc2.lazyexpr import _toggle_miniexpr
 # nparr = nparr.view('S40').astype('U10')
 
 N = int(1e5)
-nparr_ = np.array(['josé', 'pepe', 'francisco'])
-nparr = np.repeat(nparr_, N)
+nparr = np.repeat(np.array(['josé', 'pepe', 'francisco']), N)
 cparams = blosc2.cparams_dflts
+cparams["filters"][-1] = blosc2.Filter.SHUFFLE
+cparams["filters_meta"][-1] = 0 # use default (typesize)
 arr1 = blosc2.asarray(nparr, cparams=cparams)
 print(f"cratio without filter: {arr1.cratio}")
-cparams["filters"][-1] = blosc2.Filter.SHUFFLE
 cparams["filters_meta"][-1] = 4
 arr1 = blosc2.asarray(nparr, cparams=cparams)
 print(f"cratio with filter: {arr1.cratio}")

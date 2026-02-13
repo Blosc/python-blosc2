@@ -540,41 +540,22 @@ def test_stringops(values):
     if value1 == "NDArray":
         a1 = np.array(["abc", "def", "aterr", "oot", "zu", "ab c"])
         a1_blosc = blosc2.asarray(a1)
-        if value2 == "str":  # ("NDArray", "str")
-            value2 = "a"
-            expr_lazy = blosc2.startswith(a1_blosc, value2)
-            assert expr_lazy.shape == a1_blosc.shape
-            res_numexpr = np.char.startswith(a1, value2)
-            np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
-            value2 = "c"
-            expr_lazy = blosc2.endswith(a1_blosc, value2)
-            res_numexpr = np.char.endswith(a1, value2)
-            np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
-        else:  # ("NDArray", "NDArray")
-            a2 = np.array(["ba", "ef", "rr", "o ", "\tz", "c h"])
-            a2_blosc = blosc2.asarray(a2)
-            expr_lazy = blosc2.startswith(a1_blosc, a2_blosc)
-            assert expr_lazy.shape == a1_blosc.shape
-            res_numexpr = np.char.startswith(a1, a2)
-            np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
-            a2 = np.array(["ab", "d", " ath", "oo", "\tabc", " c"])
-            a2_blosc = blosc2.asarray(a2)
-            expr_lazy = blosc2.endswith(a1, a2_blosc)
-            res_numexpr = np.char.endswith(a1, a2)
-            np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
-    else:  # ("str", "NDArray")
-        value1 = "abc"
-        a2 = np.array(["ab", "def", "a", "oot", "zu", "ab "])
-        a2_blosc = blosc2.asarray(a2)
-        expr_lazy = blosc2.startswith(value1, a2_blosc)
-        assert expr_lazy.shape == a2_blosc.shape
-        assert expr_lazy.dtype == blosc2.bool_
-        res_numexpr = np.char.startswith(value1, a2)
-        np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
+    else:  # ("str", _)
+        a1 = a1_blosc = "abc"
 
-        value1 = "b"
-        expr_lazy = blosc2.endswith(value1, a2_blosc)
-        res_numexpr = np.char.endswith(value1, a2)
+    if value2 == "str":  # (_, "str")
+        a2 = a2_blosc = "a"
+    else:  # (_, "NDArray")
+        a2 = np.array(["ba", "ef", "rr", "o ", "\tz", "c h"])
+        a2_blosc = blosc2.asarray(a2)
+
+    for func, npfunc in zip(
+        (blosc2.startswith, blosc2.endswith), (np.char.startswith, np.char.endswith), strict=True
+    ):
+        expr_lazy = func(a1_blosc, a2_blosc)
+        res_numexpr = npfunc(a1, a2)
+        assert expr_lazy.shape == res_numexpr.shape
+        assert expr_lazy.dtype == blosc2.bool_
         np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
 
 
