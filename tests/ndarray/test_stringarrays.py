@@ -169,3 +169,61 @@ def test_unicode_on_disk_persistence(tmp_path):
 
     reopened = blosc2.open(path)
     assert np.array_equal(reopened, arr2)
+
+
+@pytest.mark.parametrize(
+    "constructor",
+    [
+        "zeros",
+        "ones",
+        "empty",
+        "full",
+        # "full_like", these all call ones/empty/full/zeros anyway
+        # "zeros_like",
+        # "ones_like",
+        # "empty_like",
+        "eye",
+    ],
+)
+@pytest.mark.parametrize("shape", SHAPES)
+def test_constructors(constructor, shape):
+    if constructor == "full":
+        arr = getattr(blosc2, constructor)(fill_value="pepe", shape=shape, dtype=np.str_)
+        nparr = getattr(np, constructor)(fill_value="pepe", shape=shape, dtype=np.str_)
+    elif constructor == "eye":
+        arr = getattr(blosc2, constructor)(shape[0], dtype=np.str_)
+        nparr = getattr(np, constructor)(shape[0], dtype=np.str_)
+    else:
+        arr = getattr(blosc2, constructor)(shape=shape, dtype=np.str_)
+        nparr = getattr(np, constructor)(shape=shape, dtype=np.str_)
+    np.testing.assert_array_equal(arr[()], nparr)
+
+
+def test_optimised_string_comp():
+    N = int(1e5)
+    nparr = np.repeat(np.array(["josé", "pepe", "francisco"]), N)
+    cparams = blosc2.cparams_dflts
+    arr1 = blosc2.asarray(nparr, cparams=cparams)
+    cratio_subopt = arr1.cratio
+    # when not providing cparams, blosc2_ext passes an optimised pipeline for string dtypes
+    arr1 = blosc2.asarray(nparr)
+    assert arr1.cratio > cratio_subopt
+
+
+@pytest.mark.parametrize("shape", SHAPES)
+def test_frombuffer(shape):
+    chunks = tuple(max(c // 4, 1) for c in shape)
+    dtype = np.dtype("<U8")
+    typesize = dtype.itemsize
+    # Create a buffer
+    nparr = make_unicode_array(shape, maxlen=8)
+    buffer = bytes(nparr)
+    # Create a NDArray from a buffer with default blocks
+    arr = blosc2.frombuffer(buffer, shape, chunks=chunks, dtype=dtype)
+    np.testing.assert_array_equal(arr[()], nparr)
+
+
+def test_fromiter():
+    nparr = np.arange(0, 20).astype(np.str_)
+    arr = blosc2.fromiter(range(20), shape=(20,), dtype=nparr.dtype)
+    np.testing.assert_array_equal(arr[()], nparr)

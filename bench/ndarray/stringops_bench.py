@@ -22,7 +22,7 @@ nparr = np.repeat(np.array(['josé', 'pepe', 'francisco']), N)
 cparams = blosc2.cparams_dflts
 cparams["filters"][-1] = blosc2.Filter.SHUFFLE
 cparams["filters_meta"][-1] = 0 # use default (typesize)
-arr1 = blosc2.asarray(nparr, cparams=cparams)
+arr1 = blosc2.asarray(nparr)
 print(f"cratio without filter: {arr1.cratio}")
 cparams["filters_meta"][-1] = 4
 arr1 = blosc2.asarray(nparr, cparams=cparams)

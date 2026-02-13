@@ -4996,6 +4996,8 @@ def _check_dtype(dtype):
     dtype = np.dtype(dtype)
     if dtype.itemsize > blosc2.MAX_TYPESIZE:
         raise ValueError(f"dtype itemsize {dtype.itemsize} is too large (>{blosc2.MAX_TYPESIZE})!")
+    if dtype == np.str_:  # itemsize is 0
+        dtype = np.dtype("<U1")  # default to 1 char strings
     return dtype
 
 
