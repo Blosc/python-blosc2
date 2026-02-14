@@ -70,6 +70,12 @@ if not NUMPY_GE_2_0:  # handle non-array-api compliance
     safe_numpy_globals["concat"] = np.concatenate
     safe_numpy_globals["matrix_transpose"] = np.transpose
     safe_numpy_globals["vecdot"] = npvecdot
+    safe_numpy_globals["cumulative_sum"] = npcumsum
+    safe_numpy_globals["cumulative_prod"] = npcumprod
+    # handle different naming conventions between numpy and blosc2
+    safe_numpy_globals["contains"] = lambda *args: np.char.find(*args) != -1
+    safe_numpy_globals["startswith"] = np.char.startswith
+    safe_numpy_globals["endswith"] = np.char.endswith
 
 
 elementwise_funcs = [
@@ -945,6 +951,8 @@ def _incomplete_lazyfunc(func) -> None:
         return func(*args, **kwargs)
 
     return wrapper
+
+
 def check_smaller_shape(value_shape, shape, slice_shape, slice_):
     """Check whether the shape of the value is smaller than the shape of the array.
 

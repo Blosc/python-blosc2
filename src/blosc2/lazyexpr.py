@@ -49,7 +49,6 @@ from blosc2.info import InfoReporter
 
 from .proxy import _convert_dtype
 from .utils import (
-    NUMPY_GE_2_0,
     _get_chunk_operands,
     _sliced_chunk_iter,
     check_smaller_shape,
@@ -63,7 +62,6 @@ from .utils import (
     linalg_funcs,
     npcumprod,
     npcumsum,
-    npvecdot,
     process_key,
     reducers,
     safe_numpy_globals,
@@ -74,32 +72,6 @@ if not blosc2.IS_WASM:
 
 global safe_blosc2_globals
 safe_blosc2_globals = {}
-global safe_numpy_globals
-# Use numpy eval when running in WebAssembly
-safe_numpy_globals = {"np": np}
-# Add all first-level numpy functions
-safe_numpy_globals.update(
-    {name: getattr(np, name) for name in dir(np) if callable(getattr(np, name)) and not name.startswith("_")}
-)
-
-if not NUMPY_GE_2_0:  # handle non-array-api compliance
-    safe_numpy_globals["acos"] = np.arccos
-    safe_numpy_globals["acosh"] = np.arccosh
-    safe_numpy_globals["asin"] = np.arcsin
-    safe_numpy_globals["asinh"] = np.arcsinh
-    safe_numpy_globals["atan"] = np.arctan
-    safe_numpy_globals["atanh"] = np.arctanh
-    safe_numpy_globals["atan2"] = np.arctan2
-    safe_numpy_globals["permute_dims"] = np.transpose
-    safe_numpy_globals["pow"] = np.power
-    safe_numpy_globals["bitwise_left_shift"] = np.left_shift
-    safe_numpy_globals["bitwise_right_shift"] = np.right_shift
-    safe_numpy_globals["bitwise_invert"] = np.bitwise_not
-    safe_numpy_globals["concat"] = np.concatenate
-    safe_numpy_globals["matrix_transpose"] = np.transpose
-    safe_numpy_globals["vecdot"] = npvecdot
-    safe_numpy_globals["cumulative_sum"] = npcumsum
-    safe_numpy_globals["cumulative_prod"] = npcumprod
 
 # Set this to False if miniexpr should not be tried out
 try_miniexpr = True
@@ -3246,7 +3218,7 @@ class LazyExpr(LazyArray):
             # We have constructors in the expression (probably coming from a string lazyexpr)
             # Let's replace the constructors with the actual NDArray objects
             for constructor in constructors:
-                if constructor not in newexpr:
+                if constructor + "(" not in newexpr:
                     continue
                 while constructor in newexpr:
                     # Get the constructor function and replace it by an NDArray object in the operands
