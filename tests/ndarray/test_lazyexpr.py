@@ -1519,6 +1519,40 @@ def test_lazyexpr_string_scalar_keeps_miniexpr_fast_path(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="miniexpr fast path is not available on WASM")
+def test_lazyexpr_unary_negative_literal_matches_subtraction(monkeypatch):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    captured = {"calls": 0, "exprs": []}
+
+    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        captured["calls"] += 1
+        expr = expression.decode("utf-8") if isinstance(expression, bytes) else expression
+        captured["exprs"].append(expr)
+        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc, jit=jit)
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+
+    try:
+        na = np.arange(32 * 32, dtype=np.int64).reshape(32, 32)
+        a = blosc2.asarray(na, chunks=(16, 16), blocks=(8, 8))
+
+        left = blosc2.lazyexpr("-1 + a", operands={"a": a}).compute()
+        right = blosc2.lazyexpr("a - 1", operands={"a": a}).compute()
+
+        np.testing.assert_equal(left[...], right[...])
+        np.testing.assert_equal(left[...], na - 1)
+        assert captured["calls"] >= 1
+        assert any("-1" in expr for expr in captured["exprs"])
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
+
+
 # Test the LazyExpr when some operands are missing (e.g. removed file)
 def test_missing_operator():
     a = blosc2.arange(10, urlpath="a.b2nd", mode="w")
