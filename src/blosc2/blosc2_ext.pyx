@@ -1941,6 +1941,9 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
 
     if miniexpr_handle == NULL:
         raise ValueError("miniexpr: handle not assigned")
+    if input_buffers == NULL:
+        raise MemoryError("miniexpr: cannot allocate input buffer table")
+    memset(input_buffers, 0, udata.ninputs * sizeof(uint8_t*))
 
     # Query valid (unpadded) items for this block
     rc = me_nd_valid_nitems(miniexpr_handle, nchunk, nblock, &valid_nitems)
@@ -1956,7 +1959,6 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
 
     for i in range(udata.ninputs):
         ndarr = udata.inputs[i]
-        input_buffers[i] = malloc(ndarr.sc.blocksize)
         if ndarr.sc.storage.urlpath == NULL:
             src = ndarr.sc.data[nchunk]
         else:
@@ -1987,6 +1989,11 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         rc = blosc2_cbuffer_sizes(src, &chunk_nbytes, &chunk_cbytes, &block_nbytes)
         if rc < 0:
             raise ValueError("miniexpr: error getting cbuffer sizes")
+        if block_nbytes <= 0:
+            raise ValueError("miniexpr: invalid block size")
+        input_buffers[i] = malloc(block_nbytes)
+        if input_buffers[i] == NULL:
+            raise MemoryError("miniexpr: cannot allocate input block buffer")
         input_typesize = ndarr.sc.typesize
         blocknitems = block_nbytes // input_typesize
         if expected_blocknitems == -1:
