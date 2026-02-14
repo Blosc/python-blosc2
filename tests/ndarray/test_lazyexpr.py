@@ -1484,6 +1484,41 @@ def test_numpy_funcs(array_fixture, func):
         pytest.skip("NumPy version has no cumulative_sum function.")
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="miniexpr fast path is not available on WASM")
+def test_lazyexpr_string_scalar_keeps_miniexpr_fast_path(monkeypatch):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    captured = {"calls": 0, "expr": None, "keys": None}
+
+    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        captured["calls"] += 1
+        captured["expr"] = expression.decode("utf-8") if isinstance(expression, bytes) else expression
+        captured["keys"] = tuple(inputs.keys())
+        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc, jit=jit)
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+
+    try:
+        na = np.arange(32 * 32, dtype=np.float32).reshape(32, 32)
+        a = blosc2.asarray(na, chunks=(16, 16), blocks=(8, 8))
+        b = 3
+        expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+        res = expr.compute()
+
+        np.testing.assert_allclose(res[...], na + b, rtol=1e-6, atol=1e-6)
+        assert captured["calls"] >= 1
+        assert captured["keys"] == ("o0",)
+        assert captured["expr"] == "o0 + 3"
+        assert "b" not in captured["expr"]
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
+
+
 # Test the LazyExpr when some operands are missing (e.g. removed file)
 def test_missing_operator():
     a = blosc2.arange(10, urlpath="a.b2nd", mode="w")
