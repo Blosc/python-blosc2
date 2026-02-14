@@ -56,6 +56,12 @@ set(MINIEXPR_BUILD_TESTS OFF CACHE BOOL "Build miniexpr tests" FORCE)
 set(MINIEXPR_BUILD_EXAMPLES OFF CACHE BOOL "Build miniexpr examples" FORCE)
 set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
 
+if(EMSCRIPTEN)
+  # JIT in miniexpr for wasm32 exists already, but we need to do some work before we can use it
+  # See plans/external-js-glue.md for details
+  set(MINIEXPR_ENABLE_TCC_JIT OFF CACHE BOOL "TCC JIT unavailable in Emscripten side-module builds" FORCE)
+endif()
+
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
     GIT_TAG 9a6d3df0e9f31bc0b9812ad0d3efd05922a728dd
