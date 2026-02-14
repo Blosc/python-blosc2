@@ -1495,11 +1495,11 @@ def test_lazyexpr_string_scalar_keeps_miniexpr_fast_path(monkeypatch):
     original_set_pref_expr = blosc2.NDArray._set_pref_expr
     captured = {"calls": 0, "expr": None, "keys": None}
 
-    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None):
+    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
         captured["calls"] += 1
         captured["expr"] = expression.decode("utf-8") if isinstance(expression, bytes) else expression
         captured["keys"] = tuple(inputs.keys())
-        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc)
+        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc, jit=jit)
 
     monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
 
