@@ -1,4 +1,4 @@
-Indexing Functions and Utilities
+Indexing and Manipulation Functions and Utilities
 =======================================
 
 The following functions are useful for performing indexing and other associated operations.

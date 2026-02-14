@@ -6,6 +6,7 @@ import sys
 import numpy as np
 
 import blosc2
+from blosc2.utils import constructors, elementwise_funcs, reducers
 
 
 def genbody(f, func_list, lib="blosc2"):
@@ -99,7 +100,7 @@ The following elementwise functions can be used for computing with any of :ref:`
 
 Their result is always a :ref:`LazyExpr` instance, which can be evaluated (with ``compute`` or ``__getitem__``) to get the actual values of the computation.
 
-Note: The functions ``conj``, ``real``, ``imag``, ``contains``, ``where`` are not technically ufuncs.
+Note: The functions ``real``, ``imag``, ``contains``, ``where`` are not technically ufuncs.
 
 .. currentmodule:: blosc2
 
@@ -110,7 +111,7 @@ Note: The functions ``conj``, ``real``, ``imag``, ``contains``, ``where`` are no
     genbody(f, blosc2_ufuncs)
 
 # GENERATE additional_funcs.rst
-blosc2_addfuncs = sorted(["conj", "real", "imag", "contains", "where", "clip", "round"])
+blosc2_addfuncs = sorted(set(elementwise_funcs) - set(blosc2_ufuncs))
 blosc2_dtypefuncs = sorted(["astype", "can_cast", "result_type", "isdtype"])
 
 with open("reference/additional_funcs.rst", "w") as f:
@@ -133,7 +134,9 @@ Their result is typically a :ref:`LazyExpr` instance, which can be evaluated (wi
     )
     genbody(f, blosc2_addfuncs)
     f.write(
-        """Type Utilities
+        """
+
+Type Utilities
 --------------
 
 The following functions are useful for working with datatypes.
@@ -158,12 +161,14 @@ blosc2_indexfuncs = sorted(
         "broadcast_to",
         "meshgrid",
         "indices",
+        "concat",
+        "stack",
     ]
 )
 
 with open("reference/index_funcs.rst", "w") as f:
     f.write(
-        """Indexing Functions and Utilities
+        """Indexing and Manipulation Functions and Utilities
 =======================================
 
 The following functions are useful for performing indexing and other associated operations.
@@ -195,7 +200,68 @@ The following functions can be used for computing linear algebra operations with
 
 """
     )
-    genbody(f, linalg_funcs, "blosc2.linalg")
+    genbody(f, sorted(linalg_funcs), "blosc2.linalg")
+
+with open("reference/reduction_functions.rst", "w") as f:
+    f.write(
+        """Reduction Functions
+-------------------
+
+Contrarily to lazy functions, reduction functions are evaluated eagerly, and the result is always a NumPy array (although this can be converted internally into an :ref:`NDArray <NDArray>` if you pass any :func:`blosc2.empty` arguments in ``kwargs``).
+
+Reduction operations can be used with any of :ref:`NDArray <NDArray>`, :ref:`C2Array <C2Array>`, :ref:`NDField <NDField>` and :ref:`LazyExpr <LazyExpr>`. Again, although these can be part of a :ref:`LazyExpr <LazyExpr>`, you must be aware that they are not lazy, but will be evaluated eagerly during the construction of a LazyExpr instance (this might change in the future). When the input is a :ref:`LazyExpr`, reductions accept ``fp_accuracy`` to control floating-point accuracy, and it is forwarded to :func:`LazyExpr.compute`.
+
+.. currentmodule:: blosc2
+
+.. autosummary::
+
+"""
+    )
+    genbody(f, sorted(reducers))
+
+with open("reference/ndarray.rst", "w") as f:
+    f.write(
+        """.. _NDArray:
+
+NDArray
+=======
+
+The multidimensional data array class. Instances may be constructed using the constructor functions in the list below `NDArrayConstructors`_.
+In addition, all the functions from the :ref:`Lazy Functions <lazy_functions>` section can be used with NDArray instances.
+
+.. currentmodule:: blosc2
+
+.. autoclass:: NDArray
+    :members:
+    :inherited-members:
+    :exclude-members: get_slice, set_slice, get_slice_numpy, get_oindex_numpy, set_oindex_numpy
+    :member-order: groupwise
+
+    :Special Methods:
+
+    .. autosummary::
+
+        __iter__
+        __len__
+        __getitem__
+        __setitem__
+
+    Utility Methods
+    ---------------
+
+    .. automethod:: __iter__
+    .. automethod:: __len__
+    .. automethod:: __getitem__
+    .. automethod:: __setitem__
+
+Constructors
+------------
+.. _NDArrayConstructors:
+.. autosummary::
+
+"""
+    )
+    genbody(f, sorted(constructors))
 
 hidden = "_ignore_multiple_size"
 

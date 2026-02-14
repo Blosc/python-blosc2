@@ -13,6 +13,7 @@ import asyncio
 import builtins
 import concurrent.futures
 import copy
+import enum
 import inspect
 import linecache
 import math
@@ -48,6 +49,11 @@ from blosc2.info import InfoReporter
 
 from .proxy import _convert_dtype
 from .utils import (
+    NUMPY_GE_2_0,
+    _get_chunk_operands,
+    _sliced_chunk_iter,
+    check_smaller_shape,
+    compute_smaller_slice,
     constructors,
     elementwise_funcs,
     get_chunks_idx,
@@ -55,6 +61,9 @@ from .utils import (
     infer_shape,
     linalg_attrs,
     linalg_funcs,
+    npcumprod,
+    npcumsum,
+    npvecdot,
     process_key,
     reducers,
     safe_numpy_globals,
@@ -65,6 +74,32 @@ if not blosc2.IS_WASM:
 
 global safe_blosc2_globals
 safe_blosc2_globals = {}
+global safe_numpy_globals
+# Use numpy eval when running in WebAssembly
+safe_numpy_globals = {"np": np}
+# Add all first-level numpy functions
+safe_numpy_globals.update(
+    {name: getattr(np, name) for name in dir(np) if callable(getattr(np, name)) and not name.startswith("_")}
+)
+
+if not NUMPY_GE_2_0:  # handle non-array-api compliance
+    safe_numpy_globals["acos"] = np.arccos
+    safe_numpy_globals["acosh"] = np.arccosh
+    safe_numpy_globals["asin"] = np.arcsin
+    safe_numpy_globals["asinh"] = np.arcsinh
+    safe_numpy_globals["atan"] = np.arctan
+    safe_numpy_globals["atanh"] = np.arctanh
+    safe_numpy_globals["atan2"] = np.arctan2
+    safe_numpy_globals["permute_dims"] = np.transpose
+    safe_numpy_globals["pow"] = np.power
+    safe_numpy_globals["bitwise_left_shift"] = np.left_shift
+    safe_numpy_globals["bitwise_right_shift"] = np.right_shift
+    safe_numpy_globals["bitwise_invert"] = np.bitwise_not
+    safe_numpy_globals["concat"] = np.concatenate
+    safe_numpy_globals["matrix_transpose"] = np.transpose
+    safe_numpy_globals["vecdot"] = npvecdot
+    safe_numpy_globals["cumulative_sum"] = npcumsum
+    safe_numpy_globals["cumulative_prod"] = npcumprod
 
 # Set this to False if miniexpr should not be tried out
 try_miniexpr = True
@@ -133,6 +168,45 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
         out[:] = res  # will handle calc/decomp if res is lazyarray
         return out
     return res[()] if isinstance(res, blosc2.Operand) else res
+
+
+def _get_result(expression, chunk_operands, ne_args, where=None, indices=None, _order=None):
+    chunk_indices = None
+    if (expression == "o0" or expression == "(o0)") and where is None:
+        # We don't have an actual expression, so avoid a copy except to make contiguous (later)
+        return chunk_operands["o0"], None
+    # Apply the where condition (in result)
+    if where is not None and len(where) == 2:
+        # x = chunk_operands["_where_x"]
+        # y = chunk_operands["_where_y"]
+        # result = np.where(result, x, y)
+        # numexpr is a bit faster than np.where, and we can fuse operations in this case
+        new_expr = f"where({expression}, _where_x, _where_y)"
+        return ne_evaluate(new_expr, chunk_operands, **ne_args), None
+
+    result = ne_evaluate(expression, chunk_operands, **ne_args)
+    if where is None:
+        return result, None
+    elif len(where) == 1:
+        x = chunk_operands["_where_x"]
+        if (indices is not None) or (_order is not None):
+            # Return indices only makes sense when the where condition is a tuple with one element
+            # and result is a boolean array
+            if len(x.shape) > 1:
+                raise ValueError("indices() and sort() only support 1D arrays")
+            if result.dtype != np.bool_:
+                raise ValueError("indices() and sort() only support bool conditions")
+            if _order:
+                # We need to cumulate all the fields in _order, as well as indices
+                chunk_indices = indices[result]
+                result = x[_order][result]
+            else:
+                chunk_indices = None
+                result = indices[result]
+            return result, chunk_indices
+        else:
+            return x[result], None
+    raise ValueError("The where condition must be a tuple with one or two elements")
 
 
 # Define empty ndindex tuple for function defaults
@@ -215,13 +289,27 @@ def get_expr_globals(expression):
             if hasattr(blosc2, func):
                 _globals[func] = getattr(blosc2, func)
             # Fall back to numpy
-            elif hasattr(np, func):
-                _globals[func] = getattr(np, func)
-            # Function not found in either module
             else:
-                raise AttributeError(f"Function {func} not found in blosc2 or numpy")
+                try:
+                    _globals[func] = safe_numpy_globals[func]
+                # Function not found in either module
+                except KeyError as e:
+                    raise AttributeError(f"Function {func} not found in blosc2 or numpy") from e
 
     return _globals
+
+
+if not hasattr(enum, "member"):
+    # copy-pasted from Lib/enum.py
+    class _mymember:
+        """
+        Forces item to become an Enum member during class creation.
+        """
+
+        def __init__(self, value):
+            self.value = value
+else:
+    _mymember = enum.member  # only available after python 3.11
 
 
 class ReduceOp(Enum):
@@ -229,23 +317,27 @@ class ReduceOp(Enum):
     Available reduce operations.
     """
 
-    SUM = np.add
-    PROD = np.multiply
-    MEAN = np.mean
-    STD = np.std
-    VAR = np.var
+    # wrap as enum.member so that Python doesn't treat some funcs
+    # as class methods (rather than Enum members)
+    SUM = _mymember(np.add)
+    PROD = _mymember(np.multiply)
+    MEAN = _mymember(np.mean)
+    STD = _mymember(np.std)
+    VAR = _mymember(np.var)
     # Computing a median from partial results is not straightforward because the median
     # is a positional statistic, which means it depends on the relative ordering of all
     # the data points. Unlike statistics such as the sum or mean, you can't compute a median
     # from partial results without knowing the entire dataset, and this is way too expensive
     # for arrays that cannot typically fit in-memory (e.g. disk-based NDArray).
     # MEDIAN = np.median
-    MAX = np.maximum
-    MIN = np.minimum
-    ANY = np.any
-    ALL = np.all
-    ARGMAX = np.argmax
-    ARGMIN = np.argmin
+    MAX = _mymember(np.maximum)
+    MIN = _mymember(np.minimum)
+    ANY = _mymember(np.any)
+    ALL = _mymember(np.all)
+    ARGMAX = _mymember(np.argmax)
+    ARGMIN = _mymember(np.argmin)
+    CUMULATIVE_SUM = _mymember(npcumsum)
+    CUMULATIVE_PROD = _mymember(npcumprod)
 
 
 class LazyArrayEnum(Enum):
@@ -520,79 +612,6 @@ def compute_broadcast_shape(arrays):
     # When dealing with UDFs, one can arrive params that are not arrays
     shapes = [arr.shape for arr in arrays if hasattr(arr, "shape") and arr is not np]
     return np.broadcast_shapes(*shapes) if shapes else None
-
-
-def check_smaller_shape(value_shape, shape, slice_shape, slice_):
-    """Check whether the shape of the value is smaller than the shape of the array.
-
-    This follows the NumPy broadcasting rules.
-    """
-    # slice_shape must be as long as shape
-    if len(slice_shape) != len(slice_):
-        raise ValueError("slice_shape must be as long as slice_")
-    no_nones_shape = tuple(sh for sh, s in zip(slice_shape, slice_, strict=True) if s is not None)
-    no_nones_slice = tuple(s for sh, s in zip(slice_shape, slice_, strict=True) if s is not None)
-    is_smaller_shape = any(
-        s > (1 if i >= len(value_shape) else value_shape[i]) for i, s in enumerate(no_nones_shape)
-    )
-    slice_past_bounds = any(
-        s.stop > (1 if i >= len(value_shape) else value_shape[i]) for i, s in enumerate(no_nones_slice)
-    )
-    return len(value_shape) < len(shape) or is_smaller_shape or slice_past_bounds
-
-
-def _compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
-    smaller_slice = []
-    diff_dims = len(larger_shape) - len(smaller_shape)
-
-    for i in range(len(larger_shape)):
-        if i < diff_dims:
-            # For leading dimensions of the larger array that the smaller array doesn't have,
-            # we don't add anything to the smaller slice
-            pass
-        else:
-            # For dimensions that both arrays have, the slice for the smaller array should be
-            # the same as the larger array unless the smaller array's size along that dimension
-            # is 1, in which case we use None to indicate the full slice
-            if smaller_shape[i - diff_dims] != 1:
-                smaller_slice.append(larger_slice[i])
-            else:
-                smaller_slice.append(slice(0, larger_shape[i]))
-
-    return tuple(smaller_slice)
-
-
-# A more compact version of the function above, albeit less readable
-def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
-    """
-    Returns the slice of the smaller array that corresponds to the slice of the larger array.
-    """
-    j_small = len(smaller_shape) - 1
-    j_large = len(larger_shape) - 1
-    smaller_shape_nones = []
-    larger_shape_nones = []
-    for s in reversed(larger_slice):
-        if s is None:
-            smaller_shape_nones.append(1)
-            larger_shape_nones.append(1)
-        else:
-            if j_small >= 0:
-                smaller_shape_nones.append(smaller_shape[j_small])
-                j_small -= 1
-            if j_large >= 0:
-                larger_shape_nones.append(larger_shape[j_large])
-                j_large -= 1
-    smaller_shape_nones.reverse()
-    larger_shape_nones.reverse()
-    diff_dims = len(larger_shape_nones) - len(smaller_shape_nones)
-    return tuple(
-        None
-        if larger_slice[i] is None
-        else (
-            larger_slice[i] if smaller_shape_nones[i - diff_dims] != 1 else slice(0, larger_shape_nones[i])
-        )
-        for i in range(diff_dims, len(larger_shape_nones))
-    )
 
 
 # Define the patterns for validation
@@ -1106,10 +1125,14 @@ def get_chunk(arr, info, nchunk):
 
 async def async_read_chunks(arrs, info, queue):
     loop = asyncio.get_event_loop()
-    nchunks = arrs[0].schunk.nchunks
-
+    shape, chunks_ = arrs[0].shape, arrs[0].chunks
     with concurrent.futures.ThreadPoolExecutor() as executor:
-        for nchunk in range(nchunks):
+        my_chunk_iter = range(arrs[0].schunk.nchunks)
+        if len(info) == 5:
+            if info[-1] is not None:
+                my_chunk_iter = _sliced_chunk_iter(chunks_, (), shape, axis=info[-1], nchunk=True)
+            info = info[:4]
+        for i, nchunk in enumerate(my_chunk_iter):
             futures = [
                 (index, loop.run_in_executor(executor, get_chunk, arr, info, nchunk))
                 for index, arr in enumerate(arrs)
@@ -1122,7 +1145,7 @@ async def async_read_chunks(arrs, info, queue):
                     print(f"Exception occurred: {chunk}")
                     raise chunk
                 chunks_sorted.append(chunk)
-            queue.put((nchunk, chunks_sorted))  # use non-async queue.put()
+            queue.put((i, chunks_sorted))  # use non-async queue.put()
 
     queue.put(None)  # signal the end of the chunks
 
@@ -1159,7 +1182,7 @@ iter_chunks = None
 
 
 def fill_chunk_operands(
-    operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands, reduc=False
+    operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands, reduc=False, axis=None
 ):
     """Retrieve the chunk operands for evaluating an expression.
 
@@ -1172,12 +1195,12 @@ def fill_chunk_operands(
         low_mem = os.environ.get("BLOSC_LOW_MEM", False)
         # This method is only useful when all operands are NDArray and shows better
         # performance only when at least one of them is persisted on disk
-        if nchunk == 0:
+        if iter_chunks is None:
             # Initialize the iterator for reading the chunks
             # Take any operand (all should have the same shape and chunks)
             key, arr = next(iter(operands.items()))
             chunks_idx, _ = get_chunks_idx(arr.shape, arr.chunks)
-            info = (reduc, aligned[key], low_mem, chunks_idx)
+            info = (reduc, aligned[key], low_mem, chunks_idx, axis)
             iter_chunks = read_nchunk(list(operands.values()), info)
         # Run the asynchronous file reading function from a synchronous context
         chunks = next(iter_chunks)
@@ -1185,7 +1208,10 @@ def fill_chunk_operands(
         for i, (key, value) in enumerate(operands.items()):
             # Chunks are already decompressed, so we can use them directly
             if not low_mem:
-                chunk_operands[key] = chunks[i]
+                if full_chunk:
+                    chunk_operands[key] = chunks[i]
+                else:
+                    chunk_operands[key] = value[slice_]
                 continue
             # Otherwise, we need to decompress them
             if aligned[key]:
@@ -1590,14 +1616,16 @@ def slices_eval(  # noqa: C901
     intersecting_chunks = get_intersecting_chunks(
         _slice, shape, chunks
     )  # if _slice is (), returns all chunks
+    ratio = np.ceil(np.asarray(shape) / np.asarray(chunks)).astype(np.int64)
 
-    for nchunk, chunk_slice in enumerate(intersecting_chunks):
-        # get intersection of chunk and target
-        if _slice != ():
-            cslice = step_handler(chunk_slice.raw, _slice)
-        else:
-            cslice = chunk_slice.raw
-
+    for chunk_slice in intersecting_chunks:
+        # Check whether current cslice intersects with _slice
+        cslice = chunk_slice.raw
+        nchunk = builtins.sum([c.start // chunks[i] * np.prod(ratio[i + 1 :]) for i, c in enumerate(cslice)])
+        if cslice != () and _slice != ():
+            # get intersection of chunk and target
+            cslice = step_handler(cslice, _slice)
+        offset = tuple(s.start for s in cslice)  # offset for the udf
         cslice_shape = tuple(s.stop - s.start for s in cslice)
         len_chunk = math.prod(cslice_shape)
         # get local index of part of out that is to be updated
@@ -1605,35 +1633,7 @@ def slices_eval(  # noqa: C901
             ndindex.ndindex(cslice).as_subindex(_slice).raw
         )  # in the case _slice=(), just gives cslice
 
-        # Get the starts and stops for the slice
-        starts = [s.start if s.start is not None else 0 for s in cslice]
-        stops = [s.stop if s.stop is not None else sh for s, sh in zip(cslice, cslice_shape, strict=True)]
-        unit_steps = np.all([s.step == 1 for s in cslice])
-
-        # Get the slice of each operand
-        for key, value in operands.items():
-            if np.isscalar(value):
-                chunk_operands[key] = value
-                continue
-            if value.shape == ():
-                chunk_operands[key] = value[()]
-                continue
-            if check_smaller_shape(value.shape, shape, cslice_shape, cslice):
-                # We need to fetch the part of the value that broadcasts with the operand
-                smaller_slice = compute_smaller_slice(shape, value.shape, cslice)
-                chunk_operands[key] = value[smaller_slice]
-                continue
-            # If key is in operands, we can reuse the buffer
-            if (
-                key in chunk_operands
-                and cslice_shape == chunk_operands[key].shape
-                and isinstance(value, blosc2.NDArray)
-                and unit_steps
-            ):
-                value.get_slice_numpy(chunk_operands[key], (starts, stops))
-                continue
-
-            chunk_operands[key] = value[cslice]
+        _get_chunk_operands(operands, cslice, chunk_operands, shape)
 
         if out is None:
             shape_ = shape_slice if shape_slice is not None else shape
@@ -1664,47 +1664,16 @@ def slices_eval(  # noqa: C901
             result = np.empty(cslice_shape, dtype=out.dtype)  # raises error if out is None
             # cslice should be equal to cslice_subidx
             # Call the udf directly and use result as the output array
-            offset = tuple(s.start for s in cslice)
             expression(tuple(chunk_operands.values()), result, offset=offset)
             out[cslice_subidx] = result
             continue
 
-        if where is None:
-            result = ne_evaluate(expression, chunk_operands, **ne_args)
+        if _indices or _order:
+            indices = np.arange(leninputs, leninputs + len_chunk, dtype=np.int64).reshape(cslice_shape)
+            leninputs += len_chunk
+            result, chunk_indices = _get_result(expression, chunk_operands, ne_args, where, indices, _order)
         else:
-            # Apply the where condition (in result)
-            if len(where) == 2:
-                # x = chunk_operands["_where_x"]
-                # y = chunk_operands["_where_y"]
-                # result = np.where(result, x, y)
-                # numexpr is a bit faster than np.where, and we can fuse operations in this case
-                new_expr = f"where({expression}, _where_x, _where_y)"
-                result = ne_evaluate(new_expr, chunk_operands, **ne_args)
-            elif len(where) == 1:
-                result = ne_evaluate(expression, chunk_operands, **ne_args)
-                if _indices or _order:
-                    # Return indices only makes sense when the where condition is a tuple with one element
-                    # and result is a boolean array
-                    x = chunk_operands["_where_x"]
-                    if len(x.shape) > 1:
-                        raise ValueError("indices() and sort() only support 1D arrays")
-                    if result.dtype != np.bool_:
-                        raise ValueError("indices() and sort() only support bool conditions")
-                    indices = np.arange(leninputs, leninputs + len_chunk, dtype=np.int64).reshape(
-                        cslice_shape
-                    )
-                    if _order:
-                        # We need to cumulate all the fields in _order, as well as indices
-                        chunk_indices = indices[result]
-                        result = x[_order][result]
-                    else:
-                        result = indices[result]
-                    leninputs += len_chunk
-                else:
-                    x = chunk_operands["_where_x"]
-                    result = x[result]
-            else:
-                raise ValueError("The where condition must be a tuple with one or two elements")
+            result, _ = _get_result(expression, chunk_operands, ne_args, where)
         # Enforce contiguity of result (necessary to fill the out array)
         # but avoid copy if already contiguous
         result = np.require(result, requirements="C")
@@ -1811,9 +1780,9 @@ def slices_eval_getitem(
             shape = out.shape
 
     # compute the shape of the output array
-    _slice_bcast = tuple(slice(i, i + 1) if isinstance(i, int) else i for i in _slice.raw)
-    slice_shape = ndindex.ndindex(_slice_bcast).newshape(shape)  # includes dummy dimensions
     _slice = _slice.raw
+    _slice_bcast = tuple(slice(i, i + 1) if isinstance(i, int) else i for i in _slice)
+    slice_shape = ndindex.ndindex(_slice_bcast).newshape(shape)  # includes dummy dimensions
 
     # Get the slice of each operand
     slice_operands = {}
@@ -1838,12 +1807,7 @@ def slices_eval_getitem(
         result = np.empty(slice_shape, dtype=dtype)
         expression(tuple(slice_operands.values()), result, offset=offset)
     else:
-        if where is None:
-            result = ne_evaluate(expression, slice_operands, **ne_args)
-        else:
-            # Apply the where condition (in result)
-            new_expr = f"where({expression}, _where_x, _where_y)"
-            result = ne_evaluate(new_expr, slice_operands, **ne_args)
+        result, _ = _get_result(expression, slice_operands, ne_args, where)
 
     if out is None:  # avoid copying unnecessarily
         try:
@@ -1863,7 +1827,7 @@ def infer_reduction_dtype(dtype, operation):
     my_float = np.result_type(
         dtype, np.float32 if dtype in (np.float32, np.complex64) else blosc2.DEFAULT_FLOAT
     )
-    if operation in {ReduceOp.SUM, ReduceOp.PROD}:
+    if operation in {ReduceOp.SUM, ReduceOp.PROD, ReduceOp.CUMULATIVE_SUM, ReduceOp.CUMULATIVE_PROD}:
         if np.issubdtype(dtype, np.bool_):
             return np.int64
         if np.issubdtype(dtype, np.unsignedinteger):
@@ -1945,7 +1909,8 @@ def reduce_slices(  # noqa: C901
     reduce_op = reduce_args.pop("op")
     reduce_op_str = reduce_args.pop("op_str", None)
     axis = reduce_args["axis"]
-    keepdims = reduce_args["keepdims"]
+    keepdims = reduce_args.get("keepdims", False)
+    include_initial = reduce_args.pop("include_initial", False)
     dtype = reduce_args.get("dtype", None)
     if dtype is None:
         dtype = kwargs.pop("dtype", None)
@@ -1974,14 +1939,23 @@ def reduce_slices(  # noqa: C901
     if np.any(mask_slice):
         add_idx = np.cumsum(mask_slice)
         axis = tuple(a + add_idx[a] for a in axis)  # axis now refers to new shape with dummy dims
-        if reduce_args["axis"] is not None:
-            # conserve as integer if was not tuple originally
-            reduce_args["axis"] = axis[0] if np.isscalar(reduce_args["axis"]) else axis
-    if keepdims:
-        reduced_shape = tuple(1 if i in axis else s for i, s in enumerate(shape_slice))
+    if reduce_args["axis"] is not None:
+        # conserve as integer if was not tuple originally
+        reduce_args["axis"] = axis[0] if np.isscalar(reduce_args["axis"]) else axis
+    if reduce_op in {ReduceOp.CUMULATIVE_SUM, ReduceOp.CUMULATIVE_PROD}:
+        reduced_shape = (np.prod(shape_slice),) if reduce_args["axis"] is None else shape_slice
+        # if reduce_args["axis"] is None, have to have 1D input array; otherwise, ensure positive scalar
+        reduce_args["axis"] = 0 if reduce_args["axis"] is None else axis[0]
+        if include_initial:
+            reduced_shape = tuple(
+                s + 1 if i == reduce_args["axis"] else s for i, s in enumerate(shape_slice)
+            )
     else:
-        reduced_shape = tuple(s for i, s in enumerate(shape_slice) if i not in axis)
-        mask_slice = mask_slice[[i for i in range(len(mask_slice)) if i not in axis]]
+        if keepdims:
+            reduced_shape = tuple(1 if i in axis else s for i, s in enumerate(shape_slice))
+        else:
+            reduced_shape = tuple(s for i, s in enumerate(shape_slice) if i not in axis)
+            mask_slice = mask_slice[[i for i in range(len(mask_slice)) if i not in axis]]
 
     if out is not None and reduced_shape != out.shape:
         raise ValueError("Provided output shape does not match the reduced shape.")
@@ -2042,11 +2016,11 @@ def reduce_slices(  # noqa: C901
         del temp
 
     # miniexpr reduction path only supported for some cases so far
-    if not (fast_path and all_ndarray and reduced_shape == ()):
+    if not (fast_path and all_ndarray and reduced_shape == () and _slice == ()):
         use_miniexpr = False
 
     # Some reductions are not supported yet in miniexpr
-    if reduce_op in (ReduceOp.ARGMAX, ReduceOp.ARGMIN):
+    if reduce_op in (ReduceOp.ARGMAX, ReduceOp.ARGMIN, ReduceOp.CUMULATIVE_PROD, ReduceOp.CUMULATIVE_SUM):
         use_miniexpr = False
 
     # Check whether we can use miniexpr
@@ -2081,9 +2055,9 @@ def reduce_slices(  # noqa: C901
         nblocks = res_eval.nbytes // res_eval.blocksize
         # Initialize aux_reduc based on the reduction operation
         # Padding blocks won't be written, so initial values matter for the final reduction
-        if reduce_op == ReduceOp.SUM or reduce_op == ReduceOp.ANY:
+        if reduce_op in {ReduceOp.SUM, ReduceOp.ANY, ReduceOp.CUMULATIVE_SUM}:
             aux_reduc = np.zeros(nblocks, dtype=dtype)
-        elif reduce_op == ReduceOp.PROD or reduce_op == ReduceOp.ALL:
+        elif reduce_op in {ReduceOp.PROD, ReduceOp.ALL, ReduceOp.CUMULATIVE_PROD}:
             aux_reduc = np.ones(nblocks, dtype=dtype)
         elif reduce_op == ReduceOp.MIN:
             if np.issubdtype(dtype, np.integer):
@@ -2124,10 +2098,8 @@ def reduce_slices(  # noqa: C901
             # (continue to the manual chunked evaluation below)
             pass
         else:
-            if reduce_op == ReduceOp.ANY:
-                result = np.any(aux_reduc, **reduce_args)
-            elif reduce_op == ReduceOp.ALL:
-                result = np.all(aux_reduc, **reduce_args)
+            if reduce_op in {ReduceOp.ANY, ReduceOp.ALL}:
+                result = reduce_op.value(aux_reduc, **reduce_args)
             else:
                 result = reduce_op.value.reduce(aux_reduc, **reduce_args)
             return result
@@ -2135,66 +2107,66 @@ def reduce_slices(  # noqa: C901
     # Iterate over the operands and get the chunks
     chunk_operands = {}
     # Check which chunks intersect with _slice
-    # if chunks has 0 we loop once but fast path is false as gives error (schunk has no chunks)
-    intersecting_chunks = get_intersecting_chunks(_slice, shape, chunks)
+    if np.isscalar(reduce_args["axis"]):  # iterate over chunks incrementing along reduction axis
+        intersecting_chunks = get_intersecting_chunks(_slice, shape, chunks, axis=reduce_args["axis"])
+    else:  # iterate over chunks incrementing along last axis
+        intersecting_chunks = get_intersecting_chunks(_slice, shape, chunks)
     out_init = False
+    res_out_init = False
+    ratio = np.ceil(np.asarray(shape) / np.asarray(chunks)).astype(np.int64)
 
-    for nchunk, chunk_slice in enumerate(intersecting_chunks):
+    for chunk_slice in intersecting_chunks:
         cslice = chunk_slice.raw
-        offset = tuple(s.start for s in cslice)  # offset for the udf
+        nchunk = builtins.sum([c.start // chunks[i] * np.prod(ratio[i + 1 :]) for i, c in enumerate(cslice)])
         # Check whether current cslice intersects with _slice
         if cslice != () and _slice != ():
             # get intersection of chunk and target
             cslice = step_handler(cslice, _slice)
-        chunks_ = tuple(s.stop - s.start for s in cslice)
-        unit_steps = np.all([s.step == 1 for s in cslice])
-        # Starts for slice
+        offset = tuple(s.start for s in cslice)  # offset for the udf
         starts = [s.start if s.start is not None else 0 for s in cslice]
-        if _slice == () and fast_path and unit_steps:
-            # Fast path
-            full_chunk = chunks_ == chunks
-            fill_chunk_operands(
-                operands, cslice, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands, reduc=True
-            )
-        else:
-            # Get the stops for the slice
-            stops = [s.stop if s.stop is not None else sh for s, sh in zip(cslice, chunks_, strict=True)]
-            # Get the slice of each operand
-            for key, value in operands.items():
-                if np.isscalar(value):
-                    chunk_operands[key] = value
-                    continue
-                if value.shape == ():
-                    chunk_operands[key] = value[()]
-                    continue
-                if check_smaller_shape(value.shape, shape, chunks_, cslice):
-                    # We need to fetch the part of the value that broadcasts with the operand
-                    smaller_slice = compute_smaller_slice(operand.shape, value.shape, cslice)
-                    chunk_operands[key] = value[smaller_slice]
-                    continue
-                # If key is in operands, we can reuse the buffer
-                if (
-                    key in chunk_operands
-                    and chunks_ == chunk_operands[key].shape
-                    and isinstance(value, blosc2.NDArray)
-                    and unit_steps
-                ):
-                    value.get_slice_numpy(chunk_operands[key], (starts, stops))
-                    continue
-                chunk_operands[key] = value[cslice]
-
+        unit_steps = np.all([s.step == 1 for s in cslice])
+        cslice_shape = tuple(s.stop - s.start for s in cslice)
         # get local index of part of out that is to be updated
         cslice_subidx = ndindex.ndindex(cslice).as_subindex(_slice).raw  # if _slice is (), just gives cslice
-        if keepdims:
-            reduced_slice = tuple(slice(None) if i in axis else sl for i, sl in enumerate(cslice_subidx))
+        if _slice == () and fast_path and unit_steps:
+            # Fast path
+            full_chunk = cslice_shape == chunks
+            fill_chunk_operands(
+                operands,
+                cslice,
+                cslice_shape,
+                full_chunk,
+                aligned,
+                nchunk,
+                iter_disk,
+                chunk_operands,
+                reduc=True,
+                axis=reduce_args["axis"] if np.isscalar(reduce_args["axis"]) else None,
+            )
         else:
-            reduced_slice = tuple(sl for i, sl in enumerate(cslice_subidx) if i not in axis)
+            _get_chunk_operands(operands, cslice, chunk_operands, shape)
+
+        if reduce_op in {ReduceOp.CUMULATIVE_PROD, ReduceOp.CUMULATIVE_SUM}:
+            reduced_slice = (
+                tuple(
+                    slice(sl.start + 1, sl.stop + 1, sl.step) if i == reduce_args["axis"] else sl
+                    for i, sl in enumerate(cslice_subidx)
+                )
+                if include_initial
+                else cslice_subidx
+            )
+        else:
+            reduced_slice = (
+                tuple(slice(None) if i in axis else sl for i, sl in enumerate(cslice_subidx))
+                if keepdims
+                else tuple(sl for i, sl in enumerate(cslice_subidx) if i not in axis)
+            )
 
         # Evaluate and reduce the expression using chunks of operands
 
         if callable(expression):
             # TODO: Implement the reductions for UDFs (and test them)
-            result = np.empty(chunks_, dtype=out.dtype)
+            result = np.empty(cslice_shape, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
             # Reduce the result
             result = reduce_op.value.reduce(result, **reduce_args)
@@ -2202,38 +2174,21 @@ def reduce_slices(  # noqa: C901
             out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
             continue
 
-        if where is None:
-            if expression == "o0" or expression == "(o0)":
-                # We don't have an actual expression, so avoid a copy except to make contiguous
-                result = np.require(chunk_operands["o0"], requirements="C")
-            else:
-                result = ne_evaluate(expression, chunk_operands, **ne_args)
-        else:
-            # Apply the where condition (in result)
-            if len(where) == 2:
-                new_expr = f"where({expression}, _where_x, _where_y)"
-                result = ne_evaluate(new_expr, chunk_operands, **ne_args)
-            elif len(where) == 1:
-                result = ne_evaluate(expression, chunk_operands, **ne_args)
-                x = chunk_operands["_where_x"]
-                result = x[result]
-            else:
-                raise NotImplementedError(
-                    "A where condition with no params in combination with reductions is not supported yet"
-                )
+        result, _ = _get_result(expression, chunk_operands, ne_args, where)
+        # Enforce contiguity of result (necessary to fill the out array)
+        # but avoid copy if already contiguous
+        result = np.require(result, requirements="C")
 
         # Reduce the result
         if result.shape == ():
             if reduce_op == ReduceOp.SUM and result[()] == 0:
                 # Avoid a reduction when result is a zero scalar. Faster for sparse data.
                 continue
-            # Note that chunks_ refers to slice of operand chunks, not reduced_slice
-            result = np.full(chunks_, result[()])
-        if reduce_op == ReduceOp.ANY:
-            result = np.any(result, **reduce_args)
-        elif reduce_op == ReduceOp.ALL:
-            result = np.all(result, **reduce_args)
-        elif reduce_op == ReduceOp.ARGMAX or reduce_op == ReduceOp.ARGMIN:
+            # Note that cslice_shape refers to slice of operand chunks, not reduced_slice
+            result = np.full(cslice_shape, result[()])
+        if reduce_op in {ReduceOp.ANY, ReduceOp.ALL, ReduceOp.CUMULATIVE_SUM, ReduceOp.CUMULATIVE_PROD}:
+            result = reduce_op.value(result, **reduce_args)
+        elif reduce_op in {ReduceOp.ARGMAX, ReduceOp.ARGMIN}:
             # offset for start of slice
             slice_ref = (
                 starts
@@ -2243,14 +2198,10 @@ def reduce_slices(  # noqa: C901
                     for s, sl in zip(starts, _slice, strict=True)
                 ]
             )
-            result_idx = (
-                np.argmin(result, **reduce_args)
-                if reduce_op == ReduceOp.ARGMIN
-                else np.argmax(result, **reduce_args)
-            )
+            result_idx = reduce_op.value(result, **reduce_args)
             if reduce_args["axis"] is None:  # indexing into flattened array
                 result = result[np.unravel_index(result_idx, shape=result.shape)]
-                idx_within_cslice = np.unravel_index(result_idx, shape=chunks_)
+                idx_within_cslice = np.unravel_index(result_idx, shape=cslice_shape)
                 result_idx = np.ravel_multi_index(
                     tuple(o + i for o, i in zip(slice_ref, idx_within_cslice, strict=True)), shape_slice
                 )
@@ -2266,7 +2217,7 @@ def reduce_slices(  # noqa: C901
             result = reduce_op.value.reduce(result, **reduce_args)
 
         if not out_init:
-            out_, res_out_ = convert_none_out(result.dtype, reduce_op, reduced_shape)
+            out_ = convert_none_out(result.dtype, reduce_op, reduced_shape)
             if out is not None:
                 out[:] = out_
                 del out_
@@ -2274,29 +2225,38 @@ def reduce_slices(  # noqa: C901
                 out = out_
             out_init = True
 
+        # res_out only used be argmin/max and cumulative_sum/prod which only accept axis=int argument
+        if (not res_out_init) or (
+            np.isscalar(reduce_args["axis"]) and cslice_subidx[reduce_args["axis"]].start == 0
+        ):  # starting reduction again along axis
+            res_out_ = _get_res_out(result.shape, reduce_args["axis"], dtype, reduce_op)
+            res_out_init = True
+
         # Update the output array with the result
         if reduce_op == ReduceOp.ANY:
             out[reduced_slice] += result
         elif reduce_op == ReduceOp.ALL:
             out[reduced_slice] *= result
-        elif res_out_ is not None:  # i.e. ReduceOp.ARGMAX or ReduceOp.ARGMIN
+        elif res_out_ is not None:
             # need lowest index for which optimum attained
-            cond = (res_out_[reduced_slice] == result) & (result_idx < out[reduced_slice])
-            if reduce_op == ReduceOp.ARGMAX:
-                cond |= res_out_[reduced_slice] < result
-            else:  # ARGMIN
-                cond |= res_out_[reduced_slice] > result
-            if reduced_slice == ():
-                out = np.where(cond, result_idx, out[reduced_slice])
-                res_out_ = np.where(cond, result, res_out_[reduced_slice])
-            else:
+            if reduce_op in {ReduceOp.ARGMAX, ReduceOp.ARGMIN}:
+                cond = (res_out_ == result) & (result_idx < out[reduced_slice])
+                cond |= res_out_ < result if reduce_op == ReduceOp.ARGMAX else res_out_ > result
                 out[reduced_slice] = np.where(cond, result_idx, out[reduced_slice])
-                res_out_[reduced_slice] = np.where(cond, result, res_out_[reduced_slice])
+                res_out_ = np.where(cond, result, res_out_)
+            else:  # CUMULATIVE_SUM or CUMULATIVE_PROD
+                idx_lastval = tuple(
+                    slice(-1, None) if i == reduce_args["axis"] else slice(None, None)
+                    for i, c in enumerate(reduced_slice)
+                )
+                if reduce_op == ReduceOp.CUMULATIVE_SUM:
+                    result += res_out_
+                else:  # CUMULATIVE_PROD
+                    result *= res_out_
+                res_out_ = result[idx_lastval]
+                out[reduced_slice] = result
         else:
-            if reduced_slice == ():
-                out = reduce_op.value(out, result)
-            else:
-                out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
+            out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
 
     # No longer need res_out_
     del res_out_
@@ -2307,8 +2267,9 @@ def reduce_slices(  # noqa: C901
         if dtype is None:
             # We have no hint here, so choose a default dtype
             dtype = np.float64
-        out, _ = convert_none_out(dtype, reduce_op, reduced_shape)
+        out = convert_none_out(dtype, reduce_op, reduced_shape)
 
+    out = out[()] if reduced_shape == () else out  # undo dummy dim from inside convert_none_out
     final_mask = tuple(np.where(mask_slice)[0])
     if np.any(mask_slice):  # remove dummy dims
         out = np.squeeze(out, axis=final_mask)
@@ -2318,13 +2279,39 @@ def reduce_slices(  # noqa: C901
     return out
 
 
+def _get_res_out(reduced_shape, axis, dtype, reduce_op):
+    reduced_shape = (1,) if reduced_shape == () else reduced_shape
+    # Get res_out to hold running sums along axes for chunks when doing cumulative sums/prods with axis not None
+    if reduce_op in {ReduceOp.CUMULATIVE_SUM, ReduceOp.CUMULATIVE_PROD}:
+        temp_shape = tuple(1 if i == axis else s for i, s in enumerate(reduced_shape))
+        res_out_ = (
+            np.zeros(temp_shape, dtype=dtype)
+            if reduce_op == ReduceOp.CUMULATIVE_SUM
+            else np.ones(temp_shape, dtype=dtype)
+        )
+    elif reduce_op in {ReduceOp.ARGMIN, ReduceOp.ARGMAX}:
+        temp_shape = reduced_shape
+        res_out_ = np.ones(temp_shape, dtype=dtype)
+        if np.issubdtype(dtype, np.integer):
+            res_out_ *= np.iinfo(dtype).max if reduce_op == ReduceOp.ARGMIN else np.iinfo(dtype).min
+        elif np.issubdtype(dtype, np.bool):
+            res_out_ = res_out_ if reduce_op == ReduceOp.ARGMIN else np.zeros(temp_shape, dtype=dtype)
+        else:
+            res_out_ *= np.inf if reduce_op == ReduceOp.ARGMIN else -np.inf
+    else:
+        res_out_ = None
+    return res_out_
+
+
 def convert_none_out(dtype, reduce_op, reduced_shape):
-    out = None
+    reduced_shape = (1,) if reduced_shape == () else reduced_shape
     # out will be a proper numpy.ndarray
-    if reduce_op == ReduceOp.SUM:
-        out = np.zeros(reduced_shape, dtype=dtype)
-    elif reduce_op == ReduceOp.PROD:
-        out = np.ones(reduced_shape, dtype=dtype)
+    if reduce_op in {ReduceOp.SUM, ReduceOp.CUMULATIVE_SUM, ReduceOp.PROD, ReduceOp.CUMULATIVE_PROD}:
+        out = (
+            np.zeros(reduced_shape, dtype=dtype)
+            if reduce_op in {ReduceOp.SUM, ReduceOp.CUMULATIVE_SUM}
+            else np.ones(reduced_shape, dtype=dtype)
+        )
     elif reduce_op == ReduceOp.MIN:
         if np.issubdtype(dtype, np.integer):
             out = np.iinfo(dtype).max * np.ones(reduced_shape, dtype=dtype)
@@ -2339,19 +2326,9 @@ def convert_none_out(dtype, reduce_op, reduced_shape):
         out = np.zeros(reduced_shape, dtype=np.bool_)
     elif reduce_op == ReduceOp.ALL:
         out = np.ones(reduced_shape, dtype=np.bool_)
-    elif reduce_op == ReduceOp.ARGMIN:
-        if np.issubdtype(dtype, np.integer):
-            res_out_ = np.iinfo(dtype).max * np.ones(reduced_shape, dtype=dtype)
-        else:
-            res_out_ = np.inf * np.ones(reduced_shape, dtype=dtype)
-        out = (np.zeros(reduced_shape, dtype=blosc2.DEFAULT_INDEX), res_out_)
-    elif reduce_op == ReduceOp.ARGMAX:
-        if np.issubdtype(dtype, np.integer):
-            res_out_ = np.iinfo(dtype).min * np.ones(reduced_shape, dtype=dtype)
-        else:
-            res_out_ = -np.inf * np.ones(reduced_shape, dtype=dtype)
-        out = (np.zeros(reduced_shape, dtype=blosc2.DEFAULT_INDEX), res_out_)
-    return out if isinstance(out, tuple) else (out, None)
+    elif reduce_op in {ReduceOp.ARGMIN, ReduceOp.ARGMAX}:
+        out = np.zeros(reduced_shape, dtype=blosc2.DEFAULT_INDEX)
+    return out
 
 
 def chunked_eval(
@@ -3144,6 +3121,38 @@ class LazyExpr(LazyArray):
             "axis": axis,
             "keepdims": keepdims,
         }
+        return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
+
+    def cumulative_sum(
+        self,
+        axis=None,
+        include_initial: bool = False,
+        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        **kwargs,
+    ):
+        reduce_args = {
+            "op": ReduceOp.CUMULATIVE_SUM,
+            "axis": axis,
+            "include_initial": include_initial,
+        }
+        if self.ndim != 1 and axis is None:
+            raise ValueError("axis must be specified for cumulative_sum of non-1D array.")
+        return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
+
+    def cumulative_prod(
+        self,
+        axis=None,
+        include_initial: bool = False,
+        fp_accuracy: blosc2.FPAccuracy = blosc2.FPAccuracy.DEFAULT,
+        **kwargs,
+    ):
+        reduce_args = {
+            "op": ReduceOp.CUMULATIVE_PROD,
+            "axis": axis,
+            "include_initial": include_initial,
+        }
+        if self.ndim != 1 and axis is None:
+            raise ValueError("axis must be specified for cumulative_prod of non-1D array.")
         return self.compute(_reduce_args=reduce_args, fp_accuracy=fp_accuracy, **kwargs)
 
     def _eval_constructor(self, expression, constructor, operands):

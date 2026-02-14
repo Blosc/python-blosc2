@@ -150,9 +150,9 @@ export PKG_CONFIG_PATH="$BLOSC2_PREFIX/lib/pkgconfig"
 ```
 
 We can check that the .pc file has the required info and has been found via
-``bash
+```bash
 pkg-config --modversion blosc2
-``
+```
 
 Then define a test program
 ```bash

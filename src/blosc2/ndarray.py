@@ -539,6 +539,78 @@ def sum(
     return ndarr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
 
 
+def cumulative_sum(
+    ndarr: blosc2.Array,
+    axis: int | tuple[int] | None = None,
+    dtype: np.dtype | str = None,
+    include_initial: bool = False,
+    **kwargs: Any,
+) -> blosc2.Array:
+    """
+    Calculates the cumulative sum of elements in the input array ndarr.
+
+    Parameters
+    -----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array or expression.
+    axis: int
+        Axis along which a cumulative sum must be computed. If array is 1D, axis may be None; otherwise the axis must be specified.
+    dtype: dtype
+        Data type of the returned array.
+    include_initial : bool
+        Boolean indicating whether to include the initial value as the first value in the output. Initial value will be zero. Default: False.
+    fp_accuracy: :ref:`blosc2.FPAccuracy`, optional
+        Specifies the floating-point accuracy for reductions on :ref:`LazyExpr`.
+        Passed to :func:`LazyExpr.compute` when :paramref:`ndarr` is a LazyExpr.
+    kwargs: dict, optional
+        Additional keyword arguments supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: blosc2.Array
+        An array containing the cumulative sums. Let N be the size of the axis along which to compute the cumulative sum.
+        If include_initial is True, the returned array has the same shape as ndarr, except the size of the axis along which to compute the cumulative sum is N+1.
+        If include_initial is False, the returned array has the same shape as ndarr.
+    """
+    return ndarr.cumulative_sum(axis=axis, dtype=dtype, include_initial=include_initial, **kwargs)
+
+
+def cumulative_prod(
+    ndarr: blosc2.Array,
+    axis: int | tuple[int] | None = None,
+    dtype: np.dtype | str = None,
+    include_initial: bool = False,
+    **kwargs: Any,
+) -> blosc2.Array:
+    """
+    Calculates the cumulative product of elements in the input array ndarr.
+
+    Parameters
+    -----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array or expression.
+    axis: int
+        Axis along which a cumulative product must be computed. If array is 1D, axis may be None; otherwise the axis must be specified.
+    dtype: dtype
+        Data type of the returned array.
+    include_initial : bool
+        Boolean indicating whether to include the initial value as the first value in the output. Initial value will be one. Default: False.
+    fp_accuracy: :ref:`blosc2.FPAccuracy`, optional
+        Specifies the floating-point accuracy for reductions on :ref:`LazyExpr`.
+        Passed to :func:`LazyExpr.compute` when :paramref:`ndarr` is a LazyExpr.
+    kwargs: dict, optional
+        Additional keyword arguments supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: blosc2.Array
+        An array containing the cumulative products. Let N be the size of the axis along which to compute the cumulative product.
+        If include_initial is True, the returned array has the same shape as ndarr, except the size of the axis along which to compute the cumulative product is N+1.
+        If include_initial is False, the returned array has the same shape as ndarr.
+    """
+    return ndarr.cumulative_prod(axis=axis, dtype=dtype, include_initial=include_initial, **kwargs)
+
+
 def mean(
     ndarr: blosc2.Array,
     axis: int | tuple[int] | None = None,
@@ -3382,6 +3454,16 @@ class Operand:
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
+    @is_documented_by(cumulative_sum)
+    def cumulative_sum(self, axis=None, dtype=None, include_initial=False, **kwargs):
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.cumulative_sum(axis=axis, dtype=dtype, include_initial=include_initial, **kwargs)
+
+    @is_documented_by(cumulative_prod)
+    def cumulative_prod(self, axis=None, dtype=None, include_initial=False, **kwargs):
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.cumulative_prod(axis=axis, dtype=dtype, include_initial=include_initial, **kwargs)
 
     @is_documented_by(mean)
     def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):

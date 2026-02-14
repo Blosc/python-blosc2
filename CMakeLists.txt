@@ -130,11 +130,13 @@ if(UNIX)
 endif()
 
 if(WIN32)
-  add_custom_command(TARGET blosc2_ext POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:blosc2_shared>
-            $<TARGET_FILE_DIR:blosc2_ext>
-  )
+  if(TARGET blosc2_shared)
+    add_custom_command(TARGET blosc2_ext POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              $<TARGET_FILE:blosc2_shared>
+              $<TARGET_FILE_DIR:blosc2_ext>
+    )
+  endif()
 endif()
 
 # Python extension -> site-packages/blosc2
