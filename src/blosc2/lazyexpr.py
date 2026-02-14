@@ -1603,12 +1603,20 @@ def slices_eval(  # noqa: C901
     intersecting_chunks = get_intersecting_chunks(
         _slice, shape, chunks
     )  # if _slice is (), returns all chunks
-    ratio = np.ceil(np.asarray(shape) / np.asarray(chunks)).astype(np.int64)
+    ratio = (
+        np.ceil(np.asarray(shape) / np.asarray(chunks)).astype(np.int64)
+        if 0 not in chunks
+        else np.asarray(shape)
+    )
 
     for chunk_slice in intersecting_chunks:
         # Check whether current cslice intersects with _slice
         cslice = chunk_slice.raw
-        nchunk = builtins.sum([c.start // chunks[i] * np.prod(ratio[i + 1 :]) for i, c in enumerate(cslice)])
+        nchunk = (
+            builtins.sum([c.start // chunks[i] * np.prod(ratio[i + 1 :]) for i, c in enumerate(cslice)])
+            if 0 not in chunks
+            else 0
+        )
         if cslice != () and _slice != ():
             # get intersection of chunk and target
             cslice = step_handler(cslice, _slice)
@@ -2100,11 +2108,19 @@ def reduce_slices(  # noqa: C901
         intersecting_chunks = get_intersecting_chunks(_slice, shape, chunks)
     out_init = False
     res_out_init = False
-    ratio = np.ceil(np.asarray(shape) / np.asarray(chunks)).astype(np.int64)
+    ratio = (
+        np.ceil(np.asarray(shape) / np.asarray(chunks)).astype(np.int64)
+        if 0 not in chunks
+        else np.asarray(shape)
+    )
 
     for chunk_slice in intersecting_chunks:
         cslice = chunk_slice.raw
-        nchunk = builtins.sum([c.start // chunks[i] * np.prod(ratio[i + 1 :]) for i, c in enumerate(cslice)])
+        nchunk = (
+            builtins.sum([c.start // chunks[i] * np.prod(ratio[i + 1 :]) for i, c in enumerate(cslice)])
+            if 0 not in chunks
+            else 0
+        )
         # Check whether current cslice intersects with _slice
         if cslice != () and _slice != ():
             # get intersection of chunk and target
@@ -3228,7 +3244,7 @@ class LazyExpr(LazyArray):
             # We have constructors in the expression (probably coming from a string lazyexpr)
             # Let's replace the constructors with the actual NDArray objects
             for constructor in constructors:
-                if constructor not in newexpr:
+                if constructor + "(" not in newexpr:
                     continue
                 while constructor in newexpr:
                     # Get the constructor function and replace it by an NDArray object in the operands

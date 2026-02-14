@@ -851,7 +851,7 @@ def get_intersecting_chunks(idx, shape, chunks, axis=None):
     if len(chunks) != len(shape):
         raise ValueError("chunks must be same length as shape!")
     if 0 in chunks:  # chunk is whole array so just return full tuple to do loop once
-        return (ndindex.ndindex(...).expand(shape),), range(0)
+        return (ndindex.ndindex(...).expand(shape),)
     chunk_size = ndindex.ChunkSize(chunks)
     if axis is None:
         return chunk_size.as_subchunks(idx, shape)  # if _slice is (), returns all chunks

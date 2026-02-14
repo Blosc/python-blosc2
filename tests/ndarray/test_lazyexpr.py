@@ -33,7 +33,7 @@ def dtype_fixture(request):
     return request.param
 
 
-@pytest.fixture(params=[(NITEMS_SMALL,), (NITEMS,), (NITEMS // 10, 100)])
+@pytest.fixture(params=[(NITEMS_SMALL,), (NITEMS,), (NITEMS // 10, 100), (0, 100)])
 def shape_fixture(request):
     return request.param
 
@@ -88,6 +88,44 @@ def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
     na4 = np.copy(na1)
     a4 = blosc2.asarray(na4, chunks=chunks1, blocks=blocks1)
     return a1, a2, a3, a4, na1, na2, na3, na4
+
+
+def test_operandmethods_scalar(shape_fixture, dtype_fixture):
+    nelems = np.prod(shape_fixture)
+    na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
+    a1 = blosc2.asarray(na1)
+    scalar = 10
+
+    # Test __r***__ methods
+    for expr in (
+        scalar + a1,
+        scalar - a1,
+        scalar * a1,
+        scalar / a1,
+        scalar // a1,
+        scalar**a1,
+        scalar % a1,
+        scalar & a1,
+        scalar | a1,
+        scalar ^ a1,
+        scalar << a1,
+        scalar >> a1,
+    ):
+        assert expr[()].shape == expr.shape
+
+    # Test __i***__ methods
+    a1 += scalar
+    a1 -= scalar
+    a1 *= scalar
+    a1 /= scalar
+    a1 //= scalar
+    a1 **= scalar
+    a1 %= scalar
+    a1 &= scalar
+    a1 |= scalar
+    a1 ^= scalar
+    a1 <<= scalar
+    a1 >>= scalar
 
 
 def test_simple_getitem(array_fixture):
