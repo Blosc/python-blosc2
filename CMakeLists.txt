@@ -56,9 +56,16 @@ set(MINIEXPR_BUILD_TESTS OFF CACHE BOOL "Build miniexpr tests" FORCE)
 set(MINIEXPR_BUILD_EXAMPLES OFF CACHE BOOL "Build miniexpr examples" FORCE)
 set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
 
+if(EMSCRIPTEN)
+  # JIT in miniexpr for wasm32 exists already, but we need to do some work before we can use it
+  # See plans/external-js-glue.md for details
+  set(MINIEXPR_ENABLE_TCC_JIT OFF CACHE BOOL "TCC JIT unavailable in Emscripten side-module builds" FORCE)
+endif()
+
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    GIT_TAG 77d633cb2c134552da045b8d2cc0ad23908e6b9e
+    GIT_TAG 4bf12c8d5eac4c2022db8567d7b3cee44a963c9c
+    # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
 
@@ -144,3 +151,33 @@ install(
   TARGETS blosc2_ext
   LIBRARY DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2
 )
+
+# Install bundled libtcc next to the Python package (separate LGPL artifact).
+if(MINIEXPR_ENABLE_TCC_JIT)
+  if(APPLE)
+    install(
+      FILES "${miniexpr_BINARY_DIR}/libtcc.dylib"
+      DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2/lib
+      OPTIONAL
+    )
+  elseif(WIN32)
+    install(
+      FILES
+        "${miniexpr_BINARY_DIR}/tcc.dll"
+        "${miniexpr_BINARY_DIR}/Debug/tcc.dll"
+        "${miniexpr_BINARY_DIR}/Release/tcc.dll"
+        "${miniexpr_BINARY_DIR}/RelWithDebInfo/tcc.dll"
+        "${miniexpr_BINARY_DIR}/MinSizeRel/tcc.dll"
+      DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2/lib
+      OPTIONAL
+    )
+  else()
+    install(
+      FILES
+        "${miniexpr_BINARY_DIR}/libtcc.so"
+        "${miniexpr_BINARY_DIR}/libtcc.so.1"
+      DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2/lib
+      OPTIONAL
+    )
+  endif()
+endif()
