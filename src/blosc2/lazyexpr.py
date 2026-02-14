@@ -3910,10 +3910,10 @@ def lazyudf(
         Whether to evaluate the function in chunks or not (blocks).
     jit: bool or None, optional
         JIT policy for miniexpr-backed execution:
-        ``None`` uses default behavior, ``True`` prefers JIT, ``False`` disables JIT.
+        ``None`` uses default behavior (currently, JIT is tried out), ``True`` prefers JIT, ``False`` disables JIT.
     jit_backend: {"tcc", "cc"} or None, optional
         JIT backend selection for miniexpr-backed execution:
-        ``None`` uses backend defaults, ``"tcc"`` forces libtcc, ``"cc"`` forces C compiler backend.
+        ``None`` uses backend defaults (currently "tcc"), ``"tcc"`` forces libtcc, ``"cc"`` forces C compiler backend.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
         These arguments will be used by the :meth:`LazyArray.__getitem__` and
