@@ -1350,6 +1350,16 @@ def fast_eval(  # noqa: C901
 
     # Check whether we can use miniexpr
     if use_miniexpr:
+        if math.prod(shape) <= 1:
+            # Avoid miniexpr for scalar-like outputs; current prefilter path is unstable here.
+            use_miniexpr = False
+        if (
+            isinstance(expr_string_miniexpr, str)
+            and
+            # Prefix scans are stateful across chunks and not safe for miniexpr prefilter execution.
+            any(tok in expr_string_miniexpr for tok in ("cumsum(", "cumprod(", "cumulative_sum("))
+        ):
+            use_miniexpr = False
         if isinstance(expr_string_miniexpr, str):
             expr_string_miniexpr = _apply_jit_backend_pragma(
                 expr_string_miniexpr, operands_miniexpr, jit_backend
