@@ -3110,12 +3110,10 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
     if 'cparams' in kwargs:
         kwargs['cparams']['typesize'] = typesize
     else:
-        kwargs['cparams'] = {'typesize': typesize}
-        # kwargs['cparams'] = {} # last filter is shuffle
-        # if isinstance(dtype, np.dtypes.StrDType) or dtype == np.str_:
-        #    kwargs['cparams'] = {'filters': [blosc2.Filter.NOFILTER] * 5 + [blosc2.Filter.SHUFFLE],
-        #                        'filters_meta': [0] * 5 + [4]} # unicode char bytesize
-        # kwargs['cparams']['typesize'] = typesize
+        kwargs['cparams'] = {'typesize': typesize} # last filter is shuffle
+        if isinstance(dtype, np.dtypes.StrDType) or dtype == np.str_:
+            kwargs['cparams']['filters'] = [blosc2.Filter.NOFILTER] * 5 + [blosc2.Filter.SHUFFLE],
+            kwargs['cparams']['filters_meta'] = [0] * 5 + [4] # unicode char bytesize
     if dtype.kind == 'V':
         str_dtype = str(dtype)
     else:

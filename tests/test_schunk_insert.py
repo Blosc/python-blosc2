@@ -14,7 +14,7 @@ import blosc2
 
 
 @pytest.mark.parametrize("gil", [True, False])
-@pytest.mark.parametrize("contiguous", [True, False])  # # if False, fails
+@pytest.mark.parametrize("contiguous", [True, False])  # if False, fails
 @pytest.mark.parametrize("urlpath", [None, "b2frame"])  # if None, fails
 @pytest.mark.parametrize(
     ("nchunks", "ninserts"),
