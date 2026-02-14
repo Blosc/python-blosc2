@@ -250,6 +250,16 @@ numpy_ufuncs = {name for name, member in inspect.getmembers(np, lambda x: isinst
 # (will be evaluated via the array interface)
 additional_funcs = sorted((numpy_funcs | numpy_ufuncs) - set(blosc2_funcs))
 functions = blosc2_funcs + additional_funcs
+_constructor_call_patterns = {name: re.compile(rf"\b{re.escape(name)}\s*\(") for name in constructors}
+
+
+def _has_constructor_call(expression: str, constructor: str) -> bool:
+    return _constructor_call_patterns[constructor].search(expression) is not None
+
+
+def _find_constructor_call(expression: str, constructor: str) -> re.Match | None:
+    return _constructor_call_patterns[constructor].search(expression)
+
 
 relational_ops = ["==", "!=", "<", "<=", ">", ">="]
 logical_ops = ["&", "|", "^", "~"]
@@ -2856,7 +2866,7 @@ class LazyExpr(LazyArray):
             return None
 
         # Operands shape can change, so we always need to recompute this
-        if any(constructor in self.expression for constructor in constructors):
+        if any(_has_constructor_call(self.expression, constructor) for constructor in constructors):
             # might have an expression with pure constructors
             opshapes = {k: v if not hasattr(v, "shape") else v.shape for k, v in self.operands.items()}
             _shape = infer_shape(self.expression, opshapes)  # infer shape, includes constructors
@@ -3225,8 +3235,11 @@ class LazyExpr(LazyArray):
                     return expr[idx:i], i + 1
             raise ValueError("Unbalanced parenthesis in expression")
 
-        # Find the index of the first parenthesis after the constructor
-        idx = expression.find(f"{constructor}")
+        # Find the index of the first constructor call.
+        match = _find_constructor_call(expression, constructor)
+        if match is None:
+            raise ValueError(f"Constructor '{constructor}' not found in expression: {expression}")
+        idx = match.start()
         # Find the arguments of the constructor function
         try:
             args, idx2 = find_args(expression[idx + len(constructor) :])
@@ -3294,16 +3307,16 @@ class LazyExpr(LazyArray):
 
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
 
-        if any(constructor in self.expression for constructor in constructors):
+        if any(_has_constructor_call(self.expression, constructor) for constructor in constructors):
             expression = self.expression
             newexpr = expression
             newops = self.operands.copy()
             # We have constructors in the expression (probably coming from a string lazyexpr)
             # Let's replace the constructors with the actual NDArray objects
             for constructor in constructors:
-                if constructor not in newexpr:
+                if not _has_constructor_call(newexpr, constructor):
                     continue
-                while constructor in newexpr:
+                while _has_constructor_call(newexpr, constructor):
                     # Get the constructor function and replace it by an NDArray object in the operands
                     # Find the constructor call and its arguments
                     value, constexpr = self._eval_constructor(newexpr, constructor, newops)
@@ -4082,7 +4095,7 @@ def lazyexpr(
             operands = seek_operands(operand_set, local_dict, global_dict, _frame_depth=_frame_depth)
         else:
             # No operands found in the expression. Maybe a constructor?
-            constructor = any(constructor in expression for constructor in constructors)
+            constructor = any(_has_constructor_call(expression, constructor) for constructor in constructors)
             if not constructor:
                 raise ValueError("No operands nor constructors found in the expression")
             # _new_expr will take care of the constructor, but needs an empty dict in operands
