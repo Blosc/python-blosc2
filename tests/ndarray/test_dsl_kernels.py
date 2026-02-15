@@ -112,9 +112,14 @@ def kernel_fallback_tuple_assign(x, y):
     return lhs + rhs
 
 
-def test_dsl_kernel_reduced_expr():
+@blosc2.dsl_kernel
+def kernel_index_ramp(x):
+    return _i0 * _n1 + _i1  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+
+
+def test_dsl_kernel_loop_kept_as_full_dsl_function():
     assert kernel_loop.dsl_source is not None
-    assert "def " not in kernel_loop.dsl_source
+    assert "def kernel_loop(x, y):" in kernel_loop.dsl_source
     assert kernel_loop.input_names == ["x", "y"]
 
     a, b, a2, b2 = _make_arrays()
@@ -125,9 +130,9 @@ def test_dsl_kernel_reduced_expr():
     np.testing.assert_allclose(res[...], expected, rtol=1e-5, atol=1e-6)
 
 
-def test_dsl_kernel_integer_ops_reduced_expr():
+def test_dsl_kernel_integer_ops_kept_as_full_dsl_function():
     assert kernel_integer_ops.dsl_source is not None
-    assert "def " not in kernel_integer_ops.dsl_source
+    assert "def kernel_integer_ops(x, y):" in kernel_integer_ops.dsl_source
     assert kernel_integer_ops.input_names == ["x", "y"]
 
     a, b, a2, b2 = _make_int_arrays()
@@ -142,6 +147,36 @@ def test_dsl_kernel_integer_ops_reduced_expr():
     expected = kernel_integer_ops.func(a, b)
 
     np.testing.assert_equal(res[...], expected)
+
+
+def test_dsl_kernel_index_symbols_keep_full_kernel(monkeypatch):
+    if blosc2.IS_WASM:
+        pytest.skip("miniexpr fast path is not available on WASM")
+
+    assert kernel_index_ramp.dsl_source is not None
+    assert "def kernel_index_ramp(x):" in kernel_index_ramp.dsl_source
+
+    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    captured = {"calls": 0, "expr": None}
+
+    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        captured["calls"] += 1
+        captured["expr"] = expression.decode("utf-8") if isinstance(expression, bytes) else expression
+        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc, jit=jit)
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+
+    shape = (10, 10)
+    x2 = blosc2.zeros(shape, dtype=np.float32)
+    expr = blosc2.lazyudf(kernel_index_ramp, (x2,), dtype=np.float32)
+    res = expr[:]
+
+    assert captured["calls"] >= 1
+    assert "def kernel_index_ramp(x):" in captured["expr"]
+    assert "_i0" in captured["expr"]
+    assert "_n1" in captured["expr"]
+    assert "_i1" in captured["expr"]
+    assert res.shape == shape
 
 
 def test_dsl_kernel_full_control_flow_kept_as_dsl_function():

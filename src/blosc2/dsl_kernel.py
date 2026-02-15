@@ -141,31 +141,13 @@ class DSLKernel:
         if func_node is None:
             raise ValueError("No function definition found for DSL extraction")
 
-        dsl_source_full = None
-        if _PRINT_DSL_KERNEL:
-            try:
-                dsl_source_full = _DSLBuilder().build(func_node)
-                func_name = getattr(func, "__name__", "<dsl_kernel>")
-                print(f"[DSLKernel:{func_name}] dsl_source (full):")
-                print(dsl_source_full[0])
-            except Exception as exc:
-                func_name = getattr(func, "__name__", "<dsl_kernel>")
-                print(f"[DSLKernel:{func_name}] dsl_source (full) failed: {exc}")
-
-        reducer = _DSLReducer()
-        reduced = reducer.reduce(func_node)
-        if reduced is not None:
-            if _PRINT_DSL_KERNEL:
-                func_name = getattr(func, "__name__", "<dsl_kernel>")
-                print(f"[DSLKernel:{func_name}] reduced_expr:")
-                print(reduced[0])
-            return reduced
-
-        if dsl_source_full is not None:
-            return dsl_source_full
-
         builder = _DSLBuilder()
-        return builder.build(func_node)
+        dsl_source, input_names = builder.build(func_node)
+        if _PRINT_DSL_KERNEL:
+            func_name = getattr(func, "__name__", "<dsl_kernel>")
+            print(f"[DSLKernel:{func_name}] dsl_source (full):")
+            print(dsl_source)
+        return dsl_source, input_names
 
     def __call__(self, inputs_tuple, output, offset=None):
         if self._legacy_udf_signature:
