@@ -320,7 +320,7 @@ def test_dsl_kernel_scalar_param_keeps_miniexpr_fast_path(monkeypatch):
             (a2, b2, niter),
             dtype=a2.dtype,
         )
-        res = expr.compute()
+        res = expr.compute(strict_miniexpr=False)
         expected = kernel_loop_param.func(a, b, niter)
 
         np.testing.assert_allclose(res[...], expected, rtol=1e-5, atol=1e-6)
@@ -374,6 +374,30 @@ def test_dsl_kernel_scalar_float_cast_inlined_without_float_call(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
+def test_dsl_kernel_miniexpr_failure_is_strict_by_default(monkeypatch):
+    if blosc2.IS_WASM:
+        pytest.skip("miniexpr fast path is not available on WASM")
+
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    def failing_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        raise ValueError("forced miniexpr failure")
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", failing_set_pref_expr)
+
+    try:
+        _, _, a2, b2 = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))
+        expr = blosc2.lazyudf(kernel_loop, (a2, b2), dtype=a2.dtype)
+        with pytest.raises(RuntimeError, match="strict_miniexpr=True"):
+            _ = expr.compute()
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
+
+
 def test_lazyudf_jit_policy_forwarding(monkeypatch):
     if blosc2.IS_WASM:
         pytest.skip("miniexpr fast path is not available on WASM")
@@ -396,8 +420,8 @@ def test_lazyudf_jit_policy_forwarding(monkeypatch):
     try:
         _, _, a2, b2 = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))
         expr = blosc2.lazyudf(kernel_loop, (a2, b2), dtype=a2.dtype, jit=False)
-        _ = expr.compute()
-        _ = expr.compute(jit=True)
+        _ = expr.compute(strict_miniexpr=False)
+        _ = expr.compute(jit=True, strict_miniexpr=False)
         assert seen[0] is False
         assert seen[1] is True
     finally:

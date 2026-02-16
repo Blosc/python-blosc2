@@ -416,6 +416,9 @@ class LazyArray(ABC, blosc2.Operand):
             Keyword arguments that are supported by the :func:`empty` constructor.
             These arguments will be set in the resulting :ref:`NDArray`.
             Additionally, the following special kwargs are supported:
+            - ``strict_miniexpr`` (bool): controls whether miniexpr compilation/execution
+              failures are raised instead of silently falling back to regular chunked eval.
+              Defaults to ``True`` for DSL kernels and ``False`` otherwise.
 
         Returns
         -------
@@ -1325,9 +1328,13 @@ def fast_eval(  # noqa: C901
     fp_accuracy = kwargs.pop("fp_accuracy", blosc2.FPAccuracy.DEFAULT)
     jit = kwargs.pop("jit", None)
     jit_backend = kwargs.pop("jit_backend", None)
+    strict_miniexpr = kwargs.pop("strict_miniexpr", None)
     dtype = kwargs.pop("dtype", None)
     requested_shape = kwargs.pop("shape", None)
     where: dict | None = kwargs.pop("_where_args", None)
+    if strict_miniexpr is None:
+        # Be strict by default for DSL kernels to avoid silently losing DSL fast-path regressions.
+        strict_miniexpr = bool(is_dsl)
     if where is not None:
         # miniexpr does not support where(); use the regular path.
         use_miniexpr = False
@@ -1468,8 +1475,10 @@ def fast_eval(  # noqa: C901
             # Exercise prefilter for each chunk
             for nchunk in range(res_eval.schunk.nchunks):
                 res_eval.schunk.update_data(nchunk, data, copy=False)
-        except Exception:
+        except Exception as e:
             use_miniexpr = False
+            if strict_miniexpr:
+                raise RuntimeError("miniexpr evaluation failed while strict_miniexpr=True") from e
         finally:
             res_eval.schunk.remove_prefilter("miniexpr")
             global iter_chunks

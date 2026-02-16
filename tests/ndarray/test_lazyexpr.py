@@ -1563,6 +1563,53 @@ def test_lazyexpr_unary_negative_literal_matches_subtraction(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
+@pytest.mark.skipif(blosc2.IS_WASM, reason="miniexpr fast path is not available on WASM")
+def test_lazyexpr_miniexpr_failure_falls_back_by_default(monkeypatch):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    def failing_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        raise ValueError("forced miniexpr failure")
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", failing_set_pref_expr)
+
+    try:
+        na = np.arange(32 * 32, dtype=np.float32).reshape(32, 32)
+        a = blosc2.asarray(na, chunks=(16, 16), blocks=(8, 8))
+        b = blosc2.asarray(np.ones_like(na), chunks=(16, 16), blocks=(8, 8))
+        res = blosc2.lazyexpr("a + b", operands={"a": a, "b": b}).compute()
+        np.testing.assert_allclose(res[...], na + 1.0, rtol=1e-6, atol=1e-6)
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="miniexpr fast path is not available on WASM")
+def test_lazyexpr_miniexpr_failure_raises_when_strict(monkeypatch):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    def failing_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        raise ValueError("forced miniexpr failure")
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", failing_set_pref_expr)
+
+    try:
+        na = np.arange(32 * 32, dtype=np.float32).reshape(32, 32)
+        a = blosc2.asarray(na, chunks=(16, 16), blocks=(8, 8))
+        b = blosc2.asarray(np.ones_like(na), chunks=(16, 16), blocks=(8, 8))
+        expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+        with pytest.raises(RuntimeError, match="strict_miniexpr=True"):
+            _ = expr.compute(strict_miniexpr=True)
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
+
+
 # Test the LazyExpr when some operands are missing (e.g. removed file)
 def test_missing_operator():
     a = blosc2.arange(10, urlpath="a.b2nd", mode="w")
