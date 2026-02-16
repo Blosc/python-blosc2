@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 import blosc2
+from blosc2.dsl_kernel import DSLSyntaxError
 from blosc2.lazyexpr import _apply_jit_backend_pragma
 
 
@@ -111,6 +112,11 @@ def kernel_fallback_for_else(x, y):
 def kernel_fallback_tuple_assign(x, y):
     lhs, rhs = x, y
     return lhs + rhs
+
+
+@blosc2.dsl_kernel
+def kernel_fallback_ternary(x):
+    return 1 if x else 0
 
 
 @blosc2.dsl_kernel
@@ -333,26 +339,33 @@ def test_jit_backend_pragma_wrapping_dsl_source():
 @pytest.mark.parametrize(
     "kernel",
     [
-        kernel_fallback_range_2args,
         kernel_fallback_kw_call,
         kernel_fallback_for_else,
         kernel_fallback_tuple_assign,
     ],
 )
 def test_dsl_kernel_flawed_syntax_detected_fallback_callable(kernel):
-    assert kernel.dsl_source is not None
-    assert kernel.dsl_source.startswith("def ")
-    assert kernel.input_names == ["x", "y"]
+    assert kernel.dsl_source is None
+    assert kernel.input_names is None
+    assert isinstance(kernel.dsl_error, DSLSyntaxError)
 
     a, b, a2, b2 = _make_arrays()
-    expr = blosc2.lazyudf(
-        kernel,
-        (a2, b2),
-        dtype=a2.dtype,
-        chunks=a2.chunks,
-        blocks=a2.blocks,
-    )
-    res = expr.compute()
-    expected = kernel.func(a, b)
+    with pytest.raises(DSLSyntaxError, match="Invalid DSL kernel"):
+        _ = blosc2.lazyudf(
+            kernel,
+            (a2, b2),
+            dtype=a2.dtype,
+            chunks=a2.chunks,
+            blocks=a2.blocks,
+        )
 
-    np.testing.assert_allclose(res[...], expected, rtol=1e-5, atol=1e-6)
+
+def test_dsl_kernel_ternary_rejected_with_actionable_error():
+    assert kernel_fallback_ternary.dsl_source is None
+    assert isinstance(kernel_fallback_ternary.dsl_error, DSLSyntaxError)
+    msg = str(kernel_fallback_ternary.dsl_error)
+    assert "Ternary expressions are not supported in DSL" in msg
+    assert "line" in msg
+    assert "column" in msg
+    assert "DSL kernel source:" in msg
+    assert "^" in msg

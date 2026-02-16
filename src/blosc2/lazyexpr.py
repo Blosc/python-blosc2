@@ -42,7 +42,7 @@ import numpy as np
 
 import blosc2
 
-from .dsl_kernel import DSLKernel, specialize_miniexpr_inputs
+from .dsl_kernel import DSLKernel, DSLSyntaxError, specialize_miniexpr_inputs
 
 if blosc2._HAS_NUMBA:
     import numba
@@ -3588,6 +3588,9 @@ class LazyUDF(LazyArray):
         self.kwargs["jit_backend"] = jit_backend
         self._dtype = dtype
         self.func = func
+        if isinstance(self.func, DSLKernel) and self.func.dsl_error is not None:
+            udf_name = getattr(self.func.func, "__name__", self.func.__name__)
+            raise DSLSyntaxError(f"Invalid DSL kernel '{udf_name}'.\n{self.func.dsl_error}") from None
 
         # Prepare internal array for __getitem__
         # Deep copy the kwargs to avoid modifying them
@@ -3963,6 +3966,9 @@ def lazyudf(
             [17.5 20.  22.5]
             [25.  27.5 30. ]]
     """
+    if isinstance(func, DSLKernel) and func.dsl_error is not None:
+        udf_name = getattr(func.func, "__name__", func.__name__)
+        raise DSLSyntaxError(f"Invalid DSL kernel '{udf_name}'.\n{func.dsl_error}") from None
     return LazyUDF(func, inputs, dtype, shape, chunked_eval, jit, jit_backend, **kwargs)
 
 
