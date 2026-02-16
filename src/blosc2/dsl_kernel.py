@@ -18,6 +18,7 @@ from typing import ClassVar
 
 _PRINT_DSL_KERNEL = os.environ.get("PRINT_DSL_KERNEL", "").strip().lower()
 _PRINT_DSL_KERNEL = _PRINT_DSL_KERNEL not in ("", "0", "false", "no", "off")
+_DSL_USAGE_DOC_URL = "https://github.com/Blosc/miniexpr/blob/main/doc/dsl-usage.md"
 
 
 class DSLSyntaxError(ValueError):
@@ -219,7 +220,7 @@ class _DSLValidator:
         self._line_base = line_base
 
     def validate(self, func_node: ast.FunctionDef):
-        self._args(func_node.args)
+        self._args(func_node)
         if not func_node.body:
             self._err(func_node, "DSL kernel must have a body")
         for stmt in func_node.body:
@@ -233,7 +234,7 @@ class _DSLValidator:
         line -= self._line_base
         location = f"{msg} at line {line}, column {col}"
         dump = self._format_source_with_pointer(line, col)
-        raise DSLSyntaxError(f"{location}\n\nDSL kernel source:\n{dump}")
+        raise DSLSyntaxError(f"{location}\n\nDSL kernel source:\n{dump}\n\nSee: {_DSL_USAGE_DOC_URL}")
 
     def _format_source_with_pointer(self, line: int, col: int) -> str:
         lines = self._source.splitlines()
@@ -248,14 +249,12 @@ class _DSLValidator:
                 out.append(f"{' ' * width} | {pointer}^")
         return "\n".join(out)
 
-    def _args(self, args: ast.arguments):
+    def _args(self, func_node: ast.FunctionDef):
+        args = func_node.args
         if args.vararg or args.kwarg or args.kwonlyargs:
             self._err(args, "DSL kernel does not support *args/**kwargs/kwonly args")
         if args.defaults or args.kw_defaults:
             self._err(args, "DSL kernel does not support default arguments")
-        names = [a.arg for a in (args.posonlyargs + args.args)]
-        if not names:
-            self._err(args, "DSL kernel must accept at least one argument")
 
     def _stmt(self, node: ast.stmt):  # noqa: C901
         if isinstance(node, ast.Assign):
@@ -482,10 +481,7 @@ class DSLKernel:
             raise ValueError("DSL kernel does not support *args/**kwargs/kwonly args")
         if args.defaults or args.kw_defaults:
             raise ValueError("DSL kernel does not support default arguments")
-        names = [a.arg for a in (args.posonlyargs + args.args)]
-        if not names:
-            raise ValueError("DSL kernel must accept at least one argument")
-        return names
+        return [a.arg for a in (args.posonlyargs + args.args)]
 
     def __call__(self, inputs_tuple, output, offset=None):
         if self.dsl_error is not None:
@@ -516,6 +512,34 @@ def dsl_kernel(func):
     """Decorator to wrap a function in a DSLKernel."""
 
     return DSLKernel(func)
+
+
+def validate_dsl(func):
+    """Validate a DSL kernel function without executing it.
+
+    Parameters
+    ----------
+    func
+        A Python callable or :class:`DSLKernel`.
+
+    Returns
+    -------
+    dict
+        A dictionary with:
+        - ``valid`` (bool): whether the DSL is valid
+        - ``dsl_source`` (str | None): extracted DSL source when valid
+        - ``input_names`` (list[str] | None): input signature names when valid
+        - ``error`` (str | None): user-facing error message when invalid
+    """
+
+    kernel = func if isinstance(func, DSLKernel) else DSLKernel(func)
+    err = kernel.dsl_error
+    return {
+        "valid": err is None,
+        "dsl_source": kernel.dsl_source,
+        "input_names": kernel.input_names,
+        "error": None if err is None else str(err),
+    }
 
 
 class _DSLBuilder:

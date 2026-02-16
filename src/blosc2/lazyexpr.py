@@ -1273,6 +1273,14 @@ def _apply_jit_backend_pragma(expression: str, inputs: dict, jit_backend: str | 
     return f"{pragma}def __me_auto({params}):\n    return {expression}"
 
 
+def _inject_dummy_param_for_zero_input_dsl(expression: str, param_name: str) -> str:
+    pattern = re.compile(r"^(\s*def\s+[A-Za-z_]\w*)\(\s*\)(\s*:)", re.MULTILINE)
+    rewritten, nsubs = pattern.subn(rf"\1({param_name})\2", expression, count=1)
+    if nsubs == 0:
+        raise ValueError("Could not inject dummy DSL parameter for zero-input kernel")
+    return rewritten
+
+
 def fast_eval(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
     operands: dict,
@@ -1318,6 +1326,7 @@ def fast_eval(  # noqa: C901
     jit = kwargs.pop("jit", None)
     jit_backend = kwargs.pop("jit_backend", None)
     dtype = kwargs.pop("dtype", None)
+    requested_shape = kwargs.pop("shape", None)
     where: dict | None = kwargs.pop("_where_args", None)
     if where is not None:
         # miniexpr does not support where(); use the regular path.
@@ -1331,7 +1340,19 @@ def fast_eval(  # noqa: C901
     else:
         # Otherwise, find the operand with the 'chunks' attribute and the longest shape
         operands_with_chunks = [o for o in operands.values() if hasattr(o, "chunks")]
-        basearr = max(operands_with_chunks, key=lambda x: len(x.shape))
+        if operands_with_chunks:
+            basearr = max(operands_with_chunks, key=lambda x: len(x.shape))
+        else:
+            if requested_shape is None:
+                raise ValueError("Cannot infer output shape without operands; pass `shape` explicitly")
+            if dtype is None:
+                raise ValueError("Cannot infer output dtype without operands; pass `dtype` explicitly")
+            basearr = blosc2.empty(
+                requested_shape,
+                dtype=dtype,
+                chunks=kwargs.get("chunks"),
+                blocks=kwargs.get("blocks"),
+            )
 
     # Get the shape of the base array
     shape = basearr.shape
@@ -1373,6 +1394,17 @@ def fast_eval(  # noqa: C901
 
     # Check whether we can use miniexpr
     if use_miniexpr:
+        if (
+            is_dsl
+            and isinstance(expression, DSLKernel)
+            and expression.input_names == []
+            and not operands_miniexpr
+        ):
+            dummy_name = "__me_dummy0"
+            expr_string_miniexpr = _inject_dummy_param_for_zero_input_dsl(expr_string_miniexpr, dummy_name)
+            operands_miniexpr = {
+                dummy_name: blosc2.zeros(shape, dtype=np.uint8, chunks=chunks, blocks=blocks)
+            }
         if math.prod(shape) <= 1:
             # Avoid miniexpr for scalar-like outputs; current prefilter path is unstable here.
             use_miniexpr = False
@@ -2386,6 +2418,51 @@ def convert_none_out(dtype, reduce_op, reduced_shape):
     return out
 
 
+def _validate_chunked_eval_inputs(operands: dict, out, shape, reduce_args: dict) -> bool:
+    if operands:
+        _, _, _, fast_path = validate_inputs(operands, out, reduce=reduce_args != {})
+        return fast_path
+    if shape is None and out is None:
+        raise ValueError(
+            "For UDFs with no inputs, provide `shape` (or an output array) to indicate result shape"
+        )
+    return False
+
+
+def _eval_zero_input_dsl_if_needed(
+    expression,
+    operands: dict,
+    where,
+    getitem: bool,
+    item,
+    shape,
+    jit,
+    jit_backend,
+    kwargs: dict,
+):
+    use_zero_input_dsl_fast_eval = (
+        not operands
+        and isinstance(expression, DSLKernel)
+        and expression.dsl_source is not None
+        and where is None
+    )
+    if not use_zero_input_dsl_fast_eval:
+        return False, None
+
+    full_res = fast_eval(
+        expression,
+        operands,
+        getitem=False,
+        shape=shape,
+        jit=jit,
+        jit_backend=jit_backend,
+        **kwargs,
+    )
+    if getitem:
+        return True, full_res[item.raw]
+    return True, full_res
+
+
 def chunked_eval(
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=(), **kwargs
 ):
@@ -2441,7 +2518,7 @@ def chunked_eval(
             operands = {**operands, **where}
 
         reduce_args = kwargs.pop("_reduce_args", {})
-        _, _, _, fast_path = validate_inputs(operands, out, reduce=reduce_args != {})
+        fast_path = _validate_chunked_eval_inputs(operands, out, shape, reduce_args)
 
         # Activate last read cache for NDField instances
         for op in operands:
@@ -2459,6 +2536,12 @@ def chunked_eval(
                 jit_backend=jit_backend,
                 **kwargs,
             )
+
+        handled, result = _eval_zero_input_dsl_if_needed(
+            expression, operands, where, getitem, item, shape, jit, jit_backend, kwargs
+        )
+        if handled:
+            return result
 
         if not is_full_slice(item.raw) or (where is not None and len(where) < 2):
             # The fast path is possible under a few conditions
@@ -3652,6 +3735,13 @@ class LazyUDF(LazyArray):
     def chunks(self):
         if hasattr(self, "_chunks"):
             return self._chunks
+        if not self.inputs_dict:
+            req_chunks = self.kwargs.get("chunks")
+            req_blocks = self.kwargs.get("blocks")
+            self._chunks, self._blocks = compute_chunks_blocks(
+                self.shape, req_chunks, req_blocks, dtype=self.dtype
+            )
+            return self._chunks
         shape, self._chunks, self._blocks, fast_path = validate_inputs(
             self.inputs_dict, getattr(self, "_out", None)
         )
@@ -3667,6 +3757,13 @@ class LazyUDF(LazyArray):
     @property
     def blocks(self):
         if hasattr(self, "_blocks"):
+            return self._blocks
+        if not self.inputs_dict:
+            req_chunks = self.kwargs.get("chunks")
+            req_blocks = self.kwargs.get("blocks")
+            self._chunks, self._blocks = compute_chunks_blocks(
+                self.shape, req_chunks, req_blocks, dtype=self.dtype
+            )
             return self._blocks
         shape, self._chunks, self._blocks, fast_path = validate_inputs(
             self.inputs_dict, getattr(self, "_out", None)

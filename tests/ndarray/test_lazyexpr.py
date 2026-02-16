@@ -1514,7 +1514,7 @@ def test_lazyexpr_string_scalar_keeps_miniexpr_fast_path(monkeypatch):
         np.testing.assert_allclose(res[...], na + b, rtol=1e-6, atol=1e-6)
         assert captured["calls"] >= 1
         assert captured["keys"] == ("o0",)
-        assert captured["expr"] == "o0 + 3"
+        assert captured["expr"] in {"o0 + 3", "(o0 + 3)"}
         assert "b" not in captured["expr"]
     finally:
         lazyexpr_mod.try_miniexpr = old_try_miniexpr

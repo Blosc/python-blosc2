@@ -31,6 +31,8 @@ and tools in the Python ecosystem, including:
 * Excellent integration with Numba and Cython via
   `User Defined
   Functions <https://www.blosc.org/python-blosc2/getting_started/tutorials/03.lazyarray-udf.html>`_.
+* DSL kernels for miniexpr-backed UDF authoring and validation (see
+  `this tutorial <https://www.blosc.org/python-blosc2/getting_started/tutorials/03.lazyarray-udf-kernels.html>`_).
 * By making use of the simple and open
 `C-Blosc2 format <https://github.com/Blosc/c-blosc2/blob/main/README_FORMAT.rst>`_
 for storing compressed data, Python-Blosc2 facilitates seamless integration with many other

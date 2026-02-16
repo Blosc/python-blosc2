@@ -124,6 +124,16 @@ def kernel_index_ramp(x):
     return _i0 * _n1 + _i1  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
 
 
+@blosc2.dsl_kernel
+def kernel_index_ramp_float_cast(x):
+    return float(_i0) * _n1 + _i1  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+
+
+@blosc2.dsl_kernel
+def kernel_index_ramp_no_inputs():
+    return _i0 * _n1 + _i1  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+
+
 def test_dsl_kernel_loop_kept_as_full_dsl_function():
     assert kernel_loop.dsl_source is not None
     assert "def kernel_loop(x, y):" in kernel_loop.dsl_source
@@ -184,6 +194,32 @@ def test_dsl_kernel_index_symbols_keep_full_kernel(monkeypatch):
     assert "_n1" in captured["expr"]
     assert "_i1" in captured["expr"]
     assert res.shape == shape
+
+
+def test_dsl_kernel_with_no_inputs_works_with_explicit_shape():
+    assert kernel_index_ramp_no_inputs.dsl_source is not None
+    assert "def kernel_index_ramp_no_inputs():" in kernel_index_ramp_no_inputs.dsl_source
+    assert kernel_index_ramp_no_inputs.input_names == []
+
+    shape = (10, 10)
+    expr = blosc2.lazyudf(kernel_index_ramp_no_inputs, (), dtype=np.float32, shape=shape)
+    res = expr[:]
+    expected = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+    np.testing.assert_equal(res, expected)
+
+
+def test_dsl_kernel_with_no_inputs_requires_shape_or_out():
+    with pytest.raises(ValueError, match="shape"):
+        _ = blosc2.lazyudf(kernel_index_ramp_no_inputs, (), dtype=np.float32)
+
+
+def test_dsl_kernel_index_symbols_float_cast_matches_expected_ramp():
+    shape = (32, 5)
+    x2 = blosc2.zeros(shape, dtype=np.float32)
+    expr = blosc2.lazyudf(kernel_index_ramp_float_cast, (x2,), dtype=np.float32)
+    res = expr[:]
+    expected = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+    np.testing.assert_allclose(res, expected, rtol=0.0, atol=0.0)
 
 
 def test_dsl_kernel_full_control_flow_kept_as_dsl_function():
@@ -369,3 +405,17 @@ def test_dsl_kernel_ternary_rejected_with_actionable_error():
     assert "column" in msg
     assert "DSL kernel source:" in msg
     assert "^" in msg
+
+
+def test_validate_dsl_api_valid_and_invalid():
+    valid_report = blosc2.validate_dsl(kernel_loop)
+    assert valid_report["valid"] is True
+    assert valid_report["error"] is None
+    assert "def kernel_loop(x, y):" in valid_report["dsl_source"]
+    assert valid_report["input_names"] == ["x", "y"]
+
+    invalid_report = blosc2.validate_dsl(kernel_fallback_ternary)
+    assert invalid_report["valid"] is False
+    assert "Ternary expressions are not supported in DSL" in invalid_report["error"]
+    assert invalid_report["dsl_source"] is None
+    assert invalid_report["input_names"] is None
