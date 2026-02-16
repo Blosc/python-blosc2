@@ -214,6 +214,16 @@ def test_dsl_kernel_with_no_inputs_works_with_explicit_shape():
     np.testing.assert_equal(res, expected)
 
 
+def test_dsl_kernel_with_no_inputs_sum_returns_scalar():
+    shape = (10, 5)
+    expr = blosc2.lazyudf(kernel_index_ramp_no_inputs, (), dtype=np.float32, shape=shape)
+    result = expr.sum()
+
+    expected = np.arange(np.prod(shape), dtype=np.float32).reshape(shape).sum()
+    assert np.isscalar(result)
+    np.testing.assert_allclose(result, expected, rtol=0.0, atol=0.0)
+
+
 def test_dsl_kernel_with_no_inputs_requires_shape_or_out():
     with pytest.raises(ValueError, match="shape"):
         _ = blosc2.lazyudf(kernel_index_ramp_no_inputs, (), dtype=np.float32)

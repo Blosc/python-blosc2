@@ -2366,7 +2366,13 @@ def reduce_slices(  # noqa: C901
             dtype = np.float64
         out = convert_none_out(dtype, reduce_op, reduced_shape)
 
-    out = out[()] if reduced_shape == () else out  # undo dummy dim from inside convert_none_out
+    if reduced_shape == ():
+        # convert_none_out() may allocate shape (1,) as an internal buffer for scalar reductions.
+        # Collapse it to a numpy scalar while handling both 0-d and 1-d singleton arrays.
+        if isinstance(out, np.ndarray):
+            out = out[()] if out.ndim == 0 else out[0]
+        else:
+            out = out[()]
     final_mask = tuple(np.where(mask_slice)[0])
     if np.any(mask_slice):  # remove dummy dims
         out = np.squeeze(out, axis=final_mask)
