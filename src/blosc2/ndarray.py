@@ -4727,6 +4727,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> b.shape
         (50, 10)
         """
+        if 0 in self.chunks or 0 in self.blocks:
+            raise ValueError(
+                "Cannot resize array. Perhaps you want to specify chunks/blocks on array creation. For 1D arrays, a good chunks value is (cache_size/typesize,)!"
+            )
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
         super().resize(newshape)
 
