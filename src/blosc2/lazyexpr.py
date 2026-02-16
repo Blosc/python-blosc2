@@ -2272,8 +2272,12 @@ def reduce_slices(  # noqa: C901
             result = reduce_op.value.reduce(result, **reduce_args)
 
         if not out_init:
-            # if cumsum/cumprod, return blosc2 array with same chunks
-            out_ = convert_none_out(result.dtype, reduce_op, reduced_shape, chunks=chunks)
+            # if cumsum/cumprod and arrays large, return blosc2 array with same chunks
+            chunks_out = (
+                chunks if np.prod(reduced_shape) * dtype.itemsize > 4 * blosc2.MAX_FAST_PATH_SIZE else None
+            )
+            chunks_out = chunks_out if _slice == () else None
+            out_ = convert_none_out(result.dtype, reduce_op, reduced_shape, chunks=chunks_out)
             if out is not None:
                 out[:] = out_
                 del out_
@@ -2315,9 +2319,9 @@ def reduce_slices(  # noqa: C901
                 else:  # CUMULATIVE_PROD
                     result *= res_out_
                 res_out_ = result[idx_lastval]
-                if behaved and result.shape == out.chunks and result.dtype == out.dtype:
+                if behaved and result.shape == out.chunks and result.dtype == out.dtype and _slice == ():
                     # Fast path
-                    # TODO: Check this only works when slice is ()
+                    # TODO: Check this only works when slice is () as nchunk is incorrect  for out otherwise
                     out.schunk.update_data(nchunk, result, copy=False)
                 else:
                     out[reduced_slice] = result
@@ -2373,16 +2377,16 @@ def convert_none_out(dtype, reduce_op, reduced_shape, chunks=None):
     reduced_shape = (1,) if reduced_shape == () else reduced_shape
     # out will be a proper numpy.ndarray
     if reduce_op in {ReduceOp.SUM, ReduceOp.CUMULATIVE_SUM, ReduceOp.PROD, ReduceOp.CUMULATIVE_PROD}:
-        if reduce_op in (ReduceOp.CUMULATIVE_SUM, ReduceOp.CUMULATIVE_PROD):
+        if reduce_op in (ReduceOp.CUMULATIVE_SUM, ReduceOp.CUMULATIVE_PROD) and chunks is not None:
             out = (
                 blosc2.zeros(reduced_shape, dtype=dtype, chunks=chunks)
-                if reduce_op in {ReduceOp.CUMULATIVE_SUM}
+                if reduce_op == ReduceOp.CUMULATIVE_SUM
                 else blosc2.ones(reduced_shape, dtype=dtype, chunks=chunks)
             )
         else:
             out = (
                 np.zeros(reduced_shape, dtype=dtype)
-                if reduce_op in {ReduceOp.SUM}
+                if reduce_op in {ReduceOp.SUM, ReduceOp.CUMULATIVE_SUM}
                 else np.ones(reduced_shape, dtype=dtype)
             )
     elif reduce_op == ReduceOp.MIN:
