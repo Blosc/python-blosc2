@@ -219,6 +219,23 @@ def test_dsl_kernel_with_no_inputs_requires_shape_or_out():
         _ = blosc2.lazyudf(kernel_index_ramp_no_inputs, (), dtype=np.float32)
 
 
+def test_dsl_kernel_with_no_inputs_handles_windows_dtype_policy(monkeypatch):
+    if blosc2.IS_WASM:
+        pytest.skip("miniexpr fast path is not available on WASM")
+
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    monkeypatch.setattr(lazyexpr_mod.sys, "platform", "win32")
+    monkeypatch.setattr(lazyexpr_mod, "_MINIEXPR_WINDOWS_OVERRIDE", False)
+
+    shape = (10, 10)
+    expr = blosc2.lazyudf(kernel_index_ramp_no_inputs, (), dtype=np.float32, shape=shape)
+    res = expr[:]
+    expected = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+    np.testing.assert_equal(res, expected)
+
+
 def test_dsl_kernel_index_symbols_float_cast_matches_expected_ramp():
     shape = (32, 5)
     x2 = blosc2.zeros(shape, dtype=np.float32)

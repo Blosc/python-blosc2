@@ -1408,9 +1408,10 @@ def fast_eval(  # noqa: C901
             and not operands_miniexpr
         ):
             dummy_name = "__me_dummy0"
+            dummy_dtype = dtype if dtype is not None else np.uint8
             expr_string_miniexpr = _inject_dummy_param_for_zero_input_dsl(expr_string_miniexpr, dummy_name)
             operands_miniexpr = {
-                dummy_name: blosc2.zeros(shape, dtype=np.uint8, chunks=chunks, blocks=blocks)
+                dummy_name: blosc2.zeros(shape, dtype=dummy_dtype, chunks=chunks, blocks=blocks)
             }
         if math.prod(shape) <= 1:
             # Avoid miniexpr for scalar-like outputs; current prefilter path is unstable here.
