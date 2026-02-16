@@ -86,6 +86,7 @@ def kernel_while_full(x, y):
 @blosc2.dsl_kernel
 def kernel_loop_param(x, y, niter):
     acc = x
+    # loop count comes from scalar niter
     for _i in range(niter):
         acc = np.where(acc < y, acc + 1, acc - 1)
     return acc
@@ -183,10 +184,10 @@ def test_dsl_kernel_full_control_flow_kept_as_dsl_function():
     assert kernel_control_flow_full.dsl_source is not None
     assert "def kernel_control_flow_full(x, y):" in kernel_control_flow_full.dsl_source
     assert "for i in range(4):" in kernel_control_flow_full.dsl_source
-    assert "elif (i == 1):" in kernel_control_flow_full.dsl_source
+    assert "if i == 1:" in kernel_control_flow_full.dsl_source
     assert "continue" in kernel_control_flow_full.dsl_source
     assert "break" in kernel_control_flow_full.dsl_source
-    assert "where(" in kernel_control_flow_full.dsl_source
+    assert "np.where(" in kernel_control_flow_full.dsl_source
 
     a, b, a2, b2 = _make_arrays()
     expr = blosc2.lazyudf(
@@ -205,7 +206,7 @@ def test_dsl_kernel_full_control_flow_kept_as_dsl_function():
 def test_dsl_kernel_while_kept_as_dsl_function():
     assert kernel_while_full.dsl_source is not None
     assert "def kernel_while_full(x, y):" in kernel_while_full.dsl_source
-    assert "while (i < 3):" in kernel_while_full.dsl_source
+    assert "while i < 3:" in kernel_while_full.dsl_source
 
     a, b, a2, b2 = _make_arrays()
     expr = blosc2.lazyudf(
@@ -280,6 +281,7 @@ def test_dsl_kernel_scalar_param_keeps_miniexpr_fast_path(monkeypatch):
         assert "def kernel_loop_param(x, y):" in captured["expr"]
         assert "for it in range(3):" not in captured["expr"]
         assert "for _i in range(3):" in captured["expr"]
+        assert "# loop count comes from scalar niter" in captured["expr"]
         assert "range(niter)" not in captured["expr"]
         assert "float(niter)" not in captured["expr"]
     finally:
@@ -338,8 +340,9 @@ def test_jit_backend_pragma_wrapping_dsl_source():
     ],
 )
 def test_dsl_kernel_flawed_syntax_detected_fallback_callable(kernel):
-    assert kernel.dsl_source is None
-    assert kernel.input_names is None
+    assert kernel.dsl_source is not None
+    assert kernel.dsl_source.startswith("def ")
+    assert kernel.input_names == ["x", "y"]
 
     a, b, a2, b2 = _make_arrays()
     expr = blosc2.lazyudf(

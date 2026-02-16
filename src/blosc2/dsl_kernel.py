@@ -12,6 +12,8 @@ import contextlib
 import inspect
 import os
 import textwrap
+import tokenize
+from io import StringIO
 from typing import ClassVar
 
 _PRINT_DSL_KERNEL = os.environ.get("PRINT_DSL_KERNEL", "").strip().lower()
@@ -30,28 +32,129 @@ def _normalize_miniexpr_scalar(value):
     raise TypeError("Unsupported scalar type for miniexpr specialization")
 
 
-class _MiniexprScalarSpecializer(ast.NodeTransformer):
-    def __init__(self, replacements: dict[str, int | float]):
-        self.replacements = replacements
+def _line_starts(text: str) -> list[int]:
+    starts = [0]
+    for i, ch in enumerate(text):
+        if ch == "\n":
+            starts.append(i + 1)
+    return starts
 
-    def visit_Name(self, node):
-        if isinstance(node.ctx, ast.Load) and node.id in self.replacements:
-            return ast.copy_location(ast.Constant(value=self.replacements[node.id]), node)
-        return node
 
-    def visit_Call(self, node):
-        node = self.generic_visit(node)
-        if (
-            isinstance(node.func, ast.Name)
-            and node.func.id in {"float", "int"}
-            and len(node.args) == 1
-            and not node.keywords
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, int | float | bool)
-        ):
-            folded = float(node.args[0].value) if node.func.id == "float" else int(node.args[0].value)
-            return ast.copy_location(ast.Constant(value=folded), node)
-        return node
+def _to_abs(line_starts: list[int], line: int, col: int) -> int:
+    return line_starts[line - 1] + col
+
+
+def _find_def_signature_span(text: str):
+    tokens = list(tokenize.generate_tokens(StringIO(text).readline))
+    for i, tok in enumerate(tokens):
+        if tok.type != tokenize.NAME or tok.string != "def":
+            continue
+        lparen = None
+        rparen = None
+        colon = None
+        depth = 0
+        for j in range(i + 1, len(tokens)):
+            t = tokens[j]
+            if lparen is None:
+                if t.type == tokenize.OP and t.string == "(":
+                    lparen = t
+                    depth = 1
+                continue
+            if t.type == tokenize.OP and t.string == "(":
+                depth += 1
+                continue
+            if t.type == tokenize.OP and t.string == ")":
+                depth -= 1
+                if depth == 0:
+                    rparen = t
+                    continue
+            if rparen is not None and t.type == tokenize.OP and t.string == ":":
+                colon = t
+                break
+        if lparen is not None and rparen is not None:
+            return lparen, rparen, colon
+    return None, None, None
+
+
+def _remove_scalar_params_preserving_source(text: str, scalar_replacements: dict[str, int | float]):
+    if not scalar_replacements:
+        return text, 0
+
+    lparen, rparen, colon = _find_def_signature_span(text)
+    if lparen is None or rparen is None:
+        return text, 0
+
+    try:
+        tree = ast.parse(text)
+    except Exception:
+        return text, 0
+
+    func = next((n for n in tree.body if isinstance(n, ast.FunctionDef)), None)
+    if func is None:
+        return text, 0
+
+    kept = [a.arg for a in (func.args.posonlyargs + func.args.args) if a.arg not in scalar_replacements]
+    line_starts = _line_starts(text)
+    pstart = _to_abs(line_starts, lparen.end[0], lparen.end[1])
+    pend = _to_abs(line_starts, rparen.start[0], rparen.start[1])
+    updated = f"{text[:pstart]}{', '.join(kept)}{text[pend:]}"
+    body_start = 0
+    if colon is not None:
+        body_start = _to_abs(_line_starts(updated), colon.end[0], colon.end[1])
+    return updated, body_start
+
+
+def _replace_scalar_names_preserving_source(
+    text: str, scalar_replacements: dict[str, int | float], body_start: int
+):
+    if not scalar_replacements:
+        return text
+
+    line_starts = _line_starts(text)
+    tokens = list(tokenize.generate_tokens(StringIO(text).readline))
+    significant = {
+        tokenize.NAME,
+        tokenize.NUMBER,
+        tokenize.STRING,
+        tokenize.OP,
+        tokenize.INDENT,
+        tokenize.DEDENT,
+    }
+    assign_ops = {"=", "+=", "-=", "*=", "/=", "//=", "%=", "&=", "|=", "^=", "<<=", ">>=", ":="}
+    edits = []
+    for i, tok in enumerate(tokens):
+        if tok.type != tokenize.NAME or tok.string not in scalar_replacements:
+            continue
+        start_abs = _to_abs(line_starts, tok.start[0], tok.start[1])
+        if start_abs < body_start:
+            continue
+
+        prev_sig = None
+        for j in range(i - 1, -1, -1):
+            if tokens[j].type in significant:
+                prev_sig = tokens[j]
+                break
+        if prev_sig is not None and prev_sig.type == tokenize.OP and prev_sig.string == ".":
+            continue
+
+        next_sig = None
+        for j in range(i + 1, len(tokens)):
+            if tokens[j].type in significant:
+                next_sig = tokens[j]
+                break
+        if next_sig is not None and next_sig.type == tokenize.OP and next_sig.string in assign_ops:
+            continue
+
+        end_abs = _to_abs(line_starts, tok.end[0], tok.end[1])
+        edits.append((start_abs, end_abs, repr(scalar_replacements[tok.string])))
+
+    if not edits:
+        return text
+
+    out = text
+    for start, end, repl in sorted(edits, key=lambda e: e[0], reverse=True):
+        out = f"{out[:start]}{repl}{out[end:]}"
+    return out
 
 
 def specialize_miniexpr_inputs(expr_string: str, operands: dict):
@@ -73,14 +176,9 @@ def specialize_miniexpr_inputs(expr_string: str, operands: dict):
     if not scalar_replacements:
         return expr_string, operands
 
-    tree = ast.parse(expr_string)
-    tree = _MiniexprScalarSpecializer(scalar_replacements).visit(tree)
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef):
-            node.args.posonlyargs = [a for a in node.args.posonlyargs if a.arg not in scalar_replacements]
-            node.args.args = [a for a in node.args.args if a.arg not in scalar_replacements]
-    ast.fix_missing_locations(tree)
-    return ast.unparse(tree), array_operands
+    rewritten, body_start = _remove_scalar_params_preserving_source(expr_string, scalar_replacements)
+    rewritten = _replace_scalar_names_preserving_source(rewritten, scalar_replacements, body_start)
+    return rewritten, array_operands
 
 
 def specialize_dsl_miniexpr_inputs(expr_string: str, operands: dict):
@@ -141,13 +239,36 @@ class DSLKernel:
         if func_node is None:
             raise ValueError("No function definition found for DSL extraction")
 
-        builder = _DSLBuilder()
-        dsl_source, input_names = builder.build(func_node)
+        dsl_source = self._slice_function_source(source, func_node)
+        input_names = self._input_names_from_signature(func_node)
         if _PRINT_DSL_KERNEL:
             func_name = getattr(func, "__name__", "<dsl_kernel>")
             print(f"[DSLKernel:{func_name}] dsl_source (full):")
             print(dsl_source)
         return dsl_source, input_names
+
+    @staticmethod
+    def _slice_function_source(source: str, func_node: ast.FunctionDef) -> str:
+        lines = source.splitlines()
+        start = func_node.lineno - 1
+        end_lineno = getattr(func_node, "end_lineno", None)
+        if end_lineno is None:
+            end = len(lines)
+        else:
+            end = end_lineno
+        return "\n".join(lines[start:end])
+
+    @staticmethod
+    def _input_names_from_signature(func_node: ast.FunctionDef) -> list[str]:
+        args = func_node.args
+        if args.vararg or args.kwarg or args.kwonlyargs:
+            raise ValueError("DSL kernel does not support *args/**kwargs/kwonly args")
+        if args.defaults or args.kw_defaults:
+            raise ValueError("DSL kernel does not support default arguments")
+        names = [a.arg for a in (args.posonlyargs + args.args)]
+        if not names:
+            raise ValueError("DSL kernel must accept at least one argument")
+        return names
 
     def __call__(self, inputs_tuple, output, offset=None):
         if self._legacy_udf_signature:
