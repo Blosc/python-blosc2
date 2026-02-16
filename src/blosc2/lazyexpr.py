@@ -2274,7 +2274,9 @@ def reduce_slices(  # noqa: C901
         if not out_init:
             # if cumsum/cumprod and arrays large, return blosc2 array with same chunks
             chunks_out = (
-                chunks if np.prod(reduced_shape) * dtype.itemsize > 4 * blosc2.MAX_FAST_PATH_SIZE else None
+                chunks
+                if np.prod(reduced_shape) * np.dtype(dtype).itemsize > 4 * blosc2.MAX_FAST_PATH_SIZE
+                else None
             )
             chunks_out = chunks_out if _slice == () else None
             out_ = convert_none_out(result.dtype, reduce_op, reduced_shape, chunks=chunks_out)
