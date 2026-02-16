@@ -94,6 +94,12 @@ def kernel_loop_param(x, y, niter):
 
 
 @blosc2.dsl_kernel
+def kernel_scalar_float_cast(x, niter):
+    offset = float(niter)
+    return x + offset
+
+
+@blosc2.dsl_kernel
 def kernel_fallback_kw_call(x, y):
     return np.clip(x + y, a_min=0.5, a_max=2.5)
 
@@ -326,6 +332,44 @@ def test_dsl_kernel_scalar_param_keeps_miniexpr_fast_path(monkeypatch):
         assert "# loop count comes from scalar niter" in captured["expr"]
         assert "range(niter)" not in captured["expr"]
         assert "float(niter)" not in captured["expr"]
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
+
+
+def test_dsl_kernel_scalar_float_cast_inlined_without_float_call(monkeypatch):
+    if blosc2.IS_WASM:
+        pytest.skip("miniexpr fast path is not available on WASM")
+
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    captured = {"calls": 0, "expr": None, "keys": None}
+
+    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        captured["calls"] += 1
+        captured["expr"] = expression.decode("utf-8") if isinstance(expression, bytes) else expression
+        captured["keys"] = tuple(inputs.keys())
+        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc, jit=jit)
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+
+    try:
+        a, _, a2, _ = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))
+        niter = 3
+        expr = blosc2.lazyudf(kernel_scalar_float_cast, (a2, niter), dtype=a2.dtype)
+        res = expr.compute()
+        expected = kernel_scalar_float_cast.func(a, niter)
+
+        np.testing.assert_allclose(res[...], expected, rtol=1e-5, atol=1e-6)
+        assert captured["calls"] >= 1
+        assert captured["keys"] == ("x",)
+        assert "def kernel_scalar_float_cast(x):" in captured["expr"]
+        assert "offset = 3.0" in captured["expr"]
+        assert "float(3)" not in captured["expr"]
     finally:
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 

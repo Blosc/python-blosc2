@@ -162,6 +162,52 @@ def _replace_scalar_names_preserving_source(
     return out
 
 
+def _fold_numeric_cast_calls_preserving_source(text: str, body_start: int):
+    """Fold float(<number>) and int(<number>) calls into literals.
+
+    miniexpr parses DSL function calls in a restricted way, and scalar specialization can
+    produce calls like float(200) that fail to parse.  Fold those into literals while
+    preserving source formatting/comments elsewhere.
+    """
+    try:
+        tree = ast.parse(text)
+    except Exception:
+        return text
+
+    line_starts = _line_starts(text)
+    edits = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if node.keywords or len(node.args) != 1:
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id not in {"float", "int"}:
+            continue
+
+        arg = node.args[0]
+        if not isinstance(arg, ast.Constant) or not isinstance(arg.value, int | float | bool):
+            continue
+
+        start_abs = _to_abs(line_starts, node.lineno, node.col_offset)
+        if start_abs < body_start:
+            continue
+        end_abs = _to_abs(line_starts, node.end_lineno, node.end_col_offset)
+
+        if node.func.id == "float":
+            repl = repr(float(arg.value))
+        else:
+            repl = repr(int(arg.value))
+        edits.append((start_abs, end_abs, repl))
+
+    if not edits:
+        return text
+
+    out = text
+    for start, end, repl in sorted(edits, key=lambda e: e[0], reverse=True):
+        out = f"{out[:start]}{repl}{out[end:]}"
+    return out
+
+
 def specialize_miniexpr_inputs(expr_string: str, operands: dict):
     """Inline scalar operands as constants for miniexpr compilation."""
     scalar_replacements = {}
@@ -183,6 +229,7 @@ def specialize_miniexpr_inputs(expr_string: str, operands: dict):
 
     rewritten, body_start = _remove_scalar_params_preserving_source(expr_string, scalar_replacements)
     rewritten = _replace_scalar_names_preserving_source(rewritten, scalar_replacements, body_start)
+    rewritten = _fold_numeric_cast_calls_preserving_source(rewritten, body_start)
     return rewritten, array_operands
 
 
