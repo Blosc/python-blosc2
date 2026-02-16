@@ -439,16 +439,14 @@ def test_fast_path(chunks, blocks, disk, fill_value, reduce_op, axis):
     assert np.allclose(res, nres)
 
     # Try with a slice
-    b = blosc2.linspace(0, 1, blocks=blocks, chunks=chunks, shape=shape, dtype=a.dtype)
-    nb = b[:]
     slice_ = (slice(5, 7),)
     if reduce_op in {"cumulative_sum", "cumulative_prod"}:
         axis = 0 if axis is None else axis
         oploc = "npcumsum" if reduce_op == "cumulative_sum" else "npcumprod"
-        nres = eval(f"{oploc}((na + nb)[{slice_}], axis={axis})")
+        nres = eval(f"{oploc}((na - .1)[{slice_}], axis={axis})")
     else:
-        nres = getattr((na + nb)[slice_], reduce_op)(axis=axis)
-    res = getattr(a + b, reduce_op)(axis=axis, item=slice_)
+        nres = getattr((na - 0.1)[slice_], reduce_op)(axis=axis)
+    res = getattr(a - 0.1, reduce_op)(axis=axis, item=slice_)
     assert np.allclose(res, nres)
 
 
