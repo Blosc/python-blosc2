@@ -1586,24 +1586,25 @@ def compute_chunks_blocks(  # noqa: C901
 
     if blocks is None:
         # Get the default blocksize for the compression params
-        # Using an 8 MB buffer should be enough for detecting the whole range of blocksizes
-        nitems = 2**23 // itemsize
         # compress2 is used just to provide a hint on the blocksize
         # However, it does not work well with filters that are not shuffle or bitshuffle,
         # so let's get rid of them
-        filters = cparams.get("filters", None)
-        if filters:
-            cparams2 = copy.deepcopy(cparams)
-            for i, filter in enumerate(filters):
-                if filter not in (blosc2.Filter.SHUFFLE, blosc2.Filter.BITSHUFFLE):
-                    cparams2["filters"][i] = blosc2.Filter.NOFILTER
-        else:
-            cparams2 = cparams
+        # filters = cparams.get("filters", None)
+        # if filters:
+        #     cparams2 = copy.deepcopy(cparams)
+        #     for i, filter in enumerate(filters):
+        #         if filter not in (blosc2.Filter.SHUFFLE, blosc2.Filter.BITSHUFFLE):
+        #             cparams2["filters"][i] = blosc2.Filter.NOFILTER
+        # else:
+        #     cparams2 = cparams
         # Force STUNE to get a hint on the blocksize
-        aux_tuner = cparams2.get("tuner", blosc2.Tuner.STUNE)
-        cparams2["tuner"] = blosc2.Tuner.STUNE
-        src = blosc2.compress2(np.zeros(nitems, dtype=f"V{itemsize}"), **cparams2)
-        _, _, blocksize = blosc2.get_cbuffer_sizes(src)
+        # aux_tuner = cparams2.get("tuner", blosc2.Tuner.STUNE)
+        # cparams2["tuner"] = blosc2.Tuner.STUNE
+        # src = blosc2.compress2(np.zeros(nitems, dtype=f"V{itemsize}"), **cparams2)
+        # _, _, blocksize = blosc2.get_cbuffer_sizes(src)
+        # We disable internal STUNE path as it is a bit costly, specially for small arrays.
+        # The heuristic below should be good enough in general.
+        blocksize = 32 * 1024
         # Minimum blocksize calculation
         min_blocksize = blocksize
         if platform.machine() == "x86_64":
@@ -1634,7 +1635,9 @@ def compute_chunks_blocks(  # noqa: C901
         if blocksize < itemsize:
             blocksize = itemsize
 
-        cparams2["tuner"] = aux_tuner
+        # We disable internal STUNE path as it is a bit costly, specially for small arrays.
+        # See above.
+        # cparams2["tuner"] = aux_tuner
     else:
         blocksize = math.prod(blocks) * itemsize
 
