@@ -3274,6 +3274,9 @@ class Operand:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
+    def __radd__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
+        return self.__add__(value)
+
     def __iadd__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         return self.__add__(value)
 
@@ -3289,8 +3292,13 @@ class Operand:
     def __mod__(self, other) -> blosc2.LazyExpr:
         return remainder(self, other)
 
-    def __radd__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
-        return self.__add__(value)
+    @is_documented_by(remainder)
+    def __imod__(self, other) -> blosc2.LazyExpr:
+        return self.__mod__(other)
+
+    @is_documented_by(remainder)
+    def __rmod__(self, other) -> blosc2.LazyExpr:
+        return remainder(other, self)
 
     def __sub__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
@@ -3330,6 +3338,14 @@ class Operand:
     def __floordiv__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "//", value))
+
+    def __ifloordiv__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
+        _check_allowed_dtypes(value)
+        return self.__floordiv__(value)
+
+    def __rfloordiv__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
+        _check_allowed_dtypes(value)
+        return blosc2.LazyExpr(new_op=(value, "//", self))
 
     def __lt__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
@@ -3378,13 +3394,31 @@ class Operand:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "&", value))
 
+    def __iand__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
+        return self.__and__(value)
+
+    def __rand__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
+        return self.__and__(value)
+
     @is_documented_by(bitwise_xor)
     def __xor__(self, other) -> blosc2.LazyExpr:
         return blosc2.LazyExpr(new_op=(self, "^", other))
 
+    def __ixor__(self, other) -> blosc2.LazyExpr:
+        return self.__xor__(other)
+
+    def __rxor__(self, other) -> blosc2.LazyExpr:
+        return self.__xor__(other)
+
     @is_documented_by(bitwise_or)
     def __or__(self, other) -> blosc2.LazyExpr:
         return blosc2.LazyExpr(new_op=(self, "|", other))
+
+    def __ior__(self, other) -> blosc2.LazyExpr:
+        return self.__or__(other)
+
+    def __ror__(self, other) -> blosc2.LazyExpr:
+        return self.__or__(other)
 
     @is_documented_by(bitwise_invert)
     def __invert__(self) -> blosc2.LazyExpr:
@@ -3394,9 +3428,21 @@ class Operand:
     def __rshift__(self, other) -> blosc2.LazyExpr:
         return blosc2.LazyExpr(new_op=(self, ">>", other))
 
+    def __irshift__(self, other) -> blosc2.LazyExpr:
+        return self.__rshift__(other)
+
+    def __rrshift__(self, other) -> blosc2.LazyExpr:
+        return blosc2.LazyExpr(new_op=(other, ">>", self))
+
     @is_documented_by(bitwise_left_shift)
     def __lshift__(self, other) -> blosc2.LazyExpr:
         return blosc2.LazyExpr(new_op=(self, "<<", other))
+
+    def __ilshift__(self, other) -> blosc2.LazyExpr:
+        return self.__lshift__(other)
+
+    def __rlshift__(self, other) -> blosc2.LazyExpr:
+        return blosc2.LazyExpr(new_op=(other, "<<", self))
 
     def __bool__(self) -> bool:
         if math.prod(self.shape) != 1:
@@ -4693,6 +4739,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> b.shape
         (50, 10)
         """
+        if 0 in self.chunks or 0 in self.blocks:
+            raise ValueError(
+                "Cannot resize array. Perhaps you want to specify chunks/blocks on array creation. For 1D arrays, a good chunks value is (cache_size/typesize,)!"
+            )
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
         super().resize(newshape)
 

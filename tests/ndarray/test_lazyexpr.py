@@ -7,6 +7,7 @@
 
 import math
 import pathlib
+import sys
 
 import numpy as np
 import pytest
@@ -88,6 +89,44 @@ def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
     na4 = np.copy(na1)
     a4 = blosc2.asarray(na4, chunks=chunks1, blocks=blocks1)
     return a1, a2, a3, a4, na1, na2, na3, na4
+
+
+def test_operandmethods_scalar(shape_fixture, dtype_fixture):
+    nelems = np.prod(shape_fixture)
+    na1 = np.linspace(1, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
+    a1 = blosc2.asarray(na1)
+    scalar = 10
+
+    # Test __r***__ methods
+    for expr in (
+        scalar + a1,
+        scalar - a1,
+        scalar * a1,
+        scalar / a1,
+        scalar // a1,
+        scalar**a1,
+        scalar % a1,
+    ):
+        assert expr[()].shape == expr.shape
+
+    # Test __i***__ methods
+    a1 += scalar
+    a1 -= scalar
+    a1 *= scalar
+    a1 /= scalar
+    a1 //= scalar
+    a1 **= scalar
+    a1 %= scalar
+
+    a1 = blosc2.asarray(na1, dtype=np.int64)
+    for expr in (scalar & a1, scalar | a1, scalar ^ a1, scalar << a1, scalar >> a1):
+        assert expr[()].shape == expr.shape
+
+    a1 &= scalar
+    a1 |= scalar
+    a1 ^= scalar
+    a1 <<= scalar
+    a1 >>= scalar
 
 
 def test_simple_getitem(array_fixture):
@@ -1505,6 +1544,84 @@ def test_numpy_funcs(array_fixture, func):
         np.testing.assert_equal(d_blosc2, d_numpy)
     except AttributeError:
         pytest.skip("NumPy version has no cumulative_sum function.")
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="miniexpr fast path is not available on WASM")
+def test_lazyexpr_string_scalar_keeps_miniexpr_fast_path(monkeypatch):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    captured = {"calls": 0, "expr": None, "keys": None}
+
+    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        captured["calls"] += 1
+        captured["expr"] = expression.decode("utf-8") if isinstance(expression, bytes) else expression
+        captured["keys"] = tuple(inputs.keys())
+        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc, jit=jit)
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+
+    try:
+        na = np.arange(32 * 32, dtype=np.float32).reshape(32, 32)
+        a = blosc2.asarray(na, chunks=(16, 16), blocks=(8, 8))
+        b = 3
+        expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+        res = expr.compute()
+
+        np.testing.assert_allclose(res[...], na + b, rtol=1e-6, atol=1e-6)
+        assert captured["calls"] >= 1
+        assert captured["keys"] == ("o0",)
+        assert captured["expr"] == "o0 + 3"
+        assert "b" not in captured["expr"]
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
+
+
+@pytest.mark.skipif(blosc2.IS_WASM, reason="miniexpr fast path is not available on WASM")
+def test_lazyexpr_unary_negative_literal_matches_subtraction(monkeypatch):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    captured = {"calls": 0, "exprs": []}
+
+    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        captured["calls"] += 1
+        expr = expression.decode("utf-8") if isinstance(expression, bytes) else expression
+        captured["exprs"].append(expr)
+        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc, jit=jit)
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+
+    try:
+        na = np.arange(32 * 32, dtype=np.int64).reshape(32, 32)
+        a = blosc2.asarray(na, chunks=(16, 16), blocks=(8, 8))
+
+        left = blosc2.lazyexpr("-1 + a", operands={"a": a}).compute()
+        right = blosc2.lazyexpr("a - 1", operands={"a": a}).compute()
+
+        np.testing.assert_equal(left[...], right[...])
+        np.testing.assert_equal(left[...], na - 1)
+        miniexpr_expected = not (
+            sys.platform == "win32"
+            and not lazyexpr_mod._MINIEXPR_WINDOWS_OVERRIDE
+            and np.issubdtype(na.dtype, np.integer)
+        )
+        if miniexpr_expected:
+            assert captured["calls"] >= 1
+            assert any("-1" in expr for expr in captured["exprs"])
+        else:
+            # Integer dtypes on Windows skip miniexpr by policy unless explicitly overridden.
+            assert captured["calls"] == 0
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
 # Test the LazyExpr when some operands are missing (e.g. removed file)
