@@ -1,11 +1,6 @@
 name: Python wheels for WASM upload
 on:
-  push:
-    tags:
-      - '*'
-  pull_request:
-    branches:
-      - main
+  workflow_dispatch:
 
 env:
   CIBW_BUILD_VERBOSITY: 1
