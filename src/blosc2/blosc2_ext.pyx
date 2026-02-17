@@ -556,6 +556,7 @@ cdef extern from "miniexpr.h":
         const void *address
         int type
         void *context
+        size_t itemsize
 
     ctypedef struct me_expr:
         int type

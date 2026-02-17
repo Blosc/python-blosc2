@@ -12,10 +12,17 @@ import contextlib
 import inspect
 import os
 import textwrap
+import tokenize
+from io import StringIO
 from typing import ClassVar
 
 _PRINT_DSL_KERNEL = os.environ.get("PRINT_DSL_KERNEL", "").strip().lower()
 _PRINT_DSL_KERNEL = _PRINT_DSL_KERNEL not in ("", "0", "false", "no", "off")
+_DSL_USAGE_DOC_URL = "https://github.com/Blosc/miniexpr/blob/main/doc/dsl-usage.md"
+
+
+class DSLSyntaxError(ValueError):
+    """Raised when a @dsl_kernel function uses unsupported DSL syntax."""
 
 
 def _normalize_miniexpr_scalar(value):
@@ -30,28 +37,175 @@ def _normalize_miniexpr_scalar(value):
     raise TypeError("Unsupported scalar type for miniexpr specialization")
 
 
-class _MiniexprScalarSpecializer(ast.NodeTransformer):
-    def __init__(self, replacements: dict[str, int | float]):
-        self.replacements = replacements
+def _line_starts(text: str) -> list[int]:
+    starts = [0]
+    for i, ch in enumerate(text):
+        if ch == "\n":
+            starts.append(i + 1)
+    return starts
 
-    def visit_Name(self, node):
-        if isinstance(node.ctx, ast.Load) and node.id in self.replacements:
-            return ast.copy_location(ast.Constant(value=self.replacements[node.id]), node)
-        return node
 
-    def visit_Call(self, node):
-        node = self.generic_visit(node)
-        if (
-            isinstance(node.func, ast.Name)
-            and node.func.id in {"float", "int"}
-            and len(node.args) == 1
-            and not node.keywords
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, int | float | bool)
-        ):
-            folded = float(node.args[0].value) if node.func.id == "float" else int(node.args[0].value)
-            return ast.copy_location(ast.Constant(value=folded), node)
-        return node
+def _to_abs(line_starts: list[int], line: int, col: int) -> int:
+    return line_starts[line - 1] + col
+
+
+def _find_def_signature_span(text: str):
+    tokens = list(tokenize.generate_tokens(StringIO(text).readline))
+    for i, tok in enumerate(tokens):
+        if tok.type != tokenize.NAME or tok.string != "def":
+            continue
+        lparen = None
+        rparen = None
+        colon = None
+        depth = 0
+        for j in range(i + 1, len(tokens)):
+            t = tokens[j]
+            if lparen is None:
+                if t.type == tokenize.OP and t.string == "(":
+                    lparen = t
+                    depth = 1
+                continue
+            if t.type == tokenize.OP and t.string == "(":
+                depth += 1
+                continue
+            if t.type == tokenize.OP and t.string == ")":
+                depth -= 1
+                if depth == 0:
+                    rparen = t
+                    continue
+            if rparen is not None and t.type == tokenize.OP and t.string == ":":
+                colon = t
+                break
+        if lparen is not None and rparen is not None:
+            return lparen, rparen, colon
+    return None, None, None
+
+
+def _remove_scalar_params_preserving_source(text: str, scalar_replacements: dict[str, int | float]):
+    if not scalar_replacements:
+        return text, 0
+
+    lparen, rparen, colon = _find_def_signature_span(text)
+    if lparen is None or rparen is None:
+        return text, 0
+
+    try:
+        tree = ast.parse(text)
+    except Exception:
+        return text, 0
+
+    func = next((n for n in tree.body if isinstance(n, ast.FunctionDef)), None)
+    if func is None:
+        return text, 0
+
+    kept = [a.arg for a in (func.args.posonlyargs + func.args.args) if a.arg not in scalar_replacements]
+    line_starts = _line_starts(text)
+    pstart = _to_abs(line_starts, lparen.end[0], lparen.end[1])
+    pend = _to_abs(line_starts, rparen.start[0], rparen.start[1])
+    updated = f"{text[:pstart]}{', '.join(kept)}{text[pend:]}"
+    body_start = 0
+    if colon is not None:
+        body_start = _to_abs(_line_starts(updated), colon.end[0], colon.end[1])
+    return updated, body_start
+
+
+def _replace_scalar_names_preserving_source(
+    text: str, scalar_replacements: dict[str, int | float], body_start: int
+):
+    if not scalar_replacements:
+        return text
+
+    line_starts = _line_starts(text)
+    tokens = list(tokenize.generate_tokens(StringIO(text).readline))
+    significant = {
+        tokenize.NAME,
+        tokenize.NUMBER,
+        tokenize.STRING,
+        tokenize.OP,
+        tokenize.INDENT,
+        tokenize.DEDENT,
+    }
+    assign_ops = {"=", "+=", "-=", "*=", "/=", "//=", "%=", "&=", "|=", "^=", "<<=", ">>=", ":="}
+    edits = []
+    for i, tok in enumerate(tokens):
+        if tok.type != tokenize.NAME or tok.string not in scalar_replacements:
+            continue
+        start_abs = _to_abs(line_starts, tok.start[0], tok.start[1])
+        if start_abs < body_start:
+            continue
+
+        prev_sig = None
+        for j in range(i - 1, -1, -1):
+            if tokens[j].type in significant:
+                prev_sig = tokens[j]
+                break
+        if prev_sig is not None and prev_sig.type == tokenize.OP and prev_sig.string == ".":
+            continue
+
+        next_sig = None
+        for j in range(i + 1, len(tokens)):
+            if tokens[j].type in significant:
+                next_sig = tokens[j]
+                break
+        if next_sig is not None and next_sig.type == tokenize.OP and next_sig.string in assign_ops:
+            continue
+
+        end_abs = _to_abs(line_starts, tok.end[0], tok.end[1])
+        edits.append((start_abs, end_abs, repr(scalar_replacements[tok.string])))
+
+    if not edits:
+        return text
+
+    out = text
+    for start, end, repl in sorted(edits, key=lambda e: e[0], reverse=True):
+        out = f"{out[:start]}{repl}{out[end:]}"
+    return out
+
+
+def _fold_numeric_cast_calls_preserving_source(text: str, body_start: int):
+    """Fold float(<number>) and int(<number>) calls into literals.
+
+    miniexpr parses DSL function calls in a restricted way, and scalar specialization can
+    produce calls like float(200) that fail to parse.  Fold those into literals while
+    preserving source formatting/comments elsewhere.
+    """
+    try:
+        tree = ast.parse(text)
+    except Exception:
+        return text
+
+    line_starts = _line_starts(text)
+    edits = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if node.keywords or len(node.args) != 1:
+            continue
+        if not isinstance(node.func, ast.Name) or node.func.id not in {"float", "int"}:
+            continue
+
+        arg = node.args[0]
+        if not isinstance(arg, ast.Constant) or not isinstance(arg.value, int | float | bool):
+            continue
+
+        start_abs = _to_abs(line_starts, node.lineno, node.col_offset)
+        if start_abs < body_start:
+            continue
+        end_abs = _to_abs(line_starts, node.end_lineno, node.end_col_offset)
+
+        if node.func.id == "float":
+            repl = repr(float(arg.value))
+        else:
+            repl = repr(int(arg.value))
+        edits.append((start_abs, end_abs, repl))
+
+    if not edits:
+        return text
+
+    out = text
+    for start, end, repl in sorted(edits, key=lambda e: e[0], reverse=True):
+        out = f"{out[:start]}{repl}{out[end:]}"
+    return out
 
 
 def specialize_miniexpr_inputs(expr_string: str, operands: dict):
@@ -73,19 +227,216 @@ def specialize_miniexpr_inputs(expr_string: str, operands: dict):
     if not scalar_replacements:
         return expr_string, operands
 
-    tree = ast.parse(expr_string)
-    tree = _MiniexprScalarSpecializer(scalar_replacements).visit(tree)
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef):
-            node.args.posonlyargs = [a for a in node.args.posonlyargs if a.arg not in scalar_replacements]
-            node.args.args = [a for a in node.args.args if a.arg not in scalar_replacements]
-    ast.fix_missing_locations(tree)
-    return ast.unparse(tree), array_operands
+    rewritten, body_start = _remove_scalar_params_preserving_source(expr_string, scalar_replacements)
+    rewritten = _replace_scalar_names_preserving_source(rewritten, scalar_replacements, body_start)
+    rewritten = _fold_numeric_cast_calls_preserving_source(rewritten, body_start)
+    return rewritten, array_operands
 
 
 def specialize_dsl_miniexpr_inputs(expr_string: str, operands: dict):
     """Backward-compatible alias for DSL-specific callers."""
     return specialize_miniexpr_inputs(expr_string, operands)
+
+
+class _DSLValidator:
+    _binop_map: ClassVar[dict[type[ast.operator], str]] = {
+        ast.Add: "+",
+        ast.Sub: "-",
+        ast.Mult: "*",
+        ast.Div: "/",
+        ast.FloorDiv: "//",
+        ast.Mod: "%",
+        ast.Pow: "**",
+        ast.BitAnd: "&",
+        ast.BitOr: "|",
+        ast.BitXor: "^",
+        ast.LShift: "<<",
+        ast.RShift: ">>",
+    }
+    _cmp_map: ClassVar[dict[type[ast.cmpop], str]] = {
+        ast.Eq: "==",
+        ast.NotEq: "!=",
+        ast.Lt: "<",
+        ast.LtE: "<=",
+        ast.Gt: ">",
+        ast.GtE: ">=",
+    }
+
+    def __init__(self, source: str, line_base: int = 0):
+        self._source = source
+        self._line_base = line_base
+
+    def validate(self, func_node: ast.FunctionDef):
+        self._args(func_node)
+        if not func_node.body:
+            self._err(func_node, "DSL kernel must have a body")
+        for stmt in func_node.body:
+            self._stmt(stmt)
+
+    def _err(self, node: ast.AST, msg: str, *, line: int | None = None, col: int | None = None):
+        if line is None:
+            line = getattr(node, "lineno", 0)
+        if col is None:
+            col = getattr(node, "col_offset", 0) + 1
+        line -= self._line_base
+        location = f"{msg} at line {line}, column {col}"
+        dump = self._format_source_with_pointer(line, col)
+        raise DSLSyntaxError(f"{location}\n\nDSL kernel source:\n{dump}\n\nSee: {_DSL_USAGE_DOC_URL}")
+
+    def _format_source_with_pointer(self, line: int, col: int) -> str:
+        lines = self._source.splitlines()
+        if not lines:
+            return "<empty>"
+        width = len(str(len(lines)))
+        out = []
+        for lineno, text in enumerate(lines, start=1):
+            out.append(f"{lineno:>{width}} | {text}")
+            if lineno == line:
+                pointer = " " * max(col - 1, 0)
+                out.append(f"{' ' * width} | {pointer}^")
+        return "\n".join(out)
+
+    def _args(self, func_node: ast.FunctionDef):
+        args = func_node.args
+        if args.vararg or args.kwarg or args.kwonlyargs:
+            self._err(args, "DSL kernel does not support *args/**kwargs/kwonly args")
+        if args.defaults or args.kw_defaults:
+            self._err(args, "DSL kernel does not support default arguments")
+
+    def _stmt(self, node: ast.stmt):  # noqa: C901
+        if isinstance(node, ast.Assign):
+            if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
+                self._err(node, "Only simple assignments are supported in DSL kernels")
+            self._expr(node.value)
+            return
+        if isinstance(node, ast.AugAssign):
+            if not isinstance(node.target, ast.Name):
+                self._err(node, "Only simple augmented assignments are supported")
+            self._binop(node.op)
+            self._expr(node.value)
+            return
+        if isinstance(node, ast.Return):
+            if node.value is None:
+                self._err(node, "DSL kernel return must have a value")
+            self._expr(node.value)
+            return
+        if isinstance(node, ast.Expr):
+            self._expr(node.value)
+            return
+        if isinstance(node, ast.If):
+            self._expr(node.test)
+            if not node.body:
+                self._err(node, "Empty if blocks are not supported in DSL kernels")
+            for stmt in node.body:
+                self._stmt(stmt)
+            for stmt in node.orelse:
+                self._stmt(stmt)
+            return
+        if isinstance(node, ast.For):
+            if node.orelse:
+                self._err(node, "for/else is not supported in DSL kernels")
+            if not isinstance(node.target, ast.Name):
+                self._err(node, "DSL for-loop target must be a simple name")
+            if not isinstance(node.iter, ast.Call):
+                self._err(node, "DSL for-loop must iterate over range()")
+            func_name = self._call_name(node.iter.func)
+            if func_name != "range":
+                self._err(node, "DSL for-loop must iterate over range()")
+            if node.iter.keywords or not (1 <= len(node.iter.args) <= 3):
+                self._err(node, "DSL range() must take 1 to 3 positional arguments")
+            for arg in node.iter.args:
+                self._expr(arg)
+            if not node.body:
+                self._err(node, "Empty for-loop bodies are not supported in DSL kernels")
+            for stmt in node.body:
+                self._stmt(stmt)
+            return
+        if isinstance(node, ast.While):
+            if node.orelse:
+                self._err(node, "while/else is not supported in DSL kernels")
+            self._expr(node.test)
+            if not node.body:
+                self._err(node, "Empty while-loop bodies are not supported in DSL kernels")
+            for stmt in node.body:
+                self._stmt(stmt)
+            return
+        if isinstance(node, ast.Break | ast.Continue):
+            return
+        self._err(node, f"Unsupported DSL statement: {type(node).__name__}")
+
+    def _expr(self, node: ast.AST):  # noqa: C901
+        if isinstance(node, ast.Name):
+            return
+        if isinstance(node, ast.Constant):
+            val = node.value
+            if isinstance(val, bool | int | float | str):
+                return
+            self._err(node, "Unsupported constant in DSL expression")
+        if isinstance(node, ast.UnaryOp):
+            if isinstance(node.op, ast.UAdd | ast.USub | ast.Not):
+                self._expr(node.operand)
+                return
+            self._err(node, "Unsupported unary operator in DSL expression")
+        if isinstance(node, ast.BinOp):
+            self._binop(node.op)
+            self._expr(node.left)
+            self._expr(node.right)
+            return
+        if isinstance(node, ast.BoolOp):
+            for value in node.values:
+                self._expr(value)
+            return
+        if isinstance(node, ast.Compare):
+            if len(node.ops) != 1 or len(node.comparators) != 1:
+                self._err(node, "Chained comparisons are not supported in DSL")
+            self._cmpop(node.ops[0])
+            self._expr(node.left)
+            self._expr(node.comparators[0])
+            return
+        if isinstance(node, ast.Call):
+            self._call_name(node.func)
+            if node.keywords:
+                self._err(node, "Keyword arguments are not supported in DSL calls")
+            for arg in node.args:
+                self._expr(arg)
+            return
+        if isinstance(node, ast.IfExp):
+            seg = ast.get_source_segment(self._source, node)
+            col = getattr(node, "col_offset", 0) + 1
+            if seg is not None:
+                rel = seg.find(" if ")
+                if rel >= 0:
+                    col += rel + 1
+            self._err(
+                node,
+                "Ternary expressions are not supported in DSL; use where(cond, a, b)",
+                col=col,
+            )
+        self._err(node, f"Unsupported DSL expression: {type(node).__name__}")
+
+    def _call_name(self, node: ast.AST) -> str:
+        if isinstance(node, ast.Name):
+            return node.id
+        if (
+            isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id in {"np", "numpy", "math"}
+        ):
+            return node.attr
+        self._err(node, "Unsupported call target in DSL")
+        raise AssertionError("unreachable")
+
+    def _binop(self, op: ast.operator):
+        for k in self._binop_map:
+            if isinstance(op, k):
+                return
+        self._err(op, "Unsupported binary operator in DSL")
+
+    def _cmpop(self, op: ast.cmpop):
+        for k in self._cmp_map:
+            if isinstance(op, k):
+                return
+        self._err(op, "Unsupported comparison in DSL")
 
 
 class DSLKernel:
@@ -116,8 +467,13 @@ class DSLKernel:
                 self._legacy_udf_signature = p2 in {"output", "out"} and p3 == "offset"
         self.dsl_source = None
         self.input_names = None
+        self.dsl_error = None
         try:
             dsl_source, input_names = self._extract_dsl(func)
+        except DSLSyntaxError as e:
+            dsl_source = None
+            input_names = None
+            self.dsl_error = e
         except Exception:
             dsl_source = None
             input_names = None
@@ -141,33 +497,42 @@ class DSLKernel:
         if func_node is None:
             raise ValueError("No function definition found for DSL extraction")
 
-        dsl_source_full = None
+        dsl_source = self._slice_function_source(source, func_node)
+        dsl_tree = ast.parse(dsl_source)
+        dsl_func = next((node for node in dsl_tree.body if isinstance(node, ast.FunctionDef)), None)
+        if dsl_func is None:
+            raise ValueError("No function definition found in sliced DSL source")
+        _DSLValidator(dsl_source).validate(dsl_func)
+        input_names = self._input_names_from_signature(dsl_func)
         if _PRINT_DSL_KERNEL:
-            try:
-                dsl_source_full = _DSLBuilder().build(func_node)
-                func_name = getattr(func, "__name__", "<dsl_kernel>")
-                print(f"[DSLKernel:{func_name}] dsl_source (full):")
-                print(dsl_source_full[0])
-            except Exception as exc:
-                func_name = getattr(func, "__name__", "<dsl_kernel>")
-                print(f"[DSLKernel:{func_name}] dsl_source (full) failed: {exc}")
+            func_name = getattr(func, "__name__", "<dsl_kernel>")
+            print(f"[DSLKernel:{func_name}] dsl_source (full):")
+            print(dsl_source)
+        return dsl_source, input_names
 
-        reducer = _DSLReducer()
-        reduced = reducer.reduce(func_node)
-        if reduced is not None:
-            if _PRINT_DSL_KERNEL:
-                func_name = getattr(func, "__name__", "<dsl_kernel>")
-                print(f"[DSLKernel:{func_name}] reduced_expr:")
-                print(reduced[0])
-            return reduced
+    @staticmethod
+    def _slice_function_source(source: str, func_node: ast.FunctionDef) -> str:
+        lines = source.splitlines()
+        start = func_node.lineno - 1
+        end_lineno = getattr(func_node, "end_lineno", None)
+        if end_lineno is None:
+            end = len(lines)
+        else:
+            end = end_lineno
+        return "\n".join(lines[start:end])
 
-        if dsl_source_full is not None:
-            return dsl_source_full
-
-        builder = _DSLBuilder()
-        return builder.build(func_node)
+    @staticmethod
+    def _input_names_from_signature(func_node: ast.FunctionDef) -> list[str]:
+        args = func_node.args
+        if args.vararg or args.kwarg or args.kwonlyargs:
+            raise ValueError("DSL kernel does not support *args/**kwargs/kwonly args")
+        if args.defaults or args.kw_defaults:
+            raise ValueError("DSL kernel does not support default arguments")
+        return [a.arg for a in (args.posonlyargs + args.args)]
 
     def __call__(self, inputs_tuple, output, offset=None):
+        if self.dsl_error is not None:
+            raise self.dsl_error
         if self._legacy_udf_signature:
             return self.func(inputs_tuple, output, offset)
 
@@ -194,6 +559,34 @@ def dsl_kernel(func):
     """Decorator to wrap a function in a DSLKernel."""
 
     return DSLKernel(func)
+
+
+def validate_dsl(func):
+    """Validate a DSL kernel function without executing it.
+
+    Parameters
+    ----------
+    func
+        A Python callable or :class:`DSLKernel`.
+
+    Returns
+    -------
+    dict
+        A dictionary with:
+        - ``valid`` (bool): whether the DSL is valid
+        - ``dsl_source`` (str | None): extracted DSL source when valid
+        - ``input_names`` (list[str] | None): input signature names when valid
+        - ``error`` (str | None): user-facing error message when invalid
+    """
+
+    kernel = func if isinstance(func, DSLKernel) else DSLKernel(func)
+    err = kernel.dsl_error
+    return {
+        "valid": err is None,
+        "dsl_source": kernel.dsl_source,
+        "input_names": kernel.input_names,
+        "error": None if err is None else str(err),
+    }
 
 
 class _DSLBuilder:
@@ -315,7 +708,7 @@ class _DSLBuilder:
         return self._stmt_terminates(body[-1])
 
     def _stmt_terminates(self, node: ast.stmt) -> bool:
-        if isinstance(node, (ast.Return, ast.Break, ast.Continue)):
+        if isinstance(node, ast.Return | ast.Break | ast.Continue):
             return True
         if isinstance(node, ast.If) and node.orelse:
             return self._block_terminates(node.body) and self._block_terminates(node.orelse)

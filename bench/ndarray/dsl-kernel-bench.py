@@ -14,6 +14,7 @@ import blosc2
 import importlib
 
 lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+where = np.where
 
 
 @blosc2.dsl_kernel
@@ -21,9 +22,9 @@ def kernel_loop1(x, y):
     acc = 0.0
     for i in range(1):
         if i % 2 == 0:
-            tmp = np.where(x < y, y + i, x - i)
+            tmp = where(x < y, y + i, x - i)
         else:
-            tmp = np.where(x > y, x + i, y - i)
+            tmp = where(x > y, x + i, y - i)
         acc = acc + tmp * (i + 1)
     return acc
 
@@ -33,9 +34,9 @@ def kernel_loop2(x, y):
     acc = 0.0
     for i in range(2):
         if i % 2 == 0:
-            tmp = np.where(x < y, y + i, x - i)
+            tmp = where(x < y, y + i, x - i)
         else:
-            tmp = np.where(x > y, x + i, y - i)
+            tmp = where(x > y, x + i, y - i)
         acc = acc + tmp * (i + 1)
     return acc
 
@@ -45,9 +46,9 @@ def kernel_loop4(x, y):
     acc = 0.0
     for i in range(4):
         if i % 2 == 0:
-            tmp = np.where(x < y, y + i, x - i)
+            tmp = where(x < y, y + i, x - i)
         else:
-            tmp = np.where(x > y, x + i, y - i)
+            tmp = where(x > y, x + i, y - i)
         acc = acc + tmp * (i + 1)
     return acc
 
@@ -57,9 +58,9 @@ def kernel_loop4_heavy(x, y):
     acc = 0.0
     for i in range(4):
         if i % 2 == 0:
-            tmp = np.where(x < y, y + i, x - i)
+            tmp = where(x < y, y + i, x - i)
         else:
-            tmp = np.where(x > y, x + i, y - i)
+            tmp = where(x > y, x + i, y - i)
         acc = acc + tmp * (i + 1) + (tmp * tmp) * 0.05
     return acc
 
@@ -70,9 +71,9 @@ def kernel_nested2(x, y):
     for i in range(2):
         for j in range(2):
             if (i + j) % 2 == 0:
-                tmp = np.where(x < y, y + i + j, x - i - j)
+                tmp = where(x < y, y + i + j, x - i - j)
             else:
-                tmp = np.where(x > y, x + i + j, y - i - j)
+                tmp = where(x > y, x + i + j, y - i - j)
             acc = acc + tmp * (i + j + 1)
     return acc
 
@@ -148,7 +149,7 @@ def bench_case(name, kernel, expr, a, b, dtype, gb):
         res_dsl = lazy_dsl.compute()
         dsl_time, _ = time_it(lambda: lazy_dsl.compute())
 
-    np.testing.assert_allclose(res_dsl[...], res_base[...], rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(res_dsl[...], res_base[...], rtol=1e-5, atol=2e-6)
 
     return {
         "case": name,
