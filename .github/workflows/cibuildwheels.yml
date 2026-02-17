@@ -1,7 +1,13 @@
 name: Python wheels
 
 on:
-  workflow_dispatch:
+  # Trigger the workflow only for tags and PRs to the main branch
+  push:
+    tags:
+      - '*'
+  pull_request:
+    branches:
+      - main
 
 env:
   CIBW_BUILD_VERBOSITY: 1
