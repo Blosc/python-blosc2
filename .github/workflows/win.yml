@@ -44,17 +44,10 @@ jobs:
           CMAKE_BUILD_PARALLEL_LEVEL: 8
           SKBUILD_PARALLEL_LEVEL: 8
 
-      - name: Run full test suite (miniexpr override off)
-        if: matrix.miniexpr_windows == '0'
+      - name: Run full test suite
         run: python -m pytest
         env:
-          BLOSC2_ENABLE_MINIEXPR_WINDOWS: "0"
-
-      - name: Run targeted constructor test (miniexpr override on)
-        if: matrix.miniexpr_windows == '1'
-        run: python -m pytest tests/ndarray/test_lazyexpr.py -k test_save_constructor -x -vv
-        env:
-          BLOSC2_ENABLE_MINIEXPR_WINDOWS: "1"
+          BLOSC2_ENABLE_MINIEXPR_WINDOWS: ${{ matrix.miniexpr_windows }}
 
       - name: Run DSL JIT bench with trace
         if: matrix.miniexpr_windows == '1'
