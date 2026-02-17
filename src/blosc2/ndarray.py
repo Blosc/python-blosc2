@@ -3427,7 +3427,7 @@ class Operand:
         return blosc2.LazyExpr(new_op=(self, "<<", other))
 
     def __ilshift__(self, other) -> blosc2.LazyExpr:
-        return self.__lshift(other)
+        return self.__lshift__(other)
 
     def __rlshift__(self, other) -> blosc2.LazyExpr:
         return blosc2.LazyExpr(new_op=(other, "<<", self))

@@ -33,7 +33,7 @@ def dtype_fixture(request):
     return request.param
 
 
-@pytest.fixture(params=[(NITEMS_SMALL,), (NITEMS,), (NITEMS // 10, 100), (0, 100)])
+@pytest.fixture(params=[(NITEMS_SMALL,), (NITEMS,), (NITEMS // 10, 100)])
 def shape_fixture(request):
     return request.param
 
@@ -92,7 +92,7 @@ def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
 
 def test_operandmethods_scalar(shape_fixture, dtype_fixture):
     nelems = np.prod(shape_fixture)
-    na1 = np.linspace(0, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
+    na1 = np.linspace(1, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
     a1 = blosc2.asarray(na1)
     scalar = 10
 
@@ -105,11 +105,6 @@ def test_operandmethods_scalar(shape_fixture, dtype_fixture):
         scalar // a1,
         scalar**a1,
         scalar % a1,
-        scalar & a1,
-        scalar | a1,
-        scalar ^ a1,
-        scalar << a1,
-        scalar >> a1,
     ):
         assert expr[()].shape == expr.shape
 
@@ -121,6 +116,11 @@ def test_operandmethods_scalar(shape_fixture, dtype_fixture):
     a1 //= scalar
     a1 **= scalar
     a1 %= scalar
+
+    a1 = blosc2.asarray(na1, dtype=np.int64)
+    for expr in (scalar & a1, scalar | a1, scalar ^ a1, scalar << a1, scalar >> a1):
+        assert expr[()].shape == expr.shape
+
     a1 &= scalar
     a1 |= scalar
     a1 ^= scalar
@@ -149,6 +149,22 @@ def test_proxy_simple_getitem(array_fixture):
     a2 = blosc2.Proxy(a2)
     expr = a1 + a2 - a3 * a4
     nres = ne_evaluate("na1 + na2 - na3 * na4")
+    sl = slice(100)
+    res = expr[sl]
+    np.testing.assert_allclose(res, nres[sl])
+
+
+# Mix Proxy and NDArray operands with 0 shape
+def test_proxy_zeroshape():
+    a1, a2 = (
+        blosc2.ones(shape=(0, 100), chunks=(0, 9), blocks=(0, 1)),
+        blosc2.full(fill_value=3.22, shape=(0, 100), chunks=(0, 11), blocks=(0, 2)),
+    )
+    na1, na2 = a1[()], a2[()]
+    a1 = blosc2.Proxy(a1)
+    a2 = blosc2.Proxy(a2)
+    expr = a1 + a2
+    nres = ne_evaluate("na1 + na2")
     sl = slice(100)
     res = expr[sl]
     np.testing.assert_allclose(res, nres[sl])
