@@ -3026,8 +3026,8 @@ cdef class NDArray:
         cdef int64_t* shape = &self.array.shape[0]
         cdef int32_t* chunkshape = &self.array.chunkshape[0]
         cdef int32_t* blockshape = &self.array.blockshape[0]
-        cdef int rc = me_compile_nd_jit(expression, variables, n, me_dtype, ndims,
-                                        shape, chunkshape, blockshape, jit_mode,
+        cdef int rc = me_compile_nd_ex(expression, variables, n, me_dtype, ndims,
+                                        shape, chunkshape, blockshape,
                                         &error, &out_expr)
         if rc == ME_COMPILE_ERR_INVALID_ARG_TYPE:
             raise TypeError(f"miniexpr does not support operand or output dtype: {expression}")
@@ -3139,7 +3139,7 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
     else:
         kwargs['cparams'] = {'typesize': typesize} # last filter is shuffle
         if isinstance(dtype, np.dtypes.StrDType) or dtype == np.str_:
-            kwargs['cparams']['filters'] = [blosc2.Filter.NOFILTER] * 5 + [blosc2.Filter.SHUFFLE],
+            kwargs['cparams']['filters'] = [blosc2.Filter.NOFILTER] * 5 + [blosc2.Filter.SHUFFLE]
             kwargs['cparams']['filters_meta'] = [0] * 5 + [4] # unicode char bytesize
     if dtype.kind == 'V':
         str_dtype = str(dtype)
