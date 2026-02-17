@@ -12,6 +12,9 @@ import blosc2
 from blosc2.dsl_kernel import DSLSyntaxError
 from blosc2.lazyexpr import _apply_jit_backend_pragma
 
+where = np.where
+clip = np.clip
+
 
 def _make_arrays(shape=(8, 8), chunks=(4, 4), blocks=(2, 2)):
     a = np.linspace(0, 1, num=np.prod(shape), dtype=np.float32).reshape(shape)
@@ -34,9 +37,9 @@ def kernel_loop(x, y):
     acc = 0.0
     for i in range(2):
         if i % 2 == 0:
-            tmp = np.where(x < y, y + i, x - i)
+            tmp = where(x < y, y + i, x - i)
         else:
-            tmp = np.where(x > y, x + i, y - i)
+            tmp = where(x > y, x + i, y - i)
         acc = acc + tmp * (i + 1)
     return acc
 
@@ -68,7 +71,7 @@ def kernel_control_flow_full(x, y):
         if i == 1:
             acc = acc - y
         else:
-            acc = np.where(acc < y, acc + i, acc - i)
+            acc = where(acc < y, acc + i, acc - i)
             if i == 3:
                 break
     return acc
@@ -79,7 +82,7 @@ def kernel_while_full(x, y):
     acc = x
     i = 0
     while i < 3:
-        acc = np.where(acc < y, acc + 1, acc - 1)
+        acc = where(acc < y, acc + 1, acc - 1)
         i = i + 1
     return acc
 
@@ -89,7 +92,7 @@ def kernel_loop_param(x, y, niter):
     acc = x
     # loop count comes from scalar niter
     for _i in range(niter):
-        acc = np.where(acc < y, acc + 1, acc - 1)
+        acc = where(acc < y, acc + 1, acc - 1)
     return acc
 
 
@@ -101,7 +104,7 @@ def kernel_scalar_float_cast(x, niter):
 
 @blosc2.dsl_kernel
 def kernel_fallback_kw_call(x, y):
-    return np.clip(x + y, a_min=0.5, a_max=2.5)
+    return clip(x + y, a_min=0.5, a_max=2.5)
 
 
 @blosc2.dsl_kernel
@@ -133,6 +136,16 @@ def kernel_index_ramp(x):
 @blosc2.dsl_kernel
 def kernel_index_ramp_float_cast(x):
     return float(_i0) * _n1 + _i1  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+
+
+@blosc2.dsl_kernel
+def kernel_index_ramp_int_cast(x):
+    return int(_i0 * _n1 + _i1)  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+
+
+@blosc2.dsl_kernel
+def kernel_bool_cast_numeric(x):
+    return bool(x)
 
 
 @blosc2.dsl_kernel
@@ -255,6 +268,52 @@ def test_dsl_kernel_index_symbols_float_cast_matches_expected_ramp():
     np.testing.assert_allclose(res, expected, rtol=0.0, atol=0.0)
 
 
+def test_dsl_kernel_index_symbols_float_cast_uses_miniexpr_fast_path(monkeypatch):
+    if blosc2.IS_WASM:
+        pytest.skip("miniexpr fast path is not available on WASM")
+
+    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    captured = {"calls": 0, "expr": None}
+
+    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        captured["calls"] += 1
+        captured["expr"] = expression.decode("utf-8") if isinstance(expression, bytes) else expression
+        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc, jit=jit)
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+
+    shape = (16, 9)
+    x2 = blosc2.zeros(shape, dtype=np.float32)
+    expr = blosc2.lazyudf(kernel_index_ramp_float_cast, (x2,), dtype=np.float32)
+    res = expr[:]
+    expected = np.arange(np.prod(shape), dtype=np.float32).reshape(shape)
+
+    np.testing.assert_allclose(res, expected, rtol=0.0, atol=0.0)
+    assert captured["calls"] >= 1
+    assert "def kernel_index_ramp_float_cast(x):" in captured["expr"]
+    assert "float(_i0)" in captured["expr"]
+    assert "_n1" in captured["expr"]
+    assert "_i1" in captured["expr"]
+
+
+def test_dsl_kernel_index_symbols_int_cast_matches_expected_ramp():
+    shape = (32, 5)
+    x2 = blosc2.zeros(shape, dtype=np.float32)
+    expr = blosc2.lazyudf(kernel_index_ramp_int_cast, (x2,), dtype=np.int64)
+    res = expr[:]
+    expected = np.arange(np.prod(shape), dtype=np.int64).reshape(shape)
+    np.testing.assert_equal(res, expected)
+
+
+def test_dsl_kernel_bool_cast_numeric_matches_expected():
+    x = np.array([[0.0, 1.0, -2.0], [3.5, 0.0, -0.1]], dtype=np.float32)
+    x2 = blosc2.asarray(x, chunks=(2, 3), blocks=(1, 2))
+    expr = blosc2.lazyudf(kernel_bool_cast_numeric, (x2,), dtype=np.bool_)
+    res = expr[:]
+    expected = x != 0.0
+    np.testing.assert_equal(res, expected)
+
+
 def test_dsl_kernel_full_control_flow_kept_as_dsl_function():
     assert kernel_control_flow_full.dsl_source is not None
     assert "def kernel_control_flow_full(x, y):" in kernel_control_flow_full.dsl_source
@@ -262,7 +321,7 @@ def test_dsl_kernel_full_control_flow_kept_as_dsl_function():
     assert "if i == 1:" in kernel_control_flow_full.dsl_source
     assert "continue" in kernel_control_flow_full.dsl_source
     assert "break" in kernel_control_flow_full.dsl_source
-    assert "np.where(" in kernel_control_flow_full.dsl_source
+    assert "where(" in kernel_control_flow_full.dsl_source
 
     a, b, a2, b2 = _make_arrays()
     expr = blosc2.lazyudf(
