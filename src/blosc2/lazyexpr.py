@@ -107,9 +107,6 @@ try_miniexpr = True
 if blosc2.IS_WASM:
     try_miniexpr = False
 
-_MINIEXPR_WINDOWS_OVERRIDE = os.environ.get("BLOSC2_ENABLE_MINIEXPR_WINDOWS", "").strip().lower()
-_MINIEXPR_WINDOWS_OVERRIDE = _MINIEXPR_WINDOWS_OVERRIDE not in ("", "0", "false", "no", "off")
-
 
 def ne_evaluate(expression, local_dict=None, **kwargs):
     """Safely evaluate expressions using numexpr when possible, falling back to numpy."""
@@ -1292,8 +1289,6 @@ def _dsl_miniexpr_required_message(reason: str | None = None) -> str:
     message = "DSL kernels require miniexpr evaluation and cannot run via direct Python fallback."
     if reason:
         message = f"{message} {reason}"
-    if sys.platform == "win32" and not _MINIEXPR_WINDOWS_OVERRIDE:
-        message = f"{message} Set BLOSC2_ENABLE_MINIEXPR_WINDOWS=1 to force-enable miniexpr on Windows."
     return message
 
 
@@ -1353,11 +1348,11 @@ def fast_eval(  # noqa: C901
     if strict_miniexpr is None:
         # Be strict by default for DSL kernels to avoid silently losing DSL fast-path regressions.
         strict_miniexpr = bool(is_dsl)
-        if where is not None:
-            # miniexpr does not support where(); use the regular path.
-            use_miniexpr = False
-            if is_dsl:
-                dsl_disable_reason = "DSL kernels cannot be run without miniexpr."
+    if where is not None:
+        # miniexpr does not support where(); use the regular path.
+        use_miniexpr = False
+        if is_dsl:
+            dsl_disable_reason = "DSL kernels cannot be run without miniexpr."
     if isinstance(out, blosc2.NDArray):
         # If 'out' has been passed, and is a NDArray, use it as the base array
         basearr = out
@@ -1482,7 +1477,7 @@ def fast_eval(  # noqa: C901
                 use_miniexpr = False
                 if is_dsl and dsl_disable_reason is None:
                     dsl_disable_reason = "complex comparisons are not supported by miniexpr."
-        if sys.platform == "win32" and use_miniexpr and (not is_dsl or not _MINIEXPR_WINDOWS_OVERRIDE):
+        if sys.platform == "win32" and use_miniexpr:
             # Work around Windows miniexpr issues for integer outputs and dtype conversions.
             if blosc2.isdtype(dtype, "integral"):
                 use_miniexpr = False

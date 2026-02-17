@@ -22,11 +22,7 @@ def _windows_policy_blocks_dsl_dtype(dtype, operand_dtypes=()) -> bool:
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
     dtype = np.dtype(dtype)
     dtype_mismatch = any(np.dtype(op_dtype) != dtype for op_dtype in operand_dtypes)
-    return (
-        lazyexpr_mod.sys.platform == "win32"
-        and not lazyexpr_mod._MINIEXPR_WINDOWS_OVERRIDE
-        and (blosc2.isdtype(dtype, "integral") or dtype_mismatch)
-    )
+    return lazyexpr_mod.sys.platform == "win32" and (blosc2.isdtype(dtype, "integral") or dtype_mismatch)
 
 
 def _make_arrays(shape=(8, 8), chunks=(4, 4), blocks=(2, 2)):
@@ -268,7 +264,6 @@ def test_dsl_kernel_with_no_inputs_handles_windows_dtype_policy(monkeypatch):
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
     monkeypatch.setattr(lazyexpr_mod.sys, "platform", "win32")
-    monkeypatch.setattr(lazyexpr_mod, "_MINIEXPR_WINDOWS_OVERRIDE", False)
 
     shape = (10, 10)
     expr = blosc2.lazyudf(kernel_index_ramp_no_inputs, (), dtype=np.float32, shape=shape)
