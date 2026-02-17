@@ -26,7 +26,6 @@ def test_resize(shape, new_shape, chunks, blocks, fill_value):
 
     a.resize(new_shape)
     assert a.shape == new_shape
-
     slices = tuple(slice(s) for s in shape)
     if 0 not in shape:
         slices = tuple(slice(s) for s in shape)
