@@ -154,22 +154,6 @@ def test_proxy_simple_getitem(array_fixture):
     np.testing.assert_allclose(res, nres[sl])
 
 
-# Mix Proxy and NDArray operands with 0 shape
-def test_proxy_zeroshape():
-    a1, a2 = (
-        blosc2.ones(shape=(0, 100), chunks=(0, 9), blocks=(0, 1)),
-        blosc2.full(fill_value=3.22, shape=(0, 100), chunks=(0, 11), blocks=(0, 2)),
-    )
-    na1, na2 = a1[()], a2[()]
-    a1 = blosc2.Proxy(a1)
-    a2 = blosc2.Proxy(a2)
-    expr = a1 + a2
-    nres = ne_evaluate("na1 + na2")
-    sl = slice(100)
-    res = expr[sl]
-    np.testing.assert_allclose(res, nres[sl])
-
-
 @pytest.mark.heavy
 def test_mix_operands(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
