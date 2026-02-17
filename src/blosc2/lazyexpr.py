@@ -250,6 +250,16 @@ numpy_ufuncs = {name for name, member in inspect.getmembers(np, lambda x: isinst
 # (will be evaluated via the array interface)
 additional_funcs = sorted((numpy_funcs | numpy_ufuncs) - set(blosc2_funcs))
 functions = blosc2_funcs + additional_funcs
+_constructor_call_patterns = {name: re.compile(rf"\b{re.escape(name)}\s*\(") for name in constructors}
+
+
+def _has_constructor_call(expression: str, constructor: str) -> bool:
+    return _constructor_call_patterns[constructor].search(expression) is not None
+
+
+def _find_constructor_call(expression: str, constructor: str) -> re.Match | None:
+    return _constructor_call_patterns[constructor].search(expression)
+
 
 relational_ops = ["==", "!=", "<", "<=", ">", ">="]
 logical_ops = ["&", "|", "^", "~"]
@@ -2278,12 +2288,24 @@ def reduce_slices(  # noqa: C901
             result = reduce_op.value.reduce(result, **reduce_args)
 
         if not out_init:
-            out_ = convert_none_out(result.dtype, reduce_op, reduced_shape)
+            # if cumsum/cumprod and arrays large, return blosc2 array with same chunks
+            chunks_out = (
+                chunks
+                if np.prod(reduced_shape) * np.dtype(dtype).itemsize > 4 * blosc2.MAX_FAST_PATH_SIZE
+                else None
+            )
+            chunks_out = chunks_out if _slice == () else None
+            out_ = convert_none_out(result.dtype, reduce_op, reduced_shape, chunks=chunks_out)
             if out is not None:
                 out[:] = out_
                 del out_
             else:
                 out = out_
+            behaved = (
+                False
+                if not hasattr(out, "chunks")
+                else blosc2.are_partitions_behaved(out.shape, out.chunks, out.blocks)
+            )
             out_init = True
 
         # res_out only used be argmin/max and cumulative_sum/prod which only accept axis=int argument
@@ -2315,7 +2337,12 @@ def reduce_slices(  # noqa: C901
                 else:  # CUMULATIVE_PROD
                     result *= res_out_
                 res_out_ = result[idx_lastval]
-                out[reduced_slice] = result
+                if behaved and result.shape == out.chunks and result.dtype == out.dtype and _slice == ():
+                    # Fast path
+                    # TODO: Check this only works when slice is () as nchunk is incorrect  for out otherwise
+                    out.schunk.update_data(nchunk, result, copy=False)
+                else:
+                    out[reduced_slice] = result
         else:
             out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
 
@@ -2364,15 +2391,22 @@ def _get_res_out(reduced_shape, axis, dtype, reduce_op):
     return res_out_
 
 
-def convert_none_out(dtype, reduce_op, reduced_shape):
+def convert_none_out(dtype, reduce_op, reduced_shape, chunks=None):
     reduced_shape = (1,) if reduced_shape == () else reduced_shape
     # out will be a proper numpy.ndarray
     if reduce_op in {ReduceOp.SUM, ReduceOp.CUMULATIVE_SUM, ReduceOp.PROD, ReduceOp.CUMULATIVE_PROD}:
-        out = (
-            np.zeros(reduced_shape, dtype=dtype)
-            if reduce_op in {ReduceOp.SUM, ReduceOp.CUMULATIVE_SUM}
-            else np.ones(reduced_shape, dtype=dtype)
-        )
+        if reduce_op in (ReduceOp.CUMULATIVE_SUM, ReduceOp.CUMULATIVE_PROD) and chunks is not None:
+            out = (
+                blosc2.zeros(reduced_shape, dtype=dtype, chunks=chunks)
+                if reduce_op == ReduceOp.CUMULATIVE_SUM
+                else blosc2.ones(reduced_shape, dtype=dtype, chunks=chunks)
+            )
+        else:
+            out = (
+                np.zeros(reduced_shape, dtype=dtype)
+                if reduce_op in {ReduceOp.SUM, ReduceOp.CUMULATIVE_SUM}
+                else np.ones(reduced_shape, dtype=dtype)
+            )
     elif reduce_op == ReduceOp.MIN:
         if np.issubdtype(dtype, np.integer):
             out = np.iinfo(dtype).max * np.ones(reduced_shape, dtype=dtype)
@@ -2872,7 +2906,7 @@ class LazyExpr(LazyArray):
             return None
 
         # Operands shape can change, so we always need to recompute this
-        if any(constructor in self.expression for constructor in constructors):
+        if any(_has_constructor_call(self.expression, constructor) for constructor in constructors):
             # might have an expression with pure constructors
             opshapes = {k: v if not hasattr(v, "shape") else v.shape for k, v in self.operands.items()}
             _shape = infer_shape(self.expression, opshapes)  # infer shape, includes constructors
@@ -3241,8 +3275,11 @@ class LazyExpr(LazyArray):
                     return expr[idx:i], i + 1
             raise ValueError("Unbalanced parenthesis in expression")
 
-        # Find the index of the first parenthesis after the constructor
-        idx = expression.find(f"{constructor}")
+        # Find the index of the first constructor call.
+        match = _find_constructor_call(expression, constructor)
+        if match is None:
+            raise ValueError(f"Constructor '{constructor}' not found in expression: {expression}")
+        idx = match.start()
         # Find the arguments of the constructor function
         try:
             args, idx2 = find_args(expression[idx + len(constructor) :])
@@ -3310,16 +3347,16 @@ class LazyExpr(LazyArray):
 
             return chunked_eval(lazy_expr.expression, lazy_expr.operands, item, **kwargs)
 
-        if any(constructor in self.expression for constructor in constructors):
+        if any(_has_constructor_call(self.expression, constructor) for constructor in constructors):
             expression = self.expression
             newexpr = expression
             newops = self.operands.copy()
             # We have constructors in the expression (probably coming from a string lazyexpr)
             # Let's replace the constructors with the actual NDArray objects
             for constructor in constructors:
-                if constructor + "(" not in newexpr:
+                if not _has_constructor_call(newexpr, constructor):
                     continue
-                while constructor in newexpr:
+                while _has_constructor_call(newexpr, constructor):
                     # Get the constructor function and replace it by an NDArray object in the operands
                     # Find the constructor call and its arguments
                     value, constexpr = self._eval_constructor(newexpr, constructor, newops)
@@ -3926,10 +3963,10 @@ def lazyudf(
         Whether to evaluate the function in chunks or not (blocks).
     jit: bool or None, optional
         JIT policy for miniexpr-backed execution:
-        ``None`` uses default behavior, ``True`` prefers JIT, ``False`` disables JIT.
+        ``None`` uses default behavior (currently, JIT is tried out), ``True`` prefers JIT, ``False`` disables JIT.
     jit_backend: {"tcc", "cc"} or None, optional
         JIT backend selection for miniexpr-backed execution:
-        ``None`` uses backend defaults, ``"tcc"`` forces libtcc, ``"cc"`` forces C compiler backend.
+        ``None`` uses backend defaults (currently "tcc"), ``"tcc"`` forces libtcc, ``"cc"`` forces C compiler backend.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
         These arguments will be used by the :meth:`LazyArray.__getitem__` and
@@ -4098,7 +4135,7 @@ def lazyexpr(
             operands = seek_operands(operand_set, local_dict, global_dict, _frame_depth=_frame_depth)
         else:
             # No operands found in the expression. Maybe a constructor?
-            constructor = any(constructor in expression for constructor in constructors)
+            constructor = any(_has_constructor_call(expression, constructor) for constructor in constructors)
             if not constructor:
                 raise ValueError("No operands nor constructors found in the expression")
             # _new_expr will take care of the constructor, but needs an empty dict in operands
