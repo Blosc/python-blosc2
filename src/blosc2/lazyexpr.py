@@ -1482,7 +1482,7 @@ def fast_eval(  # noqa: C901
                 use_miniexpr = False
                 if is_dsl and dsl_disable_reason is None:
                     dsl_disable_reason = "complex comparisons are not supported by miniexpr."
-        if sys.platform == "win32" and use_miniexpr and not _MINIEXPR_WINDOWS_OVERRIDE:
+        if sys.platform == "win32" and use_miniexpr and (not is_dsl or not _MINIEXPR_WINDOWS_OVERRIDE):
             # Work around Windows miniexpr issues for integer outputs and dtype conversions.
             if blosc2.isdtype(dtype, "integral"):
                 use_miniexpr = False
@@ -1506,6 +1506,7 @@ def fast_eval(  # noqa: C901
         cparams = kwargs.pop("cparams", blosc2.CParams())
         # All values will be overwritten, so we can use an uninitialized array
         res_eval = blosc2.uninit(shape, dtype, chunks=chunks, blocks=blocks, cparams=cparams, **kwargs)
+        prefilter_set = False
         try:
             res_eval._set_pref_expr(
                 expr_string_miniexpr,
@@ -1513,6 +1514,7 @@ def fast_eval(  # noqa: C901
                 fp_accuracy=fp_accuracy,
                 jit=jit,
             )
+            prefilter_set = True
             # print("expr->miniexpr:", expression, fp_accuracy)
             # Data to compress is fetched from operands, so it can be uninitialized here
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
@@ -1530,7 +1532,8 @@ def fast_eval(  # noqa: C901
             if strict_miniexpr:
                 raise RuntimeError("miniexpr evaluation failed while strict_miniexpr=True") from e
         finally:
-            res_eval.schunk.remove_prefilter("miniexpr")
+            if prefilter_set:
+                res_eval.schunk.remove_prefilter("miniexpr")
             global iter_chunks
             # Ensure any background reading thread is closed
             iter_chunks = None
@@ -2189,7 +2192,7 @@ def reduce_slices(  # noqa: C901
         if has_complex and sys.platform == "win32":
             # On Windows, miniexpr has issues with complex numbers
             use_miniexpr = False
-        if sys.platform == "win32" and use_miniexpr and not _MINIEXPR_WINDOWS_OVERRIDE:
+        if sys.platform == "win32" and use_miniexpr:
             if blosc2.isdtype(dtype, "integral"):
                 use_miniexpr = False
             else:
@@ -2229,6 +2232,7 @@ def reduce_slices(  # noqa: C901
         else:
             # For other operations, zeros should be safe
             aux_reduc = np.zeros(nblocks, dtype=dtype)
+        prefilter_set = False
         try:
             if where is not None:
                 expression_miniexpr = f"{reduce_op_str}(where({expression}, _where_x, _where_y))"
@@ -2236,6 +2240,7 @@ def reduce_slices(  # noqa: C901
                 expression_miniexpr = f"{reduce_op_str}({expression})"
             expression_miniexpr = _apply_jit_backend_pragma(expression_miniexpr, operands, jit_backend)
             res_eval._set_pref_expr(expression_miniexpr, operands, fp_accuracy, aux_reduc, jit=jit)
+            prefilter_set = True
             # print("expr->miniexpr:", expression, reduce_op, fp_accuracy)
             # Data won't even try to be compressed, so buffers can be unitialized and reused
             data = np.empty(res_eval.schunk.chunksize, dtype=np.uint8)
@@ -2246,7 +2251,8 @@ def reduce_slices(  # noqa: C901
         except Exception:
             use_miniexpr = False
         finally:
-            res_eval.schunk.remove_prefilter("miniexpr")
+            if prefilter_set:
+                res_eval.schunk.remove_prefilter("miniexpr")
             global iter_chunks
             # Ensure any background reading thread is closed
             iter_chunks = None
