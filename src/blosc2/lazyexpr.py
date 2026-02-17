@@ -2272,12 +2272,24 @@ def reduce_slices(  # noqa: C901
             result = reduce_op.value.reduce(result, **reduce_args)
 
         if not out_init:
-            out_ = convert_none_out(result.dtype, reduce_op, reduced_shape)
+            # if cumsum/cumprod and arrays large, return blosc2 array with same chunks
+            chunks_out = (
+                chunks
+                if np.prod(reduced_shape) * np.dtype(dtype).itemsize > 4 * blosc2.MAX_FAST_PATH_SIZE
+                else None
+            )
+            chunks_out = chunks_out if _slice == () else None
+            out_ = convert_none_out(result.dtype, reduce_op, reduced_shape, chunks=chunks_out)
             if out is not None:
                 out[:] = out_
                 del out_
             else:
                 out = out_
+            behaved = (
+                False
+                if not hasattr(out, "chunks")
+                else blosc2.are_partitions_behaved(out.shape, out.chunks, out.blocks)
+            )
             out_init = True
 
         # res_out only used be argmin/max and cumulative_sum/prod which only accept axis=int argument
@@ -2309,7 +2321,12 @@ def reduce_slices(  # noqa: C901
                 else:  # CUMULATIVE_PROD
                     result *= res_out_
                 res_out_ = result[idx_lastval]
-                out[reduced_slice] = result
+                if behaved and result.shape == out.chunks and result.dtype == out.dtype and _slice == ():
+                    # Fast path
+                    # TODO: Check this only works when slice is () as nchunk is incorrect  for out otherwise
+                    out.schunk.update_data(nchunk, result, copy=False)
+                else:
+                    out[reduced_slice] = result
         else:
             out[reduced_slice] = reduce_op.value(out[reduced_slice], result)
 
@@ -2358,15 +2375,22 @@ def _get_res_out(reduced_shape, axis, dtype, reduce_op):
     return res_out_
 
 
-def convert_none_out(dtype, reduce_op, reduced_shape):
+def convert_none_out(dtype, reduce_op, reduced_shape, chunks=None):
     reduced_shape = (1,) if reduced_shape == () else reduced_shape
     # out will be a proper numpy.ndarray
     if reduce_op in {ReduceOp.SUM, ReduceOp.CUMULATIVE_SUM, ReduceOp.PROD, ReduceOp.CUMULATIVE_PROD}:
-        out = (
-            np.zeros(reduced_shape, dtype=dtype)
-            if reduce_op in {ReduceOp.SUM, ReduceOp.CUMULATIVE_SUM}
-            else np.ones(reduced_shape, dtype=dtype)
-        )
+        if reduce_op in (ReduceOp.CUMULATIVE_SUM, ReduceOp.CUMULATIVE_PROD) and chunks is not None:
+            out = (
+                blosc2.zeros(reduced_shape, dtype=dtype, chunks=chunks)
+                if reduce_op == ReduceOp.CUMULATIVE_SUM
+                else blosc2.ones(reduced_shape, dtype=dtype, chunks=chunks)
+            )
+        else:
+            out = (
+                np.zeros(reduced_shape, dtype=dtype)
+                if reduce_op in {ReduceOp.SUM, ReduceOp.CUMULATIVE_SUM}
+                else np.ones(reduced_shape, dtype=dtype)
+            )
     elif reduce_op == ReduceOp.MIN:
         if np.issubdtype(dtype, np.integer):
             out = np.iinfo(dtype).max * np.ones(reduced_shape, dtype=dtype)
