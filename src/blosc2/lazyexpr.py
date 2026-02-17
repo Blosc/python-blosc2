@@ -417,8 +417,8 @@ class LazyArray(ABC, blosc2.Operand):
             These arguments will be set in the resulting :ref:`NDArray`.
             Additionally, the following special kwargs are supported:
             - ``strict_miniexpr`` (bool): controls whether miniexpr compilation/execution
-              failures are raised instead of silently falling back to regular chunked eval.
-              Defaults to ``True`` for DSL kernels and ``False`` otherwise.
+              failures are raised instead of silently falling back to regular chunked eval
+              for non-DSL expressions.
 
         Returns
         -------
@@ -1284,6 +1284,23 @@ def _inject_dummy_param_for_zero_input_dsl(expression: str, param_name: str) -> 
     return rewritten
 
 
+def _is_dsl_kernel_expression(expression) -> bool:
+    return isinstance(expression, DSLKernel) and expression.dsl_source is not None
+
+
+def _dsl_miniexpr_required_message(reason: str | None = None) -> str:
+    message = "DSL kernels require miniexpr evaluation and cannot run via direct Python fallback."
+    if reason:
+        message = f"{message} {reason}"
+    if sys.platform == "win32" and not _MINIEXPR_WINDOWS_OVERRIDE:
+        message = f"{message} Set BLOSC2_ENABLE_MINIEXPR_WINDOWS=1 to force-enable miniexpr on Windows."
+    return message
+
+
+def _raise_dsl_miniexpr_required(reason: str | None = None) -> None:
+    raise RuntimeError(_dsl_miniexpr_required_message(reason))
+
+
 def fast_eval(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None],
     operands: dict,
@@ -1314,8 +1331,9 @@ def fast_eval(  # noqa: C901
     # Use a local copy so we don't modify the global
     use_miniexpr = try_miniexpr
 
-    is_dsl = isinstance(expression, DSLKernel) and expression.dsl_source
+    is_dsl = _is_dsl_kernel_expression(expression)
     expr_string = expression.dsl_source if is_dsl else expression
+    dsl_disable_reason = None
 
     # Disable miniexpr for UDFs (callable expressions), except DSL kernels
     if callable(expression) and not is_dsl:
@@ -1335,9 +1353,11 @@ def fast_eval(  # noqa: C901
     if strict_miniexpr is None:
         # Be strict by default for DSL kernels to avoid silently losing DSL fast-path regressions.
         strict_miniexpr = bool(is_dsl)
-    if where is not None:
-        # miniexpr does not support where(); use the regular path.
-        use_miniexpr = False
+        if where is not None:
+            # miniexpr does not support where(); use the regular path.
+            use_miniexpr = False
+            if is_dsl:
+                dsl_disable_reason = "DSL kernels cannot be run without miniexpr."
     if isinstance(out, blosc2.NDArray):
         # If 'out' has been passed, and is a NDArray, use it as the base array
         basearr = out
@@ -1416,6 +1436,8 @@ def fast_eval(  # noqa: C901
         if math.prod(shape) <= 1:
             # Avoid miniexpr for scalar-like outputs; current prefilter path is unstable here.
             use_miniexpr = False
+            if is_dsl and dsl_disable_reason is None:
+                dsl_disable_reason = "scalar-like outputs are not supported by the DSL miniexpr path."
         if (
             isinstance(expr_string_miniexpr, str)
             and
@@ -1423,6 +1445,8 @@ def fast_eval(  # noqa: C901
             any(tok in expr_string_miniexpr for tok in ("cumsum(", "cumprod(", "cumulative_sum("))
         ):
             use_miniexpr = False
+            if is_dsl and dsl_disable_reason is None:
+                dsl_disable_reason = "cumulative scans are not supported by the DSL miniexpr path."
         if isinstance(expr_string_miniexpr, str):
             expr_string_miniexpr = _apply_jit_backend_pragma(
                 expr_string_miniexpr, operands_miniexpr, jit_backend
@@ -1436,8 +1460,14 @@ def fast_eval(  # noqa: C901
         same_blocks = all(hasattr(op, "blocks") and op.blocks == blocks for op in operands_miniexpr.values())
         if not (same_shape and same_chunks and same_blocks):
             use_miniexpr = False
+            if is_dsl and dsl_disable_reason is None:
+                dsl_disable_reason = "all DSL operands must share shape/chunks/blocks."
         if not (all_ndarray_miniexpr and out is None):
             use_miniexpr = False
+            if is_dsl and dsl_disable_reason is None:
+                dsl_disable_reason = (
+                    "DSL kernels require NDArray inputs and do not support the `out` argument."
+                )
         has_complex = any(
             isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
             for op in operands_miniexpr.values()
@@ -1446,18 +1476,31 @@ def fast_eval(  # noqa: C901
             if sys.platform == "win32":
                 # On Windows, miniexpr has issues with complex numbers
                 use_miniexpr = False
+                if is_dsl and dsl_disable_reason is None:
+                    dsl_disable_reason = "complex DSL kernels are disabled on Windows."
             if any(tok in expr_string_miniexpr for tok in ("!=", "==", "<=", ">=", "<", ">")):
                 use_miniexpr = False
+                if is_dsl and dsl_disable_reason is None:
+                    dsl_disable_reason = "complex comparisons are not supported by miniexpr."
         if sys.platform == "win32" and use_miniexpr and not _MINIEXPR_WINDOWS_OVERRIDE:
             # Work around Windows miniexpr issues for integer outputs and dtype conversions.
             if blosc2.isdtype(dtype, "integral"):
                 use_miniexpr = False
+                if is_dsl and dsl_disable_reason is None:
+                    dsl_disable_reason = "Windows policy disables miniexpr for integral output dtypes."
             else:
                 dtype_mismatch = any(
                     isinstance(op, blosc2.NDArray) and op.dtype != dtype for op in operands_miniexpr.values()
                 )
                 if dtype_mismatch:
                     use_miniexpr = False
+                    if is_dsl and dsl_disable_reason is None:
+                        dsl_disable_reason = (
+                            "Windows policy disables miniexpr when operand and output dtypes differ."
+                        )
+
+    if is_dsl and not use_miniexpr:
+        _raise_dsl_miniexpr_required(dsl_disable_reason)
 
     if use_miniexpr:
         cparams = kwargs.pop("cparams", blosc2.CParams())
@@ -1478,6 +1521,12 @@ def fast_eval(  # noqa: C901
                 res_eval.schunk.update_data(nchunk, data, copy=False)
         except Exception as e:
             use_miniexpr = False
+            if is_dsl:
+                raise RuntimeError(
+                    _dsl_miniexpr_required_message(
+                        "miniexpr compilation or execution failed for this DSL kernel."
+                    )
+                ) from e
             if strict_miniexpr:
                 raise RuntimeError("miniexpr evaluation failed while strict_miniexpr=True") from e
         finally:
@@ -1525,6 +1574,10 @@ def fast_eval(  # noqa: C901
                 out = blosc2.empty(shape, chunks=chunks, blocks=blocks, dtype=dtype, **kwargs)
 
         if callable(expression):
+            if _is_dsl_kernel_expression(expression):
+                _raise_dsl_miniexpr_required(
+                    "internal fallback attempted to execute the DSL kernel directly in Python."
+                )
             result = np.empty(chunks_, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
         else:
@@ -1755,6 +1808,10 @@ def slices_eval(  # noqa: C901
         # Evaluate the expression using chunks of operands
 
         if callable(expression):
+            if _is_dsl_kernel_expression(expression):
+                _raise_dsl_miniexpr_required(
+                    "internal sliced fallback attempted to execute the DSL kernel directly in Python."
+                )
             result = np.empty(cslice_shape, dtype=out.dtype)  # raises error if out is None
             # cslice should be equal to cslice_subidx
             # Call the udf directly and use result as the output array
@@ -1897,6 +1954,10 @@ def slices_eval_getitem(
 
     # Evaluate the expression using slices of operands
     if callable(expression):
+        if _is_dsl_kernel_expression(expression):
+            _raise_dsl_miniexpr_required(
+                "internal getitem fallback attempted to execute the DSL kernel directly in Python."
+            )
         offset = tuple(0 if s is None else s.start for s in _slice_bcast)  # offset for the udf
         result = np.empty(slice_shape, dtype=dtype)
         expression(tuple(slice_operands.values()), result, offset=offset)
@@ -2262,6 +2323,10 @@ def reduce_slices(  # noqa: C901
         # Evaluate and reduce the expression using chunks of operands
 
         if callable(expression):
+            if _is_dsl_kernel_expression(expression):
+                _raise_dsl_miniexpr_required(
+                    "internal reduction fallback attempted to execute the DSL kernel directly in Python."
+                )
             # TODO: Implement the reductions for UDFs (and test them)
             result = np.empty(cslice_shape, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
@@ -2479,7 +2544,7 @@ def _eval_zero_input_dsl_if_needed(
     return True, full_res
 
 
-def chunked_eval(
+def chunked_eval(  # noqa: C901
     expression: str | Callable[[tuple, np.ndarray, tuple[int]], None], operands: dict, item=(), **kwargs
 ):
     """
@@ -2586,6 +2651,11 @@ def chunked_eval(
                 # If not, the conditions to use the fast path are a bit more restrictive
                 # e.g. the user cannot specify chunks or blocks, or an output that is not
                 # a blosc2.NDArray
+                return fast_eval(
+                    expression, operands, getitem=False, jit=jit, jit_backend=jit_backend, **kwargs
+                )
+            elif _is_dsl_kernel_expression(expression) and (out is None or isinstance(out, blosc2.NDArray)):
+                # DSL kernels require miniexpr and must not fall back to Python execution.
                 return fast_eval(
                     expression, operands, getitem=False, jit=jit, jit_backend=jit_backend, **kwargs
                 )
