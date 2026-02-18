@@ -1353,6 +1353,11 @@ def fast_eval(  # noqa: C901
     if strict_miniexpr is None:
         # Be strict by default for DSL kernels to avoid silently losing DSL fast-path regressions.
         strict_miniexpr = bool(is_dsl)
+    if blosc2.IS_WASM and not (is_dsl or strict_miniexpr or bool(jit)):
+        # Keep wasm behavior conservative: only opt into miniexpr for DSL kernels
+        # or explicit strict/jit requests. General lazyexpr correctness on wasm is
+        # currently more reliable via the regular evaluation path.
+        use_miniexpr = False
     if where is not None:
         # miniexpr does not support where(); use the regular path.
         use_miniexpr = False
@@ -2056,6 +2061,9 @@ def reduce_slices(  # noqa: C901
 
     # Use a local copy so we don't modify the global
     use_miniexpr = try_miniexpr  # & False
+    if blosc2.IS_WASM:
+        # Keep reduction evaluation on wasm on the regular path for correctness.
+        use_miniexpr = False
 
     out = kwargs.pop("_output", None)
     res_out_ = None  # temporary required to store max/min for argmax/argmin
