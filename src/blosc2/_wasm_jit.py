@@ -60,16 +60,73 @@ _REGISTER_HELPERS_JS = r"""
     return null;
   };
 
-  const wasmExports = resolve("wasmExports");
+  const wasmExports = resolve("wasmExports") || resolve("exports");
+  const asmObj = resolve("asm");
+
+  const isWasmMemory = (value) =>
+    typeof WebAssembly !== "undefined" &&
+    typeof WebAssembly.Memory !== "undefined" &&
+    value instanceof WebAssembly.Memory;
+  const isWasmTable = (value) =>
+    typeof WebAssembly !== "undefined" &&
+    typeof WebAssembly.Table !== "undefined" &&
+    value instanceof WebAssembly.Table;
+
+  const findMemoryOrTableByType = (wantMemory) => {
+    for (const cand of candidates) {
+      const obj = cand.obj;
+      if (!obj) {
+        continue;
+      }
+      let keys = [];
+      try {
+        keys = Object.getOwnPropertyNames(obj);
+      } catch (_e) {
+        keys = [];
+      }
+      for (const key of keys) {
+        let value;
+        try {
+          value = obj[key];
+        } catch (_e) {
+          continue;
+        }
+        if (wantMemory && isWasmMemory(value)) {
+          return value;
+        }
+        if (!wantMemory && isWasmTable(value)) {
+          return value;
+        }
+        if (value && (typeof value === "object" || typeof value === "function")) {
+          if (wantMemory && isWasmMemory(value.memory)) {
+            return value.memory;
+          }
+          if (!wantMemory && isWasmTable(value.__indirect_function_table)) {
+            return value.__indirect_function_table;
+          }
+        }
+      }
+    }
+    return null;
+  };
+
   const wasmMemory =
     resolve("wasmMemory") ||
     resolve("memory") ||
+    resolve("wasmMemoryObject") ||
+    resolve("__wasmMemory") ||
+    (asmObj && asmObj.memory) ||
+    (asmObj && asmObj.wasmMemory) ||
     (wasmExports && wasmExports.memory) ||
+    findMemoryOrTableByType(true) ||
     null;
   const wasmTable =
     resolve("wasmTable") ||
     resolve("__indirect_function_table") ||
+    (asmObj && asmObj.__indirect_function_table) ||
+    (asmObj && asmObj.wasmTable) ||
     (wasmExports && wasmExports.__indirect_function_table) ||
+    findMemoryOrTableByType(false) ||
     null;
   const runtime = {
     HEAPF32: resolve("HEAPF32"),
@@ -103,6 +160,7 @@ _REGISTER_HELPERS_JS = r"""
   ];
   const missing = required.filter((name) => !runtime[name]);
   if (missing.length > 0) {
+    const aliasKeys = ["wasmMemory", "memory", "wasmExports", "asm", "__indirect_function_table", "wasmTable"];
     const diag = candidates.map((cand) => {
       const have = required.filter((name) => {
         try {
@@ -111,7 +169,14 @@ _REGISTER_HELPERS_JS = r"""
           return false;
         }
       });
-      return `${cand.name}=[${have.join(",")}]`;
+      const aliases = aliasKeys.filter((name) => {
+        try {
+          return cand.obj[name] !== undefined && cand.obj[name] !== null;
+        } catch (_e) {
+          return false;
+        }
+      });
+      return `${cand.name}=[${have.join(",")}],aliases=[${aliases.join(",")}]`;
     }).join(" | ");
     return {
       instantiatePtr: 0,
