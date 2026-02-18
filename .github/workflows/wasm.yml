@@ -9,8 +9,8 @@ on:
 
 env:
   CIBW_BUILD_VERBOSITY: 1
-  # In case you want to specify a version of pyodide
-  # PYODIDE_VERSION: 0.28.2
+  # Pin pyodide while debugging wasm JIT runtime-object integration.
+  PYODIDE_VERSION: 0.28.2
 
 jobs:
   build_wheels_wasm:
