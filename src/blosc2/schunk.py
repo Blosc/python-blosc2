@@ -319,6 +319,18 @@ class SChunk(blosc2_ext.SChunk):
                 kwargs["cparams"] = cparams
         else:
             kwargs["cparams"] = {"typesize": itemsize}
+        if blosc2.IS_WASM:
+            # wasm32 runtime is effectively single-threaded for Blosc operations.
+            cparams = kwargs.get("cparams")
+            if isinstance(cparams, dict) and cparams.get("nthreads", 1) != 1:
+                cparams = cparams.copy()
+                cparams["nthreads"] = 1
+                kwargs["cparams"] = cparams
+            dparams = kwargs.get("dparams")
+            if isinstance(dparams, dict) and dparams.get("nthreads", 1) != 1:
+                dparams = dparams.copy()
+                dparams["nthreads"] = 1
+                kwargs["dparams"] = dparams
 
         # chunksize handling
         if chunksize is None:
