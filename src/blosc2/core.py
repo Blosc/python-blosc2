@@ -35,6 +35,8 @@ if TYPE_CHECKING:
     import tensorflow
     import torch
 
+_wasm_releasegil_state = False
+
 
 def _check_typesize(typesize):
     if not 1 <= typesize <= blosc2_ext.MAX_TYPESIZE:
@@ -933,6 +935,14 @@ def set_nthreads(nthreads: int) -> int:
     --------
     :attr:`~blosc2.nthreads`
     """
+    if blosc2.IS_WASM:
+        # Keep API validation semantics while forcing single-thread execution.
+        if nthreads > 2**31 - 1:
+            raise ValueError("nthreads must be less or equal than 2^31 - 1.")
+        if nthreads < 1:
+            raise ValueError("nthreads must be a positive integer.")
+        nthreads = 1
+
     rc = blosc2_ext.set_nthreads(nthreads)
     blosc2.nthreads = nthreads
     return rc
@@ -1069,6 +1079,14 @@ def set_releasegil(gilstate: bool) -> bool:
     >>> oldReleaseState = blosc2.set_releasegil(True)
     """
     gilstate = bool(gilstate)
+    if blosc2.IS_WASM:
+        # wasm32 does not benefit from releasing the GIL and enabling this can
+        # lead to incorrect results in some code paths.
+        global _wasm_releasegil_state
+        oldstate = _wasm_releasegil_state
+        _wasm_releasegil_state = gilstate
+        blosc2_ext.set_releasegil(False)
+        return oldstate
     return blosc2_ext.set_releasegil(gilstate)
 
 
@@ -1738,6 +1756,11 @@ def compress2(src: object, **kwargs: dict) -> str | bytes:
             kwargs = asdict(kwargs.get("cparams"))
         else:
             kwargs = kwargs.get("cparams")
+    if kwargs is None:
+        kwargs = {}
+    if blosc2.IS_WASM and kwargs.get("nthreads", 1) != 1:
+        kwargs = kwargs.copy()
+        kwargs["nthreads"] = 1
 
     return blosc2_ext.compress2(src, **kwargs)
 
@@ -1794,6 +1817,11 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
             kwargs = asdict(kwargs.get("dparams"))
         else:
             kwargs = kwargs.get("dparams")
+    if kwargs is None:
+        kwargs = {}
+    if blosc2.IS_WASM and kwargs.get("nthreads", 1) != 1:
+        kwargs = kwargs.copy()
+        kwargs["nthreads"] = 1
 
     return blosc2_ext.decompress2(src, dst, **kwargs)
 

@@ -41,6 +41,8 @@ import blosc2
 def test_open(contiguous, urlpath, cparams, dparams, nchunks, chunk_nitems, dtype, mode, mmap_mode):
     if os.name == "nt" and mmap_mode == "c":
         pytest.skip("Cannot test mmap_mode 'c' on Windows")
+    if blosc2.IS_WASM and mmap_mode is not None:
+        pytest.skip("mmap_mode is not supported reliably on wasm32")
 
     kwargs = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     blosc2.remove_urlpath(urlpath)
@@ -115,6 +117,9 @@ def test_open_fake():
 @pytest.mark.parametrize("urlpath", ["schunk.b2frame"])
 @pytest.mark.parametrize(("mode", "mmap_mode"), [("r", None), (None, "r")])
 def test_open_offset(offset, urlpath, mode, mmap_mode):
+    if blosc2.IS_WASM and mmap_mode is not None:
+        pytest.skip("mmap_mode is not supported reliably on wasm32")
+
     urlpath_temp = urlpath + ".temp"
 
     blosc2.remove_urlpath(urlpath)

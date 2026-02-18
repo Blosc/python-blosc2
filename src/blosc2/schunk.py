@@ -1515,6 +1515,16 @@ def _set_default_dparams(kwargs):
             blosc2.DParams(nthreads=blosc2.nthreads) if not blosc2.IS_WASM else blosc2.DParams(nthreads=1)
         )
         kwargs["dparams"] = dparams
+    if blosc2.IS_WASM:
+        dparams = kwargs.get("dparams")
+        if isinstance(dparams, blosc2.DParams) and dparams.nthreads != 1:
+            dparams = asdict(dparams)
+            dparams["nthreads"] = 1
+            kwargs["dparams"] = dparams
+        elif isinstance(dparams, dict) and dparams.get("nthreads", 1) != 1:
+            dparams = dparams.copy()
+            dparams["nthreads"] = 1
+            kwargs["dparams"] = dparams
 
 
 def _process_opened_object(res):
