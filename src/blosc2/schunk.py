@@ -11,7 +11,7 @@ import os
 import pathlib
 from collections import namedtuple
 from collections.abc import Iterator, Mapping, MutableMapping
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -362,6 +362,8 @@ class SChunk(blosc2_ext.SChunk):
 
     @cparams.setter
     def cparams(self, value: blosc2.CParams) -> None:
+        if blosc2.IS_WASM and value.nthreads != 1:
+            value = replace(value, nthreads=1)
         super().update_cparams(value)
         self._cparams = super().get_cparams()
 
@@ -374,6 +376,8 @@ class SChunk(blosc2_ext.SChunk):
 
     @dparams.setter
     def dparams(self, value: blosc2.DParams) -> None:
+        if blosc2.IS_WASM and value.nthreads != 1:
+            value = replace(value, nthreads=1)
         super().update_dparams(value)
         self._dparams = super().get_dparams()
 

@@ -102,6 +102,9 @@ def test_ufilters(contiguous, urlpath, nchunks, filters, filters_meta, dtype):
     ],
 )
 def test_pyufilters_error(cparams, dparams):
+    if blosc2.IS_WASM:
+        pytest.skip("nthreads are coerced to 1 on wasm32")
+
     dtype = np.dtype(np.int32)
 
     def forward(input, output, meta, schunk):
@@ -141,6 +144,9 @@ def test_pyufilters_error(cparams, dparams):
     ],
 )
 def test_dynamic_ufilters_error(cparams, dparams):
+    if blosc2.IS_WASM:
+        pytest.skip("nthreads are coerced to 1 on wasm32")
+
     dtype = np.dtype(np.int32)
     blosc2.register_filter(163, None, None, "ufilter_test")
 

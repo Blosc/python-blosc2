@@ -14,6 +14,11 @@ import pytest
 import blosc2
 
 
+def _skip_wasm_mmap(*mmap_modes):
+    if blosc2.IS_WASM and any(mode is not None for mode in mmap_modes):
+        pytest.skip("mmap_mode is not supported reliably on wasm32")
+
+
 @pytest.mark.parametrize(
     ("urlpath", "contiguous", "mode", "mmap_mode"),
     [
@@ -44,6 +49,7 @@ import blosc2
     ],
 )
 def test_schunk_numpy(contiguous, urlpath, mode, mmap_mode, cparams, dparams, nchunks):
+    _skip_wasm_mmap(mmap_mode)
     storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode=mode, mmap_mode=mmap_mode)
     blosc2.remove_urlpath(urlpath)
 
@@ -113,6 +119,7 @@ def test_schunk_numpy(contiguous, urlpath, mode, mmap_mode, cparams, dparams, nc
     [("w", "r", None, None), (None, None, "w+", "r")],
 )
 def test_schunk_ndarray(tmp_path, mode_write, mode_read, mmap_mode_write, mmap_mode_read):
+    _skip_wasm_mmap(mmap_mode_write, mmap_mode_read)
     urlpath = tmp_path / "test.b2nd"
 
     data = np.arange(2 * 10, dtype="int32")
@@ -141,6 +148,7 @@ def test_schunk_ndarray(tmp_path, mode_write, mode_read, mmap_mode_write, mmap_m
     ],
 )
 def test_schunk(contiguous, urlpath, mode, mmap_mode, nbytes, cparams, dparams, nchunks):
+    _skip_wasm_mmap(mmap_mode)
     kwargs = {"contiguous": contiguous, "urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     numpy_meta = {b"dtype": str(np.dtype(np.uint8))}
     test_meta = {b"lorem": 1234}
@@ -199,6 +207,7 @@ def test_schunk(contiguous, urlpath, mode, mmap_mode, nbytes, cparams, dparams, 
 )
 @pytest.mark.parametrize("copy", [True, False])
 def test_schunk_cframe(contiguous, urlpath, mode, mmap_mode, cparams, dparams, nchunks, copy):
+    _skip_wasm_mmap(mmap_mode)
     storage = blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode=mode, mmap_mode=mmap_mode)
     blosc2.remove_urlpath(urlpath)
 
@@ -275,9 +284,15 @@ def test_schunk_cdparams(cparams, dparams, new_cparams, new_dparams):
     cparams_dict = cparams if isinstance(cparams, dict) else asdict(cparams)
     dparams_dict = dparams if isinstance(dparams, dict) else asdict(dparams)
     for key in cparams_dict:
-        assert getattr(schunk.cparams, key) == cparams_dict[key]
+        expected = cparams_dict[key]
+        if blosc2.IS_WASM and key == "nthreads":
+            expected = 1
+        assert getattr(schunk.cparams, key) == expected
     for key in dparams_dict:
-        assert getattr(schunk.dparams, key) == dparams_dict[key]
+        expected = dparams_dict[key]
+        if blosc2.IS_WASM and key == "nthreads":
+            expected = 1
+        assert getattr(schunk.dparams, key) == expected
 
     schunk.cparams = new_cparams
     schunk.dparams = new_dparams
@@ -287,6 +302,9 @@ def test_schunk_cdparams(cparams, dparams, new_cparams, new_dparams):
                 new_cparams, field.name
             )
         else:
-            assert getattr(schunk.cparams, field.name) == getattr(new_cparams, field.name)
+            expected = getattr(new_cparams, field.name)
+            if blosc2.IS_WASM and field.name == "nthreads":
+                expected = 1
+            assert getattr(schunk.cparams, field.name) == expected
 
-    assert schunk.dparams.nthreads == new_dparams.nthreads
+    assert schunk.dparams.nthreads == (1 if blosc2.IS_WASM else new_dparams.nthreads)

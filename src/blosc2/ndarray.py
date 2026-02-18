@@ -5935,6 +5935,17 @@ def _check_ndarray_kwargs(**kwargs):
                 raise ValueError("You cannot pass chunks in cparams, use `blocks` argument instead")
     if "dparams" in kwargs and isinstance(kwargs["dparams"], blosc2.DParams):
         kwargs["dparams"] = asdict(kwargs["dparams"])
+    if blosc2.IS_WASM:
+        cparams = kwargs.get("cparams")
+        if isinstance(cparams, dict) and cparams.get("nthreads", 1) != 1:
+            cparams = cparams.copy()
+            cparams["nthreads"] = 1
+            kwargs["cparams"] = cparams
+        dparams = kwargs.get("dparams")
+        if isinstance(dparams, dict) and dparams.get("nthreads", 1) != 1:
+            dparams = dparams.copy()
+            dparams["nthreads"] = 1
+            kwargs["dparams"] = dparams
 
     return kwargs
 
