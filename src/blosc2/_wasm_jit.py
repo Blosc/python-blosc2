@@ -413,13 +413,57 @@ _REGISTER_HELPERS_JS = r"""
     return { instantiatePtr: 0, freePtr: 0, error: "me_jit_glue exports unavailable" };
   }
 
+  const refreshRuntimeViews = () => {
+    const updater = resolve("updateMemoryViews");
+    if (typeof updater === "function") {
+      try {
+        updater();
+      } catch (_e) {
+        /* best effort only */
+      }
+      runtime.HEAPU8 = resolve("HEAPU8") || runtime.HEAPU8;
+      runtime.HEAPF32 = resolve("HEAPF32") || runtime.HEAPF32;
+      runtime.HEAPF64 = resolve("HEAPF64") || runtime.HEAPF64;
+    }
+
+    const mem = runtime.wasmMemory;
+    const buffer = mem && mem.buffer ? mem.buffer : null;
+    if (!buffer || typeof buffer.byteLength !== "number" || buffer.byteLength === 0) {
+      return null;
+    }
+
+    const heapU8 = runtime.HEAPU8;
+    if (!heapU8 || heapU8.buffer !== buffer || heapU8.byteLength === 0) {
+      runtime.HEAPU8 = new Uint8Array(buffer);
+    }
+    const heapF32 = runtime.HEAPF32;
+    if (!heapF32 || heapF32.buffer !== buffer || heapF32.byteLength === 0) {
+      runtime.HEAPF32 = new Float32Array(buffer);
+    }
+    const heapF64 = runtime.HEAPF64;
+    if (!heapF64 || heapF64.buffer !== buffer || heapF64.byteLength === 0) {
+      runtime.HEAPF64 = new Float64Array(buffer);
+    }
+
+    return runtime.HEAPU8;
+  };
+
   const instantiateWrapper = (wasmPtr, wasmLen, bridgeLookupFnIdx) => {
     const start = wasmPtr >>> 0;
     const len = wasmLen >>> 0;
     if (start === 0 || len === 0) {
       return 0;
     }
-    const wasmBytes = runtime.HEAPU8.slice(start, start + len);
+    const heapU8 = refreshRuntimeViews();
+    if (!heapU8) {
+      return 0;
+    }
+    const end = (start + len) >>> 0;
+    if (end > heapU8.byteLength || end < start) {
+      return 0;
+    }
+    const wasmBytes = new Uint8Array(len);
+    wasmBytes.set(heapU8.subarray(start, end));
     return g._meJitInstantiate(runtime, wasmBytes, bridgeLookupFnIdx | 0) | 0;
   };
   const freeWrapper = (fnIdx) => {
