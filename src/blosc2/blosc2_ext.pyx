@@ -1443,12 +1443,13 @@ cdef class SChunk:
             dst = PyBytes_FromStringAndSize(NULL, nbytes)
             if dst is None:
                 raise RuntimeError("Could not get a bytes object")
+            print(f"nbytes being fetched {nbytes}; fetching chunk {nchunk}")
             size = blosc2_schunk_decompress_chunk(self.schunk, nchunk, <void*><char *>dst, nbytes)
             if size >= 0:
                 return dst
 
         if size < 0:
-            raise RuntimeError("Error while decompressing the specified chunk")
+            raise RuntimeError(f"Error while decompressing the specified chunk, error {size}")
 
     def get_chunk(self, nchunk):
         cdef uint8_t *chunk
