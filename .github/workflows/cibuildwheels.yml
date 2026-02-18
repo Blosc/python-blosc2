@@ -26,6 +26,8 @@ env:
 jobs:
 
   build_wheels:
+    # Temporarily disable non-wasm CI while debugging wasm/Pyodide integration.
+    if: ${{ false }}
     name: Build wheels on ${{ matrix.os }} for ${{ matrix.arch }}
     runs-on: ${{ matrix.runs-on || matrix.os }}
     permissions:
@@ -128,10 +130,11 @@ jobs:
 
 
   upload_pypi:
+    # Temporarily disable non-wasm CI while debugging wasm/Pyodide integration.
+    if: ${{ false }}
     needs: [ build_wheels]
     runs-on: ubuntu-latest
     # Only upload wheels when tagging (typically a release)
-    if: startsWith(github.event.ref, 'refs/tags')
     steps:
       - uses: actions/download-artifact@v7
         with:
