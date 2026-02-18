@@ -73,6 +73,10 @@ _REGISTER_HELPERS_JS = r"""
     value instanceof WebAssembly.Table;
   const heapU8ForProbe = resolve("HEAPU8");
   const heapBufferForProbe = heapU8ForProbe && heapU8ForProbe.buffer ? heapU8ForProbe.buffer : null;
+  const heapBufferLenForProbe =
+    heapBufferForProbe && typeof heapBufferForProbe.byteLength === "number"
+      ? heapBufferForProbe.byteLength
+      : -1;
 
   const isMemoryLike = (value) => {
     if (!value) {
@@ -94,7 +98,10 @@ _REGISTER_HELPERS_JS = r"""
       return false;
     }
     if (heapBufferForProbe && buf !== heapBufferForProbe) {
-      return false;
+      const bufLen = typeof buf.byteLength === "number" ? buf.byteLength : -1;
+      if (heapBufferLenForProbe > 0 && bufLen > 0 && bufLen < heapBufferLenForProbe) {
+        return false;
+      }
     }
     return true;
   };
@@ -117,7 +124,7 @@ _REGISTER_HELPERS_JS = r"""
     const isObj = (v) => v && (typeof v === "object" || typeof v === "function");
     const seen = new Set();
     const queue = [];
-    const maxDepth = 4;
+    const maxDepth = 6;
     const maxVisited = 5000;
 
     for (const cand of candidates) {
