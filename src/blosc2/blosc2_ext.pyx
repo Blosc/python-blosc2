@@ -558,14 +558,6 @@ cdef extern from "miniexpr.h":
         void *context
         size_t itemsize
 
-    ctypedef struct me_variable_ex:
-        const char *name
-        me_dtype dtype
-        const void *address
-        int type
-        void *context
-        size_t itemsize
-
     ctypedef struct me_expr:
         int type
         double value
@@ -579,19 +571,11 @@ cdef extern from "miniexpr.h":
         int ncode
         void *parameters[1]
 
-    int me_compile(const char *expression, const me_variable *variables,
-                   int var_count, me_dtype dtype, int *error, me_expr **out)
-
     int me_compile_nd_jit(const char *expression, const me_variable *variables,
                           int var_count, me_dtype dtype, int ndims,
                           const int64_t *shape, const int32_t *chunkshape,
                           const int32_t *blockshape, int jit_mode,
                           int *error, me_expr **out)
-
-    int me_compile_nd_ex(const char* expression, const me_variable_ex* variables,
-                     int var_count, me_dtype dtype, int ndims,
-                     const int64_t* shape, const int32_t* chunkshape,
-                     const int32_t* blockshape, int* error, me_expr** out)
 
     ctypedef enum me_compile_status:
         ME_COMPILE_SUCCESS
@@ -3005,10 +2989,10 @@ cdef class NDArray:
 
         # Get the compiled expression handle for multi-threading
         cdef Py_ssize_t n = len(inputs)
-        cdef me_variable_ex* variables = <me_variable_ex *> malloc(sizeof(me_variable_ex) * n)
+        cdef me_variable* variables = <me_variable *> malloc(sizeof(me_variable) * n)
         if variables == NULL:
             raise MemoryError()
-        cdef me_variable_ex *var
+        cdef me_variable *var
         for i, (k, v) in enumerate(inputs.items()):
             var = &variables[i]
             var_name = k.encode("utf-8") if isinstance(k, str) else k
@@ -3028,8 +3012,8 @@ cdef class NDArray:
         cdef int64_t* shape = &self.array.shape[0]
         cdef int32_t* chunkshape = &self.array.chunkshape[0]
         cdef int32_t* blockshape = &self.array.blockshape[0]
-        cdef int rc = me_compile_nd_ex(expression, variables, n, me_dtype, ndims,
-                                        shape, chunkshape, blockshape,
+        cdef int rc = me_compile_nd_jit(expression, variables, n, me_dtype, ndims,
+                                        shape, chunkshape, blockshape, jit_mode,
                                         &error, &out_expr)
         if rc == ME_COMPILE_ERR_INVALID_ARG_TYPE:
             raise TypeError(f"miniexpr does not support operand or output dtype: {expression}")
