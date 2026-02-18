@@ -1584,24 +1584,40 @@ def compute_chunks_blocks(  # noqa: C901
 
     if blocks is None:
         # Get the default blocksize for the compression params
-        # Using an 8 MB buffer should be enough for detecting the whole range of blocksizes
-        nitems = 2**23 // itemsize
-        # compress2 is used just to provide a hint on the blocksize
-        # However, it does not work well with filters that are not shuffle or bitshuffle,
-        # so let's get rid of them
+        # Check if we need STUNE for lossy codecs/filters that have specific blocksize requirements
+        codec = cparams.get("codec")
         filters = cparams.get("filters", None)
-        if filters:
-            cparams2 = copy.deepcopy(cparams)
-            for i, filter in enumerate(filters):
-                if filter not in (blosc2.Filter.SHUFFLE, blosc2.Filter.BITSHUFFLE):
-                    cparams2["filters"][i] = blosc2.Filter.NOFILTER
+        needs_stune = codec in (
+            blosc2.Codec.ZFP_RATE,
+            blosc2.Codec.ZFP_PREC,
+            blosc2.Codec.ZFP_ACC,
+            blosc2.Codec.NDLZ,
+        ) or (filters and any(f in (blosc2.Filter.NDMEAN, blosc2.Filter.NDCELL) for f in filters))
+
+        if needs_stune:
+            # Lossy codecs need proper blocksize calculation via STUNE
+            # Using an 8 MB buffer should be enough for detecting the whole range of blocksizes
+            nitems = 2**23 // itemsize
+            # compress2 is used just to provide a hint on the blocksize
+            # However, it does not work well with filters that are not shuffle or bitshuffle,
+            # so let's get rid of them
+            if filters:
+                cparams2 = copy.deepcopy(cparams)
+                for i, filter in enumerate(filters):
+                    if filter not in (blosc2.Filter.SHUFFLE, blosc2.Filter.BITSHUFFLE):
+                        cparams2["filters"][i] = blosc2.Filter.NOFILTER
+            else:
+                cparams2 = cparams
+            # Force STUNE to get a hint on the blocksize
+            aux_tuner = cparams2.get("tuner", blosc2.Tuner.STUNE)
+            cparams2["tuner"] = blosc2.Tuner.STUNE
+            src = blosc2.compress2(np.zeros(nitems, dtype=f"V{itemsize}"), **cparams2)
+            _, _, blocksize = blosc2.get_cbuffer_sizes(src)
+            cparams2["tuner"] = aux_tuner
         else:
-            cparams2 = cparams
-        # Force STUNE to get a hint on the blocksize
-        aux_tuner = cparams2.get("tuner", blosc2.Tuner.STUNE)
-        cparams2["tuner"] = blosc2.Tuner.STUNE
-        src = blosc2.compress2(np.zeros(nitems, dtype=f"V{itemsize}"), **cparams2)
-        _, _, blocksize = blosc2.get_cbuffer_sizes(src)
+            # We disable internal STUNE path for regular codecs as it is a bit costly, specially for small arrays.
+            # The heuristic below should be good enough in general.
+            blocksize = 32 * 1024
         # Minimum blocksize calculation
         min_blocksize = blocksize
         if platform.machine() == "x86_64":
@@ -1631,8 +1647,6 @@ def compute_chunks_blocks(  # noqa: C901
         # Fix for #364
         if blocksize < itemsize:
             blocksize = itemsize
-
-        cparams2["tuner"] = aux_tuner
     else:
         blocksize = math.prod(blocks) * itemsize
 

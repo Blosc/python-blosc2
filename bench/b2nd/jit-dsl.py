@@ -18,6 +18,12 @@ import time
 import blosc2
 import numpy as np
 
+where = np.where
+sin = np.sin
+cos = np.cos
+exp = np.exp
+log = np.log
+
 
 @blosc2.dsl_kernel
 def k_dsl(x, y):
@@ -27,7 +33,7 @@ def k_dsl(x, y):
         if i == 0:
             acc = acc + y
         else:
-            acc = np.where(acc < y, acc + i, acc - i)
+            acc = where(acc < y, acc + i, acc - i)
         i = i + 1
     return acc
 
@@ -37,15 +43,15 @@ def k_heavy_dsl(x, y, niter):
     acc = x
     i = 0
     while i < niter:
-        t = np.sin(acc * 1.001 + y * 0.123)
-        u = np.cos(acc * 0.777 - y * 0.211)
-        v = np.exp(t * 0.25) - np.log(np.abs(u) + 1.0)
-        p = np.sin(v * 0.731 + acc * 0.071)
-        q = np.cos(v * 0.379 - y * 0.053)
-        r = np.exp((p - q) * 0.17) - np.log(np.abs(p + q) + 1.0)
-        w = np.sin((r + v) * 0.11) + np.cos((r - v) * 0.07)
+        t = sin(acc * 1.001 + y * 0.123)
+        u = cos(acc * 0.777 - y * 0.211)
+        v = exp(t * 0.25) - log(abs(u) + 1.0)
+        p = sin(v * 0.731 + acc * 0.071)
+        q = cos(v * 0.379 - y * 0.053)
+        r = exp((p - q) * 0.17) - log(abs(p + q) + 1.0)
+        w = sin((r + v) * 0.11) + cos((r - v) * 0.07)
         delta = v + r + w
-        acc = np.where((acc < y), (acc + delta), (acc - delta))
+        acc = where((acc < y), (acc + delta), (acc - delta))
         i = i + 1
     return acc
 

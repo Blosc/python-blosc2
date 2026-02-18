@@ -64,6 +64,13 @@ import blosc2
 )
 def test_lossy(shape, cparams, dtype, urlpath, contiguous):
     cparams_dict = cparams if isinstance(cparams, dict) else asdict(cparams)
+    codec = cparams_dict.get("codec")
+    if codec is not None:
+        # Skip if the codec library is not available in this build (e.g. some Windows builds).
+        try:
+            blosc2.clib_info(codec)
+        except ValueError:
+            pytest.skip(f"codec {codec} is not supported in this build")
     if cparams_dict.get("codec") == blosc2.Codec.NDLZ:
         dtype = np.uint8
     array = np.linspace(0, np.prod(shape), np.prod(shape), dtype=dtype).reshape(shape)
