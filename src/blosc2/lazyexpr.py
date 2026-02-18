@@ -103,9 +103,7 @@ if not NUMPY_GE_2_0:  # handle non-array-api compliance
     safe_numpy_globals["cumulative_prod"] = npcumprod
 
 # Set this to False if miniexpr should not be tried out
-try_miniexpr = True
-if blosc2.IS_WASM:
-    try_miniexpr = False
+try_miniexpr = not blosc2.IS_WASM or getattr(blosc2, "_WASM_MINIEXPR_ENABLED", False)
 
 
 def ne_evaluate(expression, local_dict=None, **kwargs):

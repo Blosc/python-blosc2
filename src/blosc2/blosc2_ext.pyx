@@ -620,6 +620,15 @@ cdef extern from "miniexpr.h":
     void me_print(const me_expr *n) nogil
     void me_free(me_expr *n) nogil
 
+    ctypedef int (*me_wasm_jit_instantiate_helper)(
+        const unsigned char *wasm_bytes,
+        int wasm_len,
+        int bridge_lookup_fn_idx
+    )
+    ctypedef void (*me_wasm_jit_free_helper)(int fn_idx)
+    void me_register_wasm_jit_helpers(me_wasm_jit_instantiate_helper instantiate_helper,
+                                      me_wasm_jit_free_helper free_helper)
+
 
 cdef extern from "miniexpr_numpy.h":
     me_dtype me_dtype_from_numpy(int numpy_type_num)
@@ -691,6 +700,14 @@ def destroy():
     if chunk_cache_lock != NULL:
         PyThread_free_lock(chunk_cache_lock)
     blosc2_destroy()
+
+
+def _register_wasm_jit_helpers(uintptr_t instantiate_ptr, uintptr_t free_ptr):
+    cdef me_wasm_jit_instantiate_helper instantiate_helper = (
+        <me_wasm_jit_instantiate_helper>instantiate_ptr
+    )
+    cdef me_wasm_jit_free_helper free_helper = <me_wasm_jit_free_helper>free_ptr
+    me_register_wasm_jit_helpers(instantiate_helper, free_helper)
 
 
 @cython.boundscheck(False)
