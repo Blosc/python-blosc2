@@ -324,8 +324,8 @@ _REGISTER_HELPERS_JS = r"""
     (asmObj && asmObj.wasmMemory) ||
     (wasmExports && wasmExports.memory) ||
     (adjustedRuntime && adjustedRuntime.memory) ||
-    findMemoryOrTableByType(true) ||
     captureMemoryViaGrowHook() ||
+    findMemoryOrTableByType(true) ||
     null;
   const wasmTable =
     resolve("wasmTable") ||

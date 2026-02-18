@@ -144,6 +144,12 @@ def main():
         help="JIT backend override: auto (default), tcc, or cc.",
     )
     parser.add_argument(
+        "--mode",
+        default="all",
+        choices=("off", "on", "auto", "all"),
+        help="JIT mode rows to benchmark: off, on, auto, or all (default).",
+    )
+    parser.add_argument(
         "--fresh-cache",
         action="store_true",
         help="Use a fresh TMPDIR per workload/mode row so cold_s includes actual JIT build cost.",
@@ -164,7 +170,12 @@ def main():
     cr = blosc2.linspace(-2.0, 1.0, args.n, dtype=dtype, cparams=cparams)
     ci = blosc2.linspace(-1.5, 1.5, args.n, dtype=dtype, cparams=cparams)
 
-    modes = [("auto", None), ("on", True), ("off", False)]
+    mode_map = {
+        "auto": ("auto", None),
+        "on": ("on", True),
+        "off": ("off", False),
+    }
+    modes = [mode_map["auto"], mode_map["on"], mode_map["off"]] if args.mode == "all" else [mode_map[args.mode]]
     rows = []
 
     for mode_name, jit in modes:
@@ -243,11 +254,11 @@ def main():
     for workload, mode_name, cold, med, best in rows:
         warm_base = warm_baseline.get(workload)
         cold_base = cold_baseline.get(workload)
-        warm_speedup = (warm_base / med) if warm_base else 1.0
-        cold_speedup = (cold_base / cold) if cold_base else 1.0
+        warm_speedup = f"{(warm_base / med):>8.3f}x" if warm_base else f"{'n/a':>8}"
+        cold_speedup = f"{(cold_base / cold):>8.3f}x" if cold_base else f"{'n/a':>8}"
         print(
             f"{workload:<14} {mode_name:<5} {_fmt(cold):>8}   {_fmt(med):>8}   {_fmt(best):>8}   "
-            f"{warm_speedup:>8.3f}x   {cold_speedup:>8.3f}x"
+            f"{warm_speedup}   {cold_speedup}"
         )
 
 
