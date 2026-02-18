@@ -23,7 +23,7 @@ jobs:
       CMAKE_ARGS: "-DWITH_OPTIM=OFF"
       DEACTIVATE_OPENZL: "1"
       ME_DSL_TRACE: "1"
-      CIBW_TEST_COMMAND: "pytest -s {project}/tests/ndarray/test_wasm_dsl_jit.py {project}/tests/ndarray/test_reductions.py"
+      CIBW_TEST_COMMAND: "pytest -s {project}/tests/ndarray/test_wasm_dsl_jit.py {project}/tests/ndarray/test_lazyexpr.py"
     strategy:
       matrix:
         os: [ubuntu-latest]
