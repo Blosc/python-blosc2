@@ -19,22 +19,72 @@ _REGISTER_HELPERS_JS = r"""
     return g.__blosc2_me_jit_helper_ptrs;
   }
 
-  const moduleObj = g.Module || {};
-  const pick = (name) => moduleObj[name] !== undefined ? moduleObj[name] : g[name];
+  const candidates = [];
+  const addCandidate = (name, obj) => {
+    if (!obj || (typeof obj !== "object" && typeof obj !== "function")) {
+      return;
+    }
+    candidates.push({ name, obj });
+  };
+
+  addCandidate("globalThis", g);
+  addCandidate("globalThis.Module", g.Module);
+  addCandidate("globalThis.__blosc2_pyodide_module", g.__blosc2_pyodide_module);
+  addCandidate("globalThis.__blosc2_pyodide_api", g.__blosc2_pyodide_api);
+  addCandidate("globalThis.pyodide", g.pyodide);
+  addCandidate("globalThis.pyodide._module", g.pyodide && g.pyodide._module);
+  addCandidate("globalThis.pyodide.module", g.pyodide && g.pyodide.module);
+  addCandidate("globalThis.pyodide.Module", g.pyodide && g.pyodide.Module);
+  addCandidate("globalThis.pyodide._api", g.pyodide && g.pyodide._api);
+  addCandidate("globalThis.pyodide._api._module", g.pyodide && g.pyodide._api && g.pyodide._api._module);
+  addCandidate("globalThis.pyodide._api.Module", g.pyodide && g.pyodide._api && g.pyodide._api.Module);
+
+  const resolve = (name) => {
+    for (const cand of candidates) {
+      let value;
+      try {
+        value = cand.obj[name];
+      } catch (_e) {
+        value = undefined;
+      }
+      if (value !== undefined && value !== null) {
+        if (typeof value === "function") {
+          return value.bind(cand.obj);
+        }
+        return value;
+      }
+    }
+    if (g[name] !== undefined && g[name] !== null) {
+      return g[name];
+    }
+    return null;
+  };
+
+  const wasmExports = resolve("wasmExports");
+  const wasmMemory =
+    resolve("wasmMemory") ||
+    resolve("memory") ||
+    (wasmExports && wasmExports.memory) ||
+    null;
+  const wasmTable =
+    resolve("wasmTable") ||
+    resolve("__indirect_function_table") ||
+    (wasmExports && wasmExports.__indirect_function_table) ||
+    null;
   const runtime = {
-    HEAPF32: pick("HEAPF32"),
-    HEAPF64: pick("HEAPF64"),
-    HEAPU8: pick("HEAPU8"),
-    wasmMemory: pick("wasmMemory"),
-    wasmTable: pick("wasmTable"),
-    addFunction: pick("addFunction"),
-    removeFunction: pick("removeFunction"),
-    stackSave: pick("stackSave"),
-    stackAlloc: pick("stackAlloc"),
-    stackRestore: pick("stackRestore"),
-    lengthBytesUTF8: pick("lengthBytesUTF8"),
-    stringToUTF8: pick("stringToUTF8"),
-    err: pick("err"),
+    HEAPF32: resolve("HEAPF32"),
+    HEAPF64: resolve("HEAPF64"),
+    HEAPU8: resolve("HEAPU8"),
+    wasmMemory,
+    wasmTable,
+    addFunction: resolve("addFunction"),
+    removeFunction: resolve("removeFunction"),
+    stackSave: resolve("stackSave"),
+    stackAlloc: resolve("stackAlloc"),
+    stackRestore: resolve("stackRestore"),
+    lengthBytesUTF8: resolve("lengthBytesUTF8"),
+    stringToUTF8: resolve("stringToUTF8"),
+    err: resolve("err"),
   };
 
   const required = [
@@ -53,7 +103,21 @@ _REGISTER_HELPERS_JS = r"""
   ];
   const missing = required.filter((name) => !runtime[name]);
   if (missing.length > 0) {
-    return { instantiatePtr: 0, freePtr: 0, error: `missing runtime members: ${missing.join(", ")}` };
+    const diag = candidates.map((cand) => {
+      const have = required.filter((name) => {
+        try {
+          return !!cand.obj[name];
+        } catch (_e) {
+          return false;
+        }
+      });
+      return `${cand.name}=[${have.join(",")}]`;
+    }).join(" | ");
+    return {
+      instantiatePtr: 0,
+      freePtr: 0,
+      error: `missing runtime members: ${missing.join(", ")}; candidates: ${diag}`,
+    };
   }
 
   if (typeof g._meJitInstantiate !== "function" || typeof g._meJitFreeFn !== "function") {
@@ -134,6 +198,27 @@ def _load_glue_once(js_mod) -> bool:
     return bool(has_exports)
 
 
+def _inject_pyodide_runtime_handles(js_mod) -> None:
+    try:
+        import pyodide_js
+    except ImportError:
+        return
+
+    module_obj = None
+    for name in ("_module", "module", "Module"):
+        module_obj = getattr(pyodide_js, name, None)
+        if module_obj is not None:
+            break
+    if module_obj is not None:
+        js_mod.globalThis.__blosc2_pyodide_module = module_obj
+        _trace("captured pyodide_js module handle")
+
+    api_obj = getattr(pyodide_js, "_api", None)
+    if api_obj is not None:
+        js_mod.globalThis.__blosc2_pyodide_api = api_obj
+        _trace("captured pyodide_js API handle")
+
+
 def _create_helper_ptrs(js_mod) -> tuple[int, int] | None:
     try:
         result = _js_eval(js_mod, _REGISTER_HELPERS_JS)
@@ -171,6 +256,8 @@ def init_wasm_jit_helpers() -> bool:
     if not hasattr(blosc2_ext, "_register_wasm_jit_helpers"):
         _trace("extension does not expose _register_wasm_jit_helpers")
         return False
+
+    _inject_pyodide_runtime_handles(js)
     if not _load_glue_once(js):
         _trace("me_jit_glue.js was not loaded")
         return False
