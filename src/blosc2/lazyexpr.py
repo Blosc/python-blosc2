@@ -1185,7 +1185,7 @@ def read_nchunk(arrs, info):
 iter_chunks = None
 
 
-def fill_chunk_operands(
+def fill_chunk_operands(  # noqa: C901
     operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands, reduc=False, axis=None
 ):
     """Retrieve the chunk operands for evaluating an expression.
@@ -1236,6 +1236,12 @@ def fill_chunk_operands(
             continue
         if value.shape == ():
             chunk_operands[key] = value[()]
+            continue
+        if blosc2.IS_WASM and isinstance(value, blosc2.NDArray):
+            # Keep wasm path conservative: avoid low-level chunk buffer reuse and
+            # manual frombuffer views, which have shown correctness issues for
+            # some dtypes/expressions under Pyodide.
+            chunk_operands[key] = value[slice_]
             continue
 
         if not full_chunk or not isinstance(value, blosc2.NDArray):
@@ -1612,7 +1618,7 @@ def fast_eval(  # noqa: C901
         else:
             if behaved and result.shape == chunks_ and result.dtype == out.dtype:
                 # Fast path only works for results that are full chunks
-                out.schunk.update_data(nchunk, result, copy=False)
+                out.schunk.update_data(nchunk, result, copy=blosc2.IS_WASM)
             else:
                 out[cslice] = result
 
@@ -1841,7 +1847,7 @@ def slices_eval(  # noqa: C901
             if behaved and result.shape == out.chunks and result.dtype == out.dtype:
                 # Fast path
                 # TODO: Check this only works when slice is ()
-                out.schunk.update_data(nchunk, result, copy=False)
+                out.schunk.update_data(nchunk, result, copy=blosc2.IS_WASM)
             else:
                 try:
                     out[cslice_subidx] = result
@@ -2445,7 +2451,7 @@ def reduce_slices(  # noqa: C901
                 if behaved and result.shape == out.chunks and result.dtype == out.dtype and _slice == ():
                     # Fast path
                     # TODO: Check this only works when slice is () as nchunk is incorrect  for out otherwise
-                    out.schunk.update_data(nchunk, result, copy=False)
+                    out.schunk.update_data(nchunk, result, copy=blosc2.IS_WASM)
                 else:
                     out[reduced_slice] = result
         else:
