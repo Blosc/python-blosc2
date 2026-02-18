@@ -223,6 +223,98 @@ _REGISTER_HELPERS_JS = r"""
     return null;
   };
 
+  const captureMemoryViaGrowHook = () => {
+    if (
+      typeof WebAssembly === "undefined" ||
+      typeof WebAssembly.Memory === "undefined" ||
+      !WebAssembly.Memory.prototype ||
+      typeof WebAssembly.Memory.prototype.grow !== "function"
+    ) {
+      return null;
+    }
+
+    const growMemory = resolve("growMemory");
+    const resizeHeap = resolve("_emscripten_resize_heap");
+    if (typeof growMemory !== "function" && typeof resizeHeap !== "function") {
+      return null;
+    }
+
+    const heapU8 = resolve("HEAPU8");
+    const currentBytes =
+      heapU8 && heapU8.buffer && typeof heapU8.buffer.byteLength === "number"
+        ? heapU8.buffer.byteLength
+        : 0;
+    if (currentBytes <= 0) {
+      return null;
+    }
+
+    let captured = null;
+    const originalGrow = WebAssembly.Memory.prototype.grow;
+    WebAssembly.Memory.prototype.grow = function patchedGrow(pages) {
+      captured = this;
+      return originalGrow.call(this, pages);
+    };
+
+    try {
+      if (typeof growMemory === "function") {
+        growMemory(currentBytes);
+      } else if (typeof resizeHeap === "function") {
+        resizeHeap(currentBytes);
+      }
+    } catch (_e) {
+      /* best effort only */
+    } finally {
+      WebAssembly.Memory.prototype.grow = originalGrow;
+    }
+
+    if (captured && isMemoryLike(captured)) {
+      return captured;
+    }
+    return null;
+  };
+
+  const deriveRuntimeFromAdjustedImports = () => {
+    for (const cand of candidates) {
+      const obj = cand.obj;
+      if (!obj || typeof obj.adjustWasmImports !== "function") {
+        continue;
+      }
+      try {
+        const importsObj = { env: {} };
+        const adjustedMaybe = obj.adjustWasmImports(importsObj);
+        const adjusted =
+          adjustedMaybe && (typeof adjustedMaybe === "object" || typeof adjustedMaybe === "function")
+            ? adjustedMaybe
+            : importsObj;
+        const env =
+          (adjusted && adjusted.env) ||
+          (importsObj && importsObj.env) ||
+          null;
+        if (!env) {
+          continue;
+        }
+        const mem =
+          env.memory ||
+          env.wasmMemory ||
+          (adjusted && (adjusted.memory || adjusted.wasmMemory)) ||
+          null;
+        const tbl =
+          env.__indirect_function_table ||
+          env.wasmTable ||
+          (adjusted && (adjusted.__indirect_function_table || adjusted.wasmTable)) ||
+          null;
+        if (mem || tbl) {
+          return { memory: mem, table: tbl };
+        }
+      } catch (_e) {
+        continue;
+      }
+    }
+    return null;
+  };
+
+  const adjustedRuntime = deriveRuntimeFromAdjustedImports();
+
   const wasmMemory =
     resolve("wasmMemory") ||
     resolve("memory") ||
@@ -231,7 +323,9 @@ _REGISTER_HELPERS_JS = r"""
     (asmObj && asmObj.memory) ||
     (asmObj && asmObj.wasmMemory) ||
     (wasmExports && wasmExports.memory) ||
+    (adjustedRuntime && adjustedRuntime.memory) ||
     findMemoryOrTableByType(true) ||
+    captureMemoryViaGrowHook() ||
     null;
   const wasmTable =
     resolve("wasmTable") ||
@@ -239,6 +333,7 @@ _REGISTER_HELPERS_JS = r"""
     (asmObj && asmObj.__indirect_function_table) ||
     (asmObj && asmObj.wasmTable) ||
     (wasmExports && wasmExports.__indirect_function_table) ||
+    (adjustedRuntime && adjustedRuntime.table) ||
     findMemoryOrTableByType(false) ||
     null;
   const runtime = {
@@ -273,7 +368,15 @@ _REGISTER_HELPERS_JS = r"""
   ];
   const missing = required.filter((name) => !runtime[name]);
   if (missing.length > 0) {
-    const aliasKeys = ["wasmMemory", "memory", "wasmExports", "asm", "__indirect_function_table", "wasmTable"];
+    const aliasKeys = [
+      "wasmMemory",
+      "memory",
+      "wasmExports",
+      "asm",
+      "__indirect_function_table",
+      "wasmTable",
+      "adjustWasmImports",
+    ];
     const keyRegex = /(mem|wasm|asm|module|heap)/i;
     const diag = candidates.map((cand) => {
       const have = required.filter((name) => {
