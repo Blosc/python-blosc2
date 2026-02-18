@@ -71,42 +71,130 @@ _REGISTER_HELPERS_JS = r"""
     typeof WebAssembly !== "undefined" &&
     typeof WebAssembly.Table !== "undefined" &&
     value instanceof WebAssembly.Table;
+  const heapU8ForProbe = resolve("HEAPU8");
+  const heapBufferForProbe = heapU8ForProbe && heapU8ForProbe.buffer ? heapU8ForProbe.buffer : null;
+
+  const isMemoryLike = (value) => {
+    if (!value) {
+      return false;
+    }
+    if (isWasmMemory(value)) {
+      return true;
+    }
+    let buf = null;
+    try {
+      buf = value.buffer;
+    } catch (_e) {
+      buf = null;
+    }
+    if (!buf || typeof buf.byteLength !== "number") {
+      return false;
+    }
+    if (typeof value.grow !== "function") {
+      return false;
+    }
+    if (heapBufferForProbe && buf !== heapBufferForProbe) {
+      return false;
+    }
+    return true;
+  };
+
+  const isTableLike = (value) => {
+    if (!value) {
+      return false;
+    }
+    if (isWasmTable(value)) {
+      return true;
+    }
+    return (
+      typeof value.get === "function" &&
+      typeof value.grow === "function" &&
+      typeof value.length === "number"
+    );
+  };
 
   const findMemoryOrTableByType = (wantMemory) => {
+    const isObj = (v) => v && (typeof v === "object" || typeof v === "function");
+    const seen = new Set();
+    const queue = [];
+    const maxDepth = 4;
+    const maxVisited = 5000;
+
     for (const cand of candidates) {
-      const obj = cand.obj;
-      if (!obj) {
+      if (isObj(cand.obj)) {
+        queue.push({ value: cand.obj, depth: 0 });
+      }
+    }
+
+    while (queue.length > 0 && seen.size < maxVisited) {
+      const node = queue.shift();
+      const obj = node.value;
+      const depth = node.depth;
+      if (!isObj(obj) || seen.has(obj)) {
         continue;
       }
+      seen.add(obj);
+
+      if (wantMemory && isMemoryLike(obj)) {
+        return obj;
+      }
+      if (!wantMemory && isTableLike(obj)) {
+        return obj;
+      }
+      if (depth >= maxDepth) {
+        continue;
+      }
+
       let keys = [];
       try {
         keys = Object.getOwnPropertyNames(obj);
       } catch (_e) {
         keys = [];
       }
-      for (const key of keys) {
+      let symKeys = [];
+      try {
+        symKeys = Object.getOwnPropertySymbols(obj);
+      } catch (_e) {
+        symKeys = [];
+      }
+      const allKeys = keys.concat(symKeys);
+
+      for (const key of allKeys) {
         let value;
         try {
           value = obj[key];
         } catch (_e) {
           continue;
         }
-        if (wantMemory && isWasmMemory(value)) {
+
+        if (wantMemory && isMemoryLike(value)) {
           return value;
         }
-        if (!wantMemory && isWasmTable(value)) {
+        if (!wantMemory && isTableLike(value)) {
           return value;
         }
-        if (value && (typeof value === "object" || typeof value === "function")) {
-          if (wantMemory && isWasmMemory(value.memory)) {
+        if (isObj(value)) {
+          if (wantMemory && isMemoryLike(value.memory)) {
             return value.memory;
           }
-          if (!wantMemory && isWasmTable(value.__indirect_function_table)) {
+          if (!wantMemory && isTableLike(value.__indirect_function_table)) {
             return value.__indirect_function_table;
           }
+          queue.push({ value, depth: depth + 1 });
         }
       }
+
+      let proto = null;
+      try {
+        proto = Object.getPrototypeOf(obj);
+      } catch (_e) {
+        proto = null;
+      }
+      if (isObj(proto)) {
+        queue.push({ value: proto, depth: depth + 1 });
+      }
     }
+
     return null;
   };
 
@@ -131,7 +219,7 @@ _REGISTER_HELPERS_JS = r"""
   const runtime = {
     HEAPF32: resolve("HEAPF32"),
     HEAPF64: resolve("HEAPF64"),
-    HEAPU8: resolve("HEAPU8"),
+    HEAPU8: heapU8ForProbe,
     wasmMemory,
     wasmTable,
     addFunction: resolve("addFunction"),
