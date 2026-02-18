@@ -1185,7 +1185,7 @@ def read_nchunk(arrs, info):
 iter_chunks = None
 
 
-def fill_chunk_operands(  # noqa: C901
+def fill_chunk_operands(
     operands, slice_, chunks_, full_chunk, aligned, nchunk, iter_disk, chunk_operands, reduc=False, axis=None
 ):
     """Retrieve the chunk operands for evaluating an expression.
@@ -1237,13 +1237,6 @@ def fill_chunk_operands(  # noqa: C901
         if value.shape == ():
             chunk_operands[key] = value[()]
             continue
-        if blosc2.IS_WASM and isinstance(value, blosc2.NDArray):
-            # Keep wasm path conservative: avoid low-level chunk buffer reuse and
-            # manual frombuffer views, which have shown correctness issues for
-            # some dtypes/expressions under Pyodide.
-            chunk_operands[key] = value[slice_]
-            continue
-
         if not full_chunk or not isinstance(value, blosc2.NDArray):
             # The chunk is not a full one, or has padding, or is not a blosc2.NDArray,
             # so we need to go the slow path
@@ -1359,11 +1352,6 @@ def fast_eval(  # noqa: C901
     if strict_miniexpr is None:
         # Be strict by default for DSL kernels to avoid silently losing DSL fast-path regressions.
         strict_miniexpr = bool(is_dsl)
-    if blosc2.IS_WASM and not (is_dsl or strict_miniexpr or bool(jit)):
-        # Keep wasm behavior conservative: only opt into miniexpr for DSL kernels
-        # or explicit strict/jit requests. General lazyexpr correctness on wasm is
-        # currently more reliable via the regular evaluation path.
-        use_miniexpr = False
     if where is not None:
         # miniexpr does not support where(); use the regular path.
         use_miniexpr = False
@@ -1618,7 +1606,7 @@ def fast_eval(  # noqa: C901
         else:
             if behaved and result.shape == chunks_ and result.dtype == out.dtype:
                 # Fast path only works for results that are full chunks
-                out.schunk.update_data(nchunk, result, copy=blosc2.IS_WASM)
+                out.schunk.update_data(nchunk, result, copy=False)
             else:
                 out[cslice] = result
 
@@ -1847,7 +1835,7 @@ def slices_eval(  # noqa: C901
             if behaved and result.shape == out.chunks and result.dtype == out.dtype:
                 # Fast path
                 # TODO: Check this only works when slice is ()
-                out.schunk.update_data(nchunk, result, copy=blosc2.IS_WASM)
+                out.schunk.update_data(nchunk, result, copy=False)
             else:
                 try:
                     out[cslice_subidx] = result
@@ -2067,10 +2055,6 @@ def reduce_slices(  # noqa: C901
 
     # Use a local copy so we don't modify the global
     use_miniexpr = try_miniexpr  # & False
-    if blosc2.IS_WASM:
-        # Keep reduction evaluation on wasm on the regular path for correctness.
-        use_miniexpr = False
-
     out = kwargs.pop("_output", None)
     res_out_ = None  # temporary required to store max/min for argmax/argmin
     ne_args: dict = kwargs.pop("_ne_args", {})
@@ -2451,7 +2435,7 @@ def reduce_slices(  # noqa: C901
                 if behaved and result.shape == out.chunks and result.dtype == out.dtype and _slice == ():
                     # Fast path
                     # TODO: Check this only works when slice is () as nchunk is incorrect  for out otherwise
-                    out.schunk.update_data(nchunk, result, copy=blosc2.IS_WASM)
+                    out.schunk.update_data(nchunk, result, copy=False)
                 else:
                     out[reduced_slice] = result
         else:
