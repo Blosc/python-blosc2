@@ -10,7 +10,7 @@ on:
 env:
   CIBW_BUILD_VERBOSITY: 1
   # Pin pyodide while debugging wasm JIT runtime-object integration.
-  CIBW_PYODIDE_VERSION: 0.28.2
+  CIBW_PYODIDE_VERSION: 0.29.3
 
 jobs:
   build_wheels_wasm:
@@ -26,8 +26,8 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
-        cibw_build: ["cp3{12,13,14}-*"]
-        p_ver: ["3.12-3.14"]
+        cibw_build: ["cp313-*"]
+        p_ver: ["3.13"]
 
     steps:
       - name: Checkout repo
