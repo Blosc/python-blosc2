@@ -74,10 +74,6 @@ def _configure_libtcc_runtime_path():
 _configure_libtcc_runtime_path()
 
 _WASM_MINIEXPR_ENABLED = not IS_WASM
-if IS_WASM:
-    from ._wasm_jit import init_wasm_jit_helpers
-
-    _WASM_MINIEXPR_ENABLED = init_wasm_jit_helpers()
 
 __version__ = __version__
 __array_api_version__ = __array_api_version__
@@ -235,6 +231,11 @@ The C-Blosc2 version's date."""
 VERSION_STRING = VERSION_STRING
 """
 The C-Blosc2 version's string."""
+
+if IS_WASM:
+    from ._wasm_jit import init_wasm_jit_helpers
+
+    _WASM_MINIEXPR_ENABLED = init_wasm_jit_helpers()
 
 
 # For array-api compatibility
