@@ -84,7 +84,7 @@ def test_empty(shape, chunks, blocks, dtype, cparams, urlpath, contiguous):
     assert a.schunk.cparams.codec == cparams["codec"]
     assert a.schunk.cparams.clevel == cparams["clevel"]
     assert a.schunk.cparams.filters[: len(filters)] == filters
-    assert a.schunk.dparams.nthreads == 2
+    assert a.schunk.dparams.nthreads == (1 if blosc2.IS_WASM else 2)
 
     blosc2.remove_urlpath(urlpath)
 

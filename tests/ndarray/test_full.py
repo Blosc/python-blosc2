@@ -75,7 +75,10 @@ def test_full(shape, chunks, blocks, fill_value, cparams, dparams, dtype, urlpat
         dparams=blosc2.DParams(**dparams),
         **storage,
     )
-    assert asdict(a.schunk.dparams) == dparams
+    expected_dparams = dparams.copy()
+    if blosc2.IS_WASM:
+        expected_dparams["nthreads"] = 1
+    assert asdict(a.schunk.dparams) == expected_dparams
     if isinstance(fill_value, bytes):
         dtype = np.dtype(f"S{len(fill_value)}")
     assert a.dtype == np.dtype(dtype) if dtype is not None else np.dtype(np.uint8)
