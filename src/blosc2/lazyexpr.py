@@ -985,6 +985,13 @@ def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C90
         else:
             return out.shape, None, None, True
 
+    raw_inputs = [input_ for input_ in inputs.values() if input_ is not np]
+    if raw_inputs and all(
+        np.isscalar(input_) or (hasattr(input_, "shape") and input_.shape == ()) for input_ in raw_inputs
+    ):
+        # Scalar-only expressions have scalar output shape.
+        return (), None, None, False
+
     inputs = [input for input in inputs.values() if hasattr(input, "shape") and input is not np]
     # This will raise an exception if the input shapes are not compatible
     shape = compute_broadcast_shape(inputs)

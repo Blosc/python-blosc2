@@ -26,6 +26,20 @@ _REGISTER_HELPERS_JS = r"""
     }
     candidates.push({ name, obj });
   };
+  const addDerivedCandidates = (baseName, obj) => {
+    if (!obj || (typeof obj !== "object" && typeof obj !== "function")) {
+      return;
+    }
+    addCandidate(`${baseName}._module`, obj._module);
+    addCandidate(`${baseName}.module`, obj.module);
+    addCandidate(`${baseName}.Module`, obj.Module);
+    addCandidate(`${baseName}.asm`, obj.asm);
+    addCandidate(`${baseName}.wasmExports`, obj.wasmExports);
+    addCandidate(`${baseName}.wasm`, obj.wasm);
+    addCandidate(`${baseName}.__wasm`, obj.__wasm);
+    addCandidate(`${baseName}.pyodide`, obj.pyodide);
+    addCandidate(`${baseName}._api`, obj._api);
+  };
 
   addCandidate("globalThis", g);
   addCandidate("globalThis.Module", g.Module);
@@ -38,6 +52,10 @@ _REGISTER_HELPERS_JS = r"""
   addCandidate("globalThis.pyodide._api", g.pyodide && g.pyodide._api);
   addCandidate("globalThis.pyodide._api._module", g.pyodide && g.pyodide._api && g.pyodide._api._module);
   addCandidate("globalThis.pyodide._api.Module", g.pyodide && g.pyodide._api && g.pyodide._api.Module);
+  addDerivedCandidates("globalThis", g);
+  addDerivedCandidates("globalThis.pyodide", g.pyodide);
+  addDerivedCandidates("globalThis.__blosc2_pyodide_module", g.__blosc2_pyodide_module);
+  addDerivedCandidates("globalThis.__blosc2_pyodide_api", g.__blosc2_pyodide_api);
 
   const resolve = (name) => {
     for (const cand of candidates) {
@@ -256,6 +274,7 @@ _REGISTER_HELPERS_JS = r"""
   const missing = required.filter((name) => !runtime[name]);
   if (missing.length > 0) {
     const aliasKeys = ["wasmMemory", "memory", "wasmExports", "asm", "__indirect_function_table", "wasmTable"];
+    const keyRegex = /(mem|wasm|asm|module|heap)/i;
     const diag = candidates.map((cand) => {
       const have = required.filter((name) => {
         try {
@@ -271,7 +290,14 @@ _REGISTER_HELPERS_JS = r"""
           return false;
         }
       });
-      return `${cand.name}=[${have.join(",")}],aliases=[${aliases.join(",")}]`;
+      let ownKeys = [];
+      try {
+        ownKeys = Object.getOwnPropertyNames(cand.obj);
+      } catch (_e) {
+        ownKeys = [];
+      }
+      const interesting = ownKeys.filter((k) => keyRegex.test(k)).slice(0, 20);
+      return `${cand.name}=[${have.join(",")}],aliases=[${aliases.join(",")}],keys=[${interesting.join(",")}]`;
     }).join(" | ");
     return {
       instantiatePtr: 0,
