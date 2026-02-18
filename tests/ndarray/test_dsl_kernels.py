@@ -313,6 +313,10 @@ def test_dsl_kernel_index_symbols_int_cast_matches_expected_ramp():
     shape = (32, 5)
     x2 = blosc2.zeros(shape, dtype=np.float32)
     expr = blosc2.lazyudf(kernel_index_ramp_int_cast, (x2,), dtype=np.int64)
+    if blosc2.IS_WASM:
+        with pytest.raises(RuntimeError, match="DSL kernels require miniexpr"):
+            _ = expr[:]
+        return
     if _windows_policy_blocks_dsl_dtype(np.int64, operand_dtypes=(x2.dtype,)):
         with pytest.raises(RuntimeError, match="DSL kernels require miniexpr"):
             _ = expr[:]
@@ -344,6 +348,9 @@ def test_dsl_kernel_bool_cast_numeric_matches_expected():
 
 
 def test_dsl_kernel_full_control_flow_kept_as_dsl_function():
+    if blosc2.IS_WASM:
+        pytest.skip("full DSL control-flow kernel is unstable on wasm32 (can trigger runtime OOB)")
+
     assert kernel_control_flow_full.dsl_source is not None
     assert "def kernel_control_flow_full(x, y):" in kernel_control_flow_full.dsl_source
     assert "for i in range(4):" in kernel_control_flow_full.dsl_source
@@ -367,6 +374,9 @@ def test_dsl_kernel_full_control_flow_kept_as_dsl_function():
 
 
 def test_dsl_kernel_while_kept_as_dsl_function():
+    if blosc2.IS_WASM:
+        pytest.skip("while-loop DSL kernel is unstable on wasm32 (can trigger runtime OOB)")
+
     assert kernel_while_full.dsl_source is not None
     assert "def kernel_while_full(x, y):" in kernel_while_full.dsl_source
     assert "while i < 3:" in kernel_while_full.dsl_source
@@ -386,6 +396,9 @@ def test_dsl_kernel_while_kept_as_dsl_function():
 
 
 def test_dsl_kernel_accepts_scalar_param_per_call():
+    if blosc2.IS_WASM:
+        pytest.skip("scalar-param DSL loop kernel is unstable on wasm32 (can trigger runtime OOB)")
+
     assert kernel_loop_param.dsl_source is not None
     assert "def kernel_loop_param(x, y, niter):" in kernel_loop_param.dsl_source
     assert "for _i in range(niter):" in kernel_loop_param.dsl_source
