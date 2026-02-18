@@ -22,7 +22,7 @@ jobs:
       CIBW_BUILD: ${{ matrix.cibw_build }}
       CMAKE_ARGS: "-DWITH_ZLIB_OPTIM=OFF -DWITH_OPTIM=OFF -DWITH_RUNTIME_CPU_DETECTION=OFF"
       ME_DSL_TRACE: "1"
-      CIBW_TEST_COMMAND: "pytest -s {project}/tests/ndarray/test_wasm_dsl_jit.py"
+      CIBW_TEST_COMMAND: "pytest -s {project}/tests/ndarray/test_wasm_dsl_jit.py {project}/tests/ndarray/test_lazyexpr.py {project}/tests/ndarray/test_reductions.py"
     strategy:
       matrix:
         os: [ubuntu-latest]

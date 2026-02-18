@@ -2059,6 +2059,12 @@ def reduce_slices(  # noqa: C901
 
     # Use a local copy so we don't modify the global
     use_miniexpr = try_miniexpr  # & False
+
+    if blosc2.IS_WASM:
+        # Reduction miniexpr on wasm is currently unstable for scalar reductions (axis=None).
+        # Keep wasm reduction evaluation on the regular chunked path until stabilized.
+        use_miniexpr = False
+
     out = kwargs.pop("_output", None)
     res_out_ = None  # temporary required to store max/min for argmax/argmin
     ne_args: dict = kwargs.pop("_ne_args", {})
