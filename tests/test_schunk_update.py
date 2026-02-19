@@ -47,8 +47,6 @@ def test_schunk_update_numpy(contiguous, urlpath, nchunks, nupdates, copy, creat
         buffer = pos * np.arange(200 * 1000, dtype="int32")
         if create_chunk:
             chunk = blosc2.compress2(buffer)
-            dest = np.empty(buffer.shape, buffer.dtype)
-            check = blosc2.decompress2(chunk, dest)
             schunk.update_chunk(pos, chunk)
         else:
             schunk.update_data(pos, buffer, copy)

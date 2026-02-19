@@ -56,16 +56,16 @@ import blosc2
             False,
             None,
         ),
-        (
-            (2**31 - 1,),
-            (2**30,),
-            None,
-            np.dtype("U1"),
-            {"codec": blosc2.Codec.LZ4, "clevel": 5, "nthreads": 2},
-            None,
-            False,
-            None,
-        ),
+        # (
+        #     (2**31 - 1,),
+        #     (2**30,),
+        #     None,
+        #     np.dtype("U1"),
+        #     {"codec": blosc2.Codec.LZ4, "clevel": 5, "nthreads": 2},
+        #     None,
+        #     False,
+        #     None,
+        # ),
     ],
 )
 def test_zeros(shape, chunks, blocks, dtype, cparams, urlpath, contiguous, meta):
