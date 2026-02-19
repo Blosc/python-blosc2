@@ -36,6 +36,9 @@ class EmbedStore:
         deserialized later using the :func:`blosc2.from_cframe` function.
     mode : str, optional
         File mode ('r', 'w', 'a'). Default is 'w'.
+    mmap_mode : str or None, optional
+        Memory mapping mode for read access. For now, only ``"r"`` is supported,
+        and only when ``mode="r"``. Default is None.
     cparams : dict or None, optional
         Compression parameters for nodes and the embed store itself.
         Default is None, which uses the default Blosc2 parameters.
@@ -76,6 +79,8 @@ class EmbedStore:
         storage: blosc2.Storage | None = None,
         chunksize: int | None = 2**13,
         _from_schunk: SChunk | None = None,
+        *,
+        mmap_mode: str | None = None,
     ):
         """Initialize EmbedStore."""
 
@@ -84,6 +89,11 @@ class EmbedStore:
         # Let's use the SChunk store by default and continue experimenting.
         self._schunk_store = True  # put this to False to use an NDArray instead of a SChunk
         self.urlpath = urlpath
+        if mmap_mode not in (None, "r"):
+            raise ValueError("For EmbedStore containers, mmap_mode must be None or 'r'")
+        if mmap_mode == "r" and mode != "r":
+            raise ValueError("For EmbedStore containers, mmap_mode='r' requires mode='r'")
+        self.mmap_mode = mmap_mode
 
         if _from_schunk is not None:
             self.cparams = _from_schunk.cparams
@@ -108,7 +118,7 @@ class EmbedStore:
             self.storage = storage
 
         if mode in ("r", "a") and urlpath:
-            self._store = blosc2.blosc2_ext.open(urlpath, mode=mode, offset=0)
+            self._store = blosc2.blosc2_ext.open(urlpath, mode=mode, offset=0, mmap_mode=mmap_mode)
             self._load_metadata()
             return
 
