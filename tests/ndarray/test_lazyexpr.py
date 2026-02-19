@@ -820,7 +820,7 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
 @pytest.mark.parametrize("shape", [(10,), (10, 10), (10, 10, 10)])
 @pytest.mark.parametrize("dtype", ["int32", "float64", "i2"])
 @pytest.mark.parametrize("disk", [True, False])
-def test_save_constructor(disk, shape, dtype, constructor):  # noqa: C901
+def test_save_constructor(disk, shape, dtype, constructor):
     lshape = math.prod(shape)
     urlpath = "a.b2nd" if disk else None
     b2func = getattr(blosc2, constructor)

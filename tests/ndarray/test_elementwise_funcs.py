@@ -44,7 +44,7 @@ SHAPES_CHUNKS = [((10,), (3,)), ((20, 20), (4, 7))]
 SHAPES_CHUNKS_HEAVY = [((10, 13, 13), (3, 5, 2))]
 
 
-def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):  # noqa : C901
+def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):
     """Helper function containing the actual test logic for unary functions."""
     if np_func.__name__ in ("arccos", "arcsin", "arctanh"):
         a_blosc = blosc2.linspace(
@@ -108,7 +108,7 @@ def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):  # noq
                 raise e
 
 
-def _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp):  # noqa: C901
+def _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp):
     dtype_ = getattr(xp, dtype) if hasattr(xp, dtype) else np.dtype(dtype)
     dtype = np.dtype(dtype)
     not_blosc1 = xp.ones(shape, dtype=dtype_)
@@ -231,7 +231,7 @@ def _test_unary_func_proxy(np_func, blosc_func, dtype, shape, xp):
                 raise e
 
 
-def _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):  # noqa: C901
+def _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):
     """Helper function containing the actual test logic for binary functions."""
     a_blosc1 = blosc2.linspace(
         1, stop=np.prod(shape), num=np.prod(shape), chunks=chunkshape, shape=shape, dtype=dtype
