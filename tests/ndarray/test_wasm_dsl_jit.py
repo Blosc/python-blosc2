@@ -5,8 +5,6 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-import platform
-
 import numpy as np
 import pytest
 
@@ -20,9 +18,6 @@ def _wasm_kernel(x, y):
 
 @pytest.mark.skipif(not blosc2.IS_WASM, reason="WASM-only integration test")
 def test_wasm_dsl_tcc_jit_smoke():
-    if platform.system() == "Emscripten":
-        pytest.skip("Known unstable path on current Pyodide runtime (can trigger wasm OOB)")
-
     assert getattr(blosc2, "_WASM_MINIEXPR_ENABLED", False)
 
     a_np = np.linspace(-1.0, 1.0, 64, dtype=np.float64).reshape(8, 8)

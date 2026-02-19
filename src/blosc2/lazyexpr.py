@@ -1334,10 +1334,6 @@ def fast_eval(  # noqa: C901
     expr_string = expression.dsl_source if is_dsl else expression
     dsl_disable_reason = None
 
-    if blosc2.IS_WASM and not is_dsl:
-        # Keep wasm miniexpr scoped to DSL kernels until generic lazyexpr miniexpr paths are stabilized.
-        use_miniexpr = False
-
     # Disable miniexpr for UDFs (callable expressions), except DSL kernels
     if callable(expression) and not is_dsl:
         use_miniexpr = False

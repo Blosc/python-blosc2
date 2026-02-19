@@ -1484,7 +1484,6 @@ def test_numpy_funcs(array_fixture, func):
         pytest.skip("NumPy version has no cumulative_sum function.")
 
 
-@pytest.mark.skipif(blosc2.IS_WASM, reason="miniexpr fast path is not available on WASM")
 def test_lazyexpr_string_scalar_keeps_miniexpr_fast_path(monkeypatch):
     import importlib
 
@@ -1519,7 +1518,6 @@ def test_lazyexpr_string_scalar_keeps_miniexpr_fast_path(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-@pytest.mark.skipif(blosc2.IS_WASM, reason="miniexpr fast path is not available on WASM")
 def test_lazyexpr_unary_negative_literal_matches_subtraction(monkeypatch):
     import importlib
 
@@ -1555,7 +1553,6 @@ def test_lazyexpr_unary_negative_literal_matches_subtraction(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-@pytest.mark.skipif(blosc2.IS_WASM, reason="miniexpr fast path is not available on WASM")
 def test_lazyexpr_miniexpr_failure_falls_back_by_default(monkeypatch):
     import importlib
 
@@ -1578,7 +1575,6 @@ def test_lazyexpr_miniexpr_failure_falls_back_by_default(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-@pytest.mark.skipif(blosc2.IS_WASM, reason="miniexpr fast path is not available on WASM")
 def test_lazyexpr_miniexpr_failure_raises_when_strict(monkeypatch):
     import importlib
 
