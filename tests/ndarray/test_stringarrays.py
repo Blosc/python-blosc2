@@ -202,7 +202,7 @@ def test_constructors(constructor, shape):
 def test_optimised_string_comp():
     N = int(1e5)
     nparr = np.repeat(np.array(["josé", "pepe", "francisco"]), N)
-    cparams = blosc2.cparams_dflts.copy()
+    cparams = blosc2.CParams()
     arr1 = blosc2.asarray(nparr, cparams=cparams)
     cratio_subopt = arr1.cratio
     # when not providing cparams, blosc2_ext passes an optimised pipeline for string dtypes
