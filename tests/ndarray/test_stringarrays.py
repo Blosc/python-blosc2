@@ -199,15 +199,15 @@ def test_constructors(constructor, shape):
     np.testing.assert_array_equal(arr[()], nparr)
 
 
-# def test_optimised_string_comp():
-#     N = int(1e5)
-#     nparr = np.repeat(np.array(["josé", "pepe", "francisco"]), N)
-#     cparams = blosc2.cparams_dflts
-#     arr1 = blosc2.asarray(nparr, cparams=cparams)
-#     cratio_subopt = arr1.cratio
-#     # when not providing cparams, blosc2_ext passes an optimised pipeline for string dtypes
-#     arr1 = blosc2.asarray(nparr)
-#     assert arr1.cratio > cratio_subopt
+def test_optimised_string_comp():
+    N = int(1e5)
+    nparr = np.repeat(np.array(["josé", "pepe", "francisco"]), N)
+    cparams = blosc2.cparams_dflts.copy()
+    arr1 = blosc2.asarray(nparr, cparams=cparams)
+    cratio_subopt = arr1.cratio
+    # when not providing cparams, blosc2_ext passes an optimised pipeline for string dtypes
+    arr1 = blosc2.asarray(nparr)
+    assert arr1.cratio > cratio_subopt
 
 
 @pytest.mark.parametrize("shape", SHAPES)
