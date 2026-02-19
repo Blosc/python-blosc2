@@ -247,6 +247,22 @@ _REGISTER_HELPERS_JS = r"""
     if (currentBytes <= 0) {
       return null;
     }
+    const onePage = 64 * 1024;
+    let targetBytes = currentBytes + onePage;
+    const getHeapMax = resolve("getHeapMax");
+    if (typeof getHeapMax === "function") {
+      try {
+        const maxBytes = getHeapMax();
+        if (typeof maxBytes === "number" && maxBytes > 0) {
+          targetBytes = Math.min(targetBytes, maxBytes);
+        }
+      } catch (_e) {
+        /* ignore */
+      }
+    }
+    if (targetBytes <= currentBytes) {
+      return null;
+    }
 
     let captured = null;
     const originalGrow = WebAssembly.Memory.prototype.grow;
@@ -257,9 +273,9 @@ _REGISTER_HELPERS_JS = r"""
 
     try {
       if (typeof growMemory === "function") {
-        growMemory(currentBytes);
+        growMemory(targetBytes);
       } else if (typeof resizeHeap === "function") {
-        resizeHeap(currentBytes);
+        resizeHeap(targetBytes);
       }
     } catch (_e) {
       /* best effort only */
