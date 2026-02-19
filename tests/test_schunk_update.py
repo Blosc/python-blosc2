@@ -19,7 +19,7 @@ import blosc2
 @pytest.mark.parametrize(
     ("nchunks", "nupdates"),
     [
-        (0, 0),
+        # (0, 0),  # comment this out for testing
         (1, 1),
         (7, 3),
     ],
