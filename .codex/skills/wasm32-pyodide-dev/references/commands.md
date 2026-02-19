@@ -39,4 +39,3 @@ ME_DSL_TRACE=1 .venv-pyodide313/bin/python -u bench/ndarray/jit-dsl.py
 ```bash
 cp -f src/blosc2/schunk.py .venv-pyodide313/lib/python3.13/site-packages/blosc2/schunk.py
 ```
-

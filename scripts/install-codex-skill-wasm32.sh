@@ -68,4 +68,3 @@ else
   ln -s "${src_skill}" "${dst_skill}"
   echo "Linked skill to ${dst_skill}"
 fi
-
