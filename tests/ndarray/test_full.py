@@ -39,6 +39,17 @@ import blosc2
             True,
         ),
         (
+            (23, 34),
+            (20, 20),
+            (10, 10),
+            "josé",
+            None,
+            blosc2.CParams(codec=blosc2.Codec.LZ4HC, clevel=8, use_dict=False, nthreads=2),
+            {"nthreads": 2},
+            "full.b2nd",
+            True,
+        ),
+        (
             (80, 51, 60),
             (20, 10, 33),
             (6, 6, 26),
@@ -139,6 +150,7 @@ def test_full(shape, chunks, blocks, fill_value, cparams, dparams, dtype, urlpat
     [
         ((100, 1230), b"0123", None),
         ((23, 34), b"sun", None),
+        ((23, 34), "josé", None),
         ((80, 51, 60), 3.14, "f8"),
         ((13, 13), 123456789, None),
     ],
@@ -205,6 +217,7 @@ def test_complex_datatype():
             ("f_019", "<f4", (27, 363)),
             ("f_020", "S1000"),
             ("f_021", "S1000"),
+            ("f_022", "<U1000"),
         ]
     )
     a = np.zeros((256,), dtype=dtype)

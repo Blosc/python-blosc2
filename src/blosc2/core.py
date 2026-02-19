@@ -1576,7 +1576,7 @@ def compute_chunks_blocks(  # noqa: C901
                 raise ValueError("blocks cannot be greater than chunks")
         return chunks, blocks
 
-    cparams = kwargs.get("cparams") or copy.deepcopy(blosc2.cparams_dflts)
+    cparams = kwargs.get("cparams") or blosc2.CParams()  # just get defaults
     if isinstance(cparams, blosc2.CParams):
         cparams = asdict(cparams)
     # Typesize in dtype always has preference over typesize in cparams

@@ -51,7 +51,6 @@ from blosc2.info import InfoReporter
 
 from .proxy import _convert_dtype
 from .utils import (
-    NUMPY_GE_2_0,
     _get_chunk_operands,
     _sliced_chunk_iter,
     check_smaller_shape,
@@ -65,9 +64,9 @@ from .utils import (
     linalg_funcs,
     npcumprod,
     npcumsum,
-    npvecdot,
     process_key,
     reducers,
+    safe_numpy_globals,
 )
 
 if not blosc2.IS_WASM:
@@ -75,37 +74,16 @@ if not blosc2.IS_WASM:
 
 global safe_blosc2_globals
 safe_blosc2_globals = {}
-global safe_numpy_globals
-# Use numpy eval when running in WebAssembly
-safe_numpy_globals = {"np": np}
-# Add all first-level numpy functions
-safe_numpy_globals.update(
-    {name: getattr(np, name) for name in dir(np) if callable(getattr(np, name)) and not name.startswith("_")}
-)
-
-if not NUMPY_GE_2_0:  # handle non-array-api compliance
-    safe_numpy_globals["acos"] = np.arccos
-    safe_numpy_globals["acosh"] = np.arccosh
-    safe_numpy_globals["asin"] = np.arcsin
-    safe_numpy_globals["asinh"] = np.arcsinh
-    safe_numpy_globals["atan"] = np.arctan
-    safe_numpy_globals["atanh"] = np.arctanh
-    safe_numpy_globals["atan2"] = np.arctan2
-    safe_numpy_globals["permute_dims"] = np.transpose
-    safe_numpy_globals["pow"] = np.power
-    safe_numpy_globals["bitwise_left_shift"] = np.left_shift
-    safe_numpy_globals["bitwise_right_shift"] = np.right_shift
-    safe_numpy_globals["bitwise_invert"] = np.bitwise_not
-    safe_numpy_globals["concat"] = np.concatenate
-    safe_numpy_globals["matrix_transpose"] = np.transpose
-    safe_numpy_globals["vecdot"] = npvecdot
-    safe_numpy_globals["cumulative_sum"] = npcumsum
-    safe_numpy_globals["cumulative_prod"] = npcumprod
 
 # Set this to False if miniexpr should not be tried out
 try_miniexpr = True
 if blosc2.IS_WASM:
     try_miniexpr = False
+
+
+def _toggle_miniexpr(FLAG):
+    global try_miniexpr
+    try_miniexpr = FLAG
 
 
 def ne_evaluate(expression, local_dict=None, **kwargs):
@@ -134,28 +112,33 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
     try:
         return numexpr.evaluate(expression, local_dict=local_dict, **kwargs)
     except ValueError as e:
-        raise e  # unsafe expression
-    except Exception:  # non_numexpr functions present
-        global safe_blosc2_globals
-        # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp)
-        # that are implemented in python-blosc2 not in numexpr
-        if len(safe_blosc2_globals) == 0:
-            # First eval call, fill blosc2_safe_globals for ne_evaluate
-            safe_blosc2_globals = {"blosc2": blosc2}
-            # Add all first-level blosc2 functions
-            safe_blosc2_globals.update(
-                {
-                    name: getattr(blosc2, name)
-                    for name in dir(blosc2)
-                    if callable(getattr(blosc2, name)) and not name.startswith("_")
-                }
-            )
-        res = eval(expression, safe_blosc2_globals, local_dict)
-        if "out" in kwargs:
-            out = kwargs.pop("out")
-            out[:] = res  # will handle calc/decomp if res is lazyarray
-            return out
-        return res[()] if isinstance(res, blosc2.Operand) else res
+        if e.args and e.args[0] == "NumExpr 2 does not support Unicode as a dtype.":
+            pass
+        else:
+            raise e  # unsafe expression
+    except Exception:
+        pass
+    # Try with blosc2 funcs as presence of non-numexpr funcs probably caused failure
+    # ne_evaluate will need safe_blosc2_globals for some functions (e.g. clip, logaddexp,
+    # startswith, matmul) that are implemented incompletely in numexpr/miniexpr or not implemented at all
+    global safe_blosc2_globals
+    if len(safe_blosc2_globals) == 0:
+        # First eval call, fill blosc2_safe_globals
+        safe_blosc2_globals = {"blosc2": blosc2}
+        # Add all first-level blosc2 functions
+        safe_blosc2_globals.update(
+            {
+                name: getattr(blosc2, name)
+                for name in dir(blosc2)
+                if callable(getattr(blosc2, name)) and not name.startswith("_")
+            }
+        )
+    res = eval(expression, safe_blosc2_globals, local_dict)
+    if "out" in kwargs:
+        out = kwargs.pop("out")
+        out[:] = res  # will handle calc/decomp if res is lazyarray
+        return out
+    return res[()] if isinstance(res, blosc2.Operand) else res
 
 
 def _get_result(expression, chunk_operands, ne_args, where=None, indices=None, _order=None):
@@ -271,6 +254,8 @@ funcs_2args = (
     "hypot",
     "maximum",
     "minimum",
+    "startswith",
+    "endswith",
 )
 
 
@@ -2801,7 +2786,7 @@ def check_dtype(op, value1, value2):
 
 
 def result_type(
-    *arrays_and_dtypes: blosc2.NDArray | int | float | complex | bool | blosc2.dtype,
+    *arrays_and_dtypes: blosc2.NDArray | int | float | complex | bool | str | blosc2.dtype,
 ) -> blosc2.dtype:
     """
     Returns the dtype that results from applying type promotion rules (see Type Promotion Rules) to the arguments.
@@ -2819,7 +2804,7 @@ def result_type(
     # Follow NumPy rules for scalar-array operations
     # Create small arrays with the same dtypes and let NumPy's type promotion determine the result type
     arrs = [
-        value
+        (np.array(value).dtype if isinstance(value, str) else value)
         if (np.isscalar(value) or not hasattr(value, "dtype"))
         else np.array([0], dtype=_convert_dtype(value.dtype))
         for value in arrays_and_dtypes
@@ -2869,6 +2854,8 @@ class LazyExpr(LazyArray):
             if not (isinstance(value1, (blosc2.Operand, np.ndarray)) or np.isscalar(value1))
             else value1
         )
+        # Reset values represented as np.int64 etc. to be set as Python natives
+        value1 = value1.item() if np.isscalar(value1) and hasattr(value1, "item") else value1
         if value2 is None:
             if isinstance(value1, LazyExpr):
                 self.expression = value1.expression if op is None else f"{op}({value1.expression})"
@@ -2881,7 +2868,7 @@ class LazyExpr(LazyArray):
                 self.operands = value1.operands
             else:
                 if np.isscalar(value1):
-                    value1 = ne_evaluate(f"{op}({value1})")
+                    value1 = ne_evaluate(f"{op}({value1!r})")
                     op = None
                 self.operands = {"o0": value1}
                 self.expression = "o0" if op is None else f"{op}(o0)"
@@ -2891,6 +2878,9 @@ class LazyExpr(LazyArray):
             if not (isinstance(value2, (blosc2.Operand, np.ndarray)) or np.isscalar(value2))
             else value2
         )
+        # Reset values represented as np.int64 etc. to be set as Python natives
+        value2 = value2.item() if np.isscalar(value2) and hasattr(value2, "item") else value2
+
         if isinstance(value1, LazyExpr) or isinstance(value2, LazyExpr):
             if isinstance(value1, LazyExpr):
                 newexpr = value1.update_expr(new_op)
@@ -2903,13 +2893,13 @@ class LazyExpr(LazyArray):
         elif op in funcs_2args:
             if np.isscalar(value1) and np.isscalar(value2):
                 self.expression = "o0"
-                self.operands = {"o0": ne_evaluate(f"{op}({value1}, {value2})")}  # eager evaluation
+                self.operands = {"o0": ne_evaluate(f"{op}({value1!r}, {value2!r})")}  # eager evaluation
             elif np.isscalar(value2):
                 self.operands = {"o0": value1}
-                self.expression = f"{op}(o0, {value2})"
+                self.expression = f"{op}(o0, {value2!r})"
             elif np.isscalar(value1):
                 self.operands = {"o0": value2}
-                self.expression = f"{op}({value1}, o0)"
+                self.expression = f"{op}({value1!r}, o0)"
             else:
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"{op}(o0, o1)"
@@ -2918,16 +2908,16 @@ class LazyExpr(LazyArray):
         self._dtype = dtype_
         if np.isscalar(value1) and np.isscalar(value2):
             self.expression = "o0"
-            self.operands = {"o0": ne_evaluate(f"({value1} {op} {value2})")}  # eager evaluation
+            self.operands = {"o0": ne_evaluate(f"({value1!r} {op} {value2!r})")}  # eager evaluation
         elif np.isscalar(value2):
             self.operands = {"o0": value1}
-            self.expression = f"(o0 {op} {value2})"
+            self.expression = f"(o0 {op} {value2!r})"
         elif hasattr(value2, "shape") and value2.shape == ():
             self.operands = {"o0": value1}
             self.expression = f"(o0 {op} {value2[()]})"
         elif np.isscalar(value1):
             self.operands = {"o0": value2}
-            self.expression = f"({value1} {op} o0)"
+            self.expression = f"({value1!r} {op} o0)"
         elif hasattr(value1, "shape") and value1.shape == ():
             self.operands = {"o0": value2}
             self.expression = f"({value1[()]} {op} o0)"
@@ -4095,7 +4085,7 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
             for key, value in operands.items()
         }
 
-    if "contains" in expression:
+    if np.any([a in expression for a in ["contains", "startswith", "endswith"]]):
         _out = ne_evaluate(expression, local_dict=ops)
     else:
         # Create a globals dict with blosc2 version of functions preferentially

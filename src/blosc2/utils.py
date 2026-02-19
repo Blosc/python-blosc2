@@ -7,6 +7,7 @@
 
 import ast
 import builtins
+import inspect
 import math
 import warnings
 from itertools import product
@@ -45,6 +46,38 @@ else:  # not array-api compliant
         return np.einsum("...i,...i->...", np.moveaxis(np.conj(a), axis, -1), np.moveaxis(b, axis, -1))
 
 
+global safe_numpy_globals
+# Use numpy eval when running in WebAssembly
+safe_numpy_globals = {"np": np}
+# Add all first-level numpy functions
+safe_numpy_globals.update(
+    {name: getattr(np, name) for name in dir(np) if callable(getattr(np, name)) and not name.startswith("_")}
+)
+
+if not NUMPY_GE_2_0:  # handle non-array-api compliance
+    safe_numpy_globals["acos"] = np.arccos
+    safe_numpy_globals["acosh"] = np.arccosh
+    safe_numpy_globals["asin"] = np.arcsin
+    safe_numpy_globals["asinh"] = np.arcsinh
+    safe_numpy_globals["atan"] = np.arctan
+    safe_numpy_globals["atanh"] = np.arctanh
+    safe_numpy_globals["atan2"] = np.arctan2
+    safe_numpy_globals["permute_dims"] = np.transpose
+    safe_numpy_globals["pow"] = np.power
+    safe_numpy_globals["bitwise_left_shift"] = np.left_shift
+    safe_numpy_globals["bitwise_right_shift"] = np.right_shift
+    safe_numpy_globals["bitwise_invert"] = np.bitwise_not
+    safe_numpy_globals["concat"] = np.concatenate
+    safe_numpy_globals["matrix_transpose"] = np.transpose
+    safe_numpy_globals["vecdot"] = npvecdot
+    safe_numpy_globals["cumulative_sum"] = npcumsum
+    safe_numpy_globals["cumulative_prod"] = npcumprod
+    # handle different naming conventions between numpy and blosc2
+    safe_numpy_globals["contains"] = lambda *args: np.char.find(*args) != -1
+    safe_numpy_globals["startswith"] = np.char.startswith
+    safe_numpy_globals["endswith"] = np.char.endswith
+
+
 elementwise_funcs = [
     "abs",
     "acos",
@@ -77,6 +110,7 @@ elementwise_funcs = [
     "cos",
     "cosh",
     "divide",
+    "endswith",
     "equal",
     "exp",
     "expm1",
@@ -118,6 +152,7 @@ elementwise_funcs = [
     "sinh",
     "sqrt",
     "square",
+    "startswith",
     "subtract",
     "tan",
     "tanh",
@@ -873,6 +908,49 @@ def process_key(key, shape):
     )  # mask to track dummy dims introduced by int -> slice(k, k+1)
     key = tuple(slice(k, k + 1, None) if isinstance(k, int) else k for k in key)  # key is slice, None, int
     return key, mask
+
+
+incomplete_lazyfunc_map = {
+    "contains": lambda *args: np.char.find(*args) != -1,
+    "startswith": lambda *args: np.char.startswith(*args),
+    "endswith": lambda *args: np.char.endswith(*args),
+} | safe_numpy_globals  # clip and logaddexp available in safe_numpy_globals
+
+
+def is_inside_ne_evaluate() -> bool:
+    """
+    Whether the current code is being executed from an ne_evaluate call
+    """
+    # Get the current call stack
+    stack = inspect.stack()
+    return builtins.any(frame_info.function in {"ne_evaluate"} for frame_info in stack)
+
+
+def _incomplete_lazyfunc(func) -> None:
+    """Decorator for lazy functions with incomplete numexpr/miniexpr coverage.
+
+    This function will force eager execution when called from ne_evaluate.
+
+    Returns
+    -------
+    out: None
+
+    Examples
+    --------
+    .. code-block:: python
+
+        @incomplete_lazyfunc()
+        def filler(inputs_tuple, output, offset):
+            output[:] = inputs_tuple[0] - inputs_tuple[1]
+
+    """
+
+    def wrapper(*args, **kwargs):
+        if is_inside_ne_evaluate():  # haven't been able to use miniexpr so use numpy
+            return incomplete_lazyfunc_map[func.__name__](*args, **kwargs)
+        return func(*args, **kwargs)
+
+    return wrapper
 
 
 def check_smaller_shape(value_shape, shape, slice_shape, slice_):
