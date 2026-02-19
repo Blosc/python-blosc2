@@ -973,9 +973,7 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
 
 def compress2(src, **kwargs):
     cdef blosc2_cparams cparams
-    print('default typesize:', blosc2.cparams_dflts['typesize'])
     create_cparams_from_kwargs(&cparams, kwargs)
-    print('typesize set to:',cparams.typesize)
 
     cdef blosc2_context *cctx
     cdef Py_buffer buf
@@ -1435,7 +1433,7 @@ cdef class SChunk:
                 return dst
 
         if size < 0:
-            raise RuntimeError(f"Error while decompressing the specified chunk, error {size}")
+            raise RuntimeError(f"Error while decompressing the specified chunk, error code: {size}")
 
     def get_chunk(self, nchunk):
         cdef uint8_t *chunk
