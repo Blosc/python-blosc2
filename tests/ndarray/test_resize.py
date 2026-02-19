@@ -17,6 +17,9 @@ import blosc2
         ((100, 1230), (200, 1230), (200, 100), (55, 3), b"0123"),
         ((23, 34), (23, 120), (20, 20), (10, 10), 1234),
         ((80, 51, 60), (80, 100, 100), (20, 10, 33), (6, 6, 26), 3.333),
+        ((0,), (4,), (20,), (6,), 3.333),
+        ((0, 0, 0), (4, 4, 100), (20, 10, 33), (6, 6, 26), 3.333),
+        ((0, 0, 0), (40, 40, 10), (3, 3, 7), (2, 2, 5), 1),
     ],
 )
 def test_resize(shape, new_shape, chunks, blocks, fill_value):
@@ -25,6 +28,12 @@ def test_resize(shape, new_shape, chunks, blocks, fill_value):
     a.resize(new_shape)
     assert a.shape == new_shape
     slices = tuple(slice(s) for s in shape)
+    if 0 not in shape:
+        slices = tuple(slice(s) for s in shape)
+    else:
+        np.testing.assert_array_equal(np.zeros(new_shape), a)
+        return
+
     for i in np.nditer(a[slices]):
         assert i == fill_value
 

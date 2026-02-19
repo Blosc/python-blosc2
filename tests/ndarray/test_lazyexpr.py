@@ -90,6 +90,44 @@ def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
     return a1, a2, a3, a4, na1, na2, na3, na4
 
 
+def test_operandmethods_scalar(shape_fixture, dtype_fixture):
+    nelems = np.prod(shape_fixture)
+    na1 = np.linspace(1, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
+    a1 = blosc2.asarray(na1)
+    scalar = 10
+
+    # Test __r***__ methods
+    for expr in (
+        scalar + a1,
+        scalar - a1,
+        scalar * a1,
+        scalar / a1,
+        scalar // a1,
+        scalar**a1,
+        scalar % a1,
+    ):
+        assert expr[()].shape == expr.shape
+
+    # Test __i***__ methods
+    a1 += scalar
+    a1 -= scalar
+    a1 *= scalar
+    a1 /= scalar
+    a1 //= scalar
+    a1 **= scalar
+    a1 %= scalar
+
+    a1 = blosc2.asarray(na1, dtype=np.int64)
+    for expr in (scalar & a1, scalar | a1, scalar ^ a1, scalar << a1, scalar >> a1):
+        assert expr[()].shape == expr.shape
+
+    a1 &= scalar
+    a1 |= scalar
+    a1 ^= scalar
+    a1 <<= scalar
+    a1 >>= scalar
+
+
 def test_simple_getitem(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 - a3 * a4

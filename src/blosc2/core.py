@@ -1550,7 +1550,7 @@ def compute_chunks_blocks(  # noqa: C901
     """
 
     # Return an arbitrary value for chunks and blocks when shape has any 0 dim
-    if 0 in shape:
+    if 0 in shape and chunks is None and blocks is None:
         return shape, shape
 
     if blocks:
@@ -1559,18 +1559,16 @@ def compute_chunks_blocks(  # noqa: C901
         if len(blocks) != len(shape):
             raise ValueError("blocks should have the same length than shape")
         for block, dim in zip(blocks, shape, strict=True):
-            if block == 0:
-                raise ValueError("blocks cannot contain 0 dimension")
-            if dim == 1 and block > dim:
-                raise ValueError("blocks cannot be greater than shape if it is 1")
+            if block == 0 and dim != 0:
+                raise ValueError("blocks cannot contain 0 dimension if shape is not zero")
     if chunks:
         if not isinstance(chunks, tuple | list):
             chunks = [chunks]
         if len(chunks) != len(shape):
             raise ValueError("chunks should have the same length than shape")
         for chunk, dim in zip(chunks, shape, strict=True):
-            if dim == 1 and chunk > dim:
-                raise ValueError("chunks cannot be greater than shape if it is 1")
+            if chunk == 0 and dim != 0:
+                raise ValueError("chunks cannot contain 0 dimension if shape is not zero")
 
     if chunks is not None and blocks is not None:
         for block, chunk in zip(blocks, chunks, strict=True):
@@ -1660,7 +1658,7 @@ def compute_chunks_blocks(  # noqa: C901
     if chunks is None:
         maxshape = shape
     else:
-        maxshape = [min(els) for els in zip(chunks, shape, strict=True)]
+        maxshape = chunks
     blocks = compute_partition(blocksize // itemsize, maxshape)
 
     # Finally, the chunks
