@@ -394,20 +394,26 @@ class DictStore:
                 if self.is_zip_store:
                     if filepath in self.offsets:
                         offset = self.offsets[filepath]["offset"]
-                        yield key, blosc2.blosc2_ext.open(
-                            self.b2z_path,
-                            mode="r",
-                            offset=offset,
-                            mmap_mode=self.mmap_mode,
-                            dparams=self.dparams,
+                        yield (
+                            key,
+                            blosc2.blosc2_ext.open(
+                                self.b2z_path,
+                                mode="r",
+                                offset=offset,
+                                mmap_mode=self.mmap_mode,
+                                dparams=self.dparams,
+                            ),
                         )
                 else:
                     urlpath = os.path.join(self.working_dir, filepath)
-                    yield key, blosc2.open(
-                        urlpath,
-                        mode="r" if self.mode == "r" else "a",
-                        mmap_mode=self.mmap_mode if self.mode == "r" else None,
-                        dparams=self.dparams,
+                    yield (
+                        key,
+                        blosc2.open(
+                            urlpath,
+                            mode="r" if self.mode == "r" else "a",
+                            mmap_mode=self.mmap_mode if self.mode == "r" else None,
+                            dparams=self.dparams,
+                        ),
                     )
             elif key in self._estore:
                 yield key, self._estore[key]
