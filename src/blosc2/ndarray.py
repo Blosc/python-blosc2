@@ -5882,7 +5882,7 @@ def astype(
     return asarray(array, dtype=dtype, casting=casting, copy=copy, **kwargs)
 
 
-def _check_ndarray_kwargs(**kwargs):
+def _check_ndarray_kwargs(**kwargs):  # noqa: C901
     storage = kwargs.get("storage")
     if storage is not None:
         for key in kwargs:
