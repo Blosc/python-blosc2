@@ -616,7 +616,6 @@ cdef extern from "miniexpr.h":
                    int64_t nchunk, int64_t nblock, const me_eval_params *params) nogil
 
     int me_nd_valid_nitems(const me_expr *expr, int64_t nchunk, int64_t nblock, int64_t *valid_nitems) nogil
-    const char *me_get_last_error_message()
 
     void me_print(const me_expr *n) nogil
     void me_free(me_expr *n) nogil
@@ -746,6 +745,39 @@ cdef inline me_dtype _me_dtype_from_numpy_dtype(dtype_obj):
         if itemsize == 16:
             return ME_COMPLEX128
     return <me_dtype>-1
+
+
+cdef inline str _me_compile_status_name(int rc):
+    if rc == ME_COMPILE_SUCCESS:
+        return "ME_COMPILE_SUCCESS"
+    if rc == ME_COMPILE_ERR_OOM:
+        return "ME_COMPILE_ERR_OOM"
+    if rc == ME_COMPILE_ERR_PARSE:
+        return "ME_COMPILE_ERR_PARSE"
+    if rc == ME_COMPILE_ERR_INVALID_ARG:
+        return "ME_COMPILE_ERR_INVALID_ARG"
+    if rc == ME_COMPILE_ERR_COMPLEX_UNSUPPORTED:
+        return "ME_COMPILE_ERR_COMPLEX_UNSUPPORTED"
+    if rc == ME_COMPILE_ERR_REDUCTION_INVALID:
+        return "ME_COMPILE_ERR_REDUCTION_INVALID"
+    if rc == ME_COMPILE_ERR_VAR_MIXED:
+        return "ME_COMPILE_ERR_VAR_MIXED"
+    if rc == ME_COMPILE_ERR_VAR_UNSPECIFIED:
+        return "ME_COMPILE_ERR_VAR_UNSPECIFIED"
+    if rc == ME_COMPILE_ERR_INVALID_ARG_TYPE:
+        return "ME_COMPILE_ERR_INVALID_ARG_TYPE"
+    if rc == ME_COMPILE_ERR_MIXED_TYPE_NESTED:
+        return "ME_COMPILE_ERR_MIXED_TYPE_NESTED"
+    return "ME_COMPILE_ERR_UNKNOWN"
+
+
+cdef inline str _me_compile_error_details(int rc, int error):
+    cdef str details = f"{_me_compile_status_name(rc)} ({rc})"
+    if rc == ME_COMPILE_ERR_PARSE and error > 0:
+        details += f", parse_error_pos={error}"
+    elif error != 0:
+        details += f", error_pos={error}"
+    return details
 
 
 @cython.boundscheck(False)
@@ -3070,24 +3102,31 @@ cdef class NDArray:
             var.context = NULL
 
         cdef int error = 0
-        expression = expression.encode("utf-8") if isinstance(expression, str) else expression
+        cdef bytes expression_bytes
+        cdef str expression_display
+        if isinstance(expression, str):
+            expression_display = expression
+            expression_bytes = (<str>expression).encode("utf-8")
+        elif isinstance(expression, bytes):
+            expression_bytes = expression
+            expression_display = (<bytes>expression).decode("utf-8", "replace")
+        else:
+            expression_display = str(expression)
+            expression_bytes = expression_display.encode("utf-8")
         cdef me_dtype = me_output_dtype
         cdef me_expr *out_expr
         cdef int ndims = self.array.ndim
         cdef int64_t* shape = &self.array.shape[0]
         cdef int32_t* chunkshape = &self.array.chunkshape[0]
         cdef int32_t* blockshape = &self.array.blockshape[0]
-        cdef int rc = me_compile_nd_jit(expression, variables, n, me_dtype, ndims,
+        cdef int rc = me_compile_nd_jit(expression_bytes, variables, n, me_dtype, ndims,
                                         shape, chunkshape, blockshape, jit_mode,
                                         &error, &out_expr)
-        cdef const char *me_error = me_get_last_error_message()
-        cdef str me_error_msg = ""
-        if me_error != NULL and strlen(me_error) > 0:
-            me_error_msg = (<bytes> me_error).decode("utf-8")
+        cdef str me_error_msg = _me_compile_error_details(rc, error)
         if rc == ME_COMPILE_ERR_INVALID_ARG_TYPE:
-            raise TypeError(f"miniexpr does not support operand or output dtype: {expression}; details: {me_error_msg}")
+            raise TypeError(f"miniexpr does not support operand or output dtype: {expression_display}; details: {me_error_msg}")
         if rc != ME_COMPILE_SUCCESS:
-            raise NotImplementedError(f"Cannot compile expression: {expression}; details: {me_error_msg}")
+            raise NotImplementedError(f"Cannot compile expression: {expression_display}; details: {me_error_msg}")
         udata.miniexpr_handle = out_expr
 
         # Free resources
