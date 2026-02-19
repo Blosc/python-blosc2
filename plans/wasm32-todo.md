@@ -46,8 +46,9 @@ Scope for this list:
    - Fix applied: removed wasm-only non-DSL miniexpr gate in `src/blosc2/lazyexpr.py` (`fast_eval`).
    - Result: skips removed and all four tests pass on local Pyodide.
 
-7. [ ] Revisit int-cast DSL behavior currently expected to fail on wasm.
+7. [x] Revisit int-cast DSL behavior currently expected to fail on wasm.
    - Target: `tests/ndarray/test_dsl_kernels.py::test_dsl_kernel_index_symbols_int_cast_matches_expected_ramp`
-   - Current local behavior (still expected): raises `RuntimeError` on wasm (`DSL kernels require miniexpr ... miniexpr compilation or execution failed`).
-   - Rationale for keeping open: int-cast DSL/miniexpr on wasm remains unsupported in current runtime/backend.
-   - Exit criteria: either (a) support `int(...)` casts in wasm miniexpr path, or (b) keep explicit unsupported policy with doc note.
+   - Current local behavior: succeeds on wasm and matches expected `int64` ramp output.
+   - 2026-02-19 retest after updating `CMakeLists.txt` to a newer miniexpr and rebuilding `cp313` wasm wheel (`SHA256=45e128507d91ffd535cc070d6846ee970e0054aeeb04bb1336eb454571aa41f5`): behavior unchanged; direct `expr[:]` evaluation still raises.
+   - 2026-02-19 retest after pinning miniexpr to `f5e276a151025f9307819c329a033f3f5293a714` and rebuilding `cp313` wasm wheel (`SHA256=cc2ca236ec419da8eeaea464af1fa39db5208ba09f5759952e3b5c44999f55a5`): behavior still unchanged (`expr[:]` raises), but chained cause now includes compile diagnostics (`details: failed to compile DSL expression`).
+   - 2026-02-19 retest after fixing wasm-safe dtype mapping in `src/blosc2/blosc2_ext.pyx` and rebuilding `cp313` wasm wheel (`SHA256=fc96898e332e069bfc6764c4243f75eced41cb3837252927fb4098ad6d3972f8`): direct `expr[:]` now succeeds on wasm (`int64`, ramp 0..159), and the previous wasm-only `RuntimeError` expectation was removed from the test.

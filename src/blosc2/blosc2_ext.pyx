@@ -616,6 +616,7 @@ cdef extern from "miniexpr.h":
                    int64_t nchunk, int64_t nblock, const me_eval_params *params) nogil
 
     int me_nd_valid_nitems(const me_expr *expr, int64_t nchunk, int64_t nblock, int64_t *valid_nitems) nogil
+    const char *me_get_last_error_message()
 
     void me_print(const me_expr *n) nogil
     void me_free(me_expr *n) nogil
@@ -708,6 +709,43 @@ def _register_wasm_jit_helpers(uintptr_t instantiate_ptr, uintptr_t free_ptr):
     )
     cdef me_wasm_jit_free_helper free_helper = <me_wasm_jit_free_helper>free_ptr
     me_register_wasm_jit_helpers(instantiate_helper, free_helper)
+
+
+cdef inline me_dtype _me_dtype_from_numpy_dtype(dtype_obj):
+    dtype = np.dtype(dtype_obj)
+    cdef int itemsize = <int>dtype.itemsize
+    kind = dtype.kind
+    if kind == "b":
+        return ME_BOOL
+    if kind == "i":
+        if itemsize == 1:
+            return ME_INT8
+        if itemsize == 2:
+            return ME_INT16
+        if itemsize == 4:
+            return ME_INT32
+        if itemsize == 8:
+            return ME_INT64
+    elif kind == "u":
+        if itemsize == 1:
+            return ME_UINT8
+        if itemsize == 2:
+            return ME_UINT16
+        if itemsize == 4:
+            return ME_UINT32
+        if itemsize == 8:
+            return ME_UINT64
+    elif kind == "f":
+        if itemsize == 4:
+            return ME_FLOAT32
+        if itemsize == 8:
+            return ME_FLOAT64
+    elif kind == "c":
+        if itemsize == 8:
+            return ME_COMPLEX64
+        if itemsize == 16:
+            return ME_COMPLEX128
+    return <me_dtype>-1
 
 
 @cython.boundscheck(False)
@@ -3012,19 +3050,28 @@ cdef class NDArray:
         if variables == NULL:
             raise MemoryError()
         cdef me_variable *var
+        cdef np.dtype out_np_dtype = np.dtype(self.dtype)
+        cdef me_dtype me_output_dtype = _me_dtype_from_numpy_dtype(out_np_dtype)
+        if <int>me_output_dtype < 0:
+            raise TypeError(f"miniexpr does not support output dtype: {out_np_dtype}")
+
+        cdef np.dtype operand_dtype
         for i, (k, v) in enumerate(inputs.items()):
             var = &variables[i]
             var_name = k.encode("utf-8") if isinstance(k, str) else k
             var.name = <char *> malloc(strlen(var_name) + 1)
             strcpy(var.name, var_name)
-            var.dtype = me_dtype_from_numpy(v.dtype.num)
+            operand_dtype = np.dtype(v.dtype)
+            var.dtype = _me_dtype_from_numpy_dtype(operand_dtype)
+            if <int>var.dtype < 0:
+                raise TypeError(f"miniexpr does not support operand dtype '{operand_dtype}' for input '{k}'")
             var.address = NULL  # chunked compile: addresses provided later
             var.type = 0  # auto-set to ME_VARIABLE inside compiler
             var.context = NULL
 
         cdef int error = 0
         expression = expression.encode("utf-8") if isinstance(expression, str) else expression
-        cdef me_dtype = me_dtype_from_numpy(self.dtype.num)
+        cdef me_dtype = me_output_dtype
         cdef me_expr *out_expr
         cdef int ndims = self.array.ndim
         cdef int64_t* shape = &self.array.shape[0]
@@ -3033,10 +3080,14 @@ cdef class NDArray:
         cdef int rc = me_compile_nd_jit(expression, variables, n, me_dtype, ndims,
                                         shape, chunkshape, blockshape, jit_mode,
                                         &error, &out_expr)
+        cdef const char *me_error = me_get_last_error_message()
+        cdef str me_error_msg = ""
+        if me_error != NULL and strlen(me_error) > 0:
+            me_error_msg = (<bytes> me_error).decode("utf-8")
         if rc == ME_COMPILE_ERR_INVALID_ARG_TYPE:
-            raise TypeError(f"miniexpr does not support operand or output dtype: {expression}")
+            raise TypeError(f"miniexpr does not support operand or output dtype: {expression}; details: {me_error_msg}")
         if rc != ME_COMPILE_SUCCESS:
-            raise NotImplementedError(f"Cannot compile expression: {expression}")
+            raise NotImplementedError(f"Cannot compile expression: {expression}; details: {me_error_msg}")
         udata.miniexpr_handle = out_expr
 
         # Free resources

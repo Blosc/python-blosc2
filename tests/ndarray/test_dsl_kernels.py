@@ -304,10 +304,6 @@ def test_dsl_kernel_index_symbols_int_cast_matches_expected_ramp():
     shape = (32, 5)
     x2 = blosc2.zeros(shape, dtype=np.float32)
     expr = blosc2.lazyudf(kernel_index_ramp_int_cast, (x2,), dtype=np.int64)
-    if blosc2.IS_WASM:
-        with pytest.raises(RuntimeError, match="DSL kernels require miniexpr"):
-            _ = expr[:]
-        return
     if _windows_policy_blocks_dsl_dtype(np.int64, operand_dtypes=(x2.dtype,)):
         with pytest.raises(RuntimeError, match="DSL kernels require miniexpr"):
             _ = expr[:]
