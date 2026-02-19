@@ -44,7 +44,7 @@ def test_schunk_insert_numpy(contiguous, urlpath, nchunks, ninserts, copy, creat
         pos = random.randint(0, nchunks + i)
         buffer = pos * np.arange(200 * 1000, dtype="int32")
         if create_chunk:
-            chunk = blosc2.compress2(buffer, typesize=4)
+            chunk = blosc2.compress2(buffer)
             schunk.insert_chunk(pos, chunk)
         else:
             schunk.insert_data(pos, buffer, copy)

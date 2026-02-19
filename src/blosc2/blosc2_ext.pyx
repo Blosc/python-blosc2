@@ -974,6 +974,7 @@ cdef create_cparams_from_kwargs(blosc2_cparams *cparams, kwargs):
 def compress2(src, **kwargs):
     cdef blosc2_cparams cparams
     create_cparams_from_kwargs(&cparams, kwargs)
+    print(cparams.typesize, cparams.filters_meta)
 
     cdef blosc2_context *cctx
     cdef Py_buffer buf
