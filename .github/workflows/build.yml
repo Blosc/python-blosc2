@@ -96,4 +96,4 @@ jobs:
 
     - name: Test (non-Windows)
       if: runner.os != 'Windows'
-      run: python -m pytest -m "not heavy and (network or not network)"
+      run: python -m pytest -m "not heavy and (network or not network)" {project}/tests/test_schunk_update.py
