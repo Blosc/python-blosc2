@@ -25,9 +25,6 @@ jobs:
       CIBW_TEST_COMMAND: >-
         pytest -s -m ""
         {project}/tests
-        {project}/src/blosc2/core.py
-        {project}/src/blosc2/ndarray.py
-        {project}/src/blosc2/schunk.py
     strategy:
       matrix:
         os: [ubuntu-latest]
