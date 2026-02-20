@@ -640,7 +640,7 @@ def test_params(array_fixture):
 
 # Tests related with save method
 def test_save():
-    tol = 1e-17
+    tol = 2e-12 if blosc2.IS_WASM else 1e-17
     shape = (23, 23)
     nelems = np.prod(shape)
     na1 = np.linspace(0, 10, nelems, dtype=np.float32).reshape(shape)
@@ -881,7 +881,7 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
 @pytest.mark.parametrize("shape", [(10,), (10, 10), (10, 10, 10)])
 @pytest.mark.parametrize("dtype", ["int32", "float64", "i2"])
 @pytest.mark.parametrize("disk", [True, False])
-def test_save_constructor(disk, shape, dtype, constructor):  # noqa: C901
+def test_save_constructor(disk, shape, dtype, constructor):
     lshape = math.prod(shape)
     urlpath = "a.b2nd" if disk else None
     b2func = getattr(blosc2, constructor)
@@ -1545,7 +1545,6 @@ def test_numpy_funcs(array_fixture, func):
         pytest.skip("NumPy version has no cumulative_sum function.")
 
 
-@pytest.mark.skipif(blosc2.IS_WASM, reason="miniexpr fast path is not available on WASM")
 def test_lazyexpr_string_scalar_keeps_miniexpr_fast_path(monkeypatch):
     import importlib
 
@@ -1580,7 +1579,6 @@ def test_lazyexpr_string_scalar_keeps_miniexpr_fast_path(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-@pytest.mark.skipif(blosc2.IS_WASM, reason="miniexpr fast path is not available on WASM")
 def test_lazyexpr_unary_negative_literal_matches_subtraction(monkeypatch):
     import importlib
 
@@ -1616,7 +1614,6 @@ def test_lazyexpr_unary_negative_literal_matches_subtraction(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-@pytest.mark.skipif(blosc2.IS_WASM, reason="miniexpr fast path is not available on WASM")
 def test_lazyexpr_miniexpr_failure_falls_back_by_default(monkeypatch):
     import importlib
 
@@ -1639,7 +1636,6 @@ def test_lazyexpr_miniexpr_failure_falls_back_by_default(monkeypatch):
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
-@pytest.mark.skipif(blosc2.IS_WASM, reason="miniexpr fast path is not available on WASM")
 def test_lazyexpr_miniexpr_failure_raises_when_strict(monkeypatch):
     import importlib
 

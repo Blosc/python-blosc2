@@ -32,7 +32,7 @@ def _normalize_miniexpr_scalar(value):
             value = value.item()
     if isinstance(value, bool):
         return int(value)
-    if isinstance(value, int | float):
+    if isinstance(value, int | float | str):
         return value
     raise TypeError("Unsupported scalar type for miniexpr specialization")
 
@@ -216,7 +216,7 @@ def specialize_miniexpr_inputs(expr_string: str, operands: dict):
         if hasattr(value, "shape") and value.shape == ():
             scalar_replacements[name] = _normalize_miniexpr_scalar(value[()])
             continue
-        if isinstance(value, int | float | bool) or (hasattr(value, "item") and callable(value.item)):
+        if isinstance(value, int | float | bool | str) or (hasattr(value, "item") and callable(value.item)):
             try:
                 scalar_replacements[name] = _normalize_miniexpr_scalar(value)
                 continue

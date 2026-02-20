@@ -251,7 +251,7 @@ def test_delete_subtree():
     os.remove("test_delete.b2z")
 
 
-def test_subtree_walk():  # noqa: C901
+def test_subtree_walk():
     """Test walking within a subtree."""
     with TreeStore("test_subtree_walk.b2z", mode="w") as tstore:
         # Create structure without assigning to structural paths

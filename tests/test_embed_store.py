@@ -63,7 +63,10 @@ def test_with_remote(populate_nodes):
     # Re-open the estore to add a remote node
     estore = blosc2.EmbedStore(urlpath="test_estore.b2e")
     urlpath = blosc2.URLPath("@public/examples/ds-1d.b2nd", "https://cat2.cloud/demo/")
-    arr_remote = blosc2.open(urlpath, mode="r")
+    try:
+        arr_remote = blosc2.open(urlpath, mode="r")
+    except Exception as exc:
+        pytest.skip(f"Remote C2 access unavailable in this environment: {exc}")
     estore["/node4"] = arr_remote
 
     estore_read = blosc2.EmbedStore(urlpath="test_estore.b2e", mode="r")

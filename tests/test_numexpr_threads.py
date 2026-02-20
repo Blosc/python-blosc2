@@ -9,6 +9,10 @@ import os
 import subprocess
 import sys
 
+import pytest
+
+import blosc2
+
 
 def test_numexpr_max_threads_no_warning():
     """Test that importing blosc2 with NUMEXPR_MAX_THREADS set does not produce a warning.
@@ -18,6 +22,9 @@ def test_numexpr_max_threads_no_warning():
     the numexpr warning being printed to stderr.
     """
     # Inherit the current environment but set NUMEXPR_MAX_THREADS to a low value
+    if blosc2.IS_WASM:
+        pytest.skip("subprocess is not supported on emscripten/wasm32")
+
     env = os.environ.copy()
     env["NUMEXPR_MAX_THREADS"] = "1"
 

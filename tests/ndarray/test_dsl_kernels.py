@@ -200,9 +200,6 @@ def test_dsl_kernel_integer_ops_kept_as_full_dsl_function():
 
 
 def test_dsl_kernel_index_symbols_keep_full_kernel(monkeypatch):
-    if blosc2.IS_WASM:
-        pytest.skip("miniexpr fast path is not available on WASM")
-
     assert kernel_index_ramp.dsl_source is not None
     assert "def kernel_index_ramp(x):" in kernel_index_ramp.dsl_source
 
@@ -257,9 +254,6 @@ def test_dsl_kernel_with_no_inputs_requires_shape_or_out():
 
 
 def test_dsl_kernel_with_no_inputs_handles_windows_dtype_policy(monkeypatch):
-    if blosc2.IS_WASM:
-        pytest.skip("miniexpr fast path is not available on WASM")
-
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
@@ -282,9 +276,6 @@ def test_dsl_kernel_index_symbols_float_cast_matches_expected_ramp():
 
 
 def test_dsl_kernel_index_symbols_float_cast_uses_miniexpr_fast_path(monkeypatch):
-    if blosc2.IS_WASM:
-        pytest.skip("miniexpr fast path is not available on WASM")
-
     original_set_pref_expr = blosc2.NDArray._set_pref_expr
     captured = {"calls": 0, "expr": None}
 
@@ -407,9 +398,6 @@ def test_dsl_kernel_accepts_scalar_param_per_call():
 
 
 def test_dsl_kernel_scalar_param_keeps_miniexpr_fast_path(monkeypatch):
-    if blosc2.IS_WASM:
-        pytest.skip("miniexpr fast path is not available on WASM")
-
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
@@ -452,9 +440,6 @@ def test_dsl_kernel_scalar_param_keeps_miniexpr_fast_path(monkeypatch):
 
 
 def test_dsl_kernel_scalar_float_cast_inlined_without_float_call(monkeypatch):
-    if blosc2.IS_WASM:
-        pytest.skip("miniexpr fast path is not available on WASM")
-
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
@@ -490,9 +475,6 @@ def test_dsl_kernel_scalar_float_cast_inlined_without_float_call(monkeypatch):
 
 
 def test_dsl_kernel_miniexpr_failure_raises_even_with_strict_disabled(monkeypatch):
-    if blosc2.IS_WASM:
-        pytest.skip("miniexpr fast path is not available on WASM")
-
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
@@ -516,9 +498,6 @@ def test_dsl_kernel_miniexpr_failure_raises_even_with_strict_disabled(monkeypatc
 
 
 def test_lazyudf_jit_policy_forwarding(monkeypatch):
-    if blosc2.IS_WASM:
-        pytest.skip("miniexpr fast path is not available on WASM")
-
     import importlib
 
     lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")

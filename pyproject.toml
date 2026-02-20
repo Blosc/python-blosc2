@@ -121,6 +121,9 @@ ignore = [
     "PT011",
     "RET505",
     "RET508",
+    "RUF001",
+    "RUF002",
+    "RUF003",
     "RUF005",
     "RUF015",
     "RUF059",
@@ -128,7 +131,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.extend-per-file-ignores]
-"tests/**" = ["F841"]
+"tests/**" = ["F841", "C901"]
 
 [tool.ruff.lint.mccabe]
 # Raise complexity from the default 10 to 13

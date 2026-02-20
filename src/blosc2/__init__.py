@@ -73,6 +73,8 @@ def _configure_libtcc_runtime_path():
 
 _configure_libtcc_runtime_path()
 
+_WASM_MINIEXPR_ENABLED = not IS_WASM
+
 __version__ = __version__
 __array_api_version__ = __array_api_version__
 """
@@ -244,6 +246,11 @@ The C-Blosc2 version's date."""
 VERSION_STRING = VERSION_STRING
 """
 The C-Blosc2 version's string."""
+
+if IS_WASM:
+    from ._wasm_jit import init_wasm_jit_helpers
+
+    _WASM_MINIEXPR_ENABLED = init_wasm_jit_helpers()
 
 
 # For array-api compatibility
@@ -452,11 +459,15 @@ nthreads = ncores = cpu_info.get("count", 1)
 """
 # Protection against too many threads
 nthreads = min(nthreads, 64)
-# Experiments say that, when using a large number of threads, it is better to not use them all
-if nthreads > 16:
-    nthreads -= nthreads // 8
-if not IS_WASM:
-    # WASM does not support threading
+
+if IS_WASM:
+    nthreads = 1
+    # Keep C-side runtime in sync with Python-level default in wasm32.
+    set_nthreads(1)
+else:
+    # Experiments say that, when using a large number of threads, it is better to not use them all
+    if nthreads > 16:
+        nthreads -= nthreads // 8
     # Only call set_num_threads if within NUMEXPR_MAX_THREADS limit to avoid warning
     numexpr_max_env = os.environ.get("NUMEXPR_MAX_THREADS")
     numexpr_max: int | None = None

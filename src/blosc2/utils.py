@@ -46,6 +46,26 @@ else:  # not array-api compliant
         return np.einsum("...i,...i->...", np.moveaxis(np.conj(a), axis, -1), np.moveaxis(b, axis, -1))
 
 
+def _string_contains(a, b):
+    return np.char.find(a, b) >= 0
+
+
+def _string_startswith(a, b):
+    return np.char.startswith(a, b)
+
+
+def _string_endswith(a, b):
+    return np.char.endswith(a, b)
+
+
+def _format_expr_scalar(value):
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, str | bytes):
+        return repr(value)
+    return value
+
+
 global safe_numpy_globals
 # Use numpy eval when running in WebAssembly
 safe_numpy_globals = {"np": np}
@@ -72,10 +92,11 @@ if not NUMPY_GE_2_0:  # handle non-array-api compliance
     safe_numpy_globals["vecdot"] = npvecdot
     safe_numpy_globals["cumulative_sum"] = npcumsum
     safe_numpy_globals["cumulative_prod"] = npcumprod
-    # handle different naming conventions between numpy and blosc2
-    safe_numpy_globals["contains"] = lambda *args: np.char.find(*args) != -1
-    safe_numpy_globals["startswith"] = np.char.startswith
-    safe_numpy_globals["endswith"] = np.char.endswith
+
+# handle different naming conventions between numpy and blosc2
+safe_numpy_globals["contains"] = _string_contains
+safe_numpy_globals["startswith"] = _string_startswith
+safe_numpy_globals["endswith"] = _string_endswith
 
 
 elementwise_funcs = [

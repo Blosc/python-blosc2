@@ -57,14 +57,13 @@ set(MINIEXPR_BUILD_EXAMPLES OFF CACHE BOOL "Build miniexpr examples" FORCE)
 set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
 
 if(EMSCRIPTEN)
-  # JIT in miniexpr for wasm32 exists already, but we need to do some work before we can use it
-  # See plans/external-js-glue.md for details
-  set(MINIEXPR_ENABLE_TCC_JIT OFF CACHE BOOL "TCC JIT unavailable in Emscripten side-module builds" FORCE)
+  set(MINIEXPR_ENABLE_TCC_JIT ON CACHE BOOL "Enable TCC JIT in Emscripten builds" FORCE)
+  set(MINIEXPR_WASM32_SIDE_MODULE ON CACHE BOOL "Use host-registered wasm32 JIT helpers" FORCE)
 endif()
 
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    GIT_TAG 393c373a0f02735784aa7afe767eb310ebe99713
+    GIT_TAG b70e9737bdd47c3447f184648df731dd1321f01d
     # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
@@ -150,6 +149,11 @@ endif()
 install(
   TARGETS blosc2_ext
   LIBRARY DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2
+)
+
+install(
+  FILES "${miniexpr_SOURCE_DIR}/src/me_jit_glue.js"
+  DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2
 )
 
 # Install bundled libtcc next to the Python package (separate LGPL artifact).

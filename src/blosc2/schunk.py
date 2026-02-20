@@ -11,7 +11,7 @@ import os
 import pathlib
 from collections import namedtuple
 from collections.abc import Iterator, Mapping, MutableMapping
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -319,6 +319,18 @@ class SChunk(blosc2_ext.SChunk):
                 kwargs["cparams"] = cparams
         else:
             kwargs["cparams"] = {"typesize": itemsize}
+        if blosc2.IS_WASM:
+            # wasm32 runtime is effectively single-threaded for Blosc operations.
+            cparams = kwargs.get("cparams")
+            if isinstance(cparams, dict) and cparams.get("nthreads", 1) != 1:
+                cparams = cparams.copy()
+                cparams["nthreads"] = 1
+                kwargs["cparams"] = cparams
+            dparams = kwargs.get("dparams")
+            if isinstance(dparams, dict) and dparams.get("nthreads", 1) != 1:
+                dparams = dparams.copy()
+                dparams["nthreads"] = 1
+                kwargs["dparams"] = dparams
 
         # chunksize handling
         if chunksize is None:
@@ -350,6 +362,8 @@ class SChunk(blosc2_ext.SChunk):
 
     @cparams.setter
     def cparams(self, value: blosc2.CParams) -> None:
+        if blosc2.IS_WASM and value.nthreads != 1:
+            value = replace(value, nthreads=1)
         super().update_cparams(value)
         self._cparams = super().get_cparams()
 
@@ -362,6 +376,8 @@ class SChunk(blosc2_ext.SChunk):
 
     @dparams.setter
     def dparams(self, value: blosc2.DParams) -> None:
+        if blosc2.IS_WASM and value.nthreads != 1:
+            value = replace(value, nthreads=1)
         super().update_dparams(value)
         self._dparams = super().get_dparams()
 
@@ -1503,6 +1519,16 @@ def _set_default_dparams(kwargs):
             blosc2.DParams(nthreads=blosc2.nthreads) if not blosc2.IS_WASM else blosc2.DParams(nthreads=1)
         )
         kwargs["dparams"] = dparams
+    if blosc2.IS_WASM:
+        dparams = kwargs.get("dparams")
+        if isinstance(dparams, blosc2.DParams) and dparams.nthreads != 1:
+            dparams = asdict(dparams)
+            dparams["nthreads"] = 1
+            kwargs["dparams"] = dparams
+        elif isinstance(dparams, dict) and dparams.get("nthreads", 1) != 1:
+            dparams = dparams.copy()
+            dparams["nthreads"] = 1
+            kwargs["dparams"] = dparams
 
 
 def _process_opened_object(res):

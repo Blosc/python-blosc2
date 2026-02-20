@@ -23,6 +23,9 @@ import blosc2
     ],
 )
 def test_schunk_pathlib(mode, mmap_mode, cparams, dparams, nchunks):
+    if blosc2.IS_WASM and mmap_mode is not None:
+        pytest.skip("mmap_mode is not supported reliably on wasm32")
+
     urlpath = pathlib.Path("b2frame")
     kwargs = {"urlpath": urlpath, "cparams": cparams, "dparams": dparams}
     blosc2.remove_urlpath(urlpath)
@@ -55,6 +58,9 @@ argvalues = [
 @pytest.mark.parametrize(("mode", "mmap_mode"), [("w", None), (None, "w+")])
 @pytest.mark.parametrize(argnames, argvalues)
 def test_ndarray_pathlib(tmp_path, mode, mmap_mode, shape, chunks, blocks, slices, dtype):
+    if blosc2.IS_WASM and mmap_mode is not None:
+        pytest.skip("mmap_mode is not supported reliably on wasm32")
+
     size = int(np.prod(shape))
     nparray = np.arange(size, dtype=dtype).reshape(shape)
     a = blosc2.asarray(

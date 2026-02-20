@@ -51,6 +51,7 @@ from blosc2.info import InfoReporter
 
 from .proxy import _convert_dtype
 from .utils import (
+    _format_expr_scalar,
     _get_chunk_operands,
     _sliced_chunk_iter,
     check_smaller_shape,
@@ -76,9 +77,7 @@ global safe_blosc2_globals
 safe_blosc2_globals = {}
 
 # Set this to False if miniexpr should not be tried out
-try_miniexpr = True
-if blosc2.IS_WASM:
-    try_miniexpr = False
+try_miniexpr = not blosc2.IS_WASM or getattr(blosc2, "_WASM_MINIEXPR_ENABLED", False)
 
 
 def _toggle_miniexpr(FLAG):
@@ -972,6 +971,13 @@ def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C90
         else:
             return out.shape, None, None, True
 
+    raw_inputs = [input_ for input_ in inputs.values() if input_ is not np]
+    if raw_inputs and all(
+        np.isscalar(input_) or (hasattr(input_, "shape") and input_.shape == ()) for input_ in raw_inputs
+    ):
+        # Scalar-only expressions have scalar output shape.
+        return (), None, None, False
+
     inputs = [input for input in inputs.values() if hasattr(input, "shape") and input is not np]
     # This will raise an exception if the input shapes are not compatible
     shape = compute_broadcast_shape(inputs)
@@ -1217,7 +1223,6 @@ def fill_chunk_operands(
         if value.shape == ():
             chunk_operands[key] = value[()]
             continue
-
         if not full_chunk or not isinstance(value, blosc2.NDArray):
             # The chunk is not a full one, or has padding, or is not a blosc2.NDArray,
             # so we need to go the slow path
@@ -1453,11 +1458,11 @@ def fast_eval(  # noqa: C901
             for op in operands_miniexpr.values()
         )
         if isinstance(expr_string_miniexpr, str) and has_complex:
-            if sys.platform == "win32":
-                # On Windows, miniexpr has issues with complex numbers
+            if sys.platform == "win32" or blosc2.IS_WASM:
+                # On Windows and WebAssembly, miniexpr has issues with complex numbers
                 use_miniexpr = False
                 if is_dsl and dsl_disable_reason is None:
-                    dsl_disable_reason = "complex DSL kernels are disabled on Windows."
+                    dsl_disable_reason = "complex DSL kernels are disabled on Windows and WebAssembly."
             if any(tok in expr_string_miniexpr for tok in ("!=", "==", "<=", ">=", "<", ">")):
                 use_miniexpr = False
                 if is_dsl and dsl_disable_reason is None:
@@ -2045,6 +2050,11 @@ def reduce_slices(  # noqa: C901
     # Use a local copy so we don't modify the global
     use_miniexpr = try_miniexpr  # & False
 
+    if blosc2.IS_WASM:
+        # Reduction miniexpr on wasm is currently unstable for scalar reductions (axis=None).
+        # Keep wasm reduction evaluation on the regular chunked path until stabilized.
+        use_miniexpr = False
+
     out = kwargs.pop("_output", None)
     res_out_ = None  # temporary required to store max/min for argmax/argmin
     ne_args: dict = kwargs.pop("_ne_args", {})
@@ -2177,8 +2187,8 @@ def reduce_slices(  # noqa: C901
             isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
             for op in operands.values()
         )
-        if has_complex and sys.platform == "win32":
-            # On Windows, miniexpr has issues with complex numbers
+        if has_complex and (sys.platform == "win32" or blosc2.IS_WASM):
+            # On Windows and WebAssembly, miniexpr has issues with complex numbers
             use_miniexpr = False
         if sys.platform == "win32" and use_miniexpr:
             if blosc2.isdtype(dtype, "integral"):
@@ -2758,7 +2768,7 @@ def fuse_expressions(expr, new_base, dup_op):
 
 
 def check_dtype(op, value1, value2):
-    if op == "contains":
+    if op in ("contains", "startswith", "endswith"):
         return np.dtype(np.bool_)
 
     v1_dtype = blosc2.result_type(value1)
@@ -2893,13 +2903,15 @@ class LazyExpr(LazyArray):
         elif op in funcs_2args:
             if np.isscalar(value1) and np.isscalar(value2):
                 self.expression = "o0"
-                self.operands = {"o0": ne_evaluate(f"{op}({value1!r}, {value2!r})")}  # eager evaluation
+                svalue1 = _format_expr_scalar(value1)
+                svalue2 = _format_expr_scalar(value2)
+                self.operands = {"o0": ne_evaluate(f"{op}({svalue1}, {svalue2})")}  # eager evaluation
             elif np.isscalar(value2):
                 self.operands = {"o0": value1}
-                self.expression = f"{op}(o0, {value2!r})"
+                self.expression = f"{op}(o0, {_format_expr_scalar(value2)})"
             elif np.isscalar(value1):
                 self.operands = {"o0": value2}
-                self.expression = f"{op}({value1!r}, o0)"
+                self.expression = f"{op}({_format_expr_scalar(value1)}, o0)"
             else:
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"{op}(o0, o1)"
@@ -2973,9 +2985,9 @@ class LazyExpr(LazyArray):
                 def_operands = value1.operands
             elif isinstance(value1, LazyExpr):
                 if np.isscalar(value2):
-                    v2 = value2
+                    v2 = _format_expr_scalar(value2)
                 elif hasattr(value2, "shape") and value2.shape == ():
-                    v2 = value2[()]
+                    v2 = _format_expr_scalar(value2[()])
                 else:
                     operand_to_key = {id(v): k for k, v in value1.operands.items()}
                     try:
@@ -2994,9 +3006,9 @@ class LazyExpr(LazyArray):
                 def_operands = value1.operands
             else:
                 if np.isscalar(value1):
-                    v1 = value1
+                    v1 = _format_expr_scalar(value1)
                 elif hasattr(value1, "shape") and value1.shape == ():
-                    v1 = value1[()]
+                    v1 = _format_expr_scalar(value1[()])
                 else:
                     operand_to_key = {id(v): k for k, v in value2.operands.items()}
                     try:
@@ -4062,6 +4074,12 @@ class LazyUDF(LazyArray):
 
 
 def _numpy_eval_expr(expression, operands, prefer_blosc=False):
+    npops = {
+        key: np.ones(np.ones(len(value.shape), dtype=int), dtype=value.dtype)
+        if hasattr(value, "shape")
+        else value
+        for key, value in operands.items()
+    }
     if prefer_blosc:
         # convert blosc arrays to small dummies
         ops = {
@@ -4077,31 +4095,24 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
             else value
             for key, value in ops.items()
         }
-    else:
-        ops = {
-            key: np.ones(np.ones(len(value.shape), dtype=int), dtype=value.dtype)
-            if hasattr(value, "shape")
-            else value
-            for key, value in operands.items()
-        }
+    else:  # wasm pathway assumes numpy arrs
+        ops = npops
 
-    if np.any([a in expression for a in ["contains", "startswith", "endswith"]]):
-        _out = ne_evaluate(expression, local_dict=ops)
+    # Create a globals dict with blosc2 version of functions preferentially
+    # (default to numpy func if not implemented in blosc2)
+    if prefer_blosc:
+        _globals = get_expr_globals(expression)
+        _globals |= dtype_symbols
     else:
-        # Create a globals dict with blosc2 version of functions preferentially
-        # (default to numpy func if not implemented in blosc2)
-        if prefer_blosc:
-            _globals = get_expr_globals(expression)
-            _globals |= dtype_symbols
-        else:
-            _globals = safe_numpy_globals
-        try:
-            _out = eval(expression, _globals, ops)
-        except RuntimeWarning:
-            # Sometimes, numpy gets a RuntimeWarning when evaluating expressions
-            # with synthetic operands (1's). Let's try with numexpr, which is not so picky
-            # about this.
-            _out = ne_evaluate(expression, local_dict=ops)
+        _globals = safe_numpy_globals
+    try:
+        _out = eval(expression, _globals, ops)
+    except RuntimeWarning:
+        # Sometimes, numpy gets a RuntimeWarning when evaluating expressions
+        # with synthetic operands (1's). Let's try with numexpr, which is not so picky
+        # about this.
+        ops = npops if blosc2.IS_WASM else ops
+        _out = ne_evaluate(expression, local_dict=ops)
     return _out
 
 

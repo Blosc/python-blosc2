@@ -93,6 +93,17 @@ If you want to run the network tests, you can use the following command:
   pytest -m "network"
 ```
 
+## wasm32 / Pyodide developer workflow
+
+For the local wasm32 workflow (uv + pyodide-build + cibuildwheel + test loop),
+use the repo skill at `.codex/skills/wasm32-pyodide-dev/SKILL.md`.
+
+Install it into Codex discovery with:
+
+```bash
+scripts/install-codex-skill-wasm32.sh --force
+```
+
 ## Documentation
 
 We are using Sphinx for documentation.  You can build the documentation by executing:

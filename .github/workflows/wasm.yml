@@ -9,8 +9,8 @@ on:
 
 env:
   CIBW_BUILD_VERBOSITY: 1
-  # In case you want to specify a version of pyodide
-  # PYODIDE_VERSION: 0.28.2
+  # Put a specific version here instead of cibuildwheel's default
+  CIBW_PYODIDE_VERSION: 0.29.3
 
 jobs:
   build_wheels_wasm:
@@ -20,14 +20,14 @@ jobs:
       contents: write
     env:
       CIBW_BUILD: ${{ matrix.cibw_build }}
-      CMAKE_ARGS: "-DWITH_OPTIM=OFF"
-      DEACTIVATE_OPENZL: "1"
-      CIBW_TEST_COMMAND: "pytest {project}/tests/ndarray/test_reductions.py"
+      CMAKE_ARGS: "-DWITH_ZLIB_OPTIM=OFF -DWITH_OPTIM=OFF -DWITH_RUNTIME_CPU_DETECTION=OFF"
+      CIBW_TEST_COMMAND: "pytest {project}/tests"
+
     strategy:
       matrix:
         os: [ubuntu-latest]
-        cibw_build: ["cp3{12,13,14}-*"]
-        p_ver: ["3.12-3.14"]
+        cibw_build: ["cp313-*"]
+        p_ver: ["3.13"]
 
     steps:
       - name: Checkout repo

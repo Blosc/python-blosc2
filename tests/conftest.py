@@ -14,6 +14,10 @@ import requests
 import blosc2
 
 
+def expected_nthreads(nthreads: int) -> int:
+    return 1 if blosc2.IS_WASM else nthreads
+
+
 def pytest_configure(config):
     blosc2.print_versions()
     if sys.platform != "emscripten":
