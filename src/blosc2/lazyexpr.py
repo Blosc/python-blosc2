@@ -4074,7 +4074,7 @@ class LazyUDF(LazyArray):
 
 
 def _numpy_eval_expr(expression, operands, prefer_blosc=False):
-    has_string_predicate = any(func in expression for func in ("contains(", "startswith(", "endswith("))
+    has_contains = "contains(" in expression
 
     if prefer_blosc:
         # convert blosc arrays to small dummies
@@ -4099,7 +4099,15 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
             for key, value in operands.items()
         }
 
-    if has_string_predicate:
+    if blosc2.IS_WASM and prefer_blosc:  # wasm pathway assumes numpy arrs
+        ops = {
+            key: np.ones(np.ones(len(value.shape), dtype=int), dtype=value.dtype)
+            if hasattr(value, "shape")
+            else value
+            for key, value in operands.items()
+        }
+
+    if has_contains:
         _out = ne_evaluate(expression, local_dict=ops)
     else:
         # Create a globals dict with blosc2 version of functions preferentially
