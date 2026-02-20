@@ -46,7 +46,6 @@ Enable miniexpr+tcc DSL JIT on `wasm32`/Pyodide and keep wasm CI focused on prov
 - Current totals:
   - `test_lazyexpr.py`: `859 passed, 371 skipped, 472 deselected`.
   - `test_reductions.py`: `2890 passed, 3744 deselected`.
-  - Combined: `3750 passed, 371 skipped, 4216 deselected`.
 
 ## Commands
 - Build wasm wheel on Linux:

@@ -9,7 +9,7 @@ on:
 
 env:
   CIBW_BUILD_VERBOSITY: 1
-  # Pin pyodide while debugging wasm JIT runtime-object integration.
+  # Put a specific version here instead of cibuildwheel's default
   CIBW_PYODIDE_VERSION: 0.29.3
 
 jobs:

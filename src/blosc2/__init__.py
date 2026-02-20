@@ -459,13 +459,15 @@ nthreads = ncores = cpu_info.get("count", 1)
 """
 # Protection against too many threads
 nthreads = min(nthreads, 64)
-# Experiments say that, when using a large number of threads, it is better to not use them all
+
 if IS_WASM:
     nthreads = 1
-elif nthreads > 16:
-    nthreads -= nthreads // 8
-if not IS_WASM:
-    # WASM does not support threading
+    # Keep C-side runtime in sync with Python-level default in wasm32.
+    set_nthreads(1)
+else:
+    # Experiments say that, when using a large number of threads, it is better to not use them all
+    if nthreads > 16:
+        nthreads -= nthreads // 8
     # Only call set_num_threads if within NUMEXPR_MAX_THREADS limit to avoid warning
     numexpr_max_env = os.environ.get("NUMEXPR_MAX_THREADS")
     numexpr_max: int | None = None
@@ -474,9 +476,6 @@ if not IS_WASM:
             numexpr_max = int(numexpr_max_env)
     if numexpr_max is None or nthreads <= numexpr_max:
         numexpr.set_num_threads(nthreads)
-else:
-    # Keep C-side runtime in sync with Python-level default in wasm32.
-    set_nthreads(1)
 
 # This import must be before ndarray and schunk
 from .storage import (  # noqa: I001
