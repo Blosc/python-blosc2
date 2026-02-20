@@ -21,18 +21,7 @@ jobs:
     env:
       CIBW_BUILD: ${{ matrix.cibw_build }}
       CMAKE_ARGS: "-DWITH_ZLIB_OPTIM=OFF -DWITH_OPTIM=OFF -DWITH_RUNTIME_CPU_DETECTION=OFF"
-      ME_DSL_TRACE: "1"
-      CIBW_TEST_COMMAND: >-
-        python {project}/bench/ndarray/jit-dsl.py &&
-        pytest -q
-        {project}/tests/ndarray/test_dsl_kernels.py::test_dsl_kernel_index_symbols_int_cast_matches_expected_ramp
-        {project}/tests/ndarray/test_dsl_kernels.py::test_dsl_kernel_index_symbols_float_cast_matches_expected_ramp
-        {project}/tests/ndarray/test_dsl_kernels.py::test_dsl_kernel_index_symbols_float_cast_uses_miniexpr_fast_path
-        {project}/tests/ndarray/test_dsl_kernels.py::test_dsl_kernel_bool_cast_numeric_matches_expected
-        {project}/tests/ndarray/test_dsl_kernels.py::test_dsl_kernel_scalar_float_cast_inlined_without_float_call
-        {project}/tests/ndarray/test_wasm_dsl_jit.py::test_wasm_dsl_tcc_jit_smoke
-        {project}/tests/ndarray/test_lazyexpr.py::test_lazyexpr_string_scalar_keeps_miniexpr_fast_path &&
-        pytest {project}/tests
+      CIBW_TEST_COMMAND: "pytest {project}/tests"
 
     strategy:
       matrix:
