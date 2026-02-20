@@ -4075,7 +4075,12 @@ class LazyUDF(LazyArray):
 
 def _numpy_eval_expr(expression, operands, prefer_blosc=False):
     has_contains = "contains(" in expression
-
+    npops = {
+        key: np.ones(np.ones(len(value.shape), dtype=int), dtype=value.dtype)
+        if hasattr(value, "shape")
+        else value
+        for key, value in operands.items()
+    }
     if prefer_blosc:
         # convert blosc arrays to small dummies
         ops = {
@@ -4091,23 +4096,11 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
             else value
             for key, value in ops.items()
         }
-    else:
-        ops = {
-            key: np.ones(np.ones(len(value.shape), dtype=int), dtype=value.dtype)
-            if hasattr(value, "shape")
-            else value
-            for key, value in operands.items()
-        }
-
-    if blosc2.IS_WASM and prefer_blosc:  # wasm pathway assumes numpy arrs
-        ops = {
-            key: np.ones(np.ones(len(value.shape), dtype=int), dtype=value.dtype)
-            if hasattr(value, "shape")
-            else value
-            for key, value in operands.items()
-        }
+    else:  # wasm pathway assumes numpy arrs
+        ops = npops
 
     if has_contains:
+        ops = npops if blosc2.IS_WASM else ops
         _out = ne_evaluate(expression, local_dict=ops)
     else:
         # Create a globals dict with blosc2 version of functions preferentially
