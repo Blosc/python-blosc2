@@ -4074,7 +4074,6 @@ class LazyUDF(LazyArray):
 
 
 def _numpy_eval_expr(expression, operands, prefer_blosc=False):
-    has_contains = "contains(" in expression
     npops = {
         key: np.ones(np.ones(len(value.shape), dtype=int), dtype=value.dtype)
         if hasattr(value, "shape")
@@ -4099,24 +4098,21 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
     else:  # wasm pathway assumes numpy arrs
         ops = npops
 
-    if has_contains:
+    # Create a globals dict with blosc2 version of functions preferentially
+    # (default to numpy func if not implemented in blosc2)
+    if prefer_blosc:
+        _globals = get_expr_globals(expression)
+        _globals |= dtype_symbols
+    else:
+        _globals = safe_numpy_globals
+    try:
+        _out = eval(expression, _globals, ops)
+    except RuntimeWarning:
+        # Sometimes, numpy gets a RuntimeWarning when evaluating expressions
+        # with synthetic operands (1's). Let's try with numexpr, which is not so picky
+        # about this.
         ops = npops if blosc2.IS_WASM else ops
         _out = ne_evaluate(expression, local_dict=ops)
-    else:
-        # Create a globals dict with blosc2 version of functions preferentially
-        # (default to numpy func if not implemented in blosc2)
-        if prefer_blosc:
-            _globals = get_expr_globals(expression)
-            _globals |= dtype_symbols
-        else:
-            _globals = safe_numpy_globals
-        try:
-            _out = eval(expression, _globals, ops)
-        except RuntimeWarning:
-            # Sometimes, numpy gets a RuntimeWarning when evaluating expressions
-            # with synthetic operands (1's). Let's try with numexpr, which is not so picky
-            # about this.
-            _out = ne_evaluate(expression, local_dict=ops)
     return _out
 
 
