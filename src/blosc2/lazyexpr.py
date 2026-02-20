@@ -51,6 +51,7 @@ from blosc2.info import InfoReporter
 
 from .proxy import _convert_dtype
 from .utils import (
+    _format_expr_scalar,
     _get_chunk_operands,
     _sliced_chunk_iter,
     check_smaller_shape,
@@ -77,32 +78,6 @@ safe_blosc2_globals = {}
 
 # Set this to False if miniexpr should not be tried out
 try_miniexpr = not blosc2.IS_WASM or getattr(blosc2, "_WASM_MINIEXPR_ENABLED", False)
-
-
-def _string_contains(a, b):
-    return np.char.find(a, b) >= 0
-
-
-def _string_startswith(a, b):
-    return np.char.startswith(a, b)
-
-
-def _string_endswith(a, b):
-    return np.char.endswith(a, b)
-
-
-def _format_expr_scalar(value):
-    if isinstance(value, np.generic):
-        value = value.item()
-    if isinstance(value, str | bytes):
-        return repr(value)
-    return value
-
-
-# String predicate helpers used by eval-based paths (WASM and numexpr fallback).
-safe_numpy_globals["contains"] = _string_contains
-safe_numpy_globals["startswith"] = _string_startswith
-safe_numpy_globals["endswith"] = _string_endswith
 
 
 def _toggle_miniexpr(FLAG):
@@ -155,13 +130,6 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
                 name: getattr(blosc2, name)
                 for name in dir(blosc2)
                 if callable(getattr(blosc2, name)) and not name.startswith("_")
-            }
-        )
-        safe_blosc2_globals.update(
-            {
-                "contains": _string_contains,
-                "startswith": _string_startswith,
-                "endswith": _string_endswith,
             }
         )
     res = eval(expression, safe_blosc2_globals, local_dict)
@@ -278,8 +246,6 @@ not_complex_ops = ["maximum", "minimum", "<", "<=", ">", ">="]
 funcs_2args = (
     "arctan2",
     "contains",
-    "startswith",
-    "endswith",
     "pow",
     "power",
     "nextafter",
@@ -4134,11 +4100,6 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
         }
 
     if has_string_predicate:
-        # np.char.* helpers used by string predicates require NumPy arrays, not NDArray dummies.
-        ops = {
-            key: np.ones((1,) * len(value.shape), dtype=value.dtype) if hasattr(value, "shape") else value
-            for key, value in ops.items()
-        }
         _out = ne_evaluate(expression, local_dict=ops)
     else:
         # Create a globals dict with blosc2 version of functions preferentially
