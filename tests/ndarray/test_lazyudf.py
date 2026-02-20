@@ -7,13 +7,10 @@
 
 import numpy as np
 import pytest
+from conftest import expected_nthreads
 
 import blosc2
 from blosc2.ndarray import get_chunks_idx
-
-
-def _expected_nthreads(nthreads: int) -> int:
-    return 1 if blosc2.IS_WASM else nthreads
 
 
 def udf1p(inputs_tuple, output, offset):
@@ -243,7 +240,7 @@ def test_params(chunked_eval):
     res = expr.compute(urlpath=urlpath2, chunks=(10,))
     np.testing.assert_allclose(res[...], npc)
     assert res.shape == npa.shape
-    assert res.schunk.cparams.nthreads == _expected_nthreads(cparams["nthreads"])
+    assert res.schunk.cparams.nthreads == expected_nthreads(cparams["nthreads"])
     assert res.schunk.urlpath == urlpath2
     assert res.chunks == (10,)
 
@@ -298,7 +295,7 @@ def test_getitem(shape, chunks, blocks, slices, urlpath, contiguous, chunked_eva
     assert res.schunk.urlpath is None
     assert res.schunk.contiguous == contiguous
     # Check dparams after a getitem and an eval
-    assert res.schunk.dparams.nthreads == _expected_nthreads(dparams["nthreads"])
+    assert res.schunk.dparams.nthreads == expected_nthreads(dparams["nthreads"])
 
     lazy_eval = expr[slices]
     np.testing.assert_allclose(lazy_eval, npc[slices])
@@ -337,7 +334,7 @@ def test_eval_slice(shape, chunks, blocks, slices, urlpath, contiguous, chunked_
     np.testing.assert_allclose(res[...], npc[slices])
     assert res.schunk.urlpath is None
     assert res.schunk.contiguous == contiguous
-    assert res.schunk.dparams.nthreads == _expected_nthreads(dparams["nthreads"])
+    assert res.schunk.dparams.nthreads == expected_nthreads(dparams["nthreads"])
     assert res.schunk.cparams.nthreads == blosc2.nthreads
     assert res.shape == npc[slices].shape
 
@@ -349,8 +346,8 @@ def test_eval_slice(shape, chunks, blocks, slices, urlpath, contiguous, chunked_
     np.testing.assert_allclose(res[...], npc[slices])
     assert res.schunk.urlpath == urlpath2
     assert res.schunk.contiguous == contiguous
-    assert res.schunk.dparams.nthreads == _expected_nthreads(dparams["nthreads"])
-    assert res.schunk.cparams.nthreads == _expected_nthreads(cparams["nthreads"])
+    assert res.schunk.dparams.nthreads == expected_nthreads(dparams["nthreads"])
+    assert res.schunk.cparams.nthreads == expected_nthreads(cparams["nthreads"])
     assert res.shape == npc[slices].shape
 
     blosc2.remove_urlpath(urlpath)
