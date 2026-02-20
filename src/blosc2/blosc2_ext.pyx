@@ -572,9 +572,6 @@ cdef extern from "miniexpr.h":
         int ncode
         void *parameters[1]
 
-    int me_compile(const char *expression, const me_variable *variables,
-                   int var_count, me_dtype dtype, int *error, me_expr **out)
-
     int me_compile_nd_jit(const char *expression, const me_variable *variables,
                           int var_count, me_dtype dtype, int ndims,
                           const int64_t *shape, const int32_t *chunkshape,
@@ -1526,7 +1523,7 @@ cdef class SChunk:
                 return dst
 
         if size < 0:
-            raise RuntimeError("Error while decompressing the specified chunk")
+            raise RuntimeError(f"Error while decompressing the specified chunk, error code: {size}")
 
     def get_chunk(self, nchunk):
         cdef uint8_t *chunk
@@ -3113,6 +3110,7 @@ cdef class NDArray:
             var.address = NULL  # chunked compile: addresses provided later
             var.type = 0  # auto-set to ME_VARIABLE inside compiler
             var.context = NULL
+            var.itemsize = v.dtype.itemsize if v.dtype.num == 19 else 0 # only store item type if string
 
         cdef int error = 0
         cdef bytes expression_bytes
@@ -3244,7 +3242,10 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
     if 'cparams' in kwargs:
         kwargs['cparams']['typesize'] = typesize
     else:
-        kwargs['cparams'] = {'typesize': typesize}
+        kwargs['cparams'] = {'typesize': typesize} # last filter is shuffle
+        if isinstance(dtype, np.dtypes.StrDType) or dtype == np.str_:
+            kwargs['cparams']['filters'] = [blosc2.Filter.NOFILTER] * 5 + [blosc2.Filter.SHUFFLE]
+            kwargs['cparams']['filters_meta'] = [0] * 5 + [4] # unicode char bytesize
     if dtype.kind == 'V':
         str_dtype = str(dtype)
     else:

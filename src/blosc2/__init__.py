@@ -107,6 +107,21 @@ class Codec(Enum):
 class Filter(Enum):
     """
     Available filters.
+    For each of the filters, the integer value passed to  ``filters_meta`` has the following meaning:
+
+    - NOFILTER: Not used
+    - SHUFFLE: Number of byte streams for shuffle (if 0 defaults to typesize of array).
+    - BITSHUFFLE: Not used
+    - DELTA: Not used (bitwise XOR)
+    - TRUNC_PREC: Number of bits to which to truncate float
+    - NDCELL: Cellshape (i.e. for a 3-dim dataset, meta = 4 implies cellshape is 4x4x4)
+    - NDMEAN: Cellshape (i.e. for a 3-dim dataset, meta = 4 implies cellshape is 4x4x4)
+    - BYTEDELTA: Number of byte streams for delta
+    - INT_TRUNC: Number of bits to which to truncate integer
+
+    For TRUNC_PREC and INT_TRUNC, positive values specify number of bits to keep; negative values specify number of bits to zero.
+
+    For NDCELL/NDMEAN see this explanation for `NDCELL <https://github.com/Blosc/c-blosc2/blob/main/plugins/filters/ndcell/README.md>`_ and this for `NDMEAN <https://github.com/Blosc/c-blosc2/blob/main/plugins/filters/ndmean/README.md>`_.
     """
 
     NOFILTER = 0
@@ -610,6 +625,7 @@ from .ndarray import (
     cumulative_prod,
     cumulative_sum,
     divide,
+    endswith,
     equal,
     exp,
     expm1,
@@ -657,6 +673,7 @@ from .ndarray import (
     sqrt,
     square,
     squeeze,
+    startswith,
     std,
     subtract,
     sum,
@@ -781,6 +798,7 @@ __all__ = [  # noqa : RUF022
     "detect_number_of_cores",
     "divide",
     "dparams_dflts",
+    "endswith",
     "empty",
     "empty_like",
     "equal",
@@ -889,6 +907,7 @@ __all__ = [  # noqa : RUF022
     "square",
     "squeeze",
     "stack",
+    "startswith",
     "std",
     "storage_dflts",
     "subtract",
