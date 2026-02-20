@@ -73,6 +73,8 @@ elementwise_funcs = [
     "clip",
     "conj",
     "contains",
+    "startswith",
+    "endswith",
     "copysign",
     "cos",
     "cosh",

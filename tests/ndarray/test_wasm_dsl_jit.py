@@ -29,3 +29,27 @@ def test_wasm_dsl_tcc_jit_smoke():
     out = expr.compute(jit=True, jit_backend="tcc", strict_miniexpr=True)
     expected = (a_np + b_np) * 1.5 - 0.25
     np.testing.assert_allclose(out[...], expected, rtol=1e-6, atol=1e-8)
+
+
+@pytest.mark.skipif(not blosc2.IS_WASM, reason="WASM-only integration test")
+def test_wasm_string_predicates_strict_miniexpr():
+    assert getattr(blosc2, "_WASM_MINIEXPR_ENABLED", False)
+
+    names_np = np.array(["alpha", "beta", "gamma", "cafα", "汉字", ""], dtype="U8")
+    names = blosc2.asarray(names_np)
+
+    contains = blosc2.contains(names, "et")
+    contains_expected = np.char.find(names_np, "et") >= 0
+    np.testing.assert_array_equal(contains.compute(strict_miniexpr=True)[:], contains_expected)
+
+    startswith = blosc2.LazyExpr(new_op=(names, "startswith", "a"))
+    startswith_expected = np.char.startswith(names_np, "a")
+    np.testing.assert_array_equal(startswith.compute(strict_miniexpr=True)[:], startswith_expected)
+
+    endswith = blosc2.LazyExpr(new_op=(names, "endswith", "a"))
+    endswith_expected = np.char.endswith(names_np, "a")
+    np.testing.assert_array_equal(endswith.compute(strict_miniexpr=True)[:], endswith_expected)
+
+    expr = blosc2.lazyexpr("contains(a, pat)", operands={"a": names, "pat": "α"})
+    expr_expected = np.char.find(names_np, "α") >= 0
+    np.testing.assert_array_equal(expr.compute(strict_miniexpr=True)[:], expr_expected)

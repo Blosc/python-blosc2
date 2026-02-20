@@ -106,6 +106,32 @@ if not NUMPY_GE_2_0:  # handle non-array-api compliance
 try_miniexpr = not blosc2.IS_WASM or getattr(blosc2, "_WASM_MINIEXPR_ENABLED", False)
 
 
+def _string_contains(a, b):
+    return np.char.find(a, b) >= 0
+
+
+def _string_startswith(a, b):
+    return np.char.startswith(a, b)
+
+
+def _string_endswith(a, b):
+    return np.char.endswith(a, b)
+
+
+def _format_expr_scalar(value):
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, str | bytes):
+        return repr(value)
+    return value
+
+
+# String predicate helpers used by eval-based paths (WASM and numexpr fallback).
+safe_numpy_globals["contains"] = _string_contains
+safe_numpy_globals["startswith"] = _string_startswith
+safe_numpy_globals["endswith"] = _string_endswith
+
+
 def ne_evaluate(expression, local_dict=None, **kwargs):
     """Safely evaluate expressions using numexpr when possible, falling back to numpy."""
     if local_dict is None:
@@ -146,6 +172,13 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
                     name: getattr(blosc2, name)
                     for name in dir(blosc2)
                     if callable(getattr(blosc2, name)) and not name.startswith("_")
+                }
+            )
+            safe_blosc2_globals.update(
+                {
+                    "contains": _string_contains,
+                    "startswith": _string_startswith,
+                    "endswith": _string_endswith,
                 }
             )
         res = eval(expression, safe_blosc2_globals, local_dict)
@@ -262,6 +295,8 @@ not_complex_ops = ["maximum", "minimum", "<", "<=", ">", ">="]
 funcs_2args = (
     "arctan2",
     "contains",
+    "startswith",
+    "endswith",
     "pow",
     "power",
     "nextafter",
@@ -2766,7 +2801,7 @@ def fuse_expressions(expr, new_base, dup_op):
 
 
 def check_dtype(op, value1, value2):
-    if op == "contains":
+    if op in ("contains", "startswith", "endswith"):
         return np.dtype(np.bool_)
 
     v1_dtype = blosc2.result_type(value1)
@@ -2896,13 +2931,15 @@ class LazyExpr(LazyArray):
         elif op in funcs_2args:
             if np.isscalar(value1) and np.isscalar(value2):
                 self.expression = "o0"
-                self.operands = {"o0": ne_evaluate(f"{op}({value1}, {value2})")}  # eager evaluation
+                svalue1 = _format_expr_scalar(value1)
+                svalue2 = _format_expr_scalar(value2)
+                self.operands = {"o0": ne_evaluate(f"{op}({svalue1}, {svalue2})")}  # eager evaluation
             elif np.isscalar(value2):
                 self.operands = {"o0": value1}
-                self.expression = f"{op}(o0, {value2})"
+                self.expression = f"{op}(o0, {_format_expr_scalar(value2)})"
             elif np.isscalar(value1):
                 self.operands = {"o0": value2}
-                self.expression = f"{op}({value1}, o0)"
+                self.expression = f"{op}({_format_expr_scalar(value1)}, o0)"
             else:
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"{op}(o0, o1)"
@@ -2976,9 +3013,9 @@ class LazyExpr(LazyArray):
                 def_operands = value1.operands
             elif isinstance(value1, LazyExpr):
                 if np.isscalar(value2):
-                    v2 = value2
+                    v2 = _format_expr_scalar(value2)
                 elif hasattr(value2, "shape") and value2.shape == ():
-                    v2 = value2[()]
+                    v2 = _format_expr_scalar(value2[()])
                 else:
                     operand_to_key = {id(v): k for k, v in value1.operands.items()}
                     try:
@@ -2997,9 +3034,9 @@ class LazyExpr(LazyArray):
                 def_operands = value1.operands
             else:
                 if np.isscalar(value1):
-                    v1 = value1
+                    v1 = _format_expr_scalar(value1)
                 elif hasattr(value1, "shape") and value1.shape == ():
-                    v1 = value1[()]
+                    v1 = _format_expr_scalar(value1[()])
                 else:
                     operand_to_key = {id(v): k for k, v in value2.operands.items()}
                     try:
@@ -4065,6 +4102,8 @@ class LazyUDF(LazyArray):
 
 
 def _numpy_eval_expr(expression, operands, prefer_blosc=False):
+    has_string_predicate = any(func in expression for func in ("contains(", "startswith(", "endswith("))
+
     if prefer_blosc:
         # convert blosc arrays to small dummies
         ops = {
@@ -4088,7 +4127,12 @@ def _numpy_eval_expr(expression, operands, prefer_blosc=False):
             for key, value in operands.items()
         }
 
-    if "contains" in expression:
+    if has_string_predicate:
+        # np.char.* helpers used by string predicates require NumPy arrays, not NDArray dummies.
+        ops = {
+            key: np.ones((1,) * len(value.shape), dtype=value.dtype) if hasattr(value, "shape") else value
+            for key, value in ops.items()
+        }
         _out = ne_evaluate(expression, local_dict=ops)
     else:
         # Create a globals dict with blosc2 version of functions preferentially

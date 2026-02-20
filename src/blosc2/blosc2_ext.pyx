@@ -548,6 +548,7 @@ cdef extern from "miniexpr.h":
         ME_FLOAT64
         ME_COMPLEX64
         ME_COMPLEX128
+        ME_STRING
 
     # typedef struct me_variable
     ctypedef struct me_variable:
@@ -744,6 +745,8 @@ cdef inline me_dtype _me_dtype_from_numpy_dtype(dtype_obj):
             return ME_COMPLEX64
         if itemsize == 16:
             return ME_COMPLEX128
+    elif kind == "U":
+        return ME_STRING
     return <me_dtype>-1
 
 
@@ -3097,6 +3100,16 @@ cdef class NDArray:
             var.dtype = _me_dtype_from_numpy_dtype(operand_dtype)
             if <int>var.dtype < 0:
                 raise TypeError(f"miniexpr does not support operand dtype '{operand_dtype}' for input '{k}'")
+            if var.dtype == ME_STRING:
+                # miniexpr string variables use fixed-size UCS4 (numpy unicode) storage.
+                if operand_dtype.kind != "U" or operand_dtype.itemsize <= 0 or operand_dtype.itemsize % 4 != 0:
+                    raise TypeError(
+                        f"miniexpr string operands require unicode dtype with UCS4 itemsize; "
+                        f"got '{operand_dtype}' for input '{k}'"
+                    )
+                var.itemsize = <size_t>operand_dtype.itemsize
+            else:
+                var.itemsize = 0
             var.address = NULL  # chunked compile: addresses provided later
             var.type = 0  # auto-set to ME_VARIABLE inside compiler
             var.context = NULL
