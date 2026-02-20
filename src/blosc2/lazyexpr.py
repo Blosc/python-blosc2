@@ -1472,11 +1472,11 @@ def fast_eval(  # noqa: C901
             for op in operands_miniexpr.values()
         )
         if isinstance(expr_string_miniexpr, str) and has_complex:
-            if sys.platform == "win32":
-                # On Windows, miniexpr has issues with complex numbers
+            if sys.platform == "win32" or blosc2.IS_WASM:
+                # On Windows and WebAssembly, miniexpr has issues with complex numbers
                 use_miniexpr = False
                 if is_dsl and dsl_disable_reason is None:
-                    dsl_disable_reason = "complex DSL kernels are disabled on Windows."
+                    dsl_disable_reason = "complex DSL kernels are disabled on Windows and WebAssembly."
             if any(tok in expr_string_miniexpr for tok in ("!=", "==", "<=", ">=", "<", ">")):
                 use_miniexpr = False
                 if is_dsl and dsl_disable_reason is None:
@@ -2193,8 +2193,8 @@ def reduce_slices(  # noqa: C901
             isinstance(op, blosc2.NDArray) and blosc2.isdtype(op.dtype, "complex floating")
             for op in operands.values()
         )
-        if has_complex and sys.platform == "win32":
-            # On Windows, miniexpr has issues with complex numbers
+        if has_complex and (sys.platform == "win32" or blosc2.IS_WASM):
+            # On Windows and WebAssembly, miniexpr has issues with complex numbers
             use_miniexpr = False
         if sys.platform == "win32" and use_miniexpr:
             if blosc2.isdtype(dtype, "integral"):
