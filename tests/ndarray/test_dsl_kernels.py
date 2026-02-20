@@ -5,6 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import sys
+
 import numpy as np
 import pytest
 
@@ -616,6 +618,14 @@ def _save_reload_compute(kernel, inputs_np, inputs_b2, dtype, urlpaths, extra_kw
     return reloaded, reloaded.compute()
 
 
+_win32_dtype_mismatch_xfail = pytest.mark.xfail(
+    sys.platform == "win32",
+    reason="Windows miniexpr policy blocks dtype-mismatched DSL kernels",
+    strict=False,
+)
+
+
+@_win32_dtype_mismatch_xfail
 def test_dsl_save_simple(tmp_path):
     """Simple quadratic kernel: dsl_source and DSLKernel type survive a round-trip."""
     from blosc2.dsl_kernel import DSLKernel
@@ -638,6 +648,7 @@ def test_dsl_save_simple(tmp_path):
     np.testing.assert_allclose(result[...], expected, rtol=1e-5, atol=1e-6)
 
 
+@_win32_dtype_mismatch_xfail
 def test_dsl_save_clamp(tmp_path):
     """Kernel with a `where` call survives save/reload and produces correct values."""
     from blosc2.dsl_kernel import DSLKernel
@@ -659,6 +670,7 @@ def test_dsl_save_clamp(tmp_path):
 
 
 @pytest.mark.skipif(blosc2.IS_WASM, reason="Not supported on WASM")
+@_win32_dtype_mismatch_xfail
 def test_dsl_save_loop(tmp_path):
     """Kernel with a loop (full DSL function) survives save/reload."""
     from blosc2.dsl_kernel import DSLKernel
@@ -680,6 +692,7 @@ def test_dsl_save_loop(tmp_path):
     np.testing.assert_allclose(result[...], expected, rtol=1e-5, atol=1e-6)
 
 
+@_win32_dtype_mismatch_xfail
 def test_dsl_save_getitem(tmp_path):
     """Reloaded DSL kernel supports __getitem__ (sliced access), not just compute()."""
     from blosc2.dsl_kernel import DSLKernel
