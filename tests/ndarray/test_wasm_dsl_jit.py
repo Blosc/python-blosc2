@@ -36,7 +36,7 @@ def test_wasm_string_predicates_strict_miniexpr():
     assert getattr(blosc2, "_WASM_MINIEXPR_ENABLED", False)
 
     names_np = np.array(["alpha", "beta", "gamma", "cafα", "汉字", ""], dtype="U8")
-    names = blosc2.asarray(names_np)
+    names = blosc2.asarray(names_np, chunks=(3,), blocks=(2,))
 
     contains = blosc2.contains(names, "et")
     contains_expected = np.char.find(names_np, "et") >= 0

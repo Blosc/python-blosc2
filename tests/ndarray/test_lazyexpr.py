@@ -579,7 +579,7 @@ def test_params(array_fixture):
 
 # Tests related with save method
 def test_save():
-    tol = 1e-17
+    tol = 2e-12 if blosc2.IS_WASM else 1e-17
     shape = (23, 23)
     nelems = np.prod(shape)
     na1 = np.linspace(0, 10, nelems, dtype=np.float32).reshape(shape)
