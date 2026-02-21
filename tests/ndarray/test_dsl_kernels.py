@@ -17,14 +17,6 @@ where = np.where
 clip = np.clip
 
 
-def _windows_policy_blocks_dsl_dtype(dtype, operand_dtypes=()) -> bool:
-    import importlib
-
-    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
-    dtype = np.dtype(dtype)
-    return lazyexpr_mod.sys.platform == "win32" and blosc2.isdtype(dtype, "integral")
-
-
 def _make_arrays(shape=(8, 8), chunks=(4, 4), blocks=(2, 2)):
     a = np.linspace(0, 1, num=np.prod(shape), dtype=np.float32).reshape(shape)
     b = np.linspace(1, 2, num=np.prod(shape), dtype=np.float32).reshape(shape)
@@ -304,10 +296,6 @@ def test_dsl_kernel_index_symbols_int_cast_matches_expected_ramp():
     shape = (32, 5)
     x2 = blosc2.zeros(shape, dtype=np.float32)
     expr = blosc2.lazyudf(kernel_index_ramp_int_cast, (x2,), dtype=np.int64)
-    if _windows_policy_blocks_dsl_dtype(np.int64, operand_dtypes=(x2.dtype,)):
-        with pytest.raises(RuntimeError, match="DSL kernels require miniexpr"):
-            _ = expr[:]
-        return
     try:
         res = expr[:]
     except RuntimeError as e:
@@ -325,10 +313,6 @@ def test_dsl_kernel_bool_cast_numeric_matches_expected():
     x = np.array([[0.0, 1.0, -2.0], [3.5, 0.0, -0.1]], dtype=np.float32)
     x2 = blosc2.asarray(x, chunks=(2, 3), blocks=(1, 2))
     expr = blosc2.lazyudf(kernel_bool_cast_numeric, (x2,), dtype=np.bool_)
-    if _windows_policy_blocks_dsl_dtype(np.bool_, operand_dtypes=(x2.dtype,)):
-        with pytest.raises(RuntimeError, match="DSL kernels require miniexpr"):
-            _ = expr[:]
-        return
     res = expr[:]
     expected = x != 0.0
     np.testing.assert_equal(res, expected)

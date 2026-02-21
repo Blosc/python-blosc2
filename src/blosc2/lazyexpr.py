@@ -1468,12 +1468,6 @@ def fast_eval(  # noqa: C901
                 use_miniexpr = False
                 if is_dsl and dsl_disable_reason is None:
                     dsl_disable_reason = "complex comparisons are not supported by miniexpr."
-        if sys.platform == "win32" and use_miniexpr:
-            # Work around Windows miniexpr issues for integer outputs and dtype conversions.
-            if blosc2.isdtype(dtype, "integral"):
-                use_miniexpr = False
-                if is_dsl and dsl_disable_reason is None:
-                    dsl_disable_reason = "Windows policy disables miniexpr for integral output dtypes."
 
     if is_dsl and not use_miniexpr:
         _raise_dsl_miniexpr_required(dsl_disable_reason)
@@ -2181,9 +2175,6 @@ def reduce_slices(  # noqa: C901
         if has_complex and (sys.platform == "win32" or blosc2.IS_WASM):
             # On Windows and WebAssembly, miniexpr has issues with complex numbers
             use_miniexpr = False
-        if sys.platform == "win32" and use_miniexpr:
-            if blosc2.isdtype(dtype, "integral"):
-                use_miniexpr = False
         if has_complex and any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
             use_miniexpr = False
         if where is not None and len(where) != 2:
