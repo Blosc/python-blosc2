@@ -1474,16 +1474,6 @@ def fast_eval(  # noqa: C901
                 use_miniexpr = False
                 if is_dsl and dsl_disable_reason is None:
                     dsl_disable_reason = "Windows policy disables miniexpr for integral output dtypes."
-            else:
-                dtype_mismatch = any(
-                    isinstance(op, blosc2.NDArray) and op.dtype != dtype for op in operands_miniexpr.values()
-                )
-                if dtype_mismatch:
-                    use_miniexpr = False
-                    if is_dsl and dsl_disable_reason is None:
-                        dsl_disable_reason = (
-                            "Windows policy disables miniexpr when operand and output dtypes differ."
-                        )
 
     if is_dsl and not use_miniexpr:
         _raise_dsl_miniexpr_required(dsl_disable_reason)
@@ -2194,12 +2184,6 @@ def reduce_slices(  # noqa: C901
         if sys.platform == "win32" and use_miniexpr:
             if blosc2.isdtype(dtype, "integral"):
                 use_miniexpr = False
-            else:
-                dtype_mismatch = any(
-                    isinstance(op, blosc2.NDArray) and op.dtype != dtype for op in operands.values()
-                )
-                if dtype_mismatch:
-                    use_miniexpr = False
         if has_complex and any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
             use_miniexpr = False
         if where is not None and len(where) != 2:
