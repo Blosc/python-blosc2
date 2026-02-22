@@ -74,7 +74,7 @@ def test_expand_dims(shape, axis, chunks, blocks, fill_value):
     arr = np.arange(4)
     bloscarr_ = blosc2.asarray(arr)
     # In python 3.14, sys.getrefcount no longer creates "extra" dummy reference itself
-    py314 = sys.version >= "3.14"
+    py314 = sys.version_info >= (3, 14)
     assert sys.getrefcount(arr) == sys.getrefcount(bloscarr_) == 2 - py314
 
     view = np.expand_dims(arr, 0)
