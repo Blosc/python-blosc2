@@ -4352,7 +4352,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
     def __setitem__(
         self,
-        key: None | int | slice | Sequence[slice | int | np.bool_ | np.ndarray[int | np.bool_] | None],
+        key: int | slice | Sequence[slice | int | np.bool_ | np.ndarray[int | np.bool_] | None] | None,
         value: object,
     ):
         """Set a slice of the array.
