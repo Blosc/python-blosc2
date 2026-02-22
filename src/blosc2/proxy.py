@@ -586,7 +586,7 @@ def _convert_dtype(dt: str | DTypeLike):
     except TypeError:  # likely passed e.g. a torch.float64
         return np.dtype(str(dt).split(".")[1])
     except Exception as e:
-        raise TypeError("Could not parse dtype arg {dt}.") from e
+        raise TypeError(f"Could not parse dtype arg {dt}.") from e
 
 
 class SimpleProxy(blosc2.Operand):
