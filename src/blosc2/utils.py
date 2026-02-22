@@ -581,7 +581,7 @@ class ShapeInferencer(ast.NodeVisitor):
                     return (num,)
                 raise ValueError("linspace requires either shape or num argument")
 
-            elif base_name == "frombuffer" or base_name == "fromiter":
+            elif base_name in {"frombuffer", "fromiter"}:
                 count = kwargs.get("count")
                 return (count,) if count else ()
 

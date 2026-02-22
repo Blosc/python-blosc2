@@ -142,7 +142,7 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
 
 def _get_result(expression, chunk_operands, ne_args, where=None, indices=None, _order=None):
     chunk_indices = None
-    if (expression == "o0" or expression == "(o0)") and where is None:
+    if expression in {"o0", "(o0)"} and where is None:
         # We don't have an actual expression, so avoid a copy except to make contiguous (later)
         return chunk_operands["o0"], None
     # Apply the where condition (in result)
