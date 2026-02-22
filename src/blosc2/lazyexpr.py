@@ -114,7 +114,7 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
         if e.args and e.args[0] == "NumExpr 2 does not support Unicode as a dtype.":
             pass
         else:
-            raise e  # unsafe expression
+            raise  # unsafe expression
     except Exception:
         pass
     # Try with blosc2 funcs as presence of non-numexpr funcs probably caused failure

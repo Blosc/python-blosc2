@@ -105,7 +105,7 @@ def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):
             ):
                 assert True
             else:
-                raise e
+                raise
 
 
 def _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp):
@@ -168,12 +168,12 @@ def _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp):
             ):  # not supported for complex dtypes
                 assert True
             else:
-                raise e
+                raise
         except NotImplementedError as e:
             if np_func.__name__ in ("left_shift", "right_shift", "floor_divide", "power", "remainder"):
                 assert True
             else:
-                raise e
+                raise
         except AssertionError as e:
             if np_func.__name__ == "power" and blosc2.isdtype(
                 dtype, "integral"
@@ -189,7 +189,7 @@ def _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp):
                 )
                 pytest.skip("minimum and maximum for numexpr do not match NaN behaviour for numpy")
             else:
-                raise e
+                raise
 
 
 def _test_unary_func_proxy(np_func, blosc_func, dtype, shape, xp):
@@ -228,7 +228,7 @@ def _test_unary_func_proxy(np_func, blosc_func, dtype, shape, xp):
             ):
                 assert True
             else:
-                raise e
+                raise
 
 
 def _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):
@@ -283,12 +283,12 @@ def _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):
             ):  # not supported for complex dtypes
                 assert True
             else:
-                raise e
+                raise
         except NotImplementedError as e:
             if np_func.__name__ in ("left_shift", "right_shift", "floor_divide", "power", "remainder"):
                 assert True
             else:
-                raise e
+                raise
         except AssertionError as e:
             if np_func.__name__ == "power" and blosc2.isdtype(
                 dtype, "integral"
@@ -304,7 +304,7 @@ def _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):
                 )
                 pytest.skip("minimum and maximum for numexpr do not match NaN behaviour for numpy")
             else:
-                raise e
+                raise
 
 
 @pytest.mark.parametrize(("np_func", "blosc_func"), UNARY_FUNC_PAIRS)
