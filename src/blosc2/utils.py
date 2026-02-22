@@ -262,7 +262,7 @@ def linalg_shape(func_name, args, kwargs):  # noqa: C901
         axis = 0 if axis is None else axis
         # normalize negative axis
         axis = axis + len(shapes[0]) if axis < 0 else axis
-        concat_dim = builtins.sum([s[axis] for s in shapes])
+        concat_dim = builtins.sum(s[axis] for s in shapes)
         return tuple(s if i != axis else concat_dim for i, s in enumerate(shapes[0]))
 
     # --- diagonal ---
@@ -895,7 +895,7 @@ def _sliced_chunk_iter(chunks, idx, shape, axis=None, nchunk=False):
                 ]
             if nchunk:
                 yield builtins.sum(
-                    [c.start // chunks[i] * np.prod(ratio[i + 1 :]) for i, c in enumerate(my_list)]
+                    c.start // chunks[i] * np.prod(ratio[i + 1 :]) for i, c in enumerate(my_list)
                 )
             else:
                 yield ndindex.Tuple(*my_list)

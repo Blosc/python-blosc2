@@ -1761,7 +1761,7 @@ def slices_eval(  # noqa: C901
         # Check whether current cslice intersects with _slice
         cslice = chunk_slice.raw
         nchunk = (
-            builtins.sum([c.start // chunks[i] * np.prod(ratio[i + 1 :]) for i, c in enumerate(cslice)])
+            builtins.sum(c.start // chunks[i] * np.prod(ratio[i + 1 :]) for i, c in enumerate(cslice))
             if 0 not in chunks
             else 0
         )
@@ -2284,7 +2284,7 @@ def reduce_slices(  # noqa: C901
     for chunk_slice in intersecting_chunks:
         cslice = chunk_slice.raw
         nchunk = (
-            builtins.sum([c.start // chunks[i] * np.prod(ratio[i + 1 :]) for i, c in enumerate(cslice)])
+            builtins.sum(c.start // chunks[i] * np.prod(ratio[i + 1 :]) for i, c in enumerate(cslice))
             if 0 not in chunks
             else 0
         )
