@@ -43,8 +43,11 @@ version = "4.0.1.dev0"
 [project.entry-points."array_api"]
 blosc2 = "blosc2"
 
+[project.urls]
+homepage = "https://github.com/Blosc/python-blosc2"
+documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "dask",
     "h5py",
@@ -78,10 +81,6 @@ doc = [
     "furo",
     "numba",
 ]
-
-[project.urls]
-homepage = "https://github.com/Blosc/python-blosc2"
-documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 
 [tool.cibuildwheel]
 build-verbosity = 1
