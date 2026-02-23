@@ -698,3 +698,4 @@ def test_dsl_save_input_names_match(tmp_path):
 
     assert isinstance(reloaded.func, DSLKernel)
     assert reloaded.func.input_names == ["x", "y"]
+    assert list(reloaded.inputs_dict.keys()) == ["x", "y"]
