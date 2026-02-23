@@ -445,7 +445,32 @@ def test_open_context_manager(populated_dict_store):
     dstore_fixture.close()
 
     # Test opening via blosc2.open as a context manager
-    with blosc2.open(path, mode="r") as dstore:
+    with blosc2.open(path, mode="r", mmap_mode="r") as dstore:
         assert isinstance(dstore, DictStore)
         assert "/node1" in dstore
         assert np.array_equal(dstore["/node1"][:], np.array([1, 2, 3]))
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_mmap_mode_read_access(storage_type, tmp_path):
+    path = tmp_path / f"test_mmap_dstore.{storage_type}"
+    external_path = tmp_path / "external_node.b2nd"
+
+    with DictStore(str(path), mode="w", threshold=None) as dstore:
+        dstore["/embedded"] = np.arange(16)
+        external = blosc2.arange(32, urlpath=str(external_path), mode="w")
+        dstore["/external"] = external
+
+    with DictStore(str(path), mode="r", mmap_mode="r") as dstore:
+        assert np.array_equal(dstore["/embedded"][3:7], np.arange(3, 7))
+        assert np.array_equal(dstore["/external"][11:15], np.arange(11, 15))
+
+
+def test_mmap_mode_validation(tmp_path):
+    path = tmp_path / "test_mmap_validation.b2z"
+
+    with pytest.raises(ValueError, match="mmap_mode must be None or 'r'"):
+        DictStore(str(path), mode="r", mmap_mode="r+")
+
+    with pytest.raises(ValueError, match="mmap_mode='r' requires mode='r'"):
+        DictStore(str(path), mode="a", mmap_mode="r")

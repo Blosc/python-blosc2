@@ -16,6 +16,9 @@ Important: Only remote ``C2Array`` objects are stored as lightweight references 
 
 Typical use cases include bundling several small/medium arrays together, shipping datasets as one file, or creating a simple keyed store for heterogeneous array sources.
 
+For read-only access, EmbedStore supports memory-mapped opens via
+``mmap_mode="r"`` (constructor or :func:`blosc2.open`) for ``.b2e`` files.
+
 Quickstart
 ----------
 
@@ -45,10 +48,15 @@ Quickstart
     estore = blosc2.open("example_estore.b2e", mode="r")
     print(list(estore.keys()))
 
+    # Reopen in read-only mmap mode
+    estore_mmap = blosc2.open("example_estore.b2e", mode="r", mmap_mode="r")
+    print(estore_mmap["/node2"][:])
+
 .. note::
    - Embedded arrays (NumPy, NDArray, and SChunk) increase the size of the ``.b2e`` container.
    - Remote ``C2Array`` nodes only store lightweight references; reading them requires access to the remote source. NDArrays coming from external ``.b2nd`` files are embedded into the store.
    - When retrieving, ``estore[key]`` may return either an ``NDArray`` or an ``SChunk`` depending on what was originally stored; deserialization uses :func:`blosc2.from_cframe`.
+   - For store containers, only ``mmap_mode="r"`` is currently supported, and it requires ``mode="r"``.
 
 .. currentmodule:: blosc2
 

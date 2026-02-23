@@ -216,7 +216,26 @@ def test_open_context_manager(cleanup_files):
     estore["/node1"] = np.arange(10)
 
     # Test opening via blosc2.open as a context manager
-    with blosc2.open(path, mode="r") as estore_read:
+    with blosc2.open(path, mode="r", mmap_mode="r") as estore_read:
         assert isinstance(estore_read, blosc2.EmbedStore)
         assert "/node1" in estore_read
         assert np.array_equal(estore_read["/node1"][:], np.arange(10))
+
+
+def test_mmap_mode_read_access(cleanup_files):
+    path = "test_embed_mmap_read.b2e"
+    cleanup_files.append(path)
+
+    estore = blosc2.EmbedStore(path, mode="w")
+    estore["/node1"] = np.arange(20)
+
+    estore_read = blosc2.EmbedStore(path, mode="r", mmap_mode="r")
+    assert np.array_equal(estore_read["/node1"][5:11], np.arange(5, 11))
+
+
+def test_mmap_mode_validation():
+    with pytest.raises(ValueError, match="mmap_mode must be None or 'r'"):
+        blosc2.EmbedStore(urlpath="test_invalid.b2e", mode="r", mmap_mode="r+")
+
+    with pytest.raises(ValueError, match="mmap_mode='r' requires mode='r'"):
+        blosc2.EmbedStore(urlpath="test_invalid.b2e", mode="a", mmap_mode="r")

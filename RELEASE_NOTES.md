@@ -4,6 +4,11 @@
 
 XXX version-specific blurb XXX
 
+- Add initial read-only mmap support for store containers:
+  `DictStore`, `TreeStore`, and `EmbedStore` now accept `mmap_mode="r"`
+  when opened with `mode="r"` (including via `blosc2.open` for `.b2d`,
+  `.b2z`, and `.b2e`).
+
 ## Changes from 4.0.0-b1 to 4.0.0
 
 - On Windows, miniexpr is temporarily disabled for integral outputs and mixed-dtype expressions.

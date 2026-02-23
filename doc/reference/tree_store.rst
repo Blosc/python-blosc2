@@ -23,6 +23,9 @@ store, while larger arrays or explicitly external arrays are stored as separate
 ``.b2nd`` files. You can traverse your dataset hierarchically with ``walk()``, query
 children/descendants, or focus on a subtree view with ``get_subtree()``.
 
+TreeStore also supports read-only memory-mapped opens via ``mmap_mode="r"``
+(constructor or :func:`blosc2.open`) for both ``.b2d`` and ``.b2z`` formats.
+
 Quick example
 -------------
 
@@ -50,6 +53,14 @@ Quick example
    # Reopen using blosc2.open
    with blosc2.open("my_tree.b2z", mode="r") as tstore:
        print(sorted(tstore.keys()))
+
+   # Reopen in read-only mmap mode
+   with blosc2.open("my_tree.b2z", mode="r", mmap_mode="r") as tstore_mmap:
+       print(tstore_mmap["/child0/leaf1"][0:2])
+
+.. note::
+   For store containers, only ``mmap_mode="r"`` is currently supported, and it
+   requires ``mode="r"``.
 
 .. currentmodule:: blosc2
 
