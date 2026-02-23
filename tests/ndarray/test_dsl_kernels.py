@@ -642,7 +642,6 @@ def test_dsl_save_clamp(tmp_path):
     np.testing.assert_allclose(result[...], expected, rtol=1e-5, atol=1e-6)
 
 
-@pytest.mark.skipif(blosc2.IS_WASM, reason="Not supported on WASM")
 def test_dsl_save_loop(tmp_path):
     """Kernel with a loop (full DSL function) survives save/reload."""
     from blosc2.dsl_kernel import DSLKernel
