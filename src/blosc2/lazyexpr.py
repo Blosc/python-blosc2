@@ -3798,10 +3798,10 @@ class LazyUDF(LazyArray):
         #     self.res_getitem._set_postf_udf(self.func, id(self.inputs))
 
         if isinstance(self.func, DSLKernel) and self.func.input_names:
-            if len(self.func.input_names) == len(self.inputs):
-                self.inputs_dict = dict(zip(self.func.input_names, self.inputs, strict=True))
-            else:
-                self.inputs_dict = {f"o{i}": obj for i, obj in enumerate(self.inputs)}
+            # DSL kernels are using input names that are extracted from params as a list,
+            # and we need to use them for matching variables in miniexpr
+            # (instead of the 'o{%d}' notation).
+            self.inputs_dict = dict(zip(self.func.input_names, self.inputs, strict=True))
         else:
             self.inputs_dict = {f"o{i}": obj for i, obj in enumerate(self.inputs)}
 
