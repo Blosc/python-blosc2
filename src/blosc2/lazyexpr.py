@@ -496,7 +496,8 @@ class LazyArray(ABC, blosc2.Operand):
         * If an operand is a :ref:`Proxy`, keep in mind that Python-Blosc2 will only be able to reopen it as such
           if its source is a :ref:`SChunk`, :ref:`NDArray` or a :ref:`C2Array` (see :func:`blosc2.open` notes
           section for more info).
-        * This is currently only supported for :ref:`LazyExpr`.
+        * This is currently only supported for :ref:`LazyExpr` and :ref:`LazyUDF`
+          (including kernels decorated with :func:`blosc2.dsl_kernel`).
 
         Examples
         --------
@@ -1467,22 +1468,6 @@ def fast_eval(  # noqa: C901
                 use_miniexpr = False
                 if is_dsl and dsl_disable_reason is None:
                     dsl_disable_reason = "complex comparisons are not supported by miniexpr."
-        if sys.platform == "win32" and use_miniexpr:
-            # Work around Windows miniexpr issues for integer outputs and dtype conversions.
-            if blosc2.isdtype(dtype, "integral"):
-                use_miniexpr = False
-                if is_dsl and dsl_disable_reason is None:
-                    dsl_disable_reason = "Windows policy disables miniexpr for integral output dtypes."
-            else:
-                dtype_mismatch = any(
-                    isinstance(op, blosc2.NDArray) and op.dtype != dtype for op in operands_miniexpr.values()
-                )
-                if dtype_mismatch:
-                    use_miniexpr = False
-                    if is_dsl and dsl_disable_reason is None:
-                        dsl_disable_reason = (
-                            "Windows policy disables miniexpr when operand and output dtypes differ."
-                        )
 
     if is_dsl and not use_miniexpr:
         _raise_dsl_miniexpr_required(dsl_disable_reason)
@@ -2190,15 +2175,6 @@ def reduce_slices(  # noqa: C901
         if has_complex and (sys.platform == "win32" or blosc2.IS_WASM):
             # On Windows and WebAssembly, miniexpr has issues with complex numbers
             use_miniexpr = False
-        if sys.platform == "win32" and use_miniexpr:
-            if blosc2.isdtype(dtype, "integral"):
-                use_miniexpr = False
-            else:
-                dtype_mismatch = any(
-                    isinstance(op, blosc2.NDArray) and op.dtype != dtype for op in operands.values()
-                )
-                if dtype_mismatch:
-                    use_miniexpr = False
         if has_complex and any(tok in expression for tok in ("!=", "==", "<=", ">=", "<", ">")):
             use_miniexpr = False
         if where is not None and len(where) != 2:
@@ -3822,10 +3798,10 @@ class LazyUDF(LazyArray):
         #     self.res_getitem._set_postf_udf(self.func, id(self.inputs))
 
         if isinstance(self.func, DSLKernel) and self.func.input_names:
-            if len(self.func.input_names) == len(self.inputs):
-                self.inputs_dict = dict(zip(self.func.input_names, self.inputs, strict=True))
-            else:
-                self.inputs_dict = {f"o{i}": obj for i, obj in enumerate(self.inputs)}
+            # DSL kernels are using input names that are extracted from params as a list,
+            # and we need to use them for matching variables in miniexpr
+            # (instead of the 'o{%d}' notation).
+            self.inputs_dict = dict(zip(self.func.input_names, self.inputs, strict=True))
         else:
             self.inputs_dict = {f"o{i}": obj for i, obj in enumerate(self.inputs)}
 
@@ -4028,6 +4004,30 @@ class LazyUDF(LazyArray):
         return None
 
     def save(self, urlpath=None, **kwargs):
+        """
+        Save the :ref:`LazyUDF` on disk.
+
+        Parameters
+        ----------
+        urlpath: str
+            The path to the file where the LazyUDF will be stored.
+        kwargs: Any, optional
+            Keyword arguments that are supported by the :func:`empty` constructor.
+
+        Returns
+        -------
+        out: None
+
+        Notes
+        -----
+        * All operands must be :ref:`NDArray` or :ref:`C2Array` objects stored on
+          disk or a remote server (i.e. they must have a ``urlpath``).
+        * When the :ref:`LazyUDF` wraps a :func:`blosc2.dsl_kernel`-decorated
+          function, the DSL source is preserved verbatim in the saved metadata.
+          On reload via :func:`blosc2.open`, the function is restored as a full
+          :class:`~blosc2.dsl_kernel.DSLKernel` so the miniexpr JIT fast path
+          remains available without any extra work from the caller.
+        """
         if urlpath is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
 
@@ -4043,9 +4043,10 @@ class LazyUDF(LazyArray):
         # Save the expression and operands in the metadata
         operands = {}
         operands_ = self.inputs_dict
-        for key, value in operands_.items():
+        for i, (_key, value) in enumerate(operands_.items()):
+            pos_key = f"o{i}"  # always use positional keys for consistent loading
             if isinstance(value, blosc2.C2Array):
-                operands[key] = {
+                operands[pos_key] = {
                     "path": str(value.path),
                     "urlbase": value.urlbase,
                 }
@@ -4059,18 +4060,21 @@ class LazyUDF(LazyArray):
                 )
             if value.schunk.urlpath is None:
                 raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
-            operands[key] = value.schunk.urlpath
+            operands[pos_key] = value.schunk.urlpath
         udf_func = self.func.func if isinstance(self.func, DSLKernel) else self.func
         udf_name = getattr(udf_func, "__name__", self.func.__name__)
         try:
             udf_source = textwrap.dedent(inspect.getsource(udf_func)).lstrip()
         except Exception:
             udf_source = None
-        array.schunk.vlmeta["_LazyArray"] = {
+        meta = {
             "UDF": udf_source,
             "operands": operands,
             "name": udf_name,
         }
+        if isinstance(self.func, DSLKernel) and self.func.dsl_source is not None:
+            meta["dsl_source"] = self.func.dsl_source
+        array.schunk.vlmeta["_LazyArray"] = meta
 
 
 def _numpy_eval_expr(expression, operands, prefer_blosc=False):
@@ -4335,6 +4339,41 @@ def lazyexpr(
     return LazyExpr._new_expr(expression, operands, guess=True, out=out, where=where, ne_args=ne_args)
 
 
+def _reconstruct_lazyudf(expr, lazyarray, operands_dict, array):
+    """Reconstruct a LazyUDF (including DSL kernels) from saved metadata."""
+    local_ns = {}
+    name = lazyarray["name"]
+    filename = f"<{name}>"  # any unique name
+    SAFE_GLOBALS = {
+        "__builtins__": {k: v for k, v in builtins.__dict__.items() if k != "__import__"},
+        "np": np,
+        "blosc2": blosc2,
+    }
+    if blosc2._HAS_NUMBA:
+        SAFE_GLOBALS["numba"] = numba
+
+    # Register the source so inspect can find it
+    linecache.cache[filename] = (len(expr), None, expr.splitlines(True), filename)
+
+    exec(compile(expr, filename, "exec"), SAFE_GLOBALS, local_ns)
+    func = local_ns[name]
+    # If the saved LazyUDF was a DSL kernel, re-wrap and restore the dsl_source
+    if "dsl_source" in lazyarray:
+        if not isinstance(func, DSLKernel):
+            func = DSLKernel(func)
+        if func.dsl_source is None:
+            # Re-extraction from linecache failed; use the saved verbatim dsl_source
+            func.dsl_source = lazyarray["dsl_source"]
+    # TODO: make more robust for general kwargs (not just cparams)
+    return blosc2.lazyudf(
+        func,
+        tuple(operands_dict[f"o{n}"] for n in range(len(operands_dict))),
+        shape=array.shape,
+        dtype=array.dtype,
+        cparams=array.cparams,
+    )
+
+
 def _open_lazyarray(array):
     value = array.schunk.meta["LazyArray"]
     lazyarray = array.schunk.vlmeta["_LazyArray"]
@@ -4377,32 +4416,7 @@ def _open_lazyarray(array):
     if value == LazyArrayEnum.Expr.value:
         new_expr = LazyExpr._new_expr(expr, operands_dict, guess=True, out=None, where=None)
     elif value == LazyArrayEnum.UDF.value:
-        local_ns = {}
-        name = lazyarray["name"]
-        filename = f"<{name}>"  # any unique name
-        SAFE_GLOBALS = {
-            "__builtins__": {
-                name: value for name, value in builtins.__dict__.items() if name != "__import__"
-            },
-            "np": np,
-            "blosc2": blosc2,
-        }
-        if blosc2._HAS_NUMBA:
-            SAFE_GLOBALS["numba"] = numba
-
-        # Register the source so inspect can find it
-        linecache.cache[filename] = (len(expr), None, expr.splitlines(True), filename)
-
-        exec(compile(expr, filename, "exec"), SAFE_GLOBALS, local_ns)
-        func = local_ns[name]
-        # TODO: make more robust for general kwargs (not just cparams)
-        new_expr = blosc2.lazyudf(
-            func,
-            tuple(operands_dict[f"o{n}"] for n in range(len(operands_dict))),
-            shape=array.shape,
-            dtype=array.dtype,
-            cparams=array.cparams,
-        )
+        new_expr = _reconstruct_lazyudf(expr, lazyarray, operands_dict, array)
 
     # Make the array info available for the user (only available when opened from disk)
     new_expr.array = array

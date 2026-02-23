@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+
 import numpy as np
 import pytest
 
@@ -14,15 +15,6 @@ from blosc2.lazyexpr import _apply_jit_backend_pragma
 
 where = np.where
 clip = np.clip
-
-
-def _windows_policy_blocks_dsl_dtype(dtype, operand_dtypes=()) -> bool:
-    import importlib
-
-    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
-    dtype = np.dtype(dtype)
-    dtype_mismatch = any(np.dtype(op_dtype) != dtype for op_dtype in operand_dtypes)
-    return lazyexpr_mod.sys.platform == "win32" and (blosc2.isdtype(dtype, "integral") or dtype_mismatch)
 
 
 def _make_arrays(shape=(8, 8), chunks=(4, 4), blocks=(2, 2)):
@@ -304,10 +296,6 @@ def test_dsl_kernel_index_symbols_int_cast_matches_expected_ramp():
     shape = (32, 5)
     x2 = blosc2.zeros(shape, dtype=np.float32)
     expr = blosc2.lazyudf(kernel_index_ramp_int_cast, (x2,), dtype=np.int64)
-    if _windows_policy_blocks_dsl_dtype(np.int64, operand_dtypes=(x2.dtype,)):
-        with pytest.raises(RuntimeError, match="DSL kernels require miniexpr"):
-            _ = expr[:]
-        return
     try:
         res = expr[:]
     except RuntimeError as e:
@@ -325,10 +313,6 @@ def test_dsl_kernel_bool_cast_numeric_matches_expected():
     x = np.array([[0.0, 1.0, -2.0], [3.5, 0.0, -0.1]], dtype=np.float32)
     x2 = blosc2.asarray(x, chunks=(2, 3), blocks=(1, 2))
     expr = blosc2.lazyudf(kernel_bool_cast_numeric, (x2,), dtype=np.bool_)
-    if _windows_policy_blocks_dsl_dtype(np.bool_, operand_dtypes=(x2.dtype,)):
-        with pytest.raises(RuntimeError, match="DSL kernels require miniexpr"):
-            _ = expr[:]
-        return
     res = expr[:]
     expected = x != 0.0
     np.testing.assert_equal(res, expected)
@@ -583,3 +567,135 @@ def test_validate_dsl_api_valid_and_invalid():
     assert "Ternary expressions are not supported in DSL" in invalid_report["error"]
     assert invalid_report["dsl_source"] is None
     assert invalid_report["input_names"] is None
+
+
+# ---------------------------------------------------------------------------
+# Tests for DSL kernel persistence (save / reload / execute)
+# ---------------------------------------------------------------------------
+
+
+@blosc2.dsl_kernel
+def kernel_save_simple(x, y):
+    return x**2 + y**2 + 2 * x * y
+
+
+@blosc2.dsl_kernel
+def kernel_save_clamp(x, y):
+    return where(x + y > 1.5, x + y, 1.5)
+
+
+@blosc2.dsl_kernel
+def kernel_save_loop(x, y):
+    acc = 0.0
+    for i in range(3):
+        acc = acc + x * (i + 1) - y
+    return acc
+
+
+def _save_reload_compute(kernel, inputs_np, inputs_b2, dtype, urlpaths, extra_kwargs=None):
+    """Save a LazyUDF backed by *kernel*, reload it, and return (reloaded_expr, result)."""
+    lazy = blosc2.lazyudf(kernel, inputs_b2, dtype=dtype, **(extra_kwargs or {}))
+    lazy.save(urlpath=urlpaths["lazy"])
+    reloaded = blosc2.open(urlpaths["lazy"])
+    return reloaded, reloaded.compute()
+
+
+def test_dsl_save_simple(tmp_path):
+    """Simple quadratic kernel: dsl_source and DSLKernel type survive a round-trip."""
+    from blosc2.dsl_kernel import DSLKernel
+
+    shape = (16, 16)
+    na = np.linspace(0, 1, np.prod(shape), dtype=np.float32).reshape(shape)
+    nb = np.linspace(1, 2, np.prod(shape), dtype=np.float32).reshape(shape)
+    a = blosc2.asarray(na, urlpath=str(tmp_path / "a.b2nd"), mode="w")
+    b = blosc2.asarray(nb, urlpath=str(tmp_path / "b.b2nd"), mode="w")
+
+    urlpaths = {"lazy": str(tmp_path / "lazy.b2nd")}
+    reloaded, result = _save_reload_compute(kernel_save_simple, (na, nb), (a, b), np.float64, urlpaths)
+
+    assert isinstance(reloaded, blosc2.LazyUDF)
+    assert isinstance(reloaded.func, DSLKernel), "func must be a DSLKernel after reload"
+    assert reloaded.func.dsl_source is not None, "dsl_source must be preserved"
+    assert "kernel_save_simple" in reloaded.func.dsl_source
+
+    expected = (na + nb) ** 2  # (x+y)^2 == x^2 + y^2 + 2xy
+    np.testing.assert_allclose(result[...], expected, rtol=1e-5, atol=1e-6)
+
+
+def test_dsl_save_clamp(tmp_path):
+    """Kernel with a `where` call survives save/reload and produces correct values."""
+    from blosc2.dsl_kernel import DSLKernel
+
+    shape = (20, 20)
+    na = np.linspace(0, 1, np.prod(shape), dtype=np.float32).reshape(shape)
+    nb = np.linspace(0.5, 1.5, np.prod(shape), dtype=np.float32).reshape(shape)
+    a = blosc2.asarray(na, urlpath=str(tmp_path / "a.b2nd"), mode="w")
+    b = blosc2.asarray(nb, urlpath=str(tmp_path / "b.b2nd"), mode="w")
+
+    urlpaths = {"lazy": str(tmp_path / "lazy.b2nd")}
+    reloaded, result = _save_reload_compute(kernel_save_clamp, (na, nb), (a, b), np.float64, urlpaths)
+
+    assert isinstance(reloaded.func, DSLKernel)
+    assert reloaded.func.dsl_source is not None
+
+    expected = np.where(na + nb > 1.5, na + nb, 1.5)
+    np.testing.assert_allclose(result[...], expected, rtol=1e-5, atol=1e-6)
+
+
+def test_dsl_save_loop(tmp_path):
+    """Kernel with a loop (full DSL function) survives save/reload."""
+    from blosc2.dsl_kernel import DSLKernel
+
+    shape = (12, 12)
+    na = np.linspace(0, 1, np.prod(shape), dtype=np.float32).reshape(shape)
+    nb = np.linspace(1, 2, np.prod(shape), dtype=np.float32).reshape(shape)
+    a = blosc2.asarray(na, urlpath=str(tmp_path / "a.b2nd"), mode="w")
+    b = blosc2.asarray(nb, urlpath=str(tmp_path / "b.b2nd"), mode="w")
+
+    urlpaths = {"lazy": str(tmp_path / "lazy.b2nd")}
+    reloaded, result = _save_reload_compute(kernel_save_loop, (na, nb), (a, b), np.float64, urlpaths)
+
+    assert isinstance(reloaded.func, DSLKernel)
+    assert reloaded.func.dsl_source is not None
+    assert "for i in range(3):" in reloaded.func.dsl_source
+
+    expected = kernel_save_loop.func(na, nb)
+    np.testing.assert_allclose(result[...], expected, rtol=1e-5, atol=1e-6)
+
+
+def test_dsl_save_getitem(tmp_path):
+    """Reloaded DSL kernel supports __getitem__ (sliced access), not just compute()."""
+    from blosc2.dsl_kernel import DSLKernel
+
+    shape = (16, 16)
+    na = np.linspace(0, 1, np.prod(shape), dtype=np.float32).reshape(shape)
+    nb = np.linspace(1, 2, np.prod(shape), dtype=np.float32).reshape(shape)
+    a = blosc2.asarray(na, urlpath=str(tmp_path / "a.b2nd"), mode="w")
+    b = blosc2.asarray(nb, urlpath=str(tmp_path / "b.b2nd"), mode="w")
+
+    lazy = blosc2.lazyudf(kernel_save_simple, (a, b), dtype=np.float64)
+    lazy.save(urlpath=str(tmp_path / "lazy.b2nd"))
+    reloaded = blosc2.open(str(tmp_path / "lazy.b2nd"))
+
+    assert isinstance(reloaded.func, DSLKernel)
+    expected = (na + nb) ** 2
+    np.testing.assert_allclose(reloaded[()], expected, rtol=1e-5, atol=1e-6)
+
+
+def test_dsl_save_input_names_match(tmp_path):
+    """After reload, input_names in the DSLKernel match the original kernel."""
+    from blosc2.dsl_kernel import DSLKernel
+
+    shape = (10, 10)
+    na = np.linspace(0, 1, np.prod(shape), dtype=np.float32).reshape(shape)
+    nb = np.linspace(1, 2, np.prod(shape), dtype=np.float32).reshape(shape)
+    a = blosc2.asarray(na, urlpath=str(tmp_path / "a.b2nd"), mode="w")
+    b = blosc2.asarray(nb, urlpath=str(tmp_path / "b.b2nd"), mode="w")
+
+    lazy = blosc2.lazyudf(kernel_save_simple, (a, b), dtype=np.float64)
+    lazy.save(urlpath=str(tmp_path / "lazy.b2nd"))
+    reloaded = blosc2.open(str(tmp_path / "lazy.b2nd"))
+
+    assert isinstance(reloaded.func, DSLKernel)
+    assert reloaded.func.input_names == ["x", "y"]
+    assert list(reloaded.inputs_dict.keys()) == ["x", "y"]
