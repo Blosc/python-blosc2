@@ -958,6 +958,10 @@ def extract_numpy_scalars(expr: str):
     return transformed_expr, transformer.replacements
 
 
+def _isscalar(arr):
+    return np.isscalar(arr) or (hasattr(arr, "shape") and arr.shape == ())
+
+
 def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C901
     """Validate the inputs for the expression."""
     if not inputs:
@@ -971,32 +975,29 @@ def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C90
         else:
             return out.shape, None, None, True
 
-    raw_inputs = [input_ for input_ in inputs.values() if input_ is not np]
-    if raw_inputs and all(
-        np.isscalar(input_) or (hasattr(input_, "shape") and input_.shape == ()) for input_ in raw_inputs
-    ):
+    raw_inputs = [input_ for input_ in inputs.values() if (input_ is not np and not _isscalar(input_))]
+    if not raw_inputs:
         # Scalar-only expressions have scalar output shape.
         return (), None, None, False
 
-    inputs = [input for input in inputs.values() if hasattr(input, "shape") and input is not np]
     # This will raise an exception if the input shapes are not compatible
-    shape = compute_broadcast_shape(inputs)
+    shape = compute_broadcast_shape(raw_inputs)
 
-    if not all(np.array_equal(shape, input.shape) for input in inputs):
-        # If inputs have different shapes, we cannot take the fast path
+    if not all(np.array_equal(shape, input.shape) for input in raw_inputs):
+        # If inputs have different shapes (other than scalars), we cannot take the fast path
         return shape, None, None, False
 
-    # More checks specific of NDArray inputs
+    # More checks specific to NDArray inputs
     # NDInputs are either non-SimpleProxy with chunks or are SimpleProxy with src having chunks
     NDinputs = [
         input
-        for input in inputs
+        for input in raw_inputs
         if (hasattr(input, "chunks") and not isinstance(input, blosc2.SimpleProxy))
         or (isinstance(input, blosc2.SimpleProxy) and hasattr(input.src, "chunks"))
     ]
     if not NDinputs:
         # All inputs are NumPy arrays, so we cannot take the fast path
-        if inputs and hasattr(inputs[0], "shape"):
+        if raw_inputs and hasattr(inputs[0], "shape"):
             shape = inputs[0].shape
         else:
             shape = None
@@ -1688,6 +1689,7 @@ def slices_eval(  # noqa: C901
         _order = [_order]
 
     dtype = kwargs.pop("dtype", None)
+    _in_place = kwargs.pop("in_place", False)
     shape_slice = None
     need_final_slice = False
 
@@ -1710,7 +1712,7 @@ def slices_eval(  # noqa: C901
         mask_slice = np.array([isinstance(i, int) for i in orig_slice], dtype=np.bool_)
     if out is not None:
         shape_ = shape_slice if shape_slice is not None else shape
-        if shape_ != out.shape:
+        if shape_ != out.shape and not _in_place:
             raise ValueError("Provided output shape does not match the slice shape.")
 
     if chunks is None:  # Guess chunk shape
@@ -1808,11 +1810,15 @@ def slices_eval(  # noqa: C901
                 _raise_dsl_miniexpr_required(
                     "internal sliced fallback attempted to execute the DSL kernel directly in Python."
                 )
-            result = np.empty(cslice_shape, dtype=out.dtype)  # raises error if out is None
-            # cslice should be equal to cslice_subidx
-            # Call the udf directly and use result as the output array
-            expression(tuple(chunk_operands.values()), result, offset=offset)
-            out[cslice_subidx] = result
+            if shape_ != out.shape:  # presumably the user knows what they're doing
+                # edit out in-place
+                expression(tuple(chunk_operands.values()), out, offset=offset)
+            else:
+                result = np.empty(cslice_shape, dtype=out.dtype)  # raises error if out is None
+                # cslice should be equal to cslice_subidx
+                # Call the udf directly and use result as the output array
+                expression(tuple(chunk_operands.values()), result, offset=offset)
+                out[cslice_subidx] = result
             continue
 
         if _indices or _order:
@@ -3782,7 +3788,6 @@ class LazyUDF(LazyArray):
     ):
         # After this, all the inputs should be np.ndarray or NDArray objects
         self.inputs = convert_inputs(inputs)
-        self.chunked_eval = True  # chunked_eval
         # Get res shape
         if shape is None:
             self._shape = compute_broadcast_shape(self.inputs)
@@ -3798,6 +3803,8 @@ class LazyUDF(LazyArray):
         self.kwargs["shape"] = self._shape
         self.kwargs["jit"] = jit
         self.kwargs["jit_backend"] = jit_backend
+        in_place = kwargs.get("in_place", False)
+        self.kwargs["in_place"] = in_place
         self._dtype = dtype
         self.func = func
         if isinstance(self.func, DSLKernel) and self.func.dsl_error is not None:
@@ -3814,12 +3821,6 @@ class LazyUDF(LazyArray):
         else:
             raise TypeError("dparams should be a dictionary")
         kwargs_getitem["dparams"] = dparams
-
-        # TODO: enable parallelism using python 3.14t
-        # self.res_getitem = blosc2.empty(self._shape, self._dtype, **kwargs_getitem)
-        # # Register a postfilter for getitem
-        # if 0 not in self._shape:
-        #     self.res_getitem._set_postf_udf(self.func, id(self.inputs))
 
         if isinstance(self.func, DSLKernel) and self.func.input_names:
             if len(self.func.input_names) == len(self.inputs):
@@ -3990,42 +3991,11 @@ class LazyUDF(LazyArray):
             aux_kwargs["_output"] = self._output
         aux_kwargs.update(kwargs)
 
-        if self.chunked_eval:
-            # aux_kwargs includes self.shape and self.dtype
-            return chunked_eval(self.func, self.inputs_dict, item, _getitem=False, **aux_kwargs)
-
-        # TODO: Implement multithreading
-        # # Cannot use multithreading when applying a prefilter, save nthreads to set them
-        # # after the evaluation
-        # cparams = aux_kwargs.get("cparams", {})
-        # if isinstance(cparams, dict):
-        #     self._cnthreads = cparams.get("nthreads", blosc2.cparams_dflts["nthreads"])
-        #     cparams["nthreads"] = 1
-        # else:
-        #     raise ValueError("cparams should be a dictionary")
-        # aux_kwargs["cparams"] = cparams
-
-        # res_eval = blosc2.empty(self.shape, self.dtype, **aux_kwargs)
-        # # Register a prefilter for eval
-        # res_eval._set_pref_udf(self.func, id(self.inputs))
-
-        # This line would NOT allocate physical RAM on any modern OS:
-        # aux = np.empty(res_eval.shape, res_eval.dtype)
-        # Physical allocation happens here (when writing):
-        # res_eval[...] = aux
-        # res_eval.schunk.remove_prefilter(self.func.__name__)
-        # res_eval.schunk.cparams.nthreads = self._cnthreads
-
-        # return res_eval
-        return None
+        # aux_kwargs includes self.shape and self.dtype
+        return chunked_eval(self.func, self.inputs_dict, item, _getitem=False, **aux_kwargs)
 
     def __getitem__(self, item):
-        if self.chunked_eval:
-            # It is important to pass kwargs here, because chunks can be used internally
-            # self.kwargs includes self.shape and self.dtype
-            return chunked_eval(self.func, self.inputs_dict, item, _getitem=True, **self.kwargs)
-        # return self.res_getitem[item] # TODO: implement multithreading
-        return None
+        return chunked_eval(self.func, self.inputs_dict, item, _getitem=True, **self.kwargs)
 
     def save(self, urlpath=None, **kwargs):
         if urlpath is None:
@@ -4137,7 +4107,13 @@ def lazyudf(
         - `inputs_tuple`: A tuple containing the corresponding slice for the block of each input
         in :paramref:`inputs`.
         - `output`: The buffer to be filled as a multidimensional numpy.ndarray.
-        - `offset`: The multidimensional offset corresponding to the start of the block being computed.
+        - `offset`: The multidimensional offset corresponding to the start of the block being computed:
+        ```
+        def myudf(inputs_tuple, output, offset):
+            x, y = inputs_tuple
+            ...
+            output[:] = result
+        ```
     inputs: Sequence[Any] or None
         The sequence of inputs. Besides objects compliant with the blosc2.Array protocol,
         any other object is supported too, and it will be passed as-is to the
@@ -4160,6 +4136,14 @@ def lazyudf(
         These arguments will be used by the :meth:`LazyArray.__getitem__` and
         :meth:`LazyArray.compute` methods. The
         last one will ignore the `urlpath` parameter passed in this function.
+        In addition, one may provide ``in_place``, a bool (default False), which indicates whether
+        the function should modify the output directly, (rather than chunks of the output, which are later written to output):
+        ```
+        def inplace_udf(inputs_tuple, output, offset):
+            x, y = inputs_tuple
+            ...
+            out[3] += 1
+        ```
 
     Returns
     -------
