@@ -978,8 +978,14 @@ def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C90
 
     raw_inputs = [input_ for input_ in inputs.values() if (input_ is not np and not _isscalar(input_))]
     if not raw_inputs:
-        # Scalar-only expressions have scalar output shape.
-        return (), None, None, False
+        if any(
+            inspect.isgenerator(input_[()])
+            for input_ in inputs.values()
+            if hasattr(input_, "dtype") and input_.dtype == np.dtype("O")
+        ):
+            return (), None, None, False
+        # Scalar-only expressions have scalar output shape but can use miniexpr
+        return (), None, None, True
 
     # This will raise an exception if the input shapes are not compatible
     shape = compute_broadcast_shape(raw_inputs)
@@ -998,8 +1004,8 @@ def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C90
     ]
     if not NDinputs:
         # All inputs are NumPy arrays, so we cannot take the fast path
-        if raw_inputs and hasattr(inputs[0], "shape"):
-            shape = inputs[0].shape
+        if raw_inputs and hasattr(raw_inputs[0], "shape"):
+            shape = raw_inputs[0].shape
         else:
             shape = None
         return shape, None, None, False
@@ -1334,6 +1340,7 @@ def fast_eval(  # noqa: C901
     jit = kwargs.pop("jit", None)
     jit_backend = kwargs.pop("jit_backend", None)
     strict_miniexpr = kwargs.pop("strict_miniexpr", None)
+    _in_place = kwargs.pop("in_place", None)
     dtype = kwargs.pop("dtype", None)
     requested_shape = kwargs.pop("shape", None)
     where: dict | None = kwargs.pop("_where_args", None)
@@ -1549,6 +1556,9 @@ def fast_eval(  # noqa: C901
                 _raise_dsl_miniexpr_required(
                     "internal fallback attempted to execute the DSL kernel directly in Python."
                 )
+            if _in_place:
+                expression(tuple(chunk_operands.values()), out, offset=offset)
+                continue
             result = np.empty(chunks_, dtype=out.dtype)
             expression(tuple(chunk_operands.values()), result, offset=offset)
         else:
@@ -1792,7 +1802,7 @@ def slices_eval(  # noqa: C901
                 _raise_dsl_miniexpr_required(
                     "internal sliced fallback attempted to execute the DSL kernel directly in Python."
                 )
-            if shape_ != out.shape:  # presumably the user knows what they're doing
+            if _in_place:  # presumably the user knows what they're doing
                 # edit out in-place
                 expression(tuple(chunk_operands.values()), out, offset=offset)
             else:
@@ -1901,6 +1911,7 @@ def slices_eval_getitem(
     """
     out: np.ndarray | None = kwargs.pop("_output", None)
     ne_args: dict = kwargs.pop("_ne_args", {})
+    _in_place = kwargs.pop("in_place", False)
     if ne_args is None:
         ne_args = {}
     where: dict | None = kwargs.pop("_where_args", None)
@@ -1943,8 +1954,12 @@ def slices_eval_getitem(
                 "internal getitem fallback attempted to execute the DSL kernel directly in Python."
             )
         offset = tuple(0 if s is None else s.start for s in _slice_bcast)  # offset for the udf
-        result = np.empty(slice_shape, dtype=dtype)
-        expression(tuple(slice_operands.values()), result, offset=offset)
+        if _in_place:
+            expression(tuple(slice_operands.values()), out, offset=offset)
+            return out
+        else:
+            result = np.empty(slice_shape, dtype=dtype)
+            expression(tuple(slice_operands.values()), result, offset=offset)
     else:
         result, _ = _get_result(expression, slice_operands, ne_args, where)
 
@@ -2654,25 +2669,18 @@ def chunked_eval(  # noqa: C901
                     return slices_eval_getitem(expression, operands, _slice=item, shape=shape, **kwargs)
             return slices_eval(expression, operands, getitem=getitem, _slice=item, shape=shape, **kwargs)
 
-        if _is_dsl_kernel_expression(expression):
-            # DSL kernels must execute through miniexpr. Route full-slice evaluation through fast_eval
-            # even when generic fast_path is False (e.g. scalar-only inputs with explicit shape).
-            return fast_eval(
-                expression,
-                operands,
-                getitem=getitem,
-                shape=shape,
-                jit=jit,
-                jit_backend=jit_backend,
-                **kwargs,
-            )
-
         fast_path = full_slice and fast_path
         if fast_path:  # necessarily item is ()
             if getitem:
                 # When using getitem, taking the fast path is always possible
                 return fast_eval(
-                    expression, operands, getitem=True, jit=jit, jit_backend=jit_backend, **kwargs
+                    expression,
+                    operands,
+                    getitem=True,
+                    jit=jit,
+                    jit_backend=jit_backend,
+                    shape=shape,
+                    **kwargs,
                 )
             elif (kwargs.get("chunks") is None and kwargs.get("blocks") is None) and (
                 out is None or isinstance(out, blosc2.NDArray)
@@ -2681,12 +2689,24 @@ def chunked_eval(  # noqa: C901
                 # e.g. the user cannot specify chunks or blocks, or an output that is not
                 # a blosc2.NDArray
                 return fast_eval(
-                    expression, operands, getitem=False, jit=jit, jit_backend=jit_backend, **kwargs
+                    expression,
+                    operands,
+                    getitem=False,
+                    jit=jit,
+                    jit_backend=jit_backend,
+                    shape=shape,
+                    **kwargs,
                 )
             elif _is_dsl_kernel_expression(expression) and (out is None or isinstance(out, blosc2.NDArray)):
                 # DSL kernels require miniexpr and must not fall back to Python execution.
                 return fast_eval(
-                    expression, operands, getitem=False, jit=jit, jit_backend=jit_backend, **kwargs
+                    expression,
+                    operands,
+                    getitem=False,
+                    jit=jit,
+                    jit_backend=jit_backend,
+                    shape=shape,
+                    **kwargs,
                 )
 
         # End up here by default
