@@ -109,7 +109,7 @@ jobs:
           python -m venv sdist_test_env
           source sdist_test_env/bin/activate
           pip install pip --upgrade
-          pip install --break-system-packages -e .[test]
+          pip install --break-system-packages -e . --group test
 
       - name: Test sdist package with pytest
         if: ${{ matrix.os == 'ubuntu-latest' }}

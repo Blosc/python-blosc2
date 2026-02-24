@@ -71,7 +71,7 @@ jobs:
     - name: Build (Windows)
       if: runner.os == 'Windows'
       id: build_windows
-      run: pip install -e .[test]
+      run: pip install -e . --group test
       env:
         CMAKE_C_COMPILER_LAUNCHER: sccache
         CMAKE_CXX_COMPILER_LAUNCHER: sccache
@@ -84,7 +84,7 @@ jobs:
     - name: Build (non-Windows)
       if: runner.os != 'Windows'
       id: build_non_windows
-      run: pip install -e .[test]
+      run: pip install -e . --group test
 
     - name: Test (Windows)
       if: runner.os == 'Windows'
