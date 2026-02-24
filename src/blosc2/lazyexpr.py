@@ -978,12 +978,6 @@ def validate_inputs(inputs: dict, out=None, reduce=False) -> tuple:  # noqa: C90
 
     raw_inputs = [input_ for input_ in inputs.values() if (input_ is not np and not _isscalar(input_))]
     if not raw_inputs:
-        if any(
-            inspect.isgenerator(input_[()])
-            for input_ in inputs.values()
-            if hasattr(input_, "dtype") and input_.dtype == np.dtype("O")
-        ):
-            return (), None, None, False
         # Scalar-only expressions have scalar output shape but can use miniexpr
         return (), None, None, True
 
@@ -1361,7 +1355,7 @@ def fast_eval(  # noqa: C901
     else:
         # Otherwise, find the operand with the 'chunks' attribute and the longest shape
         operands_with_chunks = [o for o in operands.values() if hasattr(o, "chunks")]
-        if operands_with_chunks:
+        if operands_with_chunks and any(arr.chunks != () for arr in operands_with_chunks):
             basearr = max(operands_with_chunks, key=lambda x: len(x.shape))
         else:
             if requested_shape is None:
