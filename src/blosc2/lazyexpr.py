@@ -1407,12 +1407,9 @@ def fast_eval(  # noqa: C901
 
     # Check whether we can use miniexpr
     if use_miniexpr:
-        if (
-            is_dsl
-            and isinstance(expression, DSLKernel)
-            and expression.input_names == []
-            and not operands_miniexpr
-        ):
+        if is_dsl and isinstance(expression, DSLKernel) and not operands_miniexpr:
+            # Scalar specialization may remove all kernel inputs at runtime (e.g. `f(start)` with start=3),
+            # so inject a dummy array operand for miniexpr even if the original DSL signature had parameters.
             dummy_name = "__me_dummy0"
             dummy_dtype = dtype if dtype is not None else np.uint8
             expr_string_miniexpr = _inject_dummy_param_for_zero_input_dsl(expr_string_miniexpr, dummy_name)
@@ -2636,7 +2633,8 @@ def chunked_eval(  # noqa: C901
         if handled:
             return result
 
-        if not is_full_slice(item.raw) or (where is not None and len(where) < 2):
+        full_slice = is_full_slice(item.raw)
+        if not full_slice or (where is not None and len(where) < 2):
             # The fast path is possible under a few conditions
             if getitem and (where is None or len(where) == 2):
                 # Compute the size of operands for the fast path
@@ -2650,7 +2648,20 @@ def chunked_eval(  # noqa: C901
                     return slices_eval_getitem(expression, operands, _slice=item, shape=shape, **kwargs)
             return slices_eval(expression, operands, getitem=getitem, _slice=item, shape=shape, **kwargs)
 
-        fast_path = is_full_slice(item.raw) and fast_path
+        if _is_dsl_kernel_expression(expression):
+            # DSL kernels must execute through miniexpr. Route full-slice evaluation through fast_eval
+            # even when generic fast_path is False (e.g. scalar-only inputs with explicit shape).
+            return fast_eval(
+                expression,
+                operands,
+                getitem=getitem,
+                shape=shape,
+                jit=jit,
+                jit_backend=jit_backend,
+                **kwargs,
+            )
+
+        fast_path = full_slice and fast_path
         if fast_path:  # necessarily item is ()
             if getitem:
                 # When using getitem, taking the fast path is always possible
