@@ -104,6 +104,16 @@ def kernel_scalar_float_cast(x, niter):
 
 
 @blosc2.dsl_kernel
+def kernel_scalar_only(start):
+    return start + 1
+
+
+@blosc2.dsl_kernel
+def kernel_scalar_start_step(start, step):
+    return start + step * (_i0 * _n1 + _i1)  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+
+
+@blosc2.dsl_kernel
 def kernel_fallback_kw_call(x, y):
     return clip(x + y, a_min=0.5, a_max=2.5)
 
@@ -456,6 +466,80 @@ def test_dsl_kernel_scalar_float_cast_inlined_without_float_call(monkeypatch):
         assert "float(3)" not in captured["expr"]
     finally:
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
+
+
+def test_dsl_kernel_scalar_only_inputs_route_through_fast_eval(monkeypatch):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    captured = {"fast_calls": 0, "slices_calls": 0, "operands": None}
+
+    def fake_fast_eval(expression, operands, getitem, **kwargs):
+        captured["fast_calls"] += 1
+        captured["operands"] = dict(operands)
+        shape = kwargs["shape"]
+        dtype = kwargs["dtype"]
+        if getitem:
+            return np.zeros(shape, dtype=dtype)
+        return blosc2.zeros(shape, dtype=dtype)
+
+    def fail_slices_eval(*args, **kwargs):
+        captured["slices_calls"] += 1
+        raise AssertionError("scalar-only DSL kernel should not route to slices_eval")
+
+    monkeypatch.setattr(lazyexpr_mod, "fast_eval", fake_fast_eval)
+    monkeypatch.setattr(lazyexpr_mod, "slices_eval", fail_slices_eval)
+
+    shape = (8, 8)
+    expr = blosc2.lazyudf(kernel_scalar_only, (3,), dtype=np.float32, shape=shape)
+    res = expr.compute()
+
+    assert captured["fast_calls"] == 1
+    assert captured["slices_calls"] == 0
+    assert captured["operands"] == {"start": 3}
+    np.testing.assert_equal(res[...], np.zeros(shape, dtype=np.float32))
+
+
+def test_dsl_kernel_scalar_only_inputs_specialization_injects_dummy_operand(monkeypatch):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    captured = {"calls": 0, "expr": None, "keys": None}
+
+    def failing_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        captured["calls"] += 1
+        captured["expr"] = expression.decode("utf-8") if isinstance(expression, bytes) else expression
+        captured["keys"] = tuple(inputs.keys())
+        raise ValueError("forced miniexpr failure for capture")
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", failing_set_pref_expr)
+
+    try:
+        shape = (8, 8)
+        expr = blosc2.lazyudf(kernel_scalar_only, (3,), dtype=np.float32, shape=shape)
+        with pytest.raises(RuntimeError, match="DSL kernels require miniexpr"):
+            expr.compute()
+        assert captured["calls"] >= 1
+        assert captured["keys"] == ("__me_dummy0",)
+        assert "def kernel_scalar_only(__me_dummy0):" in captured["expr"]
+        assert "return 3 + 1" in captured["expr"]
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
+
+
+def test_dsl_kernel_two_scalar_params_start_step_linear_ramp():
+    shape = (9, 7)
+    start = np.float32(2.5)
+    step = np.float32(0.75)
+
+    expr = blosc2.lazyudf(kernel_scalar_start_step, (start, step), dtype=np.float32, shape=shape)
+    res = expr.compute()
+
+    expected = (start + step * np.arange(np.prod(shape), dtype=np.float32)).reshape(shape)
+    np.testing.assert_allclose(res[...], expected, rtol=0.0, atol=0.0)
 
 
 def test_dsl_kernel_miniexpr_failure_raises_even_with_strict_disabled(monkeypatch):

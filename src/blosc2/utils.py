@@ -565,11 +565,11 @@ class ShapeInferencer(ast.NodeVisitor):
                 if stop is None:
                     stop, start = start, 0
                 try:
-                    NUM = int((stop - start) / step)
+                    NUM = max(math.ceil((stop - start) / step), 0)
                 except Exception:
                     # symbolic or non-numeric: unknown 1D
                     return ((),)
-                return (max(NUM, 0),)
+                return (NUM,)
 
             # ---- linspace ----
             elif base_name == "linspace":

@@ -5393,12 +5393,15 @@ def arange(
     [0 1 2 3 4 5 6 7 8 9]
     """
 
+    def _arange_num_elements(start, stop, step):
+        return builtins.max(math.ceil((stop - start) / step), 0)
+
     def arange_fill(inputs, output, offset):
         lout = len(output)
         start, _, step = inputs
         start += offset[0] * step
         stop = start + lout * step
-        if math.ceil((stop - start) / step) == lout:  # USE ARANGE IF POSSIBLE (2X FASTER)
+        if _arange_num_elements(start, stop, step) == lout:  # USE ARANGE IF POSSIBLE (2X FASTER)
             output[:] = np.arange(start, stop, step, dtype=output.dtype)
         else:  # use linspace to have finer control over exclusion of endpoint for float types
             output[:] = np.linspace(start, stop, lout, endpoint=False, dtype=output.dtype)
@@ -5408,7 +5411,7 @@ def arange(
     if stop is None:
         stop = start
         start = 0
-    NUM = int((stop - start) / step)
+    NUM = _arange_num_elements(start, stop, step)
     if shape is None:
         shape = (builtins.max(NUM, 0),)
     else:
