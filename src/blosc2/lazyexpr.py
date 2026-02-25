@@ -107,7 +107,8 @@ def ne_evaluate(expression, local_dict=None, **kwargs):
             out = kwargs.pop("out")
             out[:] = eval(expression, safe_numpy_globals, local_dict)
             return out
-        return eval(expression, safe_numpy_globals, local_dict)
+        res = eval(expression, safe_numpy_globals, local_dict)
+        return np.asarray(res) if not hasattr(res, "shape") else res
     try:
         return numexpr.evaluate(expression, local_dict=local_dict, **kwargs)
     except ValueError as e:
