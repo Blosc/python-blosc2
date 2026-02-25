@@ -5406,6 +5406,10 @@ def arange(
         else:  # use linspace to have finer control over exclusion of endpoint for float types
             output[:] = np.linspace(start, stop, lout, endpoint=False, dtype=output.dtype)
 
+    @blosc2.dsl_kernel
+    def kernel_ramp(start, step):
+        return start + _global_linear_idx * step  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+
     if step is None:  # not array-api compliant but for backwards compatibility
         step = 1
     if stop is None:
@@ -5430,14 +5434,18 @@ def arange(
         # We already have the dtype and shape, so return immediately
         return blosc2.zeros(shape, dtype=dtype, **kwargs)
 
-    lshape = (math.prod(shape),)
-    lazyarr = blosc2.lazyudf(arange_fill, (start, stop, step), dtype=dtype, shape=lshape)
+    if False:
+        lshape = (math.prod(shape),)
+        lazyarr = blosc2.lazyudf(arange_fill, (start, stop, step), dtype=dtype, shape=lshape)
 
-    if len(shape) == 1:
-        # C order is guaranteed, and no reshape is needed
+        if len(shape) == 1:
+            # C order is guaranteed, and no reshape is needed
+            return lazyarr.compute(**kwargs)
+
+        return reshape(lazyarr, shape, c_order=c_order, **kwargs)
+    else:
+        lazyarr = blosc2.lazyudf(kernel_ramp, (start, step), dtype=dtype, shape=shape)
         return lazyarr.compute(**kwargs)
-
-    return reshape(lazyarr, shape, c_order=c_order, **kwargs)
 
 
 # Define a numpy linspace-like function
