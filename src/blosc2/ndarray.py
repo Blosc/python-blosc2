@@ -5434,7 +5434,8 @@ def arange(
         # We already have the dtype and shape, so return immediately
         return blosc2.zeros(shape, dtype=dtype, **kwargs)
 
-    if False:
+    # Windows and wasm32 does not support complex numbers in DSL
+    if False or blosc2.isdtype(dtype, "complex floating"):
         lshape = (math.prod(shape),)
         lazyarr = blosc2.lazyudf(arange_fill, (start, stop, step), dtype=dtype, shape=lshape)
 
