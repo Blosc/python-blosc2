@@ -6,6 +6,9 @@
 #######################################################################
 
 
+import subprocess
+import sys
+
 import numpy as np
 import pytest
 
@@ -111,6 +114,18 @@ def kernel_scalar_only(start):
 @blosc2.dsl_kernel
 def kernel_scalar_start_step(start, step):
     return start + step * (_i0 * _n1 + _i1)  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+
+
+@blosc2.dsl_kernel
+def kernel_scalar_start_stop_nitems(start, stop, nitems):
+    step = (stop - start) / nitems
+    return start + _global_linear_idx * step  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+
+
+@blosc2.dsl_kernel
+def kernel_scalar_start_stop_nitems_float_cast(start, stop, nitems):
+    step = (float(stop) - float(start)) / float(nitems)
+    return float(start) + _global_linear_idx * step  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
 
 
 @blosc2.dsl_kernel
@@ -540,6 +555,63 @@ def test_dsl_kernel_two_scalar_params_start_step_linear_ramp():
 
     expected = (start + step * np.arange(np.prod(shape), dtype=np.float32)).reshape(shape)
     np.testing.assert_allclose(res[...], expected, rtol=0.0, atol=0.0)
+
+
+def test_dsl_kernel_three_scalar_params_start_stop_nitems_ramp():
+    shape = (20, 25)
+    start = np.float64(1.0)
+    stop = np.float64(2.0)
+    nitems = np.int64(np.prod(shape))
+
+    expr = blosc2.lazyudf(
+        kernel_scalar_start_stop_nitems, (start, stop, nitems), dtype=np.float64, shape=shape
+    )
+    res = expr.compute()
+
+    step = (stop - start) / nitems
+    expected = (start + step * np.arange(np.prod(shape), dtype=np.float64)).reshape(shape)
+    np.testing.assert_allclose(res[...], expected, rtol=0.0, atol=0.0)
+
+
+def test_dsl_kernel_float_cast_with_negative_scalar_param():
+    shape = (10, 100)
+    start = -10
+    stop = 10
+    nitems = np.int64(np.prod(shape) - 1)
+
+    expr = blosc2.lazyudf(
+        kernel_scalar_start_stop_nitems_float_cast, (start, stop, nitems), dtype=np.float32, shape=shape
+    )
+    res = expr.compute()
+
+    expected = np.linspace(start, stop, np.prod(shape), dtype=np.float32).reshape(shape)
+    np.testing.assert_allclose(res[...], expected, rtol=1e-6, atol=1e-6)
+
+
+def test_dsl_kernel_float_cast_with_global_linear_idx_no_segfault_subprocess():
+    if blosc2.IS_WASM:
+        pytest.skip("subprocess is not supported on emscripten/wasm32")
+
+    code = (
+        "import numpy as np\n"
+        "import blosc2\n"
+        "@blosc2.dsl_kernel\n"
+        "def kernel(start, stop, nitems):\n"
+        "    step = (float(stop) - float(start)) / float(nitems)\n"
+        "    return float(start) + _global_linear_idx * step  # noqa: F821\n"
+        "shape = (10, 100)\n"
+        "arr = blosc2.lazyudf(kernel, (-10, 10, 999), dtype=np.float32, shape=shape).compute()\n"
+        "exp = np.linspace(-10, 10, np.prod(shape), dtype=np.float32).reshape(shape)\n"
+        "np.testing.assert_allclose(arr, exp, rtol=1e-6, atol=1e-6)\n"
+        "print('ok')\n"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, (
+        "subprocess failed (possible segfault/regression in DSL float-cast path):\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    assert "ok" in result.stdout
 
 
 def test_dsl_kernel_miniexpr_failure_raises_even_with_strict_disabled(monkeypatch):

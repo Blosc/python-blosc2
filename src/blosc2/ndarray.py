@@ -5511,6 +5511,10 @@ def linspace(
         else:
             output[:] = np.linspace(start_, stop_, lout, endpoint=False, dtype=output.dtype)
 
+    @blosc2.dsl_kernel
+    def kernel_ramp(start, step):
+        return float(start) + _global_linear_idx * float(step)  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+
     if shape is None:
         if num is None:
             raise ValueError("Either `shape` or `num` must be specified.")
@@ -5540,13 +5544,21 @@ def linspace(
         # We already have the dtype and shape, so return immediately
         return blosc2.zeros(shape, dtype=dtype, **kwargs)  # will return empty array for num == 0
 
-    inputs = (start, stop, num, endpoint)
-    lazyarr = blosc2.lazyudf(linspace_fill, inputs, dtype=dtype, shape=(num,))
-    if len(shape) == 1:
-        # C order is guaranteed, and no reshape is needed
-        return lazyarr.compute(**kwargs)
+    # Windows and wasm32 does not support complex numbers in DSL
+    if False or blosc2.isdtype(dtype, "complex floating"):
+        inputs = (start, stop, num, endpoint)
+        lazyarr = blosc2.lazyudf(linspace_fill, inputs, dtype=dtype, shape=(num,))
+        if len(shape) == 1:
+            # C order is guaranteed, and no reshape is needed
+            return lazyarr.compute(**kwargs)
 
-    return reshape(lazyarr, shape, c_order=c_order, **kwargs)
+        return reshape(lazyarr, shape, c_order=c_order, **kwargs)
+    else:
+        nitems = num - 1 if endpoint else num
+        step = (float(stop) - float(start)) / float(nitems) if nitems > 0 else 0.0
+        inputs = (start, step)
+        lazyarr = blosc2.lazyudf(kernel_ramp, inputs, dtype=dtype, shape=shape)
+        return lazyarr.compute(**kwargs)
 
 
 def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:

@@ -105,7 +105,11 @@ def _remove_scalar_params_preserving_source(text: str, scalar_replacements: dict
     updated = f"{text[:pstart]}{', '.join(kept)}{text[pend:]}"
     body_start = 0
     if colon is not None:
-        body_start = _to_abs(_line_starts(updated), colon.end[0], colon.end[1])
+        # Signature shrink can move ':' to an earlier column, so recompute
+        # on the rewritten text to avoid skipping first-line body tokens.
+        _, _, updated_colon = _find_def_signature_span(updated)
+        if updated_colon is not None:
+            body_start = _to_abs(_line_starts(updated), updated_colon.end[0], updated_colon.end[1])
     return updated, body_start
 
 
@@ -162,7 +166,7 @@ def _replace_scalar_names_preserving_source(
     return out
 
 
-def _fold_numeric_cast_calls_preserving_source(text: str, body_start: int):
+def _fold_numeric_cast_calls_preserving_source(text: str, body_start: int):  # noqa: C901
     """Fold float(<number>) and int(<number>) calls into literals.
 
     miniexpr parses DSL function calls in a restricted way, and scalar specialization can
@@ -176,6 +180,20 @@ def _fold_numeric_cast_calls_preserving_source(text: str, body_start: int):
 
     line_starts = _line_starts(text)
     edits = []
+
+    def _numeric_literal_value(node):
+        if isinstance(node, ast.Constant) and isinstance(node.value, int | float | bool):
+            return node.value
+        if (
+            isinstance(node, ast.UnaryOp)
+            and isinstance(node.op, ast.UAdd | ast.USub)
+            and isinstance(node.operand, ast.Constant)
+            and isinstance(node.operand.value, int | float | bool)
+        ):
+            value = node.operand.value
+            return +value if isinstance(node.op, ast.UAdd) else -value
+        return None
+
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -185,7 +203,8 @@ def _fold_numeric_cast_calls_preserving_source(text: str, body_start: int):
             continue
 
         arg = node.args[0]
-        if not isinstance(arg, ast.Constant) or not isinstance(arg.value, int | float | bool):
+        value = _numeric_literal_value(arg)
+        if value is None:
             continue
 
         start_abs = _to_abs(line_starts, node.lineno, node.col_offset)
@@ -194,9 +213,9 @@ def _fold_numeric_cast_calls_preserving_source(text: str, body_start: int):
         end_abs = _to_abs(line_starts, node.end_lineno, node.end_col_offset)
 
         if node.func.id == "float":
-            repl = repr(float(arg.value))
+            repl = repr(float(value))
         else:
-            repl = repr(int(arg.value))
+            repl = repr(int(value))
         edits.append((start_abs, end_abs, repl))
 
     if not edits:
