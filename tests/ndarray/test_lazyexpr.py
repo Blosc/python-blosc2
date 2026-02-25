@@ -1496,6 +1496,11 @@ def test_str_constructors():
     lexpr = blosc2.sin(blosc2.sqrt(x**2))
 
 
+def test_str_arange_non_divisible_step():
+    expr = blosc2.lazyexpr("arange(1, 100, 2)")
+    np.testing.assert_array_equal(expr[:], np.arange(1, 100, 2))
+
+
 @pytest.mark.parametrize(
     "obj",
     [
