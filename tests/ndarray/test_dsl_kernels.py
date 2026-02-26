@@ -8,6 +8,9 @@
 
 import subprocess
 import sys
+import tempfile
+import textwrap
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -114,6 +117,18 @@ def kernel_scalar_only(start):
 @blosc2.dsl_kernel
 def kernel_scalar_start_step(start, step):
     return start + step * (_i0 * _n1 + _i1)  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+
+
+@blosc2.dsl_kernel
+def kernel_scalar_start_stop_nitems(start, stop, nitems):
+    step = (stop - start) / nitems
+    return start + _flat_idx * step  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+
+
+@blosc2.dsl_kernel
+def kernel_scalar_start_stop_nitems_float_cast(start, stop, nitems):
+    step = (float(stop) - float(start)) / float(nitems)
+    return float(start) + _flat_idx * step  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
 
 
 @blosc2.dsl_kernel
@@ -543,6 +558,73 @@ def test_dsl_kernel_two_scalar_params_start_step_linear_ramp():
 
     expected = (start + step * np.arange(np.prod(shape), dtype=np.float32)).reshape(shape)
     np.testing.assert_allclose(res[...], expected, rtol=0.0, atol=0.0)
+
+
+def test_dsl_kernel_three_scalar_params_start_stop_nitems_ramp():
+    shape = (20, 25)
+    start = np.float64(1.0)
+    stop = np.float64(2.0)
+    nitems = np.int64(np.prod(shape))
+
+    expr = blosc2.lazyudf(
+        kernel_scalar_start_stop_nitems, (start, stop, nitems), dtype=np.float64, shape=shape
+    )
+    res = expr.compute()
+
+    step = (stop - start) / nitems
+    expected = (start + step * np.arange(np.prod(shape), dtype=np.float64)).reshape(shape)
+    np.testing.assert_allclose(res[...], expected, rtol=0.0, atol=0.0)
+
+
+def test_dsl_kernel_float_cast_with_negative_scalar_param():
+    shape = (10, 100)
+    start = -10
+    stop = 10
+    nitems = np.int64(np.prod(shape) - 1)
+
+    expr = blosc2.lazyudf(
+        kernel_scalar_start_stop_nitems_float_cast, (start, stop, nitems), dtype=np.float32, shape=shape
+    )
+    res = expr.compute()
+
+    expected = np.linspace(start, stop, np.prod(shape), dtype=np.float32).reshape(shape)
+    np.testing.assert_allclose(res[...], expected, rtol=1e-6, atol=1e-6)
+
+
+def test_dsl_kernel_float_cast_with_flat_idx_no_segfault_subprocess():
+    if blosc2.IS_WASM:
+        pytest.skip("subprocess is not supported on emscripten/wasm32")
+
+    code = textwrap.dedent(
+        """
+        import numpy as np
+        import blosc2
+
+        @blosc2.dsl_kernel
+        def kernel(start, stop, nitems):
+            step = (float(stop) - float(start)) / float(nitems)
+            return float(start) + _flat_idx * step  # noqa: F821
+
+        shape = (10, 100)
+        arr = blosc2.lazyudf(kernel, (-10, 10, 999), dtype=np.float32, shape=shape).compute()
+        exp = np.linspace(-10, 10, np.prod(shape), dtype=np.float32).reshape(shape)
+        np.testing.assert_allclose(arr, exp, rtol=1e-6, atol=1e-6)
+        print("ok")
+        """
+    )
+
+    # Run from a real .py file so inspect.getsource() can recover the DSL source.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        script = Path(tmpdir) / "dsl_kernel_subprocess.py"
+        script.write_text(code, encoding="utf-8")
+        result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True, check=False)
+
+    assert result.returncode == 0, (
+        "subprocess failed (possible segfault/regression in DSL float-cast path):\n"
+        f"stdout:\n{result.stdout}\n"
+        f"stderr:\n{result.stderr}"
+    )
+    assert "ok" in result.stdout
 
 
 def test_dsl_kernel_scalar_constant_subexpr_runtime_no_segfault(tmp_path):
