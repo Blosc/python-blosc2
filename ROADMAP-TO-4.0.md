@@ -21,3 +21,26 @@ The constructor for the `Table` object should take some parameters to specify pr
     * `.__iter__()` for easy and fast iteration over rows.
     * `.where()`: an iterator for querying with conditions that are evaluated with the internal compute engine.
     * `.index()` for indexing a column and getting better performance in queries (desirable, but optional for 4.0).
+
+In particular, it should try to mimic much of the functionality of data-querying libraries such as ``pandas`` (see [this blog](https://datapythonista.me/blog/whats-new-in-pandas-3) for much of the followin). Hence, one should be able to filter rows of the `Table` via querying on multiple columns (accessed via `.` or perhaps ``__getitem__``), with conditions to select rows implemented via `.index`, `.where` like so
+
+```
+tbl.where((tbl.property_type == "hotel") & (tbl.country == "us"))
+```
+
+It should also be possible to modify the filtered ``Table`` in-place, using some operation which only acts on the filtered elements (e.g ``assign``)
+
+```
+tbl = tbl.where((tbl.property_type == "hotel") & (tbl.country == "us")).assign(max_people = tbl.max_people + tbl.max_children)
+```
+
+Secondly, it should be possible to write bespoke transformation functions which act row-wise and then may be applied to get results from the `Table` and/or modify the ``Table`` in-place:
+
+```
+def myudf(row):
+    col = row.name_of_column
+    # do things with col
+    return result
+
+ans = tbl.apply(myudf, axis=1)
+```
