@@ -627,6 +627,36 @@ def test_dsl_kernel_float_cast_with_global_linear_idx_no_segfault_subprocess():
     assert "ok" in result.stdout
 
 
+def test_dsl_kernel_scalar_constant_subexpr_runtime_no_segfault(tmp_path):
+    if blosc2.IS_WASM:
+        pytest.skip("subprocess is not supported on emscripten/wasm32")
+
+    script = tmp_path / "dsl_constant_runtime_regression.py"
+    script.write_text(
+        """
+import blosc2
+import numpy as np
+
+
+@blosc2.dsl_kernel
+def kernel_const_subexpr(x, start, step):
+    return (start + step) * x
+
+
+x = blosc2.asarray(np.linspace(0.8, 1.2, 100000, dtype=np.float64), chunks=(10000,), blocks=(2000,))
+out = blosc2.lazyudf(kernel_const_subexpr, (x, 0.1, 0.5), dtype=np.float32).compute()
+expected = (0.6 * np.linspace(0.8, 1.2, 100000, dtype=np.float64)).astype(np.float32)
+np.testing.assert_allclose(out[:], expected, rtol=1e-6, atol=1e-7)
+print("ok")
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run([sys.executable, str(script)], capture_output=True, text=True)
+    assert result.returncode == 0, f"subprocess failed with rc={result.returncode}\n{result.stderr}"
+    assert "ok" in result.stdout
+
+
 def test_dsl_kernel_miniexpr_failure_raises_even_with_strict_disabled(monkeypatch):
     import importlib
 
