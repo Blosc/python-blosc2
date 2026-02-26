@@ -122,13 +122,13 @@ def kernel_scalar_start_step(start, step):
 @blosc2.dsl_kernel
 def kernel_scalar_start_stop_nitems(start, stop, nitems):
     step = (stop - start) / nitems
-    return start + _global_linear_idx * step  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+    return start + _flat_idx * step  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
 
 
 @blosc2.dsl_kernel
 def kernel_scalar_start_stop_nitems_float_cast(start, stop, nitems):
     step = (float(stop) - float(start)) / float(nitems)
-    return float(start) + _global_linear_idx * step  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+    return float(start) + _flat_idx * step  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
 
 
 @blosc2.dsl_kernel
@@ -591,7 +591,7 @@ def test_dsl_kernel_float_cast_with_negative_scalar_param():
     np.testing.assert_allclose(res[...], expected, rtol=1e-6, atol=1e-6)
 
 
-def test_dsl_kernel_float_cast_with_global_linear_idx_no_segfault_subprocess():
+def test_dsl_kernel_float_cast_with_flat_idx_no_segfault_subprocess():
     if blosc2.IS_WASM:
         pytest.skip("subprocess is not supported on emscripten/wasm32")
 
@@ -603,7 +603,7 @@ def test_dsl_kernel_float_cast_with_global_linear_idx_no_segfault_subprocess():
         @blosc2.dsl_kernel
         def kernel(start, stop, nitems):
             step = (float(stop) - float(start)) / float(nitems)
-            return float(start) + _global_linear_idx * step  # noqa: F821
+            return float(start) + _flat_idx * step  # noqa: F821
 
         shape = (10, 100)
         arr = blosc2.lazyudf(kernel, (-10, 10, 999), dtype=np.float32, shape=shape).compute()

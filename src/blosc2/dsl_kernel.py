@@ -191,7 +191,7 @@ def _fold_numeric_cast_calls_preserving_source(text: str, body_start: int):  # n
             and isinstance(node.operand.value, int | float | bool)
         ):
             value = node.operand.value
-            return +value if isinstance(node.op, ast.UAdd) else -value
+            return value if isinstance(node.op, ast.UAdd) else -value
         return None
 
     for node in ast.walk(tree):

@@ -5408,7 +5408,7 @@ def arange(
 
     @blosc2.dsl_kernel
     def kernel_ramp(start, step):
-        return start + _global_linear_idx * step  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+        return start + _flat_idx * step  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
 
     if step is None:  # not array-api compliant but for backwards compatibility
         step = 1
@@ -5513,7 +5513,7 @@ def linspace(
 
     @blosc2.dsl_kernel
     def kernel_ramp(start, step):
-        return float(start) + _global_linear_idx * float(step)  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+        return float(start) + _flat_idx * float(step)  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
 
     if shape is None:
         if num is None:
