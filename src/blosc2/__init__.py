@@ -393,17 +393,21 @@ def __array_namespace_info__() -> Info:
             "max dimensions": MAX_DIM,
         },
         default_device=lambda: "cpu",
-        default_dtypes=lambda device=None: {
-            "real floating": DEFAULT_FLOAT,
-            "complex floating": DEFAULT_COMPLEX,
-            "integral": DEFAULT_INT,
-            "indexing": DEFAULT_INDEX,
-        }
-        if (device == "cpu" or device is None)
-        else _raise(ValueError("Only cpu devices allowed")),
-        dtypes=lambda device=None, kind=None: np.__array_namespace_info__().dtypes(kind=kind, device=device)
-        if (device == "cpu" or device is None)
-        else _raise(ValueError("Only cpu devices allowed")),
+        default_dtypes=lambda device=None: (
+            {
+                "real floating": DEFAULT_FLOAT,
+                "complex floating": DEFAULT_COMPLEX,
+                "integral": DEFAULT_INT,
+                "indexing": DEFAULT_INDEX,
+            }
+            if (device == "cpu" or device is None)
+            else _raise(ValueError("Only cpu devices allowed"))
+        ),
+        dtypes=lambda device=None, kind=None: (
+            np.__array_namespace_info__().dtypes(kind=kind, device=device)
+            if (device == "cpu" or device is None)
+            else _raise(ValueError("Only cpu devices allowed"))
+        ),
         devices=lambda: ["cpu"],
         name="blosc2",
         version=__version__,

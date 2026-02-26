@@ -219,7 +219,7 @@ def test_reduce_expr_arr(array_fixture, axis, reduce_op):
             print(blosccumsumVsnpsum, npcumsumVsnpsum)
             if blosccumsumVsnpsum < npcumsumVsnpsum:
                 return
-        raise e
+        raise
 
 
 # Test broadcasting
