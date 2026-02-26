@@ -5407,7 +5407,7 @@ def arange(
             output[:] = np.linspace(start, stop, lout, endpoint=False, dtype=output.dtype)
 
     @blosc2.dsl_kernel
-    def kernel_ramp(start, step):
+    def ramp_arange(start, step):
         return start + _flat_idx * step  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
 
     if step is None:  # not array-api compliant but for backwards compatibility
@@ -5435,7 +5435,7 @@ def arange(
         return blosc2.zeros(shape, dtype=dtype, **kwargs)
 
     # Windows and wasm32 does not support complex numbers in DSL
-    if False or blosc2.isdtype(dtype, "complex floating"):
+    if blosc2.isdtype(dtype, "complex floating"):
         lshape = (math.prod(shape),)
         lazyarr = blosc2.lazyudf(arange_fill, (start, stop, step), dtype=dtype, shape=lshape)
 
@@ -5445,7 +5445,7 @@ def arange(
 
         return reshape(lazyarr, shape, c_order=c_order, **kwargs)
     else:
-        lazyarr = blosc2.lazyudf(kernel_ramp, (start, step), dtype=dtype, shape=shape)
+        lazyarr = blosc2.lazyudf(ramp_arange, (start, step), dtype=dtype, shape=shape)
         return lazyarr.compute(**kwargs)
 
 
@@ -5512,7 +5512,7 @@ def linspace(
             output[:] = np.linspace(start_, stop_, lout, endpoint=False, dtype=output.dtype)
 
     @blosc2.dsl_kernel
-    def kernel_ramp(start, step):
+    def ramp_linspace(start, step):
         return float(start) + _flat_idx * float(step)  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
 
     if shape is None:
@@ -5545,7 +5545,7 @@ def linspace(
         return blosc2.zeros(shape, dtype=dtype, **kwargs)  # will return empty array for num == 0
 
     # Windows and wasm32 does not support complex numbers in DSL
-    if False or blosc2.isdtype(dtype, "complex floating"):
+    if blosc2.isdtype(dtype, "complex floating"):
         inputs = (start, stop, num, endpoint)
         lazyarr = blosc2.lazyudf(linspace_fill, inputs, dtype=dtype, shape=(num,))
         if len(shape) == 1:
@@ -5557,7 +5557,7 @@ def linspace(
         nitems = num - 1 if endpoint else num
         step = (float(stop) - float(start)) / float(nitems) if nitems > 0 else 0.0
         inputs = (start, step)
-        lazyarr = blosc2.lazyudf(kernel_ramp, inputs, dtype=dtype, shape=shape)
+        lazyarr = blosc2.lazyudf(ramp_linspace, inputs, dtype=dtype, shape=shape)
         return lazyarr.compute(**kwargs)
 
 
