@@ -17,7 +17,7 @@ shape = (10_000, 10_000)
 
 @blosc2.dsl_kernel
 def kernel_ramp(start):
-    return start + _global_linear_idx  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+    return start + _flat_idx  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
 
 t0 = time()
 npa = np.arange(np.prod(shape), dtype=dtype).reshape(shape)

@@ -597,6 +597,41 @@ def test_stringops(values):
         np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
 
 
+def test_stringops2():
+    # test all supported string ops for bytes and strings
+    for t in ("bytes", "string"):
+        if t == "bytes":
+            a1 = np.array([b"abc", b"def", b"aterr", b"oot", b"zu", b"ab c"])
+            a2 = a2_blosc = b"a"
+        else:
+            a1 = np.array(["abc", "def", "aterr", "oot", "zu", "ab c"])
+            a2 = a2_blosc = "a"
+        a1_blosc = blosc2.asarray(a1)
+        for func, npfunc in zip(
+            (blosc2.startswith, blosc2.endswith, blosc2.contains),
+            (np.char.startswith, np.char.endswith, lambda *args: np.char.find(*args) != -1),
+            strict=True,
+        ):
+            expr_lazy = func(a1_blosc, a2_blosc)
+            res_numexpr = npfunc(a1, a2)
+            assert expr_lazy.shape == res_numexpr.shape
+            assert expr_lazy.dtype == blosc2.bool_
+            np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
+
+        np.testing.assert_array_equal((a1_blosc < a2_blosc)[:], a1 < a2)
+        np.testing.assert_array_equal((a1_blosc <= a2_blosc)[:], a1 <= a2)
+        np.testing.assert_array_equal((a1_blosc == a2_blosc)[:], a1 == a2)
+        np.testing.assert_array_equal((a1_blosc != a2_blosc)[:], a1 != a2)
+        np.testing.assert_array_equal((a1_blosc >= a2_blosc)[:], a1 >= a2)
+        np.testing.assert_array_equal((a1_blosc > a2_blosc)[:], a1 > a2)
+
+        for func, npfunc in zip((blosc2.lower, blosc2.upper), (np.char.lower, np.char.upper), strict=True):
+            expr_lazy = func(a1_blosc)
+            res_numexpr = npfunc(a1)
+            assert expr_lazy.shape == res_numexpr.shape
+            np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
+
+
 def test_negate(dtype_fixture, shape_fixture):
     nelems = np.prod(shape_fixture)
     na1 = np.linspace(-1, 1, nelems, dtype=dtype_fixture).reshape(shape_fixture)
