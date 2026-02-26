@@ -5048,6 +5048,54 @@ def endswith(
     return blosc2.LazyExpr(new_op=(a, "endswith", suffix))
 
 
+@_incomplete_lazyfunc
+def lower(a: str | blosc2.Array) -> NDArray:
+    """
+    Copy-pasted from numpy documentation: https://numpy.org/doc/stable/reference/generated/numpy.char.lower.html
+    Return an array with the elements converted to lowercase.
+    Call str.lower element-wise.
+    For 8-bit strings, this method is locale-dependent.
+
+    Parameters
+    ----------
+    a : blosc2.Array
+        Input array of bytes_ or str_ dtype
+    kwargs: Any
+        kwargs accepted by the :func:`empty` constructor
+
+    Returns
+    -------
+    out: blosc2.Array, of bytes_ or str_ dtype
+        Has the same shape as element.
+
+    """
+    return blosc2.LazyExpr(new_op=(a, "lower", None))
+
+
+@_incomplete_lazyfunc
+def upper(a: str | blosc2.Array) -> NDArray:
+    """
+    Copy-pasted from numpy documentation: https://numpy.org/doc/stable/reference/generated/numpy.char.upper.html
+    Return an array with the elements converted to uppercase.
+    Call str.lower element-wise.
+    For 8-bit strings, this method is locale-dependent.
+
+    Parameters
+    ----------
+    a : blosc2.Array
+        Input array of bytes_ or str_ dtype
+    kwargs: Any
+        kwargs accepted by the :func:`empty` constructor
+
+    Returns
+    -------
+    out: blosc2.Array, of bytes_ or str_ dtype
+        Has the same shape as element.
+
+    """
+    return blosc2.LazyExpr(new_op=(a, "upper", None))
+
+
 def lazywhere(value1=None, value2=None):
     """Decorator to apply a where condition to a LazyExpr."""
 

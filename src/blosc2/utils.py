@@ -54,6 +54,14 @@ def _string_startswith(a, b):
     return np.char.startswith(a, b)
 
 
+def _string_lower(a):
+    return np.char.lower(a)
+
+
+def _string_upper(a):
+    return np.char.upper(a)
+
+
 def _string_endswith(a, b):
     return np.char.endswith(a, b)
 
@@ -97,6 +105,8 @@ if not NUMPY_GE_2_0:  # handle non-array-api compliance
 safe_numpy_globals["contains"] = _string_contains
 safe_numpy_globals["startswith"] = _string_startswith
 safe_numpy_globals["endswith"] = _string_endswith
+safe_numpy_globals["upper"] = _string_upper
+safe_numpy_globals["lower"] = _string_lower
 
 
 elementwise_funcs = [
@@ -155,6 +165,7 @@ elementwise_funcs = [
     "logical_not",
     "logical_or",
     "logical_xor",
+    "lower",
     "maximum",
     "minimum",
     "multiply",
@@ -178,6 +189,7 @@ elementwise_funcs = [
     "tan",
     "tanh",
     "trunc",
+    "upper",
     "where",
 ]
 
@@ -931,13 +943,6 @@ def process_key(key, shape):
     return key, mask
 
 
-incomplete_lazyfunc_map = {
-    "contains": lambda *args: np.char.find(*args) != -1,
-    "startswith": lambda *args: np.char.startswith(*args),
-    "endswith": lambda *args: np.char.endswith(*args),
-} | safe_numpy_globals  # clip and logaddexp available in safe_numpy_globals
-
-
 def is_inside_ne_evaluate() -> bool:
     """
     Whether the current code is being executed from an ne_evaluate call
@@ -968,7 +973,7 @@ def _incomplete_lazyfunc(func) -> None:
 
     def wrapper(*args, **kwargs):
         if is_inside_ne_evaluate():  # haven't been able to use miniexpr so use numpy
-            return incomplete_lazyfunc_map[func.__name__](*args, **kwargs)
+            return safe_numpy_globals[func.__name__](*args, **kwargs)
         return func(*args, **kwargs)
 
     return wrapper

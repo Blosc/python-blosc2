@@ -2822,7 +2822,7 @@ def result_type(
     # Follow NumPy rules for scalar-array operations
     # Create small arrays with the same dtypes and let NumPy's type promotion determine the result type
     arrs = [
-        (np.array(value).dtype if isinstance(value, str) else value)
+        (np.array(value).dtype if isinstance(value, (str, bytes)) else value)
         if (np.isscalar(value) or not hasattr(value, "dtype"))
         else np.array([0], dtype=_convert_dtype(value.dtype))
         for value in arrays_and_dtypes
