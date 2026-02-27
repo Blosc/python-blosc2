@@ -13,8 +13,9 @@ import numpy as np
 
 import blosc2
 
-dtype = np.float64
+dtype = np.int64
 shape = (10_000, 10_000)
+cparams = blosc2.CParams(codec=blosc2.Codec.BLOSCLZ, clevel=1)
 
 @blosc2.dsl_kernel
 def kernel_ramp():
@@ -23,7 +24,7 @@ def kernel_ramp():
 
 print(kernel_ramp.dsl_source)
 a = blosc2.lazyudf(kernel_ramp, (), dtype=dtype, shape=shape)
-npa = a.compute(cparams=dict(clevel=1, codec=blosc2.Codec.LZ4))
+npa = a.compute(cparams=cparams)
 t0 = time()
 result = npa.sum()
 # print(result)
@@ -31,16 +32,21 @@ print("Blosc2 sum over NDArray:", round(time() - t0, 3), "s")
 
 t0 = time()
 a = blosc2.lazyudf(kernel_ramp, (), dtype=dtype, shape=shape)
-result = a.sum()
+result = a.sum(cparams=cparams)
 # print(result)
 print("Blosc2 sum over LazyArray:", round(time() - t0, 3), "s")
 
 t0 = time()
 a = blosc2.lazyudf(kernel_ramp, (), dtype=dtype, shape=shape)
-# result = a.compute(cparams=dict(clevel=1, codec=blosc2.Codec.LZ4)).sum()
-result = a.compute().sum()
+result = a.compute(cparams=cparams).sum()
 # print(result)
 print("(with a prior .compute):", round(time() - t0, 3), "s")
+
+t0 = time()
+a = blosc2.arange(np.prod(shape), dtype=dtype, shape=shape, cparams=cparams)
+result = a.sum()
+# print(result)
+print("Blosc2 arange + sum:", round(time() - t0, 3), "s")
 
 t0 = time()
 npa = np.arange(np.prod(shape), dtype=dtype).reshape(shape)
