@@ -42,6 +42,7 @@ def populate_nodes(cleanup_files):
 def test_basic(populate_nodes):
     estore = populate_nodes
 
+    assert "b2embed" in estore.storage.meta
     assert set(estore.keys()) == {"/node1", "/node2", "/node3"}
     assert np.all(estore["/node1"][:] == np.array([1, 2, 3]))
     assert np.all(estore["/node2"][:] == np.arange(3))
@@ -51,6 +52,7 @@ def test_basic(populate_nodes):
     assert "/node1" not in estore
 
     estore_read = blosc2.EmbedStore(urlpath="test_estore.b2e", mode="r")
+    assert "b2embed" in estore_read.storage.meta
     assert set(estore_read.keys()) == {"/node2", "/node3"}
     for value in estore_read.values():
         assert hasattr(value, "shape")

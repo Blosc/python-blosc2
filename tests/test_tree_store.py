@@ -49,6 +49,8 @@ def test_basic_tree_store(populated_tree_store):
     """Test basic TreeStore functionality."""
     tstore, _ = populated_tree_store
 
+    assert "b2tree" in tstore.storage.meta
+
     # Test key existence - should include both leaf and structural nodes
     expected_keys = {
         "/child0/data",
@@ -450,6 +452,7 @@ def test_treestore_vlmeta_basic_and_bulk(storage_type):
 
     # Reopen in read-only to check persistence and read-only protection
     with TreeStore(path, mode="r") as tstore:
+        assert "b2tree" in tstore.storage.meta
         assert tstore.vlmeta["author"] == "blosc2"
         assert tstore.vlmeta["version"] == 1
         assert tstore.vlmeta["shape"] == (3, 2)

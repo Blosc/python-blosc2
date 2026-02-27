@@ -149,7 +149,7 @@ class TreeStore(DictStore):
     """
 
     # For some reason, we had to revert the explicit parametrisation of the
-    # constructor to make benchmarks wrok fine again.
+    # constructor to make benchmarks working again.
     def __init__(self, *args, _from_parent_store=None, **kwargs):
         """Initialize TreeStore with subtree support.
 
@@ -159,7 +159,9 @@ class TreeStore(DictStore):
             # This is a subtree view, copy state from parent
             self.__dict__.update(_from_parent_store.__dict__)
         else:
-            super().__init__(*args, **kwargs)
+            # Call initialization and mark this storage as a b2tree object
+            super().__init__(*args, **kwargs, _storage_meta={"b2tree": {"version": 1}})
+
             self.subtree_path = ""  # Empty string means full tree
 
     def _is_vlmeta_key(self, key: str) -> bool:

@@ -81,6 +81,7 @@ class EmbedStore:
         _from_schunk: SChunk | None = None,
         *,
         mmap_mode: str | None = None,
+        meta: dict | None = None,
     ):
         """Initialize EmbedStore."""
 
@@ -100,6 +101,8 @@ class EmbedStore:
             self.dparams = _from_schunk.dparams
             self.mode = mode
             self._store = _from_schunk
+            self.storage = blosc2.Storage()
+            self.storage.meta = _from_schunk.meta
             self._load_metadata()
             return
 
@@ -119,14 +122,14 @@ class EmbedStore:
 
         if mode in ("r", "a") and urlpath:
             self._store = blosc2.blosc2_ext.open(urlpath, mode=mode, offset=0, mmap_mode=mmap_mode)
+            self.storage.meta = self._store.meta
             self._load_metadata()
             return
 
         _cparams = copy.deepcopy(self.cparams)
         _cparams.typesize = 1  # ensure typesize is set to 1 for byte storage
         _storage = self.storage
-        # Mark this storage as a b2embed object
-        _storage.meta = {"b2embed": {"version": 1}}
+        _storage.meta = meta if meta is not None else {"b2embed": {"version": 1}}
         if self._schunk_store:
             self._store = blosc2.SChunk(
                 chunksize=chunksize,

@@ -48,6 +48,7 @@ def populated_dict_store(request):
 
 def test_basic_dstore(populated_dict_store):
     dstore, path = populated_dict_store
+    assert "b2dict" in dstore.storage.meta
     assert set(dstore.keys()) == {"/node1", "/node2", "/dir1/node3"}
     assert np.all(dstore["/node1"][:] == np.array([1, 2, 3]))
     assert np.all(dstore["/node2"][:] == np.ones(2))
@@ -64,6 +65,7 @@ def test_basic_dstore(populated_dict_store):
     # Persist and reopen
     dstore.close()
     with DictStore(path, mode="r") as dstore_read:
+        assert "b2dict" in dstore_read.storage.meta
         keys = set(dstore_read.keys())
         assert "/node2" in keys
         assert "/dir1/node3" in keys

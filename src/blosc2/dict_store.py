@@ -23,6 +23,7 @@ from blosc2.schunk import SChunk
 class DictStore:
     """
     Directory-based storage for compressed data using Blosc2.
+
     Manages arrays in a directory (.b2d) or zip (.b2z) format.
 
     Supports the following types:
@@ -102,6 +103,7 @@ class DictStore:
         threshold: int | None = 2**13,
         *,
         mmap_mode: str | None = None,
+        _storage_meta: dict | None = None,
     ):
         """
         See :class:`DictStore` for full documentation of parameters.
@@ -122,6 +124,12 @@ class DictStore:
         self.cparams = cparams or blosc2.CParams()
         self.dparams = dparams or blosc2.DParams()
         self.storage = storage or blosc2.Storage()
+
+        if _storage_meta:
+            self.storage.meta = _storage_meta
+        else:
+            # Mark this storage as a b2dict object
+            self.storage.meta = {"b2dict": {"version": 1}}
 
         self.offsets = {}
         self.map_tree = {}
@@ -187,6 +195,7 @@ class DictStore:
             self._update_map_tree()
 
         self._estore = EmbedStore(_from_schunk=schunk)
+        self.storage.meta = self._estore.storage.meta
 
     def _init_write_append_mode(
         self,
@@ -208,6 +217,7 @@ class DictStore:
             cparams=cparams,
             dparams=dparams,
             storage=storage,
+            meta=self.storage.meta,
         )
         self._update_map_tree()
 
