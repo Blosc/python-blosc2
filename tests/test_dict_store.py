@@ -449,6 +449,7 @@ def test_open_context_manager(populated_dict_store):
     # Test opening via blosc2.open as a context manager
     with blosc2.open(path, mode="r", mmap_mode="r") as dstore:
         assert isinstance(dstore, DictStore)
+        assert "b2dict" in dstore.storage.meta
         assert "/node1" in dstore
         assert np.array_equal(dstore["/node1"][:], np.array([1, 2, 3]))
 

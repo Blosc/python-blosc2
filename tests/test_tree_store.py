@@ -935,6 +935,7 @@ def test_open_context_manager(populated_tree_store):
     # Test opening via blosc2.open as a context manager
     with blosc2.open(path, mode="r", mmap_mode="r") as tstore:
         assert isinstance(tstore, TreeStore)
+        assert "b2tree" in tstore.storage.meta
         assert "/child0/data" in tstore
         assert np.array_equal(tstore["/child0/data"][:], np.array([1, 2, 3]))
 

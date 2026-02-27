@@ -220,6 +220,7 @@ def test_open_context_manager(cleanup_files):
     # Test opening via blosc2.open as a context manager
     with blosc2.open(path, mode="r", mmap_mode="r") as estore_read:
         assert isinstance(estore_read, blosc2.EmbedStore)
+        assert "b2embed" in estore_read.storage.meta
         assert "/node1" in estore_read
         assert np.array_equal(estore_read["/node1"][:], np.arange(10))
 
