@@ -48,6 +48,7 @@ def populated_dict_store(request):
 
 def test_basic_dstore(populated_dict_store):
     dstore, path = populated_dict_store
+    assert "b2dict" in dstore.storage.meta
     assert set(dstore.keys()) == {"/node1", "/node2", "/dir1/node3"}
     assert np.all(dstore["/node1"][:] == np.array([1, 2, 3]))
     assert np.all(dstore["/node2"][:] == np.ones(2))
@@ -64,6 +65,7 @@ def test_basic_dstore(populated_dict_store):
     # Persist and reopen
     dstore.close()
     with DictStore(path, mode="r") as dstore_read:
+        assert "b2dict" in dstore_read.storage.meta
         keys = set(dstore_read.keys())
         assert "/node2" in keys
         assert "/dir1/node3" in keys
@@ -447,6 +449,7 @@ def test_open_context_manager(populated_dict_store):
     # Test opening via blosc2.open as a context manager
     with blosc2.open(path, mode="r", mmap_mode="r") as dstore:
         assert isinstance(dstore, DictStore)
+        assert "b2dict" in dstore.storage.meta
         assert "/node1" in dstore
         assert np.array_equal(dstore["/node1"][:], np.array([1, 2, 3]))
 

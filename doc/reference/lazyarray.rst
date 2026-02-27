@@ -61,6 +61,7 @@ DSL Kernels
 -----------
 
 For miniexpr-backed kernels, see `the dedicated tutorial <../getting_started/tutorials/03.lazyarray-udf-kernels.html>`_.
+For the full DSL syntax, see the `DSL syntax reference <../getting_started/dsl_syntax.html>`_.
 
 .. autofunction:: dsl_kernel
 

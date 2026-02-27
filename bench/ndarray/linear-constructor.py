@@ -12,7 +12,7 @@ import numpy as np
 
 import blosc2
 
-dtype = np.int64
+dtype = np.float64
 shape = (10_000, 10_000)
 start, stop = 1, 2
 cparams = blosc2.CParams(codec=blosc2.Codec.BLOSCLZ, clevel=1)
