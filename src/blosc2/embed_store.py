@@ -64,10 +64,6 @@ class EmbedStore:
     >>> print(estore["/node1"][:])
     [1 2 3]
 
-    Notes
-    -----
-    The EmbedStore is still experimental and subject to change.
-    Please report any issues you may find.
     """
 
     def __init__(

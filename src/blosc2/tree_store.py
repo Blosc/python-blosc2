@@ -142,10 +142,6 @@ class TreeStore(DictStore):
     >>> sorted(list(subtree.keys()))
     ['/child1/leaf2', '/child2', '/leaf1']
 
-    Notes
-    -----
-    The TreeStore is still experimental and subject to change.
-    Please report any issues you may find.
     """
 
     # For some reason, we had to revert the explicit parametrisation of the

@@ -86,8 +86,6 @@ class DictStore:
 
     Notes
     -----
-    - The DictStore is still experimental and subject to change.
-      Please report any issues you may find.
     - External persistence uses the following file extensions:
       .b2nd for NDArray and .b2f for SChunk.
     """
