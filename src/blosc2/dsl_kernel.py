@@ -18,7 +18,7 @@ from typing import ClassVar
 
 _PRINT_DSL_KERNEL = os.environ.get("PRINT_DSL_KERNEL", "").strip().lower()
 _PRINT_DSL_KERNEL = _PRINT_DSL_KERNEL not in ("", "0", "false", "no", "off")
-_DSL_USAGE_DOC_URL = "https://github.com/Blosc/miniexpr/blob/main/doc/dsl-usage.md"
+_DSL_USAGE_DOC_URL = "https://github.com/Blosc/python-blosc2/blob/main/doc/getting_started/dsl_syntax.md"
 
 
 class DSLSyntaxError(ValueError):

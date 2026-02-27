@@ -212,7 +212,7 @@ def test_dsl_kernel_integer_ops_kept_as_full_dsl_function():
         res = expr.compute()
     except RuntimeError as e:
         # Some DSL ops may still be unsupported by miniexpr backends.
-        if "DSL kernels require miniexpr" not in str(e):
+        if "DSL kernel requires miniexpr" not in str(e):
             raise
     else:
         expected = kernel_integer_ops.func(a, b)
@@ -538,7 +538,7 @@ def test_dsl_kernel_scalar_only_inputs_specialization_injects_dummy_operand(monk
     try:
         shape = (8, 8)
         expr = blosc2.lazyudf(kernel_scalar_only, (3,), dtype=np.float32, shape=shape)
-        with pytest.raises(RuntimeError, match="DSL kernels require miniexpr"):
+        with pytest.raises(RuntimeError, match="DSL kernel requires miniexpr"):
             expr.compute()
         assert captured["calls"] >= 1
         assert captured["keys"] == ("__me_dummy0",)
@@ -672,10 +672,66 @@ def test_dsl_kernel_miniexpr_failure_raises_even_with_strict_disabled(monkeypatc
     try:
         _, _, a2, b2 = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))
         expr = blosc2.lazyudf(kernel_loop, (a2, b2), dtype=a2.dtype)
-        with pytest.raises(RuntimeError, match="DSL kernels require miniexpr"):
+        with pytest.raises(RuntimeError, match="DSL kernel requires miniexpr"):
             _ = expr.compute()
-        with pytest.raises(RuntimeError, match="DSL kernels require miniexpr"):
+        with pytest.raises(RuntimeError, match="DSL kernel requires miniexpr"):
             _ = expr.compute(strict_miniexpr=False)
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
+
+
+def test_dsl_kernel_miniexpr_failure_includes_backend_error_details(monkeypatch):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    def failing_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        raise ValueError("forced miniexpr backend failure details")
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", failing_set_pref_expr)
+
+    try:
+        _, _, a2, b2 = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))
+        expr = blosc2.lazyudf(kernel_loop, (a2, b2), dtype=a2.dtype)
+        with pytest.raises(RuntimeError, match="DSL kernel requires miniexpr") as excinfo:
+            _ = expr.compute()
+        msg = str(excinfo.value)
+        assert "Backend error: forced miniexpr backend failure details" in msg
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
+
+
+def test_dsl_kernel_miniexpr_failure_prefers_validate_dsl_error(monkeypatch):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    def failing_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        raise ValueError("forced backend failure hidden by validate_dsl message")
+
+    def fake_validate_dsl(_func):
+        return {
+            "valid": False,
+            "dsl_source": None,
+            "input_names": None,
+            "error": "synthetic validate_dsl diagnostics",
+        }
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", failing_set_pref_expr)
+    monkeypatch.setattr(lazyexpr_mod, "validate_dsl", fake_validate_dsl)
+
+    try:
+        _, _, a2, b2 = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))
+        expr = blosc2.lazyudf(kernel_loop, (a2, b2), dtype=a2.dtype)
+        with pytest.raises(RuntimeError, match="DSL kernel requires miniexpr") as excinfo:
+            _ = expr.compute()
+        msg = str(excinfo.value)
+        assert "synthetic validate_dsl diagnostics" in msg
+        assert "Backend error:" not in msg
     finally:
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 

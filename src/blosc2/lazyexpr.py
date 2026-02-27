@@ -42,7 +42,7 @@ import numpy as np
 
 import blosc2
 
-from .dsl_kernel import DSLKernel, DSLSyntaxError, specialize_miniexpr_inputs
+from .dsl_kernel import DSLKernel, DSLSyntaxError, specialize_miniexpr_inputs, validate_dsl
 
 if blosc2._HAS_NUMBA:
     import numba
@@ -1279,7 +1279,7 @@ def _is_dsl_kernel_expression(expression) -> bool:
 
 
 def _dsl_miniexpr_required_message(reason: str | None = None) -> str:
-    message = "DSL kernels require miniexpr evaluation and cannot run via direct Python fallback."
+    message = "DSL kernel requires miniexpr."
     if reason:
         message = f"{message} {reason}"
     return message
@@ -1494,11 +1494,14 @@ def fast_eval(  # noqa: C901
         except Exception as e:
             use_miniexpr = False
             if is_dsl:
-                raise RuntimeError(
-                    _dsl_miniexpr_required_message(
-                        "miniexpr compilation or execution failed for this DSL kernel."
-                    )
-                ) from e
+                reason = "miniexpr compilation or execution failed for this DSL kernel."
+                if isinstance(expression, DSLKernel):
+                    report = validate_dsl(expression)
+                    if not report["valid"] and report["error"]:
+                        reason = report["error"]
+                    else:
+                        reason = f"{reason}\nBackend error: {e}"
+                raise RuntimeError(_dsl_miniexpr_required_message(reason)) from e
             if strict_miniexpr:
                 raise RuntimeError("miniexpr evaluation failed while strict_miniexpr=True") from e
         finally:
