@@ -44,7 +44,6 @@ Constructors
     eye
     frombuffer
     fromiter
-    fromiter
     full
     full_like
     linspace
@@ -67,7 +66,6 @@ Constructors
 .. autofunction:: blosc2.empty_like
 .. autofunction:: blosc2.eye
 .. autofunction:: blosc2.frombuffer
-.. autofunction:: blosc2.fromiter
 .. autofunction:: blosc2.fromiter
 .. autofunction:: blosc2.full
 .. autofunction:: blosc2.full_like
