@@ -2,19 +2,20 @@
 
 ## Changes from 4.0.0 to 4.1.0
 
-- Add DSL kernel functionality for faster, compiled, user-defined functions which broadly respect python syntax and implement the `LazyArray` interface.
+- Add DSL kernel functionality for faster, compiled, user-defined functions which broadly respect python syntax and implement the `LazyArray` interface. See the introductory tutorial at: https://blosc.org/python-blosc2/getting_started/tutorials/03.lazyarray-udf-kernels.html
 - Add read-only mmap support for store containers:
   `DictStore`, `TreeStore`, and `EmbedStore` now accept `mmap_mode="r"`
   when opened with `mode="r"` (including via `blosc2.open` for `.b2d`,
   `.b2z`, and `.b2e`).
-- Add `cumulative_sum` and `cumulative_prod` functions for Array API compliance
-- Add Unicode string arrays, support comparison operations with them, and optimised compression path
-- Add ``endswith`` and ``startswith`` and extend ``contains`` to support strings and offer `miniexpr` multithreaded computation when possible
-- Use DSL kernels to accelerate `arange`/`linspace` constructors by 6-10x
-- Improve documentation for `filters` and `filters_meta`
+- New .meta entry for store containers, allowing better store recognition at `blosc2.open()` time.  Fixes #546.
+- Add `cumulative_sum` and `cumulative_prod` functions for Array API compliance.
+- Add Unicode string arrays, support comparison operations with them, and optimised compression path.
+- Add ``endswith`` and ``startswith`` and extend ``contains`` to support strings and offer `miniexpr` multithreaded computation when possible.
+- Use DSL kernels to accelerate `arange`/`linspace` constructors by 6-10x.
+- Improve documentation for `filters` and `filters_meta`.
 - Fix edge case issues with `resize` and `constructors` so that `chunks` may be set independently of shape, and arrays may be extended from empty consistently.
-- Continued work on `miniexpr` integration, interface, and support
-- Ruff fixes and implementation of PEP recommendations
+- Continued work on `miniexpr` integration, interface, and support.
+- Ruff fixes and implementation of PEP recommendations.
 
 ## Changes from 4.0.0-b1 to 4.0.0
 
