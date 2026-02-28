@@ -1,9 +1,9 @@
 Announcing Python-Blosc2 4.0.0
 ===============================
 
-This is major version release where we have accelerated computation via multithreading using the
-[miniexpr library](https://github.com/Blosc/miniexpr/tree/main). We have also changed the wheel layout to comply with PEP 427
-and added support for the [blosc2-openzl plugin](https://github.com/Blosc/blosc2-openzl).
+This is minor version release which introduces various new features: optimised compression and string functions (e.g. endswith) for unicode character arrays; cumulative reductions (see `the blog <https://blosc.org/posts/cumsum/>`_) ; memory-map support for store containers like ``DictStore`` ; as well as further improvements to our bespoke multi-threaded computation backend ``miniexpr``.
+
+The main new feature is a DSL kernel functionality for faster, compiled, user-defined functions: these DSL kernels accelerate ``arange`` / ``linspace`` constructors by 6-10x. Tutorial: https://blosc.org/python-blosc2/getting_started/tutorials/03.lazyarray-udf-kernels.html.
 
 You can think of Python-Blosc2 4.x as an extension of NumPy/numexpr that:
 
