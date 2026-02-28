@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.1.0 to 4.1.1
+
+XXX version-specific blurb XXX
+
 ## Changes from 4.0.0 to 4.1.0
 
 - Add DSL kernel functionality for faster, compiled, user-defined functions which broadly respect python syntax and implement the `LazyArray` interface. See the introductory tutorial at: https://blosc.org/python-blosc2/getting_started/tutorials/03.lazyarray-udf-kernels.html
