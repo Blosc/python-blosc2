@@ -1,8 +1,8 @@
 # Release notes
 
-  ## Changes from 4.1.2 to 4.1.3
+## Changes from 4.1.0 to 4.1.1
 
-  XXX version-specific blurb XXX
+XXX version-specific blurb XXX
 
 ## Changes from 4.1.1 to 4.1.2
 

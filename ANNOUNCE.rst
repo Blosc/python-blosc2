@@ -1,7 +1,7 @@
-Announcing Python-Blosc2 4.1.2
+Announcing Python-Blosc2 4.0.0
 ===============================
 
-This is patch release which updates the ``c-blosc2`` version to fix some memory leaks.
+This is patch release which updates the ``miniexpr`` version to fix a bug for ubuntu ARM64 failure.
 
 You can think of Python-Blosc2 4.x as an extension of NumPy/numexpr that:
 
