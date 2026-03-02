@@ -1,5 +1,9 @@
 # Release notes
 
+## Changes from 4.1.1 to 4.1.2
+
+  XXX version-specific blurb XXX
+
 ## Changes from 4.1.0 to 4.1.1
 
 - Update ``miniexpr`` to fix bug on ubuntu with ARM64.
