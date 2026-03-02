@@ -101,7 +101,8 @@ Checking packaging
 
 * Check that the packages and wheels are sane::
 
-    pip install blosc2[test] -U
+    pip install --group test
+    pip install blosc2 -U
     python -c "import blosc2; blosc2.print_versions()"
     pytest
 
