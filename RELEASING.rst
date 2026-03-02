@@ -26,7 +26,7 @@ Preliminaries
 
 * Build the package and make sure that tests are passing::
 
-    pip install -e ".[test]"
+    pip install -e . --group test
     pytest
 
 * Make sure that ``RELEASE_NOTES.md`` and ``ANNOUNCE.rst`` are up to date with the

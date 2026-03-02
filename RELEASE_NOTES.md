@@ -2,7 +2,7 @@
 
 ## Changes from 4.1.0 to 4.1.1
 
-XXX version-specific blurb XXX
+- Update `miniexpr` version to fix bug for ubuntu ARM64 failure
 
 ## Changes from 4.0.0 to 4.1.0
 
