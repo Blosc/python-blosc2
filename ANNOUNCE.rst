@@ -1,4 +1,4 @@
-Announcing Python-Blosc2 4.0.0
+Announcing Python-Blosc2 4.1.1
 ===============================
 
 This is patch release which fixes a bug for ``miniexpr`` on ubuntu with ARM64.
