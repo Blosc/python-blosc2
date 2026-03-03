@@ -1,5 +1,9 @@
 # Release notes
 
+  ## Changes from 4.1.2 to 4.1.3
+
+  XXX version-specific blurb XXX
+
 ## Changes from 4.1.1 to 4.1.2
 
 - Update `c-blosc2` version
