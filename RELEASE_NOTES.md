@@ -2,7 +2,7 @@
 
 ## Changes from 4.1.1 to 4.1.2
 
-  XXX version-specific blurb XXX
+- Update `c-blosc2` version
 
 ## Changes from 4.1.0 to 4.1.1
 
