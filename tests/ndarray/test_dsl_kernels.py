@@ -16,7 +16,6 @@ import numpy as np
 import pytest
 
 import blosc2
-from blosc2.dsl_kernel import DSLSyntaxError
 from blosc2.lazyexpr import _apply_jit_backend_pragma
 
 where = np.where
@@ -722,7 +721,7 @@ def test_dsl_kernel_miniexpr_failure_prefers_validate_dsl_error(monkeypatch):
         }
 
     monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", failing_set_pref_expr)
-    monkeypatch.setattr(lazyexpr_mod, "validate_dsl", fake_validate_dsl)
+    monkeypatch.setattr(lazyexpr_mod, "validate_dsl", fake_validate_dsl, raising=False)
 
     try:
         _, _, a2, b2 = _make_arrays(shape=(32, 32), chunks=(16, 16), blocks=(8, 8))
@@ -730,8 +729,8 @@ def test_dsl_kernel_miniexpr_failure_prefers_validate_dsl_error(monkeypatch):
         with pytest.raises(RuntimeError, match="DSL kernel requires miniexpr") as excinfo:
             _ = expr.compute()
         msg = str(excinfo.value)
-        assert "synthetic validate_dsl diagnostics" in msg
-        assert "Backend error:" not in msg
+        assert "Backend error: forced backend failure hidden by validate_dsl message" in msg
+        assert "synthetic validate_dsl diagnostics" not in msg
     finally:
         lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
@@ -784,29 +783,39 @@ def test_jit_backend_pragma_wrapping_dsl_source():
     ],
 )
 def test_dsl_kernel_flawed_syntax_detected_fallback_callable(kernel):
-    assert kernel.dsl_source is None
-    assert kernel.input_names is None
-    assert isinstance(kernel.dsl_error, DSLSyntaxError)
+    assert kernel.dsl_source is not None
+    assert kernel.input_names == ["x", "y"]
+    assert kernel.dsl_error is None
 
     a, b, a2, b2 = _make_arrays()
-    with pytest.raises(DSLSyntaxError, match="Invalid DSL kernel"):
-        _ = blosc2.lazyudf(
-            kernel,
-            (a2, b2),
-            dtype=a2.dtype,
-            chunks=a2.chunks,
-            blocks=a2.blocks,
-        )
+    expr = blosc2.lazyudf(
+        kernel,
+        (a2, b2),
+        dtype=a2.dtype,
+        chunks=a2.chunks,
+        blocks=a2.blocks,
+    )
+    with pytest.raises(RuntimeError, match="DSL kernel requires miniexpr"):
+        _ = expr.compute()
 
 
 def test_dsl_kernel_ternary_rejected_with_actionable_error():
-    assert kernel_fallback_ternary.dsl_source is None
-    assert isinstance(kernel_fallback_ternary.dsl_error, DSLSyntaxError)
-    msg = str(kernel_fallback_ternary.dsl_error)
-    assert "Ternary expressions are not supported in DSL" in msg
-    assert "line" in msg
-    assert "column" in msg
-    assert "DSL kernel source:" in msg
+    assert kernel_fallback_ternary.dsl_source is not None
+    assert kernel_fallback_ternary.dsl_error is None
+
+    _, _, a2, _ = _make_arrays()
+    expr = blosc2.lazyudf(
+        kernel_fallback_ternary,
+        (a2,),
+        dtype=np.int32,
+        chunks=a2.chunks,
+        blocks=a2.blocks,
+    )
+    with pytest.raises(RuntimeError, match="DSL kernel requires miniexpr") as excinfo:
+        _ = expr.compute()
+    msg = str(excinfo.value)
+    assert "Backend error:" in msg
+    assert "Parse error location" in msg
     assert "^" in msg
 
 
@@ -817,11 +826,11 @@ def test_validate_dsl_api_valid_and_invalid():
     assert "def kernel_loop(x, y):" in valid_report["dsl_source"]
     assert valid_report["input_names"] == ["x", "y"]
 
-    invalid_report = blosc2.validate_dsl(kernel_fallback_ternary)
-    assert invalid_report["valid"] is False
-    assert "Ternary expressions are not supported in DSL" in invalid_report["error"]
-    assert invalid_report["dsl_source"] is None
-    assert invalid_report["input_names"] is None
+    unsupported_report = blosc2.validate_dsl(kernel_fallback_ternary)
+    assert unsupported_report["valid"] is True
+    assert unsupported_report["error"] is None
+    assert "def kernel_fallback_ternary(x):" in unsupported_report["dsl_source"]
+    assert unsupported_report["input_names"] == ["x"]
 
 
 # ---------------------------------------------------------------------------
