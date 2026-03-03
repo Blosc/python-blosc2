@@ -521,7 +521,6 @@ class DSLKernel:
         dsl_func = next((node for node in dsl_tree.body if isinstance(node, ast.FunctionDef)), None)
         if dsl_func is None:
             raise ValueError("No function definition found in sliced DSL source")
-        _DSLValidator(dsl_source).validate(dsl_func)
         input_names = self._input_names_from_signature(dsl_func)
         if _PRINT_DSL_KERNEL:
             func_name = getattr(func, "__name__", "<dsl_kernel>")

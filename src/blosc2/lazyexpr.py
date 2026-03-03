@@ -42,7 +42,7 @@ import numpy as np
 
 import blosc2
 
-from .dsl_kernel import DSLKernel, DSLSyntaxError, specialize_miniexpr_inputs, validate_dsl
+from .dsl_kernel import DSLKernel, DSLSyntaxError, _DSLValidator, specialize_miniexpr_inputs
 
 if blosc2._HAS_NUMBA:
     import numba
@@ -1278,6 +1278,29 @@ def _is_dsl_kernel_expression(expression) -> bool:
     return isinstance(expression, DSLKernel) and expression.dsl_source is not None
 
 
+def _format_dsl_parse_error_hint(expr_text: str, backend_msg: str):
+    marker = "parse_error_pos="
+    pos0 = backend_msg.find(marker)
+    if pos0 < 0:
+        return None
+    pos0 += len(marker)
+    pos1 = pos0
+    while pos1 < len(backend_msg) and backend_msg[pos1].isdigit():
+        pos1 += 1
+    if pos1 == pos0:
+        return None
+    err_pos = int(backend_msg[pos0:pos1])
+    if err_pos < 0:
+        return None
+    if err_pos > len(expr_text):
+        err_pos = len(expr_text)
+    line_no = expr_text.count("\n", 0, err_pos) + 1
+    line_start = expr_text.rfind("\n", 0, err_pos) + 1
+    col_no = err_pos - line_start + 1
+    dump = _DSLValidator(expr_text)._format_source_with_pointer(line_no, col_no)
+    return f"Parse error location (line {line_no}, col {col_no}, offset {err_pos}):\n{dump}"
+
+
 def _dsl_miniexpr_required_message(reason: str | None = None) -> str:
     message = "DSL kernel requires miniexpr."
     if reason:
@@ -1495,12 +1518,13 @@ def fast_eval(  # noqa: C901
             use_miniexpr = False
             if is_dsl:
                 reason = "miniexpr compilation or execution failed for this DSL kernel."
-                if isinstance(expression, DSLKernel):
-                    report = validate_dsl(expression)
-                    if not report["valid"] and report["error"]:
-                        reason = report["error"]
-                    else:
-                        reason = f"{reason}\nBackend error: {e}"
+                backend_error = str(e)
+                parse_hint = None
+                if isinstance(expr_string_miniexpr, str):
+                    parse_hint = _format_dsl_parse_error_hint(expr_string_miniexpr, backend_error)
+                reason = f"{reason}\nBackend error: {backend_error}"
+                if parse_hint is not None:
+                    reason = f"{reason}\n{parse_hint}"
                 raise RuntimeError(_dsl_miniexpr_required_message(reason)) from e
             if strict_miniexpr:
                 raise RuntimeError("miniexpr evaluation failed while strict_miniexpr=True") from e
@@ -2223,6 +2247,7 @@ def reduce_slices(  # noqa: C901
             # For other operations, zeros should be safe
             aux_reduc = np.zeros(nblocks, dtype=dtype)
         prefilter_set = False
+        expression_miniexpr = None
         try:
             if where is not None:
                 expression_miniexpr = f"{reduce_op_str}(where({expression}, _where_x, _where_y))"
@@ -2238,8 +2263,18 @@ def reduce_slices(  # noqa: C901
             # Exercise prefilter for each chunk
             for nchunk in range(res_eval.schunk.nchunks):
                 res_eval.schunk._prefilter_data(nchunk, data, chunk_data)
-        except Exception:
+        except Exception as e:
             use_miniexpr = False
+            if callable(expression) and _is_dsl_kernel_expression(expression):
+                reason = "miniexpr compilation or execution failed for this DSL kernel."
+                backend_error = str(e)
+                parse_hint = None
+                if isinstance(expression_miniexpr, str):
+                    parse_hint = _format_dsl_parse_error_hint(expression_miniexpr, backend_error)
+                reason = f"{reason}\nBackend error: {backend_error}"
+                if parse_hint is not None:
+                    reason = f"{reason}\n{parse_hint}"
+                raise RuntimeError(_dsl_miniexpr_required_message(reason)) from e
         finally:
             if prefilter_set:
                 res_eval.schunk.remove_prefilter("miniexpr")
