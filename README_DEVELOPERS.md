@@ -22,7 +22,7 @@ You are done!
     pip install .   # add -e for editable mode
 ```
 
-On Windows, clang-cl is required (OpenZL depends on C11 support). Make sure LLVM
+On Windows, clang-cl is required now. Make sure LLVM
 is on PATH and build with Ninja, for example:
 
 ```bash
