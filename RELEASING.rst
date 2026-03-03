@@ -20,7 +20,7 @@ Preliminaries
         GIT_TAG b179abf1132dfa5a263b2ebceb6ef7a3c2890c64
     )
 
-  to point to the desired commit/tag in the c-blosc2 repo.
+  to point to the desired commit/tag in the c-blosc2 repo. Note that ``conda-forge`` only selects the latest release, so it may be necessary to do a formal release of ``c-blosc2`` to ensure that the package is correctly generated in ```conda-forge``.
 
 * Make sure that the current main branch is passing the tests in continuous integration.
 
