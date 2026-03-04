@@ -4178,12 +4178,10 @@ def lazyudf(
         in :paramref:`inputs`.
         - `output`: The buffer to be filled as a multidimensional numpy.ndarray.
         - `offset`: The multidimensional offset corresponding to the start of the block being computed:
-        ```
-        def myudf(inputs_tuple, output, offset):
-            x, y = inputs_tuple
-            ...
-            output[:] = result
-        ```
+            def myudf(inputs_tuple, output, offset):
+                x, y = inputs_tuple
+                ...
+                output[:] = result
     inputs: Sequence[Any] or None
         The sequence of inputs. Besides objects compliant with the blosc2.Array protocol,
         any other object is supported too, and it will be passed as-is to the
@@ -4208,12 +4206,10 @@ def lazyudf(
         last one will ignore the `urlpath` parameter passed in this function.
         In addition, one may provide ``in_place``, a bool (default False), which indicates whether
         the function should modify the output directly, (rather than chunks of the output, which are later written to output):
-        ```
-        def inplace_udf(inputs_tuple, output, offset):
-            x, y = inputs_tuple
-            ...
-            out[3] += 1
-        ```
+            def inplace_udf(inputs_tuple, output, offset):
+                x, y = inputs_tuple
+                ...
+                out[3] += 1
 
     Returns
     -------

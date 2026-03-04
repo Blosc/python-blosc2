@@ -31,7 +31,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-src_skill="${repo_root}/.codex/skills/wasm32-pyodide-dev"
+src_skill="${repo_root}/.skills/wasm32-pyodide-dev"
 codex_home="${CODEX_HOME:-${HOME}/.codex}"
 dst_skill="${codex_home}/skills/wasm32-pyodide-dev"
 
