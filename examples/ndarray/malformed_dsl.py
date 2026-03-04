@@ -15,7 +15,7 @@ import blosc2
 from blosc2.dsl_kernel import DSLSyntaxError
 
 
-# --- 1) Malformed DSL syntax: validate_dsl() and lazyudf() diagnostics ---
+# --- 1) Malformed DSL syntax: validate_dsl() diagnostics ---
 @blosc2.dsl_kernel
 def kernel_bad_ternary(x):
     return 1 if x else 0
@@ -25,14 +25,15 @@ report = blosc2.validate_dsl(kernel_bad_ternary)
 print("validate_dsl valid:", report["valid"])
 print("validate_dsl error:\n", report["error"])
 
+# --- 2) Proper error is raised when trying to compute as well ---
+x = blosc2.ones((8, 8), dtype=np.float32)
 try:
-    x = blosc2.ones((8, 8), dtype=np.float32)
-    _ = blosc2.lazyudf(kernel_bad_ternary, (x,), dtype=np.int32)
+    res = blosc2.lazyudf(kernel_bad_ternary, (x,), dtype=np.int32)[:]
 except DSLSyntaxError as e:
     print("\nlazyudf rejected malformed DSL kernel as expected:\n", e)
 
 
-# --- 2) Force miniexpr backend failure to show enriched RuntimeError message ---
+# --- 3) Force miniexpr backend failure to show enriched RuntimeError message ---
 @blosc2.dsl_kernel
 def kernel_ok(x, y):
     return x + y

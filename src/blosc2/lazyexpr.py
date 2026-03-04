@@ -1302,9 +1302,9 @@ def _format_dsl_parse_error_hint(expr_text: str, backend_msg: str):
 
 
 def _dsl_miniexpr_required_message(reason: str | None = None) -> str:
-    message = "DSL kernel requires miniexpr."
+    message = ""
     if reason:
-        message = f"{message} {reason}"
+        message = f"{message}{reason}"
     return message
 
 
@@ -1517,7 +1517,9 @@ def fast_eval(  # noqa: C901
         except Exception as e:
             use_miniexpr = False
             if is_dsl:
-                reason = "miniexpr compilation or execution failed for this DSL kernel."
+                reason = (
+                    f"miniexpr compilation or execution failed for this DSL kernel:\n{expression.dsl_source}"
+                )
                 backend_error = str(e)
                 parse_hint = None
                 if isinstance(expr_string_miniexpr, str):

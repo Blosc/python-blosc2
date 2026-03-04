@@ -490,8 +490,12 @@ class DSLKernel:
         try:
             dsl_source, input_names = self._extract_dsl(func)
         except DSLSyntaxError as e:
-            dsl_source = None
-            input_names = None
+            # Preserve extracted source/signature for diagnostics even when DSL validation fails.
+            try:
+                dsl_source, input_names = self._extract_dsl(func, validate=False)
+            except Exception:
+                dsl_source = None
+                input_names = None
             self.dsl_error = e
         except Exception:
             dsl_source = None
@@ -499,7 +503,7 @@ class DSLKernel:
         self.dsl_source = dsl_source
         self.input_names = input_names
 
-    def _extract_dsl(self, func):
+    def _extract_dsl(self, func, validate: bool = True):
         source = inspect.getsource(func)
         source = textwrap.dedent(source)
         tree = ast.parse(source)
@@ -521,6 +525,8 @@ class DSLKernel:
         dsl_func = next((node for node in dsl_tree.body if isinstance(node, ast.FunctionDef)), None)
         if dsl_func is None:
             raise ValueError("No function definition found in sliced DSL source")
+        if validate:
+            _DSLValidator(dsl_source).validate(dsl_func)
         input_names = self._input_names_from_signature(dsl_func)
         if _PRINT_DSL_KERNEL:
             func_name = getattr(func, "__name__", "<dsl_kernel>")
