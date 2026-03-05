@@ -56,9 +56,15 @@ set(MINIEXPR_BUILD_TESTS OFF CACHE BOOL "Build miniexpr tests" FORCE)
 set(MINIEXPR_BUILD_EXAMPLES OFF CACHE BOOL "Build miniexpr examples" FORCE)
 set(MINIEXPR_BUILD_BENCH OFF CACHE BOOL "Build miniexpr benchmarks" FORCE)
 
+if(EMSCRIPTEN)
+  set(MINIEXPR_ENABLE_TCC_JIT ON CACHE BOOL "Enable TCC JIT in Emscripten builds" FORCE)
+  set(MINIEXPR_WASM32_SIDE_MODULE ON CACHE BOOL "Use host-registered wasm32 JIT helpers" FORCE)
+endif()
+
 FetchContent_Declare(miniexpr
     GIT_REPOSITORY https://github.com/Blosc/miniexpr.git
-    GIT_TAG 979573da618e0443c3984bad8db3ed5d9ce72f75
+    GIT_TAG 37bf6982bf9619036b47f095b7005bc3c87a7447
+    # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../miniexpr
 )
 FetchContent_MakeAvailable(miniexpr)
 
@@ -103,9 +109,6 @@ else()
     set(BUILD_EXAMPLES OFF CACHE BOOL "Build C-Blosc2 examples")
     set(BUILD_BENCHMARKS OFF CACHE BOOL "Build C-Blosc2 benchmarks")
     set(BUILD_FUZZERS OFF CACHE BOOL "Build C-Blosc2 fuzzers")
-    if(DEFINED ENV{DEACTIVATE_OPENZL})
-        set(DEACTIVATE_OPENZL ON CACHE BOOL "Do not include support for the OpenZL library.")
-    endif()
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)
     set(CMAKE_INSTALL_INCLUDEDIR ${SKBUILD_PLATLIB_DIR}/blosc2/include) # directory for include files
     set(CMAKE_INSTALL_LIBDIR ${SKBUILD_PLATLIB_DIR}/blosc2/lib) # directory for libblosc2 and pkgconfig
@@ -116,7 +119,7 @@ else()
     include(FetchContent)
     FetchContent_Declare(blosc2
         GIT_REPOSITORY https://github.com/Blosc/c-blosc2
-        GIT_TAG f057d1519c0a990f6351cd39c6a659c752fb84e9
+        GIT_TAG 1386ef42f58b61c876edf714a2af84bd7b59dc5d # v2.23.1
     )
     FetchContent_MakeAvailable(blosc2)
     include_directories("${blosc2_SOURCE_DIR}/include")
@@ -133,11 +136,13 @@ if(UNIX)
 endif()
 
 if(WIN32)
-  add_custom_command(TARGET blosc2_ext POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:blosc2_shared>
-            $<TARGET_FILE_DIR:blosc2_ext>
-  )
+  if(TARGET blosc2_shared)
+    add_custom_command(TARGET blosc2_ext POST_BUILD
+      COMMAND ${CMAKE_COMMAND} -E copy_if_different
+              $<TARGET_FILE:blosc2_shared>
+              $<TARGET_FILE_DIR:blosc2_ext>
+    )
+  endif()
 endif()
 
 # Python extension -> site-packages/blosc2
@@ -145,3 +150,38 @@ install(
   TARGETS blosc2_ext
   LIBRARY DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2
 )
+
+install(
+  FILES "${miniexpr_SOURCE_DIR}/src/me_jit_glue.js"
+  DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2
+)
+
+# Install bundled libtcc next to the Python package (separate LGPL artifact).
+if(MINIEXPR_ENABLE_TCC_JIT)
+  if(APPLE)
+    install(
+      FILES "${miniexpr_BINARY_DIR}/libtcc.dylib"
+      DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2/lib
+      OPTIONAL
+    )
+  elseif(WIN32)
+    install(
+      FILES
+        "${miniexpr_BINARY_DIR}/tcc.dll"
+        "${miniexpr_BINARY_DIR}/Debug/tcc.dll"
+        "${miniexpr_BINARY_DIR}/Release/tcc.dll"
+        "${miniexpr_BINARY_DIR}/RelWithDebInfo/tcc.dll"
+        "${miniexpr_BINARY_DIR}/MinSizeRel/tcc.dll"
+      DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2/lib
+      OPTIONAL
+    )
+  else()
+    install(
+      FILES
+        "${miniexpr_BINARY_DIR}/libtcc.so"
+        "${miniexpr_BINARY_DIR}/libtcc.so.1"
+      DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2/lib
+      OPTIONAL
+    )
+  endif()
+endif()

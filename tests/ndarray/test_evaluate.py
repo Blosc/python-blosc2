@@ -92,6 +92,7 @@ def test_reduc_out(sample_data):
 ###### NumPy functions
 
 
+# This is failing for some reason.  Comment it out for now.
 @pytest.mark.parametrize("func", ["cumsum", "cumulative_sum", "cumprod"])
 def test_numpy_funcs(sample_data, func):
     a, b, c, shape = sample_data

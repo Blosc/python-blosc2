@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+
 import numpy as np
 import pytest
 
@@ -45,6 +46,7 @@ def test_compute_chunks_blocks(clevel, codec, shape: tuple, dtype):
     for dim, chunk, block in zip(shape, chunks, blocks, strict=True):
         assert dim >= chunk
         assert chunk >= block
+    assert blosc2.cparams_dflts["clevel"] == blosc2.CParams().clevel  # check haven't edited defaults
 
 
 @pytest.mark.parametrize(

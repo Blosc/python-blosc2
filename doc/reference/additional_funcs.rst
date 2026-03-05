@@ -12,23 +12,33 @@ Their result is typically a :ref:`LazyExpr` instance, which can be evaluated (wi
 
 .. autosummary::
 
+    broadcast_to
     clip
-    conj
     contains
+    endswith
     imag
+    lower
     real
     round
+    startswith
+    upper
     where
 
 
 
+.. autofunction:: blosc2.broadcast_to
 .. autofunction:: blosc2.clip
-.. autofunction:: blosc2.conj
 .. autofunction:: blosc2.contains
+.. autofunction:: blosc2.endswith
 .. autofunction:: blosc2.imag
+.. autofunction:: blosc2.lower
 .. autofunction:: blosc2.real
 .. autofunction:: blosc2.round
+.. autofunction:: blosc2.startswith
+.. autofunction:: blosc2.upper
 .. autofunction:: blosc2.where
+
+
 Type Utilities
 --------------
 

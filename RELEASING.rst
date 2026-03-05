@@ -20,13 +20,13 @@ Preliminaries
         GIT_TAG b179abf1132dfa5a263b2ebceb6ef7a3c2890c64
     )
 
-  to point to the desired commit/tag in the c-blosc2 repo.
+  to point to the desired commit/tag in the c-blosc2 repo. Note that ``conda-forge`` only selects the latest release, so it may be necessary to do a formal release of ``c-blosc2`` to ensure that the package is correctly generated in ```conda-forge``.
 
 * Make sure that the current main branch is passing the tests in continuous integration.
 
 * Build the package and make sure that tests are passing::
 
-    pip install -e ".[test]"
+    pip install -e . --group test
     pytest
 
 * Make sure that ``RELEASE_NOTES.md`` and ``ANNOUNCE.rst`` are up to date with the
@@ -55,11 +55,11 @@ Tagging
 
     git tag -a vX.Y.Z -m "Tagging python-blosc2 version X.Y.Z"
 
-* Push the tag to the github repo::
+* Push the tag to the GitHub repo::
 
     git push --tags
 
-* If you happen to have to delete the tag, such as artifacts demonstrates a fault, first delete it locally:
+* If you happen to have to delete the tag, such as when artifacts demonstrate a fault, first delete it locally:
 
     git tag --delete vX.Y.Z
 
@@ -77,7 +77,7 @@ Tagging
   an empty dir (say dist), and upload to PyPI with::
 
     rm wheelhouse/*
-    # download artifacts from the tag in github
+    # download artifacts from the tag in GitHub
     twine upload --repository blosc2 wheelhouse/*
 
 * Update the latest release in the ``doc/python-blosc2.rst`` file with the new version
@@ -101,11 +101,12 @@ Checking packaging
 
 * Check that the packages and wheels are sane::
 
-    pip install blosc2[test] -U
+    pip install --group test
+    pip install blosc2 -U
     python -c "import blosc2; blosc2.print_versions()"
     pytest
 
-* Do an actual release in github by visiting:
+* Do an actual release in GitHub by visiting:
   https://github.com/Blosc/python-blosc2/releases/new
   Add the notes specific for this release.
 

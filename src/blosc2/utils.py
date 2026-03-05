@@ -7,13 +7,17 @@
 
 import ast
 import builtins
+import inspect
 import math
 import warnings
+from itertools import product
 
 import ndindex
 import numpy as np
 from ndindex.subindex_helpers import ceiling
 from numpy import broadcast_shapes
+
+import blosc2
 
 # NumPy version and a convenient boolean flag
 NUMPY_GE_2_0 = np.__version__ >= "2.0"
@@ -24,14 +28,85 @@ if NUMPY_GE_2_0:  # array-api compliant
     npbinvert = np.bitwise_invert
     npvecdot = np.vecdot
     nptranspose = np.permute_dims
+    if hasattr(np, "cumulative_sum"):
+        npcumsum = np.cumulative_sum
+        npcumprod = np.cumulative_prod
+    else:
+        npcumsum = np.cumsum
+        npcumprod = np.cumprod
 else:  # not array-api compliant
     nplshift = np.left_shift
     nprshift = np.right_shift
     npbinvert = np.bitwise_not
     nptranspose = np.transpose
+    npcumsum = np.cumsum
+    npcumprod = np.cumprod
 
     def npvecdot(a, b, axis=-1):
         return np.einsum("...i,...i->...", np.moveaxis(np.conj(a), axis, -1), np.moveaxis(b, axis, -1))
+
+
+def _string_contains(a, b):
+    return np.char.find(a, b) >= 0
+
+
+def _string_startswith(a, b):
+    return np.char.startswith(a, b)
+
+
+def _string_lower(a):
+    return np.char.lower(a)
+
+
+def _string_upper(a):
+    return np.char.upper(a)
+
+
+def _string_endswith(a, b):
+    return np.char.endswith(a, b)
+
+
+def _format_expr_scalar(value):
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, str | bytes):
+        return repr(value)
+    return value
+
+
+global safe_numpy_globals
+# Use numpy eval when running in WebAssembly
+safe_numpy_globals = {"np": np}
+# Add all first-level numpy functions
+safe_numpy_globals.update(
+    {name: getattr(np, name) for name in dir(np) if callable(getattr(np, name)) and not name.startswith("_")}
+)
+
+if not NUMPY_GE_2_0:  # handle non-array-api compliance
+    safe_numpy_globals["acos"] = np.arccos
+    safe_numpy_globals["acosh"] = np.arccosh
+    safe_numpy_globals["asin"] = np.arcsin
+    safe_numpy_globals["asinh"] = np.arcsinh
+    safe_numpy_globals["atan"] = np.arctan
+    safe_numpy_globals["atanh"] = np.arctanh
+    safe_numpy_globals["atan2"] = np.arctan2
+    safe_numpy_globals["permute_dims"] = np.transpose
+    safe_numpy_globals["pow"] = np.power
+    safe_numpy_globals["bitwise_left_shift"] = np.left_shift
+    safe_numpy_globals["bitwise_right_shift"] = np.right_shift
+    safe_numpy_globals["bitwise_invert"] = np.bitwise_not
+    safe_numpy_globals["concat"] = np.concatenate
+    safe_numpy_globals["matrix_transpose"] = np.transpose
+    safe_numpy_globals["vecdot"] = npvecdot
+    safe_numpy_globals["cumulative_sum"] = npcumsum
+    safe_numpy_globals["cumulative_prod"] = npcumprod
+
+# handle different naming conventions between numpy and blosc2
+safe_numpy_globals["contains"] = _string_contains
+safe_numpy_globals["startswith"] = _string_startswith
+safe_numpy_globals["endswith"] = _string_endswith
+safe_numpy_globals["upper"] = _string_upper
+safe_numpy_globals["lower"] = _string_lower
 
 
 elementwise_funcs = [
@@ -66,6 +141,7 @@ elementwise_funcs = [
     "cos",
     "cosh",
     "divide",
+    "endswith",
     "equal",
     "exp",
     "expm1",
@@ -89,6 +165,7 @@ elementwise_funcs = [
     "logical_not",
     "logical_or",
     "logical_xor",
+    "lower",
     "maximum",
     "minimum",
     "multiply",
@@ -107,16 +184,13 @@ elementwise_funcs = [
     "sinh",
     "sqrt",
     "square",
-    "std",
+    "startswith",
     "subtract",
-    "sum",
     "tan",
     "tanh",
     "trunc",
-    "var",
+    "upper",
     "where",
-    "zeros",
-    "zeros_like",
 ]
 
 linalg_funcs = [
@@ -148,11 +222,15 @@ reducers = [
     "count_nonzero",
     "argmax",
     "argmin",
+    "cumulative_sum",
+    "cumulative_prod",
 ]
 
 # All the available constructors and reducers necessary for the (string) expression evaluator
 constructors = [
+    "asarray",
     "arange",
+    "copy",
     "linspace",
     "fromiter",
     "zeros",
@@ -166,7 +244,11 @@ constructors = [
     "empty_like",
     "eye",
     "nans",
+    "ndarray_from_cframe",
+    "uninit",
+    "meshgrid",
 ]
+
 # Note that, as reshape is accepted as a method too, it should always come last in the list
 constructors += ["reshape"]
 
@@ -192,7 +274,7 @@ def linalg_shape(func_name, args, kwargs):  # noqa: C901
         axis = 0 if axis is None else axis
         # normalize negative axis
         axis = axis + len(shapes[0]) if axis < 0 else axis
-        concat_dim = builtins.sum([s[axis] for s in shapes])
+        concat_dim = builtins.sum(s[axis] for s in shapes)
         return tuple(s if i != axis else concat_dim for i, s in enumerate(shapes[0]))
 
     # --- diagonal ---
@@ -369,9 +451,20 @@ def elementwise(*args):
     return broadcast_shapes(*args)
 
 
+def cumulative_shape(x, axis=None, include_initial=False, out=None):
+    if axis is None:
+        if len(x) == 1:
+            axis = 0
+        else:
+            raise ValueError("axis can only be None for 1D arrays")
+    return tuple(d + 1 if (i == axis and include_initial) else d for i, d in enumerate(x))
+
+
 # --- Function registry ---
 REDUCTIONS = {  # ignore out arg
-    func: lambda x, axis=None, keepdims=False, out=None: reduce_shape(x, axis, keepdims)
+    func: cumulative_shape
+    if func in {"cumulative_sum", "cumulative_prod"}
+    else lambda x, axis=None, keepdims=False, out=None: reduce_shape(x, axis, keepdims)
     for func in reducers
     # any unknown function will default to elementwise
 }
@@ -484,11 +577,11 @@ class ShapeInferencer(ast.NodeVisitor):
                 if stop is None:
                     stop, start = start, 0
                 try:
-                    NUM = int((stop - start) / step)
+                    NUM = max(math.ceil((stop - start) / step), 0)
                 except Exception:
                     # symbolic or non-numeric: unknown 1D
                     return ((),)
-                return (max(NUM, 0),)
+                return (NUM,)
 
             # ---- linspace ----
             elif base_name == "linspace":
@@ -500,7 +593,7 @@ class ShapeInferencer(ast.NodeVisitor):
                     return (num,)
                 raise ValueError("linspace requires either shape or num argument")
 
-            elif base_name == "frombuffer" or base_name == "fromiter":
+            elif base_name in {"frombuffer", "fromiter"}:
                 count = kwargs.get("count")
                 return (count,) if count else ()
 
@@ -758,14 +851,81 @@ def _get_local_slice(prior_selection, post_selection, chunk_bounds):
     return locbegin, locend
 
 
-def get_intersecting_chunks(_slice, shape, chunks):
-    if 0 not in chunks:
-        chunk_size = ndindex.ChunkSize(chunks)
-        return chunk_size.as_subchunks(_slice, shape)  # if _slice is (), returns all chunks
+def _sliced_chunk_iter(chunks, idx, shape, axis=None, nchunk=False):
+    """
+    If nchunk is True, retrun at iterator over the number of the chunk.
+    """
+    ratio = np.ceil(np.asarray(shape) / np.asarray(chunks)).astype(np.int64)
+    idx = ndindex.ndindex(idx).expand(shape)
+    if axis is not None:
+        idx = tuple(a for i, a in enumerate(idx.args) if i != axis) + (idx.args[axis],)
+        chunks_ = tuple(a for i, a in enumerate(chunks) if i != axis) + (chunks[axis],)
     else:
-        return (
-            ndindex.ndindex(...).expand(shape),
-        )  # chunk is whole array so just return full tuple to do loop once
+        chunks_ = chunks
+    idx_iter = iter(idx)  # iterate over tuple of slices in order
+    chunk_iter = iter(chunks_)  # iterate over chunk_shape in order
+
+    iters = []
+    while True:
+        try:
+            i = next(idx_iter)  # slice along axis
+            n = next(chunk_iter)  # chunklen along dimension
+        except StopIteration:
+            break
+        if not isinstance(i, ndindex.Slice):
+            raise ValueError("Only slices may be used with axis arg")
+
+        def _slice_iter(s, n):
+            a, N, m = s.args
+            if m > n:
+                yield from ((a + k * m) // n for k in range(ceiling(N - a, m)))
+            else:
+                yield from range(a // n, ceiling(N, n))
+
+        iters.append(_slice_iter(i, n))
+
+    def _indices(iters):
+        my_list = [ndindex.Slice(None, None)] * len(chunks)
+        for p in product(*iters):
+            # p increments over arg axis first before other axes
+            # p = (...., -1, axis)
+            if axis is None:
+                my_list = [
+                    ndindex.Slice(cs * ci, min(cs * (ci + 1), n), 1)
+                    for n, cs, ci in zip(shape, chunks, p, strict=True)
+                ]
+            else:
+                my_list[:axis] = [
+                    ndindex.Slice(cs * ci, min(cs * (ci + 1), n), 1)
+                    for n, cs, ci in zip(shape[:axis], chunks[:axis], p[:axis], strict=True)
+                ]
+                n, cs, ci = shape[axis], chunks[axis], p[-1]
+                my_list[axis] = ndindex.Slice(cs * ci, min(cs * (ci + 1), n), 1)
+                my_list[axis + 1 :] = [
+                    ndindex.Slice(cs * ci, min(cs * (ci + 1), n), 1)
+                    for n, cs, ci in zip(shape[axis + 1 :], chunks[axis + 1 :], p[axis:-1], strict=True)
+                ]
+            if nchunk:
+                yield builtins.sum(
+                    c.start // chunks[i] * np.prod(ratio[i + 1 :]) for i, c in enumerate(my_list)
+                )
+            else:
+                yield ndindex.Tuple(*my_list)
+
+    yield from _indices(iters)
+
+
+def get_intersecting_chunks(idx, shape, chunks, axis=None):
+    if len(chunks) != len(shape):
+        raise ValueError("chunks must be same length as shape!")
+    if 0 in chunks:  # chunk is whole array so just return full tuple to do loop once
+        return (ndindex.ndindex(...).expand(shape),)
+    chunk_size = ndindex.ChunkSize(chunks)
+    if axis is None:
+        return chunk_size.as_subchunks(idx, shape)  # if _slice is (), returns all chunks
+
+    # special algorithm to iterate over axis first (adapted from ndindex source)
+    return _sliced_chunk_iter(chunks, idx, shape, axis)
 
 
 def get_chunks_idx(shape, chunks):
@@ -781,3 +941,143 @@ def process_key(key, shape):
     )  # mask to track dummy dims introduced by int -> slice(k, k+1)
     key = tuple(slice(k, k + 1, None) if isinstance(k, int) else k for k in key)  # key is slice, None, int
     return key, mask
+
+
+def is_inside_ne_evaluate() -> bool:
+    """
+    Whether the current code is being executed from an ne_evaluate call
+    """
+    # Get the current call stack
+    stack = inspect.stack()
+    return builtins.any(frame_info.function in {"ne_evaluate"} for frame_info in stack)
+
+
+def _incomplete_lazyfunc(func) -> None:
+    """Decorator for lazy functions with incomplete numexpr/miniexpr coverage.
+
+    This function will force eager execution when called from ne_evaluate.
+
+    Returns
+    -------
+    out: None
+
+    Examples
+    --------
+    .. code-block:: python
+
+        @incomplete_lazyfunc()
+        def filler(inputs_tuple, output, offset):
+            output[:] = inputs_tuple[0] - inputs_tuple[1]
+
+    """
+
+    def wrapper(*args, **kwargs):
+        if is_inside_ne_evaluate():  # haven't been able to use miniexpr so use numpy
+            return safe_numpy_globals[func.__name__](*args, **kwargs)
+        return func(*args, **kwargs)
+
+    return wrapper
+
+
+def check_smaller_shape(value_shape, shape, slice_shape, slice_):
+    """Check whether the shape of the value is smaller than the shape of the array.
+
+    This follows the NumPy broadcasting rules.
+    """
+    # slice_shape must be as long as shape
+    if len(slice_shape) != len(slice_):
+        raise ValueError("slice_shape must be as long as slice_")
+    no_nones_shape = tuple(sh for sh, s in zip(slice_shape, slice_, strict=True) if s is not None)
+    no_nones_slice = tuple(s for sh, s in zip(slice_shape, slice_, strict=True) if s is not None)
+    is_smaller_shape = any(
+        s > (1 if i >= len(value_shape) else value_shape[i]) for i, s in enumerate(no_nones_shape)
+    )
+    slice_past_bounds = any(
+        s.stop > (1 if i >= len(value_shape) else value_shape[i]) for i, s in enumerate(no_nones_slice)
+    )
+    return len(value_shape) < len(shape) or is_smaller_shape or slice_past_bounds
+
+
+def _compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
+    smaller_slice = []
+    diff_dims = len(larger_shape) - len(smaller_shape)
+
+    for i in range(len(larger_shape)):
+        if i < diff_dims:
+            # For leading dimensions of the larger array that the smaller array doesn't have,
+            # we don't add anything to the smaller slice
+            pass
+        else:
+            # For dimensions that both arrays have, the slice for the smaller array should be
+            # the same as the larger array unless the smaller array's size along that dimension
+            # is 1, in which case we use None to indicate the full slice
+            if smaller_shape[i - diff_dims] != 1:
+                smaller_slice.append(larger_slice[i])
+            else:
+                smaller_slice.append(slice(0, larger_shape[i]))
+
+    return tuple(smaller_slice)
+
+
+# A more compact version of the function above, albeit less readable
+def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
+    """
+    Returns the slice of the smaller array that corresponds to the slice of the larger array.
+    """
+    j_small = len(smaller_shape) - 1
+    j_large = len(larger_shape) - 1
+    smaller_shape_nones = []
+    larger_shape_nones = []
+    for s in reversed(larger_slice):
+        if s is None:
+            smaller_shape_nones.append(1)
+            larger_shape_nones.append(1)
+        else:
+            if j_small >= 0:
+                smaller_shape_nones.append(smaller_shape[j_small])
+                j_small -= 1
+            if j_large >= 0:
+                larger_shape_nones.append(larger_shape[j_large])
+                j_large -= 1
+    smaller_shape_nones.reverse()
+    larger_shape_nones.reverse()
+    diff_dims = len(larger_shape_nones) - len(smaller_shape_nones)
+    return tuple(
+        None
+        if larger_slice[i] is None
+        else (
+            larger_slice[i] if smaller_shape_nones[i - diff_dims] != 1 else slice(0, larger_shape_nones[i])
+        )
+        for i in range(diff_dims, len(larger_shape_nones))
+    )
+
+
+def _get_chunk_operands(operands, cslice, chunk_operands, shape):
+    # Get the starts and stops for the slice
+    cslice_shape = tuple(s.stop - s.start for s in cslice)
+    starts = [s.start if s.start is not None else 0 for s in cslice]
+    stops = [s.stop if s.stop is not None else sh for s, sh in zip(cslice, cslice_shape, strict=True)]
+    unit_steps = np.all([s.step == 1 for s in cslice])
+    # Get the slice of each operand
+    for key, value in operands.items():
+        if np.isscalar(value):
+            chunk_operands[key] = value
+            continue
+        if value.shape == ():
+            chunk_operands[key] = value[()]
+            continue
+        if check_smaller_shape(value.shape, shape, cslice_shape, cslice):
+            # We need to fetch the part of the value that broadcasts with the operand
+            smaller_slice = compute_smaller_slice(shape, value.shape, cslice)
+            chunk_operands[key] = value[smaller_slice]
+            continue
+        # If key is in operands, we can reuse the buffer
+        if (
+            key in chunk_operands
+            and cslice_shape == chunk_operands[key].shape
+            and isinstance(value, blosc2.NDArray)
+            and unit_steps
+        ):
+            value.get_slice_numpy(chunk_operands[key], (starts, stops))
+            continue
+        chunk_operands[key] = value[cslice]

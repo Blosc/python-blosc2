@@ -22,7 +22,7 @@ You are done!
     pip install .   # add -e for editable mode
 ```
 
-On Windows, clang-cl is required (OpenZL depends on C11 support). Make sure LLVM
+On Windows, clang-cl is required now. Make sure LLVM
 is on PATH and build with Ninja, for example:
 
 ```bash
@@ -93,6 +93,17 @@ If you want to run the network tests, you can use the following command:
   pytest -m "network"
 ```
 
+## wasm32 / Pyodide developer workflow
+
+For the local wasm32 workflow (uv + pyodide-build + cibuildwheel + test loop),
+use the repo skill at `.skills/wasm32-pyodide-dev/SKILL.md`.
+
+Install it into Codex discovery with:
+
+```bash
+scripts/install-codex-skill-wasm32.sh --force
+```
+
 ## Documentation
 
 We are using Sphinx for documentation.  You can build the documentation by executing:
@@ -150,9 +161,9 @@ export PKG_CONFIG_PATH="$BLOSC2_PREFIX/lib/pkgconfig"
 ```
 
 We can check that the .pc file has the required info and has been found via
-``bash
+```bash
 pkg-config --modversion blosc2
-``
+```
 
 Then define a test program
 ```bash

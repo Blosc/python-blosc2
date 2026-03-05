@@ -7,3 +7,4 @@ Getting Started
     overview
     installation
     tutorials
+    dsl_syntax

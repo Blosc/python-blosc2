@@ -14,6 +14,10 @@ DictStore lets you store and retrieve arrays by string keys (paths like ``"/dir/
 
 Supported values include ``blosc2.NDArray``, ``blosc2.SChunk`` and ``blosc2.C2Array`` (as well as ``numpy.ndarray``, which is converted to NDArray). Small arrays (below a configurable compression‑size threshold) and in‑memory objects are kept inside the embedded store; larger or explicitly external arrays live as regular ``.b2nd`` (NDArray) or ``.b2f`` (SChunk) files. ``C2Array`` objects are always stored in the embedded store. You can mix all types seamlessly and use the usual mapping methods (``__getitem__``, ``__setitem__``, ``keys()``, ``items()``...).
 
+For read-only workloads, DictStore supports memory-mapped opens via
+``mmap_mode="r"`` (constructor or :func:`blosc2.open`). This works for both
+``.b2d`` and ``.b2z`` containers.
+
 Quick example
 -------------
 
@@ -33,6 +37,14 @@ Quick example
    with blosc2.open("my_dstore.b2z", mode="r") as dstore:
        print(sorted(dstore.keys()))  # ['/dir1/node3', '/node1', '/node2']
        print(dstore["/node1"][:])  # [1 2 3]
+
+   # Reopen in read-only mmap mode
+   with blosc2.open("my_dstore.b2z", mode="r", mmap_mode="r") as dstore_mmap:
+       print(dstore_mmap["/dir1/node3"][1:3])
+
+.. note::
+   For store containers, only ``mmap_mode="r"`` is currently supported, and it
+   requires ``mode="r"``.
 
 .. currentmodule:: blosc2
 

@@ -49,6 +49,8 @@ def test_basic_tree_store(populated_tree_store):
     """Test basic TreeStore functionality."""
     tstore, _ = populated_tree_store
 
+    assert "b2tree" in tstore.storage.meta
+
     # Test key existence - should include both leaf and structural nodes
     expected_keys = {
         "/child0/data",
@@ -251,7 +253,7 @@ def test_delete_subtree():
     os.remove("test_delete.b2z")
 
 
-def test_subtree_walk():  # noqa: C901
+def test_subtree_walk():
     """Test walking within a subtree."""
     with TreeStore("test_subtree_walk.b2z", mode="w") as tstore:
         # Create structure without assigning to structural paths
@@ -450,6 +452,7 @@ def test_treestore_vlmeta_basic_and_bulk(storage_type):
 
     # Reopen in read-only to check persistence and read-only protection
     with TreeStore(path, mode="r") as tstore:
+        assert "b2tree" in tstore.storage.meta
         assert tstore.vlmeta["author"] == "blosc2"
         assert tstore.vlmeta["version"] == 1
         assert tstore.vlmeta["shape"] == (3, 2)
@@ -930,7 +933,29 @@ def test_open_context_manager(populated_tree_store):
     tstore_fixture.close()
 
     # Test opening via blosc2.open as a context manager
-    with blosc2.open(path, mode="r") as tstore:
+    with blosc2.open(path, mode="r", mmap_mode="r") as tstore:
         assert isinstance(tstore, TreeStore)
+        assert "b2tree" in tstore.storage.meta
         assert "/child0/data" in tstore
         assert np.array_equal(tstore["/child0/data"][:], np.array([1, 2, 3]))
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_mmap_mode_read_access(storage_type, tmp_path):
+    path = tmp_path / f"test_tstore_mmap.{storage_type}"
+
+    with TreeStore(str(path), mode="w") as tstore:
+        tstore["/group/node"] = np.arange(12)
+
+    with TreeStore(str(path), mode="r", mmap_mode="r") as tstore:
+        assert np.array_equal(tstore["/group/node"][4:9], np.arange(4, 9))
+
+
+def test_mmap_mode_validation(tmp_path):
+    path = tmp_path / "test_tstore_mmap_validation.b2z"
+
+    with pytest.raises(ValueError, match="mmap_mode must be None or 'r'"):
+        TreeStore(str(path), mode="r", mmap_mode="c")
+
+    with pytest.raises(ValueError, match="mmap_mode='r' requires mode='r'"):
+        TreeStore(str(path), mode="a", mmap_mode="r")

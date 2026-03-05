@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import os
 import pathlib
+import zipfile
 from collections import namedtuple
 from collections.abc import Iterator, Mapping, MutableMapping
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any, NamedTuple
 
 import numpy as np
@@ -319,6 +320,18 @@ class SChunk(blosc2_ext.SChunk):
                 kwargs["cparams"] = cparams
         else:
             kwargs["cparams"] = {"typesize": itemsize}
+        if blosc2.IS_WASM:
+            # wasm32 runtime is effectively single-threaded for Blosc operations.
+            cparams = kwargs.get("cparams")
+            if isinstance(cparams, dict) and cparams.get("nthreads", 1) != 1:
+                cparams = cparams.copy()
+                cparams["nthreads"] = 1
+                kwargs["cparams"] = cparams
+            dparams = kwargs.get("dparams")
+            if isinstance(dparams, dict) and dparams.get("nthreads", 1) != 1:
+                dparams = dparams.copy()
+                dparams["nthreads"] = 1
+                kwargs["dparams"] = dparams
 
         # chunksize handling
         if chunksize is None:
@@ -350,6 +363,8 @@ class SChunk(blosc2_ext.SChunk):
 
     @cparams.setter
     def cparams(self, value: blosc2.CParams) -> None:
+        if blosc2.IS_WASM and value.nthreads != 1:
+            value = replace(value, nthreads=1)
         super().update_cparams(value)
         self._cparams = super().get_cparams()
 
@@ -362,6 +377,8 @@ class SChunk(blosc2_ext.SChunk):
 
     @dparams.setter
     def dparams(self, value: blosc2.DParams) -> None:
+        if blosc2.IS_WASM and value.nthreads != 1:
+            value = replace(value, nthreads=1)
         super().update_dparams(value)
         self._dparams = super().get_dparams()
 
@@ -1470,26 +1487,84 @@ class SChunk(blosc2_ext.SChunk):
         super().__dealloc__()
 
 
-def _open_special_store(urlpath, mode, offset, **kwargs):
+def _meta_from_store(urlpath, offset):
+    """Try to read the SChunk meta from a store path (b2e, b2d, or b2z)."""
+
+    def _open_meta(path, off=0):
+        try:
+            return blosc2.blosc2_ext.open(path, mode="r", offset=off).meta
+        except Exception:
+            return None
+
+    if urlpath.endswith(".b2e") and offset == 0:
+        return _open_meta(urlpath)
+    if urlpath.endswith(".b2d") and os.path.isdir(urlpath):
+        embed_path = os.path.join(urlpath, "embed.b2e")
+        if os.path.exists(embed_path):
+            return _open_meta(embed_path)
+    if urlpath.endswith(".b2z") and os.path.isfile(urlpath):
+        try:
+            with open(urlpath, "rb") as f, zipfile.ZipFile(f) as zf:
+                for info in zf.infolist():
+                    if info.filename == "embed.b2e":
+                        f.seek(info.header_offset)
+                        local_header = f.read(30)
+                        filename_len = int.from_bytes(local_header[26:28], "little")
+                        extra_len = int.from_bytes(local_header[28:30], "little")
+                        data_offset = info.header_offset + 30 + filename_len + extra_len
+                        return _open_meta(urlpath, data_offset)
+        except Exception:
+            pass
+    return None
+
+
+def _store_from_extension(urlpath, mode, offset, **kwargs):
+    """Dispatch to the right store constructor based on file extension."""
     if urlpath.endswith(".b2d"):
         if offset != 0:
             raise ValueError("Offset must be 0 for DictStore")
         from blosc2.dict_store import DictStore
 
         return DictStore(urlpath, mode=mode, **kwargs)
-    elif urlpath.endswith(".b2z"):
+    if urlpath.endswith(".b2z"):
         if offset != 0:
             raise ValueError("Offset must be 0 for TreeStore")
         from blosc2.tree_store import TreeStore
 
         return TreeStore(urlpath, mode=mode, **kwargs)
-    elif urlpath.endswith(".b2e"):
+    if urlpath.endswith(".b2e"):
         if offset != 0:
             raise ValueError("Offset must be 0 for EmbedStore")
         from blosc2.embed_store import EmbedStore
 
         return EmbedStore(urlpath, mode=mode, **kwargs)
     return None
+
+
+def _open_special_store(urlpath, mode, offset, **kwargs):
+    # Meta-based detection has priority over extension
+    schunk_meta = _meta_from_store(urlpath, offset)
+    if schunk_meta is not None:
+        if "b2embed" in schunk_meta:
+            if offset != 0:
+                raise ValueError("Offset must be 0 for EmbedStore")
+            from blosc2.embed_store import EmbedStore
+
+            return EmbedStore(urlpath, mode=mode, **kwargs)
+        if "b2dict" in schunk_meta:
+            if offset != 0:
+                raise ValueError("Offset must be 0 for DictStore")
+            from blosc2.dict_store import DictStore
+
+            return DictStore(urlpath, mode=mode, **kwargs)
+        if "b2tree" in schunk_meta:
+            if offset != 0:
+                raise ValueError("Offset must be 0 for TreeStore")
+            from blosc2.tree_store import TreeStore
+
+            return TreeStore(urlpath, mode=mode, **kwargs)
+
+    return _store_from_extension(urlpath, mode, offset, **kwargs)
 
 
 def _set_default_dparams(kwargs):
@@ -1503,6 +1578,16 @@ def _set_default_dparams(kwargs):
             blosc2.DParams(nthreads=blosc2.nthreads) if not blosc2.IS_WASM else blosc2.DParams(nthreads=1)
         )
         kwargs["dparams"] = dparams
+    if blosc2.IS_WASM:
+        dparams = kwargs.get("dparams")
+        if isinstance(dparams, blosc2.DParams) and dparams.nthreads != 1:
+            dparams = asdict(dparams)
+            dparams["nthreads"] = 1
+            kwargs["dparams"] = dparams
+        elif isinstance(dparams, dict) and dparams.get("nthreads", 1) != 1:
+            dparams = dparams.copy()
+            dparams["nthreads"] = 1
+            kwargs["dparams"] = dparams
 
 
 def _process_opened_object(res):

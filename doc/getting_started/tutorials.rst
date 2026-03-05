@@ -8,6 +8,7 @@ Tutorials
    tutorials/01.ndarray-basics
    tutorials/02.lazyarray-expressions
    tutorials/03.lazyarray-udf
+   tutorials/03.lazyarray-udf-kernels
    tutorials/04.reductions
    tutorials/05.persistent-reductions
    tutorials/06.remote_proxy

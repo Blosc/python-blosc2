@@ -171,3 +171,11 @@ def test_proxy_source(shape, chunks, blocks):
     proxy = blosc2.Proxy(source)
     result = proxy[...]
     np.testing.assert_array_equal(result, data)
+
+
+def test_proxy_zeroshape():
+    a1 = blosc2.ones(shape=(0, 100), chunks=(0, 9), blocks=(0, 1))
+    na1 = a1[()]
+    a1 = blosc2.Proxy(a1)
+    sl = slice(100)
+    np.testing.assert_allclose(a1[sl], na1[sl])

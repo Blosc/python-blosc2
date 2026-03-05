@@ -35,6 +35,8 @@ if TYPE_CHECKING:
     import tensorflow
     import torch
 
+_wasm_releasegil_state = False
+
 
 def _check_typesize(typesize):
     if not 1 <= typesize <= blosc2_ext.MAX_TYPESIZE:
@@ -933,6 +935,14 @@ def set_nthreads(nthreads: int) -> int:
     --------
     :attr:`~blosc2.nthreads`
     """
+    if blosc2.IS_WASM:
+        # Keep API validation semantics while forcing single-thread execution.
+        if nthreads > 2**31 - 1:
+            raise ValueError("nthreads must be less or equal than 2^31 - 1.")
+        if nthreads < 1:
+            raise ValueError("nthreads must be a positive integer.")
+        nthreads = 1
+
     rc = blosc2_ext.set_nthreads(nthreads)
     blosc2.nthreads = nthreads
     return rc
@@ -1069,6 +1079,14 @@ def set_releasegil(gilstate: bool) -> bool:
     >>> oldReleaseState = blosc2.set_releasegil(True)
     """
     gilstate = bool(gilstate)
+    if blosc2.IS_WASM:
+        # wasm32 does not benefit from releasing the GIL and enabling this can
+        # lead to incorrect results in some code paths.
+        global _wasm_releasegil_state
+        oldstate = _wasm_releasegil_state
+        _wasm_releasegil_state = gilstate
+        blosc2_ext.set_releasegil(False)
+        return oldstate
     return blosc2_ext.set_releasegil(gilstate)
 
 
@@ -1550,7 +1568,7 @@ def compute_chunks_blocks(  # noqa: C901
     """
 
     # Return an arbitrary value for chunks and blocks when shape has any 0 dim
-    if 0 in shape:
+    if 0 in shape and chunks is None and blocks is None:
         return shape, shape
 
     if blocks:
@@ -1559,18 +1577,16 @@ def compute_chunks_blocks(  # noqa: C901
         if len(blocks) != len(shape):
             raise ValueError("blocks should have the same length than shape")
         for block, dim in zip(blocks, shape, strict=True):
-            if block == 0:
-                raise ValueError("blocks cannot contain 0 dimension")
-            if dim == 1 and block > dim:
-                raise ValueError("blocks cannot be greater than shape if it is 1")
+            if block == 0 and dim != 0:
+                raise ValueError("blocks cannot contain 0 dimension if shape is not zero")
     if chunks:
         if not isinstance(chunks, tuple | list):
             chunks = [chunks]
         if len(chunks) != len(shape):
             raise ValueError("chunks should have the same length than shape")
         for chunk, dim in zip(chunks, shape, strict=True):
-            if dim == 1 and chunk > dim:
-                raise ValueError("chunks cannot be greater than shape if it is 1")
+            if chunk == 0 and dim != 0:
+                raise ValueError("chunks cannot contain 0 dimension if shape is not zero")
 
     if chunks is not None and blocks is not None:
         for block, chunk in zip(blocks, chunks, strict=True):
@@ -1578,7 +1594,7 @@ def compute_chunks_blocks(  # noqa: C901
                 raise ValueError("blocks cannot be greater than chunks")
         return chunks, blocks
 
-    cparams = kwargs.get("cparams") or copy.deepcopy(blosc2.cparams_dflts)
+    cparams = kwargs.get("cparams") or blosc2.CParams()  # just get defaults
     if isinstance(cparams, blosc2.CParams):
         cparams = asdict(cparams)
     # Typesize in dtype always has preference over typesize in cparams
@@ -1586,24 +1602,40 @@ def compute_chunks_blocks(  # noqa: C901
 
     if blocks is None:
         # Get the default blocksize for the compression params
-        # Using an 8 MB buffer should be enough for detecting the whole range of blocksizes
-        nitems = 2**23 // itemsize
-        # compress2 is used just to provide a hint on the blocksize
-        # However, it does not work well with filters that are not shuffle or bitshuffle,
-        # so let's get rid of them
+        # Check if we need STUNE for lossy codecs/filters that have specific blocksize requirements
+        codec = cparams.get("codec")
         filters = cparams.get("filters", None)
-        if filters:
-            cparams2 = copy.deepcopy(cparams)
-            for i, filter in enumerate(filters):
-                if filter not in (blosc2.Filter.SHUFFLE, blosc2.Filter.BITSHUFFLE):
-                    cparams2["filters"][i] = blosc2.Filter.NOFILTER
+        needs_stune = codec in (
+            blosc2.Codec.ZFP_RATE,
+            blosc2.Codec.ZFP_PREC,
+            blosc2.Codec.ZFP_ACC,
+            blosc2.Codec.NDLZ,
+        ) or (filters and any(f in (blosc2.Filter.NDMEAN, blosc2.Filter.NDCELL) for f in filters))
+
+        if needs_stune:
+            # Lossy codecs need proper blocksize calculation via STUNE
+            # Using an 8 MB buffer should be enough for detecting the whole range of blocksizes
+            nitems = 2**23 // itemsize
+            # compress2 is used just to provide a hint on the blocksize
+            # However, it does not work well with filters that are not shuffle or bitshuffle,
+            # so let's get rid of them
+            if filters:
+                cparams2 = copy.deepcopy(cparams)
+                for i, filter in enumerate(filters):
+                    if filter not in (blosc2.Filter.SHUFFLE, blosc2.Filter.BITSHUFFLE):
+                        cparams2["filters"][i] = blosc2.Filter.NOFILTER
+            else:
+                cparams2 = cparams
+            # Force STUNE to get a hint on the blocksize
+            aux_tuner = cparams2.get("tuner", blosc2.Tuner.STUNE)
+            cparams2["tuner"] = blosc2.Tuner.STUNE
+            src = blosc2.compress2(np.zeros(nitems, dtype=f"V{itemsize}"), **cparams2)
+            _, _, blocksize = blosc2.get_cbuffer_sizes(src)
+            cparams2["tuner"] = aux_tuner
         else:
-            cparams2 = cparams
-        # Force STUNE to get a hint on the blocksize
-        aux_tuner = cparams2.get("tuner", blosc2.Tuner.STUNE)
-        cparams2["tuner"] = blosc2.Tuner.STUNE
-        src = blosc2.compress2(np.zeros(nitems, dtype=f"V{itemsize}"), **cparams2)
-        _, _, blocksize = blosc2.get_cbuffer_sizes(src)
+            # We disable internal STUNE path for regular codecs as it is a bit costly, specially for small arrays.
+            # The heuristic below should be good enough in general.
+            blocksize = 32 * 1024
         # Minimum blocksize calculation
         min_blocksize = blocksize
         if platform.machine() == "x86_64":
@@ -1633,8 +1665,6 @@ def compute_chunks_blocks(  # noqa: C901
         # Fix for #364
         if blocksize < itemsize:
             blocksize = itemsize
-
-        cparams2["tuner"] = aux_tuner
     else:
         blocksize = math.prod(blocks) * itemsize
 
@@ -1646,7 +1676,7 @@ def compute_chunks_blocks(  # noqa: C901
     if chunks is None:
         maxshape = shape
     else:
-        maxshape = [min(els) for els in zip(chunks, shape, strict=True)]
+        maxshape = chunks
     blocks = compute_partition(blocksize // itemsize, maxshape)
 
     # Finally, the chunks
@@ -1724,6 +1754,11 @@ def compress2(src: object, **kwargs: dict) -> str | bytes:
             kwargs = asdict(kwargs.get("cparams"))
         else:
             kwargs = kwargs.get("cparams")
+    if kwargs is None:
+        kwargs = {}
+    if blosc2.IS_WASM and kwargs.get("nthreads", 1) != 1:
+        kwargs = kwargs.copy()
+        kwargs["nthreads"] = 1
 
     return blosc2_ext.compress2(src, **kwargs)
 
@@ -1780,6 +1815,11 @@ def decompress2(src: object, dst: object | bytearray = None, **kwargs: dict) -> 
             kwargs = asdict(kwargs.get("dparams"))
         else:
             kwargs = kwargs.get("dparams")
+    if kwargs is None:
+        kwargs = {}
+    if blosc2.IS_WASM and kwargs.get("nthreads", 1) != 1:
+        kwargs = kwargs.copy()
+        kwargs["nthreads"] = 1
 
     return blosc2_ext.decompress2(src, dst, **kwargs)
 

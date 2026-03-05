@@ -68,7 +68,7 @@ def test_expr_kwargs(sample_data):
     # Testing jit decorator with kwargs
     cparams = blosc2.CParams(clevel=1, codec=blosc2.Codec.LZ4, filters=[blosc2.Filter.BITSHUFFLE])
 
-    @blosc2.jit(**{"cparams": cparams})
+    @blosc2.jit(cparams=cparams)
     def expr_jit_cparams(a, b, c):
         return ((a**3 + np.sin(a * 2)) < c) & (b > 0)
 

@@ -548,6 +548,7 @@ cdef extern from "miniexpr.h":
         ME_FLOAT64
         ME_COMPLEX64
         ME_COMPLEX128
+        ME_STRING
 
     # typedef struct me_variable
     ctypedef struct me_variable:
@@ -556,6 +557,7 @@ cdef extern from "miniexpr.h":
         const void *address
         int type
         void *context
+        size_t itemsize
 
     ctypedef struct me_expr:
         int type
@@ -570,13 +572,11 @@ cdef extern from "miniexpr.h":
         int ncode
         void *parameters[1]
 
-    int me_compile(const char *expression, const me_variable *variables,
-                   int var_count, me_dtype dtype, int *error, me_expr **out)
-
-    int me_compile_nd(const char *expression, const me_variable *variables,
-                      int var_count, me_dtype dtype, int ndims,
-                      const int64_t *shape, const int32_t *chunkshape,
-                      const int32_t *blockshape, int *error, me_expr **out)
+    int me_compile_nd_jit(const char *expression, const me_variable *variables,
+                          int var_count, me_dtype dtype, int ndims,
+                          const int64_t *shape, const int32_t *chunkshape,
+                          const int32_t *blockshape, int jit_mode,
+                          int *error, me_expr **out)
 
     ctypedef enum me_compile_status:
         ME_COMPILE_SUCCESS
@@ -595,9 +595,15 @@ cdef extern from "miniexpr.h":
         ME_SIMD_ULP_1
         ME_SIMD_ULP_3_5
 
+    ctypedef enum me_jit_mode:
+        ME_JIT_DEFAULT
+        ME_JIT_ON
+        ME_JIT_OFF
+
     ctypedef struct me_eval_params:
         c_bool disable_simd
         me_simd_ulp_mode simd_ulp_mode
+        me_jit_mode jit_mode
 
     int me_eval(const me_expr *expr, const void **vars_block,
                 int n_vars, void *output_block, int chunk_nitems,
@@ -611,6 +617,15 @@ cdef extern from "miniexpr.h":
 
     void me_print(const me_expr *n) nogil
     void me_free(me_expr *n) nogil
+
+    ctypedef int (*me_wasm_jit_instantiate_helper)(
+        const unsigned char *wasm_bytes,
+        int wasm_len,
+        int bridge_lookup_fn_idx
+    )
+    ctypedef void (*me_wasm_jit_free_helper)(int fn_idx)
+    void me_register_wasm_jit_helpers(me_wasm_jit_instantiate_helper instantiate_helper,
+                                      me_wasm_jit_free_helper free_helper)
 
 
 cdef extern from "miniexpr_numpy.h":
@@ -683,6 +698,91 @@ def destroy():
     if chunk_cache_lock != NULL:
         PyThread_free_lock(chunk_cache_lock)
     blosc2_destroy()
+
+
+def _register_wasm_jit_helpers(uintptr_t instantiate_ptr, uintptr_t free_ptr):
+    cdef me_wasm_jit_instantiate_helper instantiate_helper = (
+        <me_wasm_jit_instantiate_helper>instantiate_ptr
+    )
+    cdef me_wasm_jit_free_helper free_helper = <me_wasm_jit_free_helper>free_ptr
+    me_register_wasm_jit_helpers(instantiate_helper, free_helper)
+
+
+cdef inline me_dtype _me_dtype_from_numpy_dtype(dtype_obj):
+    dtype = np.dtype(dtype_obj)
+    cdef int itemsize = <int>dtype.itemsize
+    kind = dtype.kind
+    if kind == "b":
+        return ME_BOOL
+    if kind == "i":
+        if itemsize == 1:
+            return ME_INT8
+        if itemsize == 2:
+            return ME_INT16
+        if itemsize == 4:
+            return ME_INT32
+        if itemsize == 8:
+            return ME_INT64
+    elif kind == "u":
+        if itemsize == 1:
+            return ME_UINT8
+        if itemsize == 2:
+            return ME_UINT16
+        if itemsize == 4:
+            return ME_UINT32
+        if itemsize == 8:
+            return ME_UINT64
+    elif kind == "f":
+        if itemsize == 4:
+            return ME_FLOAT32
+        if itemsize == 8:
+            return ME_FLOAT64
+    elif kind == "c":
+        if itemsize == 8:
+            return ME_COMPLEX64
+        if itemsize == 16:
+            return ME_COMPLEX128
+    elif kind == "U":
+        # miniexpr string variables use fixed-size UCS4 (numpy unicode) storage.
+        if itemsize <= 0 or itemsize % 4 != 0:
+            raise TypeError(
+                f"miniexpr string operands require unicode dtype with UCS4 itemsize; got '{dtype}'"
+            )
+        return ME_STRING
+    return <me_dtype>-1
+
+
+cdef inline str _me_compile_status_name(int rc):
+    if rc == ME_COMPILE_SUCCESS:
+        return "ME_COMPILE_SUCCESS"
+    if rc == ME_COMPILE_ERR_OOM:
+        return "ME_COMPILE_ERR_OOM"
+    if rc == ME_COMPILE_ERR_PARSE:
+        return "ME_COMPILE_ERR_PARSE"
+    if rc == ME_COMPILE_ERR_INVALID_ARG:
+        return "ME_COMPILE_ERR_INVALID_ARG"
+    if rc == ME_COMPILE_ERR_COMPLEX_UNSUPPORTED:
+        return "ME_COMPILE_ERR_COMPLEX_UNSUPPORTED"
+    if rc == ME_COMPILE_ERR_REDUCTION_INVALID:
+        return "ME_COMPILE_ERR_REDUCTION_INVALID"
+    if rc == ME_COMPILE_ERR_VAR_MIXED:
+        return "ME_COMPILE_ERR_VAR_MIXED"
+    if rc == ME_COMPILE_ERR_VAR_UNSPECIFIED:
+        return "ME_COMPILE_ERR_VAR_UNSPECIFIED"
+    if rc == ME_COMPILE_ERR_INVALID_ARG_TYPE:
+        return "ME_COMPILE_ERR_INVALID_ARG_TYPE"
+    if rc == ME_COMPILE_ERR_MIXED_TYPE_NESTED:
+        return "ME_COMPILE_ERR_MIXED_TYPE_NESTED"
+    return "ME_COMPILE_ERR_UNKNOWN"
+
+
+cdef inline str _me_compile_error_details(int rc, int error):
+    cdef str details = f"{_me_compile_status_name(rc)} ({rc})"
+    if rc == ME_COMPILE_ERR_PARSE and error > 0:
+        details += f", parse_error_pos={error}"
+    elif error != 0:
+        details += f", error_pos={error}"
+    return details
 
 
 @cython.boundscheck(False)
@@ -1428,7 +1528,7 @@ cdef class SChunk:
                 return dst
 
         if size < 0:
-            raise RuntimeError("Error while decompressing the specified chunk")
+            raise RuntimeError(f"Error while decompressing the specified chunk, error code: {size}")
 
     def get_chunk(self, nchunk):
         cdef uint8_t *chunk
@@ -1934,6 +2034,9 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
 
     if miniexpr_handle == NULL:
         raise ValueError("miniexpr: handle not assigned")
+    if input_buffers == NULL:
+        raise MemoryError("miniexpr: cannot allocate input buffer table")
+    memset(input_buffers, 0, udata.ninputs * sizeof(uint8_t*))
 
     # Query valid (unpadded) items for this block
     rc = me_nd_valid_nitems(miniexpr_handle, nchunk, nblock, &valid_nitems)
@@ -1946,9 +2049,9 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
             memset(params_output, 0, udata.array.blocknitems * typesize)
         free(input_buffers)
         return 0
+
     for i in range(udata.ninputs):
         ndarr = udata.inputs[i]
-        input_buffers[i] = malloc(ndarr.sc.blocksize)
         if ndarr.sc.storage.urlpath == NULL:
             src = ndarr.sc.data[nchunk]
         else:
@@ -1979,6 +2082,11 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         rc = blosc2_cbuffer_sizes(src, &chunk_nbytes, &chunk_cbytes, &block_nbytes)
         if rc < 0:
             raise ValueError("miniexpr: error getting cbuffer sizes")
+        if block_nbytes <= 0:
+            raise ValueError("miniexpr: invalid block size")
+        input_buffers[i] = malloc(block_nbytes)
+        if input_buffers[i] == NULL:
+            raise MemoryError("miniexpr: cannot allocate input block buffer")
         input_typesize = ndarr.sc.typesize
         blocknitems = block_nbytes // input_typesize
         if expected_blocknitems == -1:
@@ -2012,6 +2120,11 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
     cdef uintptr_t offset_bytes = typesize * linear_block_index
 
     # Call thread-safe miniexpr C API
+    # NOTE: me_eval_nd expects the OUTPUT block size (in items), not the input block size.
+    # For element-wise operations with same dtypes, they're equal, but for type-changing
+    # operations (e.g., arccos(int32) -> float64), we must use the output's block item count.
+    cdef int output_blocknitems = udata.array.blocknitems
+
     if udata.aux_reduc_ptr == NULL:
         aux_reduc_ptr = <void *> params_output
     else:
@@ -2019,7 +2132,7 @@ cdef int aux_miniexpr(me_udata *udata, int64_t nchunk, int32_t nblock,
         # NOTE: miniexpr handles scalar outputs in me_eval_nd without touching tail bytes.
         aux_reduc_ptr = <void *> (<uintptr_t> udata.aux_reduc_ptr + offset_bytes)
     rc = me_eval_nd(miniexpr_handle, <const void**> input_buffers, udata.ninputs,
-                    aux_reduc_ptr, blocknitems, nchunk, nblock, udata.eval_params)
+                    aux_reduc_ptr, output_blocknitems, nchunk, nblock, udata.eval_params)
     if rc != 0:
         raise RuntimeError(f"miniexpr: issues during evaluation; error code: {rc}")
 
@@ -2920,7 +3033,7 @@ cdef class NDArray:
 
         return udata
 
-    cdef me_udata *_fill_me_udata(self, inputs, fp_accuracy, aux_reduc):
+    cdef me_udata *_fill_me_udata(self, inputs, fp_accuracy, aux_reduc, jit=None):
         cdef me_udata *udata = <me_udata *> malloc(sizeof(me_udata))
         operands = list(inputs.values())
         ninputs = len(operands)
@@ -2934,6 +3047,12 @@ cdef class NDArray:
         cdef me_eval_params* eval_params = <me_eval_params*> malloc(sizeof(me_eval_params))
         eval_params.disable_simd = False
         eval_params.simd_ulp_mode = ME_SIMD_ULP_3_5 if fp_accuracy == blosc2.FPAccuracy.MEDIUM else ME_SIMD_ULP_1
+        if jit is None:
+            eval_params.jit_mode = ME_JIT_DEFAULT
+        elif jit:
+            eval_params.jit_mode = ME_JIT_ON
+        else:
+            eval_params.jit_mode = ME_JIT_OFF
         udata.eval_params = eval_params
         udata.array = self.array
         cdef void* aux_reduc_ptr = NULL
@@ -2949,12 +3068,18 @@ cdef class NDArray:
 
         return udata
 
-    def _set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None):
+    def _set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
         # Set prefilter for miniexpr
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> miniexpr_prefilter
 
-        cdef me_udata* udata = self._fill_me_udata(inputs, fp_accuracy, aux_reduc)
+        cdef int jit_mode = ME_JIT_DEFAULT
+        if jit is True:
+            jit_mode = ME_JIT_ON
+        elif jit is False:
+            jit_mode = ME_JIT_OFF
+
+        cdef me_udata* udata = self._fill_me_udata(inputs, fp_accuracy, aux_reduc, jit=jit)
 
         # Get the compiled expression handle for multi-threading
         cdef Py_ssize_t n = len(inputs)
@@ -2962,30 +3087,52 @@ cdef class NDArray:
         if variables == NULL:
             raise MemoryError()
         cdef me_variable *var
+        cdef np.dtype out_np_dtype = np.dtype(self.dtype)
+        cdef me_dtype me_output_dtype = _me_dtype_from_numpy_dtype(out_np_dtype)
+        if <int>me_output_dtype < 0:
+            raise TypeError(f"miniexpr does not support output dtype: {out_np_dtype}")
+
+        cdef np.dtype operand_dtype
         for i, (k, v) in enumerate(inputs.items()):
             var = &variables[i]
             var_name = k.encode("utf-8") if isinstance(k, str) else k
             var.name = <char *> malloc(strlen(var_name) + 1)
             strcpy(var.name, var_name)
-            var.dtype = me_dtype_from_numpy(v.dtype.num)
+            operand_dtype = np.dtype(v.dtype)
+            var.dtype = _me_dtype_from_numpy_dtype(operand_dtype)
+            if <int>var.dtype < 0:
+                raise TypeError(f"miniexpr does not support operand dtype '{operand_dtype}' for input '{k}'")
             var.address = NULL  # chunked compile: addresses provided later
             var.type = 0  # auto-set to ME_VARIABLE inside compiler
             var.context = NULL
+            var.itemsize = v.dtype.itemsize if v.dtype.num == 19 else 0 # only store item type if string
 
         cdef int error = 0
-        expression = expression.encode("utf-8") if isinstance(expression, str) else expression
-        cdef me_dtype = me_dtype_from_numpy(self.dtype.num)
+        cdef bytes expression_bytes
+        cdef str expression_display
+        if isinstance(expression, str):
+            expression_display = expression
+            expression_bytes = (<str>expression).encode("utf-8")
+        elif isinstance(expression, bytes):
+            expression_bytes = expression
+            expression_display = (<bytes>expression).decode("utf-8", "replace")
+        else:
+            expression_display = str(expression)
+            expression_bytes = expression_display.encode("utf-8")
+        cdef me_dtype = me_output_dtype
         cdef me_expr *out_expr
         cdef int ndims = self.array.ndim
         cdef int64_t* shape = &self.array.shape[0]
         cdef int32_t* chunkshape = &self.array.chunkshape[0]
         cdef int32_t* blockshape = &self.array.blockshape[0]
-        cdef int rc = me_compile_nd(expression, variables, n, me_dtype, ndims,
-                                    shape, chunkshape, blockshape, &error, &out_expr)
+        cdef int rc = me_compile_nd_jit(expression_bytes, variables, n, me_dtype, ndims,
+                                        shape, chunkshape, blockshape, jit_mode,
+                                        &error, &out_expr)
+        cdef str me_error_msg = _me_compile_error_details(rc, error)
         if rc == ME_COMPILE_ERR_INVALID_ARG_TYPE:
-            raise TypeError(f"miniexpr does not support operand or output dtype: {expression}")
+            raise TypeError(f"miniexpr does not support operand or output dtype: {expression_display}; details: {me_error_msg}")
         if rc != ME_COMPILE_SUCCESS:
-            raise NotImplementedError(f"Cannot compile expression: {expression}")
+            raise NotImplementedError(f"Cannot compile expression: {expression_display}; details: {me_error_msg}")
         udata.miniexpr_handle = out_expr
 
         # Free resources
@@ -3090,7 +3237,10 @@ cdef b2nd_context_t* create_b2nd_context(shape, chunks, blocks, dtype, kwargs):
     if 'cparams' in kwargs:
         kwargs['cparams']['typesize'] = typesize
     else:
-        kwargs['cparams'] = {'typesize': typesize}
+        kwargs['cparams'] = {'typesize': typesize} # last filter is shuffle
+        if isinstance(dtype, np.dtypes.StrDType) or dtype == np.str_:
+            kwargs['cparams']['filters'] = [blosc2.Filter.NOFILTER] * 5 + [blosc2.Filter.SHUFFLE]
+            kwargs['cparams']['filters_meta'] = [0] * 5 + [4] # unicode char bytesize
     if dtype.kind == 'V':
         str_dtype = str(dtype)
     else:
