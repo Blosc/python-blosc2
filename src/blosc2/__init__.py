@@ -589,6 +589,7 @@ Disable the overloaded equal operator.
 """
 
 # Delayed imports for avoiding overwriting of python builtins
+from .ctable import CTable
 from .ndarray import (
     abs,
     acos,
@@ -796,6 +797,7 @@ __all__ = [  # noqa : RUF022
     "count_nonzero",
     "cparams_dflts",
     "cpu_info",
+    "ctable",
     "cumulative_prod",
     "cumulative_sum",
     "decompress",
