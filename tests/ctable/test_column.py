@@ -1,9 +1,10 @@
-import pytest
-import numpy as np
-import blosc2
-from blosc2 import CTable
-from pydantic import BaseModel, Field
 from typing import Annotated
+
+import numpy as np
+import pytest
+from pydantic import BaseModel, Field
+
+from blosc2 import CTable
 
 
 class NumpyDtype:

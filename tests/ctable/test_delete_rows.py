@@ -5,12 +5,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-import pytest
-import numpy as np
-import blosc2
-from blosc2 import CTable
-from pydantic import BaseModel, Field
 from typing import Annotated, TypeVar
+
+import numpy as np
+import pytest
+from pydantic import BaseModel, Field
+
+from blosc2 import CTable
 
 # NOTE: Make sure to import your CTable and NumpyDtype correctly
 
@@ -166,7 +167,7 @@ def test_delete_multiple_individual_elements():
     # Delete positions 5, 15, 25, 35, 45
     positions_to_delete = [5, 15, 25, 35, 45]
 
-    for pos in positions_to_delete:
+    for _ in positions_to_delete:
         # Adjust position because previous deletions shift indices
         table.delete(0)  # Simplified: delete first element 5 times
 
@@ -418,7 +419,7 @@ def test_delete_all_rows_one_by_one():
     data = generate_test_data(50)
     table = CTable(RowModel, new_data=data, expected_size=50)
 
-    for i in range(50):
+    for _ in range(50):
         table.delete(0)
 
     assert len(table) == 0
@@ -429,7 +430,7 @@ def test_delete_all_rows_from_back():
     data = generate_test_data(50)
     table = CTable(RowModel, new_data=data, expected_size=50)
 
-    for i in range(50):
+    for _ in range(50):
         table.delete(-1)
 
     assert len(table) == 0
@@ -484,7 +485,7 @@ def test_delete_invalid_list_with_strings():
     data = generate_test_data(50)
     table = CTable(RowModel, new_data=data, expected_size=50)
 
-    with pytest.raises(Exception):
+    with pytest.raises(IndexError):
         table.delete([0, "invalid", 10])
 
 

@@ -1,9 +1,10 @@
-import pytest
-import numpy as np
-from blosc2 import CTable
-from pydantic import BaseModel, Field
 from typing import Annotated
 
+import numpy as np
+import pytest
+from pydantic import BaseModel, Field
+
+from blosc2 import CTable
 from blosc2.ctable import Column
 
 
@@ -32,7 +33,7 @@ def test_row_int_no_holes():
     assert len(result) == 1
     assert result.id[0] == 0
     assert result.score[0] == 0.0
-    assert result.active[0] == True
+    assert result.active[0]
 
     result = tabla.row[10]
     assert len(result) == 1
@@ -336,7 +337,7 @@ def test_row_view_read_operations():
 
     assert view.id[0] == 5
     assert view.score[0] == 50.0
-    assert view.active[0] == False
+    assert not view.active[0]
 
     assert list(view.id) == list(range(5, 15))
 

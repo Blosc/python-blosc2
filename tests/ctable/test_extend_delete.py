@@ -5,12 +5,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-import pytest
-import numpy as np
-import blosc2
-from blosc2 import CTable
-from pydantic import BaseModel, Field
 from typing import Annotated, TypeVar
+
+import numpy as np
+import pytest
+from pydantic import BaseModel, Field
+
+from blosc2 import CTable
 
 RowT = TypeVar("RowT", bound=BaseModel)
 
@@ -54,7 +55,7 @@ def assert_mask_matches(table: CTable, expected_mask: list):
 
 def assert_data_at_positions(table: CTable, positions: list, expected_ids: list):
     id_col = table.id
-    for pos, expected_id in zip(positions, expected_ids):
+    for pos, expected_id in zip(positions, expected_ids, strict=True):
         actual_id = int(table._cols["id"][pos])
         assert actual_id == expected_id, \
             f"Position {pos}: expected ID {expected_id}, got {actual_id}"
