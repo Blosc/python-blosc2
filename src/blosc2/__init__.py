@@ -607,6 +607,10 @@ from .ndarray import (
     where,
 )
 
+
+from .ctable import CTable
+
+
 __all__ = [  # noqa : RUF022
     # Constants
     "EXTENDED_HEADER_LENGTH",
@@ -710,6 +714,7 @@ __all__ = [  # noqa : RUF022
     "count_nonzero",
     "cparams_dflts",
     "cpu_info",
+    "ctable",
     "decompress",
     "decompress2",
     "detect_number_of_cores",
