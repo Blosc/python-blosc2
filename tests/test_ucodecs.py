@@ -93,6 +93,9 @@ def test_ucodecs(contiguous, urlpath, cparams, nchunks, codec_name, id, dtype):
     ],
 )
 def test_pyucodecs_error(cparams, dparams):
+    if blosc2.IS_WASM:
+        pytest.skip("nthreads are coerced to 1 on wasm32")
+
     chunk_len = 20 * 1000
     dtype = np.dtype(np.int32)
 
@@ -137,6 +140,9 @@ def test_pyucodecs_error(cparams, dparams):
     ],
 )
 def test_dynamic_ucodecs_error(cparams, dparams):
+    if blosc2.IS_WASM:
+        pytest.skip("nthreads are coerced to 1 on wasm32")
+
     blosc2.register_codec("codec4", cparams["codec"], None, None)
 
     chunk_len = 100

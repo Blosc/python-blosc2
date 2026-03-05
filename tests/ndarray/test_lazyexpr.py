@@ -90,6 +90,44 @@ def array_fixture(dtype_fixture, shape_fixture, chunks_blocks_fixture):
     return a1, a2, a3, a4, na1, na2, na3, na4
 
 
+def test_operandmethods_scalar(shape_fixture, dtype_fixture):
+    nelems = np.prod(shape_fixture)
+    na1 = np.linspace(1, 10, nelems, dtype=dtype_fixture).reshape(shape_fixture)
+    a1 = blosc2.asarray(na1)
+    scalar = 10
+
+    # Test __r***__ methods
+    for expr in (
+        scalar + a1,
+        scalar - a1,
+        scalar * a1,
+        scalar / a1,
+        scalar // a1,
+        scalar**a1,
+        scalar % a1,
+    ):
+        assert expr[()].shape == expr.shape
+
+    # Test __i***__ methods
+    a1 += scalar
+    a1 -= scalar
+    a1 *= scalar
+    a1 /= scalar
+    a1 //= scalar
+    a1 **= scalar
+    a1 %= scalar
+
+    a1 = blosc2.asarray(na1, dtype=np.int64)
+    for expr in (scalar & a1, scalar | a1, scalar ^ a1, scalar << a1, scalar >> a1):
+        assert expr[()].shape == expr.shape
+
+    a1 &= scalar
+    a1 |= scalar
+    a1 ^= scalar
+    a1 <<= scalar
+    a1 >>= scalar
+
+
 def test_simple_getitem(array_fixture):
     a1, a2, a3, a4, na1, na2, na3, na4 = array_fixture
     expr = a1 + a2 - a3 * a4
@@ -501,39 +539,97 @@ def test_abs(shape_fixture, dtype_fixture):
     np.testing.assert_allclose(res_lazyexpr[:], res_np)
 
 
-@pytest.mark.skipif(blosc2.IS_WASM, reason="This test is not supported in WASM")
 @pytest.mark.parametrize("values", [("NDArray", "str"), ("NDArray", "NDArray"), ("str", "NDArray")])
 def test_contains(values):
     # Unpack the value fixture
     value1, value2 = values
     if value1 == "NDArray":
-        a1 = np.array([b"abc", b"def", b"aterr", b"oot", b"zu", b"ab c"])
+        a1 = np.array(["abc", "def", "aterr", "oot", "zu", "ab c"])
         a1_blosc = blosc2.asarray(a1)
         if value2 == "str":  # ("NDArray", "str")
-            value2 = b"test abc here"
+            value2 = "test abc here"
             # Construct the lazy expression
-            expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", value2))
-            # Evaluate using NumExpr
-            expr_numexpr = f"{'contains'}(a1, value2)"
-            res_numexpr = ne_evaluate(expr_numexpr)
+            expr_lazy = blosc2.contains(a1_blosc, value2)
+            # Evaluate using NumPy
+            res_numexpr = np.char.find(a1, value2) != -1
         else:  # ("NDArray", "NDArray")
-            a2 = np.array([b"abc", b"ab c", b" abc", b" abc ", b"\tabc", b"c h"])
+            a2 = np.array(["abc", "ab c", " abc", " abc ", "\tabc", "c h"])
             a2_blosc = blosc2.asarray(a2)
             # Construct the lazy expression
-            expr_lazy = blosc2.LazyExpr(new_op=(a1_blosc, "contains", a2_blosc))
+            expr_lazy = blosc2.contains(a1_blosc, a2_blosc)
             # Evaluate using NumExpr
-            res_numexpr = ne_evaluate("contains(a2, a1)")
+            res_numexpr = np.char.find(a1, a2) != -1
     else:  # ("str", "NDArray")
-        value1 = b"abc"
-        a2 = np.array([b"abc", b"def", b"aterr", b"oot", b"zu", b"ab c"])
+        value1 = "abc"
+        a2 = np.array(["abc", "def", "aterr", "oot", "zu", "ab c"])
         a2_blosc = blosc2.asarray(a2)
         # Construct the lazy expression
-        expr_lazy = blosc2.LazyExpr(new_op=(value1, "contains", a2_blosc))
+        expr_lazy = blosc2.contains(value1, a2_blosc)
         # Evaluate using NumExpr
-        res_numexpr = ne_evaluate("contains(value1, a2)")
-    res_lazyexpr = expr_lazy.compute()
+        res_numexpr = np.char.find(value1, a2) != -1
     # Compare the results
-    np.testing.assert_array_equal(res_lazyexpr[:], res_numexpr)
+    np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
+
+
+@pytest.mark.parametrize("values", [("NDArray", "str"), ("NDArray", "NDArray"), ("str", "NDArray")])
+def test_stringops(values):
+    # Unpack the value fixture
+    value1, value2 = values
+    if value1 == "NDArray":
+        a1 = np.array(["abc", "def", "aterr", "oot", "zu", "ab c"])
+        a1_blosc = blosc2.asarray(a1)
+    else:  # ("str", _)
+        a1 = a1_blosc = "abc"
+
+    if value2 == "str":  # (_, "str")
+        a2 = a2_blosc = "a"
+    else:  # (_, "NDArray")
+        a2 = np.array(["ba", "ef", "rr", "o ", "\tz", "c h"])
+        a2_blosc = blosc2.asarray(a2)
+
+    for func, npfunc in zip(
+        (blosc2.startswith, blosc2.endswith), (np.char.startswith, np.char.endswith), strict=True
+    ):
+        expr_lazy = func(a1_blosc, a2_blosc)
+        res_numexpr = npfunc(a1, a2)
+        assert expr_lazy.shape == res_numexpr.shape
+        assert expr_lazy.dtype == blosc2.bool_
+        np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
+
+
+def test_stringops2():
+    # test all supported string ops for bytes and strings
+    for t in ("bytes", "string"):
+        if t == "bytes":
+            a1 = np.array([b"abc", b"def", b"aterr", b"oot", b"zu", b"ab c"])
+            a2 = a2_blosc = b"a"
+        else:
+            a1 = np.array(["abc", "def", "aterr", "oot", "zu", "ab c"])
+            a2 = a2_blosc = "a"
+        a1_blosc = blosc2.asarray(a1)
+        for func, npfunc in zip(
+            (blosc2.startswith, blosc2.endswith, blosc2.contains),
+            (np.char.startswith, np.char.endswith, lambda *args: np.char.find(*args) != -1),
+            strict=True,
+        ):
+            expr_lazy = func(a1_blosc, a2_blosc)
+            res_numexpr = npfunc(a1, a2)
+            assert expr_lazy.shape == res_numexpr.shape
+            assert expr_lazy.dtype == blosc2.bool_
+            np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
+
+        np.testing.assert_array_equal((a1_blosc < a2_blosc)[:], a1 < a2)
+        np.testing.assert_array_equal((a1_blosc <= a2_blosc)[:], a1 <= a2)
+        np.testing.assert_array_equal((a1_blosc == a2_blosc)[:], a1 == a2)
+        np.testing.assert_array_equal((a1_blosc != a2_blosc)[:], a1 != a2)
+        np.testing.assert_array_equal((a1_blosc >= a2_blosc)[:], a1 >= a2)
+        np.testing.assert_array_equal((a1_blosc > a2_blosc)[:], a1 > a2)
+
+        for func, npfunc in zip((blosc2.lower, blosc2.upper), (np.char.lower, np.char.upper), strict=True):
+            expr_lazy = func(a1_blosc)
+            res_numexpr = npfunc(a1)
+            assert expr_lazy.shape == res_numexpr.shape
+            np.testing.assert_array_equal(expr_lazy[:], res_numexpr)
 
 
 def test_negate(dtype_fixture, shape_fixture):
@@ -579,7 +675,7 @@ def test_params(array_fixture):
 
 # Tests related with save method
 def test_save():
-    tol = 1e-17
+    tol = 2e-12 if blosc2.IS_WASM else 1e-17
     shape = (23, 23)
     nelems = np.prod(shape)
     na1 = np.linspace(0, 10, nelems, dtype=np.float32).reshape(shape)
@@ -820,7 +916,7 @@ def test_save_many_functions(dtype_fixture, shape_fixture):
 @pytest.mark.parametrize("shape", [(10,), (10, 10), (10, 10, 10)])
 @pytest.mark.parametrize("dtype", ["int32", "float64", "i2"])
 @pytest.mark.parametrize("disk", [True, False])
-def test_save_constructor(disk, shape, dtype, constructor):  # noqa: C901
+def test_save_constructor(disk, shape, dtype, constructor):
     lshape = math.prod(shape)
     urlpath = "a.b2nd" if disk else None
     b2func = getattr(blosc2, constructor)
@@ -1435,6 +1531,11 @@ def test_str_constructors():
     lexpr = blosc2.sin(blosc2.sqrt(x**2))
 
 
+def test_str_arange_non_divisible_step():
+    expr = blosc2.lazyexpr("arange(1, 100, 2)")
+    np.testing.assert_array_equal(expr[:], np.arange(1, 100, 2))
+
+
 @pytest.mark.parametrize(
     "obj",
     [
@@ -1482,6 +1583,120 @@ def test_numpy_funcs(array_fixture, func):
         np.testing.assert_equal(d_blosc2, d_numpy)
     except AttributeError:
         pytest.skip("NumPy version has no cumulative_sum function.")
+
+
+def test_lazyexpr_string_scalar_keeps_miniexpr_fast_path(monkeypatch):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    captured = {"calls": 0, "expr": None, "keys": None}
+
+    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        captured["calls"] += 1
+        captured["expr"] = expression.decode("utf-8") if isinstance(expression, bytes) else expression
+        captured["keys"] = tuple(inputs.keys())
+        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc, jit=jit)
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+
+    try:
+        na = np.arange(32 * 32, dtype=np.float32).reshape(32, 32)
+        a = blosc2.asarray(na, chunks=(16, 16), blocks=(8, 8))
+        b = 3
+        expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+        res = expr.compute()
+
+        np.testing.assert_allclose(res[...], na + b, rtol=1e-6, atol=1e-6)
+        assert captured["calls"] >= 1
+        assert captured["keys"] == ("o0",)
+        assert captured["expr"] in {"o0 + 3", "(o0 + 3)"}
+        assert "b" not in captured["expr"]
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
+
+
+def test_lazyexpr_unary_negative_literal_matches_subtraction(monkeypatch):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    original_set_pref_expr = blosc2.NDArray._set_pref_expr
+    captured = {"calls": 0, "exprs": []}
+
+    def wrapped_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        captured["calls"] += 1
+        expr = expression.decode("utf-8") if isinstance(expression, bytes) else expression
+        captured["exprs"].append(expr)
+        return original_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc, jit=jit)
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", wrapped_set_pref_expr)
+
+    try:
+        na = np.arange(32 * 32, dtype=np.int64).reshape(32, 32)
+        a = blosc2.asarray(na, chunks=(16, 16), blocks=(8, 8))
+
+        left = blosc2.lazyexpr("-1 + a", operands={"a": a}).compute()
+        right = blosc2.lazyexpr("a - 1", operands={"a": a}).compute()
+
+        np.testing.assert_equal(left[...], right[...])
+        np.testing.assert_equal(left[...], na - 1)
+        # Fast-path coverage here is intentionally best-effort only; this test's primary
+        # goal is semantic equivalence of unary-negative literals and subtraction.
+        if captured["calls"] >= 1:
+            assert any("-1" in expr for expr in captured["exprs"])
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
+
+
+def test_lazyexpr_miniexpr_failure_falls_back_by_default(monkeypatch):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    def failing_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        raise ValueError("forced miniexpr failure")
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", failing_set_pref_expr)
+
+    try:
+        na = np.arange(32 * 32, dtype=np.float32).reshape(32, 32)
+        a = blosc2.asarray(na, chunks=(16, 16), blocks=(8, 8))
+        b = blosc2.asarray(np.ones_like(na), chunks=(16, 16), blocks=(8, 8))
+        res = blosc2.lazyexpr("a + b", operands={"a": a, "b": b}).compute()
+        np.testing.assert_allclose(res[...], na + 1.0, rtol=1e-6, atol=1e-6)
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
+
+
+def test_lazyexpr_miniexpr_failure_raises_when_strict(monkeypatch):
+    import importlib
+
+    lazyexpr_mod = importlib.import_module("blosc2.lazyexpr")
+    old_try_miniexpr = lazyexpr_mod.try_miniexpr
+    lazyexpr_mod.try_miniexpr = True
+
+    def failing_set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
+        raise ValueError("forced miniexpr failure")
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_expr", failing_set_pref_expr)
+
+    try:
+        na = np.arange(32 * 32, dtype=np.float32).reshape(32, 32)
+        a = blosc2.asarray(na, chunks=(16, 16), blocks=(8, 8))
+        b = blosc2.asarray(np.ones_like(na), chunks=(16, 16), blocks=(8, 8))
+        expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+        with pytest.raises(RuntimeError, match="strict_miniexpr=True"):
+            _ = expr.compute(strict_miniexpr=True)
+    finally:
+        lazyexpr_mod.try_miniexpr = old_try_miniexpr
 
 
 # Test the LazyExpr when some operands are missing (e.g. removed file)
@@ -1714,12 +1929,10 @@ def test_not_numexpr():
     shape = (20, 20)
     a = blosc2.linspace(0, 20, num=np.prod(shape), shape=shape)
     b = blosc2.ones((20, 1))
-    d_blosc2 = blosc2.evaluate("logaddexp(a, b) + a")
     npa = a[()]
     npb = b[()]
-    np.testing.assert_array_almost_equal(d_blosc2, np.logaddexp(npa, npb) + npa)
-    # TODO: Implement __add__ etc. for LazyUDF so this line works
-    # d_blosc2 = blosc2.evaluate(f"logaddexp(a, b) + clip(a, 6, 12)")
+    d_blosc2 = blosc2.evaluate("logaddexp(a, b) + clip(a, 6, 12)")
+    np.testing.assert_array_almost_equal(d_blosc2, np.logaddexp(npa, npb) + np.clip(npa, 6, 12))
     arr = blosc2.lazyexpr("matmul(a, b)")
     assert isinstance(arr, blosc2.LazyExpr)
     np.testing.assert_array_almost_equal(arr[()], np.matmul(npa, npb))

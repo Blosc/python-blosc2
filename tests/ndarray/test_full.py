@@ -39,6 +39,17 @@ import blosc2
             True,
         ),
         (
+            (23, 34),
+            (20, 20),
+            (10, 10),
+            "josé",
+            None,
+            blosc2.CParams(codec=blosc2.Codec.LZ4HC, clevel=8, use_dict=False, nthreads=2),
+            {"nthreads": 2},
+            "full.b2nd",
+            True,
+        ),
+        (
             (80, 51, 60),
             (20, 10, 33),
             (6, 6, 26),
@@ -53,6 +64,50 @@ import blosc2
             (13, 13),
             (12, 12),
             (11, 11),
+            123456789,
+            None,
+            blosc2.CParams(codec=blosc2.Codec.LZ4HC, clevel=8, use_dict=False, nthreads=2),
+            {"nthreads": 2},
+            None,
+            True,
+        ),  # Test zero shapes
+        (
+            (0,),
+            (200,),
+            (55,),
+            b"0123",
+            None,
+            {"clevel": 4, "use_dict": 0, "nthreads": 1},
+            {"nthreads": 1},
+            None,
+            False,
+        ),
+        (
+            (1, 1),
+            (20, 20),
+            (13, 6),
+            b"sun",
+            None,
+            blosc2.CParams(codec=blosc2.Codec.LZ4HC, clevel=8, use_dict=False, nthreads=2),
+            {"nthreads": 2},
+            "full.b2nd",
+            True,
+        ),
+        (
+            (1,),
+            (2000,),
+            (6,),
+            3.14,
+            np.float64,
+            {"codec": blosc2.Codec.ZLIB, "clevel": 5, "use_dict": True, "nthreads": 2},
+            {"nthreads": 1},
+            "full.b2nd",
+            False,
+        ),
+        (
+            (0, 0, 0),
+            (12, 12, 12),
+            (11, 11, 11),
             123456789,
             None,
             blosc2.CParams(codec=blosc2.Codec.LZ4HC, clevel=8, use_dict=False, nthreads=2),
@@ -75,7 +130,10 @@ def test_full(shape, chunks, blocks, fill_value, cparams, dparams, dtype, urlpat
         dparams=blosc2.DParams(**dparams),
         **storage,
     )
-    assert asdict(a.schunk.dparams) == dparams
+    expected_dparams = dparams.copy()
+    if blosc2.IS_WASM:
+        expected_dparams["nthreads"] = 1
+    assert asdict(a.schunk.dparams) == expected_dparams
     if isinstance(fill_value, bytes):
         dtype = np.dtype(f"S{len(fill_value)}")
     assert a.dtype == np.dtype(dtype) if dtype is not None else np.dtype(np.uint8)
@@ -95,6 +153,7 @@ def test_full(shape, chunks, blocks, fill_value, cparams, dparams, dtype, urlpat
     [
         ((100, 1230), b"0123", None),
         ((23, 34), b"sun", None),
+        ((23, 34), "josé", None),
         ((80, 51, 60), 3.14, "f8"),
         ((13, 13), 123456789, None),
     ],
@@ -161,6 +220,7 @@ def test_complex_datatype():
             ("f_019", "<f4", (27, 363)),
             ("f_020", "S1000"),
             ("f_021", "S1000"),
+            ("f_022", "<U1000"),
         ]
     )
     a = np.zeros((256,), dtype=dtype)

@@ -7,6 +7,7 @@ This page documents the miscellaneous members of the ``blosc2`` module that do n
     :members:
     :exclude-members: LazyArray,
         LazyExpr,
+        LazyUDF,
         lazyexpr,
         lazyudf,
         evaluate,
@@ -227,4 +228,6 @@ This page documents the miscellaneous members of the ``blosc2`` module that do n
         round,
         are_partitions_aligned,
         are_partitions_behaved,
-        indices
+        indices,
+        cumulative_sum,
+        cumulative_prod,

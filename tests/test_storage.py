@@ -9,6 +9,7 @@ from dataclasses import asdict, fields
 
 import numpy as np
 import pytest
+from conftest import expected_nthreads
 
 import blosc2
 
@@ -97,7 +98,10 @@ def test_cparams_values(cparams):
                 : len(getattr(cparams_dataclass, field.name))
             ] == getattr(cparams_dataclass, field.name)
         else:
-            assert getattr(schunk.cparams, field.name) == getattr(cparams_dataclass, field.name)
+            expected = getattr(cparams_dataclass, field.name)
+            if field.name == "nthreads":
+                expected = expected_nthreads(expected)
+            assert getattr(schunk.cparams, field.name) == expected
 
     array = blosc2.empty((30, 30), np.int32, cparams=cparams)
     for field in fields(cparams_dataclass):
@@ -108,15 +112,18 @@ def test_cparams_values(cparams):
         elif field.name == "typesize":
             assert getattr(array.schunk.cparams, field.name) == array.dtype.itemsize
         elif field.name != "blocksize":
-            assert getattr(array.schunk.cparams, field.name) == getattr(cparams_dataclass, field.name)
+            expected = getattr(cparams_dataclass, field.name)
+            if field.name == "nthreads":
+                expected = expected_nthreads(expected)
+            assert getattr(array.schunk.cparams, field.name) == expected
 
     blosc2.set_nthreads(10)
     schunk = blosc2.SChunk(cparams=cparams)
     cparams_dataclass = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
-    assert schunk.cparams.nthreads == cparams_dataclass.nthreads
+    assert schunk.cparams.nthreads == expected_nthreads(cparams_dataclass.nthreads)
 
     array = blosc2.empty((30, 30), np.int32, cparams=cparams)
-    assert array.schunk.cparams.nthreads == cparams_dataclass.nthreads
+    assert array.schunk.cparams.nthreads == expected_nthreads(cparams_dataclass.nthreads)
 
 
 def test_cparams_defaults():
@@ -163,15 +170,18 @@ def test_dparams_values(dparams):
     dparams_dataclass = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
     array = blosc2.empty((30, 30), dparams=dparams)
     for field in fields(dparams_dataclass):
-        assert getattr(schunk.dparams, field.name) == getattr(dparams_dataclass, field.name)
-        assert getattr(array.schunk.dparams, field.name) == getattr(dparams_dataclass, field.name)
+        expected = getattr(dparams_dataclass, field.name)
+        if field.name == "nthreads":
+            expected = expected_nthreads(expected)
+        assert getattr(schunk.dparams, field.name) == expected
+        assert getattr(array.schunk.dparams, field.name) == expected
 
     blosc2.set_nthreads(3)
     schunk = blosc2.SChunk(dparams=dparams)
     dparams_dataclass = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
     array = blosc2.empty((30, 30), dparams=dparams)
-    assert schunk.dparams.nthreads == dparams_dataclass.nthreads
-    assert array.schunk.dparams.nthreads == dparams_dataclass.nthreads
+    assert schunk.dparams.nthreads == expected_nthreads(dparams_dataclass.nthreads)
+    assert array.schunk.dparams.nthreads == expected_nthreads(dparams_dataclass.nthreads)
 
 
 def test_dparams_defaults():

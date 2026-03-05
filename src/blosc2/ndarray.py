@@ -36,6 +36,7 @@ from .linalg import matmul
 from .utils import (
     _get_local_slice,
     _get_selection,
+    _incomplete_lazyfunc,
     get_chunks_idx,
     npbinvert,
     nplshift,
@@ -536,6 +537,78 @@ def sum(
     Sum along axis 0 (columns): [5 7 9]
     """
     return ndarr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
+
+def cumulative_sum(
+    ndarr: blosc2.Array,
+    axis: int | tuple[int] | None = None,
+    dtype: np.dtype | str = None,
+    include_initial: bool = False,
+    **kwargs: Any,
+) -> blosc2.Array:
+    """
+    Calculates the cumulative sum of elements in the input array ndarr.
+
+    Parameters
+    -----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array or expression.
+    axis: int
+        Axis along which a cumulative sum must be computed. If array is 1D, axis may be None; otherwise the axis must be specified.
+    dtype: dtype
+        Data type of the returned array.
+    include_initial : bool
+        Boolean indicating whether to include the initial value as the first value in the output. Initial value will be zero. Default: False.
+    fp_accuracy: :ref:`blosc2.FPAccuracy`, optional
+        Specifies the floating-point accuracy for reductions on :ref:`LazyExpr`.
+        Passed to :func:`LazyExpr.compute` when :paramref:`ndarr` is a LazyExpr.
+    kwargs: dict, optional
+        Additional keyword arguments supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: blosc2.Array
+        An array containing the cumulative sums. Let N be the size of the axis along which to compute the cumulative sum.
+        If include_initial is True, the returned array has the same shape as ndarr, except the size of the axis along which to compute the cumulative sum is N+1.
+        If include_initial is False, the returned array has the same shape as ndarr.
+    """
+    return ndarr.cumulative_sum(axis=axis, dtype=dtype, include_initial=include_initial, **kwargs)
+
+
+def cumulative_prod(
+    ndarr: blosc2.Array,
+    axis: int | tuple[int] | None = None,
+    dtype: np.dtype | str = None,
+    include_initial: bool = False,
+    **kwargs: Any,
+) -> blosc2.Array:
+    """
+    Calculates the cumulative product of elements in the input array ndarr.
+
+    Parameters
+    -----------
+    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array` or :ref:`LazyExpr`
+        The input array or expression.
+    axis: int
+        Axis along which a cumulative product must be computed. If array is 1D, axis may be None; otherwise the axis must be specified.
+    dtype: dtype
+        Data type of the returned array.
+    include_initial : bool
+        Boolean indicating whether to include the initial value as the first value in the output. Initial value will be one. Default: False.
+    fp_accuracy: :ref:`blosc2.FPAccuracy`, optional
+        Specifies the floating-point accuracy for reductions on :ref:`LazyExpr`.
+        Passed to :func:`LazyExpr.compute` when :paramref:`ndarr` is a LazyExpr.
+    kwargs: dict, optional
+        Additional keyword arguments supported by the :func:`empty` constructor.
+
+    Returns
+    -------
+    out: blosc2.Array
+        An array containing the cumulative products. Let N be the size of the axis along which to compute the cumulative product.
+        If include_initial is True, the returned array has the same shape as ndarr, except the size of the axis along which to compute the cumulative product is N+1.
+        If include_initial is False, the returned array has the same shape as ndarr.
+    """
+    return ndarr.cumulative_prod(axis=axis, dtype=dtype, include_initial=include_initial, **kwargs)
 
 
 def mean(
@@ -1761,15 +1834,16 @@ def imag(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     return blosc2.LazyExpr(new_op=(ndarr, "imag", None))
 
 
+@_incomplete_lazyfunc
 def contains(ndarr: blosc2.Array, value: str | bytes | blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Check if the array contains a specified value.
 
     Parameters
     ----------
-    ndarr: :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
+    ndarr: :ref:`Array`
         The input array.
-    value: str or bytes or :ref:`NDArray` or :ref:`NDField` or :ref:`C2Array`
+    value: str or bytes or :ref:`Array`
         The value to be checked.
 
     Returns
@@ -1790,8 +1864,14 @@ def contains(ndarr: blosc2.Array, value: str | bytes | blosc2.Array, /) -> blosc
     >>> print("Contains 'banana':", result[:])
     Contains 'banana': [False  True False False]
     """
+    # def chunkwise_contains(inputs, output, offset):
+    #     x1, x2 = inputs
+    #     # output[...] = np.isin(x1, x2, assume_unique=assume_unique, invert=invert, kind=kind)
+    #     output[...] = np.char.find(x1, x2) != -1
+
     if not isinstance(value, str | bytes | NDArray):
         raise TypeError("value should be a string, bytes or a NDArray!")
+
     return blosc2.LazyExpr(new_op=(ndarr, "contains", value))
 
 
@@ -2980,6 +3060,7 @@ def remainder(
     return blosc2.LazyExpr(new_op=(x1, "%", x2))
 
 
+@_incomplete_lazyfunc
 def clip(
     x: blosc2.Array,
     min: int | float | blosc2.Array | None = None,
@@ -3014,12 +3095,14 @@ def clip(
 
     def chunkwise_clip(inputs, output, offset):
         x, min, max = inputs
-        output[:] = np.clip(x, min, max)
+        output[...] = np.clip(x, min, max)
 
     dtype = blosc2.result_type(x)
-    return blosc2.lazyudf(chunkwise_clip, (x, min, max), dtype=dtype, shape=x.shape, **kwargs)
+    shape = () if np.isscalar(x) else None
+    return blosc2.lazyudf(chunkwise_clip, (x, min, max), dtype=dtype, shape=shape, **kwargs)
 
 
+@_incomplete_lazyfunc
 def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array, **kwargs: Any) -> NDArray:
     """
     Calculates the logarithm of the sum of exponentiations log(exp(x1) + exp(x2)) for
@@ -3047,7 +3130,7 @@ def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array, **
 
     def chunkwise_logaddexp(inputs, output, offset):
         x1, x2 = inputs
-        output[:] = np.logaddexp(x1, x2)
+        output[...] = np.logaddexp(x1, x2)
 
     dtype = blosc2.result_type(x1, x2)
     if dtype == blosc2.bool_:
@@ -3055,7 +3138,8 @@ def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array, **
 
     if np.issubdtype(dtype, np.integer):
         dtype = blosc2.float32
-    return blosc2.lazyudf(chunkwise_logaddexp, (x1, x2), dtype=dtype, shape=x1.shape, **kwargs)
+    shape = () if np.isscalar(x1) and np.isscalar(x2) else None
+    return blosc2.lazyudf(chunkwise_logaddexp, (x1, x2), dtype=dtype, shape=shape, **kwargs)
 
 
 # implemented in python-blosc2
@@ -3190,6 +3274,9 @@ class Operand:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "+", value))
 
+    def __radd__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
+        return self.__add__(value)
+
     def __iadd__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         return self.__add__(value)
 
@@ -3205,8 +3292,13 @@ class Operand:
     def __mod__(self, other) -> blosc2.LazyExpr:
         return remainder(self, other)
 
-    def __radd__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
-        return self.__add__(value)
+    @is_documented_by(remainder)
+    def __imod__(self, other) -> blosc2.LazyExpr:
+        return self.__mod__(other)
+
+    @is_documented_by(remainder)
+    def __rmod__(self, other) -> blosc2.LazyExpr:
+        return remainder(other, self)
 
     def __sub__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
@@ -3246,6 +3338,14 @@ class Operand:
     def __floordiv__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "//", value))
+
+    def __ifloordiv__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
+        _check_allowed_dtypes(value)
+        return self.__floordiv__(value)
+
+    def __rfloordiv__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
+        _check_allowed_dtypes(value)
+        return blosc2.LazyExpr(new_op=(value, "//", self))
 
     def __lt__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
         _check_allowed_dtypes(value)
@@ -3294,13 +3394,31 @@ class Operand:
         _check_allowed_dtypes(value)
         return blosc2.LazyExpr(new_op=(self, "&", value))
 
+    def __iand__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
+        return self.__and__(value)
+
+    def __rand__(self, value: int | float | blosc2.Array, /) -> blosc2.LazyExpr:
+        return self.__and__(value)
+
     @is_documented_by(bitwise_xor)
     def __xor__(self, other) -> blosc2.LazyExpr:
         return blosc2.LazyExpr(new_op=(self, "^", other))
 
+    def __ixor__(self, other) -> blosc2.LazyExpr:
+        return self.__xor__(other)
+
+    def __rxor__(self, other) -> blosc2.LazyExpr:
+        return self.__xor__(other)
+
     @is_documented_by(bitwise_or)
     def __or__(self, other) -> blosc2.LazyExpr:
         return blosc2.LazyExpr(new_op=(self, "|", other))
+
+    def __ior__(self, other) -> blosc2.LazyExpr:
+        return self.__or__(other)
+
+    def __ror__(self, other) -> blosc2.LazyExpr:
+        return self.__or__(other)
 
     @is_documented_by(bitwise_invert)
     def __invert__(self) -> blosc2.LazyExpr:
@@ -3310,9 +3428,21 @@ class Operand:
     def __rshift__(self, other) -> blosc2.LazyExpr:
         return blosc2.LazyExpr(new_op=(self, ">>", other))
 
+    def __irshift__(self, other) -> blosc2.LazyExpr:
+        return self.__rshift__(other)
+
+    def __rrshift__(self, other) -> blosc2.LazyExpr:
+        return blosc2.LazyExpr(new_op=(other, ">>", self))
+
     @is_documented_by(bitwise_left_shift)
     def __lshift__(self, other) -> blosc2.LazyExpr:
         return blosc2.LazyExpr(new_op=(self, "<<", other))
+
+    def __ilshift__(self, other) -> blosc2.LazyExpr:
+        return self.__lshift__(other)
+
+    def __rlshift__(self, other) -> blosc2.LazyExpr:
+        return blosc2.LazyExpr(new_op=(other, "<<", self))
 
     def __bool__(self) -> bool:
         if math.prod(self.shape) != 1:
@@ -3370,6 +3500,16 @@ class Operand:
     def sum(self, axis=None, dtype=None, keepdims=False, **kwargs):
         expr = blosc2.LazyExpr(new_op=(self, None, None))
         return expr.sum(axis=axis, dtype=dtype, keepdims=keepdims, **kwargs)
+
+    @is_documented_by(cumulative_sum)
+    def cumulative_sum(self, axis=None, dtype=None, include_initial=False, **kwargs):
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.cumulative_sum(axis=axis, dtype=dtype, include_initial=include_initial, **kwargs)
+
+    @is_documented_by(cumulative_prod)
+    def cumulative_prod(self, axis=None, dtype=None, include_initial=False, **kwargs):
+        expr = blosc2.LazyExpr(new_op=(self, None, None))
+        return expr.cumulative_prod(axis=axis, dtype=dtype, include_initial=include_initial, **kwargs)
 
     @is_documented_by(mean)
     def mean(self, axis=None, dtype=None, keepdims=False, **kwargs):
@@ -4212,7 +4352,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
     def __setitem__(
         self,
-        key: None | int | slice | Sequence[slice | int | np.bool_ | np.ndarray[int | np.bool_] | None],
+        key: int | slice | Sequence[slice | int | np.bool_ | np.ndarray[int | np.bool_] | None] | None,
         value: object,
     ):
         """Set a slice of the array.
@@ -4599,6 +4739,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
         >>> b.shape
         (50, 10)
         """
+        if 0 in self.chunks or 0 in self.blocks:
+            raise ValueError(
+                "Cannot resize array. Perhaps you want to specify chunks/blocks on array creation. For 1D arrays, a good chunks value is (cache_size/typesize,)!"
+            )
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
         super().resize(newshape)
 
@@ -4825,6 +4969,133 @@ def where(
     return condition.where(x, y)
 
 
+@_incomplete_lazyfunc
+def startswith(
+    a: str | blosc2.Array, prefix: str | blosc2.Array
+) -> NDArray:  # start: int = 0, end: int | None = None, **kwargs)
+    """
+    Copy-pasted from numpy documentation: https://numpy.org/doc/stable/reference/generated/numpy.char.startswith.html
+    Returns a boolean array which is True where the string element in a starts with prefix, otherwise False.
+
+    Parameters
+    ----------
+    a : blosc2.Array
+        Input array of bytes_ or str_ dtype
+
+    prefix : blosc2.Array
+        Prefix array of bytes_ or str_ dtype
+
+    start: int | blosc2.Array
+        With start, test beginning at that position.
+
+    end: int | blosc2.Array
+        With end, stop comparing at that position.
+
+    kwargs: Any
+        kwargs accepted by the :func:`empty` constructor
+
+    Returns
+    -------
+    out: blosc2.Array, bool
+        Has the same shape as element.
+
+    """
+
+    # def chunkwise_startswith(inputs, output, offset):
+    #     x1, x2 = inputs
+    #     # output[...] = np.char.startswith(x1, x2, start=start, end=end)
+    #     output[...] = np.char.startswith(x1, x2)
+
+    return blosc2.LazyExpr(new_op=(a, "startswith", prefix))
+
+
+@_incomplete_lazyfunc
+def endswith(
+    a: str | blosc2.Array, suffix: str | blosc2.Array
+) -> NDArray:  # start: int = 0, end: int | None = None, **kwargs) -> NDArray:
+    """
+    Copy-pasted from numpy documentation: https://numpy.org/doc/stable/reference/generated/numpy.char.endswith.html
+    Returns a boolean array which is True where the string element in a ends with suffix, otherwise False.
+
+    Parameters
+    ----------
+    a : blosc2.Array
+        Input array of bytes_ or str_ dtype
+
+    suffix : blosc2.Array
+        suffix array of bytes_ or str_ dtype
+
+    start: int | blosc2.Array
+        With start, test beginning at that position.
+
+    end: int | blosc2.Array
+        With end, stop comparing at that position.
+
+    kwargs: Any
+        kwargs accepted by the :func:`empty` constructor
+
+    Returns
+    -------
+    out: blosc2.Array, bool
+        Has the same shape as element.
+
+    """
+    # def chunkwise_endswith(inputs, output, offset):
+    #     x1, x2 = inputs
+    #     # output[...] = np.char.endswith(x1, x2, start=start, end=end)
+    #     output[...] = np.char.endswith(x1, x2)
+
+    return blosc2.LazyExpr(new_op=(a, "endswith", suffix))
+
+
+@_incomplete_lazyfunc
+def lower(a: str | blosc2.Array) -> NDArray:
+    """
+    Copy-pasted from numpy documentation: https://numpy.org/doc/stable/reference/generated/numpy.char.lower.html
+    Return an array with the elements converted to lowercase.
+    Call str.lower element-wise.
+    For 8-bit strings, this method is locale-dependent.
+
+    Parameters
+    ----------
+    a : blosc2.Array
+        Input array of bytes_ or str_ dtype
+    kwargs: Any
+        kwargs accepted by the :func:`empty` constructor
+
+    Returns
+    -------
+    out: blosc2.Array, of bytes_ or str_ dtype
+        Has the same shape as element.
+
+    """
+    return blosc2.LazyExpr(new_op=(a, "lower", None))
+
+
+@_incomplete_lazyfunc
+def upper(a: str | blosc2.Array) -> NDArray:
+    """
+    Copy-pasted from numpy documentation: https://numpy.org/doc/stable/reference/generated/numpy.char.upper.html
+    Return an array with the elements converted to uppercase.
+    Call str.lower element-wise.
+    For 8-bit strings, this method is locale-dependent.
+
+    Parameters
+    ----------
+    a : blosc2.Array
+        Input array of bytes_ or str_ dtype
+    kwargs: Any
+        kwargs accepted by the :func:`empty` constructor
+
+    Returns
+    -------
+    out: blosc2.Array, of bytes_ or str_ dtype
+        Has the same shape as element.
+
+    """
+    return blosc2.LazyExpr(new_op=(a, "upper", None))
+
+
 def lazywhere(value1=None, value2=None):
     """Decorator to apply a where condition to a LazyExpr."""
 
@@ -4851,6 +5122,8 @@ def _check_dtype(dtype):
     dtype = np.dtype(dtype)
     if dtype.itemsize > blosc2.MAX_TYPESIZE:
         raise ValueError(f"dtype itemsize {dtype.itemsize} is too large (>{blosc2.MAX_TYPESIZE})!")
+    if dtype == np.str_:  # itemsize is 0
+        dtype = np.dtype("<U1")  # default to 1 char strings
     return dtype
 
 
@@ -5064,7 +5337,7 @@ def full(
     if isinstance(fill_value, bytes):
         dtype = np.dtype(f"S{len(fill_value)}")
     if dtype is None:
-        dtype = np.dtype(type(fill_value))
+        dtype = np.array(fill_value).dtype
     else:
         dtype = np.dtype(dtype)
     dtype = _check_dtype(dtype)
@@ -5168,22 +5441,29 @@ def arange(
     [0 1 2 3 4 5 6 7 8 9]
     """
 
+    def _arange_num_elements(start, stop, step):
+        return builtins.max(math.ceil((stop - start) / step), 0)
+
     def arange_fill(inputs, output, offset):
         lout = len(output)
         start, _, step = inputs
         start += offset[0] * step
         stop = start + lout * step
-        if math.ceil((stop - start) / step) == lout:  # USE ARANGE IF POSSIBLE (2X FASTER)
+        if _arange_num_elements(start, stop, step) == lout:  # USE ARANGE IF POSSIBLE (2X FASTER)
             output[:] = np.arange(start, stop, step, dtype=output.dtype)
         else:  # use linspace to have finer control over exclusion of endpoint for float types
             output[:] = np.linspace(start, stop, lout, endpoint=False, dtype=output.dtype)
+
+    @blosc2.dsl_kernel
+    def ramp_arange(start, step):
+        return start + _flat_idx * step  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
 
     if step is None:  # not array-api compliant but for backwards compatibility
         step = 1
     if stop is None:
         stop = start
         start = 0
-    NUM = int((stop - start) / step)
+    NUM = _arange_num_elements(start, stop, step)
     if shape is None:
         shape = (builtins.max(NUM, 0),)
     else:
@@ -5202,14 +5482,19 @@ def arange(
         # We already have the dtype and shape, so return immediately
         return blosc2.zeros(shape, dtype=dtype, **kwargs)
 
-    lshape = (math.prod(shape),)
-    lazyarr = blosc2.lazyudf(arange_fill, (start, stop, step), dtype=dtype, shape=lshape)
+    # Windows and wasm32 does not support complex numbers in DSL
+    if blosc2.isdtype(dtype, "complex floating"):
+        lshape = (math.prod(shape),)
+        lazyarr = blosc2.lazyudf(arange_fill, (start, stop, step), dtype=dtype, shape=lshape)
 
-    if len(shape) == 1:
-        # C order is guaranteed, and no reshape is needed
+        if len(shape) == 1:
+            # C order is guaranteed, and no reshape is needed
+            return lazyarr.compute(**kwargs)
+
+        return reshape(lazyarr, shape, c_order=c_order, **kwargs)
+    else:
+        lazyarr = blosc2.lazyudf(ramp_arange, (start, step), dtype=dtype, shape=shape)
         return lazyarr.compute(**kwargs)
-
-    return reshape(lazyarr, shape, c_order=c_order, **kwargs)
 
 
 # Define a numpy linspace-like function
@@ -5274,6 +5559,10 @@ def linspace(
         else:
             output[:] = np.linspace(start_, stop_, lout, endpoint=False, dtype=output.dtype)
 
+    @blosc2.dsl_kernel
+    def ramp_linspace(start, step):
+        return float(start) + _flat_idx * float(step)  # noqa: F821  # DSL index/shape symbols resolved by miniexpr
+
     if shape is None:
         if num is None:
             raise ValueError("Either `shape` or `num` must be specified.")
@@ -5303,13 +5592,21 @@ def linspace(
         # We already have the dtype and shape, so return immediately
         return blosc2.zeros(shape, dtype=dtype, **kwargs)  # will return empty array for num == 0
 
-    inputs = (start, stop, num, endpoint)
-    lazyarr = blosc2.lazyudf(linspace_fill, inputs, dtype=dtype, shape=(num,))
-    if len(shape) == 1:
-        # C order is guaranteed, and no reshape is needed
-        return lazyarr.compute(**kwargs)
+    # Windows and wasm32 does not support complex numbers in DSL
+    if blosc2.isdtype(dtype, "complex floating"):
+        inputs = (start, stop, num, endpoint)
+        lazyarr = blosc2.lazyudf(linspace_fill, inputs, dtype=dtype, shape=(num,))
+        if len(shape) == 1:
+            # C order is guaranteed, and no reshape is needed
+            return lazyarr.compute(**kwargs)
 
-    return reshape(lazyarr, shape, c_order=c_order, **kwargs)
+        return reshape(lazyarr, shape, c_order=c_order, **kwargs)
+    else:
+        nitems = num - 1 if endpoint else num
+        step = (float(stop) - float(start)) / float(nitems) if nitems > 0 else 0.0
+        inputs = (start, step)
+        lazyarr = blosc2.lazyudf(ramp_linspace, inputs, dtype=dtype, shape=shape)
+        return lazyarr.compute(**kwargs)
 
 
 def eye(N, M=None, k=0, dtype=np.float64, **kwargs: Any) -> NDArray:
@@ -5800,7 +6097,7 @@ def astype(
     return asarray(array, dtype=dtype, casting=casting, copy=copy, **kwargs)
 
 
-def _check_ndarray_kwargs(**kwargs):
+def _check_ndarray_kwargs(**kwargs):  # noqa: C901
     storage = kwargs.get("storage")
     if storage is not None:
         for key in kwargs:
@@ -5843,16 +6140,28 @@ def _check_ndarray_kwargs(**kwargs):
     if "cparams" in kwargs:
         cparams = kwargs["cparams"]
         if cparams is None:
-            kwargs["cparams"] = blosc2.cparams_dflts
-        if isinstance(cparams, blosc2.CParams):
+            kwargs["cparams"] = blosc2.CParams()
+        elif isinstance(cparams, blosc2.CParams):
             kwargs["cparams"] = asdict(kwargs["cparams"])
         else:
             if "chunks" in kwargs["cparams"]:
                 raise ValueError("You cannot pass chunks in cparams, use `chunks` argument instead")
             if "blocks" in kwargs["cparams"]:
                 raise ValueError("You cannot pass chunks in cparams, use `blocks` argument instead")
+            kwargs["cparams"] = cparams.copy()
     if "dparams" in kwargs and isinstance(kwargs["dparams"], blosc2.DParams):
         kwargs["dparams"] = asdict(kwargs["dparams"])
+    if blosc2.IS_WASM:
+        cparams = kwargs.get("cparams")
+        if isinstance(cparams, dict) and cparams.get("nthreads", 1) != 1:
+            cparams = cparams.copy()
+            cparams["nthreads"] = 1
+            kwargs["cparams"] = cparams
+        dparams = kwargs.get("dparams")
+        if isinstance(dparams, dict) and dparams.get("nthreads", 1) != 1:
+            dparams = dparams.copy()
+            dparams["nthreads"] = 1
+            kwargs["dparams"] = dparams
 
     return kwargs
 

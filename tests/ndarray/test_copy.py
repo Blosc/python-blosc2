@@ -55,11 +55,11 @@ def test_values(shape, chunks1, blocks1, chunks2, blocks2, dtype):
     b = a.copy(chunks=chunks2, blocks=blocks2, cparams=cparams2)
     assert a.shape == b.shape
     assert a.schunk.dparams == b.schunk.dparams
-    for key in cparams2:
+    for key, value in cparams2.items():
         if key in ("filters", "filters_meta"):
-            assert getattr(b.schunk.cparams, key)[: len(cparams2[key])] == cparams2[key]
+            assert getattr(b.schunk.cparams, key)[: len(value)] == value
             continue
-        assert getattr(b.schunk.cparams, key) == cparams2[key]
+        assert getattr(b.schunk.cparams, key) == value
     assert b.chunks == tuple(chunks2)
     assert b.blocks == tuple(blocks2)
     assert a.dtype == b.dtype

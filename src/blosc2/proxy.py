@@ -586,7 +586,7 @@ def _convert_dtype(dt: str | DTypeLike):
     except TypeError:  # likely passed e.g. a torch.float64
         return np.dtype(str(dt).split(".")[1])
     except Exception as e:
-        raise TypeError("Could not parse dtype arg {dt}.") from e
+        raise TypeError(f"Could not parse dtype arg {dt}.") from e
 
 
 class SimpleProxy(blosc2.Operand):
@@ -631,7 +631,7 @@ class SimpleProxy(blosc2.Operand):
         chunks = src.chunks if chunks is None and is_ints_sequence(src, "chunks") else chunks
         blocks = src.blocks if blocks is None and is_ints_sequence(src, "blocks") else blocks
         self.chunks, self.blocks = blosc2.compute_chunks_blocks(
-            self.shape, chunks, blocks, self.dtype, **{"cparams": cparams}
+            self.shape, chunks, blocks, self.dtype, cparams=cparams
         )
 
     @property

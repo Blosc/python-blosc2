@@ -44,7 +44,7 @@ SHAPES_CHUNKS = [((10,), (3,)), ((20, 20), (4, 7))]
 SHAPES_CHUNKS_HEAVY = [((10, 13, 13), (3, 5, 2))]
 
 
-def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):  # noqa : C901
+def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):
     """Helper function containing the actual test logic for unary functions."""
     if np_func.__name__ in ("arccos", "arcsin", "arctanh"):
         a_blosc = blosc2.linspace(
@@ -105,10 +105,10 @@ def _test_unary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):  # noq
             ):
                 assert True
             else:
-                raise e
+                raise
 
 
-def _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp):  # noqa: C901
+def _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp):
     dtype_ = getattr(xp, dtype) if hasattr(xp, dtype) else np.dtype(dtype)
     dtype = np.dtype(dtype)
     not_blosc1 = xp.ones(shape, dtype=dtype_)
@@ -168,12 +168,12 @@ def _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp): 
             ):  # not supported for complex dtypes
                 assert True
             else:
-                raise e
+                raise
         except NotImplementedError as e:
             if np_func.__name__ in ("left_shift", "right_shift", "floor_divide", "power", "remainder"):
                 assert True
             else:
-                raise e
+                raise
         except AssertionError as e:
             if np_func.__name__ == "power" and blosc2.isdtype(
                 dtype, "integral"
@@ -189,7 +189,7 @@ def _test_binary_func_proxy(np_func, blosc_func, dtype, shape, chunkshape, xp): 
                 )
                 pytest.skip("minimum and maximum for numexpr do not match NaN behaviour for numpy")
             else:
-                raise e
+                raise
 
 
 def _test_unary_func_proxy(np_func, blosc_func, dtype, shape, xp):
@@ -228,10 +228,10 @@ def _test_unary_func_proxy(np_func, blosc_func, dtype, shape, xp):
             ):
                 assert True
             else:
-                raise e
+                raise
 
 
-def _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):  # noqa: C901
+def _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):
     """Helper function containing the actual test logic for binary functions."""
     a_blosc1 = blosc2.linspace(
         1, stop=np.prod(shape), num=np.prod(shape), chunks=chunkshape, shape=shape, dtype=dtype
@@ -283,12 +283,12 @@ def _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):  # no
             ):  # not supported for complex dtypes
                 assert True
             else:
-                raise e
+                raise
         except NotImplementedError as e:
             if np_func.__name__ in ("left_shift", "right_shift", "floor_divide", "power", "remainder"):
                 assert True
             else:
-                raise e
+                raise
         except AssertionError as e:
             if np_func.__name__ == "power" and blosc2.isdtype(
                 dtype, "integral"
@@ -304,7 +304,7 @@ def _test_binary_func_impl(np_func, blosc_func, dtype, shape, chunkshape):  # no
                 )
                 pytest.skip("minimum and maximum for numexpr do not match NaN behaviour for numpy")
             else:
-                raise e
+                raise
 
 
 @pytest.mark.parametrize(("np_func", "blosc_func"), UNARY_FUNC_PAIRS)

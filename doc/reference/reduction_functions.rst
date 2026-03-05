@@ -11,24 +11,32 @@ Reduction operations can be used with any of :ref:`NDArray <NDArray>`, :ref:`C2A
 
     all
     any
-    sum
-    prod
-    mean
-    std
-    var
-    min
-    max
-    argmin
     argmax
+    argmin
+    count_nonzero
+    cumulative_prod
+    cumulative_sum
+    max
+    mean
+    min
+    prod
+    std
+    sum
+    var
 
-.. autofunction:: all
-.. autofunction:: any
-.. autofunction:: sum
-.. autofunction:: prod
-.. autofunction:: mean
-.. autofunction:: std
-.. autofunction:: var
-.. autofunction:: min
-.. autofunction:: max
-.. autofunction:: argmin
-.. autofunction:: argmax
+
+
+.. autofunction:: blosc2.all
+.. autofunction:: blosc2.any
+.. autofunction:: blosc2.argmax
+.. autofunction:: blosc2.argmin
+.. autofunction:: blosc2.count_nonzero
+.. autofunction:: blosc2.cumulative_prod
+.. autofunction:: blosc2.cumulative_sum
+.. autofunction:: blosc2.max
+.. autofunction:: blosc2.mean
+.. autofunction:: blosc2.min
+.. autofunction:: blosc2.prod
+.. autofunction:: blosc2.std
+.. autofunction:: blosc2.sum
+.. autofunction:: blosc2.var
