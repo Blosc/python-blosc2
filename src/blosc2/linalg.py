@@ -126,7 +126,7 @@ def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArra
         same_blocks = all(op.shape[-1] == op.shape[-2] and op.blocks == blocks for op in ops)
         if not (same_shape and same_chunks and same_blocks):
             use_miniexpr = False
-        if any(op.dtype != ops[0].dtype for op in ops):
+        if any(op.dtype != ops[0].dtype for op in ops):  # TODO: Remove this condition
             use_miniexpr = False
     else:
         use_miniexpr = False

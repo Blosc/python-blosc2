@@ -987,7 +987,7 @@ cdef _check_cparams(blosc2_cparams *cparams):
             if ufilters[i] and cparams.filters[i] in blosc2.ufilters_registry.keys():
                 raise ValueError("Cannot use multi-threading with user defined Python filters")
 
-        if cparams.prefilter != NULL and cparams.prefilter != <blosc2_prefilter_fn>miniexpr_prefilter:
+        if cparams.prefilter != NULL and (cparams.prefilter != <blosc2_prefilter_fn>miniexpr_prefilter and cparams.prefilter != <blosc2_prefilter_fn>matmul_prefilter):
             # Note: miniexpr_prefilter uses miniexpr C API which is thread-friendly,
             raise ValueError("`nthreads` must be 1 when a prefilter is set")
 
@@ -2159,12 +2159,14 @@ cdef int matmul_block_kernel(T* A, T* B, T* C, int M, int K, int N) nogil:
             rowB = k * N
             for c in range(N):
                 C[rowC + c] += <T>(a * B[rowB + c])
+    return 0
 
 cdef int aux_matmul(me_udata *udata, int64_t nchunk, int32_t nblock, void *params_output, int32_t typesize, int typecode) nogil:
     # Declare all C variables at the beginning
     cdef b2nd_array_t* out_arr
     cdef b2nd_array_t* ndarr
-    cdef int rc
+    cdef c_bool first_run
+    cdef int rc, M, K, N
     cdef void** input_buffers = <void**> malloc(2 * sizeof(uint8_t*))
     cdef uint8_t** src = <uint8_t**> malloc(2 * sizeof(uint8_t*))
     cdef int32_t chunk_nbytes[2]
@@ -2192,18 +2194,18 @@ cdef int aux_matmul(me_udata *udata, int64_t nchunk, int32_t nblock, void *param
     nchunkA = chunk_startA = nchunk - j
     nchunkB = chunk_startB = nchunk - i * ncols
 
-    # nblock = block_base * nblocks_per_2d + block_i * ncols + block_j
+    # nblock = block_base * nblocks_per_2d + block_i * block_ncols + block_j
     block_base = nblock // nblocks_per_2d
     block_i = (nblock % nblocks_per_2d) // block_ncols
     block_j = nblock % block_ncols
-    block_startA = nblock - j
-    block_startB = nblock - i * block_ncols
+    block_startA = nblock - block_j
+    block_startB = nblock - block_i * block_ncols
     dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
 
-    cdef void* bufA =  input_buffers[0]
-    cdef void* bufB = input_buffers[1]
+    first_run = True
 
     while True: # chunk loop
+        printf("chunks: %i, %i\n", nchunkA, nchunkB)
         nblockA = block_startA
         nblockB = block_startB
         for i in range(2):
@@ -2215,7 +2217,13 @@ cdef int aux_matmul(me_udata *udata, int64_t nchunk, int32_t nblock, void *param
                 raise ValueError("miniexpr: error getting cbuffer sizes")
             if block_nbytes[i] <= 0:
                 raise ValueError("miniexpr: invalid block size")
-            input_buffers[i] = malloc(block_nbytes[i])
+            if first_run:
+                if i == 0:
+                    K = ndarr.blockshape[ndim - 1]
+                    M = ndarr.blockshape[ndim - 2]
+                else: # i = 1
+                    N = ndarr.blockshape[ndim - 1]
+                input_buffers[i] = malloc(block_nbytes[i])
             if input_buffers[i] == NULL:
                 raise MemoryError("miniexpr: cannot allocate input block buffer")
             blocknitems[i] = block_nbytes[i] // <int> ndarr.sc.typesize
@@ -2223,7 +2231,10 @@ cdef int aux_matmul(me_udata *udata, int64_t nchunk, int32_t nblock, void *param
                 expected_blocknitems = blocknitems[i]
             elif blocknitems[i] != expected_blocknitems:
                 raise ValueError("miniexpr: inconsistent block element counts across inputs")
+
+        first_run = False
         while True: # block loop
+            printf("blocks: %i, %i\n", nblockA, nblockB)
             startA = nblockA * blocknitems[0]
             startB = nblockB * blocknitems[1]
             rc = blosc2_getitem_ctx(dctx, src[0], chunk_cbytes[0], startA, blocknitems[0],
@@ -2236,31 +2247,32 @@ cdef int aux_matmul(me_udata *udata, int64_t nchunk, int32_t nblock, void *param
                 raise ValueError("matmul: error decompressing the B chunk")
             if typecode == 0:
                 if typesize == 4:
-                    rc = matmul_block_kernel[float](<float*>bufA, <float*>bufB, <float*>params_output, block_nrows, block_ncols, block_ncols)
+                    rc = matmul_block_kernel[float](<float*>input_buffers[0], <float*>input_buffers[1], <float*>params_output, M, K, N)
                 else:
-                    rc = matmul_block_kernel[double](<double*>bufA, <double*>bufB, <double*>params_output, block_nrows, block_ncols, block_ncols)
+                    rc = matmul_block_kernel[double](<double*>input_buffers[0], <double*>input_buffers[1], <double*>params_output, M, K, N)
             elif typecode == 1:
                 if typesize == 4:
-                    rc = matmul_block_kernel[int32_t](<int32_t*>bufA, <int32_t*>bufB, <int32_t*>params_output, block_nrows, block_ncols, block_ncols)
+                    rc = matmul_block_kernel[int32_t](<int32_t*>input_buffers[0], <int32_t*>input_buffers[1], <int32_t*>params_output, M, K, N)
                 else:
-                    rc =matmul_block_kernel[int64_t](<int64_t*>bufA, <int64_t*>bufB, <int64_t*>params_output, block_nrows, block_ncols, block_ncols)
+                    rc = matmul_block_kernel[int64_t](<int64_t*>input_buffers[0], <int64_t*>input_buffers[1], <int64_t*>params_output, M, K, N)
             else:
                 with gil:
                     raise ValueError("Unsupported dtype")
             nblockA += 1
-            nblockB += ncols
-            if (nblockA % block_ncols != 0):
+            nblockB += block_ncols
+            if (nblockA % block_ncols == 0):
                 break
         nchunkA += 1
         nchunkB += ncols
-        if (nchunkA % ncols != 0):
+        if (nchunkA % ncols == 0):
             break
+    printf("finished block %i for chunk %i\n", nblock, nchunk)
+
 
     blosc2_free_ctx(dctx)
     # Free resources
     for i in range(2):
         free(input_buffers[i])
-        free(src[i])
     free(input_buffers)
     free(src)
 
@@ -2345,14 +2357,13 @@ cdef int miniexpr_prefilter(blosc2_prefilter_params *params):
 
 cdef int matmul_prefilter(blosc2_prefilter_params *params):
     cdef int typecode
-    cdef b2nd_array_t* out_arr
 
     cdef me_udata* udata = <me_udata *> params.user_data
-    out_arr = udata.array
-    cdef np.dtype out_type = np.dtype(out_arr.dtype)
-    if out_type.kind == 'f':
+    cdef b2nd_array_t* out_arr = udata.array
+    cdef char dtype_kind = out_arr.dtype[1]
+    if dtype_kind == 'f':
         typecode = 0
-    elif out_type.kind == 'f':
+    elif dtype_kind == 'i':
         typecode = 1
     else:
         raise ValueError("Unsupported dtype")
@@ -3294,7 +3305,8 @@ cdef class NDArray:
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> matmul_prefilter
 
-        cdef me_udata* udata = self._fill_me_udata(inputs, fp_accuracy, False)
+        cdef me_udata* udata = self._fill_me_udata(inputs, fp_accuracy, aux_reduc=None)
+        cdef b2nd_array_t* out_arr = udata.array
         cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> calloc(1, sizeof(blosc2_prefilter_params))
         preparams.user_data = udata
         preparams.output_is_disposable = False
