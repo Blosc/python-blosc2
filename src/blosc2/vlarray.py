@@ -11,10 +11,8 @@ import copy
 import pathlib
 from typing import TYPE_CHECKING, Any
 
-from msgpack import packb, unpackb
-
 import blosc2
-from blosc2 import blosc2_ext
+from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -177,7 +175,7 @@ class VLArray:
         return {name: self.meta[name] for name in self.meta}
 
     def _serialize(self, value: Any) -> bytes:
-        payload = packb(value, default=blosc2_ext.encode_tuple, strict_types=True, use_bin_type=True)
+        payload = msgpack_packb(value)
         _check_serialized_size(payload)
         return payload
 
@@ -244,7 +242,7 @@ class VLArray:
             return [self[i] for i in self._slice_indices(index)]
         index = self._normalize_index(index)
         payload = self.schunk.decompress_chunk(index)
-        return unpackb(payload, list_hook=blosc2_ext.decode_tuple)
+        return msgpack_unpackb(payload)
 
     def __setitem__(self, index: int, value: Any) -> None:
         if isinstance(index, slice):
@@ -335,7 +333,7 @@ class VLArray:
         return f"VLArray(len={len(self)}, urlpath={self.urlpath!r})"
 
 
-def vlarray_from_cframe(cframe: bytes, copy: bool = False) -> VLArray:
+def vlarray_from_cframe(cframe: bytes, copy: bool = True) -> VLArray:
     """Deserialize a CFrame buffer into a :class:`VLArray`."""
 
     schunk = blosc2.schunk_from_cframe(cframe, copy=copy)

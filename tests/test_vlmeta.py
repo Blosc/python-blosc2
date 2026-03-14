@@ -118,3 +118,12 @@ def clear(schunk):
 
     schunk.vlmeta.clear()
     assert schunk.vlmeta.__len__() == 0
+
+
+def test_vlmeta_empty_list_roundtrip():
+    schunk = blosc2.SChunk()
+    schunk.vlmeta["empty"] = []
+    schunk.vlmeta["nested"] = {"rows": [[], ["x"]]}
+
+    assert schunk.vlmeta["empty"] == []
+    assert schunk.vlmeta["nested"] == {"rows": [[], ["x"]]}

@@ -255,6 +255,13 @@ def test_vlarray_copy():
     blosc2.remove_urlpath(copy_path)
 
 
+def test_vlarray_empty_list_roundtrip():
+    values = [[], {"a": []}, [[], ["nested"]], None, ("tuple", []), {"rows": [[], []]}]
+    vlarray = blosc2.VLArray()
+    vlarray.extend(values)
+    assert list(vlarray) == values
+
+
 def test_vlarray_insert_delete_errors():
     vlarray = blosc2.VLArray()
     vlarray.append("value")
