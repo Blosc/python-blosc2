@@ -4703,7 +4703,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         # Add the contiguous parameter
         kwargs["contiguous"] = contiguous
 
-        super().copy(self.dtype, **kwargs)
+        super().copy(self.dtype, cparams=asdict(self.cparams), **kwargs)
 
     def resize(self, newshape: tuple | list) -> None:
         """Change the shape of the array by growing or shrinking one or more dimensions.
