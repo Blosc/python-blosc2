@@ -170,6 +170,12 @@ class VLArray:
             return len(self)
         return index
 
+    def _slice_indices(self, index: slice) -> list[int]:
+        return list(range(*index.indices(len(self))))
+
+    def _copy_meta(self) -> dict[str, Any]:
+        return {name: self.meta[name] for name in self.meta}
+
     def _serialize(self, value: Any) -> bytes:
         payload = packb(value, default=blosc2_ext.encode_tuple, strict_types=True, use_bin_type=True)
         _check_serialized_size(payload)
@@ -195,7 +201,9 @@ class VLArray:
         """Delete the value at ``index`` and return the new number of entries."""
         self._check_writable()
         if isinstance(index, slice):
-            raise NotImplementedError("Slicing is not supported for VLArray")
+            for idx in reversed(self._slice_indices(index)):
+                self.schunk.delete_chunk(idx)
+            return len(self)
         index = self._normalize_index(index)
         return self.schunk.delete_chunk(index)
 
@@ -233,14 +241,33 @@ class VLArray:
 
     def __getitem__(self, index: int) -> Any:
         if isinstance(index, slice):
-            raise NotImplementedError("Slicing is not supported for VLArray")
+            return [self[i] for i in self._slice_indices(index)]
         index = self._normalize_index(index)
         payload = self.schunk.decompress_chunk(index)
         return unpackb(payload, list_hook=blosc2_ext.decode_tuple)
 
     def __setitem__(self, index: int, value: Any) -> None:
         if isinstance(index, slice):
-            raise NotImplementedError("Slicing is not supported for VLArray")
+            self._check_writable()
+            indices = self._slice_indices(index)
+            values = list(value)
+            step = 1 if index.step is None else index.step
+            if step == 1:
+                start = self._normalize_insert_index(0 if index.start is None else index.start)
+                for idx in reversed(indices):
+                    self.schunk.delete_chunk(idx)
+                for offset, item in enumerate(values):
+                    chunk = self._compress(self._serialize(item))
+                    self.schunk.insert_chunk(start + offset, chunk)
+                return
+            if len(values) != len(indices):
+                raise ValueError(
+                    f"attempt to assign sequence of size {len(values)} to extended slice of size {len(indices)}"
+                )
+            for idx, item in zip(indices, values, strict=True):
+                chunk = self._compress(self._serialize(item))
+                self.schunk.update_chunk(idx, chunk)
+            return
         self._check_writable()
         index = self._normalize_index(index)
         chunk = self._compress(self._serialize(value))
@@ -278,6 +305,25 @@ class VLArray:
 
     def to_cframe(self) -> bytes:
         return self.schunk.to_cframe()
+
+    def copy(self, **kwargs: Any) -> VLArray:
+        """Create a copy of the container with optional constructor overrides."""
+        if "meta" in kwargs:
+            raise ValueError("meta should not be passed to copy")
+
+        kwargs["cparams"] = kwargs.get("cparams", copy.deepcopy(self.cparams))
+        kwargs["dparams"] = kwargs.get("dparams", copy.deepcopy(self.dparams))
+        kwargs["chunksize"] = kwargs.get("chunksize", -1)
+
+        if "storage" not in kwargs:
+            kwargs["meta"] = self._copy_meta()
+            kwargs["contiguous"] = kwargs.get("contiguous", self.schunk.contiguous)
+            if "urlpath" in kwargs and "mode" not in kwargs:
+                kwargs["mode"] = "w"
+
+        out = VLArray(**kwargs)
+        out.extend(self)
+        return out
 
     def __enter__(self) -> VLArray:
         return self

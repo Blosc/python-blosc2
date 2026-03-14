@@ -171,6 +171,90 @@ def test_vlarray_list_like_ops(contiguous, urlpath):
     blosc2.remove_urlpath(urlpath)
 
 
+@pytest.mark.parametrize(
+    ("contiguous", "urlpath"),
+    [
+        (False, None),
+        (True, None),
+        (True, "test_vlarray_slices.b2frame"),
+        (False, "test_vlarray_slices_s.b2frame"),
+    ],
+)
+def test_vlarray_slices(contiguous, urlpath):
+    blosc2.remove_urlpath(urlpath)
+
+    expected = list(range(8))
+    vlarray = blosc2.VLArray(storage=_storage(contiguous, urlpath))
+    vlarray.extend(expected)
+
+    assert vlarray[1:6:2] == expected[1:6:2]
+    assert vlarray[::-2] == expected[::-2]
+
+    vlarray[2:5] = ["a", "b"]
+    expected[2:5] = ["a", "b"]
+    assert list(vlarray) == expected
+
+    vlarray[1:6:2] = [100, 101, 102]
+    expected[1:6:2] = [100, 101, 102]
+    assert list(vlarray) == expected
+
+    del vlarray[::3]
+    del expected[::3]
+    assert list(vlarray) == expected
+
+    if urlpath is not None:
+        reopened = blosc2.open(urlpath, mode="r")
+        assert reopened[::2] == expected[::2]
+        with pytest.raises(ValueError):
+            reopened[1:3] = [9]
+        with pytest.raises(ValueError):
+            del reopened[::2]
+
+    blosc2.remove_urlpath(urlpath)
+
+
+def test_vlarray_slice_errors():
+    vlarray = blosc2.VLArray()
+    vlarray.extend([0, 1, 2, 3])
+
+    with pytest.raises(ValueError, match="extended slice"):
+        vlarray[::2] = [9]
+    with pytest.raises(TypeError):
+        vlarray[1:2] = 3
+    with pytest.raises(ValueError):
+        _ = vlarray[::0]
+
+
+def test_vlarray_copy():
+    urlpath = "test_vlarray_copy.b2frame"
+    copy_path = "test_vlarray_copy_out.b2frame"
+    blosc2.remove_urlpath(urlpath)
+    blosc2.remove_urlpath(copy_path)
+
+    original = blosc2.VLArray(urlpath=urlpath, mode="w", contiguous=True)
+    original.extend(VALUES)
+    original.insert(1, {"copy": True})
+
+    copied = original.copy(
+        urlpath=copy_path, contiguous=False, cparams={"codec": blosc2.Codec.LZ4, "clevel": 5}
+    )
+    assert list(copied) == list(original)
+    assert copied.urlpath == copy_path
+    assert copied.schunk.contiguous is False
+    assert copied.cparams.codec == blosc2.Codec.LZ4
+    assert copied.cparams.clevel == 5
+
+    inmem = original.copy()
+    assert list(inmem) == list(original)
+    assert inmem.urlpath is None
+
+    with pytest.raises(ValueError, match="meta should not be passed to copy"):
+        original.copy(meta={})
+
+    blosc2.remove_urlpath(urlpath)
+    blosc2.remove_urlpath(copy_path)
+
+
 def test_vlarray_insert_delete_errors():
     vlarray = blosc2.VLArray()
     vlarray.append("value")
@@ -179,8 +263,6 @@ def test_vlarray_insert_delete_errors():
         vlarray.insert("0", "bad")
     with pytest.raises(IndexError):
         vlarray.delete(3)
-    with pytest.raises(NotImplementedError):
-        vlarray.delete(slice(0, 1))
     with pytest.raises(IndexError):
         blosc2.VLArray().pop()
     with pytest.raises(NotImplementedError):
