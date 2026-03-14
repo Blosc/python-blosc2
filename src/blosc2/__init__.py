@@ -530,6 +530,7 @@ from .ndarray import (
 from .embed_store import EmbedStore, estore_from_cframe
 from .dict_store import DictStore
 from .tree_store import TreeStore
+from .vlarray import VLArray, vlarray_from_cframe
 
 from .c2array import c2context, C2Array, URLPath
 
@@ -739,6 +740,7 @@ __all__ = [  # noqa : RUF022
     "TreeStore",
     "Tuner",
     "URLPath",
+    "VLArray",
     # Version
     "__version__",
     # Utils
@@ -934,6 +936,7 @@ __all__ = [  # noqa : RUF022
     "validate_expr",
     "var",
     "vecdot",
+    "vlarray_from_cframe",
     "where",
     "zeros",
     "zeros_like",

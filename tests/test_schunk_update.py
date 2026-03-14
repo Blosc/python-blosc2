@@ -108,3 +108,38 @@ def test_update(contiguous, urlpath, nchunks, nupdates, copy, create_chunk, gil)
     for i in range(nchunks):
         schunk.decompress_chunk(i)
     blosc2.remove_urlpath(urlpath)
+
+
+@pytest.mark.parametrize(
+    ("contiguous", "urlpath"),
+    [
+        (False, None),
+        (True, None),
+        (True, "test_variable_append_chunk.b2frame"),
+        (False, "test_variable_append_chunk_s.b2frame"),
+    ],
+)
+def test_append_chunk_variable_sizes(contiguous, urlpath):
+    blosc2.remove_urlpath(urlpath)
+
+    schunk = blosc2.SChunk(chunksize=-1, contiguous=contiguous, urlpath=urlpath, cparams={"typesize": 1})
+    payloads = [b"a" * 13, b"b" * 29, b"c" * 41]
+
+    for i, payload in enumerate(payloads, start=1):
+        chunk = blosc2.compress2(payload, typesize=1)
+        assert schunk.append_chunk(chunk) == i
+        assert schunk.decompress_chunk(i - 1) == payload
+
+    assert schunk.chunksize == 0
+
+    replacement = b"z" * 17
+    schunk.update_chunk(1, blosc2.compress2(replacement, typesize=1))
+    expected = [payloads[0], replacement, payloads[2]]
+    assert [schunk.decompress_chunk(i) for i in range(schunk.nchunks)] == expected
+
+    if urlpath is not None:
+        reopened = blosc2.open(urlpath, mode="r")
+        assert reopened.chunksize == 0
+        assert [reopened.decompress_chunk(i) for i in range(reopened.nchunks)] == expected
+
+    blosc2.remove_urlpath(urlpath)

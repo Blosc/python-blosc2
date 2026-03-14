@@ -801,6 +801,27 @@ class SChunk(blosc2_ext.SChunk):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().insert_data(nchunk, data, copy)
 
+    def append_chunk(self, chunk: bytes) -> int:
+        """Append a compressed chunk to the end of the SChunk.
+
+        Parameters
+        ----------
+        chunk: bytes object
+            The compressed chunk to append.
+
+        Returns
+        -------
+        out: int
+            The number of chunks in the SChunk.
+
+        Raises
+        ------
+        RuntimeError
+            If the chunk could not be appended.
+        """
+        blosc2_ext.check_access_mode(self.urlpath, self.mode)
+        return super().append_chunk(chunk)
+
     def update_chunk(self, nchunk: int, chunk: bytes) -> int:
         """Update an existing chunk in the SChunk.
 
@@ -1603,6 +1624,11 @@ def _process_opened_object(res):
         elif not proxy_src["caterva2_env"]:
             raise RuntimeError("Could not find the source when opening a Proxy")
 
+    if "vlarray" in meta:
+        from blosc2.vlarray import VLArray
+
+        return VLArray(_from_schunk=getattr(res, "schunk", res))
+
     if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
         return blosc2._open_lazyarray(res)
     else:
@@ -1614,6 +1640,7 @@ def open(
 ) -> (
     blosc2.SChunk
     | blosc2.NDArray
+    | blosc2.VLArray
     | blosc2.C2Array
     | blosc2.LazyArray
     | blosc2.Proxy

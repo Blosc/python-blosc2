@@ -1565,6 +1565,16 @@ cdef class SChunk:
             raise RuntimeError("Could not delete the desired chunk")
         return rc
 
+    def append_chunk(self, chunk):
+        cdef const uint8_t[:] typed_view_chunk
+        mem_view_chunk = memoryview(chunk)
+        typed_view_chunk = mem_view_chunk.cast('B')
+        _check_comp_length('chunk', len(typed_view_chunk))
+        rc = blosc2_schunk_append_chunk(self.schunk, &typed_view_chunk[0], True)
+        if rc < 0:
+            raise RuntimeError("Could not append the desired chunk")
+        return rc
+
     def insert_chunk(self, nchunk, chunk):
         cdef const uint8_t[:] typed_view_chunk
         mem_view_chunk = memoryview(chunk)
