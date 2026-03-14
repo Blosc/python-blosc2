@@ -89,6 +89,16 @@ class VLArray:
         self._attach_schunk(schunk)
         return True
 
+    def _make_storage(self) -> blosc2.Storage:
+        meta = {name: self.meta[name] for name in self.meta}
+        return blosc2.Storage(
+            contiguous=self.schunk.contiguous,
+            urlpath=self.urlpath,
+            mode=self.mode,
+            mmap_mode=self.mmap_mode,
+            meta=meta,
+        )
+
     def __init__(
         self,
         chunksize: int | None = None,
@@ -149,6 +159,17 @@ class VLArray:
             raise IndexError("VLArray index out of range")
         return index
 
+    def _normalize_insert_index(self, index: int) -> int:
+        if not isinstance(index, int):
+            raise TypeError("VLArray indices must be integers")
+        if index < 0:
+            index += len(self)
+            if index < 0:
+                return 0
+        if index > len(self):
+            return len(self)
+        return index
+
     def _serialize(self, value: Any) -> bytes:
         payload = packb(value, default=blosc2_ext.encode_tuple, strict_types=True, use_bin_type=True)
         _check_serialized_size(payload)
@@ -158,9 +179,57 @@ class VLArray:
         return blosc2.compress2(payload, cparams=self.schunk.cparams)
 
     def append(self, value: Any) -> int:
+        """Append one value and return the new number of entries."""
         self._check_writable()
         chunk = self._compress(self._serialize(value))
         return self.schunk.append_chunk(chunk)
+
+    def insert(self, index: int, value: Any) -> int:
+        """Insert one value at ``index`` and return the new number of entries."""
+        self._check_writable()
+        index = self._normalize_insert_index(index)
+        chunk = self._compress(self._serialize(value))
+        return self.schunk.insert_chunk(index, chunk)
+
+    def delete(self, index: int) -> int:
+        """Delete the value at ``index`` and return the new number of entries."""
+        self._check_writable()
+        if isinstance(index, slice):
+            raise NotImplementedError("Slicing is not supported for VLArray")
+        index = self._normalize_index(index)
+        return self.schunk.delete_chunk(index)
+
+    def pop(self, index: int = -1) -> Any:
+        """Remove and return the value at ``index``."""
+        self._check_writable()
+        if isinstance(index, slice):
+            raise NotImplementedError("Slicing is not supported for VLArray")
+        index = self._normalize_index(index)
+        value = self[index]
+        self.schunk.delete_chunk(index)
+        return value
+
+    def extend(self, values: object) -> None:
+        """Append all values from an iterable."""
+        self._check_writable()
+        for value in values:
+            chunk = self._compress(self._serialize(value))
+            self.schunk.append_chunk(chunk)
+
+    def clear(self) -> None:
+        """Remove all entries from the container."""
+        self._check_writable()
+        storage = self._make_storage()
+        if storage.urlpath is not None:
+            blosc2.remove_urlpath(storage.urlpath)
+        schunk = blosc2.SChunk(
+            chunksize=-1,
+            data=None,
+            cparams=copy.deepcopy(self.cparams),
+            dparams=copy.deepcopy(self.dparams),
+            storage=storage,
+        )
+        self._attach_schunk(schunk)
 
     def __getitem__(self, index: int) -> Any:
         if isinstance(index, slice):
@@ -176,6 +245,9 @@ class VLArray:
         index = self._normalize_index(index)
         chunk = self._compress(self._serialize(value))
         self.schunk.update_chunk(index, chunk)
+
+    def __delitem__(self, index: int) -> None:
+        self.delete(index)
 
     def __len__(self) -> int:
         return self.schunk.nchunks

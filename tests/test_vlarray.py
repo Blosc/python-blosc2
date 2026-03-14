@@ -53,6 +53,16 @@ def test_vlarray_roundtrip(contiguous, urlpath):
     expected[-1] = "tiny"
     vlarray[1] = expected[1]
     vlarray[-1] = expected[-1]
+    assert vlarray.insert(0, "head") == len(expected) + 1
+    expected.insert(0, "head")
+    assert vlarray.insert(-1, {"between": 5}) == len(expected) + 1
+    expected.insert(-1, {"between": 5})
+    assert vlarray.insert(999, "tail") == len(expected) + 1
+    expected.insert(999, "tail")
+    assert vlarray.delete(2) == len(expected) - 1
+    del expected[2]
+    del vlarray[-2]
+    del expected[-2]
     assert list(vlarray) == expected
 
     if urlpath is not None:
@@ -63,6 +73,18 @@ def test_vlarray_roundtrip(contiguous, urlpath):
             reopened.append("nope")
         with pytest.raises(ValueError):
             reopened[0] = "nope"
+        with pytest.raises(ValueError):
+            reopened.insert(0, "nope")
+        with pytest.raises(ValueError):
+            reopened.delete(0)
+        with pytest.raises(ValueError):
+            del reopened[0]
+        with pytest.raises(ValueError):
+            reopened.extend(["nope"])
+        with pytest.raises(ValueError):
+            reopened.pop()
+        with pytest.raises(ValueError):
+            reopened.clear()
 
         reopened_rw = blosc2.open(urlpath, mode="a")
         reopened_rw[0] = "changed"
@@ -79,16 +101,20 @@ def test_vlarray_roundtrip(contiguous, urlpath):
 
 def test_vlarray_from_cframe():
     vlarray = blosc2.VLArray()
-    for value in VALUES[:4]:
-        vlarray.append(value)
+    vlarray.extend(VALUES)
+    vlarray.insert(1, {"inserted": True})
+    del vlarray[3]
+    expected = list(VALUES)
+    expected.insert(1, {"inserted": True})
+    del expected[3]
 
     restored = blosc2.from_cframe(vlarray.to_cframe())
     assert isinstance(restored, blosc2.VLArray)
-    assert list(restored) == VALUES[:4]
+    assert list(restored) == expected
 
     restored2 = blosc2.vlarray_from_cframe(vlarray.to_cframe())
     assert isinstance(restored2, blosc2.VLArray)
-    assert list(restored2) == VALUES[:4]
+    assert list(restored2) == expected
 
 
 def test_vlarray_constructor_kwargs():
@@ -96,11 +122,11 @@ def test_vlarray_constructor_kwargs():
     blosc2.remove_urlpath(urlpath)
 
     vlarray = blosc2.VLArray(urlpath=urlpath, mode="w", contiguous=True)
-    for value in VALUES[:3]:
+    for value in VALUES:
         vlarray.append(value)
 
     reopened = blosc2.VLArray(urlpath=urlpath, mode="r", contiguous=True, mmap_mode="r")
-    assert list(reopened) == VALUES[:3]
+    assert list(reopened) == VALUES
 
     blosc2.remove_urlpath(urlpath)
 
@@ -110,3 +136,52 @@ def test_vlarray_size_guard(monkeypatch):
     monkeypatch.setattr(blosc2, "MAX_BUFFERSIZE", 4)
     with pytest.raises(ValueError, match="Serialized objects cannot be larger"):
         vlarray.append("payload")
+
+
+@pytest.mark.parametrize(
+    ("contiguous", "urlpath"),
+    [
+        (False, None),
+        (True, None),
+        (True, "test_vlarray_list_ops.b2frame"),
+        (False, "test_vlarray_list_ops_s.b2frame"),
+    ],
+)
+def test_vlarray_list_like_ops(contiguous, urlpath):
+    blosc2.remove_urlpath(urlpath)
+
+    vlarray = blosc2.VLArray(storage=_storage(contiguous, urlpath))
+    vlarray.extend([1, 2, 3])
+    assert list(vlarray) == [1, 2, 3]
+    assert vlarray.pop() == 3
+    assert vlarray.pop(0) == 1
+    assert list(vlarray) == [2]
+
+    vlarray.clear()
+    assert len(vlarray) == 0
+    assert list(vlarray) == []
+
+    vlarray.extend(["a", "b"])
+    assert list(vlarray) == ["a", "b"]
+
+    if urlpath is not None:
+        reopened = blosc2.open(urlpath, mode="r")
+        assert list(reopened) == ["a", "b"]
+
+    blosc2.remove_urlpath(urlpath)
+
+
+def test_vlarray_insert_delete_errors():
+    vlarray = blosc2.VLArray()
+    vlarray.append("value")
+
+    with pytest.raises(TypeError):
+        vlarray.insert("0", "bad")
+    with pytest.raises(IndexError):
+        vlarray.delete(3)
+    with pytest.raises(NotImplementedError):
+        vlarray.delete(slice(0, 1))
+    with pytest.raises(IndexError):
+        blosc2.VLArray().pop()
+    with pytest.raises(NotImplementedError):
+        vlarray.pop(slice(0, 1))
