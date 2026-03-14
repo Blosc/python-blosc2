@@ -223,6 +223,49 @@ def test_external_schunk_file_and_reopen():
         os.remove(path)
 
 
+def test_store_and_retrieve_vlarray_in_dict(tmp_path):
+    path = tmp_path / "test_dstore_vlarray_embed.b2z"
+    values = [{"name": "alpha", "count": 1}, None, ("tuple", 2), [1, "two", b"three"]]
+
+    vlarray = blosc2.VLArray()
+    vlarray.extend(values)
+
+    with DictStore(str(path), mode="w") as dstore:
+        dstore["/vlarray"] = vlarray
+        value = dstore["/vlarray"]
+        assert isinstance(value, blosc2.VLArray)
+        assert list(value) == values
+
+    with DictStore(str(path), mode="r") as dstore_read:
+        value = dstore_read["/vlarray"]
+        assert isinstance(value, blosc2.VLArray)
+        assert list(value) == values
+
+
+def test_external_vlarray_file_and_reopen(tmp_path):
+    ext_path = tmp_path / "ext_vlarray.b2frame"
+    path = tmp_path / "test_dstore_vlarray_external.b2z"
+    values = ["alpha", {"nested": True}, None, (1, 2, 3)]
+
+    vlarray = blosc2.VLArray(urlpath=str(ext_path), mode="w", contiguous=True)
+    vlarray.extend(values)
+    vlarray.vlmeta["description"] = "External VLArray"
+
+    with DictStore(str(path), mode="w", threshold=None) as dstore:
+        dstore["/dir1/vlarray_ext"] = vlarray
+        assert "/dir1/vlarray_ext" in dstore.map_tree
+        assert dstore.map_tree["/dir1/vlarray_ext"].endswith(".b2f")
+
+    with zipfile.ZipFile(path, "r") as zf:
+        assert "dir1/vlarray_ext.b2f" in zf.namelist()
+
+    with DictStore(str(path), mode="r") as dstore_read:
+        value = dstore_read["/dir1/vlarray_ext"]
+        assert isinstance(value, blosc2.VLArray)
+        assert list(value) == values
+        assert value.vlmeta["description"] == "External VLArray"
+
+
 def _digest_value(value):
     """Return a bytes digest of a stored value."""
     if isinstance(value, blosc2.SChunk):

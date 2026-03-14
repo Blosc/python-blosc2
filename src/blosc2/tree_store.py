@@ -5,6 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+from __future__ import annotations
+
 import contextlib
 import os
 from collections.abc import Iterator, MutableMapping
@@ -14,11 +16,11 @@ import numpy as np
 
 import blosc2
 from blosc2.dict_store import DictStore
-from blosc2.schunk import SChunk
 
 if TYPE_CHECKING:
     from blosc2.c2array import C2Array
     from blosc2.ndarray import NDArray
+    from blosc2.schunk import SChunk
 
 
 class vlmetaProxy(MutableMapping):
@@ -29,7 +31,7 @@ class vlmetaProxy(MutableMapping):
     - Delegates iteration and length to the underlying vlmeta object.
     """
 
-    def __init__(self, tstore: "TreeStore", inner_vlmeta):
+    def __init__(self, tstore: TreeStore, inner_vlmeta):
         self._tstore = tstore
         self._inner = inner_vlmeta
 
@@ -224,7 +226,7 @@ class TreeStore(DictStore):
 
         return key
 
-    def __setitem__(self, key: str, value: blosc2.Array | SChunk) -> None:
+    def __setitem__(self, key: str, value: blosc2.Array | SChunk | blosc2.VLArray) -> None:
         """Add a node with hierarchical key validation.
 
         Parameters
@@ -266,7 +268,7 @@ class TreeStore(DictStore):
         full_key = self._translate_key_to_full(key)
         super().__setitem__(full_key, value)
 
-    def __getitem__(self, key: str) -> "NDArray | C2Array | SChunk | TreeStore":
+    def __getitem__(self, key: str) -> NDArray | C2Array | SChunk | blosc2.VLArray | TreeStore:
         """Retrieve a node or subtree view.
 
         If the key points to a subtree (intermediate path with children),
@@ -280,7 +282,7 @@ class TreeStore(DictStore):
 
         Returns
         -------
-        out : blosc2.NDArray or blosc2.C2Array or blosc2.SChunk or TreeStore
+        out : blosc2.NDArray or blosc2.C2Array or blosc2.SChunk or blosc2.VLArray or TreeStore
             The stored array/chunk if key is a leaf node, or a TreeStore subtree view
             if key is an intermediate path with children.
 
@@ -416,7 +418,7 @@ class TreeStore(DictStore):
         """Iterate over keys, excluding vlmeta keys."""
         return iter(self.keys())
 
-    def items(self) -> Iterator[tuple[str, "NDArray | C2Array | SChunk | TreeStore"]]:
+    def items(self) -> Iterator[tuple[str, NDArray | C2Array | SChunk | TreeStore]]:
         """Return key-value pairs in the current subtree view."""
         for key in self.keys():
             yield key, self[key]
@@ -575,7 +577,7 @@ class TreeStore(DictStore):
             # Yield current level after children (post-order)
             yield path, children_dirs, leaf_nodes
 
-    def get_subtree(self, path: str) -> "TreeStore":
+    def get_subtree(self, path: str) -> TreeStore:
         """Create a subtree view with the specified path as root.
 
         Parameters
