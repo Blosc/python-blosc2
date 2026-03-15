@@ -16,6 +16,7 @@ Main Classes
     DictStore
     TreeStore
     EmbedStore
+    VLArray
     Proxy
     ProxySource
     ProxyNDSource
@@ -33,6 +34,7 @@ Main Classes
     dict_store
     tree_store
     embed_store
+    vlarray
     proxy
     proxysource
     proxyndsource

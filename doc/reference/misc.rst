@@ -134,6 +134,8 @@ This page documents the miscellaneous members of the ``blosc2`` module that do n
         TreeStore,
         DictStore,
         EmbedStore,
+        VLArray,
+        vlarray_from_cframe,
         abs,
         acos,
         acosh,

@@ -5,19 +5,23 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+from __future__ import annotations
+
 import os
 import shutil
 import tempfile
 import zipfile
-from collections.abc import Iterator, Set
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 import blosc2
 from blosc2.c2array import C2Array
 from blosc2.embed_store import EmbedStore
-from blosc2.schunk import SChunk
+from blosc2.schunk import SChunk, _process_opened_object
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator, Set
 
 
 class DictStore:
@@ -244,7 +248,25 @@ class DictStore:
         """Access the underlying EmbedStore."""
         return self._estore
 
-    def __setitem__(self, key: str, value: blosc2.Array | SChunk) -> None:
+    @staticmethod
+    def _value_nbytes(value: blosc2.Array | SChunk | blosc2.VLArray) -> int:
+        if isinstance(value, blosc2.VLArray):
+            return value.schunk.nbytes
+        return value.nbytes
+
+    @staticmethod
+    def _is_external_value(value: blosc2.Array | SChunk | blosc2.VLArray) -> bool:
+        return isinstance(value, (blosc2.NDArray, SChunk, blosc2.VLArray)) and bool(
+            getattr(value, "urlpath", None)
+        )
+
+    @staticmethod
+    def _external_ext(value: blosc2.Array | SChunk | blosc2.VLArray) -> str:
+        if isinstance(value, blosc2.NDArray):
+            return ".b2nd"
+        return ".b2f"
+
+    def __setitem__(self, key: str, value: blosc2.Array | SChunk | blosc2.VLArray) -> None:
         """Add a node to the DictStore."""
         if isinstance(value, np.ndarray):
             value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)
@@ -252,12 +274,10 @@ class DictStore:
         if isinstance(value, C2Array):
             self._estore[key] = value
             return
-        exceeds_threshold = self.threshold is not None and value.nbytes >= self.threshold
-        # Consider both NDArray and SChunk external files (have urlpath)
-        external_file = isinstance(value, (blosc2.NDArray, SChunk)) and getattr(value, "urlpath", None)
+        exceeds_threshold = self.threshold is not None and self._value_nbytes(value) >= self.threshold
+        external_file = self._is_external_value(value)
         if exceeds_threshold or (external_file and self.threshold is None):
-            # Choose extension based on type
-            ext = ".b2f" if isinstance(value, SChunk) else ".b2nd"
+            ext = self._external_ext(value)
             # Convert key to a proper file path within the tree directory
             rel_key = key.lstrip("/")
             dest_path = os.path.join(self.working_dir, rel_key + ext)
@@ -272,7 +292,7 @@ class DictStore:
                 if hasattr(value, "save"):
                     value.save(urlpath=dest_path)
                 else:
-                    # An SChunk does not have a save() method
+                    # SChunk and VLArray can both be persisted via their cframe.
                     with open(dest_path, "wb") as f:
                         f.write(value.to_cframe())
             else:
@@ -290,20 +310,21 @@ class DictStore:
                 value = blosc2.from_cframe(value.to_cframe())
             self._estore[key] = value
 
-    def __getitem__(self, key: str) -> blosc2.NDArray | SChunk | C2Array:
+    def __getitem__(self, key: str) -> blosc2.NDArray | SChunk | blosc2.VLArray | C2Array:
         """Retrieve a node from the DictStore."""
         # Check map_tree first
         if key in self.map_tree:
             filepath = self.map_tree[key]
             if filepath in self.offsets:
                 offset = self.offsets[filepath]["offset"]
-                return blosc2.blosc2_ext.open(
+                opened = blosc2.blosc2_ext.open(
                     self.b2z_path,
                     mode="r",
                     offset=offset,
                     mmap_mode=self.mmap_mode,
                     dparams=self.dparams,
                 )
+                return _process_opened_object(opened)
             else:
                 urlpath = os.path.join(self.working_dir, filepath)
                 if os.path.exists(urlpath):
@@ -319,7 +340,7 @@ class DictStore:
         # Fall back to EmbedStore
         return self._estore[key]
 
-    def get(self, key: str, default: Any = None) -> blosc2.NDArray | SChunk | C2Array | Any:
+    def get(self, key: str, default: Any = None) -> blosc2.NDArray | SChunk | blosc2.VLArray | C2Array | Any:
         """Retrieve a node, or default if not found."""
         try:
             return self[key]

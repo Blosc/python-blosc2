@@ -16,10 +16,10 @@ from dataclasses import asdict, replace
 from typing import Any, NamedTuple
 
 import numpy as np
-from msgpack import packb, unpackb
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
+from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 from blosc2.info import InfoReporter
 
 
@@ -46,12 +46,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
                 return
             raise NotImplementedError("Slicing is not supported, unless [:]")
         cparams = {"typesize": 1}
-        content = packb(
-            content,
-            default=blosc2_ext.encode_tuple,
-            strict_types=True,
-            use_bin_type=True,
-        )
+        content = msgpack_packb(content)
         super().set_vlmeta(name, content, **cparams)
 
     def __getitem__(self, name):
@@ -60,7 +55,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
                 # Return all the vlmetalayers
                 return self.getall()
             raise NotImplementedError("Slicing is not supported, unless [:]")
-        return unpackb(super().get_vlmeta(name), list_hook=blosc2_ext.decode_tuple)
+        return msgpack_unpackb(super().get_vlmeta(name))
 
     def __delitem__(self, name):
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
@@ -120,7 +115,7 @@ class Meta(Mapping):
             ..warning: Note that the *length* of the metalayer cannot change,
             otherwise an exception will be raised.
         """
-        value = packb(value, default=blosc2_ext.encode_tuple, strict_types=True, use_bin_type=True)
+        value = msgpack_packb(value)
         blosc2_ext.meta__setitem__(self.schunk, key, value)
 
     def __getitem__(self, item: str | slice) -> bytes | dict[str, bytes]:
@@ -144,10 +139,7 @@ class Meta(Mapping):
                 return self.getall()
             raise NotImplementedError("Slicing is not supported, unless [:]")
         if self.__contains__(item):
-            return unpackb(
-                blosc2_ext.meta__getitem__(self.schunk, item),
-                list_hook=blosc2_ext.decode_tuple,
-            )
+            return msgpack_unpackb(blosc2_ext.meta__getitem__(self.schunk, item))
         else:
             raise KeyError(f"{item} not found")
 
@@ -800,6 +792,27 @@ class SChunk(blosc2_ext.SChunk):
         """
         blosc2_ext.check_access_mode(self.urlpath, self.mode)
         return super().insert_data(nchunk, data, copy)
+
+    def append_chunk(self, chunk: bytes) -> int:
+        """Append a compressed chunk to the end of the SChunk.
+
+        Parameters
+        ----------
+        chunk: bytes object
+            The compressed chunk to append.
+
+        Returns
+        -------
+        out: int
+            The number of chunks in the SChunk.
+
+        Raises
+        ------
+        RuntimeError
+            If the chunk could not be appended.
+        """
+        blosc2_ext.check_access_mode(self.urlpath, self.mode)
+        return super().append_chunk(chunk)
 
     def update_chunk(self, nchunk: int, chunk: bytes) -> int:
         """Update an existing chunk in the SChunk.
@@ -1603,6 +1616,11 @@ def _process_opened_object(res):
         elif not proxy_src["caterva2_env"]:
             raise RuntimeError("Could not find the source when opening a Proxy")
 
+    if "vlarray" in meta:
+        from blosc2.vlarray import VLArray
+
+        return VLArray(_from_schunk=getattr(res, "schunk", res))
+
     if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
         return blosc2._open_lazyarray(res)
     else:
@@ -1614,6 +1632,7 @@ def open(
 ) -> (
     blosc2.SChunk
     | blosc2.NDArray
+    | blosc2.VLArray
     | blosc2.C2Array
     | blosc2.LazyArray
     | blosc2.Proxy

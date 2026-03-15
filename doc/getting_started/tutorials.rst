@@ -16,3 +16,4 @@ Tutorials
    tutorials/08.schunk-slicing_and_beyond
    tutorials/09.ucodecs-ufilters
    tutorials/10.prefilters
+   tutorials/11.vlarray
