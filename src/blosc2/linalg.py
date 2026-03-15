@@ -23,7 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
-def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArray:
+def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArray:  # noqa: C901
     """
     Computes the matrix product between two Blosc2 NDArrays.
 
@@ -112,30 +112,64 @@ def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArra
     kwargs["_chunksize_reduc_factor"] = 1
     result = blosc2.zeros(result_shape, dtype=blosc2.result_type(x1, x2), **kwargs)
 
-    if 0 not in result.shape + x1.shape + x2.shape:  # if any array is empty, return array of 0s
-        p, q = result.chunks[-2:]
-        r = x2.chunks[-1]
+    # multithreaded matmul
+    # TODO: handle a) type promotion, b) non-square blocks, c) and >2D
+    ops = (x1, x2, result)
+    shape, chunks, blocks = result.shape, result.chunks, result.blocks
+    all_ndarray = all(isinstance(value, blosc2.NDArray) and value.shape != () for value in ops)
+    use_miniexpr = True
+    if all_ndarray:
+        # can maybe relax this to just have A.blocks[-1] == B.blocks[-2]
+        # Require aligned NDArray operands with identical chunk/block grid, and square matrices/chunks/blocks
+        same_shape = all(op.shape[-1] == op.shape[-2] and op.shape == shape for op in ops)
+        same_chunks = all(op.shape[-1] == op.shape[-2] and op.chunks == chunks for op in ops)
+        same_blocks = all(op.shape[-1] == op.shape[-2] and op.blocks == blocks for op in ops)
+        if not (same_shape and same_chunks and same_blocks):
+            use_miniexpr = False
+        if any(op.dtype != ops[0].dtype for op in ops):  # TODO: Remove this condition
+            use_miniexpr = False
+    else:
+        use_miniexpr = False
 
-        intersecting_chunks = get_intersecting_chunks((), result.shape[:-2], result.chunks[:-2])
-        for chunk in intersecting_chunks:
-            chunk = chunk.raw
-            for row in range(0, n, p):
-                row_end = builtins.min(row + p, n)
-                for col in range(0, m, q):
-                    col_end = builtins.min(col + q, m)
-                    for aux in range(0, k, r):
-                        aux_end = builtins.min(aux + r, k)
-                        bx1 = (
-                            x1[chunk[-x1.ndim + 2 :] + (slice(row, row_end), slice(aux, aux_end))]
-                            if x1.ndim > 2
-                            else x1[row:row_end, aux:aux_end]
-                        )
-                        bx2 = (
-                            x2[chunk[-x2.ndim + 2 :] + (slice(aux, aux_end), slice(col, col_end))]
-                            if x2.ndim > 2
-                            else x2[aux:aux_end, col:col_end]
-                        )
-                        result[chunk + (slice(row, row_end), slice(col, col_end))] += np.matmul(bx1, bx2)
+    if use_miniexpr:
+        prefilter_set = False
+        try:
+            result._set_pref_matmul({"x1": x1, "x2": x2}, fp_accuracy=blosc2.FPAccuracy.DEFAULT)
+            prefilter_set = True
+            # Data to compress is fetched from operands, so it can be uninitialized here
+            data = np.empty(result.schunk.chunksize, dtype=np.uint8)
+            for nchunk_out in range(result.schunk.nchunks):
+                result.schunk.update_data(nchunk_out, data, copy=False)
+        except Exception as e:
+            raise Exception from e
+        finally:
+            if prefilter_set:
+                result.schunk.remove_prefilter("miniexpr")
+    else:  # couldn't do multithreading
+        if 0 not in result.shape + x1.shape + x2.shape:  # if any array is empty, return array of 0s
+            p, q = result.chunks[-2:]
+            r = x2.chunks[-1]
+
+            intersecting_chunks = get_intersecting_chunks((), result.shape[:-2], result.chunks[:-2])
+            for chunk in intersecting_chunks:
+                chunk = chunk.raw
+                for row in range(0, n, p):
+                    row_end = builtins.min(row + p, n)
+                    for col in range(0, m, q):
+                        col_end = builtins.min(col + q, m)
+                        for aux in range(0, k, r):
+                            aux_end = builtins.min(aux + r, k)
+                            bx1 = (
+                                x1[chunk[-x1.ndim + 2 :] + (slice(row, row_end), slice(aux, aux_end))]
+                                if x1.ndim > 2
+                                else x1[row:row_end, aux:aux_end]
+                            )
+                            bx2 = (
+                                x2[chunk[-x2.ndim + 2 :] + (slice(aux, aux_end), slice(col, col_end))]
+                                if x2.ndim > 2
+                                else x2[aux:aux_end, col:col_end]
+                            )
+                            result[chunk + (slice(row, row_end), slice(col, col_end))] += np.matmul(bx1, bx2)
 
     if x1_is_vector:
         result = result.squeeze(axis=-2)
