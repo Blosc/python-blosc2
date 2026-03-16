@@ -249,24 +249,26 @@ class DictStore:
         return self._estore
 
     @staticmethod
-    def _value_nbytes(value: blosc2.Array | SChunk | blosc2.VLArray) -> int:
-        if isinstance(value, blosc2.VLArray):
+    def _value_nbytes(value: blosc2.Array | SChunk | blosc2.VLArray | blosc2.BatchArray) -> int:
+        if isinstance(value, (blosc2.VLArray, blosc2.BatchArray)):
             return value.schunk.nbytes
         return value.nbytes
 
     @staticmethod
-    def _is_external_value(value: blosc2.Array | SChunk | blosc2.VLArray) -> bool:
-        return isinstance(value, (blosc2.NDArray, SChunk, blosc2.VLArray)) and bool(
+    def _is_external_value(value: blosc2.Array | SChunk | blosc2.VLArray | blosc2.BatchArray) -> bool:
+        return isinstance(value, (blosc2.NDArray, SChunk, blosc2.VLArray, blosc2.BatchArray)) and bool(
             getattr(value, "urlpath", None)
         )
 
     @staticmethod
-    def _external_ext(value: blosc2.Array | SChunk | blosc2.VLArray) -> str:
+    def _external_ext(value: blosc2.Array | SChunk | blosc2.VLArray | blosc2.BatchArray) -> str:
         if isinstance(value, blosc2.NDArray):
             return ".b2nd"
         return ".b2f"
 
-    def __setitem__(self, key: str, value: blosc2.Array | SChunk | blosc2.VLArray) -> None:
+    def __setitem__(
+        self, key: str, value: blosc2.Array | SChunk | blosc2.VLArray | blosc2.BatchArray
+    ) -> None:
         """Add a node to the DictStore."""
         if isinstance(value, np.ndarray):
             value = blosc2.asarray(value, cparams=self.cparams, dparams=self.dparams)
@@ -292,7 +294,7 @@ class DictStore:
                 if hasattr(value, "save"):
                     value.save(urlpath=dest_path)
                 else:
-                    # SChunk and VLArray can both be persisted via their cframe.
+                    # SChunk, VLArray and BatchArray can all be persisted via their cframe.
                     with open(dest_path, "wb") as f:
                         f.write(value.to_cframe())
             else:
@@ -310,7 +312,9 @@ class DictStore:
                 value = blosc2.from_cframe(value.to_cframe())
             self._estore[key] = value
 
-    def __getitem__(self, key: str) -> blosc2.NDArray | SChunk | blosc2.VLArray | C2Array:
+    def __getitem__(
+        self, key: str
+    ) -> blosc2.NDArray | SChunk | blosc2.VLArray | blosc2.BatchArray | C2Array:
         """Retrieve a node from the DictStore."""
         # Check map_tree first
         if key in self.map_tree:
@@ -340,7 +344,9 @@ class DictStore:
         # Fall back to EmbedStore
         return self._estore[key]
 
-    def get(self, key: str, default: Any = None) -> blosc2.NDArray | SChunk | blosc2.VLArray | C2Array | Any:
+    def get(
+        self, key: str, default: Any = None
+    ) -> blosc2.NDArray | SChunk | blosc2.VLArray | blosc2.BatchArray | C2Array | Any:
         """Retrieve a node, or default if not found."""
         try:
             return self[key]

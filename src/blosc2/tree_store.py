@@ -226,7 +226,9 @@ class TreeStore(DictStore):
 
         return key
 
-    def __setitem__(self, key: str, value: blosc2.Array | SChunk | blosc2.VLArray) -> None:
+    def __setitem__(
+        self, key: str, value: blosc2.Array | SChunk | blosc2.VLArray | blosc2.BatchArray
+    ) -> None:
         """Add a node with hierarchical key validation.
 
         Parameters
@@ -268,7 +270,9 @@ class TreeStore(DictStore):
         full_key = self._translate_key_to_full(key)
         super().__setitem__(full_key, value)
 
-    def __getitem__(self, key: str) -> NDArray | C2Array | SChunk | blosc2.VLArray | TreeStore:
+    def __getitem__(
+        self, key: str
+    ) -> NDArray | C2Array | SChunk | blosc2.VLArray | blosc2.BatchArray | TreeStore:
         """Retrieve a node or subtree view.
 
         If the key points to a subtree (intermediate path with children),
@@ -282,7 +286,7 @@ class TreeStore(DictStore):
 
         Returns
         -------
-        out : blosc2.NDArray or blosc2.C2Array or blosc2.SChunk or blosc2.VLArray or TreeStore
+        out : blosc2.NDArray or blosc2.C2Array or blosc2.SChunk or blosc2.VLArray or blosc2.BatchArray or TreeStore
             The stored array/chunk if key is a leaf node, or a TreeStore subtree view
             if key is an intermediate path with children.
 
