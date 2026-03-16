@@ -113,21 +113,40 @@ def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArra
     result = blosc2.zeros(result_shape, dtype=blosc2.result_type(x1, x2), **kwargs)
 
     # multithreaded matmul
-    # TODO: handle a) type promotion, b) non-square blocks, c) and >2D
+    # TODO: handle a) type promotion, b) padding, c) (improved) >2D
     ops = (x1, x2, result)
-    shape, chunks, blocks = result.shape, result.chunks, result.blocks
+    blocks = result.blocks
     all_ndarray = all(isinstance(value, blosc2.NDArray) and value.shape != () for value in ops)
     use_miniexpr = True
     if all_ndarray:
-        # can maybe relax this to just have A.blocks[-1] == B.blocks[-2]
-        # Require aligned NDArray operands with identical chunk/block grid, and square matrices/chunks/blocks
-        same_shape = all(op.shape[-1] == op.shape[-2] and op.shape == shape for op in ops)
-        same_chunks = all(op.shape[-1] == op.shape[-2] and op.chunks == chunks for op in ops)
-        same_blocks = all(op.shape[-1] == op.shape[-2] and op.blocks == blocks for op in ops)
-        if not (same_shape and same_chunks and same_blocks):
-            use_miniexpr = False
         if any(op.dtype != ops[0].dtype for op in ops):  # TODO: Remove this condition
             use_miniexpr = False
+
+        # TODO: In fact the following can be relaxed too, just need to load across block boundaries
+        # Might want to restrict loading across chunk boundaries, in which case would require:
+        # x1.chunks[-2] % result.blocks[-2] == 0
+        # x2.chunks[-1] % result.blocks[-1] == 0
+        # x2.chunks[-2] % x1.blocks[-1] == 0
+        # Can then load in x1 as slices of size [result.blocks[-2], x1.blocks[-1]]
+        # and x2 in slices of [x1.blocks[-1], result.blocks[-1]]
+
+        # Require that blocks are matmul compatible and broadcastable directly to result
+        # (M, K) x (K, N) = (M, N)
+        # so can load block-by-block for inputs and calculate block of output
+        # Also need to avoid loading across chunk boundaries
+        chunks_aligned = x1.chunks[-2] % x1.blocks[-2] == 0
+        chunks_aligned &= x2.chunks[-1] % x2.blocks[-1] == 0
+        chunks_aligned &= x2.chunks[-2] % x1.blocks[-1] == 0
+        same_blocks = x2.blocks[-2] == x1.blocks[-1]
+        same_blocks &= x2.blocks[-1] == result.blocks[-1]
+        same_blocks &= result.blocks[-2] == x1.blocks[-2]
+        try:
+            result_blocks = np.broadcast_shapes(x1.blocks, x2.blocks)
+        except ValueError:
+            use_miniexpr = False
+        if not (same_blocks and chunks_aligned and result_blocks[:-2] == blocks[:-2]):
+            use_miniexpr = False
+
     else:
         use_miniexpr = False
 
