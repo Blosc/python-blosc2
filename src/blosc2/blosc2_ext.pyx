@@ -688,6 +688,13 @@ ctypedef struct me_udata:
     int64_t blocks_in_chunk[B2ND_MAX_DIM]
     me_expr* miniexpr_handle
 
+ctypedef struct mm_udata:
+    b2nd_array_t** inputs
+    b2nd_array_t* array
+    int64_t chunks_strides[3][B2ND_MAX_DIM]
+    int64_t blocks_strides[3][B2ND_MAX_DIM]
+    int64_t el_strides[3][B2ND_MAX_DIM]
+
 MAX_TYPESIZE = BLOSC2_MAXTYPESIZE
 MAX_BUFFERSIZE = BLOSC2_MAX_BUFFERSIZE
 MAX_BLOCKSIZE = BLOSC2_MAXBLOCKSIZE
@@ -2348,12 +2355,12 @@ cdef int matmul_block_kernel(T* A, T* B, T* C, int M, int K, int N) nogil:
                 C[rowC + c] += <T>(a * B[rowB + c])
     return 0
 
-cdef int aux_matmul(me_udata *udata, int64_t nchunk, int32_t nblock, void *params_output, int32_t typesize, int typecode) nogil:
+cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *params_output, int32_t typesize, int typecode) nogil:
     # Declare all C variables at the beginning
     cdef b2nd_array_t* out_arr
     cdef b2nd_array_t* ndarr
     cdef c_bool first_run
-    cdef int rc, M, K, N
+    cdef int rc, p, q, r
     cdef void** input_buffers = <void**> malloc(2 * sizeof(uint8_t*))
     cdef uint8_t** src = <uint8_t**> malloc(2 * sizeof(uint8_t*))
     cdef int32_t chunk_nbytes[2]
@@ -2362,42 +2369,56 @@ cdef int aux_matmul(me_udata *udata, int64_t nchunk, int32_t nblock, void *param
     cdef int blocknitems[2]
     cdef int startA, startB, expected_blocknitems
     cdef blosc2_context* dctx
-    cdef int base, i, j, nchunkA, nchunkB, nblockA, nblockB, chunk_startA,  chunk_startB, block_base, block_i, block_j, block_startA, block_startB,  idx, chunk_idx, block_ncols, block_nrows, nblocks_per_2d
-
+    cdef int i, j, block_i, block_j, ncols, block_ncols, Bblock_ncols, Bncols
+    cdef int nchunkA = 0, nchunkB = 0, nblockA = 0, nblockB = 0, offsetA = 0, offsetB = 0, offset = 0
     out_arr = udata.array
     cdef int ndim = out_arr.ndim
-    cdef int ncols = <int> udata.chunks_in_array[ndim - 1]
-    cdef int nrows = <int> udata.chunks_in_array[ndim - 2]
-    cdef int nchunks_per_2d = ncols * nrows
+    cdef int nchunk_ = nchunk
+    cdef int coord, batch, batch_, batches = 1
+    for i in range(ndim - 2):
+        batches *= out_arr.shape[i]
 
-    block_ncols = <int> udata.blocks_in_chunk[ndim - 1]
-    block_nrows = <int> udata.blocks_in_chunk[ndim - 2]
-    nblocks_per_2d = block_ncols * block_nrows
+    # nchunk = sum(strides[i]*chunkcoords[i])
+    for i in range(ndim - 2):
+        coord = nchunk_ // udata.chunks_strides[0][i]
+        nchunk_ = nchunk_ % udata.chunks_strides[0][i]
+        nchunkA += coord * udata.chunks_strides[1][i]
+        nchunkB += coord * udata.chunks_strides[2][i]
 
-    # nchunk = base * nchunks_per2d + i * ncols + j
-    base = nchunk // nchunks_per_2d
-    i = (nchunk % nchunks_per_2d) // ncols
-    j = nchunk % ncols
-    nchunkA = chunk_startA = nchunk - j
-    nchunkB = chunk_startB = nchunk - i * ncols
+    ncols = udata.chunks_strides[0][ndim - 2]
+    Bncols = udata.chunks_strides[2][ndim - 2]
 
-    # nblock = block_base * nblocks_per_2d + block_i * block_ncols + block_j
-    block_base = nblock // nblocks_per_2d
-    block_i = (nblock % nblocks_per_2d) // block_ncols
-    block_j = nblock % block_ncols
-    block_startA = nblock - block_j
-    block_startB = nblock - block_i * block_ncols
+    i = nchunk_ // ncols # ncols * i + j
+    j = nchunk_ % ncols
+    nchunkA = chunk_startA = nchunkA + i * ncols
+    nchunkB = chunk_startB = nchunkB + j
+
+    # nblock = sum(strides[i]*blockcoords[i])
+    cdef int nblock_ = nblock
+    for i in range(ndim - 2):
+        coord = nblock_ // udata.blocks_strides[0][i]
+        nblock_ = nblock_ % udata.blocks_strides[0][i]
+        nblockA += coord * udata.blocks_strides[1][i]
+        nblockB += coord * udata.blocks_strides[2][i]
+
+    block_ncols = udata.blocks_strides[0][ndim - 2]
+    Bblock_ncols = udata.blocks_strides[2][ndim - 2]
+
+    block_i = nblock_ // block_ncols
+    block_j = nblock_ % block_ncols
+    block_startA = nblockA = nblockA + i * block_ncols
+    block_startB = nblockB = nblockB + j
+
+    # batches = sum(strides[i]*elcoords[i])
     dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
 
     first_run = True
 
     while True: # chunk loop
-        printf("chunks: %i, %i\n", nchunkA, nchunkB)
-        nblockA = block_startA
-        nblockB = block_startB
         for i in range(2):
             chunk_idx = nchunkA if i == 0 else nchunkB
             ndarr = udata.inputs[i]
+            ndim = ndarr.ndim
             src[i] = ndarr.sc.data[chunk_idx]
             rc = blosc2_cbuffer_sizes(src[i], &chunk_nbytes[i], &chunk_cbytes[i], &block_nbytes[i])
             if rc < 0:
@@ -2406,10 +2427,10 @@ cdef int aux_matmul(me_udata *udata, int64_t nchunk, int32_t nblock, void *param
                 raise ValueError("miniexpr: invalid block size")
             if first_run:
                 if i == 0:
-                    K = ndarr.blockshape[ndim - 1]
-                    M = ndarr.blockshape[ndim - 2]
+                    q = ndarr.blockshape[ndim - 1]
+                    p = ndarr.blockshape[ndim - 2]
                 else: # i = 1
-                    N = ndarr.blockshape[ndim - 1]
+                    r = ndarr.blockshape[ndim - 1]
                 input_buffers[i] = malloc(block_nbytes[i])
             if input_buffers[i] == NULL:
                 raise MemoryError("miniexpr: cannot allocate input block buffer")
@@ -2420,8 +2441,9 @@ cdef int aux_matmul(me_udata *udata, int64_t nchunk, int32_t nblock, void *param
                 raise ValueError("miniexpr: inconsistent block element counts across inputs")
 
         first_run = False
+        nblockA = block_startA
+        nblockB = block_startB
         while True: # block loop
-            printf("blocks: %i, %i\n", nblockA, nblockB)
             startA = nblockA * blocknitems[0]
             startB = nblockB * blocknitems[1]
             rc = blosc2_getitem_ctx(dctx, src[0], chunk_cbytes[0], startA, blocknitems[0],
@@ -2432,28 +2454,37 @@ cdef int aux_matmul(me_udata *udata, int64_t nchunk, int32_t nblock, void *param
                                     input_buffers[1], block_nbytes[1])
             if rc < 0:
                 raise ValueError("matmul: error decompressing the B chunk")
-            if typecode == 0:
-                if typesize == 4:
-                    rc = matmul_block_kernel[float](<float*>input_buffers[0], <float*>input_buffers[1], <float*>params_output, M, K, N)
+            batch = 0
+            while batch < batches:
+                batch_ = batch
+                for i in range(ndim - 2):
+                    coord = batch // udata.el_strides[0][i]
+                    batch_ = batch_ % udata.el_strides[0][i]
+                    offsetA += coord * udata.el_strides[1][i]
+                    offsetB += coord * udata.el_strides[2][i]
+                    offset += coord * udata.el_strides[0][i]
+                if typecode == 0:
+                    if typesize == 4:
+                        rc = matmul_block_kernel[float](<float*>input_buffers[0] + offsetA, <float*>input_buffers[1] + offsetB, <float*>params_output + offset, p, q, r)
+                    else:
+                        rc = matmul_block_kernel[double](<double*>input_buffers[0] + offsetA, <double*>input_buffers[1] + offsetB, <double*>params_output + offset, p, q, r)
+                elif typecode == 1:
+                    if typesize == 4:
+                        rc = matmul_block_kernel[int32_t](<int32_t*>input_buffers[0] + offsetA, <int32_t*>input_buffers[1] + offsetB, <int32_t*>params_output + offset, p, q, r)
+                    else:
+                        rc = matmul_block_kernel[int64_t](<int64_t*>input_buffers[0] + offsetA, <int64_t*>input_buffers[1] + offsetB, <int64_t*>params_output + offset, p, q, r)
                 else:
-                    rc = matmul_block_kernel[double](<double*>input_buffers[0], <double*>input_buffers[1], <double*>params_output, M, K, N)
-            elif typecode == 1:
-                if typesize == 4:
-                    rc = matmul_block_kernel[int32_t](<int32_t*>input_buffers[0], <int32_t*>input_buffers[1], <int32_t*>params_output, M, K, N)
-                else:
-                    rc = matmul_block_kernel[int64_t](<int64_t*>input_buffers[0], <int64_t*>input_buffers[1], <int64_t*>params_output, M, K, N)
-            else:
-                with gil:
-                    raise ValueError("Unsupported dtype")
+                    with gil:
+                        raise ValueError("Unsupported dtype")
+                batch += 1
             nblockA += 1
-            nblockB += block_ncols
+            nblockB += Bblock_ncols
             if (nblockA % block_ncols == 0):
                 break
         nchunkA += 1
-        nchunkB += ncols
+        nchunkB += Bncols
         if (nchunkA % ncols == 0):
             break
-    printf("finished block %i for chunk %i\n", nblock, nchunk)
 
 
     blosc2_free_ctx(dctx)
@@ -2545,7 +2576,7 @@ cdef int miniexpr_prefilter(blosc2_prefilter_params *params):
 cdef int matmul_prefilter(blosc2_prefilter_params *params):
     cdef int typecode
 
-    cdef me_udata* udata = <me_udata *> params.user_data
+    cdef mm_udata* udata = <mm_udata *> params.user_data
     cdef b2nd_array_t* out_arr = udata.array
     cdef char dtype_kind = out_arr.dtype[1]
     if dtype_kind == 'f':
@@ -3407,6 +3438,48 @@ cdef class NDArray:
 
         return udata
 
+    cdef mm_udata *_fill_mm_udata(self, inputs):
+        cdef mm_udata *udata = <mm_udata *> malloc(sizeof(mm_udata))
+        cdef int cstrides, bstrides, estrides
+        cdef b2nd_array_t* inp
+        cdef b2nd_array_t** inputs_ = <b2nd_array_t**> malloc(2 * sizeof(b2nd_array_t*))
+        for i in range(2):
+            operand = inputs['x1'] if i == 0 else inputs['x2']
+            inputs_[i] = <b2nd_array_t*><uintptr_t>operand.c_array
+            inputs_[i].chunk_cache.nchunk = -1
+            inputs_[i].chunk_cache.data = NULL
+        udata.inputs = inputs_
+        udata.array = self.array
+
+        # Save these in udf_udata to avoid computing them for each block
+        for i in range(3):
+            udata.chunks_strides[i][self.array.ndim - 1] = 1
+            udata.blocks_strides[i][self.array.ndim - 1] = 1
+            udata.el_strides[i][self.array.ndim - 1] = 1
+        for idx in range(2, self.array.ndim + 1):
+            i = self.array.ndim - idx
+            udata.chunks_strides[0][i] = udata.chunks_strides[0][i + 1] * udata.array.extshape[i + 1] // udata.array.chunkshape[i + 1]
+            udata.blocks_strides[0][i] = udata.blocks_strides[0][i + 1] * udata.array.extchunkshape[i + 1] // udata.array.blockshape[i + 1]
+
+        for j in range(2):
+            inp = inputs_[j]
+            cstrides = bstrides = estrides = 1
+            for idx in range(2, self.array.ndim + 1):
+                i = inp.ndim - idx
+                if inp.shape[i + 1] == 1 or i < 0:
+                    udata.chunks_strides[j][i] = 0
+                    udata.blocks_strides[j][i] = 0
+                    udata.el_strides[j][i] = 0
+                else:
+                    bstrides *= inp.extchunkshape[i + 1] // inp.blockshape[i + 1]
+                    cstrides *= inp.extshape[i + 1] // inp.chunkshape[i + 1]
+                    estrides *= inp.blockshape[i + 1]
+                    udata.chunks_strides[j][i] = cstrides
+                    udata.blocks_strides[j][i] = bstrides
+                    udata.el_strides[j][i] = estrides
+
+        return udata
+
     def _set_pref_expr(self, expression, inputs, fp_accuracy, aux_reduc=None, jit=None):
         # Set prefilter for miniexpr
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
@@ -3497,7 +3570,7 @@ cdef class NDArray:
         cdef blosc2_cparams* cparams = self.array.sc.storage.cparams
         cparams.prefilter = <blosc2_prefilter_fn> matmul_prefilter
 
-        cdef me_udata* udata = self._fill_me_udata(inputs, fp_accuracy, aux_reduc=None)
+        cdef mm_udata* udata = self._fill_mm_udata(inputs)
         cdef b2nd_array_t* out_arr = udata.array
         cdef blosc2_prefilter_params* preparams = <blosc2_prefilter_params *> calloc(1, sizeof(blosc2_prefilter_params))
         preparams.user_data = udata
