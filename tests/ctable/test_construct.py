@@ -79,7 +79,9 @@ def assert_table_equals_data(table: CTable, expected_data: list):
 def test_empty_table_variants():
     """Empty table: default, with expected_size, and with compact=True."""
     table = CTable(RowModel)
-    assert len(table) == 0 and table.nrows == 0 and table.ncols == 4
+    assert len(table) == 0
+    assert table.nrows == 0
+    assert table.ncols == 4
     for col_name in ["id", "c_val", "score", "active"]:
         assert col_name in table._cols
         assert isinstance(table._cols[col_name], blosc2.NDArray)
@@ -89,7 +91,8 @@ def test_empty_table_variants():
     assert all(len(col) == 5000 for col in table_sized._cols.values())
 
     table_compact = CTable(RowModel, compact=True)
-    assert len(table_compact) == 0 and table_compact.auto_compact is True
+    assert len(table_compact) == 0
+    assert table_compact.auto_compact is True
 
 
 def test_empty_data_lifecycle():
