@@ -17,7 +17,7 @@ import numpy as np
 
 import blosc2
 
-from .utils import get_intersecting_chunks, nptranspose, npvecdot, slice_to_chunktuple
+from .utils import get_intersecting_chunks, nptranspose, npvecdot, slice_to_chunktuple, try_miniexpr
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -113,11 +113,14 @@ def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArra
     result = blosc2.zeros(result_shape, dtype=blosc2.result_type(x1, x2), **kwargs)
 
     # multithreaded matmul
-    # TODO: handle a) type promotion, b) padding, c) (improved) >2D
+    # TODO: handle a) type promotion, b) padding (explicitly), c) (improved) >2D
     ops = (x1, x2, result)
     blocks = result.blocks
     all_ndarray = all(isinstance(value, blosc2.NDArray) and value.shape != () for value in ops)
-    use_miniexpr = True
+    global try_miniexpr
+
+    # Use a local copy so we don't modify the global
+    use_miniexpr = try_miniexpr
     if all_ndarray:
         if any(op.dtype != ops[0].dtype for op in ops):  # TODO: Remove this condition
             use_miniexpr = False
@@ -165,6 +168,7 @@ def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArra
             if prefilter_set:
                 result.schunk.remove_prefilter("miniexpr")
     else:  # couldn't do multithreading
+        print("multithreading failed :( ")
         if 0 not in result.shape + x1.shape + x2.shape:  # if any array is empty, return array of 0s
             p, q = result.chunks[-2:]
             r = x2.chunks[-1]

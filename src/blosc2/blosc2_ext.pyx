@@ -2375,8 +2375,10 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
     cdef int ndim = out_arr.ndim
     cdef int nchunk_ = nchunk
     cdef int coord, batch, batch_, batches = 1
+
+    # batches = sum(strides[i]*elcoords[i])
     for i in range(ndim - 2):
-        batches *= out_arr.shape[i]
+        batches *= out_arr.blockshape[i]
 
     # nchunk = sum(strides[i]*chunkcoords[i])
     for i in range(ndim - 2):
@@ -2390,8 +2392,8 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
 
     i = nchunk_ // ncols # ncols * i + j
     j = nchunk_ % ncols
-    nchunkA = chunk_startA = nchunkA + i * ncols
-    nchunkB = chunk_startB = nchunkB + j
+    chunk_startA = nchunkA + i * ncols
+    chunk_startB = nchunkB + j
 
     # nblock = sum(strides[i]*blockcoords[i])
     cdef int nblock_ = nblock
@@ -2406,14 +2408,14 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
 
     block_i = nblock_ // block_ncols
     block_j = nblock_ % block_ncols
-    block_startA = nblockA = nblockA + i * block_ncols
-    block_startB = nblockB = nblockB + j
+    block_startA = nblockA + block_i * block_ncols
+    block_startB = nblockB + block_j
 
-    # batches = sum(strides[i]*elcoords[i])
     dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
 
     first_run = True
-
+    nchunkA = chunk_startA
+    nchunkB = chunk_startB
     while True: # chunk loop
         for i in range(2):
             chunk_idx = nchunkA if i == 0 else nchunkB
@@ -2455,6 +2457,9 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
             if rc < 0:
                 raise ValueError("matmul: error decompressing the B chunk")
             batch = 0
+            offsetA = 0
+            offsetB = 0
+            offset = 0
             while batch < batches:
                 batch_ = batch
                 for i in range(ndim - 2):
@@ -3460,9 +3465,10 @@ cdef class NDArray:
             i = self.array.ndim - idx
             udata.chunks_strides[0][i] = udata.chunks_strides[0][i + 1] * udata.array.extshape[i + 1] // udata.array.chunkshape[i + 1]
             udata.blocks_strides[0][i] = udata.blocks_strides[0][i + 1] * udata.array.extchunkshape[i + 1] // udata.array.blockshape[i + 1]
+            udata.el_strides[0][i] = udata.el_strides[0][i + 1] * udata.array.blockshape[i + 1]
 
-        for j in range(2):
-            inp = inputs_[j]
+        for j in range(1, 3):
+            inp = inputs_[j - 1]
             cstrides = bstrides = estrides = 1
             for idx in range(2, self.array.ndim + 1):
                 i = inp.ndim - idx
