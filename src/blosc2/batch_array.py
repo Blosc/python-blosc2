@@ -88,17 +88,27 @@ class BatchArray:
 
     @staticmethod
     def _set_typesize_one(cparams: blosc2.CParams | dict | None) -> blosc2.CParams | dict:
+        auto_use_dict = cparams is None
         if cparams is None:
             cparams = blosc2.CParams()
         elif isinstance(cparams, blosc2.CParams):
             cparams = copy.deepcopy(cparams)
         else:
             cparams = dict(cparams)
+            auto_use_dict = "use_dict" not in cparams
 
         if isinstance(cparams, blosc2.CParams):
             cparams.typesize = 1
+            if auto_use_dict and cparams.codec == blosc2.Codec.ZSTD and cparams.clevel > 0:
+                # BatchArray stores many small serialized payloads, where Zstd dicts help materially.
+                cparams.use_dict = True
         else:
             cparams["typesize"] = 1
+            codec = cparams.get("codec", blosc2.Codec.ZSTD)
+            clevel = cparams.get("clevel", 5)
+            if auto_use_dict and codec == blosc2.Codec.ZSTD and clevel > 0:
+                # BatchArray stores many small serialized payloads, where Zstd dicts help materially.
+                cparams["use_dict"] = True
         return cparams
 
     @staticmethod

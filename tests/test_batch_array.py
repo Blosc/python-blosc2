@@ -155,6 +155,28 @@ def test_batcharray_info():
     assert "batch_len_avg" in text
 
 
+def test_batcharray_zstd_uses_dict_by_default():
+    barray = blosc2.BatchArray()
+    assert barray.cparams.codec == blosc2.Codec.ZSTD
+    assert barray.cparams.use_dict is True
+
+
+def test_batcharray_respects_explicit_use_dict_and_non_zstd():
+    barray = blosc2.BatchArray(cparams={"codec": blosc2.Codec.LZ4, "clevel": 5})
+    assert barray.cparams.codec == blosc2.Codec.LZ4
+    assert barray.cparams.use_dict is False
+
+    barray = blosc2.BatchArray(cparams={"codec": blosc2.Codec.ZSTD, "clevel": 0})
+    assert barray.cparams.codec == blosc2.Codec.ZSTD
+    assert barray.cparams.use_dict is False
+
+    barray = blosc2.BatchArray(cparams={"codec": blosc2.Codec.ZSTD, "clevel": 5, "use_dict": False})
+    assert barray.cparams.use_dict is False
+
+    barray = blosc2.BatchArray(cparams=blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5, use_dict=False))
+    assert barray.cparams.use_dict is False
+
+
 def test_vlcompress_small_blocks_roundtrip():
     values = [
         {"value": None},

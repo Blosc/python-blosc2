@@ -144,6 +144,28 @@ def test_vlarray_info():
     assert "item_nbytes_avg" in text
 
 
+def test_vlarray_zstd_uses_dict_by_default():
+    vlarray = blosc2.VLArray()
+    assert vlarray.cparams.codec == blosc2.Codec.ZSTD
+    assert vlarray.cparams.use_dict is True
+
+
+def test_vlarray_respects_explicit_use_dict_and_non_zstd():
+    vlarray = blosc2.VLArray(cparams={"codec": blosc2.Codec.LZ4, "clevel": 5})
+    assert vlarray.cparams.codec == blosc2.Codec.LZ4
+    assert vlarray.cparams.use_dict is False
+
+    vlarray = blosc2.VLArray(cparams={"codec": blosc2.Codec.ZSTD, "clevel": 0})
+    assert vlarray.cparams.codec == blosc2.Codec.ZSTD
+    assert vlarray.cparams.use_dict is False
+
+    vlarray = blosc2.VLArray(cparams={"codec": blosc2.Codec.ZSTD, "clevel": 5, "use_dict": False})
+    assert vlarray.cparams.use_dict is False
+
+    vlarray = blosc2.VLArray(cparams=blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5, use_dict=False))
+    assert vlarray.cparams.use_dict is False
+
+
 def test_vlarray_constructor_kwargs():
     urlpath = "test_vlarray_kwargs.b2frame"
     blosc2.remove_urlpath(urlpath)
