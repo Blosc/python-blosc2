@@ -68,6 +68,7 @@ from .utils import (
     process_key,
     reducers,
     safe_numpy_globals,
+    try_miniexpr,
 )
 
 if not blosc2.IS_WASM:
@@ -75,14 +76,6 @@ if not blosc2.IS_WASM:
 
 global safe_blosc2_globals
 safe_blosc2_globals = {}
-
-# Set this to False if miniexpr should not be tried out
-try_miniexpr = not blosc2.IS_WASM or getattr(blosc2, "_WASM_MINIEXPR_ENABLED", False)
-
-
-def _toggle_miniexpr(FLAG):
-    global try_miniexpr
-    try_miniexpr = FLAG
 
 
 def ne_evaluate(expression, local_dict=None, **kwargs):

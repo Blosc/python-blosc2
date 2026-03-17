@@ -19,6 +19,15 @@ from numpy import broadcast_shapes
 
 import blosc2
 
+# Set this to False if miniexpr should not be tried out
+try_miniexpr = not blosc2.IS_WASM or getattr(blosc2, "_WASM_MINIEXPR_ENABLED", False)
+
+
+def _toggle_miniexpr(FLAG):
+    global try_miniexpr
+    try_miniexpr = FLAG
+
+
 # NumPy version and a convenient boolean flag
 NUMPY_GE_2_0 = np.__version__ >= "2.0"
 # handle different numpy versions
