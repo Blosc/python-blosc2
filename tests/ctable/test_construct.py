@@ -5,13 +5,14 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-import pytest
-import numpy as np
-import blosc2
-from blosc2 import CTable
-from pydantic import BaseModel, Field
 from typing import Annotated, TypeVar
 
+import numpy as np
+import pytest
+from pydantic import BaseModel, Field
+
+import blosc2
+from blosc2 import CTable
 
 RowT = TypeVar("RowT", bound=BaseModel)
 
@@ -45,7 +46,7 @@ SMALL_DATA = [
 ]
 SMALLEST_DATA = SMALL_DATA[:2]
 
-dtype_struct = [('id', 'i8'), ('c_val', 'c16'), ('score', 'f8'), ('active', '?')]
+dtype_struct = [("id", "i8"), ("c_val", "c16"), ("score", "f8"), ("active", "?")]
 SMALL_STRUCT = np.array(SMALL_DATA, dtype=dtype_struct)
 
 
@@ -53,8 +54,7 @@ SMALL_STRUCT = np.array(SMALL_DATA, dtype=dtype_struct)
 # Validation Utility
 # -------------------------------------------------------------------
 def assert_table_equals_data(table: CTable, expected_data: list):
-    assert len(table) == len(expected_data), \
-        f"Expected length {len(expected_data)}, got {len(table)}"
+    assert len(table) == len(expected_data), f"Expected length {len(expected_data)}, got {len(table)}"
     col_names = table.col_names
     for i, expected_row in enumerate(expected_data):
         row_extracted = table.row[i]
@@ -63,17 +63,18 @@ def assert_table_equals_data(table: CTable, expected_data: list):
             extracted_val = getattr(row_extracted, col_name)[0]
             if isinstance(expected_val, (float, complex)):
                 np.testing.assert_allclose(
-                    extracted_val, expected_val,
-                    err_msg=f"Discrepancy at row {i}, col {col_name}"
+                    extracted_val, expected_val, err_msg=f"Discrepancy at row {i}, col {col_name}"
                 )
             else:
-                assert extracted_val == expected_val, \
+                assert extracted_val == expected_val, (
                     f"Row {i}, col {col_name}: expected {expected_val}, got {extracted_val}"
+                )
 
 
 # -------------------------------------------------------------------
 # Tests
 # -------------------------------------------------------------------
+
 
 def test_empty_table_variants():
     """Empty table: default, with expected_size, and with compact=True."""
@@ -155,7 +156,6 @@ def test_invalid_append():
         table.append(["invalid_text", 1 + 2j, 95.5, True])
 
 
-
 def test_extreme_values():
     """Extreme complex, float boundary, and large integer values."""
     extreme_complex = [
@@ -171,8 +171,8 @@ def test_extreme_values():
     ]
     extreme_int = [
         (1, 0j, 50.0, True),
-        (2 ** 32, 0j, 50.0, False),
-        (2 ** 60, 0j, 50.0, True),
+        (2**32, 0j, 50.0, False),
+        (2**60, 0j, 50.0, True),
     ]
     for data in [extreme_complex, extreme_float, extreme_int]:
         assert_table_equals_data(CTable(RowModel, new_data=data), data)

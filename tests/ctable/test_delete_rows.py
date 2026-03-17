@@ -5,12 +5,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-import pytest
-import numpy as np
-import blosc2
-from blosc2 import CTable
-from pydantic import BaseModel, Field
 from typing import Annotated, TypeVar
+
+import numpy as np
+import pytest
+from pydantic import BaseModel, Field
+
+from blosc2 import CTable
 
 RowT = TypeVar("RowT", bound=BaseModel)
 
@@ -28,15 +29,13 @@ class RowModel(BaseModel):
 
 
 def generate_test_data(n_rows: int) -> list:
-    return [
-        (i, complex(i, -i), float((i * 7) % 100), bool(i % 2))
-        for i in range(1, n_rows + 1)
-    ]
+    return [(i, complex(i, -i), float((i * 7) % 100), bool(i % 2)) for i in range(1, n_rows + 1)]
 
 
 # -------------------------------------------------------------------
 # Tests
 # -------------------------------------------------------------------
+
 
 def test_delete_single_element():
     """First, last, middle deletion once; and repeated deletion from front/back."""
@@ -201,9 +200,9 @@ def test_delete_stress():
 
     # Alternating two-pass deletion
     t2 = CTable(RowModel, new_data=data, expected_size=50)
-    t2.delete(list(range(0, 50, 2)))   # delete all even → 25 remain
+    t2.delete(list(range(0, 50, 2)))  # delete all even → 25 remain
     assert len(t2) == 25
-    t2.delete(list(range(0, 25, 2)))   # delete every other of remaining → ~12
+    t2.delete(list(range(0, 25, 2)))  # delete every other of remaining → ~12
     assert len(t2) == 12
 
 

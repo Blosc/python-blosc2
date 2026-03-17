@@ -1,8 +1,9 @@
-import pytest
-import numpy as np
-from blosc2 import CTable
-from pydantic import BaseModel, Field
 from typing import Annotated
+
+import numpy as np
+from pydantic import BaseModel, Field
+
+from blosc2 import CTable
 
 
 # --- Basic model setup for tests ---
@@ -77,7 +78,7 @@ def test_compact_already_compacted_table():
         assert table.id[i] == i
 
     # Validate that all True values are consecutive at the beginning
-    mask = table._valid_rows[:len(table._valid_rows)]
+    mask = table._valid_rows[: len(table._valid_rows)]
     assert np.all(mask[:20] == True)
     if len(mask) > 20:
         assert np.all(mask[20:] == False)
@@ -108,7 +109,7 @@ def test_compact_with_holes():
         assert table._cols["id"][i] == exp_id
 
     # Verify physical mask: first 6 must be True, the rest False
-    mask = table._valid_rows[:len(table._valid_rows)]
+    mask = table._valid_rows[: len(table._valid_rows)]
     assert np.all(mask[:6] == True)
     if len(mask) > 6:
         assert np.all(mask[6:] == False)

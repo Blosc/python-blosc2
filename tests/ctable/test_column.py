@@ -5,12 +5,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-import pytest
-import numpy as np
-import blosc2
-from blosc2 import CTable
-from pydantic import BaseModel, Field
 from typing import Annotated
+
+import numpy as np
+import pytest
+from pydantic import BaseModel, Field
+
+from blosc2 import CTable
 
 
 class NumpyDtype:
@@ -30,6 +31,7 @@ DATA20 = [(i, float(i * 10), True) for i in range(20)]
 # -------------------------------------------------------------------
 # Tests
 # -------------------------------------------------------------------
+
 
 def test_column_metadata():
     """dtype correctness and internal reference consistency."""
@@ -176,8 +178,24 @@ def test_column_iter():
     # score column with scattered deletions
     tabla3 = CTable(RowModel, new_data=DATA20)
     tabla3.delete([0, 5, 10, 15])
-    expected_score = [10.0, 20.0, 30.0, 40.0, 60.0, 70.0, 80.0, 90.0,
-                      110.0, 120.0, 130.0, 140.0, 160.0, 170.0, 180.0, 190.0]
+    expected_score = [
+        10.0,
+        20.0,
+        30.0,
+        40.0,
+        60.0,
+        70.0,
+        80.0,
+        90.0,
+        110.0,
+        120.0,
+        130.0,
+        140.0,
+        160.0,
+        170.0,
+        180.0,
+        190.0,
+    ]
     assert list(tabla3.score) == expected_score
 
 

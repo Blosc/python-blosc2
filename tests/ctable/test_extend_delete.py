@@ -5,12 +5,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-import pytest
-import numpy as np
-import blosc2
-from blosc2 import CTable
-from pydantic import BaseModel, Field
 from typing import Annotated, TypeVar
+
+import numpy as np
+import pytest
+from pydantic import BaseModel, Field
+
+from blosc2 import CTable
 
 RowT = TypeVar("RowT", bound=BaseModel)
 
@@ -28,34 +29,32 @@ class RowModel(BaseModel):
 
 
 def generate_test_data(n_rows: int, start_id: int = 1) -> list:
-    return [
-        (start_id + i, complex(i, -i), float((i * 7) % 100), bool(i % 2))
-        for i in range(n_rows)
-    ]
+    return [(start_id + i, complex(i, -i), float((i * 7) % 100), bool(i % 2)) for i in range(n_rows)]
 
 
 def get_valid_mask(table: CTable) -> np.ndarray:
-    return np.array(table._valid_rows[:len(table._valid_rows)], dtype=bool)
+    return np.array(table._valid_rows[: len(table._valid_rows)], dtype=bool)
 
 
 def assert_mask_matches(table: CTable, expected_mask: list):
-    actual = get_valid_mask(table)[:len(expected_mask)]
+    actual = get_valid_mask(table)[: len(expected_mask)]
     np.testing.assert_array_equal(
-        actual, np.array(expected_mask, dtype=bool),
-        err_msg=f"Mask mismatch.\nExpected: {expected_mask}\nGot: {actual}"
+        actual,
+        np.array(expected_mask, dtype=bool),
+        err_msg=f"Mask mismatch.\nExpected: {expected_mask}\nGot: {actual}",
     )
 
 
 def assert_data_at_positions(table: CTable, positions: list, expected_ids: list):
     for pos, expected_id in zip(positions, expected_ids):
         actual_id = int(table._cols["id"][pos])
-        assert actual_id == expected_id, \
-            f"Position {pos}: expected ID {expected_id}, got {actual_id}"
+        assert actual_id == expected_id, f"Position {pos}: expected ID {expected_id}, got {actual_id}"
 
 
 # -------------------------------------------------------------------
 # Tests
 # -------------------------------------------------------------------
+
 
 def test_gap_fill_mask_and_positions():
     """extend and append fill from last valid position; mask is updated correctly."""
@@ -192,8 +191,9 @@ def test_complex_scenarios():
             t2.delete(list(range(0, min(5, current_len))))
 
     # Data integrity: correct row values survive delete + extend
-    t3 = CTable(RowModel, new_data=[(1, 1j, 10.0, True), (2, 2j, 20.0, False), (3, 3j, 30.0, True)],
-                expected_size=10)
+    t3 = CTable(
+        RowModel, new_data=[(1, 1j, 10.0, True), (2, 2j, 20.0, False), (3, 3j, 30.0, True)], expected_size=10
+    )
     t3.delete(1)
     assert t3.row[0].id[0] == 1
     assert t3.row[1].id[0] == 3

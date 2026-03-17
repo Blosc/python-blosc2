@@ -5,12 +5,13 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-import pytest
-import numpy as np
-from blosc2 import CTable
-from pydantic import BaseModel, Field
 from typing import Annotated
 
+import numpy as np
+import pytest
+from pydantic import BaseModel, Field
+
+from blosc2 import CTable
 from blosc2.ctable import Column
 
 
@@ -32,6 +33,7 @@ def generate_test_data(n_rows: int, start_id: int = 0) -> list:
 # -------------------------------------------------------------------
 # Tests
 # -------------------------------------------------------------------
+
 
 def test_row_int_indexing():
     """int indexing: no holes, with holes, negative indices, and out-of-range."""
