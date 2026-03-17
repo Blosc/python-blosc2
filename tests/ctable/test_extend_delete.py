@@ -5,13 +5,12 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-from typing import Annotated, TypeVar
-
-import numpy as np
 import pytest
-from pydantic import BaseModel, Field
-
+import numpy as np
+import blosc2
 from blosc2 import CTable
+from pydantic import BaseModel, Field
+from typing import Annotated, TypeVar
 
 RowT = TypeVar("RowT", bound=BaseModel)
 
@@ -39,291 +38,187 @@ def get_valid_mask(table: CTable) -> np.ndarray:
     return np.array(table._valid_rows[:len(table._valid_rows)], dtype=bool)
 
 
-def get_column_values(table: CTable, col_name: str, length: int) -> np.ndarray:
-    return np.array(table._cols[col_name][:length])
-
-
 def assert_mask_matches(table: CTable, expected_mask: list):
-    actual_mask = get_valid_mask(table)[:len(expected_mask)]
-    expected = np.array(expected_mask, dtype=bool)
-
+    actual = get_valid_mask(table)[:len(expected_mask)]
     np.testing.assert_array_equal(
-        actual_mask, expected,
-        err_msg=f"Mask mismatch.\nExpected: {expected}\nGot: {actual_mask}"
+        actual, np.array(expected_mask, dtype=bool),
+        err_msg=f"Mask mismatch.\nExpected: {expected_mask}\nGot: {actual}"
     )
 
 
 def assert_data_at_positions(table: CTable, positions: list, expected_ids: list):
-    id_col = table.id
-    for pos, expected_id in zip(positions, expected_ids, strict=True):
+    for pos, expected_id in zip(positions, expected_ids):
         actual_id = int(table._cols["id"][pos])
         assert actual_id == expected_id, \
             f"Position {pos}: expected ID {expected_id}, got {actual_id}"
 
 
-def test_insert_after_delete_fills_last_gap():
-    data_c1 = generate_test_data(7, start_id=1)
-    table = CTable(RowModel, new_data=data_c1, expected_size=10)
+# -------------------------------------------------------------------
+# Tests
+# -------------------------------------------------------------------
 
-    table.delete([0, 2, 4, 6])
+def test_gap_fill_mask_and_positions():
+    """extend and append fill from last valid position; mask is updated correctly."""
+    # extend after deletions: mask and physical positions
+    t = CTable(RowModel, new_data=generate_test_data(7, 1), expected_size=10)
+    t.delete([0, 2, 4, 6])
+    assert_mask_matches(t, [False, True, False, True, False, True, False])
+    assert len(t) == 3
+    t.extend(generate_test_data(3, 8))
+    assert_mask_matches(t, [False, True, False, True, False, True, True, True, True])
+    assert len(t) == 6
+    assert_data_at_positions(t, [6, 7, 8], [8, 9, 10])
 
-    expected_mask_after_delete = [False, True, False, True, False, True, False]
-    assert_mask_matches(table, expected_mask_after_delete)
-    assert len(table) == 3
+    # append fills from last valid position, not into holes
+    t2 = CTable(RowModel, new_data=generate_test_data(5, 1), expected_size=10)
+    t2.delete([1, 3])
+    assert_mask_matches(t2, [True, False, True, False, True])
+    t2.append((6, 1j, 50.0, True))
+    assert_mask_matches(t2, [True, False, True, False, True, True])
+    t2.append((7, 2j, 60.0, False))
+    assert_mask_matches(t2, [True, False, True, False, True, True, True])
 
-    data_c2 = generate_test_data(3, start_id=8)
-    table.extend(data_c2)
-
-    expected_mask_final = [False, True, False, True, False, True, True, True, True]
-    assert_mask_matches(table, expected_mask_final)
-    assert len(table) == 6
-
-    assert_data_at_positions(table, [6, 7, 8], [8, 9, 10])
-
-
-def test_append_single_row_fills_gap():
-    data = generate_test_data(5, start_id=1)
-    table = CTable(RowModel, new_data=data, expected_size=10)
-
-    table.delete([1, 3])
-
-    expected_mask = [True, False, True, False, True]
-    assert_mask_matches(table, expected_mask)
-
-    table.append((6, 1j, 50.0, True))
-
-    expected_mask_after = [True, False, True, False, True, True]
-    assert_mask_matches(table, expected_mask_after)
-
-    table.append((7, 2j, 60.0, False))
-
-    expected_mask_final = [True, False, True, False, True, True, True]
-    assert_mask_matches(table, expected_mask_final)
+    # extend fills from last valid position when there's enough capacity
+    t3 = CTable(RowModel, new_data=generate_test_data(10, 1), expected_size=15)
+    t3.delete([2, 4, 6])
+    t3.extend(generate_test_data(3, 20))
+    assert_data_at_positions(t3, [10, 11, 12], [20, 21, 22])
 
 
-def test_resize_when_capacity_full_with_gaps():
-    data = generate_test_data(10, start_id=1)
-    table = CTable(RowModel, new_data=data, expected_size=10, compact=False)
+def test_resize_behavior():
+    """Resize triggered when capacity is full; compact=True avoids massive resize."""
+    # compact=False: append beyond capacity must resize
+    t = CTable(RowModel, new_data=generate_test_data(10, 1), expected_size=10, compact=False)
+    t.delete(list(range(9)))
+    assert len(t) == 1
+    initial_cap = len(t._valid_rows)
+    t.append((11, 5j, 75.0, True))
+    assert len(t._valid_rows) > initial_cap
 
-    table.delete(list(range(9)))
+    # compact=True: no massive resize after deletions + extend
+    t2 = CTable(RowModel, new_data=generate_test_data(10, 1), expected_size=10, compact=True)
+    t2.delete(list(range(9)))
+    assert len(t2) == 1
+    initial_cap2 = len(t2._valid_rows)
+    t2.extend(generate_test_data(3, 11))
+    assert len(t2._valid_rows) <= initial_cap2 * 2
 
-    assert len(table) == 1
-
-    initial_capacity = len(table._valid_rows)
-
-    table.append((11, 5j, 75.0, True))
-
-    new_capacity = len(table._valid_rows)
-    assert new_capacity > initial_capacity, \
-        f"Expected resize, but capacity stayed {initial_capacity}"
-
-
-def test_no_resize_with_compact_enabled():
-    data = generate_test_data(10, start_id=1)
-    table = CTable(RowModel, new_data=data, expected_size=10, compact=True)
-
-    table.delete(list(range(9)))
-
-    assert len(table) == 1
-
-    initial_capacity = len(table._valid_rows)
-
-    new_data = generate_test_data(3, start_id=11)
-    table.extend(new_data)
-
-    new_capacity = len(table._valid_rows)
-    assert new_capacity <= initial_capacity * 2, \
-        "Unexpected massive resize with auto_compact enabled"
+    # extend exceeding capacity always resizes regardless of compact
+    t3 = CTable(RowModel, new_data=generate_test_data(5, 1), expected_size=10, compact=False)
+    t3.delete([0, 2, 4])
+    initial_cap3 = len(t3._valid_rows)
+    t3.extend(generate_test_data(20, 100))
+    assert len(t3._valid_rows) > initial_cap3
 
 
-def test_resize_when_extend_exceeds_capacity():
-    data = generate_test_data(5, start_id=1)
-    table = CTable(RowModel, new_data=data, expected_size=10, compact=False)
+def test_mixed_append_extend_with_gaps():
+    """Multiple extends, appends, and deletes interleaved; lengths stay correct."""
+    # Multiple extends with intermediate deletions
+    t = CTable(RowModel, expected_size=20)
+    t.extend(generate_test_data(5, 1))
+    t.extend(generate_test_data(3, 10))
+    assert len(t) == 8
+    t.delete([2, 4, 6])
+    assert len(t) == 5
+    t.extend(generate_test_data(2, 20))
+    assert len(t) == 7
+    t.delete([0, 1])
+    assert len(t) == 5
+    t.extend(generate_test_data(4, 30))
+    assert len(t) == 9
 
-    table.delete([0, 2, 4])
-
-    initial_capacity = len(table._valid_rows)
-
-    large_data = generate_test_data(20, start_id=100)
-    table.extend(large_data)
-
-    new_capacity = len(table._valid_rows)
-    assert new_capacity > initial_capacity
-
-
-def test_extend_fills_from_last_valid_position():
-    data = generate_test_data(10, start_id=1)
-    table = CTable(RowModel, new_data=data, expected_size=15)
-
-    table.delete([2, 4, 6])
-
-    new_data = generate_test_data(3, start_id=20)
-    table.extend(new_data)
-
-    assert_data_at_positions(table, [10, 11, 12], [20, 21, 22])
-
-
-def test_multiple_extends_with_gaps():
-    data = generate_test_data(5, start_id=1)
-    table = CTable(RowModel, new_data=data, expected_size=20)
-
-    table.extend(generate_test_data(3, start_id=10))
-    assert len(table) == 8
-
-    table.delete([2, 4, 6])
-    assert len(table) == 5
-
-    table.extend(generate_test_data(2, start_id=20))
-    assert len(table) == 7
-
-    table.delete([0, 1])
-    assert len(table) == 5
-
-    table.extend(generate_test_data(4, start_id=30))
-    assert len(table) == 9
-
-
-def test_append_and_extend_mixed_with_gaps():
-    table = CTable(RowModel, expected_size=20)
-
+    # append + extend mixed, delete all then re-extend
+    t2 = CTable(RowModel, expected_size=20)
     for i in range(5):
-        table.append((i + 1, complex(i), float(i * 10), True))
+        t2.append((i + 1, complex(i), float(i * 10), True))
+    assert len(t2) == 5
+    t2.extend(generate_test_data(5, 10))
+    assert len(t2) == 10
+    t2.delete([1, 3, 5, 7, 9])
+    assert len(t2) == 5
+    t2.append((100, 0j, 50.0, False))
+    assert len(t2) == 6
+    t2.extend(generate_test_data(3, 200))
+    assert len(t2) == 9
 
-    assert len(table) == 5
+    # Fill all gaps then extend; delete all then extend from scratch
+    t3 = CTable(RowModel, new_data=generate_test_data(10, 1), expected_size=15)
+    t3.delete(list(range(0, 10, 2)))
+    assert len(t3) == 5
+    t3.extend(generate_test_data(5, 20))
+    assert len(t3) == 10
 
-    table.extend(generate_test_data(5, start_id=10))
-    assert len(table) == 10
-
-    table.delete([1, 3, 5, 7, 9])
-    assert len(table) == 5
-
-    table.append((100, 0j, 50.0, False))
-    assert len(table) == 6
-
-    table.extend(generate_test_data(3, start_id=200))
-    assert len(table) == 9
-
-
-def test_fill_gaps_completely_then_extend():
-    data = generate_test_data(10, start_id=1)
-    table = CTable(RowModel, new_data=data, expected_size=15)
-
-    table.delete(list(range(0, 10, 2)))
-    assert len(table) == 5
-
-    table.extend(generate_test_data(5, start_id=20))
-    assert len(table) == 10
+    t4 = CTable(RowModel, new_data=generate_test_data(10, 1), expected_size=15)
+    t4.delete(list(range(10)))
+    assert len(t4) == 0
+    t4.extend(generate_test_data(5, 100))
+    assert len(t4) == 5
 
 
-def test_delete_all_then_extend():
-    data = generate_test_data(10, start_id=1)
-    table = CTable(RowModel, new_data=data, expected_size=15)
+def test_compact_behavior():
+    """Manual compact consolidates mask; auto-compact keeps data correct after extend."""
+    # Manual compact: valid rows packed to front, extend fills after them
+    t = CTable(RowModel, new_data=generate_test_data(10, 1), expected_size=15, compact=False)
+    t.delete([1, 3, 5, 7, 9])
+    assert len(t) == 5
+    t.compact()
+    assert_mask_matches(t, [True] * 5 + [False] * 10)
+    t.extend(generate_test_data(3, 20))
+    assert len(t) == 8
 
-    table.delete(list(range(10)))
-    assert len(table) == 0
-
-    new_data = generate_test_data(5, start_id=100)
-    table.extend(new_data)
-
-    assert len(table) == 5
-
-
-def test_sparse_table_with_many_gaps():
-    data = generate_test_data(20, start_id=1)
-    table = CTable(RowModel, new_data=data, expected_size=30)
-
-    to_delete = [0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, 16, 17, 18]
-    table.delete(to_delete)
-
-    assert len(table) == 5
-
-    table.extend(generate_test_data(10, start_id=100))
-
-    assert len(table) == 15
+    # Auto-compact: table stays consistent after heavy deletions + extend
+    t2 = CTable(RowModel, new_data=generate_test_data(10, 1), expected_size=15, compact=True)
+    t2.delete(list(range(0, 8)))
+    assert len(t2) == 2
+    t2.extend(generate_test_data(10, 100))
+    assert len(t2) == 12
 
 
-def test_alternating_insert_delete_pattern():
-    table = CTable(RowModel, expected_size=50)
+def test_complex_scenarios():
+    """Sparse gaps, alternating cycles, data integrity, and full workflow."""
+    # Sparse table: many scattered deletions then bulk extend
+    t = CTable(RowModel, new_data=generate_test_data(20, 1), expected_size=30)
+    t.delete([0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, 16, 17, 18])
+    assert len(t) == 5
+    t.extend(generate_test_data(10, 100))
+    assert len(t) == 15
 
+    # Alternating extend/delete cycles
+    t2 = CTable(RowModel, expected_size=50)
     for cycle in range(5):
-        table.extend(generate_test_data(10, start_id=cycle * 100))
-
-        current_len = len(table)
+        t2.extend(generate_test_data(10, cycle * 100))
+        current_len = len(t2)
         if current_len >= 5:
-            to_delete = list(range(0, min(5, current_len)))
-            table.delete(to_delete)
+            t2.delete(list(range(0, min(5, current_len))))
 
+    # Data integrity: correct row values survive delete + extend
+    t3 = CTable(RowModel, new_data=[(1, 1j, 10.0, True), (2, 2j, 20.0, False), (3, 3j, 30.0, True)],
+                expected_size=10)
+    t3.delete(1)
+    assert t3.row[0].id[0] == 1
+    assert t3.row[1].id[0] == 3
+    t3.extend([(10, 10j, 100.0, True), (11, 11j, 100.0, False)])
+    assert t3.row[0].id[0] == 1
+    assert t3.row[1].id[0] == 3
+    assert t3.row[2].id[0] == 10
+    assert t3.row[3].id[0] == 11
 
-def test_manual_compact_before_extend():
-    data = generate_test_data(10, start_id=1)
-    table = CTable(RowModel, new_data=data, expected_size=15, compact=False)
-
-    table.delete([1, 3, 5, 7, 9])
-    assert len(table) == 5
-
-    table.compact()
-
-    expected_mask = [True] * 5 + [False] * 10
-    assert_mask_matches(table, expected_mask)
-
-    table.extend(generate_test_data(3, start_id=20))
-    assert len(table) == 8
-
-
-def test_auto_compact_on_extend():
-    data = generate_test_data(10, start_id=1)
-    table = CTable(RowModel, new_data=data, expected_size=15, compact=True)
-
-    table.delete(list(range(0, 8)))
-    assert len(table) == 2
-
-    table.extend(generate_test_data(10, start_id=100))
-
-    assert len(table) == 12
-
-
-def test_data_integrity_after_gap_operations():
-    data1 = [(1, 1j, 10.0, True), (2, 2j, 20.0, False), (3, 3j, 30.0, True)]
-    table = CTable(RowModel, new_data=data1, expected_size=10)
-
-    table.delete(1)
-
-    assert table.row[0].id[0] == 1
-    assert table.row[1].id[0] == 3
-
-    data2 = [(10, 10j, 100.0, True), (11, 11j, 110.0, False)]
-    table.extend(data2)
-
-    assert table.row[0].id[0] == 1
-    assert table.row[1].id[0] == 3
-    assert table.row[2].id[0] == 10
-    assert table.row[3].id[0] == 11
-
-
-def test_complex_scenario_full_workflow():
-    table = CTable(RowModel, expected_size=20, compact=False)
-
-    table.extend(generate_test_data(10, start_id=1))
-    assert len(table) == 10
-
-    table.delete([0, 2, 4, 6, 8])
-    assert len(table) == 5
-
-    table.append((100, 0j, 50.0, True))
-    table.append((101, 1j, 60.0, False))
-    assert len(table) == 7
-
-    table.extend(generate_test_data(5, start_id=200))
-    assert len(table) == 12
-
-    table.delete([3, 7, 10])
-    assert len(table) == 9
-
-    table.extend(generate_test_data(3, start_id=300))
-    assert len(table) == 12
-
-    assert table.nrows == 12
-    assert table.ncols == 4
+    # Full workflow
+    t4 = CTable(RowModel, expected_size=20, compact=False)
+    t4.extend(generate_test_data(10, 1))
+    assert len(t4) == 10
+    t4.delete([0, 2, 4, 6, 8])
+    assert len(t4) == 5
+    t4.append((100, 0j, 50.0, True))
+    t4.append((101, 1j, 60.0, False))
+    assert len(t4) == 7
+    t4.extend(generate_test_data(5, 200))
+    assert len(t4) == 12
+    t4.delete([3, 7, 10])
+    assert len(t4) == 9
+    t4.extend(generate_test_data(3, 300))
+    assert len(t4) == 12
+    assert t4.nrows == 12 and t4.ncols == 4
 
 
 if __name__ == "__main__":

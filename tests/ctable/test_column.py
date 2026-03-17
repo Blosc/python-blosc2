@@ -1,10 +1,16 @@
-from typing import Annotated
+#######################################################################
+# Copyright (c) 2019-present, Blosc Development Team <blosc@blosc.org>
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#######################################################################
 
-import numpy as np
 import pytest
-from pydantic import BaseModel, Field
-
+import numpy as np
+import blosc2
 from blosc2 import CTable
+from pydantic import BaseModel, Field
+from typing import Annotated
 
 
 class NumpyDtype:
@@ -18,373 +24,203 @@ class RowModel(BaseModel):
     active: Annotated[bool, NumpyDtype(np.bool_)] = True
 
 
-def test_column_dtype():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
-    col_id = tabla.id
-    col_score = tabla.score
-    col_active = tabla.active
-
-    assert col_id.dtype == np.int64
-    assert col_score.dtype == np.float64
-    assert col_active.dtype == np.bool_
+DATA20 = [(i, float(i * 10), True) for i in range(20)]
 
 
-def test_column_references():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
+# -------------------------------------------------------------------
+# Tests
+# -------------------------------------------------------------------
 
-    col_id = tabla.id
+def test_column_metadata():
+    """dtype correctness and internal reference consistency."""
+    tabla = CTable(RowModel, new_data=DATA20)
 
-    assert col_id._raw_col is tabla._cols["id"]
-    assert col_id._valid_rows is tabla._valid_rows
+    assert tabla.id.dtype == np.int64
+    assert tabla.score.dtype == np.float64
+    assert tabla.active.dtype == np.bool_
 
-
-def test_column_getitem_int_no_holes():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
-    col_id = tabla.id
-    print("hola")
-    assert col_id[0] == 0
-    print("hola")
-    assert col_id[5] == 5
-    print("hola")
-    assert col_id[19] == 19
-    print("hola")
-    assert col_id[-1] == 19
-    print("hola")
-    assert col_id[-5] == 15
-    print("hola")
+    assert tabla.id._raw_col is tabla._cols["id"]
+    assert tabla.id._valid_rows is tabla._valid_rows
 
 
-def test_column_getitem_int_with_holes():
-    data = [(i, float(i * 10), i % 2 == 0) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
+def test_column_getitem_no_holes():
+    """int, slice, and list indexing on a full table."""
+    tabla = CTable(RowModel, new_data=DATA20)
+    col = tabla.id
 
+    # int
+    assert col[0] == 0
+    assert col[5] == 5
+    assert col[19] == 19
+    assert col[-1] == 19
+    assert col[-5] == 15
+
+    # slice
+    assert list(col[0:5]) == [0, 1, 2, 3, 4]
+    assert list(col[10:15]) == [10, 11, 12, 13, 14]
+    assert list(col[::2]) == list(range(0, 20, 2))
+
+    # list
+    assert list(col[[0, 5, 10, 15]]) == [0, 5, 10, 15]
+    assert list(col[[19, 0, 10]]) == [19, 0, 10]
+
+
+def test_column_getitem_with_holes():
+    """int, slice, and list indexing after deletions."""
+    # int + list: delete odd indices [1,3,5,7,9] → valid: 0,2,4,6,8,10…19
+    tabla = CTable(RowModel, new_data=DATA20)
     tabla.delete([1, 3, 5, 7, 9])
+    col = tabla.id
 
-    col_id = tabla.id
+    assert col[0] == 0
+    assert col[1] == 2
+    assert col[2] == 4
+    assert col[3] == 6
+    assert col[4] == 8
+    assert col[-1] == 19
+    assert col[-2] == 18
 
-    assert col_id[0] == 0
-    assert col_id[1] == 2
-    assert col_id[2] == 4
-    assert col_id[3] == 6
-    assert col_id[4] == 8
-    assert col_id[-1] == 19
-    assert col_id[-2] == 18
+    assert list(col[[0, 2, 4]]) == [0, 4, 8]
+    assert list(col[[5, 3, 1]]) == [10, 6, 2]
 
+    # slice: delete all odd indices → valid: 0,2,4,…,18
+    tabla2 = CTable(RowModel, new_data=DATA20)
+    tabla2.delete([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])
+    col2 = tabla2.id
 
-def test_column_getitem_slice_no_holes():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
-    col_id = tabla.id
-
-    result = col_id[0:5]
-    expected = [0, 1, 2, 3, 4]
-    assert list(result) == expected
-
-    result = col_id[10:15]
-    expected = [10, 11, 12, 13, 14]
-    assert list(result) == expected
-
-    result = col_id[::2]
-    expected = list(range(0, 20, 2))
-    assert list(result) == expected
+    assert list(col2[0:5]) == [0, 2, 4, 6, 8]
+    assert list(col2[5:10]) == [10, 12, 14, 16, 18]
+    assert list(col2[::2]) == [0, 4, 8, 12, 16]
 
 
-def test_column_getitem_slice_with_holes():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
-    tabla.delete([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])
-
-    col_id = tabla.id
-
-    result = col_id[0:5]
-    expected = [0, 2, 4, 6, 8]
-    assert list(result) == expected
-
-    result = col_id[5:10]
-    expected = [10, 12, 14, 16, 18]
-    assert list(result) == expected
-
-    result = col_id[::2]
-    expected = [0, 4, 8, 12, 16]
-    assert list(result) == expected
-
-
-def test_column_getitem_list_no_holes():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
-    col_id = tabla.id
-
-    result = col_id[[0, 5, 10, 15]]
-    expected = [0, 5, 10, 15]
-    assert list(result) == expected
-
-    result = col_id[[19, 0, 10]]
-    expected = [19, 0, 10]
-    assert list(result) == expected
-
-
-def test_column_getitem_list_with_holes():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
+def test_column_getitem_out_of_range():
+    """int and list indexing raise IndexError when out of bounds."""
+    tabla = CTable(RowModel, new_data=DATA20)
     tabla.delete([1, 3, 5, 7, 9])
-
-    col_id = tabla.id
-
-    result = col_id[[0, 2, 4]]
-    expected = [0, 4, 8]
-    assert list(result) == expected
-
-    result = col_id[[5, 3, 1]]
-    expected = [10, 6, 2]
-    assert list(result) == expected
-
-
-def test_column_getitem_out_of_range_int():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
-    tabla.delete([1, 3, 5, 7, 9])
-
-    col_id = tabla.id
+    col = tabla.id
 
     with pytest.raises(IndexError):
-        _ = col_id[100]
-
+        _ = col[100]
     with pytest.raises(IndexError):
-        _ = col_id[-100]
-
-
-def test_column_getitem_out_of_range_list():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
-    tabla.delete([1, 3, 5, 7, 9])
-
-    col_id = tabla.id
-
+        _ = col[-100]
     with pytest.raises(IndexError):
-        _ = col_id[[0, 1, 100]]
+        _ = col[[0, 1, 100]]
 
 
-def test_column_setitem_int_no_holes():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
+def test_column_setitem_no_holes():
+    """int, slice, and list assignment on a full table."""
+    tabla = CTable(RowModel, new_data=DATA20)
+    col = tabla.id
 
-    col_id = tabla.id
+    # int
+    col[0] = 999
+    assert col[0] == 999
+    col[10] = 888
+    assert col[10] == 888
+    col[-1] = 777
+    assert col[-1] == 777
 
-    col_id[0] = 999
-    assert col_id[0] == 999
+    # slice
+    col[0:5] = [100, 101, 102, 103, 104]
+    assert list(col[0:5]) == [100, 101, 102, 103, 104]
 
-    col_id[10] = 888
-    assert col_id[10] == 888
+    # list
+    col[[0, 5, 10]] = [10, 50, 100]
+    assert col[0] == 10
+    assert col[5] == 50
+    assert col[10] == 100
 
-    col_id[-1] = 777
-    assert col_id[-1] == 777
 
-
-def test_column_setitem_int_with_holes():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
+def test_column_setitem_with_holes():
+    """int, slice, and list assignment after deletions."""
+    tabla = CTable(RowModel, new_data=DATA20)
     tabla.delete([1, 3, 5, 7, 9])
+    col = tabla.id
 
-    col_id = tabla.id
-
-    col_id[0] = 999
-    assert col_id[0] == 999
+    # int: logical index 2 → physical index 4
+    col[0] = 999
+    assert col[0] == 999
     assert tabla._cols["id"][0] == 999
 
-    col_id[2] = 888
-    assert col_id[2] == 888
+    col[2] = 888
+    assert col[2] == 888
     assert tabla._cols["id"][4] == 888
 
-    col_id[-1] = 777
-    assert col_id[-1] == 777
+    col[-1] = 777
+    assert col[-1] == 777
+
+    # slice
+    col[0:3] = [100, 200, 300]
+    assert col[0] == 100
+    assert col[1] == 200
+    assert col[2] == 300
+
+    # list
+    col[[0, 2, 4]] = [11, 22, 33]
+    assert col[0] == 11
+    assert col[2] == 22
+    assert col[4] == 33
 
 
-def test_column_setitem_slice_no_holes():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
+def test_column_iter():
+    """Iteration over full table, with odd-index holes, and on score column."""
+    # No holes
+    tabla = CTable(RowModel, new_data=DATA20)
+    assert list(tabla.id) == list(range(20))
 
-    col_id = tabla.id
+    # All odd indices deleted
+    tabla2 = CTable(RowModel, new_data=DATA20)
+    tabla2.delete([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])
+    assert list(tabla2.id) == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
 
-    col_id[0:5] = [100, 101, 102, 103, 104]
-
-    assert col_id[0] == 100
-    assert col_id[1] == 101
-    assert col_id[2] == 102
-    assert col_id[3] == 103
-    assert col_id[4] == 104
-
-
-def test_column_setitem_slice_with_holes():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
-    tabla.delete([1, 3, 5, 7, 9])
-
-    col_id = tabla.id
-
-    col_id[0:3] = [100, 200, 300]
-
-    assert col_id[0] == 100
-    assert col_id[1] == 200
-    assert col_id[2] == 300
+    # score column with scattered deletions
+    tabla3 = CTable(RowModel, new_data=DATA20)
+    tabla3.delete([0, 5, 10, 15])
+    expected_score = [10.0, 20.0, 30.0, 40.0, 60.0, 70.0, 80.0, 90.0,
+                      110.0, 120.0, 130.0, 140.0, 160.0, 170.0, 180.0, 190.0]
+    assert list(tabla3.score) == expected_score
 
 
-def test_column_setitem_list_no_holes():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
-    col_id = tabla.id
-
-    col_id[[0, 5, 10]] = [100, 500, 1000]
-
-    assert col_id[0] == 100
-    assert col_id[5] == 500
-    assert col_id[10] == 1000
-
-
-def test_column_setitem_list_with_holes():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
+def test_column_len():
+    """len() after no deletions, partial deletions, cumulative deletions, and cross-column."""
+    tabla = CTable(RowModel, new_data=DATA20)
+    col = tabla.id
+    assert len(col) == 20
 
     tabla.delete([1, 3, 5, 7, 9])
+    assert len(col) == 15
 
-    col_id = tabla.id
+    # Cumulative deletes
+    tabla2 = CTable(RowModel, new_data=DATA20)
+    col2 = tabla2.id
+    tabla2.delete([0, 1, 2])
+    assert len(col2) == 17
+    tabla2.delete([0, 1, 2, 3, 4])
+    assert len(col2) == 12
 
-    col_id[[0, 2, 4]] = [100, 200, 300]
-
-    assert col_id[0] == 100
-    assert col_id[2] == 200
-    assert col_id[4] == 300
-
-
-def test_column_iter_no_holes():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
-    col_id = tabla.id
-
-    result = list(col_id)
-    expected = list(range(20))
-
-    assert result == expected
+    # Cross-column consistency
+    data = [(i, float(i * 10), i % 2 == 0) for i in range(10)]
+    tabla3 = CTable(RowModel, new_data=data, expected_size=10)
+    tabla3.delete([0, 1, 5, 6, 9])
+    assert len(tabla3.id) == len(tabla3.score) == len(tabla3.active) == 5
+    for i in range(len(tabla3.id)):
+        assert tabla3.score[i] == float(tabla3.id[i] * 10)
 
 
-def test_column_iter_with_holes():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
-    tabla.delete([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])
-
-    col_id = tabla.id
-
-    result = list(col_id)
-    expected = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
-
-    assert result == expected
-
-
-def test_column_iter_score():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
-    tabla.delete([0, 5, 10, 15])
-
-    col_score = tabla.score
-
-    result = list(col_score)
-    expected = [10.0, 20.0, 30.0, 40.0, 60.0, 70.0, 80.0, 90.0,
-                110.0, 120.0, 130.0, 140.0, 160.0, 170.0, 180.0, 190.0]
-
-    assert result == expected
-
-
-def test_column_len_no_holes():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
-    col_id = tabla.id
-
-    assert len(col_id) == 20
-
-
-def test_column_len_with_holes():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
-    tabla.delete([1, 3, 5, 7, 9])
-
-    col_id = tabla.id
-
-    assert len(col_id) == 15
-
-
-def test_column_len_after_multiple_deletes():
-    data = [(i, float(i * 10), True) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
-    col_id = tabla.id
-
-    assert len(col_id) == 20
-
-    tabla.delete([0, 1, 2])
-    assert len(col_id) == 17
-
-    tabla.delete([0, 1, 2, 3, 4])
-    assert len(col_id) == 12
-
-
-def test_column_multiple_columns_consistency():
-    data = [(i, float(i * 10), i % 2 == 0) for i in range(20)]
-    tabla = CTable(RowModel, new_data=data)
-
-    tabla.delete([2, 5, 8, 11, 14])
-
-    col_id = tabla.id
-    col_score = tabla.score
-    col_active = tabla.active
-
-    assert len(col_id) == len(col_score) == len(col_active) == 15
-
-    for i in range(len(col_id)):
-        expected_id = col_id[i]
-        expected_score = col_score[i]
-        expected_active = col_active[i]
-
-        assert expected_score == float(expected_id * 10)
-
-
-def test_column_empty_table():
+def test_column_edge_cases():
+    """Empty table and fully-deleted table both behave as zero-length columns."""
+    # Empty table from the start
     tabla = CTable(RowModel)
+    assert len(tabla.id) == 0
+    assert list(tabla.id) == []
 
-    col_id = tabla.id
-
-    assert len(col_id) == 0
-
-    result = list(col_id)
-    assert result == []
-
-
-def test_column_all_deleted():
+    # All rows deleted
     data = [(i, float(i * 10), True) for i in range(10)]
-    tabla = CTable(RowModel, new_data=data)
+    tabla2 = CTable(RowModel, new_data=data)
+    tabla2.delete(list(range(10)))
+    assert len(tabla2.id) == 0
+    assert list(tabla2.id) == []
 
-    tabla.delete(list(range(10)))
 
-    col_id = tabla.id
-
-    assert len(col_id) == 0
-
-    result = list(col_id)
-    assert result == []
+if __name__ == "__main__":
+    pytest.main(["-v", __file__])

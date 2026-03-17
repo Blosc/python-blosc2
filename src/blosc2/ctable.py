@@ -6,22 +6,35 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-"""Imports for CTable"""
+"""Imports para CTable"""
 
-from __future__ import annotations  # ✅ PRIMERO (después de docstring)
+from __future__ import annotations
+from collections.abc import Iterable
 
-from collections.abc import Iterable  # ✅ AHORA SÍ
-from typing import Any, Generic, TypeVar
+from typing import TYPE_CHECKING, Annotated, Any, Generic, TypeVar, List
 
 import numpy as np
-from line_profiler import profile
-from pydantic import BaseModel
 
-import blosc2
 from blosc2 import compute_chunks_blocks
 
-RowT = TypeVar("RowT", bound=BaseModel)
+try:
+    from line_profiler import profile
+except ImportError:
+    def profile(func):
+        """No-op decorator si line_profiler no está disponible"""
+        def wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+        wrapper.__name__ = func.__name__
+        return wrapper
+from pydantic import BaseModel, Field, create_model, ValidationError
 
+import blosc2
+
+""" Imports extra """
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+RowT = TypeVar("RowT", bound=BaseModel)
 
 
 class NumpyDtype:
@@ -32,7 +45,6 @@ class NumpyDtype:
 class MaxLen:
     def __init__(self, length: int):
         self.length = int(length)
-
 
 """
 class RowModel(BaseModel):
@@ -66,7 +78,7 @@ class _RowIndexer:
 
 
 class Column:
-    def __init__(self, table: CTable, col_name: str):
+    def __init__(self, table: 'CTable', col_name: str):
         self._table = table
         self._col_name = col_name
 
@@ -138,7 +150,7 @@ class Column:
 
         raise TypeError(f"Invalid index type: {type(key)}")
 
-    def __setitem__(self, key: int | slice | list | np.ndarray, value): # noqa: C901
+    def __setitem__(self, key: int | slice | list | np.ndarray, value):
         if isinstance(key, int):
             n_rows = len(self)
             if key < 0:
@@ -265,8 +277,7 @@ class Column:
 
 class CTable(Generic[RowT]):
 
-
-    def __init__(self, row_type: type[RowT], new_data = None, expected_size: int = 1_048_576, compact: bool = False) -> None:  # noqa: C901
+    def __init__(self, row_type: type[RowT], new_data = None, expected_size: int = 1_048_576, compact: bool = False) -> None:
         self._row_type = row_type
         self._cols: dict[str, blosc2.NDArray] = {}
         self._n_rows: int = 0
@@ -285,7 +296,8 @@ class CTable(Generic[RowT]):
             self.col_names.append(name)
             origin = getattr(field.annotation, "__origin__", field.annotation)
 
-            if origin is str or field.annotation is str:
+            # We need to check for other posibilities...
+            if origin == str or field.annotation == str:
                 max_len = 32  # Default MaxLen
                 if hasattr(field.annotation, "__metadata__"):
                     for meta in field.annotation.__metadata__:
@@ -295,7 +307,7 @@ class CTable(Generic[RowT]):
                 dt = np.dtype(f"U{max_len}")
                 display_width = max(10, min(max_len, 50))
 
-            elif origin is bytes or field.annotation is bytes:
+            elif origin == bytes or field.annotation == bytes:
                 max_len = 32    # Default MaxLen
                 if hasattr(field.annotation, "__metadata__"):
                     for meta in field.annotation.__metadata__:
@@ -305,19 +317,19 @@ class CTable(Generic[RowT]):
                 dt = np.dtype(f"S{max_len}")
                 display_width = max(10, min(max_len, 50))
 
-            elif origin is int or field.annotation is int:
+            elif origin == int or field.annotation == int:
                 dt = np.int64
                 display_width = 12
 
-            elif origin is float or field.annotation is float:
+            elif origin == float or field.annotation == float:
                 dt = np.float64
                 display_width = 15
 
-            elif origin is bool or field.annotation is bool:
+            elif origin == bool or field.annotation == bool:
                 dt = np.bool_
                 display_width = 6  # "True" / "False" fit in 5-6 chars
 
-            elif origin is complex or field.annotation is complex:
+            elif origin == complex or field.annotation == complex:
                 dt = np.complex128
                 display_width = 25
             else:
@@ -351,22 +363,25 @@ class CTable(Generic[RowT]):
         retval = []
         cont = 0
 
-        for name in self._cols:
+        # We print the header
+        for name in self._cols.keys():
             retval.append(f"{name:^{self._col_widths[name]}} |")
             cont += self._col_widths[name]+2
         retval.append("\n")
-        for _ in range(cont):
+        for i in range(cont):
             retval.append("-")
         retval.append("\n")
 
 
         # We print the rows
 
+        """Change this. Use where"""
         real_poss = blosc2.where(self._valid_rows, np.array(range(len(self._valid_rows)))).compute()
+
         for j in real_poss:
-            for name in self._cols:
+            for name in self._cols.keys():
                 retval.append(f"{self._cols[name][j]:^{self._col_widths[name]}}")
-                retval.append(" |")
+                retval.append(f" |")
             retval.append("\n")
             for _ in range(cont):
                 retval.append("-")
@@ -414,7 +429,9 @@ class CTable(Generic[RowT]):
 
         return retval'''
         if N <= 0:
-            return self.view(blosc2.zeros(shape=len(self._valid_rows), dtype=np.bool_))
+            # If N is 0 or negative, return an empty table
+            retval = self.view(blosc2.zeros(shape=len(self._valid_rows), dtype=np.bool_))
+            return retval
 
         arr = self._valid_rows
         count = 0
@@ -422,7 +439,6 @@ class CTable(Generic[RowT]):
         pos_N_true = -1
         if (N<=0):
             return self.view(blosc2.zeros(shape=len(arr), dtype=np.bool_))
-
         for info in arr.iterchunks_info():
             actual_size = min(chunk_size, arr.shape[0] - info.nchunk * chunk_size)
             chunk_start = info.nchunk * chunk_size
@@ -456,7 +472,8 @@ class CTable(Generic[RowT]):
             break
 
         if pos_N_true == -1:
-            return self.view(self._valid_rows)
+            retval = self.view(self._valid_rows)
+            return retval
 
         if pos_N_true < len(self._valid_rows)//2:
             mask_arr = blosc2.zeros(shape=len(arr), dtype=np.bool_)
@@ -468,10 +485,11 @@ class CTable(Generic[RowT]):
         mask_arr = (mask_arr & self._valid_rows).compute()
         return self.view(mask_arr)
 
-    def tail(self, N: int = 5) -> CTable:
+    def tail(self, N: int = 5) -> 'CTable':
         if N <= 0:
             # If N is 0 or negative, return an empty table
-            return self.view(blosc2.zeros(shape=len(self._valid_rows), dtype=np.bool_))
+            retval = self.view(blosc2.zeros(shape=len(self._valid_rows), dtype=np.bool_))
+            return retval
 
         arr = self._valid_rows
         count = 0
@@ -514,8 +532,8 @@ class CTable(Generic[RowT]):
             break
 
         if pos_N_true == -1:
-            return self.view(self._valid_rows)
-
+            retval = self.view(self._valid_rows)
+            return retval
 
 
 
@@ -532,7 +550,8 @@ class CTable(Generic[RowT]):
 
         # Compute intersection with existing valid rows and creating view
         mask_arr = (mask_arr & self._valid_rows).compute()
-        return self.view(mask_arr)
+        retval = self.view(mask_arr)
+        return retval
 
     def __getitem__(self, s: str):
         if s in self._cols:
@@ -550,13 +569,14 @@ class CTable(Generic[RowT]):
         block_size= self._valid_rows.blocks[0]
         end = min(block_size, self._n_rows)
         while start < end:
-            for _, v in self._cols.items():
+            for k, v in self._cols.items():
                 v[start:end] = v[real_poss[start:end]]
             start += block_size
             end = min(end + block_size, self._n_rows)
 
         self._valid_rows[:self._n_rows] = True
         self._valid_rows[self._n_rows:] = False
+
 
     @property
     def nrows(self) -> int:
@@ -591,7 +611,7 @@ class CTable(Generic[RowT]):
         ratio = (nbytes / cbytes) if cbytes > 0 else 0.0
 
         lines = []
-        lines.append("<class 'CTable'>")
+        lines.append(f"<class 'CTable'>")
         lines.append(f"nºColumns: {n_cols}")
         lines.append(f"nºRows: {n_rows}")
         lines.append("")
@@ -617,58 +637,57 @@ class CTable(Generic[RowT]):
 
         print("\n".join(lines))
 
-    def append(self, data: list | np.void | np.ndarray) -> None: # noqa: C901
+
+    def append(self, data: list | np.void | np.ndarray) -> None:
         if self.base is not None:
             raise TypeError("Cannot extend view.")
 
         is_list = isinstance(data, (list, tuple))
-        col_values = list(self._cols.values())
-        col_names = self.col_names
 
-        if isinstance(data, dict):
-            raise TypeError("Dictionaries are not supported in append.")
+        arr = self._valid_rows
+        chunk_size = arr.chunks[0]
+        last_true_pos = -1
 
-        if is_list and len(data) != len(col_values):
-            raise ValueError(f"Expected {len(col_values)} values, received {len(data)}")
+        for info in reversed(list(arr.iterchunks_info())):
+            actual_size = min(chunk_size, arr.shape[0] - info.nchunk * chunk_size)
+            chunk_start = info.nchunk * chunk_size
 
-        if is_list:
-            for i, val in enumerate(data):
-                target_dtype = col_values[i].dtype
-                try:
-                    np.array(val, dtype=target_dtype)
-                except (ValueError, TypeError):
-                    raise TypeError(
-                        f"Value '{val}' is not compatible with column '{col_names[i]}' of type {target_dtype}") from None
-        else:
-            for name, arr in self._cols.items():
-                try:
-                    val = data[name]
-                except (IndexError, KeyError, ValueError):
-                    raise ValueError(f"Input data does not contain required field '{name}'") from None
-                try:
-                    np.array(val, dtype=arr.dtype)
-                except (ValueError, TypeError):
-                    raise TypeError(f"Value '{val}' in field '{name}' is not compatible with type {arr.dtype}") from None
+            if info.special == blosc2.SpecialValue.ZERO:
+                continue
 
-        ultimas_validas = blosc2.where(self._valid_rows, np.array(range(len(self._valid_rows)))).compute()
-        pos = ultimas_validas[-1] + 1 if len(ultimas_validas) > 0 else 0
+            if info.special == blosc2.SpecialValue.VALUE:
+                val = np.frombuffer(info.repeated_value, dtype=arr.dtype)[0]
+                if not val:
+                    continue
+                last_true_pos = chunk_start + actual_size - 1
+                break
+
+            chunk_data = arr[chunk_start: chunk_start + actual_size]
+            nonzero = np.flatnonzero(chunk_data)
+            if len(nonzero) == 0:
+                continue
+            last_true_pos = chunk_start + int(nonzero[-1])
+            break
+
+        pos = last_true_pos + 1
+
         if pos >= len(self._valid_rows):
             c = len(self._valid_rows)
-            for _,v in self._cols.items():
+            for v in self._cols.values():
                 v.resize((c * 2,))
             self._valid_rows.resize((c * 2,))
 
         if is_list:
-            for i, col_array in enumerate(col_values):
+            for i, col_array in enumerate(self._cols.values()):
                 col_array[pos] = data[i]
         else:
             for name, col_array in self._cols.items():
                 col_array[pos] = data[name]
-        self._valid_rows[pos] = True
 
+        self._valid_rows[pos] = True
         self._n_rows += 1
 
-    def delete(self, ind: int | slice | str | Iterable):
+    def delete(self, ind: int | slice | str | Iterable) -> blosc2.NDArray:
         valid_rows_np = self._valid_rows[:]
         true_pos = np.where(valid_rows_np)[0]
 
@@ -687,7 +706,7 @@ class CTable(Generic[RowT]):
         self._n_rows = blosc2.count_nonzero(self._valid_rows)
 
     def extend(self, data: list | CTable | Any) -> None:
-        if self.base is not None:
+        if self.base != None:
             raise TypeError("Cannot extend view.")
         if len(data) <=0:
             return
@@ -709,7 +728,7 @@ class CTable(Generic[RowT]):
                     columns_to_insert.append(data[name])
                 new_nrows = len(data)
             else:
-                columns_to_insert = list(zip(*data, strict=True))
+                columns_to_insert = list(zip(*data))
                 new_nrows = len(data)
 
         processed_cols = []
@@ -761,7 +780,8 @@ class CTable(Generic[RowT]):
 
         filter = (filter & self._valid_rows).compute()
 
-        return self.view(filter)
+        retval = self.view(filter)
+        return retval
 
     def _run_row_logic(self, ind: int | slice | str | Iterable) -> CTable:
         valid_rows_np = self._valid_rows[:]
@@ -786,3 +806,5 @@ class CTable(Generic[RowT]):
     @classmethod
     def load(cls, urlpath: str, group: str = "table", row_type: type[RowT] | None = None) -> CTable:
         ...
+
+

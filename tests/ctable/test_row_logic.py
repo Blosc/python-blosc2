@@ -1,10 +1,16 @@
+#######################################################################
+# Copyright (c) 2019-present, Blosc Development Team <blosc@blosc.org>
+# All rights reserved.
+#
+# SPDX-License-Identifier: BSD-3-Clause
+#######################################################################
+
+import pytest
+import numpy as np
+from blosc2 import CTable
+from pydantic import BaseModel, Field
 from typing import Annotated
 
-import numpy as np
-import pytest
-from pydantic import BaseModel, Field
-
-from blosc2 import CTable
 from blosc2.ctable import Column
 
 
@@ -23,364 +29,176 @@ def generate_test_data(n_rows: int, start_id: int = 0) -> list:
     return [(start_id + i, float(i * 10), i % 2 == 0) for i in range(n_rows)]
 
 
-def test_row_int_no_holes():
+# -------------------------------------------------------------------
+# Tests
+# -------------------------------------------------------------------
+
+def test_row_int_indexing():
+    """int indexing: no holes, with holes, negative indices, and out-of-range."""
     data = generate_test_data(20)
-    tabla = CTable(RowModel, new_data=data)
 
-    result = tabla.row[0]
+    # No holes: spot checks
+    t = CTable(RowModel, new_data=data)
+    r = t.row[0]
+    assert isinstance(r, CTable) and len(r) == 1
+    assert r.id[0] == 0 and r.score[0] == 0.0 and r.active[0] == True
+    assert t.row[10].id[0] == 10 and t.row[10].score[0] == 100.0
 
-    assert isinstance(result, CTable)
-    assert len(result) == 1
-    assert result.id[0] == 0
-    assert result.score[0] == 0.0
-    assert result.active[0]
+    # Negative indices
+    assert t.row[-1].id[0] == 19
+    assert t.row[-5].id[0] == 15
 
-    result = tabla.row[10]
-    assert len(result) == 1
-    assert result.id[0] == 10
-    assert result.score[0] == 100.0
+    # With holes: delete odd positions → valid: 0,2,4,6,8,10…
+    t.delete([1, 3, 5, 7, 9])
+    assert t.row[0].id[0] == 0
+    assert t.row[1].id[0] == 2
+    assert t.row[5].id[0] == 10
+
+    # Out of range
+    t2 = CTable(RowModel, new_data=generate_test_data(10))
+    for idx in [10, 100, -11]:
+        with pytest.raises(IndexError):
+            _ = t2.row[idx]
 
 
-def test_row_int_with_holes():
+def test_row_slice_indexing():
+    """Slice indexing: no holes, with holes, step, negative, beyond bounds, empty/full."""
     data = generate_test_data(20)
-    tabla = CTable(RowModel, new_data=data)
 
-    tabla.delete([1, 3, 5, 7, 9])
+    # No holes
+    t = CTable(RowModel, new_data=data)
+    assert isinstance(t.row[0:5], CTable)
+    assert list(t.row[0:5].id) == [0, 1, 2, 3, 4]
+    assert list(t.row[10:15].id) == [10, 11, 12, 13, 14]
+    assert list(t.row[::2].id) == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
 
-    result = tabla.row[0]
-    assert len(result) == 1
-    assert result.id[0] == 0
+    # With step
+    assert list(t.row[0:10:2].id) == [0, 2, 4, 6, 8]
+    assert list(t.row[1:10:3].id) == [1, 4, 7]
 
-    result = tabla.row[1]
-    assert len(result) == 1
-    assert result.id[0] == 2
+    # Negative indices
+    assert list(t.row[-5:].id) == [15, 16, 17, 18, 19]
+    assert list(t.row[-10:-5].id) == [10, 11, 12, 13, 14]
 
-    result = tabla.row[5]
-    assert len(result) == 1
-    assert result.id[0] == 10
+    # With holes: delete odd positions
+    t.delete([1, 3, 5, 7, 9])
+    assert list(t.row[0:5].id) == [0, 2, 4, 6, 8]
+    assert list(t.row[5:10].id) == [10, 11, 12, 13, 14]
+
+    # Beyond bounds
+    t2 = CTable(RowModel, new_data=generate_test_data(10))
+    assert len(t2.row[11:20]) == 0
+    assert list(t2.row[5:100].id) == [5, 6, 7, 8, 9]
+    assert len(t2.row[100:]) == 0
+
+    # Empty and full slices
+    assert len(t2.row[5:5]) == 0
+    assert len(t2.row[0:0]) == 0
+    result = t2.row[:]
+    assert len(result) == 10 and list(result.id) == list(range(10))
 
 
-def test_row_int_negative_indices():
+def test_row_list_indexing():
+    """List indexing: no holes, with holes, out-of-range, edge cases."""
     data = generate_test_data(20)
-    tabla = CTable(RowModel, new_data=data)
 
-    result = tabla.row[-1]
-    assert len(result) == 1
-    assert result.id[0] == 19
+    # No holes
+    t = CTable(RowModel, new_data=data)
+    r = t.row[[0, 5, 10, 15]]
+    assert isinstance(r, CTable) and len(r) == 4
+    assert set(r.id) == {0, 5, 10, 15}
+    assert set(t.row[[19, 0, 10]].id) == {0, 10, 19}
 
-    result = tabla.row[-5]
-    assert len(result) == 1
-    assert result.id[0] == 15
+    # With holes: delete [1,3,5,7,9] → logical 0→id0, 1→id2, 2→id4…
+    t.delete([1, 3, 5, 7, 9])
+    assert set(t.row[[0, 2, 4]].id) == {0, 4, 8}
+    assert set(t.row[[5, 3, 1]].id) == {2, 6, 10}
 
+    # Negative indices in list
+    t2 = CTable(RowModel, new_data=generate_test_data(10))
+    assert set(t2.row[[0, -1, 5]].id) == {0, 5, 9}
 
-def test_row_int_out_of_range():
-    data = generate_test_data(10)
-    tabla = CTable(RowModel, new_data=data)
+    # Single element
+    assert t2.row[[5]].id[0] == 5
 
-    with pytest.raises(IndexError):
-        _ = tabla.row[10]
+    # Duplicate indices → deduplicated
+    r_dup = t2.row[[5, 5, 5]]
+    assert len(r_dup) == 1 and r_dup.id[0] == 5
 
-    with pytest.raises(IndexError):
-        _ = tabla.row[100]
+    # Empty list
+    assert len(t2.row[[]]) == 0
 
-    with pytest.raises(IndexError):
-        _ = tabla.row[-11]
-
-
-def test_row_slice_no_holes():
-    data = generate_test_data(20)
-    tabla = CTable(RowModel, new_data=data)
-
-    result = tabla.row[0:5]
-
-    assert isinstance(result, CTable)
-    assert len(result) == 5
-    assert list(result.id) == [0, 1, 2, 3, 4]
-
-    result = tabla.row[10:15]
-    assert len(result) == 5
-    assert list(result.id) == [10, 11, 12, 13, 14]
-
-    result = tabla.row[::2]
-    assert len(result) == 10
-    assert list(result.id) == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
+    # Out of range
+    for bad in [[0, 5, 100], [0, 1, -11]]:
+        with pytest.raises(IndexError):
+            _ = t2.row[bad]
 
 
-def test_row_slice_with_holes():
-    data = generate_test_data(20)
-    tabla = CTable(RowModel, new_data=data)
-
-    tabla.delete([1, 3, 5, 7, 9])
-
-    result = tabla.row[0:5]
-    assert len(result) == 5
-    assert list(result.id) == [0, 2, 4, 6, 8]
-
-    result = tabla.row[5:10]
-    assert len(result) == 5
-    assert list(result.id) == [10, 11, 12, 13, 14]
-
-
-def test_row_slice_beyond_table_size():
-    data = generate_test_data(10)
-    tabla = CTable(RowModel, new_data=data)
-
-    result = tabla.row[11:20]
-    assert len(result) == 0
-
-    result = tabla.row[5:100]
-    assert len(result) == 5
-    assert list(result.id) == [5, 6, 7, 8, 9]
-
-    result = tabla.row[100:]
-    assert len(result) == 0
-
-
-def test_row_slice_negative_indices():
-    data = generate_test_data(20)
-    tabla = CTable(RowModel, new_data=data)
-
-    result = tabla.row[-5:]
-    assert len(result) == 5
-    assert list(result.id) == [15, 16, 17, 18, 19]
-
-    result = tabla.row[-10:-5]
-    assert len(result) == 5
-    assert list(result.id) == [10, 11, 12, 13, 14]
-
-
-def test_row_list_no_holes():
-    data = generate_test_data(20)
-    tabla = CTable(RowModel, new_data=data)
-
-    result = tabla.row[[0, 5, 10, 15]]
-
-    assert isinstance(result, CTable)
-    assert len(result) == 4
-    assert set(result.id) == {0, 5, 10, 15}
-
-    result = tabla.row[[19, 0, 10]]
-    assert len(result) == 3
-    assert set(result.id) == {0, 10, 19}
-
-
-def test_row_list_with_holes():
-    data = generate_test_data(20)
-    tabla = CTable(RowModel, new_data=data)
-
-    tabla.delete([1, 3, 5, 7, 9])
-
-    result = tabla.row[[0, 2, 4]]
-    assert len(result) == 3
-    assert set(result.id) == {0, 4, 8}
-
-    result = tabla.row[[5, 3, 1]]
-    assert len(result) == 3
-    assert set(result.id) == {2, 6, 10}
-
-
-def test_row_list_out_of_range():
-    data = generate_test_data(10)
-    tabla = CTable(RowModel, new_data=data)
-
-    with pytest.raises(IndexError):
-        _ = tabla.row[[0, 5, 100]]
-
-    with pytest.raises(IndexError):
-        _ = tabla.row[[0, 1, -11]]
-
-
-def test_row_returns_view_properties():
-    data = generate_test_data(20)
-    tabla = CTable(RowModel, new_data=data)
-
-    result = tabla.row[0:10]
-
-    assert result.base is tabla
-    assert result._row_type == tabla._row_type
-    assert result._cols is tabla._cols
-    assert result._col_widths == tabla._col_widths
-    assert result.col_names == tabla.col_names
-
-
-def test_row_chained_views():
+def test_row_view_properties():
+    """View metadata, base chain, mask integrity, column liveness, and chained views."""
     data = generate_test_data(100)
     tabla0 = CTable(RowModel, new_data=data)
 
-    tabla1 = tabla0.row[:50]
-    assert tabla1.base is tabla0
-    assert len(tabla1) == 50
-    assert list(tabla1.id)[:5] == [0, 1, 2, 3, 4]
-
-    tabla2 = tabla1.row[:10]
-    assert tabla2.base is tabla1
-    assert len(tabla2) == 10
-    assert list(tabla2.id) == [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
-
-    tabla3 = tabla2.row[5:]
-    assert tabla3.base is tabla2
-    assert len(tabla3) == 5
-    assert list(tabla3.id) == [5, 6, 7, 8, 9]
-
-
-def test_row_view_on_view_with_holes():
-    data = generate_test_data(50)
-    tabla0 = CTable(RowModel, new_data=data)
-
-    tabla0.delete([5, 10, 15, 20, 25])
-
-    tabla1 = tabla0.row[:30]
-    assert tabla1.base is tabla0
-    assert len(tabla1) == 30
-
-    tabla2 = tabla1.row[10:20]
-    assert tabla2.base is tabla1
-    assert len(tabla2) == 10
-
-
-def test_row_empty_slice():
-    data = generate_test_data(10)
-    tabla = CTable(RowModel, new_data=data)
-
-    result = tabla.row[5:5]
-    assert len(result) == 0
-
-    result = tabla.row[0:0]
-    assert len(result) == 0
-
-
-def test_row_full_slice():
-    data = generate_test_data(10)
-    tabla = CTable(RowModel, new_data=data)
-
-    result = tabla.row[:]
-    assert len(result) == 10
-    assert list(result.id) == list(range(10))
-
-
-def test_row_empty_table():
-    tabla = CTable(RowModel)
-
-    with pytest.raises(IndexError):
-        _ = tabla.row[0]
-
-    result = tabla.row[:]
-    assert len(result) == 0
-
-    result = tabla.row[0:10]
-    assert len(result) == 0
-
-
-def test_row_all_deleted():
-    data = generate_test_data(10)
-    tabla = CTable(RowModel, new_data=data)
-
-    tabla.delete(list(range(10)))
-
-    with pytest.raises(IndexError):
-        _ = tabla.row[0]
-
-    result = tabla.row[:]
-    assert len(result) == 0
-
-
-def test_row_view_maintains_mask_reference():
-    data = generate_test_data(20)
-    tabla = CTable(RowModel, new_data=data)
-
-    result = tabla.row[5:15]
-
-    mask = result._valid_rows[:]
-    true_count = np.count_nonzero(mask)
-    assert true_count == 10
-
-
-def test_row_single_element_list():
-    data = generate_test_data(10)
-    tabla = CTable(RowModel, new_data=data)
-
-    result = tabla.row[[5]]
-    assert len(result) == 1
-    assert result.id[0] == 5
-
-
-def test_row_duplicate_indices_in_list():
-    data = generate_test_data(10)
-    tabla = CTable(RowModel, new_data=data)
-
-    result = tabla.row[[5, 5, 5]]
-    assert len(result) == 1
-    assert result.id[0] == 5
-
-
-def test_row_view_base_chain():
-    data = generate_test_data(100)
-    tabla0 = CTable(RowModel, new_data=data)
-
+    # Base is None on root table
     assert tabla0.base is None
 
-    tabla1 = tabla0.row[:80]
-    assert tabla1.base is tabla0
+    # View properties are shared with parent
+    v = tabla0.row[0:10]
+    assert v.base is tabla0
+    assert v._row_type == tabla0._row_type
+    assert v._cols is tabla0._cols
+    assert v._col_widths == tabla0._col_widths
+    assert v.col_names == tabla0.col_names
 
-    tabla2 = tabla1.row[:60]
-    assert tabla2.base is tabla1
-
-    tabla3 = tabla2.row[:40]
-    assert tabla3.base is tabla2
-
-
-def test_row_view_read_operations():
-    data = generate_test_data(20)
-    tabla = CTable(RowModel, new_data=data)
-
-    view = tabla.row[5:15]
-
-    assert view.id[0] == 5
-    assert view.score[0] == 50.0
-    assert not view.active[0]
-
+    # Read ops on view
+    view = tabla0.row[5:15]
+    assert view.id[0] == 5 and view.score[0] == 50.0 and view.active[0] == False
     assert list(view.id) == list(range(5, 15))
 
+    # Mask integrity
+    assert np.count_nonzero(view._valid_rows[:]) == 10
 
-def test_row_list_empty():
-    data = generate_test_data(10)
-    tabla = CTable(RowModel, new_data=data)
-
-    result = tabla.row[[]]
-    assert len(result) == 0
-
-
-def test_row_slice_with_step():
-    data = generate_test_data(20)
-    tabla = CTable(RowModel, new_data=data)
-
-    result = tabla.row[0:10:2]
-    assert len(result) == 5
-    assert list(result.id) == [0, 2, 4, 6, 8]
-
-    result = tabla.row[1:10:3]
-    assert len(result) == 3
-    assert list(result.id) == [1, 4, 7]
-
-
-def test_row_list_with_negative_indices():
-    data = generate_test_data(10)
-    tabla = CTable(RowModel, new_data=data)
-
-    result = tabla.row[[0, -1, 5]]
-    assert len(result) == 3
-    assert set(result.id) == {0, 5, 9}
-
-
-def test_row_view_columns_are_live():
-    data = generate_test_data(20)
-    tabla = CTable(RowModel, new_data=data)
-
-    view = tabla.row[5:10]
-
+    # Column is live (points back to its view)
     col = view.id
-    assert isinstance(col, Column) if 'Column' in dir() else True
+    assert isinstance(col, Column)
     assert col._table is view
+
+    # Chained views: base always points to immediate parent
+    tabla1 = tabla0.row[:50]
+    assert tabla1.base is tabla0 and len(tabla1) == 50
+
+    tabla2 = tabla1.row[:10]
+    assert tabla2.base is tabla1 and len(tabla2) == 10
+    assert list(tabla2.id) == list(range(10))
+
+    tabla3 = tabla2.row[5:]
+    assert tabla3.base is tabla2 and len(tabla3) == 5
+    assert list(tabla3.id) == [5, 6, 7, 8, 9]
+
+    # Chained view with holes on parent
+    tabla0.delete([5, 10, 15, 20, 25])
+    tv1 = tabla0.row[:30]
+    assert tv1.base is tabla0 and len(tv1) == 30
+    tv2 = tv1.row[10:20]
+    assert tv2.base is tv1 and len(tv2) == 10
+
+
+def test_row_edge_cases():
+    """Empty table, fully-deleted table: int raises IndexError, slice returns empty."""
+    # Empty table
+    empty = CTable(RowModel)
+    with pytest.raises(IndexError):
+        _ = empty.row[0]
+    assert len(empty.row[:]) == 0
+    assert len(empty.row[0:10]) == 0
+
+    # All rows deleted
+    data = generate_test_data(10)
+    t = CTable(RowModel, new_data=data)
+    t.delete(list(range(10)))
+    with pytest.raises(IndexError):
+        _ = t.row[0]
+    assert len(t.row[:]) == 0
 
 
 if __name__ == "__main__":

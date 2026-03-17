@@ -33,7 +33,7 @@ classifiers = [
 requires-python = ">=3.10"
 # Follow guidelines from https://scientific-python.org/specs/spec-0000/
 dependencies = [
-    "numpy>=1.26",
+  #"numpy>=1.26",
     "ndindex",
     "msgpack",
     "numexpr>=2.14.1; platform_machine != 'wasm32'",
@@ -54,6 +54,7 @@ dev = [
     "hdf5plugin",
     "jupyterlab",
     "matplotlib",
+    "numpy>=1.26"
     "pandas",
     "plotly",
     "pre-commit",
@@ -135,3 +136,4 @@ ignore = [
 [tool.ruff.lint.mccabe]
 # Raise complexity from the default 10 to 13
 max-complexity = 13
+
