@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 import blosc2
 from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
+from blosc2.info import InfoReporter, format_nbytes_info
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -73,7 +74,6 @@ class VLArray:
 
     def _attach_schunk(self, schunk: SChunk) -> None:
         self.schunk = schunk
-        self.urlpath = schunk.urlpath
         self.mode = schunk.mode
         self.mmap_mode = getattr(schunk, "mmap_mode", None)
         self._validate_tag()
@@ -173,6 +173,15 @@ class VLArray:
 
     def _copy_meta(self) -> dict[str, Any]:
         return {name: self.meta[name] for name in self.meta}
+
+    def _item_size_stats(self) -> tuple[list[int], list[int]]:
+        item_nbytes = []
+        chunk_cbytes = []
+        for i in range(len(self)):
+            nbytes, cbytes, _ = blosc2.get_cbuffer_sizes(self.schunk.get_lazychunk(i))
+            item_nbytes.append(nbytes)
+            chunk_cbytes.append(cbytes)
+        return item_nbytes, chunk_cbytes
 
     def _serialize(self, value: Any) -> bytes:
         payload = msgpack_packb(value)
@@ -300,6 +309,57 @@ class VLArray:
     @property
     def chunksize(self) -> int:
         return self.schunk.chunksize
+
+    @property
+    def typesize(self) -> int:
+        return self.schunk.typesize
+
+    @property
+    def nbytes(self) -> int:
+        return self.schunk.nbytes
+
+    @property
+    def cbytes(self) -> int:
+        return self.schunk.cbytes
+
+    @property
+    def cratio(self) -> float:
+        return self.schunk.cratio
+
+    @property
+    def urlpath(self) -> str | None:
+        return self.schunk.urlpath
+
+    @property
+    def contiguous(self) -> bool:
+        return self.schunk.contiguous
+
+    @property
+    def info(self) -> InfoReporter:
+        """Print information about this VLArray."""
+        return InfoReporter(self)
+
+    @property
+    def info_items(self) -> list:
+        """A list of tuples with summary information about this VLArray."""
+        item_nbytes, chunk_cbytes = self._item_size_stats()
+        avg_item_nbytes = sum(item_nbytes) / len(item_nbytes) if item_nbytes else 0.0
+        avg_chunk_cbytes = sum(chunk_cbytes) / len(chunk_cbytes) if chunk_cbytes else 0.0
+        return [
+            ("type", f"{self.__class__.__name__}"),
+            ("entries", len(self)),
+            ("item_nbytes_min", min(item_nbytes) if item_nbytes else 0),
+            ("item_nbytes_max", max(item_nbytes) if item_nbytes else 0),
+            ("item_nbytes_avg", f"{avg_item_nbytes:.2f}"),
+            ("chunk_cbytes_min", min(chunk_cbytes) if chunk_cbytes else 0),
+            ("chunk_cbytes_max", max(chunk_cbytes) if chunk_cbytes else 0),
+            ("chunk_cbytes_avg", f"{avg_chunk_cbytes:.2f}"),
+            ("nbytes", format_nbytes_info(self.nbytes)),
+            ("cbytes", format_nbytes_info(self.cbytes)),
+            ("cratio", f"{self.cratio:.2f}"),
+            ("cparams", self.cparams),
+            ("dparams", self.dparams),
+        ]
 
     def to_cframe(self) -> bytes:
         return self.schunk.to_cframe()

@@ -103,6 +103,18 @@ def test_asarray(a):
         np.testing.assert_allclose(a, b[:])
 
 
+def test_ndarray_info_has_human_sizes():
+    array = blosc2.asarray(np.arange(16, dtype=np.int32))
+
+    items = dict(array.info_items)
+    assert "(" in items["nbytes"]
+    assert "(" in items["cbytes"]
+
+    text = repr(array.info)
+    assert "nbytes" in text
+    assert "cbytes" in text
+
+
 @pytest.mark.parametrize(
     ("shape", "newshape", "chunks", "blocks"),
     [

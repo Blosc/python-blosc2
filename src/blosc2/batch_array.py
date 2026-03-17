@@ -15,6 +15,7 @@ from typing import Any
 
 import blosc2
 from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
+from blosc2.info import InfoReporter, format_nbytes_info
 
 _BATCHARRAY_META = {"version": 1, "serializer": "msgpack", "format": "vlblocks"}
 
@@ -128,7 +129,6 @@ class BatchArray:
 
     def _attach_schunk(self, schunk: blosc2.SChunk) -> None:
         self.schunk = schunk
-        self.urlpath = schunk.urlpath
         self.mode = schunk.mode
         self.mmap_mode = getattr(schunk, "mmap_mode", None)
         self._validate_tag()
@@ -262,6 +262,13 @@ class BatchArray:
     def _get_batch(self, index: int) -> Batch:
         return Batch(self, index, self.schunk.get_lazychunk(index))
 
+    def _batch_lengths(self) -> list[int]:
+        lengths = []
+        for i in range(len(self)):
+            _, _, nblocks = blosc2.get_cbuffer_sizes(self.schunk.get_lazychunk(i))
+            lengths.append(nblocks)
+        return lengths
+
     def append(self, value: object) -> int:
         """Append one batch and return the new number of entries."""
         self._check_writable()
@@ -381,6 +388,10 @@ class BatchArray:
         return self.schunk.chunksize
 
     @property
+    def typesize(self) -> int:
+        return self.schunk.typesize
+
+    @property
     def nbytes(self) -> int:
         return self.schunk.nbytes
 
@@ -391,6 +402,39 @@ class BatchArray:
     @property
     def cratio(self) -> float:
         return self.schunk.cratio
+
+    @property
+    def urlpath(self) -> str | None:
+        return self.schunk.urlpath
+
+    @property
+    def contiguous(self) -> bool:
+        return self.schunk.contiguous
+
+    @property
+    def info(self) -> InfoReporter:
+        """Print information about this BatchArray."""
+        return InfoReporter(self)
+
+    @property
+    def info_items(self) -> list:
+        """A list of tuples with summary information about this BatchArray."""
+        batch_lengths = self._batch_lengths()
+        nitems = sum(batch_lengths)
+        avg_batch_len = nitems / len(batch_lengths) if batch_lengths else 0.0
+        return [
+            ("type", f"{self.__class__.__name__}"),
+            ("nbatches", len(self)),
+            ("nitems", nitems),
+            ("batch_len_min", min(batch_lengths) if batch_lengths else 0),
+            ("batch_len_max", max(batch_lengths) if batch_lengths else 0),
+            ("batch_len_avg", f"{avg_batch_len:.2f}"),
+            ("nbytes", format_nbytes_info(self.nbytes)),
+            ("cbytes", format_nbytes_info(self.cbytes)),
+            ("cratio", f"{self.cratio:.2f}"),
+            ("cparams", self.cparams),
+            ("dparams", self.dparams),
+        ]
 
     def to_cframe(self) -> bytes:
         return self.schunk.to_cframe()

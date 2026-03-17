@@ -117,6 +117,33 @@ def test_vlarray_from_cframe():
     assert list(restored2) == expected
 
 
+def test_vlarray_info():
+    vlarray = blosc2.VLArray()
+    vlarray.extend(VALUES)
+
+    assert vlarray.typesize == 1
+    assert vlarray.contiguous == vlarray.schunk.contiguous
+    assert vlarray.urlpath == vlarray.schunk.urlpath
+
+    items = dict(vlarray.info_items)
+    assert items["type"] == "VLArray"
+    assert items["entries"] == len(VALUES)
+    assert items["item_nbytes_min"] > 0
+    assert items["item_nbytes_max"] >= items["item_nbytes_min"]
+    assert items["chunk_cbytes_min"] > 0
+    assert items["chunk_cbytes_max"] >= items["chunk_cbytes_min"]
+    assert "urlpath" not in items
+    assert "contiguous" not in items
+    assert "typesize" not in items
+    assert "(" in items["nbytes"]
+    assert "(" in items["cbytes"]
+
+    text = repr(vlarray.info)
+    assert "type" in text
+    assert "VLArray" in text
+    assert "item_nbytes_avg" in text
+
+
 def test_vlarray_constructor_kwargs():
     urlpath = "test_vlarray_kwargs.b2frame"
     blosc2.remove_urlpath(urlpath)

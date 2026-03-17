@@ -20,7 +20,7 @@ import numpy as np
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
 from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
-from blosc2.info import InfoReporter
+from blosc2.info import InfoReporter, format_nbytes_info
 
 
 class vlmeta(MutableMapping, blosc2_ext.vlmeta):
@@ -491,8 +491,8 @@ class SChunk(blosc2_ext.SChunk):
         items += [("chunksize", self.chunksize)]
         items += [("blocksize", self.blocksize)]
         items += [("typesize", self.typesize)]
-        items += [("nbytes", self.nbytes)]
-        items += [("cbytes", self.cbytes)]
+        items += [("nbytes", format_nbytes_info(self.nbytes))]
+        items += [("cbytes", format_nbytes_info(self.cbytes))]
         items += [("cratio", f"{self.cratio:.2f}")]
         items += [("cparams", self.cparams)]
         items += [("dparams", self.dparams)]

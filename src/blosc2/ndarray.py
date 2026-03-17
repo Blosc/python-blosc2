@@ -29,7 +29,7 @@ import numpy as np
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext, compute_chunks_blocks
-from blosc2.info import InfoReporter
+from blosc2.info import InfoReporter, format_nbytes_info
 from blosc2.schunk import SChunk
 
 from .linalg import matmul
@@ -3838,8 +3838,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         items += [("chunks", self.chunks)]
         items += [("blocks", self.blocks)]
         items += [("dtype", self.dtype)]
-        items += [("nbytes", self.nbytes)]
-        items += [("cbytes", self.cbytes)]
+        items += [("nbytes", format_nbytes_info(self.nbytes))]
+        items += [("cbytes", format_nbytes_info(self.cbytes))]
         items += [("cratio", f"{self.cratio:.2f}")]
         items += [("cparams", self.cparams)]
         items += [("dparams", self.dparams)]

@@ -127,6 +127,34 @@ def test_batcharray_from_cframe():
     assert [batch[:] for batch in restored2] == expected
 
 
+def test_batcharray_info():
+    barray = blosc2.BatchArray()
+    barray.extend(BATCHES)
+
+    assert barray.typesize == 1
+    assert barray.contiguous == barray.schunk.contiguous
+    assert barray.urlpath == barray.schunk.urlpath
+
+    items = dict(barray.info_items)
+    assert items["type"] == "BatchArray"
+    assert items["nbatches"] == len(BATCHES)
+    assert items["nitems"] == sum(len(batch) for batch in BATCHES)
+    assert items["batch_len_min"] == 2
+    assert items["batch_len_max"] == 4
+    assert items["batch_len_avg"] == "3.00"
+    assert "urlpath" not in items
+    assert "contiguous" not in items
+    assert "typesize" not in items
+    assert "(" in items["nbytes"]
+    assert "(" in items["cbytes"]
+    assert "B)" in items["nbytes"] or "KiB)" in items["nbytes"] or "MiB)" in items["nbytes"]
+
+    text = repr(barray.info)
+    assert "type" in text
+    assert "BatchArray" in text
+    assert "batch_len_avg" in text
+
+
 def test_vlcompress_small_blocks_roundtrip():
     values = [
         {"value": None},
