@@ -46,7 +46,7 @@ def assert_mask_matches(table: CTable, expected_mask: list):
 
 
 def assert_data_at_positions(table: CTable, positions: list, expected_ids: list):
-    for pos, expected_id in zip(positions, expected_ids):
+    for pos, expected_id in zip(positions, expected_ids, strict=False):
         actual_id = int(table._cols["id"][pos])
         assert actual_id == expected_id, f"Position {pos}: expected ID {expected_id}, got {actual_id}"
 
@@ -218,7 +218,8 @@ def test_complex_scenarios():
     assert len(t4) == 9
     t4.extend(generate_test_data(3, 300))
     assert len(t4) == 12
-    assert t4.nrows == 12 and t4.ncols == 4
+    assert t4.nrows == 12
+    assert t4.ncols == 4
 
 
 if __name__ == "__main__":

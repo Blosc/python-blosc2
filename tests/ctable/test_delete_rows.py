@@ -185,7 +185,7 @@ def test_delete_invalid_types():
         t.delete("invalid")
     with pytest.raises(TypeError):
         t.delete(10.5)
-    with pytest.raises(Exception):
+    with pytest.raises(TypeError):
         t.delete([0, "invalid", 10])
 
 
@@ -200,9 +200,9 @@ def test_delete_stress():
 
     # Alternating two-pass deletion
     t2 = CTable(RowModel, new_data=data, expected_size=50)
-    t2.delete(list(range(0, 50, 2)))  # delete all even → 25 remain
+    t2.delete(list(range(0, 50, 2)))  # delete all even -> 25 remain
     assert len(t2) == 25
-    t2.delete(list(range(0, 25, 2)))  # delete every other of remaining → ~12
+    t2.delete(list(range(0, 25, 2)))  # delete every other of remaining -> ~12
     assert len(t2) == 12
 
 
