@@ -134,3 +134,9 @@ ignore = [
 [tool.ruff.lint.mccabe]
 # Raise complexity from the default 10 to 13
 max-complexity = 13
+
+[dependency-groups]
+test = [
+    "pytest",
+    "psutil; platform_machine != 'wasm32'",
+]
