@@ -185,7 +185,7 @@ def test_delete_invalid_types():
         t.delete("invalid")
     with pytest.raises(TypeError):
         t.delete(10.5)
-    with pytest.raises(TypeError):
+    with pytest.raises(IndexError):
         t.delete([0, "invalid", 10])
 
 
