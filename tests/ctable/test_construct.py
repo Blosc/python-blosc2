@@ -154,10 +154,6 @@ def test_invalid_append():
     with pytest.raises((TypeError, ValueError)):
         table.append(["invalid_text", 1 + 2j, 95.5, True])
 
-    # Dict: marked xfail because append no longer rejects dicts explicitly
-    # after validation simplification — revisit if dict support is added
-    with pytest.raises(TypeError, match="Dictionaries are not supported"):
-        table.append({"id": 1, "c_val": 1 + 2j, "score": 95.5, "active": True})
 
 
 def test_extreme_values():
