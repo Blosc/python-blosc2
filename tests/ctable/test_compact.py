@@ -24,7 +24,6 @@ def generate_test_data(n_rows: int) -> list:
 def test_compact_empty_table():
     """Test compact() on a completely empty table (no data)."""
     table = CTable(RowModel, expected_size=100)
-    initial_capacity = len(table._valid_rows)
 
     assert len(table) == 0
 
@@ -79,9 +78,9 @@ def test_compact_already_compacted_table():
 
     # Validate that all True values are consecutive at the beginning
     mask = table._valid_rows[: len(table._valid_rows)]
-    assert np.all(mask[:20] == True)
+    assert np.all(mask[:20])
     if len(mask) > 20:
-        assert np.all(mask[20:] == False)
+        assert not np.any(mask[20:])
 
 
 def test_compact_with_holes():
@@ -110,9 +109,9 @@ def test_compact_with_holes():
 
     # Verify physical mask: first 6 must be True, the rest False
     mask = table._valid_rows[: len(table._valid_rows)]
-    assert np.all(mask[:6] == True)
+    assert np.all(mask[:6])
     if len(mask) > 6:
-        assert np.all(mask[6:] == False)
+        assert not np.any(mask[6:])
 
 
 def test_compact_all_deleted():

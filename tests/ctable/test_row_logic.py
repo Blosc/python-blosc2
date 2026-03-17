@@ -42,15 +42,19 @@ def test_row_int_indexing():
     # No holes: spot checks
     t = CTable(RowModel, new_data=data)
     r = t.row[0]
-    assert isinstance(r, CTable) and len(r) == 1
-    assert r.id[0] == 0 and r.score[0] == 0.0 and r.active[0] == True
-    assert t.row[10].id[0] == 10 and t.row[10].score[0] == 100.0
+    assert isinstance(r, CTable)
+    assert len(r) == 1
+    assert r.id[0] == 0
+    assert r.score[0] == 0.0
+    assert r.active[0]
+    assert t.row[10].id[0] == 10
+    assert t.row[10].score[0] == 100.0
 
     # Negative indices
     assert t.row[-1].id[0] == 19
     assert t.row[-5].id[0] == 15
 
-    # With holes: delete odd positions → valid: 0,2,4,6,8,10…
+    # With holes: delete odd positions -> valid: 0,2,4,6,8,10...
     t.delete([1, 3, 5, 7, 9])
     assert t.row[0].id[0] == 0
     assert t.row[1].id[0] == 2
@@ -97,7 +101,8 @@ def test_row_slice_indexing():
     assert len(t2.row[5:5]) == 0
     assert len(t2.row[0:0]) == 0
     result = t2.row[:]
-    assert len(result) == 10 and list(result.id) == list(range(10))
+    assert len(result) == 10
+    assert list(result.id) == list(range(10))
 
 
 def test_row_list_indexing():
@@ -107,11 +112,12 @@ def test_row_list_indexing():
     # No holes
     t = CTable(RowModel, new_data=data)
     r = t.row[[0, 5, 10, 15]]
-    assert isinstance(r, CTable) and len(r) == 4
+    assert isinstance(r, CTable)
+    assert len(r) == 4
     assert set(r.id) == {0, 5, 10, 15}
     assert set(t.row[[19, 0, 10]].id) == {0, 10, 19}
 
-    # With holes: delete [1,3,5,7,9] → logical 0→id0, 1→id2, 2→id4…
+    # With holes: delete [1,3,5,7,9] -> logical 0->id0, 1->id2, 2->id4...
     t.delete([1, 3, 5, 7, 9])
     assert set(t.row[[0, 2, 4]].id) == {0, 4, 8}
     assert set(t.row[[5, 3, 1]].id) == {2, 6, 10}
@@ -123,9 +129,10 @@ def test_row_list_indexing():
     # Single element
     assert t2.row[[5]].id[0] == 5
 
-    # Duplicate indices → deduplicated
+    # Duplicate indices -> deduplicated
     r_dup = t2.row[[5, 5, 5]]
-    assert len(r_dup) == 1 and r_dup.id[0] == 5
+    assert len(r_dup) == 1
+    assert r_dup.id[0] == 5
 
     # Empty list
     assert len(t2.row[[]]) == 0
@@ -154,7 +161,9 @@ def test_row_view_properties():
 
     # Read ops on view
     view = tabla0.row[5:15]
-    assert view.id[0] == 5 and view.score[0] == 50.0 and view.active[0] == False
+    assert view.id[0] == 5
+    assert view.score[0] == 50.0
+    assert not view.active[0]
     assert list(view.id) == list(range(5, 15))
 
     # Mask integrity
@@ -167,22 +176,27 @@ def test_row_view_properties():
 
     # Chained views: base always points to immediate parent
     tabla1 = tabla0.row[:50]
-    assert tabla1.base is tabla0 and len(tabla1) == 50
+    assert tabla1.base is tabla0
+    assert len(tabla1) == 50
 
     tabla2 = tabla1.row[:10]
-    assert tabla2.base is tabla1 and len(tabla2) == 10
+    assert tabla2.base is tabla1
+    assert len(tabla2) == 10
     assert list(tabla2.id) == list(range(10))
 
     tabla3 = tabla2.row[5:]
-    assert tabla3.base is tabla2 and len(tabla3) == 5
+    assert tabla3.base is tabla2
+    assert len(tabla3) == 5
     assert list(tabla3.id) == [5, 6, 7, 8, 9]
 
     # Chained view with holes on parent
     tabla0.delete([5, 10, 15, 20, 25])
     tv1 = tabla0.row[:30]
-    assert tv1.base is tabla0 and len(tv1) == 30
+    assert tv1.base is tabla0
+    assert len(tv1) == 30
     tv2 = tv1.row[10:20]
-    assert tv2.base is tv1 and len(tv2) == 10
+    assert tv2.base is tv1
+    assert len(tv2) == 10
 
 
 def test_row_edge_cases():
