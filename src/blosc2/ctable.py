@@ -76,6 +76,102 @@ class _RowIndexer:
         return self._table._run_row_logic(item)
 
 
+def _resolve_field_dtype(field) -> tuple[np.dtype, int]:
+    """Return (numpy dtype, display_width) for a pydantic model field.
+
+    Extracts dtype from NumpyDtype metadata when present, otherwise falls
+    back to a sensible default for each Python primitive type.
+    """
+    annotation = field.annotation
+    origin = getattr(annotation, "__origin__", annotation)
+
+    # str / bytes: look for MaxLen metadata, build fixed-width dtype
+    if origin in (str, bytes) or annotation in (str, bytes):
+        is_bytes = origin is bytes or annotation is bytes
+        max_len = 32
+        if hasattr(annotation, "__metadata__"):
+            for meta in annotation.__metadata__:
+                if isinstance(meta, MaxLen):
+                    max_len = meta.length
+                    break
+        kind = "S" if is_bytes else "U"
+        dt = np.dtype(f"{kind}{max_len}")
+        display_width = max(10, min(max_len, 50))
+        return dt, display_width
+
+    # Check for explicit NumpyDtype metadata (overrides primitive defaults)
+    if hasattr(annotation, "__metadata__"):
+        for meta in annotation.__metadata__:
+            if isinstance(meta, NumpyDtype):
+                dt = np.dtype(meta.dtype)
+                display_width = _default_display_width(origin)
+                return dt, display_width
+
+    # Primitive defaults
+    _PRIMITIVE_MAP = {
+        int: (np.int64, 12),
+        float: (np.float64, 15),
+        bool: (np.bool_, 6),
+        complex: (np.complex128, 25),
+    }
+    if origin in _PRIMITIVE_MAP:
+        dt_raw, display_width = _PRIMITIVE_MAP[origin]
+        return np.dtype(dt_raw), display_width
+
+    return np.dtype(np.object_), 20
+
+
+def _default_display_width(origin) -> int:
+    """Return a sensible display column width for a given Python type."""
+    return {int: 12, float: 15, bool: 6, complex: 25}.get(origin, 20)
+
+
+def _find_physical_index(arr: blosc2.NDArray, logical_key: int) -> int:
+    """Translate a logical (valid-row) index into a physical array index.
+
+    Iterates chunk metadata of the boolean *arr* (valid_rows) to locate the
+    *logical_key*-th True value without fully decompressing the array.
+
+    Returns
+    -------
+    int
+        Physical position in the underlying storage array.
+
+    Raises
+    ------
+    IndexError
+        If the logical index is out of range or the array is inconsistent.
+    """
+    count = 0
+    chunk_size = arr.chunks[0]
+
+    for info in arr.iterchunks_info():
+        actual_size = min(chunk_size, arr.shape[0] - info.nchunk * chunk_size)
+        chunk_start = info.nchunk * chunk_size
+
+        if info.special == blosc2.SpecialValue.ZERO:
+            continue
+
+        if info.special == blosc2.SpecialValue.VALUE:
+            val = np.frombuffer(info.repeated_value, dtype=arr.dtype)[0]
+            if not val:
+                continue
+            if count + actual_size <= logical_key:
+                count += actual_size
+                continue
+            return chunk_start + (logical_key - count)
+
+        chunk_data = arr[chunk_start : chunk_start + actual_size]
+        n_true = int(np.count_nonzero(chunk_data))
+        if count + n_true <= logical_key:
+            count += n_true
+            continue
+
+        return chunk_start + int(np.flatnonzero(chunk_data)[logical_key - count])
+
+    raise IndexError("Unexpected error finding physical index.")
+
+
 class Column:
     def __init__(self, table: CTable, col_name: str):
         self._table = table
@@ -96,44 +192,7 @@ class Column:
                 key += n_rows
             if not (0 <= key < n_rows):
                 raise IndexError(f"index {key} is out of bounds for column with size {n_rows}")
-
-            arr = self._valid_rows
-            count = 0
-            chunk_size = arr.chunks[0]
-            pos_true = -1
-
-            for info in arr.iterchunks_info():
-                actual_size = min(chunk_size, arr.shape[0] - info.nchunk * chunk_size)
-                chunk_start = info.nchunk * chunk_size
-
-                if info.special == blosc2.SpecialValue.ZERO:
-                    continue
-
-                if info.special == blosc2.SpecialValue.VALUE:
-                    val = np.frombuffer(info.repeated_value, dtype=arr.dtype)[0]
-                    if not val:
-                        continue
-
-                    if count + actual_size <= key:
-                        count += actual_size
-                        continue
-
-                    pos_true = chunk_start + (key - count)
-                    break
-
-                chunk_data = arr[chunk_start : chunk_start + actual_size]
-                n_true = int(np.count_nonzero(chunk_data))
-
-                if count + n_true <= key:
-                    count += n_true
-                    continue
-
-                pos_true = chunk_start + int(np.flatnonzero(chunk_data)[key - count])
-                break
-
-            if pos_true == -1:
-                raise IndexError("Unexpected error finding physical index.")
-
+            pos_true = _find_physical_index(self._valid_rows, key)
             return self._raw_col[int(pos_true)]
 
         elif isinstance(key, slice):
@@ -156,58 +215,21 @@ class Column:
                 key += n_rows
             if not (0 <= key < n_rows):
                 raise IndexError(f"index {key} is out of bounds for column with size {n_rows}")
-
-            arr = self._valid_rows
-            count = 0
-            chunk_size = arr.chunks[0]
-            pos_true = -1
-
-            for info in arr.iterchunks_info():
-                actual_size = min(chunk_size, arr.shape[0] - info.nchunk * chunk_size)
-                chunk_start = info.nchunk * chunk_size
-
-                if info.special == blosc2.SpecialValue.ZERO:
-                    continue
-
-                if info.special == blosc2.SpecialValue.VALUE:
-                    val = np.frombuffer(info.repeated_value, dtype=arr.dtype)[0]
-                    if not val:
-                        continue
-                    if count + actual_size <= key:
-                        count += actual_size
-                        continue
-                    pos_true = chunk_start + (key - count)
-                    break
-
-                chunk_data = arr[chunk_start : chunk_start + actual_size]
-                n_true = int(np.count_nonzero(chunk_data))
-                if count + n_true <= key:
-                    count += n_true
-                    continue
-
-                pos_true = chunk_start + int(np.flatnonzero(chunk_data)[key - count])
-                break
-
+            pos_true = _find_physical_index(self._valid_rows, key)
             self._raw_col[int(pos_true)] = value
 
-        elif isinstance(key, slice):
+        elif isinstance(key, (slice, list, tuple, np.ndarray)):
             real_pos = blosc2.where(self._valid_rows, np.arange(len(self._valid_rows))).compute()
-            lindices = range(*key.indices(len(real_pos)))
-            phys_indices = np.array([real_pos[i] for i in lindices], dtype=np.int64)
+            if isinstance(key, slice):
+                lindices = range(*key.indices(len(real_pos)))
+                phys_indices = np.array([real_pos[i] for i in lindices], dtype=np.int64)
+            else:
+                phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
 
             if isinstance(value, (list, tuple)):
                 value = np.array(value, dtype=self._raw_col.dtype)
-
             self._raw_col[phys_indices] = value
 
-        elif isinstance(key, (list, tuple, np.ndarray)):
-            real_pos = blosc2.where(self._valid_rows, np.arange(len(self._valid_rows))).compute()
-            phys_indices = np.array([real_pos[i] for i in key], dtype=np.int64)
-
-            if isinstance(value, (list, tuple)):
-                value = np.array(value, dtype=self._raw_col.dtype)
-
-            self._raw_col[phys_indices] = value
         else:
             raise TypeError(f"Invalid index type: {type(key)}")
 
@@ -292,70 +314,32 @@ class CTable(Generic[RowT]):
 
         for name, field in row_type.model_fields.items():
             self.col_names.append(name)
-            origin = getattr(field.annotation, "__origin__", field.annotation)
-
-            # We need to check for other posibilities...
-            if origin is str or field.annotation is str:
-                max_len = 32  # Default MaxLen
-                if hasattr(field.annotation, "__metadata__"):
-                    for meta in field.annotation.__metadata__:
-                        if isinstance(meta, MaxLen):
-                            max_len = meta.max_length
-                            break
-                dt = np.dtype(f"U{max_len}")
-                display_width = max(10, min(max_len, 50))
-
-            elif origin is bytes or field.annotation is bytes:
-                max_len = 32  # Default MaxLen
-                if hasattr(field.annotation, "__metadata__"):
-                    for meta in field.annotation.__metadata__:
-                        if isinstance(meta, MaxLen):
-                            max_len = meta.max_length
-                            break
-                dt = np.dtype(f"S{max_len}")
-                display_width = max(10, min(max_len, 50))
-
-            elif origin is int or field.annotation is int:
-                dt = np.int64
-                display_width = 12
-
-            elif origin is float or field.annotation is float:
-                dt = np.float64
-                display_width = 15
-
-            elif origin is bool or field.annotation is bool:
-                dt = np.bool_
-                display_width = 6  # "True" / "False" fit in 5-6 chars
-
-            elif origin is complex or field.annotation is complex:
-                dt = np.complex128
-                display_width = 25
-            else:
-                dt = np.object_
-                display_width = 20
-
+            dt, display_width = _resolve_field_dtype(field)
             final_width = max(len(name), display_width)
-            self._col_widths[name] = final_width  # Usefull in __str__
-
+            self._col_widths[name] = final_width
             self._cols[name] = blosc2.zeros(shape=(expected_size,), dtype=dt, chunks=c, blocks=b)
 
         if new_data is not None:
-            is_append = False
+            self._load_initial_data(new_data)
 
-            if isinstance(new_data, (np.void, np.record)):
+    def _load_initial_data(self, new_data) -> None:
+        """Dispatch new_data to append() or extend() as appropriate."""
+        is_append = False
+
+        if isinstance(new_data, (np.void, np.record)):
+            is_append = True
+        elif isinstance(new_data, np.ndarray):
+            if new_data.dtype.names is not None and new_data.ndim == 0:
                 is_append = True
-            elif isinstance(new_data, np.ndarray):
-                if new_data.dtype.names is not None and new_data.ndim == 0:
-                    is_append = True
-            elif isinstance(new_data, list) and len(new_data) > 0:
-                first_elem = new_data[0]
-                if isinstance(first_elem, (str, bytes, int, float, bool, complex)):
-                    is_append = True
+        elif isinstance(new_data, list) and len(new_data) > 0:
+            first_elem = new_data[0]
+            if isinstance(first_elem, (str, bytes, int, float, bool, complex)):
+                is_append = True
 
-            if is_append:
-                self.append(new_data)
-            else:
-                self.extend(new_data)
+        if is_append:
+            self.append(new_data)
+        else:
+            self.extend(new_data)
 
     def __str__(self):
         retval = []
