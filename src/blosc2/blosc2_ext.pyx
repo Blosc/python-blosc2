@@ -8,6 +8,7 @@
 #cython: language_level=3
 
 import os
+import dataclasses
 import ast
 import atexit
 import pathlib
@@ -2571,7 +2572,8 @@ def open(urlpath, mode, offset, **kwargs):
     if mode != "w" and kwargs is not None:
         check_schunk_params(schunk, kwargs)
     cparams = kwargs.get("cparams")
-    # For reading with the default number of threads
+    # nthreads is not stored in the frame; apply the live global when the caller
+    # did not supply an explicit cparams — symmetric with the DParams default below.
     dparams = kwargs.get("dparams", blosc2.DParams())
 
     if is_ndarray:
@@ -2579,6 +2581,8 @@ def open(urlpath, mode, offset, **kwargs):
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
         if cparams is not None:
             res.schunk.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
+        else:
+            res.schunk.cparams = dataclasses.replace(res.schunk.cparams, nthreads=blosc2.nthreads)
         if dparams is not None:
             res.schunk.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
         res.schunk.mode = mode
@@ -2587,6 +2591,8 @@ def open(urlpath, mode, offset, **kwargs):
                             mode=mode, **kwargs)
         if cparams is not None:
             res.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
+        else:
+            res.cparams = dataclasses.replace(res.cparams, nthreads=blosc2.nthreads)
         if dparams is not None:
             res.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
 
