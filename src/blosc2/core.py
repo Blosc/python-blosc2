@@ -1918,9 +1918,9 @@ def ndarray_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.NDArr
 
 def from_cframe(
     cframe: bytes | str, copy: bool = True
-) -> blosc2.EmbedStore | blosc2.NDArray | blosc2.SChunk | blosc2.ObjectArray | blosc2.VLArray:
+) -> blosc2.EmbedStore | blosc2.NDArray | blosc2.SChunk | blosc2.ObjectStore | blosc2.VLArray:
     """Create a :ref:`EmbedStore <EmbedStore>`, :ref:`NDArray <NDArray>`, :ref:`SChunk <SChunk>`,
-    :ref:`ObjectArray <ObjectArray>` or :ref:`VLArray <VLArray>` instance
+    :ref:`ObjectStore <ObjectStore>` or :ref:`VLArray <VLArray>` instance
     from a contiguous frame buffer.
 
     Parameters
@@ -1938,7 +1938,7 @@ def from_cframe(
     Returns
     -------
     out: :ref:`EmbedStore <EmbedStore>`, :ref:`NDArray <NDArray>`, :ref:`SChunk <SChunk>`,
-         :ref:`ObjectArray <ObjectArray>` or :ref:`VLArray <VLArray>`
+         :ref:`ObjectStore <ObjectStore>` or :ref:`VLArray <VLArray>`
         A new instance of the appropriate type containing the data passed.
 
     See Also
@@ -1952,8 +1952,8 @@ def from_cframe(
     # Check the metalayer to determine the type
     if "b2embed" in schunk.meta:
         return blosc2.estore_from_cframe(cframe, copy=copy)
-    if "objectarray" in schunk.meta:
-        return blosc2.objectarray_from_cframe(cframe, copy=copy)
+    if "objectstore" in schunk.meta:
+        return blosc2.ObjectStore(_from_schunk=schunk_from_cframe(cframe, copy=copy))
     if "vlarray" in schunk.meta:
         return blosc2.vlarray_from_cframe(cframe, copy=copy)
     if "b2nd" in schunk.meta:

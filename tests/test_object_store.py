@@ -32,15 +32,15 @@ def _storage(contiguous, urlpath, mode="w"):
     [
         (False, None),
         (True, None),
-        (True, "test_objectarray.b2frame"),
-        (False, "test_objectarray_s.b2frame"),
+        (True, "test_objectstore.b2frame"),
+        (False, "test_objectstore_s.b2frame"),
     ],
 )
-def test_objectarray_roundtrip(contiguous, urlpath):
+def test_objectstore_roundtrip(contiguous, urlpath):
     blosc2.remove_urlpath(urlpath)
 
-    barray = blosc2.ObjectArray(storage=_storage(contiguous, urlpath))
-    assert barray.meta["objectarray"]["serializer"] == "msgpack"
+    barray = blosc2.ObjectStore(storage=_storage(contiguous, urlpath))
+    assert barray.meta["objectstore"]["serializer"] == "msgpack"
 
     for i, batch in enumerate(BATCHES, start=1):
         assert barray.append(batch) == i
@@ -82,7 +82,7 @@ def test_objectarray_roundtrip(contiguous, urlpath):
 
     if urlpath is not None:
         reopened = blosc2.open(urlpath, mode="r")
-        assert isinstance(reopened, blosc2.ObjectArray)
+        assert isinstance(reopened, blosc2.ObjectStore)
         assert reopened.chunksize == barray.chunksize
         assert reopened.blocksize == barray.blocksize
         assert [batch[:] for batch in reopened] == expected
@@ -110,14 +110,14 @@ def test_objectarray_roundtrip(contiguous, urlpath):
 
         if contiguous:
             reopened_mmap = blosc2.open(urlpath, mode="r", mmap_mode="r")
-            assert isinstance(reopened_mmap, blosc2.ObjectArray)
+            assert isinstance(reopened_mmap, blosc2.ObjectStore)
             assert [batch[:] for batch in reopened_mmap] == expected
 
     blosc2.remove_urlpath(urlpath)
 
 
-def test_objectarray_from_cframe():
-    barray = blosc2.ObjectArray()
+def test_objectstore_from_cframe():
+    barray = blosc2.ObjectStore()
     barray.extend(BATCHES)
     barray.insert(1, ["inserted", True, None])
     del barray[3]
@@ -126,16 +126,16 @@ def test_objectarray_from_cframe():
     del expected[3]
 
     restored = blosc2.from_cframe(barray.to_cframe())
-    assert isinstance(restored, blosc2.ObjectArray)
+    assert isinstance(restored, blosc2.ObjectStore)
     assert [batch[:] for batch in restored] == expected
 
-    restored2 = blosc2.objectarray_from_cframe(barray.to_cframe())
-    assert isinstance(restored2, blosc2.ObjectArray)
+    restored2 = blosc2.from_cframe(barray.to_cframe())
+    assert isinstance(restored2, blosc2.ObjectStore)
     assert [batch[:] for batch in restored2] == expected
 
 
-def test_objectarray_info():
-    barray = blosc2.ObjectArray()
+def test_objectstore_info():
+    barray = blosc2.ObjectStore()
     barray.extend(BATCHES)
 
     assert barray.typesize == 1
@@ -143,7 +143,7 @@ def test_objectarray_info():
     assert barray.urlpath == barray.schunk.urlpath
 
     items = dict(barray.info_items)
-    assert items["type"] == "ObjectArray"
+    assert items["type"] == "ObjectStore"
     assert items["nbatches"] == len(BATCHES)
     assert items["chunksize"] == len(BATCHES[0])
     assert items["blocksize"] == barray.blocksize
@@ -160,37 +160,37 @@ def test_objectarray_info():
 
     text = repr(barray.info)
     assert "type" in text
-    assert "ObjectArray" in text
+    assert "ObjectStore" in text
     assert "batch_len_avg" in text
 
 
-def test_objectarray_zstd_uses_dict_by_default():
-    barray = blosc2.ObjectArray()
+def test_objectstore_zstd_uses_dict_by_default():
+    barray = blosc2.ObjectStore()
     assert barray.cparams.codec == blosc2.Codec.ZSTD
     assert barray.cparams.use_dict is True
 
 
-def test_objectarray_explicit_chunksize_blocksize():
-    barray = blosc2.ObjectArray(chunksize=3, blocksize=2)
+def test_objectstore_explicit_chunksize_blocksize():
+    barray = blosc2.ObjectStore(chunksize=3, blocksize=2)
     assert barray.chunksize == 3
     assert barray.blocksize == 2
     barray.append([1, 2, 3])
     assert [batch[:] for batch in barray] == [[1, 2, 3]]
 
 
-def test_objectarray_respects_explicit_use_dict_and_non_zstd():
-    barray = blosc2.ObjectArray(cparams={"codec": blosc2.Codec.LZ4, "clevel": 5})
+def test_objectstore_respects_explicit_use_dict_and_non_zstd():
+    barray = blosc2.ObjectStore(cparams={"codec": blosc2.Codec.LZ4, "clevel": 5})
     assert barray.cparams.codec == blosc2.Codec.LZ4
     assert barray.cparams.use_dict is False
 
-    barray = blosc2.ObjectArray(cparams={"codec": blosc2.Codec.ZSTD, "clevel": 0})
+    barray = blosc2.ObjectStore(cparams={"codec": blosc2.Codec.ZSTD, "clevel": 0})
     assert barray.cparams.codec == blosc2.Codec.ZSTD
     assert barray.cparams.use_dict is False
 
-    barray = blosc2.ObjectArray(cparams={"codec": blosc2.Codec.ZSTD, "clevel": 5, "use_dict": False})
+    barray = blosc2.ObjectStore(cparams={"codec": blosc2.Codec.ZSTD, "clevel": 5, "use_dict": False})
     assert barray.cparams.use_dict is False
 
-    barray = blosc2.ObjectArray(cparams=blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5, use_dict=False))
+    barray = blosc2.ObjectStore(cparams=blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5, use_dict=False))
     assert barray.cparams.use_dict is False
 
 
@@ -231,14 +231,14 @@ def test_vlcompress_small_blocks_roundtrip():
     assert out == payloads
 
 
-def test_objectarray_constructor_kwargs():
-    urlpath = "test_objectarray_kwargs.b2frame"
+def test_objectstore_constructor_kwargs():
+    urlpath = "test_objectstore_kwargs.b2frame"
     blosc2.remove_urlpath(urlpath)
 
-    barray = blosc2.ObjectArray(urlpath=urlpath, mode="w", contiguous=True)
+    barray = blosc2.ObjectStore(urlpath=urlpath, mode="w", contiguous=True)
     barray.extend(BATCHES)
 
-    reopened = blosc2.ObjectArray(urlpath=urlpath, mode="r", contiguous=True, mmap_mode="r")
+    reopened = blosc2.ObjectStore(urlpath=urlpath, mode="r", contiguous=True, mmap_mode="r")
     assert [batch[:] for batch in reopened] == BATCHES
 
     blosc2.remove_urlpath(urlpath)
@@ -249,14 +249,14 @@ def test_objectarray_constructor_kwargs():
     [
         (False, None),
         (True, None),
-        (True, "test_objectarray_list_ops.b2frame"),
-        (False, "test_objectarray_list_ops_s.b2frame"),
+        (True, "test_objectstore_list_ops.b2frame"),
+        (False, "test_objectstore_list_ops_s.b2frame"),
     ],
 )
-def test_objectarray_list_like_ops(contiguous, urlpath):
+def test_objectstore_list_like_ops(contiguous, urlpath):
     blosc2.remove_urlpath(urlpath)
 
-    barray = blosc2.ObjectArray(storage=_storage(contiguous, urlpath))
+    barray = blosc2.ObjectStore(storage=_storage(contiguous, urlpath))
     barray.extend([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
     assert [batch[:] for batch in barray] == [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
     assert barray.pop() == [7, 8, 9]
@@ -282,15 +282,15 @@ def test_objectarray_list_like_ops(contiguous, urlpath):
     [
         (False, None),
         (True, None),
-        (True, "test_objectarray_slices.b2frame"),
-        (False, "test_objectarray_slices_s.b2frame"),
+        (True, "test_objectstore_slices.b2frame"),
+        (False, "test_objectstore_slices_s.b2frame"),
     ],
 )
-def test_objectarray_slices(contiguous, urlpath):
+def test_objectstore_slices(contiguous, urlpath):
     blosc2.remove_urlpath(urlpath)
 
     expected = [[i, i + 100, i + 200] for i in range(8)]
-    barray = blosc2.ObjectArray(storage=_storage(contiguous, urlpath))
+    barray = blosc2.ObjectStore(storage=_storage(contiguous, urlpath))
     barray.extend(expected)
 
     assert [batch[:] for batch in barray[1:6:2]] == expected[1:6:2]
@@ -319,8 +319,8 @@ def test_objectarray_slices(contiguous, urlpath):
     blosc2.remove_urlpath(urlpath)
 
 
-def test_objectarray_slice_errors():
-    barray = blosc2.ObjectArray()
+def test_objectstore_slice_errors():
+    barray = blosc2.ObjectStore()
     barray.extend([[0], [1], [2], [3]])
 
     with pytest.raises(ValueError, match="extended slice"):
@@ -331,13 +331,13 @@ def test_objectarray_slice_errors():
         _ = barray[::0]
 
 
-def test_objectarray_copy():
-    urlpath = "test_objectarray_copy.b2frame"
-    copy_path = "test_objectarray_copy_out.b2frame"
+def test_objectstore_copy():
+    urlpath = "test_objectstore_copy.b2frame"
+    copy_path = "test_objectstore_copy_out.b2frame"
     blosc2.remove_urlpath(urlpath)
     blosc2.remove_urlpath(copy_path)
 
-    original = blosc2.ObjectArray(urlpath=urlpath, mode="w", contiguous=True)
+    original = blosc2.ObjectStore(urlpath=urlpath, mode="w", contiguous=True)
     original.extend(BATCHES)
     original.insert(1, ["copy", True, 123])
 
@@ -362,7 +362,7 @@ def test_objectarray_copy():
 
 
 @pytest.mark.parametrize(("contiguous", "nthreads"), [(False, 2), (True, 4)])
-def test_objectarray_multithreaded_inner_vl(contiguous, nthreads):
+def test_objectstore_multithreaded_inner_vl(contiguous, nthreads):
     batches = []
     for batch_id in range(24):
         batch = []
@@ -379,7 +379,7 @@ def test_objectarray_multithreaded_inner_vl(contiguous, nthreads):
             )
         batches.append(batch)
 
-    barray = blosc2.ObjectArray(
+    barray = blosc2.ObjectStore(
         storage=blosc2.Storage(contiguous=contiguous),
         cparams=blosc2.CParams(typesize=1, nthreads=nthreads, codec=blosc2.Codec.ZSTD, clevel=5),
         dparams=blosc2.DParams(nthreads=nthreads),
@@ -390,8 +390,8 @@ def test_objectarray_multithreaded_inner_vl(contiguous, nthreads):
     assert [barray[i][:] for i in range(len(barray))] == batches
 
 
-def test_objectarray_validation_errors():
-    barray = blosc2.ObjectArray()
+def test_objectstore_validation_errors():
+    barray = blosc2.ObjectStore()
 
     with pytest.raises(TypeError):
         barray.append("value")
@@ -402,7 +402,7 @@ def test_objectarray_validation_errors():
     with pytest.raises(IndexError):
         barray.delete(3)
     with pytest.raises(IndexError):
-        blosc2.ObjectArray().pop()
+        blosc2.ObjectStore().pop()
     barray.extend([[1, 2, 3]])
     with pytest.raises(ValueError):
         barray.append([2, 3])
@@ -410,29 +410,29 @@ def test_objectarray_validation_errors():
         barray.pop(slice(0, 1))
 
 
-def test_objectarray_in_embed_store():
+def test_objectstore_in_embed_store():
     estore = blosc2.EmbedStore()
-    barray = blosc2.ObjectArray()
+    barray = blosc2.ObjectStore()
     barray.extend(BATCHES)
 
     estore["/batch"] = barray
     restored = estore["/batch"]
-    assert isinstance(restored, blosc2.ObjectArray)
+    assert isinstance(restored, blosc2.ObjectStore)
     assert [batch[:] for batch in restored] == BATCHES
 
 
-def test_objectarray_in_dict_store():
-    path = "test_objectarray_store.b2z"
+def test_objectstore_in_dict_store():
+    path = "test_objectstore_store.b2z"
     blosc2.remove_urlpath(path)
 
     with blosc2.DictStore(path, mode="w", threshold=1) as dstore:
-        barray = blosc2.ObjectArray()
+        barray = blosc2.ObjectStore()
         barray.extend(BATCHES)
         dstore["/batch"] = barray
 
     with blosc2.DictStore(path, mode="r") as dstore:
         restored = dstore["/batch"]
-        assert isinstance(restored, blosc2.ObjectArray)
+        assert isinstance(restored, blosc2.ObjectStore)
         assert [batch[:] for batch in restored] == BATCHES
 
     blosc2.remove_urlpath(path)

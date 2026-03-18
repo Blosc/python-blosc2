@@ -18,7 +18,7 @@ from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 from blosc2.info import InfoReporter, format_nbytes_info
 
 _OBJECTARRAY_META = {"version": 2, "serializer": "msgpack", "format": "batched_vlblocks"}
-_OBJECTARRAY_LAYOUT_KEY = "objectarray"
+_OBJECTARRAY_LAYOUT_KEY = "objectstore"
 
 
 def _check_serialized_size(buffer: bytes) -> None:
@@ -27,9 +27,9 @@ def _check_serialized_size(buffer: bytes) -> None:
 
 
 class Batch(Sequence[Any]):
-    """A lazy sequence of Python objects stored in one ObjectArray chunk."""
+    """A lazy sequence of Python objects stored in one ObjectStore chunk."""
 
-    def __init__(self, parent: ObjectArray, nchunk: int, lazychunk: bytes) -> None:
+    def __init__(self, parent: ObjectStore, nchunk: int, lazychunk: bytes) -> None:
         self._parent = parent
         self._nchunk = nchunk
         self._lazychunk = lazychunk
@@ -58,7 +58,7 @@ class Batch(Sequence[Any]):
         index = self._normalize_index(index)
         blocksize = self._parent.blocksize
         if blocksize is None:
-            raise RuntimeError("ObjectArray blocksize is not initialized")
+            raise RuntimeError("ObjectStore blocksize is not initialized")
         block_index, item_index = divmod(index, blocksize)
         return blocks[block_index][item_index]
 
@@ -92,7 +92,7 @@ class Batch(Sequence[Any]):
         return f"Batch(len={len(self)}, nbytes={self.nbytes}, cbytes={self.cbytes})"
 
 
-class ObjectArray:
+class ObjectStore:
     """A batched variable-length array backed by an :class:`blosc2.SChunk`."""
 
     @staticmethod
@@ -109,14 +109,14 @@ class ObjectArray:
         if isinstance(cparams, blosc2.CParams):
             cparams.typesize = 1
             if auto_use_dict and cparams.codec == blosc2.Codec.ZSTD and cparams.clevel > 0:
-                # ObjectArray stores many small serialized payloads, where Zstd dicts help materially.
+                # ObjectStore stores many small serialized payloads, where Zstd dicts help materially.
                 cparams.use_dict = True
         else:
             cparams["typesize"] = 1
             codec = cparams.get("codec", blosc2.Codec.ZSTD)
             clevel = cparams.get("clevel", 5)
             if auto_use_dict and codec == blosc2.Codec.ZSTD and clevel > 0:
-                # ObjectArray stores many small serialized payloads, where Zstd dicts help materially.
+                # ObjectStore stores many small serialized payloads, where Zstd dicts help materially.
                 cparams["use_dict"] = True
         return cparams
 
@@ -142,9 +142,9 @@ class ObjectArray:
     @staticmethod
     def _validate_storage(storage: blosc2.Storage) -> None:
         if storage.mmap_mode not in (None, "r"):
-            raise ValueError("For ObjectArray containers, mmap_mode must be None or 'r'")
+            raise ValueError("For ObjectStore containers, mmap_mode must be None or 'r'")
         if storage.mmap_mode == "r" and storage.mode != "r":
-            raise ValueError("For ObjectArray containers, mmap_mode='r' requires mode='r'")
+            raise ValueError("For ObjectStore containers, mmap_mode='r' requires mode='r'")
 
     def _attach_schunk(self, schunk: blosc2.SChunk) -> None:
         self.schunk = schunk
@@ -197,7 +197,7 @@ class ObjectArray:
 
         if kwargs:
             unexpected = ", ".join(sorted(kwargs))
-            raise ValueError(f"Unsupported ObjectArray keyword argument(s): {unexpected}")
+            raise ValueError(f"Unsupported ObjectStore keyword argument(s): {unexpected}")
 
         self._validate_storage(storage)
         cparams = self._set_typesize_one(cparams)
@@ -209,7 +209,7 @@ class ObjectArray:
             return
 
         fixed_meta = dict(storage.meta or {})
-        fixed_meta["objectarray"] = dict(_OBJECTARRAY_META)
+        fixed_meta["objectstore"] = dict(_OBJECTARRAY_META)
         storage.meta = fixed_meta
         schunk = blosc2.SChunk(chunksize=-1, data=None, cparams=cparams, dparams=dparams, storage=storage)
         self._attach_schunk(schunk)
@@ -217,8 +217,8 @@ class ObjectArray:
             self._store_layout()
 
     def _validate_tag(self) -> None:
-        if "objectarray" not in self.schunk.meta:
-            raise ValueError("The supplied SChunk is not tagged as an ObjectArray")
+        if "objectstore" not in self.schunk.meta:
+            raise ValueError("The supplied SChunk is not tagged as an ObjectStore")
 
     def _load_layout(self) -> None:
         layout = None
@@ -232,7 +232,7 @@ class ObjectArray:
             return
         if len(self) == 0:
             return
-        raise ValueError("ObjectArray layout metadata is missing")
+        raise ValueError("ObjectStore layout metadata is missing")
 
     def _store_layout(self) -> None:
         if self._chunksize is None or self.mode == "r":
@@ -248,20 +248,20 @@ class ObjectArray:
 
     def _check_writable(self) -> None:
         if self.mode == "r":
-            raise ValueError("Cannot modify an ObjectArray opened in read-only mode")
+            raise ValueError("Cannot modify an ObjectStore opened in read-only mode")
 
     def _normalize_index(self, index: int) -> int:
         if not isinstance(index, int):
-            raise TypeError("ObjectArray indices must be integers")
+            raise TypeError("ObjectStore indices must be integers")
         if index < 0:
             index += len(self)
         if index < 0 or index >= len(self):
-            raise IndexError("ObjectArray index out of range")
+            raise IndexError("ObjectStore index out of range")
         return index
 
     def _normalize_insert_index(self, index: int) -> int:
         if not isinstance(index, int):
-            raise TypeError("ObjectArray indices must be integers")
+            raise TypeError("ObjectStore indices must be integers")
         if index < 0:
             index += len(self)
             if index < 0:
@@ -278,19 +278,19 @@ class ObjectArray:
 
     def _normalize_batch(self, value: object) -> list[Any]:
         if isinstance(value, (str, bytes, bytearray, memoryview)):
-            raise TypeError("ObjectArray entries must be sequences of Python objects")
+            raise TypeError("ObjectStore entries must be sequences of Python objects")
         if not isinstance(value, Sequence):
-            raise TypeError("ObjectArray entries must be sequences of Python objects")
+            raise TypeError("ObjectStore entries must be sequences of Python objects")
         values = list(value)
         if len(values) == 0:
-            raise ValueError("ObjectArray entries cannot be empty")
+            raise ValueError("ObjectStore entries cannot be empty")
         return values
 
     def _ensure_layout_for_batch(self, batch: list[Any]) -> None:
         if self._chunksize is None:
             self._chunksize = len(batch)
         if len(batch) != self._chunksize:
-            raise ValueError(f"ObjectArray entries must contain exactly {self._chunksize} objects")
+            raise ValueError(f"ObjectStore entries must contain exactly {self._chunksize} objects")
         if self._blocksize is None:
             payload_sizes = [len(msgpack_packb(item)) for item in batch]
             self._blocksize = self._guess_blocksize(payload_sizes)
@@ -298,7 +298,7 @@ class ObjectArray:
 
     def _guess_blocksize(self, payload_sizes: list[int]) -> int:
         if not payload_sizes:
-            raise ValueError("ObjectArray entries cannot be empty")
+            raise ValueError("ObjectStore entries cannot be empty")
         l2_cache_size = blosc2.cpu_info.get("l2_cache_size")
         if not isinstance(l2_cache_size, int) or l2_cache_size <= 0:
             return len(payload_sizes)
@@ -331,7 +331,7 @@ class ObjectArray:
 
     def _compress_batch(self, batch: list[Any]) -> bytes:
         if self._blocksize is None:
-            raise RuntimeError("ObjectArray blocksize is not initialized")
+            raise RuntimeError("ObjectStore blocksize is not initialized")
         blocks = [
             self._serialize_block(batch[i : i + self._blocksize])
             for i in range(0, len(batch), self._blocksize)
@@ -381,7 +381,7 @@ class ObjectArray:
         """Remove and return the batch at ``index``."""
         self._check_writable()
         if isinstance(index, slice):
-            raise NotImplementedError("Slicing is not supported for ObjectArray")
+            raise NotImplementedError("Slicing is not supported for ObjectStore")
         index = self._normalize_index(index)
         value = self[index][:]
         self.schunk.delete_chunk(index)
@@ -507,12 +507,12 @@ class ObjectArray:
 
     @property
     def info(self) -> InfoReporter:
-        """Print information about this ObjectArray."""
+        """Print information about this ObjectStore."""
         return InfoReporter(self)
 
     @property
     def info_items(self) -> list:
-        """A list of tuples with summary information about this ObjectArray."""
+        """A list of tuples with summary information about this ObjectStore."""
         batch_lengths = self._batch_lengths()
         nitems = sum(batch_lengths)
         avg_batch_len = nitems / len(batch_lengths) if batch_lengths else 0.0
@@ -535,7 +535,7 @@ class ObjectArray:
     def to_cframe(self) -> bytes:
         return self.schunk.to_cframe()
 
-    def copy(self, **kwargs: Any) -> ObjectArray:
+    def copy(self, **kwargs: Any) -> ObjectStore:
         """Create a copy of the container with optional constructor overrides."""
         if "meta" in kwargs:
             raise ValueError("meta should not be passed to copy")
@@ -551,25 +551,18 @@ class ObjectArray:
             if "urlpath" in kwargs and "mode" not in kwargs:
                 kwargs["mode"] = "w"
 
-        out = ObjectArray(**kwargs)
+        out = ObjectStore(**kwargs)
         if "storage" not in kwargs and len(self.vlmeta) > 0:
             for key, value in self.vlmeta.getall().items():
                 out.vlmeta[key] = value
         out.extend(self)
         return out
 
-    def __enter__(self) -> ObjectArray:
+    def __enter__(self) -> ObjectStore:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         return False
 
     def __repr__(self) -> str:
-        return f"ObjectArray(len={len(self)}, urlpath={self.urlpath!r})"
-
-
-def objectarray_from_cframe(cframe: bytes, copy: bool = True) -> ObjectArray:
-    """Deserialize a CFrame buffer into a :class:`ObjectArray`."""
-
-    schunk = blosc2.schunk_from_cframe(cframe, copy=copy)
-    return ObjectArray(_from_schunk=schunk)
+        return f"ObjectStore(len={len(self)}, urlpath={self.urlpath!r})"
