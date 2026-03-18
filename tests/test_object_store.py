@@ -46,9 +46,9 @@ def test_objectstore_roundtrip(contiguous, urlpath):
         assert barray.append(batch) == i
 
     assert len(barray) == len(BATCHES)
-    assert barray.chunksize == len(BATCHES[0])
+    assert barray.batchsize == len(BATCHES[0])
     assert barray.blocksize is not None
-    assert 1 <= barray.blocksize <= barray.chunksize
+    assert 1 <= barray.blocksize <= barray.batchsize
     assert [batch[:] for batch in barray] == BATCHES
     with pytest.raises(ValueError):
         barray.append([1, 2])
@@ -83,7 +83,7 @@ def test_objectstore_roundtrip(contiguous, urlpath):
     if urlpath is not None:
         reopened = blosc2.open(urlpath, mode="r")
         assert isinstance(reopened, blosc2.ObjectStore)
-        assert reopened.chunksize == barray.chunksize
+        assert reopened.batchsize == barray.batchsize
         assert reopened.blocksize == barray.blocksize
         assert [batch[:] for batch in reopened] == expected
         with pytest.raises(ValueError):
@@ -145,7 +145,7 @@ def test_objectstore_info():
     items = dict(barray.info_items)
     assert items["type"] == "ObjectStore"
     assert items["nbatches"] == len(BATCHES)
-    assert items["chunksize"] == len(BATCHES[0])
+    assert items["batchsize"] == len(BATCHES[0])
     assert items["blocksize"] == barray.blocksize
     assert items["nitems"] == sum(len(batch) for batch in BATCHES)
     assert items["batch_len_min"] == 3
@@ -170,12 +170,17 @@ def test_objectstore_zstd_uses_dict_by_default():
     assert barray.cparams.use_dict is True
 
 
-def test_objectstore_explicit_chunksize_blocksize():
-    barray = blosc2.ObjectStore(chunksize=3, blocksize=2)
+def test_objectstore_explicit_batchsize_blocksize():
+    barray = blosc2.ObjectStore(batchsize=3, blocksize=2)
+    assert barray.batchsize == 3
     assert barray.chunksize == 3
     assert barray.blocksize == 2
     barray.append([1, 2, 3])
     assert [batch[:] for batch in barray] == [[1, 2, 3]]
+
+    legacy = blosc2.ObjectStore(chunksize=3, blocksize=2)
+    assert legacy.batchsize == 3
+    assert legacy.chunksize == 3
 
 
 def test_objectstore_respects_explicit_use_dict_and_non_zstd():

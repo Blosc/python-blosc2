@@ -63,10 +63,10 @@ class Batch(Sequence[Any]):
         return blocks[block_index][item_index]
 
     def __len__(self) -> int:
-        chunksize = self._parent.chunksize
-        if chunksize is None:
+        batchsize = self._parent.batchsize
+        if batchsize is None:
             return self._nblocks
-        return chunksize
+        return batchsize
 
     def __iter__(self) -> Iterator[Any]:
         for i in range(len(self)):
@@ -174,17 +174,21 @@ class ObjectStore:
 
     def __init__(
         self,
-        chunksize: int | None = None,
+        batchsize: int | None = None,
         blocksize: int | None = None,
         _from_schunk: blosc2.SChunk | None = None,
         **kwargs: Any,
     ) -> None:
-        self._chunksize: int | None = chunksize
+        if "chunksize" in kwargs:
+            if batchsize is not None:
+                raise ValueError("Cannot pass both `batchsize` and `chunksize`")
+            batchsize = kwargs.pop("chunksize")
+        self._batchsize: int | None = batchsize
         self._blocksize: int | None = blocksize
         self._layout_format: str | None = None
         if _from_schunk is not None:
-            if chunksize is not None or blocksize is not None:
-                raise ValueError("Cannot pass `chunksize` or `blocksize` together with `_from_schunk`")
+            if batchsize is not None or blocksize is not None:
+                raise ValueError("Cannot pass `batchsize` or `blocksize` together with `_from_schunk`")
             if kwargs:
                 unexpected = ", ".join(sorted(kwargs))
                 raise ValueError(f"Cannot pass {unexpected} together with `_from_schunk`")
@@ -213,7 +217,7 @@ class ObjectStore:
         storage.meta = fixed_meta
         schunk = blosc2.SChunk(chunksize=-1, data=None, cparams=cparams, dparams=dparams, storage=storage)
         self._attach_schunk(schunk)
-        if self._chunksize is not None or self._blocksize is not None:
+        if self._batchsize is not None or self._blocksize is not None:
             self._store_layout()
 
     def _validate_tag(self) -> None:
@@ -226,7 +230,7 @@ class ObjectStore:
         if _OBJECTARRAY_LAYOUT_KEY in self.vlmeta:
             layout = self.vlmeta[_OBJECTARRAY_LAYOUT_KEY]
         if isinstance(layout, dict):
-            self._chunksize = layout.get("chunksize")
+            self._batchsize = layout.get("batchsize", layout.get("chunksize"))
             self._blocksize = layout.get("blocksize")
             self._layout_format = layout.get("format", "batched_vlblocks")
             return
@@ -235,11 +239,11 @@ class ObjectStore:
         raise ValueError("ObjectStore layout metadata is missing")
 
     def _store_layout(self) -> None:
-        if self._chunksize is None or self.mode == "r":
+        if self._batchsize is None or self.mode == "r":
             return
         layout = {
             "version": 1,
-            "chunksize": self._chunksize,
+            "batchsize": self._batchsize,
             "blocksize": self._blocksize,
             "format": self._layout_format or "batched_vlblocks",
             "sizing_policy": "l2_cache_prefix",
@@ -287,10 +291,10 @@ class ObjectStore:
         return values
 
     def _ensure_layout_for_batch(self, batch: list[Any]) -> None:
-        if self._chunksize is None:
-            self._chunksize = len(batch)
-        if len(batch) != self._chunksize:
-            raise ValueError(f"ObjectStore entries must contain exactly {self._chunksize} objects")
+        if self._batchsize is None:
+            self._batchsize = len(batch)
+        if len(batch) != self._batchsize:
+            raise ValueError(f"ObjectStore entries must contain exactly {self._batchsize} objects")
         if self._blocksize is None:
             payload_sizes = [len(msgpack_packb(item)) for item in batch]
             self._blocksize = self._guess_blocksize(payload_sizes)
@@ -348,8 +352,8 @@ class ObjectStore:
         return Batch(self, index, self.schunk.get_lazychunk(index))
 
     def _batch_lengths(self) -> list[int]:
-        if self.chunksize is not None:
-            return [self.chunksize for _ in range(len(self))]
+        if self.batchsize is not None:
+            return [self.batchsize for _ in range(len(self))]
         return [len(self[i]) for i in range(len(self))]
 
     def append(self, value: object) -> int:
@@ -475,7 +479,11 @@ class ObjectStore:
 
     @property
     def chunksize(self) -> int:
-        return self._chunksize
+        return self._batchsize
+
+    @property
+    def batchsize(self) -> int:
+        return self._batchsize
 
     @property
     def blocksize(self) -> int:
@@ -519,7 +527,7 @@ class ObjectStore:
         return [
             ("type", f"{self.__class__.__name__}"),
             ("nbatches", len(self)),
-            ("chunksize", self.chunksize),
+            ("batchsize", self.batchsize),
             ("blocksize", self.blocksize),
             ("nitems", nitems),
             ("batch_len_min", min(batch_lengths) if batch_lengths else 0),
@@ -539,10 +547,14 @@ class ObjectStore:
         """Create a copy of the container with optional constructor overrides."""
         if "meta" in kwargs:
             raise ValueError("meta should not be passed to copy")
+        if "chunksize" in kwargs:
+            if "batchsize" in kwargs:
+                raise ValueError("Cannot pass both `batchsize` and `chunksize` to copy")
+            kwargs["batchsize"] = kwargs.pop("chunksize")
 
         kwargs["cparams"] = kwargs.get("cparams", copy.deepcopy(self.cparams))
         kwargs["dparams"] = kwargs.get("dparams", copy.deepcopy(self.dparams))
-        kwargs["chunksize"] = kwargs.get("chunksize", self.chunksize)
+        kwargs["batchsize"] = kwargs.get("batchsize", self.batchsize)
         kwargs["blocksize"] = kwargs.get("blocksize", self.blocksize)
 
         if "storage" not in kwargs:
