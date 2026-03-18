@@ -17,7 +17,8 @@ import blosc2
 from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 from blosc2.info import InfoReporter, format_nbytes_info
 
-_BATCHARRAY_META = {"version": 1, "serializer": "msgpack", "format": "vlblocks"}
+_BATCHARRAY_META = {"version": 2, "serializer": "msgpack", "format": "batched_vlblocks"}
+_BATCHARRAY_LAYOUT_KEY = "batcharray"
 
 
 def _check_serialized_size(buffer: bytes) -> None:
@@ -32,7 +33,7 @@ class Batch(Sequence[Any]):
         self._parent = parent
         self._nchunk = nchunk
         self._lazychunk = lazychunk
-        self._payloads: list[bytes] | None = None
+        self._blocks: list[list[Any]] | None = None
         self._nbytes, self._cbytes, self._nblocks = blosc2.get_cbuffer_sizes(lazychunk)
 
     def _normalize_index(self, index: int) -> int:
@@ -44,20 +45,28 @@ class Batch(Sequence[Any]):
             raise IndexError("Batch index out of range")
         return index
 
-    def _decode_payloads(self) -> list[bytes]:
-        if self._payloads is None:
-            self._payloads = self._parent._decode_payloads(self._nchunk)
-        return self._payloads
+    def _decode_blocks(self) -> list[list[Any]]:
+        if self._blocks is None:
+            self._blocks = self._parent._decode_blocks(self._nchunk)
+        return self._blocks
 
     def __getitem__(self, index: int | slice) -> Any | list[Any]:
-        payloads = self._decode_payloads()
+        blocks = self._decode_blocks()
         if isinstance(index, slice):
-            return [msgpack_unpackb(payload) for payload in payloads[index]]
+            flat_items = [item for block in blocks for item in block]
+            return flat_items[index]
         index = self._normalize_index(index)
-        return msgpack_unpackb(payloads[index])
+        blocksize = self._parent.blocksize
+        if blocksize is None:
+            raise RuntimeError("BatchArray blocksize is not initialized")
+        block_index, item_index = divmod(index, blocksize)
+        return blocks[block_index][item_index]
 
     def __len__(self) -> int:
-        return self._nblocks
+        chunksize = self._parent.chunksize
+        if chunksize is None:
+            return self._nblocks
+        return chunksize
 
     def __iter__(self) -> Iterator[Any]:
         for i in range(len(self)):
@@ -142,6 +151,7 @@ class BatchArray:
         self.mode = schunk.mode
         self.mmap_mode = getattr(schunk, "mmap_mode", None)
         self._validate_tag()
+        self._load_layout()
 
     def _maybe_open_existing(self, storage: blosc2.Storage) -> bool:
         urlpath = storage.urlpath
@@ -165,18 +175,21 @@ class BatchArray:
     def __init__(
         self,
         chunksize: int | None = None,
+        blocksize: int | None = None,
         _from_schunk: blosc2.SChunk | None = None,
         **kwargs: Any,
     ) -> None:
+        self._chunksize: int | None = chunksize
+        self._blocksize: int | None = blocksize
+        self._layout_format: str | None = None
         if _from_schunk is not None:
-            if chunksize is not None:
-                raise ValueError("Cannot pass `chunksize` together with `_from_schunk`")
+            if chunksize is not None or blocksize is not None:
+                raise ValueError("Cannot pass `chunksize` or `blocksize` together with `_from_schunk`")
             if kwargs:
                 unexpected = ", ".join(sorted(kwargs))
                 raise ValueError(f"Cannot pass {unexpected} together with `_from_schunk`")
             self._attach_schunk(_from_schunk)
             return
-
         cparams = kwargs.pop("cparams", None)
         dparams = kwargs.pop("dparams", None)
         storage = kwargs.pop("storage", None)
@@ -198,16 +211,47 @@ class BatchArray:
         fixed_meta = dict(storage.meta or {})
         fixed_meta["batcharray"] = dict(_BATCHARRAY_META)
         storage.meta = fixed_meta
-        if chunksize is None:
-            chunksize = -1
-        schunk = blosc2.SChunk(
-            chunksize=chunksize, data=None, cparams=cparams, dparams=dparams, storage=storage
-        )
+        schunk = blosc2.SChunk(chunksize=-1, data=None, cparams=cparams, dparams=dparams, storage=storage)
         self._attach_schunk(schunk)
+        if self._chunksize is not None or self._blocksize is not None:
+            self._store_layout()
 
     def _validate_tag(self) -> None:
         if "batcharray" not in self.schunk.meta:
             raise ValueError("The supplied SChunk is not tagged as a BatchArray")
+
+    def _load_layout(self) -> None:
+        layout = None
+        self._layout_format = None
+        if _BATCHARRAY_LAYOUT_KEY in self.vlmeta:
+            layout = self.vlmeta[_BATCHARRAY_LAYOUT_KEY]
+        if isinstance(layout, dict):
+            self._chunksize = layout.get("chunksize")
+            self._blocksize = layout.get("blocksize")
+            self._layout_format = layout.get("format", "batched_vlblocks")
+            return
+        if len(self) == 0:
+            return
+        # Legacy fallback: one object per VL block.
+        first_nbytes, _, nblocks = blosc2.get_cbuffer_sizes(self.schunk.get_lazychunk(0))
+        if nblocks <= 0 or first_nbytes <= 0:
+            return
+        self._chunksize = nblocks
+        self._blocksize = 1
+        self._layout_format = "legacy_vlblocks"
+        self._store_layout()
+
+    def _store_layout(self) -> None:
+        if self._chunksize is None or self.mode == "r":
+            return
+        layout = {
+            "version": 1,
+            "chunksize": self._chunksize,
+            "blocksize": self._blocksize,
+            "format": self._layout_format or "batched_vlblocks",
+            "sizing_policy": "l2_cache_prefix",
+        }
+        self.vlmeta[_BATCHARRAY_LAYOUT_KEY] = layout
 
     def _check_writable(self) -> None:
         if self.mode == "r":
@@ -249,13 +293,42 @@ class BatchArray:
             raise ValueError("BatchArray entries cannot be empty")
         return values
 
-    def _serialize_batch(self, value: object) -> list[bytes]:
-        payloads = []
-        for item in self._normalize_batch(value):
-            payload = msgpack_packb(item)
-            _check_serialized_size(payload)
-            payloads.append(payload)
-        return payloads
+    def _ensure_layout_for_batch(self, batch: list[Any]) -> None:
+        if self._chunksize is None:
+            self._chunksize = len(batch)
+        if len(batch) != self._chunksize:
+            raise ValueError(f"BatchArray entries must contain exactly {self._chunksize} objects")
+        if self._blocksize is None:
+            payload_sizes = [len(msgpack_packb(item)) for item in batch]
+            self._blocksize = self._guess_blocksize(payload_sizes)
+        self._store_layout()
+
+    def _guess_blocksize(self, payload_sizes: list[int]) -> int:
+        if not payload_sizes:
+            raise ValueError("BatchArray entries cannot be empty")
+        l2_cache_size = blosc2.cpu_info.get("l2_cache_size")
+        if not isinstance(l2_cache_size, int) or l2_cache_size <= 0:
+            return len(payload_sizes)
+        total = 0
+        count = 0
+        for payload_size in payload_sizes:
+            if count > 0 and total + payload_size > l2_cache_size:
+                break
+            total += payload_size
+            count += 1
+        if count == 0:
+            count = 1
+        return min(count, len(payload_sizes))
+
+    def _serialize_batch(self, value: object) -> list[Any]:
+        batch = self._normalize_batch(value)
+        self._ensure_layout_for_batch(batch)
+        return batch
+
+    def _serialize_block(self, items: list[Any]) -> bytes:
+        payload = msgpack_packb(items)
+        _check_serialized_size(payload)
+        return payload
 
     def _vl_cparams_kwargs(self) -> dict[str, Any]:
         return asdict(self.schunk.cparams)
@@ -263,33 +336,44 @@ class BatchArray:
     def _vl_dparams_kwargs(self) -> dict[str, Any]:
         return asdict(self.schunk.dparams)
 
-    def _compress_batch(self, payloads: list[bytes]) -> bytes:
-        return blosc2.blosc2_ext.vlcompress(payloads, **self._vl_cparams_kwargs())
+    def _compress_batch(self, batch: list[Any]) -> bytes:
+        if self._blocksize is None:
+            raise RuntimeError("BatchArray blocksize is not initialized")
+        blocks = [
+            self._serialize_block(batch[i : i + self._blocksize])
+            for i in range(0, len(batch), self._blocksize)
+        ]
+        return blosc2.blosc2_ext.vlcompress(blocks, **self._vl_cparams_kwargs())
 
-    def _decode_payloads(self, nchunk: int) -> list[bytes]:
-        return blosc2.blosc2_ext.vldecompress(self.schunk.get_chunk(nchunk), **self._vl_dparams_kwargs())
+    def _decode_blocks(self, nchunk: int) -> list[list[Any]]:
+        block_payloads = blosc2.blosc2_ext.vldecompress(
+            self.schunk.get_chunk(nchunk), **self._vl_dparams_kwargs()
+        )
+        if self._layout_format == "legacy_vlblocks":
+            return [[msgpack_unpackb(payload)] for payload in block_payloads]
+        return [msgpack_unpackb(payload) for payload in block_payloads]
 
     def _get_batch(self, index: int) -> Batch:
         return Batch(self, index, self.schunk.get_lazychunk(index))
 
     def _batch_lengths(self) -> list[int]:
-        lengths = []
-        for i in range(len(self)):
-            _, _, nblocks = blosc2.get_cbuffer_sizes(self.schunk.get_lazychunk(i))
-            lengths.append(nblocks)
-        return lengths
+        if self.chunksize is not None:
+            return [self.chunksize for _ in range(len(self))]
+        return [len(self[i]) for i in range(len(self))]
 
     def append(self, value: object) -> int:
         """Append one batch and return the new number of entries."""
         self._check_writable()
-        chunk = self._compress_batch(self._serialize_batch(value))
+        batch = self._serialize_batch(value)
+        chunk = self._compress_batch(batch)
         return self.schunk.append_chunk(chunk)
 
     def insert(self, index: int, value: object) -> int:
         """Insert one batch at ``index`` and return the new number of entries."""
         self._check_writable()
         index = self._normalize_insert_index(index)
-        chunk = self._compress_batch(self._serialize_batch(value))
+        batch = self._serialize_batch(value)
+        chunk = self._compress_batch(batch)
         return self.schunk.insert_chunk(index, chunk)
 
     def delete(self, index: int | slice) -> int:
@@ -316,7 +400,8 @@ class BatchArray:
         """Append all batches from an iterable."""
         self._check_writable()
         for value in values:
-            chunk = self._compress_batch(self._serialize_batch(value))
+            batch = self._serialize_batch(value)
+            chunk = self._compress_batch(batch)
             self.schunk.append_chunk(chunk)
 
     def clear(self) -> None:
@@ -333,6 +418,7 @@ class BatchArray:
             storage=storage,
         )
         self._attach_schunk(schunk)
+        self._store_layout()
 
     def __getitem__(self, index: int | slice) -> Batch | list[Batch]:
         if isinstance(index, slice):
@@ -351,7 +437,8 @@ class BatchArray:
                 for idx in reversed(indices):
                     self.schunk.delete_chunk(idx)
                 for offset, item in enumerate(values):
-                    chunk = self._compress_batch(self._serialize_batch(item))
+                    batch = self._serialize_batch(item)
+                    chunk = self._compress_batch(batch)
                     self.schunk.insert_chunk(start + offset, chunk)
                 return
             if len(values) != len(indices):
@@ -359,12 +446,14 @@ class BatchArray:
                     f"attempt to assign sequence of size {len(values)} to extended slice of size {len(indices)}"
                 )
             for idx, item in zip(indices, values, strict=True):
-                chunk = self._compress_batch(self._serialize_batch(item))
+                batch = self._serialize_batch(item)
+                chunk = self._compress_batch(batch)
                 self.schunk.update_chunk(idx, chunk)
             return
         self._check_writable()
         index = self._normalize_index(index)
-        chunk = self._compress_batch(self._serialize_batch(value))
+        batch = self._serialize_batch(value)
+        chunk = self._compress_batch(batch)
         self.schunk.update_chunk(index, chunk)
 
     def __delitem__(self, index: int | slice) -> None:
@@ -395,7 +484,11 @@ class BatchArray:
 
     @property
     def chunksize(self) -> int:
-        return self.schunk.chunksize
+        return self._chunksize
+
+    @property
+    def blocksize(self) -> int:
+        return self._blocksize
 
     @property
     def typesize(self) -> int:
@@ -435,6 +528,8 @@ class BatchArray:
         return [
             ("type", f"{self.__class__.__name__}"),
             ("nbatches", len(self)),
+            ("chunksize", self.chunksize),
+            ("blocksize", self.blocksize),
             ("nitems", nitems),
             ("batch_len_min", min(batch_lengths) if batch_lengths else 0),
             ("batch_len_max", max(batch_lengths) if batch_lengths else 0),
@@ -456,7 +551,8 @@ class BatchArray:
 
         kwargs["cparams"] = kwargs.get("cparams", copy.deepcopy(self.cparams))
         kwargs["dparams"] = kwargs.get("dparams", copy.deepcopy(self.dparams))
-        kwargs["chunksize"] = kwargs.get("chunksize", -1)
+        kwargs["chunksize"] = kwargs.get("chunksize", self.chunksize)
+        kwargs["blocksize"] = kwargs.get("blocksize", self.blocksize)
 
         if "storage" not in kwargs:
             kwargs["meta"] = self._copy_meta()
@@ -465,6 +561,9 @@ class BatchArray:
                 kwargs["mode"] = "w"
 
         out = BatchArray(**kwargs)
+        if "storage" not in kwargs and len(self.vlmeta) > 0:
+            for key, value in self.vlmeta.getall().items():
+                out.vlmeta[key] = value
         out.extend(self)
         return out
 

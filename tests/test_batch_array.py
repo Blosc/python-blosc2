@@ -12,8 +12,8 @@ from blosc2._msgpack_utils import msgpack_packb
 
 BATCHES = [
     [b"bytes\x00payload", "plain text", 42],
-    [{"nested": [1, 2]}, None],
-    [(1, 2, "three"), 3.5, True, {"rows": [[], ["nested"]]}],
+    [{"nested": [1, 2]}, None, {"tail": True}],
+    [(1, 2, "three"), 3.5, True],
 ]
 
 
@@ -46,7 +46,12 @@ def test_batcharray_roundtrip(contiguous, urlpath):
         assert barray.append(batch) == i
 
     assert len(barray) == len(BATCHES)
+    assert barray.chunksize == len(BATCHES[0])
+    assert barray.blocksize is not None
+    assert 1 <= barray.blocksize <= barray.chunksize
     assert [batch[:] for batch in barray] == BATCHES
+    with pytest.raises(ValueError):
+        barray.append([1, 2])
 
     batch0 = barray[0]
     assert isinstance(batch0, blosc2.Batch)
@@ -59,16 +64,16 @@ def test_batcharray_roundtrip(contiguous, urlpath):
     assert batch0.cratio > 0
 
     expected = list(BATCHES)
-    expected[1] = ["updated", {"tuple": (7, 8)}]
-    expected[-1] = ["tiny"]
+    expected[1] = ["updated", {"tuple": (7, 8)}, 99]
+    expected[-1] = ["tiny", False, "x"]
     barray[1] = expected[1]
     barray[-1] = expected[-1]
-    assert barray.insert(0, ["head", 0]) == len(expected) + 1
-    expected.insert(0, ["head", 0])
-    assert barray.insert(-1, ["between", {"k": 5}]) == len(expected) + 1
-    expected.insert(-1, ["between", {"k": 5}])
-    assert barray.insert(999, ["tail"]) == len(expected) + 1
-    expected.insert(999, ["tail"])
+    assert barray.insert(0, ["head", 0, "x"]) == len(expected) + 1
+    expected.insert(0, ["head", 0, "x"])
+    assert barray.insert(-1, ["between", {"k": 5}, None]) == len(expected) + 1
+    expected.insert(-1, ["between", {"k": 5}, None])
+    assert barray.insert(999, ["tail", 1, 2]) == len(expected) + 1
+    expected.insert(999, ["tail", 1, 2])
     assert barray.delete(2) == len(expected) - 1
     del expected[2]
     del barray[-2]
@@ -78,6 +83,8 @@ def test_batcharray_roundtrip(contiguous, urlpath):
     if urlpath is not None:
         reopened = blosc2.open(urlpath, mode="r")
         assert isinstance(reopened, blosc2.BatchArray)
+        assert reopened.chunksize == barray.chunksize
+        assert reopened.blocksize == barray.blocksize
         assert [batch[:] for batch in reopened] == expected
         with pytest.raises(ValueError):
             reopened.append(["nope"])
@@ -97,8 +104,8 @@ def test_batcharray_roundtrip(contiguous, urlpath):
             reopened.clear()
 
         reopened_rw = blosc2.open(urlpath, mode="a")
-        reopened_rw[0] = ["changed"]
-        expected[0] = ["changed"]
+        reopened_rw[0] = ["changed", "batch", 0]
+        expected[0] = ["changed", "batch", 0]
         assert [batch[:] for batch in reopened_rw] == expected
 
         if contiguous:
@@ -112,10 +119,10 @@ def test_batcharray_roundtrip(contiguous, urlpath):
 def test_batcharray_from_cframe():
     barray = blosc2.BatchArray()
     barray.extend(BATCHES)
-    barray.insert(1, ["inserted", True])
+    barray.insert(1, ["inserted", True, None])
     del barray[3]
     expected = list(BATCHES)
-    expected.insert(1, ["inserted", True])
+    expected.insert(1, ["inserted", True, None])
     del expected[3]
 
     restored = blosc2.from_cframe(barray.to_cframe())
@@ -138,9 +145,11 @@ def test_batcharray_info():
     items = dict(barray.info_items)
     assert items["type"] == "BatchArray"
     assert items["nbatches"] == len(BATCHES)
+    assert items["chunksize"] == len(BATCHES[0])
+    assert items["blocksize"] == barray.blocksize
     assert items["nitems"] == sum(len(batch) for batch in BATCHES)
-    assert items["batch_len_min"] == 2
-    assert items["batch_len_max"] == 4
+    assert items["batch_len_min"] == 3
+    assert items["batch_len_max"] == 3
     assert items["batch_len_avg"] == "3.00"
     assert "urlpath" not in items
     assert "contiguous" not in items
@@ -159,6 +168,14 @@ def test_batcharray_zstd_uses_dict_by_default():
     barray = blosc2.BatchArray()
     assert barray.cparams.codec == blosc2.Codec.ZSTD
     assert barray.cparams.use_dict is True
+
+
+def test_batcharray_explicit_chunksize_blocksize():
+    barray = blosc2.BatchArray(chunksize=3, blocksize=2)
+    assert barray.chunksize == 3
+    assert barray.blocksize == 2
+    barray.append([1, 2, 3])
+    assert [batch[:] for batch in barray] == [[1, 2, 3]]
 
 
 def test_batcharray_respects_explicit_use_dict_and_non_zstd():
@@ -240,22 +257,22 @@ def test_batcharray_list_like_ops(contiguous, urlpath):
     blosc2.remove_urlpath(urlpath)
 
     barray = blosc2.BatchArray(storage=_storage(contiguous, urlpath))
-    barray.extend([[1, 2], [3], [4, 5, 6]])
-    assert [batch[:] for batch in barray] == [[1, 2], [3], [4, 5, 6]]
-    assert barray.pop() == [4, 5, 6]
-    assert barray.pop(0) == [1, 2]
-    assert [batch[:] for batch in barray] == [[3]]
+    barray.extend([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
+    assert [batch[:] for batch in barray] == [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+    assert barray.pop() == [7, 8, 9]
+    assert barray.pop(0) == [1, 2, 3]
+    assert [batch[:] for batch in barray] == [[4, 5, 6]]
 
     barray.clear()
     assert len(barray) == 0
     assert [batch[:] for batch in barray] == []
 
-    barray.extend([["a"], ["b", "c"]])
-    assert [batch[:] for batch in barray] == [["a"], ["b", "c"]]
+    barray.extend([["a", "b", "c"], ["d", "e", "f"]])
+    assert [batch[:] for batch in barray] == [["a", "b", "c"], ["d", "e", "f"]]
 
     if urlpath is not None:
         reopened = blosc2.open(urlpath, mode="r")
-        assert [batch[:] for batch in reopened] == [["a"], ["b", "c"]]
+        assert [batch[:] for batch in reopened] == [["a", "b", "c"], ["d", "e", "f"]]
 
     blosc2.remove_urlpath(urlpath)
 
@@ -272,19 +289,19 @@ def test_batcharray_list_like_ops(contiguous, urlpath):
 def test_batcharray_slices(contiguous, urlpath):
     blosc2.remove_urlpath(urlpath)
 
-    expected = [[i, i + 100] for i in range(8)]
+    expected = [[i, i + 100, i + 200] for i in range(8)]
     barray = blosc2.BatchArray(storage=_storage(contiguous, urlpath))
     barray.extend(expected)
 
     assert [batch[:] for batch in barray[1:6:2]] == expected[1:6:2]
     assert [batch[:] for batch in barray[::-2]] == expected[::-2]
 
-    barray[2:5] = [["a"], ["b", "c"]]
-    expected[2:5] = [["a"], ["b", "c"]]
+    barray[2:5] = [["a", "b", "c"], ["d", "e", "f"], ["g", "h", "i"]]
+    expected[2:5] = [["a", "b", "c"], ["d", "e", "f"], ["g", "h", "i"]]
     assert [batch[:] for batch in barray] == expected
 
-    barray[1:6:2] = [[100], [101], [102]]
-    expected[1:6:2] = [[100], [101], [102]]
+    barray[1:6:2] = [[100, 101, 102], [103, 104, 105], [106, 107, 108]]
+    expected[1:6:2] = [[100, 101, 102], [103, 104, 105], [106, 107, 108]]
     assert [batch[:] for batch in barray] == expected
 
     del barray[::3]
@@ -322,7 +339,7 @@ def test_batcharray_copy():
 
     original = blosc2.BatchArray(urlpath=urlpath, mode="w", contiguous=True)
     original.extend(BATCHES)
-    original.insert(1, ["copy", True])
+    original.insert(1, ["copy", True, 123])
 
     copied = original.copy(
         urlpath=copy_path, contiguous=False, cparams={"codec": blosc2.Codec.LZ4, "clevel": 5}
@@ -386,7 +403,9 @@ def test_batcharray_validation_errors():
         barray.delete(3)
     with pytest.raises(IndexError):
         blosc2.BatchArray().pop()
-    barray.extend([[1]])
+    barray.extend([[1, 2, 3]])
+    with pytest.raises(ValueError):
+        barray.append([2, 3])
     with pytest.raises(NotImplementedError):
         barray.pop(slice(0, 1))
 
