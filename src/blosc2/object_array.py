@@ -232,14 +232,7 @@ class ObjectArray:
             return
         if len(self) == 0:
             return
-        # Legacy fallback: one object per VL block.
-        first_nbytes, _, nblocks = blosc2.get_cbuffer_sizes(self.schunk.get_lazychunk(0))
-        if nblocks <= 0 or first_nbytes <= 0:
-            return
-        self._chunksize = nblocks
-        self._blocksize = 1
-        self._layout_format = "legacy_vlblocks"
-        self._store_layout()
+        raise ValueError("ObjectArray layout metadata is missing")
 
     def _store_layout(self) -> None:
         if self._chunksize is None or self.mode == "r":
@@ -349,8 +342,6 @@ class ObjectArray:
         block_payloads = blosc2.blosc2_ext.vldecompress(
             self.schunk.get_chunk(nchunk), **self._vl_dparams_kwargs()
         )
-        if self._layout_format == "legacy_vlblocks":
-            return [[msgpack_unpackb(payload)] for payload in block_payloads]
         return [msgpack_unpackb(payload) for payload in block_payloads]
 
     def _get_batch(self, index: int) -> Batch:
