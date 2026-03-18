@@ -535,7 +535,7 @@ from .ndarray import (
 from .embed_store import EmbedStore, estore_from_cframe
 from .dict_store import DictStore
 from .tree_store import TreeStore
-from .batch_array import Batch, BatchArray, batcharray_from_cframe
+from .object_array import Batch, ObjectArray, objectarray_from_cframe
 from .vlarray import VLArray, vlarray_from_cframe
 
 from .c2array import c2context, C2Array, URLPath
@@ -721,7 +721,7 @@ __all__ = [  # noqa : RUF022
     "C2Array",
     "CParams",
     "Batch",
-    "BatchArray",
+    "ObjectArray",
     # Enums
     "Codec",
     "DParams",
@@ -944,7 +944,7 @@ __all__ = [  # noqa : RUF022
     "validate_expr",
     "var",
     "vecdot",
-    "batcharray_from_cframe",
+    "objectarray_from_cframe",
     "vlarray_from_cframe",
     "where",
     "zeros",

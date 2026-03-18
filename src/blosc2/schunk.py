@@ -1621,10 +1621,10 @@ def _process_opened_object(res):
 
         return VLArray(_from_schunk=getattr(res, "schunk", res))
 
-    if "batcharray" in meta:
-        from blosc2.batch_array import BatchArray
+    if "objectarray" in meta:
+        from blosc2.object_array import ObjectArray
 
-        return BatchArray(_from_schunk=getattr(res, "schunk", res))
+        return ObjectArray(_from_schunk=getattr(res, "schunk", res))
 
     if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
         return blosc2._open_lazyarray(res)
@@ -1637,7 +1637,7 @@ def open(
 ) -> (
     blosc2.SChunk
     | blosc2.NDArray
-    | blosc2.BatchArray
+    | blosc2.ObjectArray
     | blosc2.VLArray
     | blosc2.C2Array
     | blosc2.LazyArray
