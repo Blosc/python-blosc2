@@ -27,14 +27,14 @@ def _check_serialized_size(buffer: bytes) -> None:
 
 
 class Batch(Sequence[Any]):
-    """A lazy sequence of Python objects stored in one BatchStore chunk."""
+    """A lazy sequence of Python objects stored in one BatchStore batch."""
 
-    def __init__(self, parent: BatchStore, nchunk: int, lazychunk: bytes) -> None:
+    def __init__(self, parent: BatchStore, nbatch: int, lazybatch: bytes) -> None:
         self._parent = parent
-        self._nchunk = nchunk
-        self._lazychunk = lazychunk
+        self._nbatch = nbatch
+        self._lazybatch = lazybatch
         self._blocks: list[list[Any]] | None = None
-        self._nbytes, self._cbytes, self._nblocks = blosc2.get_cbuffer_sizes(lazychunk)
+        self._nbytes, self._cbytes, self._nblocks = blosc2.get_cbuffer_sizes(lazybatch)
 
     def _normalize_index(self, index: int) -> int:
         if not isinstance(index, int):
@@ -47,7 +47,7 @@ class Batch(Sequence[Any]):
 
     def _decode_blocks(self) -> list[list[Any]]:
         if self._blocks is None:
-            self._blocks = self._parent._decode_blocks(self._nchunk)
+            self._blocks = self._parent._decode_blocks(self._nbatch)
         return self._blocks
 
     def __getitem__(self, index: int | slice) -> Any | list[Any]:
@@ -73,8 +73,8 @@ class Batch(Sequence[Any]):
             yield self[i]
 
     @property
-    def lazychunk(self) -> bytes:
-        return self._lazychunk
+    def lazybatch(self) -> bytes:
+        return self._lazybatch
 
     @property
     def nbytes(self) -> int:
@@ -338,9 +338,9 @@ class BatchStore:
         ]
         return blosc2.blosc2_ext.vlcompress(blocks, **self._vl_cparams_kwargs())
 
-    def _decode_blocks(self, nchunk: int) -> list[list[Any]]:
+    def _decode_blocks(self, nbatch: int) -> list[list[Any]]:
         block_payloads = blosc2.blosc2_ext.vldecompress(
-            self.schunk.get_chunk(nchunk), **self._vl_dparams_kwargs()
+            self.schunk.get_chunk(nbatch), **self._vl_dparams_kwargs()
         )
         return [msgpack_unpackb(payload) for payload in block_payloads]
 
@@ -351,16 +351,16 @@ class BatchStore:
         """Append one batch and return the new number of entries."""
         self._check_writable()
         batch = self._serialize_batch(value)
-        chunk = self._compress_batch(batch)
-        return self.schunk.append_chunk(chunk)
+        batch_payload = self._compress_batch(batch)
+        return self.schunk.append_chunk(batch_payload)
 
     def insert(self, index: int, value: object) -> int:
         """Insert one batch at ``index`` and return the new number of entries."""
         self._check_writable()
         index = self._normalize_insert_index(index)
         batch = self._serialize_batch(value)
-        chunk = self._compress_batch(batch)
-        return self.schunk.insert_chunk(index, chunk)
+        batch_payload = self._compress_batch(batch)
+        return self.schunk.insert_chunk(index, batch_payload)
 
     def delete(self, index: int | slice) -> int:
         """Delete the batch at ``index`` and return the new number of entries."""
@@ -387,8 +387,8 @@ class BatchStore:
         self._check_writable()
         for value in values:
             batch = self._serialize_batch(value)
-            chunk = self._compress_batch(batch)
-            self.schunk.append_chunk(chunk)
+            batch_payload = self._compress_batch(batch)
+            self.schunk.append_chunk(batch_payload)
 
     def clear(self) -> None:
         """Remove all entries from the container."""
@@ -424,8 +424,8 @@ class BatchStore:
                     self.schunk.delete_chunk(idx)
                 for offset, item in enumerate(values):
                     batch = self._serialize_batch(item)
-                    chunk = self._compress_batch(batch)
-                    self.schunk.insert_chunk(start + offset, chunk)
+                    batch_payload = self._compress_batch(batch)
+                    self.schunk.insert_chunk(start + offset, batch_payload)
                 return
             if len(values) != len(indices):
                 raise ValueError(
@@ -433,14 +433,14 @@ class BatchStore:
                 )
             for idx, item in zip(indices, values, strict=True):
                 batch = self._serialize_batch(item)
-                chunk = self._compress_batch(batch)
-                self.schunk.update_chunk(idx, chunk)
+                batch_payload = self._compress_batch(batch)
+                self.schunk.update_chunk(idx, batch_payload)
             return
         self._check_writable()
         index = self._normalize_index(index)
         batch = self._serialize_batch(value)
-        chunk = self._compress_batch(batch)
-        self.schunk.update_chunk(index, chunk)
+        batch_payload = self._compress_batch(batch)
+        self.schunk.update_chunk(index, batch_payload)
 
     def __delitem__(self, index: int | slice) -> None:
         self.delete(index)

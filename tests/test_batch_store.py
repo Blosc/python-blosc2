@@ -58,7 +58,7 @@ def test_batchstore_roundtrip(contiguous, urlpath):
     assert len(batch0) == len(BATCHES[0])
     assert batch0[1] == BATCHES[0][1]
     assert batch0[:] == BATCHES[0]
-    assert isinstance(batch0.lazychunk, bytes)
+    assert isinstance(batch0.lazybatch, bytes)
     assert batch0.nbytes > 0
     assert batch0.cbytes > 0
     assert batch0.cratio > 0
@@ -216,14 +216,14 @@ def test_vlcompress_small_blocks_roundtrip():
     ]
     payloads = [msgpack_packb(value) for value in values]
 
-    chunk = blosc2.blosc2_ext.vlcompress(
+    batch_payload = blosc2.blosc2_ext.vlcompress(
         payloads,
         codec=blosc2.Codec.ZSTD,
         clevel=5,
         typesize=1,
         nthreads=1,
     )
-    out = blosc2.blosc2_ext.vldecompress(chunk, nthreads=1)
+    out = blosc2.blosc2_ext.vldecompress(batch_payload, nthreads=1)
 
     assert out == payloads
 
