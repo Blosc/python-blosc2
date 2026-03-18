@@ -17,8 +17,8 @@ import blosc2
 from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 from blosc2.info import InfoReporter, format_nbytes_info
 
-_OBJECTARRAY_META = {"version": 2, "serializer": "msgpack", "format": "batched_vlblocks"}
-_OBJECTARRAY_LAYOUT_KEY = "objectstore"
+_BATCHSTORE_META = {"version": 2, "serializer": "msgpack", "format": "batched_vlblocks"}
+_BATCHSTORE_LAYOUT_KEY = "batchstore"
 
 
 def _check_serialized_size(buffer: bytes) -> None:
@@ -27,9 +27,9 @@ def _check_serialized_size(buffer: bytes) -> None:
 
 
 class Batch(Sequence[Any]):
-    """A lazy sequence of Python objects stored in one ObjectStore chunk."""
+    """A lazy sequence of Python objects stored in one BatchStore chunk."""
 
-    def __init__(self, parent: ObjectStore, nchunk: int, lazychunk: bytes) -> None:
+    def __init__(self, parent: BatchStore, nchunk: int, lazychunk: bytes) -> None:
         self._parent = parent
         self._nchunk = nchunk
         self._lazychunk = lazychunk
@@ -58,7 +58,7 @@ class Batch(Sequence[Any]):
         index = self._normalize_index(index)
         blocksize = self._parent.blocksize
         if blocksize is None:
-            raise RuntimeError("ObjectStore blocksize is not initialized")
+            raise RuntimeError("BatchStore blocksize is not initialized")
         block_index, item_index = divmod(index, blocksize)
         return blocks[block_index][item_index]
 
@@ -92,7 +92,7 @@ class Batch(Sequence[Any]):
         return f"Batch(len={len(self)}, nbytes={self.nbytes}, cbytes={self.cbytes})"
 
 
-class ObjectStore:
+class BatchStore:
     """A batched variable-length array backed by an :class:`blosc2.SChunk`."""
 
     @staticmethod
@@ -109,14 +109,14 @@ class ObjectStore:
         if isinstance(cparams, blosc2.CParams):
             cparams.typesize = 1
             if auto_use_dict and cparams.codec == blosc2.Codec.ZSTD and cparams.clevel > 0:
-                # ObjectStore stores many small serialized payloads, where Zstd dicts help materially.
+                # BatchStore stores many small serialized payloads, where Zstd dicts help materially.
                 cparams.use_dict = True
         else:
             cparams["typesize"] = 1
             codec = cparams.get("codec", blosc2.Codec.ZSTD)
             clevel = cparams.get("clevel", 5)
             if auto_use_dict and codec == blosc2.Codec.ZSTD and clevel > 0:
-                # ObjectStore stores many small serialized payloads, where Zstd dicts help materially.
+                # BatchStore stores many small serialized payloads, where Zstd dicts help materially.
                 cparams["use_dict"] = True
         return cparams
 
@@ -142,9 +142,9 @@ class ObjectStore:
     @staticmethod
     def _validate_storage(storage: blosc2.Storage) -> None:
         if storage.mmap_mode not in (None, "r"):
-            raise ValueError("For ObjectStore containers, mmap_mode must be None or 'r'")
+            raise ValueError("For BatchStore containers, mmap_mode must be None or 'r'")
         if storage.mmap_mode == "r" and storage.mode != "r":
-            raise ValueError("For ObjectStore containers, mmap_mode='r' requires mode='r'")
+            raise ValueError("For BatchStore containers, mmap_mode='r' requires mode='r'")
 
     def _attach_schunk(self, schunk: blosc2.SChunk) -> None:
         self.schunk = schunk
@@ -179,10 +179,6 @@ class ObjectStore:
         _from_schunk: blosc2.SChunk | None = None,
         **kwargs: Any,
     ) -> None:
-        if "chunksize" in kwargs:
-            if batchsize is not None:
-                raise ValueError("Cannot pass both `batchsize` and `chunksize`")
-            batchsize = kwargs.pop("chunksize")
         self._batchsize: int | None = batchsize
         self._blocksize: int | None = blocksize
         self._layout_format: str | None = None
@@ -201,7 +197,7 @@ class ObjectStore:
 
         if kwargs:
             unexpected = ", ".join(sorted(kwargs))
-            raise ValueError(f"Unsupported ObjectStore keyword argument(s): {unexpected}")
+            raise ValueError(f"Unsupported BatchStore keyword argument(s): {unexpected}")
 
         self._validate_storage(storage)
         cparams = self._set_typesize_one(cparams)
@@ -213,7 +209,7 @@ class ObjectStore:
             return
 
         fixed_meta = dict(storage.meta or {})
-        fixed_meta["objectstore"] = dict(_OBJECTARRAY_META)
+        fixed_meta["batchstore"] = dict(_BATCHSTORE_META)
         storage.meta = fixed_meta
         schunk = blosc2.SChunk(chunksize=-1, data=None, cparams=cparams, dparams=dparams, storage=storage)
         self._attach_schunk(schunk)
@@ -221,22 +217,22 @@ class ObjectStore:
             self._store_layout()
 
     def _validate_tag(self) -> None:
-        if "objectstore" not in self.schunk.meta:
-            raise ValueError("The supplied SChunk is not tagged as an ObjectStore")
+        if "batchstore" not in self.schunk.meta:
+            raise ValueError("The supplied SChunk is not tagged as a BatchStore")
 
     def _load_layout(self) -> None:
         layout = None
         self._layout_format = None
-        if _OBJECTARRAY_LAYOUT_KEY in self.vlmeta:
-            layout = self.vlmeta[_OBJECTARRAY_LAYOUT_KEY]
+        if _BATCHSTORE_LAYOUT_KEY in self.vlmeta:
+            layout = self.vlmeta[_BATCHSTORE_LAYOUT_KEY]
         if isinstance(layout, dict):
-            self._batchsize = layout.get("batchsize", layout.get("chunksize"))
+            self._batchsize = layout["batchsize"]
             self._blocksize = layout.get("blocksize")
             self._layout_format = layout.get("format", "batched_vlblocks")
             return
         if len(self) == 0:
             return
-        raise ValueError("ObjectStore layout metadata is missing")
+        raise ValueError("BatchStore layout metadata is missing")
 
     def _store_layout(self) -> None:
         if self._batchsize is None or self.mode == "r":
@@ -248,24 +244,24 @@ class ObjectStore:
             "format": self._layout_format or "batched_vlblocks",
             "sizing_policy": "l2_cache_prefix",
         }
-        self.vlmeta[_OBJECTARRAY_LAYOUT_KEY] = layout
+        self.vlmeta[_BATCHSTORE_LAYOUT_KEY] = layout
 
     def _check_writable(self) -> None:
         if self.mode == "r":
-            raise ValueError("Cannot modify an ObjectStore opened in read-only mode")
+            raise ValueError("Cannot modify a BatchStore opened in read-only mode")
 
     def _normalize_index(self, index: int) -> int:
         if not isinstance(index, int):
-            raise TypeError("ObjectStore indices must be integers")
+            raise TypeError("BatchStore indices must be integers")
         if index < 0:
             index += len(self)
         if index < 0 or index >= len(self):
-            raise IndexError("ObjectStore index out of range")
+            raise IndexError("BatchStore index out of range")
         return index
 
     def _normalize_insert_index(self, index: int) -> int:
         if not isinstance(index, int):
-            raise TypeError("ObjectStore indices must be integers")
+            raise TypeError("BatchStore indices must be integers")
         if index < 0:
             index += len(self)
             if index < 0:
@@ -282,19 +278,19 @@ class ObjectStore:
 
     def _normalize_batch(self, value: object) -> list[Any]:
         if isinstance(value, (str, bytes, bytearray, memoryview)):
-            raise TypeError("ObjectStore entries must be sequences of Python objects")
+            raise TypeError("BatchStore entries must be sequences of Python objects")
         if not isinstance(value, Sequence):
-            raise TypeError("ObjectStore entries must be sequences of Python objects")
+            raise TypeError("BatchStore entries must be sequences of Python objects")
         values = list(value)
         if len(values) == 0:
-            raise ValueError("ObjectStore entries cannot be empty")
+            raise ValueError("BatchStore entries cannot be empty")
         return values
 
     def _ensure_layout_for_batch(self, batch: list[Any]) -> None:
         if self._batchsize is None:
             self._batchsize = len(batch)
         if len(batch) != self._batchsize:
-            raise ValueError(f"ObjectStore entries must contain exactly {self._batchsize} objects")
+            raise ValueError(f"BatchStore entries must contain exactly {self._batchsize} objects")
         if self._blocksize is None:
             payload_sizes = [len(msgpack_packb(item)) for item in batch]
             self._blocksize = self._guess_blocksize(payload_sizes)
@@ -302,7 +298,7 @@ class ObjectStore:
 
     def _guess_blocksize(self, payload_sizes: list[int]) -> int:
         if not payload_sizes:
-            raise ValueError("ObjectStore entries cannot be empty")
+            raise ValueError("BatchStore entries cannot be empty")
         l2_cache_size = blosc2.cpu_info.get("l2_cache_size")
         if not isinstance(l2_cache_size, int) or l2_cache_size <= 0:
             return len(payload_sizes)
@@ -335,7 +331,7 @@ class ObjectStore:
 
     def _compress_batch(self, batch: list[Any]) -> bytes:
         if self._blocksize is None:
-            raise RuntimeError("ObjectStore blocksize is not initialized")
+            raise RuntimeError("BatchStore blocksize is not initialized")
         blocks = [
             self._serialize_block(batch[i : i + self._blocksize])
             for i in range(0, len(batch), self._blocksize)
@@ -380,7 +376,7 @@ class ObjectStore:
         """Remove and return the batch at ``index``."""
         self._check_writable()
         if isinstance(index, slice):
-            raise NotImplementedError("Slicing is not supported for ObjectStore")
+            raise NotImplementedError("Slicing is not supported for BatchStore")
         index = self._normalize_index(index)
         value = self[index][:]
         self.schunk.delete_chunk(index)
@@ -473,10 +469,6 @@ class ObjectStore:
         return self.schunk.dparams
 
     @property
-    def chunksize(self) -> int:
-        return self._batchsize
-
-    @property
     def batchsize(self) -> int:
         return self._batchsize
 
@@ -510,12 +502,12 @@ class ObjectStore:
 
     @property
     def info(self) -> InfoReporter:
-        """Print information about this ObjectStore."""
+        """Print information about this BatchStore."""
         return InfoReporter(self)
 
     @property
     def info_items(self) -> list:
-        """A list of tuples with summary information about this ObjectStore."""
+        """A list of tuples with summary information about this BatchStore."""
         nitems = len(self) * self.batchsize if self.batchsize is not None else 0
         return [
             ("type", f"{self.__class__.__name__}"),
@@ -533,15 +525,10 @@ class ObjectStore:
     def to_cframe(self) -> bytes:
         return self.schunk.to_cframe()
 
-    def copy(self, **kwargs: Any) -> ObjectStore:
+    def copy(self, **kwargs: Any) -> BatchStore:
         """Create a copy of the container with optional constructor overrides."""
         if "meta" in kwargs:
             raise ValueError("meta should not be passed to copy")
-        if "chunksize" in kwargs:
-            if "batchsize" in kwargs:
-                raise ValueError("Cannot pass both `batchsize` and `chunksize` to copy")
-            kwargs["batchsize"] = kwargs.pop("chunksize")
-
         kwargs["cparams"] = kwargs.get("cparams", copy.deepcopy(self.cparams))
         kwargs["dparams"] = kwargs.get("dparams", copy.deepcopy(self.dparams))
         kwargs["batchsize"] = kwargs.get("batchsize", self.batchsize)
@@ -553,18 +540,18 @@ class ObjectStore:
             if "urlpath" in kwargs and "mode" not in kwargs:
                 kwargs["mode"] = "w"
 
-        out = ObjectStore(**kwargs)
+        out = BatchStore(**kwargs)
         if "storage" not in kwargs and len(self.vlmeta) > 0:
             for key, value in self.vlmeta.getall().items():
                 out.vlmeta[key] = value
         out.extend(self)
         return out
 
-    def __enter__(self) -> ObjectStore:
+    def __enter__(self) -> BatchStore:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
         return False
 
     def __repr__(self) -> str:
-        return f"ObjectStore(len={len(self)}, urlpath={self.urlpath!r})"
+        return f"BatchStore(len={len(self)}, urlpath={self.urlpath!r})"
