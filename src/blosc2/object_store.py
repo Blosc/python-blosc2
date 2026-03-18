@@ -351,11 +351,6 @@ class ObjectStore:
     def _get_batch(self, index: int) -> Batch:
         return Batch(self, index, self.schunk.get_lazychunk(index))
 
-    def _batch_lengths(self) -> list[int]:
-        if self.batchsize is not None:
-            return [self.batchsize for _ in range(len(self))]
-        return [len(self[i]) for i in range(len(self))]
-
     def append(self, value: object) -> int:
         """Append one batch and return the new number of entries."""
         self._check_writable()
@@ -521,18 +516,13 @@ class ObjectStore:
     @property
     def info_items(self) -> list:
         """A list of tuples with summary information about this ObjectStore."""
-        batch_lengths = self._batch_lengths()
-        nitems = sum(batch_lengths)
-        avg_batch_len = nitems / len(batch_lengths) if batch_lengths else 0.0
+        nitems = len(self) * self.batchsize if self.batchsize is not None else 0
         return [
             ("type", f"{self.__class__.__name__}"),
             ("nbatches", len(self)),
             ("batchsize", self.batchsize),
             ("blocksize", self.blocksize),
             ("nitems", nitems),
-            ("batch_len_min", min(batch_lengths) if batch_lengths else 0),
-            ("batch_len_max", max(batch_lengths) if batch_lengths else 0),
-            ("batch_len_avg", f"{avg_batch_len:.2f}"),
             ("nbytes", format_nbytes_info(self.nbytes)),
             ("cbytes", format_nbytes_info(self.cbytes)),
             ("cratio", f"{self.cratio:.2f}"),

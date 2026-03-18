@@ -148,9 +148,6 @@ def test_objectstore_info():
     assert items["batchsize"] == len(BATCHES[0])
     assert items["blocksize"] == barray.blocksize
     assert items["nitems"] == sum(len(batch) for batch in BATCHES)
-    assert items["batch_len_min"] == 3
-    assert items["batch_len_max"] == 3
-    assert items["batch_len_avg"] == "3.00"
     assert "urlpath" not in items
     assert "contiguous" not in items
     assert "typesize" not in items
@@ -161,7 +158,7 @@ def test_objectstore_info():
     text = repr(barray.info)
     assert "type" in text
     assert "ObjectStore" in text
-    assert "batch_len_avg" in text
+    assert "batchsize" in text
 
 
 def test_objectstore_zstd_uses_dict_by_default():
