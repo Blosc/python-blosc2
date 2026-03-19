@@ -115,61 +115,73 @@ def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArra
     # multithreaded matmul
     # TODO: handle a) type promotion, b) padding (explicitly), c) (improved) >2D
     ops = (x1, x2, result)
-    blocks = result.blocks
     all_ndarray = all(isinstance(value, blosc2.NDArray) and value.shape != () for value in ops)
     global try_miniexpr
 
     # Use a local copy so we don't modify the global
     use_miniexpr = try_miniexpr
-    if all_ndarray:
-        if any(op.dtype != ops[0].dtype for op in ops):  # TODO: Remove this condition
+    if 0 not in result.shape + x1.shape + x2.shape:  # if any array is empty, return array of 0s
+        if all_ndarray:
+            if any(op.dtype != ops[0].dtype for op in ops):  # TODO: Remove this condition
+                use_miniexpr = False
+
+            # Just force same chunk/block shapes
+            same_chunks = all(op.chunks == result.chunks for op in (x1, x2))
+            same_blocks = all(op.blocks == result.blocks for op in (x1, x2))
+            same_shape = all(op.shape == result.shape for op in (x1, x2))
+
+            use_miniexpr &= same_blocks & same_chunks & same_shape
+
+            # TODO: We can relax this to even just load according to result blockshape, but that's difficult.
+            # Two easier cases are presented below
+            # Case 1: Might want to restrict loading across chunk boundaries, in which case would require:
+            # x1.chunks[-2] % result.blocks[-2] == 0
+            # x2.chunks[-1] % result.blocks[-1] == 0
+            # x2.chunks[-2] % x1.blocks[-1] == 0
+            # Can then load in x1 as slices of size [result.blocks[-2], x1.blocks[-1]]
+            # and x2 in slices of [x1.blocks[-1], result.blocks[-1]]
+
+            # Case 2: Slightly easier to implement this maybe
+            # Require that blocks are matmul compatible and broadcastable directly to result
+            # (M, K) x (K, N) = (M, N)
+            # so can load block-by-block for inputs and calculate block of output
+            # Also need to avoid loading across chunk boundaries
+            # chunks_aligned = x1.chunks[-2] % x1.blocks[-2] == 0
+            # chunks_aligned &= x2.chunks[-1] % x2.blocks[-1] == 0
+            # chunks_aligned &= x2.chunks[-2] % x1.blocks[-1] == 0
+            # same_blocks = x2.blocks[-2] == x1.blocks[-1]
+            # same_blocks &= x2.blocks[-1] == result.blocks[-1]
+            # same_blocks &= result.blocks[-2] == x1.blocks[-2]
+            # try:
+            #     result_blocks = np.broadcast_shapes(x1.blocks, x2.blocks)
+            #     if not (same_blocks and chunks_aligned and result_blocks[:-2] == result.blocks[:-2]):
+            #         use_miniexpr = False
+            # except ValueError:
+            #     use_miniexpr = False
+
+            use_miniexpr &= x1.dtype.kind in ("i", "f")
+            use_miniexpr &= x2.dtype.kind in ("i", "f")
+            use_miniexpr &= x1.dtype == x2.dtype
+
+        else:
             use_miniexpr = False
 
-        # TODO: In fact the following can be relaxed too, just need to load across block boundaries
-        # Might want to restrict loading across chunk boundaries, in which case would require:
-        # x1.chunks[-2] % result.blocks[-2] == 0
-        # x2.chunks[-1] % result.blocks[-1] == 0
-        # x2.chunks[-2] % x1.blocks[-1] == 0
-        # Can then load in x1 as slices of size [result.blocks[-2], x1.blocks[-1]]
-        # and x2 in slices of [x1.blocks[-1], result.blocks[-1]]
-
-        # Require that blocks are matmul compatible and broadcastable directly to result
-        # (M, K) x (K, N) = (M, N)
-        # so can load block-by-block for inputs and calculate block of output
-        # Also need to avoid loading across chunk boundaries
-        chunks_aligned = x1.chunks[-2] % x1.blocks[-2] == 0
-        chunks_aligned &= x2.chunks[-1] % x2.blocks[-1] == 0
-        chunks_aligned &= x2.chunks[-2] % x1.blocks[-1] == 0
-        same_blocks = x2.blocks[-2] == x1.blocks[-1]
-        same_blocks &= x2.blocks[-1] == result.blocks[-1]
-        same_blocks &= result.blocks[-2] == x1.blocks[-2]
-        try:
-            result_blocks = np.broadcast_shapes(x1.blocks, x2.blocks)
-        except ValueError:
-            use_miniexpr = False
-        if not (same_blocks and chunks_aligned and result_blocks[:-2] == blocks[:-2]):
-            use_miniexpr = False
-
-    else:
-        use_miniexpr = False
-
-    if use_miniexpr:
-        prefilter_set = False
-        try:
-            result._set_pref_matmul({"x1": x1, "x2": x2}, fp_accuracy=blosc2.FPAccuracy.DEFAULT)
-            prefilter_set = True
-            # Data to compress is fetched from operands, so it can be uninitialized here
-            data = np.empty(result.schunk.chunksize, dtype=np.uint8)
-            for nchunk_out in range(result.schunk.nchunks):
-                result.schunk.update_data(nchunk_out, data, copy=False)
-        except Exception as e:
-            raise Exception from e
-        finally:
-            if prefilter_set:
-                result.schunk.remove_prefilter("miniexpr")
-    else:  # couldn't do multithreading
-        print("multithreading failed :( ")
-        if 0 not in result.shape + x1.shape + x2.shape:  # if any array is empty, return array of 0s
+        if use_miniexpr:
+            prefilter_set = False
+            try:
+                result._set_pref_matmul({"x1": x1, "x2": x2}, fp_accuracy=blosc2.FPAccuracy.DEFAULT)
+                prefilter_set = True
+                # Data to compress is fetched from operands, so it can be uninitialized here
+                data = np.empty(result.schunk.chunksize, dtype=np.uint8)
+                for nchunk_out in range(result.schunk.nchunks):
+                    result.schunk.update_data(nchunk_out, data, copy=False)
+            except Exception as e:
+                raise Exception from e
+            finally:
+                if prefilter_set:
+                    result.schunk.remove_prefilter("miniexpr")
+        else:  # couldn't do multithreading
+            print("multithreading failed :( ")
             p, q = result.chunks[-2:]
             r = x2.chunks[-1]
 
