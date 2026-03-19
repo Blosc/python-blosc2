@@ -202,6 +202,30 @@ def test_batchstore_get_vlblock_and_scalar_access():
     blosc2.remove_urlpath(urlpath)
 
 
+def test_batchstore_scalar_reads_cache_vlblocks():
+    barray = blosc2.BatchStore(blocksize_max=2)
+    barray.append([0, 1, 2, 3, 4])
+
+    batch = barray[0]
+    original_get_vlblock = barray.schunk.get_vlblock
+    calls = []
+
+    def wrapped_get_vlblock(nchunk, nblock):
+        calls.append((nchunk, nblock))
+        return original_get_vlblock(nchunk, nblock)
+
+    barray.schunk.get_vlblock = wrapped_get_vlblock
+    try:
+        assert batch[0] == 0
+        assert batch[1] == 1
+        assert batch[0] == 0
+        assert batch[2] == 2
+        assert batch[3] == 3
+        assert calls == [(0, 0), (0, 1)]
+    finally:
+        barray.schunk.get_vlblock = original_get_vlblock
+
+
 def test_batchstore_respects_explicit_use_dict_and_non_zstd():
     barray = blosc2.BatchStore(cparams={"codec": blosc2.Codec.LZ4, "clevel": 5})
     assert barray.cparams.codec == blosc2.Codec.LZ4

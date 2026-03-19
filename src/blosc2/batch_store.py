@@ -34,6 +34,8 @@ class Batch(Sequence[Any]):
         self._nbatch = nbatch
         self._lazybatch = lazybatch
         self._items: list[Any] | None = None
+        self._cached_block_index: int | None = None
+        self._cached_block: list[Any] | None = None
         self._nbytes, self._cbytes, self._nblocks = blosc2.get_cbuffer_sizes(lazybatch)
 
     def _normalize_index(self, index: int) -> int:
@@ -51,6 +53,14 @@ class Batch(Sequence[Any]):
             self._items = [item for block in blocks for item in block]
         return self._items
 
+    def _get_block(self, block_index: int) -> list[Any]:
+        if self._cached_block_index == block_index and self._cached_block is not None:
+            return self._cached_block
+        block = msgpack_unpackb(self._parent.schunk.get_vlblock(self._nbatch, block_index))
+        self._cached_block_index = block_index
+        self._cached_block = block
+        return block
+
     def __getitem__(self, index: int | slice) -> Any | list[Any]:
         if isinstance(index, slice):
             items = self._decode_items()
@@ -64,7 +74,7 @@ class Batch(Sequence[Any]):
             block_index, item_index = divmod(index, blocksize_max)
             if block_index >= self._nblocks:
                 raise IndexError("Batch index out of range")
-            block = msgpack_unpackb(self._parent.schunk.get_vlblock(self._nbatch, block_index))
+            block = self._get_block(block_index)
             try:
                 return block[item_index]
             except IndexError as exc:
