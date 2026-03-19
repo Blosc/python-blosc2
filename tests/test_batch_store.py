@@ -46,8 +46,8 @@ def test_batchstore_roundtrip(contiguous, urlpath):
         assert barray.append(batch) == i
 
     assert len(barray) == len(BATCHES)
-    assert barray.blocksize_max is not None
-    assert 1 <= barray.blocksize_max <= len(BATCHES[0])
+    assert barray.max_blocksize is not None
+    assert 1 <= barray.max_blocksize <= len(BATCHES[0])
     assert [batch[:] for batch in barray.iter_batches()] == BATCHES
     assert barray.append([1, 2]) == len(BATCHES) + 1
     assert [batch[:] for batch in barray.iter_batches()][-1] == [1, 2]
@@ -83,7 +83,7 @@ def test_batchstore_roundtrip(contiguous, urlpath):
     if urlpath is not None:
         reopened = blosc2.open(urlpath, mode="r")
         assert isinstance(reopened, blosc2.BatchStore)
-        assert reopened.blocksize_max is None
+        assert reopened.max_blocksize == barray.max_blocksize
         assert [batch[:] for batch in reopened.iter_batches()] == expected
         with pytest.raises(ValueError):
             reopened.append(["nope"])
@@ -145,7 +145,7 @@ def test_batchstore_info():
     assert items["type"] == "BatchStore"
     assert items["nbatches"] == len(BATCHES)
     assert items["batch stats"].startswith("mean=")
-    assert items["blocksize_max"] == barray.blocksize_max
+    assert items["max_blocksize"] == barray.max_blocksize
     assert items["nitems"] == sum(len(batch) for batch in BATCHES)
     assert "urlpath" not in items
     assert "contiguous" not in items
@@ -158,7 +158,7 @@ def test_batchstore_info():
     assert "type" in text
     assert "BatchStore" in text
     assert "batch stats" in text
-    assert "blocksize_max" in text
+    assert "max_blocksize" in text
 
 
 def test_batchstore_zstd_does_not_use_dict_by_default():
@@ -167,9 +167,9 @@ def test_batchstore_zstd_does_not_use_dict_by_default():
     assert barray.cparams.use_dict is False
 
 
-def test_batchstore_explicit_blocksize_max():
-    barray = blosc2.BatchStore(blocksize_max=2)
-    assert barray.blocksize_max == 2
+def test_batchstore_explicit_max_blocksize():
+    barray = blosc2.BatchStore(max_blocksize=2)
+    assert barray.max_blocksize == 2
     barray.append([1, 2, 3])
     barray.append([4])
     assert [batch[:] for batch in barray.iter_batches()] == [[1, 2, 3], [4]]
@@ -180,10 +180,10 @@ def test_batchstore_get_vlblock_and_scalar_access():
     blosc2.remove_urlpath(urlpath)
 
     batch = [0, 1, 2, 3, 4]
-    barray = blosc2.BatchStore(storage=_storage(True, urlpath), blocksize_max=2)
+    barray = blosc2.BatchStore(storage=_storage(True, urlpath), max_blocksize=2)
     barray.append(batch)
 
-    assert barray.blocksize_max == 2
+    assert barray.max_blocksize == 2
     assert msgpack_unpackb(barray.schunk.get_vlblock(0, 0)) == batch[:2]
     assert msgpack_unpackb(barray.schunk.get_vlblock(0, 1)) == batch[2:4]
     assert msgpack_unpackb(barray.schunk.get_vlblock(0, 2)) == batch[4:]
@@ -194,6 +194,7 @@ def test_batchstore_get_vlblock_and_scalar_access():
 
     reopened = blosc2.open(urlpath, mode="r")
     assert isinstance(reopened, blosc2.BatchStore)
+    assert reopened.max_blocksize == 2
     assert reopened[0][0] == 0
     assert reopened[0][2] == 2
     assert reopened[0][4] == 4
@@ -203,7 +204,7 @@ def test_batchstore_get_vlblock_and_scalar_access():
 
 
 def test_batchstore_scalar_reads_cache_vlblocks():
-    barray = blosc2.BatchStore(blocksize_max=2)
+    barray = blosc2.BatchStore(max_blocksize=2)
     barray.append([0, 1, 2, 3, 4])
 
     batch = barray[0]
@@ -227,7 +228,7 @@ def test_batchstore_scalar_reads_cache_vlblocks():
 
 
 def test_batchstore_iter_objects():
-    barray = blosc2.BatchStore(blocksize_max=2)
+    barray = blosc2.BatchStore(max_blocksize=2)
     batches = [[1, 2, 3], [4], [5, 6]]
     barray.extend(batches)
 

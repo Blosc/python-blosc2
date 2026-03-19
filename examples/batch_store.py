@@ -36,7 +36,7 @@ def main() -> None:
     blosc2.remove_urlpath(URLPATH)
 
     storage = blosc2.Storage(urlpath=URLPATH, mode="w", contiguous=True)
-    with blosc2.BatchStore(storage=storage, blocksize_max=BLOCKSIZE_MAX) as store:
+    with blosc2.BatchStore(storage=storage, max_blocksize=BLOCKSIZE_MAX) as store:
         for batch_index in range(NBATCHES):
             store.append(make_batch(batch_index))
 
@@ -44,11 +44,11 @@ def main() -> None:
         print("Created BatchStore")
         print(f"  batches: {len(store)}")
         print(f"  objects: {total_objects}")
-        print(f"  blocksize_max: {store.blocksize_max}")
+        print(f"  max_blocksize: {store.max_blocksize}")
 
-    # Reopen with the same blocksize_max hint so scalar reads can use the
+    # Reopen with the same max_blocksize hint so scalar reads can use the
     # VL-block path instead of decoding the entire batch.
-    reopened = blosc2.BatchStore(urlpath=URLPATH, mode="r", contiguous=True, blocksize_max=BLOCKSIZE_MAX)
+    reopened = blosc2.BatchStore(urlpath=URLPATH, mode="r", contiguous=True, max_blocksize=BLOCKSIZE_MAX)
 
     print()
     print(reopened.info)

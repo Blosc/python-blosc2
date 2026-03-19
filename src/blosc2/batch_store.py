@@ -18,7 +18,7 @@ import blosc2
 from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 from blosc2.info import InfoReporter, format_nbytes_info
 
-_BATCHSTORE_META = {"version": 1, "serializer": "msgpack"}
+_BATCHSTORE_META = {"version": 1, "serializer": "msgpack", "max_blocksize": None}
 
 
 def _check_serialized_size(buffer: bytes) -> None:
@@ -69,9 +69,9 @@ class Batch(Sequence[Any]):
             items = self._decode_items()
             index = self._normalize_index(index)
             return items[index]
-        blocksize_max = self._parent.blocksize_max
-        if blocksize_max is not None:
-            block_index, item_index = divmod(index, blocksize_max)
+        max_blocksize = self._parent.max_blocksize
+        if max_blocksize is not None:
+            block_index, item_index = divmod(index, max_blocksize)
             if block_index >= self._nblocks:
                 raise IndexError("Batch index out of range")
             block = self._get_block(block_index)
@@ -158,6 +158,11 @@ class BatchStore:
         self.schunk = schunk
         self.mode = schunk.mode
         self.mmap_mode = getattr(schunk, "mmap_mode", None)
+        try:
+            batchstore_meta = self.schunk.meta["batchstore"]
+        except KeyError:
+            batchstore_meta = {}
+        self._max_blocksize = batchstore_meta.get("max_blocksize", self._max_blocksize)
         self._validate_tag()
 
     def _maybe_open_existing(self, storage: blosc2.Storage) -> bool:
@@ -181,13 +186,13 @@ class BatchStore:
 
     def __init__(
         self,
-        blocksize_max: int | None = None,
+        max_blocksize: int | None = None,
         _from_schunk: blosc2.SChunk | None = None,
         **kwargs: Any,
     ) -> None:
-        if blocksize_max is not None and blocksize_max <= 0:
-            raise ValueError("blocksize_max must be a positive integer")
-        self._blocksize_max: int | None = blocksize_max
+        if max_blocksize is not None and max_blocksize <= 0:
+            raise ValueError("max_blocksize must be a positive integer")
+        self._max_blocksize: int | None = max_blocksize
         if _from_schunk is not None:
             if kwargs:
                 unexpected = ", ".join(sorted(kwargs))
@@ -213,7 +218,7 @@ class BatchStore:
             return
 
         fixed_meta = dict(storage.meta or {})
-        fixed_meta["batchstore"] = dict(_BATCHSTORE_META)
+        fixed_meta["batchstore"] = {**_BATCHSTORE_META, "max_blocksize": self._max_blocksize}
         storage.meta = fixed_meta
         schunk = blosc2.SChunk(chunksize=-1, data=None, cparams=cparams, dparams=dparams, storage=storage)
         self._attach_schunk(schunk)
@@ -263,9 +268,29 @@ class BatchStore:
         return values
 
     def _ensure_layout_for_batch(self, batch: list[Any]) -> None:
-        if self._blocksize_max is None:
+        if self._max_blocksize is None:
             payload_sizes = [len(msgpack_packb(item)) for item in batch]
-            self._blocksize_max = self._guess_blocksize(payload_sizes)
+            self._max_blocksize = self._guess_blocksize(payload_sizes)
+            self._persist_max_blocksize()
+
+    def _persist_max_blocksize(self) -> None:
+        if self._max_blocksize is None or len(self) > 0:
+            return
+        storage = self._make_storage()
+        fixed_meta = dict(storage.meta or {})
+        fixed_meta["batchstore"] = {
+            **dict(fixed_meta.get("batchstore", {})),
+            "max_blocksize": self._max_blocksize,
+        }
+        storage.meta = fixed_meta
+        schunk = blosc2.SChunk(
+            chunksize=-1,
+            data=None,
+            cparams=copy.deepcopy(self.cparams),
+            dparams=copy.deepcopy(self.dparams),
+            storage=storage,
+        )
+        self._attach_schunk(schunk)
 
     def _guess_blocksize(self, payload_sizes: list[int]) -> int:
         if not payload_sizes:
@@ -301,11 +326,11 @@ class BatchStore:
         return asdict(self.schunk.dparams)
 
     def _compress_batch(self, batch: list[Any]) -> bytes:
-        if self._blocksize_max is None:
-            raise RuntimeError("BatchStore blocksize_max is not initialized")
+        if self._max_blocksize is None:
+            raise RuntimeError("BatchStore max_blocksize is not initialized")
         blocks = [
-            self._serialize_block(batch[i : i + self._blocksize_max])
-            for i in range(0, len(batch), self._blocksize_max)
+            self._serialize_block(batch[i : i + self._max_blocksize])
+            for i in range(0, len(batch), self._max_blocksize)
         ]
         return blosc2.blosc2_ext.vlcompress(blocks, **self._vl_cparams_kwargs())
 
@@ -446,8 +471,8 @@ class BatchStore:
         return self.schunk.dparams
 
     @property
-    def blocksize_max(self) -> int | None:
-        return self._blocksize_max
+    def max_blocksize(self) -> int | None:
+        return self._max_blocksize
 
     @property
     def typesize(self) -> int:
@@ -492,7 +517,7 @@ class BatchStore:
             ("type", f"{self.__class__.__name__}"),
             ("nbatches", len(self)),
             ("batch stats", batch_stats),
-            ("blocksize_max", self.blocksize_max),
+            ("max_blocksize", self.max_blocksize),
             ("nitems", sum(batch_sizes)),
             ("nbytes", format_nbytes_info(self.nbytes)),
             ("cbytes", format_nbytes_info(self.cbytes)),
@@ -510,7 +535,7 @@ class BatchStore:
             raise ValueError("meta should not be passed to copy")
         kwargs["cparams"] = kwargs.get("cparams", copy.deepcopy(self.cparams))
         kwargs["dparams"] = kwargs.get("dparams", copy.deepcopy(self.dparams))
-        kwargs["blocksize_max"] = kwargs.get("blocksize_max", self.blocksize_max)
+        kwargs["max_blocksize"] = kwargs.get("max_blocksize", self.max_blocksize)
 
         if "storage" not in kwargs:
             kwargs["meta"] = self._copy_meta()

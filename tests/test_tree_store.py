@@ -658,7 +658,7 @@ def test_external_batchstore_support(tmp_path):
     store_path = tmp_path / "test_batchstore_external.b2d"
 
     with TreeStore(str(store_path), mode="w", threshold=0) as tstore:
-        bstore = blosc2.BatchStore(blocksize_max=2)
+        bstore = blosc2.BatchStore(max_blocksize=2)
         bstore.extend([[{"id": 1}, {"id": 2}], [{"id": 3}]])
         tstore["/data/batchstore"] = bstore
 

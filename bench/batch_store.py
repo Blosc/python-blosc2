@@ -61,7 +61,7 @@ def build_store(codec: blosc2.Codec, clevel: int, use_dict: bool, in_mem: bool) 
         storage = blosc2.Storage(mode="w")
         store = blosc2.BatchStore(
             storage=storage,
-            blocksize_max=BLOCKSIZE_MAX,
+            max_blocksize=BLOCKSIZE_MAX,
             cparams={
                 "codec": codec,
                 "clevel": clevel,
@@ -79,7 +79,7 @@ def build_store(codec: blosc2.Codec, clevel: int, use_dict: bool, in_mem: bool) 
         "clevel": clevel,
         "use_dict": use_dict and codec in (blosc2.Codec.ZSTD, blosc2.Codec.LZ4),
     }
-    with blosc2.BatchStore(storage=storage, blocksize_max=BLOCKSIZE_MAX, cparams=cparams) as store:
+    with blosc2.BatchStore(storage=storage, max_blocksize=BLOCKSIZE_MAX, cparams=cparams) as store:
         for batch_index in range(NBATCHES):
             store.append(make_batch(batch_index))
     return None
@@ -123,7 +123,7 @@ def main() -> None:
         assert store is not None
         read_store = store
     else:
-        read_store = blosc2.BatchStore(urlpath=URLPATH, mode="r", contiguous=True, blocksize_max=BLOCKSIZE_MAX)
+        read_store = blosc2.BatchStore(urlpath=URLPATH, mode="r", contiguous=True, max_blocksize=BLOCKSIZE_MAX)
     samples, timings_ns = measure_random_reads(read_store)
     t0 = time.perf_counter()
     checksum = 0
@@ -138,7 +138,7 @@ def main() -> None:
     print(f"  build time: {build_time_s:.3f} s")
     print(f"  batches: {len(read_store)}")
     print(f"  objects: {TOTAL_OBJECTS}")
-    print(f"  blocksize_max: {read_store.blocksize_max}")
+    print(f"  max_blocksize: {read_store.max_blocksize}")
     print()
     print(read_store.info)
     print(f"Random scalar reads: {N_RANDOM_READS}")
