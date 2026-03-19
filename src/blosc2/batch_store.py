@@ -418,9 +418,16 @@ class BatchStore:
     def __len__(self) -> int:
         return self.schunk.nchunks
 
-    def __iter__(self) -> Iterator[Batch]:
+    def iter_batches(self) -> Iterator[Batch]:
         for i in range(len(self)):
             yield self[i]
+
+    def iter_objects(self) -> Iterator[Any]:
+        for batch in self.iter_batches():
+            yield from batch
+
+    def __iter__(self) -> Iterator[Batch]:
+        yield from self.iter_batches()
 
     @property
     def meta(self):
@@ -474,7 +481,7 @@ class BatchStore:
     @property
     def info_items(self) -> list:
         """A list of tuples with summary information about this BatchStore."""
-        batch_sizes = [len(batch) for batch in self]
+        batch_sizes = [len(batch) for batch in self.iter_batches()]
         if batch_sizes:
             batch_stats = (
                 f"mean={statistics.fmean(batch_sizes):.2f}, max={max(batch_sizes)}, min={min(batch_sizes)}"
@@ -515,7 +522,7 @@ class BatchStore:
         if "storage" not in kwargs and len(self.vlmeta) > 0:
             for key, value in self.vlmeta.getall().items():
                 out.vlmeta[key] = value
-        out.extend(self)
+        out.extend(self.iter_batches())
         return out
 
     def __enter__(self) -> BatchStore:

@@ -125,6 +125,13 @@ def main() -> None:
     else:
         read_store = blosc2.BatchStore(urlpath=URLPATH, mode="r", contiguous=True, blocksize_max=BLOCKSIZE_MAX)
     samples, timings_ns = measure_random_reads(read_store)
+    t0 = time.perf_counter()
+    checksum = 0
+    nobjects = 0
+    for obj in read_store.iter_objects():
+        checksum += obj["blue"]
+        nobjects += 1
+    iter_time_s = time.perf_counter() - t0
 
     print()
     print("BatchStore benchmark")
@@ -138,6 +145,9 @@ def main() -> None:
     print(f"  mean: {statistics.fmean(timings_ns) / 1_000:.2f} us")
     print(f"  max:  {max(timings_ns) / 1_000:.2f} us")
     print(f"  min:  {min(timings_ns) / 1_000:.2f} us")
+    print(f"Object iteration via iter_objects(): {iter_time_s:.3f} s")
+    print(f"  per object: {iter_time_s * 1_000_000 / nobjects:.2f} us")
+    print(f"  checksum: {checksum}")
     print("Sample reads:")
     for timing_ns, batch_index, item_index, value in samples[:5]:
         print(f"  {timing_ns / 1_000:.2f} us -> read_store[{batch_index}][{item_index}] = {value}")
