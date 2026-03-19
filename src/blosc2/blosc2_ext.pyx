@@ -390,6 +390,8 @@ cdef extern from "blosc2.h":
                                 c_bool *needs_free) nogil
     int blosc2_schunk_get_lazychunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t ** chunk,
                                     c_bool *needs_free) nogil
+    int blosc2_schunk_get_vlblock(blosc2_schunk *schunk, int64_t nchunk, int32_t nblock,
+                                  uint8_t **dest, int32_t *destsize)
     int blosc2_schunk_get_slice_buffer(blosc2_schunk *schunk, int64_t start, int64_t stop, void *buffer)
     int blosc2_schunk_set_slice_buffer(blosc2_schunk *schunk, int64_t start, int64_t stop, void *buffer)
     int blosc2_schunk_get_cparams(blosc2_schunk *schunk, blosc2_cparams** cparams)
@@ -416,6 +418,9 @@ cdef extern from "blosc2.h":
                           uint8_t **content, int32_t *content_len)
     int blosc2_vlmeta_delete(blosc2_schunk *schunk, const char *name)
     int blosc2_vlmeta_get_names(blosc2_schunk *schunk, char **names)
+    int blosc2_vldecompress_block_ctx(blosc2_context* context, const void* src,
+                                      int32_t srcsize, int32_t nblock, uint8_t** dest,
+                                      int32_t* destsize)
 
 
     int blosc1_get_blocksize()
@@ -1282,6 +1287,40 @@ def vldecompress(src, **kwargs):
         blosc2_free_ctx(dctx)
 
 
+def vldecompress_block(src, int32_t nblock, **kwargs):
+    cdef blosc2_dparams dparams
+    create_dparams_from_kwargs(&dparams, kwargs)
+
+    cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
+    if dctx == NULL:
+        raise RuntimeError("Could not create decompression context")
+
+    cdef const uint8_t[:] typed_view_src
+    mem_view_src = memoryview(src)
+    typed_view_src = mem_view_src.cast('B')
+    _check_comp_length('src', typed_view_src.nbytes)
+
+    cdef uint8_t *dest = NULL
+    cdef int32_t destsize = 0
+    cdef int32_t rc
+    try:
+        rc = blosc2_vldecompress_block_ctx(
+            dctx,
+            <void*>&typed_view_src[0],
+            <int32_t>typed_view_src.nbytes,
+            nblock,
+            &dest,
+            &destsize,
+        )
+        if rc < 0:
+            raise RuntimeError("Could not decompress the block")
+        return PyBytes_FromStringAndSize(<char*>dest, destsize)
+    finally:
+        if dest != NULL:
+            free(dest)
+        blosc2_free_ctx(dctx)
+
+
 cdef create_storage(blosc2_storage *storage, kwargs):
     contiguous = kwargs.get('contiguous', blosc2.storage_dflts['contiguous'])
     storage.contiguous = contiguous
@@ -1686,6 +1725,16 @@ cdef class SChunk:
         if needs_free:
             free(chunk)
         return ret_chunk
+
+    def get_vlblock(self, nchunk, nblock):
+        cdef uint8_t *block
+        cdef int32_t destsize
+        cbytes = blosc2_schunk_get_vlblock(self.schunk, nchunk, nblock, &block, &destsize)
+        if cbytes < 0:
+            raise RuntimeError("Error while getting the vlblock")
+        ret_block = PyBytes_FromStringAndSize(<char*>block, destsize)
+        free(block)
+        return ret_block
 
     def delete_chunk(self, nchunk):
         rc = blosc2_schunk_delete_chunk(self.schunk, nchunk)

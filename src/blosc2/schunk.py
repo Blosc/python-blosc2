@@ -674,6 +674,10 @@ class SChunk(blosc2_ext.SChunk):
         """
         return super().get_chunk(nchunk)
 
+    def get_vlblock(self, nchunk: int, nblock: int) -> bytes:
+        """Return the decompressed payload of one VL block from a chunk."""
+        return super().get_vlblock(nchunk, nblock)
+
     def delete_chunk(self, nchunk: int) -> int:
         """Delete the specified chunk from the SChunk.
 

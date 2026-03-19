@@ -8,7 +8,7 @@
 import pytest
 
 import blosc2
-from blosc2._msgpack_utils import msgpack_packb
+from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 
 BATCHES = [
     [b"bytes\x00payload", "plain text", 42],
@@ -32,8 +32,8 @@ def _storage(contiguous, urlpath, mode="w"):
     [
         (False, None),
         (True, None),
-        (True, "test_batchstore.b2frame"),
-        (False, "test_batchstore_s.b2frame"),
+        (True, "test_batchstore.b2b"),
+        (False, "test_batchstore_s.b2b"),
     ],
 )
 def test_batchstore_roundtrip(contiguous, urlpath):
@@ -161,10 +161,10 @@ def test_batchstore_info():
     assert "blocksize_max" in text
 
 
-def test_batchstore_zstd_uses_dict_by_default():
+def test_batchstore_zstd_does_not_use_dict_by_default():
     barray = blosc2.BatchStore()
     assert barray.cparams.codec == blosc2.Codec.ZSTD
-    assert barray.cparams.use_dict is True
+    assert barray.cparams.use_dict is False
 
 
 def test_batchstore_explicit_blocksize_max():
@@ -173,6 +173,33 @@ def test_batchstore_explicit_blocksize_max():
     barray.append([1, 2, 3])
     barray.append([4])
     assert [batch[:] for batch in barray] == [[1, 2, 3], [4]]
+
+
+def test_batchstore_get_vlblock_and_scalar_access():
+    urlpath = "test_batchstore_vlblock.b2b"
+    blosc2.remove_urlpath(urlpath)
+
+    batch = [0, 1, 2, 3, 4]
+    barray = blosc2.BatchStore(storage=_storage(True, urlpath), blocksize_max=2)
+    barray.append(batch)
+
+    assert barray.blocksize_max == 2
+    assert msgpack_unpackb(barray.schunk.get_vlblock(0, 0)) == batch[:2]
+    assert msgpack_unpackb(barray.schunk.get_vlblock(0, 1)) == batch[2:4]
+    assert msgpack_unpackb(barray.schunk.get_vlblock(0, 2)) == batch[4:]
+
+    assert barray[0][0] == 0
+    assert barray[0][2] == 2
+    assert barray[0][4] == 4
+
+    reopened = blosc2.open(urlpath, mode="r")
+    assert isinstance(reopened, blosc2.BatchStore)
+    assert reopened[0][0] == 0
+    assert reopened[0][2] == 2
+    assert reopened[0][4] == 4
+    assert msgpack_unpackb(reopened.schunk.get_vlblock(0, 1)) == batch[2:4]
+
+    blosc2.remove_urlpath(urlpath)
 
 
 def test_batchstore_respects_explicit_use_dict_and_non_zstd():
@@ -229,7 +256,7 @@ def test_vlcompress_small_blocks_roundtrip():
 
 
 def test_batchstore_constructor_kwargs():
-    urlpath = "test_batchstore_kwargs.b2frame"
+    urlpath = "test_batchstore_kwargs.b2b"
     blosc2.remove_urlpath(urlpath)
 
     barray = blosc2.BatchStore(urlpath=urlpath, mode="w", contiguous=True)
@@ -246,8 +273,8 @@ def test_batchstore_constructor_kwargs():
     [
         (False, None),
         (True, None),
-        (True, "test_batchstore_list_ops.b2frame"),
-        (False, "test_batchstore_list_ops_s.b2frame"),
+        (True, "test_batchstore_list_ops.b2b"),
+        (False, "test_batchstore_list_ops_s.b2b"),
     ],
 )
 def test_batchstore_list_like_ops(contiguous, urlpath):
@@ -279,8 +306,8 @@ def test_batchstore_list_like_ops(contiguous, urlpath):
     [
         (False, None),
         (True, None),
-        (True, "test_batchstore_slices.b2frame"),
-        (False, "test_batchstore_slices_s.b2frame"),
+        (True, "test_batchstore_slices.b2b"),
+        (False, "test_batchstore_slices_s.b2b"),
     ],
 )
 def test_batchstore_slices(contiguous, urlpath):
@@ -329,8 +356,8 @@ def test_batchstore_slice_errors():
 
 
 def test_batchstore_copy():
-    urlpath = "test_batchstore_copy.b2frame"
-    copy_path = "test_batchstore_copy_out.b2frame"
+    urlpath = "test_batchstore_copy.b2b"
+    copy_path = "test_batchstore_copy_out.b2b"
     blosc2.remove_urlpath(urlpath)
     blosc2.remove_urlpath(copy_path)
 

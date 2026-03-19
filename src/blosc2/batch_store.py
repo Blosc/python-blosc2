@@ -52,9 +52,24 @@ class Batch(Sequence[Any]):
         return self._items
 
     def __getitem__(self, index: int | slice) -> Any | list[Any]:
-        items = self._decode_items()
         if isinstance(index, slice):
+            items = self._decode_items()
             return items[index]
+        if index < 0:
+            items = self._decode_items()
+            index = self._normalize_index(index)
+            return items[index]
+        blocksize_max = self._parent.blocksize_max
+        if blocksize_max is not None:
+            block_index, item_index = divmod(index, blocksize_max)
+            if block_index >= self._nblocks:
+                raise IndexError("Batch index out of range")
+            block = msgpack_unpackb(self._parent.schunk.get_vlblock(self._nbatch, block_index))
+            try:
+                return block[item_index]
+            except IndexError as exc:
+                raise IndexError("Batch index out of range") from exc
+        items = self._decode_items()
         index = self._normalize_index(index)
         return items[index]
 
@@ -90,27 +105,17 @@ class BatchStore:
 
     @staticmethod
     def _set_typesize_one(cparams: blosc2.CParams | dict | None) -> blosc2.CParams | dict:
-        auto_use_dict = cparams is None
         if cparams is None:
             cparams = blosc2.CParams()
         elif isinstance(cparams, blosc2.CParams):
             cparams = copy.deepcopy(cparams)
         else:
             cparams = dict(cparams)
-            auto_use_dict = "use_dict" not in cparams
 
         if isinstance(cparams, blosc2.CParams):
             cparams.typesize = 1
-            if auto_use_dict and cparams.codec == blosc2.Codec.ZSTD and cparams.clevel > 0:
-                # BatchStore stores many small serialized payloads, where Zstd dicts help materially.
-                cparams.use_dict = True
         else:
             cparams["typesize"] = 1
-            codec = cparams.get("codec", blosc2.Codec.ZSTD)
-            clevel = cparams.get("clevel", 5)
-            if auto_use_dict and codec == blosc2.Codec.ZSTD and clevel > 0:
-                # BatchStore stores many small serialized payloads, where Zstd dicts help materially.
-                cparams["use_dict"] = True
         return cparams
 
     @staticmethod
