@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import copy
 import pathlib
+import statistics
 from collections.abc import Iterator, Sequence
 from dataclasses import asdict
 from typing import Any
@@ -17,8 +18,7 @@ import blosc2
 from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 from blosc2.info import InfoReporter, format_nbytes_info
 
-_BATCHSTORE_META = {"version": 2, "serializer": "msgpack", "format": "batched_vlblocks"}
-_BATCHSTORE_LAYOUT_KEY = "batchstore"
+_BATCHSTORE_META = {"version": 1, "serializer": "msgpack"}
 
 
 def _check_serialized_size(buffer: bytes) -> None:
@@ -33,7 +33,7 @@ class Batch(Sequence[Any]):
         self._parent = parent
         self._nbatch = nbatch
         self._lazybatch = lazybatch
-        self._blocks: list[list[Any]] | None = None
+        self._items: list[Any] | None = None
         self._nbytes, self._cbytes, self._nblocks = blosc2.get_cbuffer_sizes(lazybatch)
 
     def _normalize_index(self, index: int) -> int:
@@ -45,28 +45,21 @@ class Batch(Sequence[Any]):
             raise IndexError("Batch index out of range")
         return index
 
-    def _decode_blocks(self) -> list[list[Any]]:
-        if self._blocks is None:
-            self._blocks = self._parent._decode_blocks(self._nbatch)
-        return self._blocks
+    def _decode_items(self) -> list[Any]:
+        if self._items is None:
+            blocks = self._parent._decode_blocks(self._nbatch)
+            self._items = [item for block in blocks for item in block]
+        return self._items
 
     def __getitem__(self, index: int | slice) -> Any | list[Any]:
-        blocks = self._decode_blocks()
+        items = self._decode_items()
         if isinstance(index, slice):
-            flat_items = [item for block in blocks for item in block]
-            return flat_items[index]
+            return items[index]
         index = self._normalize_index(index)
-        blocksize = self._parent.blocksize
-        if blocksize is None:
-            raise RuntimeError("BatchStore blocksize is not initialized")
-        block_index, item_index = divmod(index, blocksize)
-        return blocks[block_index][item_index]
+        return items[index]
 
     def __len__(self) -> int:
-        batchsize = self._parent.batchsize
-        if batchsize is None:
-            return self._nblocks
-        return batchsize
+        return len(self._decode_items())
 
     def __iter__(self) -> Iterator[Any]:
         for i in range(len(self)):
@@ -151,7 +144,6 @@ class BatchStore:
         self.mode = schunk.mode
         self.mmap_mode = getattr(schunk, "mmap_mode", None)
         self._validate_tag()
-        self._load_layout()
 
     def _maybe_open_existing(self, storage: blosc2.Storage) -> bool:
         urlpath = storage.urlpath
@@ -174,17 +166,14 @@ class BatchStore:
 
     def __init__(
         self,
-        batchsize: int | None = None,
-        blocksize: int | None = None,
+        blocksize_max: int | None = None,
         _from_schunk: blosc2.SChunk | None = None,
         **kwargs: Any,
     ) -> None:
-        self._batchsize: int | None = batchsize
-        self._blocksize: int | None = blocksize
-        self._layout_format: str | None = None
+        if blocksize_max is not None and blocksize_max <= 0:
+            raise ValueError("blocksize_max must be a positive integer")
+        self._blocksize_max: int | None = blocksize_max
         if _from_schunk is not None:
-            if batchsize is not None or blocksize is not None:
-                raise ValueError("Cannot pass `batchsize` or `blocksize` together with `_from_schunk`")
             if kwargs:
                 unexpected = ", ".join(sorted(kwargs))
                 raise ValueError(f"Cannot pass {unexpected} together with `_from_schunk`")
@@ -213,38 +202,10 @@ class BatchStore:
         storage.meta = fixed_meta
         schunk = blosc2.SChunk(chunksize=-1, data=None, cparams=cparams, dparams=dparams, storage=storage)
         self._attach_schunk(schunk)
-        if self._batchsize is not None or self._blocksize is not None:
-            self._store_layout()
 
     def _validate_tag(self) -> None:
         if "batchstore" not in self.schunk.meta:
             raise ValueError("The supplied SChunk is not tagged as a BatchStore")
-
-    def _load_layout(self) -> None:
-        layout = None
-        self._layout_format = None
-        if _BATCHSTORE_LAYOUT_KEY in self.vlmeta:
-            layout = self.vlmeta[_BATCHSTORE_LAYOUT_KEY]
-        if isinstance(layout, dict):
-            self._batchsize = layout["batchsize"]
-            self._blocksize = layout.get("blocksize")
-            self._layout_format = layout.get("format", "batched_vlblocks")
-            return
-        if len(self) == 0:
-            return
-        raise ValueError("BatchStore layout metadata is missing")
-
-    def _store_layout(self) -> None:
-        if self._batchsize is None or self.mode == "r":
-            return
-        layout = {
-            "version": 1,
-            "batchsize": self._batchsize,
-            "blocksize": self._blocksize,
-            "format": self._layout_format or "batched_vlblocks",
-            "sizing_policy": "l2_cache_prefix",
-        }
-        self.vlmeta[_BATCHSTORE_LAYOUT_KEY] = layout
 
     def _check_writable(self) -> None:
         if self.mode == "r":
@@ -287,14 +248,9 @@ class BatchStore:
         return values
 
     def _ensure_layout_for_batch(self, batch: list[Any]) -> None:
-        if self._batchsize is None:
-            self._batchsize = len(batch)
-        if len(batch) != self._batchsize:
-            raise ValueError(f"BatchStore entries must contain exactly {self._batchsize} objects")
-        if self._blocksize is None:
+        if self._blocksize_max is None:
             payload_sizes = [len(msgpack_packb(item)) for item in batch]
-            self._blocksize = self._guess_blocksize(payload_sizes)
-        self._store_layout()
+            self._blocksize_max = self._guess_blocksize(payload_sizes)
 
     def _guess_blocksize(self, payload_sizes: list[int]) -> int:
         if not payload_sizes:
@@ -330,11 +286,11 @@ class BatchStore:
         return asdict(self.schunk.dparams)
 
     def _compress_batch(self, batch: list[Any]) -> bytes:
-        if self._blocksize is None:
-            raise RuntimeError("BatchStore blocksize is not initialized")
+        if self._blocksize_max is None:
+            raise RuntimeError("BatchStore blocksize_max is not initialized")
         blocks = [
-            self._serialize_block(batch[i : i + self._blocksize])
-            for i in range(0, len(batch), self._blocksize)
+            self._serialize_block(batch[i : i + self._blocksize_max])
+            for i in range(0, len(batch), self._blocksize_max)
         ]
         return blosc2.blosc2_ext.vlcompress(blocks, **self._vl_cparams_kwargs())
 
@@ -404,7 +360,6 @@ class BatchStore:
             storage=storage,
         )
         self._attach_schunk(schunk)
-        self._store_layout()
 
     def __getitem__(self, index: int | slice) -> Batch | list[Batch]:
         if isinstance(index, slice):
@@ -469,12 +424,8 @@ class BatchStore:
         return self.schunk.dparams
 
     @property
-    def batchsize(self) -> int:
-        return self._batchsize
-
-    @property
-    def blocksize(self) -> int:
-        return self._blocksize
+    def blocksize_max(self) -> int | None:
+        return self._blocksize_max
 
     @property
     def typesize(self) -> int:
@@ -508,13 +459,19 @@ class BatchStore:
     @property
     def info_items(self) -> list:
         """A list of tuples with summary information about this BatchStore."""
-        nitems = len(self) * self.batchsize if self.batchsize is not None else 0
+        batch_sizes = [len(batch) for batch in self]
+        if batch_sizes:
+            batch_stats = (
+                f"mean={statistics.fmean(batch_sizes):.2f}, max={max(batch_sizes)}, min={min(batch_sizes)}"
+            )
+        else:
+            batch_stats = "n/a"
         return [
             ("type", f"{self.__class__.__name__}"),
             ("nbatches", len(self)),
-            ("batchsize", self.batchsize),
-            ("blocksize", self.blocksize),
-            ("nitems", nitems),
+            ("batch stats", batch_stats),
+            ("blocksize_max", self.blocksize_max),
+            ("nitems", sum(batch_sizes)),
             ("nbytes", format_nbytes_info(self.nbytes)),
             ("cbytes", format_nbytes_info(self.cbytes)),
             ("cratio", f"{self.cratio:.2f}"),
@@ -531,8 +488,7 @@ class BatchStore:
             raise ValueError("meta should not be passed to copy")
         kwargs["cparams"] = kwargs.get("cparams", copy.deepcopy(self.cparams))
         kwargs["dparams"] = kwargs.get("dparams", copy.deepcopy(self.dparams))
-        kwargs["batchsize"] = kwargs.get("batchsize", self.batchsize)
-        kwargs["blocksize"] = kwargs.get("blocksize", self.blocksize)
+        kwargs["blocksize_max"] = kwargs.get("blocksize_max", self.blocksize_max)
 
         if "storage" not in kwargs:
             kwargs["meta"] = self._copy_meta()

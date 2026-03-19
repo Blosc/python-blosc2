@@ -46,12 +46,11 @@ def test_batchstore_roundtrip(contiguous, urlpath):
         assert barray.append(batch) == i
 
     assert len(barray) == len(BATCHES)
-    assert barray.batchsize == len(BATCHES[0])
-    assert barray.blocksize is not None
-    assert 1 <= barray.blocksize <= barray.batchsize
+    assert barray.blocksize_max is not None
+    assert 1 <= barray.blocksize_max <= len(BATCHES[0])
     assert [batch[:] for batch in barray] == BATCHES
-    with pytest.raises(ValueError):
-        barray.append([1, 2])
+    assert barray.append([1, 2]) == len(BATCHES) + 1
+    assert [batch[:] for batch in barray][-1] == [1, 2]
 
     batch0 = barray[0]
     assert isinstance(batch0, blosc2.Batch)
@@ -64,6 +63,7 @@ def test_batchstore_roundtrip(contiguous, urlpath):
     assert batch0.cratio > 0
 
     expected = list(BATCHES)
+    expected.append([1, 2])
     expected[1] = ["updated", {"tuple": (7, 8)}, 99]
     expected[-1] = ["tiny", False, "x"]
     barray[1] = expected[1]
@@ -83,8 +83,7 @@ def test_batchstore_roundtrip(contiguous, urlpath):
     if urlpath is not None:
         reopened = blosc2.open(urlpath, mode="r")
         assert isinstance(reopened, blosc2.BatchStore)
-        assert reopened.batchsize == barray.batchsize
-        assert reopened.blocksize == barray.blocksize
+        assert reopened.blocksize_max is None
         assert [batch[:] for batch in reopened] == expected
         with pytest.raises(ValueError):
             reopened.append(["nope"])
@@ -145,8 +144,8 @@ def test_batchstore_info():
     items = dict(barray.info_items)
     assert items["type"] == "BatchStore"
     assert items["nbatches"] == len(BATCHES)
-    assert items["batchsize"] == len(BATCHES[0])
-    assert items["blocksize"] == barray.blocksize
+    assert items["batch stats"].startswith("mean=")
+    assert items["blocksize_max"] == barray.blocksize_max
     assert items["nitems"] == sum(len(batch) for batch in BATCHES)
     assert "urlpath" not in items
     assert "contiguous" not in items
@@ -158,7 +157,8 @@ def test_batchstore_info():
     text = repr(barray.info)
     assert "type" in text
     assert "BatchStore" in text
-    assert "batchsize" in text
+    assert "batch stats" in text
+    assert "blocksize_max" in text
 
 
 def test_batchstore_zstd_uses_dict_by_default():
@@ -167,12 +167,12 @@ def test_batchstore_zstd_uses_dict_by_default():
     assert barray.cparams.use_dict is True
 
 
-def test_batchstore_explicit_batchsize_blocksize():
-    barray = blosc2.BatchStore(batchsize=3, blocksize=2)
-    assert barray.batchsize == 3
-    assert barray.blocksize == 2
+def test_batchstore_explicit_blocksize_max():
+    barray = blosc2.BatchStore(blocksize_max=2)
+    assert barray.blocksize_max == 2
     barray.append([1, 2, 3])
-    assert [batch[:] for batch in barray] == [[1, 2, 3]]
+    barray.append([4])
+    assert [batch[:] for batch in barray] == [[1, 2, 3], [4]]
 
 
 def test_batchstore_respects_explicit_use_dict_and_non_zstd():
@@ -401,8 +401,8 @@ def test_batchstore_validation_errors():
     with pytest.raises(IndexError):
         blosc2.BatchStore().pop()
     barray.extend([[1, 2, 3]])
-    with pytest.raises(ValueError):
-        barray.append([2, 3])
+    assert barray.append([2, 3]) == 2
+    assert [batch[:] for batch in barray] == [[1, 2, 3], [2, 3]]
     with pytest.raises(NotImplementedError):
         barray.pop(slice(0, 1))
 
