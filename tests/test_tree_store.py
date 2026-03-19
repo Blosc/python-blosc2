@@ -654,6 +654,34 @@ def test_external_vlarray_support():
     os.remove("test_vlarray_external.b2z")
 
 
+def test_external_batchstore_support(tmp_path):
+    store_path = tmp_path / "test_batchstore_external.b2d"
+
+    with TreeStore(str(store_path), mode="w", threshold=0) as tstore:
+        bstore = blosc2.BatchStore(blocksize_max=2)
+        bstore.extend([[{"id": 1}, {"id": 2}], [{"id": 3}]])
+        tstore["/data/batchstore"] = bstore
+
+        batchstore_path = store_path / "data" / "batchstore.b2b"
+        assert batchstore_path.exists()
+
+    with TreeStore(str(store_path), mode="r") as tstore:
+        retrieved = tstore["/data/batchstore"]
+        assert isinstance(retrieved, blosc2.BatchStore)
+        assert [batch[:] for batch in retrieved] == [[{"id": 1}, {"id": 2}], [{"id": 3}]]
+
+
+def test_treestore_vlmeta_externalized_b2d(tmp_path):
+    store_path = tmp_path / "test_vlmeta_externalized.b2d"
+
+    with TreeStore(str(store_path), mode="w", threshold=0) as tstore:
+        tstore["/data"] = np.array([1, 2, 3])
+        tstore.vlmeta["schema_manifest"] = {"version": 1, "fields": {"a": {"kind": "fixed"}}}
+
+    with TreeStore(str(store_path), mode="r") as tstore:
+        assert tstore.vlmeta["schema_manifest"] == {"version": 1, "fields": {"a": {"kind": "fixed"}}}
+
+
 def test_walk_topdown_argument_ordering():
     """Ensure walk supports topdown argument mimicking os.walk order semantics."""
     with TreeStore("test_walk_topdown.b2z", mode="w") as tstore:

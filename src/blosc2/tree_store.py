@@ -668,8 +668,15 @@ class TreeStore(DictStore):
         """
         if hasattr(self, "_vlmeta_key"):
             vlmeta_key = self._vlmeta_key
-            # Only embedded case is expected; handle it safely.
-            if hasattr(self, "_estore") and vlmeta_key in self._estore:
+            if vlmeta_key in self.map_tree:
+                filepath = self.map_tree[vlmeta_key]
+                dest_path = os.path.join(self.working_dir, filepath)
+                parent_dir = os.path.dirname(dest_path)
+                if parent_dir and not os.path.exists(parent_dir):
+                    os.makedirs(parent_dir, exist_ok=True)
+                with open(dest_path, "wb") as f:
+                    f.write(self._vlmeta.to_cframe())
+            elif hasattr(self, "_estore") and vlmeta_key in self._estore:
                 # Replace the stored snapshot
                 with contextlib.suppress(KeyError):
                     del self._estore[vlmeta_key]

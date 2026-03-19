@@ -36,6 +36,8 @@ class DictStore:
       are stored as .b2nd files.
     - blosc2.SChunk: super-chunks. When persisted externally they are stored
       as .b2f files.
+    - blosc2.BatchStore: batched variable-length containers. When persisted
+      externally they are stored as .b2b files.
     - blosc2.C2Array: columnar containers. These are always kept inside the
       embedded store (never externalized).
     - numpy.ndarray: converted to blosc2.NDArray on assignment.
@@ -91,7 +93,7 @@ class DictStore:
     Notes
     -----
     - External persistence uses the following file extensions:
-      .b2nd for NDArray and .b2f for SChunk.
+      .b2nd for NDArray, .b2f for SChunk, and .b2b for BatchStore.
     """
 
     def __init__(
@@ -181,8 +183,11 @@ class DictStore:
                 dparams=dparams,
             )
             for filepath in self.offsets:
-                if filepath.endswith((".b2nd", ".b2f")):
-                    key = "/" + filepath[: -5 if filepath.endswith(".b2nd") else -4]
+                if filepath.endswith((".b2nd", ".b2f", ".b2b")):
+                    if filepath.endswith(".b2nd"):
+                        key = "/" + filepath[:-5]
+                    else:
+                        key = "/" + filepath[:-4]
                     self.map_tree[key] = filepath
         else:  # .b2d
             if not os.path.isdir(self.localpath):
@@ -228,14 +233,14 @@ class DictStore:
         for root, _, files in os.walk(self.working_dir):
             for file in files:
                 filepath = os.path.join(root, file)
-                if filepath.endswith((".b2nd", ".b2f")):
+                if filepath.endswith((".b2nd", ".b2f", ".b2b")):
                     # Convert filename to key: remove extension and ensure starts with /
                     rel_path = os.path.relpath(filepath, self.working_dir)
                     # Normalize path separators to forward slashes for cross-platform consistency
                     rel_path = rel_path.replace(os.sep, "/")
                     if rel_path.endswith(".b2nd"):
                         key = rel_path[:-5]
-                    elif rel_path.endswith(".b2f"):
+                    elif rel_path.endswith(".b2b") or rel_path.endswith(".b2f"):
                         key = rel_path[:-4]
                     else:
                         continue
@@ -264,6 +269,8 @@ class DictStore:
     def _external_ext(value: blosc2.Array | SChunk | blosc2.VLArray | blosc2.BatchStore) -> str:
         if isinstance(value, blosc2.NDArray):
             return ".b2nd"
+        if isinstance(value, blosc2.BatchStore):
+            return ".b2b"
         return ".b2f"
 
     def __setitem__(
