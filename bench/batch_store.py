@@ -51,7 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--codec", type=str, default="ZSTD", choices=[codec.name for codec in blosc2.Codec])
     parser.add_argument("--clevel", type=int, default=5)
-    parser.add_argument("--use-dict", action="store_true", help="Enable dictionaries for ZSTD/LZ4 codecs.")
+    parser.add_argument("--use-dict", action="store_true", help="Enable dictionaries for ZSTD/LZ4/LZ4HC codecs.")
     parser.add_argument("--in-mem", action="store_true", help="Keep the BatchStore purely in memory.")
     return parser
 
@@ -65,7 +65,7 @@ def build_store(codec: blosc2.Codec, clevel: int, use_dict: bool, in_mem: bool) 
             cparams={
                 "codec": codec,
                 "clevel": clevel,
-                "use_dict": use_dict and codec in (blosc2.Codec.ZSTD, blosc2.Codec.LZ4),
+                "use_dict": use_dict and codec in (blosc2.Codec.ZSTD, blosc2.Codec.LZ4, blosc2.Codec.LZ4HC),
             },
         )
         for batch_index in range(NBATCHES):
@@ -77,7 +77,7 @@ def build_store(codec: blosc2.Codec, clevel: int, use_dict: bool, in_mem: bool) 
     cparams = {
         "codec": codec,
         "clevel": clevel,
-        "use_dict": use_dict and codec in (blosc2.Codec.ZSTD, blosc2.Codec.LZ4),
+        "use_dict": use_dict and codec in (blosc2.Codec.ZSTD, blosc2.Codec.LZ4, blosc2.Codec.LZ4HC),
     }
     with blosc2.BatchStore(storage=storage, max_blocksize=BLOCKSIZE_MAX, cparams=cparams) as store:
         for batch_index in range(NBATCHES):
@@ -107,7 +107,7 @@ def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
     codec = blosc2.Codec[args.codec]
-    use_dict = args.use_dict and codec in (blosc2.Codec.ZSTD, blosc2.Codec.LZ4)
+    use_dict = args.use_dict and codec in (blosc2.Codec.ZSTD, blosc2.Codec.LZ4, blosc2.Codec.LZ4HC)
 
     mode_label = "in-memory" if args.in_mem else "persistent"
     article = "an" if args.in_mem else "a"

@@ -241,6 +241,10 @@ def test_batchstore_respects_explicit_use_dict_and_non_zstd():
     assert barray.cparams.codec == blosc2.Codec.LZ4
     assert barray.cparams.use_dict is False
 
+    barray = blosc2.BatchStore(cparams={"codec": blosc2.Codec.LZ4HC, "clevel": 1, "use_dict": True})
+    assert barray.cparams.codec == blosc2.Codec.LZ4HC
+    assert barray.cparams.use_dict is True
+
     barray = blosc2.BatchStore(cparams={"codec": blosc2.Codec.ZSTD, "clevel": 0})
     assert barray.cparams.codec == blosc2.Codec.ZSTD
     assert barray.cparams.use_dict is False
@@ -250,6 +254,27 @@ def test_batchstore_respects_explicit_use_dict_and_non_zstd():
 
     barray = blosc2.BatchStore(cparams=blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5, use_dict=False))
     assert barray.cparams.use_dict is False
+
+
+def test_batchstore_guess_max_blocksize_uses_l1_for_low_clevel(monkeypatch):
+    monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 100)
+    monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 1000)
+    barray = blosc2.BatchStore(cparams={"clevel": 5})
+    assert barray._guess_blocksize([30, 30, 30, 30]) == 3
+
+
+def test_batchstore_guess_max_blocksize_uses_l2_for_mid_clevel(monkeypatch):
+    monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 100)
+    monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 150)
+    barray = blosc2.BatchStore(cparams={"clevel": 6})
+    assert barray._guess_blocksize([60, 60, 60, 60]) == 2
+
+
+def test_batchstore_guess_max_blocksize_uses_full_batch_for_clevel_9(monkeypatch):
+    monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 1)
+    monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 1)
+    barray = blosc2.BatchStore(cparams={"clevel": 9})
+    assert barray._guess_blocksize([100, 100, 100, 100]) == 4
 
 
 def test_vlcompress_small_blocks_roundtrip():

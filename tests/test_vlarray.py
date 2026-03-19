@@ -155,6 +155,10 @@ def test_vlarray_respects_explicit_use_dict_and_non_zstd():
     assert vlarray.cparams.codec == blosc2.Codec.LZ4
     assert vlarray.cparams.use_dict is False
 
+    vlarray = blosc2.VLArray(cparams={"codec": blosc2.Codec.LZ4HC, "clevel": 1, "use_dict": True})
+    assert vlarray.cparams.codec == blosc2.Codec.LZ4HC
+    assert vlarray.cparams.use_dict is True
+
     vlarray = blosc2.VLArray(cparams={"codec": blosc2.Codec.ZSTD, "clevel": 0})
     assert vlarray.cparams.codec == blosc2.Codec.ZSTD
     assert vlarray.cparams.use_dict is False

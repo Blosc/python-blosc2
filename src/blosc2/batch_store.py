@@ -295,13 +295,21 @@ class BatchStore:
     def _guess_blocksize(self, payload_sizes: list[int]) -> int:
         if not payload_sizes:
             raise ValueError("BatchStore entries cannot be empty")
-        l2_cache_size = blosc2.cpu_info.get("l2_cache_size")
-        if not isinstance(l2_cache_size, int) or l2_cache_size <= 0:
+        clevel = self.cparams.clevel
+        if clevel == 9:
+            return len(payload_sizes)
+        if 0 < clevel < 6:
+            budget = blosc2.cpu_info.get("l1_data_cache_size")
+        elif 6 <= clevel < 9:
+            budget = blosc2.cpu_info.get("l2_cache_size")
+        else:
+            return len(payload_sizes)
+        if not isinstance(budget, int) or budget <= 0:
             return len(payload_sizes)
         total = 0
         count = 0
         for payload_size in payload_sizes:
-            if count > 0 and total + payload_size > l2_cache_size:
+            if count > 0 and total + payload_size > budget:
                 break
             total += payload_size
             count += 1
