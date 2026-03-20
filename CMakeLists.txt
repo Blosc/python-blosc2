@@ -119,7 +119,7 @@ else()
     include(FetchContent)
     FetchContent_Declare(blosc2
         GIT_REPOSITORY https://github.com/Blosc/c-blosc2
-        GIT_TAG 7cec94ba9d4243ff7d7eb397ef669ec5dd501711  # variable-length chunks/blocks
+        GIT_TAG 8a1af55c510fac5f5f20a8b8d0853f4dfaf9e438 # variable-length chunks support in schunks
         # SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../c-blosc2
     )
     FetchContent_MakeAvailable(blosc2)
