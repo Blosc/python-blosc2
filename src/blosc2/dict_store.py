@@ -85,7 +85,7 @@ class DictStore:
     >>> schunk.append_data(b"abcd")
     4
     >>> dstore["/dir1/schunk1"] = schunk  # externalized as .b2f if above threshold
-    >>> dstore.to_b2z()  # persist to the zip file; external files are copied in
+    >>> dstore.to_b2z(filename="my_dstore.b2z")  # persist to the zip file; external files are copied in
     >>> print(sorted(dstore.keys()))
     ['/dir1/node3', '/dir1/schunk1', '/node1', '/node2']
     >>> print(dstore["/node1"][:]))
@@ -555,14 +555,19 @@ class DictStore:
             If True, overwrite the existing b2z file if it exists. Default is False.
         filename : str, optional
             If provided, use this filename instead of the default b2z file path.
+            Keyword use is recommended for clarity.
 
         Returns
         -------
         filename : str
             The absolute path to the created b2z file.
         """
-        if self.mode == "r":
-            raise ValueError("Cannot call to_b2z() on a DictStore opened in read mode.")
+        if isinstance(overwrite, str | os.PathLike) and filename is None:
+            filename = overwrite
+            overwrite = False
+
+        if self.mode == "r" and self.is_zip_store:
+            raise ValueError("Cannot call to_b2z() on a .b2z DictStore opened in read mode.")
 
         b2z_path = self.b2z_path if filename is None else filename
         if not b2z_path.endswith(".b2z"):
@@ -582,7 +587,7 @@ class DictStore:
         # Sort filepaths by file size from largest to smallest
         filepaths.sort(key=os.path.getsize, reverse=True)
 
-        with zipfile.ZipFile(self.b2z_path, "w", zipfile.ZIP_STORED) as zf:
+        with zipfile.ZipFile(b2z_path, "w", zipfile.ZIP_STORED) as zf:
             # Write all files (except estore_path) first (sorted by size)
             for filepath in filepaths:
                 arcname = os.path.relpath(filepath, self.working_dir)
@@ -591,7 +596,7 @@ class DictStore:
             if os.path.exists(self.estore_path):
                 arcname = os.path.relpath(self.estore_path, self.working_dir)
                 zf.write(self.estore_path, arcname)
-        return os.path.abspath(self.b2z_path)
+        return os.path.abspath(b2z_path)
 
     def _get_zip_offsets(self) -> dict[str, dict[str, int]]:
         """Get offset and length of all files in the zip archive."""

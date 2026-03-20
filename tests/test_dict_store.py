@@ -114,6 +114,74 @@ def test_to_b2z_and_reopen(populated_dict_store):
         assert np.all(dstore_read["/nodeB"][:] == np.arange(6))
 
 
+def test_to_b2z_from_readonly_b2d():
+    b2d_path = "test_to_b2z_from_readonly.b2d"
+    b2z_path = "test_to_b2z_from_readonly.b2z"
+
+    if os.path.exists(b2d_path):
+        shutil.rmtree(b2d_path)
+    if os.path.exists(b2z_path):
+        os.remove(b2z_path)
+
+    with DictStore(b2d_path, mode="w") as dstore:
+        dstore["/nodeA"] = np.arange(5)
+        dstore["/nodeB"] = np.arange(6)
+
+    with DictStore(b2d_path, mode="r") as dstore:
+        packed = dstore.to_b2z(filename=b2z_path)
+        assert packed.endswith(b2z_path)
+
+    with DictStore(b2z_path, mode="r") as dstore:
+        assert np.all(dstore["/nodeA"][:] == np.arange(5))
+        assert np.all(dstore["/nodeB"][:] == np.arange(6))
+
+    shutil.rmtree(b2d_path)
+    os.remove(b2z_path)
+
+
+def test_to_b2z_accepts_positional_filename():
+    b2d_path = "test_to_b2z_positional_filename.b2d"
+    b2z_path = "test_to_b2z_positional_filename.b2z"
+
+    if os.path.exists(b2d_path):
+        shutil.rmtree(b2d_path)
+    if os.path.exists(b2z_path):
+        os.remove(b2z_path)
+
+    with DictStore(b2d_path, mode="w") as dstore:
+        dstore["/nodeA"] = np.arange(5)
+
+    with DictStore(b2d_path, mode="r") as dstore:
+        packed = dstore.to_b2z(b2z_path)
+        assert packed.endswith(b2z_path)
+
+    with DictStore(b2z_path, mode="r") as dstore:
+        assert np.all(dstore["/nodeA"][:] == np.arange(5))
+
+    shutil.rmtree(b2d_path)
+    os.remove(b2z_path)
+
+
+def test_to_b2z_from_readonly_b2z_raises():
+    b2z_path = "test_to_b2z_readonly_zip.b2z"
+    out_path = "test_to_b2z_readonly_zip_out.b2z"
+
+    for path in (b2z_path, out_path):
+        if os.path.exists(path):
+            os.remove(path)
+
+    with DictStore(b2z_path, mode="w") as dstore:
+        dstore["/nodeA"] = np.arange(5)
+
+    with (
+        DictStore(b2z_path, mode="r") as dstore,
+        pytest.raises(ValueError, match=r"\.b2z DictStore opened in read mode"),
+    ):
+        dstore.to_b2z(filename=out_path)
+
+    os.remove(b2z_path)
+
+
 def test_map_tree_precedence(populated_dict_store):
     dstore, path = populated_dict_store
     # Create external file and add to dstore
