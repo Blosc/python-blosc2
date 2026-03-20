@@ -568,9 +568,9 @@ class BatchStore:
         clevel = self.cparams.clevel
         if clevel == 9:
             return len(payload_sizes)
-        if 0 < clevel < 6:
+        if 0 < clevel < 5:
             budget = blosc2.cpu_info.get("l1_data_cache_size")
-        elif 6 <= clevel < 9:
+        elif 5 <= clevel < 9:
             budget = blosc2.cpu_info.get("l2_cache_size")
         else:
             return len(payload_sizes)
