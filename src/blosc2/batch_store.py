@@ -15,6 +15,8 @@ from dataclasses import asdict
 from functools import lru_cache
 from typing import Any
 
+import numpy as np
+
 import blosc2
 from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 from blosc2.info import InfoReporter, format_nbytes_info
@@ -124,6 +126,19 @@ class Batch(Sequence[Any]):
         return f"Batch(len={len(self)}, nbytes={self.nbytes}, cbytes={self.cbytes})"
 
 
+class BatchStoreItems(Sequence[Any]):
+    """A read-only flat view over the items stored in a :class:`BatchStore`."""
+
+    def __init__(self, parent: BatchStore) -> None:
+        self._parent = parent
+
+    def __getitem__(self, index: int | slice) -> Any | list[Any]:
+        return self._parent._get_flat_item(index)
+
+    def __len__(self) -> int:
+        return self._parent._get_total_item_count()
+
+
 class BatchStore:
     """A batched container for variable-length Python items.
 
@@ -214,6 +229,8 @@ class BatchStore:
         self._arrow_schema = batchstore_meta.get("arrow_schema", self._arrow_schema)
         self._arrow_schema_obj = None
         self._batch_lengths = self._load_batch_lengths()
+        self._items = BatchStoreItems(self)
+        self._item_prefix_sums: np.ndarray | None = None
         self._validate_tag()
 
     def _maybe_open_existing(self, storage: blosc2.Storage) -> bool:
@@ -363,10 +380,48 @@ class BatchStore:
             self._batch_lengths = []
         return self._batch_lengths
 
+    def _load_or_compute_batch_lengths(self) -> list[int]:
+        if self._batch_lengths is None:
+            self._batch_lengths = [len(self._get_batch(i)) for i in range(len(self))]
+            if self.mode != "r":
+                self._persist_batch_lengths()
+        return self._batch_lengths
+
     def _batch_length(self, index: int) -> int | None:
         if self._batch_lengths is None:
             return None
         return self._batch_lengths[index]
+
+    def _invalidate_item_cache(self) -> None:
+        self._item_prefix_sums = None
+
+    def _get_item_prefix_sums(self) -> np.ndarray:
+        if self._item_prefix_sums is None:
+            batch_lengths = np.asarray(self._load_or_compute_batch_lengths(), dtype=np.int64)
+            prefix_sums = np.empty(len(batch_lengths) + 1, dtype=np.int64)
+            prefix_sums[0] = 0
+            prefix_sums[1:] = np.cumsum(batch_lengths, dtype=np.int64)
+            self._item_prefix_sums = prefix_sums
+        return self._item_prefix_sums
+
+    def _get_total_item_count(self) -> int:
+        return int(self._get_item_prefix_sums()[-1])
+
+    def _get_flat_item(self, index: int | slice) -> Any | list[Any]:
+        if isinstance(index, slice):
+            return [self._get_flat_item(i) for i in range(*index.indices(self._get_total_item_count()))]
+        if not isinstance(index, int):
+            raise TypeError("BatchStore item indices must be integers")
+        nitems = self._get_total_item_count()
+        if index < 0:
+            index += nitems
+        if index < 0 or index >= nitems:
+            raise IndexError("BatchStore item index out of range")
+
+        prefix_sums = self._get_item_prefix_sums()
+        batch_index = int(np.searchsorted(prefix_sums, index, side="right") - 1)
+        item_index = int(index - prefix_sums[batch_index])
+        return self[batch_index][item_index]
 
     def _block_sizes_from_batch_length(self, batch_length: int, nblocks: int) -> list[int]:
         if self._max_blocksize is None or nblocks <= 0:
@@ -600,6 +655,7 @@ class BatchStore:
         new_len = self.schunk.append_chunk(batch_payload)
         self._ensure_batch_lengths().append(length)
         self._persist_batch_lengths()
+        self._invalidate_item_cache()
         return new_len
 
     def insert(self, index: int, value: object) -> int:
@@ -612,6 +668,7 @@ class BatchStore:
         new_len = self.schunk.insert_chunk(index, batch_payload)
         self._ensure_batch_lengths().insert(index, length)
         self._persist_batch_lengths()
+        self._invalidate_item_cache()
         return new_len
 
     def delete(self, index: int | slice) -> int:
@@ -623,12 +680,14 @@ class BatchStore:
                 if self._batch_lengths is not None:
                     del self._batch_lengths[idx]
             self._persist_batch_lengths()
+            self._invalidate_item_cache()
             return len(self)
         index = self._normalize_index(index)
         new_len = self.schunk.delete_chunk(index)
         if self._batch_lengths is not None:
             del self._batch_lengths[index]
             self._persist_batch_lengths()
+        self._invalidate_item_cache()
         return new_len
 
     def pop(self, index: int = -1) -> list[Any]:
@@ -650,6 +709,7 @@ class BatchStore:
             self.schunk.append_chunk(batch_payload)
             self._ensure_batch_lengths().append(self._batch_len(batch))
         self._persist_batch_lengths()
+        self._invalidate_item_cache()
 
     def clear(self) -> None:
         """Remove all entries from the container."""
@@ -667,6 +727,7 @@ class BatchStore:
         self._attach_schunk(schunk)
         self._batch_lengths = []
         self._persist_batch_lengths()
+        self._invalidate_item_cache()
 
     def __getitem__(self, index: int | slice) -> Batch | list[Batch]:
         """Return one batch or a list of batches."""
@@ -693,6 +754,7 @@ class BatchStore:
                     self.schunk.insert_chunk(start + offset, batch_payload)
                     self._ensure_batch_lengths().insert(start + offset, self._batch_len(batch))
                 self._persist_batch_lengths()
+                self._invalidate_item_cache()
                 return
             if len(values) != len(indices):
                 raise ValueError(
@@ -705,6 +767,7 @@ class BatchStore:
                 if self._batch_lengths is not None:
                     self._batch_lengths[idx] = self._batch_len(batch)
             self._persist_batch_lengths()
+            self._invalidate_item_cache()
             return
         self._check_writable()
         index = self._normalize_index(index)
@@ -714,6 +777,7 @@ class BatchStore:
         if self._batch_lengths is not None:
             self._batch_lengths[index] = self._batch_len(batch)
             self._persist_batch_lengths()
+        self._invalidate_item_cache()
 
     def __delitem__(self, index: int | slice) -> None:
         self.delete(index)
@@ -750,6 +814,10 @@ class BatchStore:
     @property
     def max_blocksize(self) -> int | None:
         return self._max_blocksize
+
+    @property
+    def items(self) -> BatchStoreItems:
+        return self._items
 
     @property
     def typesize(self) -> int:

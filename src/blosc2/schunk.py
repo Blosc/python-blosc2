@@ -676,7 +676,15 @@ class SChunk(blosc2_ext.SChunk):
 
     def get_vlblock(self, nchunk: int, nblock: int) -> bytes:
         """Return the decompressed payload of one VL block from a chunk."""
-        return super().get_vlblock(nchunk, nblock)
+        get_vlblock = getattr(super(), "get_vlblock", None)
+        if get_vlblock is not None:
+            return get_vlblock(nchunk, nblock)
+
+        block_payloads = blosc2_ext.vldecompress(self.get_chunk(nchunk), **asdict(self.dparams))
+        try:
+            return block_payloads[nblock]
+        except IndexError as exc:
+            raise IndexError("VL block index out of range") from exc
 
     def delete_chunk(self, nchunk: int) -> int:
         """Delete the specified chunk from the SChunk.

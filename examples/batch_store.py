@@ -61,6 +61,11 @@ def main() -> None:
         value = reopened[batch_index][item_index]
         print(f"  reopened[{batch_index}][{item_index}] -> {value}")
 
+    print()
+    print("Flat item reads via .items:")
+    print(f"  reopened.items[0] -> {reopened.items[0]}")
+    print(f"  reopened.items[150:153] -> {reopened.items[150:153]}")
+
     print(f"BatchStore file at: {reopened.urlpath}")
 
 

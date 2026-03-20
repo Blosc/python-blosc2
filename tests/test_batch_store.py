@@ -486,6 +486,63 @@ def test_batchstore_slice_errors():
         _ = barray[::0]
 
 
+@pytest.mark.parametrize(
+    ("contiguous", "urlpath"),
+    [
+        (False, None),
+        (True, None),
+        (True, "test_batchstore_items.b2b"),
+        (False, "test_batchstore_items_s.b2b"),
+    ],
+)
+def test_batchstore_items_accessor(contiguous, urlpath):
+    blosc2.remove_urlpath(urlpath)
+
+    batches = [["a", "b"], [10, 11, 12], [{"x": 1}], [None, True]]
+    flat = [item for batch in batches for item in batch]
+    barray = blosc2.BatchStore(storage=_storage(contiguous, urlpath), max_blocksize=2)
+    barray.extend(batches)
+
+    assert len(barray.items) == len(flat)
+    assert barray.items[0] == flat[0]
+    assert barray.items[3] == flat[3]
+    assert barray.items[-1] == flat[-1]
+    assert barray.items[1:6] == flat[1:6]
+    assert barray.items[::-2] == flat[::-2]
+
+    barray.append(["tail0", "tail1"])
+    flat.extend(["tail0", "tail1"])
+    assert len(barray.items) == len(flat)
+    assert barray.items[-2:] == flat[-2:]
+
+    barray.insert(1, ["mid0", "mid1"])
+    flat[2:2] = ["mid0", "mid1"]
+    assert barray.items[:] == flat
+
+    barray[2] = ["replaced"]
+    batch_start = len(batches[0]) + 2
+    flat[batch_start : batch_start + 3] = ["replaced"]
+    assert barray.items[:] == flat
+
+    del barray[0]
+    del flat[:2]
+    assert barray.items[:] == flat
+
+    with pytest.raises(IndexError, match="item index out of range"):
+        _ = barray.items[len(flat)]
+    with pytest.raises(TypeError, match="item indices must be integers"):
+        _ = barray.items[1.5]
+    with pytest.raises(ValueError):
+        _ = barray.items[::0]
+
+    if urlpath is not None:
+        reopened = blosc2.open(urlpath, mode="r")
+        assert reopened.items[:] == flat
+        assert reopened.items[2] == flat[2]
+
+    blosc2.remove_urlpath(urlpath)
+
+
 def test_batchstore_copy():
     urlpath = "test_batchstore_copy.b2b"
     copy_path = "test_batchstore_copy_out.b2b"
