@@ -20,7 +20,7 @@ import numpy as np
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
 from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
-from blosc2.info import InfoReporter
+from blosc2.info import InfoReporter, format_nbytes_info
 
 
 class vlmeta(MutableMapping, blosc2_ext.vlmeta):
@@ -491,8 +491,8 @@ class SChunk(blosc2_ext.SChunk):
         items += [("chunksize", self.chunksize)]
         items += [("blocksize", self.blocksize)]
         items += [("typesize", self.typesize)]
-        items += [("nbytes", self.nbytes)]
-        items += [("cbytes", self.cbytes)]
+        items += [("nbytes", format_nbytes_info(self.nbytes))]
+        items += [("cbytes", format_nbytes_info(self.cbytes))]
         items += [("cratio", f"{self.cratio:.2f}")]
         items += [("cparams", self.cparams)]
         items += [("dparams", self.dparams)]
@@ -673,6 +673,10 @@ class SChunk(blosc2_ext.SChunk):
         10552
         """
         return super().get_chunk(nchunk)
+
+    def get_vlblock(self, nchunk: int, nblock: int) -> bytes:
+        """Return the decompressed payload of one VL block from a chunk."""
+        return super().get_vlblock(nchunk, nblock)
 
     def delete_chunk(self, nchunk: int) -> int:
         """Delete the specified chunk from the SChunk.
@@ -1621,6 +1625,11 @@ def _process_opened_object(res):
 
         return VLArray(_from_schunk=getattr(res, "schunk", res))
 
+    if "batchstore" in meta:
+        from blosc2.batch_store import BatchStore
+
+        return BatchStore(_from_schunk=getattr(res, "schunk", res))
+
     if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
         return blosc2._open_lazyarray(res)
     else:
@@ -1632,6 +1641,7 @@ def open(
 ) -> (
     blosc2.SChunk
     | blosc2.NDArray
+    | blosc2.BatchStore
     | blosc2.VLArray
     | blosc2.C2Array
     | blosc2.LazyArray

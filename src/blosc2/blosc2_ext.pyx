@@ -8,6 +8,7 @@
 #cython: language_level=3
 
 import os
+import dataclasses
 import ast
 import atexit
 import pathlib
@@ -279,8 +280,16 @@ cdef extern from "blosc2.h":
             blosc2_context * context, const void * src, int32_t srcsize, void * dest,
             int32_t destsize) nogil
 
+    int blosc2_vlcompress_ctx(
+            blosc2_context * context, const void * const * srcs, const int32_t * srcsizes,
+            int32_t nblocks, void * dest, int32_t destsize) nogil
+
     int blosc2_decompress_ctx(blosc2_context * context, const void * src,
                               int32_t srcsize, void * dest, int32_t destsize) nogil
+
+    int blosc2_vldecompress_ctx(blosc2_context* context, const void* src,
+                                int32_t srcsize, void** dests,
+                                int32_t* destsizes, int32_t maxblocks)
 
     int blosc2_getitem_ctx(blosc2_context* context, const void* src,
                            int32_t srcsize, int start, int nitems, void* dest,
@@ -381,6 +390,8 @@ cdef extern from "blosc2.h":
                                 c_bool *needs_free) nogil
     int blosc2_schunk_get_lazychunk(blosc2_schunk *schunk, int64_t nchunk, uint8_t ** chunk,
                                     c_bool *needs_free) nogil
+    int blosc2_schunk_get_vlblock(blosc2_schunk *schunk, int64_t nchunk, int32_t nblock,
+                                  uint8_t **dest, int32_t *destsize)
     int blosc2_schunk_get_slice_buffer(blosc2_schunk *schunk, int64_t start, int64_t stop, void *buffer)
     int blosc2_schunk_set_slice_buffer(blosc2_schunk *schunk, int64_t start, int64_t stop, void *buffer)
     int blosc2_schunk_get_cparams(blosc2_schunk *schunk, blosc2_cparams** cparams)
@@ -407,6 +418,9 @@ cdef extern from "blosc2.h":
                           uint8_t **content, int32_t *content_len)
     int blosc2_vlmeta_delete(blosc2_schunk *schunk, const char *name)
     int blosc2_vlmeta_get_names(blosc2_schunk *schunk, char **names)
+    int blosc2_vldecompress_block_ctx(blosc2_context* context, const void* src,
+                                      int32_t srcsize, int32_t nblock, uint8_t** dest,
+                                      int32_t* destsize)
 
 
     int blosc1_get_blocksize()
@@ -1095,6 +1109,7 @@ def compress2(src, **kwargs):
     return dest[:size]
 
 cdef create_dparams_from_kwargs(blosc2_dparams *dparams, kwargs, blosc2_cparams* cparams=NULL):
+    memcpy(dparams, &BLOSC2_DPARAMS_DEFAULTS, sizeof(BLOSC2_DPARAMS_DEFAULTS))
     dparams.nthreads = kwargs.get('nthreads', blosc2.nthreads)
     dparams.schunk = NULL
     dparams.postfilter = NULL
@@ -1152,6 +1167,158 @@ def decompress2(src, dst=None, **kwargs):
             return dst
     if size < 0:
         raise ValueError("Error while decompressing, check the src data and/or the dparams")
+
+
+def vlcompress(srcs, **kwargs):
+    cdef blosc2_cparams cparams
+    create_cparams_from_kwargs(&cparams, kwargs)
+
+    cdef Py_ssize_t nblocks = len(srcs)
+    if nblocks <= 0:
+        raise ValueError("At least one block is required")
+
+    cdef blosc2_context *cctx = NULL
+    cdef Py_buffer *buffers = <Py_buffer*>calloc(nblocks, sizeof(Py_buffer))
+    cdef const void **src_ptrs = <const void **>malloc(nblocks * sizeof(void *))
+    cdef int32_t *srcsizes = <int32_t*>malloc(nblocks * sizeof(int32_t))
+    cdef Py_ssize_t acquired = 0
+    cdef Py_ssize_t i
+    cdef int64_t total_nbytes = 0
+    cdef int32_t len_dest
+    cdef int size
+    cdef Py_ssize_t release_i
+    cdef void *_dest
+    if buffers == NULL or src_ptrs == NULL or srcsizes == NULL:
+        free(buffers)
+        free(src_ptrs)
+        free(srcsizes)
+        raise MemoryError()
+
+    try:
+        for i in range(nblocks):
+            PyObject_GetBuffer(srcs[i], &buffers[i], PyBUF_SIMPLE)
+            acquired += 1
+            if buffers[i].len <= 0:
+                raise ValueError("Each VL block must have at least one byte")
+            src_ptrs[i] = buffers[i].buf
+            srcsizes[i] = <int32_t>buffers[i].len
+            total_nbytes += buffers[i].len
+
+        # VL blocks can carry enough per-block framing that the simple
+        # total_nbytes + global_overhead estimate is too small for many tiny
+        # buffers.  Budget one max-overhead chunk per block as a conservative
+        # upper bound for the temporary destination.
+        len_dest = <int32_t>(total_nbytes + BLOSC2_MAX_OVERHEAD * (nblocks + 1) + 64)
+        dest = PyBytes_FromStringAndSize(NULL, len_dest)
+        if dest is None:
+            raise MemoryError()
+        _dest = <void*><char *>dest
+        cctx = blosc2_create_cctx(cparams)
+        if cctx == NULL:
+            raise RuntimeError("Could not create the compression context")
+        if RELEASEGIL:
+            with nogil:
+                size = blosc2_vlcompress_ctx(cctx, src_ptrs, srcsizes, <int32_t>nblocks, _dest, len_dest)
+        else:
+            size = blosc2_vlcompress_ctx(cctx, src_ptrs, srcsizes, <int32_t>nblocks, _dest, len_dest)
+    finally:
+        if cctx != NULL:
+            blosc2_free_ctx(cctx)
+        for release_i in range(acquired):
+            PyBuffer_Release(&buffers[release_i])
+        free(buffers)
+        free(src_ptrs)
+        free(srcsizes)
+
+    if size < 0:
+        raise RuntimeError("Could not compress the data")
+    elif size == 0:
+        del dest
+        raise RuntimeError("The result could not fit ")
+    return dest[:size]
+
+
+def vldecompress(src, **kwargs):
+    cdef blosc2_dparams dparams
+    create_dparams_from_kwargs(&dparams, kwargs)
+
+    cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
+    if dctx == NULL:
+        raise RuntimeError("Could not create decompression context")
+
+    cdef const uint8_t[:] typed_view_src
+    mem_view_src = memoryview(src)
+    typed_view_src = mem_view_src.cast('B')
+    _check_comp_length('src', typed_view_src.nbytes)
+    cdef int32_t nbytes
+    cdef int32_t cbytes
+    cdef int32_t nblocks
+    blosc2_cbuffer_sizes(<void*>&typed_view_src[0], &nbytes, &cbytes, &nblocks)
+    if nblocks <= 0:
+        blosc2_free_ctx(dctx)
+        raise ValueError("Chunk does not contain VL blocks")
+
+    cdef void **dests = <void**>calloc(nblocks, sizeof(void *))
+    cdef int32_t *destsizes = <int32_t*>malloc(nblocks * sizeof(int32_t))
+    cdef int32_t rc
+    cdef int32_t i
+    cdef list out = []
+    if dests == NULL or destsizes == NULL:
+        blosc2_free_ctx(dctx)
+        free(dests)
+        free(destsizes)
+        raise MemoryError()
+
+    try:
+        rc = blosc2_vldecompress_ctx(dctx, <void*>&typed_view_src[0], cbytes, dests, destsizes, nblocks)
+        if rc < 0:
+            raise RuntimeError("Could not decompress the data")
+        for i in range(rc):
+            out.append(PyBytes_FromStringAndSize(<char*>dests[i], destsizes[i]))
+            free(dests[i])
+            dests[i] = NULL
+        return out
+    finally:
+        for i in range(nblocks):
+            if dests[i] != NULL:
+                free(dests[i])
+        free(dests)
+        free(destsizes)
+        blosc2_free_ctx(dctx)
+
+
+def vldecompress_block(src, int32_t nblock, **kwargs):
+    cdef blosc2_dparams dparams
+    create_dparams_from_kwargs(&dparams, kwargs)
+
+    cdef blosc2_context *dctx = blosc2_create_dctx(dparams)
+    if dctx == NULL:
+        raise RuntimeError("Could not create decompression context")
+
+    cdef const uint8_t[:] typed_view_src
+    mem_view_src = memoryview(src)
+    typed_view_src = mem_view_src.cast('B')
+    _check_comp_length('src', typed_view_src.nbytes)
+
+    cdef uint8_t *dest = NULL
+    cdef int32_t destsize = 0
+    cdef int32_t rc
+    try:
+        rc = blosc2_vldecompress_block_ctx(
+            dctx,
+            <void*>&typed_view_src[0],
+            <int32_t>typed_view_src.nbytes,
+            nblock,
+            &dest,
+            &destsize,
+        )
+        if rc < 0:
+            raise RuntimeError("Could not decompress the block")
+        return PyBytes_FromStringAndSize(<char*>dest, destsize)
+    finally:
+        if dest != NULL:
+            free(dest)
+        blosc2_free_ctx(dctx)
 
 
 cdef create_storage(blosc2_storage *storage, kwargs):
@@ -1558,6 +1725,16 @@ cdef class SChunk:
         if needs_free:
             free(chunk)
         return ret_chunk
+
+    def get_vlblock(self, nchunk, nblock):
+        cdef uint8_t *block
+        cdef int32_t destsize
+        cbytes = blosc2_schunk_get_vlblock(self.schunk, nchunk, nblock, &block, &destsize)
+        if cbytes < 0:
+            raise RuntimeError("Error while getting the vlblock")
+        ret_block = PyBytes_FromStringAndSize(<char*>block, destsize)
+        free(block)
+        return ret_block
 
     def delete_chunk(self, nchunk):
         rc = blosc2_schunk_delete_chunk(self.schunk, nchunk)
@@ -2444,7 +2621,8 @@ def open(urlpath, mode, offset, **kwargs):
     if mode != "w" and kwargs is not None:
         check_schunk_params(schunk, kwargs)
     cparams = kwargs.get("cparams")
-    # For reading with the default number of threads
+    # nthreads is not stored in the frame; apply the live global when the caller
+    # did not supply an explicit cparams — symmetric with the DParams default below.
     dparams = kwargs.get("dparams", blosc2.DParams())
 
     if is_ndarray:
@@ -2452,6 +2630,8 @@ def open(urlpath, mode, offset, **kwargs):
                              _array=PyCapsule_New(array, <char *> "b2nd_array_t*", NULL))
         if cparams is not None:
             res.schunk.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
+        else:
+            res.schunk.cparams = dataclasses.replace(res.schunk.cparams, nthreads=blosc2.nthreads)
         if dparams is not None:
             res.schunk.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
         res.schunk.mode = mode
@@ -2460,6 +2640,8 @@ def open(urlpath, mode, offset, **kwargs):
                             mode=mode, **kwargs)
         if cparams is not None:
             res.cparams = cparams if isinstance(cparams, blosc2.CParams) else blosc2.CParams(**cparams)
+        else:
+            res.cparams = dataclasses.replace(res.cparams, nthreads=blosc2.nthreads)
         if dparams is not None:
             res.dparams = dparams if isinstance(dparams, blosc2.DParams) else blosc2.DParams(**dparams)
 

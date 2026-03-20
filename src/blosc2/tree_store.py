@@ -226,7 +226,9 @@ class TreeStore(DictStore):
 
         return key
 
-    def __setitem__(self, key: str, value: blosc2.Array | SChunk | blosc2.VLArray) -> None:
+    def __setitem__(
+        self, key: str, value: blosc2.Array | SChunk | blosc2.VLArray | blosc2.BatchStore
+    ) -> None:
         """Add a node with hierarchical key validation.
 
         Parameters
@@ -268,7 +270,9 @@ class TreeStore(DictStore):
         full_key = self._translate_key_to_full(key)
         super().__setitem__(full_key, value)
 
-    def __getitem__(self, key: str) -> NDArray | C2Array | SChunk | blosc2.VLArray | TreeStore:
+    def __getitem__(
+        self, key: str
+    ) -> NDArray | C2Array | SChunk | blosc2.VLArray | blosc2.BatchStore | TreeStore:
         """Retrieve a node or subtree view.
 
         If the key points to a subtree (intermediate path with children),
@@ -282,7 +286,7 @@ class TreeStore(DictStore):
 
         Returns
         -------
-        out : blosc2.NDArray or blosc2.C2Array or blosc2.SChunk or blosc2.VLArray or TreeStore
+        out : blosc2.NDArray or blosc2.C2Array or blosc2.SChunk or blosc2.VLArray or blosc2.BatchStore or TreeStore
             The stored array/chunk if key is a leaf node, or a TreeStore subtree view
             if key is an intermediate path with children.
 
@@ -664,8 +668,15 @@ class TreeStore(DictStore):
         """
         if hasattr(self, "_vlmeta_key"):
             vlmeta_key = self._vlmeta_key
-            # Only embedded case is expected; handle it safely.
-            if hasattr(self, "_estore") and vlmeta_key in self._estore:
+            if vlmeta_key in self.map_tree:
+                filepath = self.map_tree[vlmeta_key]
+                dest_path = os.path.join(self.working_dir, filepath)
+                parent_dir = os.path.dirname(dest_path)
+                if parent_dir and not os.path.exists(parent_dir):
+                    os.makedirs(parent_dir, exist_ok=True)
+                with open(dest_path, "wb") as f:
+                    f.write(self._vlmeta.to_cframe())
+            elif hasattr(self, "_estore") and vlmeta_key in self._estore:
                 # Replace the stored snapshot
                 with contextlib.suppress(KeyError):
                     del self._estore[vlmeta_key]

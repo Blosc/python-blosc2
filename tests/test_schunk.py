@@ -186,6 +186,19 @@ def test_schunk(contiguous, urlpath, mode, mmap_mode, nbytes, cparams, dparams, 
     blosc2.remove_urlpath(urlpath)
 
 
+def test_schunk_info_has_human_sizes():
+    schunk = blosc2.SChunk(chunksize=32)
+    schunk.append_data(b"a" * 32)
+
+    items = dict(schunk.info_items)
+    assert "(" in items["nbytes"]
+    assert "(" in items["cbytes"]
+
+    text = repr(schunk.info)
+    assert "nbytes" in text
+    assert "cbytes" in text
+
+
 @pytest.mark.parametrize(
     ("urlpath", "contiguous", "mode", "mmap_mode"),
     [

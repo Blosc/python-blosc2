@@ -10,6 +10,22 @@ import pprint
 from textwrap import TextWrapper
 
 
+def format_nbytes_human(nbytes: int) -> str:
+    units = ("B", "KiB", "MiB", "GiB", "TiB", "PiB")
+    value = float(nbytes)
+    for unit in units:
+        if value < 1024.0 or unit == units[-1]:
+            if unit == "B":
+                return f"{nbytes} B"
+            return f"{value:.2f} {unit}"
+        value /= 1024.0
+    return None
+
+
+def format_nbytes_info(nbytes: int) -> str:
+    return f"{nbytes} ({format_nbytes_human(nbytes)})"
+
+
 def info_text_report_(items: list) -> str:
     with io.StringIO() as buf:
         print(items, file=buf)

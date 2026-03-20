@@ -117,6 +117,59 @@ def test_vlarray_from_cframe():
     assert list(restored2) == expected
 
 
+def test_vlarray_info():
+    vlarray = blosc2.VLArray()
+    vlarray.extend(VALUES)
+
+    assert vlarray.typesize == 1
+    assert vlarray.contiguous == vlarray.schunk.contiguous
+    assert vlarray.urlpath == vlarray.schunk.urlpath
+
+    items = dict(vlarray.info_items)
+    assert items["type"] == "VLArray"
+    assert items["entries"] == len(VALUES)
+    assert items["item_nbytes_min"] > 0
+    assert items["item_nbytes_max"] >= items["item_nbytes_min"]
+    assert items["chunk_cbytes_min"] > 0
+    assert items["chunk_cbytes_max"] >= items["chunk_cbytes_min"]
+    assert "urlpath" not in items
+    assert "contiguous" not in items
+    assert "typesize" not in items
+    assert "(" in items["nbytes"]
+    assert "(" in items["cbytes"]
+
+    text = repr(vlarray.info)
+    assert "type" in text
+    assert "VLArray" in text
+    assert "item_nbytes_avg" in text
+
+
+def test_vlarray_zstd_uses_dict_by_default():
+    vlarray = blosc2.VLArray()
+    assert vlarray.cparams.codec == blosc2.Codec.ZSTD
+    assert vlarray.cparams.use_dict is True
+
+
+def test_vlarray_respects_explicit_use_dict_and_non_zstd():
+    vlarray = blosc2.VLArray(cparams={"codec": blosc2.Codec.LZ4, "clevel": 5})
+    assert vlarray.cparams.codec == blosc2.Codec.LZ4
+    assert vlarray.cparams.use_dict is False
+
+    vlarray = blosc2.VLArray(cparams={"codec": blosc2.Codec.LZ4HC, "clevel": 1, "use_dict": True})
+    assert vlarray.cparams.codec == blosc2.Codec.LZ4HC
+    assert vlarray.cparams.use_dict is True
+
+    vlarray = blosc2.VLArray(cparams={"codec": blosc2.Codec.ZSTD, "clevel": 0})
+    assert vlarray.cparams.codec == blosc2.Codec.ZSTD
+    assert vlarray.cparams.use_dict is False
+
+    vlarray = blosc2.VLArray(cparams={"codec": blosc2.Codec.ZSTD, "clevel": 5, "use_dict": False})
+    assert vlarray.cparams.use_dict is False
+
+    vlarray = blosc2.VLArray(cparams=blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=5, use_dict=False))
+    assert vlarray.cparams.use_dict is False
+
+
 def test_vlarray_constructor_kwargs():
     urlpath = "test_vlarray_kwargs.b2frame"
     blosc2.remove_urlpath(urlpath)

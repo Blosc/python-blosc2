@@ -173,7 +173,9 @@ class EmbedStore:
             new_size = max(required_size, int(self._store.shape[0] * 1.5))
             self._store.resize((new_size,))
 
-    def __setitem__(self, key: str, value: blosc2.Array | SChunk | blosc2.VLArray) -> None:
+    def __setitem__(
+        self, key: str, value: blosc2.Array | SChunk | blosc2.VLArray | blosc2.BatchStore
+    ) -> None:
         """Add a node to the embed store."""
         if self.mode == "r":
             raise ValueError("Cannot set items in read-only mode.")
@@ -196,7 +198,7 @@ class EmbedStore:
             self._embed_map[key] = {"offset": offset, "length": data_len}
         self._save_metadata()
 
-    def __getitem__(self, key: str) -> blosc2.NDArray | SChunk | blosc2.VLArray:
+    def __getitem__(self, key: str) -> blosc2.NDArray | SChunk | blosc2.VLArray | blosc2.BatchStore:
         """Retrieve a node from the embed store."""
         if key not in self._embed_map:
             raise KeyError(f"Key '{key}' not found in the embed store.")
@@ -212,7 +214,9 @@ class EmbedStore:
         # Use from_cframe so we can deserialize either an NDArray or an SChunk
         return blosc2.from_cframe(serialized_data, copy=True)
 
-    def get(self, key: str, default: Any = None) -> blosc2.NDArray | SChunk | blosc2.VLArray | Any:
+    def get(
+        self, key: str, default: Any = None
+    ) -> blosc2.NDArray | SChunk | blosc2.VLArray | blosc2.BatchStore | Any:
         """Retrieve a node, or default if not found."""
         return self[key] if key in self._embed_map else default
 
@@ -239,12 +243,12 @@ class EmbedStore:
         """Return all keys."""
         return self._embed_map.keys()
 
-    def values(self) -> Iterator[blosc2.NDArray | SChunk | blosc2.VLArray]:
+    def values(self) -> Iterator[blosc2.NDArray | SChunk | blosc2.VLArray | blosc2.BatchStore]:
         """Iterate over all values."""
         for key in self._embed_map:
             yield self[key]
 
-    def items(self) -> Iterator[tuple[str, blosc2.NDArray | SChunk | blosc2.VLArray]]:
+    def items(self) -> Iterator[tuple[str, blosc2.NDArray | SChunk | blosc2.VLArray | blosc2.BatchStore]]:
         """Iterate over (key, value) pairs."""
         for key in self._embed_map:
             yield key, self[key]

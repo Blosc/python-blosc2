@@ -46,7 +46,9 @@ class CParams:
         (maximum compression). Default is 1.
     use_dict: bool
         Whether to use dictionaries when compressing
-        (only for :py:obj:`blosc2.Codec.ZSTD <Codec>`). Default is `False`.
+        (supported for :py:obj:`blosc2.Codec.ZSTD <Codec>`,
+        :py:obj:`blosc2.Codec.LZ4 <Codec>`, and
+        :py:obj:`blosc2.Codec.LZ4HC <Codec>`). Default is `False`.
     typesize: int
         The data type size, ranging from 1 to 255. Default is 8.
     nthreads: int

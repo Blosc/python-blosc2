@@ -66,7 +66,8 @@ def test_setitem_torch_proxy(shape, chunks, blocks, slices, dtype):
     dtype_ = {np.float32: torch.float32, np.int32: torch.int32, np.float64: torch.float64}[dtype]
     val = torch.ones(slice_shape, dtype=dtype_)
     a[slices] = val
-    nparray[slices] = val
+    # Make the expected assignment explicit so NumPy does not rely on torch.__array__().
+    nparray[slices] = val.numpy()
     np.testing.assert_almost_equal(a[...], nparray)
 
 

@@ -18,7 +18,7 @@ import numpy as np
 import requests
 
 import blosc2
-from blosc2.info import InfoReporter
+from blosc2.info import InfoReporter, format_nbytes_info
 
 _subscriber_data = {
     "urlbase": os.environ.get("BLOSC_C2URLBASE"),
@@ -424,8 +424,8 @@ class C2Array(blosc2.Operand):
         items += [("chunks", self.chunks)]
         items += [("blocks", self.blocks)]
         items += [("dtype", self.dtype)]
-        items += [("nbytes", self.nbytes)]
-        items += [("cbytes", self.cbytes)]
+        items += [("nbytes", format_nbytes_info(self.nbytes))]
+        items += [("cbytes", format_nbytes_info(self.cbytes))]
         items += [("cratio", f"{self.cratio:.2f}")]
         items += [("cparams", self.cparams)]
         # items += [("dparams", self.dparams)]

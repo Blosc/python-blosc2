@@ -37,6 +37,11 @@ if not IS_WASM:
 
 from .version import __array_api_version__, __version__
 
+_PACKAGE_DIR = str(Path(__file__).resolve().parent)
+if _PACKAGE_DIR in __path__:
+    __path__.remove(_PACKAGE_DIR)
+__path__.insert(0, _PACKAGE_DIR)
+
 
 def _configure_libtcc_runtime_path():
     """Best-effort configuration so miniexpr can find bundled libtcc at runtime."""
@@ -530,6 +535,7 @@ from .ndarray import (
 from .embed_store import EmbedStore, estore_from_cframe
 from .dict_store import DictStore
 from .tree_store import TreeStore
+from .batch_store import Batch, BatchStore
 from .vlarray import VLArray, vlarray_from_cframe
 
 from .c2array import c2context, C2Array, URLPath
@@ -714,6 +720,8 @@ __all__ = [  # noqa : RUF022
     # Classes
     "C2Array",
     "CParams",
+    "Batch",
+    "BatchStore",
     # Enums
     "Codec",
     "DParams",
