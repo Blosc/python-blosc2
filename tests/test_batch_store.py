@@ -48,9 +48,9 @@ def test_batchstore_roundtrip(contiguous, urlpath):
     assert len(barray) == len(BATCHES)
     assert barray.max_blocksize is not None
     assert 1 <= barray.max_blocksize <= len(BATCHES[0])
-    assert [batch[:] for batch in barray.iter_batches()] == BATCHES
+    assert [batch[:] for batch in barray] == BATCHES
     assert barray.append([1, 2]) == len(BATCHES) + 1
-    assert [batch[:] for batch in barray.iter_batches()][-1] == [1, 2]
+    assert [batch[:] for batch in barray][-1] == [1, 2]
 
     batch0 = barray[0]
     assert isinstance(batch0, blosc2.Batch)
@@ -78,13 +78,13 @@ def test_batchstore_roundtrip(contiguous, urlpath):
     del expected[2]
     del barray[-2]
     del expected[-2]
-    assert [batch[:] for batch in barray.iter_batches()] == expected
+    assert [batch[:] for batch in barray] == expected
 
     if urlpath is not None:
         reopened = blosc2.open(urlpath, mode="r")
         assert isinstance(reopened, blosc2.BatchStore)
         assert reopened.max_blocksize == barray.max_blocksize
-        assert [batch[:] for batch in reopened.iter_batches()] == expected
+        assert [batch[:] for batch in reopened] == expected
         with pytest.raises(ValueError):
             reopened.append(["nope"])
         with pytest.raises(ValueError):
@@ -105,12 +105,40 @@ def test_batchstore_roundtrip(contiguous, urlpath):
         reopened_rw = blosc2.open(urlpath, mode="a")
         reopened_rw[0] = ["changed", "batch", 0]
         expected[0] = ["changed", "batch", 0]
-        assert [batch[:] for batch in reopened_rw.iter_batches()] == expected
+        assert [batch[:] for batch in reopened_rw] == expected
 
         if contiguous:
             reopened_mmap = blosc2.open(urlpath, mode="r", mmap_mode="r")
             assert isinstance(reopened_mmap, blosc2.BatchStore)
-            assert [batch[:] for batch in reopened_mmap.iter_batches()] == expected
+            assert [batch[:] for batch in reopened_mmap] == expected
+
+    blosc2.remove_urlpath(urlpath)
+
+
+def test_batchstore_arrow_ipc_roundtrip():
+    pa = pytest.importorskip("pyarrow")
+    urlpath = "test_batchstore_arrow_ipc.b2b"
+    blosc2.remove_urlpath(urlpath)
+
+    barray = blosc2.BatchStore(storage=_storage(True, urlpath), serializer="arrow")
+    assert barray.serializer == "arrow"
+    assert barray.meta["batchstore"]["serializer"] == "arrow"
+
+    batch1 = pa.array([[1, 2], None, [3]])
+    batch2 = pa.array([[4], [5, 6]])
+    barray.append(batch1)
+    barray.append(batch2)
+
+    assert barray[0][:] == [[1, 2], None, [3]]
+    assert barray[1][:] == [[4], [5, 6]]
+    assert barray.meta["batchstore"]["arrow_schema"] is not None
+
+    reopened = blosc2.open(urlpath, mode="r")
+    assert isinstance(reopened, blosc2.BatchStore)
+    assert reopened.serializer == "arrow"
+    assert reopened.meta["batchstore"]["serializer"] == "arrow"
+    assert reopened[0][:] == [[1, 2], None, [3]]
+    assert reopened[1][:] == [[4], [5, 6]]
 
     blosc2.remove_urlpath(urlpath)
 
@@ -126,11 +154,11 @@ def test_batchstore_from_cframe():
 
     restored = blosc2.from_cframe(barray.to_cframe())
     assert isinstance(restored, blosc2.BatchStore)
-    assert [batch[:] for batch in restored.iter_batches()] == expected
+    assert [batch[:] for batch in restored] == expected
 
     restored2 = blosc2.from_cframe(barray.to_cframe())
     assert isinstance(restored2, blosc2.BatchStore)
-    assert [batch[:] for batch in restored2.iter_batches()] == expected
+    assert [batch[:] for batch in restored2] == expected
 
 
 def test_batchstore_info():
@@ -143,9 +171,9 @@ def test_batchstore_info():
 
     items = dict(barray.info_items)
     assert items["type"] == "BatchStore"
-    assert items["nbatches"] == len(BATCHES)
-    assert items["batch stats"].startswith("mean=")
-    assert items["max_blocksize"] == barray.max_blocksize
+    assert items["serializer"] == "msgpack"
+    assert items["nbatches"].startswith(f"{len(BATCHES)} (items per batch: mean=")
+    assert items["nblocks"].startswith(str(len(BATCHES)))
     assert items["nitems"] == sum(len(batch) for batch in BATCHES)
     assert "urlpath" not in items
     assert "contiguous" not in items
@@ -156,9 +184,53 @@ def test_batchstore_info():
 
     text = repr(barray.info)
     assert "type" in text
+    assert "serializer" in text
     assert "BatchStore" in text
-    assert "batch stats" in text
-    assert "max_blocksize" in text
+    assert "items per batch" in text
+    assert "items per block" in text
+
+
+def test_batchstore_info_uses_persisted_batch_lengths():
+    barray = blosc2.BatchStore()
+    barray.extend(BATCHES)
+
+    assert barray.vlmeta["_batch_store_metadata"]["batch_lengths"] == [len(batch) for batch in BATCHES]
+
+    def fail_decode(*args, **kwargs):
+        raise AssertionError(
+            "info() should not deserialize batches when batch_lengths metadata is available"
+        )
+
+    original_decode_blocks = barray._decode_blocks
+    barray._decode_blocks = fail_decode
+    try:
+        items = dict(barray.info_items)
+    finally:
+        barray._decode_blocks = original_decode_blocks
+
+    assert items["nitems"] == sum(len(batch) for batch in BATCHES)
+    assert "items per batch: mean=" in items["nbatches"]
+
+
+def test_batchstore_info_reports_exact_block_stats_from_lazy_chunks():
+    barray = blosc2.BatchStore(max_blocksize=2)
+    barray.extend([[1, 2, 3, 4, 5], [6, 7], [8]])
+
+    items = dict(barray.info_items)
+    assert items["nblocks"] == "5 (items per block: mean=1.60, max=2, min=1)"
+
+
+def test_batchstore_pop_keeps_batch_lengths_metadata_in_sync():
+    barray = blosc2.BatchStore(max_blocksize=2)
+    barray.extend([[1, 2, 3], [4, 5], [6]])
+
+    removed = barray.pop(1)
+
+    assert removed == [4, 5]
+    assert [batch[:] for batch in barray] == [[1, 2, 3], [6]]
+    assert barray.vlmeta["_batch_store_metadata"]["batch_lengths"] == [3, 1]
+    items = dict(barray.info_items)
+    assert items["nbatches"].startswith("2 (items per batch: mean=2.00")
 
 
 def test_batchstore_zstd_does_not_use_dict_by_default():
@@ -172,7 +244,7 @@ def test_batchstore_explicit_max_blocksize():
     assert barray.max_blocksize == 2
     barray.append([1, 2, 3])
     barray.append([4])
-    assert [batch[:] for batch in barray.iter_batches()] == [[1, 2, 3], [4]]
+    assert [batch[:] for batch in barray] == [[1, 2, 3], [4]]
 
 
 def test_batchstore_get_vlblock_and_scalar_access():
@@ -227,13 +299,13 @@ def test_batchstore_scalar_reads_cache_vlblocks():
         barray.schunk.get_vlblock = original_get_vlblock
 
 
-def test_batchstore_iter_objects():
+def test_batchstore_iter_items():
     barray = blosc2.BatchStore(max_blocksize=2)
     batches = [[1, 2, 3], [4], [5, 6]]
     barray.extend(batches)
 
     assert [batch[:] for batch in barray] == batches
-    assert list(barray.iter_objects()) == [1, 2, 3, 4, 5, 6]
+    assert list(barray.iter_items()) == [1, 2, 3, 4, 5, 6]
 
 
 def test_batchstore_respects_explicit_use_dict_and_non_zstd():
@@ -322,7 +394,7 @@ def test_batchstore_constructor_kwargs():
     barray.extend(BATCHES)
 
     reopened = blosc2.BatchStore(urlpath=urlpath, mode="r", contiguous=True, mmap_mode="r")
-    assert [batch[:] for batch in reopened.iter_batches()] == BATCHES
+    assert [batch[:] for batch in reopened] == BATCHES
 
     blosc2.remove_urlpath(urlpath)
 
@@ -341,21 +413,21 @@ def test_batchstore_list_like_ops(contiguous, urlpath):
 
     barray = blosc2.BatchStore(storage=_storage(contiguous, urlpath))
     barray.extend([[1, 2, 3], [4, 5, 6], [7, 8, 9]])
-    assert [batch[:] for batch in barray.iter_batches()] == [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
+    assert [batch[:] for batch in barray] == [[1, 2, 3], [4, 5, 6], [7, 8, 9]]
     assert barray.pop() == [7, 8, 9]
     assert barray.pop(0) == [1, 2, 3]
-    assert [batch[:] for batch in barray.iter_batches()] == [[4, 5, 6]]
+    assert [batch[:] for batch in barray] == [[4, 5, 6]]
 
     barray.clear()
     assert len(barray) == 0
-    assert [batch[:] for batch in barray.iter_batches()] == []
+    assert [batch[:] for batch in barray] == []
 
     barray.extend([["a", "b", "c"], ["d", "e", "f"]])
-    assert [batch[:] for batch in barray.iter_batches()] == [["a", "b", "c"], ["d", "e", "f"]]
+    assert [batch[:] for batch in barray] == [["a", "b", "c"], ["d", "e", "f"]]
 
     if urlpath is not None:
         reopened = blosc2.open(urlpath, mode="r")
-        assert [batch[:] for batch in reopened.iter_batches()] == [["a", "b", "c"], ["d", "e", "f"]]
+        assert [batch[:] for batch in reopened] == [["a", "b", "c"], ["d", "e", "f"]]
 
     blosc2.remove_urlpath(urlpath)
 
@@ -381,15 +453,15 @@ def test_batchstore_slices(contiguous, urlpath):
 
     barray[2:5] = [["a", "b", "c"], ["d", "e", "f"], ["g", "h", "i"]]
     expected[2:5] = [["a", "b", "c"], ["d", "e", "f"], ["g", "h", "i"]]
-    assert [batch[:] for batch in barray.iter_batches()] == expected
+    assert [batch[:] for batch in barray] == expected
 
     barray[1:6:2] = [[100, 101, 102], [103, 104, 105], [106, 107, 108]]
     expected[1:6:2] = [[100, 101, 102], [103, 104, 105], [106, 107, 108]]
-    assert [batch[:] for batch in barray.iter_batches()] == expected
+    assert [batch[:] for batch in barray] == expected
 
     del barray[::3]
     del expected[::3]
-    assert [batch[:] for batch in barray.iter_batches()] == expected
+    assert [batch[:] for batch in barray] == expected
 
     if urlpath is not None:
         reopened = blosc2.open(urlpath, mode="r")
@@ -427,14 +499,14 @@ def test_batchstore_copy():
     copied = original.copy(
         urlpath=copy_path, contiguous=False, cparams={"codec": blosc2.Codec.LZ4, "clevel": 5}
     )
-    assert [batch[:] for batch in copied.iter_batches()] == [batch[:] for batch in original.iter_batches()]
+    assert [batch[:] for batch in copied] == [batch[:] for batch in original]
     assert copied.urlpath == copy_path
     assert copied.schunk.contiguous is False
     assert copied.cparams.codec == blosc2.Codec.LZ4
     assert copied.cparams.clevel == 5
 
     inmem = original.copy()
-    assert [batch[:] for batch in inmem.iter_batches()] == [batch[:] for batch in original.iter_batches()]
+    assert [batch[:] for batch in inmem] == [batch[:] for batch in original]
     assert inmem.urlpath is None
 
     with pytest.raises(ValueError, match="meta should not be passed to copy"):
@@ -469,7 +541,7 @@ def test_batchstore_multithreaded_inner_vl(contiguous, nthreads):
     )
     barray.extend(batches)
 
-    assert [batch[:] for batch in barray.iter_batches()] == batches
+    assert [batch[:] for batch in barray] == batches
     assert [barray[i][:] for i in range(len(barray))] == batches
 
 
@@ -488,7 +560,7 @@ def test_batchstore_validation_errors():
         blosc2.BatchStore().pop()
     barray.extend([[1, 2, 3]])
     assert barray.append([2, 3]) == 2
-    assert [batch[:] for batch in barray.iter_batches()] == [[1, 2, 3], [2, 3]]
+    assert [batch[:] for batch in barray] == [[1, 2, 3], [2, 3]]
     with pytest.raises(NotImplementedError):
         barray.pop(slice(0, 1))
 
@@ -501,7 +573,7 @@ def test_batchstore_in_embed_store():
     estore["/batch"] = barray
     restored = estore["/batch"]
     assert isinstance(restored, blosc2.BatchStore)
-    assert [batch[:] for batch in restored.iter_batches()] == BATCHES
+    assert [batch[:] for batch in restored] == BATCHES
 
 
 def test_batchstore_in_dict_store():
@@ -516,6 +588,6 @@ def test_batchstore_in_dict_store():
     with blosc2.DictStore(path, mode="r") as dstore:
         restored = dstore["/batch"]
         assert isinstance(restored, blosc2.BatchStore)
-        assert [batch[:] for batch in restored.iter_batches()] == BATCHES
+        assert [batch[:] for batch in restored] == BATCHES
 
     blosc2.remove_urlpath(path)

@@ -12,13 +12,16 @@ import pathlib
 import statistics
 from collections.abc import Iterator, Sequence
 from dataclasses import asdict
+from functools import lru_cache
 from typing import Any
 
 import blosc2
 from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 from blosc2.info import InfoReporter, format_nbytes_info
 
-_BATCHSTORE_META = {"version": 1, "serializer": "msgpack", "max_blocksize": None}
+_BATCHSTORE_META = {"version": 1, "serializer": "msgpack", "max_blocksize": None, "arrow_schema": None}
+_SUPPORTED_SERIALIZERS = {"msgpack", "arrow"}
+_BATCHSTORE_VLMETA_KEY = "_batch_store_metadata"
 
 
 def _check_serialized_size(buffer: bytes) -> None:
@@ -27,7 +30,15 @@ def _check_serialized_size(buffer: bytes) -> None:
 
 
 class Batch(Sequence[Any]):
-    """A lazy sequence of Python objects stored in one BatchStore batch."""
+    """A lazy sequence representing one batch in a :class:`BatchStore`.
+
+    ``Batch`` provides sequence-style access to the items stored in a single
+    batch. Integer indexing can use block-local reads when possible, while
+    slicing materializes the full batch into Python items.
+
+    Batch instances are normally obtained via :class:`BatchStore` indexing or
+    iteration rather than constructed directly.
+    """
 
     def __init__(self, parent: BatchStore, nbatch: int, lazybatch: bytes) -> None:
         self._parent = parent
@@ -56,7 +67,7 @@ class Batch(Sequence[Any]):
     def _get_block(self, block_index: int) -> list[Any]:
         if self._cached_block_index == block_index and self._cached_block is not None:
             return self._cached_block
-        block = msgpack_unpackb(self._parent.schunk.get_vlblock(self._nbatch, block_index))
+        block = self._parent._deserialize_block(self._parent.schunk.get_vlblock(self._nbatch, block_index))
         self._cached_block_index = block_index
         self._cached_block = block
         return block
@@ -84,6 +95,9 @@ class Batch(Sequence[Any]):
         return items[index]
 
     def __len__(self) -> int:
+        batch_length = self._parent._batch_length(self._nbatch)
+        if batch_length is not None:
+            return batch_length
         return len(self._decode_items())
 
     def __iter__(self) -> Iterator[Any]:
@@ -111,7 +125,40 @@ class Batch(Sequence[Any]):
 
 
 class BatchStore:
-    """A batched variable-length array backed by an :class:`blosc2.SChunk`."""
+    """A batched container for variable-length Python items.
+
+    BatchStore stores data as a sequence of *batches*, where each batch contains
+    one or more Python items. Each batch is stored in one compressed chunk, and
+    each chunk is internally split into one or more variable-length blocks for
+    efficient item access.
+
+    The main abstraction is batch-oriented:
+
+    - indexing the store returns batches
+    - iterating the store yields batches
+    - :meth:`iter_items` provides flat item-wise traversal
+
+    BatchStore is a good fit when:
+
+    - data arrives naturally in batches
+    - batch-level append/update operations are important
+    - occasional item-level reads are needed inside a batch
+
+    Parameters
+    ----------
+    max_blocksize : int, optional
+        Maximum number of items stored in each internal variable-length block.
+        If not provided, a value is inferred from the first batch.
+    serializer : {"msgpack", "arrow"}, optional
+        Serializer used for batch payloads. ``"msgpack"`` is the default and is
+        the general-purpose choice for Python items. ``"arrow"`` is optional and
+        requires ``pyarrow``.
+    _from_schunk : blosc2.SChunk, optional
+        Internal hook used when reopening an already-tagged BatchStore.
+    **kwargs
+        Storage, compression, and decompression arguments accepted by the
+        constructor.
+    """
 
     @staticmethod
     def _set_typesize_one(cparams: blosc2.CParams | dict | None) -> blosc2.CParams | dict:
@@ -162,7 +209,11 @@ class BatchStore:
             batchstore_meta = self.schunk.meta["batchstore"]
         except KeyError:
             batchstore_meta = {}
+        self._serializer = batchstore_meta.get("serializer", self._serializer)
         self._max_blocksize = batchstore_meta.get("max_blocksize", self._max_blocksize)
+        self._arrow_schema = batchstore_meta.get("arrow_schema", self._arrow_schema)
+        self._arrow_schema_obj = None
+        self._batch_lengths = self._load_batch_lengths()
         self._validate_tag()
 
     def _maybe_open_existing(self, storage: blosc2.Storage) -> bool:
@@ -187,12 +238,25 @@ class BatchStore:
     def __init__(
         self,
         max_blocksize: int | None = None,
+        serializer: str = "msgpack",
         _from_schunk: blosc2.SChunk | None = None,
         **kwargs: Any,
     ) -> None:
+        """Create a new BatchStore or reopen an existing one.
+
+        When a persistent ``urlpath`` points to an existing BatchStore and the
+        mode is ``"r"`` or ``"a"``, the container is reopened automatically.
+        Otherwise a new empty store is created.
+        """
         if max_blocksize is not None and max_blocksize <= 0:
             raise ValueError("max_blocksize must be a positive integer")
+        if serializer not in _SUPPORTED_SERIALIZERS:
+            raise ValueError(f"Unsupported BatchStore serializer: {serializer!r}")
         self._max_blocksize: int | None = max_blocksize
+        self._serializer = serializer
+        self._arrow_schema: bytes | None = None
+        self._arrow_schema_obj = None
+        self._batch_lengths: list[int] | None = None
         if _from_schunk is not None:
             if kwargs:
                 unexpected = ", ".join(sorted(kwargs))
@@ -218,7 +282,12 @@ class BatchStore:
             return
 
         fixed_meta = dict(storage.meta or {})
-        fixed_meta["batchstore"] = {**_BATCHSTORE_META, "max_blocksize": self._max_blocksize}
+        fixed_meta["batchstore"] = {
+            **_BATCHSTORE_META,
+            "serializer": self._serializer,
+            "max_blocksize": self._max_blocksize,
+            "arrow_schema": self._arrow_schema,
+        }
         storage.meta = fixed_meta
         schunk = blosc2.SChunk(chunksize=-1, data=None, cparams=cparams, dparams=dparams, storage=storage)
         self._attach_schunk(schunk)
@@ -226,6 +295,20 @@ class BatchStore:
     def _validate_tag(self) -> None:
         if "batchstore" not in self.schunk.meta:
             raise ValueError("The supplied SChunk is not tagged as a BatchStore")
+        if self._serializer not in _SUPPORTED_SERIALIZERS:
+            raise ValueError(f"Unsupported BatchStore serializer in metadata: {self._serializer!r}")
+        if self._serializer == "arrow":
+            self._require_pyarrow()
+
+    @staticmethod
+    @lru_cache(maxsize=1)
+    def _require_pyarrow():
+        try:
+            import pyarrow as pa
+            import pyarrow.ipc as pa_ipc
+        except ImportError as exc:
+            raise ImportError("BatchStore serializer='arrow' requires pyarrow") from exc
+        return pa, pa_ipc
 
     def _check_writable(self) -> None:
         if self.mode == "r":
@@ -257,7 +340,72 @@ class BatchStore:
     def _copy_meta(self) -> dict[str, Any]:
         return {name: self.meta[name] for name in self.meta}
 
-    def _normalize_batch(self, value: object) -> list[Any]:
+    def _load_batch_lengths(self) -> list[int] | None:
+        try:
+            metadata = self.schunk.vlmeta[_BATCHSTORE_VLMETA_KEY]
+        except KeyError:
+            return None
+        batch_lengths = metadata.get("batch_lengths")
+        if not isinstance(batch_lengths, list):
+            return None
+        return [int(length) for length in batch_lengths]
+
+    def _persist_batch_lengths(self) -> None:
+        if self._batch_lengths is None:
+            return
+        self.schunk.vlmeta[_BATCHSTORE_VLMETA_KEY] = {"batch_lengths": list(self._batch_lengths)}
+
+    def _get_batch_lengths(self) -> list[int] | None:
+        return self._batch_lengths
+
+    def _ensure_batch_lengths(self) -> list[int]:
+        if self._batch_lengths is None:
+            self._batch_lengths = []
+        return self._batch_lengths
+
+    def _batch_length(self, index: int) -> int | None:
+        if self._batch_lengths is None:
+            return None
+        return self._batch_lengths[index]
+
+    def _block_sizes_from_batch_length(self, batch_length: int, nblocks: int) -> list[int]:
+        if self._max_blocksize is None or nblocks <= 0:
+            return []
+        full_blocks, remainder = divmod(batch_length, self._max_blocksize)
+        block_sizes = [self._max_blocksize] * full_blocks
+        if remainder:
+            block_sizes.append(remainder)
+        if not block_sizes and batch_length > 0:
+            block_sizes.append(batch_length)
+        if len(block_sizes) != nblocks:
+            return []
+        return block_sizes
+
+    def _get_block_sizes(self, batch_sizes: list[int]) -> list[int] | None:
+        if self._max_blocksize is None:
+            return None
+        block_sizes: list[int] = []
+        for index, batch_length in enumerate(batch_sizes):
+            lazychunk = self.schunk.get_lazychunk(index)
+            _, _, nblocks = blosc2.get_cbuffer_sizes(lazychunk)
+            sizes = self._block_sizes_from_batch_length(batch_length, nblocks)
+            if not sizes:
+                return None
+            block_sizes.extend(sizes)
+        return block_sizes
+
+    def _total_nblocks(self) -> int:
+        total = 0
+        for index in range(len(self)):
+            lazychunk = self.schunk.get_lazychunk(index)
+            _, _, nblocks = blosc2.get_cbuffer_sizes(lazychunk)
+            total += nblocks
+        return total
+
+    def _user_vlmeta_items(self) -> dict[str, Any]:
+        return {key: value for key, value in self.vlmeta.getall().items() if key != _BATCHSTORE_VLMETA_KEY}
+
+    def _normalize_msgpack_batch(self, value: object) -> list[Any]:
         if isinstance(value, (str, bytes, bytearray, memoryview)):
             raise TypeError("BatchStore entries must be sequences of Python objects")
         if not isinstance(value, Sequence):
@@ -267,20 +415,85 @@ class BatchStore:
             raise ValueError("BatchStore entries cannot be empty")
         return values
 
-    def _ensure_layout_for_batch(self, batch: list[Any]) -> None:
-        if self._max_blocksize is None:
-            payload_sizes = [len(msgpack_packb(item)) for item in batch]
-            self._max_blocksize = self._guess_blocksize(payload_sizes)
-            self._persist_max_blocksize()
+    def _normalize_arrow_batch(self, value: object):
+        pa, _ = self._require_pyarrow()
+        if isinstance(value, pa.ChunkedArray):
+            value = value.combine_chunks()
+        elif isinstance(value, pa.RecordBatch):
+            if value.num_columns != 1:
+                raise TypeError("Arrow RecordBatch inputs for BatchStore must have exactly one column")
+            value = value.column(0)
+        elif not isinstance(value, pa.Array):
+            if isinstance(value, (str, bytes, bytearray, memoryview)):
+                raise TypeError("BatchStore entries must be Arrow arrays or sequences of Python objects")
+            if not isinstance(value, Sequence):
+                raise TypeError("BatchStore entries must be Arrow arrays or sequences of Python objects")
+            value = pa.array(list(value))
+        if len(value) == 0:
+            raise ValueError("BatchStore entries cannot be empty")
+        self._ensure_arrow_schema(value)
+        return value
 
-    def _persist_max_blocksize(self) -> None:
-        if self._max_blocksize is None or len(self) > 0:
+    def _ensure_arrow_schema(self, batch) -> None:
+        if self._serializer != "arrow":
             return
+        pa, _ = self._require_pyarrow()
+        schema = pa.schema([pa.field("values", batch.type)])
+        if self._arrow_schema is None:
+            self._arrow_schema = schema.serialize().to_pybytes()
+            self._arrow_schema_obj = schema
+            return
+        existing_schema = self._get_arrow_schema()
+        if not existing_schema.equals(schema):
+            raise TypeError("All Arrow batches in a BatchStore must share the same schema")
+
+    def _get_arrow_schema(self):
+        if self._serializer != "arrow":
+            return None
+        if self._arrow_schema is None:
+            raise RuntimeError("Arrow schema is not initialized")
+        if self._arrow_schema_obj is None:
+            pa, pa_ipc = self._require_pyarrow()
+            self._arrow_schema_obj = pa_ipc.read_schema(pa.BufferReader(self._arrow_schema))
+        return self._arrow_schema_obj
+
+    def _normalize_batch(self, value: object) -> Any:
+        if self._serializer == "arrow":
+            return self._normalize_arrow_batch(value)
+        return self._normalize_msgpack_batch(value)
+
+    def _batch_len(self, batch: Any) -> int:
+        return len(batch)
+
+    def _payload_sizes_for_batch(self, batch: Any) -> list[int]:
+        if self._serializer == "arrow":
+            total_size = batch.get_total_buffer_size()
+            avg_size = max(1, total_size // max(1, len(batch)))
+            return [avg_size] * len(batch)
+        return [len(msgpack_packb(item)) for item in batch]
+
+    def _ensure_layout_for_batch(self, batch: Any) -> None:
+        layout_changed = False
+        if self._max_blocksize is None:
+            payload_sizes = self._payload_sizes_for_batch(batch)
+            self._max_blocksize = self._guess_blocksize(payload_sizes)
+            layout_changed = True
+        if self._serializer == "arrow" and self._arrow_schema is not None:
+            layout_changed = layout_changed or len(self) == 0
+        if layout_changed:
+            self._persist_layout_metadata()
+
+    def _persist_layout_metadata(self) -> None:
+        if len(self) > 0:
+            return
+        batch_lengths = None if self._batch_lengths is None else list(self._batch_lengths)
         storage = self._make_storage()
         fixed_meta = dict(storage.meta or {})
         fixed_meta["batchstore"] = {
             **dict(fixed_meta.get("batchstore", {})),
             "max_blocksize": self._max_blocksize,
+            "serializer": self._serializer,
+            "arrow_schema": self._arrow_schema,
         }
         storage.meta = fixed_meta
         schunk = blosc2.SChunk(
@@ -291,6 +504,8 @@ class BatchStore:
             storage=storage,
         )
         self._attach_schunk(schunk)
+        if batch_lengths is not None and self._batch_lengths is None:
+            self._batch_lengths = batch_lengths
 
     def _guess_blocksize(self, payload_sizes: list[int]) -> int:
         if not payload_sizes:
@@ -317,15 +532,40 @@ class BatchStore:
             count = 1
         return min(count, len(payload_sizes))
 
-    def _serialize_batch(self, value: object) -> list[Any]:
+    def _serialize_batch(self, value: object) -> Any:
         batch = self._normalize_batch(value)
         self._ensure_layout_for_batch(batch)
         return batch
 
-    def _serialize_block(self, items: list[Any]) -> bytes:
+    def _serialize_msgpack_block(self, items: list[Any]) -> bytes:
         payload = msgpack_packb(items)
         _check_serialized_size(payload)
         return payload
+
+    def _serialize_arrow_block(self, items) -> bytes:
+        pa, _ = self._require_pyarrow()
+        batch = pa.record_batch([items], schema=self._get_arrow_schema())
+        payload = batch.serialize().to_pybytes()
+        _check_serialized_size(payload)
+        return payload
+
+    def _serialize_block(self, items: Any) -> bytes:
+        if self._serializer == "arrow":
+            return self._serialize_arrow_block(items)
+        return self._serialize_msgpack_block(items)
+
+    def _deserialize_msgpack_block(self, payload: bytes) -> list[Any]:
+        return msgpack_unpackb(payload)
+
+    def _deserialize_arrow_block(self, payload: bytes) -> list[Any]:
+        pa, pa_ipc = self._require_pyarrow()
+        batch = pa_ipc.read_record_batch(pa.BufferReader(payload), self._get_arrow_schema())
+        return batch.column(0).to_pylist()
+
+    def _deserialize_block(self, payload: bytes) -> list[Any]:
+        if self._serializer == "arrow":
+            return self._deserialize_arrow_block(payload)
+        return self._deserialize_msgpack_block(payload)
 
     def _vl_cparams_kwargs(self) -> dict[str, Any]:
         return asdict(self.schunk.cparams)
@@ -333,12 +573,12 @@ class BatchStore:
     def _vl_dparams_kwargs(self) -> dict[str, Any]:
         return asdict(self.schunk.dparams)
 
-    def _compress_batch(self, batch: list[Any]) -> bytes:
+    def _compress_batch(self, batch: Any) -> bytes:
         if self._max_blocksize is None:
             raise RuntimeError("BatchStore max_blocksize is not initialized")
         blocks = [
             self._serialize_block(batch[i : i + self._max_blocksize])
-            for i in range(0, len(batch), self._max_blocksize)
+            for i in range(0, self._batch_len(batch), self._max_blocksize)
         ]
         return blosc2.blosc2_ext.vlcompress(blocks, **self._vl_cparams_kwargs())
 
@@ -346,53 +586,70 @@ class BatchStore:
         block_payloads = blosc2.blosc2_ext.vldecompress(
             self.schunk.get_chunk(nbatch), **self._vl_dparams_kwargs()
         )
-        return [msgpack_unpackb(payload) for payload in block_payloads]
+        return [self._deserialize_block(payload) for payload in block_payloads]
 
     def _get_batch(self, index: int) -> Batch:
         return Batch(self, index, self.schunk.get_lazychunk(index))
 
     def append(self, value: object) -> int:
-        """Append one batch and return the new number of entries."""
+        """Append one batch and return the new number of batches."""
         self._check_writable()
         batch = self._serialize_batch(value)
         batch_payload = self._compress_batch(batch)
-        return self.schunk.append_chunk(batch_payload)
+        length = self._batch_len(batch)
+        new_len = self.schunk.append_chunk(batch_payload)
+        self._ensure_batch_lengths().append(length)
+        self._persist_batch_lengths()
+        return new_len
 
     def insert(self, index: int, value: object) -> int:
-        """Insert one batch at ``index`` and return the new number of entries."""
+        """Insert one batch at ``index`` and return the new number of batches."""
         self._check_writable()
         index = self._normalize_insert_index(index)
         batch = self._serialize_batch(value)
         batch_payload = self._compress_batch(batch)
-        return self.schunk.insert_chunk(index, batch_payload)
+        length = self._batch_len(batch)
+        new_len = self.schunk.insert_chunk(index, batch_payload)
+        self._ensure_batch_lengths().insert(index, length)
+        self._persist_batch_lengths()
+        return new_len
 
     def delete(self, index: int | slice) -> int:
-        """Delete the batch at ``index`` and return the new number of entries."""
+        """Delete the batch at ``index`` and return the new number of batches."""
         self._check_writable()
         if isinstance(index, slice):
             for idx in reversed(self._slice_indices(index)):
                 self.schunk.delete_chunk(idx)
+                if self._batch_lengths is not None:
+                    del self._batch_lengths[idx]
+            self._persist_batch_lengths()
             return len(self)
         index = self._normalize_index(index)
-        return self.schunk.delete_chunk(index)
+        new_len = self.schunk.delete_chunk(index)
+        if self._batch_lengths is not None:
+            del self._batch_lengths[index]
+            self._persist_batch_lengths()
+        return new_len
 
     def pop(self, index: int = -1) -> list[Any]:
-        """Remove and return the batch at ``index``."""
+        """Remove and return the batch at ``index`` as a Python list."""
         self._check_writable()
         if isinstance(index, slice):
             raise NotImplementedError("Slicing is not supported for BatchStore")
         index = self._normalize_index(index)
         value = self[index][:]
-        self.schunk.delete_chunk(index)
+        self.delete(index)
         return value
 
     def extend(self, values: object) -> None:
-        """Append all batches from an iterable."""
+        """Append all batches from an iterable of batches."""
         self._check_writable()
         for value in values:
             batch = self._serialize_batch(value)
             batch_payload = self._compress_batch(batch)
             self.schunk.append_chunk(batch_payload)
+            self._ensure_batch_lengths().append(self._batch_len(batch))
+        self._persist_batch_lengths()
 
     def clear(self) -> None:
         """Remove all entries from the container."""
@@ -408,8 +665,11 @@ class BatchStore:
             storage=storage,
         )
         self._attach_schunk(schunk)
+        self._batch_lengths = []
+        self._persist_batch_lengths()
 
     def __getitem__(self, index: int | slice) -> Batch | list[Batch]:
+        """Return one batch or a list of batches."""
         if isinstance(index, slice):
             return [self[i] for i in self._slice_indices(index)]
         index = self._normalize_index(index)
@@ -425,10 +685,14 @@ class BatchStore:
                 start = self._normalize_insert_index(0 if index.start is None else index.start)
                 for idx in reversed(indices):
                     self.schunk.delete_chunk(idx)
+                    if self._batch_lengths is not None:
+                        del self._batch_lengths[idx]
                 for offset, item in enumerate(values):
                     batch = self._serialize_batch(item)
                     batch_payload = self._compress_batch(batch)
                     self.schunk.insert_chunk(start + offset, batch_payload)
+                    self._ensure_batch_lengths().insert(start + offset, self._batch_len(batch))
+                self._persist_batch_lengths()
                 return
             if len(values) != len(indices):
                 raise ValueError(
@@ -438,29 +702,34 @@ class BatchStore:
                 batch = self._serialize_batch(item)
                 batch_payload = self._compress_batch(batch)
                 self.schunk.update_chunk(idx, batch_payload)
+                if self._batch_lengths is not None:
+                    self._batch_lengths[idx] = self._batch_len(batch)
+            self._persist_batch_lengths()
             return
         self._check_writable()
         index = self._normalize_index(index)
         batch = self._serialize_batch(value)
         batch_payload = self._compress_batch(batch)
         self.schunk.update_chunk(index, batch_payload)
+        if self._batch_lengths is not None:
+            self._batch_lengths[index] = self._batch_len(batch)
+            self._persist_batch_lengths()
 
     def __delitem__(self, index: int | slice) -> None:
         self.delete(index)
 
     def __len__(self) -> int:
+        """Return the number of batches stored in the container."""
         return self.schunk.nchunks
 
-    def iter_batches(self) -> Iterator[Batch]:
-        for i in range(len(self)):
-            yield self[i]
-
-    def iter_objects(self) -> Iterator[Any]:
-        for batch in self.iter_batches():
+    def iter_items(self) -> Iterator[Any]:
+        """Iterate over all items across all batches in order."""
+        for batch in self:
             yield from batch
 
     def __iter__(self) -> Iterator[Batch]:
-        yield from self.iter_batches()
+        for i in range(len(self)):
+            yield self[i]
 
     @property
     def meta(self):
@@ -508,24 +777,35 @@ class BatchStore:
 
     @property
     def info(self) -> InfoReporter:
-        """Print information about this BatchStore."""
+        """Return an info reporter with a compact summary of the store."""
         return InfoReporter(self)
 
     @property
     def info_items(self) -> list:
-        """A list of tuples with summary information about this BatchStore."""
-        batch_sizes = [len(batch) for batch in self.iter_batches()]
+        """Return summary information as ``(name, value)`` pairs."""
+        batch_sizes = self._get_batch_lengths()
+        if batch_sizes is None:
+            batch_sizes = [len(batch) for batch in self]
+        block_sizes = self._get_block_sizes(batch_sizes)
         if batch_sizes:
             batch_stats = (
                 f"mean={statistics.fmean(batch_sizes):.2f}, max={max(batch_sizes)}, min={min(batch_sizes)}"
             )
+            nbatches_value = f"{len(self)} (items per batch: {batch_stats})"
         else:
-            batch_stats = "n/a"
+            nbatches_value = f"{len(self)} (items per batch: n/a)"
+        if block_sizes:
+            block_stats = (
+                f"mean={statistics.fmean(block_sizes):.2f}, max={max(block_sizes)}, min={min(block_sizes)}"
+            )
+            nblocks_value = f"{self._total_nblocks()} (items per block: {block_stats})"
+        else:
+            nblocks_value = f"{self._total_nblocks()} (items per block: n/a)"
         return [
             ("type", f"{self.__class__.__name__}"),
-            ("nbatches", len(self)),
-            ("batch stats", batch_stats),
-            ("max_blocksize", self.max_blocksize),
+            ("serializer", self.serializer),
+            ("nbatches", nbatches_value),
+            ("nblocks", nblocks_value),
             ("nitems", sum(batch_sizes)),
             ("nbytes", format_nbytes_info(self.nbytes)),
             ("cbytes", format_nbytes_info(self.cbytes)),
@@ -535,15 +815,17 @@ class BatchStore:
         ]
 
     def to_cframe(self) -> bytes:
+        """Serialize the full store to a Blosc2 cframe buffer."""
         return self.schunk.to_cframe()
 
     def copy(self, **kwargs: Any) -> BatchStore:
-        """Create a copy of the container with optional constructor overrides."""
+        """Create a copy of the store with optional constructor overrides."""
         if "meta" in kwargs:
             raise ValueError("meta should not be passed to copy")
         kwargs["cparams"] = kwargs.get("cparams", copy.deepcopy(self.cparams))
         kwargs["dparams"] = kwargs.get("dparams", copy.deepcopy(self.dparams))
         kwargs["max_blocksize"] = kwargs.get("max_blocksize", self.max_blocksize)
+        kwargs["serializer"] = kwargs.get("serializer", self.serializer)
 
         if "storage" not in kwargs:
             kwargs["meta"] = self._copy_meta()
@@ -553,9 +835,9 @@ class BatchStore:
 
         out = BatchStore(**kwargs)
         if "storage" not in kwargs and len(self.vlmeta) > 0:
-            for key, value in self.vlmeta.getall().items():
+            for key, value in self._user_vlmeta_items().items():
                 out.vlmeta[key] = value
-        out.extend(self.iter_batches())
+        out.extend(self)
         return out
 
     def __enter__(self) -> BatchStore:
@@ -566,3 +848,8 @@ class BatchStore:
 
     def __repr__(self) -> str:
         return f"BatchStore(len={len(self)}, urlpath={self.urlpath!r})"
+
+    @property
+    def serializer(self) -> str:
+        """Serializer name used for batch payloads."""
+        return self._serializer

@@ -51,17 +51,21 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--codec", type=str, default="ZSTD", choices=[codec.name for codec in blosc2.Codec])
     parser.add_argument("--clevel", type=int, default=5)
+    parser.add_argument("--serializer", type=str, default="msgpack", choices=["msgpack", "arrow"])
     parser.add_argument("--use-dict", action="store_true", help="Enable dictionaries for ZSTD/LZ4/LZ4HC codecs.")
     parser.add_argument("--in-mem", action="store_true", help="Keep the BatchStore purely in memory.")
     return parser
 
 
-def build_store(codec: blosc2.Codec, clevel: int, use_dict: bool, in_mem: bool) -> blosc2.BatchStore | None:
+def build_store(
+    codec: blosc2.Codec, clevel: int, use_dict: bool, serializer: str, in_mem: bool
+) -> blosc2.BatchStore | None:
     if in_mem:
         storage = blosc2.Storage(mode="w")
         store = blosc2.BatchStore(
             storage=storage,
             max_blocksize=BLOCKSIZE_MAX,
+            serializer=serializer,
             cparams={
                 "codec": codec,
                 "clevel": clevel,
@@ -79,7 +83,9 @@ def build_store(codec: blosc2.Codec, clevel: int, use_dict: bool, in_mem: bool) 
         "clevel": clevel,
         "use_dict": use_dict and codec in (blosc2.Codec.ZSTD, blosc2.Codec.LZ4, blosc2.Codec.LZ4HC),
     }
-    with blosc2.BatchStore(storage=storage, max_blocksize=BLOCKSIZE_MAX, cparams=cparams) as store:
+    with blosc2.BatchStore(
+        storage=storage, max_blocksize=BLOCKSIZE_MAX, serializer=serializer, cparams=cparams
+    ) as store:
         for batch_index in range(NBATCHES):
             store.append(make_batch(batch_index))
     return None
@@ -114,10 +120,13 @@ def main() -> None:
     print(f"Building {article} {mode_label} BatchStore with 1,000,000 RGB dicts and timing 1,000 random scalar reads...")
     print(f"  codec: {codec.name}")
     print(f"  clevel: {args.clevel}")
+    print(f"  serializer: {args.serializer}")
     print(f"  use_dict: {use_dict}")
     print(f"  in_mem: {args.in_mem}")
     t0 = time.perf_counter()
-    store = build_store(codec=codec, clevel=args.clevel, use_dict=use_dict, in_mem=args.in_mem)
+    store = build_store(
+        codec=codec, clevel=args.clevel, use_dict=use_dict, serializer=args.serializer, in_mem=args.in_mem
+    )
     build_time_s = time.perf_counter() - t0
     if args.in_mem:
         assert store is not None
@@ -127,17 +136,17 @@ def main() -> None:
     samples, timings_ns = measure_random_reads(read_store)
     t0 = time.perf_counter()
     checksum = 0
-    nobjects = 0
-    for obj in read_store.iter_objects():
-        checksum += obj["blue"]
-        nobjects += 1
+    nitems = 0
+    for item in read_store.iter_items():
+        checksum += item["blue"]
+        nitems += 1
     iter_time_s = time.perf_counter() - t0
 
     print()
     print("BatchStore benchmark")
     print(f"  build time: {build_time_s:.3f} s")
     print(f"  batches: {len(read_store)}")
-    print(f"  objects: {TOTAL_OBJECTS}")
+    print(f"  items: {TOTAL_OBJECTS}")
     print(f"  max_blocksize: {read_store.max_blocksize}")
     print()
     print(read_store.info)
@@ -145,8 +154,8 @@ def main() -> None:
     print(f"  mean: {statistics.fmean(timings_ns) / 1_000:.2f} us")
     print(f"  max:  {max(timings_ns) / 1_000:.2f} us")
     print(f"  min:  {min(timings_ns) / 1_000:.2f} us")
-    print(f"Object iteration via iter_objects(): {iter_time_s:.3f} s")
-    print(f"  per object: {iter_time_s * 1_000_000 / nobjects:.2f} us")
+    print(f"Item iteration via iter_items(): {iter_time_s:.3f} s")
+    print(f"  per item: {iter_time_s * 1_000_000 / nitems:.2f} us")
     print(f"  checksum: {checksum}")
     print("Sample reads:")
     for timing_ns, batch_index, item_index, value in samples[:5]:
