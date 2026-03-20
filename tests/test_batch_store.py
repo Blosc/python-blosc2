@@ -143,6 +143,26 @@ def test_batchstore_arrow_ipc_roundtrip():
     blosc2.remove_urlpath(urlpath)
 
 
+def test_batchstore_inferred_layout_preserves_user_vlmeta():
+    barray = blosc2.BatchStore()
+    barray.vlmeta["user"] = {"x": 1}
+
+    barray.append([1, 2, 3])
+
+    assert barray.vlmeta["user"] == {"x": 1}
+
+
+def test_batchstore_arrow_layout_persistence_preserves_user_vlmeta():
+    pa = pytest.importorskip("pyarrow")
+
+    barray = blosc2.BatchStore(serializer="arrow")
+    barray.vlmeta["user"] = {"x": 1}
+
+    barray.append(pa.array([[1], [2, 3]]))
+
+    assert barray.vlmeta["user"] == {"x": 1}
+
+
 def test_batchstore_from_cframe():
     barray = blosc2.BatchStore()
     barray.extend(BATCHES)
@@ -231,6 +251,38 @@ def test_batchstore_pop_keeps_batch_lengths_metadata_in_sync():
     assert barray.vlmeta["_batch_store_metadata"]["batch_lengths"] == [3, 1]
     items = dict(barray.info_items)
     assert items["nbatches"].startswith("2 (items per batch: mean=2.00")
+
+
+def test_batchstore_clear_keeps_empty_store_vlmeta_readable():
+    urlpath = "test_batchstore_clear_empty_vlmeta.b2b"
+    blosc2.remove_urlpath(urlpath)
+
+    barray = blosc2.BatchStore(urlpath=urlpath, mode="w", contiguous=True)
+    barray.append([1, 2, 3])
+    barray.clear()
+
+    assert barray.vlmeta.getall() == {}
+
+    reopened = blosc2.open(urlpath, mode="r")
+    assert reopened.vlmeta.getall() == {}
+
+    blosc2.remove_urlpath(urlpath)
+
+
+def test_batchstore_delete_last_keeps_empty_store_vlmeta_readable():
+    urlpath = "test_batchstore_delete_last_empty_vlmeta.b2b"
+    blosc2.remove_urlpath(urlpath)
+
+    barray = blosc2.BatchStore(urlpath=urlpath, mode="w", contiguous=True)
+    barray.append([1, 2, 3])
+    barray.delete(0)
+
+    assert barray.vlmeta.getall() == {}
+
+    reopened = blosc2.open(urlpath, mode="r")
+    assert reopened.vlmeta.getall() == {}
+
+    blosc2.remove_urlpath(urlpath)
 
 
 def test_batchstore_zstd_does_not_use_dict_by_default():
@@ -568,6 +620,26 @@ def test_batchstore_copy():
 
     with pytest.raises(ValueError, match="meta should not be passed to copy"):
         original.copy(meta={})
+
+    blosc2.remove_urlpath(urlpath)
+    blosc2.remove_urlpath(copy_path)
+
+
+def test_batchstore_copy_with_storage_preserves_user_metadata():
+    urlpath = "test_batchstore_copy_storage.b2b"
+    copy_path = "test_batchstore_copy_storage_out.b2b"
+    blosc2.remove_urlpath(urlpath)
+    blosc2.remove_urlpath(copy_path)
+
+    original = blosc2.BatchStore(urlpath=urlpath, mode="w", contiguous=True, meta={"user_meta": {"a": 1}})
+    original.vlmeta["user_vlmeta"] = {"b": 2}
+    original.extend(BATCHES)
+
+    copied = original.copy(storage=blosc2.Storage(contiguous=False, urlpath=copy_path, mode="w"))
+
+    assert [batch[:] for batch in copied] == [batch[:] for batch in original]
+    assert copied.meta["user_meta"] == {"a": 1}
+    assert copied.vlmeta["user_vlmeta"] == {"b": 2}
 
     blosc2.remove_urlpath(urlpath)
     blosc2.remove_urlpath(copy_path)

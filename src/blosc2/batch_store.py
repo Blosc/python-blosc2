@@ -370,6 +370,10 @@ class BatchStore:
     def _persist_batch_lengths(self) -> None:
         if self._batch_lengths is None:
             return
+        if len(self._batch_lengths) == 0:
+            if _BATCHSTORE_VLMETA_KEY in self.vlmeta:
+                del self.vlmeta[_BATCHSTORE_VLMETA_KEY]
+            return
         self.schunk.vlmeta[_BATCHSTORE_VLMETA_KEY] = {"batch_lengths": list(self._batch_lengths)}
 
     def _get_batch_lengths(self) -> list[int] | None:
@@ -542,6 +546,7 @@ class BatchStore:
         if len(self) > 0:
             return
         batch_lengths = None if self._batch_lengths is None else list(self._batch_lengths)
+        user_vlmeta = self._user_vlmeta_items() if len(self.vlmeta) > 0 else {}
         storage = self._make_storage()
         fixed_meta = dict(storage.meta or {})
         fixed_meta["batchstore"] = {
@@ -559,6 +564,8 @@ class BatchStore:
             storage=storage,
         )
         self._attach_schunk(schunk)
+        for key, value in user_vlmeta.items():
+            self.vlmeta[key] = value
         if batch_lengths is not None and self._batch_lengths is None:
             self._batch_lengths = batch_lengths
 
@@ -894,17 +901,24 @@ class BatchStore:
         kwargs["dparams"] = kwargs.get("dparams", copy.deepcopy(self.dparams))
         kwargs["max_blocksize"] = kwargs.get("max_blocksize", self.max_blocksize)
         kwargs["serializer"] = kwargs.get("serializer", self.serializer)
+        user_vlmeta = self._user_vlmeta_items() if len(self.vlmeta) > 0 else {}
 
-        if "storage" not in kwargs:
+        if "storage" in kwargs:
+            storage = self._coerce_storage(kwargs["storage"], {})
+            fixed_meta = self._copy_meta()
+            if storage.meta is not None:
+                fixed_meta.update(storage.meta)
+            storage.meta = fixed_meta
+            kwargs["storage"] = storage
+        else:
             kwargs["meta"] = self._copy_meta()
             kwargs["contiguous"] = kwargs.get("contiguous", self.schunk.contiguous)
             if "urlpath" in kwargs and "mode" not in kwargs:
                 kwargs["mode"] = "w"
 
         out = BatchStore(**kwargs)
-        if "storage" not in kwargs and len(self.vlmeta) > 0:
-            for key, value in self._user_vlmeta_items().items():
-                out.vlmeta[key] = value
+        for key, value in user_vlmeta.items():
+            out.vlmeta[key] = value
         out.extend(self)
         return out
 
