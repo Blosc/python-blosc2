@@ -7,12 +7,29 @@
 
 import os
 import shutil
+import zipfile
 
 import numpy as np
 import pytest
 
 import blosc2
 from blosc2.tree_store import TreeStore
+
+
+def _rename_store_member(store_path, old_name, new_name):
+    """Rename an external leaf inside a .b2d/.b2z store without changing its contents."""
+    if str(store_path).endswith(".b2d"):
+        old_path = os.path.join(store_path, old_name.replace("/", os.sep))
+        new_path = os.path.join(store_path, new_name.replace("/", os.sep))
+        os.rename(old_path, new_path)
+        return
+
+    tmp_zip = f"{store_path}.tmp"
+    with zipfile.ZipFile(store_path, "r") as src, zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_STORED) as dst:
+        for info in src.infolist():
+            arcname = new_name if info.filename == old_name else info.filename
+            dst.writestr(arcname, src.read(info.filename), compress_type=zipfile.ZIP_STORED)
+    os.replace(tmp_zip, store_path)
 
 
 @pytest.fixture(params=["b2d", "b2z"])
@@ -666,6 +683,28 @@ def test_external_batchstore_support(tmp_path):
         assert batchstore_path.exists()
 
     with TreeStore(str(store_path), mode="r") as tstore:
+        retrieved = tstore["/data/batchstore"]
+        assert isinstance(retrieved, blosc2.BatchStore)
+        assert [batch[:] for batch in retrieved] == [[{"id": 1}, {"id": 2}], [{"id": 3}]]
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_metadata_discovery_reopens_renamed_batchstore_leaf(storage_type, tmp_path):
+    store_path = tmp_path / f"test_batchstore_renamed.{storage_type}"
+
+    with TreeStore(str(store_path), mode="w", threshold=0) as tstore:
+        bstore = blosc2.BatchStore(max_blocksize=2)
+        bstore.extend([[{"id": 1}, {"id": 2}], [{"id": 3}]])
+        tstore["/data/batchstore"] = bstore
+
+    old_name = "data/batchstore.b2b"
+    new_name = "data/batchstore.odd"
+    _rename_store_member(str(store_path), old_name, new_name)
+
+    with pytest.warns(UserWarning, match=r"batchstore\.odd'.*BatchStore.*expected '\.b2b'"):
+        tstore = TreeStore(str(store_path), mode="r")
+    with tstore:
+        assert tstore.map_tree["/data/batchstore"] == new_name
         retrieved = tstore["/data/batchstore"]
         assert isinstance(retrieved, blosc2.BatchStore)
         assert [batch[:] for batch in retrieved] == [[{"id": 1}, {"id": 2}], [{"id": 3}]]

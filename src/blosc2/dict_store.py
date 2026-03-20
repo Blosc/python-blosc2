@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import warnings
 import zipfile
 from typing import TYPE_CHECKING, Any
 
@@ -94,6 +95,9 @@ class DictStore:
     -----
     - External persistence uses the following file extensions:
       .b2nd for NDArray, .b2f for SChunk, and .b2b for BatchStore.
+      These suffixes are a naming convention for newly written leaves; when
+      reopening an existing store, leaf typing is resolved from object
+      metadata instead of trusting the suffix alone.
     """
 
     def __init__(
@@ -112,7 +116,7 @@ class DictStore:
         """
         See :class:`DictStore` for full documentation of parameters.
         """
-        self.localpath = localpath if isinstance(localpath, (str, bytes)) else str(localpath)
+        self.localpath = localpath if isinstance(localpath, str | bytes) else str(localpath)
         if not self.localpath.endswith((".b2z", ".b2d")):
             raise ValueError(f"localpath must have a .b2z or .b2d extension; you passed: {self.localpath}")
         if mode not in ("r", "w", "a"):
@@ -182,13 +186,7 @@ class DictStore:
                 mmap_mode=self.mmap_mode,
                 dparams=dparams,
             )
-            for filepath in self.offsets:
-                if filepath.endswith((".b2nd", ".b2f", ".b2b")):
-                    if filepath.endswith(".b2nd"):
-                        key = "/" + filepath[:-5]
-                    else:
-                        key = "/" + filepath[:-4]
-                    self.map_tree[key] = filepath
+            self._update_map_tree_from_offsets()
         else:  # .b2d
             if not os.path.isdir(self.localpath):
                 raise FileNotFoundError(f"Directory {self.localpath} does not exist for reading.")
@@ -203,6 +201,90 @@ class DictStore:
 
         self._estore = EmbedStore(_from_schunk=schunk)
         self.storage.meta = self._estore.storage.meta
+
+    @staticmethod
+    def _logical_key_from_relpath(rel_path: str) -> str:
+        """Map an external leaf path to its logical tree key."""
+        rel_path = rel_path.replace(os.sep, "/")
+        key = os.path.splitext(rel_path)[0]
+        if not key.startswith("/"):
+            key = "/" + key
+        return key
+
+    @staticmethod
+    def _expected_ext_from_kind(kind: str) -> str:
+        """Return the canonical write-time suffix for a supported external leaf kind."""
+        if kind == "ndarray":
+            return ".b2nd"
+        if kind == "batchstore":
+            return ".b2b"
+        return ".b2f"
+
+    @classmethod
+    def _opened_external_kind(
+        cls,
+        opened: blosc2.NDArray | SChunk | blosc2.VLArray | blosc2.BatchStore | C2Array | Any,
+        rel_path: str,
+    ) -> str | None:
+        """Return the supported external leaf kind for an already opened object."""
+        processed = _process_opened_object(opened)
+        if isinstance(processed, blosc2.BatchStore):
+            kind = "batchstore"
+        elif isinstance(processed, blosc2.VLArray):
+            kind = "vlarray"
+        elif isinstance(processed, blosc2.NDArray):
+            kind = "ndarray"
+        elif isinstance(processed, SChunk):
+            kind = "schunk"
+        else:
+            warnings.warn(
+                f"Ignoring unsupported Blosc2 object at '{rel_path}' during DictStore discovery: "
+                f"{type(processed).__name__}",
+                UserWarning,
+                stacklevel=2,
+            )
+            return None
+
+        expected_ext = cls._expected_ext_from_kind(kind)
+        found_ext = os.path.splitext(rel_path)[1]
+        if found_ext != expected_ext:
+            warnings.warn(
+                f"External leaf '{rel_path}' uses extension '{found_ext}' but metadata resolves to "
+                f"{type(processed).__name__}; expected '{expected_ext}'.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return kind
+
+    def _probe_external_leaf_path(self, rel_path: str) -> bool:
+        """Return whether a working-dir file is a supported external leaf."""
+        urlpath = os.path.join(self.working_dir, rel_path)
+        try:
+            opened = blosc2.blosc2_ext.open(
+                urlpath,
+                mode="r",
+                offset=0,
+                mmap_mode=self.mmap_mode,
+                dparams=self.dparams,
+            )
+        except Exception:
+            return False
+        return self._opened_external_kind(opened, rel_path) is not None
+
+    def _probe_external_leaf_offset(self, filepath: str) -> bool:
+        """Return whether a zip member is a supported external leaf."""
+        offset = self.offsets[filepath]["offset"]
+        try:
+            opened = blosc2.blosc2_ext.open(
+                self.b2z_path,
+                mode="r",
+                offset=offset,
+                mmap_mode=self.mmap_mode,
+                dparams=self.dparams,
+            )
+        except Exception:
+            return False
+        return self._opened_external_kind(opened, filepath) is not None
 
     def _init_write_append_mode(
         self,
@@ -229,24 +311,23 @@ class DictStore:
         self._update_map_tree()
 
     def _update_map_tree(self):
-        # Build map_tree from .b2nd and .b2f files in working dir
+        # Build map_tree from supported external leaves in working dir.
         for root, _, files in os.walk(self.working_dir):
             for file in files:
                 filepath = os.path.join(root, file)
-                if filepath.endswith((".b2nd", ".b2f", ".b2b")):
-                    # Convert filename to key: remove extension and ensure starts with /
-                    rel_path = os.path.relpath(filepath, self.working_dir)
-                    # Normalize path separators to forward slashes for cross-platform consistency
-                    rel_path = rel_path.replace(os.sep, "/")
-                    if rel_path.endswith(".b2nd"):
-                        key = rel_path[:-5]
-                    elif rel_path.endswith(".b2b") or rel_path.endswith(".b2f"):
-                        key = rel_path[:-4]
-                    else:
-                        continue
-                    if not key.startswith("/"):
-                        key = "/" + key
-                    self.map_tree[key] = rel_path
+                if os.path.abspath(filepath) == os.path.abspath(self.estore_path):
+                    continue
+                rel_path = os.path.relpath(filepath, self.working_dir).replace(os.sep, "/")
+                if self._probe_external_leaf_path(rel_path):
+                    self.map_tree[self._logical_key_from_relpath(rel_path)] = rel_path
+
+    def _update_map_tree_from_offsets(self):
+        """Build map_tree from supported external leaves in a zip store."""
+        for filepath in self.offsets:
+            if filepath == "embed.b2e":
+                continue
+            if self._probe_external_leaf_offset(filepath):
+                self.map_tree[self._logical_key_from_relpath(filepath)] = filepath
 
     @property
     def estore(self) -> EmbedStore:
@@ -255,13 +336,13 @@ class DictStore:
 
     @staticmethod
     def _value_nbytes(value: blosc2.Array | SChunk | blosc2.VLArray | blosc2.BatchStore) -> int:
-        if isinstance(value, (blosc2.VLArray, blosc2.BatchStore)):
+        if isinstance(value, blosc2.VLArray | blosc2.BatchStore):
             return value.schunk.nbytes
         return value.nbytes
 
     @staticmethod
     def _is_external_value(value: blosc2.Array | SChunk | blosc2.VLArray | blosc2.BatchStore) -> bool:
-        return isinstance(value, (blosc2.NDArray, SChunk, blosc2.VLArray, blosc2.BatchStore)) and bool(
+        return isinstance(value, blosc2.NDArray | SChunk | blosc2.VLArray | blosc2.BatchStore) and bool(
             getattr(value, "urlpath", None)
         )
 
@@ -406,12 +487,14 @@ class DictStore:
                 if self.is_zip_store:
                     if filepath in self.offsets:
                         offset = self.offsets[filepath]["offset"]
-                        yield blosc2.blosc2_ext.open(
-                            self.b2z_path,
-                            mode="r",
-                            offset=offset,
-                            mmap_mode=self.mmap_mode,
-                            dparams=self.dparams,
+                        yield _process_opened_object(
+                            blosc2.blosc2_ext.open(
+                                self.b2z_path,
+                                mode="r",
+                                offset=offset,
+                                mmap_mode=self.mmap_mode,
+                                dparams=self.dparams,
+                            )
                         )
                 else:
                     urlpath = os.path.join(self.working_dir, filepath)
@@ -438,12 +521,14 @@ class DictStore:
                         offset = self.offsets[filepath]["offset"]
                         yield (
                             key,
-                            blosc2.blosc2_ext.open(
-                                self.b2z_path,
-                                mode="r",
-                                offset=offset,
-                                mmap_mode=self.mmap_mode,
-                                dparams=self.dparams,
+                            _process_opened_object(
+                                blosc2.blosc2_ext.open(
+                                    self.b2z_path,
+                                    mode="r",
+                                    offset=offset,
+                                    mmap_mode=self.mmap_mode,
+                                    dparams=self.dparams,
+                                )
                             ),
                         )
                 else:

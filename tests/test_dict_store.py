@@ -16,6 +16,22 @@ import blosc2
 from blosc2.dict_store import DictStore
 
 
+def _rename_store_member(store_path, old_name, new_name):
+    """Rename an external leaf inside a .b2d/.b2z store without changing its contents."""
+    if str(store_path).endswith(".b2d"):
+        old_path = os.path.join(store_path, old_name.replace("/", os.sep))
+        new_path = os.path.join(store_path, new_name.replace("/", os.sep))
+        os.rename(old_path, new_path)
+        return
+
+    tmp_zip = f"{store_path}.tmp"
+    with zipfile.ZipFile(store_path, "r") as src, zipfile.ZipFile(tmp_zip, "w", zipfile.ZIP_STORED) as dst:
+        for info in src.infolist():
+            arcname = new_name if info.filename == old_name else info.filename
+            dst.writestr(arcname, src.read(info.filename), compress_type=zipfile.ZIP_STORED)
+    os.replace(tmp_zip, store_path)
+
+
 @pytest.fixture(params=["b2d", "b2z"])
 def populated_dict_store(request):
     """Create and populate a DictStore for tests.
@@ -264,6 +280,78 @@ def test_external_vlarray_file_and_reopen(tmp_path):
         assert isinstance(value, blosc2.VLArray)
         assert list(value) == values
         assert value.vlmeta["description"] == "External VLArray"
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_metadata_discovery_reopens_renamed_external_ndarray(storage_type, tmp_path):
+    path = tmp_path / f"test_renamed_ndarray.{storage_type}"
+    ext_path = tmp_path / "renamed_array_source.b2nd"
+
+    with DictStore(str(path), mode="w", threshold=None) as dstore:
+        arr_external = blosc2.arange(5, urlpath=str(ext_path), mode="w")
+        arr_external.vlmeta["description"] = "Renamed NDArray"
+        dstore["/dir1/node3"] = arr_external
+
+    old_name = "dir1/node3.b2nd"
+    new_name = "dir1/node3.weird"
+    _rename_store_member(str(path), old_name, new_name)
+
+    with pytest.warns(UserWarning, match=r"node3\.weird'.*NDArray.*expected '\.b2nd'"):
+        dstore_read = DictStore(str(path), mode="r")
+    with dstore_read:
+        assert dstore_read.map_tree["/dir1/node3"] == new_name
+        node3 = dstore_read["/dir1/node3"]
+        assert isinstance(node3, blosc2.NDArray)
+        assert np.array_equal(node3[:], np.arange(5))
+        assert node3.vlmeta["description"] == "Renamed NDArray"
+
+
+@pytest.mark.parametrize("storage_type", ["b2d", "b2z"])
+def test_metadata_discovery_reopens_renamed_external_vlarray(storage_type, tmp_path):
+    path = tmp_path / f"test_renamed_vlarray.{storage_type}"
+    ext_path = tmp_path / "renamed_vlarray_source.b2frame"
+    values = ["alpha", {"nested": True}, None, (1, 2, 3)]
+
+    vlarray = blosc2.VLArray(urlpath=str(ext_path), mode="w", contiguous=True)
+    vlarray.extend(values)
+    vlarray.vlmeta["description"] = "Renamed VLArray"
+
+    with DictStore(str(path), mode="w", threshold=None) as dstore:
+        dstore["/dir1/vlarray_ext"] = vlarray
+
+    old_name = "dir1/vlarray_ext.b2f"
+    new_name = "dir1/vlarray_ext.renamed"
+    _rename_store_member(str(path), old_name, new_name)
+
+    with pytest.warns(UserWarning, match=r"vlarray_ext\.renamed'.*VLArray.*expected '\.b2f'"):
+        dstore_read = DictStore(str(path), mode="r")
+    with dstore_read:
+        assert dstore_read.map_tree["/dir1/vlarray_ext"] == new_name
+        value = dstore_read["/dir1/vlarray_ext"]
+        assert isinstance(value, blosc2.VLArray)
+        assert list(value) == values
+        assert value.vlmeta["description"] == "Renamed VLArray"
+
+
+def test_metadata_discovery_warns_and_skips_unsupported_blosc2_leaf(tmp_path):
+    path = tmp_path / "test_unsupported_lazyexpr.b2d"
+
+    with DictStore(str(path), mode="w") as dstore:
+        dstore["/embedded"] = np.arange(3)
+
+    a = blosc2.asarray(np.arange(5), urlpath=str(tmp_path / "a.b2nd"), mode="w")
+    b = blosc2.asarray(np.arange(5), urlpath=str(tmp_path / "b.b2nd"), mode="w")
+    expr = a + b
+    expr_path = path / "unsupported_lazyexpr.b2nd"
+    expr.save(str(expr_path))
+
+    with pytest.warns(
+        UserWarning, match=r"Ignoring unsupported Blosc2 object.*unsupported_lazyexpr\.b2nd.*LazyExpr"
+    ):
+        dstore_read = DictStore(str(path), mode="r")
+    with dstore_read:
+        assert "/unsupported_lazyexpr" not in dstore_read
+        assert "/embedded" in dstore_read
 
 
 def _digest_value(value):
