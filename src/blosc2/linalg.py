@@ -125,14 +125,13 @@ def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArra
             if any(op.dtype != ops[0].dtype for op in ops):  # TODO: Remove this condition
                 use_miniexpr = False
 
-            # Just force same chunk/block shapes
-            same_chunks = all(op.chunks == result.chunks for op in (x1, x2))
-            same_blocks = all(op.blocks == result.blocks for op in (x1, x2))
-            same_shape = all(op.shape == result.shape for op in (x1, x2))
-
-            use_miniexpr &= same_blocks & same_chunks & same_shape
-
             # TODO: We can relax this to even just load according to result blockshape, but that's difficult.
+            # Just force same chunk/block shapes
+            # same_chunks = all(op.chunks == result.chunks for op in (x1, x2))
+            # same_blocks = all(op.blocks == result.blocks for op in (x1, x2))
+            # same_shape = all(op.shape == result.shape for op in (x1, x2))
+
+            # use_miniexpr &= same_blocks & same_chunks & same_shape
             # Two easier cases are presented below
             # Case 1: Might want to restrict loading across chunk boundaries, in which case would require:
             # x1.chunks[-2] % result.blocks[-2] == 0
@@ -146,18 +145,18 @@ def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArra
             # (M, K) x (K, N) = (M, N)
             # so can load block-by-block for inputs and calculate block of output
             # Also need to avoid loading across chunk boundaries
-            # chunks_aligned = x1.chunks[-2] % x1.blocks[-2] == 0
-            # chunks_aligned &= x2.chunks[-1] % x2.blocks[-1] == 0
-            # chunks_aligned &= x2.chunks[-2] % x1.blocks[-1] == 0
-            # same_blocks = x2.blocks[-2] == x1.blocks[-1]
-            # same_blocks &= x2.blocks[-1] == result.blocks[-1]
-            # same_blocks &= result.blocks[-2] == x1.blocks[-2]
-            # try:
-            #     result_blocks = np.broadcast_shapes(x1.blocks, x2.blocks)
-            #     if not (same_blocks and chunks_aligned and result_blocks[:-2] == result.blocks[:-2]):
-            #         use_miniexpr = False
-            # except ValueError:
-            #     use_miniexpr = False
+            chunks_aligned = x1.chunks[-2] % x1.blocks[-2] == 0
+            chunks_aligned &= x2.chunks[-1] % x2.blocks[-1] == 0
+            chunks_aligned &= x2.chunks[-2] % x1.blocks[-1] == 0
+            same_blocks = x2.blocks[-2] == x1.blocks[-1]
+            same_blocks &= x2.blocks[-1] == result.blocks[-1]
+            same_blocks &= result.blocks[-2] == x1.blocks[-2]
+            try:
+                result_blocks = np.broadcast_shapes(x1.blocks, x2.blocks)
+                if not (same_blocks and chunks_aligned and result_blocks[:-2] == result.blocks[:-2]):
+                    use_miniexpr = False
+            except ValueError:
+                use_miniexpr = False
 
             use_miniexpr &= x1.dtype.kind in ("i", "f")
             use_miniexpr &= x2.dtype.kind in ("i", "f")
