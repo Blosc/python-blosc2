@@ -2182,12 +2182,13 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
     cdef int blocknitems[2]
     cdef int startA, startB, expected_blocknitems
     cdef blosc2_context* dctx
-    cdef int i, j, block_i, block_j, ncols, block_ncols, Bblock_ncols, Bncols
+    cdef int i, j, block_i, block_j, chunk_i, chunk_j, ncols, block_ncols, Bblock_ncols, Bncols, Ablock_ncols, Ancols
     cdef int nchunkA = 0, nchunkB = 0, nblockA = 0, nblockB = 0, offsetA = 0, offsetB = 0, offset = 0
     out_arr = udata.array
     cdef int ndim = out_arr.ndim
     cdef int nchunk_ = nchunk
     cdef int coord, batch, batch_, batches = 1
+    cdef int out_chunk_nrows, out_chunk_ncols, out_block_nrows, out_block_ncols
 
     # batches = sum(strides[i]*elcoords[i])
     for i in range(ndim - 2):
@@ -2201,12 +2202,10 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
         nchunkB += coord * udata.chunks_strides[2][i]
 
     ncols = udata.chunks_strides[0][ndim - 2]
+    Ancols = udata.chunks_strides[1][ndim - 2]
     Bncols = udata.chunks_strides[2][ndim - 2]
-
-    i = nchunk_ // ncols # ncols * i + j
-    j = nchunk_ % ncols
-    chunk_startA = nchunkA + i * ncols
-    chunk_startB = nchunkB + j
+    out_chunk_nrows = out_arr.chunkshape[ndim - 2]
+    out_chunk_ncols = out_arr.chunkshape[ndim - 1]
 
     # nblock = sum(strides[i]*blockcoords[i])
     cdef int nblock_ = nblock
@@ -2217,18 +2216,14 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
         nblockB += coord * udata.blocks_strides[2][i]
 
     block_ncols = udata.blocks_strides[0][ndim - 2]
+    Ablock_ncols = udata.blocks_strides[1][ndim - 2]
     Bblock_ncols = udata.blocks_strides[2][ndim - 2]
-
-    block_i = nblock_ // block_ncols
-    block_j = nblock_ % block_ncols
-    block_startA = nblockA + block_i * block_ncols
-    block_startB = nblockB + block_j
+    out_block_nrows = out_arr.blockshape[ndim - 2]
+    out_block_ncols = out_arr.blockshape[ndim - 1]
 
     dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
 
     first_run = True
-    nchunkA = chunk_startA
-    nchunkB = chunk_startB
     while True: # chunk loop
         for i in range(2):
             chunk_idx = nchunkA if i == 0 else nchunkB
@@ -2244,16 +2239,28 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
                 if i == 0:
                     q = ndarr.blockshape[ndim - 1]
                     p = ndarr.blockshape[ndim - 2]
+                    # nchunk_ = chunks_in_row * chunk_row + chunk_col
+                    # convert from chunk_idx to element idx chunk_i (row)
+                    chunk_i = nchunk_ // ncols * out_chunk_nrows
+                    chunk_startA = nchunkA + chunk_i // ndarr.chunkshape[ndim - 2] * Ancols
+                    nchunkA = chunk_startA
+                    # nblock_ = blocks_in_chunkrow * block_row + block_col
+                    # convert from block_idx to element idx block_i (row)
+                    block_i = nblock_ // block_ncols * out_block_nrows
+                    block_startA = nblockA + block_i // p * Ablock_ncols
                 else: # i = 1
                     r = ndarr.blockshape[ndim - 1]
+                    # convert from chunk_idx to element idx chunk_j (col)
+                    chunk_j = nchunk_ % ncols * out_chunk_ncols
+                    chunk_startB = nchunkB + chunk_j // ndarr.chunkshape[ndim - 1]
+                    nchunkB = chunk_startB
+                    # convert from block_idx to element idx block_j (col)
+                    block_j = nblock_ % block_ncols * out_block_ncols
+                    block_startB = nblockB + block_j // r
                 input_buffers[i] = malloc(block_nbytes[i])
             if input_buffers[i] == NULL:
                 raise MemoryError("miniexpr: cannot allocate input block buffer")
             blocknitems[i] = block_nbytes[i] // <int> ndarr.sc.typesize
-            if i == 0:
-                expected_blocknitems = blocknitems[i]
-            elif blocknitems[i] != expected_blocknitems:
-                raise ValueError("miniexpr: inconsistent block element counts across inputs")
 
         first_run = False
         nblockA = block_startA
@@ -2297,11 +2304,11 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
                 batch += 1
             nblockA += 1
             nblockB += Bblock_ncols
-            if (nblockA % block_ncols == 0):
+            if (nblockA % Ablock_ncols == 0):
                 break
         nchunkA += 1
         nchunkB += Bncols
-        if (nchunkA % ncols == 0):
+        if (nchunkA % Ancols == 0):
             break
 
 
@@ -3280,7 +3287,7 @@ cdef class NDArray:
             cstrides = bstrides = estrides = 1
             for idx in range(2, self.array.ndim + 1):
                 i = inp.ndim - idx
-                if inp.shape[i + 1] == 1 or i < 0:
+                if (inp.shape[i + 1] == 1 and i < inp.ndim - 3) or i < 0:
                     udata.chunks_strides[j][i] = 0
                     udata.blocks_strides[j][i] = 0
                     udata.el_strides[j][i] = 0
