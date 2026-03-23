@@ -87,6 +87,30 @@ Python-Blosc2 version.
 """
 
 
+def get_matmul_library() -> str | None:
+    """
+    Return the library used by the active matmul fast backend, if any.
+
+    Returns
+    -------
+    str | None
+        ``"Accelerate.framework"`` when the selected backend is Accelerate,
+        the loaded CBLAS library path for runtime-discovered CBLAS backends,
+        or ``None`` when the selected backend is ``naive``.
+    """
+    from . import blosc2_ext
+
+    selected_backend = blosc2_ext.get_selected_matmul_block_backend()
+    if selected_backend == "accelerate":
+        return "Accelerate.framework"
+    if selected_backend == "cblas":
+        get_loaded_cblas = getattr(blosc2_ext, "get_loaded_matmul_cblas_library", None)
+        if get_loaded_cblas is None:
+            return None
+        return get_loaded_cblas()
+    return None
+
+
 class Codec(Enum):
     """
     Available codecs.
@@ -837,6 +861,7 @@ __all__ = [  # noqa : RUF022
     "get_compressor",
     "get_cpu_info",
     "get_expr_operands",
+    "get_matmul_library",
     "get_slice_nchunks",
     "greater",
     "greater_equal",

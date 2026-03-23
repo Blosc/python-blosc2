@@ -7,11 +7,13 @@
 
 #cython: language_level=3
 
+import glob
 import os
 import dataclasses
 import ast
 import atexit
 import pathlib
+import sys
 import time
 import warnings
 
@@ -69,15 +71,91 @@ cdef extern from "matmul_kernels.h":
         B2_MATMUL_BACKEND_AUTO
         B2_MATMUL_BACKEND_NAIVE
         B2_MATMUL_BACKEND_ACCELERATE
+        B2_MATMUL_BACKEND_CBLAS
 
     int b2_has_accelerate() nogil
+    int b2_has_cblas() nogil
+    void b2_clear_cblas_candidates()
+    int b2_add_cblas_candidate(const char *path)
+    int b2_init_cblas()
     void b2_set_matmul_backend(int backend) nogil
     int b2_get_matmul_backend() nogil
     int b2_get_selected_matmul_backend() nogil
     const char *b2_get_matmul_backend_name() nogil
     const char *b2_get_selected_matmul_backend_name() nogil
+    const char *b2_get_loaded_cblas_path() nogil
     int b2_gemm_accelerate_f32(const float *a, const float *b, float *c, int m, int k, int n) nogil
     int b2_gemm_accelerate_f64(const double *a, const double *b, double *c, int m, int k, int n) nogil
+    int b2_gemm_cblas_f32(const float *a, const float *b, float *c, int m, int k, int n) nogil
+    int b2_gemm_cblas_f64(const double *a, const double *b, double *c, int m, int k, int n) nogil
+
+
+def _discover_matmul_cblas_candidates():
+    if sys.platform == "darwin":
+        return []
+
+    prefix = pathlib.Path(sys.prefix)
+    if sys.platform.startswith("win"):
+        libdirs = [prefix / "Library" / "bin", prefix / "Library" / "lib", prefix / "DLLs"]
+        patterns = [
+            "mkl_rt.dll",
+            "libopenblas*.dll",
+            "openblas*.dll",
+            "cblas.dll",
+            "blas.dll",
+        ]
+    else:
+        libdirs = [prefix / "lib", prefix / "lib64"]
+        patterns = [
+            "libcblas.so",
+            "libcblas.so.*",
+            "libopenblas.so",
+            "libopenblas.so.*",
+            "libflexiblas.so",
+            "libflexiblas.so.*",
+            "libblis.so",
+            "libblis.so.*",
+            "libmkl_rt.so",
+            "libmkl_rt.so.*",
+            "libblas.so",
+            "libblas.so.*",
+        ]
+
+    try:
+        config = np.show_config(mode="dicts")
+        blas_cfg = config.get("Build Dependencies", {}).get("blas", {})
+        libdir = blas_cfg.get("lib directory")
+        if libdir:
+            libdirs.insert(0, pathlib.Path(libdir))
+    except Exception:
+        pass
+
+    candidates = []
+    seen = set()
+    for libdir in libdirs:
+        if not libdir.exists():
+            continue
+        for pattern in patterns:
+            for match in sorted(glob.glob(str(libdir / pattern))):
+                resolved = pathlib.Path(match).resolve()
+                path = str(resolved)
+                if path not in seen and resolved.exists():
+                    seen.add(path)
+                    candidates.append(path)
+    return candidates
+
+
+def _configure_matmul_cblas_backend():
+    cdef bytes path_bytes
+
+    b2_clear_cblas_candidates()
+    for path in _discover_matmul_cblas_candidates():
+        path_bytes = os.fsencode(path)
+        b2_add_cblas_candidate(path_bytes)
+    b2_init_cblas()
+
+
+_configure_matmul_cblas_backend()
 
 cdef extern from "blosc2.h":
 
@@ -2514,6 +2592,15 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
                                 q,
                                 r,
                             )
+                        elif selected_backend == B2_MATMUL_BACKEND_CBLAS:
+                            rc = b2_gemm_cblas_f32(
+                                <float*>input_buffers[0] + offsetA,
+                                <float*>input_buffers[1] + offsetB,
+                                <float*>params_output + offset,
+                                p,
+                                q,
+                                r,
+                            )
                         else:
                             rc = matmul_block_kernel[float](
                                 <float*>input_buffers[0] + offsetA,
@@ -2526,6 +2613,15 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
                     else:
                         if selected_backend == B2_MATMUL_BACKEND_ACCELERATE:
                             rc = b2_gemm_accelerate_f64(
+                                <double*>input_buffers[0] + offsetA,
+                                <double*>input_buffers[1] + offsetB,
+                                <double*>params_output + offset,
+                                p,
+                                q,
+                                r,
+                            )
+                        elif selected_backend == B2_MATMUL_BACKEND_CBLAS:
+                            rc = b2_gemm_cblas_f64(
                                 <double*>input_buffers[0] + offsetA,
                                 <double*>input_buffers[1] + offsetB,
                                 <double*>params_output + offset,
@@ -4060,8 +4156,10 @@ def set_matmul_block_backend(mode):
         b2_set_matmul_backend(B2_MATMUL_BACKEND_NAIVE)
     elif mode == "accelerate":
         b2_set_matmul_backend(B2_MATMUL_BACKEND_ACCELERATE)
+    elif mode == "cblas":
+        b2_set_matmul_backend(B2_MATMUL_BACKEND_CBLAS)
     else:
-        raise ValueError("mode must be 'auto', 'naive', or 'accelerate'")
+        raise ValueError("mode must be 'auto', 'naive', 'accelerate', or 'cblas'")
 
 
 def get_matmul_block_backend():
@@ -4070,3 +4168,10 @@ def get_matmul_block_backend():
 
 def get_selected_matmul_block_backend():
     return b2_get_selected_matmul_backend_name().decode("utf-8")
+
+
+def get_loaded_matmul_cblas_library():
+    cdef const char *path = b2_get_loaded_cblas_path()
+    if path == NULL:
+        return None
+    return path.decode("utf-8")

@@ -15,6 +15,7 @@ import pytest
 import blosc2
 import blosc2.linalg as blosc2_linalg
 import blosc2.utils as utils_mod
+from blosc2 import blosc2_ext
 from blosc2.lazyexpr import linalg_funcs
 from blosc2.utils import _toggle_miniexpr, npvecdot
 
@@ -96,6 +97,47 @@ def _set_pref_matmul_call_recorder(monkeypatch):
 
     monkeypatch.setattr(blosc2.NDArray, "_set_pref_matmul", wrapped_set_pref_matmul)
     return calls
+
+
+def test_matmul_backend_selection_modes():
+    original_mode = blosc2_ext.get_matmul_block_backend()
+    try:
+        assert blosc2_ext.get_selected_matmul_block_backend() in {"naive", "accelerate", "cblas"}
+
+        blosc2_ext.set_matmul_block_backend("naive")
+        assert blosc2_ext.get_matmul_block_backend() == "naive"
+        assert blosc2_ext.get_selected_matmul_block_backend() == "naive"
+
+        blosc2_ext.set_matmul_block_backend("auto")
+        assert blosc2_ext.get_matmul_block_backend() == "auto"
+        assert blosc2_ext.get_selected_matmul_block_backend() in {"naive", "accelerate", "cblas"}
+
+        blosc2_ext.set_matmul_block_backend("cblas")
+        assert blosc2_ext.get_matmul_block_backend() == "cblas"
+        assert blosc2_ext.get_selected_matmul_block_backend() in {"naive", "cblas"}
+    finally:
+        blosc2_ext.set_matmul_block_backend(original_mode)
+
+
+def test_get_matmul_library_for_cblas(monkeypatch):
+    monkeypatch.setattr(blosc2.blosc2_ext, "get_selected_matmul_block_backend", lambda: "cblas")
+    monkeypatch.setattr(
+        blosc2.blosc2_ext,
+        "get_loaded_matmul_cblas_library",
+        lambda: "/tmp/libopenblas.so.0",
+        raising=False,
+    )
+    assert blosc2.get_matmul_library() == "/tmp/libopenblas.so.0"
+
+
+def test_get_matmul_library_for_accelerate(monkeypatch):
+    monkeypatch.setattr(blosc2.blosc2_ext, "get_selected_matmul_block_backend", lambda: "accelerate")
+    assert blosc2.get_matmul_library() == "Accelerate.framework"
+
+
+def test_get_matmul_library_for_naive(monkeypatch):
+    monkeypatch.setattr(blosc2.blosc2_ext, "get_selected_matmul_block_backend", lambda: "naive")
+    assert blosc2.get_matmul_library() is None
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
@@ -211,6 +253,126 @@ def test_matmul_falls_back_for_dtype_mismatch(monkeypatch):
 
         assert calls == []
         np.testing.assert_allclose(c[:], expected, rtol=1e-6, atol=1e-6)
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+def test_matmul_fast_path_limits_blas_threads_for_cblas(monkeypatch):
+    old_flag = utils_mod.try_miniexpr
+    calls = []
+
+    class FakeThreadpoolLimits:
+        def __init__(self, *, limits, user_api):
+            calls.append(("init", limits, user_api))
+
+        def __enter__(self):
+            calls.append("enter")
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            calls.append(("exit", exc_type))
+            return False
+
+    monkeypatch.setattr(blosc2_linalg, "threadpool_limits", FakeThreadpoolLimits)
+    monkeypatch.setattr(blosc2.blosc2_ext, "get_selected_matmul_block_backend", lambda: "cblas")
+    try:
+        _toggle_miniexpr(True)
+        a = blosc2.ones(shape=(200, 200), dtype=np.float64, chunks=(100, 100), blocks=(50, 50))
+        b = blosc2.full(shape=(200, 200), fill_value=2, dtype=np.float64, chunks=(100, 100), blocks=(50, 50))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            c = blosc2.matmul(a, b, chunks=(100, 100), blocks=(50, 50))
+
+        np.testing.assert_allclose(c[:], np.matmul(a[:], b[:]), rtol=1e-6, atol=1e-6)
+        assert calls == [("init", 1, "blas"), "enter", ("exit", None)]
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+def test_matmul_fast_path_skips_blas_thread_limits_above_block_threshold(monkeypatch):
+    old_flag = utils_mod.try_miniexpr
+
+    def unexpected_threadpool_limits(*args, **kwargs):
+        raise AssertionError("threadpool_limits should not be used above the CBLAS block threshold")
+
+    monkeypatch.setattr(blosc2_linalg, "threadpool_limits", unexpected_threadpool_limits)
+    monkeypatch.setattr(blosc2.blosc2_ext, "get_selected_matmul_block_backend", lambda: "cblas")
+    try:
+        _toggle_miniexpr(True)
+        a = blosc2.ones(shape=(400, 400), dtype=np.float64, chunks=(400, 400), blocks=(200, 200))
+        b = blosc2.full(
+            shape=(400, 400), fill_value=2, dtype=np.float64, chunks=(400, 400), blocks=(200, 200)
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            c = blosc2.matmul(a, b, chunks=(400, 400), blocks=(200, 200))
+
+        np.testing.assert_allclose(c[:], np.matmul(a[:], b[:]), rtol=1e-6, atol=1e-6)
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+def test_matmul_fast_path_skips_blas_thread_limits_on_darwin(monkeypatch):
+    old_flag = utils_mod.try_miniexpr
+
+    def unexpected_threadpool_limits(*args, **kwargs):
+        raise AssertionError("threadpool_limits should not be used on darwin")
+
+    monkeypatch.setattr(blosc2_linalg, "threadpool_limits", unexpected_threadpool_limits)
+    monkeypatch.setattr(blosc2_linalg.sys, "platform", "darwin")
+    monkeypatch.setattr(blosc2.blosc2_ext, "get_selected_matmul_block_backend", lambda: "cblas")
+    try:
+        _toggle_miniexpr(True)
+        a = blosc2.ones(shape=(200, 200), dtype=np.float64, chunks=(100, 100), blocks=(50, 50))
+        b = blosc2.full(shape=(200, 200), fill_value=2, dtype=np.float64, chunks=(100, 100), blocks=(50, 50))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            c = blosc2.matmul(a, b, chunks=(100, 100), blocks=(50, 50))
+
+        np.testing.assert_allclose(c[:], np.matmul(a[:], b[:]), rtol=1e-6, atol=1e-6)
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+def test_matmul_fast_path_skips_blas_thread_limits_for_non_cblas(monkeypatch):
+    old_flag = utils_mod.try_miniexpr
+
+    def unexpected_threadpool_limits(*args, **kwargs):
+        raise AssertionError("threadpool_limits should not be used for non-cblas backends")
+
+    monkeypatch.setattr(blosc2_linalg, "threadpool_limits", unexpected_threadpool_limits)
+    monkeypatch.setattr(blosc2.blosc2_ext, "get_selected_matmul_block_backend", lambda: "naive")
+    try:
+        _toggle_miniexpr(True)
+        a = blosc2.ones(shape=(200, 200), dtype=np.float64, chunks=(100, 100), blocks=(50, 50))
+        b = blosc2.full(shape=(200, 200), fill_value=2, dtype=np.float64, chunks=(100, 100), blocks=(50, 50))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            c = blosc2.matmul(a, b, chunks=(100, 100), blocks=(50, 50))
+
+        np.testing.assert_allclose(c[:], np.matmul(a[:], b[:]), rtol=1e-6, atol=1e-6)
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+def test_matmul_fast_path_skips_blas_thread_limits_when_threadpoolctl_missing(monkeypatch):
+    old_flag = utils_mod.try_miniexpr
+    monkeypatch.setattr(blosc2_linalg, "threadpool_limits", None)
+    monkeypatch.setattr(blosc2.blosc2_ext, "get_selected_matmul_block_backend", lambda: "cblas")
+    try:
+        _toggle_miniexpr(True)
+        a = blosc2.ones(shape=(200, 200), dtype=np.float64, chunks=(100, 100), blocks=(50, 50))
+        b = blosc2.full(shape=(200, 200), fill_value=2, dtype=np.float64, chunks=(100, 100), blocks=(50, 50))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            c = blosc2.matmul(a, b, chunks=(100, 100), blocks=(50, 50))
+
+        np.testing.assert_allclose(c[:], np.matmul(a[:], b[:]), rtol=1e-6, atol=1e-6)
     finally:
         _toggle_miniexpr(old_flag)
 
