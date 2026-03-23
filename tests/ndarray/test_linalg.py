@@ -108,6 +108,7 @@ def test_matmul_uses_fast_path_for_supported_2d(monkeypatch, dtype):
         b = blosc2.full(shape=(400, 400), fill_value=2, dtype=dtype, chunks=(200, 200), blocks=(100, 100))
 
         with warnings.catch_warnings():
+            # NumPy + Accelerate can emit spurious matmul RuntimeWarnings on macOS arm64.
             warnings.simplefilter("ignore", RuntimeWarning)
             c = blosc2.matmul(a, b, chunks=(200, 200), blocks=(100, 100))
             expected = np.matmul(a[:], b[:])

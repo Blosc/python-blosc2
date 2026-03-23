@@ -69,6 +69,7 @@ def run_case(
 ):
     a, b, a_np, b_np = build_arrays(shape_a, shape_b, dtype, chunks_a, chunks_b, blocks_a, blocks_b)
     with warnings.catch_warnings():
+        # NumPy + Accelerate can emit spurious matmul RuntimeWarnings on macOS arm64.
         warnings.simplefilter("ignore", RuntimeWarning)
         expected = np.matmul(a_np, b_np)
     original_flag = set_path_mode(mode)
@@ -87,6 +88,7 @@ def run_case(
             before = len(selected_paths)
             t0 = time.perf_counter()
             with warnings.catch_warnings():
+                # NumPy + Accelerate can emit spurious matmul RuntimeWarnings on macOS arm64.
                 warnings.simplefilter("ignore", RuntimeWarning)
                 result = blosc2.matmul(a, b, chunks=chunks_out, blocks=blocks_out)
             times.append(time.perf_counter() - t0)
