@@ -17,10 +17,82 @@ import numpy as np
 
 import blosc2
 
-from .utils import get_intersecting_chunks, nptranspose, npvecdot, slice_to_chunktuple
+from .utils import get_intersecting_chunks, nptranspose, npvecdot, slice_to_chunktuple, try_miniexpr
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+
+def _matmul_chunked(
+    x1: blosc2.Array, x2: blosc2.NDArray, result: blosc2.NDArray, n: int, m: int, k: int
+) -> None:
+    p, q = result.chunks[-2:]
+    r = x2.chunks[-1]
+
+    intersecting_chunks = get_intersecting_chunks((), result.shape[:-2], result.chunks[:-2])
+    for chunk in intersecting_chunks:
+        chunk = chunk.raw
+        for row in range(0, n, p):
+            row_end = builtins.min(row + p, n)
+            for col in range(0, m, q):
+                col_end = builtins.min(col + q, m)
+                for aux in range(0, k, r):
+                    aux_end = builtins.min(aux + r, k)
+                    bx1 = (
+                        x1[chunk[-x1.ndim + 2 :] + (slice(row, row_end), slice(aux, aux_end))]
+                        if x1.ndim > 2
+                        else x1[row:row_end, aux:aux_end]
+                    )
+                    bx2 = (
+                        x2[chunk[-x2.ndim + 2 :] + (slice(aux, aux_end), slice(col, col_end))]
+                        if x2.ndim > 2
+                        else x2[aux:aux_end, col:col_end]
+                    )
+                    result[chunk + (slice(row, row_end), slice(col, col_end))] += np.matmul(bx1, bx2)
+
+
+def _matmul_can_use_fast_path(
+    x1: blosc2.Array, x2: blosc2.NDArray, result: blosc2.NDArray, use_miniexpr: bool
+) -> bool:
+    if not use_miniexpr:
+        return False
+
+    ops = (x1, x2, result)
+    all_ndarray = all(isinstance(value, blosc2.NDArray) and value.shape != () for value in ops)
+    if not all_ndarray:
+        return False
+
+    # The current prefilter-backed implementation is only supported for 2-D layouts.
+    if result.ndim != 2 or x1.ndim != 2 or x2.ndim != 2:
+        return False
+
+    if any(op.dtype != ops[0].dtype for op in ops):
+        return False
+
+    chunks_aligned = x1.chunks[-2] % x1.blocks[-2] == 0
+    chunks_aligned &= x2.chunks[-1] % x2.blocks[-1] == 0
+    chunks_aligned &= x2.chunks[-2] % x1.blocks[-1] == 0
+    if not chunks_aligned:
+        return False
+
+    same_blocks = x2.blocks[-2] == x1.blocks[-1]
+    same_blocks &= x2.blocks[-1] == result.blocks[-1]
+    same_blocks &= result.blocks[-2] == x1.blocks[-2]
+    if not same_blocks:
+        return False
+
+    try:
+        result_blocks = np.broadcast_shapes(x1.blocks, x2.blocks)
+    except ValueError:
+        return False
+    if result_blocks[:-2] != result.blocks[:-2]:
+        return False
+
+    if x1.dtype.kind != "f":
+        return False
+    if x2.dtype.kind != "f":
+        return False
+    return x1.dtype == x2.dtype
 
 
 def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArray:
@@ -112,30 +184,28 @@ def matmul(x1: blosc2.Array, x2: blosc2.NDArray, **kwargs: Any) -> blosc2.NDArra
     kwargs["_chunksize_reduc_factor"] = 1
     result = blosc2.zeros(result_shape, dtype=blosc2.result_type(x1, x2), **kwargs)
 
-    if 0 not in result.shape + x1.shape + x2.shape:  # if any array is empty, return array of 0s
-        p, q = result.chunks[-2:]
-        r = x2.chunks[-1]
+    global try_miniexpr
 
-        intersecting_chunks = get_intersecting_chunks((), result.shape[:-2], result.chunks[:-2])
-        for chunk in intersecting_chunks:
-            chunk = chunk.raw
-            for row in range(0, n, p):
-                row_end = builtins.min(row + p, n)
-                for col in range(0, m, q):
-                    col_end = builtins.min(col + q, m)
-                    for aux in range(0, k, r):
-                        aux_end = builtins.min(aux + r, k)
-                        bx1 = (
-                            x1[chunk[-x1.ndim + 2 :] + (slice(row, row_end), slice(aux, aux_end))]
-                            if x1.ndim > 2
-                            else x1[row:row_end, aux:aux_end]
-                        )
-                        bx2 = (
-                            x2[chunk[-x2.ndim + 2 :] + (slice(aux, aux_end), slice(col, col_end))]
-                            if x2.ndim > 2
-                            else x2[aux:aux_end, col:col_end]
-                        )
-                        result[chunk + (slice(row, row_end), slice(col, col_end))] += np.matmul(bx1, bx2)
+    if 0 not in result.shape + x1.shape + x2.shape:  # if any array is empty, return array of 0s
+        if _matmul_can_use_fast_path(x1, x2, result, try_miniexpr):
+            prefilter_set = False
+            try:
+                result._set_pref_matmul({"x1": x1, "x2": x2}, fp_accuracy=blosc2.FPAccuracy.DEFAULT)
+                prefilter_set = True
+                # Data to compress is fetched from operands, so it can be uninitialized here
+                data = np.empty(result.schunk.chunksize, dtype=np.uint8)
+                for nchunk_out in range(result.schunk.nchunks):
+                    result.schunk.update_data(nchunk_out, data, copy=False)
+            except Exception as exc:
+                warnings.warn(
+                    f"Fast matmul path unavailable; falling back to chunked path: {exc}", RuntimeWarning
+                )
+                _matmul_chunked(x1, x2, result, n, m, k)
+            finally:
+                if prefilter_set:
+                    result.schunk.remove_prefilter("miniexpr")
+        else:
+            _matmul_chunked(x1, x2, result, n, m, k)
 
     if x1_is_vector:
         result = result.squeeze(axis=-2)

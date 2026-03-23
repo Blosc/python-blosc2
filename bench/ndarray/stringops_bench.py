@@ -12,7 +12,7 @@ Compare miniexpr and non-miniexpr paths for string ops.
 import time
 import numpy as np
 import blosc2
-from blosc2.lazyexpr import _toggle_miniexpr
+from blosc2.utils import _toggle_miniexpr
 
 # nparr = np.random.randint(low=0, high=128, size=(N, 10), dtype=np.uint32)
 # nparr = nparr.view('S40').astype('U10')
