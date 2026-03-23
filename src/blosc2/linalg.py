@@ -88,9 +88,9 @@ def _matmul_can_use_fast_path(
     if result_blocks[:-2] != result.blocks[:-2]:
         return False
 
-    if x1.dtype.kind not in ("i", "f"):
+    if x1.dtype.kind != "f":
         return False
-    if x2.dtype.kind not in ("i", "f"):
+    if x2.dtype.kind != "f":
         return False
     return x1.dtype == x2.dtype
 
