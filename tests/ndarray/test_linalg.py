@@ -86,29 +86,53 @@ def test_toggle_miniexpr_updates_linalg_runtime_flag():
         _toggle_miniexpr(old_flag)
 
 
-def test_matmul_uses_fast_path_for_supported_2d(monkeypatch):
-    old_flag = utils_mod.try_miniexpr
+def _set_pref_matmul_call_recorder(monkeypatch):
     calls = []
     original = blosc2.NDArray._set_pref_matmul
 
     def wrapped_set_pref_matmul(self, inputs, fp_accuracy):
-        calls.append((self.shape, inputs["x1"].shape, inputs["x2"].shape))
+        calls.append((self.shape, inputs["x1"].shape, inputs["x2"].shape, self.dtype))
         return original(self, inputs, fp_accuracy)
 
     monkeypatch.setattr(blosc2.NDArray, "_set_pref_matmul", wrapped_set_pref_matmul)
+    return calls
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_matmul_uses_fast_path_for_supported_2d(monkeypatch, dtype):
+    old_flag = utils_mod.try_miniexpr
+    calls = _set_pref_matmul_call_recorder(monkeypatch)
     try:
         _toggle_miniexpr(True)
-        a = blosc2.ones(shape=(400, 400), dtype=np.float64, chunks=(200, 200), blocks=(100, 100))
-        b = blosc2.full(
-            shape=(400, 400), fill_value=2, dtype=np.float64, chunks=(200, 200), blocks=(100, 100)
-        )
+        a = blosc2.ones(shape=(400, 400), dtype=dtype, chunks=(200, 200), blocks=(100, 100))
+        b = blosc2.full(shape=(400, 400), fill_value=2, dtype=dtype, chunks=(200, 200), blocks=(100, 100))
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             c = blosc2.matmul(a, b, chunks=(200, 200), blocks=(100, 100))
             expected = np.matmul(a[:], b[:])
 
-        assert calls == [((400, 400), (400, 400), (400, 400))]
+        assert calls == [((400, 400), (400, 400), (400, 400), np.dtype(dtype))]
+        np.testing.assert_allclose(c[:], expected, rtol=1e-6, atol=1e-6)
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_matmul_uses_fast_path_with_multiple_inner_blocks(monkeypatch, dtype):
+    old_flag = utils_mod.try_miniexpr
+    calls = _set_pref_matmul_call_recorder(monkeypatch)
+    try:
+        _toggle_miniexpr(True)
+        a = blosc2.ones(shape=(256, 384), dtype=dtype, chunks=(128, 192), blocks=(64, 64))
+        b = blosc2.full(shape=(384, 256), fill_value=2, dtype=dtype, chunks=(192, 128), blocks=(64, 64))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            c = blosc2.matmul(a, b, chunks=(128, 128), blocks=(64, 64))
+            expected = np.matmul(a[:], b[:])
+
+        assert calls == [((256, 256), (256, 384), (384, 256), np.dtype(dtype))]
         np.testing.assert_allclose(c[:], expected, rtol=1e-6, atol=1e-6)
     finally:
         _toggle_miniexpr(old_flag)
@@ -116,14 +140,7 @@ def test_matmul_uses_fast_path_for_supported_2d(monkeypatch):
 
 def test_matmul_falls_back_for_integer_inputs(monkeypatch):
     old_flag = utils_mod.try_miniexpr
-    calls = []
-    original = blosc2.NDArray._set_pref_matmul
-
-    def wrapped_set_pref_matmul(self, inputs, fp_accuracy):
-        calls.append((self.shape, inputs["x1"].shape, inputs["x2"].shape))
-        return original(self, inputs, fp_accuracy)
-
-    monkeypatch.setattr(blosc2.NDArray, "_set_pref_matmul", wrapped_set_pref_matmul)
+    calls = _set_pref_matmul_call_recorder(monkeypatch)
     try:
         _toggle_miniexpr(True)
         a = blosc2.ones(shape=(200, 200), dtype=np.int64, chunks=(100, 100), blocks=(50, 50))
@@ -139,14 +156,7 @@ def test_matmul_falls_back_for_integer_inputs(monkeypatch):
 
 def test_matmul_falls_back_for_nd_inputs(monkeypatch):
     old_flag = utils_mod.try_miniexpr
-    calls = []
-    original = blosc2.NDArray._set_pref_matmul
-
-    def wrapped_set_pref_matmul(self, inputs, fp_accuracy):
-        calls.append((self.shape, inputs["x1"].shape, inputs["x2"].shape))
-        return original(self, inputs, fp_accuracy)
-
-    monkeypatch.setattr(blosc2.NDArray, "_set_pref_matmul", wrapped_set_pref_matmul)
+    calls = _set_pref_matmul_call_recorder(monkeypatch)
     try:
         _toggle_miniexpr(True)
         a = blosc2.ones(shape=(2, 40, 40), dtype=np.float64, chunks=(1, 20, 20), blocks=(1, 10, 10))
@@ -157,6 +167,65 @@ def test_matmul_falls_back_for_nd_inputs(monkeypatch):
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             c = blosc2.matmul(a, b, chunks=(1, 20, 20), blocks=(1, 10, 10))
+            expected = np.matmul(a[:], b[:])
+
+        assert calls == []
+        np.testing.assert_allclose(c[:], expected, rtol=1e-6, atol=1e-6)
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_matmul_falls_back_for_misaligned_blocks(monkeypatch, dtype):
+    old_flag = utils_mod.try_miniexpr
+    calls = _set_pref_matmul_call_recorder(monkeypatch)
+    try:
+        _toggle_miniexpr(True)
+        a = blosc2.ones(shape=(400, 400), dtype=dtype, chunks=(200, 200), blocks=(120, 100))
+        b = blosc2.full(shape=(400, 400), fill_value=2, dtype=dtype, chunks=(200, 200), blocks=(100, 100))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            c = blosc2.matmul(a, b, chunks=(200, 200), blocks=(120, 100))
+            expected = np.matmul(a[:], b[:])
+
+        assert calls == []
+        np.testing.assert_allclose(c[:], expected, rtol=1e-6, atol=1e-6)
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+def test_matmul_falls_back_for_dtype_mismatch(monkeypatch):
+    old_flag = utils_mod.try_miniexpr
+    calls = _set_pref_matmul_call_recorder(monkeypatch)
+    try:
+        _toggle_miniexpr(True)
+        a = blosc2.ones(shape=(200, 200), dtype=np.float32, chunks=(100, 100), blocks=(50, 50))
+        b = blosc2.full(shape=(200, 200), fill_value=2, dtype=np.float64, chunks=(100, 100), blocks=(50, 50))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            c = blosc2.matmul(a, b, chunks=(100, 100), blocks=(50, 50))
+            expected = np.matmul(a[:], b[:])
+
+        assert calls == []
+        np.testing.assert_allclose(c[:], expected, rtol=1e-6, atol=1e-6)
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+@pytest.mark.parametrize("dtype", [np.complex64, np.complex128])
+def test_matmul_complex_falls_back_to_chunked(monkeypatch, dtype):
+    old_flag = utils_mod.try_miniexpr
+    calls = _set_pref_matmul_call_recorder(monkeypatch)
+    try:
+        _toggle_miniexpr(True)
+        a = blosc2.asarray(np.ones((100, 100), dtype=dtype))
+        b = blosc2.asarray(np.full((100, 100), 2 + 0j, dtype=dtype))
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            c = blosc2.matmul(a, b, chunks=(50, 50), blocks=(25, 25))
             expected = np.matmul(a[:], b[:])
 
         assert calls == []
