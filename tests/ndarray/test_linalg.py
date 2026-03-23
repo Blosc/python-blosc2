@@ -12,8 +12,10 @@ import numpy as np
 import pytest
 
 import blosc2
+import blosc2.linalg as blosc2_linalg
+import blosc2.utils as utils_mod
 from blosc2.lazyexpr import linalg_funcs
-from blosc2.utils import npvecdot
+from blosc2.utils import _toggle_miniexpr, npvecdot
 
 # Conditionally import torch for proxy tests
 try:
@@ -67,6 +69,88 @@ def test_matmul(ashape, achunks, ablocks, bshape, bchunks, bblocks, dtype):
     else:
         b2_res = blosc2.matmul(a, b)
         np.testing.assert_allclose(b2_res[()], np_res, rtol=1e-6)
+
+
+def test_toggle_miniexpr_updates_linalg_runtime_flag():
+    old_flag = utils_mod.try_miniexpr
+    try:
+        _toggle_miniexpr(False)
+        assert utils_mod.try_miniexpr is False
+        assert blosc2_linalg.try_miniexpr is False
+
+        _toggle_miniexpr(True)
+        assert utils_mod.try_miniexpr is True
+        assert blosc2_linalg.try_miniexpr is True
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+def test_matmul_uses_fast_path_for_supported_2d(monkeypatch):
+    old_flag = utils_mod.try_miniexpr
+    calls = []
+    original = blosc2.NDArray._set_pref_matmul
+
+    def wrapped_set_pref_matmul(self, inputs, fp_accuracy):
+        calls.append((self.shape, inputs["x1"].shape, inputs["x2"].shape))
+        return original(self, inputs, fp_accuracy)
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_matmul", wrapped_set_pref_matmul)
+    try:
+        _toggle_miniexpr(True)
+        a = blosc2.ones(shape=(400, 400), dtype=np.int64, chunks=(200, 200), blocks=(100, 100))
+        b = blosc2.full(shape=(400, 400), fill_value=2, dtype=np.int64, chunks=(200, 200), blocks=(100, 100))
+
+        c = blosc2.matmul(a, b, chunks=(200, 200), blocks=(100, 100))
+
+        assert calls == [((400, 400), (400, 400), (400, 400))]
+        np.testing.assert_allclose(c[:], np.matmul(a[:], b[:]), rtol=1e-6, atol=1e-6)
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+def test_matmul_falls_back_for_nd_inputs(monkeypatch):
+    old_flag = utils_mod.try_miniexpr
+    calls = []
+    original = blosc2.NDArray._set_pref_matmul
+
+    def wrapped_set_pref_matmul(self, inputs, fp_accuracy):
+        calls.append((self.shape, inputs["x1"].shape, inputs["x2"].shape))
+        return original(self, inputs, fp_accuracy)
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_matmul", wrapped_set_pref_matmul)
+    try:
+        _toggle_miniexpr(True)
+        a = blosc2.ones(shape=(2, 40, 40), dtype=np.int64, chunks=(1, 20, 20), blocks=(1, 10, 10))
+        b = blosc2.full(
+            shape=(2, 40, 40), fill_value=2, dtype=np.int64, chunks=(1, 20, 20), blocks=(1, 10, 10)
+        )
+
+        c = blosc2.matmul(a, b, chunks=(1, 20, 20), blocks=(1, 10, 10))
+
+        assert calls == []
+        np.testing.assert_allclose(c[:], np.matmul(a[:], b[:]), rtol=1e-6, atol=1e-6)
+    finally:
+        _toggle_miniexpr(old_flag)
+
+
+def test_matmul_fast_path_failure_falls_back(monkeypatch):
+    old_flag = utils_mod.try_miniexpr
+
+    def failing_set_pref_matmul(self, inputs, fp_accuracy):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(blosc2.NDArray, "_set_pref_matmul", failing_set_pref_matmul)
+    try:
+        _toggle_miniexpr(True)
+        a = blosc2.ones(shape=(200, 200), dtype=np.int64, chunks=(100, 100), blocks=(50, 50))
+        b = blosc2.full(shape=(200, 200), fill_value=2, dtype=np.int64, chunks=(100, 100), blocks=(50, 50))
+
+        with pytest.warns(RuntimeWarning, match="falling back to chunked path"):
+            c = blosc2.matmul(a, b, chunks=(100, 100), blocks=(50, 50))
+
+        np.testing.assert_allclose(c[:], np.matmul(a[:], b[:]), rtol=1e-6, atol=1e-6)
+    finally:
+        _toggle_miniexpr(old_flag)
 
 
 @pytest.mark.parametrize(

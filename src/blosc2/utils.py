@@ -9,6 +9,7 @@ import ast
 import builtins
 import inspect
 import math
+import sys
 import warnings
 from itertools import product
 
@@ -26,6 +27,10 @@ try_miniexpr = not blosc2.IS_WASM or getattr(blosc2, "_WASM_MINIEXPR_ENABLED", F
 def _toggle_miniexpr(FLAG):
     global try_miniexpr
     try_miniexpr = FLAG
+    for module_name in ("blosc2.lazyexpr", "blosc2.linalg"):
+        module = sys.modules.get(module_name)
+        if module is not None:
+            module.try_miniexpr = FLAG
 
 
 # NumPy version and a convenient boolean flag

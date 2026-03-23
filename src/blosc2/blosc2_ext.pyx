@@ -2102,6 +2102,7 @@ cdef class SChunk:
     cpdef remove_prefilter(self, func_name, _new_ctx=True):
         cdef udf_udata* udf_data
         cdef user_filters_udata* udata
+        cdef mm_udata* mm_data
 
         if func_name is not None and func_name in blosc2.prefilter_funcs:
             del blosc2.prefilter_funcs[func_name]
@@ -2123,6 +2124,13 @@ cdef class SChunk:
                     if me_data.eval_params != NULL:
                         free(me_data.eval_params)
                     free(me_data)
+        elif self.schunk.storage.cparams.prefilter == <blosc2_prefilter_fn>matmul_prefilter:
+            if self.schunk.storage.cparams.preparams != NULL:
+                mm_data = <mm_udata*>self.schunk.storage.cparams.preparams.user_data
+                if mm_data != NULL:
+                    if mm_data.inputs != NULL:
+                        free(mm_data.inputs)
+                    free(mm_data)
         elif self.schunk.storage.cparams.prefilter != NULL:
             # From Python the preparams->udata with always have the field py_func
             if self.schunk.storage.cparams.preparams != NULL:
@@ -2408,6 +2416,8 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
     out_block_nrows = out_arr.blockshape[ndim - 2]
     out_block_ncols = out_arr.blockshape[ndim - 1]
 
+    memset(params_output, 0, out_arr.blocknitems * typesize)
+
     dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
 
     first_run = True
@@ -2464,13 +2474,13 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
             if rc < 0:
                 raise ValueError("matmul: error decompressing the B chunk")
             batch = 0
-            offsetA = 0
-            offsetB = 0
-            offset = 0
             while batch < batches:
                 batch_ = batch
+                offsetA = 0
+                offsetB = 0
+                offset = 0
                 for i in range(ndim - 2):
-                    coord = batch // udata.el_strides[0][i]
+                    coord = batch_ // udata.el_strides[0][i]
                     batch_ = batch_ % udata.el_strides[0][i]
                     offsetA += coord * udata.el_strides[1][i]
                     offsetB += coord * udata.el_strides[2][i]
