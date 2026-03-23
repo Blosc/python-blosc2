@@ -274,6 +274,7 @@ def test_matmul_fast_path_limits_blas_threads_for_cblas(monkeypatch):
             return False
 
     monkeypatch.setattr(blosc2_linalg, "threadpool_limits", FakeThreadpoolLimits)
+    monkeypatch.setattr(blosc2_linalg.sys, "platform", "linux")
     monkeypatch.setattr(blosc2.blosc2_ext, "get_selected_matmul_block_backend", lambda: "cblas")
     try:
         _toggle_miniexpr(True)
