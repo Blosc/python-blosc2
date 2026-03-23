@@ -285,7 +285,10 @@ def test_matmul_fast_path_limits_blas_threads_for_cblas(monkeypatch):
             warnings.simplefilter("ignore", RuntimeWarning)
             c = blosc2.matmul(a, b, chunks=(100, 100), blocks=(50, 50))
 
-        np.testing.assert_allclose(c[:], np.matmul(a[:], b[:]), rtol=1e-6, atol=1e-6)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            expected = np.matmul(a[:], b[:])
+        np.testing.assert_allclose(c[:], expected, rtol=1e-6, atol=1e-6)
         assert calls == [("init", 1, "blas"), "enter", ("exit", None)]
     finally:
         _toggle_miniexpr(old_flag)
@@ -310,7 +313,10 @@ def test_matmul_fast_path_skips_blas_thread_limits_above_block_threshold(monkeyp
             warnings.simplefilter("ignore", RuntimeWarning)
             c = blosc2.matmul(a, b, chunks=(400, 400), blocks=(200, 200))
 
-        np.testing.assert_allclose(c[:], np.matmul(a[:], b[:]), rtol=1e-6, atol=1e-6)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            expected = np.matmul(a[:], b[:])
+        np.testing.assert_allclose(c[:], expected, rtol=1e-6, atol=1e-6)
     finally:
         _toggle_miniexpr(old_flag)
 
@@ -333,7 +339,10 @@ def test_matmul_fast_path_skips_blas_thread_limits_on_darwin(monkeypatch):
             warnings.simplefilter("ignore", RuntimeWarning)
             c = blosc2.matmul(a, b, chunks=(100, 100), blocks=(50, 50))
 
-        np.testing.assert_allclose(c[:], np.matmul(a[:], b[:]), rtol=1e-6, atol=1e-6)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            expected = np.matmul(a[:], b[:])
+        np.testing.assert_allclose(c[:], expected, rtol=1e-6, atol=1e-6)
     finally:
         _toggle_miniexpr(old_flag)
 
@@ -355,7 +364,10 @@ def test_matmul_fast_path_skips_blas_thread_limits_for_non_cblas(monkeypatch):
             warnings.simplefilter("ignore", RuntimeWarning)
             c = blosc2.matmul(a, b, chunks=(100, 100), blocks=(50, 50))
 
-        np.testing.assert_allclose(c[:], np.matmul(a[:], b[:]), rtol=1e-6, atol=1e-6)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            expected = np.matmul(a[:], b[:])
+        np.testing.assert_allclose(c[:], expected, rtol=1e-6, atol=1e-6)
     finally:
         _toggle_miniexpr(old_flag)
 
@@ -373,7 +385,10 @@ def test_matmul_fast_path_skips_blas_thread_limits_when_threadpoolctl_missing(mo
             warnings.simplefilter("ignore", RuntimeWarning)
             c = blosc2.matmul(a, b, chunks=(100, 100), blocks=(50, 50))
 
-        np.testing.assert_allclose(c[:], np.matmul(a[:], b[:]), rtol=1e-6, atol=1e-6)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)
+            expected = np.matmul(a[:], b[:])
+        np.testing.assert_allclose(c[:], expected, rtol=1e-6, atol=1e-6)
     finally:
         _toggle_miniexpr(old_flag)
 
