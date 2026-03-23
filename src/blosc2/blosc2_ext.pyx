@@ -12,6 +12,8 @@ import dataclasses
 import ast
 import atexit
 import pathlib
+import time
+import warnings
 
 import _ctypes
 
@@ -61,6 +63,21 @@ ctypedef fused T:
 
 cdef extern from "<stdio.h>":
     int printf(const char *format, ...) nogil
+
+cdef extern from "matmul_kernels.h":
+    ctypedef enum b2_matmul_backend:
+        B2_MATMUL_BACKEND_AUTO
+        B2_MATMUL_BACKEND_NAIVE
+        B2_MATMUL_BACKEND_ACCELERATE
+
+    int b2_has_accelerate() nogil
+    void b2_set_matmul_backend(int backend) nogil
+    int b2_get_matmul_backend() nogil
+    int b2_get_selected_matmul_backend() nogil
+    const char *b2_get_matmul_backend_name() nogil
+    const char *b2_get_selected_matmul_backend_name() nogil
+    int b2_gemm_accelerate_f32(const float *a, const float *b, float *c, int m, int k, int n) nogil
+    int b2_gemm_accelerate_f64(const double *a, const double *b, double *c, int m, int k, int n) nogil
 
 cdef extern from "blosc2.h":
 
@@ -2384,6 +2401,7 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
     cdef int nchunk_ = nchunk
     cdef int coord, batch, batch_, batches = 1
     cdef int out_chunk_nrows, out_chunk_ncols, out_block_nrows, out_block_ncols
+    cdef int selected_backend = b2_get_selected_matmul_backend()
 
     # batches = sum(strides[i]*elcoords[i])
     for i in range(ndim - 2):
@@ -2487,9 +2505,43 @@ cdef int aux_matmul(mm_udata *udata, int64_t nchunk, int32_t nblock, void *param
                     offset += coord * udata.el_strides[0][i]
                 if typecode == 0:
                     if typesize == 4:
-                        rc = matmul_block_kernel[float](<float*>input_buffers[0] + offsetA, <float*>input_buffers[1] + offsetB, <float*>params_output + offset, p, q, r)
+                        if selected_backend == B2_MATMUL_BACKEND_ACCELERATE:
+                            rc = b2_gemm_accelerate_f32(
+                                <float*>input_buffers[0] + offsetA,
+                                <float*>input_buffers[1] + offsetB,
+                                <float*>params_output + offset,
+                                p,
+                                q,
+                                r,
+                            )
+                        else:
+                            rc = matmul_block_kernel[float](
+                                <float*>input_buffers[0] + offsetA,
+                                <float*>input_buffers[1] + offsetB,
+                                <float*>params_output + offset,
+                                p,
+                                q,
+                                r,
+                            )
                     else:
-                        rc = matmul_block_kernel[double](<double*>input_buffers[0] + offsetA, <double*>input_buffers[1] + offsetB, <double*>params_output + offset, p, q, r)
+                        if selected_backend == B2_MATMUL_BACKEND_ACCELERATE:
+                            rc = b2_gemm_accelerate_f64(
+                                <double*>input_buffers[0] + offsetA,
+                                <double*>input_buffers[1] + offsetB,
+                                <double*>params_output + offset,
+                                p,
+                                q,
+                                r,
+                            )
+                        else:
+                            rc = matmul_block_kernel[double](
+                                <double*>input_buffers[0] + offsetA,
+                                <double*>input_buffers[1] + offsetB,
+                                <double*>params_output + offset,
+                                p,
+                                q,
+                                r,
+                            )
                 elif typecode == 1:
                     if typesize == 4:
                         rc = matmul_block_kernel[int32_t](<int32_t*>input_buffers[0] + offsetA, <int32_t*>input_buffers[1] + offsetB, <int32_t*>params_output + offset, p, q, r)
@@ -3999,3 +4051,22 @@ def squeeze(arr1: NDArray, axis_mask: list[bool]) -> blosc2.NDArray:
     new_base = arr1 if arr1.base is None else arr1.base
     return blosc2.NDArray(_schunk=PyCapsule_New(view.sc, <char *> "blosc2_schunk*", NULL),
                         _array=PyCapsule_New(view, <char *> "b2nd_array_t*", NULL), _base=new_base)
+
+
+def set_matmul_block_backend(mode):
+    if mode == "auto":
+        b2_set_matmul_backend(B2_MATMUL_BACKEND_AUTO)
+    elif mode == "naive":
+        b2_set_matmul_backend(B2_MATMUL_BACKEND_NAIVE)
+    elif mode == "accelerate":
+        b2_set_matmul_backend(B2_MATMUL_BACKEND_ACCELERATE)
+    else:
+        raise ValueError("mode must be 'auto', 'naive', or 'accelerate'")
+
+
+def get_matmul_block_backend():
+    return b2_get_matmul_backend_name().decode("utf-8")
+
+
+def get_selected_matmul_block_backend():
+    return b2_get_selected_matmul_backend_name().decode("utf-8")

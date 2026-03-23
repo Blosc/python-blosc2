@@ -56,6 +56,7 @@ def set_path_mode(mode: str) -> bool:
 
 def run_case(
     mode: str,
+    block_backend: str,
     repeats: int,
     shape_a: tuple[int, ...],
     shape_b: tuple[int, ...],
@@ -73,8 +74,10 @@ def run_case(
         warnings.simplefilter("ignore", RuntimeWarning)
         expected = np.matmul(a_np, b_np)
     original_flag = set_path_mode(mode)
+    original_block_backend = blosc2.blosc2_ext.get_matmul_block_backend()
     original_set_pref_matmul = blosc2.NDArray._set_pref_matmul
     selected_paths = []
+    selected_block_backend = None
     times = []
     result = None
 
@@ -83,7 +86,9 @@ def run_case(
         return original_set_pref_matmul(self, inputs, fp_accuracy)
 
     blosc2.NDArray._set_pref_matmul = wrapped_set_pref_matmul
+    blosc2.blosc2_ext.set_matmul_block_backend(block_backend)
     try:
+        selected_block_backend = blosc2.blosc2_ext.get_selected_matmul_block_backend()
         for _ in range(repeats):
             before = len(selected_paths)
             t0 = time.perf_counter()
@@ -97,6 +102,7 @@ def run_case(
     finally:
         blosc2.NDArray._set_pref_matmul = original_set_pref_matmul
         linalg.try_miniexpr = original_flag
+        blosc2.blosc2_ext.set_matmul_block_backend(original_block_backend)
 
     if result is None:
         raise RuntimeError("matmul did not produce a result")
@@ -114,6 +120,8 @@ def run_case(
         "gflops_best": expected_gflops(shape_a, shape_b, best),
         "gflops_median": expected_gflops(shape_a, shape_b, median),
         "correct": True,
+        "configured_block_backend": block_backend,
+        "selected_block_backend": selected_block_backend,
         "selected_paths": selected_paths,
         "selected_path": selected_paths[0] if selected_paths and len(set(selected_paths)) == 1 else "mixed",
     }
@@ -132,6 +140,12 @@ def main() -> None:
     parser.add_argument("--blocks-out", default="100,100", help="Comma-separated block shape for output.")
     parser.add_argument("--repeats", type=int, default=250)
     parser.add_argument("--modes", nargs="+", default=["chunked", "fast", "auto"], choices=["chunked", "fast", "auto"])
+    parser.add_argument(
+        "--block-backend",
+        default="auto",
+        choices=["auto", "naive", "accelerate"],
+        help="Kernel backend for the fast matmul block path.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit full JSON instead of a compact text summary.")
     args = parser.parse_args()
 
@@ -150,6 +164,7 @@ def main() -> None:
         results.append(
             run_case(
                 mode,
+                args.block_backend,
                 args.repeats,
                 shape_a,
                 shape_b,
@@ -173,6 +188,7 @@ def main() -> None:
         "blocks_b": blocks_b,
         "chunks_out": chunks_out,
         "blocks_out": blocks_out,
+        "block_backend": args.block_backend,
         "results": results,
     }
 
@@ -184,36 +200,27 @@ def main() -> None:
         print(json.dumps(summary, indent=2, sort_keys=True))
         return
 
-    print(
-        "case",
-        json.dumps(
-            {
-                "shape_a": shape_a,
-                "shape_b": shape_b,
-                "dtype": str(dtype),
-                "chunks_out": chunks_out,
-                "blocks_out": blocks_out,
-            },
-            sort_keys=True,
-        ),
-    )
+    print("Matmul path comparison")
+    print(f"  A shape: {shape_a}")
+    print(f"  B shape: {shape_b}")
+    print(f"  dtype: {dtype}")
+    print(f"  chunks A/B/out: {chunks_a} / {chunks_b} / {chunks_out}")
+    print(f"  blocks A/B/out: {blocks_a} / {blocks_b} / {blocks_out}")
+    print(f"  repeats: {args.repeats}")
+    print(f"  fast block backend: {args.block_backend}")
     for item in results:
+        gflops_best = "-" if item["gflops_best"] is None else f"{item['gflops_best']:.3f}"
         print(
-            "result",
-            json.dumps(
-                {
-                    "mode": item["mode"],
-                    "best_s": round(item["best_s"], 6),
-                    "median_s": round(item["median_s"], 6),
-                    "gflops_best": None if item["gflops_best"] is None else round(item["gflops_best"], 3),
-                    "correct": item["correct"],
-                    "selected_path": item["selected_path"],
-                },
-                sort_keys=True,
-            ),
+            f"{item['mode']:>7}: "
+            f"best={item['best_s']:.6f}s "
+            f"median={item['median_s']:.6f}s "
+            f"gflops={gflops_best} "
+            f"path={item['selected_path']} "
+            f"block_backend={item['selected_block_backend']} "
+            f"correct={item['correct']}"
         )
     if "speedup_fast_vs_chunked" in summary:
-        print("speedup", json.dumps({"fast_vs_chunked": round(summary["speedup_fast_vs_chunked"], 3)}, sort_keys=True))
+        print(f"Speedup fast vs chunked: {summary['speedup_fast_vs_chunked']:.3f}x")
 
 
 if __name__ == "__main__":
