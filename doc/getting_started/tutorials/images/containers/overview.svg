@@ -1,0 +1,783 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   width="1200"
+   height="820"
+   viewBox="0 0 1200 820"
+   role="img"
+   aria-labelledby="title desc"
+   version="1.1"
+   id="svg68"
+   sodipodi:docname="overview.svg"
+   inkscape:version="1.4 (e7c3feb1, 2024-10-09)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview68"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     showgrid="false"
+     inkscape:zoom="0.9625"
+     inkscape:cx="600"
+     inkscape:cy="410.38961"
+     inkscape:window-width="1712"
+     inkscape:window-height="1045"
+     inkscape:window-x="0"
+     inkscape:window-y="34"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg68" />
+  <title
+     id="title">python-blosc2 container family overview</title>
+  <desc
+     id="desc">A layered overview showing stores at the top, NDArray, VLArray, and BatchStore in the middle, SChunk as the storage foundation at the bottom, and C2Array attached to NDArray for remote access.</desc>
+  <defs
+     id="defs2">
+    <marker
+       style="overflow:visible"
+       id="Triangle"
+       refX="0"
+       refY="0"
+       orient="auto-start-reverse"
+       inkscape:stockid="Triangle arrow"
+       markerWidth="1"
+       markerHeight="1"
+       viewBox="0 0 1 1"
+       inkscape:isstock="true"
+       inkscape:collect="always"
+       preserveAspectRatio="xMidYMid">
+      <path
+         transform="scale(0.5)"
+         style="fill:context-stroke;fill-rule:evenodd;stroke:context-stroke;stroke-width:1pt"
+         d="M 5.77,0 -2.88,5 V -5 Z"
+         id="path135" />
+    </marker>
+    <style
+       id="style1">
+      .title { font: 700 30px &quot;DejaVu Sans&quot;, Arial, sans-serif; fill: #002a64; }
+      .subtitle { font: 400 15px &quot;DejaVu Sans&quot;, Arial, sans-serif; fill: #24457a; }
+      .section { font: 700 18px &quot;DejaVu Sans&quot;, Arial, sans-serif; fill: #002a64; }
+      .label { font: 700 20px &quot;DejaVu Sans&quot;, Arial, sans-serif; fill: #002a64; }
+      .body { font: 400 14px &quot;DejaVu Sans&quot;, Arial, sans-serif; fill: #173866; }
+      .small { font: 400 13px &quot;DejaVu Sans&quot;, Arial, sans-serif; fill: #305185; }
+      .tiny { font: 700 11px &quot;DejaVu Sans&quot;, Arial, sans-serif; fill: #002a64; }
+      .box { fill: #f7fafc; stroke: #002a64; stroke-width: 3; rx: 18; ry: 18; }
+      .box-soft { fill: #fbfcfd; stroke: #002a64; stroke-width: 2.5; rx: 18; ry: 18; }
+      .meta { fill: #007a86; }
+      .chunk { fill: #df9e00; }
+      .accent { fill: #e7f5f7; stroke: #007a86; stroke-width: 2; rx: 12; ry: 12; }
+      .arrow { stroke: #002a64; stroke-width: 3.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+      .arrow-dashed { stroke: #007a86; stroke-width: 3.5; fill: none; stroke-dasharray: 10 10; stroke-linecap: round; stroke-linejoin: round; }
+    </style>
+    <marker
+       id="arrowhead-blue"
+       markerWidth="10"
+       markerHeight="10"
+       refX="8"
+       refY="5"
+       orient="auto">
+      <path
+         d="M 0 0 L 10 5 L 0 10 z"
+         fill="#002a64"
+         id="path1" />
+    </marker>
+    <marker
+       id="arrowhead-cyan"
+       markerWidth="10"
+       markerHeight="10"
+       refX="8"
+       refY="5"
+       orient="auto">
+      <path
+         d="M 0 0 L 10 5 L 0 10 z"
+         fill="#007a86"
+         id="path2" />
+    </marker>
+  </defs>
+  <text
+     x="372"
+     y="60"
+     class="title"
+     id="text2"
+     style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:30px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif"><tspan
+       style="font-size:32px"
+       id="tspan69">Python-Blosc2 container family</tspan></text>
+  <text
+     x="402"
+     y="96"
+     class="subtitle"
+     id="text3"
+     style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:15px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif"><tspan
+       style="font-size:24px"
+       id="tspan68">Different abstractions for diverse needs</tspan></text>
+  <text
+     x="150"
+     y="150"
+     class="section"
+     id="text8"
+     style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:18px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">Organization</text>
+  <text
+     x="132"
+     y="370"
+     class="section"
+     id="text9"
+     style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:18px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">Specialized Containers</text>
+  <text
+     x="450"
+     y="628"
+     class="section"
+     id="text10"
+     style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:18px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">Storage foundation</text>
+  <g
+     transform="translate(95 170)"
+     id="g19">
+    <rect
+       x="0"
+       y="0"
+       width="270"
+       height="118"
+       class="box-soft"
+       id="rect10" />
+    <rect
+       x="20"
+       y="24"
+       width="46"
+       height="18"
+       class="meta"
+       rx="7"
+       ry="7"
+       id="rect11" />
+    <rect
+       x="20"
+       y="54"
+       width="46"
+       height="24"
+       class="chunk"
+       rx="8"
+       ry="8"
+       id="rect12" />
+    <rect
+       x="78"
+       y="54"
+       width="46"
+       height="24"
+       class="chunk"
+       rx="8"
+       ry="8"
+       id="rect13" />
+    <text
+       x="140"
+       y="40"
+       class="label"
+       id="text13"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:20px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">EmbedStore</text>
+    <text
+       x="140"
+       y="64"
+       class="body"
+       id="text14"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:14px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">embedded nodes</text>
+    <text
+       x="140"
+       y="84"
+       class="body"
+       id="text15"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:14px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">single bundled store</text>
+    <rect
+       x="20"
+       y="88"
+       width="26"
+       height="16"
+       class="accent"
+       id="rect15" />
+    <rect
+       x="52"
+       y="88"
+       width="26"
+       height="16"
+       class="accent"
+       id="rect16" />
+    <rect
+       x="84"
+       y="88"
+       width="26"
+       height="16"
+       class="accent"
+       id="rect17" />
+    <text
+       x="27"
+       y="100"
+       class="tiny"
+       id="text17">ND</text>
+    <text
+       x="60"
+       y="100"
+       class="tiny"
+       id="text18">VL</text>
+    <text
+       x="90"
+       y="100"
+       class="tiny"
+       id="text19">BS</text>
+  </g>
+  <g
+     transform="translate(415 170)"
+     id="g27">
+    <rect
+       x="0"
+       y="0"
+       width="270"
+       height="118"
+       class="box-soft"
+       id="rect19" />
+    <path
+       d="M 17.833308,35.833308 H 61.107182 L 70.060397,47.91332 H 126.76409 V 86.166692 H 17.833308 Z"
+       fill="#e7f5f7"
+       stroke="#002a64"
+       stroke-width="2.16662"
+       id="path19" />
+    <rect
+       x="34"
+       y="72"
+       width="26"
+       height="16"
+       class="chunk"
+       rx="5"
+       ry="5"
+       id="rect20" />
+    <rect
+       x="66"
+       y="72"
+       width="20"
+       height="16"
+       class="meta"
+       rx="5"
+       ry="5"
+       id="rect21" />
+    <text
+       x="142"
+       y="40"
+       class="label"
+       id="text21"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:20px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">DictStore</text>
+    <text
+       x="142"
+       y="64"
+       class="body"
+       id="text22"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:14px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">named collection</text>
+    <text
+       x="142"
+       y="84"
+       class="body"
+       id="text23"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:14px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">flat keys, .b2d / .b2z</text>
+    <rect
+       x="20"
+       y="88"
+       width="26"
+       height="16"
+       class="accent"
+       id="rect23" />
+    <rect
+       x="52"
+       y="88"
+       width="26"
+       height="16"
+       class="accent"
+       id="rect24" />
+    <rect
+       x="84"
+       y="88"
+       width="26"
+       height="16"
+       class="accent"
+       id="rect25" />
+    <text
+       x="27"
+       y="100"
+       class="tiny"
+       id="text25">ND</text>
+    <text
+       x="60"
+       y="100"
+       class="tiny"
+       id="text26">VL</text>
+    <text
+       x="90"
+       y="100"
+       class="tiny"
+       id="text27">BS</text>
+  </g>
+  <g
+     transform="translate(735 170)"
+     id="g38">
+    <rect
+       x="0"
+       y="0"
+       width="270"
+       height="118"
+       class="box-soft"
+       id="rect27" />
+    <line
+       x1="26"
+       y1="26"
+       x2="26"
+       y2="82"
+       stroke="#002a64"
+       stroke-width="3"
+       id="line27" />
+    <line
+       x1="26"
+       y1="26"
+       x2="57.454544"
+       y2="26"
+       stroke="#002a64"
+       stroke-width="2.48076"
+       id="line28" />
+    <line
+       x1="26"
+       y1="54"
+       x2="57.454544"
+       y2="54"
+       stroke="#002a64"
+       stroke-width="2.48076"
+       id="line29" />
+    <line
+       x1="56"
+       y1="54"
+       x2="102"
+       y2="54"
+       stroke="#002a64"
+       stroke-width="3"
+       id="line30" />
+    <rect
+       x="58"
+       y="18"
+       width="18"
+       height="16"
+       class="chunk"
+       rx="4"
+       ry="4"
+       id="rect30" />
+    <rect
+       x="58"
+       y="46"
+       width="18"
+       height="16"
+       class="chunk"
+       rx="4"
+       ry="4"
+       id="rect31" />
+    <rect
+       x="100"
+       y="46"
+       width="18"
+       height="16"
+       class="chunk"
+       rx="4"
+       ry="4"
+       id="rect32" />
+    <text
+       x="134"
+       y="40"
+       class="label"
+       id="text32"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:20px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">TreeStore</text>
+    <text
+       x="134"
+       y="64"
+       class="body"
+       id="text33"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:14px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">hierarchical collection</text>
+    <text
+       x="134"
+       y="84"
+       class="body"
+       id="text34"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:14px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">paths and subtrees</text>
+    <rect
+       x="20"
+       y="88"
+       width="26"
+       height="16"
+       class="accent"
+       id="rect34" />
+    <rect
+       x="52"
+       y="88"
+       width="26"
+       height="16"
+       class="accent"
+       id="rect35" />
+    <rect
+       x="84"
+       y="88"
+       width="26"
+       height="16"
+       class="accent"
+       id="rect36" />
+    <text
+       x="27"
+       y="100"
+       class="tiny"
+       id="text36">ND</text>
+    <text
+       x="60"
+       y="100"
+       class="tiny"
+       id="text37">VL</text>
+    <text
+       x="90"
+       y="100"
+       class="tiny"
+       id="text38">BS</text>
+  </g>
+  <g
+     transform="translate(95 390)"
+     id="g45">
+    <rect
+       x="0"
+       y="0"
+       width="270"
+       height="118"
+       class="box-soft"
+       id="rect39" />
+    <rect
+       x="20"
+       y="26"
+       width="36"
+       height="36"
+       class="chunk"
+       rx="8"
+       ry="8"
+       id="rect40" />
+    <rect
+       x="60"
+       y="26"
+       width="36"
+       height="36"
+       class="chunk"
+       rx="8"
+       ry="8"
+       id="rect41" />
+    <rect
+       x="20"
+       y="66"
+       width="36"
+       height="36"
+       class="chunk"
+       rx="8"
+       ry="8"
+       id="rect42" />
+    <rect
+       x="60"
+       y="66"
+       width="36"
+       height="36"
+       class="chunk"
+       rx="8"
+       ry="8"
+       id="rect43" />
+    <text
+       x="124"
+       y="40"
+       class="label"
+       id="text43">NDArray</text>
+    <text
+       x="124"
+       y="64"
+       class="body"
+       id="text44">N-D array semantics</text>
+    <text
+       x="124"
+       y="84"
+       class="body"
+       id="text45">shape, dtype, slices</text>
+  </g>
+  <g
+     transform="translate(415 390)"
+     id="g50">
+    <rect
+       x="0"
+       y="0"
+       width="270"
+       height="118"
+       class="box-soft"
+       id="rect45" />
+    <rect
+       x="20"
+       y="28"
+       width="74"
+       height="16"
+       class="chunk"
+       rx="8"
+       ry="8"
+       id="rect46" />
+    <rect
+       x="20"
+       y="54"
+       width="42"
+       height="16"
+       class="chunk"
+       rx="8"
+       ry="8"
+       id="rect47" />
+    <rect
+       x="20"
+       y="80"
+       width="92"
+       height="16"
+       class="chunk"
+       rx="8"
+       ry="8"
+       id="rect48" />
+    <text
+       x="132"
+       y="40"
+       class="label"
+       id="text48">VLArray</text>
+    <text
+       x="132"
+       y="64"
+       class="body"
+       id="text49">variable-length entries</text>
+    <text
+       x="132"
+       y="84"
+       class="body"
+       id="text50">one item per entry</text>
+  </g>
+  <g
+     transform="translate(735 390)"
+     id="g55">
+    <rect
+       x="0"
+       y="0"
+       width="270"
+       height="118"
+       class="box-soft"
+       id="rect50" />
+    <rect
+       x="18"
+       y="24"
+       width="98"
+       height="22"
+       class="chunk"
+       rx="8"
+       ry="8"
+       id="rect51" />
+    <line
+       x1="50"
+       y1="24"
+       x2="50"
+       y2="46"
+       stroke="#ffffff"
+       stroke-width="3"
+       id="line51" />
+    <line
+       x1="82"
+       y1="24"
+       x2="82"
+       y2="46"
+       stroke="#ffffff"
+       stroke-width="3"
+       id="line52" />
+    <rect
+       x="18"
+       y="58"
+       width="82"
+       height="22"
+       class="chunk"
+       rx="8"
+       ry="8"
+       id="rect52" />
+    <line
+       x1="59"
+       y1="58"
+       x2="59"
+       y2="80"
+       stroke="#ffffff"
+       stroke-width="3"
+       id="line53" />
+    <rect
+       x="18"
+       y="92"
+       width="110"
+       height="10"
+       class="meta"
+       rx="5"
+       ry="5"
+       id="rect53" />
+    <text
+       x="132"
+       y="40"
+       class="label"
+       id="text53">BatchStore</text>
+    <text
+       x="132"
+       y="64"
+       class="body"
+       id="text54">batch-oriented entries</text>
+    <text
+       x="132"
+       y="84"
+       class="body"
+       id="text55">one batch per chunk</text>
+  </g>
+  <g
+     transform="translate(43,590)"
+     id="g57">
+    <rect
+       x="0"
+       y="0"
+       width="206"
+       height="70"
+       class="accent"
+       id="rect55" />
+    <rect
+       x="18"
+       y="22"
+       width="62"
+       height="26"
+       fill="#f1f7fb"
+       stroke="#007a86"
+       stroke-width="2.5"
+       rx="10"
+       ry="10"
+       id="rect56" />
+    <line
+       x1="28"
+       y1="34"
+       x2="70"
+       y2="34"
+       stroke="#007a86"
+       stroke-width="2.5"
+       id="line56" />
+    <text
+       x="96"
+       y="30"
+       class="label"
+       font-size="18px"
+       id="text56"
+       style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:20px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">C2Array</text>
+    <text
+       x="96"
+       y="50"
+       class="body"
+       id="text57"
+       style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:14px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif"><tspan
+         sodipodi:role="line"
+         id="tspan70"
+         x="96"
+         y="50">remote NDArray</tspan><tspan
+         sodipodi:role="line"
+         id="tspan71"
+         x="96"
+         y="67.5">handle</tspan></text>
+  </g>
+  <rect
+     x="340.1279"
+     y="633.12793"
+     width="539.7442"
+     height="176.75716"
+     class="box"
+     id="rect57" />
+  <rect
+     x="362"
+     y="653"
+     width="496"
+     height="28"
+     class="meta"
+     rx="10"
+     ry="10"
+     id="rect58" />
+  <text
+     x="378"
+     y="673"
+     font-family="'DejaVu Sans', Arial, sans-serif"
+     font-size="14px"
+     font-weight="700"
+     fill="#ffffff"
+     id="text58">meta / vlmeta</text>
+  <rect
+     x="382"
+     y="711"
+     width="94"
+     height="52"
+     class="chunk"
+     rx="12"
+     ry="12"
+     id="rect59" />
+  <rect
+     x="486"
+     y="711"
+     width="94"
+     height="52"
+     class="chunk"
+     rx="12"
+     ry="12"
+     id="rect60" />
+  <rect
+     x="590"
+     y="711"
+     width="94"
+     height="52"
+     class="chunk"
+     rx="12"
+     ry="12"
+     id="rect61" />
+  <rect
+     x="694"
+     y="711"
+     width="94"
+     height="52"
+     class="chunk"
+     rx="12"
+     ry="12"
+     id="rect62" />
+  <text
+     x="372"
+     y="791"
+     class="label"
+     id="text62"
+     style="font-style:normal;font-variant:normal;font-weight:700;font-stretch:normal;font-size:20px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">SChunk</text>
+  <text
+     x="490"
+     y="779"
+     class="body"
+     id="text63"
+     style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:14px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">compressed chunks + metadata</text>
+  <text
+     x="490"
+     y="801"
+     class="body"
+     id="text64"
+     style="font-style:normal;font-variant:normal;font-weight:400;font-stretch:normal;font-size:14px;line-height:normal;font-family:'DejaVu Sans', Arial, sans-serif">persistent or in-memory foundation</text>
+  <path
+     d="M 230 508 L 230 556 L 465 556 L 465 605"
+     class="arrow"
+     marker-end="url(#arrowhead-blue)"
+     id="path65" />
+  <path
+     d="M 550 508 L 550 605"
+     class="arrow"
+     marker-end="url(#arrowhead-blue)"
+     id="path66" />
+  <path
+     d="M 870 508 L 870 556 L 635 556 L 635 605"
+     class="arrow"
+     marker-end="url(#arrowhead-blue)"
+     id="path67" />
+  <path
+     d="m 130.25974,578.84398 v -34.2331"
+     class="arrow-dashed"
+     marker-end="url(#arrowhead-cyan)"
+     id="path68"
+     style="stroke-dasharray:none;marker-end:url(#Triangle)" />
+</svg>
