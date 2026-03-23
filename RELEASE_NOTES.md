@@ -1,12 +1,20 @@
 # Release notes
 
-## Changes from 4.1.0 to 4.1.1
-
-XXX version-specific blurb XXX
-
 ## Changes from 4.1.1 to 4.1.2
 
-- Update `c-blosc2` version
+- A new fast path for src/blosc2/linalg.py that uses the matmul prefilter machinery in src/blosc2/blosc2_ext.pyx.
+  - The fast path is only used for supported cases:
+      - blosc2.NDArray inputs
+      - 2-D only
+      - floating-point only
+      - matching dtypes
+      - aligned chunk/block layouts that satisfy the current kernel assumptions
+  - All other valid cases fall back to the existing chunk-by-chunk implementation in src/blosc2/linalg.py.
+  - Some benchmarks for the supported cases show significant speedups over the chunked implementation:
+    - aligned 400x400 float32: about 3.7x faster over chunked
+    - aligned 400x400 float64: about 3.0x
+    - aligned 800x800 float32: about 1.5x
+    - misaligned case: auto correctly stays on chunked
 
 ## Changes from 4.1.0 to 4.1.1
 
