@@ -55,6 +55,7 @@ def set_path_mode(mode: str) -> bool:
 
 
 def run_case(
+    label: str,
     mode: str,
     block_backend: str,
     repeats: int,
@@ -113,6 +114,7 @@ def run_case(
     best = min(times)
     median = statistics.median(times)
     return {
+        "label": label,
         "mode": mode,
         "times_s": times,
         "best_s": best,
@@ -164,6 +166,7 @@ def main() -> None:
         results.append(
             run_case(
                 mode,
+                mode,
                 args.block_backend,
                 args.repeats,
                 shape_a,
@@ -177,6 +180,27 @@ def main() -> None:
                 blocks_out,
             )
         )
+
+    if args.block_backend == "auto" and "fast" in args.modes:
+        fast_naive = run_case(
+            "fast-naive",
+            "fast",
+            "naive",
+            args.repeats,
+            shape_a,
+            shape_b,
+            dtype,
+            chunks_a,
+            chunks_b,
+            blocks_a,
+            blocks_b,
+            chunks_out,
+            blocks_out,
+        )
+        if fast_naive["selected_block_backend"] != next(
+            item["selected_block_backend"] for item in results if item["mode"] == "fast"
+        ):
+            results.append(fast_naive)
 
     summary = {
         "shape_a": shape_a,
@@ -192,9 +216,13 @@ def main() -> None:
         "results": results,
     }
 
-    best_by_mode = {item["mode"]: item["best_s"] for item in results}
-    if "chunked" in best_by_mode and "fast" in best_by_mode:
-        summary["speedup_fast_vs_chunked"] = best_by_mode["chunked"] / best_by_mode["fast"]
+    best_by_label = {item["label"]: item["best_s"] for item in results}
+    if "chunked" in best_by_label and "fast" in best_by_label:
+        summary["speedup_fast_vs_chunked"] = best_by_label["chunked"] / best_by_label["fast"]
+    if "chunked" in best_by_label and "fast-naive" in best_by_label:
+        summary["speedup_fast_naive_vs_chunked"] = best_by_label["chunked"] / best_by_label["fast-naive"]
+    if "fast" in best_by_label and "fast-naive" in best_by_label:
+        summary["speedup_fast_vs_fast_naive"] = best_by_label["fast-naive"] / best_by_label["fast"]
 
     if args.json:
         print(json.dumps(summary, indent=2, sort_keys=True))
@@ -208,10 +236,13 @@ def main() -> None:
     print(f"  blocks A/B/out: {blocks_a} / {blocks_b} / {blocks_out}")
     print(f"  repeats: {args.repeats}")
     print(f"  fast block backend: {args.block_backend}")
-    for item in results:
+    display_order = ["chunked", "fast-naive", "fast", "auto"]
+    ordered_results = sorted(results, key=lambda item: display_order.index(item["label"]) if item["label"] in display_order else len(display_order))
+
+    for item in ordered_results:
         gflops_best = "-" if item["gflops_best"] is None else f"{item['gflops_best']:.3f}"
         print(
-            f"{item['mode']:>7}: "
+            f"{item['label']:>10}: "
             f"best={item['best_s']:.6f}s "
             f"median={item['median_s']:.6f}s "
             f"gflops={gflops_best} "
@@ -221,6 +252,10 @@ def main() -> None:
         )
     if "speedup_fast_vs_chunked" in summary:
         print(f"Speedup fast vs chunked: {summary['speedup_fast_vs_chunked']:.3f}x")
+    if "speedup_fast_naive_vs_chunked" in summary:
+        print(f"Speedup fast-naive vs chunked: {summary['speedup_fast_naive_vs_chunked']:.3f}x")
+    if "speedup_fast_vs_fast_naive" in summary:
+        print(f"Speedup fast vs fast-naive: {summary['speedup_fast_vs_fast_naive']:.3f}x")
 
 
 if __name__ == "__main__":
