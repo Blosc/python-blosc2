@@ -198,7 +198,7 @@ def main() -> None:
     parser.add_argument("--chunks-out", default="500,500", help="Comma-separated chunk shape for output.")
     parser.add_argument("--blocks-out", default="100,100", help="Comma-separated block shape for output.")
     parser.add_argument("--warmup", type=int, default=2)
-    parser.add_argument("--repeats", type=int, default=1)
+    parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--modes", nargs="+", default=["chunked", "fast", "auto"], choices=["chunked", "fast", "auto"])
     parser.add_argument(
         "--block-backend",
