@@ -31,7 +31,7 @@ class RowModel(BaseModel):
 
 
 
-M = 50
+M = 779
 N = 62_500
 MAX_N = 1_000_000
 print(f"expected_size benchmark  |  wrong expected_size = {M}")

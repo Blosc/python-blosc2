@@ -173,9 +173,10 @@ def _find_physical_index(arr: blosc2.NDArray, logical_key: int) -> int:
 
 
 class Column:
-    def __init__(self, table: CTable, col_name: str):
+    def __init__(self, table: CTable, col_name: str, mask=None):
         self._table = table
         self._col_name = col_name
+        self._mask = mask
 
     @property
     def _raw_col(self):
@@ -183,7 +184,9 @@ class Column:
 
     @property
     def _valid_rows(self):
-        return self._table._valid_rows
+        if self._mask is None:
+            return self._table._valid_rows
+        return (self._table._valid_rows & self._mask).compute()
 
     def __getitem__(self, key: int | slice | list | np.ndarray):
         if isinstance(key, int):
@@ -195,11 +198,22 @@ class Column:
             pos_true = _find_physical_index(self._valid_rows, key)
             return self._raw_col[int(pos_true)]
 
+
+
         elif isinstance(key, slice):
             real_pos = blosc2.where(self._valid_rows, np.arange(len(self._valid_rows))).compute()
-            lindices = range(*key.indices(len(real_pos)))
-            phys_indices = np.array([real_pos[i] for i in lindices], dtype=np.int64)
-            return self._raw_col[phys_indices]
+            start, stop, step = key.indices(len(real_pos))
+            mask = blosc2.zeros(len(self._table._valid_rows), dtype=np.bool_)
+            if step == 1:
+                phys_start = real_pos[start]
+                phys_stop = real_pos[stop - 1]
+                mask[phys_start: phys_stop + 1] = True
+            else:
+                lindices = np.arange(start, stop, step)
+                phys_indices = real_pos[lindices]
+                mask[phys_indices[:]] = True
+            return Column(self._table, self._col_name, mask=mask)
+
 
         elif isinstance(key, (list, tuple, np.ndarray)):
             real_pos = blosc2.where(self._valid_rows, np.arange(len(self._valid_rows))).compute()
@@ -294,6 +308,10 @@ class Column:
     @property
     def dtype(self):
         return self._raw_col.dtype
+
+    def to_array(self):
+        real_pos = blosc2.where(self._valid_rows, np.arange(len(self._valid_rows))).compute()
+        return self._raw_col[real_pos[:]]
 
 
 class CTable(Generic[RowT]):

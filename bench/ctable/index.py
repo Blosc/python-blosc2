@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# Benchmark for measuring where() performance with varying selectivity.
-# Filter: id < threshold, with thresholds covering 1%, 10%, 50%, 90%, 100%
+# Benchmark for measuring Column[int] access (single row by logical index),
+# which exercises _find_physical_index() traversal over chunk metadata.
 
 from time import time
 from typing import Annotated
@@ -31,9 +31,9 @@ class RowModel(BaseModel):
 
 
 N = 1_000_000
-thresholds = [10,10_000, 100_000,250_000, 500_000,750_000 ,900_000, 999_990, 1_000_000]
+indices = [0, N // 4, N // 2, (3 * N) // 4, N - 1]
 
-print(f"where() selectivity benchmark  |  N = {N:,}")
+print(f"Column[int] access benchmark  |  N = {N:,}\n")
 
 # Build CTable once
 np_dtype = np.dtype([
@@ -54,15 +54,16 @@ ct = blosc2.CTable(RowModel, expected_size=N)
 ct.extend(DATA)
 
 print(f"CTable built with {len(ct):,} rows\n")
-print("=" * 70)
-print(f"{'THRESHOLD':<15} {'ROWS RETURNED':>15} {'SELECTIVITY':>13} {'TIME (s)':>12}")
-print("-" * 70)
+print("=" * 60)
+print(f"{'INDEX':<15} {'POSITION':>12} {'TIME (s)':>12}")
+print("-" * 60)
 
-for threshold in thresholds:
+col = ct["score"]
+for idx in indices:
     t0 = time()
-    result = ct.where(ct["id"] < threshold)
-    t_where = time() - t0
-    selectivity = threshold / N * 100
-    print(f"id < {threshold:<10,} {len(result):>15,} {selectivity:>12.1f}% {t_where:>12.6f}")
+    val = col[idx]
+    t_access = time() - t0
+    position = f"{idx / N * 100:.0f}% into array"
+    print(f"{idx:<15,} {position:>12}   {t_access:.6f}")
 
-print("-" * 70)
+print("-" * 60)
