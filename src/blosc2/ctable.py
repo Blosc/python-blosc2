@@ -262,21 +262,12 @@ class Column:
                 val = np.frombuffer(info.repeated_value, dtype=arr.dtype)[0]
                 if not val:
                     continue
-
-                data_chunk = self._raw_col[chunk_start : chunk_start + actual_size]
-                yield from data_chunk
+                yield from self._raw_col[chunk_start: chunk_start + actual_size]
                 continue
 
-            mask_chunk = arr[chunk_start : chunk_start + actual_size]
-            true_offsets = np.flatnonzero(mask_chunk)
-
-            if len(true_offsets) == 0:
-                continue
-
-            physical_indices = chunk_start + true_offsets
-            valid_data = self._raw_col[physical_indices.tolist()]
-
-            yield from valid_data
+            mask_chunk = arr[chunk_start: chunk_start + actual_size]
+            data_chunk = self._raw_col[chunk_start: chunk_start + actual_size]
+            yield from data_chunk[mask_chunk]
 
     def __len__(self):
         return blosc2.count_nonzero(self._valid_rows)
@@ -309,7 +300,7 @@ class Column:
     def dtype(self):
         return self._raw_col.dtype
 
-    def to_array(self):
+    def to_numpy(self):
         real_pos = blosc2.where(self._valid_rows, np.arange(len(self._valid_rows))).compute()
         return self._raw_col[real_pos[:]]
 

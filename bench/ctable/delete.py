@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# Benchmark for measuring Column[slice] + to_array() with slices of
-# different sizes and positions: small, large, and middle of the array.
+# Benchmark for measuring delete() performance with different index types:
+# int, slice, and list — with varying sizes.
 
 from time import time
 from typing import Annotated
@@ -31,19 +31,10 @@ class RowModel(BaseModel):
 
 
 N = 1_000_000
-slices = [
-    ("small  — start",  slice(0, 100)),
-    ("small  — middle", slice(N // 2, N // 2 + 100)),
-    ("small  — end",    slice(N - 100, N)),
-    ("large  — start",  slice(0, 100_000)),
-    ("large  — middle", slice(N // 2 - 50_000, N // 2 + 50_000)),
-    ("large  — end",    slice(N - 100_000, N)),
-    ("full   — all",    slice(0, N)),
-]
 
-print(f"Column[slice].to_array() benchmark  |  N = {N:,}\n")
+print(f"delete() benchmark  |  N = {N:,}\n")
 
-# Build CTable once
+# Build base data once
 np_dtype = np.dtype([
     ("id",     np.int64),
     ("c_val",  np.complex128),
@@ -58,20 +49,34 @@ DATA = np.array(
     dtype=np_dtype,
 )
 
-ct = blosc2.CTable(RowModel, expected_size=N)
-ct.extend(DATA)
+delete_cases = [
+    ("int",          0),
+    ("slice small",  slice(0, 100)),
+    ("slice large",  slice(0, 100_000)),
+    ("slice full",   slice(0, N)),
+    ("list small",   list(range(100))),
+    ("list large",   list(range(100_000))),
+    ("list full",    list(range(N))),
+]
 
-print(f"CTable built with {len(ct):,} rows\n")
-print("=" * 65)
-print(f"{'SLICE':<25} {'ROWS':>8} {'TIME (s)':>12}")
-print("-" * 65)
+print("=" * 60)
+print(f"{'CASE':<20} {'ROWS DELETED':>14} {'TIME (s)':>12}")
+print("-" * 60)
 
-col = ct["score"]
-for label, s in slices:
+for label, key in delete_cases:
+    ct = blosc2.CTable(RowModel, expected_size=N)
+    ct.extend(DATA)
+
+    if isinstance(key, int):
+        n_deleted = 1
+    elif isinstance(key, slice):
+        n_deleted = len(range(*key.indices(N)))
+    else:
+        n_deleted = len(key)
+
     t0 = time()
-    arr = col[s].to_numpy()
-    t_total = time() - t0
-    n_rows = s.stop - s.start
-    print(f"{label:<25} {n_rows:>8,} {t_total:>12.6f}")
+    ct.delete(key)
+    t_delete = time() - t0
+    print(f"{label:<20} {n_deleted:>14,} {t_delete:>12.6f}")
 
-print("-" * 65)
+print("-" * 60)

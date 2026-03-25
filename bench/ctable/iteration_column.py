@@ -5,8 +5,10 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# Benchmark for measuring Column[slice] + to_array() with slices of
-# different sizes and positions: small, large, and middle of the array.
+# Benchmark for comparing full column iteration strategies:
+#   1. for val in ct["score"]  — Python iterator via __iter__
+#   2. np.array(list(ct["score"]))  — materialize via list then convert
+#   3. ct["score"][0:N].to_array()  — slice view + to_array()
 
 from time import time
 from typing import Annotated
@@ -31,17 +33,8 @@ class RowModel(BaseModel):
 
 
 N = 1_000_000
-slices = [
-    ("small  — start",  slice(0, 100)),
-    ("small  — middle", slice(N // 2, N // 2 + 100)),
-    ("small  — end",    slice(N - 100, N)),
-    ("large  — start",  slice(0, 100_000)),
-    ("large  — middle", slice(N // 2 - 50_000, N // 2 + 50_000)),
-    ("large  — end",    slice(N - 100_000, N)),
-    ("full   — all",    slice(0, N)),
-]
 
-print(f"Column[slice].to_array() benchmark  |  N = {N:,}\n")
+print(f"Column iteration benchmark  |  N = {N:,}\n")
 
 # Build CTable once
 np_dtype = np.dtype([
@@ -62,16 +55,31 @@ ct = blosc2.CTable(RowModel, expected_size=N)
 ct.extend(DATA)
 
 print(f"CTable built with {len(ct):,} rows\n")
-print("=" * 65)
-print(f"{'SLICE':<25} {'ROWS':>8} {'TIME (s)':>12}")
-print("-" * 65)
+print("=" * 60)
 
 col = ct["score"]
-for label, s in slices:
-    t0 = time()
-    arr = col[s].to_numpy()
-    t_total = time() - t0
-    n_rows = s.stop - s.start
-    print(f"{label:<25} {n_rows:>8,} {t_total:>12.6f}")
 
-print("-" * 65)
+# 1. Python iterator
+t0 = time()
+for val in col:
+    pass
+t_iter = time() - t0
+print(f"for val in col:              {t_iter:.4f} s")
+
+# 2. list() + np.array()
+t0 = time()
+arr = np.array(list(col))
+t_list = time() - t0
+print(f"np.array(list(col)):         {t_list:.4f} s")
+
+# 3. slice view + to_array()
+t0 = time()
+arr = col[0:N].to_numpy()
+for val in arr:
+    pass
+t_toarray = time() - t0
+print(f"col[0:N].to_array():         {t_toarray:.4f} s")
+
+print("=" * 60)
+print(f"Speedup to_array vs iter:    {t_iter / t_toarray:.2f}x")
+print(f"Speedup to_array vs list:    {t_list / t_toarray:.2f}x")

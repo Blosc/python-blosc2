@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# Benchmark for measuring Column[slice] + to_array() with slices of
-# different sizes and positions: small, large, and middle of the array.
+# Benchmark for measuring compact() time and memory gain after deletions
+# of varying fractions of the table.
 
 from time import time
 from typing import Annotated
@@ -31,19 +31,10 @@ class RowModel(BaseModel):
 
 
 N = 1_000_000
-slices = [
-    ("small  — start",  slice(0, 100)),
-    ("small  — middle", slice(N // 2, N // 2 + 100)),
-    ("small  — end",    slice(N - 100, N)),
-    ("large  — start",  slice(0, 100_000)),
-    ("large  — middle", slice(N // 2 - 50_000, N // 2 + 50_000)),
-    ("large  — end",    slice(N - 100_000, N)),
-    ("full   — all",    slice(0, N)),
-]
 
-print(f"Column[slice].to_array() benchmark  |  N = {N:,}\n")
+print(f"compact() benchmark  |  N = {N:,}\n")
 
-# Build CTable once
+# Build base data once
 np_dtype = np.dtype([
     ("id",     np.int64),
     ("c_val",  np.complex128),
@@ -58,20 +49,33 @@ DATA = np.array(
     dtype=np_dtype,
 )
 
-ct = blosc2.CTable(RowModel, expected_size=N)
-ct.extend(DATA)
+delete_fractions = [0.1, 0.25, 0.5, 0.75, 0.9]
 
-print(f"CTable built with {len(ct):,} rows\n")
-print("=" * 65)
-print(f"{'SLICE':<25} {'ROWS':>8} {'TIME (s)':>12}")
-print("-" * 65)
+print("=" * 75)
+print(f"{'DELETED':>10} {'ROWS LEFT':>10} {'TIME (s)':>12} {'CBYTES BEFORE':>15} {'CBYTES AFTER':>14}")
+print("-" * 75)
 
-col = ct["score"]
-for label, s in slices:
+for frac in delete_fractions:
+    ct = blosc2.CTable(RowModel, expected_size=N)
+    ct.extend(DATA)
+
+    n_delete = int(N * frac)
+    ct.delete(list(range(n_delete)))
+
+    cbytes_before = sum(col.cbytes for col in ct._cols.values()) + ct._valid_rows.cbytes
+
     t0 = time()
-    arr = col[s].to_numpy()
-    t_total = time() - t0
-    n_rows = s.stop - s.start
-    print(f"{label:<25} {n_rows:>8,} {t_total:>12.6f}")
+    ct.compact()
+    t_compact = time() - t0
 
-print("-" * 65)
+    cbytes_after = sum(col.cbytes for col in ct._cols.values()) + ct._valid_rows.cbytes
+
+    print(
+        f"{frac*100:>9.0f}%"
+        f" {N - n_delete:>10,}"
+        f" {t_compact:>12.4f}"
+        f" {cbytes_before / 1024**2:>13.2f} MB"
+        f" {cbytes_after / 1024**2:>12.2f} MB"
+    )
+
+print("-" * 75)

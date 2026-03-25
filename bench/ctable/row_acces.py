@@ -5,8 +5,8 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-# Benchmark for measuring Column[slice] + to_array() with slices of
-# different sizes and positions: small, large, and middle of the array.
+# Benchmark for measuring row[int] access (full row via _RowIndexer),
+# testing access at different positions across the array.
 
 from time import time
 from typing import Annotated
@@ -31,17 +31,9 @@ class RowModel(BaseModel):
 
 
 N = 1_000_000
-slices = [
-    ("small  — start",  slice(0, 100)),
-    ("small  — middle", slice(N // 2, N // 2 + 100)),
-    ("small  — end",    slice(N - 100, N)),
-    ("large  — start",  slice(0, 100_000)),
-    ("large  — middle", slice(N // 2 - 50_000, N // 2 + 50_000)),
-    ("large  — end",    slice(N - 100_000, N)),
-    ("full   — all",    slice(0, N)),
-]
+indices = [0, N // 4, N // 2, (3 * N) // 4, N - 1]
 
-print(f"Column[slice].to_array() benchmark  |  N = {N:,}\n")
+print(f"row[int] access benchmark  |  N = {N:,}\n")
 
 # Build CTable once
 np_dtype = np.dtype([
@@ -62,16 +54,15 @@ ct = blosc2.CTable(RowModel, expected_size=N)
 ct.extend(DATA)
 
 print(f"CTable built with {len(ct):,} rows\n")
-print("=" * 65)
-print(f"{'SLICE':<25} {'ROWS':>8} {'TIME (s)':>12}")
-print("-" * 65)
+print("=" * 60)
+print(f"{'INDEX':<15} {'POSITION':>12} {'TIME (s)':>12}")
+print("-" * 60)
 
-col = ct["score"]
-for label, s in slices:
+for idx in indices:
     t0 = time()
-    arr = col[s].to_numpy()
-    t_total = time() - t0
-    n_rows = s.stop - s.start
-    print(f"{label:<25} {n_rows:>8,} {t_total:>12.6f}")
+    row = ct.row[idx]
+    t_access = time() - t0
+    position = f"{idx / N * 100:.0f}% into array"
+    print(f"{idx:<15,} {position:>12}   {t_access:.6f}")
 
-print("-" * 65)
+print("-" * 60)

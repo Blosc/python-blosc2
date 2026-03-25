@@ -60,7 +60,7 @@ print("-" * 60)
 col = ct["score"]
 for step in steps:
     t0 = time()
-    arr = col[::step].to_array()
+    arr = col[::step].to_numpy()
     t_total = time() - t0
     print(f"::{ step:<8} {len(arr):>15,} {t_total:>12.6f}")
 
