@@ -35,7 +35,7 @@ def test_wasm_dsl_tcc_jit_smoke():
 def test_wasm_string_predicates_strict_miniexpr():
     assert getattr(blosc2, "_WASM_MINIEXPR_ENABLED", False)
 
-    names_np = np.array(["alpha", "beta", "gamma", "cafα", "汉字", ""], dtype="U8")
+    names_np = np.array(["alpha", "beta", "gamma", "cafα", "汉字", ""], dtype="U8")  # noqa: RUF001
     names = blosc2.asarray(names_np, chunks=(3,), blocks=(2,))
 
     contains = blosc2.contains(names, "et")
@@ -50,6 +50,6 @@ def test_wasm_string_predicates_strict_miniexpr():
     endswith_expected = np.char.endswith(names_np, "a")
     np.testing.assert_array_equal(endswith.compute(strict_miniexpr=True)[:], endswith_expected)
 
-    expr = blosc2.lazyexpr("contains(a, pat)", operands={"a": names, "pat": "α"})
-    expr_expected = np.char.find(names_np, "α") >= 0
+    expr = blosc2.lazyexpr("contains(a, pat)", operands={"a": names, "pat": "α"})  # noqa: RUF001
+    expr_expected = np.char.find(names_np, "α") >= 0  # noqa: RUF001
     np.testing.assert_array_equal(expr.compute(strict_miniexpr=True)[:], expr_expected)

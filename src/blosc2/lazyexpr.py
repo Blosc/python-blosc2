@@ -2249,7 +2249,7 @@ def reduce_slices(  # noqa: C901
             else:
                 expression_miniexpr = f"{reduce_op_str}({expression})"
             expression_miniexpr = _apply_jit_backend_pragma(expression_miniexpr, operands, jit_backend)
-            res_eval._set_pref_expr(expression_miniexpr, operands, fp_accuracy, aux_reduc, jit=jit)
+            res_eval._set_pref_expr(expression_miniexpr, operands, fp_accuracy, aux_reduc)
             prefilter_set = True
             # print("expr->miniexpr:", expression, reduce_op, fp_accuracy)
             # Data won't even try to be compressed, so buffers can be unitialized and reused

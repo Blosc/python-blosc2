@@ -38,16 +38,14 @@ dependencies = [
     "msgpack",
     "numexpr>=2.14.1; platform_machine != 'wasm32'",
     "requests",
+    "pydantic",
 ]
 version = "4.1.1.dev0"
 [project.entry-points."array_api"]
 blosc2 = "blosc2"
 
-[project.urls]
-homepage = "https://github.com/Blosc/python-blosc2"
-documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 
-[dependency-groups]
+[project.optional-dependencies]
 dev = [
     "dask",
     "h5py",
@@ -81,6 +79,10 @@ doc = [
     "furo",
     "numba",
 ]
+
+[project.urls]
+homepage = "https://github.com/Blosc/python-blosc2"
+documentation = "https://www.blosc.org/python-blosc2/python-blosc2.html"
 
 [tool.cibuildwheel]
 build-verbosity = 1
@@ -120,9 +122,6 @@ ignore = [
     "PT011",
     "RET505",
     "RET508",
-    "RUF001",
-    "RUF002",
-    "RUF003",
     "RUF005",
     "RUF015",
     "RUF059",
@@ -130,8 +129,14 @@ ignore = [
 ]
 
 [tool.ruff.lint.extend-per-file-ignores]
-"tests/**" = ["F841", "C901"]
+"tests/**" = ["F841"]
 
 [tool.ruff.lint.mccabe]
 # Raise complexity from the default 10 to 13
 max-complexity = 13
+
+[dependency-groups]
+test = [
+    "pytest",
+    "psutil; platform_machine != 'wasm32'",
+]
