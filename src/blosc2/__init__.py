@@ -596,6 +596,7 @@ Disable the overloaded equal operator.
 """
 
 # Delayed imports for avoiding overwriting of python builtins
+from .ctable import CTable, Column
 from .ndarray import (
     abs,
     acos,
