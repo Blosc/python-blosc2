@@ -200,8 +200,6 @@ class Column:
             pos_true = _find_physical_index(self._valid_rows, key)
             return self._raw_col[int(pos_true)]
 
-
-
         elif isinstance(key, slice):
             real_pos = blosc2.where(self._valid_rows, np.arange(len(self._valid_rows))).compute()
             start, stop, step = key.indices(len(real_pos))
@@ -209,13 +207,12 @@ class Column:
             if step == 1:
                 phys_start = real_pos[start]
                 phys_stop = real_pos[stop - 1]
-                mask[phys_start: phys_stop + 1] = True
+                mask[phys_start : phys_stop + 1] = True
             else:
                 lindices = np.arange(start, stop, step)
                 phys_indices = real_pos[lindices]
                 mask[phys_indices[:]] = True
             return Column(self._table, self._col_name, mask=mask)
-
 
         elif isinstance(key, (list, tuple, np.ndarray)):
             real_pos = blosc2.where(self._valid_rows, np.arange(len(self._valid_rows))).compute()
@@ -264,11 +261,11 @@ class Column:
                 val = np.frombuffer(info.repeated_value, dtype=arr.dtype)[0]
                 if not val:
                     continue
-                yield from self._raw_col[chunk_start: chunk_start + actual_size]
+                yield from self._raw_col[chunk_start : chunk_start + actual_size]
                 continue
 
-            mask_chunk = arr[chunk_start: chunk_start + actual_size]
-            data_chunk = self._raw_col[chunk_start: chunk_start + actual_size]
+            mask_chunk = arr[chunk_start : chunk_start + actual_size]
+            data_chunk = self._raw_col[chunk_start : chunk_start + actual_size]
             yield from data_chunk[mask_chunk]
 
     def __len__(self):
@@ -308,7 +305,9 @@ class Column:
 
 
 class CTable(Generic[RowT]):
-    def __init__(self, row_type: type[RowT], new_data=None, expected_size: int = 1_048_576, compact: bool = False) -> None:
+    def __init__(
+        self, row_type: type[RowT], new_data=None, expected_size: int = 1_048_576, compact: bool = False
+    ) -> None:
         self._row_type = row_type
         self._cols: dict[str, blosc2.NDArray] = {}
         self._n_rows: int = 0

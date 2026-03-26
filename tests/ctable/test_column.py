@@ -10,8 +10,8 @@ from typing import Annotated
 import numpy as np
 import pytest
 from pydantic import BaseModel, Field
-import blosc2
 
+import blosc2
 from blosc2 import CTable
 
 
@@ -171,12 +171,14 @@ def test_column_iter():
 
     tabla3 = CTable(RowModel, new_data=DATA20)
     tabla3.delete([0, 5, 10, 15])
+    # fmt: off
     expected_score = [
         10.0, 20.0, 30.0, 40.0,
         60.0, 70.0, 80.0, 90.0,
         110.0, 120.0, 130.0, 140.0,
         160.0, 170.0, 180.0, 190.0,
     ]
+    # fmt: on
     assert list(tabla3.score) == expected_score
 
 
@@ -264,7 +266,7 @@ def test_to_array_full_column():
     col = tabla.id
 
     expected = np.array([i for i in range(20) if i not in {0, 10, 19}], dtype=np.int64)
-    np.testing.assert_array_equal(col[0:len(col)].to_numpy(), expected)
+    np.testing.assert_array_equal(col[0 : len(col)].to_numpy(), expected)
 
 
 def test_to_array_mask_does_not_include_deleted():
@@ -287,7 +289,6 @@ def test_column_view_mask_is_independent():
     view_a = col[0:5]
 
     np.testing.assert_array_equal(view_a.to_numpy(), np.arange(0, 5, dtype=np.int64))
-
 
 
 if __name__ == "__main__":

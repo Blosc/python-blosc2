@@ -114,4 +114,3 @@ print("-" * 60)
 print(f"{'Python list of lists':<30} {t_from_list:>12.4f} {'1.00x':>18}")
 print(f"{'NumPy structured array':<30} {t_from_np:>12.4f} {t_from_list / t_from_np:>17.2f}x")
 print(f"{'Existing CTable':<30} {t_from_ctable:>12.4f} {t_from_list / t_from_ctable:>17.2f}x")
-
