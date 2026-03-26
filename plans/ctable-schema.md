@@ -1155,6 +1155,17 @@ def schema_from_dict(data: dict[str, Any]) -> CompiledSchema: ...
 
 This should remain internal until the persisted format is stable.
 
+The persistency design itself is specified in:
+
+* [ctable-persistency.md](/Users/faltet/blosc/python-blosc2/plans/ctable-persistency.md)
+
+The schema-layer contract for persistency is:
+
+* schema must serialize to a versioned JSON-compatible dict
+* column order must be preserved explicitly in the serialized `columns` list
+* the serialized schema must be sufficient to reconstruct `CompiledSchema`
+  without requiring the original Python dataclass definition at load time
+
 ### Step 13: delivery order across PRs
 
 Recommended PR slicing:
@@ -1182,8 +1193,17 @@ PR 3:
 
 PR 4:
 
-* persistence groundwork
+* persistence groundwork on the schema side
 * optional compatibility adapter for legacy Pydantic model declarations
+
+PR 5:
+
+* TreeStore-backed persistency as described in
+  [ctable-persistency.md](/Users/faltet/blosc/python-blosc2/plans/ctable-persistency.md)
+* `urlpath` / `mode` constructor semantics
+* explicit `open()` support
+* `_meta`, `_valid_rows`, `_cols/<name>` storage layout
+* persistency tests
 
 ### Step 14: concrete first-PR checklist
 
@@ -1205,6 +1225,13 @@ That first PR gives the project:
 * confidence in the canonical API shape
 
 before touching too much `CTable` mutation logic.
+
+After that first PR lands, follow the later phases in this order:
+
+1. dataclass-driven `CTable` construction and append path
+2. validation and batch-insert behavior
+3. schema introspection
+4. TreeStore-backed persistency
 
 ---
 
