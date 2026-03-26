@@ -122,14 +122,10 @@ Expected shape:
 b2.field(
     b2.float64(ge=0, le=100),
     default=...,
-    default_factory=...,
     cparams=...,
     dparams=...,
     chunks=...,
     blocks=...,
-    title=...,
-    description=...,
-    nullable=...,
 )
 ```
 
@@ -137,7 +133,6 @@ At minimum for the first version:
 
 * `spec`
 * `default`
-* `default_factory`
 * `cparams`
 * `dparams`
 * `chunks`
@@ -388,7 +383,6 @@ b2.bool()
 Internal common fields:
 
 * `dtype`
-* `nullable`
 * `constraints`
 * `python_type`
 
@@ -480,8 +474,6 @@ For each field, produce a `CompiledColumn` object containing:
 * `spec`
 * `dtype`
 * `default`
-* `default_factory`
-* `nullable`
 * `cparams`
 * `dparams`
 * `chunks`
@@ -538,19 +530,16 @@ Examples:
 
 ```python
 active: bool = b2.field(b2.bool(), default=True)
-tags: list[str] = b2.field(..., default_factory=list)
 ```
 
 For the first implementation, keep this conservative:
 
 * support scalar defaults
-* support `default_factory` only if there is a clear use case
 * reject mutable defaults directly
 
 On insert:
 
 * omitted values should be filled from defaults
-* explicit `None` should be accepted only if the field is nullable
 
 ---
 
@@ -721,19 +710,7 @@ In other words:
 * `id = b2.field(b2.int64(ge=0))` is not the preferred style because it drops
   the Python annotation
 
-### 2. Where should nullability live?
-
-Recommended answer: on the schema spec.
-
-Example:
-
-```python
-name: str | None = b2.field(b2.string(max_length=32, nullable=True))
-```
-
-The Python annotation and schema spec should agree.
-
-### 3. Should `b2.field()` require a spec?
+### 2. Should `b2.field()` require a spec?
 
 Recommended answer: yes for the first version.
 
@@ -748,7 +725,7 @@ active: bool = True
 
 but once `b2.field(...)` is used, it should carry an explicit schema spec.
 
-### 4. How much should Pydantic-specific behavior leak?
+### 3. How much should Pydantic-specific behavior leak?
 
 Recommended answer: as little as possible.
 
@@ -785,49 +762,39 @@ Proposed public classes and functions:
 class SchemaSpec:
     dtype: np.dtype
     python_type: type[Any]
-    nullable: bool
 
     def to_pydantic_kwargs(self) -> dict[str, Any]: ...
     def to_metadata_dict(self) -> dict[str, Any]: ...
 
 
 class int64(SchemaSpec):
-    def __init__(
-        self, *, ge=None, gt=None, le=None, lt=None, nullable: bool = False
-    ): ...
+    def __init__(self, *, ge=None, gt=None, le=None, lt=None): ...
 
 
 class float64(SchemaSpec):
-    def __init__(
-        self, *, ge=None, gt=None, le=None, lt=None, nullable: bool = False
-    ): ...
+    def __init__(self, *, ge=None, gt=None, le=None, lt=None): ...
 
 
 class bool(SchemaSpec):
-    def __init__(self, *, nullable: bool = False): ...
+    def __init__(self): ...
 
 
 class string(SchemaSpec):
-    def __init__(
-        self, *, min_length=None, max_length=None, pattern=None, nullable: bool = False
-    ): ...
+    def __init__(self, *, min_length=None, max_length=None, pattern=None): ...
 
 
 class bytes(SchemaSpec):
-    def __init__(self, *, min_length=None, max_length=None, nullable: bool = False): ...
+    def __init__(self, *, min_length=None, max_length=None): ...
 
 
 def field(
     spec: SchemaSpec,
     *,
     default=MISSING,
-    default_factory=MISSING,
     cparams: dict[str, Any] | None = None,
     dparams: dict[str, Any] | None = None,
     chunks: tuple[int, ...] | None = None,
     blocks: tuple[int, ...] | None = None,
-    title: str | None = None,
-    description: str | None = None,
 ) -> DataclassField: ...
 ```
 
@@ -863,8 +830,6 @@ class ColumnConfig:
     dparams: dict[str, Any] | None
     chunks: tuple[int, ...] | None
     blocks: tuple[int, ...] | None
-    title: str | None
-    description: str | None
 
 
 @dataclass(slots=True)
@@ -874,7 +839,6 @@ class CompiledColumn:
     spec: Any
     dtype: np.dtype
     default: Any
-    default_factory: Any
     config: ColumnConfig
 
 
@@ -1095,7 +1059,6 @@ Initial checks to support:
 
 * numeric `ge`, `gt`, `le`, `lt`
 * string and bytes `min_length`, `max_length`
-* nullability
 * dtype compatibility after coercion
 
 This module should remain optional in the first PR if the rowwise path is enough
@@ -1154,7 +1117,6 @@ Test scope by file:
 
 * Pydantic validator generation
 * constraint enforcement
-* nullable vs non-nullable behavior
 
 `tests/ctable/test_ctable_dataclass_schema.py`
 
