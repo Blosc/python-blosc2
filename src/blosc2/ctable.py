@@ -78,6 +78,23 @@ class _RowIndexer:
         return self._table._run_row_logic(item)
 
 
+class _Row:
+    def __init__(self, table: CTable, nrow: int):
+        self._table = table
+        self._nrow = nrow
+        self._real_pos = None
+
+    def _get_real_pos(self) -> int:
+        self._real_pos = _find_physical_index(self._table._valid_rows, self._nrow)
+        return self._real_pos
+
+    def __getitem__(self, col_name: str):
+        if self._real_pos is None:
+            self._get_real_pos()
+        return self._table._cols[col_name][self._real_pos]
+
+
+
 def _resolve_field_dtype(field) -> tuple[np.dtype, int]:
     """Return (numpy dtype, display_width) for a pydantic model field.
 
@@ -379,6 +396,10 @@ class CTable(Generic[RowT]):
 
     def __len__(self):
         return self._n_rows
+
+    def __iter__(self):
+        for i in range(self.nrows):
+            yield _Row(self, i)
 
     def view(self, new_valid_rows):
         if not (
