@@ -94,7 +94,6 @@ class _Row:
         return self._table._cols[col_name][self._real_pos]
 
 
-
 def _resolve_field_dtype(field) -> tuple[np.dtype, int]:
     """Return (numpy dtype, display_width) for a pydantic model field.
 
@@ -205,6 +204,7 @@ class Column:
     def _valid_rows(self):
         if self._mask is None:
             return self._table._valid_rows
+
         return (self._table._valid_rows & self._mask).compute()
 
     def __getitem__(self, key: int | slice | list | np.ndarray):
