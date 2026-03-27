@@ -6,6 +6,7 @@
 #######################################################################
 
 import contextlib
+import argparse
 import time
 
 import numpy as np
@@ -111,6 +112,26 @@ def expr_nested2() -> str:
     return " + ".join(terms)
 
 
+def expr_transcendentals() -> str:
+    return "log(exp(x) + tanh(x) + log1p(abs(x)) + sqrt(abs(x)) + expm1(x))"
+
+
+def expr_transcend1() -> str:
+    return "log(exp(x))"
+
+
+def expr_transcend2() -> str:
+    return "tanh(x)"
+
+
+def expr_transcend3() -> str:
+    return "log1p(abs(x))"
+
+
+def expr_sincos_identity() -> str:
+    return "sin(x) ** 2 + cos(x) ** 2"
+
+
 @contextlib.contextmanager
 def miniexpr_enabled(enabled: bool):
     old = lazyexpr_mod.try_miniexpr
@@ -213,6 +234,10 @@ def format_row(row):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--transcend", action="store_true", help="Run only the transcendental lazyexpr cases")
+    args = parser.parse_args()
+
     n = 10_000
     dtype = np.float32
     cparams = blosc2.CParams(codec=blosc2.Codec.BLOSCLZ, clevel=1)
@@ -229,12 +254,48 @@ def main():
         ("nested2", kernel_nested2, expr_nested2()),
     ]
 
-    headers, fmt, sep = table_formatter()
-    print(fmt.format(*headers), flush=True)
-    print(sep, flush=True)
-    for name, kernel, expr in cases:
-        row = bench_case(name, kernel, expr, a, b, dtype, gb)
-        print(fmt.format(*format_row(row)), flush=True)
+    transcendental_cases = [
+        ("transcend1", expr_transcend1()),
+        ("transcend2", expr_transcend2()),
+        ("transcend3", expr_transcend3()),
+        ("transcend4", expr_transcendentals()),
+        ("sincos_id", expr_sincos_identity()),
+    ]
+
+    if not args.transcend:
+        headers, fmt, sep = table_formatter()
+        print(fmt.format(*headers), flush=True)
+        print(sep, flush=True)
+        for name, kernel, expr in cases:
+            row = bench_case(name, kernel, expr, a, b, dtype, gb)
+            print(fmt.format(*format_row(row)), flush=True)
+
+    if not args.transcend:
+        print()
+    print("Transcendental lazyexpr cases", flush=True)
+    print("Case        |Base ms|Base GB/s|Expr ms|Expr GB/s|Expr/Base", flush=True)
+    print("------------+-------+---------+-------+---------+---------", flush=True)
+    with miniexpr_enabled(False):
+        for name, expr in transcendental_cases:
+            lazy_expr_base = blosc2.lazyexpr(expr, {"x": a})
+            res_base = lazy_expr_base.compute()
+            base_time, _ = time_it(lambda: lazy_expr_base.compute())
+
+            with miniexpr_enabled(True):
+                lazy_expr_fast = blosc2.lazyexpr(expr, {"x": a})
+                res_fast = lazy_expr_fast.compute()
+                expr_time, _ = time_it(lambda: lazy_expr_fast.compute())
+
+            np.testing.assert_allclose(res_fast[...], res_base[...], rtol=1e-5, atol=2e-6)
+            print(
+                f"{name:<12}|"
+                f"{base_time * 1000:>7.2f}|"
+                f"{(a.nbytes * 2 / 1e9) / base_time:>9.2f}|"
+                f"{expr_time * 1000:>7.2f}|"
+                f"{(a.nbytes * 2 / 1e9) / expr_time:>9.2f}|"
+                f"{base_time / expr_time:>8.2f}x",
+                flush=True,
+            )
 
 
 if __name__ == "__main__":
