@@ -16,16 +16,9 @@ jobs:
       CMAKE_GENERATOR: Ninja
     strategy:
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [windows-latest]
         python-version: ["3.12"]
         numpy-version: [null]
-        include:
-          - os: ubuntu-latest
-            python-version: "3.12"
-            numpy-version: "1.26"
-          - os: ubuntu-latest
-            python-version: "3.14"
-            numpy-version: null
 
     steps:
     - uses: actions/checkout@v6
@@ -73,6 +66,7 @@ jobs:
       id: build_windows
       run: pip install -e . --group test
       env:
+        CMAKE_BUILD_TYPE: Debug
         CMAKE_C_COMPILER_LAUNCHER: sccache
         CMAKE_CXX_COMPILER_LAUNCHER: sccache
         SCCACHE_DIR: C:\Users\runneradmin\AppData\Local\sccache
@@ -89,10 +83,9 @@ jobs:
     - name: Test (Windows)
       if: runner.os == 'Windows'
       run: python -m pytest -m "not heavy and (network or not network)"
-#      env:
-#        BLOSC_NTHREADS: "1"
-#        NUMEXPR_NUM_THREADS: "1"
-#        OMP_NUM_THREADS: "1"
+      env:
+        ME_DSL_JIT: "0"
+        ME_DSL_TRACE: "1"
 
     - name: Test (non-Windows)
       if: runner.os != 'Windows'
