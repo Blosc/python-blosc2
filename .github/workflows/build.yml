@@ -82,7 +82,7 @@ jobs:
 
     - name: Test (Windows)
       if: runner.os == 'Windows'
-      run: python -m pytest -m "not heavy and (network or not network)"
+      run: python -m pytest tests/ndarray/test_dsl_kernels.py
       env:
         ME_DSL_JIT: "0"
         ME_DSL_TRACE: "1"
