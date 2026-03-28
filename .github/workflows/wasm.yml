@@ -14,6 +14,7 @@ env:
 
 jobs:
   build_wheels_wasm:
+    if: ${{ github.ref_name != 'ctable3' && github.head_ref != 'ctable3' }}
     name: Build and test wheels for WASM on ${{ matrix.os }} for ${{ matrix.p_ver }}
     runs-on: ubuntu-latest
     permissions:

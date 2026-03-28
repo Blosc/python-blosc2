@@ -37,6 +37,7 @@ dependencies = [
     "ndindex",
     "msgpack",
     "numexpr>=2.14.1; platform_machine != 'wasm32'",
+    "pydantic",
     "requests",
 ]
 version = "4.1.1.dev0"
