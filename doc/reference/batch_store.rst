@@ -47,15 +47,18 @@ Structured reference-style Blosc2 objects currently supported:
 
 - ``C2Array``
 - ``LazyExpr``
+- ``LazyUDF`` backed by ``@blosc2.dsl_kernel``
 
-``LazyExpr`` values preserve reference semantics and are serialized as a recipe
-plus durable operand references. Supported operands are:
+``LazyExpr`` values and supported ``LazyUDF`` values preserve reference
+semantics and are serialized as a recipe plus durable operand references.
+Supported operands are:
 
 - persistent local Blosc2 operands reopenable from ``urlpath``
 - remote ``C2Array`` operands
 - ``DictStore`` members reopenable from ``(.b2d|.b2z, key)``
 
-Purely in-memory operands are intentionally not supported.
+Purely in-memory operands are intentionally not supported. Plain Python
+``LazyUDF`` callables are not serialized by msgpack.
 
 Quick example
 -------------

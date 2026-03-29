@@ -11,6 +11,17 @@ import pytest
 import blosc2
 import blosc2.c2array as blosc2_c2array
 
+
+@blosc2.dsl_kernel
+def _kernel_add_twice(x, y):
+    return x + y * 2
+
+
+def _python_udf_add(inputs_tuple, output, offset):
+    x, y = inputs_tuple
+    output[:] = x + y
+
+
 VALUES = [
     b"bytes\x00payload",
     "plain text",
@@ -66,6 +77,20 @@ def _make_in_memory_lazyexpr():
     a = blosc2.asarray(np.arange(5, dtype=np.int64))
     b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2)
     return blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+
+
+def _make_persistent_lazyudf(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.float32), urlpath=tmp_path / "a_udf.b2nd", mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.float32) * 2, urlpath=tmp_path / "b_udf.b2nd", mode="w")
+    udf = blosc2.lazyudf(_kernel_add_twice, (a, b), dtype=a.dtype, shape=a.shape)
+    expected = a[:] + b[:] * 2
+    return udf, expected
+
+
+def _make_persistent_python_lazyudf(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.float32), urlpath=tmp_path / "a_pyudf.b2nd", mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.float32) * 2, urlpath=tmp_path / "b_pyudf.b2nd", mode="w")
+    return blosc2.lazyudf(_python_udf_add, (a, b), dtype=a.dtype, shape=a.shape)
 
 
 @pytest.mark.parametrize(
@@ -218,12 +243,31 @@ def test_vlarray_msgpack_supports_lazyexpr(tmp_path):
     np.testing.assert_array_equal(restored[:], expected)
 
 
+def test_vlarray_msgpack_supports_lazyudf_dslkernel(tmp_path):
+    udf, expected = _make_persistent_lazyudf(tmp_path)
+
+    vlarray = blosc2.VLArray()
+    vlarray.append(udf)
+    restored = vlarray[0]
+
+    assert isinstance(restored, blosc2.LazyUDF)
+    np.testing.assert_allclose(restored[:], expected)
+
+
 def test_vlarray_msgpack_rejects_lazyexpr_with_in_memory_operands():
     expr = _make_in_memory_lazyexpr()
 
     vlarray = blosc2.VLArray()
     with pytest.raises(ValueError, match="stored on disk/network"):
         vlarray.append(expr)
+
+
+def test_vlarray_msgpack_rejects_plain_python_lazyudf(tmp_path):
+    udf = _make_persistent_python_lazyudf(tmp_path)
+
+    vlarray = blosc2.VLArray()
+    with pytest.raises(TypeError, match="DSLKernel"):
+        vlarray.append(udf)
 
 
 @pytest.mark.network
