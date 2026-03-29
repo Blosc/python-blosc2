@@ -94,6 +94,11 @@ def _make_persistent_python_lazyudf(tmp_path):
     return blosc2.lazyudf(_python_udf_add, (a, b), dtype=a.dtype, shape=a.shape)
 
 
+def _make_persistent_ref(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=tmp_path / "a_ref.b2nd", mode="w")
+    return blosc2.Ref.from_object(a), a[:]
+
+
 @pytest.mark.parametrize(
     ("contiguous", "urlpath"),
     [
@@ -283,6 +288,16 @@ def test_msgpack_supports_c2array(monkeypatch):
     assert restored["remote"].path == c2array.path
     assert restored["remote"].urlbase == c2array.urlbase
     assert restored["remote"].auth_token is None
+
+
+def test_msgpack_supports_ref(tmp_path):
+    ref, expected = _make_persistent_ref(tmp_path)
+
+    restored = msgpack_unpackb(msgpack_packb({"ref": ref}))["ref"]
+
+    assert isinstance(restored, blosc2.Ref)
+    assert restored == ref
+    np.testing.assert_array_equal(restored.open()[:], expected)
 
 
 def test_batchstore_msgpack_supports_c2array(monkeypatch):

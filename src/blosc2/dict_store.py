@@ -335,8 +335,7 @@ class DictStore:
         value: blosc2.NDArray | SChunk | blosc2.VLArray | blosc2.BatchStore | C2Array,
     ):
         """Attach DictStore origin metadata so structured msgpack can preserve member identity."""
-        value._msgpack_dictstore_urlpath = self.localpath
-        value._msgpack_dictstore_key = key
+        value._blosc2_ref = blosc2.Ref.dictstore_key(self.localpath, key)
         return value
 
     @property

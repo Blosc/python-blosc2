@@ -18,6 +18,7 @@ from msgpack import ExtType, packb, unpackb
 
 from blosc2 import blosc2_ext
 from blosc2.dsl_kernel import DSLKernel
+from blosc2.ref import Ref
 
 # Msgpack extension type codes are application-defined.  Reserve code 42 in
 # python-blosc2 for values serialized as Blosc2 CFrames via ``to_cframe()`` and
@@ -33,43 +34,15 @@ _BLOSC2_DSL_VERSION = 1
 
 
 def _encode_operand_reference(obj):
-    import blosc2
-
-    if isinstance(obj, blosc2.C2Array):
-        return {
-            "kind": "c2array",
-            "version": _BLOSC2_STRUCTURED_VERSION,
-            "path": obj.path,
-            "urlbase": obj.urlbase,
-        }
-    if isinstance(obj, blosc2.Proxy):
-        obj = obj._cache
-    dictstore_urlpath = getattr(obj, "_msgpack_dictstore_urlpath", None)
-    dictstore_key = getattr(obj, "_msgpack_dictstore_key", None)
-    if isinstance(dictstore_urlpath, str) and isinstance(dictstore_key, str):
-        return {
-            "kind": "dictstore_key",
-            "version": _BLOSC2_STRUCTURED_VERSION,
-            "urlpath": dictstore_urlpath,
-            "key": dictstore_key,
-        }
-    if hasattr(obj, "schunk"):
-        urlpath = obj.schunk.urlpath
-        if urlpath is None:
-            raise ValueError(
-                "Structured Blosc2 msgpack payload requires operands to be stored on disk/network"
-            )
-        return {
-            "kind": "urlpath",
-            "version": _BLOSC2_STRUCTURED_VERSION,
-            "urlpath": urlpath,
-        }
-    raise TypeError("Structured Blosc2 msgpack payload requires NDArray, C2Array, or Proxy operands")
+    return Ref.from_object(obj).to_dict()
 
 
 def _encode_structured_reference(obj):
     import blosc2
 
+    if isinstance(obj, blosc2.Ref):
+        payload = {"kind": "ref", "version": _BLOSC2_STRUCTURED_VERSION, "ref": obj.to_dict()}
+        return ExtType(_BLOSC2_STRUCTURED_EXT_CODE, packb(payload, use_bin_type=True))
     if isinstance(obj, blosc2.C2Array):
         payload = _encode_operand_reference(obj)
         return ExtType(_BLOSC2_STRUCTURED_EXT_CODE, packb(payload, use_bin_type=True))
@@ -124,38 +97,7 @@ def _encode_structured_reference(obj):
 
 
 def _decode_operand_reference(payload):
-    import blosc2
-
-    if not isinstance(payload, dict):
-        raise TypeError("Structured Blosc2 msgpack payload must decode to a mapping")
-
-    version = payload.get("version")
-    if version != _BLOSC2_STRUCTURED_VERSION:
-        raise ValueError(f"Unsupported structured Blosc2 msgpack payload version: {version!r}")
-
-    kind = payload.get("kind")
-    if kind == "c2array":
-        path = payload.get("path")
-        if not isinstance(path, str):
-            raise TypeError("Structured C2Array msgpack payload requires a string 'path'")
-        urlbase = payload.get("urlbase")
-        if urlbase is not None and not isinstance(urlbase, str):
-            raise TypeError("Structured C2Array msgpack payload requires 'urlbase' to be a string or None")
-        return blosc2.C2Array(path, urlbase=urlbase)
-    if kind == "dictstore_key":
-        urlpath = payload.get("urlpath")
-        if not isinstance(urlpath, str):
-            raise TypeError("Structured DictStore-key msgpack payload requires a string 'urlpath'")
-        key = payload.get("key")
-        if not isinstance(key, str):
-            raise TypeError("Structured DictStore-key msgpack payload requires a string 'key'")
-        return blosc2.DictStore(urlpath, mode="r")[key]
-    if kind == "urlpath":
-        urlpath = payload.get("urlpath")
-        if not isinstance(urlpath, str):
-            raise TypeError("Structured urlpath msgpack payload requires a string 'urlpath'")
-        return blosc2.open(urlpath, mode="r")
-    raise ValueError(f"Unsupported structured Blosc2 msgpack payload operand kind: {kind!r}")
+    return Ref.from_dict(payload).open()
 
 
 def _decode_structured_reference(data):
@@ -168,6 +110,9 @@ def _decode_structured_reference(data):
         raise ValueError(f"Unsupported structured Blosc2 msgpack payload version: {version!r}")
 
     kind = payload.get("kind")
+    if kind == "ref":
+        ref_payload = payload.get("ref")
+        return Ref.from_dict(ref_payload)
     if kind == "c2array":
         return _decode_operand_reference(payload)
     if kind == "lazyexpr":

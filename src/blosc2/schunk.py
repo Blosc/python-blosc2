@@ -27,6 +27,20 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
     """
     Class providing access to user metadata on an :ref:`SChunk`.
     It is available via the `.vlmeta` property of an :ref:`SChunk`.
+
+    Values are serialized using the general Blosc2 msgpack extensions; see
+    :ref:`Msgpack Serialization <MsgpackSerialization>`. Besides ordinary
+    msgpack-safe Python values, this includes:
+
+    - CFrame-backed Blosc2 objects such as :class:`blosc2.NDArray`,
+      :class:`blosc2.SChunk`, :class:`blosc2.VLArray`,
+      :class:`blosc2.BatchStore`, and :class:`blosc2.EmbedStore`
+    - structured references and lazy objects such as :class:`blosc2.Ref`,
+      :class:`blosc2.C2Array`, :class:`blosc2.LazyExpr`, and
+      :class:`blosc2.LazyUDF` backed by :func:`blosc2.dsl_kernel`
+
+    Lazy expressions and supported lazy UDFs still require durable operand
+    references only; purely in-memory operands are intentionally rejected.
     """
 
     def __init__(self, schunk, urlpath, mode, mmap_mode, initial_mapping_size):
@@ -72,7 +86,7 @@ class vlmeta(MutableMapping, blosc2_ext.vlmeta):
         Return all the variable length metalayers as a dictionary
 
         """
-        return super().to_dict()
+        return {name: self[name] for name in self}
 
     def __repr__(self):
         return repr(self.getall())

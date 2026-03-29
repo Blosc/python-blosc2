@@ -18,6 +18,7 @@ Main Classes
     EmbedStore
     BatchStore
     VLArray
+    Ref
     Proxy
     ProxySource
     ProxyNDSource
@@ -37,6 +38,7 @@ Main Classes
     embed_store
     batch_store
     vlarray
+    ref
     proxy
     proxysource
     proxyndsource
@@ -58,4 +60,5 @@ Other Classes
     Storage
     Tuner
     URLPath
+    Ref
     FPAccuracy
