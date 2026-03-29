@@ -36,7 +36,7 @@ def _make_nested_blosc2_objects():
     nested_vlarray = blosc2.VLArray()
     nested_vlarray.extend(["alpha", {"beta": 2}])
 
-    nested_batchstore = blosc2.BatchStore(max_blocksize=2)
+    nested_batchstore = blosc2.BatchStore(items_per_block=2)
     nested_batchstore.extend([[1, 2], ["x", {"y": 3}]])
 
     estore = blosc2.EmbedStore()

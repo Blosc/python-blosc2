@@ -19,7 +19,7 @@ URLPATH = "bench_batch_store.b2b"
 NBATCHES = 10_000
 OBJECTS_PER_BATCH = 100
 TOTAL_OBJECTS = NBATCHES * OBJECTS_PER_BATCH
-BLOCKSIZE_MAX = 32
+ITEMS_PER_BLOCK = 32
 N_RANDOM_READS = 1_000
 
 
@@ -64,7 +64,7 @@ def build_store(
         storage = blosc2.Storage(mode="w")
         store = blosc2.BatchStore(
             storage=storage,
-            max_blocksize=BLOCKSIZE_MAX,
+            items_per_block=ITEMS_PER_BLOCK,
             serializer=serializer,
             cparams={
                 "codec": codec,
@@ -84,7 +84,7 @@ def build_store(
         "use_dict": use_dict and codec in (blosc2.Codec.ZSTD, blosc2.Codec.LZ4, blosc2.Codec.LZ4HC),
     }
     with blosc2.BatchStore(
-        storage=storage, max_blocksize=BLOCKSIZE_MAX, serializer=serializer, cparams=cparams
+        storage=storage, items_per_block=ITEMS_PER_BLOCK, serializer=serializer, cparams=cparams
     ) as store:
         for batch_index in range(NBATCHES):
             store.append(make_batch(batch_index))
@@ -132,7 +132,7 @@ def main() -> None:
         assert store is not None
         read_store = store
     else:
-        read_store = blosc2.BatchStore(urlpath=URLPATH, mode="r", contiguous=True, max_blocksize=BLOCKSIZE_MAX)
+        read_store = blosc2.BatchStore(urlpath=URLPATH, mode="r", contiguous=True, items_per_block=ITEMS_PER_BLOCK)
     samples, timings_ns = measure_random_reads(read_store)
     t0 = time.perf_counter()
     checksum = 0
@@ -147,7 +147,7 @@ def main() -> None:
     print(f"  build time: {build_time_s:.3f} s")
     print(f"  batches: {len(read_store)}")
     print(f"  items: {TOTAL_OBJECTS}")
-    print(f"  max_blocksize: {read_store.max_blocksize}")
+    print(f"  items_per_block: {read_store.items_per_block}")
     print()
     print(read_store.info)
     print(f"Random scalar reads: {N_RANDOM_READS}")

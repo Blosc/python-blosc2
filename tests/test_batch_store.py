@@ -37,7 +37,7 @@ def _make_nested_blosc2_objects():
     nested_vlarray = blosc2.VLArray()
     nested_vlarray.extend(["alpha", {"beta": 2}])
 
-    nested_batchstore = blosc2.BatchStore(max_blocksize=2)
+    nested_batchstore = blosc2.BatchStore(items_per_block=2)
     nested_batchstore.extend([[1, 2], ["x", {"y": 3}]])
 
     estore = blosc2.EmbedStore()
@@ -65,8 +65,8 @@ def test_batchstore_roundtrip(contiguous, urlpath):
         assert barray.append(batch) == i
 
     assert len(barray) == len(BATCHES)
-    assert barray.max_blocksize is not None
-    assert 1 <= barray.max_blocksize <= len(BATCHES[0])
+    assert barray.items_per_block is not None
+    assert 1 <= barray.items_per_block <= len(BATCHES[0])
     assert [batch[:] for batch in barray] == BATCHES
     assert barray.append([1, 2]) == len(BATCHES) + 1
     assert [batch[:] for batch in barray][-1] == [1, 2]
@@ -102,7 +102,7 @@ def test_batchstore_roundtrip(contiguous, urlpath):
     if urlpath is not None:
         reopened = blosc2.open(urlpath, mode="r")
         assert isinstance(reopened, blosc2.BatchStore)
-        assert reopened.max_blocksize == barray.max_blocksize
+        assert reopened.items_per_block == barray.items_per_block
         assert [batch[:] for batch in reopened] == expected
         with pytest.raises(ValueError):
             reopened.append(["nope"])
@@ -203,7 +203,7 @@ def test_batchstore_from_cframe():
 def test_batchstore_msgpack_supports_blosc2_objects():
     ndarray, schunk, nested_vlarray, nested_batchstore, estore = _make_nested_blosc2_objects()
 
-    barray = blosc2.BatchStore(max_blocksize=2)
+    barray = blosc2.BatchStore(items_per_block=2)
     barray.append([ndarray, schunk, nested_vlarray, nested_batchstore, estore])
 
     restored = barray[0][:]
@@ -277,7 +277,7 @@ def test_batchstore_info_uses_persisted_batch_lengths():
 
 
 def test_batchstore_info_reports_exact_block_stats_from_lazy_chunks():
-    barray = blosc2.BatchStore(max_blocksize=2)
+    barray = blosc2.BatchStore(items_per_block=2)
     barray.extend([[1, 2, 3, 4, 5], [6, 7], [8]])
 
     items = dict(barray.info_items)
@@ -285,7 +285,7 @@ def test_batchstore_info_reports_exact_block_stats_from_lazy_chunks():
 
 
 def test_batchstore_pop_keeps_batch_lengths_metadata_in_sync():
-    barray = blosc2.BatchStore(max_blocksize=2)
+    barray = blosc2.BatchStore(items_per_block=2)
     barray.extend([[1, 2, 3], [4, 5], [6]])
 
     removed = barray.pop(1)
@@ -335,9 +335,9 @@ def test_batchstore_zstd_does_not_use_dict_by_default():
     assert barray.cparams.use_dict is False
 
 
-def test_batchstore_explicit_max_blocksize():
-    barray = blosc2.BatchStore(max_blocksize=2)
-    assert barray.max_blocksize == 2
+def test_batchstore_explicit_items_per_block():
+    barray = blosc2.BatchStore(items_per_block=2)
+    assert barray.items_per_block == 2
     barray.append([1, 2, 3])
     barray.append([4])
     assert [batch[:] for batch in barray] == [[1, 2, 3], [4]]
@@ -348,10 +348,10 @@ def test_batchstore_get_vlblock_and_scalar_access():
     blosc2.remove_urlpath(urlpath)
 
     batch = [0, 1, 2, 3, 4]
-    barray = blosc2.BatchStore(storage=_storage(True, urlpath), max_blocksize=2)
+    barray = blosc2.BatchStore(storage=_storage(True, urlpath), items_per_block=2)
     barray.append(batch)
 
-    assert barray.max_blocksize == 2
+    assert barray.items_per_block == 2
     assert msgpack_unpackb(barray.schunk.get_vlblock(0, 0)) == batch[:2]
     assert msgpack_unpackb(barray.schunk.get_vlblock(0, 1)) == batch[2:4]
     assert msgpack_unpackb(barray.schunk.get_vlblock(0, 2)) == batch[4:]
@@ -362,7 +362,7 @@ def test_batchstore_get_vlblock_and_scalar_access():
 
     reopened = blosc2.open(urlpath, mode="r")
     assert isinstance(reopened, blosc2.BatchStore)
-    assert reopened.max_blocksize == 2
+    assert reopened.items_per_block == 2
     assert reopened[0][0] == 0
     assert reopened[0][2] == 2
     assert reopened[0][4] == 4
@@ -372,7 +372,7 @@ def test_batchstore_get_vlblock_and_scalar_access():
 
 
 def test_batchstore_scalar_reads_cache_vlblocks():
-    barray = blosc2.BatchStore(max_blocksize=2)
+    barray = blosc2.BatchStore(items_per_block=2)
     barray.append([0, 1, 2, 3, 4])
 
     batch = barray[0]
@@ -396,7 +396,7 @@ def test_batchstore_scalar_reads_cache_vlblocks():
 
 
 def test_batchstore_iter_items():
-    barray = blosc2.BatchStore(max_blocksize=2)
+    barray = blosc2.BatchStore(items_per_block=2)
     batches = [[1, 2, 3], [4], [5, 6]]
     barray.extend(batches)
 
@@ -424,21 +424,21 @@ def test_batchstore_respects_explicit_use_dict_and_non_zstd():
     assert barray.cparams.use_dict is False
 
 
-def test_batchstore_guess_max_blocksize_uses_l2_for_clevel_5(monkeypatch):
+def test_batchstore_guess_items_per_block_uses_l2_for_clevel_5(monkeypatch):
     monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 100)
     monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 1000)
     barray = blosc2.BatchStore(cparams={"clevel": 5})
     assert barray._guess_blocksize([30, 30, 30, 30]) == 4
 
 
-def test_batchstore_guess_max_blocksize_uses_l2_for_mid_clevel(monkeypatch):
+def test_batchstore_guess_items_per_block_uses_l2_for_mid_clevel(monkeypatch):
     monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 100)
     monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 150)
     barray = blosc2.BatchStore(cparams={"clevel": 6})
     assert barray._guess_blocksize([60, 60, 60, 60]) == 2
 
 
-def test_batchstore_guess_max_blocksize_uses_full_batch_for_clevel_9(monkeypatch):
+def test_batchstore_guess_items_per_block_uses_full_batch_for_clevel_9(monkeypatch):
     monkeypatch.setitem(blosc2.cpu_info, "l1_data_cache_size", 1)
     monkeypatch.setitem(blosc2.cpu_info, "l2_cache_size", 1)
     barray = blosc2.BatchStore(cparams={"clevel": 9})
@@ -596,7 +596,7 @@ def test_batchstore_items_accessor(contiguous, urlpath):
 
     batches = [["a", "b"], [10, 11, 12], [{"x": 1}], [None, True]]
     flat = [item for batch in batches for item in batch]
-    barray = blosc2.BatchStore(storage=_storage(contiguous, urlpath), max_blocksize=2)
+    barray = blosc2.BatchStore(storage=_storage(contiguous, urlpath), items_per_block=2)
     barray.extend(batches)
 
     assert len(barray.items) == len(flat)
