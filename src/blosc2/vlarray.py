@@ -29,7 +29,14 @@ def _check_serialized_size(buffer: bytes) -> None:
 
 
 class VLArray:
-    """A variable-length array backed by an :class:`blosc2.SChunk`."""
+    """A variable-length array backed by an :class:`blosc2.SChunk`.
+
+    Entries are serialized with msgpack before compression. Standard Python
+    objects are supported, and Blosc2 containers such as
+    :class:`blosc2.NDArray`, :class:`blosc2.SChunk`, :class:`blosc2.VLArray`,
+    :class:`blosc2.BatchStore`, and :class:`blosc2.EmbedStore` are serialized
+    transparently via :meth:`to_cframe` / :func:`blosc2.from_cframe`.
+    """
 
     @staticmethod
     def _set_typesize_one(cparams: blosc2.CParams | dict | None) -> blosc2.CParams | dict:

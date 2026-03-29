@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import numpy as np
 import pytest
 
 import blosc2
@@ -25,6 +26,24 @@ def _make_payload(seed, size):
 
 def _storage(contiguous, urlpath, mode="w"):
     return blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode=mode)
+
+
+def _make_nested_blosc2_objects():
+    ndarray = blosc2.arange(6, dtype=np.int32)
+
+    schunk = blosc2.SChunk(chunksize=16)
+    schunk.append_data(np.arange(4, dtype=np.int32))
+
+    nested_vlarray = blosc2.VLArray()
+    nested_vlarray.extend(["alpha", {"beta": 2}])
+
+    nested_batchstore = blosc2.BatchStore(max_blocksize=2)
+    nested_batchstore.extend([[1, 2], ["x", {"y": 3}]])
+
+    estore = blosc2.EmbedStore()
+    estore["/node"] = blosc2.arange(3, dtype=np.int32)
+
+    return ndarray, schunk, nested_vlarray, nested_batchstore, estore
 
 
 @pytest.mark.parametrize(
@@ -179,6 +198,31 @@ def test_batchstore_from_cframe():
     restored2 = blosc2.from_cframe(barray.to_cframe())
     assert isinstance(restored2, blosc2.BatchStore)
     assert [batch[:] for batch in restored2] == expected
+
+
+def test_batchstore_msgpack_supports_blosc2_objects():
+    ndarray, schunk, nested_vlarray, nested_batchstore, estore = _make_nested_blosc2_objects()
+
+    barray = blosc2.BatchStore(max_blocksize=2)
+    barray.append([ndarray, schunk, nested_vlarray, nested_batchstore, estore])
+
+    restored = barray[0][:]
+
+    assert isinstance(restored[0], blosc2.NDArray)
+    assert np.array_equal(restored[0][:], ndarray[:])
+
+    assert isinstance(restored[1], blosc2.SChunk)
+    assert restored[1].decompress_chunk(0) == schunk.decompress_chunk(0)
+
+    assert isinstance(restored[2], blosc2.VLArray)
+    assert list(restored[2]) == list(nested_vlarray)
+
+    assert isinstance(restored[3], blosc2.BatchStore)
+    assert [batch[:] for batch in restored[3]] == [batch[:] for batch in nested_batchstore]
+
+    assert isinstance(restored[4], blosc2.EmbedStore)
+    assert list(restored[4].keys()) == ["/node"]
+    assert np.array_equal(restored[4]["/node"][:], estore["/node"][:])
 
 
 def test_batchstore_info():

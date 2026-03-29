@@ -5,6 +5,7 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
+import numpy as np
 import pytest
 
 import blosc2
@@ -24,6 +25,24 @@ VALUES = [
 
 def _storage(contiguous, urlpath, mode="w"):
     return blosc2.Storage(contiguous=contiguous, urlpath=urlpath, mode=mode)
+
+
+def _make_nested_blosc2_objects():
+    ndarray = blosc2.arange(6, dtype=np.int32)
+
+    schunk = blosc2.SChunk(chunksize=16)
+    schunk.append_data(np.arange(4, dtype=np.int32))
+
+    nested_vlarray = blosc2.VLArray()
+    nested_vlarray.extend(["alpha", {"beta": 2}])
+
+    nested_batchstore = blosc2.BatchStore(max_blocksize=2)
+    nested_batchstore.extend([[1, 2], ["x", {"y": 3}]])
+
+    estore = blosc2.EmbedStore()
+    estore["/node"] = blosc2.arange(3, dtype=np.int32)
+
+    return ndarray, schunk, nested_vlarray, nested_batchstore, estore
 
 
 @pytest.mark.parametrize(
@@ -115,6 +134,39 @@ def test_vlarray_from_cframe():
     restored2 = blosc2.vlarray_from_cframe(vlarray.to_cframe())
     assert isinstance(restored2, blosc2.VLArray)
     assert list(restored2) == expected
+
+
+def test_vlarray_msgpack_supports_blosc2_objects():
+    ndarray, schunk, nested_vlarray, nested_batchstore, estore = _make_nested_blosc2_objects()
+
+    vlarray = blosc2.VLArray()
+    vlarray.append(
+        {
+            "ndarray": ndarray,
+            "schunk": schunk,
+            "vlarray": nested_vlarray,
+            "batchstore": nested_batchstore,
+            "estore": estore,
+        }
+    )
+
+    restored = vlarray[0]
+
+    assert isinstance(restored["ndarray"], blosc2.NDArray)
+    assert np.array_equal(restored["ndarray"][:], ndarray[:])
+
+    assert isinstance(restored["schunk"], blosc2.SChunk)
+    assert restored["schunk"].decompress_chunk(0) == schunk.decompress_chunk(0)
+
+    assert isinstance(restored["vlarray"], blosc2.VLArray)
+    assert list(restored["vlarray"]) == list(nested_vlarray)
+
+    assert isinstance(restored["batchstore"], blosc2.BatchStore)
+    assert [batch[:] for batch in restored["batchstore"]] == [batch[:] for batch in nested_batchstore]
+
+    assert isinstance(restored["estore"], blosc2.EmbedStore)
+    assert list(restored["estore"].keys()) == ["/node"]
+    assert np.array_equal(restored["estore"]["/node"][:], estore["/node"][:])
 
 
 def test_vlarray_info():

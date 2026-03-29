@@ -166,8 +166,12 @@ class BatchStore:
         If not provided, a value is inferred from the first batch.
     serializer : {"msgpack", "arrow"}, optional
         Serializer used for batch payloads. ``"msgpack"`` is the default and is
-        the general-purpose choice for Python items. ``"arrow"`` is optional and
-        requires ``pyarrow``.
+        the general-purpose choice for Python items, including nested Blosc2
+        containers such as :class:`blosc2.NDArray`, :class:`blosc2.SChunk`,
+        :class:`blosc2.VLArray`, :class:`blosc2.BatchStore`, and
+        :class:`blosc2.EmbedStore`, which are serialized transparently via
+        :meth:`to_cframe` / :func:`blosc2.from_cframe`. ``"arrow"`` is optional
+        and requires ``pyarrow``.
     _from_schunk : blosc2.SChunk, optional
         Internal hook used when reopening an already-tagged BatchStore.
     **kwargs
