@@ -36,6 +36,13 @@ class VLArray:
     :class:`blosc2.NDArray`, :class:`blosc2.SChunk`, :class:`blosc2.VLArray`,
     :class:`blosc2.BatchStore`, and :class:`blosc2.EmbedStore` are serialized
     transparently via :meth:`to_cframe` / :func:`blosc2.from_cframe`.
+
+    Msgpack also supports structured Blosc2 reference objects. Currently this
+    includes :class:`blosc2.C2Array` and :class:`blosc2.LazyExpr`. Lazy
+    expressions are serialized as recipes plus durable operand references, so
+    only persistent local operands, :class:`blosc2.C2Array` operands, and
+    :class:`blosc2.DictStore` members are supported. Purely in-memory operands
+    are intentionally rejected.
     """
 
     @staticmethod

@@ -171,8 +171,13 @@ class BatchStore:
         containers such as :class:`blosc2.NDArray`, :class:`blosc2.SChunk`,
         :class:`blosc2.VLArray`, :class:`blosc2.BatchStore`, and
         :class:`blosc2.EmbedStore`, which are serialized transparently via
-        :meth:`to_cframe` / :func:`blosc2.from_cframe`. ``"arrow"`` is optional
-        and requires ``pyarrow``.
+        :meth:`to_cframe` / :func:`blosc2.from_cframe`. Msgpack also supports
+        structured Blosc2 reference objects, currently
+        :class:`blosc2.C2Array` and :class:`blosc2.LazyExpr`. Lazy expressions
+        preserve reference semantics, so only persistent local operands,
+        :class:`blosc2.C2Array` operands, and :class:`blosc2.DictStore`
+        members are supported; purely in-memory operands are rejected.
+        ``"arrow"`` is optional and requires ``pyarrow``.
     _from_schunk : blosc2.SChunk, optional
         Internal hook used when reopening an already-tagged BatchStore.
     **kwargs

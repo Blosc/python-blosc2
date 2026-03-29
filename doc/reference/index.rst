@@ -6,6 +6,7 @@ API Reference
 
     classes
     save_load
+    msgpack_serialization
     storage
     array_operations
     utilities
