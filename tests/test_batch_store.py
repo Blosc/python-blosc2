@@ -341,11 +341,9 @@ def test_batchstore_msgpack_supports_lazyexpr_with_c2array_operand(cat2_context,
     np.testing.assert_allclose(restored[:], a_values + b[:])
 
 
-@pytest.mark.xfail(
-    strict=True, reason="Structured LazyExpr urlpath operands do not preserve .b2z member offsets"
-)
-def test_msgpack_lazyexpr_with_b2z_operands(tmp_path):
-    store_path = tmp_path / "operands.b2z"
+@pytest.mark.parametrize("suffix", [".b2d", ".b2z"])
+def test_msgpack_lazyexpr_with_dictstore_operands(tmp_path, suffix):
+    store_path = tmp_path / f"operands{suffix}"
     ext_a = tmp_path / "a.b2nd"
     ext_b = tmp_path / "b.b2nd"
     expected = np.arange(5, dtype=np.int64) * 3
@@ -359,6 +357,28 @@ def test_msgpack_lazyexpr_with_b2z_operands(tmp_path):
     with blosc2.DictStore(str(store_path), mode="r") as dstore:
         expr = blosc2.lazyexpr("a + b", operands={"a": dstore["/a"], "b": dstore["/b"]})
         restored = msgpack_unpackb(msgpack_packb({"expr": expr}))["expr"]
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], expected)
+
+
+def test_batchstore_msgpack_lazyexpr_with_dictstore_operands(tmp_path):
+    store_path = tmp_path / "operands.b2z"
+    ext_a = tmp_path / "a.b2nd"
+    ext_b = tmp_path / "b.b2nd"
+    expected = np.arange(5, dtype=np.int64) * 3
+
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=str(ext_a), mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2, urlpath=str(ext_b), mode="w")
+    with blosc2.DictStore(str(store_path), mode="w", threshold=None) as dstore:
+        dstore["/a"] = a
+        dstore["/b"] = b
+
+    with blosc2.DictStore(str(store_path), mode="r") as dstore:
+        expr = blosc2.lazyexpr("a + b", operands={"a": dstore["/a"], "b": dstore["/b"]})
+        barray = blosc2.BatchStore(items_per_block=2)
+        barray.append([expr])
+        restored = barray[0][0]
 
     assert isinstance(restored, blosc2.LazyExpr)
     np.testing.assert_array_equal(restored[:], expected)

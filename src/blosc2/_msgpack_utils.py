@@ -35,6 +35,15 @@ def _encode_operand_reference(obj):
         }
     if isinstance(obj, blosc2.Proxy):
         obj = obj._cache
+    dictstore_urlpath = getattr(obj, "_msgpack_dictstore_urlpath", None)
+    dictstore_key = getattr(obj, "_msgpack_dictstore_key", None)
+    if isinstance(dictstore_urlpath, str) and isinstance(dictstore_key, str):
+        return {
+            "kind": "dictstore_key",
+            "version": _BLOSC2_STRUCTURED_VERSION,
+            "urlpath": dictstore_urlpath,
+            "key": dictstore_key,
+        }
     if hasattr(obj, "schunk"):
         urlpath = obj.schunk.urlpath
         if urlpath is None:
@@ -87,6 +96,14 @@ def _decode_operand_reference(payload):
         if urlbase is not None and not isinstance(urlbase, str):
             raise TypeError("Structured C2Array msgpack payload requires 'urlbase' to be a string or None")
         return blosc2.C2Array(path, urlbase=urlbase)
+    if kind == "dictstore_key":
+        urlpath = payload.get("urlpath")
+        if not isinstance(urlpath, str):
+            raise TypeError("Structured DictStore-key msgpack payload requires a string 'urlpath'")
+        key = payload.get("key")
+        if not isinstance(key, str):
+            raise TypeError("Structured DictStore-key msgpack payload requires a string 'key'")
+        return blosc2.DictStore(urlpath, mode="r")[key]
     if kind == "urlpath":
         urlpath = payload.get("urlpath")
         if not isinstance(urlpath, str):

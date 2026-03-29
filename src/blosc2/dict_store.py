@@ -329,6 +329,16 @@ class DictStore:
             if self._probe_external_leaf_offset(filepath):
                 self.map_tree[self._logical_key_from_relpath(filepath)] = filepath
 
+    def _annotate_external_value(
+        self,
+        key: str,
+        value: blosc2.NDArray | SChunk | blosc2.VLArray | blosc2.BatchStore | C2Array,
+    ):
+        """Attach DictStore origin metadata so structured msgpack can preserve member identity."""
+        value._msgpack_dictstore_urlpath = self.localpath
+        value._msgpack_dictstore_key = key
+        return value
+
     @property
     def estore(self) -> EmbedStore:
         """Access the underlying EmbedStore."""
@@ -416,15 +426,18 @@ class DictStore:
                     mmap_mode=self.mmap_mode,
                     dparams=self.dparams,
                 )
-                return _process_opened_object(opened)
+                return self._annotate_external_value(key, _process_opened_object(opened))
             else:
                 urlpath = os.path.join(self.working_dir, filepath)
                 if os.path.exists(urlpath):
-                    return blosc2.open(
-                        urlpath,
-                        mode="r" if self.mode == "r" else "a",
-                        mmap_mode=self.mmap_mode if self.mode == "r" else None,
-                        dparams=self.dparams,
+                    return self._annotate_external_value(
+                        key,
+                        blosc2.open(
+                            urlpath,
+                            mode="r" if self.mode == "r" else "a",
+                            mmap_mode=self.mmap_mode if self.mode == "r" else None,
+                            dparams=self.dparams,
+                        ),
                     )
                 else:
                     raise KeyError(f"File for key '{key}' not found in offsets or temporary directory.")
@@ -487,22 +500,28 @@ class DictStore:
                 if self.is_zip_store:
                     if filepath in self.offsets:
                         offset = self.offsets[filepath]["offset"]
-                        yield _process_opened_object(
-                            blosc2.blosc2_ext.open(
-                                self.b2z_path,
-                                mode="r",
-                                offset=offset,
-                                mmap_mode=self.mmap_mode,
-                                dparams=self.dparams,
-                            )
+                        yield self._annotate_external_value(
+                            key,
+                            _process_opened_object(
+                                blosc2.blosc2_ext.open(
+                                    self.b2z_path,
+                                    mode="r",
+                                    offset=offset,
+                                    mmap_mode=self.mmap_mode,
+                                    dparams=self.dparams,
+                                )
+                            ),
                         )
                 else:
                     urlpath = os.path.join(self.working_dir, filepath)
-                    yield blosc2.open(
-                        urlpath,
-                        mode="r" if self.mode == "r" else "a",
-                        mmap_mode=self.mmap_mode if self.mode == "r" else None,
-                        dparams=self.dparams,
+                    yield self._annotate_external_value(
+                        key,
+                        blosc2.open(
+                            urlpath,
+                            mode="r" if self.mode == "r" else "a",
+                            mmap_mode=self.mmap_mode if self.mode == "r" else None,
+                            dparams=self.dparams,
+                        ),
                     )
             elif key in self._estore:
                 yield self._estore[key]
@@ -521,25 +540,31 @@ class DictStore:
                         offset = self.offsets[filepath]["offset"]
                         yield (
                             key,
-                            _process_opened_object(
-                                blosc2.blosc2_ext.open(
-                                    self.b2z_path,
-                                    mode="r",
-                                    offset=offset,
-                                    mmap_mode=self.mmap_mode,
-                                    dparams=self.dparams,
-                                )
+                            self._annotate_external_value(
+                                key,
+                                _process_opened_object(
+                                    blosc2.blosc2_ext.open(
+                                        self.b2z_path,
+                                        mode="r",
+                                        offset=offset,
+                                        mmap_mode=self.mmap_mode,
+                                        dparams=self.dparams,
+                                    )
+                                ),
                             ),
                         )
                 else:
                     urlpath = os.path.join(self.working_dir, filepath)
                     yield (
                         key,
-                        blosc2.open(
-                            urlpath,
-                            mode="r" if self.mode == "r" else "a",
-                            mmap_mode=self.mmap_mode if self.mode == "r" else None,
-                            dparams=self.dparams,
+                        self._annotate_external_value(
+                            key,
+                            blosc2.open(
+                                urlpath,
+                                mode="r" if self.mode == "r" else "a",
+                                mmap_mode=self.mmap_mode if self.mode == "r" else None,
+                                dparams=self.dparams,
+                            ),
                         ),
                     )
             elif key in self._estore:
