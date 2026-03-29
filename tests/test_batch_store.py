@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 import blosc2
+import blosc2.c2array as blosc2_c2array
 from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 
 BATCHES = [
@@ -44,6 +45,14 @@ def _make_nested_blosc2_objects():
     estore["/node"] = blosc2.arange(3, dtype=np.int32)
 
     return ndarray, schunk, nested_vlarray, nested_batchstore, estore
+
+
+def _make_c2array(monkeypatch, path="@public/examples/ds-1d.b2nd", urlbase="https://cat2.cloud/demo/"):
+    def fake_info(path_, urlbase_, params=None, headers=None, model=None, auth_token=None):
+        return {"schunk": {"cparams": dict(blosc2.cparams_dflts)}}
+
+    monkeypatch.setattr(blosc2_c2array, "info", fake_info)
+    return blosc2.C2Array(path, urlbase=urlbase)
 
 
 @pytest.mark.parametrize(
@@ -223,6 +232,62 @@ def test_batchstore_msgpack_supports_blosc2_objects():
     assert isinstance(restored[4], blosc2.EmbedStore)
     assert list(restored[4].keys()) == ["/node"]
     assert np.array_equal(restored[4]["/node"][:], estore["/node"][:])
+
+
+def test_msgpack_supports_c2array(monkeypatch):
+    c2array = _make_c2array(monkeypatch)
+
+    payload = msgpack_packb({"remote": c2array})
+    restored = msgpack_unpackb(payload)
+
+    assert isinstance(restored["remote"], blosc2.C2Array)
+    assert restored["remote"].path == c2array.path
+    assert restored["remote"].urlbase == c2array.urlbase
+    assert restored["remote"].auth_token is None
+
+
+def test_batchstore_msgpack_supports_c2array(monkeypatch):
+    c2array = _make_c2array(monkeypatch)
+
+    barray = blosc2.BatchStore(items_per_block=2)
+    barray.append([c2array])
+
+    restored = barray[0][0]
+
+    assert isinstance(restored, blosc2.C2Array)
+    assert restored.path == c2array.path
+    assert restored.urlbase == c2array.urlbase
+    assert restored.auth_token is None
+
+
+@pytest.mark.network
+def test_msgpack_roundtrip_c2array_network(cat2_context):
+    path = "@public/expr/ds-1-2-linspace-float64-b2-(5,)d.b2nd"
+    original = blosc2.C2Array(path)
+
+    payload = msgpack_packb({"remote": original})
+    restored = msgpack_unpackb(payload)["remote"]
+
+    assert isinstance(restored, blosc2.C2Array)
+    assert restored.path == original.path
+    assert restored.urlbase == original.urlbase
+    np.testing.assert_allclose(restored[:], original[:])
+
+
+@pytest.mark.network
+def test_batchstore_msgpack_roundtrip_c2array_network(cat2_context):
+    path = "@public/expr/ds-1-2-linspace-float64-b2-(5,)d.b2nd"
+    original = blosc2.C2Array(path)
+
+    barray = blosc2.BatchStore(items_per_block=2)
+    barray.append([original])
+
+    restored = barray[0][0]
+
+    assert isinstance(restored, blosc2.C2Array)
+    assert restored.path == original.path
+    assert restored.urlbase == original.urlbase
+    np.testing.assert_allclose(restored[:], original[:])
 
 
 def test_batchstore_info():

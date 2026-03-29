@@ -16,6 +16,48 @@ from blosc2 import blosc2_ext
 # reconstructed with ``blosc2.from_cframe()``.  Keep this stable for backward
 # compatibility with persisted msgpack payloads produced by this package.
 _BLOSC2_EXT_CODE = 42
+# Reserve code 43 for structured Blosc2 reference objects that are not naturally
+# serialized as CFrames.  The payload is a msgpack-encoded mapping with a
+# stable ``kind`` and ``version`` envelope.
+_BLOSC2_STRUCTURED_EXT_CODE = 43
+_BLOSC2_STRUCTURED_VERSION = 1
+
+
+def _encode_structured_reference(obj):
+    import blosc2
+
+    if isinstance(obj, blosc2.C2Array):
+        payload = {
+            "kind": "c2array",
+            "version": _BLOSC2_STRUCTURED_VERSION,
+            "path": obj.path,
+            "urlbase": obj.urlbase,
+        }
+        return ExtType(_BLOSC2_STRUCTURED_EXT_CODE, packb(payload, use_bin_type=True))
+    return None
+
+
+def _decode_structured_reference(data):
+    import blosc2
+
+    payload = unpackb(data)
+    if not isinstance(payload, dict):
+        raise TypeError("Structured Blosc2 msgpack payload must decode to a mapping")
+
+    version = payload.get("version")
+    if version != _BLOSC2_STRUCTURED_VERSION:
+        raise ValueError(f"Unsupported structured Blosc2 msgpack payload version: {version!r}")
+
+    kind = payload.get("kind")
+    if kind == "c2array":
+        path = payload.get("path")
+        if not isinstance(path, str):
+            raise TypeError("Structured C2Array msgpack payload requires a string 'path'")
+        urlbase = payload.get("urlbase")
+        if urlbase is not None and not isinstance(urlbase, str):
+            raise TypeError("Structured C2Array msgpack payload requires 'urlbase' to be a string or None")
+        return blosc2.C2Array(path, urlbase=urlbase)
+    raise ValueError(f"Unsupported structured Blosc2 msgpack payload kind: {kind!r}")
 
 
 def _encode_msgpack_ext(obj):
@@ -32,6 +74,9 @@ def _encode_msgpack_ext(obj):
         ),
     ):
         return ExtType(_BLOSC2_EXT_CODE, obj.to_cframe())
+    structured = _encode_structured_reference(obj)
+    if structured is not None:
+        return structured
     return blosc2_ext.encode_tuple(obj)
 
 
@@ -50,6 +95,8 @@ def _decode_msgpack_ext(code, data):
 
     if code == _BLOSC2_EXT_CODE:
         return blosc2.from_cframe(data, copy=True)
+    if code == _BLOSC2_STRUCTURED_EXT_CODE:
+        return _decode_structured_reference(data)
     return ExtType(code, data)
 
 

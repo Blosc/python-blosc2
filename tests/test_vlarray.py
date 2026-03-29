@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 import blosc2
+import blosc2.c2array as blosc2_c2array
 
 VALUES = [
     b"bytes\x00payload",
@@ -43,6 +44,14 @@ def _make_nested_blosc2_objects():
     estore["/node"] = blosc2.arange(3, dtype=np.int32)
 
     return ndarray, schunk, nested_vlarray, nested_batchstore, estore
+
+
+def _make_c2array(monkeypatch, path="@public/examples/ds-1d.b2nd", urlbase="https://cat2.cloud/demo/"):
+    def fake_info(path_, urlbase_, params=None, headers=None, model=None, auth_token=None):
+        return {"schunk": {"cparams": dict(blosc2.cparams_dflts)}}
+
+    monkeypatch.setattr(blosc2_c2array, "info", fake_info)
+    return blosc2.C2Array(path, urlbase=urlbase)
 
 
 @pytest.mark.parametrize(
@@ -167,6 +176,36 @@ def test_vlarray_msgpack_supports_blosc2_objects():
     assert isinstance(restored["estore"], blosc2.EmbedStore)
     assert list(restored["estore"].keys()) == ["/node"]
     assert np.array_equal(restored["estore"]["/node"][:], estore["/node"][:])
+
+
+def test_vlarray_msgpack_supports_c2array(monkeypatch):
+    c2array = _make_c2array(monkeypatch)
+
+    vlarray = blosc2.VLArray()
+    vlarray.append(c2array)
+
+    restored = vlarray[0]
+
+    assert isinstance(restored, blosc2.C2Array)
+    assert restored.path == c2array.path
+    assert restored.urlbase == c2array.urlbase
+    assert restored.auth_token is None
+
+
+@pytest.mark.network
+def test_vlarray_msgpack_roundtrip_c2array_network(cat2_context):
+    path = "@public/expr/ds-1-2-linspace-float64-b2-(5,)d.b2nd"
+    original = blosc2.C2Array(path)
+
+    vlarray = blosc2.VLArray()
+    vlarray.append(original)
+
+    restored = vlarray[0]
+
+    assert isinstance(restored, blosc2.C2Array)
+    assert restored.path == original.path
+    assert restored.urlbase == original.urlbase
+    np.testing.assert_allclose(restored[:], original[:])
 
 
 def test_vlarray_info():
