@@ -55,6 +55,20 @@ def _make_c2array(monkeypatch, path="@public/examples/ds-1d.b2nd", urlbase="http
     return blosc2.C2Array(path, urlbase=urlbase)
 
 
+def _make_persistent_lazyexpr(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=tmp_path / "a.b2nd", mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2, urlpath=tmp_path / "b.b2nd", mode="w")
+    expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+    expected = np.arange(5, dtype=np.int64) * 3
+    return expr, expected
+
+
+def _make_in_memory_lazyexpr():
+    a = blosc2.asarray(np.arange(5, dtype=np.int64))
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2)
+    return blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+
+
 @pytest.mark.parametrize(
     ("contiguous", "urlpath"),
     [
@@ -258,6 +272,96 @@ def test_batchstore_msgpack_supports_c2array(monkeypatch):
     assert restored.path == c2array.path
     assert restored.urlbase == c2array.urlbase
     assert restored.auth_token is None
+
+
+def test_msgpack_supports_lazyexpr(tmp_path):
+    expr, expected = _make_persistent_lazyexpr(tmp_path)
+
+    payload = msgpack_packb({"expr": expr})
+    restored = msgpack_unpackb(payload)["expr"]
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], expected)
+
+
+def test_batchstore_msgpack_supports_lazyexpr(tmp_path):
+    expr, expected = _make_persistent_lazyexpr(tmp_path)
+
+    barray = blosc2.BatchStore(items_per_block=2)
+    barray.append([expr])
+
+    restored = barray[0][0]
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], expected)
+
+
+def test_msgpack_rejects_lazyexpr_with_in_memory_operands():
+    expr = _make_in_memory_lazyexpr()
+
+    with pytest.raises(ValueError, match="stored on disk/network"):
+        msgpack_packb({"expr": expr})
+
+
+def test_batchstore_msgpack_rejects_lazyexpr_with_in_memory_operands():
+    expr = _make_in_memory_lazyexpr()
+
+    barray = blosc2.BatchStore(items_per_block=2)
+    with pytest.raises(ValueError, match="stored on disk/network"):
+        barray.append([expr])
+
+
+@pytest.mark.network
+def test_msgpack_supports_lazyexpr_with_c2array_operand(cat2_context, tmp_path):
+    path = "@public/expr/ds-1-2-linspace-float64-b2-(5,)d.b2nd"
+    a = blosc2.C2Array(path)
+    a_values = np.asarray(a[:])
+    b = blosc2.asarray(a_values * 2, urlpath=tmp_path / "b.b2nd", mode="w")
+    expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+
+    restored = msgpack_unpackb(msgpack_packb({"expr": expr}))["expr"]
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_allclose(restored[:], a_values + b[:])
+
+
+@pytest.mark.network
+def test_batchstore_msgpack_supports_lazyexpr_with_c2array_operand(cat2_context, tmp_path):
+    path = "@public/expr/ds-1-2-linspace-float64-b2-(5,)d.b2nd"
+    a = blosc2.C2Array(path)
+    a_values = np.asarray(a[:])
+    b = blosc2.asarray(a_values * 2, urlpath=tmp_path / "b.b2nd", mode="w")
+    expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+
+    barray = blosc2.BatchStore(items_per_block=2)
+    barray.append([expr])
+    restored = barray[0][0]
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_allclose(restored[:], a_values + b[:])
+
+
+@pytest.mark.xfail(
+    strict=True, reason="Structured LazyExpr urlpath operands do not preserve .b2z member offsets"
+)
+def test_msgpack_lazyexpr_with_b2z_operands(tmp_path):
+    store_path = tmp_path / "operands.b2z"
+    ext_a = tmp_path / "a.b2nd"
+    ext_b = tmp_path / "b.b2nd"
+    expected = np.arange(5, dtype=np.int64) * 3
+
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=str(ext_a), mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2, urlpath=str(ext_b), mode="w")
+    with blosc2.DictStore(str(store_path), mode="w", threshold=None) as dstore:
+        dstore["/a"] = a
+        dstore["/b"] = b
+
+    with blosc2.DictStore(str(store_path), mode="r") as dstore:
+        expr = blosc2.lazyexpr("a + b", operands={"a": dstore["/a"], "b": dstore["/b"]})
+        restored = msgpack_unpackb(msgpack_packb({"expr": expr}))["expr"]
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], expected)
 
 
 @pytest.mark.network

@@ -54,6 +54,20 @@ def _make_c2array(monkeypatch, path="@public/examples/ds-1d.b2nd", urlbase="http
     return blosc2.C2Array(path, urlbase=urlbase)
 
 
+def _make_persistent_lazyexpr(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=tmp_path / "a.b2nd", mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2, urlpath=tmp_path / "b.b2nd", mode="w")
+    expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+    expected = np.arange(5, dtype=np.int64) * 3
+    return expr, expected
+
+
+def _make_in_memory_lazyexpr():
+    a = blosc2.asarray(np.arange(5, dtype=np.int64))
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2)
+    return blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+
+
 @pytest.mark.parametrize(
     ("contiguous", "urlpath"),
     [
@@ -190,6 +204,26 @@ def test_vlarray_msgpack_supports_c2array(monkeypatch):
     assert restored.path == c2array.path
     assert restored.urlbase == c2array.urlbase
     assert restored.auth_token is None
+
+
+def test_vlarray_msgpack_supports_lazyexpr(tmp_path):
+    expr, expected = _make_persistent_lazyexpr(tmp_path)
+
+    vlarray = blosc2.VLArray()
+    vlarray.append(expr)
+
+    restored = vlarray[0]
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], expected)
+
+
+def test_vlarray_msgpack_rejects_lazyexpr_with_in_memory_operands():
+    expr = _make_in_memory_lazyexpr()
+
+    vlarray = blosc2.VLArray()
+    with pytest.raises(ValueError, match="stored on disk/network"):
+        vlarray.append(expr)
 
 
 @pytest.mark.network
