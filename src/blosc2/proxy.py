@@ -192,11 +192,6 @@ class Proxy(blosc2.Operand):
 
     This can be used to cache chunks of a regular data container which follows the
     :ref:`ProxySource` or :ref:`ProxyNDSource` interfaces.
-
-    If a persisted proxy is reopened in read mode, lazy cache fills still need to
-    update the local cache.  In that case the cache file is reopened internally
-    in append mode on demand when :meth:`fetch`, :meth:`afetch`, or
-    :meth:`__getitem__` needs to populate missing chunks.
     """
 
     def __init__(
@@ -214,9 +209,6 @@ class Proxy(blosc2.Operand):
         mode: str, optional
             "a" means read/write (create if it doesn't exist); "w" means create
             (overwrite if it exists). Default is "a".
-            When a persisted proxy is reopened through :func:`blosc2.open` with
-            ``mode="r"``, later lazy cache fills may reopen the cache file
-            internally in append mode so missing chunks can be written locally.
         kwargs: dict, optional
             Keyword arguments supported:
 
@@ -274,14 +266,6 @@ class Proxy(blosc2.Operand):
             for key in vlmeta:
                 self._schunk_cache.vlmeta[key] = vlmeta[key]
 
-    def _ensure_writable_cache(self) -> None:
-        """Reopen a persisted cache writable when lazy fetch needs to fill chunks."""
-        cache_urlpath = getattr(self._schunk_cache, "urlpath", None)
-        if cache_urlpath is None or getattr(self._schunk_cache, "mode", None) != "r":
-            return
-        self._cache = blosc2.blosc2_ext.open(cache_urlpath, "a", 0)
-        self._schunk_cache = getattr(self._cache, "schunk", self._cache)
-
     def fetch(self, item: slice | list[slice] | None = ()) -> blosc2.NDArray | blosc2.schunk.SChunk:
         """
         Get the container used as cache with the requested data updated.
@@ -297,13 +281,6 @@ class Proxy(blosc2.Operand):
         out: :ref:`NDArray` or :ref:`SChunk`
             The local container used to cache the already requested data.
 
-        Notes
-        -----
-        If the proxy cache was reopened read-only from disk, this method may
-        reopen that cache internally in append mode before filling missing
-        chunks.  This preserves the logical read-only open of the proxy source
-        while still allowing the local cache to be populated lazily.
-
         Examples
         --------
         >>> import numpy as np
@@ -317,7 +294,6 @@ class Proxy(blosc2.Operand):
         [2 3]
         [4 5]]
         """
-        self._ensure_writable_cache()
         if item == ():
             # Full realization
             for info in self._schunk_cache.iterchunks_info():
@@ -353,9 +329,6 @@ class Proxy(blosc2.Operand):
         -----
         This method is only available if the :ref:`ProxySource` or :ref:`ProxyNDSource`
         have an async `aget_chunk` method.
-        If the proxy cache was reopened read-only from disk, this method may
-        reopen that cache internally in append mode before filling missing
-        chunks.
 
         Examples
         --------
@@ -413,7 +386,6 @@ class Proxy(blosc2.Operand):
         """
         if not callable(getattr(self.src, "aget_chunk", None)):
             raise NotImplementedError("afetch is only available if the source has an aget_chunk method")
-        self._ensure_writable_cache()
         if item == ():
             # Full realization
             for info in self._schunk_cache.iterchunks_info():

@@ -1752,6 +1752,22 @@ def test_save_dictstore_operands(tmp_path):
     np.testing.assert_array_equal(restored[:], expected)
 
 
+def test_save_proxy_operands_reopen_default_mode(tmp_path):
+    src_path = tmp_path / "src.b2nd"
+    proxy_path = tmp_path / "proxy.b2nd"
+    expr_path = tmp_path / "expr.b2nd"
+
+    src = blosc2.asarray(np.arange(10, dtype=np.int64), urlpath=str(src_path), mode="w")
+    proxy = blosc2.Proxy(src, urlpath=str(proxy_path), mode="w")
+    expr = proxy + proxy
+    expr.save(str(expr_path))
+
+    restored = blosc2.open(str(expr_path))
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], np.arange(10, dtype=np.int64) * 2)
+
+
 # Test the chaining of multiple lazy expressions
 def test_chain_expressions():
     N = 1_000
