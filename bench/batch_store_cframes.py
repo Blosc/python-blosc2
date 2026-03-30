@@ -293,8 +293,8 @@ def main() -> None:
         print(f"  seed: {args.seed}")
         print_store_counts(store)
         print()
-        print(store.info)
-        print()
+        # print(store.info)
+        # print()
         if random_read_requested:
             print_random_read_stats(store, args.random_read, rng)
         if args.random_read_cframe > 0:
