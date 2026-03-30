@@ -397,7 +397,20 @@ class DictStore:
 
             # Save the value to the destination path
             if not external_file:
-                if hasattr(value, "save"):
+                if isinstance(value, blosc2.NDArray) and "b2o" in value.schunk.meta:
+                    carrier = blosc2.empty(
+                        value.shape,
+                        value.dtype,
+                        chunks=value.chunks,
+                        blocks=value.blocks,
+                        cparams=value.cparams,
+                        urlpath=dest_path,
+                        mode="w",
+                        meta={"b2o": value.schunk.meta["b2o"]},
+                    )
+                    for meta_key, meta_value in value.schunk.vlmeta[:].items():
+                        carrier.schunk.vlmeta[meta_key] = meta_value
+                elif hasattr(value, "save"):
                     value.save(urlpath=dest_path)
                 else:
                     # SChunk, VLArray and BatchStore can all be persisted via their cframe.
