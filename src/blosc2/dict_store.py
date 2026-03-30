@@ -227,30 +227,39 @@ class DictStore:
         rel_path: str,
     ) -> str | None:
         """Return the supported external leaf kind for an already opened object."""
-        processed = process_opened_object(opened)
-        if isinstance(processed, blosc2.BatchStore):
-            kind = "batchstore"
-        elif isinstance(processed, blosc2.VLArray):
-            kind = "vlarray"
-        elif isinstance(processed, blosc2.NDArray):
+        meta = getattr(opened, "schunk", opened).meta
+        if "b2o" in meta and isinstance(opened, blosc2.NDArray):
+            # Keep b2o carriers as NDArray external leaves during discovery.
+            # Rehydrating them here can recurse when a lazy recipe points back
+            # into the same DictStore via dictstore_key refs.
             kind = "ndarray"
-        elif isinstance(processed, SChunk):
-            kind = "schunk"
+            processed_name = type(opened).__name__
         else:
-            warnings.warn(
-                f"Ignoring unsupported Blosc2 object at '{rel_path}' during DictStore discovery: "
-                f"{type(processed).__name__}",
-                UserWarning,
-                stacklevel=2,
-            )
-            return None
+            processed = process_opened_object(opened)
+            processed_name = type(processed).__name__
+            if isinstance(processed, blosc2.BatchStore):
+                kind = "batchstore"
+            elif isinstance(processed, blosc2.VLArray):
+                kind = "vlarray"
+            elif isinstance(processed, blosc2.NDArray):
+                kind = "ndarray"
+            elif isinstance(processed, SChunk):
+                kind = "schunk"
+            else:
+                warnings.warn(
+                    f"Ignoring unsupported Blosc2 object at '{rel_path}' during DictStore discovery: "
+                    f"{processed_name}",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                return None
 
         expected_ext = cls._expected_ext_from_kind(kind)
         found_ext = os.path.splitext(rel_path)[1]
         if found_ext != expected_ext:
             warnings.warn(
                 f"External leaf '{rel_path}' uses extension '{found_ext}' but metadata resolves to "
-                f"{type(processed).__name__}; expected '{expected_ext}'.",
+                f"{processed_name}; expected '{expected_ext}'.",
                 UserWarning,
                 stacklevel=2,
             )

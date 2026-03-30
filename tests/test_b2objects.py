@@ -182,3 +182,28 @@ def test_lazyudf_open_roundtrip(tmp_path):
 
     assert isinstance(restored, blosc2.LazyUDF)
     np.testing.assert_allclose(restored[:], (np.arange(5, dtype=np.float64) * 3) ** 2)
+
+
+def test_b2z_bundle_with_lazy_recipes_opens_read_only(tmp_path):
+    bundle_path = tmp_path / "bundle.b2z"
+
+    with blosc2.DictStore(str(bundle_path), mode="w", threshold=1) as store:
+        store["/data/a"] = np.arange(5, dtype=np.float64)
+        store["/data/b"] = np.arange(5, dtype=np.float64) * 2
+
+        a = store["/data/a"]
+        b = store["/data/b"]
+        expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+        udf = blosc2.lazyudf(kernel_add_square, (a, b), dtype=np.float64, shape=a.shape)
+
+        store["/recipes/expr"] = blosc2.ndarray_from_cframe(expr.to_cframe())
+        store["/recipes/udf"] = blosc2.ndarray_from_cframe(udf.to_cframe())
+
+    with blosc2.open(str(bundle_path), mode="r") as store:
+        restored_expr = store["/recipes/expr"]
+        restored_udf = store["/recipes/udf"]
+
+        assert isinstance(restored_expr, blosc2.LazyExpr)
+        assert isinstance(restored_udf, blosc2.LazyUDF)
+        np.testing.assert_allclose(restored_expr.compute()[:], np.arange(5, dtype=np.float64) * 3)
+        np.testing.assert_allclose(restored_udf.compute()[:], (np.arange(5, dtype=np.float64) * 3) ** 2)
