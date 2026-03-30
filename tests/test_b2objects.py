@@ -102,8 +102,8 @@ def test_lazyexpr_from_cframe_roundtrip(tmp_path):
         "version": 1,
         "expression": "a + b",
         "operands": {
-            "a": {"kind": "urlpath", "version": 1, "urlpath": str(tmp_path / "a.b2nd")},
-            "b": {"kind": "urlpath", "version": 1, "urlpath": str(tmp_path / "b.b2nd")},
+            "a": {"kind": "urlpath", "version": 1, "urlpath": (tmp_path / "a.b2nd").as_posix()},
+            "b": {"kind": "urlpath", "version": 1, "urlpath": (tmp_path / "b.b2nd").as_posix()},
         },
     }
 
@@ -161,8 +161,8 @@ def test_lazyudf_from_cframe_roundtrip(tmp_path):
     assert payload["dtype"] == np.dtype(np.float64).str
     assert payload["shape"] == [5]
     assert payload["operands"] == {
-        "o0": {"kind": "urlpath", "version": 1, "urlpath": str(tmp_path / "a.b2nd")},
-        "o1": {"kind": "urlpath", "version": 1, "urlpath": str(tmp_path / "b.b2nd")},
+        "o0": {"kind": "urlpath", "version": 1, "urlpath": (tmp_path / "a.b2nd").as_posix()},
+        "o1": {"kind": "urlpath", "version": 1, "urlpath": (tmp_path / "b.b2nd").as_posix()},
     }
 
     restored = blosc2.from_cframe(expr.to_cframe())
