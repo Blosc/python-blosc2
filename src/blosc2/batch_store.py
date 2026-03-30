@@ -21,7 +21,7 @@ import blosc2
 from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 from blosc2.info import InfoReporter, format_nbytes_info
 
-_BATCHSTORE_META = {"version": 1, "serializer": "msgpack", "max_blocksize": None, "arrow_schema": None}
+_BATCHSTORE_META = {"version": 1, "serializer": "msgpack", "items_per_block": None, "arrow_schema": None}
 _SUPPORTED_SERIALIZERS = {"msgpack", "arrow"}
 _BATCHSTORE_VLMETA_KEY = "_batch_store_metadata"
 
@@ -82,9 +82,9 @@ class Batch(Sequence[Any]):
             items = self._decode_items()
             index = self._normalize_index(index)
             return items[index]
-        max_blocksize = self._parent.max_blocksize
-        if max_blocksize is not None:
-            block_index, item_index = divmod(index, max_blocksize)
+        items_per_block = self._parent.items_per_block
+        if items_per_block is not None:
+            block_index, item_index = divmod(index, items_per_block)
             if block_index >= self._nblocks:
                 raise IndexError("Batch index out of range")
             block = self._get_block(block_index)
@@ -161,13 +161,26 @@ class BatchStore:
 
     Parameters
     ----------
-    max_blocksize : int, optional
+    items_per_block : int, optional
         Maximum number of items stored in each internal variable-length block.
-        If not provided, a value is inferred from the first batch.
+        The last block in a batch may contain fewer items than this cap. If not
+        provided, a value is inferred from the first batch.
     serializer : {"msgpack", "arrow"}, optional
         Serializer used for batch payloads. ``"msgpack"`` is the default and is
-        the general-purpose choice for Python items. ``"arrow"`` is optional and
-        requires ``pyarrow``.
+        the general-purpose choice for Python items, including nested Blosc2
+        containers such as :class:`blosc2.NDArray`, :class:`blosc2.SChunk`,
+        :class:`blosc2.VLArray`, :class:`blosc2.BatchStore`, and
+        :class:`blosc2.EmbedStore`, which are serialized transparently via
+        :meth:`to_cframe` / :func:`blosc2.from_cframe`. Msgpack also supports
+        structured Blosc2 reference objects, currently
+        :class:`blosc2.C2Array`, :class:`blosc2.LazyExpr`, and
+        :class:`blosc2.LazyUDF` backed by :func:`blosc2.dsl_kernel`. These lazy
+        objects preserve reference semantics, so only persistent local
+        operands, :class:`blosc2.C2Array` operands, and
+        :class:`blosc2.DictStore` members are supported; purely in-memory
+        operands are rejected. Plain Python :class:`blosc2.LazyUDF` callables
+        are not serialized by msgpack. ``"arrow"`` is optional and requires
+        ``pyarrow``.
     _from_schunk : blosc2.SChunk, optional
         Internal hook used when reopening an already-tagged BatchStore.
     **kwargs
@@ -225,7 +238,7 @@ class BatchStore:
         except KeyError:
             batchstore_meta = {}
         self._serializer = batchstore_meta.get("serializer", self._serializer)
-        self._max_blocksize = batchstore_meta.get("max_blocksize", self._max_blocksize)
+        self._items_per_block = batchstore_meta.get("items_per_block", self._items_per_block)
         self._arrow_schema = batchstore_meta.get("arrow_schema", self._arrow_schema)
         self._arrow_schema_obj = None
         self._batch_lengths = self._load_batch_lengths()
@@ -254,7 +267,7 @@ class BatchStore:
 
     def __init__(
         self,
-        max_blocksize: int | None = None,
+        items_per_block: int | None = None,
         serializer: str = "msgpack",
         _from_schunk: blosc2.SChunk | None = None,
         **kwargs: Any,
@@ -265,11 +278,11 @@ class BatchStore:
         mode is ``"r"`` or ``"a"``, the container is reopened automatically.
         Otherwise a new empty store is created.
         """
-        if max_blocksize is not None and max_blocksize <= 0:
-            raise ValueError("max_blocksize must be a positive integer")
+        if items_per_block is not None and items_per_block <= 0:
+            raise ValueError("items_per_block must be a positive integer")
         if serializer not in _SUPPORTED_SERIALIZERS:
             raise ValueError(f"Unsupported BatchStore serializer: {serializer!r}")
-        self._max_blocksize: int | None = max_blocksize
+        self._items_per_block: int | None = items_per_block
         self._serializer = serializer
         self._arrow_schema: bytes | None = None
         self._arrow_schema_obj = None
@@ -302,7 +315,7 @@ class BatchStore:
         fixed_meta["batchstore"] = {
             **_BATCHSTORE_META,
             "serializer": self._serializer,
-            "max_blocksize": self._max_blocksize,
+            "items_per_block": self._items_per_block,
             "arrow_schema": self._arrow_schema,
         }
         storage.meta = fixed_meta
@@ -428,10 +441,10 @@ class BatchStore:
         return self[batch_index][item_index]
 
     def _block_sizes_from_batch_length(self, batch_length: int, nblocks: int) -> list[int]:
-        if self._max_blocksize is None or nblocks <= 0:
+        if self._items_per_block is None or nblocks <= 0:
             return []
-        full_blocks, remainder = divmod(batch_length, self._max_blocksize)
-        block_sizes = [self._max_blocksize] * full_blocks
+        full_blocks, remainder = divmod(batch_length, self._items_per_block)
+        block_sizes = [self._items_per_block] * full_blocks
         if remainder:
             block_sizes.append(remainder)
         if not block_sizes and batch_length > 0:
@@ -441,7 +454,7 @@ class BatchStore:
         return block_sizes
 
     def _get_block_sizes(self, batch_sizes: list[int]) -> list[int] | None:
-        if self._max_blocksize is None:
+        if self._items_per_block is None:
             return None
         block_sizes: list[int] = []
         for index, batch_length in enumerate(batch_sizes):
@@ -533,9 +546,9 @@ class BatchStore:
 
     def _ensure_layout_for_batch(self, batch: Any) -> None:
         layout_changed = False
-        if self._max_blocksize is None:
+        if self._items_per_block is None:
             payload_sizes = self._payload_sizes_for_batch(batch)
-            self._max_blocksize = self._guess_blocksize(payload_sizes)
+            self._items_per_block = self._guess_blocksize(payload_sizes)
             layout_changed = True
         if self._serializer == "arrow" and self._arrow_schema is not None:
             layout_changed = layout_changed or len(self) == 0
@@ -551,7 +564,7 @@ class BatchStore:
         fixed_meta = dict(storage.meta or {})
         fixed_meta["batchstore"] = {
             **dict(fixed_meta.get("batchstore", {})),
-            "max_blocksize": self._max_blocksize,
+            "items_per_block": self._items_per_block,
             "serializer": self._serializer,
             "arrow_schema": self._arrow_schema,
         }
@@ -636,11 +649,11 @@ class BatchStore:
         return asdict(self.schunk.dparams)
 
     def _compress_batch(self, batch: Any) -> bytes:
-        if self._max_blocksize is None:
-            raise RuntimeError("BatchStore max_blocksize is not initialized")
+        if self._items_per_block is None:
+            raise RuntimeError("BatchStore items_per_block is not initialized")
         blocks = [
-            self._serialize_block(batch[i : i + self._max_blocksize])
-            for i in range(0, self._batch_len(batch), self._max_blocksize)
+            self._serialize_block(batch[i : i + self._items_per_block])
+            for i in range(0, self._batch_len(batch), self._items_per_block)
         ]
         return blosc2.blosc2_ext.vlcompress(blocks, **self._vl_cparams_kwargs())
 
@@ -819,8 +832,12 @@ class BatchStore:
         return self.schunk.dparams
 
     @property
-    def max_blocksize(self) -> int | None:
-        return self._max_blocksize
+    def items_per_block(self) -> int | None:
+        """Maximum number of items per internal block.
+
+        The last block in a batch may contain fewer items.
+        """
+        return self._items_per_block
 
     @property
     def items(self) -> BatchStoreItems:
@@ -899,7 +916,7 @@ class BatchStore:
             raise ValueError("meta should not be passed to copy")
         kwargs["cparams"] = kwargs.get("cparams", copy.deepcopy(self.cparams))
         kwargs["dparams"] = kwargs.get("dparams", copy.deepcopy(self.dparams))
-        kwargs["max_blocksize"] = kwargs.get("max_blocksize", self.max_blocksize)
+        kwargs["items_per_block"] = kwargs.get("items_per_block", self.items_per_block)
         kwargs["serializer"] = kwargs.get("serializer", self.serializer)
         user_vlmeta = self._user_vlmeta_items() if len(self.vlmeta) > 0 else {}
 

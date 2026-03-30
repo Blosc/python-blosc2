@@ -31,6 +31,35 @@ BatchStore currently supports two serializers:
 - ``"arrow"``: optional and requires ``pyarrow``; mainly useful when data is
   already Arrow-shaped before ingestion
 
+For ``"msgpack"``, python-blosc2 supports both ordinary msgpack-safe Python
+values and selected Blosc2 objects.
+
+Blosc2 objects serialized by value via :meth:`to_cframe` /
+:func:`blosc2.from_cframe`:
+
+- ``NDArray``
+- ``SChunk``
+- ``VLArray``
+- ``BatchStore``
+- ``EmbedStore``
+
+Structured reference-style Blosc2 objects currently supported:
+
+- ``C2Array``
+- ``LazyExpr``
+- ``LazyUDF`` backed by ``@blosc2.dsl_kernel``
+
+``LazyExpr`` values and supported ``LazyUDF`` values preserve reference
+semantics and are serialized as a recipe plus durable operand references.
+Supported operands are:
+
+- persistent local Blosc2 operands reopenable from ``urlpath``
+- remote ``C2Array`` operands
+- ``DictStore`` members reopenable from ``(.b2d|.b2z, key)``
+
+Purely in-memory operands are intentionally not supported. Plain Python
+``LazyUDF`` callables are not serialized by msgpack.
+
 Quick example
 -------------
 

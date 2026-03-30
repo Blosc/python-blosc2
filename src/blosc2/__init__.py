@@ -537,6 +537,7 @@ from .dict_store import DictStore
 from .tree_store import TreeStore
 from .batch_store import Batch, BatchStore
 from .vlarray import VLArray, vlarray_from_cframe
+from .ref import Ref
 
 from .c2array import c2context, C2Array, URLPath
 
@@ -740,6 +741,7 @@ __all__ = [  # noqa : RUF022
     "ProxyNDField",
     "ProxyNDSource",
     "ProxySource",
+    "Ref",
     "SChunk",
     "SimpleProxy",
     "SpecialValue",
