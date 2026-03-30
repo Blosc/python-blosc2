@@ -3718,10 +3718,7 @@ class LazyExpr(LazyArray):
         self._to_b2object_carrier(**kwargs)
 
     def to_cframe(self) -> bytes:
-        try:
-            return self._to_b2object_carrier().to_cframe()
-        except (TypeError, ValueError):
-            return self.compute().to_cframe()
+        return self._to_b2object_carrier().to_cframe()
 
     def _to_b2object_carrier(self, **kwargs):
         expression = self.expression_tosave if hasattr(self, "expression_tosave") else self.expression
@@ -4079,50 +4076,91 @@ class LazyUDF(LazyArray):
         if urlpath is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
 
-        meta = kwargs.get("meta", {})
-        meta["LazyArray"] = LazyArrayEnum.UDF.value
         kwargs["urlpath"] = urlpath
-        kwargs["meta"] = meta
         kwargs["mode"] = "w"  # always overwrite the file in urlpath
-
-        # Create an empty array; useful for providing the shape and dtype of the outcome
-        array = blosc2.empty(shape=self.shape, dtype=self.dtype, **kwargs)
-
-        # Save the expression and operands in the metadata
-        operands = {}
-        operands_ = self.inputs_dict
-        for i, (_key, value) in enumerate(operands_.items()):
-            pos_key = f"o{i}"  # always use positional keys for consistent loading
-            if isinstance(value, blosc2.C2Array):
-                operands[pos_key] = {
-                    "path": str(value.path),
-                    "urlbase": value.urlbase,
-                }
-                continue
-            if isinstance(value, blosc2.Proxy):
-                # Take the required info from the Proxy._cache container
-                value = value._cache
-            if not hasattr(value, "schunk"):
-                raise ValueError(
-                    "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
-                )
-            if value.schunk.urlpath is None:
-                raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
-            operands[pos_key] = value.schunk.urlpath
-        udf_func = self.func.func if isinstance(self.func, DSLKernel) else self.func
-        udf_name = getattr(udf_func, "__name__", self.func.__name__)
         try:
-            udf_source = textwrap.dedent(inspect.getsource(udf_func)).lstrip()
-        except Exception:
-            udf_source = None
-        meta = {
-            "UDF": udf_source,
-            "operands": operands,
-            "name": udf_name,
-        }
-        if isinstance(self.func, DSLKernel) and self.func.dsl_source is not None:
-            meta["dsl_source"] = self.func.dsl_source
-        array.schunk.vlmeta["_LazyArray"] = meta
+            self._to_b2object_carrier(**kwargs)
+        except (TypeError, ValueError):
+            meta = kwargs.get("meta", {})
+            meta["LazyArray"] = LazyArrayEnum.UDF.value
+            kwargs["meta"] = meta
+
+            # Create an empty array; useful for providing the shape and dtype of the outcome
+            array = blosc2.empty(shape=self.shape, dtype=self.dtype, **kwargs)
+
+            # Save the expression and operands in the metadata
+            operands = {}
+            operands_ = self.inputs_dict
+            for i, (_key, value) in enumerate(operands_.items()):
+                pos_key = f"o{i}"  # always use positional keys for consistent loading
+                if isinstance(value, blosc2.C2Array):
+                    operands[pos_key] = {
+                        "path": str(value.path),
+                        "urlbase": value.urlbase,
+                    }
+                    continue
+                if isinstance(value, blosc2.Proxy):
+                    # Take the required info from the Proxy._cache container
+                    value = value._cache
+                if not hasattr(value, "schunk"):
+                    raise ValueError(
+                        "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
+                    ) from None
+                if value.schunk.urlpath is None:
+                    raise ValueError(
+                        "To save a LazyArray, all operands must be stored on disk/network"
+                    ) from None
+                operands[pos_key] = value.schunk.urlpath
+            udf_func = self.func.func if isinstance(self.func, DSLKernel) else self.func
+            udf_name = getattr(udf_func, "__name__", self.func.__name__)
+            try:
+                udf_source = textwrap.dedent(inspect.getsource(udf_func)).lstrip()
+            except Exception:
+                udf_source = None
+            meta = {
+                "UDF": udf_source,
+                "operands": operands,
+                "name": udf_name,
+            }
+            if isinstance(self.func, DSLKernel) and self.func.dsl_source is not None:
+                meta["dsl_source"] = self.func.dsl_source
+            array.schunk.vlmeta["_LazyArray"] = meta
+
+    def to_cframe(self) -> bytes:
+        return self._to_b2object_carrier().to_cframe()
+
+    def _to_b2object_carrier(self, **kwargs):
+        payload = encode_b2object_payload(self)
+        if payload is None:
+            raise TypeError("Persistent Blosc2 object payload is not supported for this LazyUDF")
+
+        carrier_urlpath = kwargs.get("urlpath")
+        carrier_parent = Path(carrier_urlpath).parent if carrier_urlpath is not None else None
+        for operand_payload in payload["operands"].values():
+            if operand_payload["kind"] not in {"urlpath", "dictstore_key"}:
+                continue
+            operand_urlpath = Path(operand_payload["urlpath"])
+            if carrier_parent is not None and not operand_urlpath.is_absolute():
+                ref_urlpath = operand_urlpath.as_posix()
+            elif carrier_parent is not None:
+                try:
+                    ref_urlpath = operand_urlpath.relative_to(carrier_parent).as_posix()
+                except ValueError:
+                    ref_urlpath = operand_urlpath.as_posix()
+            else:
+                ref_urlpath = operand_urlpath.as_posix()
+            operand_payload["urlpath"] = ref_urlpath
+
+        array = make_b2object_carrier(
+            "lazyudf",
+            self.shape,
+            self.dtype,
+            chunks=self.chunks,
+            blocks=self.blocks,
+            **kwargs,
+        )
+        write_b2object_payload(array, payload)
+        return array
 
 
 def _numpy_eval_expr(expression, operands, prefer_blosc=False):

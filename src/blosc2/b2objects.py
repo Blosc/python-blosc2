@@ -49,9 +49,14 @@ def encode_operand_reference(obj):
 
 
 def decode_operand_reference(payload, *, base_path=None):
+    if (
+        payload.get("kind") in {"urlpath", "dictstore_key"}
+        and base_path is not None
+        and not pathlib.Path(payload["urlpath"]).is_absolute()
+    ):
+        payload = dict(payload)
+        payload["urlpath"] = (base_path / payload["urlpath"]).as_posix()
     ref = blosc2.Ref.from_dict(payload)
-    if ref.kind == "urlpath" and base_path is not None and not pathlib.Path(ref.urlpath).is_absolute():
-        return blosc2.open(base_path / ref.urlpath, mode="r")
     return ref.open()
 
 
@@ -123,23 +128,28 @@ def decode_structured_lazyexpr(payload, *, carrier_path=None):
     operands_payload = payload.get("operands")
     if not isinstance(operands_payload, dict):
         raise TypeError("Structured LazyExpr payload requires a mapping 'operands'")
-    operands = {}
-    missing_ops = {}
-    for key, value in operands_payload.items():
-        try:
-            operands[key] = decode_operand_reference(value, base_path=carrier_path)
-        except FileNotFoundError:
-            ref = blosc2.Ref.from_dict(value)
-            if ref.kind == "urlpath":
-                missing_ops[key] = pathlib.Path(ref.urlpath)
-            else:
-                raise
+    operands, missing_ops = decode_operand_mapping(operands_payload, base_path=carrier_path)
     if missing_ops:
         exc = blosc2.exceptions.MissingOperands(expression, missing_ops)
         exc.expr = expression
         exc.missing_ops = missing_ops
         raise exc
     return blosc2.lazyexpr(expression, operands=operands)
+
+
+def decode_operand_mapping(operands_payload, *, base_path=None):
+    operands = {}
+    missing_ops = {}
+    for key, value in operands_payload.items():
+        try:
+            operands[key] = decode_operand_reference(value, base_path=base_path)
+        except FileNotFoundError:
+            ref = blosc2.Ref.from_dict(value)
+            if ref.kind in {"urlpath", "dictstore_key"}:
+                missing_ops[key] = pathlib.Path(ref.urlpath)
+            else:
+                raise
+    return operands, missing_ops
 
 
 def decode_structured_lazyudf(payload, *, carrier_path=None):
@@ -180,12 +190,16 @@ def decode_structured_lazyudf(payload, *, carrier_path=None):
     func = local_ns[name]
     if not isinstance(func, DSLKernel):
         func = DSLKernel(func)
-
-    operands = tuple(
-        decode_operand_reference(operands_payload[f"o{n}"], base_path=carrier_path)
-        for n in range(len(operands_payload))
+    ordered_operands_payload = {f"o{n}": operands_payload[f"o{n}"] for n in range(len(operands_payload))}
+    operands, missing_ops = decode_operand_mapping(ordered_operands_payload, base_path=carrier_path)
+    if missing_ops:
+        exc = blosc2.exceptions.MissingOperands(name, missing_ops)
+        exc.expr = name
+        exc.missing_ops = missing_ops
+        raise exc
+    return blosc2.lazyudf(
+        func, tuple(operands.values()), dtype=np.dtype(dtype), shape=tuple(shape_payload), **kwargs
     )
-    return blosc2.lazyudf(func, operands, dtype=np.dtype(dtype), shape=tuple(shape_payload), **kwargs)
 
 
 def read_b2object_marker(obj) -> dict[str, Any] | None:

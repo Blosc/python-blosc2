@@ -15,6 +15,11 @@ import blosc2
 import blosc2.c2array as blosc2_c2array
 
 
+@blosc2.dsl_kernel
+def kernel_add_square(x, y):
+    return x * x + y * y + 2 * x * y
+
+
 def _make_c2array(
     monkeypatch,
     path="@public/examples/ds-1d.b2nd",
@@ -128,3 +133,52 @@ def test_legacy_lazyexpr_open_backward_compat():
 
     assert isinstance(restored, blosc2.LazyExpr)
     np.testing.assert_array_equal(restored[:], np.arange(5, dtype=np.int64) * 3)
+
+
+def test_legacy_lazyudf_open_backward_compat():
+    fixture = Path(__file__).parent / "data" / "legacy_lazyudf_v1" / "expr.b2nd"
+
+    restored = blosc2.open(fixture, mode="r")
+
+    assert isinstance(restored, blosc2.LazyUDF)
+    np.testing.assert_allclose(restored.compute()[:], (np.arange(5, dtype=np.float64) * 3) ** 2)
+
+
+def test_lazyudf_from_cframe_roundtrip(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.float64), urlpath=tmp_path / "a.b2nd", mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.float64) * 2, urlpath=tmp_path / "b.b2nd", mode="w")
+    expr = blosc2.lazyudf(kernel_add_square, (a, b), dtype=np.float64)
+    carrier = blosc2.ndarray_from_cframe(expr.to_cframe())
+
+    assert carrier.schunk.meta["b2o"] == {"kind": "lazyudf", "version": 1}
+    payload = carrier.schunk.vlmeta["b2o"]
+    assert payload["kind"] == "lazyudf"
+    assert payload["version"] == 1
+    assert payload["function_kind"] == "dsl"
+    assert payload["dsl_version"] == 1
+    assert payload["name"] == "kernel_add_square"
+    assert "kernel_add_square" in payload["udf_source"]
+    assert payload["dtype"] == np.dtype(np.float64).str
+    assert payload["shape"] == [5]
+    assert payload["operands"] == {
+        "o0": {"kind": "urlpath", "version": 1, "urlpath": str(tmp_path / "a.b2nd")},
+        "o1": {"kind": "urlpath", "version": 1, "urlpath": str(tmp_path / "b.b2nd")},
+    }
+
+    restored = blosc2.from_cframe(expr.to_cframe())
+
+    assert isinstance(restored, blosc2.LazyUDF)
+    np.testing.assert_allclose(restored[:], (np.arange(5, dtype=np.float64) * 3) ** 2)
+
+
+def test_lazyudf_open_roundtrip(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.float64), urlpath=tmp_path / "a.b2nd", mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.float64) * 2, urlpath=tmp_path / "b.b2nd", mode="w")
+    expr = blosc2.lazyudf(kernel_add_square, (a, b), dtype=np.float64)
+    urlpath = tmp_path / "expr.b2nd"
+
+    expr.save(urlpath)
+    restored = blosc2.open(urlpath, mode="r")
+
+    assert isinstance(restored, blosc2.LazyUDF)
+    np.testing.assert_allclose(restored[:], (np.arange(5, dtype=np.float64) * 3) ** 2)

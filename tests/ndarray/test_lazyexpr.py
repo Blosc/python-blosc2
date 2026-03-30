@@ -1874,12 +1874,8 @@ def test_to_cframe():
     dtype = "float64"
     a = blosc2.linspace(0, 1, N * N, dtype=dtype, shape=(N, N))
     expr = a**3 + blosc2.sin(a**2)
-    cframe = expr.to_cframe()
-    assert len(cframe) > 0
-    arr = blosc2.ndarray_from_cframe(cframe)
-    assert arr.shape == expr.shape
-    assert arr.dtype == expr.dtype
-    assert np.allclose(arr[:], expr[:])
+    with pytest.raises(ValueError, match="stored on disk/network"):
+        expr.to_cframe()
 
 
 # Test for the bug where multiplying two complex lazy expressions would fail with:
