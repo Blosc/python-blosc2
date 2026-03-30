@@ -24,6 +24,7 @@ import sys
 import textwrap
 import threading
 from abc import ABC, abstractmethod, abstractproperty
+from collections.abc import MutableMapping
 from dataclasses import asdict
 from enum import Enum
 from pathlib import Path
@@ -42,7 +43,13 @@ import numpy as np
 
 import blosc2
 
-from .b2objects import encode_b2object_payload, make_b2object_carrier, write_b2object_payload
+from .b2objects import (
+    encode_b2object_payload,
+    make_b2object_carrier,
+    read_b2object_user_vlmeta,
+    write_b2object_payload,
+    write_b2object_user_vlmeta,
+)
 from .dsl_kernel import DSLKernel, DSLSyntaxError, DSLValidator, specialize_miniexpr_inputs
 
 if blosc2._HAS_NUMBA:
@@ -325,7 +332,64 @@ class LazyArrayEnum(Enum):
     UDF = 1
 
 
+class LazyArrayVLMeta(MutableMapping):
+    """User metadata attached to a LazyArray."""
+
+    def __init__(self, lazyarr: LazyArray):
+        self.lazyarr = lazyarr
+
+    def __getitem__(self, key):
+        return self.lazyarr._get_user_vlmeta()[key]
+
+    def __setitem__(self, key, value):
+        data = self.lazyarr._get_user_vlmeta()
+        data[key] = value
+        self.lazyarr._sync_user_vlmeta()
+
+    def __delitem__(self, key):
+        data = self.lazyarr._get_user_vlmeta()
+        del data[key]
+        self.lazyarr._sync_user_vlmeta()
+
+    def __iter__(self):
+        return iter(self.lazyarr._get_user_vlmeta())
+
+    def __len__(self):
+        return len(self.lazyarr._get_user_vlmeta())
+
+    def getall(self):
+        return self.lazyarr._get_user_vlmeta().copy()
+
+    def __repr__(self):
+        return repr(self.getall())
+
+    def __str__(self):
+        return str(self.getall())
+
+
 class LazyArray(ABC, blosc2.Operand):
+    def _get_user_vlmeta(self) -> dict[str, Any]:
+        if not hasattr(self, "_vlmeta_user"):
+            self._vlmeta_user = {}
+        return self._vlmeta_user
+
+    def _set_user_vlmeta(self, metadata: dict[str, Any], *, sync: bool = True) -> None:
+        self._vlmeta_user = dict(metadata)
+        if sync:
+            self._sync_user_vlmeta()
+
+    def _sync_user_vlmeta(self) -> None:
+        array = getattr(self, "array", None)
+        if array is not None:
+            write_b2object_user_vlmeta(array, self._get_user_vlmeta())
+
+    @property
+    def vlmeta(self) -> LazyArrayVLMeta:
+        """User variable-length metadata for this LazyArray."""
+        if not hasattr(self, "_vlmeta_proxy"):
+            self._vlmeta_proxy = LazyArrayVLMeta(self)
+        return self._vlmeta_proxy
+
     @abstractmethod
     def indices(self, order: str | list[str] | None = None) -> blosc2.LazyArray:
         """
@@ -494,6 +558,9 @@ class LazyArray(ABC, blosc2.Operand):
           section for more info).
         * This is currently only supported for :ref:`LazyExpr` and :ref:`LazyUDF`
           (including kernels decorated with :func:`blosc2.dsl_kernel`).
+        * User metadata can be attached via :attr:`vlmeta`. For in-memory LazyArrays
+          this stays in memory; for persisted LazyArrays it is serialized and restored
+          on reopen.
 
         Examples
         --------
@@ -3764,6 +3831,7 @@ class LazyExpr(LazyArray):
             **kwargs,
         )
         write_b2object_payload(array, payload)
+        write_b2object_user_vlmeta(array, self._get_user_vlmeta())
         return array
 
     @classmethod
@@ -4125,6 +4193,7 @@ class LazyUDF(LazyArray):
             if isinstance(self.func, DSLKernel) and self.func.dsl_source is not None:
                 meta["dsl_source"] = self.func.dsl_source
             array.schunk.vlmeta["_LazyArray"] = meta
+            write_b2object_user_vlmeta(array, self._get_user_vlmeta())
 
     def to_cframe(self) -> bytes:
         return self._to_b2object_carrier().to_cframe()
@@ -4160,6 +4229,7 @@ class LazyUDF(LazyArray):
             **kwargs,
         )
         write_b2object_payload(array, payload)
+        write_b2object_user_vlmeta(array, self._get_user_vlmeta())
         return array
 
 
@@ -4518,6 +4588,7 @@ def open_lazyarray(array):
     new_expr.array = array
     # We want to expose schunk too, so that .info() can be used on the LazyArray
     new_expr.schunk = array.schunk
+    new_expr._set_user_vlmeta(read_b2object_user_vlmeta(array), sync=False)
     return new_expr
 
 

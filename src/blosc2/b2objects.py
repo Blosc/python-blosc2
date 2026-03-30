@@ -23,6 +23,7 @@ from blosc2.dsl_kernel import DSLKernel
 _B2OBJECT_META_KEY = "b2o"
 _B2OBJECT_VERSION = 1
 _B2OBJECT_DSL_VERSION = 1
+_B2OBJECT_USER_VLMETA_KEY = "_b2o_user_vlmeta"
 
 
 def make_b2object_carrier(
@@ -42,6 +43,17 @@ def make_b2object_carrier(
 
 def write_b2object_payload(array, payload: dict[str, Any]) -> None:
     array.schunk.vlmeta[_B2OBJECT_META_KEY] = payload
+
+
+def write_b2object_user_vlmeta(array, user_vlmeta: dict[str, Any]) -> None:
+    array.schunk.vlmeta[_B2OBJECT_USER_VLMETA_KEY] = user_vlmeta
+
+
+def read_b2object_user_vlmeta(obj) -> dict[str, Any]:
+    schunk = getattr(obj, "schunk", obj)
+    if _B2OBJECT_USER_VLMETA_KEY not in schunk.vlmeta:
+        return {}
+    return schunk.vlmeta[_B2OBJECT_USER_VLMETA_KEY]
 
 
 def encode_operand_reference(obj):
@@ -232,4 +244,5 @@ def open_b2object(obj):
     if isinstance(opened, blosc2.LazyExpr | blosc2.LazyUDF):
         opened.array = obj
         opened.schunk = schunk
+        opened._set_user_vlmeta(read_b2object_user_vlmeta(obj), sync=False)
     return opened

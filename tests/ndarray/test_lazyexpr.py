@@ -1768,6 +1768,29 @@ def test_save_proxy_operands_reopen_default_mode(tmp_path):
     np.testing.assert_array_equal(restored[:], np.arange(10, dtype=np.int64) * 2)
 
 
+def test_lazyexpr_vlmeta_in_memory_and_persisted(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=str(tmp_path / "a.b2nd"), mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=str(tmp_path / "b.b2nd"), mode="w")
+    expr = a + b
+
+    expr.vlmeta["name"] = "sum"
+    expr.vlmeta["config"] = {"scale": 1}
+    assert expr.vlmeta["name"] == "sum"
+    assert expr.vlmeta["config"] == {"scale": 1}
+
+    expr_path = tmp_path / "expr_vlmeta.b2nd"
+    expr.save(str(expr_path))
+    restored = blosc2.open(str(expr_path))
+
+    assert restored.vlmeta["name"] == "sum"
+    assert restored.vlmeta["config"] == {"scale": 1}
+
+    restored.vlmeta["note"] = "persisted"
+    reopened = blosc2.open(str(expr_path))
+    assert reopened.vlmeta["note"] == "persisted"
+    np.testing.assert_array_equal(reopened[:], np.arange(5, dtype=np.int64) * 2)
+
+
 # Test the chaining of multiple lazy expressions
 def test_chain_expressions():
     N = 1_000
