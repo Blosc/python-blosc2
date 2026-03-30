@@ -93,7 +93,6 @@ def encode_b2object_payload(obj) -> dict[str, Any] | None:
             "dsl_version": _B2OBJECT_DSL_VERSION,
             "name": udf_name,
             "udf_source": udf_source,
-            "dsl_source": obj.func.dsl_source,
             "dtype": np.dtype(obj.dtype).str,
             "shape": list(obj.shape),
             "operands": {f"o{i}": encode_operand_reference(value) for i, value in enumerate(obj.inputs)},
@@ -181,9 +180,6 @@ def decode_structured_lazyudf(payload, *, carrier_path=None):
     func = local_ns[name]
     if not isinstance(func, DSLKernel):
         func = DSLKernel(func)
-    dsl_source = payload.get("dsl_source")
-    if dsl_source is not None and func.dsl_source is None:
-        func.dsl_source = dsl_source
 
     operands = tuple(
         decode_operand_reference(operands_payload[f"o{n}"], base_path=carrier_path)
