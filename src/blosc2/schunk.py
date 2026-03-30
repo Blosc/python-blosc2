@@ -1721,6 +1721,9 @@ def open(
       it will return the Python-Blosc2 container used to cache the data which
       can be a :ref:`SChunk` or a :ref:`NDArray` and may not have all the data
       initialized (e.g. if the user has not accessed to it yet).
+      When such a persisted proxy is opened with ``mode="r"``, later lazy cache
+      fills may reopen the local cache internally in append mode so missing
+      chunks can still be written.
 
     * When opening a :ref:`LazyExpr` keep in mind the note above regarding operands.
 
