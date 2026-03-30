@@ -257,7 +257,7 @@ def specialize_dsl_miniexpr_inputs(expr_string: str, operands: dict):
     return specialize_miniexpr_inputs(expr_string, operands)
 
 
-class _DSLValidator:
+class DSLValidator:
     _binop_map: ClassVar[dict[type[ast.operator], str]] = {
         ast.Add: "+",
         ast.Sub: "-",
@@ -526,7 +526,7 @@ class DSLKernel:
         if dsl_func is None:
             raise ValueError("No function definition found in sliced DSL source")
         if validate:
-            _DSLValidator(dsl_source).validate(dsl_func)
+            DSLValidator(dsl_source).validate(dsl_func)
         input_names = self._input_names_from_signature(dsl_func)
         if _PRINT_DSL_KERNEL:
             func_name = getattr(func, "__name__", "<dsl_kernel>")
@@ -613,7 +613,7 @@ def validate_dsl(func):
     }
 
 
-class _DSLBuilder:
+class DSLBuilder:
     _binop_map: ClassVar[dict[type[ast.operator], str]] = {
         ast.Add: "+",
         ast.Sub: "-",
@@ -852,9 +852,9 @@ class _DSLBuilder:
         raise ValueError("Unsupported comparison in DSL")
 
 
-class _DSLReducer:
-    _binop_map: ClassVar[dict[type[ast.operator], str]] = _DSLBuilder._binop_map
-    _cmp_map: ClassVar[dict[type[ast.cmpop], str]] = _DSLBuilder._cmp_map
+class DSLReducer:
+    _binop_map: ClassVar[dict[type[ast.operator], str]] = DSLBuilder._binop_map
+    _cmp_map: ClassVar[dict[type[ast.cmpop], str]] = DSLBuilder._cmp_map
 
     def __init__(self, max_unroll: int = 64):
         self._env: dict[str, str] = {}

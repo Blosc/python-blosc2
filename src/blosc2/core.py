@@ -1959,7 +1959,7 @@ def from_cframe(
     if "vlarray" in schunk.meta:
         return blosc2.vlarray_from_cframe(cframe, copy=copy)
     if "b2o" in schunk.meta:
-        return blosc2._open_b2object(ndarray_from_cframe(cframe, copy=copy))
+        return blosc2.open_b2object(ndarray_from_cframe(cframe, copy=copy))
     if "b2nd" in schunk.meta:
         return ndarray_from_cframe(cframe, copy=copy)
     return schunk_from_cframe(cframe, copy=copy)

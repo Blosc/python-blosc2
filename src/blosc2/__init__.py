@@ -253,7 +253,7 @@ VERSION_STRING = VERSION_STRING
 The C-Blosc2 version's string."""
 
 if IS_WASM:
-    from ._wasm_jit import init_wasm_jit_helpers
+    from .wasm_jit import init_wasm_jit_helpers
 
     _WASM_MINIEXPR_ENABLED = init_wasm_jit_helpers()
 
@@ -538,7 +538,7 @@ from .tree_store import TreeStore
 from .batch_store import Batch, BatchStore
 from .vlarray import VLArray, vlarray_from_cframe
 from .ref import Ref
-from .b2objects import _open_b2object
+from .b2objects import open_b2object
 
 from .c2array import c2context, C2Array, URLPath
 
@@ -549,7 +549,7 @@ from .lazyexpr import (
     lazyexpr,
     LazyArray,
     LazyUDF,
-    _open_lazyarray,
+    open_lazyarray,
     get_expr_operands,
     validate_expr,
     evaluate,

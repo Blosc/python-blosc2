@@ -24,7 +24,7 @@ _B2OBJECT_VERSION = 1
 _B2OBJECT_DSL_VERSION = 1
 
 
-def _make_b2object_carrier(
+def make_b2object_carrier(
     kind: str,
     shape,
     dtype,
@@ -39,19 +39,19 @@ def _make_b2object_carrier(
     return blosc2.empty(shape=shape, dtype=dtype, chunks=chunks, blocks=blocks, **kwargs)
 
 
-def _write_b2object_payload(array, payload: dict[str, Any]) -> None:
+def write_b2object_payload(array, payload: dict[str, Any]) -> None:
     array.schunk.vlmeta[_B2OBJECT_META_KEY] = payload
 
 
-def _encode_operand_reference(obj):
+def encode_operand_reference(obj):
     return blosc2.Ref.from_object(obj).to_dict()
 
 
-def _decode_operand_reference(payload):
+def decode_operand_reference(payload):
     return blosc2.Ref.from_dict(payload).open()
 
 
-def _encode_b2object_payload(obj) -> dict[str, Any] | None:
+def encode_b2object_payload(obj) -> dict[str, Any] | None:
     if isinstance(obj, blosc2.C2Array):
         return blosc2.Ref.c2array_ref(obj.path, obj.urlbase).to_dict()
     if isinstance(obj, blosc2.LazyExpr):
@@ -61,7 +61,7 @@ def _encode_b2object_payload(obj) -> dict[str, Any] | None:
             "kind": "lazyexpr",
             "version": _B2OBJECT_VERSION,
             "expression": expression,
-            "operands": {key: _encode_operand_reference(value) for key, value in operands.items()},
+            "operands": {key: encode_operand_reference(value) for key, value in operands.items()},
         }
     if isinstance(obj, blosc2.LazyUDF):
         if not isinstance(obj.func, DSLKernel):
@@ -92,13 +92,13 @@ def _encode_b2object_payload(obj) -> dict[str, Any] | None:
             "dsl_source": obj.func.dsl_source,
             "dtype": np.dtype(obj.dtype).str,
             "shape": list(obj.shape),
-            "operands": {f"o{i}": _encode_operand_reference(value) for i, value in enumerate(obj.inputs)},
+            "operands": {f"o{i}": encode_operand_reference(value) for i, value in enumerate(obj.inputs)},
             "kwargs": kwargs,
         }
     return None
 
 
-def _decode_b2object_payload(payload: dict[str, Any]):
+def decode_b2object_payload(payload: dict[str, Any]):
     kind = payload.get("kind")
     version = payload.get("version")
     if version != _B2OBJECT_VERSION:
@@ -107,24 +107,24 @@ def _decode_b2object_payload(payload: dict[str, Any]):
         ref = blosc2.Ref.from_dict(payload)
         return ref.open()
     if kind == "lazyexpr":
-        return _decode_structured_lazyexpr(payload)
+        return decode_structured_lazyexpr(payload)
     if kind == "lazyudf":
-        return _decode_structured_lazyudf(payload)
+        return decode_structured_lazyudf(payload)
     raise ValueError(f"Unsupported persisted Blosc2 object kind: {kind!r}")
 
 
-def _decode_structured_lazyexpr(payload):
+def decode_structured_lazyexpr(payload):
     expression = payload.get("expression")
     if not isinstance(expression, str):
         raise TypeError("Structured LazyExpr payload requires a string 'expression'")
     operands_payload = payload.get("operands")
     if not isinstance(operands_payload, dict):
         raise TypeError("Structured LazyExpr payload requires a mapping 'operands'")
-    operands = {key: _decode_operand_reference(value) for key, value in operands_payload.items()}
+    operands = {key: decode_operand_reference(value) for key, value in operands_payload.items()}
     return blosc2.lazyexpr(expression, operands=operands)
 
 
-def _decode_structured_lazyudf(payload):
+def decode_structured_lazyudf(payload):
     function_kind = payload.get("function_kind")
     if function_kind != "dsl":
         raise ValueError(f"Unsupported structured LazyUDF function kind: {function_kind!r}")
@@ -167,31 +167,31 @@ def _decode_structured_lazyudf(payload):
         func.dsl_source = dsl_source
 
     operands = tuple(
-        _decode_operand_reference(operands_payload[f"o{n}"]) for n in range(len(operands_payload))
+        decode_operand_reference(operands_payload[f"o{n}"]) for n in range(len(operands_payload))
     )
     return blosc2.lazyudf(func, operands, dtype=np.dtype(dtype), shape=tuple(shape_payload), **kwargs)
 
 
-def _read_b2object_marker(obj) -> dict[str, Any] | None:
+def read_b2object_marker(obj) -> dict[str, Any] | None:
     schunk = getattr(obj, "schunk", obj)
     if _B2OBJECT_META_KEY not in schunk.meta:
         return None
     return schunk.meta[_B2OBJECT_META_KEY]
 
 
-def _read_b2object_payload(obj) -> dict[str, Any]:
+def read_b2object_payload(obj) -> dict[str, Any]:
     schunk = getattr(obj, "schunk", obj)
     return schunk.vlmeta[_B2OBJECT_META_KEY]
 
 
-def _open_b2object(obj):
-    marker = _read_b2object_marker(obj)
+def open_b2object(obj):
+    marker = read_b2object_marker(obj)
     if marker is None:
         return None
 
-    payload = _read_b2object_payload(obj)
+    payload = read_b2object_payload(obj)
     if marker.get("version") != _B2OBJECT_VERSION:
         raise ValueError(f"Unsupported persisted Blosc2 object version: {marker.get('version')!r}")
     if marker.get("kind") != payload.get("kind"):
         raise ValueError("Persisted Blosc2 object marker/payload kind mismatch")
-    return _decode_b2object_payload(payload)
+    return decode_b2object_payload(payload)

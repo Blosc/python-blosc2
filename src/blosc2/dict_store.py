@@ -19,7 +19,7 @@ import numpy as np
 import blosc2
 from blosc2.c2array import C2Array
 from blosc2.embed_store import EmbedStore
-from blosc2.schunk import SChunk, _process_opened_object
+from blosc2.schunk import SChunk, process_opened_object
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Set
@@ -227,7 +227,7 @@ class DictStore:
         rel_path: str,
     ) -> str | None:
         """Return the supported external leaf kind for an already opened object."""
-        processed = _process_opened_object(opened)
+        processed = process_opened_object(opened)
         if isinstance(processed, blosc2.BatchStore):
             kind = "batchstore"
         elif isinstance(processed, blosc2.VLArray):
@@ -425,7 +425,7 @@ class DictStore:
                     mmap_mode=self.mmap_mode,
                     dparams=self.dparams,
                 )
-                return self._annotate_external_value(key, _process_opened_object(opened))
+                return self._annotate_external_value(key, process_opened_object(opened))
             else:
                 urlpath = os.path.join(self.working_dir, filepath)
                 if os.path.exists(urlpath):
@@ -501,7 +501,7 @@ class DictStore:
                         offset = self.offsets[filepath]["offset"]
                         yield self._annotate_external_value(
                             key,
-                            _process_opened_object(
+                            process_opened_object(
                                 blosc2.blosc2_ext.open(
                                     self.b2z_path,
                                     mode="r",
@@ -541,7 +541,7 @@ class DictStore:
                             key,
                             self._annotate_external_value(
                                 key,
-                                _process_opened_object(
+                                process_opened_object(
                                     blosc2.blosc2_ext.open(
                                         self.b2z_path,
                                         mode="r",

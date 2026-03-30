@@ -80,7 +80,7 @@ def _string_endswith(a, b):
     return np.char.endswith(a, b)
 
 
-def _format_expr_scalar(value):
+def format_expr_scalar(value):
     if isinstance(value, np.generic):
         value = value.item()
     if isinstance(value, str | bytes):
@@ -708,7 +708,7 @@ class ShapeInferencer(ast.NodeVisitor):
             # handle negative constants like -1
             if isinstance(node.op, ast.USub):
                 val = self._lookup_value(node.operand)
-                if isinstance(val, (int, float)):
+                if isinstance(val, int | float):
                     return -val
             # handle + (USub) if needed
             if isinstance(node.op, ast.UAdd):
@@ -775,7 +775,7 @@ def slice_to_chunktuple(s, n):
         return range(start // n, ceiling(stop, n))
 
 
-def _get_selection(ctuple, ptuple, chunks):
+def get_selection(ctuple, ptuple, chunks):
     # we assume that at least one element of chunk intersects with the slice
     # (as a consequence of only looping over intersecting chunks)
     # ptuple is global slice, ctuple is chunk coords (in units of chunks)
@@ -841,7 +841,7 @@ def _get_selection(ctuple, ptuple, chunks):
     return out_pselection, pselection, loc_selection
 
 
-def _get_local_slice(prior_selection, post_selection, chunk_bounds):
+def get_local_slice(prior_selection, post_selection, chunk_bounds):
     chunk_begin, chunk_end = chunk_bounds
     # +1 for negative steps as have to include start (exclude stop)
     locbegin = np.hstack(
@@ -865,7 +865,7 @@ def _get_local_slice(prior_selection, post_selection, chunk_bounds):
     return locbegin, locend
 
 
-def _sliced_chunk_iter(chunks, idx, shape, axis=None, nchunk=False):
+def sliced_chunk_iter(chunks, idx, shape, axis=None, nchunk=False):
     """
     If nchunk is True, retrun at iterator over the number of the chunk.
     """
@@ -939,7 +939,7 @@ def get_intersecting_chunks(idx, shape, chunks, axis=None):
         return chunk_size.as_subchunks(idx, shape)  # if _slice is (), returns all chunks
 
     # special algorithm to iterate over axis first (adapted from ndindex source)
-    return _sliced_chunk_iter(chunks, idx, shape, axis)
+    return sliced_chunk_iter(chunks, idx, shape, axis)
 
 
 def get_chunks_idx(shape, chunks):
@@ -966,7 +966,7 @@ def is_inside_ne_evaluate() -> bool:
     return builtins.any(frame_info.function in {"ne_evaluate"} for frame_info in stack)
 
 
-def _incomplete_lazyfunc(func) -> None:
+def incomplete_lazyfunc(func) -> None:
     """Decorator for lazy functions with incomplete numexpr/miniexpr coverage.
 
     This function will force eager execution when called from ne_evaluate.
@@ -1066,7 +1066,7 @@ def compute_smaller_slice(larger_shape, smaller_shape, larger_slice):
     )
 
 
-def _get_chunk_operands(operands, cslice, chunk_operands, shape):
+def get_chunk_operands(operands, cslice, chunk_operands, shape):
     # Get the starts and stops for the slice
     cslice_shape = tuple(s.stop - s.start for s in cslice)
     starts = [s.start if s.start is not None else 0 for s in cslice]

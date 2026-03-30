@@ -18,7 +18,7 @@ import numpy as np
 import requests
 
 import blosc2
-from blosc2.b2objects import _encode_b2object_payload, _make_b2object_carrier, _write_b2object_payload
+from blosc2.b2objects import encode_b2object_payload, make_b2object_carrier, write_b2object_payload
 from blosc2.info import InfoReporter, format_nbytes_info
 
 _subscriber_data = {
@@ -240,13 +240,13 @@ class C2Array(blosc2.Operand):
         self._cparams = blosc2.CParams(**cparams)
 
     def _to_b2object_payload(self) -> dict:
-        payload = _encode_b2object_payload(self)
+        payload = encode_b2object_payload(self)
         if payload is None:
             raise TypeError("Unsupported persisted Blosc2 object")
         return payload
 
     def _to_b2object_carrier(self, **kwargs):
-        array = _make_b2object_carrier(
+        array = make_b2object_carrier(
             "c2array",
             self.shape,
             self.dtype,
@@ -255,7 +255,7 @@ class C2Array(blosc2.Operand):
             cparams=self.cparams,
             **kwargs,
         )
-        _write_b2object_payload(array, self._to_b2object_payload())
+        write_b2object_payload(array, self._to_b2object_payload())
         return array
 
     def to_cframe(self) -> bytes:

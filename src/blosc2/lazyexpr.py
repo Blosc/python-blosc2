@@ -42,23 +42,23 @@ import numpy as np
 
 import blosc2
 
-from .b2objects import _encode_b2object_payload, _make_b2object_carrier, _write_b2object_payload
-from .dsl_kernel import DSLKernel, DSLSyntaxError, _DSLValidator, specialize_miniexpr_inputs
+from .b2objects import encode_b2object_payload, make_b2object_carrier, write_b2object_payload
+from .dsl_kernel import DSLKernel, DSLSyntaxError, DSLValidator, specialize_miniexpr_inputs
 
 if blosc2._HAS_NUMBA:
     import numba
+
 from blosc2 import compute_chunks_blocks
 from blosc2.info import InfoReporter
 
-from .proxy import _convert_dtype
+from .proxy import convert_dtype
 from .utils import (
-    _format_expr_scalar,
-    _get_chunk_operands,
-    _sliced_chunk_iter,
     check_smaller_shape,
     compute_smaller_slice,
     constructors,
     elementwise_funcs,
+    format_expr_scalar,
+    get_chunk_operands,
     get_chunks_idx,
     get_intersecting_chunks,
     infer_shape,
@@ -69,6 +69,7 @@ from .utils import (
     process_key,
     reducers,
     safe_numpy_globals,
+    sliced_chunk_iter,
     try_miniexpr,
 )
 
@@ -276,7 +277,7 @@ def get_expr_globals(expression):
 
 if not hasattr(enum, "member"):
     # copy-pasted from Lib/enum.py
-    class _mymember:
+    class MyMember:
         """
         Forces item to become an Enum member during class creation.
         """
@@ -284,7 +285,7 @@ if not hasattr(enum, "member"):
         def __init__(self, value):
             self.value = value
 else:
-    _mymember = enum.member  # only available after python 3.11
+    MyMember = enum.member  # only available after python 3.11
 
 
 class ReduceOp(Enum):
@@ -294,25 +295,25 @@ class ReduceOp(Enum):
 
     # wrap as enum.member so that Python doesn't treat some funcs
     # as class methods (rather than Enum members)
-    SUM = _mymember(np.add)
-    PROD = _mymember(np.multiply)
-    MEAN = _mymember(np.mean)
-    STD = _mymember(np.std)
-    VAR = _mymember(np.var)
+    SUM = MyMember(np.add)
+    PROD = MyMember(np.multiply)
+    MEAN = MyMember(np.mean)
+    STD = MyMember(np.std)
+    VAR = MyMember(np.var)
     # Computing a median from partial results is not straightforward because the median
     # is a positional statistic, which means it depends on the relative ordering of all
     # the data points. Unlike statistics such as the sum or mean, you can't compute a median
     # from partial results without knowing the entire dataset, and this is way too expensive
     # for arrays that cannot typically fit in-memory (e.g. disk-based NDArray).
     # MEDIAN = np.median
-    MAX = _mymember(np.maximum)
-    MIN = _mymember(np.minimum)
-    ANY = _mymember(np.any)
-    ALL = _mymember(np.all)
-    ARGMAX = _mymember(np.argmax)
-    ARGMIN = _mymember(np.argmin)
-    CUMULATIVE_SUM = _mymember(npcumsum)
-    CUMULATIVE_PROD = _mymember(npcumprod)
+    MAX = MyMember(np.maximum)
+    MIN = MyMember(np.minimum)
+    ANY = MyMember(np.any)
+    ALL = MyMember(np.all)
+    ARGMAX = MyMember(np.argmax)
+    ARGMIN = MyMember(np.argmin)
+    CUMULATIVE_SUM = MyMember(npcumsum)
+    CUMULATIVE_PROD = MyMember(npcumprod)
 
 
 class LazyArrayEnum(Enum):
@@ -1117,7 +1118,7 @@ async def async_read_chunks(arrs, info, queue):
         my_chunk_iter = range(arrs[0].schunk.nchunks)
         if len(info) == 5:
             if info[-1] is not None:
-                my_chunk_iter = _sliced_chunk_iter(chunks_, (), shape, axis=info[-1], nchunk=True)
+                my_chunk_iter = sliced_chunk_iter(chunks_, (), shape, axis=info[-1], nchunk=True)
             info = info[:4]
         for i, nchunk in enumerate(my_chunk_iter):
             futures = [
@@ -1291,7 +1292,7 @@ def _format_dsl_parse_error_hint(expr_text: str, backend_msg: str):
     line_no = expr_text.count("\n", 0, err_pos) + 1
     line_start = expr_text.rfind("\n", 0, err_pos) + 1
     col_no = err_pos - line_start + 1
-    dump = _DSLValidator(expr_text)._format_source_with_pointer(line_no, col_no)
+    dump = DSLValidator(expr_text)._format_source_with_pointer(line_no, col_no)
     return f"Parse error location (line {line_no}, col {col_no}, offset {err_pos}):\n{dump}"
 
 
@@ -1788,7 +1789,7 @@ def slices_eval(  # noqa: C901
             ndindex.ndindex(cslice).as_subindex(_slice).raw
         )  # in the case _slice=(), just gives cslice
 
-        _get_chunk_operands(operands, cslice, chunk_operands, shape)
+        get_chunk_operands(operands, cslice, chunk_operands, shape)
 
         if out is None:
             shape_ = shape_slice if shape_slice is not None else shape
@@ -2337,7 +2338,7 @@ def reduce_slices(  # noqa: C901
                 axis=reduce_args["axis"] if np.isscalar(reduce_args["axis"]) else None,
             )
         else:
-            _get_chunk_operands(operands, cslice, chunk_operands, shape)
+            get_chunk_operands(operands, cslice, chunk_operands, shape)
 
         if reduce_op in {ReduceOp.CUMULATIVE_PROD, ReduceOp.CUMULATIVE_SUM}:
             reduced_slice = (
@@ -2858,7 +2859,7 @@ def result_type(
     arrs = [
         (np.array(value).dtype if isinstance(value, str | bytes) else value)
         if (np.isscalar(value) or not hasattr(value, "dtype"))
-        else np.array([0], dtype=_convert_dtype(value.dtype))
+        else np.array([0], dtype=convert_dtype(value.dtype))
         for value in arrays_and_dtypes
     ]
     return np.result_type(*arrs)
@@ -2945,15 +2946,15 @@ class LazyExpr(LazyArray):
         elif op in funcs_2args:
             if np.isscalar(value1) and np.isscalar(value2):
                 self.expression = "o0"
-                svalue1 = _format_expr_scalar(value1)
-                svalue2 = _format_expr_scalar(value2)
+                svalue1 = format_expr_scalar(value1)
+                svalue2 = format_expr_scalar(value2)
                 self.operands = {"o0": ne_evaluate(f"{op}({svalue1}, {svalue2})")}  # eager evaluation
             elif np.isscalar(value2):
                 self.operands = {"o0": value1}
-                self.expression = f"{op}(o0, {_format_expr_scalar(value2)})"
+                self.expression = f"{op}(o0, {format_expr_scalar(value2)})"
             elif np.isscalar(value1):
                 self.operands = {"o0": value2}
-                self.expression = f"{op}({_format_expr_scalar(value1)}, o0)"
+                self.expression = f"{op}({format_expr_scalar(value1)}, o0)"
             else:
                 self.operands = {"o0": value1, "o1": value2}
                 self.expression = f"{op}(o0, o1)"
@@ -3027,9 +3028,9 @@ class LazyExpr(LazyArray):
                 def_operands = value1.operands
             elif isinstance(value1, LazyExpr):
                 if np.isscalar(value2):
-                    v2 = _format_expr_scalar(value2)
+                    v2 = format_expr_scalar(value2)
                 elif hasattr(value2, "shape") and value2.shape == ():
-                    v2 = _format_expr_scalar(value2[()])
+                    v2 = format_expr_scalar(value2[()])
                 else:
                     operand_to_key = {id(v): k for k, v in value1.operands.items()}
                     try:
@@ -3048,9 +3049,9 @@ class LazyExpr(LazyArray):
                 def_operands = value1.operands
             else:
                 if np.isscalar(value1):
-                    v1 = _format_expr_scalar(value1)
+                    v1 = format_expr_scalar(value1)
                 elif hasattr(value1, "shape") and value1.shape == ():
-                    v1 = _format_expr_scalar(value1[()])
+                    v1 = format_expr_scalar(value1[()])
                 else:
                     operand_to_key = {id(v): k for k, v in value2.operands.items()}
                     try:
@@ -3720,10 +3721,10 @@ class LazyExpr(LazyArray):
         return self._to_b2object_carrier().to_cframe()
 
     def _to_b2object_carrier(self, **kwargs):
-        payload = _encode_b2object_payload(self)
+        payload = encode_b2object_payload(self)
         if payload is None:
             raise TypeError("Unsupported persisted Blosc2 object")
-        array = _make_b2object_carrier(
+        array = make_b2object_carrier(
             "lazyexpr",
             self.shape,
             self.dtype,
@@ -3731,7 +3732,7 @@ class LazyExpr(LazyArray):
             blocks=self.blocks,
             **kwargs,
         )
-        _write_b2object_payload(array, payload)
+        write_b2object_payload(array, payload)
         return array
 
     @classmethod
@@ -4397,7 +4398,7 @@ def _reconstruct_lazyudf(expr, lazyarray, operands_dict, array):
     )
 
 
-def _open_lazyarray(array):
+def open_lazyarray(array):
     value = array.schunk.meta["LazyArray"]
     lazyarray = array.schunk.vlmeta["_LazyArray"]
     if value == LazyArrayEnum.Expr.value:

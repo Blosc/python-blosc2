@@ -726,7 +726,7 @@ def destroy():
     blosc2_destroy()
 
 
-def _register_wasm_jit_helpers(uintptr_t instantiate_ptr, uintptr_t free_ptr):
+def register_wasm_jit_helpers(uintptr_t instantiate_ptr, uintptr_t free_ptr):
     cdef me_wasm_jit_instantiate_helper instantiate_helper = (
         <me_wasm_jit_instantiate_helper>instantiate_ptr
     )

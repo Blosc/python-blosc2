@@ -1621,7 +1621,7 @@ def _set_default_dparams(kwargs):
             kwargs["dparams"] = dparams
 
 
-def _process_opened_object(res):
+def process_opened_object(res):
     meta = getattr(res, "schunk", res).meta
     if "proxy-source" in meta:
         proxy_src = meta["proxy-source"]
@@ -1635,7 +1635,7 @@ def _process_opened_object(res):
             raise RuntimeError("Could not find the source when opening a Proxy")
 
     if "b2o" in meta:
-        return blosc2._open_b2object(res)
+        return blosc2.open_b2object(res)
 
     if "vlarray" in meta:
         from blosc2.vlarray import VLArray
@@ -1648,7 +1648,7 @@ def _process_opened_object(res):
         return BatchStore(_from_schunk=getattr(res, "schunk", res))
 
     if isinstance(res, blosc2.NDArray) and "LazyArray" in res.schunk.meta:
-        return blosc2._open_lazyarray(res)
+        return blosc2.open_lazyarray(res)
     else:
         return res
 
@@ -1781,4 +1781,4 @@ def open(
     _set_default_dparams(kwargs)
     res = blosc2_ext.open(urlpath, mode, offset, **kwargs)
 
-    return _process_opened_object(res)
+    return process_opened_object(res)

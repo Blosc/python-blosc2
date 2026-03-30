@@ -575,7 +575,7 @@ class ProxyNDField(blosc2.Operand):
         return nparr[self.field]
 
 
-def _convert_dtype(dt: str | DTypeLike):
+def convert_dtype(dt: str | DTypeLike):
     """
     Attempts to convert to blosc2.dtype (i.e. numpy dtype)
     """
@@ -617,14 +617,14 @@ class SimpleProxy(blosc2.Operand):
         if not hasattr(src, "__getitem__"):
             raise TypeError("The source must have a __getitem__ method")
         self._src = src
-        self._dtype = _convert_dtype(src.dtype)
+        self._dtype = convert_dtype(src.dtype)
         self._shape = src.shape if isinstance(src.shape, tuple) else tuple(src.shape)
         # Compute reasonable values for chunks and blocks
         cparams = blosc2.CParams(clevel=0)
 
         def is_ints_sequence(src, attr):
             seq = getattr(src, attr, None)
-            if not isinstance(seq, Sequence) or isinstance(seq, (str, bytes)):
+            if not isinstance(seq, Sequence) or isinstance(seq, str | bytes):
                 return False
             return all(isinstance(x, int) for x in seq)
 

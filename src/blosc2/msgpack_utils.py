@@ -10,7 +10,7 @@ from __future__ import annotations
 from msgpack import ExtType, packb, unpackb
 
 from blosc2 import blosc2_ext
-from blosc2.b2objects import _decode_b2object_payload, _encode_b2object_payload
+from blosc2.b2objects import decode_b2object_payload, encode_b2object_payload
 from blosc2.ref import Ref
 
 # Msgpack extension type codes are application-defined.  Reserve code 42 in
@@ -31,7 +31,7 @@ def _encode_structured_reference(obj):
     if isinstance(obj, blosc2.Ref):
         payload = {"kind": "ref", "version": _BLOSC2_STRUCTURED_VERSION, "ref": obj.to_dict()}
         return ExtType(_BLOSC2_STRUCTURED_EXT_CODE, packb(payload, use_bin_type=True))
-    payload = _encode_b2object_payload(obj)
+    payload = encode_b2object_payload(obj)
     if payload is not None:
         return ExtType(_BLOSC2_STRUCTURED_EXT_CODE, packb(payload, use_bin_type=True))
     return None
@@ -51,7 +51,7 @@ def _decode_structured_reference(data):
         ref_payload = payload.get("ref")
         return Ref.from_dict(ref_payload)
     if kind in {"c2array", "lazyexpr", "lazyudf"}:
-        return _decode_b2object_payload(payload)
+        return decode_b2object_payload(payload)
     raise ValueError(f"Unsupported structured Blosc2 msgpack payload kind: {kind!r}")
 
 
