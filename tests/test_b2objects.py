@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 
 import blosc2
@@ -69,7 +71,7 @@ def test_c2array_from_cframe_roundtrip(monkeypatch):
 
 def test_c2array_open_roundtrip(tmp_path, monkeypatch):
     original = _make_c2array(monkeypatch, shape=(8,), chunks=(4,), blocks=(2,))
-    urlpath = tmp_path / "remote-array.b2o"
+    urlpath = tmp_path / "remote-array.b2nd"
 
     original.save(urlpath)
     restored = blosc2.open(urlpath, mode="r")
@@ -81,3 +83,48 @@ def test_c2array_open_roundtrip(tmp_path, monkeypatch):
     assert restored.shape == original.shape
     assert restored.chunks == original.chunks
     assert restored.blocks == original.blocks
+
+
+def test_lazyexpr_from_cframe_roundtrip(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=tmp_path / "a.b2nd", mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2, urlpath=tmp_path / "b.b2nd", mode="w")
+    expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+    carrier = blosc2.ndarray_from_cframe(expr.to_cframe())
+
+    assert carrier.schunk.meta["b2o"] == {"kind": "lazyexpr", "version": 1}
+    assert carrier.schunk.vlmeta["b2o"] == {
+        "kind": "lazyexpr",
+        "version": 1,
+        "expression": "a + b",
+        "operands": {
+            "a": {"kind": "urlpath", "version": 1, "urlpath": str(tmp_path / "a.b2nd")},
+            "b": {"kind": "urlpath", "version": 1, "urlpath": str(tmp_path / "b.b2nd")},
+        },
+    }
+
+    restored = blosc2.from_cframe(expr.to_cframe())
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], np.arange(5, dtype=np.int64) * 3)
+
+
+def test_lazyexpr_open_roundtrip(tmp_path):
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=tmp_path / "a.b2nd", mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2, urlpath=tmp_path / "b.b2nd", mode="w")
+    expr = blosc2.lazyexpr("a + b", operands={"a": a, "b": b})
+    urlpath = tmp_path / "expr.b2nd"
+
+    expr.save(urlpath)
+    restored = blosc2.open(urlpath, mode="r")
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], np.arange(5, dtype=np.int64) * 3)
+
+
+def test_legacy_lazyexpr_open_backward_compat():
+    fixture = Path(__file__).parent / "data" / "legacy_lazyexpr_v1" / "expr.b2nd"
+
+    restored = blosc2.open(fixture, mode="r")
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], np.arange(5, dtype=np.int64) * 3)

@@ -42,6 +42,7 @@ import numpy as np
 
 import blosc2
 
+from .b2objects import _encode_b2object_payload, _make_b2object_carrier, _write_b2object_payload
 from .dsl_kernel import DSLKernel, DSLSyntaxError, _DSLValidator, specialize_miniexpr_inputs
 
 if blosc2._HAS_NUMBA:
@@ -570,7 +571,7 @@ def convert_inputs(inputs):
         return []
     inputs_ = []
     for obj in inputs:
-        if not isinstance(obj, (np.ndarray, blosc2.Operand)) and not np.isscalar(obj):
+        if not isinstance(obj, np.ndarray | blosc2.Operand) and not np.isscalar(obj):
             try:
                 obj = blosc2.SimpleProxy(obj)
             except Exception:
@@ -2855,7 +2856,7 @@ def result_type(
     # Follow NumPy rules for scalar-array operations
     # Create small arrays with the same dtypes and let NumPy's type promotion determine the result type
     arrs = [
-        (np.array(value).dtype if isinstance(value, (str, bytes)) else value)
+        (np.array(value).dtype if isinstance(value, str | bytes) else value)
         if (np.isscalar(value) or not hasattr(value, "dtype"))
         else np.array([0], dtype=_convert_dtype(value.dtype))
         for value in arrays_and_dtypes
@@ -2902,7 +2903,7 @@ class LazyExpr(LazyArray):
         # Check that operands are proper Operands, LazyArray or scalars; if not, convert to NDArray objects
         value1 = (
             blosc2.SimpleProxy(value1)
-            if not (isinstance(value1, (blosc2.Operand, np.ndarray)) or np.isscalar(value1))
+            if not (isinstance(value1, blosc2.Operand | np.ndarray) or np.isscalar(value1))
             else value1
         )
         # Reset values represented as np.int64 etc. to be set as Python natives
@@ -2926,7 +2927,7 @@ class LazyExpr(LazyArray):
             return
         value2 = (
             blosc2.SimpleProxy(value2)
-            if not (isinstance(value2, (blosc2.Operand, np.ndarray)) or np.isscalar(value2))
+            if not (isinstance(value2, blosc2.Operand | np.ndarray) or np.isscalar(value2))
             else value2
         )
         # Reset values represented as np.int64 etc. to be set as Python natives
@@ -3711,44 +3712,27 @@ class LazyExpr(LazyArray):
         if urlpath is None:
             raise ValueError("To save a LazyArray you must provide an urlpath")
 
-        expression = self.expression_tosave if hasattr(self, "expression_tosave") else self.expression
-        operands_ = self.operands_tosave if hasattr(self, "operands_tosave") else self.operands
-        # Validate expression
-        validate_expr(expression)
-
-        meta = kwargs.get("meta", {})
-        meta["LazyArray"] = LazyArrayEnum.Expr.value
         kwargs["urlpath"] = urlpath
-        kwargs["meta"] = meta
         kwargs["mode"] = "w"  # always overwrite the file in urlpath
+        self._to_b2object_carrier(**kwargs)
 
-        # Create an empty array; useful for providing the shape and dtype of the outcome
-        array = blosc2.empty(shape=self.shape, dtype=self.dtype, **kwargs)
+    def to_cframe(self) -> bytes:
+        return self._to_b2object_carrier().to_cframe()
 
-        # Save the expression and operands in the metadata
-        operands = {}
-        for key, value in operands_.items():
-            if isinstance(value, blosc2.C2Array):
-                operands[key] = {
-                    "path": str(value.path),
-                    "urlbase": value.urlbase,
-                }
-                continue
-            if isinstance(value, blosc2.Proxy):
-                # Take the required info from the Proxy._cache container
-                value = value._cache
-            if not hasattr(value, "schunk"):
-                raise ValueError(
-                    "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
-                )
-            if value.schunk.urlpath is None:
-                raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
-            operands[key] = value.schunk.urlpath
-        array.schunk.vlmeta["_LazyArray"] = {
-            "expression": expression,
-            "UDF": None,
-            "operands": operands,
-        }
+    def _to_b2object_carrier(self, **kwargs):
+        payload = _encode_b2object_payload(self)
+        if payload is None:
+            raise TypeError("Unsupported persisted Blosc2 object")
+        array = _make_b2object_carrier(
+            "lazyexpr",
+            self.shape,
+            self.dtype,
+            chunks=self.chunks,
+            blocks=self.blocks,
+            **kwargs,
+        )
+        _write_b2object_payload(array, payload)
+        return array
 
     @classmethod
     def _new_expr(cls, expression, operands, guess, out=None, where=None, ne_args=None):
@@ -3764,7 +3748,7 @@ class LazyExpr(LazyArray):
             _operands = operands | local_vars
             # Check that operands are proper Operands, LazyArray or scalars; if not, convert to NDArray objects
             for op, val in _operands.items():
-                if not (isinstance(val, (blosc2.Operand, np.ndarray)) or np.isscalar(val)):
+                if not (isinstance(val, blosc2.Operand | np.ndarray) or np.isscalar(val)):
                     _operands[op] = blosc2.SimpleProxy(val)
             # for scalars just return value (internally converts to () if necessary)
             opshapes = {k: v if not hasattr(v, "shape") else v.shape for k, v in _operands.items()}
