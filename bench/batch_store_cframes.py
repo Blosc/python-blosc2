@@ -16,7 +16,7 @@ import time
 from bisect import bisect_right
 
 import blosc2
-from blosc2._msgpack_utils import msgpack_packb
+from blosc2.msgpack_utils import msgpack_packb
 
 
 URLPATH = "bench_batch_store_cframes.b2b"
