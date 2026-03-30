@@ -1721,6 +1721,37 @@ def test_missing_operator():
     blosc2.remove_urlpath("expr.b2nd")
 
 
+def test_save_dictstore_operands(tmp_path):
+    store_path = tmp_path / "operands.b2z"
+    ext_a = tmp_path / "a.b2nd"
+    ext_b = tmp_path / "b.b2nd"
+    expr_path = tmp_path / "expr.b2nd"
+    expected = np.arange(5, dtype=np.int64) * 3
+
+    a = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=str(ext_a), mode="w")
+    b = blosc2.asarray(np.arange(5, dtype=np.int64) * 2, urlpath=str(ext_b), mode="w")
+    with blosc2.DictStore(str(store_path), mode="w", threshold=None) as dstore:
+        dstore["/a"] = a
+        dstore["/b"] = b
+
+    with blosc2.DictStore(str(store_path), mode="r") as dstore:
+        a = dstore["/a"]
+        b = dstore["/b"]
+        expr = blosc2.lazyexpr("a + b")
+        expr.save(expr_path)
+
+    carrier = blosc2.open(expr_path, mode="r").array
+    assert carrier.schunk.vlmeta["b2o"]["operands"] == {
+        "a": {"kind": "dictstore_key", "version": 1, "urlpath": str(store_path), "key": "/a"},
+        "b": {"kind": "dictstore_key", "version": 1, "urlpath": str(store_path), "key": "/b"},
+    }
+
+    restored = blosc2.open(expr_path)
+
+    assert isinstance(restored, blosc2.LazyExpr)
+    np.testing.assert_array_equal(restored[:], expected)
+
+
 # Test the chaining of multiple lazy expressions
 def test_chain_expressions():
     N = 1_000

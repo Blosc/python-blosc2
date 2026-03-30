@@ -3718,12 +3718,46 @@ class LazyExpr(LazyArray):
         self._to_b2object_carrier(**kwargs)
 
     def to_cframe(self) -> bytes:
-        return self._to_b2object_carrier().to_cframe()
+        try:
+            return self._to_b2object_carrier().to_cframe()
+        except (TypeError, ValueError):
+            return self.compute().to_cframe()
 
     def _to_b2object_carrier(self, **kwargs):
-        payload = encode_b2object_payload(self)
-        if payload is None:
-            raise TypeError("Unsupported persisted Blosc2 object")
+        expression = self.expression_tosave if hasattr(self, "expression_tosave") else self.expression
+        operands_ = self.operands_tosave if hasattr(self, "operands_tosave") else self.operands
+        validate_expr(expression)
+
+        payload = {"kind": "lazyexpr", "version": 1, "expression": expression, "operands": {}}
+        carrier_urlpath = kwargs.get("urlpath")
+        carrier_parent = Path(carrier_urlpath).parent if carrier_urlpath is not None else None
+        for key, value in operands_.items():
+            if isinstance(value, blosc2.C2Array):
+                payload["operands"][key] = encode_b2object_payload(value)
+                continue
+            if isinstance(value, blosc2.Proxy):
+                value = value._cache
+            ref = getattr(value, "_blosc2_ref", None)
+            if isinstance(ref, blosc2.Ref):
+                payload["operands"][key] = ref.to_dict()
+                continue
+            if not hasattr(value, "schunk"):
+                raise ValueError(
+                    "To save a LazyArray, all operands must be blosc2.NDArray or blosc2.C2Array objects"
+                )
+            if value.schunk.urlpath is None:
+                raise ValueError("To save a LazyArray, all operands must be stored on disk/network")
+            operand_urlpath = Path(value.schunk.urlpath)
+            if carrier_parent is not None and not operand_urlpath.is_absolute():
+                ref_urlpath = operand_urlpath.as_posix()
+            elif carrier_parent is not None:
+                try:
+                    ref_urlpath = operand_urlpath.relative_to(carrier_parent).as_posix()
+                except ValueError:
+                    ref_urlpath = operand_urlpath.as_posix()
+            else:
+                ref_urlpath = operand_urlpath.as_posix()
+            payload["operands"][key] = {"kind": "urlpath", "version": 1, "urlpath": ref_urlpath}
         array = make_b2object_carrier(
             "lazyexpr",
             self.shape,

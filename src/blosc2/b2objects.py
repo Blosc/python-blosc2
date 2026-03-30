@@ -10,6 +10,7 @@ from __future__ import annotations
 import builtins
 import inspect
 import linecache
+import pathlib
 import textwrap
 from dataclasses import asdict
 from typing import Any
@@ -47,8 +48,11 @@ def encode_operand_reference(obj):
     return blosc2.Ref.from_object(obj).to_dict()
 
 
-def decode_operand_reference(payload):
-    return blosc2.Ref.from_dict(payload).open()
+def decode_operand_reference(payload, *, base_path=None):
+    ref = blosc2.Ref.from_dict(payload)
+    if ref.kind == "urlpath" and base_path is not None and not pathlib.Path(ref.urlpath).is_absolute():
+        return blosc2.open(base_path / ref.urlpath, mode="r")
+    return ref.open()
 
 
 def encode_b2object_payload(obj) -> dict[str, Any] | None:
@@ -98,7 +102,7 @@ def encode_b2object_payload(obj) -> dict[str, Any] | None:
     return None
 
 
-def decode_b2object_payload(payload: dict[str, Any]):
+def decode_b2object_payload(payload: dict[str, Any], *, carrier_path=None):
     kind = payload.get("kind")
     version = payload.get("version")
     if version != _B2OBJECT_VERSION:
@@ -107,24 +111,39 @@ def decode_b2object_payload(payload: dict[str, Any]):
         ref = blosc2.Ref.from_dict(payload)
         return ref.open()
     if kind == "lazyexpr":
-        return decode_structured_lazyexpr(payload)
+        return decode_structured_lazyexpr(payload, carrier_path=carrier_path)
     if kind == "lazyudf":
-        return decode_structured_lazyudf(payload)
+        return decode_structured_lazyudf(payload, carrier_path=carrier_path)
     raise ValueError(f"Unsupported persisted Blosc2 object kind: {kind!r}")
 
 
-def decode_structured_lazyexpr(payload):
+def decode_structured_lazyexpr(payload, *, carrier_path=None):
     expression = payload.get("expression")
     if not isinstance(expression, str):
         raise TypeError("Structured LazyExpr payload requires a string 'expression'")
     operands_payload = payload.get("operands")
     if not isinstance(operands_payload, dict):
         raise TypeError("Structured LazyExpr payload requires a mapping 'operands'")
-    operands = {key: decode_operand_reference(value) for key, value in operands_payload.items()}
+    operands = {}
+    missing_ops = {}
+    for key, value in operands_payload.items():
+        try:
+            operands[key] = decode_operand_reference(value, base_path=carrier_path)
+        except FileNotFoundError:
+            ref = blosc2.Ref.from_dict(value)
+            if ref.kind == "urlpath":
+                missing_ops[key] = pathlib.Path(ref.urlpath)
+            else:
+                raise
+    if missing_ops:
+        exc = blosc2.exceptions.MissingOperands(expression, missing_ops)
+        exc.expr = expression
+        exc.missing_ops = missing_ops
+        raise exc
     return blosc2.lazyexpr(expression, operands=operands)
 
 
-def decode_structured_lazyudf(payload):
+def decode_structured_lazyudf(payload, *, carrier_path=None):
     function_kind = payload.get("function_kind")
     if function_kind != "dsl":
         raise ValueError(f"Unsupported structured LazyUDF function kind: {function_kind!r}")
@@ -167,7 +186,8 @@ def decode_structured_lazyudf(payload):
         func.dsl_source = dsl_source
 
     operands = tuple(
-        decode_operand_reference(operands_payload[f"o{n}"]) for n in range(len(operands_payload))
+        decode_operand_reference(operands_payload[f"o{n}"], base_path=carrier_path)
+        for n in range(len(operands_payload))
     )
     return blosc2.lazyudf(func, operands, dtype=np.dtype(dtype), shape=tuple(shape_payload), **kwargs)
 
@@ -194,4 +214,12 @@ def open_b2object(obj):
         raise ValueError(f"Unsupported persisted Blosc2 object version: {marker.get('version')!r}")
     if marker.get("kind") != payload.get("kind"):
         raise ValueError("Persisted Blosc2 object marker/payload kind mismatch")
-    return decode_b2object_payload(payload)
+    carrier_path = None
+    schunk = getattr(obj, "schunk", obj)
+    if getattr(schunk, "urlpath", None) is not None:
+        carrier_path = pathlib.Path(schunk.urlpath).parent
+    opened = decode_b2object_payload(payload, carrier_path=carrier_path)
+    if isinstance(opened, blosc2.LazyExpr | blosc2.LazyUDF):
+        opened.array = obj
+        opened.schunk = schunk
+    return opened
