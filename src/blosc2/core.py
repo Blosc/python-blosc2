@@ -1918,7 +1918,9 @@ def ndarray_from_cframe(cframe: bytes | str, copy: bool = False) -> blosc2.NDArr
 
 def from_cframe(
     cframe: bytes | str, copy: bool = True
-) -> blosc2.EmbedStore | blosc2.NDArray | blosc2.SChunk | blosc2.BatchStore | blosc2.VLArray:
+) -> (
+    blosc2.EmbedStore | blosc2.NDArray | blosc2.SChunk | blosc2.BatchStore | blosc2.VLArray | blosc2.C2Array
+):
     """Create a :ref:`EmbedStore <EmbedStore>`, :ref:`NDArray <NDArray>`, :ref:`SChunk <SChunk>`,
     :ref:`BatchStore <BatchStore>` or :ref:`VLArray <VLArray>` instance
     from a contiguous frame buffer.
@@ -1956,6 +1958,8 @@ def from_cframe(
         return blosc2.BatchStore(_from_schunk=schunk_from_cframe(cframe, copy=copy))
     if "vlarray" in schunk.meta:
         return blosc2.vlarray_from_cframe(cframe, copy=copy)
+    if "b2o" in schunk.meta:
+        return blosc2._open_b2object(ndarray_from_cframe(cframe, copy=copy))
     if "b2nd" in schunk.meta:
         return ndarray_from_cframe(cframe, copy=copy)
     return schunk_from_cframe(cframe, copy=copy)

@@ -10,7 +10,7 @@ import pytest
 
 import blosc2
 import blosc2.c2array as blosc2_c2array
-from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
+from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
 
 @blosc2.dsl_kernel

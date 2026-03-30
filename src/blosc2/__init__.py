@@ -538,6 +538,7 @@ from .tree_store import TreeStore
 from .batch_store import Batch, BatchStore
 from .vlarray import VLArray, vlarray_from_cframe
 from .ref import Ref
+from .b2objects import _open_b2object
 
 from .c2array import c2context, C2Array, URLPath
 

@@ -19,8 +19,8 @@ import numpy as np
 
 import blosc2
 from blosc2 import SpecialValue, blosc2_ext
-from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 from blosc2.info import InfoReporter, format_nbytes_info
+from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
 
 class vlmeta(MutableMapping, blosc2_ext.vlmeta):
@@ -1633,6 +1633,9 @@ def _process_opened_object(res):
             return blosc2.Proxy(src, _cache=res)
         elif not proxy_src["caterva2_env"]:
             raise RuntimeError("Could not find the source when opening a Proxy")
+
+    if "b2o" in meta:
+        return blosc2._open_b2object(res)
 
     if "vlarray" in meta:
         from blosc2.vlarray import VLArray

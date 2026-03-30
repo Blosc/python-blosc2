@@ -18,6 +18,7 @@ import numpy as np
 import requests
 
 import blosc2
+from blosc2.b2objects import _encode_b2object_payload, _make_b2object_carrier, _write_b2object_payload
 from blosc2.info import InfoReporter, format_nbytes_info
 
 _subscriber_data = {
@@ -237,6 +238,37 @@ class C2Array(blosc2.Operand):
         # Remove "filters, meta" from cparams; this is an artifact from the server
         cparams.pop("filters, meta", None)
         self._cparams = blosc2.CParams(**cparams)
+
+    def _to_b2object_payload(self) -> dict:
+        payload = _encode_b2object_payload(self)
+        if payload is None:
+            raise TypeError("Unsupported persisted Blosc2 object")
+        return payload
+
+    def _to_b2object_carrier(self, **kwargs):
+        array = _make_b2object_carrier(
+            "c2array",
+            self.shape,
+            self.dtype,
+            chunks=self.chunks,
+            blocks=self.blocks,
+            cparams=self.cparams,
+            **kwargs,
+        )
+        _write_b2object_payload(array, self._to_b2object_payload())
+        return array
+
+    def to_cframe(self) -> bytes:
+        """Serialize the remote array reference as a CFrame-backed Blosc2 object."""
+        return self._to_b2object_carrier().to_cframe()
+
+    def save(self, urlpath: str, contiguous: bool = True, **kwargs) -> None:
+        """Persist the remote array reference using a CFrame-backed carrier."""
+        blosc2.blosc2_ext.check_access_mode(urlpath, "w")
+        kwargs["urlpath"] = urlpath
+        kwargs["contiguous"] = contiguous
+        kwargs["mode"] = "w"
+        self._to_b2object_carrier(**kwargs)
 
     def __getitem__(self, slice_: int | slice | Sequence[slice]) -> np.ndarray:
         """
