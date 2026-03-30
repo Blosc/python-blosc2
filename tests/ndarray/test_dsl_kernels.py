@@ -975,3 +975,33 @@ def test_dsl_save_input_names_match(tmp_path):
     assert isinstance(reloaded.func, DSLKernel)
     assert reloaded.func.input_names == ["x", "y"]
     assert list(reloaded.inputs_dict.keys()) == ["x", "y"]
+
+
+def test_dsl_save_dictstore_operands(tmp_path):
+    shape = (10,)
+    store_path = tmp_path / "ops.b2z"
+    ext_a = tmp_path / "a.b2nd"
+    ext_b = tmp_path / "b.b2nd"
+    expr_path = tmp_path / "lazy.b2nd"
+
+    a = blosc2.asarray(np.arange(shape[0], dtype=np.float64), urlpath=str(ext_a), mode="w")
+    b = blosc2.asarray(np.arange(shape[0], dtype=np.float64) * 2, urlpath=str(ext_b), mode="w")
+    with blosc2.DictStore(str(store_path), mode="w", threshold=None) as dstore:
+        dstore["/a"] = a
+        dstore["/b"] = b
+
+    with blosc2.DictStore(str(store_path), mode="r") as dstore:
+        a = dstore["/a"]
+        b = dstore["/b"]
+        lazy = blosc2.lazyudf(kernel_save_simple, (a, b), dtype=np.float64)
+        lazy.save(urlpath=str(expr_path))
+
+    carrier = blosc2.open(str(expr_path), mode="r").array
+    assert carrier.schunk.vlmeta["b2o"]["operands"] == {
+        "o0": {"kind": "dictstore_key", "version": 1, "urlpath": "ops.b2z", "key": "/a"},
+        "o1": {"kind": "dictstore_key", "version": 1, "urlpath": "ops.b2z", "key": "/b"},
+    }
+
+    reloaded = blosc2.open(str(expr_path), mode="r")
+    expected = (np.arange(shape[0], dtype=np.float64) * 3) ** 2
+    np.testing.assert_allclose(reloaded.compute()[...], expected, rtol=1e-5, atol=1e-6)

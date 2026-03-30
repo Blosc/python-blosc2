@@ -12,8 +12,8 @@ import pathlib
 from typing import TYPE_CHECKING, Any
 
 import blosc2
-from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 from blosc2.info import InfoReporter, format_nbytes_info
+from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
 if TYPE_CHECKING:
     from collections.abc import Iterator

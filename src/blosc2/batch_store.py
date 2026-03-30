@@ -18,8 +18,8 @@ from typing import Any
 import numpy as np
 
 import blosc2
-from blosc2._msgpack_utils import msgpack_packb, msgpack_unpackb
 from blosc2.info import InfoReporter, format_nbytes_info
+from blosc2.msgpack_utils import msgpack_packb, msgpack_unpackb
 
 _BATCHSTORE_META = {"version": 1, "serializer": "msgpack", "items_per_block": None, "arrow_schema": None}
 _SUPPORTED_SERIALIZERS = {"msgpack", "arrow"}

@@ -34,10 +34,10 @@ from blosc2.schunk import SChunk
 
 from .linalg import matmul
 from .utils import (
-    _get_local_slice,
-    _get_selection,
-    _incomplete_lazyfunc,
     get_chunks_idx,
+    get_local_slice,
+    get_selection,
+    incomplete_lazyfunc,
     npbinvert,
     nplshift,
     nprshift,
@@ -157,7 +157,7 @@ def is_inside_new_expr() -> bool:
     """
     # Get the current call stack
     stack = inspect.stack()
-    return builtins.any(frame_info.function in {"_new_expr", "_open_lazyarray"} for frame_info in stack)
+    return builtins.any(frame_info.function in {"_new_expr", "open_lazyarray"} for frame_info in stack)
 
 
 def make_key_hashable(key):
@@ -1834,7 +1834,7 @@ def imag(ndarr: blosc2.Array, /) -> blosc2.LazyExpr:
     return blosc2.LazyExpr(new_op=(ndarr, "imag", None))
 
 
-@_incomplete_lazyfunc
+@incomplete_lazyfunc
 def contains(ndarr: blosc2.Array, value: str | bytes | blosc2.Array, /) -> blosc2.LazyExpr:
     """
     Check if the array contains a specified value.
@@ -3060,7 +3060,7 @@ def remainder(
     return blosc2.LazyExpr(new_op=(x1, "%", x2))
 
 
-@_incomplete_lazyfunc
+@incomplete_lazyfunc
 def clip(
     x: blosc2.Array,
     min: int | float | blosc2.Array | None = None,
@@ -3102,7 +3102,7 @@ def clip(
     return blosc2.lazyudf(chunkwise_clip, (x, min, max), dtype=dtype, shape=shape, **kwargs)
 
 
-@_incomplete_lazyfunc
+@incomplete_lazyfunc
 def logaddexp(x1: int | float | blosc2.Array, x2: int | float | blosc2.Array, **kwargs: Any) -> NDArray:
     """
     Calculates the logarithm of the sum of exponentiations log(exp(x1) + exp(x2)) for
@@ -4036,7 +4036,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         # now all indices are slices or arrays of integers (or booleans)
         # # moreover, all arrays are consecutive (otherwise an error is raised)
 
-        if np.all([isinstance(s, (slice, np.ndarray)) for s in _slice]) and np.all(
+        if np.all([isinstance(s, slice | np.ndarray) for s in _slice]) and np.all(
             [s.dtype is not bool for s in _slice if isinstance(s, np.ndarray)]
         ):
             chunks = np.array(chunks)
@@ -4123,14 +4123,14 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
                 # loop over chunks coming from slices before and after array indices
                 for cprior_tuple in product(*cprior_slices):
-                    out_prior_selection, prior_selection, loc_prior_selection = _get_selection(
+                    out_prior_selection, prior_selection, loc_prior_selection = get_selection(
                         cprior_tuple, prior_tuple, chunks[:begin]
                     )
                     for cpost_tuple in product(*cpost_slices):
-                        out_post_selection, post_selection, loc_post_selection = _get_selection(
+                        out_post_selection, post_selection, loc_post_selection = get_selection(
                             cpost_tuple, post_tuple, chunks[end:]
                         )
-                        locbegin, locend = _get_local_slice(
+                        locbegin, locend = get_local_slice(
                             prior_selection, post_selection, (chunk_begin, chunk_end)
                         )
                         to_be_loaded = np.empty(locend - locbegin, dtype=self.dtype)
@@ -4202,10 +4202,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
             slice_to_chunktuple(s, c) for s, c in zip(_slice, chunks, strict=True)
         ]  # internally handles negative steps
         for c in product(*intersecting_chunks):
-            sel_idx, glob_selection, sub_idx = _get_selection(c, _slice, chunks)
+            sel_idx, glob_selection, sub_idx = get_selection(c, _slice, chunks)
             sel_idx = tuple(s for s, m in zip(sel_idx, mask, strict=True) if not m)
             sub_idx = tuple(s if not m else s.start for s, m in zip(sub_idx, mask, strict=True))
-            locstart, locstop = _get_local_slice(
+            locstart, locstop = get_local_slice(
                 glob_selection,
                 (),
                 ((), ()),  # switches start and stop for negative steps
@@ -4298,8 +4298,8 @@ class NDArray(blosc2_ext.NDArray, Operand):
         key = key[()] if hasattr(key, "shape") and key.shape == () else key  # convert to scalar
 
         # fancy indexing
-        if isinstance(key_, (list, np.ndarray)) or builtins.any(
-            isinstance(k, (list, np.ndarray)) for k in key_
+        if isinstance(key_, list | np.ndarray) or builtins.any(
+            isinstance(k, list | np.ndarray) for k in key_
         ):
             # check scalar booleans, which add 1 dim to beginning
             if np.issubdtype(type(key), bool) and np.isscalar(key):
@@ -4397,7 +4397,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             value if np.isscalar(value) else blosc2.as_simpleproxy(value)
         )  # convert to SimpleProxy for e.g. JAX, Tensorflow, PyTorch
 
-        if builtins.any(isinstance(k, (list, np.ndarray)) for k in key_):  # fancy indexing
+        if builtins.any(isinstance(k, list | np.ndarray) for k in key_):  # fancy indexing
             _slice = ndindex.ndindex(key_).expand(
                 self.shape
             )  # handles negative indices -> positive internally
@@ -4969,7 +4969,7 @@ def where(
     return condition.where(x, y)
 
 
-@_incomplete_lazyfunc
+@incomplete_lazyfunc
 def startswith(
     a: str | blosc2.Array, prefix: str | blosc2.Array
 ) -> NDArray:  # start: int = 0, end: int | None = None, **kwargs)
@@ -5009,7 +5009,7 @@ def startswith(
     return blosc2.LazyExpr(new_op=(a, "startswith", prefix))
 
 
-@_incomplete_lazyfunc
+@incomplete_lazyfunc
 def endswith(
     a: str | blosc2.Array, suffix: str | blosc2.Array
 ) -> NDArray:  # start: int = 0, end: int | None = None, **kwargs) -> NDArray:
@@ -5048,7 +5048,7 @@ def endswith(
     return blosc2.LazyExpr(new_op=(a, "endswith", suffix))
 
 
-@_incomplete_lazyfunc
+@incomplete_lazyfunc
 def lower(a: str | blosc2.Array) -> NDArray:
     """
     Copy-pasted from numpy documentation: https://numpy.org/doc/stable/reference/generated/numpy.char.lower.html
@@ -5072,7 +5072,7 @@ def lower(a: str | blosc2.Array) -> NDArray:
     return blosc2.LazyExpr(new_op=(a, "lower", None))
 
 
-@_incomplete_lazyfunc
+@incomplete_lazyfunc
 def upper(a: str | blosc2.Array) -> NDArray:
     """
     Copy-pasted from numpy documentation: https://numpy.org/doc/stable/reference/generated/numpy.char.upper.html
@@ -6003,7 +6003,7 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
         raise ValueError("Only unsafe casting is supported at the moment.")
     if not hasattr(array, "shape"):
         array = np.asarray(array)  # defaults if dtype=None
-    dtype_ = blosc2.proxy._convert_dtype(array.dtype)
+    dtype_ = blosc2.proxy.convert_dtype(array.dtype)
     dtype = kwargs.pop("dtype", dtype_)  # check if dtype provided
     kwargs = _check_ndarray_kwargs(**kwargs)
     chunks = kwargs.pop("chunks", None)
@@ -6013,7 +6013,7 @@ def asarray(array: Sequence | blosc2.Array, copy: bool | None = None, **kwargs: 
         chunks = array.chunks
     # Zarr adds a .blocks property that maps to a zarr.indexing.BlockIndex object
     # Let's avoid this
-    if blocks is None and hasattr(array, "blocks") and isinstance(array.blocks, (tuple, list)):
+    if blocks is None and hasattr(array, "blocks") and isinstance(array.blocks, tuple | list):
         blocks = array.blocks
 
     copy = True if copy is None and not isinstance(array, NDArray) else copy
@@ -6572,7 +6572,7 @@ def take(x: blosc2.Array, indices: blosc2.Array, axis: int | None = None) -> NDA
             raise ValueError("Must specify axis parameter if x is not 1D.")
     if axis < 0:
         axis += x.ndim
-    if not isinstance(axis, (int, np.integer)):
+    if not isinstance(axis, int | np.integer):
         raise ValueError("Axis must be integer.")
     if isinstance(indices, list):
         indices = np.asarray(indices)
@@ -6604,7 +6604,7 @@ def take_along_axis(x: blosc2.Array, indices: blosc2.Array, axis: int = -1) -> N
     out: NDArray
         Selected indices of x.
     """
-    if not isinstance(axis, (int, np.integer)):
+    if not isinstance(axis, int | np.integer):
         raise ValueError("Axis must be integer.")
     if indices.ndim != x.ndim:
         raise ValueError("Indices must have same dimensions as x.")

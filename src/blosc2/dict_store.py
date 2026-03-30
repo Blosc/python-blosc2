@@ -19,7 +19,7 @@ import numpy as np
 import blosc2
 from blosc2.c2array import C2Array
 from blosc2.embed_store import EmbedStore
-from blosc2.schunk import SChunk, _process_opened_object
+from blosc2.schunk import SChunk, process_opened_object
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Set
@@ -227,30 +227,39 @@ class DictStore:
         rel_path: str,
     ) -> str | None:
         """Return the supported external leaf kind for an already opened object."""
-        processed = _process_opened_object(opened)
-        if isinstance(processed, blosc2.BatchStore):
-            kind = "batchstore"
-        elif isinstance(processed, blosc2.VLArray):
-            kind = "vlarray"
-        elif isinstance(processed, blosc2.NDArray):
+        meta = getattr(opened, "schunk", opened).meta
+        if "b2o" in meta and isinstance(opened, blosc2.NDArray):
+            # Keep b2o carriers as NDArray external leaves during discovery.
+            # Rehydrating them here can recurse when a lazy recipe points back
+            # into the same DictStore via dictstore_key refs.
             kind = "ndarray"
-        elif isinstance(processed, SChunk):
-            kind = "schunk"
+            processed_name = type(opened).__name__
         else:
-            warnings.warn(
-                f"Ignoring unsupported Blosc2 object at '{rel_path}' during DictStore discovery: "
-                f"{type(processed).__name__}",
-                UserWarning,
-                stacklevel=2,
-            )
-            return None
+            processed = process_opened_object(opened)
+            processed_name = type(processed).__name__
+            if isinstance(processed, blosc2.BatchStore):
+                kind = "batchstore"
+            elif isinstance(processed, blosc2.VLArray):
+                kind = "vlarray"
+            elif isinstance(processed, blosc2.NDArray):
+                kind = "ndarray"
+            elif isinstance(processed, SChunk):
+                kind = "schunk"
+            else:
+                warnings.warn(
+                    f"Ignoring unsupported Blosc2 object at '{rel_path}' during DictStore discovery: "
+                    f"{processed_name}",
+                    UserWarning,
+                    stacklevel=2,
+                )
+                return None
 
         expected_ext = cls._expected_ext_from_kind(kind)
         found_ext = os.path.splitext(rel_path)[1]
         if found_ext != expected_ext:
             warnings.warn(
                 f"External leaf '{rel_path}' uses extension '{found_ext}' but metadata resolves to "
-                f"{type(processed).__name__}; expected '{expected_ext}'.",
+                f"{processed_name}; expected '{expected_ext}'.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -388,7 +397,20 @@ class DictStore:
 
             # Save the value to the destination path
             if not external_file:
-                if hasattr(value, "save"):
+                if isinstance(value, blosc2.NDArray) and "b2o" in value.schunk.meta:
+                    carrier = blosc2.empty(
+                        value.shape,
+                        value.dtype,
+                        chunks=value.chunks,
+                        blocks=value.blocks,
+                        cparams=value.cparams,
+                        urlpath=dest_path,
+                        mode="w",
+                        meta={"b2o": value.schunk.meta["b2o"]},
+                    )
+                    for meta_key, meta_value in value.schunk.vlmeta[:].items():
+                        carrier.schunk.vlmeta[meta_key] = meta_value
+                elif hasattr(value, "save"):
                     value.save(urlpath=dest_path)
                 else:
                     # SChunk, VLArray and BatchStore can all be persisted via their cframe.
@@ -425,7 +447,7 @@ class DictStore:
                     mmap_mode=self.mmap_mode,
                     dparams=self.dparams,
                 )
-                return self._annotate_external_value(key, _process_opened_object(opened))
+                return self._annotate_external_value(key, process_opened_object(opened))
             else:
                 urlpath = os.path.join(self.working_dir, filepath)
                 if os.path.exists(urlpath):
@@ -501,7 +523,7 @@ class DictStore:
                         offset = self.offsets[filepath]["offset"]
                         yield self._annotate_external_value(
                             key,
-                            _process_opened_object(
+                            process_opened_object(
                                 blosc2.blosc2_ext.open(
                                     self.b2z_path,
                                     mode="r",
@@ -541,7 +563,7 @@ class DictStore:
                             key,
                             self._annotate_external_value(
                                 key,
-                                _process_opened_object(
+                                process_opened_object(
                                     blosc2.blosc2_ext.open(
                                         self.b2z_path,
                                         mode="r",

@@ -118,7 +118,7 @@ class Ref:
         import blosc2
 
         if self.kind == "urlpath":
-            return blosc2.open(self.urlpath, mode="r")
+            return blosc2.open(self.urlpath)
         if self.kind == "dictstore_key":
             return blosc2.DictStore(self.urlpath, mode="r")[self.key]
         if self.kind == "c2array":

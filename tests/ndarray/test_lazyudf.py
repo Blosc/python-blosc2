@@ -501,6 +501,23 @@ def test_save_ludf():
     blosc2.remove_urlpath(urlpath)
 
 
+def test_lazyudf_vlmeta_roundtrip(tmp_path):
+    a_path = tmp_path / "a.b2nd"
+    expr_path = tmp_path / "lazyudf_vlmeta.b2nd"
+    array = blosc2.asarray(np.arange(5, dtype=np.int64), urlpath=str(a_path), mode="w")
+    expr = blosc2.lazyudf(udf1p, (array,), np.float64)
+
+    expr.vlmeta["name"] = "increment"
+    expr.vlmeta["attrs"] = {"version": 1}
+    expr.save(urlpath=str(expr_path))
+
+    restored = blosc2.open(str(expr_path))
+
+    assert isinstance(restored, blosc2.LazyUDF)
+    assert restored.vlmeta["name"] == "increment"
+    assert restored.vlmeta["attrs"] == {"version": 1}
+
+
 # Test get_chunk method
 def test_get_chunk():
     a = blosc2.linspace(0, 100, 100, shape=(10, 10), chunks=(3, 4), blocks=(2, 3))
