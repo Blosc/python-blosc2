@@ -1758,6 +1758,7 @@ def slices_eval(  # noqa: C901
         ne_args = {}
     chunks = kwargs.get("chunks")
     where: dict | None = kwargs.pop("_where_args", None)
+    use_index = kwargs.pop("_use_index", True)
     _indices = kwargs.pop("_indices", False)
     if _indices and (not where or len(where) != 1):
         raise NotImplementedError("Indices can only be used with one where condition")
@@ -1836,6 +1837,11 @@ def slices_eval(  # noqa: C901
         if 0 not in chunks
         else np.asarray(shape)
     )
+    index_plan = None
+    if where is not None and len(where) == 1 and use_index:
+        from . import indexing
+
+        index_plan = indexing.plan_query(expression, operands, where, use_index=use_index)
 
     for chunk_slice in intersecting_chunks:
         # Check whether current cslice intersects with _slice
@@ -1851,6 +1857,10 @@ def slices_eval(  # noqa: C901
         offset = tuple(s.start for s in cslice)  # offset for the udf
         cslice_shape = tuple(s.stop - s.start for s in cslice)
         len_chunk = math.prod(cslice_shape)
+        if index_plan is not None and index_plan.usable and not index_plan.candidate_chunks[nchunk]:
+            if _indices or _order:
+                leninputs += len_chunk
+            continue
         # get local index of part of out that is to be updated
         cslice_subidx = (
             ndindex.ndindex(cslice).as_subindex(_slice).raw
@@ -3687,6 +3697,16 @@ class LazyExpr(LazyArray):
             lazy_expr._order = order
         return lazy_expr
 
+    def will_use_index(self) -> bool:
+        from . import indexing
+
+        return indexing.will_use_index(self)
+
+    def explain(self) -> dict:
+        from . import indexing
+
+        return indexing.explain_query(self)
+
     def compute(
         self,
         item=(),
@@ -3735,6 +3755,7 @@ class LazyExpr(LazyArray):
                 "_indices",
                 "_order",
                 "_ne_args",
+                "_use_index",
                 "dtype",
                 "shape",
                 "fp_accuracy",

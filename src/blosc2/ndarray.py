@@ -4409,14 +4409,22 @@ class NDArray(blosc2_ext.NDArray, Operand):
                     _slice = ndindex.ndindex(()).expand(self.shape)  # just get whole array
                 else:  # do nothing
                     return self
-            return self._get_set_findex_default(_slice, value=value)
+            result = self._get_set_findex_default(_slice, value=value)
+            from . import indexing
+
+            indexing.mark_indexes_stale(self)
+            return result
 
         start, stop, step, none_mask = get_ndarray_start_stop(self.ndim, key_, self.shape)
 
         if step != (1,) * self.ndim:  # handle non-unit or negative steps
             if np.any(none_mask):
                 raise ValueError("Cannot mix non-unit steps and None indexing for __setitem__.")
-            return self._get_set_nonunit_steps((start, stop, step, mask), value=value)
+            result = self._get_set_nonunit_steps((start, stop, step, mask), value=value)
+            from . import indexing
+
+            indexing.mark_indexes_stale(self)
+            return result
 
         shape = [sp - st for sp, st in zip(stop, start, strict=False)]
         if isinstance(value, blosc2.Operand):  # handles SimpleProxy, NDArray, LazyExpr etc.
@@ -4431,7 +4439,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
                 # when using complex functions (e.g. conj) with real arrays
                 value = value.real.astype(self.dtype)
 
-        return super().set_slice((start, stop), value)
+        result = super().set_slice((start, stop), value)
+        from . import indexing
+
+        indexing.mark_indexes_stale(self)
+        return result
 
     def __iter__(self):
         """Iterate over the (outer) elements of the array.
@@ -4705,6 +4717,50 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         super().copy(self.dtype, cparams=asdict(self.cparams), **kwargs)
 
+    def create_index(
+        self,
+        field: str | None = None,
+        kind: str = "light",
+        optlevel: int = 3,
+        granularity: str = "chunk",
+        persistent: bool | None = None,
+        name: str | None = None,
+        **kwargs: Any,
+    ) -> dict:
+        from . import indexing
+
+        return indexing.create_index(
+            self,
+            field=field,
+            kind=kind,
+            optlevel=optlevel,
+            granularity=granularity,
+            persistent=persistent,
+            name=name,
+            **kwargs,
+        )
+
+    def create_csindex(self, field: str | None = None, **kwargs: Any) -> dict:
+        from . import indexing
+
+        return indexing.create_csindex(self, field=field, **kwargs)
+
+    def drop_index(self, field: str | None = None, name: str | None = None) -> None:
+        from . import indexing
+
+        indexing.drop_index(self, field=field, name=name)
+
+    def rebuild_index(self, field: str | None = None, name: str | None = None) -> dict:
+        from . import indexing
+
+        return indexing.rebuild_index(self, field=field, name=name)
+
+    @property
+    def indexes(self) -> list[dict]:
+        from . import indexing
+
+        return indexing.get_indexes(self)
+
     def resize(self, newshape: tuple | list) -> None:
         """Change the shape of the array by growing or shrinking one or more dimensions.
 
@@ -4745,6 +4801,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
             )
         blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
         super().resize(newshape)
+        from . import indexing
+
+        indexing.mark_indexes_stale(self)
 
     def slice(self, key: int | slice | Sequence[slice], **kwargs: Any) -> NDArray:
         """Get a (multidimensional) slice as a new :ref:`NDArray`.
