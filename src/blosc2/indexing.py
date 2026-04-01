@@ -18,32 +18,52 @@ import blosc2
 
 INDEXES_VLMETA_KEY = "blosc2_indexes"
 INDEX_FORMAT_VERSION = 1
-INDEX_KIND_ZONE_MAP = "zone-map"
 
 FLAG_ALL_NAN = np.uint8(1 << 0)
 FLAG_HAS_NAN = np.uint8(1 << 1)
 
+SEGMENT_LEVELS_BY_KIND = {
+    "ultralight": ("chunk",),
+    "light": ("chunk", "block"),
+    "medium": ("chunk", "block", "subblock"),
+    "full": ("chunk", "block", "subblock"),
+}
+
 _IN_MEMORY_INDEXES: dict[int, dict] = {}
-_SUMMARY_CACHE: dict[tuple[int, str | None], np.ndarray] = {}
+_DATA_CACHE: dict[tuple[int, str | None, str, str], np.ndarray] = {}
 
 
 @dataclass(slots=True)
 class IndexPlan:
     usable: bool
     reason: str
-    candidate_chunks: np.ndarray | None = None
     descriptor: dict | None = None
+    base: blosc2.NDArray | None = None
     field: str | None = None
-    total_chunks: int = 0
-    selected_chunks: int = 0
+    level: str | None = None
+    segment_len: int | None = None
+    candidate_units: np.ndarray | None = None
+    total_units: int = 0
+    selected_units: int = 0
+    exact_positions: np.ndarray | None = None
 
 
 @dataclass(slots=True)
-class PredicatePlan:
+class SegmentPredicatePlan:
     base: blosc2.NDArray
-    candidate_chunks: np.ndarray
+    candidate_units: np.ndarray
     descriptor: dict
     field: str | None
+    level: str
+    segment_len: int
+
+
+@dataclass(slots=True)
+class ExactPredicatePlan:
+    base: blosc2.NDArray
+    descriptor: dict
+    field: str | None
+    intervals: list[tuple[int, int]]
 
 
 def _default_index_store() -> dict:
@@ -58,12 +78,22 @@ def _field_token(field: str | None) -> str:
     return "__self__" if field is None else field
 
 
+def _copy_nested_dict(value: dict | None) -> dict | None:
+    if value is None:
+        return None
+    copied = value.copy()
+    for key, item in list(copied.items()):
+        if isinstance(item, dict):
+            copied[key] = item.copy()
+    return copied
+
+
 def _copy_descriptor(descriptor: dict) -> dict:
-    summary = descriptor.get("summary")
-    descriptor = descriptor.copy()
-    if summary is not None:
-        descriptor["summary"] = summary.copy()
-    return descriptor
+    copied = descriptor.copy()
+    copied["levels"] = _copy_nested_dict(descriptor.get("levels"))
+    if descriptor.get("full") is not None:
+        copied["full"] = descriptor["full"].copy()
+    return copied
 
 
 def _is_persistent_array(array: blosc2.NDArray) -> bool:
@@ -94,8 +124,7 @@ def _save_store(array: blosc2.NDArray, store: dict) -> None:
 
 
 def _supported_index_dtype(dtype: np.dtype) -> bool:
-    dtype = np.dtype(dtype)
-    return dtype.kind in {"b", "i", "u", "f", "m", "M"}
+    return np.dtype(dtype).kind in {"b", "i", "u", "f", "m", "M"}
 
 
 def _field_dtype(array: blosc2.NDArray, field: str | None) -> np.dtype:
@@ -122,101 +151,158 @@ def _validate_index_target(array: blosc2.NDArray, field: str | None) -> np.dtype
 def _sanitize_sidecar_root(urlpath: str | Path) -> tuple[Path, str]:
     path = Path(urlpath)
     suffix = "".join(path.suffixes)
-    if suffix:
-        root = path.name[: -len(suffix)]
-    else:
-        root = path.name
+    root = path.name[: -len(suffix)] if suffix else path.name
     return path, root
 
 
-def _summary_sidecar_path(array: blosc2.NDArray, field: str | None, kind: str) -> str:
+def _sidecar_path(array: blosc2.NDArray, field: str | None, kind: str, name: str) -> str:
     path, root = _sanitize_sidecar_root(array.urlpath)
     token = _field_token(field)
-    return str(path.with_name(f"{root}.__index__.{token}.{kind}.b2nd"))
+    return str(path.with_name(f"{root}.__index__.{token}.{kind}.{name}.b2nd"))
 
 
-def _summary_cache_key(array: blosc2.NDArray, field: str | None) -> tuple[int, str | None]:
-    return (_array_key(array), field)
+def _segment_len(array: blosc2.NDArray, level: str) -> int:
+    if level == "chunk":
+        return int(array.chunks[0])
+    if level == "block":
+        return int(array.blocks[0])
+    if level == "subblock":
+        return max(1, int(array.blocks[0]) // 8)
+    raise ValueError(f"unknown level {level!r}")
 
 
-def _compute_chunk_summaries(array: blosc2.NDArray, field: str | None, dtype: np.dtype) -> np.ndarray:
-    chunk_len = array.chunks[0]
-    nchunks = math.ceil(array.shape[0] / chunk_len)
+def _data_cache_key(
+    array: blosc2.NDArray, field: str | None, category: str, name: str
+) -> tuple[int, str | None, str, str]:
+    return (_array_key(array), field, category, name)
+
+
+def _clear_cached_data(array: blosc2.NDArray, field: str | None) -> None:
+    prefix = (_array_key(array), field)
+    keys = [key for key in _DATA_CACHE if key[:2] == prefix]
+    for key in keys:
+        _DATA_CACHE.pop(key, None)
+
+
+def _values_for_index(array: blosc2.NDArray, field: str | None) -> np.ndarray:
+    values = array[:]
+    return values if field is None else values[field]
+
+
+def _compute_segment_summaries(values: np.ndarray, dtype: np.dtype, segment_len: int) -> np.ndarray:
+    nsegments = math.ceil(values.shape[0] / segment_len)
     summary_dtype = np.dtype([("min", dtype), ("max", dtype), ("flags", np.uint8)])
-    summaries = np.empty(nchunks, dtype=summary_dtype)
+    summaries = np.empty(nsegments, dtype=summary_dtype)
 
-    for nchunk in range(nchunks):
-        start = nchunk * chunk_len
-        stop = min(start + chunk_len, array.shape[0])
-        chunk = array[start:stop]
-        if field is not None:
-            chunk = chunk[field]
+    for idx in range(nsegments):
+        start = idx * segment_len
+        stop = min(start + segment_len, values.shape[0])
+        segment = values[start:stop]
         flags = np.uint8(0)
         if dtype.kind == "f":
-            valid = ~np.isnan(chunk)
+            valid = ~np.isnan(segment)
             if not np.all(valid):
                 flags |= FLAG_HAS_NAN
             if not np.any(valid):
                 flags |= FLAG_ALL_NAN
-                value = np.zeros((), dtype=dtype)[()]
-                summaries[nchunk] = (value, value, flags)
+                zero = np.zeros((), dtype=dtype)[()]
+                summaries[idx] = (zero, zero, flags)
                 continue
-            chunk = chunk[valid]
-        summaries[nchunk] = (chunk.min(), chunk.max(), flags)
+            segment = segment[valid]
+        summaries[idx] = (segment.min(), segment.max(), flags)
     return summaries
 
 
-def _store_summary_data(
+def _store_array_sidecar(
     array: blosc2.NDArray,
     field: str | None,
-    summaries: np.ndarray,
-    persistent: bool,
     kind: str,
+    category: str,
+    name: str,
+    data: np.ndarray,
+    persistent: bool,
 ) -> dict:
+    cache_key = _data_cache_key(array, field, category, name)
+    _DATA_CACHE[cache_key] = data
     if persistent:
-        summary_path = _summary_sidecar_path(array, field, kind)
-        blosc2.remove_urlpath(summary_path)
-        blosc2.asarray(summaries, urlpath=summary_path, mode="w")
-        _SUMMARY_CACHE[_summary_cache_key(array, field)] = summaries
-        return {"path": summary_path, "dtype": summaries.dtype.descr}
-    _SUMMARY_CACHE[_summary_cache_key(array, field)] = summaries
-    return {"path": None, "dtype": summaries.dtype.descr}
+        path = _sidecar_path(array, field, kind, f"{category}.{name}")
+        blosc2.remove_urlpath(path)
+        blosc2.asarray(data, urlpath=path, mode="w")
+    else:
+        path = None
+    return {"path": path, "dtype": data.dtype.descr if data.dtype.fields else data.dtype.str}
 
 
-def _clear_summary_cache(array: blosc2.NDArray, field: str | None) -> None:
-    _SUMMARY_CACHE.pop(_summary_cache_key(array, field), None)
-
-
-def _get_summary_data(array: blosc2.NDArray, descriptor: dict) -> np.ndarray:
-    field = descriptor["field"]
-    cache_key = _summary_cache_key(array, field)
-    cached = _SUMMARY_CACHE.get(cache_key)
+def _load_array_sidecar(
+    array: blosc2.NDArray, field: str | None, category: str, name: str, path: str | None
+) -> np.ndarray:
+    cache_key = _data_cache_key(array, field, category, name)
+    cached = _DATA_CACHE.get(cache_key)
     if cached is not None:
         return cached
-    summary_path = descriptor["summary"]["path"]
-    if summary_path is None:
+    if path is None:
         raise RuntimeError("in-memory index metadata is missing from the current process")
-    summaries = blosc2.open(summary_path)[:]
-    _SUMMARY_CACHE[cache_key] = summaries
-    return summaries
+    data = blosc2.open(path)[:]
+    _DATA_CACHE[cache_key] = data
+    return data
+
+
+def _build_levels_descriptor(
+    array: blosc2.NDArray,
+    field: str | None,
+    kind: str,
+    dtype: np.dtype,
+    values: np.ndarray,
+    persistent: bool,
+) -> dict:
+    levels = {}
+    for level in SEGMENT_LEVELS_BY_KIND[kind]:
+        segment_len = _segment_len(array, level)
+        summaries = _compute_segment_summaries(values, dtype, segment_len)
+        sidecar = _store_array_sidecar(array, field, kind, "summary", level, summaries, persistent)
+        levels[level] = {
+            "segment_len": segment_len,
+            "nsegments": len(summaries),
+            "path": sidecar["path"],
+            "dtype": sidecar["dtype"],
+        }
+    return levels
+
+
+def _build_full_descriptor(
+    array: blosc2.NDArray,
+    field: str | None,
+    kind: str,
+    values: np.ndarray,
+    persistent: bool,
+) -> dict:
+    order = np.argsort(values, kind="stable")
+    positions = order.astype(np.int64, copy=False)
+    sorted_values = values[order]
+    values_sidecar = _store_array_sidecar(array, field, kind, "full", "values", sorted_values, persistent)
+    positions_sidecar = _store_array_sidecar(array, field, kind, "full", "positions", positions, persistent)
+    return {
+        "values_path": values_sidecar["path"],
+        "positions_path": positions_sidecar["path"],
+    }
 
 
 def _build_descriptor(
     array: blosc2.NDArray,
     field: str | None,
-    dtype: np.dtype,
     kind: str,
     optlevel: int,
     granularity: str,
     persistent: bool,
     name: str | None,
-    summary: dict,
+    dtype: np.dtype,
+    levels: dict,
+    full: dict | None,
 ) -> dict:
     return {
         "name": name or _field_token(field),
         "field": field,
-        "kind": INDEX_KIND_ZONE_MAP,
-        "requested_kind": kind,
+        "kind": kind,
         "version": INDEX_FORMAT_VERSION,
         "optlevel": optlevel,
         "granularity": granularity,
@@ -225,8 +311,9 @@ def _build_descriptor(
         "dtype": np.dtype(dtype).str,
         "shape": tuple(array.shape),
         "chunks": tuple(array.chunks),
-        "nchunks": math.ceil(array.shape[0] / array.chunks[0]),
-        "summary": summary,
+        "blocks": tuple(array.blocks),
+        "levels": levels,
+        "full": full,
     }
 
 
@@ -242,17 +329,18 @@ def create_index(
 ) -> dict:
     del kwargs
     dtype = _validate_index_target(array, field)
-    if kind not in {"ultralight", "light", "medium"}:
-        raise NotImplementedError("only zone-map style indexes are implemented for now")
+    if kind not in SEGMENT_LEVELS_BY_KIND:
+        raise NotImplementedError(f"unsupported index kind {kind!r}")
     if granularity != "chunk":
-        raise NotImplementedError("only chunk-granularity indexes are implemented for now")
+        raise NotImplementedError("only chunk-based array indexes are implemented for now")
     if persistent is None:
         persistent = _is_persistent_array(array)
 
-    summaries = _compute_chunk_summaries(array, field, dtype)
-    summary = _store_summary_data(array, field, summaries, persistent, kind)
+    values = _values_for_index(array, field)
+    levels = _build_levels_descriptor(array, field, kind, dtype, values, persistent)
+    full = _build_full_descriptor(array, field, kind, values, persistent) if kind == "full" else None
     descriptor = _build_descriptor(
-        array, field, dtype, kind, optlevel, granularity, persistent, name, summary
+        array, field, kind, optlevel, granularity, persistent, name, dtype, levels, full
     )
 
     store = _load_store(array)
@@ -262,8 +350,7 @@ def create_index(
 
 
 def create_csindex(array: blosc2.NDArray, field: str | None = None, **kwargs) -> dict:
-    del array, field, kwargs
-    raise NotImplementedError("full permutation indexes are not implemented yet")
+    return create_index(array, field=field, kind="full", **kwargs)
 
 
 def drop_index(array: blosc2.NDArray, field: str | None = None, name: str | None = None) -> None:
@@ -279,10 +366,15 @@ def drop_index(array: blosc2.NDArray, field: str | None = None, name: str | None
 
     descriptor = store["indexes"].pop(token)
     _save_store(array, store)
-    _clear_summary_cache(array, descriptor["field"])
-    summary_path = descriptor["summary"]["path"]
-    if summary_path:
-        blosc2.remove_urlpath(summary_path)
+    _clear_cached_data(array, descriptor["field"])
+    for level_info in descriptor["levels"].values():
+        if level_info["path"]:
+            blosc2.remove_urlpath(level_info["path"])
+    if descriptor.get("full") is not None:
+        if descriptor["full"]["values_path"]:
+            blosc2.remove_urlpath(descriptor["full"]["values_path"])
+        if descriptor["full"]["positions_path"]:
+            blosc2.remove_urlpath(descriptor["full"]["positions_path"])
 
 
 def rebuild_index(array: blosc2.NDArray, field: str | None = None, name: str | None = None) -> dict:
@@ -301,7 +393,7 @@ def rebuild_index(array: blosc2.NDArray, field: str | None = None, name: str | N
     return create_index(
         array,
         field=descriptor["field"],
-        kind=descriptor["requested_kind"],
+        kind=descriptor["kind"],
         optlevel=descriptor["optlevel"],
         granularity=descriptor["granularity"],
         persistent=descriptor["persistent"],
@@ -328,11 +420,8 @@ def mark_indexes_stale(array: blosc2.NDArray) -> None:
 
 
 def _descriptor_for(array: blosc2.NDArray, field: str | None) -> dict | None:
-    store = _load_store(array)
-    descriptor = store["indexes"].get(_field_token(field))
-    if descriptor is None:
-        return None
-    if descriptor.get("stale", False):
+    descriptor = _load_store(array)["indexes"].get(_field_token(field))
+    if descriptor is None or descriptor.get("stale", False):
         return None
     if tuple(descriptor.get("shape", ())) != tuple(array.shape):
         return None
@@ -341,16 +430,29 @@ def _descriptor_for(array: blosc2.NDArray, field: str | None) -> dict | None:
     return descriptor
 
 
+def _load_level_summaries(array: blosc2.NDArray, descriptor: dict, level: str) -> np.ndarray:
+    level_info = descriptor["levels"][level]
+    return _load_array_sidecar(array, descriptor["field"], "summary", level, level_info["path"])
+
+
+def _load_full_arrays(array: blosc2.NDArray, descriptor: dict) -> tuple[np.ndarray, np.ndarray]:
+    full = descriptor.get("full")
+    if full is None:
+        raise RuntimeError("full index metadata is not available")
+    values = _load_array_sidecar(array, descriptor["field"], "full", "values", full["values_path"])
+    positions = _load_array_sidecar(array, descriptor["field"], "full", "positions", full["positions_path"])
+    return values, positions
+
+
 def _normalize_scalar(value, dtype: np.dtype):
     if isinstance(value, np.generic):
         return value.item()
     if dtype.kind == "f" and isinstance(value, float) and np.isnan(value):
         raise ValueError("NaN comparisons are not indexable")
-    arr = np.asarray(value, dtype=dtype)
-    return arr[()]
+    return np.asarray(value, dtype=dtype)[()]
 
 
-def _candidate_chunks_from_summary(summaries: np.ndarray, op: str, value, dtype: np.dtype) -> np.ndarray:
+def _candidate_units_from_summary(summaries: np.ndarray, op: str, value, dtype: np.dtype) -> np.ndarray:
     mins = summaries["min"]
     maxs = summaries["max"]
     flags = summaries["flags"]
@@ -367,6 +469,28 @@ def _candidate_chunks_from_summary(summaries: np.ndarray, op: str, value, dtype:
     if op == ">=":
         return valid & (maxs >= value)
     raise ValueError(f"unsupported comparison operator {op!r}")
+
+
+def _intervals_from_sorted(values: np.ndarray, op: str, value, dtype: np.dtype) -> list[tuple[int, int]]:
+    value = _normalize_scalar(value, dtype)
+    if op == "==":
+        lo = np.searchsorted(values, value, side="left")
+        hi = np.searchsorted(values, value, side="right")
+    elif op == "<":
+        lo = 0
+        hi = np.searchsorted(values, value, side="left")
+    elif op == "<=":
+        lo = 0
+        hi = np.searchsorted(values, value, side="right")
+    elif op == ">":
+        lo = np.searchsorted(values, value, side="right")
+        hi = len(values)
+    elif op == ">=":
+        lo = np.searchsorted(values, value, side="left")
+        hi = len(values)
+    else:
+        raise ValueError(f"unsupported comparison operator {op!r}")
+    return [] if lo >= hi else [(int(lo), int(hi))]
 
 
 def _operand_target(operand) -> tuple[blosc2.NDArray, str | None] | None:
@@ -408,7 +532,9 @@ def _compare_operator(node: ast.AST) -> str | None:
     return None
 
 
-def _plan_compare(node: ast.Compare, operands: dict) -> PredicatePlan | None:
+def _target_from_compare(
+    node: ast.Compare, operands: dict
+) -> tuple[blosc2.NDArray, str | None, str, object] | None:
     if len(node.ops) != 1 or len(node.comparators) != 1:
         return None
     op = _compare_operator(node.ops[0])
@@ -438,43 +564,73 @@ def _plan_compare(node: ast.Compare, operands: dict) -> PredicatePlan | None:
     base, field = target
     if base.ndim != 1:
         return None
+    return base, field, op, value
+
+
+def _finest_level(descriptor: dict) -> str:
+    level_names = tuple(descriptor["levels"])
+    return level_names[-1]
+
+
+def _plan_segment_compare(node: ast.Compare, operands: dict) -> SegmentPredicatePlan | None:
+    target = _target_from_compare(node, operands)
+    if target is None:
+        return None
+    base, field, op, value = target
     descriptor = _descriptor_for(base, field)
     if descriptor is None:
         return None
+    level = _finest_level(descriptor)
+    level_info = descriptor["levels"][level]
     dtype = np.dtype(descriptor["dtype"])
     try:
-        summaries = _get_summary_data(base, descriptor)
-        mask = _candidate_chunks_from_summary(summaries, op, value, dtype)
+        summaries = _load_level_summaries(base, descriptor, level)
+        candidate_units = _candidate_units_from_summary(summaries, op, value, dtype)
     except (RuntimeError, ValueError, TypeError):
         return None
-    return PredicatePlan(base=base, candidate_chunks=mask, descriptor=descriptor, field=field)
-
-
-def _same_target(left: PredicatePlan, right: PredicatePlan) -> bool:
-    return left.base is right.base and left.base.chunks == right.base.chunks
-
-
-def _merge_plans(left: PredicatePlan, right: PredicatePlan, op: str) -> PredicatePlan | None:
-    if not _same_target(left, right):
-        return None
-    if op == "and":
-        candidate_chunks = left.candidate_chunks & right.candidate_chunks
-    else:
-        candidate_chunks = left.candidate_chunks | right.candidate_chunks
-    return PredicatePlan(
-        base=left.base,
-        candidate_chunks=candidate_chunks,
-        descriptor=left.descriptor,
-        field=left.field,
+    return SegmentPredicatePlan(
+        base=base,
+        candidate_units=candidate_units,
+        descriptor=descriptor,
+        field=field,
+        level=level,
+        segment_len=level_info["segment_len"],
     )
 
 
-def _plan_boolop(node: ast.BoolOp, operands: dict) -> PredicatePlan | None:
+def _same_segment_space(left: SegmentPredicatePlan, right: SegmentPredicatePlan) -> bool:
+    return (
+        left.base is right.base
+        and left.level == right.level
+        and left.segment_len == right.segment_len
+        and left.candidate_units.shape == right.candidate_units.shape
+    )
+
+
+def _merge_segment_plans(
+    left: SegmentPredicatePlan, right: SegmentPredicatePlan, op: str
+) -> SegmentPredicatePlan | None:
+    if not _same_segment_space(left, right):
+        return None
+    if op == "and":
+        candidate_units = left.candidate_units & right.candidate_units
+    else:
+        candidate_units = left.candidate_units | right.candidate_units
+    return SegmentPredicatePlan(
+        base=left.base,
+        candidate_units=candidate_units,
+        descriptor=left.descriptor,
+        field=left.field,
+        level=left.level,
+        segment_len=left.segment_len,
+    )
+
+
+def _plan_segment_boolop(node: ast.BoolOp, operands: dict) -> SegmentPredicatePlan | None:
     op = "and" if isinstance(node.op, ast.And) else "or" if isinstance(node.op, ast.Or) else None
     if op is None:
         return None
-
-    plans = [_plan_node(value, operands) for value in node.values]
+    plans = [_plan_segment_node(value, operands) for value in node.values]
     if op == "and":
         plans = [plan for plan in plans if plan is not None]
         if not plans:
@@ -484,14 +640,14 @@ def _plan_boolop(node: ast.BoolOp, operands: dict) -> PredicatePlan | None:
 
     plan = plans[0]
     for other in plans[1:]:
-        merged = _merge_plans(plan, other, op)
+        merged = _merge_segment_plans(plan, other, op)
         if merged is None:
             return None
         plan = merged
     return plan
 
 
-def _plan_bitop(node: ast.BinOp, operands: dict) -> PredicatePlan | None:
+def _plan_segment_bitop(node: ast.BinOp, operands: dict) -> SegmentPredicatePlan | None:
     if isinstance(node.op, ast.BitAnd):
         op = "and"
     elif isinstance(node.op, ast.BitOr):
@@ -499,32 +655,147 @@ def _plan_bitop(node: ast.BinOp, operands: dict) -> PredicatePlan | None:
     else:
         return None
 
-    left = _plan_node(node.left, operands)
-    right = _plan_node(node.right, operands)
-    if left is None:
-        return right if op == "and" else None
-    if right is None:
-        return left if op == "and" else None
-    return _merge_plans(left, right, op)
+    left = _plan_segment_node(node.left, operands)
+    right = _plan_segment_node(node.right, operands)
+    if op == "and":
+        if left is None:
+            return right
+        if right is None:
+            return left
+        return _merge_segment_plans(left, right, op)
+    if left is None or right is None:
+        return None
+    return _merge_segment_plans(left, right, op)
 
 
-def _plan_node(node: ast.AST, operands: dict) -> PredicatePlan | None:
+def _plan_segment_node(node: ast.AST, operands: dict) -> SegmentPredicatePlan | None:
     if isinstance(node, ast.Compare):
-        return _plan_compare(node, operands)
+        return _plan_segment_compare(node, operands)
     if isinstance(node, ast.BoolOp):
-        return _plan_boolop(node, operands)
+        return _plan_segment_boolop(node, operands)
     if isinstance(node, ast.BinOp):
-        return _plan_bitop(node, operands)
+        return _plan_segment_bitop(node, operands)
     return None
 
 
-def plan_query(
-    expression: str,
-    operands: dict,
-    where: dict | None,
-    *,
-    use_index: bool = True,
-) -> IndexPlan:
+def _plan_exact_compare(node: ast.Compare, operands: dict) -> ExactPredicatePlan | None:
+    target = _target_from_compare(node, operands)
+    if target is None:
+        return None
+    base, field, op, value = target
+    descriptor = _descriptor_for(base, field)
+    if descriptor is None or descriptor.get("kind") != "full":
+        return None
+    dtype = np.dtype(descriptor["dtype"])
+    try:
+        sorted_values, _ = _load_full_arrays(base, descriptor)
+        intervals = _intervals_from_sorted(sorted_values, op, value, dtype)
+    except (RuntimeError, ValueError, TypeError):
+        return None
+    return ExactPredicatePlan(base=base, descriptor=descriptor, field=field, intervals=intervals)
+
+
+def _same_base(left: ExactPredicatePlan, right: ExactPredicatePlan) -> bool:
+    return left.base is right.base and left.field == right.field
+
+
+def _normalize_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    if not intervals:
+        return []
+    intervals = sorted(intervals)
+    normalized = [intervals[0]]
+    for lo, hi in intervals[1:]:
+        prev_lo, prev_hi = normalized[-1]
+        if lo <= prev_hi:
+            normalized[-1] = (prev_lo, max(prev_hi, hi))
+        else:
+            normalized.append((lo, hi))
+    return normalized
+
+
+def _intersect_intervals(
+    left_intervals: list[tuple[int, int]], right_intervals: list[tuple[int, int]]
+) -> list[tuple[int, int]]:
+    intersections = []
+    left = _normalize_intervals(left_intervals)
+    right = _normalize_intervals(right_intervals)
+    i = j = 0
+    while i < len(left) and j < len(right):
+        lo = max(left[i][0], right[j][0])
+        hi = min(left[i][1], right[j][1])
+        if lo < hi:
+            intersections.append((lo, hi))
+        if left[i][1] <= right[j][1]:
+            i += 1
+        else:
+            j += 1
+    return intersections
+
+
+def _merge_exact_plans(
+    left: ExactPredicatePlan, right: ExactPredicatePlan, op: str
+) -> ExactPredicatePlan | None:
+    if not _same_base(left, right):
+        return None
+    if op == "and":
+        intervals = _intersect_intervals(left.intervals, right.intervals)
+    else:
+        intervals = _normalize_intervals(left.intervals + right.intervals)
+    return ExactPredicatePlan(
+        base=left.base, descriptor=left.descriptor, field=left.field, intervals=intervals
+    )
+
+
+def _plan_exact_boolop(node: ast.BoolOp, operands: dict) -> ExactPredicatePlan | None:
+    op = "and" if isinstance(node.op, ast.And) else "or" if isinstance(node.op, ast.Or) else None
+    if op is None:
+        return None
+    plans = [_plan_exact_node(value, operands) for value in node.values]
+    if any(plan is None for plan in plans):
+        return None
+    plan = plans[0]
+    for other in plans[1:]:
+        merged = _merge_exact_plans(plan, other, op)
+        if merged is None:
+            return None
+        plan = merged
+    return plan
+
+
+def _plan_exact_bitop(node: ast.BinOp, operands: dict) -> ExactPredicatePlan | None:
+    if isinstance(node.op, ast.BitAnd):
+        op = "and"
+    elif isinstance(node.op, ast.BitOr):
+        op = "or"
+    else:
+        return None
+    left = _plan_exact_node(node.left, operands)
+    right = _plan_exact_node(node.right, operands)
+    if left is None or right is None:
+        return None
+    return _merge_exact_plans(left, right, op)
+
+
+def _plan_exact_node(node: ast.AST, operands: dict) -> ExactPredicatePlan | None:
+    if isinstance(node, ast.Compare):
+        return _plan_exact_compare(node, operands)
+    if isinstance(node, ast.BoolOp):
+        return _plan_exact_boolop(node, operands)
+    if isinstance(node, ast.BinOp):
+        return _plan_exact_bitop(node, operands)
+    return None
+
+
+def _positions_from_intervals(plan: ExactPredicatePlan) -> np.ndarray:
+    _, positions = _load_full_arrays(plan.base, plan.descriptor)
+    if not plan.intervals:
+        return np.empty(0, dtype=np.int64)
+    selected = [positions[lo:hi] for lo, hi in plan.intervals]
+    merged = np.concatenate(selected) if len(selected) > 1 else selected[0]
+    return np.sort(merged, kind="stable")
+
+
+def plan_query(expression: str, operands: dict, where: dict | None, *, use_index: bool = True) -> IndexPlan:
     if not use_index:
         return IndexPlan(False, "index usage disabled for this query")
     if where is None or len(where) != 1:
@@ -535,31 +806,103 @@ def plan_query(
     except SyntaxError:
         return IndexPlan(False, "expression is not valid Python syntax for planning")
 
-    plan = _plan_node(tree.body, operands)
-    if plan is None:
+    exact_plan = _plan_exact_node(tree.body, operands)
+    if exact_plan is not None:
+        exact_positions = _positions_from_intervals(exact_plan)
+        return IndexPlan(
+            True,
+            "full index selected",
+            descriptor=_copy_descriptor(exact_plan.descriptor),
+            base=exact_plan.base,
+            field=exact_plan.field,
+            level="full",
+            total_units=exact_plan.base.shape[0],
+            selected_units=len(exact_positions),
+            exact_positions=exact_positions,
+        )
+
+    segment_plan = _plan_segment_node(tree.body, operands)
+    if segment_plan is None:
         return IndexPlan(False, "no usable index was found for this predicate")
 
-    total_chunks = len(plan.candidate_chunks)
-    selected_chunks = int(np.count_nonzero(plan.candidate_chunks))
-    if selected_chunks == total_chunks:
+    total_units = len(segment_plan.candidate_units)
+    selected_units = int(np.count_nonzero(segment_plan.candidate_units))
+    if selected_units == total_units:
         return IndexPlan(
             False,
-            "available index does not prune any chunks for this predicate",
-            candidate_chunks=plan.candidate_chunks,
-            descriptor=_copy_descriptor(plan.descriptor),
-            field=plan.field,
-            total_chunks=total_chunks,
-            selected_chunks=selected_chunks,
+            "available index does not prune any units for this predicate",
+            descriptor=_copy_descriptor(segment_plan.descriptor),
+            base=segment_plan.base,
+            field=segment_plan.field,
+            level=segment_plan.level,
+            segment_len=segment_plan.segment_len,
+            candidate_units=segment_plan.candidate_units,
+            total_units=total_units,
+            selected_units=selected_units,
         )
+
     return IndexPlan(
         True,
-        "zone-map index selected",
-        candidate_chunks=plan.candidate_chunks,
-        descriptor=_copy_descriptor(plan.descriptor),
-        field=plan.field,
-        total_chunks=total_chunks,
-        selected_chunks=selected_chunks,
+        f"{segment_plan.level} summaries selected",
+        descriptor=_copy_descriptor(segment_plan.descriptor),
+        base=segment_plan.base,
+        field=segment_plan.field,
+        level=segment_plan.level,
+        segment_len=segment_plan.segment_len,
+        candidate_units=segment_plan.candidate_units,
+        total_units=total_units,
+        selected_units=selected_units,
     )
+
+
+def _where_output_dtype(where_x) -> np.dtype:
+    return where_x.dtype if hasattr(where_x, "dtype") else np.asarray(where_x).dtype
+
+
+def evaluate_segment_query(
+    expression: str, operands: dict, ne_args: dict, where: dict, plan: IndexPlan
+) -> np.ndarray:
+    from .lazyexpr import _get_result
+    from .utils import get_chunk_operands
+
+    if plan.base is None or plan.candidate_units is None or plan.segment_len is None:
+        raise ValueError("segment evaluation requires a segment-based plan")
+
+    parts = []
+    chunk_operands = {}
+    for unit in np.flatnonzero(plan.candidate_units):
+        start = int(unit) * plan.segment_len
+        stop = min(start + plan.segment_len, plan.base.shape[0])
+        cslice = (slice(start, stop, 1),)
+        get_chunk_operands(operands, cslice, chunk_operands, plan.base.shape)
+        result, _ = _get_result(expression, chunk_operands, ne_args, where)
+        if len(result) > 0:
+            parts.append(np.require(result, requirements="C"))
+
+    if parts:
+        return np.concatenate(parts)
+    return np.empty(0, dtype=_where_output_dtype(where["_where_x"]))
+
+
+def _gather_positions(where_x, positions: np.ndarray) -> np.ndarray:
+    if len(positions) == 0:
+        return np.empty(0, dtype=_where_output_dtype(where_x))
+
+    positions = np.asarray(positions, dtype=np.int64)
+    breaks = np.nonzero(np.diff(positions) != 1)[0] + 1
+    runs = np.split(positions, breaks)
+    parts = []
+    for run in runs:
+        start = int(run[0])
+        stop = int(run[-1]) + 1
+        parts.append(where_x[start:stop])
+    return np.concatenate(parts) if len(parts) > 1 else parts[0]
+
+
+def evaluate_full_query(where: dict, plan: IndexPlan) -> np.ndarray:
+    if plan.exact_positions is None:
+        raise ValueError("full evaluation requires exact positions")
+    return _gather_positions(where["_where_x"], plan.exact_positions)
 
 
 def will_use_index(expr) -> bool:
@@ -574,7 +917,12 @@ def explain_query(expr) -> dict:
         "will_use_index": plan.usable,
         "reason": plan.reason,
         "field": plan.field,
-        "candidate_chunks": plan.selected_chunks,
-        "total_chunks": plan.total_chunks,
+        "kind": None if plan.descriptor is None else plan.descriptor["kind"],
+        "level": plan.level,
+        "candidate_units": plan.selected_units,
+        "total_units": plan.total_units,
+        "candidate_chunks": plan.selected_units,
+        "total_chunks": plan.total_units,
+        "exact_rows": None if plan.exact_positions is None else len(plan.exact_positions),
         "descriptor": plan.descriptor,
     }

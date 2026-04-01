@@ -6,23 +6,25 @@
 #######################################################################
 
 import numpy as np
+import pytest
 
 import blosc2
 
 
-def test_scalar_zone_map_index_matches_scan():
+@pytest.mark.parametrize("kind", ["ultralight", "light", "medium", "full"])
+def test_scalar_index_matches_scan(kind):
     data = np.arange(200_000, dtype=np.int64)
     arr = blosc2.asarray(data, chunks=(10_000,), blocks=(2_000,))
-    descriptor = arr.create_index()
+    descriptor = arr.create_index(kind=kind)
 
-    assert descriptor["kind"] == "zone-map"
+    assert descriptor["kind"] == kind
     assert descriptor["field"] is None
     assert len(arr.indexes) == 1
 
     expr = ((arr >= 120_000) & (arr < 125_000)).where(arr)
     assert expr.will_use_index() is True
     explanation = expr.explain()
-    assert explanation["candidate_chunks"] < explanation["total_chunks"]
+    assert explanation["candidate_units"] < explanation["total_units"] or explanation["level"] == "full"
 
     indexed = expr.compute()[:]
     scanned = expr.compute(_use_index=False)[:]
@@ -30,14 +32,15 @@ def test_scalar_zone_map_index_matches_scan():
     np.testing.assert_array_equal(indexed, data[(data >= 120_000) & (data < 125_000)])
 
 
-def test_structured_field_index_matches_scan():
+@pytest.mark.parametrize("kind", ["ultralight", "light", "medium", "full"])
+def test_structured_field_index_matches_scan(kind):
     dtype = np.dtype([("id", np.int64), ("payload", np.float64)])
     data = np.empty(120_000, dtype=dtype)
     data["id"] = np.arange(data.shape[0], dtype=np.int64)
     data["payload"] = np.linspace(0, 1, data.shape[0], dtype=np.float64)
 
     arr = blosc2.asarray(data, chunks=(12_000,), blocks=(3_000,))
-    arr.create_index(field="id")
+    arr.create_index(field="id", kind=kind)
 
     expr = blosc2.lazyexpr("(id >= 48_000) & (id < 51_000)", arr.fields).where(arr)
     assert expr.will_use_index() is True
@@ -52,13 +55,13 @@ def test_persistent_index_survives_reopen(tmp_path):
     path = tmp_path / "indexed_array.b2nd"
     data = np.arange(80_000, dtype=np.int64)
     arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(8_000,), blocks=(2_000,))
-    descriptor = arr.create_index()
+    descriptor = arr.create_index(kind="full")
 
-    assert descriptor["summary"]["path"] is not None
+    assert descriptor["full"]["values_path"] is not None
 
     reopened = blosc2.open(path, mode="a")
     assert len(reopened.indexes) == 1
-    assert reopened.indexes[0]["summary"]["path"] == descriptor["summary"]["path"]
+    assert reopened.indexes[0]["full"]["values_path"] == descriptor["full"]["values_path"]
 
     expr = (reopened >= 72_000).where(reopened)
     assert expr.will_use_index() is True
@@ -68,7 +71,7 @@ def test_persistent_index_survives_reopen(tmp_path):
 def test_mutation_marks_index_stale_and_rebuild_restores_it():
     data = np.arange(50_000, dtype=np.int64)
     arr = blosc2.asarray(data, chunks=(5_000,), blocks=(1_000,))
-    arr.create_index()
+    arr.create_index(kind="full")
 
     arr[:25] = -1
     assert arr.indexes[0]["stale"] is True

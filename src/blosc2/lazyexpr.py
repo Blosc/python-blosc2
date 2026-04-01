@@ -1838,10 +1838,15 @@ def slices_eval(  # noqa: C901
         else np.asarray(shape)
     )
     index_plan = None
-    if where is not None and len(where) == 1 and use_index:
+    if where is not None and len(where) == 1 and use_index and _slice == ():
         from . import indexing
 
         index_plan = indexing.plan_query(expression, operands, where, use_index=use_index)
+        if index_plan.usable and not (_indices or _order):
+            if index_plan.exact_positions is not None:
+                return indexing.evaluate_full_query(where, index_plan)
+            if index_plan.level not in (None, "chunk"):
+                return indexing.evaluate_segment_query(expression, operands, ne_args, where, index_plan)
 
     for chunk_slice in intersecting_chunks:
         # Check whether current cslice intersects with _slice
@@ -1857,7 +1862,12 @@ def slices_eval(  # noqa: C901
         offset = tuple(s.start for s in cslice)  # offset for the udf
         cslice_shape = tuple(s.stop - s.start for s in cslice)
         len_chunk = math.prod(cslice_shape)
-        if index_plan is not None and index_plan.usable and not index_plan.candidate_chunks[nchunk]:
+        if (
+            index_plan is not None
+            and index_plan.usable
+            and index_plan.level == "chunk"
+            and not index_plan.candidate_units[nchunk]
+        ):
             if _indices or _order:
                 leninputs += len_chunk
             continue
