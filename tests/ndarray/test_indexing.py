@@ -19,6 +19,7 @@ def test_scalar_index_matches_scan(kind):
 
     assert descriptor["kind"] == kind
     assert descriptor["field"] is None
+    assert descriptor["target"] == {"source": "field", "field": None}
     assert len(arr.indexes) == 1
 
     expr = ((arr >= 120_000) & (arr < 125_000)).where(arr)
@@ -40,7 +41,8 @@ def test_structured_field_index_matches_scan(kind):
     data["payload"] = np.linspace(0, 1, data.shape[0], dtype=np.float64)
 
     arr = blosc2.asarray(data, chunks=(12_000,), blocks=(3_000,))
-    arr.create_index(field="id", kind=kind)
+    descriptor = arr.create_index(field="id", kind=kind)
+    assert descriptor["target"] == {"source": "field", "field": "id"}
 
     expr = blosc2.lazyexpr("(id >= 48_000) & (id < 51_000)", arr.fields).where(arr)
     assert expr.will_use_index() is True
@@ -273,6 +275,14 @@ def test_filtered_ordered_queries_support_cross_field_exact_indexes():
         expr.sort(order=["a", "b"]).compute()[:], np.sort(data[mask], order=["a", "b"])
     )
 
+    explained = expr.sort(order=["a", "b"]).explain()
+    assert explained["will_use_index"] is True
+    assert explained["ordered_access"] is True
+    assert explained["field"] == "a"
+    assert explained["target"] == {"source": "field", "field": "a"}
+    assert explained["secondary_refinement"] is True
+    assert explained["filter_reason"] == "multi-field exact indexes selected"
+
 
 def test_itersorted_matches_numpy_sorted_order():
     dtype = np.dtype([("a", np.int64), ("b", np.int64)])
@@ -285,6 +295,20 @@ def test_itersorted_matches_numpy_sorted_order():
 
     rows = np.array(list(arr.itersorted(order=["a", "b"], batch_size=3)), dtype=dtype)
     np.testing.assert_array_equal(rows, np.sort(data, order=["a", "b"]))
+
+
+def test_ordered_explain_reports_missing_full_index():
+    dtype = np.dtype([("a", np.int64), ("b", np.int64)])
+    data = np.array([(3, 2), (1, 9), (2, 4), (1, 3)], dtype=dtype)
+    arr = blosc2.asarray(data, chunks=(2,), blocks=(2,))
+    arr.create_index(field="b", kind="medium")
+
+    expr = blosc2.lazyexpr("b >= 0", arr.fields).where(arr).sort(order="a")
+    explained = expr.explain()
+
+    assert explained["will_use_index"] is False
+    assert explained["ordered_access"] is True
+    assert explained["reason"] == "no matching full index was found for ordered access"
 
 
 @pytest.mark.parametrize("kind", ["light", "medium", "full"])

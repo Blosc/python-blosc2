@@ -1843,9 +1843,11 @@ def slices_eval(  # noqa: C901
 
         index_plan = indexing.plan_query(expression, operands, where, use_index=use_index)
         if _order is not None:
-            ordered_positions = indexing.ordered_query_indices(expression, operands, where, _order)
-            if ordered_positions is not None:
-                return ordered_positions
+            ordered_plan = indexing.plan_ordered_query(expression, operands, where, _order)
+            if ordered_plan.usable:
+                ordered_positions = indexing.ordered_query_indices(expression, operands, where, _order)
+                if ordered_positions is not None:
+                    return ordered_positions
         if _indices and _order is None and index_plan.usable and index_plan.exact_positions is not None:
             return np.asarray(index_plan.exact_positions, dtype=np.int64)
         if index_plan.usable and not (_indices or _order):

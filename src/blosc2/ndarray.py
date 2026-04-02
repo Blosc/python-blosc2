@@ -4735,7 +4735,10 @@ class NDArray(blosc2_ext.NDArray, Operand):
         field : str or None, optional
             Field to index for structured dtypes. Use ``None`` to index the array values.
         kind : {"ultralight", "light", "medium", "full"}, optional
-            Index tier to build.
+            Index tier to build. Use ``light`` or ``medium`` for faster/lighter
+            filter-oriented indexes, and ``full`` when exact ordered access via
+            ``sort(order=...)``, ``indices(order=...)``, or ``itersorted(...)``
+            should reuse the index directly.
         optlevel : int, optional
             Optimization level for index payload construction.
         granularity : str, optional
@@ -4748,7 +4751,15 @@ class NDArray(blosc2_ext.NDArray, Operand):
             this can require substantially more memory than the final index itself, so the default is ``False`` and
             uses the out-of-core builders for ``light``, ``medium``, and ``full``.
         name : str or None, optional
-            Optional logical name for the index descriptor.
+            Optional logical label stored in the descriptor. Index identity is
+            still driven by the target field, so creating another index on the
+            same field replaces the previous one.
+
+        Notes
+        -----
+        The current indexing model supports one active index target per field.
+        Append operations keep compatible indexes current, while general
+        mutation and resize operations mark indexes as stale until rebuild.
         """
         from . import indexing
 
@@ -4765,16 +4776,24 @@ class NDArray(blosc2_ext.NDArray, Operand):
         )
 
     def create_csindex(self, field: str | None = None, **kwargs: Any) -> dict:
+        """Create a fully sorted index for a 1-D array or structured field.
+
+        This is a convenience wrapper for ``create_index(kind="full")`` and is
+        the required index tier for direct ordered reuse in
+        ``sort(order=...)``, ``indices(order=...)``, and ``itersorted(...)``.
+        """
         from . import indexing
 
         return indexing.create_csindex(self, field=field, **kwargs)
 
     def drop_index(self, field: str | None = None, name: str | None = None) -> None:
+        """Drop an index by field or optional descriptor label."""
         from . import indexing
 
         indexing.drop_index(self, field=field, name=name)
 
     def rebuild_index(self, field: str | None = None, name: str | None = None) -> dict:
+        """Rebuild an index by field or optional descriptor label."""
         from . import indexing
 
         return indexing.rebuild_index(self, field=field, name=name)
@@ -4998,6 +5017,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         This is only valid for 1-dim structured arrays.
 
+        When the primary order key has a matching ``full`` index, the ordered
+        positions are produced directly from that index. Secondary keys refine
+        ties after the primary indexed order and the traversal is ascending and
+        stable.
+
         See full documentation in :func:`indices`.
         """
         return indices(self, order, **kwargs)
@@ -5017,7 +5041,9 @@ class NDArray(blosc2_ext.NDArray, Operand):
         ----------
         order : str, list of str, optional
             Sort order to iterate. The first field must have an associated
-            ``full`` index.
+            ``full`` index. Traversal is ascending and stable; if only the
+            primary key is indexed, secondary keys refine ties after the primary
+            indexed order.
         start, stop, step : int or None, optional
             Optional slice applied to the ordered sequence before iteration.
         batch_size : int or None, optional
@@ -5031,6 +5057,11 @@ class NDArray(blosc2_ext.NDArray, Operand):
         Return a sorted array following the specified order, or the order of the fields.
 
         This is only valid for 1-dim structured arrays.
+
+        When the primary order key has a matching ``full`` index, the ordered
+        rows are gathered directly from that index. Secondary keys refine ties
+        after the primary indexed order and the traversal is ascending and
+        stable.
 
         See full documentation in :func:`sort`.
         """
@@ -6380,7 +6411,14 @@ def indices(array: blosc2.Array, order: str | list[str] | None = None, **kwargs:
     Returns
     -------
     out: :ref:`NDArray`
-        The sorted array.
+        The ordered logical positions.
+
+    Notes
+    -----
+    If the primary order key has a matching ``full`` index, the positions are
+    returned directly from that index in ascending stable order. Secondary keys
+    refine ties after the primary indexed order. Otherwise this falls back to a
+    scan-plus-sort path.
     """
     if not order:
         # Shortcut for this relatively rare case
@@ -6422,6 +6460,13 @@ def sort(array: blosc2.Array, order: str | list[str] | None = None, **kwargs: An
     -------
     out: :ref:`NDArray`
         The sorted array.
+
+    Notes
+    -----
+    If the primary order key has a matching ``full`` index, rows are gathered
+    directly in ascending stable index order. Secondary keys refine ties after
+    the primary indexed order. Otherwise this falls back to a scan-plus-sort
+    path.
     """
     if not order:
         return array
@@ -6464,6 +6509,12 @@ def itersorted(
         Optional slice applied to the ordered sequence before iteration.
     batch_size : int or None, optional
         Internal prefetch size used during iteration.
+
+    Notes
+    -----
+    This requires a matching ``full`` index on the primary order key. The
+    iteration order is ascending and stable. Secondary keys refine ties after
+    the primary indexed order.
     """
     if not isinstance(array, blosc2.NDArray):
         raise TypeError("itersorted() is only supported on NDArray")

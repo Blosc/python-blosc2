@@ -87,6 +87,19 @@ class SortedRun:
     length: int
 
 
+@dataclass(slots=True)
+class OrderedIndexPlan:
+    usable: bool
+    reason: str
+    descriptor: dict | None = None
+    base: blosc2.NDArray | None = None
+    field: str | None = None
+    order_fields: list[str | None] | None = None
+    total_rows: int = 0
+    selected_rows: int = 0
+    secondary_refinement: bool = False
+
+
 def _default_index_store() -> dict:
     return {"version": INDEX_FORMAT_VERSION, "indexes": {}}
 
@@ -114,6 +127,8 @@ def _copy_nested_dict(value: dict | None) -> dict | None:
 def _copy_descriptor(descriptor: dict) -> dict:
     copied = descriptor.copy()
     copied["levels"] = _copy_nested_dict(descriptor.get("levels"))
+    if descriptor.get("target") is not None:
+        copied["target"] = descriptor["target"].copy()
     if descriptor.get("light") is not None:
         copied["light"] = descriptor["light"].copy()
     if descriptor.get("reduced") is not None:
@@ -159,6 +174,10 @@ def _save_store(array: blosc2.NDArray, store: dict) -> None:
 
 def _supported_index_dtype(dtype: np.dtype) -> bool:
     return np.dtype(dtype).kind in {"b", "i", "u", "f", "m", "M"}
+
+
+def _field_target_descriptor(field: str | None) -> dict:
+    return {"source": "field", "field": field}
 
 
 def _field_dtype(array: blosc2.NDArray, field: str | None) -> np.dtype:
@@ -925,6 +944,7 @@ def _build_descriptor(
 ) -> dict:
     return {
         "name": name or _field_token(field),
+        "target": _field_target_descriptor(field),
         "field": field,
         "kind": kind,
         "version": INDEX_FORMAT_VERSION,
@@ -2232,6 +2252,32 @@ def _normalize_order_fields(array: blosc2.NDArray, order: str | list[str] | None
     return fields
 
 
+def plan_array_order(
+    array: blosc2.NDArray, order: str | list[str] | None = None, *, require_full: bool = False
+) -> OrderedIndexPlan:
+    try:
+        order_fields = _normalize_order_fields(array, order)
+    except (TypeError, ValueError) as exc:
+        return OrderedIndexPlan(False, str(exc))
+    primary_field = order_fields[0]
+    descriptor = _full_descriptor_for_order(array, primary_field)
+    if descriptor is None:
+        if require_full:
+            return OrderedIndexPlan(False, f"field {primary_field!r} must have an associated full index")
+        return OrderedIndexPlan(False, "no matching full index was found for ordered access")
+    return OrderedIndexPlan(
+        True,
+        "ordered access will reuse a full index",
+        descriptor=_copy_descriptor(descriptor),
+        base=array,
+        field=primary_field,
+        order_fields=order_fields,
+        total_rows=int(array.shape[0]),
+        selected_rows=int(array.shape[0]),
+        secondary_refinement=len(order_fields) > 1,
+    )
+
+
 def _positions_in_input_order(
     positions: np.ndarray, start: int | None, stop: int | None, step: int | None
 ) -> np.ndarray:
@@ -2311,17 +2357,53 @@ def ordered_indices(
     step: int | None = None,
     require_full: bool = False,
 ) -> np.ndarray | None:
-    order_fields = _normalize_order_fields(array, order)
-    primary_field = order_fields[0]
-    descriptor = _full_descriptor_for_order(array, primary_field)
-    if descriptor is None:
+    ordered_plan = plan_array_order(array, order=order, require_full=require_full)
+    if not ordered_plan.usable:
         if require_full:
-            raise ValueError(f"field {primary_field!r} must have an associated full index")
+            raise ValueError(ordered_plan.reason)
         return None
+    order_fields = ordered_plan.order_fields
+    descriptor = ordered_plan.descriptor
     positions = _ordered_positions_from_exact_positions(
         array, descriptor, np.arange(int(array.shape[0]), dtype=np.int64), order_fields
     )
     return _positions_in_input_order(positions, start, stop, step)
+
+
+def plan_ordered_query(
+    expression: str, operands: dict, where: dict, order: str | list[str]
+) -> OrderedIndexPlan:
+    if len(where) != 1:
+        return OrderedIndexPlan(False, "ordered index reuse is only available for where(x) style filtering")
+    base = where["_where_x"]
+    if not isinstance(base, blosc2.NDArray) or base.ndim != 1:
+        return OrderedIndexPlan(False, "ordered index reuse requires a 1-D NDArray target")
+
+    base_order_plan = plan_array_order(base, order=order, require_full=False)
+    if not base_order_plan.usable:
+        return base_order_plan
+
+    filter_plan = plan_query(expression, operands, where, use_index=True)
+    if not filter_plan.usable:
+        return OrderedIndexPlan(
+            False, f"ordered access cannot reuse an index because filtering does not: {filter_plan.reason}"
+        )
+    if filter_plan.base is not base or filter_plan.exact_positions is None:
+        return OrderedIndexPlan(
+            False, "ordered access currently requires exact row positions from filtering"
+        )
+
+    return OrderedIndexPlan(
+        True,
+        "ordered access will reuse a full index after exact filtering",
+        descriptor=base_order_plan.descriptor,
+        base=base,
+        field=base_order_plan.field,
+        order_fields=base_order_plan.order_fields,
+        total_rows=int(base.shape[0]),
+        selected_rows=len(filter_plan.exact_positions),
+        secondary_refinement=base_order_plan.secondary_refinement,
+    )
 
 
 def ordered_query_indices(
@@ -2334,21 +2416,14 @@ def ordered_query_indices(
     stop: int | None = None,
     step: int | None = None,
 ) -> np.ndarray | None:
-    if len(where) != 1:
+    ordered_plan = plan_ordered_query(expression, operands, where, order)
+    if not ordered_plan.usable:
         return None
-    base = where["_where_x"]
-    if not isinstance(base, blosc2.NDArray) or base.ndim != 1:
-        return None
-
-    order_fields = _normalize_order_fields(base, order)
-    primary_field = order_fields[0]
-    descriptor = _full_descriptor_for_order(base, primary_field)
-    if descriptor is None:
-        return None
+    base = ordered_plan.base
+    order_fields = ordered_plan.order_fields
+    descriptor = ordered_plan.descriptor
 
     plan = plan_query(expression, operands, where, use_index=True)
-    if not plan.usable or plan.base is not base or plan.exact_positions is None:
-        return None
 
     positions = _ordered_positions_from_exact_positions(base, descriptor, plan.exact_positions, order_fields)
     return _positions_in_input_order(positions, start, stop, step)
@@ -2401,18 +2476,49 @@ def iter_sorted(
 
 def will_use_index(expr) -> bool:
     where = getattr(expr, "_where_args", None)
+    order = getattr(expr, "_order", None)
+    if order is not None:
+        return plan_ordered_query(expr.expression, expr.operands, where, order).usable
     return plan_query(expr.expression, expr.operands, where).usable
 
 
 def explain_query(expr) -> dict:
     where = getattr(expr, "_where_args", None)
+    order = getattr(expr, "_order", None)
+    if order is not None:
+        ordered_plan = plan_ordered_query(expr.expression, expr.operands, where, order)
+        filter_plan = plan_query(expr.expression, expr.operands, where)
+        return {
+            "will_use_index": ordered_plan.usable,
+            "reason": ordered_plan.reason,
+            "target": None if ordered_plan.descriptor is None else ordered_plan.descriptor.get("target"),
+            "field": ordered_plan.field,
+            "kind": None if ordered_plan.descriptor is None else ordered_plan.descriptor["kind"],
+            "level": "full" if ordered_plan.usable else None,
+            "ordered_access": True,
+            "order": ordered_plan.order_fields,
+            "secondary_refinement": ordered_plan.secondary_refinement,
+            "candidate_units": ordered_plan.selected_rows,
+            "total_units": ordered_plan.total_rows,
+            "candidate_chunks": ordered_plan.selected_rows,
+            "total_chunks": ordered_plan.total_rows,
+            "exact_rows": ordered_plan.selected_rows if ordered_plan.usable else None,
+            "filter_reason": filter_plan.reason,
+            "filter_level": filter_plan.level,
+            "descriptor": ordered_plan.descriptor,
+        }
+
     plan = plan_query(expr.expression, expr.operands, where)
     return {
         "will_use_index": plan.usable,
         "reason": plan.reason,
+        "target": None if plan.descriptor is None else plan.descriptor.get("target"),
         "field": plan.field,
         "kind": None if plan.descriptor is None else plan.descriptor["kind"],
         "level": plan.level,
+        "ordered_access": False,
+        "order": None,
+        "secondary_refinement": False,
         "candidate_units": plan.selected_units,
         "total_units": plan.total_units,
         "candidate_chunks": plan.selected_units,
