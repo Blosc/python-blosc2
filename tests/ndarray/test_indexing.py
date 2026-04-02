@@ -112,6 +112,27 @@ def test_light_lossy_integer_values_match_scan():
     np.testing.assert_array_equal(indexed, data[(data["id"] >= -123) & (data["id"] < 456)])
 
 
+def test_light_lossy_float_values_match_scan():
+    rng = np.random.default_rng(3)
+    dtype = np.dtype([("x", np.float64), ("payload", np.float32)])
+    data = np.zeros(160_000, dtype=dtype)
+    data["x"] = np.linspace(-5000.0, 5000.0, data.shape[0], dtype=np.float64)
+    rng.shuffle(data["x"])
+
+    arr = blosc2.asarray(data, chunks=(16_000,), blocks=(4_000,))
+    descriptor = arr.create_index(field="x", kind="light", optlevel=0)
+
+    assert descriptor["light"]["value_lossy_bits"] == 8
+
+    expr = blosc2.lazyexpr("(x >= -12.5) & (x < 17.25)", arr.fields).where(arr)
+    assert expr.will_use_index() is True
+
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    np.testing.assert_array_equal(indexed, scanned)
+    np.testing.assert_array_equal(indexed, data[(data["x"] >= -12.5) & (data["x"] < 17.25)])
+
+
 @pytest.mark.parametrize("kind", ["light", "medium", "full"])
 def test_persistent_index_survives_reopen(tmp_path, kind):
     path = tmp_path / "indexed_array.b2nd"

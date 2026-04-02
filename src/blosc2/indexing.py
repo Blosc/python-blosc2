@@ -381,9 +381,10 @@ def _pack_bucket_mask(bucket_ids: np.ndarray) -> np.uint64:
 
 def _light_value_lossy_bits(dtype: np.dtype, optlevel: int) -> int:
     dtype = np.dtype(dtype)
-    if dtype.kind not in {"i", "u"}:
+    if dtype.kind in {"i", "u"} or dtype == np.dtype(np.float32) or dtype == np.dtype(np.float64):
+        max_bits = dtype.itemsize
+    else:
         return 0
-    max_bits = dtype.itemsize
     return min(max(0, 9 - int(optlevel)), max_bits)
 
 
@@ -405,6 +406,83 @@ def _quantize_integer_scalar(value, dtype: np.dtype, bits: int):
     return np.bitwise_and(scalar, mask, dtype=dtype)
 
 
+def _float_order_uint_dtype(dtype: np.dtype) -> np.dtype:
+    if dtype == np.dtype(np.float32):
+        return np.dtype(np.uint32)
+    if dtype == np.dtype(np.float64):
+        return np.dtype(np.uint64)
+    raise TypeError(f"unsupported float dtype {dtype}")
+
+
+def _ordered_uint_from_float(values: np.ndarray) -> np.ndarray:
+    dtype = np.dtype(values.dtype)
+    uint_dtype = _float_order_uint_dtype(dtype)
+    bits = values.view(uint_dtype).copy()
+    sign_mask = np.asarray(1 << (dtype.itemsize * 8 - 1), dtype=uint_dtype)[()]
+    negative = (bits & sign_mask) != 0
+    bits[negative] = ~bits[negative]
+    bits[~negative] ^= sign_mask
+    return bits
+
+
+def _float_from_ordered_uint(ordered: np.ndarray, dtype: np.dtype) -> np.ndarray:
+    uint_dtype = _float_order_uint_dtype(dtype)
+    bits = ordered.astype(uint_dtype, copy=True)
+    sign_mask = np.asarray(1 << (dtype.itemsize * 8 - 1), dtype=uint_dtype)[()]
+    positive = (bits & sign_mask) != 0
+    bits[positive] ^= sign_mask
+    bits[~positive] = ~bits[~positive]
+    return bits.view(dtype)
+
+
+def _quantize_float_array(values: np.ndarray, bits: int) -> np.ndarray:
+    if bits <= 0:
+        return values
+    quantized = values.copy()
+    finite = np.isfinite(quantized)
+    if not np.any(finite):
+        return quantized
+    ordered = _ordered_uint_from_float(quantized[finite])
+    uint_dtype = ordered.dtype
+    mask = np.asarray(np.iinfo(uint_dtype).max ^ ((1 << bits) - 1), dtype=uint_dtype)[()]
+    np.bitwise_and(ordered, mask, out=ordered)
+    quantized[finite] = _float_from_ordered_uint(ordered, quantized.dtype)
+    return quantized
+
+
+def _quantize_float_scalar(value, dtype: np.dtype, bits: int):
+    scalar = np.asarray(value, dtype=dtype)[()]
+    if bits <= 0 or not np.isfinite(scalar):
+        return scalar
+    ordered = _ordered_uint_from_float(np.asarray([scalar], dtype=dtype))
+    uint_dtype = ordered.dtype
+    mask = np.asarray(np.iinfo(uint_dtype).max ^ ((1 << bits) - 1), dtype=uint_dtype)[()]
+    np.bitwise_and(ordered, mask, out=ordered)
+    return _float_from_ordered_uint(ordered, dtype)[0]
+
+
+def _quantize_light_values_array(values: np.ndarray, bits: int) -> np.ndarray:
+    dtype = np.dtype(values.dtype)
+    if bits <= 0:
+        return values
+    if dtype.kind in {"i", "u"}:
+        return _quantize_integer_array(values, bits)
+    if dtype == np.dtype(np.float32) or dtype == np.dtype(np.float64):
+        return _quantize_float_array(values, bits)
+    return values
+
+
+def _quantize_light_value_scalar(value, dtype: np.dtype, bits: int):
+    dtype = np.dtype(dtype)
+    if bits <= 0:
+        return np.asarray(value, dtype=dtype)[()]
+    if dtype.kind in {"i", "u"}:
+        return _quantize_integer_scalar(value, dtype, bits)
+    if dtype == np.dtype(np.float32) or dtype == np.dtype(np.float64):
+        return _quantize_float_scalar(value, dtype, bits)
+    return np.asarray(value, dtype=dtype)[()]
+
+
 def _build_light_descriptor(
     array: blosc2.NDArray,
     field: str | None,
@@ -419,7 +497,7 @@ def _build_light_descriptor(
     value_lossy_bits = _light_value_lossy_bits(values.dtype, optlevel)
     sorted_values, positions, offsets, _ = _build_block_sorted_payload(values, block_len)
     if value_lossy_bits > 0:
-        sorted_values = _quantize_integer_array(sorted_values, value_lossy_bits)
+        sorted_values = _quantize_light_values_array(sorted_values, value_lossy_bits)
     bucket_positions = (positions // bucket_len).astype(np.uint8, copy=False)
 
     values_sidecar = _store_array_sidecar(array, field, kind, "light", "values", sorted_values, persistent)
@@ -1081,14 +1159,20 @@ def _bucket_masks_from_light(
         start = int(offsets[block_id])
         stop = int(offsets[block_id + 1])
         block_values = sorted_values[start:stop]
-        if value_lossy_bits > 0 and dtype.kind in {"i", "u"}:
+        if value_lossy_bits > 0:
             if plan.lower is not None:
-                if plan.lower_inclusive:
-                    next_lower = plan.lower
+                if dtype.kind in {"i", "u"}:
+                    if plan.lower_inclusive:
+                        next_lower = plan.lower
+                    else:
+                        max_value = np.iinfo(dtype).max
+                        next_lower = min(int(plan.lower) + 1, max_value)
                 else:
-                    max_value = np.iinfo(dtype).max
-                    next_lower = min(int(plan.lower) + 1, max_value)
-                lower = _quantize_integer_scalar(next_lower, dtype, value_lossy_bits)
+                    if plan.lower_inclusive:
+                        next_lower = plan.lower
+                    else:
+                        next_lower = np.nextafter(np.asarray(plan.lower, dtype=dtype)[()], np.inf)
+                lower = _quantize_light_value_scalar(next_lower, dtype, value_lossy_bits)
                 lower_inclusive = True
             else:
                 lower = None

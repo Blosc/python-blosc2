@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import statistics
 import tempfile
 import time
@@ -29,10 +30,38 @@ RNG_SEED = 0
 DEFAULT_OPLEVEL = 5
 
 
-def fill_ids(ids: np.ndarray, dist: str, rng: np.random.Generator) -> None:
+def dtype_token(dtype: np.dtype) -> str:
+    return re.sub(r"[^0-9A-Za-z]+", "_", np.dtype(dtype).name).strip("_")
+
+
+def make_ordered_ids(size: int, dtype: np.dtype) -> np.ndarray:
+    dtype = np.dtype(dtype)
+    if dtype == np.dtype(np.bool_):
+        values = np.zeros(size, dtype=dtype)
+        values[size // 2 :] = True
+        return values
+
+    if dtype.kind in {"i", "u"}:
+        info = np.iinfo(dtype)
+        unique_count = min(size, int(info.max) - int(info.min) + 1)
+        start = int(info.min) if unique_count < size and dtype.kind == "i" else 0
+        if dtype.kind == "i" and unique_count < size:
+            start = max(int(info.min), -(unique_count // 2))
+        positions = np.arange(size, dtype=np.int64)
+        values = start + (positions * unique_count) // size
+        return values.astype(dtype, copy=False)
+
+    if dtype.kind == "f":
+        span = max(1, size)
+        return np.linspace(-span / 2, span / 2, num=size, endpoint=False, dtype=dtype)
+
+    raise ValueError(f"unsupported dtype for benchmark: {dtype}")
+
+
+def fill_ids(ids: np.ndarray, ordered_ids: np.ndarray, dist: str, rng: np.random.Generator) -> None:
     size = ids.shape[0]
     if dist == "sorted":
-        ids[:] = np.arange(size, dtype=np.int64)
+        ids[:] = ordered_ids
         return
 
     if dist == "block-shuffled":
@@ -43,22 +72,22 @@ def fill_ids(ids: np.ndarray, dist: str, rng: np.random.Generator) -> None:
             src_start = int(src_block) * BLOCK_LEN
             src_stop = min(src_start + BLOCK_LEN, size)
             block_size = src_stop - src_start
-            ids[dest : dest + block_size] = np.arange(src_start, src_stop, dtype=np.int64)
+            ids[dest : dest + block_size] = ordered_ids[src_start:src_stop]
             dest += block_size
         return
 
     if dist == "random":
-        ids[:] = np.arange(size, dtype=np.int64)
+        ids[:] = ordered_ids
         rng.shuffle(ids)
         return
 
     raise ValueError(f"unsupported distribution {dist!r}")
 
 
-def make_source_data(size: int, dist: str) -> np.ndarray:
-    dtype = np.dtype([("id", np.int64), ("payload", np.float32)])
+def make_source_data(size: int, dist: str, id_dtype: np.dtype) -> np.ndarray:
+    dtype = np.dtype([("id", id_dtype), ("payload", np.float32)])
     data = np.zeros(size, dtype=dtype)
-    fill_ids(data["id"], dist, np.random.default_rng(RNG_SEED))
+    fill_ids(data["id"], make_ordered_ids(size, id_dtype), dist, np.random.default_rng(RNG_SEED))
     return data
 
 
@@ -70,12 +99,12 @@ def build_persistent_array(data: np.ndarray, path: Path) -> blosc2.NDArray:
     return blosc2.asarray(data, urlpath=path, mode="w", chunks=(CHUNK_LEN,), blocks=(BLOCK_LEN,))
 
 
-def base_array_path(size_dir: Path, size: int, dist: str) -> Path:
-    return size_dir / f"size_{size}_{dist}.b2nd"
+def base_array_path(size_dir: Path, size: int, dist: str, id_dtype: np.dtype) -> Path:
+    return size_dir / f"size_{size}_{dist}_{dtype_token(id_dtype)}.b2nd"
 
 
-def indexed_array_path(size_dir: Path, size: int, dist: str, kind: str, optlevel: int) -> Path:
-    return size_dir / f"size_{size}_{dist}.{kind}.opt{optlevel}.b2nd"
+def indexed_array_path(size_dir: Path, size: int, dist: str, kind: str, optlevel: int, id_dtype: np.dtype) -> Path:
+    return size_dir / f"size_{size}_{dist}_{dtype_token(id_dtype)}.{kind}.opt{optlevel}.b2nd"
 
 
 def benchmark_scan_once(expr) -> tuple[float, int]:
@@ -131,16 +160,54 @@ def index_sizes(descriptor: dict) -> tuple[int, int]:
     return logical, disk
 
 
-def _source_data_factory(size: int, dist: str):
+def _source_data_factory(size: int, dist: str, id_dtype: np.dtype):
     data = None
 
     def get_data() -> np.ndarray:
         nonlocal data
         if data is None:
-            data = make_source_data(size, dist)
+            data = make_source_data(size, dist, id_dtype)
         return data
 
     return get_data
+
+
+def _ordered_ids_factory(size: int, id_dtype: np.dtype):
+    ordered_ids = None
+
+    def get_ordered_ids() -> np.ndarray:
+        nonlocal ordered_ids
+        if ordered_ids is None:
+            ordered_ids = make_ordered_ids(size, id_dtype)
+        return ordered_ids
+
+    return get_ordered_ids
+
+
+def _query_bounds(ordered_ids: np.ndarray, query_width: int) -> tuple[object, object]:
+    if ordered_ids.size == 0:
+        raise ValueError("benchmark arrays must not be empty")
+
+    lo_idx = ordered_ids.size // 2
+    hi_idx = min(ordered_ids.size - 1, lo_idx + max(query_width - 1, 0))
+    return ordered_ids[lo_idx].item(), ordered_ids[hi_idx].item()
+
+
+def _literal(value: object, dtype: np.dtype) -> str:
+    dtype = np.dtype(dtype)
+    if dtype == np.dtype(np.bool_):
+        return "True" if bool(value) else "False"
+    if dtype.kind == "f":
+        return repr(float(value))
+    if dtype.kind in {"i", "u"}:
+        return str(int(value))
+    raise ValueError(f"unsupported dtype for literal formatting: {dtype}")
+
+
+def _condition_expr(lo: object, hi: object, dtype: np.dtype) -> str:
+    lo_literal = _literal(lo, dtype)
+    hi_literal = _literal(hi, dtype)
+    return f"(id >= {lo_literal}) & (id <= {hi_literal})"
 
 
 def _valid_index_descriptor(arr: blosc2.NDArray, kind: str, optlevel: int) -> dict | None:
@@ -179,12 +246,15 @@ def _open_or_build_indexed_array(path: Path, get_data, kind: str, optlevel: int)
     return arr, time.perf_counter() - build_start
 
 
-def benchmark_size(size: int, size_dir: Path, dist: str, query_width: int, optlevel: int) -> list[dict]:
-    get_data = _source_data_factory(size, dist)
-    arr = _open_or_build_persistent_array(base_array_path(size_dir, size, dist), get_data)
-    lo = size // 2
-    hi = min(size, lo + query_width)
-    condition = blosc2.lazyexpr(f"(id >= {lo}) & (id < {hi})", arr.fields)
+def benchmark_size(
+    size: int, size_dir: Path, dist: str, query_width: int, optlevel: int, id_dtype: np.dtype
+) -> list[dict]:
+    get_data = _source_data_factory(size, dist, id_dtype)
+    get_ordered_ids = _ordered_ids_factory(size, id_dtype)
+    arr = _open_or_build_persistent_array(base_array_path(size_dir, size, dist, id_dtype), get_data)
+    lo, hi = _query_bounds(get_ordered_ids(), query_width)
+    condition_str = _condition_expr(lo, hi, id_dtype)
+    condition = blosc2.lazyexpr(condition_str, arr.fields)
     expr = condition.where(arr)
     base_bytes = size * arr.dtype.itemsize
     compressed_base_bytes = os.path.getsize(arr.urlpath)
@@ -194,9 +264,9 @@ def benchmark_size(size: int, size_dir: Path, dist: str, query_width: int, optle
     rows = []
     for kind in KINDS:
         idx_arr, build_time = _open_or_build_indexed_array(
-            indexed_array_path(size_dir, size, dist, kind, optlevel), get_data, kind, optlevel
+            indexed_array_path(size_dir, size, dist, kind, optlevel, id_dtype), get_data, kind, optlevel
         )
-        idx_cond = blosc2.lazyexpr(f"(id >= {lo}) & (id < {hi})", idx_arr.fields)
+        idx_cond = blosc2.lazyexpr(condition_str, idx_arr.fields)
         idx_expr = idx_cond.where(idx_arr)
         explanation = idx_expr.explain()
         logical_index_bytes, disk_index_bytes = index_sizes(idx_arr.indexes[0])
@@ -299,6 +369,11 @@ def parse_args() -> argparse.Namespace:
         help="Index optlevel to use when creating indexes. Default: 5.",
     )
     parser.add_argument(
+        "--dtype",
+        default="float64",
+        help="NumPy dtype for the indexed field. Examples: float64, float32, int16, bool. Default: float64.",
+    )
+    parser.add_argument(
         "--dist",
         choices=(*DISTS, "all"),
         default="sorted",
@@ -311,15 +386,23 @@ def main() -> None:
     args = parse_args()
     if args.repeats < 0:
         raise SystemExit("--repeats must be >= 0")
+    try:
+        id_dtype = np.dtype(args.dtype)
+    except TypeError as exc:
+        raise SystemExit(f"unsupported dtype {args.dtype!r}") from exc
+    if id_dtype.kind not in {"b", "i", "u", "f"}:
+        raise SystemExit(f"--dtype only supports bool, integer, and floating-point dtypes; got {id_dtype}")
     sizes = (args.size,) if args.size is not None else SIZES
     dists = DISTS if args.dist == "all" else (args.dist,)
 
     if args.outdir is None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            run_benchmarks(sizes, dists, Path(tmpdir), args.dist, args.query_width, args.repeats, args.optlevel)
+            run_benchmarks(
+                sizes, dists, Path(tmpdir), args.dist, args.query_width, args.repeats, args.optlevel, id_dtype
+            )
     else:
         args.outdir.mkdir(parents=True, exist_ok=True)
-        run_benchmarks(sizes, dists, args.outdir, args.dist, args.query_width, args.repeats, args.optlevel)
+        run_benchmarks(sizes, dists, args.outdir, args.dist, args.query_width, args.repeats, args.optlevel, id_dtype)
 
 
 def run_benchmarks(
@@ -330,16 +413,17 @@ def run_benchmarks(
     query_width: int,
     repeats: int,
     optlevel: int,
+    id_dtype: np.dtype,
 ) -> None:
     all_results = []
     print("Structured range-query benchmark across index kinds")
     print(
         f"chunks={CHUNK_LEN:,}, blocks={BLOCK_LEN:,}, repeats={repeats}, dist={dist_label}, "
-        f"query_width={query_width:,}, optlevel={optlevel}"
+        f"query_width={query_width:,}, optlevel={optlevel}, dtype={id_dtype.name}"
     )
     for dist in dists:
         for size in sizes:
-            size_results = benchmark_size(size, size_dir, dist, query_width, optlevel)
+            size_results = benchmark_size(size, size_dir, dist, query_width, optlevel, id_dtype)
             all_results.extend(size_results)
 
     print()
