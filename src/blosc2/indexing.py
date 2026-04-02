@@ -107,26 +107,33 @@ def _is_persistent_array(array: blosc2.NDArray) -> bool:
 
 
 def _load_store(array: blosc2.NDArray) -> dict:
+    key = _array_key(array)
+    cached = _IN_MEMORY_INDEXES.get(key)
+    if cached is not None:
+        return cached
+
     if _is_persistent_array(array):
         try:
             store = array.schunk.vlmeta[INDEXES_VLMETA_KEY]
         except KeyError:
-            return _default_index_store()
+            store = _default_index_store()
         if not isinstance(store, dict):
-            return _default_index_store()
+            store = _default_index_store()
         store.setdefault("version", INDEX_FORMAT_VERSION)
         store.setdefault("indexes", {})
-        return store
-    return _IN_MEMORY_INDEXES.get(_array_key(array), _default_index_store())
+    else:
+        store = _default_index_store()
+
+    _IN_MEMORY_INDEXES[key] = store
+    return store
 
 
 def _save_store(array: blosc2.NDArray, store: dict) -> None:
     store.setdefault("version", INDEX_FORMAT_VERSION)
     store.setdefault("indexes", {})
+    _IN_MEMORY_INDEXES[_array_key(array)] = store
     if _is_persistent_array(array):
         array.schunk.vlmeta[INDEXES_VLMETA_KEY] = store
-    else:
-        _IN_MEMORY_INDEXES[_array_key(array)] = store
 
 
 def _supported_index_dtype(dtype: np.dtype) -> bool:

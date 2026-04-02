@@ -76,9 +76,16 @@ def indexed_array_path(size_dir: Path, size: int, dist: str, kind: str) -> Path:
     return size_dir / f"size_{size}_{dist}.{kind}.b2nd"
 
 
-def benchmark_once(expr, *, use_index: bool) -> tuple[float, int]:
+def benchmark_scan_once(expr) -> tuple[float, int]:
     start = time.perf_counter()
-    result = expr.compute(_use_index=use_index)[:]
+    result = expr.compute(_use_index=False)[:]
+    elapsed = time.perf_counter() - start
+    return elapsed, len(result)
+
+
+def benchmark_index_once(arr: blosc2.NDArray, cond) -> tuple[float, int]:
+    start = time.perf_counter()
+    result = arr[cond][:]
     elapsed = time.perf_counter() - start
     return elapsed, len(result)
 
@@ -161,19 +168,21 @@ def benchmark_size(size: int, size_dir: Path, dist: str, query_width: int) -> li
     arr = _open_or_build_persistent_array(base_array_path(size_dir, size, dist), get_data)
     lo = size // 2
     hi = min(size, lo + query_width)
-    expr = blosc2.lazyexpr(f"(id >= {lo}) & (id < {hi})", arr.fields).where(arr)
+    condition = blosc2.lazyexpr(f"(id >= {lo}) & (id < {hi})", arr.fields)
+    expr = condition.where(arr)
     base_bytes = size * arr.dtype.itemsize
     compressed_base_bytes = os.path.getsize(arr.urlpath)
 
-    scan_ms = benchmark_once(expr, use_index=False)[0] * 1_000
+    scan_ms = benchmark_scan_once(expr)[0] * 1_000
 
     rows = []
     for kind in KINDS:
         idx_arr, build_time = _open_or_build_indexed_array(indexed_array_path(size_dir, size, dist, kind), get_data, kind)
-        idx_expr = blosc2.lazyexpr(f"(id >= {lo}) & (id < {hi})", idx_arr.fields).where(idx_arr)
+        idx_cond = blosc2.lazyexpr(f"(id >= {lo}) & (id < {hi})", idx_arr.fields)
+        idx_expr = idx_cond.where(idx_arr)
         explanation = idx_expr.explain()
         logical_index_bytes, disk_index_bytes = index_sizes(idx_arr.indexes[0])
-        cold_time, index_len = benchmark_once(idx_expr, use_index=True)
+        cold_time, index_len = benchmark_index_once(idx_arr, idx_cond)
 
         rows.append(
             {
@@ -195,7 +204,7 @@ def benchmark_size(size: int, size_dir: Path, dist: str, query_width: int) -> li
                 "index_pct": logical_index_bytes / base_bytes * 100,
                 "index_pct_disk": disk_index_bytes / compressed_base_bytes * 100,
                 "_arr": idx_arr,
-                "_expr": idx_expr,
+                "_cond": idx_cond,
             }
         )
     return rows
@@ -205,8 +214,9 @@ def measure_warm_queries(rows: list[dict], repeats: int) -> None:
     if repeats <= 0:
         return
     for result in rows:
-        expr = result["_expr"]
-        index_runs = [benchmark_once(expr, use_index=True)[0] for _ in range(repeats)]
+        arr = result["_arr"]
+        cond = result["_cond"]
+        index_runs = [benchmark_index_once(arr, cond)[0] for _ in range(repeats)]
         warm_ms = statistics.median(index_runs) * 1_000 if index_runs else None
         result["warm_ms"] = warm_ms
         result["warm_speedup"] = None if warm_ms is None else result["scan_ms"] / warm_ms
