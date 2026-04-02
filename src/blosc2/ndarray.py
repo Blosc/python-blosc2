@@ -4724,9 +4724,32 @@ class NDArray(blosc2_ext.NDArray, Operand):
         optlevel: int = 3,
         granularity: str = "chunk",
         persistent: bool | None = None,
+        in_mem: bool = False,
         name: str | None = None,
         **kwargs: Any,
     ) -> dict:
+        """Create an index for a 1-D array or structured field.
+
+        Parameters
+        ----------
+        field : str or None, optional
+            Field to index for structured dtypes. Use ``None`` to index the array values.
+        kind : {"ultralight", "light", "medium", "full"}, optional
+            Index tier to build.
+        optlevel : int, optional
+            Optimization level for index payload construction.
+        granularity : str, optional
+            Current implementation only supports ``"chunk"``.
+        persistent : bool or None, optional
+            Whether index sidecars should be persisted. If ``None``, this follows whether the base array is persistent.
+        in_mem : bool, optional
+            Force the in-memory builder. When set to ``True``, index creation materializes the indexed field in RAM and
+            may allocate additional temporary arrays for sorting, permutations, and block payloads. For large datasets
+            this can require substantially more memory than the final index itself, so the default is ``False`` and
+            uses the out-of-core builders for ``light``, ``medium``, and ``full``.
+        name : str or None, optional
+            Optional logical name for the index descriptor.
+        """
         from . import indexing
 
         return indexing.create_index(
@@ -4736,6 +4759,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
             optlevel=optlevel,
             granularity=granularity,
             persistent=persistent,
+            in_mem=in_mem,
             name=name,
             **kwargs,
         )

@@ -161,6 +161,55 @@ def test_persistent_index_survives_reopen(tmp_path, kind):
     np.testing.assert_array_equal(expr.compute()[:], data[data >= 72_000])
 
 
+@pytest.mark.parametrize("kind", ["light", "medium", "full"])
+def test_default_ooc_persistent_index_matches_scan_and_rebuilds(tmp_path, kind):
+    path = tmp_path / f"indexed_ooc_{kind}.b2nd"
+    rng = np.random.default_rng(7)
+    dtype = np.dtype([("id", np.int64), ("payload", np.float32)])
+    data = np.zeros(240_000, dtype=dtype)
+    data["id"] = np.arange(data.shape[0], dtype=np.int64)
+    rng.shuffle(data["id"])
+
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(24_000,), blocks=(4_000,))
+    descriptor = arr.create_index(field="id", kind=kind)
+
+    assert descriptor["ooc"] is True
+
+    reopened = blosc2.open(path, mode="a")
+    assert reopened.indexes[0]["ooc"] is True
+
+    expr = blosc2.lazyexpr("(id >= 123_456) & (id < 124_321)", reopened.fields).where(reopened)
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    expected = data[(data["id"] >= 123_456) & (data["id"] < 124_321)]
+
+    np.testing.assert_array_equal(indexed, scanned)
+    np.testing.assert_array_equal(indexed, expected)
+
+    rebuilt = reopened.rebuild_index()
+    assert rebuilt["ooc"] is True
+
+
+@pytest.mark.parametrize("kind", ["light", "medium", "full"])
+def test_small_default_index_builder_uses_ooc(kind):
+    data = np.arange(100_000, dtype=np.int64)
+    arr = blosc2.asarray(data, chunks=(10_000,), blocks=(2_000,))
+
+    descriptor = arr.create_index(kind=kind)
+
+    assert descriptor["ooc"] is True
+
+
+@pytest.mark.parametrize("kind", ["light", "medium", "full"])
+def test_in_mem_override_disables_ooc_builder(kind):
+    data = np.arange(120_000, dtype=np.int64)
+    arr = blosc2.asarray(data, chunks=(12_000,), blocks=(3_000,))
+
+    descriptor = arr.create_index(kind=kind, in_mem=True)
+
+    assert descriptor["ooc"] is False
+
+
 def test_mutation_marks_index_stale_and_rebuild_restores_it():
     data = np.arange(50_000, dtype=np.int64)
     arr = blosc2.asarray(data, chunks=(5_000,), blocks=(1_000,))

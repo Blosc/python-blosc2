@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import math
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -32,6 +33,8 @@ SEGMENT_LEVELS_BY_KIND = {
 _IN_MEMORY_INDEXES: dict[int, dict] = {}
 _DATA_CACHE: dict[tuple[int, str | None, str, str], np.ndarray] = {}
 BLOCK_GATHER_POSITIONS_THRESHOLD = 32
+FULL_OOC_RUN_ITEMS = 2_000_000
+FULL_OOC_MERGE_BUFFER_ITEMS = 500_000
 
 
 @dataclass(slots=True)
@@ -77,12 +80,21 @@ class ExactPredicatePlan:
     upper_inclusive: bool = True
 
 
+@dataclass(slots=True)
+class SortedRun:
+    values_path: Path
+    positions_path: Path
+    length: int
+
+
 def _default_index_store() -> dict:
     return {"version": INDEX_FORMAT_VERSION, "indexes": {}}
 
 
-def _array_key(array: blosc2.NDArray) -> int:
-    return id(array)
+def _array_key(array: blosc2.NDArray) -> tuple[str, str | int]:
+    if _is_persistent_array(array):
+        return ("persistent", str(Path(array.urlpath).resolve()))
+    return ("memory", id(array))
 
 
 def _field_token(field: str | None) -> str:
@@ -211,27 +223,39 @@ def _values_for_index(array: blosc2.NDArray, field: str | None) -> np.ndarray:
     return values if field is None else values[field]
 
 
+def _slice_values_for_index(array: blosc2.NDArray, field: str | None, start: int, stop: int) -> np.ndarray:
+    values = array[start:stop]
+    return values if field is None else values[field]
+
+
+def _summary_dtype(dtype: np.dtype) -> np.dtype:
+    return np.dtype([("min", dtype), ("max", dtype), ("flags", np.uint8)])
+
+
+def _segment_summary(segment: np.ndarray, dtype: np.dtype):
+    flags = np.uint8(0)
+    if dtype.kind == "f":
+        valid = ~np.isnan(segment)
+        if not np.all(valid):
+            flags |= FLAG_HAS_NAN
+        if not np.any(valid):
+            flags |= FLAG_ALL_NAN
+            zero = np.zeros((), dtype=dtype)[()]
+            return zero, zero, flags
+        segment = segment[valid]
+    return segment.min(), segment.max(), flags
+
+
 def _compute_segment_summaries(values: np.ndarray, dtype: np.dtype, segment_len: int) -> np.ndarray:
     nsegments = math.ceil(values.shape[0] / segment_len)
-    summary_dtype = np.dtype([("min", dtype), ("max", dtype), ("flags", np.uint8)])
+    summary_dtype = _summary_dtype(dtype)
     summaries = np.empty(nsegments, dtype=summary_dtype)
 
     for idx in range(nsegments):
         start = idx * segment_len
         stop = min(start + segment_len, values.shape[0])
         segment = values[start:stop]
-        flags = np.uint8(0)
-        if dtype.kind == "f":
-            valid = ~np.isnan(segment)
-            if not np.all(valid):
-                flags |= FLAG_HAS_NAN
-            if not np.any(valid):
-                flags |= FLAG_ALL_NAN
-                zero = np.zeros((), dtype=dtype)[()]
-                summaries[idx] = (zero, zero, flags)
-                continue
-            segment = segment[valid]
-        summaries[idx] = (segment.min(), segment.max(), flags)
+        summaries[idx] = _segment_summary(segment, dtype)
     return summaries
 
 
@@ -245,13 +269,17 @@ def _store_array_sidecar(
     persistent: bool,
 ) -> dict:
     cache_key = _data_cache_key(array, field, category, name)
-    _DATA_CACHE[cache_key] = data
     if persistent:
         path = _sidecar_path(array, field, kind, f"{category}.{name}")
         blosc2.remove_urlpath(path)
         blosc2.asarray(data, urlpath=path, mode="w")
+        if isinstance(data, np.memmap):
+            _DATA_CACHE.pop(cache_key, None)
+        else:
+            _DATA_CACHE[cache_key] = data
     else:
         path = None
+        _DATA_CACHE[cache_key] = np.array(data, copy=True) if isinstance(data, np.memmap) else data
     return {"path": path, "dtype": data.dtype.descr if data.dtype.fields else data.dtype.str}
 
 
@@ -291,6 +319,34 @@ def _build_levels_descriptor(
     return levels
 
 
+def _build_levels_descriptor_ooc(
+    array: blosc2.NDArray,
+    field: str | None,
+    kind: str,
+    dtype: np.dtype,
+    persistent: bool,
+) -> dict:
+    levels = {}
+    size = int(array.shape[0])
+    summary_dtype = _summary_dtype(dtype)
+    for level in SEGMENT_LEVELS_BY_KIND[kind]:
+        segment_len = _segment_len(array, level)
+        nsegments = math.ceil(size / segment_len)
+        summaries = np.empty(nsegments, dtype=summary_dtype)
+        for idx in range(nsegments):
+            start = idx * segment_len
+            stop = min(start + segment_len, size)
+            summaries[idx] = _segment_summary(_slice_values_for_index(array, field, start, stop), dtype)
+        sidecar = _store_array_sidecar(array, field, kind, "summary", level, summaries, persistent)
+        levels[level] = {
+            "segment_len": segment_len,
+            "nsegments": len(summaries),
+            "path": sidecar["path"],
+            "dtype": sidecar["dtype"],
+        }
+    return levels
+
+
 def _build_full_descriptor(
     array: blosc2.NDArray,
     field: str | None,
@@ -317,6 +373,12 @@ def _position_dtype(max_value: int) -> np.dtype:
     if max_value <= np.iinfo(np.uint32).max:
         return np.dtype(np.uint32)
     return np.dtype(np.uint64)
+
+
+def _resolve_ooc_mode(kind: str, in_mem: bool) -> bool:
+    if kind not in {"light", "medium", "full"}:
+        return False
+    return not in_mem
 
 
 def _build_block_sorted_payload(
@@ -354,6 +416,54 @@ def _build_reduced_descriptor(
 ) -> dict:
     block_len = int(array.blocks[0])
     sorted_values, positions, offsets, _ = _build_block_sorted_payload(values, block_len)
+
+    values_sidecar = _store_array_sidecar(array, field, kind, "reduced", "values", sorted_values, persistent)
+    positions_sidecar = _store_array_sidecar(
+        array, field, kind, "reduced", "positions", positions, persistent
+    )
+    offsets_sidecar = _store_array_sidecar(array, field, kind, "reduced", "offsets", offsets, persistent)
+    return {
+        "block_len": block_len,
+        "values_path": values_sidecar["path"],
+        "positions_path": positions_sidecar["path"],
+        "offsets_path": offsets_sidecar["path"],
+    }
+
+
+def _open_temp_memmap(workdir: Path, name: str, dtype: np.dtype, shape: tuple[int, ...]) -> np.memmap:
+    path = workdir / f"{name}.npy"
+    return np.lib.format.open_memmap(path, mode="w+", dtype=dtype, shape=shape)
+
+
+def _build_reduced_descriptor_ooc(
+    array: blosc2.NDArray,
+    field: str | None,
+    kind: str,
+    persistent: bool,
+    workdir: Path,
+) -> dict:
+    size = int(array.shape[0])
+    block_len = int(array.blocks[0])
+    nblocks = math.ceil(size / block_len)
+    position_dtype = _position_dtype(block_len - 1)
+    offsets = np.empty(nblocks + 1, dtype=np.int64)
+    offsets[0] = 0
+    sorted_values = _open_temp_memmap(
+        workdir, f"{kind}_reduced_values", np.dtype(_field_dtype(array, field)), (size,)
+    )
+    positions = _open_temp_memmap(workdir, f"{kind}_reduced_positions", position_dtype, (size,))
+
+    cursor = 0
+    for block_id in range(nblocks):
+        start = block_id * block_len
+        stop = min(start + block_len, size)
+        block = _slice_values_for_index(array, field, start, stop)
+        order = np.argsort(block, kind="stable")
+        next_cursor = cursor + (stop - start)
+        sorted_values[cursor:next_cursor] = block[order]
+        positions[cursor:next_cursor] = order.astype(position_dtype, copy=False)
+        cursor = next_cursor
+        offsets[block_id + 1] = cursor
 
     values_sidecar = _store_array_sidecar(array, field, kind, "reduced", "values", sorted_values, persistent)
     positions_sidecar = _store_array_sidecar(
@@ -516,6 +626,288 @@ def _build_light_descriptor(
     }
 
 
+def _build_light_descriptor_ooc(
+    array: blosc2.NDArray,
+    field: str | None,
+    kind: str,
+    dtype: np.dtype,
+    optlevel: int,
+    persistent: bool,
+    workdir: Path,
+) -> dict:
+    size = int(array.shape[0])
+    block_len = int(array.blocks[0])
+    nblocks = math.ceil(size / block_len)
+    bucket_count = _light_bucket_count(block_len)
+    bucket_len = math.ceil(block_len / bucket_count)
+    value_lossy_bits = _light_value_lossy_bits(dtype, optlevel)
+    offsets = np.empty(nblocks + 1, dtype=np.int64)
+    offsets[0] = 0
+    sorted_values = _open_temp_memmap(workdir, f"{kind}_light_values", dtype, (size,))
+    bucket_positions = _open_temp_memmap(workdir, f"{kind}_light_bucket_positions", np.uint8, (size,))
+
+    cursor = 0
+    for block_id in range(nblocks):
+        start = block_id * block_len
+        stop = min(start + block_len, size)
+        block = _slice_values_for_index(array, field, start, stop)
+        order = np.argsort(block, kind="stable")
+        block_values = block[order]
+        if value_lossy_bits > 0:
+            block_values = _quantize_light_values_array(block_values, value_lossy_bits)
+        next_cursor = cursor + (stop - start)
+        sorted_values[cursor:next_cursor] = block_values
+        bucket_positions[cursor:next_cursor] = (order // bucket_len).astype(np.uint8, copy=False)
+        cursor = next_cursor
+        offsets[block_id + 1] = cursor
+
+    values_sidecar = _store_array_sidecar(array, field, kind, "light", "values", sorted_values, persistent)
+    positions_sidecar = _store_array_sidecar(
+        array, field, kind, "light", "bucket_positions", bucket_positions, persistent
+    )
+    offsets_sidecar = _store_array_sidecar(array, field, kind, "light", "offsets", offsets, persistent)
+    return {
+        "block_len": block_len,
+        "bucket_count": bucket_count,
+        "bucket_len": bucket_len,
+        "value_lossy_bits": value_lossy_bits,
+        "values_path": values_sidecar["path"],
+        "bucket_positions_path": positions_sidecar["path"],
+        "offsets_path": offsets_sidecar["path"],
+    }
+
+
+def _scalar_compare(left, right, dtype: np.dtype) -> int:
+    dtype = np.dtype(dtype)
+    if dtype.kind == "f":
+        left_nan = np.isnan(left)
+        right_nan = np.isnan(right)
+        if left_nan and right_nan:
+            return 0
+        if left_nan:
+            return 1
+        if right_nan:
+            return -1
+    if left < right:
+        return -1
+    if left > right:
+        return 1
+    return 0
+
+
+def _pair_le(left_value, left_position: int, right_value, right_position: int, dtype: np.dtype) -> bool:
+    cmp = _scalar_compare(left_value, right_value, dtype)
+    if cmp < 0:
+        return True
+    if cmp > 0:
+        return False
+    return int(left_position) <= int(right_position)
+
+
+def _pair_record_dtype(dtype: np.dtype) -> np.dtype:
+    return np.dtype([("value", dtype), ("position", np.int64)])
+
+
+def _pair_records(values: np.ndarray, positions: np.ndarray, dtype: np.dtype) -> np.ndarray:
+    records = np.empty(values.shape[0], dtype=_pair_record_dtype(dtype))
+    records["value"] = values
+    records["position"] = positions
+    return records
+
+
+def _merge_sorted_slices(
+    left_values: np.ndarray,
+    left_positions: np.ndarray,
+    right_values: np.ndarray,
+    right_positions: np.ndarray,
+    dtype: np.dtype,
+) -> tuple[np.ndarray, np.ndarray]:
+    if left_values.size == 0:
+        return right_values, right_positions
+    if right_values.size == 0:
+        return left_values, left_positions
+    values = np.concatenate((left_values, right_values))
+    positions = np.concatenate((left_positions, right_positions))
+    order = np.lexsort((positions, values))
+    return values[order], positions[order]
+
+
+def _pair_searchsorted_right(values: np.ndarray, positions: np.ndarray, value, position: int) -> int:
+    records = _pair_records(values, positions, values.dtype)
+    needle = np.asarray((value, position), dtype=records.dtype)[()]
+    return int(np.searchsorted(records, needle, side="right"))
+
+
+def _refill_run_buffer(
+    values_mm: np.ndarray, positions_mm: np.ndarray, cursor: int, buffer_items: int
+) -> tuple[np.ndarray, np.ndarray, int]:
+    if cursor >= len(values_mm):
+        return np.empty(0, dtype=values_mm.dtype), np.empty(0, dtype=positions_mm.dtype), cursor
+    stop = min(cursor + buffer_items, len(values_mm))
+    return np.asarray(values_mm[cursor:stop]), np.asarray(positions_mm[cursor:stop]), stop
+
+
+def _merge_run_pair(
+    left: SortedRun, right: SortedRun, workdir: Path, dtype: np.dtype, merge_id: int, buffer_items: int
+) -> SortedRun:
+    left_values_mm = np.load(left.values_path, mmap_mode="r")
+    left_positions_mm = np.load(left.positions_path, mmap_mode="r")
+    right_values_mm = np.load(right.values_path, mmap_mode="r")
+    right_positions_mm = np.load(right.positions_path, mmap_mode="r")
+
+    out_values_path = workdir / f"full_merge_values_{merge_id}.npy"
+    out_positions_path = workdir / f"full_merge_positions_{merge_id}.npy"
+    out_values = np.lib.format.open_memmap(
+        out_values_path, mode="w+", dtype=dtype, shape=(left.length + right.length,)
+    )
+    out_positions = np.lib.format.open_memmap(
+        out_positions_path, mode="w+", dtype=np.int64, shape=(left.length + right.length,)
+    )
+
+    left_cursor = 0
+    right_cursor = 0
+    out_cursor = 0
+    left_values = np.empty(0, dtype=dtype)
+    left_positions = np.empty(0, dtype=np.int64)
+    right_values = np.empty(0, dtype=dtype)
+    right_positions = np.empty(0, dtype=np.int64)
+    while True:
+        if left_values.size == 0:
+            left_values, left_positions, left_cursor = _refill_run_buffer(
+                left_values_mm, left_positions_mm, left_cursor, buffer_items
+            )
+        if right_values.size == 0:
+            right_values, right_positions, right_cursor = _refill_run_buffer(
+                right_values_mm, right_positions_mm, right_cursor, buffer_items
+            )
+
+        if left_values.size == 0 and right_values.size == 0:
+            break
+        if left_values.size == 0:
+            take = right_values.size
+            out_values[out_cursor : out_cursor + take] = right_values
+            out_positions[out_cursor : out_cursor + take] = right_positions
+            out_cursor += take
+            right_values = np.empty(0, dtype=dtype)
+            right_positions = np.empty(0, dtype=np.int64)
+            continue
+        if right_values.size == 0:
+            take = left_values.size
+            out_values[out_cursor : out_cursor + take] = left_values
+            out_positions[out_cursor : out_cursor + take] = left_positions
+            out_cursor += take
+            left_values = np.empty(0, dtype=dtype)
+            left_positions = np.empty(0, dtype=np.int64)
+            continue
+
+        if _pair_le(left_values[-1], left_positions[-1], right_values[-1], right_positions[-1], dtype):
+            left_cut = left_values.size
+            right_cut = _pair_searchsorted_right(
+                right_values, right_positions, left_values[-1], int(left_positions[-1])
+            )
+        else:
+            left_cut = _pair_searchsorted_right(
+                left_values, left_positions, right_values[-1], int(right_positions[-1])
+            )
+            right_cut = right_values.size
+
+        merged_values, merged_positions = _merge_sorted_slices(
+            left_values[:left_cut],
+            left_positions[:left_cut],
+            right_values[:right_cut],
+            right_positions[:right_cut],
+            dtype,
+        )
+        take = merged_values.size
+        out_values[out_cursor : out_cursor + take] = merged_values
+        out_positions[out_cursor : out_cursor + take] = merged_positions
+        out_cursor += take
+        left_values = left_values[left_cut:]
+        left_positions = left_positions[left_cut:]
+        right_values = right_values[right_cut:]
+        right_positions = right_positions[right_cut:]
+
+    out_values.flush()
+    out_positions.flush()
+    del left_values_mm, left_positions_mm, right_values_mm, right_positions_mm, out_values, out_positions
+    left.values_path.unlink(missing_ok=True)
+    left.positions_path.unlink(missing_ok=True)
+    right.values_path.unlink(missing_ok=True)
+    right.positions_path.unlink(missing_ok=True)
+    return SortedRun(out_values_path, out_positions_path, out_cursor)
+
+
+def _build_full_descriptor_ooc(
+    array: blosc2.NDArray,
+    field: str | None,
+    kind: str,
+    dtype: np.dtype,
+    persistent: bool,
+    workdir: Path,
+) -> dict:
+    size = int(array.shape[0])
+    if size == 0:
+        sorted_values = np.empty(0, dtype=dtype)
+        positions = np.empty(0, dtype=np.int64)
+        values_sidecar = _store_array_sidecar(
+            array, field, kind, "full", "values", sorted_values, persistent
+        )
+        positions_sidecar = _store_array_sidecar(
+            array, field, kind, "full", "positions", positions, persistent
+        )
+        return {
+            "values_path": values_sidecar["path"],
+            "positions_path": positions_sidecar["path"],
+        }
+    run_items = max(int(array.chunks[0]), min(size, FULL_OOC_RUN_ITEMS))
+    runs = []
+    for run_id, start in enumerate(range(0, size, run_items)):
+        stop = min(start + run_items, size)
+        values = _slice_values_for_index(array, field, start, stop)
+        positions = np.arange(start, stop, dtype=np.int64)
+        order = np.lexsort((positions, values))
+        sorted_values = values[order]
+        sorted_positions = positions[order]
+
+        values_path = workdir / f"full_run_values_{run_id}.npy"
+        positions_path = workdir / f"full_run_positions_{run_id}.npy"
+        run_values = np.lib.format.open_memmap(values_path, mode="w+", dtype=dtype, shape=(stop - start,))
+        run_positions = np.lib.format.open_memmap(
+            positions_path, mode="w+", dtype=np.int64, shape=(stop - start,)
+        )
+        run_values[:] = sorted_values
+        run_positions[:] = sorted_positions
+        run_values.flush()
+        run_positions.flush()
+        del run_values, run_positions
+        runs.append(SortedRun(values_path, positions_path, stop - start))
+
+    merge_id = 0
+    while len(runs) > 1:
+        next_runs = []
+        for idx in range(0, len(runs), 2):
+            if idx + 1 >= len(runs):
+                next_runs.append(runs[idx])
+                continue
+            next_runs.append(
+                _merge_run_pair(
+                    runs[idx], runs[idx + 1], workdir, dtype, merge_id, FULL_OOC_MERGE_BUFFER_ITEMS
+                )
+            )
+            merge_id += 1
+        runs = next_runs
+
+    final_run = runs[0]
+    sorted_values = np.load(final_run.values_path, mmap_mode="r")
+    positions = np.load(final_run.positions_path, mmap_mode="r")
+    values_sidecar = _store_array_sidecar(array, field, kind, "full", "values", sorted_values, persistent)
+    positions_sidecar = _store_array_sidecar(array, field, kind, "full", "positions", positions, persistent)
+    return {
+        "values_path": values_sidecar["path"],
+        "positions_path": positions_sidecar["path"],
+    }
+
+
 def _build_descriptor(
     array: blosc2.NDArray,
     field: str | None,
@@ -523,6 +915,7 @@ def _build_descriptor(
     optlevel: int,
     granularity: str,
     persistent: bool,
+    ooc: bool,
     name: str | None,
     dtype: np.dtype,
     levels: dict,
@@ -538,6 +931,7 @@ def _build_descriptor(
         "optlevel": optlevel,
         "granularity": granularity,
         "persistent": persistent,
+        "ooc": ooc,
         "stale": False,
         "dtype": np.dtype(dtype).str,
         "shape": tuple(array.shape),
@@ -557,6 +951,7 @@ def create_index(
     optlevel: int = 5,
     granularity: str = "chunk",
     persistent: bool | None = None,
+    in_mem: bool = False,
     name: str | None = None,
     **kwargs,
 ) -> dict:
@@ -568,19 +963,69 @@ def create_index(
         raise NotImplementedError("only chunk-based array indexes are implemented for now")
     if persistent is None:
         persistent = _is_persistent_array(array)
+    use_ooc = _resolve_ooc_mode(kind, in_mem)
 
-    values = _values_for_index(array, field)
-    levels = _build_levels_descriptor(array, field, kind, dtype, values, persistent)
-    light = (
-        _build_light_descriptor(array, field, kind, values, optlevel, persistent)
-        if kind == "light"
-        else None
-    )
-    reduced = _build_reduced_descriptor(array, field, kind, values, persistent) if kind == "medium" else None
-    full = _build_full_descriptor(array, field, kind, values, persistent) if kind == "full" else None
-    descriptor = _build_descriptor(
-        array, field, kind, optlevel, granularity, persistent, name, dtype, levels, light, reduced, full
-    )
+    if use_ooc and kind in {"light", "medium", "full"}:
+        with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-") as tmpdir:
+            workdir = Path(tmpdir)
+            levels = _build_levels_descriptor_ooc(array, field, kind, dtype, persistent)
+            light = (
+                _build_light_descriptor_ooc(array, field, kind, dtype, optlevel, persistent, workdir)
+                if kind == "light"
+                else None
+            )
+            reduced = (
+                _build_reduced_descriptor_ooc(array, field, kind, persistent, workdir)
+                if kind == "medium"
+                else None
+            )
+            full = (
+                _build_full_descriptor_ooc(array, field, kind, dtype, persistent, workdir)
+                if kind == "full"
+                else None
+            )
+            descriptor = _build_descriptor(
+                array,
+                field,
+                kind,
+                optlevel,
+                granularity,
+                persistent,
+                True,
+                name,
+                dtype,
+                levels,
+                light,
+                reduced,
+                full,
+            )
+    else:
+        values = _values_for_index(array, field)
+        levels = _build_levels_descriptor(array, field, kind, dtype, values, persistent)
+        light = (
+            _build_light_descriptor(array, field, kind, values, optlevel, persistent)
+            if kind == "light"
+            else None
+        )
+        reduced = (
+            _build_reduced_descriptor(array, field, kind, values, persistent) if kind == "medium" else None
+        )
+        full = _build_full_descriptor(array, field, kind, values, persistent) if kind == "full" else None
+        descriptor = _build_descriptor(
+            array,
+            field,
+            kind,
+            optlevel,
+            granularity,
+            persistent,
+            False,
+            name,
+            dtype,
+            levels,
+            light,
+            reduced,
+            full,
+        )
 
     store = _load_store(array)
     store["indexes"][_field_token(field)] = descriptor
@@ -593,7 +1038,11 @@ def create_csindex(array: blosc2.NDArray, field: str | None = None, **kwargs) ->
 
 
 def _resolve_index_token(store: dict, field: str | None, name: str | None) -> str:
-    token = _field_token(field) if field is not None or name is None else None
+    token = None
+    if field is not None:
+        token = _field_token(field)
+    elif name is None and len(store["indexes"]) == 1:
+        token = next(iter(store["indexes"]))
     if token is None:
         for key, descriptor in store["indexes"].items():
             if descriptor.get("name") == name:
@@ -646,6 +1095,7 @@ def rebuild_index(array: blosc2.NDArray, field: str | None = None, name: str | N
         optlevel=descriptor["optlevel"],
         granularity=descriptor["granularity"],
         persistent=descriptor["persistent"],
+        in_mem=not descriptor.get("ooc", False),
         name=descriptor["name"],
     )
 
