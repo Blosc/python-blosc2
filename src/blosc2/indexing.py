@@ -1074,6 +1074,168 @@ def _drop_descriptor_sidecars(descriptor: dict) -> None:
         _remove_sidecar_path(descriptor["full"]["positions_path"])
 
 
+def _replace_levels_descriptor(
+    array: blosc2.NDArray, descriptor: dict, field: str | None, kind: str, persistent: bool
+) -> None:
+    size = int(array.shape[0])
+    for level, level_info in descriptor["levels"].items():
+        segment_len = int(level_info["segment_len"])
+        start = 0
+        summaries = _compute_segment_summaries(
+            _slice_values_for_index(array, field, start, size), _field_dtype(array, field), segment_len
+        )
+        sidecar = _store_array_sidecar(array, field, kind, "summary", level, summaries, persistent)
+        level_info["path"] = sidecar["path"]
+        level_info["dtype"] = sidecar["dtype"]
+        level_info["nsegments"] = len(summaries)
+
+
+def _replace_levels_descriptor_tail(
+    array: blosc2.NDArray, descriptor: dict, field: str | None, kind: str, old_size: int, persistent: bool
+) -> None:
+    dtype = _field_dtype(array, field)
+    new_size = int(array.shape[0])
+    for level, level_info in descriptor["levels"].items():
+        segment_len = int(level_info["segment_len"])
+        start_segment = old_size // segment_len
+        prefix = _load_level_summaries(array, descriptor, level)[:start_segment]
+        tail_start = start_segment * segment_len
+        tail_values = _slice_values_for_index(array, field, tail_start, new_size)
+        tail_summaries = _compute_segment_summaries(tail_values, dtype, segment_len)
+        summaries = np.concatenate((prefix, tail_summaries)) if len(prefix) else tail_summaries
+        sidecar = _store_array_sidecar(array, field, kind, "summary", level, summaries, persistent)
+        level_info["path"] = sidecar["path"]
+        level_info["dtype"] = sidecar["dtype"]
+        level_info["nsegments"] = len(summaries)
+
+
+def _replace_reduced_descriptor_tail(
+    array: blosc2.NDArray, descriptor: dict, field: str | None, old_size: int, persistent: bool
+) -> None:
+    reduced = descriptor["reduced"]
+    block_len = int(reduced["block_len"])
+    start_block = old_size // block_len
+    block_start = start_block * block_len
+    tail_values = _slice_values_for_index(array, field, block_start, int(array.shape[0]))
+    sorted_values_tail, positions_tail, offsets_tail, _ = _build_block_sorted_payload(tail_values, block_len)
+
+    values, positions, offsets = _load_reduced_arrays(array, descriptor)
+    prefix_items = int(offsets[start_block])
+    updated_values = np.concatenate((values[:prefix_items], sorted_values_tail))
+    updated_positions = np.concatenate((positions[:prefix_items], positions_tail))
+    updated_offsets = np.concatenate((offsets[: start_block + 1], prefix_items + offsets_tail[1:]))
+
+    kind = descriptor["kind"]
+    values_sidecar = _store_array_sidecar(
+        array, field, kind, "reduced", "values", updated_values, persistent
+    )
+    positions_sidecar = _store_array_sidecar(
+        array, field, kind, "reduced", "positions", updated_positions, persistent
+    )
+    offsets_sidecar = _store_array_sidecar(
+        array, field, kind, "reduced", "offsets", updated_offsets, persistent
+    )
+    reduced["values_path"] = values_sidecar["path"]
+    reduced["positions_path"] = positions_sidecar["path"]
+    reduced["offsets_path"] = offsets_sidecar["path"]
+
+
+def _replace_light_descriptor_tail(
+    array: blosc2.NDArray, descriptor: dict, field: str | None, old_size: int, persistent: bool
+) -> None:
+    light = descriptor["light"]
+    block_len = int(light["block_len"])
+    start_block = old_size // block_len
+    block_start = start_block * block_len
+    tail_values = _slice_values_for_index(array, field, block_start, int(array.shape[0]))
+    value_lossy_bits = int(light["value_lossy_bits"])
+    bucket_len = int(light["bucket_len"])
+    sorted_values_tail, positions_tail, offsets_tail, _ = _build_block_sorted_payload(tail_values, block_len)
+    if value_lossy_bits > 0:
+        sorted_values_tail = _quantize_light_values_array(sorted_values_tail, value_lossy_bits)
+    bucket_positions_tail = (positions_tail // bucket_len).astype(np.uint8, copy=False)
+
+    values, bucket_positions, offsets = _load_light_arrays(array, descriptor)
+    prefix_items = int(offsets[start_block])
+    updated_values = np.concatenate((values[:prefix_items], sorted_values_tail))
+    updated_bucket_positions = np.concatenate((bucket_positions[:prefix_items], bucket_positions_tail))
+    updated_offsets = np.concatenate((offsets[: start_block + 1], prefix_items + offsets_tail[1:]))
+
+    kind = descriptor["kind"]
+    values_sidecar = _store_array_sidecar(array, field, kind, "light", "values", updated_values, persistent)
+    positions_sidecar = _store_array_sidecar(
+        array, field, kind, "light", "bucket_positions", updated_bucket_positions, persistent
+    )
+    offsets_sidecar = _store_array_sidecar(
+        array, field, kind, "light", "offsets", updated_offsets, persistent
+    )
+    light["values_path"] = values_sidecar["path"]
+    light["bucket_positions_path"] = positions_sidecar["path"]
+    light["offsets_path"] = offsets_sidecar["path"]
+
+
+def _replace_full_descriptor(
+    array: blosc2.NDArray,
+    descriptor: dict,
+    field: str | None,
+    sorted_values: np.ndarray,
+    positions: np.ndarray,
+    persistent: bool,
+) -> None:
+    kind = descriptor["kind"]
+    values_sidecar = _store_array_sidecar(array, field, kind, "full", "values", sorted_values, persistent)
+    positions_sidecar = _store_array_sidecar(array, field, kind, "full", "positions", positions, persistent)
+    descriptor["full"]["values_path"] = values_sidecar["path"]
+    descriptor["full"]["positions_path"] = positions_sidecar["path"]
+
+
+def _append_full_descriptor(
+    array: blosc2.NDArray, descriptor: dict, field: str | None, old_size: int, appended_values: np.ndarray
+) -> None:
+    full = descriptor.get("full")
+    if full is None:
+        raise RuntimeError("full index metadata is not available")
+    existing_values, existing_positions = _load_full_arrays(array, descriptor)
+    appended_positions = np.arange(old_size, old_size + len(appended_values), dtype=np.int64)
+    order = np.lexsort((appended_positions, appended_values))
+    merged_values, merged_positions = _merge_sorted_slices(
+        existing_values,
+        existing_positions,
+        appended_values[order],
+        appended_positions[order],
+        np.dtype(descriptor["dtype"]),
+    )
+    _replace_full_descriptor(
+        array, descriptor, field, merged_values, merged_positions, descriptor["persistent"]
+    )
+
+
+def append_to_indexes(array: blosc2.NDArray, old_size: int, appended_values: np.ndarray) -> None:
+    store = _load_store(array)
+    if not store["indexes"]:
+        return
+
+    for descriptor in store["indexes"].values():
+        field = descriptor["field"]
+        kind = descriptor["kind"]
+        persistent = descriptor["persistent"]
+        field_values = appended_values if field is None else appended_values[field]
+        if descriptor.get("stale", False):
+            continue
+        if kind == "full":
+            _append_full_descriptor(array, descriptor, field, old_size, field_values)
+        elif kind == "medium":
+            _replace_reduced_descriptor_tail(array, descriptor, field, old_size, persistent)
+        elif kind == "light":
+            _replace_light_descriptor_tail(array, descriptor, field, old_size, persistent)
+        _replace_levels_descriptor_tail(array, descriptor, field, kind, old_size, persistent)
+        descriptor["shape"] = tuple(array.shape)
+        descriptor["chunks"] = tuple(array.chunks)
+        descriptor["blocks"] = tuple(array.blocks)
+        descriptor["stale"] = False
+    _save_store(array, store)
+
+
 def drop_index(array: blosc2.NDArray, field: str | None = None, name: str | None = None) -> None:
     store = _load_store(array)
     token = _resolve_index_token(store, field, name)
@@ -1502,6 +1664,31 @@ def _merge_exact_plans(
     )
 
 
+def _plan_exact_conjunction(node: ast.AST, operands: dict) -> list[ExactPredicatePlan] | None:
+    if isinstance(node, ast.Compare):
+        plan = _plan_exact_compare(node, operands)
+        return None if plan is None else [plan]
+    if isinstance(node, ast.BoolOp):
+        if not isinstance(node.op, ast.And):
+            return None
+        plans = []
+        for value in node.values:
+            subplans = _plan_exact_conjunction(value, operands)
+            if subplans is None:
+                return None
+            plans.extend(subplans)
+        return plans
+    if isinstance(node, ast.BinOp):
+        if not isinstance(node.op, ast.BitAnd):
+            return None
+        left = _plan_exact_conjunction(node.left, operands)
+        right = _plan_exact_conjunction(node.right, operands)
+        if left is None or right is None:
+            return None
+        return left + right
+    return None
+
+
 def _plan_exact_boolop(node: ast.BoolOp, operands: dict) -> ExactPredicatePlan | None:
     if not isinstance(node.op, ast.And):
         return None
@@ -1676,6 +1863,124 @@ def _exact_positions_from_reduced(
     return np.sort(merged, kind="stable")
 
 
+def _exact_positions_from_plan(plan: ExactPredicatePlan) -> np.ndarray | None:
+    kind = plan.descriptor["kind"]
+    if kind == "full":
+        return _exact_positions_from_full(plan.base, plan.descriptor, plan)
+    if kind == "medium":
+        return _exact_positions_from_reduced(
+            plan.base, plan.descriptor, np.dtype(plan.descriptor["dtype"]), plan
+        )
+    return None
+
+
+def _multi_exact_positions(plans: list[ExactPredicatePlan]) -> tuple[blosc2.NDArray, np.ndarray] | None:
+    if not plans:
+        return None
+    base = plans[0].base
+    merged_by_field: dict[str | None, ExactPredicatePlan] = {}
+    for plan in plans:
+        if plan.base is not base:
+            return None
+        key = plan.field
+        current = merged_by_field.get(key)
+        if current is None:
+            merged_by_field[key] = plan
+            continue
+        merged = _merge_exact_plans(current, plan, "and")
+        if merged is None:
+            return None
+        merged_by_field[key] = merged
+
+    exact_arrays = []
+    for plan in merged_by_field.values():
+        positions = _exact_positions_from_plan(plan)
+        if positions is None:
+            return None
+        exact_arrays.append(np.asarray(positions, dtype=np.int64))
+
+    result = exact_arrays[0]
+    for other in exact_arrays[1:]:
+        result = np.intersect1d(result, other, assume_unique=False)
+    return base, result
+
+
+def _plan_multi_exact_query(plans: list[ExactPredicatePlan]) -> IndexPlan | None:
+    multi_exact = _multi_exact_positions(plans)
+    if multi_exact is None:
+        return None
+    base, exact_positions = multi_exact
+    if len(exact_positions) >= int(base.shape[0]):
+        return None
+    return IndexPlan(
+        True,
+        "multi-field exact indexes selected",
+        descriptor=_copy_descriptor(plans[0].descriptor),
+        base=base,
+        field=None,
+        level="exact",
+        total_units=int(base.shape[0]),
+        selected_units=len(exact_positions),
+        exact_positions=exact_positions,
+    )
+
+
+def _plan_single_exact_query(exact_plan: ExactPredicatePlan) -> IndexPlan:
+    kind = exact_plan.descriptor["kind"]
+    if kind == "full":
+        exact_positions = _exact_positions_from_full(exact_plan.base, exact_plan.descriptor, exact_plan)
+        return IndexPlan(
+            True,
+            f"{kind} exact index selected",
+            descriptor=_copy_descriptor(exact_plan.descriptor),
+            base=exact_plan.base,
+            field=exact_plan.field,
+            level=kind,
+            total_units=exact_plan.base.shape[0],
+            selected_units=len(exact_positions),
+            exact_positions=exact_positions,
+        )
+    if kind == "medium":
+        dtype = np.dtype(exact_plan.descriptor["dtype"])
+        exact_positions = _exact_positions_from_reduced(
+            exact_plan.base, exact_plan.descriptor, dtype, exact_plan
+        )
+        return IndexPlan(
+            True,
+            f"{kind} exact index selected",
+            descriptor=_copy_descriptor(exact_plan.descriptor),
+            base=exact_plan.base,
+            field=exact_plan.field,
+            level=kind,
+            total_units=exact_plan.base.shape[0],
+            selected_units=len(exact_positions),
+            exact_positions=exact_positions,
+        )
+    bucket_masks = _bucket_masks_from_light(exact_plan.base, exact_plan.descriptor, exact_plan)
+    light = exact_plan.descriptor["light"]
+    total_units = len(bucket_masks) * int(light["bucket_count"])
+    selected_units = _bit_count_sum(bucket_masks)
+    if selected_units < total_units:
+        return IndexPlan(
+            True,
+            "light approximate-order index selected",
+            descriptor=_copy_descriptor(exact_plan.descriptor),
+            base=exact_plan.base,
+            field=exact_plan.field,
+            level=kind,
+            total_units=total_units,
+            selected_units=selected_units,
+            bucket_masks=bucket_masks,
+            bucket_len=int(light["bucket_len"]),
+            block_len=int(light["block_len"]),
+            lower=exact_plan.lower,
+            lower_inclusive=exact_plan.lower_inclusive,
+            upper=exact_plan.upper,
+            upper_inclusive=exact_plan.upper_inclusive,
+        )
+    return IndexPlan(False, "available exact index does not prune any units for this predicate")
+
+
 def plan_query(expression: str, operands: dict, where: dict | None, *, use_index: bool = True) -> IndexPlan:
     if not use_index:
         return IndexPlan(False, "index usage disabled for this query")
@@ -1687,61 +1992,17 @@ def plan_query(expression: str, operands: dict, where: dict | None, *, use_index
     except SyntaxError:
         return IndexPlan(False, "expression is not valid Python syntax for planning")
 
+    exact_terms = _plan_exact_conjunction(tree.body, operands)
+    if exact_terms is not None and len(exact_terms) > 1:
+        multi_exact_plan = _plan_multi_exact_query(exact_terms)
+        if multi_exact_plan is not None:
+            return multi_exact_plan
+
     exact_plan = _plan_exact_node(tree.body, operands)
     if exact_plan is not None:
-        kind = exact_plan.descriptor["kind"]
-        if kind == "full":
-            exact_positions = _exact_positions_from_full(exact_plan.base, exact_plan.descriptor, exact_plan)
-            return IndexPlan(
-                True,
-                f"{kind} exact index selected",
-                descriptor=_copy_descriptor(exact_plan.descriptor),
-                base=exact_plan.base,
-                field=exact_plan.field,
-                level=kind,
-                total_units=exact_plan.base.shape[0],
-                selected_units=len(exact_positions),
-                exact_positions=exact_positions,
-            )
-        if kind == "medium":
-            dtype = np.dtype(exact_plan.descriptor["dtype"])
-            exact_positions = _exact_positions_from_reduced(
-                exact_plan.base, exact_plan.descriptor, dtype, exact_plan
-            )
-            return IndexPlan(
-                True,
-                f"{kind} exact index selected",
-                descriptor=_copy_descriptor(exact_plan.descriptor),
-                base=exact_plan.base,
-                field=exact_plan.field,
-                level=kind,
-                total_units=exact_plan.base.shape[0],
-                selected_units=len(exact_positions),
-                exact_positions=exact_positions,
-            )
-        if kind == "light":
-            bucket_masks = _bucket_masks_from_light(exact_plan.base, exact_plan.descriptor, exact_plan)
-            light = exact_plan.descriptor["light"]
-            total_units = len(bucket_masks) * int(light["bucket_count"])
-            selected_units = _bit_count_sum(bucket_masks)
-            if selected_units < total_units:
-                return IndexPlan(
-                    True,
-                    "light approximate-order index selected",
-                    descriptor=_copy_descriptor(exact_plan.descriptor),
-                    base=exact_plan.base,
-                    field=exact_plan.field,
-                    level=kind,
-                    total_units=total_units,
-                    selected_units=selected_units,
-                    bucket_masks=bucket_masks,
-                    bucket_len=int(light["bucket_len"]),
-                    block_len=int(light["block_len"]),
-                    lower=exact_plan.lower,
-                    lower_inclusive=exact_plan.lower_inclusive,
-                    upper=exact_plan.upper,
-                    upper_inclusive=exact_plan.upper_inclusive,
-                )
+        exact_query_plan = _plan_single_exact_query(exact_plan)
+        if exact_query_plan.usable:
+            return exact_query_plan
 
     segment_plan = _plan_segment_node(tree.body, operands)
     if segment_plan is None:
@@ -1919,7 +2180,7 @@ def _gather_positions_by_block(
         local_positions = chunk_positions - chunk_origin
         block_ids = local_positions // block_len
         unique_blocks = np.unique(block_ids)
-        if len(unique_blocks) != 1:
+        if len(unique_blocks) != 1 or np.any(np.diff(local_positions) < 0):
             chunk_stop = min(chunk_origin + chunk_len, total_len)
             chunk_values = where_x[chunk_origin:chunk_stop]
             output[chunk_start_idx:chunk_stop_idx] = chunk_values[local_positions]
@@ -1950,6 +2211,192 @@ def evaluate_full_query(where: dict, plan: IndexPlan) -> np.ndarray:
             )
         return _gather_positions_by_chunk(where["_where_x"], plan.exact_positions, int(plan.base.chunks[0]))
     return _gather_positions(where["_where_x"], plan.exact_positions)
+
+
+def _normalize_order_fields(array: blosc2.NDArray, order: str | list[str] | None) -> list[str | None]:
+    if order is None:
+        if array.dtype.fields is None:
+            return [None]
+        return list(array.dtype.names)
+    if isinstance(order, list):
+        fields = list(order)
+    else:
+        fields = [order]
+    if array.dtype.fields is None:
+        if fields != [None]:
+            raise ValueError("order is only supported for structured arrays")
+        return [None]
+    for field in fields:
+        if field not in array.dtype.fields:
+            raise ValueError(f"field {field!r} is not present in the dtype")
+    return fields
+
+
+def _positions_in_input_order(
+    positions: np.ndarray, start: int | None, stop: int | None, step: int | None
+) -> np.ndarray:
+    if step is None:
+        step = 1
+    if step == 0:
+        raise ValueError("step cannot be zero")
+    return positions[slice(start, stop, step)]
+
+
+def _full_descriptor_for_order(array: blosc2.NDArray, field: str | None) -> dict | None:
+    descriptor = _descriptor_for(array, field)
+    if descriptor is None or descriptor.get("kind") != "full":
+        return None
+    return descriptor
+
+
+def _equal_primary_values(left, right, dtype: np.dtype) -> bool:
+    return _scalar_compare(left, right, dtype) == 0
+
+
+def _refine_secondary_order(
+    array: blosc2.NDArray,
+    positions: np.ndarray,
+    primary_values: np.ndarray,
+    primary_dtype: np.dtype,
+    secondary_fields: list[str],
+) -> np.ndarray:
+    if not secondary_fields or len(positions) <= 1:
+        return positions
+
+    refined = positions.copy()
+    start = 0
+    while start < len(refined):
+        stop = start + 1
+        while stop < len(refined) and _equal_primary_values(
+            primary_values[start], primary_values[stop], primary_dtype
+        ):
+            stop += 1
+        if stop - start > 1:
+            tied_positions = refined[start:stop]
+            tied_rows = array[tied_positions]
+            tie_order = np.argsort(tied_rows, order=secondary_fields, kind="stable")
+            refined[start:stop] = tied_positions[tie_order]
+        start = stop
+    return refined
+
+
+def _ordered_positions_from_exact_positions(
+    array: blosc2.NDArray, descriptor: dict, exact_positions: np.ndarray, order_fields: list[str | None]
+) -> np.ndarray:
+    sorted_values, sorted_positions = _load_full_arrays(array, descriptor)
+    if len(exact_positions) == len(sorted_positions):
+        selected_positions = np.asarray(sorted_positions, dtype=np.int64)
+        selected_values = np.asarray(sorted_values)
+    else:
+        keep = np.zeros(int(array.shape[0]), dtype=bool)
+        keep[np.asarray(exact_positions, dtype=np.int64)] = True
+        mask = keep[sorted_positions]
+        selected_positions = np.asarray(sorted_positions[mask], dtype=np.int64)
+        selected_values = np.asarray(sorted_values[mask])
+
+    secondary_fields = [field for field in order_fields[1:] if field is not None]
+    if secondary_fields:
+        selected_positions = _refine_secondary_order(
+            array, selected_positions, selected_values, np.dtype(descriptor["dtype"]), secondary_fields
+        )
+    return selected_positions
+
+
+def ordered_indices(
+    array: blosc2.NDArray,
+    order: str | list[str] | None = None,
+    *,
+    start: int | None = None,
+    stop: int | None = None,
+    step: int | None = None,
+    require_full: bool = False,
+) -> np.ndarray | None:
+    order_fields = _normalize_order_fields(array, order)
+    primary_field = order_fields[0]
+    descriptor = _full_descriptor_for_order(array, primary_field)
+    if descriptor is None:
+        if require_full:
+            raise ValueError(f"field {primary_field!r} must have an associated full index")
+        return None
+    positions = _ordered_positions_from_exact_positions(
+        array, descriptor, np.arange(int(array.shape[0]), dtype=np.int64), order_fields
+    )
+    return _positions_in_input_order(positions, start, stop, step)
+
+
+def ordered_query_indices(
+    expression: str,
+    operands: dict,
+    where: dict,
+    order: str | list[str],
+    *,
+    start: int | None = None,
+    stop: int | None = None,
+    step: int | None = None,
+) -> np.ndarray | None:
+    if len(where) != 1:
+        return None
+    base = where["_where_x"]
+    if not isinstance(base, blosc2.NDArray) or base.ndim != 1:
+        return None
+
+    order_fields = _normalize_order_fields(base, order)
+    primary_field = order_fields[0]
+    descriptor = _full_descriptor_for_order(base, primary_field)
+    if descriptor is None:
+        return None
+
+    plan = plan_query(expression, operands, where, use_index=True)
+    if not plan.usable or plan.base is not base or plan.exact_positions is None:
+        return None
+
+    positions = _ordered_positions_from_exact_positions(base, descriptor, plan.exact_positions, order_fields)
+    return _positions_in_input_order(positions, start, stop, step)
+
+
+def read_sorted(
+    array: blosc2.NDArray,
+    order: str | list[str] | None = None,
+    *,
+    start: int | None = None,
+    stop: int | None = None,
+    step: int | None = None,
+    require_full: bool = False,
+) -> np.ndarray | None:
+    positions = ordered_indices(
+        array, order=order, start=start, stop=stop, step=step, require_full=require_full
+    )
+    if positions is None:
+        return None
+    return _gather_positions_by_block(
+        array, positions, int(array.chunks[0]), int(array.blocks[0]), int(array.shape[0])
+    )
+
+
+def iter_sorted(
+    array: blosc2.NDArray,
+    order: str | list[str] | None = None,
+    *,
+    start: int | None = None,
+    stop: int | None = None,
+    step: int | None = None,
+    batch_size: int | None = None,
+) -> np.ndarray:
+    positions = ordered_indices(array, order=order, start=start, stop=stop, step=step, require_full=True)
+    if batch_size is None:
+        batch_size = max(1, int(array.blocks[0]))
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+
+    for idx in range(0, len(positions), batch_size):
+        batch = _gather_positions_by_block(
+            array,
+            positions[idx : idx + batch_size],
+            int(array.chunks[0]),
+            int(array.blocks[0]),
+            int(array.shape[0]),
+        )
+        yield from batch
 
 
 def will_use_index(expr) -> bool:

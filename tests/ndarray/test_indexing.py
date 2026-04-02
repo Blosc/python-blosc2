@@ -225,3 +225,103 @@ def test_mutation_marks_index_stale_and_rebuild_restores_it():
     rebuilt = arr.rebuild_index()
     assert rebuilt["stale"] is False
     assert expr.will_use_index() is True
+
+
+def test_full_index_reuses_primary_order_for_indices_and_sort():
+    dtype = np.dtype([("a", np.int64), ("b", np.int64)])
+    data = np.array(
+        [(2, 9), (1, 8), (2, 7), (1, 6), (2, 5), (1, 4), (2, 3), (1, 2), (2, 1), (1, 0)],
+        dtype=dtype,
+    )
+    arr = blosc2.asarray(data, chunks=(4,), blocks=(2,))
+    arr.create_csindex("a")
+
+    np.testing.assert_array_equal(arr.indices(order=["a", "b"])[:], np.argsort(data, order=["a", "b"]))
+    np.testing.assert_array_equal(arr.sort(order=["a", "b"])[:], np.sort(data, order=["a", "b"]))
+
+
+def test_filtered_ordered_queries_support_cross_field_exact_indexes():
+    dtype = np.dtype([("a", np.int64), ("b", np.int64), ("payload", np.int32)])
+    data = np.array(
+        [
+            (2, 9, 10),
+            (1, 8, 11),
+            (2, 7, 12),
+            (1, 6, 13),
+            (2, 5, 14),
+            (1, 4, 15),
+            (2, 3, 16),
+            (1, 2, 17),
+            (2, 1, 18),
+            (1, 0, 19),
+        ],
+        dtype=dtype,
+    )
+    arr = blosc2.asarray(data, chunks=(4,), blocks=(2,))
+    arr.create_csindex("a")
+    arr.create_csindex("b")
+
+    expr = blosc2.lazyexpr("(a >= 1) & (a < 3) & (b >= 2) & (b < 8)", arr.fields).where(arr)
+    mask = (data["a"] >= 1) & (data["a"] < 3) & (data["b"] >= 2) & (data["b"] < 8)
+    expected_indices = np.where(mask)[0]
+    expected_order = np.argsort(data[mask], order=["a", "b"])
+
+    np.testing.assert_array_equal(
+        expr.indices(order=["a", "b"]).compute()[:], expected_indices[expected_order]
+    )
+    np.testing.assert_array_equal(
+        expr.sort(order=["a", "b"]).compute()[:], np.sort(data[mask], order=["a", "b"])
+    )
+
+
+def test_itersorted_matches_numpy_sorted_order():
+    dtype = np.dtype([("a", np.int64), ("b", np.int64)])
+    data = np.array(
+        [(3, 2), (1, 9), (2, 4), (1, 3), (3, 1), (2, 6), (1, 5), (2, 0), (3, 8), (1, 7)],
+        dtype=dtype,
+    )
+    arr = blosc2.asarray(data, chunks=(4,), blocks=(2,))
+    arr.create_csindex("a")
+
+    rows = np.array(list(arr.itersorted(order=["a", "b"], batch_size=3)), dtype=dtype)
+    np.testing.assert_array_equal(rows, np.sort(data, order=["a", "b"]))
+
+
+@pytest.mark.parametrize("kind", ["light", "medium", "full"])
+def test_append_keeps_index_current(kind):
+    rng = np.random.default_rng(4)
+    dtype = np.dtype([("id", np.int64), ("payload", np.int32)])
+    data = np.zeros(32, dtype=dtype)
+    data["id"] = np.arange(32, dtype=np.int64)
+    rng.shuffle(data["id"])
+    data["payload"] = np.arange(32, dtype=np.int32)
+
+    arr = blosc2.asarray(data, chunks=(8,), blocks=(4,))
+    arr.create_index(field="id", kind=kind)
+
+    appended = np.array([(33, 100), (35, 101), (34, 102), (32, 103)], dtype=dtype)
+    all_data = np.concatenate((data, appended))
+    arr.append(appended)
+
+    assert arr.indexes[0]["stale"] is False
+
+    expr = blosc2.lazyexpr("(id >= 31) & (id < 36)", arr.fields).where(arr)
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    expected = all_data[(all_data["id"] >= 31) & (all_data["id"] < 36)]
+
+    np.testing.assert_array_equal(indexed, scanned)
+    np.testing.assert_array_equal(indexed, expected)
+
+
+def test_append_keeps_full_index_sorted_access_current():
+    dtype = np.dtype([("a", np.int64), ("b", np.int64)])
+    data = np.array([(2, 9), (1, 8), (2, 7), (1, 6)], dtype=dtype)
+    arr = blosc2.asarray(data, chunks=(2,), blocks=(2,))
+    arr.create_csindex("a")
+
+    appended = np.array([(0, 100), (3, 101), (1, 5)], dtype=dtype)
+    arr.append(appended)
+
+    expected = np.sort(np.concatenate((data, appended)), order=["a", "b"])
+    np.testing.assert_array_equal(arr.sort(order=["a", "b"])[:], expected)

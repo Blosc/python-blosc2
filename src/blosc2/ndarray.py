@@ -4829,6 +4829,54 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         indexing.mark_indexes_stale(self)
 
+    def append(self, values: object) -> int:
+        """Append values to a 1-D array and keep indexes current when possible.
+
+        Parameters
+        ----------
+        values : object
+            Values to append. Scalars append one element; array-like inputs must be
+            compatible with ``self.dtype`` and flatten to one dimension.
+
+        Returns
+        -------
+        out : int
+            The new length of the array.
+
+        Notes
+        -----
+        Appending to indexed arrays updates the index sidecars as part of the
+        append path. For ``full`` indexes this extends the sorted payload
+        incrementally; for ``light`` and ``medium`` only the affected tail
+        segments and block payloads are recomputed. General slice updates and
+        resizes outside ``append()`` still mark indexes as stale.
+        """
+        if self.ndim != 1:
+            raise ValueError("append() is only supported for 1-D arrays")
+        if 0 in self.chunks or 0 in self.blocks:
+            raise ValueError("Cannot append to arrays with zero-sized chunks or blocks")
+
+        blosc2_ext.check_access_mode(self.schunk.urlpath, self.schunk.mode)
+
+        appended = np.asarray(values, dtype=self.dtype)
+        if appended.ndim == 0:
+            appended = appended.reshape(1)
+        elif appended.ndim != 1:
+            appended = appended.reshape(-1)
+        if appended.dtype != self.dtype:
+            appended = appended.astype(self.dtype, copy=False)
+        if len(appended) == 0:
+            return int(self.shape[0])
+
+        old_size = int(self.shape[0])
+        super().resize((old_size + len(appended),))
+        super().set_slice(([old_size], [old_size + len(appended)]), appended)
+
+        from . import indexing
+
+        indexing.append_to_indexes(self, old_size, appended)
+        return int(self.shape[0])
+
     def slice(self, key: int | slice | Sequence[slice], **kwargs: Any) -> NDArray:
         """Get a (multidimensional) slice as a new :ref:`NDArray`.
 
@@ -4953,6 +5001,30 @@ class NDArray(blosc2_ext.NDArray, Operand):
         See full documentation in :func:`indices`.
         """
         return indices(self, order, **kwargs)
+
+    def itersorted(
+        self,
+        order: str | list[str] | None = None,
+        *,
+        start: int | None = None,
+        stop: int | None = None,
+        step: int | None = None,
+        batch_size: int | None = None,
+    ) -> Iterator[np.generic | np.void]:
+        """Iterate array values following a matching full index order.
+
+        Parameters
+        ----------
+        order : str, list of str, optional
+            Sort order to iterate. The first field must have an associated
+            ``full`` index.
+        start, stop, step : int or None, optional
+            Optional slice applied to the ordered sequence before iteration.
+        batch_size : int or None, optional
+            Internal prefetch size used when reading ordered rows. Larger values
+            reduce read overhead at the cost of more temporary memory.
+        """
+        return itersorted(self, order, start=start, stop=stop, step=step, batch_size=batch_size)
 
     def sort(self, order: str | list[str] | None = None, **kwargs: Any) -> NDArray:
         """
@@ -6314,6 +6386,13 @@ def indices(array: blosc2.Array, order: str | list[str] | None = None, **kwargs:
         # Shortcut for this relatively rare case
         return arange(array.shape[0], dtype=np.int64)
 
+    if isinstance(array, blosc2.NDArray):
+        from . import indexing
+
+        ordered = indexing.ordered_indices(array, order=order)
+        if ordered is not None:
+            return blosc2.asarray(ordered, **kwargs)
+
     # Create a lazy array to access the sort machinery there
     # This is a bit of a hack, but it is the simplest way to do it
     # (the sorting mechanism in LazyExpr should be improved to avoid this)
@@ -6347,12 +6426,51 @@ def sort(array: blosc2.Array, order: str | list[str] | None = None, **kwargs: An
     if not order:
         return array
 
+    if isinstance(array, blosc2.NDArray):
+        from . import indexing
+
+        ordered = indexing.read_sorted(array, order=order)
+        if ordered is not None:
+            return blosc2.asarray(ordered, **kwargs)
+
     # Create a lazy array to access the sort machinery there
     # This is a bit of a hack, but it is the simplest way to do it
     # (the sorting mechanism in LazyExpr should be improved to avoid this)
     lbool = blosc2.lazyexpr(blosc2.ones(array.shape, dtype=np.bool_))
     larr = array[lbool]
     return larr.sort(order).compute(**kwargs)
+
+
+def itersorted(
+    array: blosc2.Array,
+    order: str | list[str] | None = None,
+    *,
+    start: int | None = None,
+    stop: int | None = None,
+    step: int | None = None,
+    batch_size: int | None = None,
+) -> Iterator[np.generic | np.void]:
+    """
+    Iterate array values following a matching full index order.
+
+    Parameters
+    ----------
+    array : :ref:`blosc2.Array`
+        The array to iterate.
+    order : str, list of str, optional
+        Specifies which fields define the ordered traversal. The first field
+        must have an associated ``full`` index.
+    start, stop, step : int or None, optional
+        Optional slice applied to the ordered sequence before iteration.
+    batch_size : int or None, optional
+        Internal prefetch size used during iteration.
+    """
+    if not isinstance(array, blosc2.NDArray):
+        raise TypeError("itersorted() is only supported on NDArray")
+
+    from . import indexing
+
+    return indexing.iter_sorted(array, order=order, start=start, stop=stop, step=step, batch_size=batch_size)
 
 
 # Class for dealing with fields in an NDArray
