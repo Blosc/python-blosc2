@@ -21,7 +21,7 @@ import blosc2
 SIZES = (1_000_000, 2_000_000, 5_000_000, 10_000_000)
 CHUNK_LEN = 100_000
 BLOCK_LEN = 20_000
-REPEATS = 5
+DEFAULT_REPEATS = 3
 KINDS = ("ultralight", "light", "medium", "full")
 DISTS = ("sorted", "block-shuffled", "random")
 RNG_SEED = 0
@@ -68,6 +68,14 @@ def build_persistent_array(data: np.ndarray, path: Path) -> blosc2.NDArray:
     return blosc2.asarray(data, urlpath=path, mode="w", chunks=(CHUNK_LEN,), blocks=(BLOCK_LEN,))
 
 
+def base_array_path(size_dir: Path, size: int, dist: str) -> Path:
+    return size_dir / f"size_{size}_{dist}.b2nd"
+
+
+def indexed_array_path(size_dir: Path, size: int, dist: str, kind: str) -> Path:
+    return size_dir / f"size_{size}_{dist}.{kind}.b2nd"
+
+
 def benchmark_once(expr, *, use_index: bool) -> tuple[float, int]:
     start = time.perf_counter()
     result = expr.compute(_use_index=use_index)[:]
@@ -84,6 +92,18 @@ def index_sizes(descriptor: dict) -> tuple[int, int]:
         if level_info["path"]:
             disk += os.path.getsize(level_info["path"])
 
+    reduced = descriptor.get("reduced")
+    if reduced is not None:
+        values = blosc2.open(reduced["values_path"])
+        positions = blosc2.open(reduced["positions_path"])
+        offsets = blosc2.open(reduced["offsets_path"])
+        logical += values.shape[0] * values.dtype.itemsize
+        logical += positions.shape[0] * positions.dtype.itemsize
+        logical += offsets.shape[0] * offsets.dtype.itemsize
+        disk += os.path.getsize(reduced["values_path"])
+        disk += os.path.getsize(reduced["positions_path"])
+        disk += os.path.getsize(reduced["offsets_path"])
+
     full = descriptor.get("full")
     if full is not None:
         values = blosc2.open(full["values_path"])
@@ -95,13 +115,52 @@ def index_sizes(descriptor: dict) -> tuple[int, int]:
     return logical, disk
 
 
-def benchmark_size(size: int, size_dir: Path, dist: str) -> list[dict]:
-    data = make_source_data(size, dist)
-    arr = build_persistent_array(data, size_dir / f"size_{size}_{dist}.b2nd")
-    del data
+def _source_data_factory(size: int, dist: str):
+    data = None
+
+    def get_data() -> np.ndarray:
+        nonlocal data
+        if data is None:
+            data = make_source_data(size, dist)
+        return data
+
+    return get_data
+
+
+def _valid_index_descriptor(arr: blosc2.NDArray, kind: str) -> dict | None:
+    for descriptor in arr.indexes:
+        if descriptor.get("field") == "id" and descriptor.get("kind") == kind and not descriptor.get("stale", False):
+            return descriptor
+    return None
+
+
+def _open_or_build_persistent_array(path: Path, get_data) -> blosc2.NDArray:
+    if path.exists():
+        return blosc2.open(path, mode="a")
+    blosc2.remove_urlpath(path)
+    return build_persistent_array(get_data(), path)
+
+
+def _open_or_build_indexed_array(path: Path, get_data, kind: str) -> tuple[blosc2.NDArray, float]:
+    if path.exists():
+        arr = blosc2.open(path, mode="a")
+        if _valid_index_descriptor(arr, kind) is not None:
+            return arr, 0.0
+        if arr.indexes:
+            arr.drop_index(field="id")
+        blosc2.remove_urlpath(path)
+
+    arr = build_persistent_array(get_data(), path)
+    build_start = time.perf_counter()
+    arr.create_index(field="id", kind=kind)
+    return arr, time.perf_counter() - build_start
+
+
+def benchmark_size(size: int, size_dir: Path, dist: str, query_width: int) -> list[dict]:
+    get_data = _source_data_factory(size, dist)
+    arr = _open_or_build_persistent_array(base_array_path(size_dir, size, dist), get_data)
     lo = size // 2
-    width = 2_500
-    hi = min(size, lo + width)
+    hi = min(size, lo + query_width)
     expr = blosc2.lazyexpr(f"(id >= {lo}) & (id < {hi})", arr.fields).where(arr)
     base_bytes = size * arr.dtype.itemsize
     compressed_base_bytes = os.path.getsize(arr.urlpath)
@@ -110,18 +169,11 @@ def benchmark_size(size: int, size_dir: Path, dist: str) -> list[dict]:
 
     rows = []
     for kind in KINDS:
-        if arr.indexes:
-            arr.drop_index(field="id")
-        build_start = time.perf_counter()
-        arr.create_index(field="id", kind=kind)
-        build_time = time.perf_counter() - build_start
-        explanation = expr.explain()
-        logical_index_bytes, disk_index_bytes = index_sizes(arr.indexes[0])
-
-        warm_index, index_len = benchmark_once(expr, use_index=True)
-        del warm_index
-        index_runs = [benchmark_once(expr, use_index=True)[0] for _ in range(REPEATS)]
-        index_ms = statistics.median(index_runs) * 1_000
+        idx_arr, build_time = _open_or_build_indexed_array(indexed_array_path(size_dir, size, dist, kind), get_data, kind)
+        idx_expr = blosc2.lazyexpr(f"(id >= {lo}) & (id < {hi})", idx_arr.fields).where(idx_arr)
+        explanation = idx_expr.explain()
+        logical_index_bytes, disk_index_bytes = index_sizes(idx_arr.indexes[0])
+        cold_time, index_len = benchmark_once(idx_expr, use_index=True)
 
         rows.append(
             {
@@ -133,8 +185,10 @@ def benchmark_size(size: int, size_dir: Path, dist: str) -> list[dict]:
                 "build_s": build_time,
                 "create_idx_ms": build_time * 1_000,
                 "scan_ms": scan_ms,
-                "index_ms": index_ms,
-                "speedup": scan_ms / index_ms,
+                "cold_ms": cold_time * 1_000,
+                "cold_speedup": scan_ms / (cold_time * 1_000),
+                "warm_ms": None,
+                "warm_speedup": None,
                 "candidate_units": explanation["candidate_units"],
                 "total_units": explanation["total_units"],
                 "logical_index_bytes": logical_index_bytes,
@@ -144,6 +198,20 @@ def benchmark_size(size: int, size_dir: Path, dist: str) -> list[dict]:
             }
         )
     return rows
+
+
+def measure_warm_queries(rows: list[dict], size_dir: Path, query_width: int, repeats: int) -> None:
+    if repeats <= 0:
+        return
+    for result in rows:
+        arr = blosc2.open(indexed_array_path(size_dir, result["size"], result["dist"], result["kind"]), mode="a")
+        lo = result["size"] // 2
+        hi = min(result["size"], lo + query_width)
+        expr = blosc2.lazyexpr(f"(id >= {lo}) & (id < {hi})", arr.fields).where(arr)
+        index_runs = [benchmark_once(expr, use_index=True)[0] for _ in range(repeats)]
+        warm_ms = statistics.median(index_runs) * 1_000 if index_runs else None
+        result["warm_ms"] = warm_ms
+        result["warm_speedup"] = None if warm_ms is None else result["scan_ms"] / warm_ms
 
 
 def parse_human_size(value: str) -> int:
@@ -181,6 +249,23 @@ def parse_args() -> argparse.Namespace:
         help="Benchmark a single array size. Supports suffixes like 1k, 1K, 1M, 1G.",
     )
     parser.add_argument(
+        "--query-width",
+        type=parse_human_size,
+        default=1_000,
+        help="Width of the range predicate. Supports suffixes like 1k, 1K, 1M, 1G. Default: 1000.",
+    )
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=DEFAULT_REPEATS,
+        help="Number of repeated warm-query measurements after the first cold query. Default: 3.",
+    )
+    parser.add_argument(
+        "--outdir",
+        type=Path,
+        help="Directory where benchmark arrays and index sidecars should be written and kept.",
+    )
+    parser.add_argument(
         "--dist",
         choices=(*DISTS, "all"),
         default="sorted",
@@ -191,88 +276,104 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.repeats < 0:
+        raise SystemExit("--repeats must be >= 0")
     sizes = (args.size,) if args.size is not None else SIZES
     dists = DISTS if args.dist == "all" else (args.dist,)
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        size_dir = Path(tmpdir)
-        all_results = []
-        print("Structured range-query benchmark across index kinds")
-        print(f"chunks={CHUNK_LEN:,}, blocks={BLOCK_LEN:,}, repeats={REPEATS}, dist={args.dist}")
-        print(
-            "size,dist,kind,level,query_rows,build_s,create_idx_ms,scan_ms,index_ms,speedup,"
-            "candidate_units,total_units,logical_index_bytes,disk_index_bytes,index_pct,index_pct_disk"
-        )
-        for dist in dists:
-            for size in sizes:
-                size_results = benchmark_size(size, size_dir, dist)
-                all_results.extend(size_results)
-                for result in size_results:
-                    print(
-                        f"{result['size']},"
-                        f"{result['dist']},"
-                        f"{result['kind']},"
-                        f"{result['level']},"
-                        f"{result['query_rows']},"
-                        f"{result['build_s']:.4f},"
-                        f"{result['create_idx_ms']:.3f},"
-                        f"{result['scan_ms']:.3f},"
-                        f"{result['index_ms']:.3f},"
-                        f"{result['speedup']:.2f},"
-                        f"{result['candidate_units']},"
-                        f"{result['total_units']},"
-                        f"{result['logical_index_bytes']},"
-                        f"{result['disk_index_bytes']},"
-                        f"{result['index_pct']:.4f},"
-                        f"{result['index_pct_disk']:.4f}"
-                    )
+    if args.outdir is None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            run_benchmarks(sizes, dists, Path(tmpdir), args.dist, args.query_width, args.repeats)
+    else:
+        args.outdir.mkdir(parents=True, exist_ok=True)
+        run_benchmarks(sizes, dists, args.outdir, args.dist, args.query_width, args.repeats)
 
+
+def run_benchmarks(
+    sizes: tuple[int, ...],
+    dists: tuple[str, ...],
+    size_dir: Path,
+    dist_label: str,
+    query_width: int,
+    repeats: int,
+) -> None:
+    all_results = []
+    print("Structured range-query benchmark across index kinds")
+    print(
+        f"chunks={CHUNK_LEN:,}, blocks={BLOCK_LEN:,}, repeats={repeats}, dist={dist_label}, "
+        f"query_width={query_width:,}"
+    )
+    for dist in dists:
+        for size in sizes:
+            size_results = benchmark_size(size, size_dir, dist, query_width)
+            all_results.extend(size_results)
+
+    print()
+    print("Cold Query Table")
+    print_table(
+        all_results,
+        [
+            ("rows", lambda result: f"{result['size']:,}"),
+            ("dist", lambda result: result["dist"]),
+            ("kind", lambda result: result["kind"]),
+            ("level", lambda result: result["level"]),
+            ("create_idx_ms", lambda result: f"{result['create_idx_ms']:.3f}"),
+            ("scan_ms", lambda result: f"{result['scan_ms']:.3f}"),
+            ("cold_ms", lambda result: f"{result['cold_ms']:.3f}"),
+            ("speedup", lambda result: f"{result['cold_speedup']:.2f}x"),
+            ("logical_bytes", lambda result: f"{result['logical_index_bytes']:,}"),
+            ("disk_bytes", lambda result: f"{result['disk_index_bytes']:,}"),
+            ("index_pct", lambda result: f"{result['index_pct']:.4f}%"),
+            ("index_pct_disk", lambda result: f"{result['index_pct_disk']:.4f}%"),
+        ],
+    )
+    if repeats > 0:
+        measure_warm_queries(all_results, size_dir, query_width, repeats)
         print()
-        print("Table")
-        headers = [
-            "rows",
-            "dist",
-            "kind",
-            "level",
-            "create_idx_ms",
-            "scan_ms",
-            "index_ms",
-            "speedup",
-            "logical_bytes",
-            "disk_bytes",
-            "index_pct",
-            "index_pct_disk",
-        ]
-        table_rows = []
-        for result in all_results:
-            table_rows.append(
-                [
-                    f"{result['size']:,}",
-                    result["dist"],
-                    result["kind"],
-                    result["level"],
-                    f"{result['create_idx_ms']:.3f}",
-                    f"{result['scan_ms']:.3f}",
-                    f"{result['index_ms']:.3f}",
-                    f"{result['speedup']:.2f}x",
-                    f"{result['logical_index_bytes']:,}",
-                    f"{result['disk_index_bytes']:,}",
-                    f"{result['index_pct']:.4f}%",
-                    f"{result['index_pct_disk']:.4f}%",
-                ]
-            )
+        print("Warm Query Table")
+        print_table(
+            all_results,
+            [
+                ("rows", lambda result: f"{result['size']:,}"),
+                ("dist", lambda result: result["dist"]),
+                ("kind", lambda result: result["kind"]),
+                ("level", lambda result: result["level"]),
+                ("create_idx_ms", lambda result: f"{result['create_idx_ms']:.3f}"),
+                ("scan_ms", lambda result: f"{result['scan_ms']:.3f}"),
+                ("warm_ms", lambda result: f"{result['warm_ms']:.3f}" if result["warm_ms"] is not None else "-"),
+                (
+                    "speedup",
+                    lambda result: f"{result['warm_speedup']:.2f}x"
+                    if result["warm_speedup"] is not None
+                    else "-",
+                ),
+                ("logical_bytes", lambda result: f"{result['logical_index_bytes']:,}"),
+                ("disk_bytes", lambda result: f"{result['disk_index_bytes']:,}"),
+                ("index_pct", lambda result: f"{result['index_pct']:.4f}%"),
+                ("index_pct_disk", lambda result: f"{result['index_pct_disk']:.4f}%"),
+            ],
+        )
 
-        widths = [len(header) for header in headers]
-        for row in table_rows:
-            widths = [max(width, len(cell)) for width, cell in zip(widths, row, strict=True)]
 
-        def format_row(row: list[str]) -> str:
-            return "  ".join(cell.ljust(width) for cell, width in zip(row, widths, strict=True))
+def _format_row(cells: list[str], widths: list[int]) -> str:
+    return "  ".join(cell.ljust(width) for cell, width in zip(cells, widths, strict=True))
 
-        print(format_row(headers))
-        print(format_row(["-" * width for width in widths]))
-        for row in table_rows:
-            print(format_row(row))
+
+def _table_rows(results: list[dict], columns: list[tuple[str, callable]]) -> tuple[list[str], list[list[str]], list[int]]:
+    headers = [header for header, _ in columns]
+    widths = [len(header) for header in headers]
+    rows = [[formatter(result) for _, formatter in columns] for result in results]
+    for row in rows:
+        widths = [max(width, len(cell)) for width, cell in zip(widths, row, strict=True)]
+    return headers, rows, widths
+
+
+def print_table(results: list[dict], columns: list[tuple[str, callable]]) -> None:
+    headers, rows, widths = _table_rows(results, columns)
+    print(_format_row(headers, widths))
+    print(_format_row(["-" * width for width in widths], widths))
+    for row in rows:
+        print(_format_row(row, widths))
 
 
 if __name__ == "__main__":

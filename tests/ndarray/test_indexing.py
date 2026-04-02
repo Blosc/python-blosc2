@@ -51,17 +51,44 @@ def test_structured_field_index_matches_scan(kind):
     np.testing.assert_array_equal(indexed, data[(data["id"] >= 48_000) & (data["id"] < 51_000)])
 
 
-def test_persistent_index_survives_reopen(tmp_path):
+@pytest.mark.parametrize("kind", ["medium", "full"])
+def test_random_field_index_matches_scan(kind):
+    rng = np.random.default_rng(0)
+    dtype = np.dtype([("id", np.int64), ("payload", np.float32)])
+    data = np.zeros(150_000, dtype=dtype)
+    data["id"] = np.arange(data.shape[0], dtype=np.int64)
+    rng.shuffle(data["id"])
+
+    arr = blosc2.asarray(data, chunks=(15_000,), blocks=(3_000,))
+    arr.create_index(field="id", kind=kind)
+
+    expr = blosc2.lazyexpr("(id >= 70_000) & (id < 71_200)", arr.fields).where(arr)
+    assert expr.will_use_index() is True
+
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    np.testing.assert_array_equal(indexed, scanned)
+    np.testing.assert_array_equal(indexed, data[(data["id"] >= 70_000) & (data["id"] < 71_200)])
+
+
+@pytest.mark.parametrize("kind", ["medium", "full"])
+def test_persistent_index_survives_reopen(tmp_path, kind):
     path = tmp_path / "indexed_array.b2nd"
     data = np.arange(80_000, dtype=np.int64)
     arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(8_000,), blocks=(2_000,))
-    descriptor = arr.create_index(kind="full")
+    descriptor = arr.create_index(kind=kind)
 
-    assert descriptor["full"]["values_path"] is not None
+    if kind == "medium":
+        assert descriptor["reduced"]["values_path"] is not None
+    else:
+        assert descriptor["full"]["values_path"] is not None
 
     reopened = blosc2.open(path, mode="a")
     assert len(reopened.indexes) == 1
-    assert reopened.indexes[0]["full"]["values_path"] == descriptor["full"]["values_path"]
+    if kind == "medium":
+        assert reopened.indexes[0]["reduced"]["values_path"] == descriptor["reduced"]["values_path"]
+    else:
+        assert reopened.indexes[0]["full"]["values_path"] == descriptor["full"]["values_path"]
 
     expr = (reopened >= 72_000).where(reopened)
     assert expr.will_use_index() is True

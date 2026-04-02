@@ -63,7 +63,10 @@ class ExactPredicatePlan:
     base: blosc2.NDArray
     descriptor: dict
     field: str | None
-    intervals: list[tuple[int, int]]
+    lower: object | None = None
+    lower_inclusive: bool = True
+    upper: object | None = None
+    upper_inclusive: bool = True
 
 
 def _default_index_store() -> dict:
@@ -91,6 +94,8 @@ def _copy_nested_dict(value: dict | None) -> dict | None:
 def _copy_descriptor(descriptor: dict) -> dict:
     copied = descriptor.copy()
     copied["levels"] = _copy_nested_dict(descriptor.get("levels"))
+    if descriptor.get("reduced") is not None:
+        copied["reduced"] = descriptor["reduced"].copy()
     if descriptor.get("full") is not None:
         copied["full"] = descriptor["full"].copy()
     return copied
@@ -287,6 +292,57 @@ def _build_full_descriptor(
     }
 
 
+def _position_dtype(max_value: int) -> np.dtype:
+    if max_value <= np.iinfo(np.uint8).max:
+        return np.dtype(np.uint8)
+    if max_value <= np.iinfo(np.uint16).max:
+        return np.dtype(np.uint16)
+    if max_value <= np.iinfo(np.uint32).max:
+        return np.dtype(np.uint32)
+    return np.dtype(np.uint64)
+
+
+def _build_reduced_descriptor(
+    array: blosc2.NDArray,
+    field: str | None,
+    kind: str,
+    values: np.ndarray,
+    persistent: bool,
+) -> dict:
+    block_len = int(array.blocks[0])
+    nblocks = math.ceil(values.shape[0] / block_len)
+    position_dtype = _position_dtype(block_len - 1)
+    offsets = np.empty(nblocks + 1, dtype=np.int64)
+    offsets[0] = 0
+    sorted_values = np.empty_like(values)
+    positions = np.empty(values.shape[0], dtype=position_dtype)
+    cursor = 0
+
+    for block_id in range(nblocks):
+        start = block_id * block_len
+        stop = min(start + block_len, values.shape[0])
+        block = values[start:stop]
+        order = np.argsort(block, kind="stable")
+        block_size = stop - start
+        next_cursor = cursor + block_size
+        sorted_values[cursor:next_cursor] = block[order]
+        positions[cursor:next_cursor] = order.astype(position_dtype, copy=False)
+        cursor = next_cursor
+        offsets[block_id + 1] = cursor
+
+    values_sidecar = _store_array_sidecar(array, field, kind, "reduced", "values", sorted_values, persistent)
+    positions_sidecar = _store_array_sidecar(
+        array, field, kind, "reduced", "positions", positions, persistent
+    )
+    offsets_sidecar = _store_array_sidecar(array, field, kind, "reduced", "offsets", offsets, persistent)
+    return {
+        "block_len": block_len,
+        "values_path": values_sidecar["path"],
+        "positions_path": positions_sidecar["path"],
+        "offsets_path": offsets_sidecar["path"],
+    }
+
+
 def _build_descriptor(
     array: blosc2.NDArray,
     field: str | None,
@@ -297,6 +353,7 @@ def _build_descriptor(
     name: str | None,
     dtype: np.dtype,
     levels: dict,
+    reduced: dict | None,
     full: dict | None,
 ) -> dict:
     return {
@@ -313,6 +370,7 @@ def _build_descriptor(
         "chunks": tuple(array.chunks),
         "blocks": tuple(array.blocks),
         "levels": levels,
+        "reduced": reduced,
         "full": full,
     }
 
@@ -338,9 +396,10 @@ def create_index(
 
     values = _values_for_index(array, field)
     levels = _build_levels_descriptor(array, field, kind, dtype, values, persistent)
+    reduced = _build_reduced_descriptor(array, field, kind, values, persistent) if kind == "medium" else None
     full = _build_full_descriptor(array, field, kind, values, persistent) if kind == "full" else None
     descriptor = _build_descriptor(
-        array, field, kind, optlevel, granularity, persistent, name, dtype, levels, full
+        array, field, kind, optlevel, granularity, persistent, name, dtype, levels, reduced, full
     )
 
     store = _load_store(array)
@@ -353,8 +412,7 @@ def create_csindex(array: blosc2.NDArray, field: str | None = None, **kwargs) ->
     return create_index(array, field=field, kind="full", **kwargs)
 
 
-def drop_index(array: blosc2.NDArray, field: str | None = None, name: str | None = None) -> None:
-    store = _load_store(array)
+def _resolve_index_token(store: dict, field: str | None, name: str | None) -> str:
     token = _field_token(field) if field is not None or name is None else None
     if token is None:
         for key, descriptor in store["indexes"].items():
@@ -363,31 +421,38 @@ def drop_index(array: blosc2.NDArray, field: str | None = None, name: str | None
                 break
     if token is None or token not in store["indexes"]:
         raise KeyError("index not found")
+    return token
 
+
+def _remove_sidecar_path(path: str | None) -> None:
+    if path:
+        blosc2.remove_urlpath(path)
+
+
+def _drop_descriptor_sidecars(descriptor: dict) -> None:
+    for level_info in descriptor["levels"].values():
+        _remove_sidecar_path(level_info["path"])
+    if descriptor.get("reduced") is not None:
+        _remove_sidecar_path(descriptor["reduced"]["values_path"])
+        _remove_sidecar_path(descriptor["reduced"]["positions_path"])
+        _remove_sidecar_path(descriptor["reduced"]["offsets_path"])
+    if descriptor.get("full") is not None:
+        _remove_sidecar_path(descriptor["full"]["values_path"])
+        _remove_sidecar_path(descriptor["full"]["positions_path"])
+
+
+def drop_index(array: blosc2.NDArray, field: str | None = None, name: str | None = None) -> None:
+    store = _load_store(array)
+    token = _resolve_index_token(store, field, name)
     descriptor = store["indexes"].pop(token)
     _save_store(array, store)
     _clear_cached_data(array, descriptor["field"])
-    for level_info in descriptor["levels"].values():
-        if level_info["path"]:
-            blosc2.remove_urlpath(level_info["path"])
-    if descriptor.get("full") is not None:
-        if descriptor["full"]["values_path"]:
-            blosc2.remove_urlpath(descriptor["full"]["values_path"])
-        if descriptor["full"]["positions_path"]:
-            blosc2.remove_urlpath(descriptor["full"]["positions_path"])
+    _drop_descriptor_sidecars(descriptor)
 
 
 def rebuild_index(array: blosc2.NDArray, field: str | None = None, name: str | None = None) -> dict:
     store = _load_store(array)
-    token = _field_token(field) if field is not None or name is None else None
-    if token is None:
-        for key, descriptor in store["indexes"].items():
-            if descriptor.get("name") == name:
-                token = key
-                field = descriptor["field"]
-                break
-    if token is None or token not in store["indexes"]:
-        raise KeyError("index not found")
+    token = _resolve_index_token(store, field, name)
     descriptor = store["indexes"][token]
     drop_index(array, field=descriptor["field"], name=descriptor["name"])
     return create_index(
@@ -442,6 +507,20 @@ def _load_full_arrays(array: blosc2.NDArray, descriptor: dict) -> tuple[np.ndarr
     values = _load_array_sidecar(array, descriptor["field"], "full", "values", full["values_path"])
     positions = _load_array_sidecar(array, descriptor["field"], "full", "positions", full["positions_path"])
     return values, positions
+
+
+def _load_reduced_arrays(
+    array: blosc2.NDArray, descriptor: dict
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    reduced = descriptor.get("reduced")
+    if reduced is None:
+        raise RuntimeError("reduced index metadata is not available")
+    values = _load_array_sidecar(array, descriptor["field"], "reduced", "values", reduced["values_path"])
+    positions = _load_array_sidecar(
+        array, descriptor["field"], "reduced", "positions", reduced["positions_path"]
+    )
+    offsets = _load_array_sidecar(array, descriptor["field"], "reduced", "offsets", reduced["offsets_path"])
+    return values, positions, offsets
 
 
 def _normalize_scalar(value, dtype: np.dtype):
@@ -684,78 +763,104 @@ def _plan_exact_compare(node: ast.Compare, operands: dict) -> ExactPredicatePlan
         return None
     base, field, op, value = target
     descriptor = _descriptor_for(base, field)
-    if descriptor is None or descriptor.get("kind") != "full":
+    if descriptor is None or descriptor.get("kind") not in {"medium", "full"}:
         return None
-    dtype = np.dtype(descriptor["dtype"])
     try:
-        sorted_values, _ = _load_full_arrays(base, descriptor)
-        intervals = _intervals_from_sorted(sorted_values, op, value, dtype)
+        value = _normalize_scalar(value, np.dtype(descriptor["dtype"]))
     except (RuntimeError, ValueError, TypeError):
         return None
-    return ExactPredicatePlan(base=base, descriptor=descriptor, field=field, intervals=intervals)
+    if op == "==":
+        return ExactPredicatePlan(
+            base=base,
+            descriptor=descriptor,
+            field=field,
+            lower=value,
+            lower_inclusive=True,
+            upper=value,
+            upper_inclusive=True,
+        )
+    if op == ">":
+        return ExactPredicatePlan(
+            base=base, descriptor=descriptor, field=field, lower=value, lower_inclusive=False
+        )
+    if op == ">=":
+        return ExactPredicatePlan(
+            base=base, descriptor=descriptor, field=field, lower=value, lower_inclusive=True
+        )
+    if op == "<":
+        return ExactPredicatePlan(
+            base=base, descriptor=descriptor, field=field, upper=value, upper_inclusive=False
+        )
+    if op == "<=":
+        return ExactPredicatePlan(
+            base=base, descriptor=descriptor, field=field, upper=value, upper_inclusive=True
+        )
+    return None
 
 
 def _same_base(left: ExactPredicatePlan, right: ExactPredicatePlan) -> bool:
     return left.base is right.base and left.field == right.field
 
 
-def _normalize_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
-    if not intervals:
-        return []
-    intervals = sorted(intervals)
-    normalized = [intervals[0]]
-    for lo, hi in intervals[1:]:
-        prev_lo, prev_hi = normalized[-1]
-        if lo <= prev_hi:
-            normalized[-1] = (prev_lo, max(prev_hi, hi))
-        else:
-            normalized.append((lo, hi))
-    return normalized
+def _merge_lower_bound(
+    left: object | None, left_inclusive: bool, right: object | None, right_inclusive: bool
+) -> tuple[object | None, bool]:
+    if left is None:
+        return right, right_inclusive
+    if right is None:
+        return left, left_inclusive
+    if left < right:
+        return right, right_inclusive
+    if left > right:
+        return left, left_inclusive
+    return left, left_inclusive and right_inclusive
 
 
-def _intersect_intervals(
-    left_intervals: list[tuple[int, int]], right_intervals: list[tuple[int, int]]
-) -> list[tuple[int, int]]:
-    intersections = []
-    left = _normalize_intervals(left_intervals)
-    right = _normalize_intervals(right_intervals)
-    i = j = 0
-    while i < len(left) and j < len(right):
-        lo = max(left[i][0], right[j][0])
-        hi = min(left[i][1], right[j][1])
-        if lo < hi:
-            intersections.append((lo, hi))
-        if left[i][1] <= right[j][1]:
-            i += 1
-        else:
-            j += 1
-    return intersections
+def _merge_upper_bound(
+    left: object | None, left_inclusive: bool, right: object | None, right_inclusive: bool
+) -> tuple[object | None, bool]:
+    if left is None:
+        return right, right_inclusive
+    if right is None:
+        return left, left_inclusive
+    if left < right:
+        return left, left_inclusive
+    if left > right:
+        return right, right_inclusive
+    return left, left_inclusive and right_inclusive
 
 
 def _merge_exact_plans(
     left: ExactPredicatePlan, right: ExactPredicatePlan, op: str
 ) -> ExactPredicatePlan | None:
-    if not _same_base(left, right):
+    if op != "and" or not _same_base(left, right):
         return None
-    if op == "and":
-        intervals = _intersect_intervals(left.intervals, right.intervals)
-    else:
-        intervals = _normalize_intervals(left.intervals + right.intervals)
+    lower, lower_inclusive = _merge_lower_bound(
+        left.lower, left.lower_inclusive, right.lower, right.lower_inclusive
+    )
+    upper, upper_inclusive = _merge_upper_bound(
+        left.upper, left.upper_inclusive, right.upper, right.upper_inclusive
+    )
     return ExactPredicatePlan(
-        base=left.base, descriptor=left.descriptor, field=left.field, intervals=intervals
+        base=left.base,
+        descriptor=left.descriptor,
+        field=left.field,
+        lower=lower,
+        lower_inclusive=lower_inclusive,
+        upper=upper,
+        upper_inclusive=upper_inclusive,
     )
 
 
 def _plan_exact_boolop(node: ast.BoolOp, operands: dict) -> ExactPredicatePlan | None:
-    op = "and" if isinstance(node.op, ast.And) else "or" if isinstance(node.op, ast.Or) else None
-    if op is None:
+    if not isinstance(node.op, ast.And):
         return None
     plans = [_plan_exact_node(value, operands) for value in node.values]
     if any(plan is None for plan in plans):
         return None
     plan = plans[0]
     for other in plans[1:]:
-        merged = _merge_exact_plans(plan, other, op)
+        merged = _merge_exact_plans(plan, other, "and")
         if merged is None:
             return None
         plan = merged
@@ -763,17 +868,13 @@ def _plan_exact_boolop(node: ast.BoolOp, operands: dict) -> ExactPredicatePlan |
 
 
 def _plan_exact_bitop(node: ast.BinOp, operands: dict) -> ExactPredicatePlan | None:
-    if isinstance(node.op, ast.BitAnd):
-        op = "and"
-    elif isinstance(node.op, ast.BitOr):
-        op = "or"
-    else:
+    if not isinstance(node.op, ast.BitAnd):
         return None
     left = _plan_exact_node(node.left, operands)
     right = _plan_exact_node(node.right, operands)
     if left is None or right is None:
         return None
-    return _merge_exact_plans(left, right, op)
+    return _merge_exact_plans(left, right, "and")
 
 
 def _plan_exact_node(node: ast.AST, operands: dict) -> ExactPredicatePlan | None:
@@ -786,12 +887,81 @@ def _plan_exact_node(node: ast.AST, operands: dict) -> ExactPredicatePlan | None
     return None
 
 
-def _positions_from_intervals(plan: ExactPredicatePlan) -> np.ndarray:
-    _, positions = _load_full_arrays(plan.base, plan.descriptor)
-    if not plan.intervals:
+def _range_is_empty(plan: ExactPredicatePlan) -> bool:
+    if plan.lower is None or plan.upper is None:
+        return False
+    if plan.lower < plan.upper:
+        return False
+    if plan.lower > plan.upper:
+        return True
+    return not (plan.lower_inclusive and plan.upper_inclusive)
+
+
+def _candidate_units_from_exact_plan(
+    summaries: np.ndarray, dtype: np.dtype, plan: ExactPredicatePlan
+) -> np.ndarray:
+    candidate_units = np.ones(len(summaries), dtype=bool)
+    if plan.lower is not None:
+        lower_op = ">=" if plan.lower_inclusive else ">"
+        candidate_units &= _candidate_units_from_summary(summaries, lower_op, plan.lower, dtype)
+    if plan.upper is not None:
+        upper_op = "<=" if plan.upper_inclusive else "<"
+        candidate_units &= _candidate_units_from_summary(summaries, upper_op, plan.upper, dtype)
+    return candidate_units
+
+
+def _search_bounds(values: np.ndarray, plan: ExactPredicatePlan) -> tuple[int, int]:
+    lo = 0
+    hi = len(values)
+    if plan.lower is not None:
+        side = "left" if plan.lower_inclusive else "right"
+        lo = int(np.searchsorted(values, plan.lower, side=side))
+    if plan.upper is not None:
+        side = "right" if plan.upper_inclusive else "left"
+        hi = int(np.searchsorted(values, plan.upper, side=side))
+    return lo, hi
+
+
+def _exact_positions_from_full(
+    array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
+) -> np.ndarray:
+    if _range_is_empty(plan):
         return np.empty(0, dtype=np.int64)
-    selected = [positions[lo:hi] for lo, hi in plan.intervals]
-    merged = np.concatenate(selected) if len(selected) > 1 else selected[0]
+    sorted_values, positions = _load_full_arrays(array, descriptor)
+    lo, hi = _search_bounds(sorted_values, plan)
+    if lo >= hi:
+        return np.empty(0, dtype=np.int64)
+    return np.sort(positions[lo:hi], kind="stable")
+
+
+def _exact_positions_from_reduced(
+    array: blosc2.NDArray, descriptor: dict, dtype: np.dtype, plan: ExactPredicatePlan
+) -> np.ndarray:
+    if _range_is_empty(plan):
+        return np.empty(0, dtype=np.int64)
+
+    summaries = _load_level_summaries(array, descriptor, "block")
+    candidate_blocks = _candidate_units_from_exact_plan(summaries, dtype, plan)
+    if not np.any(candidate_blocks):
+        return np.empty(0, dtype=np.int64)
+
+    sorted_values, local_positions, offsets = _load_reduced_arrays(array, descriptor)
+    block_len = int(descriptor["reduced"]["block_len"])
+    parts = []
+    for block_id in np.flatnonzero(candidate_blocks):
+        start = int(offsets[block_id])
+        stop = int(offsets[block_id + 1])
+        block_values = sorted_values[start:stop]
+        lo, hi = _search_bounds(block_values, plan)
+        if lo >= hi:
+            continue
+        absolute = block_id * block_len
+        local = local_positions[start + lo : start + hi].astype(np.int64, copy=False)
+        parts.append(absolute + local)
+
+    if not parts:
+        return np.empty(0, dtype=np.int64)
+    merged = np.concatenate(parts) if len(parts) > 1 else parts[0]
     return np.sort(merged, kind="stable")
 
 
@@ -808,14 +978,21 @@ def plan_query(expression: str, operands: dict, where: dict | None, *, use_index
 
     exact_plan = _plan_exact_node(tree.body, operands)
     if exact_plan is not None:
-        exact_positions = _positions_from_intervals(exact_plan)
+        kind = exact_plan.descriptor["kind"]
+        dtype = np.dtype(exact_plan.descriptor["dtype"])
+        if kind == "full":
+            exact_positions = _exact_positions_from_full(exact_plan.base, exact_plan.descriptor, exact_plan)
+        else:
+            exact_positions = _exact_positions_from_reduced(
+                exact_plan.base, exact_plan.descriptor, dtype, exact_plan
+            )
         return IndexPlan(
             True,
-            "full index selected",
+            f"{kind} exact index selected",
             descriptor=_copy_descriptor(exact_plan.descriptor),
             base=exact_plan.base,
             field=exact_plan.field,
-            level="full",
+            level=kind,
             total_units=exact_plan.base.shape[0],
             selected_units=len(exact_positions),
             exact_positions=exact_positions,
@@ -899,9 +1076,32 @@ def _gather_positions(where_x, positions: np.ndarray) -> np.ndarray:
     return np.concatenate(parts) if len(parts) > 1 else parts[0]
 
 
+def _gather_positions_by_chunk(where_x, positions: np.ndarray, chunk_len: int) -> np.ndarray:
+    if len(positions) == 0:
+        return np.empty(0, dtype=_where_output_dtype(where_x))
+
+    positions = np.asarray(positions, dtype=np.int64)
+    output = np.empty(len(positions), dtype=_where_output_dtype(where_x))
+    chunk_ids = positions // chunk_len
+    breaks = np.nonzero(np.diff(chunk_ids) != 0)[0] + 1
+    start_idx = 0
+    for stop_idx in (*breaks, len(positions)):
+        chunk_positions = positions[start_idx:stop_idx]
+        chunk_id = int(chunk_ids[start_idx])
+        chunk_start = chunk_id * chunk_len
+        chunk_stop = chunk_start + chunk_len
+        chunk_values = where_x[chunk_start:chunk_stop]
+        local_positions = chunk_positions - chunk_start
+        output[start_idx:stop_idx] = chunk_values[local_positions]
+        start_idx = stop_idx
+    return output
+
+
 def evaluate_full_query(where: dict, plan: IndexPlan) -> np.ndarray:
     if plan.exact_positions is None:
         raise ValueError("full evaluation requires exact positions")
+    if plan.base is not None:
+        return _gather_positions_by_chunk(where["_where_x"], plan.exact_positions, int(plan.base.chunks[0]))
     return _gather_positions(where["_where_x"], plan.exact_positions)
 
 
