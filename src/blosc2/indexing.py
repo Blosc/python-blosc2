@@ -31,6 +31,7 @@ SEGMENT_LEVELS_BY_KIND = {
 
 _IN_MEMORY_INDEXES: dict[int, dict] = {}
 _DATA_CACHE: dict[tuple[int, str | None, str, str], np.ndarray] = {}
+BLOCK_GATHER_POSITIONS_THRESHOLD = 32
 
 
 @dataclass(slots=True)
@@ -1097,10 +1098,59 @@ def _gather_positions_by_chunk(where_x, positions: np.ndarray, chunk_len: int) -
     return output
 
 
+def _supports_block_reads(where_x) -> bool:
+    return isinstance(where_x, blosc2.NDArray) and hasattr(where_x, "get_1d_span_numpy")
+
+
+def _gather_positions_by_block(
+    where_x, positions: np.ndarray, chunk_len: int, block_len: int, total_len: int
+) -> np.ndarray:
+    if len(positions) == 0:
+        return np.empty(0, dtype=_where_output_dtype(where_x))
+    if not _supports_block_reads(where_x):
+        return _gather_positions_by_chunk(where_x, positions, chunk_len)
+
+    positions = np.asarray(positions, dtype=np.int64)
+    output = np.empty(len(positions), dtype=_where_output_dtype(where_x))
+    chunk_ids = positions // chunk_len
+    chunk_breaks = np.nonzero(np.diff(chunk_ids) != 0)[0] + 1
+    chunk_start_idx = 0
+    for chunk_stop_idx in (*chunk_breaks, len(positions)):
+        chunk_positions = positions[chunk_start_idx:chunk_stop_idx]
+        chunk_id = int(chunk_ids[chunk_start_idx])
+        chunk_origin = chunk_id * chunk_len
+        local_positions = chunk_positions - chunk_origin
+        block_ids = local_positions // block_len
+        unique_blocks = np.unique(block_ids)
+        if len(unique_blocks) != 1:
+            chunk_stop = min(chunk_origin + chunk_len, total_len)
+            chunk_values = where_x[chunk_origin:chunk_stop]
+            output[chunk_start_idx:chunk_stop_idx] = chunk_values[local_positions]
+            chunk_start_idx = chunk_stop_idx
+            continue
+
+        span_start = int(local_positions[0])
+        span_stop = int(local_positions[-1]) + 1
+        span_items = span_stop - span_start
+        span_values = np.empty(span_items, dtype=_where_output_dtype(where_x))
+        where_x.get_1d_span_numpy(span_values, chunk_id, span_start, span_items)
+        output[chunk_start_idx:chunk_stop_idx] = span_values[local_positions - span_start]
+        chunk_start_idx = chunk_stop_idx
+    return output
+
+
 def evaluate_full_query(where: dict, plan: IndexPlan) -> np.ndarray:
     if plan.exact_positions is None:
         raise ValueError("full evaluation requires exact positions")
     if plan.base is not None:
+        if len(plan.exact_positions) <= BLOCK_GATHER_POSITIONS_THRESHOLD:
+            return _gather_positions_by_block(
+                where["_where_x"],
+                plan.exact_positions,
+                int(plan.base.chunks[0]),
+                int(plan.base.blocks[0]),
+                int(plan.base.shape[0]),
+            )
         return _gather_positions_by_chunk(where["_where_x"], plan.exact_positions, int(plan.base.chunks[0]))
     return _gather_positions(where["_where_x"], plan.exact_positions)
 

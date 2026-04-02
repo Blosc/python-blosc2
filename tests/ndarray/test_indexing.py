@@ -72,6 +72,26 @@ def test_random_field_index_matches_scan(kind):
 
 
 @pytest.mark.parametrize("kind", ["medium", "full"])
+def test_random_field_point_query_matches_scan(kind):
+    rng = np.random.default_rng(1)
+    dtype = np.dtype([("id", np.int64), ("payload", np.float32)])
+    data = np.zeros(200_000, dtype=dtype)
+    data["id"] = np.arange(data.shape[0], dtype=np.int64)
+    rng.shuffle(data["id"])
+
+    arr = blosc2.asarray(data, chunks=(20_000,), blocks=(4_000,))
+    arr.create_index(field="id", kind=kind)
+
+    expr = blosc2.lazyexpr("(id >= 123_456) & (id < 123_457)", arr.fields).where(arr)
+    assert expr.will_use_index() is True
+
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    np.testing.assert_array_equal(indexed, scanned)
+    np.testing.assert_array_equal(indexed, data[(data["id"] >= 123_456) & (data["id"] < 123_457)])
+
+
+@pytest.mark.parametrize("kind", ["medium", "full"])
 def test_persistent_index_survives_reopen(tmp_path, kind):
     path = tmp_path / "indexed_array.b2nd"
     data = np.arange(80_000, dtype=np.int64)

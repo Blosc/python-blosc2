@@ -180,7 +180,6 @@ def benchmark_size(size: int, size_dir: Path, dist: str, query_width: int) -> li
                 "size": size,
                 "dist": dist,
                 "kind": kind,
-                "level": explanation["level"],
                 "query_rows": index_len,
                 "build_s": build_time,
                 "create_idx_ms": build_time * 1_000,
@@ -195,19 +194,18 @@ def benchmark_size(size: int, size_dir: Path, dist: str, query_width: int) -> li
                 "disk_index_bytes": disk_index_bytes,
                 "index_pct": logical_index_bytes / base_bytes * 100,
                 "index_pct_disk": disk_index_bytes / compressed_base_bytes * 100,
+                "_arr": idx_arr,
+                "_expr": idx_expr,
             }
         )
     return rows
 
 
-def measure_warm_queries(rows: list[dict], size_dir: Path, query_width: int, repeats: int) -> None:
+def measure_warm_queries(rows: list[dict], repeats: int) -> None:
     if repeats <= 0:
         return
     for result in rows:
-        arr = blosc2.open(indexed_array_path(size_dir, result["size"], result["dist"], result["kind"]), mode="a")
-        lo = result["size"] // 2
-        hi = min(result["size"], lo + query_width)
-        expr = blosc2.lazyexpr(f"(id >= {lo}) & (id < {hi})", arr.fields).where(arr)
+        expr = result["_expr"]
         index_runs = [benchmark_once(expr, use_index=True)[0] for _ in range(repeats)]
         warm_ms = statistics.median(index_runs) * 1_000 if index_runs else None
         result["warm_ms"] = warm_ms
@@ -316,7 +314,6 @@ def run_benchmarks(
             ("rows", lambda result: f"{result['size']:,}"),
             ("dist", lambda result: result["dist"]),
             ("kind", lambda result: result["kind"]),
-            ("level", lambda result: result["level"]),
             ("create_idx_ms", lambda result: f"{result['create_idx_ms']:.3f}"),
             ("scan_ms", lambda result: f"{result['scan_ms']:.3f}"),
             ("cold_ms", lambda result: f"{result['cold_ms']:.3f}"),
@@ -328,7 +325,7 @@ def run_benchmarks(
         ],
     )
     if repeats > 0:
-        measure_warm_queries(all_results, size_dir, query_width, repeats)
+        measure_warm_queries(all_results, repeats)
         print()
         print("Warm Query Table")
         print_table(
@@ -337,7 +334,6 @@ def run_benchmarks(
                 ("rows", lambda result: f"{result['size']:,}"),
                 ("dist", lambda result: result["dist"]),
                 ("kind", lambda result: result["kind"]),
-                ("level", lambda result: result["level"]),
                 ("create_idx_ms", lambda result: f"{result['create_idx_ms']:.3f}"),
                 ("scan_ms", lambda result: f"{result['scan_ms']:.3f}"),
                 ("warm_ms", lambda result: f"{result['warm_ms']:.3f}" if result["warm_ms"] is not None else "-"),

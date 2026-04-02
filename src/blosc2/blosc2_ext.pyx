@@ -3235,6 +3235,66 @@ cdef class NDArray:
 
         return arr
 
+    def get_1d_span_numpy(self, arr, int64_t nchunk, int32_t start, int32_t nitems):
+        if self.ndim != 1:
+            raise ValueError("get_1d_span_numpy is only supported for 1-D arrays")
+        if nchunk < 0 or nchunk >= self.array.sc.nchunks:
+            raise IndexError("chunk index out of range")
+        if start < 0 or nitems < 0:
+            raise ValueError("start and nitems must be >= 0")
+        if start + nitems > self.array.chunknitems:
+            raise ValueError("requested span exceeds chunk size")
+
+        cdef uint8_t *chunk = NULL
+        cdef c_bool needs_free
+        cdef int32_t chunk_nbytes
+        cdef int32_t chunk_cbytes
+        cdef int32_t block_nbytes
+        cdef blosc2_context *dctx = self.array.sc.dctx
+        cdef Py_buffer view
+        cdef int rc
+        cdef c_bool owns_dctx = False
+
+        rc = blosc2_schunk_get_chunk(self.array.sc, nchunk, &chunk, &needs_free)
+        if rc < 0:
+            raise RuntimeError("Error while getting the chunk")
+
+        rc = blosc2_cbuffer_sizes(chunk, &chunk_nbytes, &chunk_cbytes, &block_nbytes)
+        if rc < 0:
+            if needs_free:
+                free(chunk)
+            raise RuntimeError("Error while getting compressed buffer sizes")
+        if start + nitems > chunk_nbytes // self.array.sc.typesize:
+            if needs_free:
+                free(chunk)
+            raise ValueError("requested span exceeds decoded chunk size")
+
+        PyObject_GetBuffer(arr, &view, PyBUF_SIMPLE)
+        if view.len < nitems * self.array.sc.typesize:
+            PyBuffer_Release(&view)
+            if needs_free:
+                free(chunk)
+            raise ValueError("destination buffer is smaller than the requested decoded span")
+
+        if dctx == NULL:
+            dctx = blosc2_create_dctx(BLOSC2_DPARAMS_DEFAULTS)
+            owns_dctx = True
+        if dctx == NULL:
+            PyBuffer_Release(&view)
+            if needs_free:
+                free(chunk)
+            raise RuntimeError("Could not create decompression context")
+        rc = blosc2_getitem_ctx(dctx, chunk, chunk_cbytes, start, nitems, view.buf, view.len)
+        if owns_dctx:
+            blosc2_free_ctx(dctx)
+        PyBuffer_Release(&view)
+        if needs_free:
+            free(chunk)
+        if rc < 0:
+            raise RuntimeError("Error while decoding the requested span")
+
+        return arr
+
     def get_oindex_numpy(self, arr, key):
         """
         Orthogonal indexing. Key is a tuple of lists of integer indices.
