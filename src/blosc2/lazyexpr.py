@@ -1845,6 +1845,8 @@ def slices_eval(  # noqa: C901
         if index_plan.usable and not (_indices or _order):
             if index_plan.exact_positions is not None:
                 return indexing.evaluate_full_query(where, index_plan)
+            if index_plan.bucket_masks is not None:
+                return indexing.evaluate_light_query(expression, operands, ne_args, where, index_plan)
             if index_plan.level not in (None, "chunk"):
                 return indexing.evaluate_segment_query(expression, operands, ne_args, where, index_plan)
 

@@ -17,7 +17,7 @@ import numpy as np
 import blosc2
 
 INDEXES_VLMETA_KEY = "blosc2_indexes"
-INDEX_FORMAT_VERSION = 1
+INDEX_FORMAT_VERSION = 2
 
 FLAG_ALL_NAN = np.uint8(1 << 0)
 FLAG_HAS_NAN = np.uint8(1 << 1)
@@ -47,6 +47,13 @@ class IndexPlan:
     total_units: int = 0
     selected_units: int = 0
     exact_positions: np.ndarray | None = None
+    bucket_masks: np.ndarray | None = None
+    bucket_len: int | None = None
+    block_len: int | None = None
+    lower: object | None = None
+    lower_inclusive: bool = True
+    upper: object | None = None
+    upper_inclusive: bool = True
 
 
 @dataclass(slots=True)
@@ -95,6 +102,8 @@ def _copy_nested_dict(value: dict | None) -> dict | None:
 def _copy_descriptor(descriptor: dict) -> dict:
     copied = descriptor.copy()
     copied["levels"] = _copy_nested_dict(descriptor.get("levels"))
+    if descriptor.get("light") is not None:
+        copied["light"] = descriptor["light"].copy()
     if descriptor.get("reduced") is not None:
         copied["reduced"] = descriptor["reduced"].copy()
     if descriptor.get("full") is not None:
@@ -351,6 +360,61 @@ def _build_reduced_descriptor(
     }
 
 
+def _light_bucket_count(block_len: int) -> int:
+    return max(1, min(64, block_len))
+
+
+def _pack_bucket_mask(bucket_ids: np.ndarray) -> np.uint64:
+    mask = np.uint64(0)
+    for bucket_id in np.unique(bucket_ids):
+        mask |= np.uint64(1) << np.uint64(int(bucket_id))
+    return mask
+
+
+def _build_light_descriptor(
+    array: blosc2.NDArray,
+    field: str | None,
+    kind: str,
+    values: np.ndarray,
+    persistent: bool,
+) -> dict:
+    block_len = int(array.blocks[0])
+    bucket_count = _light_bucket_count(block_len)
+    bucket_len = math.ceil(block_len / bucket_count)
+    nblocks = math.ceil(values.shape[0] / block_len)
+    offsets = np.empty(nblocks + 1, dtype=np.int64)
+    offsets[0] = 0
+    sorted_values = np.empty_like(values)
+    bucket_positions = np.empty(values.shape[0], dtype=np.uint8)
+    cursor = 0
+
+    for block_id in range(nblocks):
+        start = block_id * block_len
+        stop = min(start + block_len, values.shape[0])
+        block = values[start:stop]
+        order = np.argsort(block, kind="stable")
+        block_size = stop - start
+        next_cursor = cursor + block_size
+        sorted_values[cursor:next_cursor] = block[order]
+        bucket_positions[cursor:next_cursor] = (order // bucket_len).astype(np.uint8, copy=False)
+        cursor = next_cursor
+        offsets[block_id + 1] = cursor
+
+    values_sidecar = _store_array_sidecar(array, field, kind, "light", "values", sorted_values, persistent)
+    positions_sidecar = _store_array_sidecar(
+        array, field, kind, "light", "bucket_positions", bucket_positions, persistent
+    )
+    offsets_sidecar = _store_array_sidecar(array, field, kind, "light", "offsets", offsets, persistent)
+    return {
+        "block_len": block_len,
+        "bucket_count": bucket_count,
+        "bucket_len": bucket_len,
+        "values_path": values_sidecar["path"],
+        "bucket_positions_path": positions_sidecar["path"],
+        "offsets_path": offsets_sidecar["path"],
+    }
+
+
 def _build_descriptor(
     array: blosc2.NDArray,
     field: str | None,
@@ -361,6 +425,7 @@ def _build_descriptor(
     name: str | None,
     dtype: np.dtype,
     levels: dict,
+    light: dict | None,
     reduced: dict | None,
     full: dict | None,
 ) -> dict:
@@ -378,6 +443,7 @@ def _build_descriptor(
         "chunks": tuple(array.chunks),
         "blocks": tuple(array.blocks),
         "levels": levels,
+        "light": light,
         "reduced": reduced,
         "full": full,
     }
@@ -404,10 +470,11 @@ def create_index(
 
     values = _values_for_index(array, field)
     levels = _build_levels_descriptor(array, field, kind, dtype, values, persistent)
+    light = _build_light_descriptor(array, field, kind, values, persistent) if kind == "light" else None
     reduced = _build_reduced_descriptor(array, field, kind, values, persistent) if kind == "medium" else None
     full = _build_full_descriptor(array, field, kind, values, persistent) if kind == "full" else None
     descriptor = _build_descriptor(
-        array, field, kind, optlevel, granularity, persistent, name, dtype, levels, reduced, full
+        array, field, kind, optlevel, granularity, persistent, name, dtype, levels, light, reduced, full
     )
 
     store = _load_store(array)
@@ -440,6 +507,10 @@ def _remove_sidecar_path(path: str | None) -> None:
 def _drop_descriptor_sidecars(descriptor: dict) -> None:
     for level_info in descriptor["levels"].values():
         _remove_sidecar_path(level_info["path"])
+    if descriptor.get("light") is not None:
+        _remove_sidecar_path(descriptor["light"]["values_path"])
+        _remove_sidecar_path(descriptor["light"]["bucket_positions_path"])
+        _remove_sidecar_path(descriptor["light"]["offsets_path"])
     if descriptor.get("reduced") is not None:
         _remove_sidecar_path(descriptor["reduced"]["values_path"])
         _remove_sidecar_path(descriptor["reduced"]["positions_path"])
@@ -496,6 +567,10 @@ def _descriptor_for(array: blosc2.NDArray, field: str | None) -> dict | None:
     descriptor = _load_store(array)["indexes"].get(_field_token(field))
     if descriptor is None or descriptor.get("stale", False):
         return None
+    if descriptor.get("version") != INDEX_FORMAT_VERSION:
+        return None
+    if descriptor.get("kind") == "light" and "values_path" not in descriptor.get("light", {}):
+        return None
     if tuple(descriptor.get("shape", ())) != tuple(array.shape):
         return None
     if tuple(descriptor.get("chunks", ())) != tuple(array.chunks):
@@ -528,6 +603,18 @@ def _load_reduced_arrays(
         array, descriptor["field"], "reduced", "positions", reduced["positions_path"]
     )
     offsets = _load_array_sidecar(array, descriptor["field"], "reduced", "offsets", reduced["offsets_path"])
+    return values, positions, offsets
+
+
+def _load_light_arrays(array: blosc2.NDArray, descriptor: dict) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    light = descriptor.get("light")
+    if light is None:
+        raise RuntimeError("light index metadata is not available")
+    values = _load_array_sidecar(array, descriptor["field"], "light", "values", light["values_path"])
+    positions = _load_array_sidecar(
+        array, descriptor["field"], "light", "bucket_positions", light["bucket_positions_path"]
+    )
+    offsets = _load_array_sidecar(array, descriptor["field"], "light", "offsets", light["offsets_path"])
     return values, positions, offsets
 
 
@@ -771,7 +858,7 @@ def _plan_exact_compare(node: ast.Compare, operands: dict) -> ExactPredicatePlan
         return None
     base, field, op, value = target
     descriptor = _descriptor_for(base, field)
-    if descriptor is None or descriptor.get("kind") not in {"medium", "full"}:
+    if descriptor is None or descriptor.get("kind") not in {"light", "medium", "full"}:
         return None
     try:
         value = _normalize_scalar(value, np.dtype(descriptor["dtype"]))
@@ -942,6 +1029,35 @@ def _exact_positions_from_full(
     return np.sort(positions[lo:hi], kind="stable")
 
 
+def _bit_count_sum(masks: np.ndarray) -> int:
+    return sum(int(mask).bit_count() for mask in masks.tolist())
+
+
+def _bucket_masks_from_light(
+    array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
+) -> np.ndarray:
+    if _range_is_empty(plan):
+        return np.empty(0, dtype=np.uint64)
+
+    summaries = _load_level_summaries(array, descriptor, "block")
+    dtype = np.dtype(descriptor["dtype"])
+    candidate_blocks = _candidate_units_from_exact_plan(summaries, dtype, plan)
+    if not np.any(candidate_blocks):
+        return np.zeros(len(summaries), dtype=np.uint64)
+
+    sorted_values, bucket_positions, offsets = _load_light_arrays(array, descriptor)
+    masks = np.zeros(len(summaries), dtype=np.uint64)
+    for block_id in np.flatnonzero(candidate_blocks):
+        start = int(offsets[block_id])
+        stop = int(offsets[block_id + 1])
+        block_values = sorted_values[start:stop]
+        lo, hi = _search_bounds(block_values, plan)
+        if lo >= hi:
+            continue
+        masks[block_id] = _pack_bucket_mask(bucket_positions[start + lo : start + hi])
+    return masks
+
+
 def _exact_positions_from_reduced(
     array: blosc2.NDArray, descriptor: dict, dtype: np.dtype, plan: ExactPredicatePlan
 ) -> np.ndarray:
@@ -987,24 +1103,58 @@ def plan_query(expression: str, operands: dict, where: dict | None, *, use_index
     exact_plan = _plan_exact_node(tree.body, operands)
     if exact_plan is not None:
         kind = exact_plan.descriptor["kind"]
-        dtype = np.dtype(exact_plan.descriptor["dtype"])
         if kind == "full":
             exact_positions = _exact_positions_from_full(exact_plan.base, exact_plan.descriptor, exact_plan)
-        else:
+            return IndexPlan(
+                True,
+                f"{kind} exact index selected",
+                descriptor=_copy_descriptor(exact_plan.descriptor),
+                base=exact_plan.base,
+                field=exact_plan.field,
+                level=kind,
+                total_units=exact_plan.base.shape[0],
+                selected_units=len(exact_positions),
+                exact_positions=exact_positions,
+            )
+        if kind == "medium":
+            dtype = np.dtype(exact_plan.descriptor["dtype"])
             exact_positions = _exact_positions_from_reduced(
                 exact_plan.base, exact_plan.descriptor, dtype, exact_plan
             )
-        return IndexPlan(
-            True,
-            f"{kind} exact index selected",
-            descriptor=_copy_descriptor(exact_plan.descriptor),
-            base=exact_plan.base,
-            field=exact_plan.field,
-            level=kind,
-            total_units=exact_plan.base.shape[0],
-            selected_units=len(exact_positions),
-            exact_positions=exact_positions,
-        )
+            return IndexPlan(
+                True,
+                f"{kind} exact index selected",
+                descriptor=_copy_descriptor(exact_plan.descriptor),
+                base=exact_plan.base,
+                field=exact_plan.field,
+                level=kind,
+                total_units=exact_plan.base.shape[0],
+                selected_units=len(exact_positions),
+                exact_positions=exact_positions,
+            )
+        if kind == "light":
+            bucket_masks = _bucket_masks_from_light(exact_plan.base, exact_plan.descriptor, exact_plan)
+            light = exact_plan.descriptor["light"]
+            total_units = len(bucket_masks) * int(light["bucket_count"])
+            selected_units = _bit_count_sum(bucket_masks)
+            if selected_units < total_units:
+                return IndexPlan(
+                    True,
+                    "light approximate-order index selected",
+                    descriptor=_copy_descriptor(exact_plan.descriptor),
+                    base=exact_plan.base,
+                    field=exact_plan.field,
+                    level=kind,
+                    total_units=total_units,
+                    selected_units=selected_units,
+                    bucket_masks=bucket_masks,
+                    bucket_len=int(light["bucket_len"]),
+                    block_len=int(light["block_len"]),
+                    lower=exact_plan.lower,
+                    lower_inclusive=exact_plan.lower_inclusive,
+                    upper=exact_plan.upper,
+                    upper_inclusive=exact_plan.upper_inclusive,
+                )
 
     segment_plan = _plan_segment_node(tree.body, operands)
     if segment_plan is None:
@@ -1063,6 +1213,59 @@ def evaluate_segment_query(
         result, _ = _get_result(expression, chunk_operands, ne_args, where)
         if len(result) > 0:
             parts.append(np.require(result, requirements="C"))
+
+    if parts:
+        return np.concatenate(parts)
+    return np.empty(0, dtype=_where_output_dtype(where["_where_x"]))
+
+
+def evaluate_light_query(
+    expression: str, operands: dict, ne_args: dict, where: dict, plan: IndexPlan
+) -> np.ndarray:
+    del expression, operands, ne_args
+
+    if plan.base is None or plan.bucket_masks is None or plan.block_len is None or plan.bucket_len is None:
+        raise ValueError("light evaluation requires bucket masks and block geometry")
+
+    parts = []
+    total_len = int(plan.base.shape[0])
+    chunk_len = int(plan.base.chunks[0])
+    bucket_count = int(plan.descriptor["light"]["bucket_count"])
+    where_x = where["_where_x"]
+    for block_id, bucket_mask in enumerate(plan.bucket_masks.tolist()):
+        mask = int(bucket_mask)
+        if mask == 0:
+            continue
+        block_start = block_id * plan.block_len
+        block_stop = min(block_start + plan.block_len, total_len)
+        bucket_id = 0
+        while bucket_id < bucket_count:
+            if not ((mask >> bucket_id) & 1):
+                bucket_id += 1
+                continue
+            run_start = bucket_id
+            bucket_id += 1
+            while bucket_id < bucket_count and ((mask >> bucket_id) & 1):
+                bucket_id += 1
+            start = block_start + run_start * plan.bucket_len
+            stop = min(block_start + bucket_id * plan.bucket_len, block_stop)
+            if start >= stop:
+                continue
+            if _supports_block_reads(where_x):
+                span = np.empty(stop - start, dtype=where_x.dtype)
+                chunk_id = start // chunk_len
+                local_start = start - chunk_id * chunk_len
+                where_x.get_1d_span_numpy(span, chunk_id, local_start, stop - start)
+            else:
+                span = where_x[start:stop]
+            field_values = span if plan.field is None else span[plan.field]
+            match = np.ones(len(field_values), dtype=bool)
+            if plan.lower is not None:
+                match &= field_values >= plan.lower if plan.lower_inclusive else field_values > plan.lower
+            if plan.upper is not None:
+                match &= field_values <= plan.upper if plan.upper_inclusive else field_values < plan.upper
+            if np.any(match):
+                parts.append(np.require(span[match], requirements="C"))
 
     if parts:
         return np.concatenate(parts)

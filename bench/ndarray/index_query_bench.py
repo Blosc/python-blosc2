@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 
 import blosc2
+from blosc2 import indexing as blosc2_indexing
 
 SIZES = (1_000_000, 2_000_000, 5_000_000, 10_000_000)
 CHUNK_LEN = 100_000
@@ -99,6 +100,13 @@ def index_sizes(descriptor: dict) -> tuple[int, int]:
         if level_info["path"]:
             disk += os.path.getsize(level_info["path"])
 
+    light = descriptor.get("light")
+    if light is not None:
+        for key in ("values_path", "bucket_positions_path", "offsets_path"):
+            array = blosc2.open(light[key])
+            logical += int(np.prod(array.shape)) * array.dtype.itemsize
+            disk += os.path.getsize(light[key])
+
     reduced = descriptor.get("reduced")
     if reduced is not None:
         values = blosc2.open(reduced["values_path"])
@@ -136,7 +144,13 @@ def _source_data_factory(size: int, dist: str):
 
 def _valid_index_descriptor(arr: blosc2.NDArray, kind: str) -> dict | None:
     for descriptor in arr.indexes:
-        if descriptor.get("field") == "id" and descriptor.get("kind") == kind and not descriptor.get("stale", False):
+        if descriptor.get("version") != blosc2_indexing.INDEX_FORMAT_VERSION:
+            continue
+        if (
+            descriptor.get("field") == "id"
+            and descriptor.get("kind") == kind
+            and not descriptor.get("stale", False)
+        ):
             return descriptor
     return None
 

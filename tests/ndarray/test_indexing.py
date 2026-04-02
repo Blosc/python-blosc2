@@ -51,7 +51,7 @@ def test_structured_field_index_matches_scan(kind):
     np.testing.assert_array_equal(indexed, data[(data["id"] >= 48_000) & (data["id"] < 51_000)])
 
 
-@pytest.mark.parametrize("kind", ["medium", "full"])
+@pytest.mark.parametrize("kind", ["light", "medium", "full"])
 def test_random_field_index_matches_scan(kind):
     rng = np.random.default_rng(0)
     dtype = np.dtype([("id", np.int64), ("payload", np.float32)])
@@ -71,7 +71,7 @@ def test_random_field_index_matches_scan(kind):
     np.testing.assert_array_equal(indexed, data[(data["id"] >= 70_000) & (data["id"] < 71_200)])
 
 
-@pytest.mark.parametrize("kind", ["medium", "full"])
+@pytest.mark.parametrize("kind", ["light", "medium", "full"])
 def test_random_field_point_query_matches_scan(kind):
     rng = np.random.default_rng(1)
     dtype = np.dtype([("id", np.int64), ("payload", np.float32)])
@@ -91,21 +91,25 @@ def test_random_field_point_query_matches_scan(kind):
     np.testing.assert_array_equal(indexed, data[(data["id"] >= 123_456) & (data["id"] < 123_457)])
 
 
-@pytest.mark.parametrize("kind", ["medium", "full"])
+@pytest.mark.parametrize("kind", ["light", "medium", "full"])
 def test_persistent_index_survives_reopen(tmp_path, kind):
     path = tmp_path / "indexed_array.b2nd"
     data = np.arange(80_000, dtype=np.int64)
     arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(8_000,), blocks=(2_000,))
     descriptor = arr.create_index(kind=kind)
 
-    if kind == "medium":
+    if kind == "light":
+        assert descriptor["light"]["values_path"] is not None
+    elif kind == "medium":
         assert descriptor["reduced"]["values_path"] is not None
     else:
         assert descriptor["full"]["values_path"] is not None
 
     reopened = blosc2.open(path, mode="a")
     assert len(reopened.indexes) == 1
-    if kind == "medium":
+    if kind == "light":
+        assert reopened.indexes[0]["light"]["values_path"] == descriptor["light"]["values_path"]
+    elif kind == "medium":
         assert reopened.indexes[0]["reduced"]["values_path"] == descriptor["reduced"]["values_path"]
     else:
         assert reopened.indexes[0]["full"]["values_path"] == descriptor["full"]["values_path"]
