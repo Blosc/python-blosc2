@@ -3255,9 +3255,9 @@ cdef class NDArray:
         cdef int rc
         cdef c_bool owns_dctx = False
 
-        rc = blosc2_schunk_get_chunk(self.array.sc, nchunk, &chunk, &needs_free)
+        rc = blosc2_schunk_get_lazychunk(self.array.sc, nchunk, &chunk, &needs_free)
         if rc < 0:
-            raise RuntimeError("Error while getting the chunk")
+            raise RuntimeError("Error while getting the lazy chunk")
 
         rc = blosc2_cbuffer_sizes(chunk, &chunk_nbytes, &chunk_cbytes, &block_nbytes)
         if rc < 0:
