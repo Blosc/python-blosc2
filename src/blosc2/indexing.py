@@ -20,7 +20,7 @@ import numpy as np
 import blosc2
 
 INDEXES_VLMETA_KEY = "blosc2_indexes"
-INDEX_FORMAT_VERSION = 3
+INDEX_FORMAT_VERSION = 1
 SELF_TARGET_NAME = "__self__"
 
 FLAG_ALL_NAN = np.uint8(1 << 0)
@@ -155,6 +155,8 @@ def _copy_descriptor(descriptor: dict) -> dict:
         copied["reduced"] = descriptor["reduced"].copy()
     if descriptor.get("full") is not None:
         copied["full"] = descriptor["full"].copy()
+        if "runs" in copied["full"]:
+            copied["full"]["runs"] = [run.copy() for run in copied["full"]["runs"]]
     return copied
 
 
@@ -497,6 +499,8 @@ def _build_full_descriptor(
     return {
         "values_path": values_sidecar["path"],
         "positions_path": positions_sidecar["path"],
+        "runs": [],
+        "next_run_id": 0,
     }
 
 
@@ -995,6 +999,8 @@ def _build_full_descriptor_ooc(
         return {
             "values_path": values_sidecar["path"],
             "positions_path": positions_sidecar["path"],
+            "runs": [],
+            "next_run_id": 0,
         }
     run_items = max(int(array.chunks[0]), min(size, FULL_OOC_RUN_ITEMS))
     runs = []
@@ -1042,6 +1048,8 @@ def _build_full_descriptor_ooc(
     return {
         "values_path": values_sidecar["path"],
         "positions_path": positions_sidecar["path"],
+        "runs": [],
+        "next_run_id": 0,
     }
 
 
@@ -1317,6 +1325,9 @@ def _drop_descriptor_sidecars(descriptor: dict) -> None:
     if descriptor.get("full") is not None:
         _remove_sidecar_path(descriptor["full"]["values_path"])
         _remove_sidecar_path(descriptor["full"]["positions_path"])
+        for run in descriptor["full"].get("runs", ()):
+            _remove_sidecar_path(run.get("values_path"))
+            _remove_sidecar_path(run.get("positions_path"))
 
 
 def _replace_levels_descriptor(array: blosc2.NDArray, descriptor: dict, kind: str, persistent: bool) -> None:
@@ -1434,10 +1445,41 @@ def _replace_full_descriptor(
 ) -> None:
     kind = descriptor["kind"]
     token = descriptor["token"]
+    full = descriptor["full"]
+    for run in full.get("runs", ()):
+        _remove_sidecar_path(run.get("values_path"))
+        _remove_sidecar_path(run.get("positions_path"))
+    _clear_cached_data(array, token)
     values_sidecar = _store_array_sidecar(array, token, kind, "full", "values", sorted_values, persistent)
     positions_sidecar = _store_array_sidecar(array, token, kind, "full", "positions", positions, persistent)
-    descriptor["full"]["values_path"] = values_sidecar["path"]
-    descriptor["full"]["positions_path"] = positions_sidecar["path"]
+    full["values_path"] = values_sidecar["path"]
+    full["positions_path"] = positions_sidecar["path"]
+    full["runs"] = []
+    full["next_run_id"] = 0
+
+
+def _store_full_run_descriptor(
+    array: blosc2.NDArray,
+    descriptor: dict,
+    run_id: int,
+    sorted_values: np.ndarray,
+    positions: np.ndarray,
+) -> dict:
+    kind = descriptor["kind"]
+    token = descriptor["token"]
+    persistent = descriptor["persistent"]
+    values_sidecar = _store_array_sidecar(
+        array, token, kind, "full_run", f"{run_id}.values", sorted_values, persistent
+    )
+    positions_sidecar = _store_array_sidecar(
+        array, token, kind, "full_run", f"{run_id}.positions", positions, persistent
+    )
+    return {
+        "id": run_id,
+        "length": len(sorted_values),
+        "values_path": values_sidecar["path"],
+        "positions_path": positions_sidecar["path"],
+    }
 
 
 def _append_full_descriptor(
@@ -1446,17 +1488,21 @@ def _append_full_descriptor(
     full = descriptor.get("full")
     if full is None:
         raise RuntimeError("full index metadata is not available")
-    existing_values, existing_positions = _load_full_arrays(array, descriptor)
     appended_positions = np.arange(old_size, old_size + len(appended_values), dtype=np.int64)
     order = np.lexsort((appended_positions, appended_values))
-    merged_values, merged_positions = _merge_sorted_slices(
-        existing_values,
-        existing_positions,
+    run_id = int(full.get("next_run_id", 0))
+    run = _store_full_run_descriptor(
+        array,
+        descriptor,
+        run_id,
         appended_values[order],
         appended_positions[order],
-        np.dtype(descriptor["dtype"]),
     )
-    _replace_full_descriptor(array, descriptor, merged_values, merged_positions, descriptor["persistent"])
+    runs = list(full.get("runs", ()))
+    runs.append(run)
+    full["runs"] = runs
+    full["next_run_id"] = run_id + 1
+    _clear_full_merge_cache(array, descriptor["token"])
 
 
 def append_to_indexes(array: blosc2.NDArray, old_size: int, appended_values: np.ndarray) -> None:
@@ -1566,12 +1612,51 @@ def _load_level_summaries(array: blosc2.NDArray, descriptor: dict, level: str) -
     return _load_array_sidecar(array, descriptor["token"], "summary", level, level_info["path"])
 
 
+def _full_merge_cache_key(array: blosc2.NDArray, token: str, name: str):
+    return _data_cache_key(array, token, "full_merged", name)
+
+
+def _clear_full_merge_cache(array: blosc2.NDArray, token: str) -> None:
+    _DATA_CACHE.pop(_full_merge_cache_key(array, token, "values"), None)
+    _DATA_CACHE.pop(_full_merge_cache_key(array, token, "positions"), None)
+
+
+def _load_full_run_arrays(
+    array: blosc2.NDArray, descriptor: dict, run: dict
+) -> tuple[np.ndarray, np.ndarray]:
+    run_id = int(run["id"])
+    token = descriptor["token"]
+    values = _load_array_sidecar(array, token, "full_run", f"{run_id}.values", run["values_path"])
+    positions = _load_array_sidecar(array, token, "full_run", f"{run_id}.positions", run["positions_path"])
+    return values, positions
+
+
 def _load_full_arrays(array: blosc2.NDArray, descriptor: dict) -> tuple[np.ndarray, np.ndarray]:
     full = descriptor.get("full")
     if full is None:
         raise RuntimeError("full index metadata is not available")
-    values = _load_array_sidecar(array, descriptor["token"], "full", "values", full["values_path"])
-    positions = _load_array_sidecar(array, descriptor["token"], "full", "positions", full["positions_path"])
+    token = descriptor["token"]
+    runs = full.get("runs", ())
+    if runs:
+        cached_values = _DATA_CACHE.get(_full_merge_cache_key(array, token, "values"))
+        cached_positions = _DATA_CACHE.get(_full_merge_cache_key(array, token, "positions"))
+        if cached_values is not None and cached_positions is not None:
+            return cached_values, cached_positions
+
+    values = _load_array_sidecar(array, token, "full", "values", full["values_path"])
+    positions = _load_array_sidecar(array, token, "full", "positions", full["positions_path"])
+    if runs:
+        dtype = np.dtype(descriptor["dtype"])
+        merged_values = values
+        merged_positions = positions
+        for run in runs:
+            run_values, run_positions = _load_full_run_arrays(array, descriptor, run)
+            merged_values, merged_positions = _merge_sorted_slices(
+                merged_values, merged_positions, run_values, run_positions, dtype
+            )
+        _DATA_CACHE[_full_merge_cache_key(array, token, "values")] = merged_values
+        _DATA_CACHE[_full_merge_cache_key(array, token, "positions")] = merged_positions
+        return merged_values, merged_positions
     return values, positions
 
 

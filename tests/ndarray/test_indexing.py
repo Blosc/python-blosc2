@@ -351,6 +351,52 @@ def test_append_keeps_full_index_sorted_access_current():
     np.testing.assert_array_equal(arr.sort(order=["a", "b"])[:], expected)
 
 
+def test_repeated_appends_keep_full_index_current():
+    dtype = np.dtype([("a", np.int64), ("b", np.int64)])
+    data = np.array([(3, 9), (1, 8), (2, 7), (1, 6)], dtype=dtype)
+    arr = blosc2.asarray(data, chunks=(2,), blocks=(2,))
+    arr.create_csindex("a")
+
+    batches = [
+        np.array([(0, 100), (3, 101)], dtype=dtype),
+        np.array([(2, 102), (1, 103), (4, 104)], dtype=dtype),
+    ]
+    expected = data
+    for nrun, batch in enumerate(batches, start=1):
+        arr.append(batch)
+        expected = np.concatenate((expected, batch))
+        assert len(arr.indexes[0]["full"]["runs"]) == nrun
+
+    expr = blosc2.lazyexpr("(a >= 1) & (a < 4)", arr.fields).where(arr)
+    assert expr.will_use_index() is True
+
+    expected_mask = (expected["a"] >= 1) & (expected["a"] < 4)
+    np.testing.assert_array_equal(arr.sort(order=["a", "b"])[:], np.sort(expected, order=["a", "b"]))
+    np.testing.assert_array_equal(expr.compute()[:], expected[expected_mask])
+
+
+def test_persistent_full_index_runs_survive_reopen(tmp_path):
+    path = tmp_path / "full_index_runs.b2nd"
+    dtype = np.dtype([("a", np.int64), ("b", np.int64)])
+    data = np.array([(3, 9), (1, 8), (2, 7), (1, 6)], dtype=dtype)
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(2,), blocks=(2,))
+    arr.create_csindex("a")
+
+    batch1 = np.array([(0, 100), (3, 101)], dtype=dtype)
+    batch2 = np.array([(2, 102), (1, 103), (4, 104)], dtype=dtype)
+    expected = np.concatenate((data, batch1, batch2))
+    arr.append(batch1)
+    arr.append(batch2)
+
+    reopened = blosc2.open(path, mode="a")
+    assert len(reopened.indexes[0]["full"]["runs"]) == 2
+
+    expr = blosc2.lazyexpr("(a >= 1) & (a < 4)", reopened.fields).where(reopened)
+    expected_mask = (expected["a"] >= 1) & (expected["a"] < 4)
+    np.testing.assert_array_equal(reopened.sort(order=["a", "b"])[:], np.sort(expected, order=["a", "b"]))
+    np.testing.assert_array_equal(expr.compute()[:], expected[expected_mask])
+
+
 @pytest.mark.parametrize("kind", ["light", "medium", "full"])
 def test_expression_index_matches_scan(kind):
     rng = np.random.default_rng(9)
@@ -454,3 +500,26 @@ def test_append_keeps_expression_index_current(kind):
     if kind == "full":
         expected_positions = np.argsort(np.abs(all_data["x"]), kind="stable")
         np.testing.assert_array_equal(arr.sort(order="abs(x)")[:], all_data[expected_positions])
+
+
+def test_repeated_appends_keep_full_expression_index_current():
+    dtype = np.dtype([("x", np.int64), ("payload", np.int32)])
+    data = np.array([(-10, 0), (7, 1), (-3, 2), (1, 3)], dtype=dtype)
+    arr = blosc2.asarray(data, chunks=(2,), blocks=(2,))
+    arr.create_expr_index("abs(x)", kind="full")
+
+    batches = [
+        np.array([(-4, 4), (12, 5)], dtype=dtype),
+        np.array([(-11, 6), (5, 7)], dtype=dtype),
+    ]
+    expected = data
+    for nrun, batch in enumerate(batches, start=1):
+        arr.append(batch)
+        expected = np.concatenate((expected, batch))
+        assert len(arr.indexes[0]["full"]["runs"]) == nrun
+
+    expr = blosc2.lazyexpr("(abs(x) >= 4) & (abs(x) < 12)", arr.fields).where(arr)
+    expected_mask = (np.abs(expected["x"]) >= 4) & (np.abs(expected["x"]) < 12)
+    expected_positions = np.argsort(np.abs(expected["x"]), kind="stable")
+    np.testing.assert_array_equal(arr.sort(order="abs(x)")[:], expected[expected_positions])
+    np.testing.assert_array_equal(expr.compute()[:], expected[expected_mask])
