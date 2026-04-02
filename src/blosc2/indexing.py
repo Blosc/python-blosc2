@@ -8,7 +8,9 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import math
+import re
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,7 +20,8 @@ import numpy as np
 import blosc2
 
 INDEXES_VLMETA_KEY = "blosc2_indexes"
-INDEX_FORMAT_VERSION = 2
+INDEX_FORMAT_VERSION = 3
+SELF_TARGET_NAME = "__self__"
 
 FLAG_ALL_NAN = np.uint8(1 << 0)
 FLAG_HAS_NAN = np.uint8(1 << 1)
@@ -37,12 +40,17 @@ FULL_OOC_RUN_ITEMS = 2_000_000
 FULL_OOC_MERGE_BUFFER_ITEMS = 500_000
 
 
+def _sanitize_token(token: str) -> str:
+    return re.sub(r"[^0-9A-Za-z_.-]+", "_", token)
+
+
 @dataclass(slots=True)
 class IndexPlan:
     usable: bool
     reason: str
     descriptor: dict | None = None
     base: blosc2.NDArray | None = None
+    target: dict | None = None
     field: str | None = None
     level: str | None = None
     segment_len: int | None = None
@@ -64,6 +72,7 @@ class SegmentPredicatePlan:
     base: blosc2.NDArray
     candidate_units: np.ndarray
     descriptor: dict
+    target: dict
     field: str | None
     level: str
     segment_len: int
@@ -73,6 +82,7 @@ class SegmentPredicatePlan:
 class ExactPredicatePlan:
     base: blosc2.NDArray
     descriptor: dict
+    target: dict
     field: str | None
     lower: object | None = None
     lower_inclusive: bool = True
@@ -112,6 +122,16 @@ def _array_key(array: blosc2.NDArray) -> tuple[str, str | int]:
 
 def _field_token(field: str | None) -> str:
     return "__self__" if field is None else field
+
+
+def _target_token(target: dict) -> str:
+    source = target.get("source")
+    if source == "field":
+        return _field_token(target.get("field"))
+    if source == "expression":
+        digest = hashlib.sha1(target["expression_key"].encode("utf-8")).hexdigest()[:12]
+        return f"__expr__{digest}"
+    raise ValueError(f"unsupported index target source {source!r}")
 
 
 def _copy_nested_dict(value: dict | None) -> dict | None:
@@ -180,6 +200,19 @@ def _field_target_descriptor(field: str | None) -> dict:
     return {"source": "field", "field": field}
 
 
+def _expression_target_descriptor(expression: str, expression_key: str, dependencies: list[str]) -> dict:
+    return {
+        "source": "expression",
+        "expression": expression,
+        "expression_key": expression_key,
+        "dependencies": list(dependencies),
+    }
+
+
+def _target_field(target: dict) -> str | None:
+    return target.get("field") if target.get("source") == "field" else None
+
+
 def _field_dtype(array: blosc2.NDArray, field: str | None) -> np.dtype:
     if field is None:
         return np.dtype(array.dtype)
@@ -201,6 +234,68 @@ def _validate_index_target(array: blosc2.NDArray, field: str | None) -> np.dtype
     return dtype
 
 
+class _OperandCanonicalizer(ast.NodeTransformer):
+    def __init__(self, operands: dict):
+        self.operands = operands
+        self.base: blosc2.NDArray | None = None
+        self.dependencies: list[str] = []
+        self.valid = True
+
+    def visit_Name(self, node: ast.Name) -> ast.AST:
+        operand = self.operands.get(node.id)
+        if operand is None:
+            return node
+        target = _operand_target(operand)
+        if target is None:
+            self.valid = False
+            return node
+        base, field = target
+        if self.base is None:
+            self.base = base
+        elif self.base is not base:
+            self.valid = False
+            return node
+        canonical = SELF_TARGET_NAME if field is None else field
+        self.dependencies.append(canonical)
+        return ast.copy_location(ast.Name(id=canonical, ctx=node.ctx), node)
+
+
+def _normalize_expression_node(
+    node: ast.AST, operands: dict
+) -> tuple[blosc2.NDArray, str, list[str]] | None:
+    canonicalizer = _OperandCanonicalizer(operands)
+    normalized = canonicalizer.visit(
+        ast.fix_missing_locations(ast.parse(ast.unparse(node), mode="eval")).body
+    )
+    if not canonicalizer.valid or canonicalizer.base is None or not canonicalizer.dependencies:
+        return None
+    dependencies = list(dict.fromkeys(canonicalizer.dependencies))
+    return canonicalizer.base, ast.unparse(normalized), dependencies
+
+
+def _normalize_expression_target(expression: str, operands: dict) -> tuple[blosc2.NDArray, dict, np.dtype]:
+    try:
+        tree = ast.parse(expression, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError("expression is not valid Python syntax") from exc
+
+    normalized = _normalize_expression_node(tree.body, operands)
+    if normalized is None:
+        raise ValueError("expression indexes require operands from a single 1-D NDArray target")
+    base, expression_key, dependencies = normalized
+    if base.ndim != 1:
+        raise ValueError("expression indexes are only supported on 1-D NDArray objects")
+    target = _expression_target_descriptor(expression, expression_key, dependencies)
+    sample_stop = min(int(base.shape[0]), max(1, int(base.blocks[0]) if base.blocks else 1))
+    sample = _slice_values_for_target(base, target, 0, sample_stop)
+    dtype = np.dtype(sample.dtype)
+    if sample.ndim != 1:
+        raise ValueError("expression indexes require expressions returning a 1-D scalar stream")
+    if not _supported_index_dtype(dtype):
+        raise TypeError(f"dtype {dtype} is not supported by the current index engine")
+    return base, target, dtype
+
+
 def _sanitize_sidecar_root(urlpath: str | Path) -> tuple[Path, str]:
     path = Path(urlpath)
     suffix = "".join(path.suffixes)
@@ -208,10 +303,9 @@ def _sanitize_sidecar_root(urlpath: str | Path) -> tuple[Path, str]:
     return path, root
 
 
-def _sidecar_path(array: blosc2.NDArray, field: str | None, kind: str, name: str) -> str:
+def _sidecar_path(array: blosc2.NDArray, token: str, kind: str, name: str) -> str:
     path, root = _sanitize_sidecar_root(array.urlpath)
-    token = _field_token(field)
-    return str(path.with_name(f"{root}.__index__.{token}.{kind}.{name}.b2nd"))
+    return str(path.with_name(f"{root}.__index__.{_sanitize_token(token)}.{kind}.{name}.b2nd"))
 
 
 def _segment_len(array: blosc2.NDArray, level: str) -> int:
@@ -224,27 +318,47 @@ def _segment_len(array: blosc2.NDArray, level: str) -> int:
     raise ValueError(f"unknown level {level!r}")
 
 
-def _data_cache_key(
-    array: blosc2.NDArray, field: str | None, category: str, name: str
-) -> tuple[int, str | None, str, str]:
-    return (_array_key(array), field, category, name)
+def _data_cache_key(array: blosc2.NDArray, token: str, category: str, name: str):
+    return (_array_key(array), token, category, name)
 
 
-def _clear_cached_data(array: blosc2.NDArray, field: str | None) -> None:
-    prefix = (_array_key(array), field)
+def _clear_cached_data(array: blosc2.NDArray, token: str) -> None:
+    prefix = (_array_key(array), token)
     keys = [key for key in _DATA_CACHE if key[:2] == prefix]
     for key in keys:
         _DATA_CACHE.pop(key, None)
 
 
-def _values_for_index(array: blosc2.NDArray, field: str | None) -> np.ndarray:
-    values = array[:]
-    return values if field is None else values[field]
+def _operands_for_dependencies(values: np.ndarray, dependencies: list[str]) -> dict[str, np.ndarray]:
+    operands = {}
+    for dependency in dependencies:
+        if dependency == SELF_TARGET_NAME:
+            operands[dependency] = values
+        else:
+            operands[dependency] = values[dependency]
+    return operands
 
 
-def _slice_values_for_index(array: blosc2.NDArray, field: str | None, start: int, stop: int) -> np.ndarray:
-    values = array[start:stop]
-    return values if field is None else values[field]
+def _values_from_numpy_target(values: np.ndarray, target: dict) -> np.ndarray:
+    if target["source"] == "field":
+        field = target.get("field")
+        return values if field is None else values[field]
+    if target["source"] == "expression":
+        from .lazyexpr import ne_evaluate
+
+        result = ne_evaluate(
+            target["expression_key"], _operands_for_dependencies(values, target["dependencies"])
+        )
+        return np.asarray(result)
+    raise ValueError(f"unsupported index target source {target['source']!r}")
+
+
+def _values_for_target(array: blosc2.NDArray, target: dict) -> np.ndarray:
+    return _slice_values_for_target(array, target, 0, int(array.shape[0]))
+
+
+def _slice_values_for_target(array: blosc2.NDArray, target: dict, start: int, stop: int) -> np.ndarray:
+    return _values_from_numpy_target(array[start:stop], target)
 
 
 def _summary_dtype(dtype: np.dtype) -> np.dtype:
@@ -280,16 +394,16 @@ def _compute_segment_summaries(values: np.ndarray, dtype: np.dtype, segment_len:
 
 def _store_array_sidecar(
     array: blosc2.NDArray,
-    field: str | None,
+    token: str,
     kind: str,
     category: str,
     name: str,
     data: np.ndarray,
     persistent: bool,
 ) -> dict:
-    cache_key = _data_cache_key(array, field, category, name)
+    cache_key = _data_cache_key(array, token, category, name)
     if persistent:
-        path = _sidecar_path(array, field, kind, f"{category}.{name}")
+        path = _sidecar_path(array, token, kind, f"{category}.{name}")
         blosc2.remove_urlpath(path)
         blosc2.asarray(data, urlpath=path, mode="w")
         if isinstance(data, np.memmap):
@@ -303,9 +417,9 @@ def _store_array_sidecar(
 
 
 def _load_array_sidecar(
-    array: blosc2.NDArray, field: str | None, category: str, name: str, path: str | None
+    array: blosc2.NDArray, token: str, category: str, name: str, path: str | None
 ) -> np.ndarray:
-    cache_key = _data_cache_key(array, field, category, name)
+    cache_key = _data_cache_key(array, token, category, name)
     cached = _DATA_CACHE.get(cache_key)
     if cached is not None:
         return cached
@@ -318,7 +432,8 @@ def _load_array_sidecar(
 
 def _build_levels_descriptor(
     array: blosc2.NDArray,
-    field: str | None,
+    target: dict,
+    token: str,
     kind: str,
     dtype: np.dtype,
     values: np.ndarray,
@@ -328,7 +443,7 @@ def _build_levels_descriptor(
     for level in SEGMENT_LEVELS_BY_KIND[kind]:
         segment_len = _segment_len(array, level)
         summaries = _compute_segment_summaries(values, dtype, segment_len)
-        sidecar = _store_array_sidecar(array, field, kind, "summary", level, summaries, persistent)
+        sidecar = _store_array_sidecar(array, token, kind, "summary", level, summaries, persistent)
         levels[level] = {
             "segment_len": segment_len,
             "nsegments": len(summaries),
@@ -340,7 +455,8 @@ def _build_levels_descriptor(
 
 def _build_levels_descriptor_ooc(
     array: blosc2.NDArray,
-    field: str | None,
+    target: dict,
+    token: str,
     kind: str,
     dtype: np.dtype,
     persistent: bool,
@@ -355,8 +471,8 @@ def _build_levels_descriptor_ooc(
         for idx in range(nsegments):
             start = idx * segment_len
             stop = min(start + segment_len, size)
-            summaries[idx] = _segment_summary(_slice_values_for_index(array, field, start, stop), dtype)
-        sidecar = _store_array_sidecar(array, field, kind, "summary", level, summaries, persistent)
+            summaries[idx] = _segment_summary(_slice_values_for_target(array, target, start, stop), dtype)
+        sidecar = _store_array_sidecar(array, token, kind, "summary", level, summaries, persistent)
         levels[level] = {
             "segment_len": segment_len,
             "nsegments": len(summaries),
@@ -368,7 +484,7 @@ def _build_levels_descriptor_ooc(
 
 def _build_full_descriptor(
     array: blosc2.NDArray,
-    field: str | None,
+    token: str,
     kind: str,
     values: np.ndarray,
     persistent: bool,
@@ -376,8 +492,8 @@ def _build_full_descriptor(
     order = np.argsort(values, kind="stable")
     positions = order.astype(np.int64, copy=False)
     sorted_values = values[order]
-    values_sidecar = _store_array_sidecar(array, field, kind, "full", "values", sorted_values, persistent)
-    positions_sidecar = _store_array_sidecar(array, field, kind, "full", "positions", positions, persistent)
+    values_sidecar = _store_array_sidecar(array, token, kind, "full", "values", sorted_values, persistent)
+    positions_sidecar = _store_array_sidecar(array, token, kind, "full", "positions", positions, persistent)
     return {
         "values_path": values_sidecar["path"],
         "positions_path": positions_sidecar["path"],
@@ -428,7 +544,7 @@ def _build_block_sorted_payload(
 
 def _build_reduced_descriptor(
     array: blosc2.NDArray,
-    field: str | None,
+    token: str,
     kind: str,
     values: np.ndarray,
     persistent: bool,
@@ -436,11 +552,11 @@ def _build_reduced_descriptor(
     block_len = int(array.blocks[0])
     sorted_values, positions, offsets, _ = _build_block_sorted_payload(values, block_len)
 
-    values_sidecar = _store_array_sidecar(array, field, kind, "reduced", "values", sorted_values, persistent)
+    values_sidecar = _store_array_sidecar(array, token, kind, "reduced", "values", sorted_values, persistent)
     positions_sidecar = _store_array_sidecar(
-        array, field, kind, "reduced", "positions", positions, persistent
+        array, token, kind, "reduced", "positions", positions, persistent
     )
-    offsets_sidecar = _store_array_sidecar(array, field, kind, "reduced", "offsets", offsets, persistent)
+    offsets_sidecar = _store_array_sidecar(array, token, kind, "reduced", "offsets", offsets, persistent)
     return {
         "block_len": block_len,
         "values_path": values_sidecar["path"],
@@ -456,8 +572,10 @@ def _open_temp_memmap(workdir: Path, name: str, dtype: np.dtype, shape: tuple[in
 
 def _build_reduced_descriptor_ooc(
     array: blosc2.NDArray,
-    field: str | None,
+    target: dict,
+    token: str,
     kind: str,
+    dtype: np.dtype,
     persistent: bool,
     workdir: Path,
 ) -> dict:
@@ -467,16 +585,14 @@ def _build_reduced_descriptor_ooc(
     position_dtype = _position_dtype(block_len - 1)
     offsets = np.empty(nblocks + 1, dtype=np.int64)
     offsets[0] = 0
-    sorted_values = _open_temp_memmap(
-        workdir, f"{kind}_reduced_values", np.dtype(_field_dtype(array, field)), (size,)
-    )
+    sorted_values = _open_temp_memmap(workdir, f"{kind}_reduced_values", dtype, (size,))
     positions = _open_temp_memmap(workdir, f"{kind}_reduced_positions", position_dtype, (size,))
 
     cursor = 0
     for block_id in range(nblocks):
         start = block_id * block_len
         stop = min(start + block_len, size)
-        block = _slice_values_for_index(array, field, start, stop)
+        block = _slice_values_for_target(array, target, start, stop)
         order = np.argsort(block, kind="stable")
         next_cursor = cursor + (stop - start)
         sorted_values[cursor:next_cursor] = block[order]
@@ -484,11 +600,11 @@ def _build_reduced_descriptor_ooc(
         cursor = next_cursor
         offsets[block_id + 1] = cursor
 
-    values_sidecar = _store_array_sidecar(array, field, kind, "reduced", "values", sorted_values, persistent)
+    values_sidecar = _store_array_sidecar(array, token, kind, "reduced", "values", sorted_values, persistent)
     positions_sidecar = _store_array_sidecar(
-        array, field, kind, "reduced", "positions", positions, persistent
+        array, token, kind, "reduced", "positions", positions, persistent
     )
-    offsets_sidecar = _store_array_sidecar(array, field, kind, "reduced", "offsets", offsets, persistent)
+    offsets_sidecar = _store_array_sidecar(array, token, kind, "reduced", "offsets", offsets, persistent)
     return {
         "block_len": block_len,
         "values_path": values_sidecar["path"],
@@ -614,7 +730,7 @@ def _quantize_light_value_scalar(value, dtype: np.dtype, bits: int):
 
 def _build_light_descriptor(
     array: blosc2.NDArray,
-    field: str | None,
+    token: str,
     kind: str,
     values: np.ndarray,
     optlevel: int,
@@ -629,11 +745,11 @@ def _build_light_descriptor(
         sorted_values = _quantize_light_values_array(sorted_values, value_lossy_bits)
     bucket_positions = (positions // bucket_len).astype(np.uint8, copy=False)
 
-    values_sidecar = _store_array_sidecar(array, field, kind, "light", "values", sorted_values, persistent)
+    values_sidecar = _store_array_sidecar(array, token, kind, "light", "values", sorted_values, persistent)
     positions_sidecar = _store_array_sidecar(
-        array, field, kind, "light", "bucket_positions", bucket_positions, persistent
+        array, token, kind, "light", "bucket_positions", bucket_positions, persistent
     )
-    offsets_sidecar = _store_array_sidecar(array, field, kind, "light", "offsets", offsets, persistent)
+    offsets_sidecar = _store_array_sidecar(array, token, kind, "light", "offsets", offsets, persistent)
     return {
         "block_len": block_len,
         "bucket_count": bucket_count,
@@ -647,7 +763,8 @@ def _build_light_descriptor(
 
 def _build_light_descriptor_ooc(
     array: blosc2.NDArray,
-    field: str | None,
+    target: dict,
+    token: str,
     kind: str,
     dtype: np.dtype,
     optlevel: int,
@@ -669,7 +786,7 @@ def _build_light_descriptor_ooc(
     for block_id in range(nblocks):
         start = block_id * block_len
         stop = min(start + block_len, size)
-        block = _slice_values_for_index(array, field, start, stop)
+        block = _slice_values_for_target(array, target, start, stop)
         order = np.argsort(block, kind="stable")
         block_values = block[order]
         if value_lossy_bits > 0:
@@ -680,11 +797,11 @@ def _build_light_descriptor_ooc(
         cursor = next_cursor
         offsets[block_id + 1] = cursor
 
-    values_sidecar = _store_array_sidecar(array, field, kind, "light", "values", sorted_values, persistent)
+    values_sidecar = _store_array_sidecar(array, token, kind, "light", "values", sorted_values, persistent)
     positions_sidecar = _store_array_sidecar(
-        array, field, kind, "light", "bucket_positions", bucket_positions, persistent
+        array, token, kind, "light", "bucket_positions", bucket_positions, persistent
     )
-    offsets_sidecar = _store_array_sidecar(array, field, kind, "light", "offsets", offsets, persistent)
+    offsets_sidecar = _store_array_sidecar(array, token, kind, "light", "offsets", offsets, persistent)
     return {
         "block_len": block_len,
         "bucket_count": bucket_count,
@@ -858,7 +975,8 @@ def _merge_run_pair(
 
 def _build_full_descriptor_ooc(
     array: blosc2.NDArray,
-    field: str | None,
+    target: dict,
+    token: str,
     kind: str,
     dtype: np.dtype,
     persistent: bool,
@@ -869,10 +987,10 @@ def _build_full_descriptor_ooc(
         sorted_values = np.empty(0, dtype=dtype)
         positions = np.empty(0, dtype=np.int64)
         values_sidecar = _store_array_sidecar(
-            array, field, kind, "full", "values", sorted_values, persistent
+            array, token, kind, "full", "values", sorted_values, persistent
         )
         positions_sidecar = _store_array_sidecar(
-            array, field, kind, "full", "positions", positions, persistent
+            array, token, kind, "full", "positions", positions, persistent
         )
         return {
             "values_path": values_sidecar["path"],
@@ -882,7 +1000,7 @@ def _build_full_descriptor_ooc(
     runs = []
     for run_id, start in enumerate(range(0, size, run_items)):
         stop = min(start + run_items, size)
-        values = _slice_values_for_index(array, field, start, stop)
+        values = _slice_values_for_target(array, target, start, stop)
         positions = np.arange(start, stop, dtype=np.int64)
         order = np.lexsort((positions, values))
         sorted_values = values[order]
@@ -919,8 +1037,8 @@ def _build_full_descriptor_ooc(
     final_run = runs[0]
     sorted_values = np.load(final_run.values_path, mmap_mode="r")
     positions = np.load(final_run.positions_path, mmap_mode="r")
-    values_sidecar = _store_array_sidecar(array, field, kind, "full", "values", sorted_values, persistent)
-    positions_sidecar = _store_array_sidecar(array, field, kind, "full", "positions", positions, persistent)
+    values_sidecar = _store_array_sidecar(array, token, kind, "full", "values", sorted_values, persistent)
+    positions_sidecar = _store_array_sidecar(array, token, kind, "full", "positions", positions, persistent)
     return {
         "values_path": values_sidecar["path"],
         "positions_path": positions_sidecar["path"],
@@ -929,7 +1047,8 @@ def _build_full_descriptor_ooc(
 
 def _build_descriptor(
     array: blosc2.NDArray,
-    field: str | None,
+    target: dict,
+    token: str,
     kind: str,
     optlevel: int,
     granularity: str,
@@ -943,9 +1062,11 @@ def _build_descriptor(
     full: dict | None,
 ) -> dict:
     return {
-        "name": name or _field_token(field),
-        "target": _field_target_descriptor(field),
-        "field": field,
+        "name": name
+        or (target["expression"] if target["source"] == "expression" else _field_token(target.get("field"))),
+        "token": token,
+        "target": target.copy(),
+        "field": _target_field(target),
         "kind": kind,
         "version": INDEX_FORMAT_VERSION,
         "optlevel": optlevel,
@@ -977,6 +1098,8 @@ def create_index(
 ) -> dict:
     del kwargs
     dtype = _validate_index_target(array, field)
+    target = _field_target_descriptor(field)
+    token = _target_token(target)
     if kind not in SEGMENT_LEVELS_BY_KIND:
         raise NotImplementedError(f"unsupported index kind {kind!r}")
     if granularity != "chunk":
@@ -988,25 +1111,26 @@ def create_index(
     if use_ooc and kind in {"light", "medium", "full"}:
         with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-") as tmpdir:
             workdir = Path(tmpdir)
-            levels = _build_levels_descriptor_ooc(array, field, kind, dtype, persistent)
+            levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent)
             light = (
-                _build_light_descriptor_ooc(array, field, kind, dtype, optlevel, persistent, workdir)
+                _build_light_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, workdir)
                 if kind == "light"
                 else None
             )
             reduced = (
-                _build_reduced_descriptor_ooc(array, field, kind, persistent, workdir)
+                _build_reduced_descriptor_ooc(array, target, token, kind, dtype, persistent, workdir)
                 if kind == "medium"
                 else None
             )
             full = (
-                _build_full_descriptor_ooc(array, field, kind, dtype, persistent, workdir)
+                _build_full_descriptor_ooc(array, target, token, kind, dtype, persistent, workdir)
                 if kind == "full"
                 else None
             )
             descriptor = _build_descriptor(
                 array,
-                field,
+                target,
+                token,
                 kind,
                 optlevel,
                 granularity,
@@ -1020,20 +1144,21 @@ def create_index(
                 full,
             )
     else:
-        values = _values_for_index(array, field)
-        levels = _build_levels_descriptor(array, field, kind, dtype, values, persistent)
+        values = _values_for_target(array, target)
+        levels = _build_levels_descriptor(array, target, token, kind, dtype, values, persistent)
         light = (
-            _build_light_descriptor(array, field, kind, values, optlevel, persistent)
+            _build_light_descriptor(array, token, kind, values, optlevel, persistent)
             if kind == "light"
             else None
         )
         reduced = (
-            _build_reduced_descriptor(array, field, kind, values, persistent) if kind == "medium" else None
+            _build_reduced_descriptor(array, token, kind, values, persistent) if kind == "medium" else None
         )
-        full = _build_full_descriptor(array, field, kind, values, persistent) if kind == "full" else None
+        full = _build_full_descriptor(array, token, kind, values, persistent) if kind == "full" else None
         descriptor = _build_descriptor(
             array,
-            field,
+            target,
+            token,
             kind,
             optlevel,
             granularity,
@@ -1048,7 +1173,107 @@ def create_index(
         )
 
     store = _load_store(array)
-    store["indexes"][_field_token(field)] = descriptor
+    store["indexes"][token] = descriptor
+    _save_store(array, store)
+    return _copy_descriptor(descriptor)
+
+
+def create_expr_index(
+    array: blosc2.NDArray,
+    expression: str,
+    *,
+    operands: dict | None = None,
+    kind: str = "light",
+    optlevel: int = 5,
+    granularity: str = "chunk",
+    persistent: bool | None = None,
+    in_mem: bool = False,
+    name: str | None = None,
+    **kwargs,
+) -> dict:
+    del kwargs
+    if operands is None:
+        operands = array.fields if array.dtype.fields is not None else {"value": array}
+    base, target, dtype = _normalize_expression_target(expression, operands)
+    if base is not array:
+        raise ValueError(
+            "expression index operands must resolve to the same array passed to create_expr_index()"
+        )
+    if kind not in SEGMENT_LEVELS_BY_KIND:
+        raise NotImplementedError(f"unsupported index kind {kind!r}")
+    if granularity != "chunk":
+        raise NotImplementedError("only chunk-based array indexes are implemented for now")
+    if persistent is None:
+        persistent = _is_persistent_array(array)
+    use_ooc = _resolve_ooc_mode(kind, in_mem)
+    token = _target_token(target)
+
+    if use_ooc and kind in {"light", "medium", "full"}:
+        with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-") as tmpdir:
+            workdir = Path(tmpdir)
+            levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent)
+            light = (
+                _build_light_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, workdir)
+                if kind == "light"
+                else None
+            )
+            reduced = (
+                _build_reduced_descriptor_ooc(array, target, token, kind, dtype, persistent, workdir)
+                if kind == "medium"
+                else None
+            )
+            full = (
+                _build_full_descriptor_ooc(array, target, token, kind, dtype, persistent, workdir)
+                if kind == "full"
+                else None
+            )
+            descriptor = _build_descriptor(
+                array,
+                target,
+                token,
+                kind,
+                optlevel,
+                granularity,
+                persistent,
+                True,
+                name,
+                dtype,
+                levels,
+                light,
+                reduced,
+                full,
+            )
+    else:
+        values = _values_for_target(array, target)
+        levels = _build_levels_descriptor(array, target, token, kind, dtype, values, persistent)
+        light = (
+            _build_light_descriptor(array, token, kind, values, optlevel, persistent)
+            if kind == "light"
+            else None
+        )
+        reduced = (
+            _build_reduced_descriptor(array, token, kind, values, persistent) if kind == "medium" else None
+        )
+        full = _build_full_descriptor(array, token, kind, values, persistent) if kind == "full" else None
+        descriptor = _build_descriptor(
+            array,
+            target,
+            token,
+            kind,
+            optlevel,
+            granularity,
+            persistent,
+            False,
+            name,
+            dtype,
+            levels,
+            light,
+            reduced,
+            full,
+        )
+
+    store = _load_store(array)
+    store["indexes"][token] = descriptor
     _save_store(array, store)
     return _copy_descriptor(descriptor)
 
@@ -1094,49 +1319,53 @@ def _drop_descriptor_sidecars(descriptor: dict) -> None:
         _remove_sidecar_path(descriptor["full"]["positions_path"])
 
 
-def _replace_levels_descriptor(
-    array: blosc2.NDArray, descriptor: dict, field: str | None, kind: str, persistent: bool
-) -> None:
+def _replace_levels_descriptor(array: blosc2.NDArray, descriptor: dict, kind: str, persistent: bool) -> None:
     size = int(array.shape[0])
+    target = descriptor["target"]
+    token = descriptor["token"]
     for level, level_info in descriptor["levels"].items():
         segment_len = int(level_info["segment_len"])
         start = 0
         summaries = _compute_segment_summaries(
-            _slice_values_for_index(array, field, start, size), _field_dtype(array, field), segment_len
+            _slice_values_for_target(array, target, start, size), np.dtype(descriptor["dtype"]), segment_len
         )
-        sidecar = _store_array_sidecar(array, field, kind, "summary", level, summaries, persistent)
+        sidecar = _store_array_sidecar(array, token, kind, "summary", level, summaries, persistent)
         level_info["path"] = sidecar["path"]
         level_info["dtype"] = sidecar["dtype"]
         level_info["nsegments"] = len(summaries)
 
 
 def _replace_levels_descriptor_tail(
-    array: blosc2.NDArray, descriptor: dict, field: str | None, kind: str, old_size: int, persistent: bool
+    array: blosc2.NDArray, descriptor: dict, kind: str, old_size: int, persistent: bool
 ) -> None:
-    dtype = _field_dtype(array, field)
+    target = descriptor["target"]
+    token = descriptor["token"]
+    dtype = np.dtype(descriptor["dtype"])
     new_size = int(array.shape[0])
     for level, level_info in descriptor["levels"].items():
         segment_len = int(level_info["segment_len"])
         start_segment = old_size // segment_len
         prefix = _load_level_summaries(array, descriptor, level)[:start_segment]
         tail_start = start_segment * segment_len
-        tail_values = _slice_values_for_index(array, field, tail_start, new_size)
+        tail_values = _slice_values_for_target(array, target, tail_start, new_size)
         tail_summaries = _compute_segment_summaries(tail_values, dtype, segment_len)
         summaries = np.concatenate((prefix, tail_summaries)) if len(prefix) else tail_summaries
-        sidecar = _store_array_sidecar(array, field, kind, "summary", level, summaries, persistent)
+        sidecar = _store_array_sidecar(array, token, kind, "summary", level, summaries, persistent)
         level_info["path"] = sidecar["path"]
         level_info["dtype"] = sidecar["dtype"]
         level_info["nsegments"] = len(summaries)
 
 
 def _replace_reduced_descriptor_tail(
-    array: blosc2.NDArray, descriptor: dict, field: str | None, old_size: int, persistent: bool
+    array: blosc2.NDArray, descriptor: dict, old_size: int, persistent: bool
 ) -> None:
     reduced = descriptor["reduced"]
+    target = descriptor["target"]
+    token = descriptor["token"]
     block_len = int(reduced["block_len"])
     start_block = old_size // block_len
     block_start = start_block * block_len
-    tail_values = _slice_values_for_index(array, field, block_start, int(array.shape[0]))
+    tail_values = _slice_values_for_target(array, target, block_start, int(array.shape[0]))
     sorted_values_tail, positions_tail, offsets_tail, _ = _build_block_sorted_payload(tail_values, block_len)
 
     values, positions, offsets = _load_reduced_arrays(array, descriptor)
@@ -1147,13 +1376,13 @@ def _replace_reduced_descriptor_tail(
 
     kind = descriptor["kind"]
     values_sidecar = _store_array_sidecar(
-        array, field, kind, "reduced", "values", updated_values, persistent
+        array, token, kind, "reduced", "values", updated_values, persistent
     )
     positions_sidecar = _store_array_sidecar(
-        array, field, kind, "reduced", "positions", updated_positions, persistent
+        array, token, kind, "reduced", "positions", updated_positions, persistent
     )
     offsets_sidecar = _store_array_sidecar(
-        array, field, kind, "reduced", "offsets", updated_offsets, persistent
+        array, token, kind, "reduced", "offsets", updated_offsets, persistent
     )
     reduced["values_path"] = values_sidecar["path"]
     reduced["positions_path"] = positions_sidecar["path"]
@@ -1161,13 +1390,15 @@ def _replace_reduced_descriptor_tail(
 
 
 def _replace_light_descriptor_tail(
-    array: blosc2.NDArray, descriptor: dict, field: str | None, old_size: int, persistent: bool
+    array: blosc2.NDArray, descriptor: dict, old_size: int, persistent: bool
 ) -> None:
     light = descriptor["light"]
+    target = descriptor["target"]
+    token = descriptor["token"]
     block_len = int(light["block_len"])
     start_block = old_size // block_len
     block_start = start_block * block_len
-    tail_values = _slice_values_for_index(array, field, block_start, int(array.shape[0]))
+    tail_values = _slice_values_for_target(array, target, block_start, int(array.shape[0]))
     value_lossy_bits = int(light["value_lossy_bits"])
     bucket_len = int(light["bucket_len"])
     sorted_values_tail, positions_tail, offsets_tail, _ = _build_block_sorted_payload(tail_values, block_len)
@@ -1182,12 +1413,12 @@ def _replace_light_descriptor_tail(
     updated_offsets = np.concatenate((offsets[: start_block + 1], prefix_items + offsets_tail[1:]))
 
     kind = descriptor["kind"]
-    values_sidecar = _store_array_sidecar(array, field, kind, "light", "values", updated_values, persistent)
+    values_sidecar = _store_array_sidecar(array, token, kind, "light", "values", updated_values, persistent)
     positions_sidecar = _store_array_sidecar(
-        array, field, kind, "light", "bucket_positions", updated_bucket_positions, persistent
+        array, token, kind, "light", "bucket_positions", updated_bucket_positions, persistent
     )
     offsets_sidecar = _store_array_sidecar(
-        array, field, kind, "light", "offsets", updated_offsets, persistent
+        array, token, kind, "light", "offsets", updated_offsets, persistent
     )
     light["values_path"] = values_sidecar["path"]
     light["bucket_positions_path"] = positions_sidecar["path"]
@@ -1197,20 +1428,20 @@ def _replace_light_descriptor_tail(
 def _replace_full_descriptor(
     array: blosc2.NDArray,
     descriptor: dict,
-    field: str | None,
     sorted_values: np.ndarray,
     positions: np.ndarray,
     persistent: bool,
 ) -> None:
     kind = descriptor["kind"]
-    values_sidecar = _store_array_sidecar(array, field, kind, "full", "values", sorted_values, persistent)
-    positions_sidecar = _store_array_sidecar(array, field, kind, "full", "positions", positions, persistent)
+    token = descriptor["token"]
+    values_sidecar = _store_array_sidecar(array, token, kind, "full", "values", sorted_values, persistent)
+    positions_sidecar = _store_array_sidecar(array, token, kind, "full", "positions", positions, persistent)
     descriptor["full"]["values_path"] = values_sidecar["path"]
     descriptor["full"]["positions_path"] = positions_sidecar["path"]
 
 
 def _append_full_descriptor(
-    array: blosc2.NDArray, descriptor: dict, field: str | None, old_size: int, appended_values: np.ndarray
+    array: blosc2.NDArray, descriptor: dict, old_size: int, appended_values: np.ndarray
 ) -> None:
     full = descriptor.get("full")
     if full is None:
@@ -1225,9 +1456,7 @@ def _append_full_descriptor(
         appended_positions[order],
         np.dtype(descriptor["dtype"]),
     )
-    _replace_full_descriptor(
-        array, descriptor, field, merged_values, merged_positions, descriptor["persistent"]
-    )
+    _replace_full_descriptor(array, descriptor, merged_values, merged_positions, descriptor["persistent"])
 
 
 def append_to_indexes(array: blosc2.NDArray, old_size: int, appended_values: np.ndarray) -> None:
@@ -1236,19 +1465,19 @@ def append_to_indexes(array: blosc2.NDArray, old_size: int, appended_values: np.
         return
 
     for descriptor in store["indexes"].values():
-        field = descriptor["field"]
         kind = descriptor["kind"]
         persistent = descriptor["persistent"]
-        field_values = appended_values if field is None else appended_values[field]
+        target = descriptor["target"]
+        target_values = _values_from_numpy_target(appended_values, target)
         if descriptor.get("stale", False):
             continue
         if kind == "full":
-            _append_full_descriptor(array, descriptor, field, old_size, field_values)
+            _append_full_descriptor(array, descriptor, old_size, target_values)
         elif kind == "medium":
-            _replace_reduced_descriptor_tail(array, descriptor, field, old_size, persistent)
+            _replace_reduced_descriptor_tail(array, descriptor, old_size, persistent)
         elif kind == "light":
-            _replace_light_descriptor_tail(array, descriptor, field, old_size, persistent)
-        _replace_levels_descriptor_tail(array, descriptor, field, kind, old_size, persistent)
+            _replace_light_descriptor_tail(array, descriptor, old_size, persistent)
+        _replace_levels_descriptor_tail(array, descriptor, kind, old_size, persistent)
         descriptor["shape"] = tuple(array.shape)
         descriptor["chunks"] = tuple(array.chunks)
         descriptor["blocks"] = tuple(array.blocks)
@@ -1261,7 +1490,7 @@ def drop_index(array: blosc2.NDArray, field: str | None = None, name: str | None
     token = _resolve_index_token(store, field, name)
     descriptor = store["indexes"].pop(token)
     _save_store(array, store)
-    _clear_cached_data(array, descriptor["field"])
+    _clear_cached_data(array, descriptor["token"])
     _drop_descriptor_sidecars(descriptor)
 
 
@@ -1270,6 +1499,19 @@ def rebuild_index(array: blosc2.NDArray, field: str | None = None, name: str | N
     token = _resolve_index_token(store, field, name)
     descriptor = store["indexes"][token]
     drop_index(array, field=descriptor["field"], name=descriptor["name"])
+    if descriptor["target"]["source"] == "expression":
+        operands = array.fields if array.dtype.fields is not None else {SELF_TARGET_NAME: array}
+        return create_expr_index(
+            array,
+            descriptor["target"]["expression_key"],
+            operands=operands,
+            kind=descriptor["kind"],
+            optlevel=descriptor["optlevel"],
+            granularity=descriptor["granularity"],
+            persistent=descriptor["persistent"],
+            in_mem=not descriptor.get("ooc", False),
+            name=descriptor["name"],
+        )
     return create_index(
         array,
         field=descriptor["field"],
@@ -1301,7 +1543,11 @@ def mark_indexes_stale(array: blosc2.NDArray) -> None:
 
 
 def _descriptor_for(array: blosc2.NDArray, field: str | None) -> dict | None:
-    descriptor = _load_store(array)["indexes"].get(_field_token(field))
+    return _descriptor_for_target(array, _field_target_descriptor(field))
+
+
+def _descriptor_for_target(array: blosc2.NDArray, target: dict) -> dict | None:
+    descriptor = _load_store(array)["indexes"].get(_target_token(target))
     if descriptor is None or descriptor.get("stale", False):
         return None
     if descriptor.get("version") != INDEX_FORMAT_VERSION:
@@ -1317,15 +1563,15 @@ def _descriptor_for(array: blosc2.NDArray, field: str | None) -> dict | None:
 
 def _load_level_summaries(array: blosc2.NDArray, descriptor: dict, level: str) -> np.ndarray:
     level_info = descriptor["levels"][level]
-    return _load_array_sidecar(array, descriptor["field"], "summary", level, level_info["path"])
+    return _load_array_sidecar(array, descriptor["token"], "summary", level, level_info["path"])
 
 
 def _load_full_arrays(array: blosc2.NDArray, descriptor: dict) -> tuple[np.ndarray, np.ndarray]:
     full = descriptor.get("full")
     if full is None:
         raise RuntimeError("full index metadata is not available")
-    values = _load_array_sidecar(array, descriptor["field"], "full", "values", full["values_path"])
-    positions = _load_array_sidecar(array, descriptor["field"], "full", "positions", full["positions_path"])
+    values = _load_array_sidecar(array, descriptor["token"], "full", "values", full["values_path"])
+    positions = _load_array_sidecar(array, descriptor["token"], "full", "positions", full["positions_path"])
     return values, positions
 
 
@@ -1335,11 +1581,11 @@ def _load_reduced_arrays(
     reduced = descriptor.get("reduced")
     if reduced is None:
         raise RuntimeError("reduced index metadata is not available")
-    values = _load_array_sidecar(array, descriptor["field"], "reduced", "values", reduced["values_path"])
+    values = _load_array_sidecar(array, descriptor["token"], "reduced", "values", reduced["values_path"])
     positions = _load_array_sidecar(
-        array, descriptor["field"], "reduced", "positions", reduced["positions_path"]
+        array, descriptor["token"], "reduced", "positions", reduced["positions_path"]
     )
-    offsets = _load_array_sidecar(array, descriptor["field"], "reduced", "offsets", reduced["offsets_path"])
+    offsets = _load_array_sidecar(array, descriptor["token"], "reduced", "offsets", reduced["offsets_path"])
     return values, positions, offsets
 
 
@@ -1347,11 +1593,11 @@ def _load_light_arrays(array: blosc2.NDArray, descriptor: dict) -> tuple[np.ndar
     light = descriptor.get("light")
     if light is None:
         raise RuntimeError("light index metadata is not available")
-    values = _load_array_sidecar(array, descriptor["field"], "light", "values", light["values_path"])
+    values = _load_array_sidecar(array, descriptor["token"], "light", "values", light["values_path"])
     positions = _load_array_sidecar(
-        array, descriptor["field"], "light", "bucket_positions", light["bucket_positions_path"]
+        array, descriptor["token"], "light", "bucket_positions", light["bucket_positions_path"]
     )
-    offsets = _load_array_sidecar(array, descriptor["field"], "light", "offsets", light["offsets_path"])
+    offsets = _load_array_sidecar(array, descriptor["token"], "light", "offsets", light["offsets_path"])
     return values, positions, offsets
 
 
@@ -1443,39 +1689,48 @@ def _compare_operator(node: ast.AST) -> str | None:
     return None
 
 
+def _compare_target_from_node(node: ast.AST, operands: dict) -> tuple[blosc2.NDArray, dict] | None:
+    if isinstance(node, ast.Name):
+        operand = operands.get(node.id)
+        target = _operand_target(operand) if operand is not None else None
+        if target is None:
+            return None
+        base, field = target
+        if base.ndim != 1:
+            return None
+        return base, _field_target_descriptor(field)
+
+    normalized = _normalize_expression_node(node, operands)
+    if normalized is None:
+        return None
+    base, expression_key, dependencies = normalized
+    return base, _expression_target_descriptor(ast.unparse(node), expression_key, dependencies)
+
+
 def _target_from_compare(
     node: ast.Compare, operands: dict
-) -> tuple[blosc2.NDArray, str | None, str, object] | None:
+) -> tuple[blosc2.NDArray, dict, str, object] | None:
     if len(node.ops) != 1 or len(node.comparators) != 1:
         return None
     op = _compare_operator(node.ops[0])
     if op is None:
         return None
 
-    left_target = operands.get(node.left.id) if isinstance(node.left, ast.Name) else None
-    right_target = (
-        operands.get(node.comparators[0].id) if isinstance(node.comparators[0], ast.Name) else None
-    )
-
     try:
+        left_target = _compare_target_from_node(node.left, operands)
+        right_target = _compare_target_from_node(node.comparators[0], operands)
         if left_target is not None:
             value = _literal_value(node.comparators[0])
-            target = _operand_target(left_target)
         elif right_target is not None:
             value = _literal_value(node.left)
-            target = _operand_target(right_target)
             op = _flip_operator(op)
         else:
             return None
     except ValueError:
         return None
 
-    if target is None:
-        return None
-    base, field = target
-    if base.ndim != 1:
-        return None
-    return base, field, op, value
+    base, target = left_target if left_target is not None else right_target
+    return base, target, op, value
 
 
 def _finest_level(descriptor: dict) -> str:
@@ -1487,8 +1742,8 @@ def _plan_segment_compare(node: ast.Compare, operands: dict) -> SegmentPredicate
     target = _target_from_compare(node, operands)
     if target is None:
         return None
-    base, field, op, value = target
-    descriptor = _descriptor_for(base, field)
+    base, target_info, op, value = target
+    descriptor = _descriptor_for_target(base, target_info)
     if descriptor is None:
         return None
     level = _finest_level(descriptor)
@@ -1503,7 +1758,8 @@ def _plan_segment_compare(node: ast.Compare, operands: dict) -> SegmentPredicate
         base=base,
         candidate_units=candidate_units,
         descriptor=descriptor,
-        field=field,
+        target=target_info,
+        field=_target_field(target_info),
         level=level,
         segment_len=level_info["segment_len"],
     )
@@ -1531,6 +1787,7 @@ def _merge_segment_plans(
         base=left.base,
         candidate_units=candidate_units,
         descriptor=left.descriptor,
+        target=left.target,
         field=left.field,
         level=left.level,
         segment_len=left.segment_len,
@@ -1593,8 +1850,8 @@ def _plan_exact_compare(node: ast.Compare, operands: dict) -> ExactPredicatePlan
     target = _target_from_compare(node, operands)
     if target is None:
         return None
-    base, field, op, value = target
-    descriptor = _descriptor_for(base, field)
+    base, target_info, op, value = target
+    descriptor = _descriptor_for_target(base, target_info)
     if descriptor is None or descriptor.get("kind") not in {"light", "medium", "full"}:
         return None
     try:
@@ -1605,7 +1862,8 @@ def _plan_exact_compare(node: ast.Compare, operands: dict) -> ExactPredicatePlan
         return ExactPredicatePlan(
             base=base,
             descriptor=descriptor,
-            field=field,
+            target=target_info,
+            field=_target_field(target_info),
             lower=value,
             lower_inclusive=True,
             upper=value,
@@ -1613,25 +1871,45 @@ def _plan_exact_compare(node: ast.Compare, operands: dict) -> ExactPredicatePlan
         )
     if op == ">":
         return ExactPredicatePlan(
-            base=base, descriptor=descriptor, field=field, lower=value, lower_inclusive=False
+            base=base,
+            descriptor=descriptor,
+            target=target_info,
+            field=_target_field(target_info),
+            lower=value,
+            lower_inclusive=False,
         )
     if op == ">=":
         return ExactPredicatePlan(
-            base=base, descriptor=descriptor, field=field, lower=value, lower_inclusive=True
+            base=base,
+            descriptor=descriptor,
+            target=target_info,
+            field=_target_field(target_info),
+            lower=value,
+            lower_inclusive=True,
         )
     if op == "<":
         return ExactPredicatePlan(
-            base=base, descriptor=descriptor, field=field, upper=value, upper_inclusive=False
+            base=base,
+            descriptor=descriptor,
+            target=target_info,
+            field=_target_field(target_info),
+            upper=value,
+            upper_inclusive=False,
         )
     if op == "<=":
         return ExactPredicatePlan(
-            base=base, descriptor=descriptor, field=field, upper=value, upper_inclusive=True
+            base=base,
+            descriptor=descriptor,
+            target=target_info,
+            field=_target_field(target_info),
+            upper=value,
+            upper_inclusive=True,
         )
     return None
 
 
 def _same_base(left: ExactPredicatePlan, right: ExactPredicatePlan) -> bool:
-    return left.base is right.base and left.field == right.field
+    return left.base is right.base and left.descriptor["token"] == right.descriptor["token"]
 
 
 def _merge_lower_bound(
@@ -1676,6 +1954,7 @@ def _merge_exact_plans(
     return ExactPredicatePlan(
         base=left.base,
         descriptor=left.descriptor,
+        target=left.target,
         field=left.field,
         lower=lower,
         lower_inclusive=lower_inclusive,
@@ -1837,6 +2116,7 @@ def _bucket_masks_from_light(
             search_plan = ExactPredicatePlan(
                 base=plan.base,
                 descriptor=plan.descriptor,
+                target=plan.target,
                 field=plan.field,
                 lower=lower,
                 lower_inclusive=lower_inclusive,
@@ -1898,22 +2178,22 @@ def _multi_exact_positions(plans: list[ExactPredicatePlan]) -> tuple[blosc2.NDAr
     if not plans:
         return None
     base = plans[0].base
-    merged_by_field: dict[str | None, ExactPredicatePlan] = {}
+    merged_by_target: dict[str, ExactPredicatePlan] = {}
     for plan in plans:
         if plan.base is not base:
             return None
-        key = plan.field
-        current = merged_by_field.get(key)
+        key = plan.descriptor["token"]
+        current = merged_by_target.get(key)
         if current is None:
-            merged_by_field[key] = plan
+            merged_by_target[key] = plan
             continue
         merged = _merge_exact_plans(current, plan, "and")
         if merged is None:
             return None
-        merged_by_field[key] = merged
+        merged_by_target[key] = merged
 
     exact_arrays = []
-    for plan in merged_by_field.values():
+    for plan in merged_by_target.values():
         positions = _exact_positions_from_plan(plan)
         if positions is None:
             return None
@@ -1937,6 +2217,7 @@ def _plan_multi_exact_query(plans: list[ExactPredicatePlan]) -> IndexPlan | None
         "multi-field exact indexes selected",
         descriptor=_copy_descriptor(plans[0].descriptor),
         base=base,
+        target=plans[0].descriptor.get("target"),
         field=None,
         level="exact",
         total_units=int(base.shape[0]),
@@ -1954,6 +2235,7 @@ def _plan_single_exact_query(exact_plan: ExactPredicatePlan) -> IndexPlan:
             f"{kind} exact index selected",
             descriptor=_copy_descriptor(exact_plan.descriptor),
             base=exact_plan.base,
+            target=exact_plan.descriptor.get("target"),
             field=exact_plan.field,
             level=kind,
             total_units=exact_plan.base.shape[0],
@@ -1970,6 +2252,7 @@ def _plan_single_exact_query(exact_plan: ExactPredicatePlan) -> IndexPlan:
             f"{kind} exact index selected",
             descriptor=_copy_descriptor(exact_plan.descriptor),
             base=exact_plan.base,
+            target=exact_plan.descriptor.get("target"),
             field=exact_plan.field,
             level=kind,
             total_units=exact_plan.base.shape[0],
@@ -1986,6 +2269,7 @@ def _plan_single_exact_query(exact_plan: ExactPredicatePlan) -> IndexPlan:
             "light approximate-order index selected",
             descriptor=_copy_descriptor(exact_plan.descriptor),
             base=exact_plan.base,
+            target=exact_plan.descriptor.get("target"),
             field=exact_plan.field,
             level=kind,
             total_units=total_units,
@@ -2036,6 +2320,7 @@ def plan_query(expression: str, operands: dict, where: dict | None, *, use_index
             "available index does not prune any units for this predicate",
             descriptor=_copy_descriptor(segment_plan.descriptor),
             base=segment_plan.base,
+            target=segment_plan.descriptor.get("target"),
             field=segment_plan.field,
             level=segment_plan.level,
             segment_len=segment_plan.segment_len,
@@ -2049,6 +2334,7 @@ def plan_query(expression: str, operands: dict, where: dict | None, *, use_index
         f"{segment_plan.level} summaries selected",
         descriptor=_copy_descriptor(segment_plan.descriptor),
         base=segment_plan.base,
+        target=segment_plan.descriptor.get("target"),
         field=segment_plan.field,
         level=segment_plan.level,
         segment_len=segment_plan.segment_len,
@@ -2087,7 +2373,7 @@ def evaluate_segment_query(
     return np.empty(0, dtype=_where_output_dtype(where["_where_x"]))
 
 
-def evaluate_light_query(
+def evaluate_light_query(  # noqa: C901
     expression: str, operands: dict, ne_args: dict, where: dict, plan: IndexPlan
 ) -> np.ndarray:
     del expression, operands, ne_args
@@ -2126,7 +2412,10 @@ def evaluate_light_query(
                 where_x.get_1d_span_numpy(span, chunk_id, local_start, stop - start)
             else:
                 span = where_x[start:stop]
-            field_values = span if plan.field is None else span[plan.field]
+            if plan.target is not None and plan.target.get("source") == "expression":
+                field_values = _values_from_numpy_target(span, plan.target)
+            else:
+                field_values = span if plan.field is None else span[plan.field]
             match = np.ones(len(field_values), dtype=bool)
             if plan.lower is not None:
                 match &= field_values >= plan.lower if plan.lower_inclusive else field_values > plan.lower
@@ -2233,37 +2522,65 @@ def evaluate_full_query(where: dict, plan: IndexPlan) -> np.ndarray:
     return _gather_positions(where["_where_x"], plan.exact_positions)
 
 
-def _normalize_order_fields(array: blosc2.NDArray, order: str | list[str] | None) -> list[str | None]:
+def _normalize_primary_order_target(array: blosc2.NDArray, order: str | None) -> tuple[dict, str | None]:
+    if order is None:
+        return _field_target_descriptor(None), None
+    if array.dtype.fields is not None and order in array.dtype.fields:
+        return _field_target_descriptor(order), order
+    operands = array.fields if array.dtype.fields is not None else {SELF_TARGET_NAME: array}
+    base, target, _ = _normalize_expression_target(order, operands)
+    if base is not array:
+        raise ValueError("ordered expressions must resolve to the target array")
+    return target, None
+
+
+def _normalize_order_fields(
+    array: blosc2.NDArray, order: str | list[str] | None
+) -> tuple[dict, list[str | None]]:
     if order is None:
         if array.dtype.fields is None:
-            return [None]
-        return list(array.dtype.names)
+            return _field_target_descriptor(None), [None]
+        return _field_target_descriptor(array.dtype.names[0]), list(array.dtype.names)
     if isinstance(order, list):
         fields = list(order)
     else:
         fields = [order]
-    if array.dtype.fields is None:
-        if fields != [None]:
-            raise ValueError("order is only supported for structured arrays")
-        return [None]
-    for field in fields:
-        if field not in array.dtype.fields:
-            raise ValueError(f"field {field!r} is not present in the dtype")
-    return fields
+    primary_target, primary_field = _normalize_primary_order_target(array, fields[0])
+    normalized_order = [primary_field if primary_field is not None else fields[0]]
+    if len(fields) > 1:
+        if array.dtype.fields is None:
+            raise ValueError("secondary order keys are only supported for structured arrays")
+        for field in fields[1:]:
+            if field not in array.dtype.fields:
+                raise ValueError(f"field {field!r} is not present in the dtype")
+        normalized_order.extend(fields[1:])
+    return primary_target, normalized_order
+
+
+def is_expression_order(array: blosc2.NDArray, order: str | list[str] | None) -> bool:
+    if order is None:
+        return False
+    primary = order[0] if isinstance(order, list) else order
+    try:
+        target, _ = _normalize_primary_order_target(array, primary)
+    except (TypeError, ValueError):
+        return False
+    return target["source"] == "expression"
 
 
 def plan_array_order(
     array: blosc2.NDArray, order: str | list[str] | None = None, *, require_full: bool = False
 ) -> OrderedIndexPlan:
     try:
-        order_fields = _normalize_order_fields(array, order)
+        primary_target, order_fields = _normalize_order_fields(array, order)
     except (TypeError, ValueError) as exc:
         return OrderedIndexPlan(False, str(exc))
-    primary_field = order_fields[0]
-    descriptor = _full_descriptor_for_order(array, primary_field)
+    primary_field = _target_field(primary_target)
+    descriptor = _full_descriptor_for_order(array, primary_target)
     if descriptor is None:
         if require_full:
-            return OrderedIndexPlan(False, f"field {primary_field!r} must have an associated full index")
+            label = primary_field if primary_field is not None else primary_target.get("expression")
+            return OrderedIndexPlan(False, f"order target {label!r} must have an associated full index")
         return OrderedIndexPlan(False, "no matching full index was found for ordered access")
     return OrderedIndexPlan(
         True,
@@ -2288,8 +2605,8 @@ def _positions_in_input_order(
     return positions[slice(start, stop, step)]
 
 
-def _full_descriptor_for_order(array: blosc2.NDArray, field: str | None) -> dict | None:
-    descriptor = _descriptor_for(array, field)
+def _full_descriptor_for_order(array: blosc2.NDArray, target: dict) -> dict | None:
+    descriptor = _descriptor_for_target(array, target)
     if descriptor is None or descriptor.get("kind") != "full":
         return None
     return descriptor

@@ -4786,6 +4786,60 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return indexing.create_csindex(self, field=field, **kwargs)
 
+    def create_expr_index(
+        self,
+        expression: str,
+        *,
+        operands: dict | None = None,
+        kind: str = "light",
+        optlevel: int = 3,
+        granularity: str = "chunk",
+        persistent: bool | None = None,
+        in_mem: bool = False,
+        name: str | None = None,
+        **kwargs: Any,
+    ) -> dict:
+        """Create an index on a derived 1-D expression stream.
+
+        Parameters
+        ----------
+        expression : str
+            Deterministic scalar expression to materialize and index. Structured
+            arrays typically use field names directly, such as ``"abs(x)"`` or
+            ``"a + b"``. For plain 1-D arrays, provide ``operands`` explicitly
+            or use the default ``"value"`` name.
+        operands : dict or None, optional
+            Operand mapping used for normalization and evaluation. When omitted,
+            structured arrays default to ``self.fields`` and plain arrays use
+            ``{"value": self}``.
+        kind, optlevel, granularity, persistent, in_mem, name
+            Same meaning as in :meth:`create_index`. Setting ``in_mem=True``
+            materializes the derived expression stream in RAM and can allocate
+            additional temporary arrays for sorting and block payloads, so the
+            default remains ``False`` and uses the out-of-core builders for
+            ``light``, ``medium``, and ``full``.
+
+        Notes
+        -----
+        Expression indexes are matched by normalized expression identity. The
+        current implementation supports one active index target per normalized
+        expression key.
+        """
+        from . import indexing
+
+        return indexing.create_expr_index(
+            self,
+            expression,
+            operands=operands,
+            kind=kind,
+            optlevel=optlevel,
+            granularity=granularity,
+            persistent=persistent,
+            in_mem=in_mem,
+            name=name,
+            **kwargs,
+        )
+
     def drop_index(self, field: str | None = None, name: str | None = None) -> None:
         """Drop an index by field or optional descriptor label."""
         from . import indexing
@@ -6402,9 +6456,10 @@ def indices(array: blosc2.Array, order: str | list[str] | None = None, **kwargs:
         The (structured) array to be sorted.
     order: str, list of str, optional
         Specifies which fields to compare first, second, etc. A single
-        field can be specified as a string. Not all fields need to be
-        specified, only the ones by which the array is to be sorted.
-        If None, the array is not sorted.
+        field can be specified as a string. The primary order key may also be
+        an indexed expression such as ``"abs(x)"`` when a matching ``full``
+        expression index exists. Not all fields need to be specified, only the
+        ones by which the array is to be sorted. If None, the array is not sorted.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
@@ -6415,9 +6470,10 @@ def indices(array: blosc2.Array, order: str | list[str] | None = None, **kwargs:
 
     Notes
     -----
-    If the primary order key has a matching ``full`` index, the positions are
-    returned directly from that index in ascending stable order. Secondary keys
-    refine ties after the primary indexed order. Otherwise this falls back to a
+    If the primary order key has a matching ``full`` field or expression index,
+    the positions are returned directly from that index in ascending stable
+    order. Secondary keys refine ties after the primary indexed order.
+    Field-based orders without a matching full index fall back to a
     scan-plus-sort path.
     """
     if not order:
@@ -6430,6 +6486,8 @@ def indices(array: blosc2.Array, order: str | list[str] | None = None, **kwargs:
         ordered = indexing.ordered_indices(array, order=order)
         if ordered is not None:
             return blosc2.asarray(ordered, **kwargs)
+        if indexing.is_expression_order(array, order):
+            raise ValueError("expression order requires a matching full expression index")
 
     # Create a lazy array to access the sort machinery there
     # This is a bit of a hack, but it is the simplest way to do it
@@ -6451,8 +6509,10 @@ def sort(array: blosc2.Array, order: str | list[str] | None = None, **kwargs: An
         The (structured) array to be sorted.
     order: str, list of str, optional
         Specifies which fields to compare first, second, etc. A single
-        field can be specified as a string. Not all fields need to be
-        specified, only the ones by which the array is to be sorted.
+        field can be specified as a string. The primary order key may also be
+        an indexed expression such as ``"abs(x)"`` when a matching ``full``
+        expression index exists. Not all fields need to be specified, only the
+        ones by which the array is to be sorted.
     kwargs: Any, optional
         Keyword arguments that are supported by the :func:`empty` constructor.
 
@@ -6463,10 +6523,10 @@ def sort(array: blosc2.Array, order: str | list[str] | None = None, **kwargs: An
 
     Notes
     -----
-    If the primary order key has a matching ``full`` index, rows are gathered
-    directly in ascending stable index order. Secondary keys refine ties after
-    the primary indexed order. Otherwise this falls back to a scan-plus-sort
-    path.
+    If the primary order key has a matching ``full`` field or expression index,
+    rows are gathered directly in ascending stable index order. Secondary keys
+    refine ties after the primary indexed order. Field-based orders without a
+    matching full index fall back to a scan-plus-sort path.
     """
     if not order:
         return array
@@ -6477,6 +6537,8 @@ def sort(array: blosc2.Array, order: str | list[str] | None = None, **kwargs: An
         ordered = indexing.read_sorted(array, order=order)
         if ordered is not None:
             return blosc2.asarray(ordered, **kwargs)
+        if indexing.is_expression_order(array, order):
+            raise ValueError("expression order requires a matching full expression index")
 
     # Create a lazy array to access the sort machinery there
     # This is a bit of a hack, but it is the simplest way to do it

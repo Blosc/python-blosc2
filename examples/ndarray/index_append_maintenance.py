@@ -25,7 +25,7 @@ arr.append(to_append)
 expr = blosc2.lazyexpr("(id >= 4) & (id < 7)", arr.fields).where(arr)
 
 print("Indexed query after append:")
-print(expr.compute()[:])
+print(expr[:])
 
 print("\nSorted rows after append:")
 print(arr.sort(order="id")[:])

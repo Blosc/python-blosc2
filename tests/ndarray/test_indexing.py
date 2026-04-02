@@ -349,3 +349,108 @@ def test_append_keeps_full_index_sorted_access_current():
 
     expected = np.sort(np.concatenate((data, appended)), order=["a", "b"])
     np.testing.assert_array_equal(arr.sort(order=["a", "b"])[:], expected)
+
+
+@pytest.mark.parametrize("kind", ["light", "medium", "full"])
+def test_expression_index_matches_scan(kind):
+    rng = np.random.default_rng(9)
+    dtype = np.dtype([("x", np.int64), ("payload", np.int32)])
+    data = np.zeros(150_000, dtype=dtype)
+    data["x"] = np.arange(-75_000, 75_000, dtype=np.int64)
+    rng.shuffle(data["x"])
+    data["payload"] = np.arange(data.shape[0], dtype=np.int32)
+
+    arr = blosc2.asarray(data, chunks=(15_000,), blocks=(3_000,))
+    descriptor = arr.create_expr_index("abs(x)", kind=kind)
+
+    assert descriptor["target"]["source"] == "expression"
+    assert descriptor["target"]["expression_key"] == "abs(x)"
+    assert descriptor["target"]["dependencies"] == ["x"]
+
+    expr = blosc2.lazyexpr("(abs(x) >= 123) & (abs(x) < 456)", arr.fields).where(arr)
+    assert expr.will_use_index() is True
+
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    expected = data[(np.abs(data["x"]) >= 123) & (np.abs(data["x"]) < 456)]
+
+    np.testing.assert_array_equal(indexed, scanned)
+    np.testing.assert_array_equal(indexed, expected)
+
+
+def test_full_expression_index_reuses_ordered_access():
+    dtype = np.dtype([("x", np.int64), ("payload", np.int32)])
+    data = np.array(
+        [(-8, 0), (5, 1), (-2, 2), (11, 3), (3, 4), (-3, 5), (2, 6), (-5, 7)],
+        dtype=dtype,
+    )
+    arr = blosc2.asarray(data, chunks=(4,), blocks=(2,))
+    arr.create_expr_index("abs(x)", kind="full", name="abs_x")
+
+    expected_positions = np.argsort(np.abs(data["x"]), kind="stable")
+    np.testing.assert_array_equal(arr.indices(order="abs(x)")[:], expected_positions)
+    np.testing.assert_array_equal(arr.sort(order="abs(x)")[:], data[expected_positions])
+
+    expr = blosc2.lazyexpr("(abs(x) >= 2) & (abs(x) < 8)", arr.fields).where(arr)
+    mask = (np.abs(data["x"]) >= 2) & (np.abs(data["x"]) < 8)
+    filtered_positions = np.where(mask)[0]
+    filtered_order = np.argsort(np.abs(data["x"][mask]), kind="stable")
+    np.testing.assert_array_equal(
+        expr.indices(order="abs(x)").compute()[:], filtered_positions[filtered_order]
+    )
+    np.testing.assert_array_equal(
+        expr.sort(order="abs(x)").compute()[:], data[filtered_positions[filtered_order]]
+    )
+
+    explained = expr.sort(order="abs(x)").explain()
+    assert explained["will_use_index"] is True
+    assert explained["ordered_access"] is True
+    assert explained["target"]["source"] == "expression"
+    assert explained["target"]["expression_key"] == "abs(x)"
+
+
+def test_persistent_expression_index_survives_reopen(tmp_path):
+    path = tmp_path / "expr_indexed_array.b2nd"
+    dtype = np.dtype([("x", np.int64), ("payload", np.int32)])
+    data = np.zeros(80_000, dtype=dtype)
+    data["x"] = np.arange(-40_000, 40_000, dtype=np.int64)
+    data["payload"] = np.arange(data.shape[0], dtype=np.int32)
+
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(8_000,), blocks=(2_000,))
+    descriptor = arr.create_expr_index("abs(x)", kind="medium")
+
+    reopened = blosc2.open(path, mode="a")
+    assert reopened.indexes[0]["target"]["source"] == "expression"
+    assert reopened.indexes[0]["target"]["expression_key"] == "abs(x)"
+    assert reopened.indexes[0]["reduced"]["values_path"] == descriptor["reduced"]["values_path"]
+
+    expr = blosc2.lazyexpr("(abs(x) >= 777) & (abs(x) < 999)", reopened.fields).where(reopened)
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    np.testing.assert_array_equal(indexed, scanned)
+
+
+@pytest.mark.parametrize("kind", ["light", "medium", "full"])
+def test_append_keeps_expression_index_current(kind):
+    dtype = np.dtype([("x", np.int64), ("payload", np.int32)])
+    data = np.array([(-10, 0), (7, 1), (-3, 2), (1, 3), (-6, 4), (9, 5)], dtype=dtype)
+    arr = blosc2.asarray(data, chunks=(4,), blocks=(2,))
+    arr.create_expr_index("abs(x)", kind=kind)
+
+    appended = np.array([(-4, 6), (12, 7), (-11, 8), (5, 9)], dtype=dtype)
+    all_data = np.concatenate((data, appended))
+    arr.append(appended)
+
+    assert arr.indexes[0]["stale"] is False
+
+    expr = blosc2.lazyexpr("(abs(x) >= 4) & (abs(x) < 12)", arr.fields).where(arr)
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    expected = all_data[(np.abs(all_data["x"]) >= 4) & (np.abs(all_data["x"]) < 12)]
+
+    np.testing.assert_array_equal(indexed, scanned)
+    np.testing.assert_array_equal(indexed, expected)
+
+    if kind == "full":
+        expected_positions = np.argsort(np.abs(all_data["x"]), kind="stable")
+        np.testing.assert_array_equal(arr.sort(order="abs(x)")[:], all_data[expected_positions])

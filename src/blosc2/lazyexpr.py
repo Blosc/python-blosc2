@@ -1824,7 +1824,10 @@ def slices_eval(  # noqa: C901
         # Get the dtype of the array to sort
         dtype_ = operands["_where_x"].dtype
         # Now, use only the fields that are necessary for the sorting
-        dtype_ = np.dtype([(f, dtype_[f]) for f in _order])
+        if dtype_.fields is not None and all(f in dtype_.fields for f in _order):
+            dtype_ = np.dtype([(f, dtype_[f]) for f in _order])
+        else:
+            dtype_ = np.dtype(np.int64)
 
     # Iterate over the operands and get the chunks
     chunk_operands = {}
@@ -1848,6 +1851,8 @@ def slices_eval(  # noqa: C901
                 ordered_positions = indexing.ordered_query_indices(expression, operands, where, _order)
                 if ordered_positions is not None:
                     return ordered_positions
+            elif indexing.is_expression_order(where["_where_x"], _order):
+                raise ValueError("expression order requires a matching full expression index")
         if _indices and _order is None and index_plan.usable and index_plan.exact_positions is not None:
             return np.asarray(index_plan.exact_positions, dtype=np.int64)
         if index_plan.usable and not (_indices or _order):
