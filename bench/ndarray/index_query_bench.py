@@ -26,6 +26,7 @@ DEFAULT_REPEATS = 3
 KINDS = ("ultralight", "light", "medium", "full")
 DISTS = ("sorted", "block-shuffled", "random")
 RNG_SEED = 0
+DEFAULT_OPLEVEL = 5
 
 
 def fill_ids(ids: np.ndarray, dist: str, rng: np.random.Generator) -> None:
@@ -73,8 +74,8 @@ def base_array_path(size_dir: Path, size: int, dist: str) -> Path:
     return size_dir / f"size_{size}_{dist}.b2nd"
 
 
-def indexed_array_path(size_dir: Path, size: int, dist: str, kind: str) -> Path:
-    return size_dir / f"size_{size}_{dist}.{kind}.b2nd"
+def indexed_array_path(size_dir: Path, size: int, dist: str, kind: str, optlevel: int) -> Path:
+    return size_dir / f"size_{size}_{dist}.{kind}.opt{optlevel}.b2nd"
 
 
 def benchmark_scan_once(expr) -> tuple[float, int]:
@@ -142,13 +143,14 @@ def _source_data_factory(size: int, dist: str):
     return get_data
 
 
-def _valid_index_descriptor(arr: blosc2.NDArray, kind: str) -> dict | None:
+def _valid_index_descriptor(arr: blosc2.NDArray, kind: str, optlevel: int) -> dict | None:
     for descriptor in arr.indexes:
         if descriptor.get("version") != blosc2_indexing.INDEX_FORMAT_VERSION:
             continue
         if (
             descriptor.get("field") == "id"
             and descriptor.get("kind") == kind
+            and int(descriptor.get("optlevel", -1)) == int(optlevel)
             and not descriptor.get("stale", False)
         ):
             return descriptor
@@ -162,10 +164,10 @@ def _open_or_build_persistent_array(path: Path, get_data) -> blosc2.NDArray:
     return build_persistent_array(get_data(), path)
 
 
-def _open_or_build_indexed_array(path: Path, get_data, kind: str) -> tuple[blosc2.NDArray, float]:
+def _open_or_build_indexed_array(path: Path, get_data, kind: str, optlevel: int) -> tuple[blosc2.NDArray, float]:
     if path.exists():
         arr = blosc2.open(path, mode="a")
-        if _valid_index_descriptor(arr, kind) is not None:
+        if _valid_index_descriptor(arr, kind, optlevel) is not None:
             return arr, 0.0
         if arr.indexes:
             arr.drop_index(field="id")
@@ -173,11 +175,11 @@ def _open_or_build_indexed_array(path: Path, get_data, kind: str) -> tuple[blosc
 
     arr = build_persistent_array(get_data(), path)
     build_start = time.perf_counter()
-    arr.create_index(field="id", kind=kind)
+    arr.create_index(field="id", kind=kind, optlevel=optlevel)
     return arr, time.perf_counter() - build_start
 
 
-def benchmark_size(size: int, size_dir: Path, dist: str, query_width: int) -> list[dict]:
+def benchmark_size(size: int, size_dir: Path, dist: str, query_width: int, optlevel: int) -> list[dict]:
     get_data = _source_data_factory(size, dist)
     arr = _open_or_build_persistent_array(base_array_path(size_dir, size, dist), get_data)
     lo = size // 2
@@ -191,7 +193,9 @@ def benchmark_size(size: int, size_dir: Path, dist: str, query_width: int) -> li
 
     rows = []
     for kind in KINDS:
-        idx_arr, build_time = _open_or_build_indexed_array(indexed_array_path(size_dir, size, dist, kind), get_data, kind)
+        idx_arr, build_time = _open_or_build_indexed_array(
+            indexed_array_path(size_dir, size, dist, kind, optlevel), get_data, kind, optlevel
+        )
         idx_cond = blosc2.lazyexpr(f"(id >= {lo}) & (id < {hi})", idx_arr.fields)
         idx_expr = idx_cond.where(idx_arr)
         explanation = idx_expr.explain()
@@ -203,6 +207,7 @@ def benchmark_size(size: int, size_dir: Path, dist: str, query_width: int) -> li
                 "size": size,
                 "dist": dist,
                 "kind": kind,
+                "optlevel": optlevel,
                 "query_rows": index_len,
                 "build_s": build_time,
                 "create_idx_ms": build_time * 1_000,
@@ -288,6 +293,12 @@ def parse_args() -> argparse.Namespace:
         help="Directory where benchmark arrays and index sidecars should be written and kept.",
     )
     parser.add_argument(
+        "--optlevel",
+        type=int,
+        default=DEFAULT_OPLEVEL,
+        help="Index optlevel to use when creating indexes. Default: 5.",
+    )
+    parser.add_argument(
         "--dist",
         choices=(*DISTS, "all"),
         default="sorted",
@@ -305,10 +316,10 @@ def main() -> None:
 
     if args.outdir is None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            run_benchmarks(sizes, dists, Path(tmpdir), args.dist, args.query_width, args.repeats)
+            run_benchmarks(sizes, dists, Path(tmpdir), args.dist, args.query_width, args.repeats, args.optlevel)
     else:
         args.outdir.mkdir(parents=True, exist_ok=True)
-        run_benchmarks(sizes, dists, args.outdir, args.dist, args.query_width, args.repeats)
+        run_benchmarks(sizes, dists, args.outdir, args.dist, args.query_width, args.repeats, args.optlevel)
 
 
 def run_benchmarks(
@@ -318,16 +329,17 @@ def run_benchmarks(
     dist_label: str,
     query_width: int,
     repeats: int,
+    optlevel: int,
 ) -> None:
     all_results = []
     print("Structured range-query benchmark across index kinds")
     print(
         f"chunks={CHUNK_LEN:,}, blocks={BLOCK_LEN:,}, repeats={repeats}, dist={dist_label}, "
-        f"query_width={query_width:,}"
+        f"query_width={query_width:,}, optlevel={optlevel}"
     )
     for dist in dists:
         for size in sizes:
-            size_results = benchmark_size(size, size_dir, dist, query_width)
+            size_results = benchmark_size(size, size_dir, dist, query_width, optlevel)
             all_results.extend(size_results)
 
     print()

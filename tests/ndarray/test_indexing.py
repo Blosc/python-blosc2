@@ -91,6 +91,27 @@ def test_random_field_point_query_matches_scan(kind):
     np.testing.assert_array_equal(indexed, data[(data["id"] >= 123_456) & (data["id"] < 123_457)])
 
 
+def test_light_lossy_integer_values_match_scan():
+    rng = np.random.default_rng(2)
+    dtype = np.dtype([("id", np.int64), ("payload", np.float32)])
+    data = np.zeros(180_000, dtype=dtype)
+    data["id"] = np.arange(-90_000, 90_000, dtype=np.int64)
+    rng.shuffle(data["id"])
+
+    arr = blosc2.asarray(data, chunks=(18_000,), blocks=(3_000,))
+    descriptor = arr.create_index(field="id", kind="light", optlevel=0)
+
+    assert descriptor["light"]["value_lossy_bits"] == 8
+
+    expr = blosc2.lazyexpr("(id >= -123) & (id < 456)", arr.fields).where(arr)
+    assert expr.will_use_index() is True
+
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    np.testing.assert_array_equal(indexed, scanned)
+    np.testing.assert_array_equal(indexed, data[(data["id"] >= -123) & (data["id"] < 456)])
+
+
 @pytest.mark.parametrize("kind", ["light", "medium", "full"])
 def test_persistent_index_survives_reopen(tmp_path, kind):
     path = tmp_path / "indexed_array.b2nd"

@@ -319,14 +319,9 @@ def _position_dtype(max_value: int) -> np.dtype:
     return np.dtype(np.uint64)
 
 
-def _build_reduced_descriptor(
-    array: blosc2.NDArray,
-    field: str | None,
-    kind: str,
-    values: np.ndarray,
-    persistent: bool,
-) -> dict:
-    block_len = int(array.blocks[0])
+def _build_block_sorted_payload(
+    values: np.ndarray, block_len: int
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.dtype]:
     nblocks = math.ceil(values.shape[0] / block_len)
     position_dtype = _position_dtype(block_len - 1)
     offsets = np.empty(nblocks + 1, dtype=np.int64)
@@ -346,6 +341,19 @@ def _build_reduced_descriptor(
         positions[cursor:next_cursor] = order.astype(position_dtype, copy=False)
         cursor = next_cursor
         offsets[block_id + 1] = cursor
+
+    return sorted_values, positions, offsets, position_dtype
+
+
+def _build_reduced_descriptor(
+    array: blosc2.NDArray,
+    field: str | None,
+    kind: str,
+    values: np.ndarray,
+    persistent: bool,
+) -> dict:
+    block_len = int(array.blocks[0])
+    sorted_values, positions, offsets, _ = _build_block_sorted_payload(values, block_len)
 
     values_sidecar = _store_array_sidecar(array, field, kind, "reduced", "values", sorted_values, persistent)
     positions_sidecar = _store_array_sidecar(
@@ -371,34 +379,48 @@ def _pack_bucket_mask(bucket_ids: np.ndarray) -> np.uint64:
     return mask
 
 
+def _light_value_lossy_bits(dtype: np.dtype, optlevel: int) -> int:
+    dtype = np.dtype(dtype)
+    if dtype.kind not in {"i", "u"}:
+        return 0
+    max_bits = dtype.itemsize
+    return min(max(0, 9 - int(optlevel)), max_bits)
+
+
+def _quantize_integer_array(values: np.ndarray, bits: int) -> np.ndarray:
+    if bits <= 0:
+        return values
+    dtype = np.dtype(values.dtype)
+    mask = np.asarray(~((1 << bits) - 1), dtype=dtype)[()]
+    quantized = values.copy()
+    np.bitwise_and(quantized, mask, out=quantized)
+    return quantized
+
+
+def _quantize_integer_scalar(value, dtype: np.dtype, bits: int):
+    scalar = np.asarray(value, dtype=dtype)[()]
+    if bits <= 0:
+        return scalar
+    mask = np.asarray(~((1 << bits) - 1), dtype=dtype)[()]
+    return np.bitwise_and(scalar, mask, dtype=dtype)
+
+
 def _build_light_descriptor(
     array: blosc2.NDArray,
     field: str | None,
     kind: str,
     values: np.ndarray,
+    optlevel: int,
     persistent: bool,
 ) -> dict:
     block_len = int(array.blocks[0])
     bucket_count = _light_bucket_count(block_len)
     bucket_len = math.ceil(block_len / bucket_count)
-    nblocks = math.ceil(values.shape[0] / block_len)
-    offsets = np.empty(nblocks + 1, dtype=np.int64)
-    offsets[0] = 0
-    sorted_values = np.empty_like(values)
-    bucket_positions = np.empty(values.shape[0], dtype=np.uint8)
-    cursor = 0
-
-    for block_id in range(nblocks):
-        start = block_id * block_len
-        stop = min(start + block_len, values.shape[0])
-        block = values[start:stop]
-        order = np.argsort(block, kind="stable")
-        block_size = stop - start
-        next_cursor = cursor + block_size
-        sorted_values[cursor:next_cursor] = block[order]
-        bucket_positions[cursor:next_cursor] = (order // bucket_len).astype(np.uint8, copy=False)
-        cursor = next_cursor
-        offsets[block_id + 1] = cursor
+    value_lossy_bits = _light_value_lossy_bits(values.dtype, optlevel)
+    sorted_values, positions, offsets, _ = _build_block_sorted_payload(values, block_len)
+    if value_lossy_bits > 0:
+        sorted_values = _quantize_integer_array(sorted_values, value_lossy_bits)
+    bucket_positions = (positions // bucket_len).astype(np.uint8, copy=False)
 
     values_sidecar = _store_array_sidecar(array, field, kind, "light", "values", sorted_values, persistent)
     positions_sidecar = _store_array_sidecar(
@@ -409,6 +431,7 @@ def _build_light_descriptor(
         "block_len": block_len,
         "bucket_count": bucket_count,
         "bucket_len": bucket_len,
+        "value_lossy_bits": value_lossy_bits,
         "values_path": values_sidecar["path"],
         "bucket_positions_path": positions_sidecar["path"],
         "offsets_path": offsets_sidecar["path"],
@@ -453,7 +476,7 @@ def create_index(
     array: blosc2.NDArray,
     field: str | None = None,
     kind: str = "light",
-    optlevel: int = 3,
+    optlevel: int = 5,
     granularity: str = "chunk",
     persistent: bool | None = None,
     name: str | None = None,
@@ -470,7 +493,11 @@ def create_index(
 
     values = _values_for_index(array, field)
     levels = _build_levels_descriptor(array, field, kind, dtype, values, persistent)
-    light = _build_light_descriptor(array, field, kind, values, persistent) if kind == "light" else None
+    light = (
+        _build_light_descriptor(array, field, kind, values, optlevel, persistent)
+        if kind == "light"
+        else None
+    )
     reduced = _build_reduced_descriptor(array, field, kind, values, persistent) if kind == "medium" else None
     full = _build_full_descriptor(array, field, kind, values, persistent) if kind == "full" else None
     descriptor = _build_descriptor(
@@ -1046,12 +1073,38 @@ def _bucket_masks_from_light(
         return np.zeros(len(summaries), dtype=np.uint64)
 
     sorted_values, bucket_positions, offsets = _load_light_arrays(array, descriptor)
+    light = descriptor["light"]
+    value_lossy_bits = int(light.get("value_lossy_bits", 0))
+    dtype = np.dtype(descriptor["dtype"])
     masks = np.zeros(len(summaries), dtype=np.uint64)
     for block_id in np.flatnonzero(candidate_blocks):
         start = int(offsets[block_id])
         stop = int(offsets[block_id + 1])
         block_values = sorted_values[start:stop]
-        lo, hi = _search_bounds(block_values, plan)
+        if value_lossy_bits > 0 and dtype.kind in {"i", "u"}:
+            if plan.lower is not None:
+                if plan.lower_inclusive:
+                    next_lower = plan.lower
+                else:
+                    max_value = np.iinfo(dtype).max
+                    next_lower = min(int(plan.lower) + 1, max_value)
+                lower = _quantize_integer_scalar(next_lower, dtype, value_lossy_bits)
+                lower_inclusive = True
+            else:
+                lower = None
+                lower_inclusive = True
+            search_plan = ExactPredicatePlan(
+                base=plan.base,
+                descriptor=plan.descriptor,
+                field=plan.field,
+                lower=lower,
+                lower_inclusive=lower_inclusive,
+                upper=plan.upper,
+                upper_inclusive=plan.upper_inclusive,
+            )
+            lo, hi = _search_bounds(block_values, search_plan)
+        else:
+            lo, hi = _search_bounds(block_values, plan)
         if lo >= hi:
             continue
         masks[block_id] = _pack_bucket_mask(bucket_positions[start + lo : start + hi])
