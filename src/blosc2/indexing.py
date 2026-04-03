@@ -3412,6 +3412,13 @@ def will_use_index(expr) -> bool:
 
 
 def explain_query(expr) -> dict:
+    """Return planning details for a lazy query.
+
+    This is an internal helper behind :meth:`blosc2.LazyExpr.explain`. The
+    returned mapping summarizes whether indexing can be used, which index kind
+    was selected, and additional diagnostics such as candidate counts and the
+    lookup path chosen for ``full`` indexes.
+    """
     where = getattr(expr, "_where_args", None)
     order = getattr(expr, "_order", None)
     if order is not None:

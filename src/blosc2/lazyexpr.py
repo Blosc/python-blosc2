@@ -3728,6 +3728,28 @@ class LazyExpr(LazyArray):
         return indexing.will_use_index(self)
 
     def explain(self) -> dict:
+        """Explain how this lazy query will be executed.
+
+        Returns a dictionary describing the planner decision for the current
+        query. Typical fields include whether an index will be used, the chosen
+        index kind and level, candidate counts, and the lookup path selected
+        for ``full`` indexes.
+
+        Returns:
+            dict: Query planning metadata for the current expression.
+
+        Examples:
+            >>> import numpy as np
+            >>> import blosc2
+            >>> arr = blosc2.asarray(np.arange(10))
+            >>> _ = arr.create_index(kind="full")
+            >>> expr = blosc2.lazyexpr("(a >= 3) & (a < 6)", {"a": arr}).where(arr)
+            >>> info = expr.explain()
+            >>> info["will_use_index"]
+            True
+            >>> info["kind"]
+            'full'
+        """
         from . import indexing
 
         return indexing.explain_query(self)
