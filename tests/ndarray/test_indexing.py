@@ -397,6 +397,31 @@ def test_persistent_full_index_runs_survive_reopen(tmp_path):
     np.testing.assert_array_equal(expr.compute()[:], expected[expected_mask])
 
 
+def test_persistent_compact_full_exact_query_avoids_whole_sidecar_load(monkeypatch, tmp_path):
+    path = tmp_path / "full_selective_ooc.b2nd"
+    rng = np.random.default_rng(12)
+    data = np.arange(120_000, dtype=np.int64)
+    rng.shuffle(data)
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(12_000,), blocks=(2_000,))
+    arr.create_csindex()
+
+    reopened = blosc2.open(path, mode="a")
+    indexing = __import__("blosc2.indexing", fromlist=["_load_array_sidecar"])
+    original_load = indexing._load_array_sidecar
+
+    def guarded_load(array, token, category, name, sidecar_path):
+        if category == "full" and name in {"values", "positions"}:
+            raise AssertionError("compact full exact lookup should not whole-load full sidecars")
+        return original_load(array, token, category, name, sidecar_path)
+
+    monkeypatch.setattr(indexing, "_load_array_sidecar", guarded_load)
+
+    expr = ((reopened >= 50_000) & (reopened < 50_010)).where(reopened)
+    explained = expr.explain()
+    assert explained["lookup_path"] == "compact-selective-ooc"
+    np.testing.assert_array_equal(expr.compute()[:], data[(data >= 50_000) & (data < 50_010)])
+
+
 @pytest.mark.parametrize("kind", ["light", "medium", "full"])
 def test_expression_index_matches_scan(kind):
     rng = np.random.default_rng(9)
@@ -517,6 +542,68 @@ def test_repeated_appends_keep_full_expression_index_current():
         arr.append(batch)
         expected = np.concatenate((expected, batch))
         assert len(arr.indexes[0]["full"]["runs"]) == nrun
+
+    expr = blosc2.lazyexpr("(abs(x) >= 4) & (abs(x) < 12)", arr.fields).where(arr)
+    expected_mask = (np.abs(expected["x"]) >= 4) & (np.abs(expected["x"]) < 12)
+    expected_positions = np.argsort(np.abs(expected["x"]), kind="stable")
+    np.testing.assert_array_equal(arr.sort(order="abs(x)")[:], expected[expected_positions])
+    np.testing.assert_array_equal(expr.compute()[:], expected[expected_mask])
+
+
+def test_compact_full_index_clears_runs_and_preserves_results(tmp_path):
+    path = tmp_path / "compact_full_runs.b2nd"
+    dtype = np.dtype([("a", np.int64), ("b", np.int64)])
+    data = np.array([(3, 9), (1, 8), (2, 7), (1, 6)], dtype=dtype)
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(2,), blocks=(2,))
+    arr.create_csindex("a")
+
+    batch1 = np.array([(0, 100), (3, 101)], dtype=dtype)
+    batch2 = np.array([(2, 102), (1, 103), (4, 104)], dtype=dtype)
+    expected = np.concatenate((data, batch1, batch2))
+    arr.append(batch1)
+    arr.append(batch2)
+
+    before = arr.indexes[0]
+    assert len(before["full"]["runs"]) == 2
+    run_paths = [(run["values_path"], run["positions_path"]) for run in before["full"]["runs"]]
+
+    compacted = arr.compact_index("a")
+    assert compacted["kind"] == "full"
+    assert compacted["full"]["runs"] == []
+    assert compacted["full"]["l1_path"] is not None
+    assert compacted["full"]["l2_path"] is not None
+
+    reopened = blosc2.open(path, mode="a")
+    assert reopened.indexes[0]["full"]["runs"] == []
+    for values_path, positions_path in run_paths:
+        with pytest.raises(FileNotFoundError):
+            blosc2.open(values_path)
+        with pytest.raises(FileNotFoundError):
+            blosc2.open(positions_path)
+
+    expr = blosc2.lazyexpr("(a >= 1) & (a < 4)", reopened.fields).where(reopened)
+    explained = expr.explain()
+    assert explained["full_runs"] == 0
+    assert explained["lookup_path"] == "compact-selective-ooc"
+    expected_mask = (expected["a"] >= 1) & (expected["a"] < 4)
+    np.testing.assert_array_equal(reopened.sort(order=["a", "b"])[:], np.sort(expected, order=["a", "b"]))
+    np.testing.assert_array_equal(expr.compute()[:], expected[expected_mask])
+
+
+def test_compact_full_expression_index_preserves_results():
+    dtype = np.dtype([("x", np.int64), ("payload", np.int32)])
+    data = np.array([(-10, 0), (7, 1), (-3, 2), (1, 3)], dtype=dtype)
+    arr = blosc2.asarray(data, chunks=(2,), blocks=(2,))
+    arr.create_expr_index("abs(x)", kind="full")
+
+    batch1 = np.array([(-4, 4), (12, 5)], dtype=dtype)
+    batch2 = np.array([(-11, 6), (5, 7)], dtype=dtype)
+    expected = np.concatenate((data, batch1, batch2))
+    arr.append(batch1)
+    arr.append(batch2)
+
+    compacted = arr.compact_index()
+    assert compacted["full"]["runs"] == []
 
     expr = blosc2.lazyexpr("(abs(x) >= 4) & (abs(x) < 12)", arr.fields).where(arr)
     expected_mask = (np.abs(expected["x"]) >= 4) & (np.abs(expected["x"]) < 12)

@@ -10,6 +10,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import math
+import os
 import re
 import tempfile
 from dataclasses import dataclass
@@ -35,9 +36,11 @@ SEGMENT_LEVELS_BY_KIND = {
 
 _IN_MEMORY_INDEXES: dict[int, dict] = {}
 _DATA_CACHE: dict[tuple[int, str | None, str, str], np.ndarray] = {}
+_SIDECAR_HANDLE_CACHE: dict[tuple[int, str | None, str, str], object] = {}
 BLOCK_GATHER_POSITIONS_THRESHOLD = 32
 FULL_OOC_RUN_ITEMS = 2_000_000
 FULL_OOC_MERGE_BUFFER_ITEMS = 500_000
+FULL_SELECTIVE_OOC_MAX_SPANS = 128
 
 
 def _sanitize_token(token: str) -> str:
@@ -329,6 +332,25 @@ def _clear_cached_data(array: blosc2.NDArray, token: str) -> None:
     keys = [key for key in _DATA_CACHE if key[:2] == prefix]
     for key in keys:
         _DATA_CACHE.pop(key, None)
+    handle_keys = [key for key in _SIDECAR_HANDLE_CACHE if key[:2] == prefix]
+    for key in handle_keys:
+        _SIDECAR_HANDLE_CACHE.pop(key, None)
+
+
+def _sidecar_handle_cache_key(array: blosc2.NDArray, token: str, category: str, name: str):
+    return (_array_key(array), token, category, name)
+
+
+def _open_sidecar_handle(array: blosc2.NDArray, token: str, category: str, name: str, path: str | None):
+    cache_key = _sidecar_handle_cache_key(array, token, category, name)
+    cached = _SIDECAR_HANDLE_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+    if path is None:
+        raise RuntimeError("sidecar handle path is not available")
+    handle = blosc2.open(path)
+    _SIDECAR_HANDLE_CACHE[cache_key] = handle
+    return handle
 
 
 def _operands_for_dependencies(values: np.ndarray, dependencies: list[str]) -> dict[str, np.ndarray]:
@@ -367,6 +389,10 @@ def _summary_dtype(dtype: np.dtype) -> np.dtype:
     return np.dtype([("min", dtype), ("max", dtype), ("flags", np.uint8)])
 
 
+def _boundary_dtype(dtype: np.dtype) -> np.dtype:
+    return np.dtype([("start", dtype), ("end", dtype)])
+
+
 def _segment_summary(segment: np.ndarray, dtype: np.dtype):
     flags = np.uint8(0)
     if dtype.kind == "f":
@@ -392,6 +418,18 @@ def _compute_segment_summaries(values: np.ndarray, dtype: np.dtype, segment_len:
         segment = values[start:stop]
         summaries[idx] = _segment_summary(segment, dtype)
     return summaries
+
+
+def _compute_sorted_boundaries(values: np.ndarray, dtype: np.dtype, segment_len: int) -> np.ndarray:
+    nsegments = math.ceil(values.shape[0] / segment_len)
+    boundaries = np.empty(nsegments, dtype=_boundary_dtype(dtype))
+
+    for idx in range(nsegments):
+        start = idx * segment_len
+        stop = min(start + segment_len, values.shape[0])
+        segment = values[start:stop]
+        boundaries[idx] = (segment[0], segment[-1])
+    return boundaries
 
 
 def _store_array_sidecar(
@@ -484,6 +522,38 @@ def _build_levels_descriptor_ooc(
     return levels
 
 
+def _sidecar_storage_geometry(
+    path: str | None, fallback_chunk_len: int, fallback_block_len: int
+) -> tuple[int, int]:
+    if path is None:
+        return fallback_chunk_len, fallback_block_len
+    sidecar = blosc2.open(path)
+    return int(sidecar.chunks[0]), int(sidecar.blocks[0])
+
+
+def _rebuild_full_navigation_sidecars(
+    array: blosc2.NDArray,
+    token: str,
+    kind: str,
+    full: dict,
+    sorted_values: np.ndarray,
+    persistent: bool,
+) -> None:
+    chunk_len, block_len = _sidecar_storage_geometry(
+        full.get("values_path"), int(array.chunks[0]), int(array.blocks[0])
+    )
+    l1 = _compute_sorted_boundaries(sorted_values, np.dtype(sorted_values.dtype), chunk_len)
+    l2 = _compute_sorted_boundaries(sorted_values, np.dtype(sorted_values.dtype), block_len)
+    l1_sidecar = _store_array_sidecar(array, token, kind, "full_nav", "l1", l1, persistent)
+    l2_sidecar = _store_array_sidecar(array, token, kind, "full_nav", "l2", l2, persistent)
+    full["l1_path"] = l1_sidecar["path"]
+    full["l2_path"] = l2_sidecar["path"]
+    full["sidecar_chunk_len"] = int(chunk_len)
+    full["sidecar_block_len"] = int(block_len)
+    full["l1_dtype"] = l1_sidecar["dtype"]
+    full["l2_dtype"] = l2_sidecar["dtype"]
+
+
 def _build_full_descriptor(
     array: blosc2.NDArray,
     token: str,
@@ -496,12 +566,14 @@ def _build_full_descriptor(
     sorted_values = values[order]
     values_sidecar = _store_array_sidecar(array, token, kind, "full", "values", sorted_values, persistent)
     positions_sidecar = _store_array_sidecar(array, token, kind, "full", "positions", positions, persistent)
-    return {
+    full = {
         "values_path": values_sidecar["path"],
         "positions_path": positions_sidecar["path"],
         "runs": [],
         "next_run_id": 0,
     }
+    _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent)
+    return full
 
 
 def _position_dtype(max_value: int) -> np.dtype:
@@ -996,12 +1068,14 @@ def _build_full_descriptor_ooc(
         positions_sidecar = _store_array_sidecar(
             array, token, kind, "full", "positions", positions, persistent
         )
-        return {
+        full = {
             "values_path": values_sidecar["path"],
             "positions_path": positions_sidecar["path"],
             "runs": [],
             "next_run_id": 0,
         }
+        _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent)
+        return full
     run_items = max(int(array.chunks[0]), min(size, FULL_OOC_RUN_ITEMS))
     runs = []
     for run_id, start in enumerate(range(0, size, run_items)):
@@ -1045,12 +1119,14 @@ def _build_full_descriptor_ooc(
     positions = np.load(final_run.positions_path, mmap_mode="r")
     values_sidecar = _store_array_sidecar(array, token, kind, "full", "values", sorted_values, persistent)
     positions_sidecar = _store_array_sidecar(array, token, kind, "full", "positions", positions, persistent)
-    return {
+    full = {
         "values_path": values_sidecar["path"],
         "positions_path": positions_sidecar["path"],
         "runs": [],
         "next_run_id": 0,
     }
+    _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent)
+    return full
 
 
 def _build_descriptor(
@@ -1325,6 +1401,8 @@ def _drop_descriptor_sidecars(descriptor: dict) -> None:
     if descriptor.get("full") is not None:
         _remove_sidecar_path(descriptor["full"]["values_path"])
         _remove_sidecar_path(descriptor["full"]["positions_path"])
+        _remove_sidecar_path(descriptor["full"].get("l1_path"))
+        _remove_sidecar_path(descriptor["full"].get("l2_path"))
         for run in descriptor["full"].get("runs", ()):
             _remove_sidecar_path(run.get("values_path"))
             _remove_sidecar_path(run.get("positions_path"))
@@ -1449,6 +1527,8 @@ def _replace_full_descriptor(
     for run in full.get("runs", ()):
         _remove_sidecar_path(run.get("values_path"))
         _remove_sidecar_path(run.get("positions_path"))
+    _remove_sidecar_path(full.get("l1_path"))
+    _remove_sidecar_path(full.get("l2_path"))
     _clear_cached_data(array, token)
     values_sidecar = _store_array_sidecar(array, token, kind, "full", "values", sorted_values, persistent)
     positions_sidecar = _store_array_sidecar(array, token, kind, "full", "positions", positions, persistent)
@@ -1456,6 +1536,7 @@ def _replace_full_descriptor(
     full["positions_path"] = positions_sidecar["path"]
     full["runs"] = []
     full["next_run_id"] = 0
+    _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent)
 
 
 def _store_full_run_descriptor(
@@ -1570,6 +1651,127 @@ def rebuild_index(array: blosc2.NDArray, field: str | None = None, name: str | N
     )
 
 
+def _copy_sidecar_to_temp_run(path: str, length: int, dtype: np.dtype, workdir: Path, prefix: str) -> Path:
+    sidecar = blosc2.open(path)
+    out_path = workdir / f"{prefix}.npy"
+    output = np.lib.format.open_memmap(out_path, mode="w+", dtype=dtype, shape=(length,))
+    chunk_len = int(sidecar.chunks[0])
+    for chunk_id, start in enumerate(range(0, length, chunk_len)):
+        stop = min(start + chunk_len, length)
+        span = np.empty(stop - start, dtype=dtype)
+        sidecar.get_1d_span_numpy(span, chunk_id, 0, stop - start)
+        output[start:stop] = span
+    output.flush()
+    del output
+    return out_path
+
+
+def _materialize_sorted_run(
+    values: np.ndarray,
+    positions: np.ndarray,
+    length: int,
+    value_dtype: np.dtype,
+    workdir: Path,
+    prefix: str,
+) -> SortedRun:
+    values_path = workdir / f"{prefix}.values.npy"
+    positions_path = workdir / f"{prefix}.positions.npy"
+    run_values = np.lib.format.open_memmap(values_path, mode="w+", dtype=value_dtype, shape=(length,))
+    run_positions = np.lib.format.open_memmap(positions_path, mode="w+", dtype=np.int64, shape=(length,))
+    run_values[:] = values
+    run_positions[:] = positions
+    run_values.flush()
+    run_positions.flush()
+    del run_values, run_positions
+    return SortedRun(values_path, positions_path, length)
+
+
+def _full_compaction_runs(array: blosc2.NDArray, descriptor: dict, workdir: Path) -> list[SortedRun]:
+    full = descriptor["full"]
+    dtype = np.dtype(descriptor["dtype"])
+    token = descriptor["token"]
+    runs = []
+    if full["values_path"] is not None and full["positions_path"] is not None:
+        length = int(array.shape[0]) - sum(int(run["length"]) for run in full.get("runs", ()))
+        base_values_path = _copy_sidecar_to_temp_run(
+            full["values_path"], length, dtype, workdir, "compact_base_values"
+        )
+        base_positions_path = _copy_sidecar_to_temp_run(
+            full["positions_path"], length, np.dtype(np.int64), workdir, "compact_base_positions"
+        )
+        runs.append(SortedRun(base_values_path, base_positions_path, length))
+    else:
+        values = _load_array_sidecar(array, token, "full", "values", full["values_path"])
+        positions = _load_array_sidecar(array, token, "full", "positions", full["positions_path"])
+        runs.append(_materialize_sorted_run(values, positions, len(values), dtype, workdir, "compact_base"))
+
+    for run in full.get("runs", ()):
+        run_length = int(run["length"])
+        run_id = int(run["id"])
+        if run["values_path"] is not None and run["positions_path"] is not None:
+            run_values_path = _copy_sidecar_to_temp_run(
+                run["values_path"], run_length, dtype, workdir, f"run_{run_id}_values"
+            )
+            run_positions_path = _copy_sidecar_to_temp_run(
+                run["positions_path"], run_length, np.dtype(np.int64), workdir, f"run_{run_id}_positions"
+            )
+            runs.append(SortedRun(run_values_path, run_positions_path, run_length))
+            continue
+        run_values, run_positions = _load_full_run_arrays(array, descriptor, run)
+        runs.append(
+            _materialize_sorted_run(run_values, run_positions, run_length, dtype, workdir, f"run_{run_id}")
+        )
+    return runs
+
+
+def compact_index(array: blosc2.NDArray, field: str | None = None, name: str | None = None) -> dict:
+    store = _load_store(array)
+    token = _resolve_index_token(store, field, name)
+    descriptor = store["indexes"][token]
+    if descriptor["kind"] != "full":
+        raise NotImplementedError("compact_index() is currently only implemented for full indexes")
+    if descriptor.get("stale", False):
+        raise RuntimeError("cannot compact a stale index; rebuild it first")
+
+    full = descriptor["full"]
+    if not full.get("runs"):
+        if full.get("l1_path") is None or full.get("l2_path") is None:
+            sorted_values, positions = _load_full_arrays(array, descriptor)
+            _replace_full_descriptor(array, descriptor, sorted_values, positions, descriptor["persistent"])
+        _clear_full_merge_cache(array, descriptor["token"])
+        _save_store(array, store)
+        return _copy_descriptor(descriptor)
+
+    dtype = np.dtype(descriptor["dtype"])
+    with tempfile.TemporaryDirectory(prefix="blosc2-index-compact-") as tmpdir:
+        workdir = Path(tmpdir)
+        runs = _full_compaction_runs(array, descriptor, workdir)
+        merge_id = 0
+        while len(runs) > 1:
+            next_runs = []
+            for idx in range(0, len(runs), 2):
+                if idx + 1 >= len(runs):
+                    next_runs.append(runs[idx])
+                    continue
+                next_runs.append(
+                    _merge_run_pair(
+                        runs[idx], runs[idx + 1], workdir, dtype, merge_id, FULL_OOC_MERGE_BUFFER_ITEMS
+                    )
+                )
+                merge_id += 1
+            runs = next_runs
+        final_run = runs[0]
+        sorted_values = np.load(final_run.values_path, mmap_mode="r")
+        positions = np.load(final_run.positions_path, mmap_mode="r")
+        _replace_full_descriptor(array, descriptor, sorted_values, positions, descriptor["persistent"])
+        final_run.values_path.unlink(missing_ok=True)
+        final_run.positions_path.unlink(missing_ok=True)
+
+    _clear_full_merge_cache(array, descriptor["token"])
+    _save_store(array, store)
+    return _copy_descriptor(descriptor)
+
+
 def get_indexes(array: blosc2.NDArray) -> list[dict]:
     store = _load_store(array)
     return [_copy_descriptor(store["indexes"][key]) for key in sorted(store["indexes"])]
@@ -1629,6 +1831,32 @@ def _load_full_run_arrays(
     values = _load_array_sidecar(array, token, "full_run", f"{run_id}.values", run["values_path"])
     positions = _load_array_sidecar(array, token, "full_run", f"{run_id}.positions", run["positions_path"])
     return values, positions
+
+
+def _load_full_navigation_arrays(array: blosc2.NDArray, descriptor: dict) -> tuple[np.ndarray, np.ndarray]:
+    full = descriptor.get("full")
+    if full is None:
+        raise RuntimeError("full index metadata is not available")
+    l1_path = full.get("l1_path")
+    l2_path = full.get("l2_path")
+    if l1_path is None or l2_path is None:
+        raise RuntimeError("full index navigation metadata is not available")
+    token = descriptor["token"]
+    l1 = _load_array_sidecar(array, token, "full_nav", "l1", l1_path)
+    l2 = _load_array_sidecar(array, token, "full_nav", "l2", l2_path)
+    return l1, l2
+
+
+def _load_full_sidecar_handles(array: blosc2.NDArray, descriptor: dict):
+    full = descriptor.get("full")
+    if full is None:
+        raise RuntimeError("full index metadata is not available")
+    token = descriptor["token"]
+    values_sidecar = _open_sidecar_handle(array, token, "full_handle", "values", full["values_path"])
+    positions_sidecar = _open_sidecar_handle(
+        array, token, "full_handle", "positions", full["positions_path"]
+    )
+    return values_sidecar, positions_sidecar
 
 
 def _load_full_arrays(array: blosc2.NDArray, descriptor: dict) -> tuple[np.ndarray, np.ndarray]:
@@ -2143,11 +2371,126 @@ def _search_bounds(values: np.ndarray, plan: ExactPredicatePlan) -> tuple[int, i
     return lo, hi
 
 
+def _candidate_units_from_boundaries(boundaries: np.ndarray, plan: ExactPredicatePlan) -> np.ndarray:
+    if len(boundaries) == 0:
+        return np.zeros(0, dtype=bool)
+    starts = boundaries["start"]
+    ends = boundaries["end"]
+    candidate = np.ones(len(boundaries), dtype=bool)
+    if plan.lower is not None:
+        candidate &= ends >= plan.lower if plan.lower_inclusive else ends > plan.lower
+    if plan.upper is not None:
+        candidate &= starts <= plan.upper if plan.upper_inclusive else starts < plan.upper
+    return candidate
+
+
+def _full_query_mode_override() -> str:
+    mode = os.getenv("BLOSC2_FULL_EXACT_QUERY_MODE", "auto").strip().lower()
+    if mode not in {"auto", "selective-ooc", "whole-load"}:
+        return "auto"
+    return mode
+
+
+def _contiguous_true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
+    true_ids = np.flatnonzero(mask)
+    if len(true_ids) == 0:
+        return []
+    breaks = np.nonzero(np.diff(true_ids) != 1)[0] + 1
+    runs = []
+    start = 0
+    for stop in (*breaks, len(true_ids)):
+        part = true_ids[start:stop]
+        runs.append((int(part[0]), int(part[-1]) + 1))
+        start = stop
+    return runs
+
+
+def _full_supports_selective_ooc_lookup(array: blosc2.NDArray, descriptor: dict) -> bool:
+    full = descriptor.get("full")
+    if full is None or full.get("runs"):
+        return False
+    if not descriptor.get("persistent", False):
+        return False
+    if full.get("values_path") is None or full.get("positions_path") is None:
+        return False
+    if full.get("l1_path") is None or full.get("l2_path") is None:
+        return False
+    try:
+        values_sidecar, positions_sidecar = _load_full_sidecar_handles(array, descriptor)
+    except Exception:
+        return False
+    return (
+        _supports_block_reads(array)
+        and _supports_block_reads(values_sidecar)
+        and _supports_block_reads(positions_sidecar)
+    )
+
+
+def _exact_positions_from_full_selective_ooc(
+    array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
+) -> np.ndarray:
+    full = descriptor["full"]
+    l1, l2 = _load_full_navigation_arrays(array, descriptor)
+    candidate_chunks = _candidate_units_from_boundaries(l1, plan)
+    if not np.any(candidate_chunks):
+        return np.empty(0, dtype=np.int64)
+
+    candidate_blocks = _candidate_units_from_boundaries(l2, plan)
+    if not np.any(candidate_blocks):
+        return np.empty(0, dtype=np.int64)
+
+    values_sidecar, positions_sidecar = _load_full_sidecar_handles(array, descriptor)
+    dtype = np.dtype(descriptor["dtype"])
+    chunk_len = int(full["sidecar_chunk_len"])
+    block_len = int(full["sidecar_block_len"])
+    size = int(descriptor["shape"][0])
+    parts = []
+    span_count = 0
+
+    for chunk_id in np.flatnonzero(candidate_chunks):
+        chunk_start = int(chunk_id) * chunk_len
+        chunk_stop = min(chunk_start + chunk_len, size)
+        first_block = chunk_start // block_len
+        nblocks = math.ceil((chunk_stop - chunk_start) / block_len)
+        block_mask = np.asarray(candidate_blocks[first_block : first_block + nblocks], dtype=bool)
+        if not np.any(block_mask):
+            continue
+        span_runs = _contiguous_true_runs(block_mask)
+        span_count += len(span_runs)
+        if span_count > FULL_SELECTIVE_OOC_MAX_SPANS:
+            raise RuntimeError("too many candidate spans for selective full lookup")
+
+        for block_start_idx, block_stop_idx in span_runs:
+            span_start = chunk_start + block_start_idx * block_len
+            span_stop = min(chunk_start + block_stop_idx * block_len, chunk_stop)
+            local_start = span_start - chunk_start
+            span_items = span_stop - span_start
+            span_values = np.empty(span_items, dtype=dtype)
+            values_sidecar.get_1d_span_numpy(span_values, int(chunk_id), local_start, span_items)
+            lo, hi = _search_bounds(span_values, plan)
+            if lo >= hi:
+                continue
+            matched = np.empty(hi - lo, dtype=np.int64)
+            positions_sidecar.get_1d_span_numpy(matched, int(chunk_id), local_start + lo, hi - lo)
+            parts.append(matched)
+
+    if not parts:
+        return np.empty(0, dtype=np.int64)
+    positions = np.concatenate(parts) if len(parts) > 1 else parts[0]
+    return np.sort(positions.astype(np.int64, copy=False), kind="stable")
+
+
 def _exact_positions_from_full(
     array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
 ) -> np.ndarray:
     if _range_is_empty(plan):
         return np.empty(0, dtype=np.int64)
+    mode = _full_query_mode_override()
+    if mode != "whole-load" and _full_supports_selective_ooc_lookup(array, descriptor):
+        try:
+            return _exact_positions_from_full_selective_ooc(array, descriptor, plan)
+        except RuntimeError:
+            pass
     sorted_values, positions = _load_full_arrays(array, descriptor)
     lo, hi = _search_bounds(sorted_values, plan)
     if lo >= hi:
@@ -2619,6 +2962,31 @@ def _normalize_primary_order_target(array: blosc2.NDArray, order: str | None) ->
     return target, None
 
 
+def _full_run_count(descriptor: dict | None) -> int:
+    if descriptor is None or descriptor.get("full") is None:
+        return 0
+    return len(descriptor["full"].get("runs", ()))
+
+
+def _full_lookup_path(descriptor: dict | None, *, ordered: bool) -> str | None:
+    if descriptor is None or descriptor.get("kind") != "full":
+        return None
+    if _full_run_count(descriptor):
+        return "in-memory-merge"
+    if ordered:
+        return "in-memory-order"
+    mode = _full_query_mode_override()
+    if mode == "whole-load":
+        return "whole-load"
+    if (
+        descriptor.get("persistent")
+        and descriptor["full"].get("l1_path")
+        and descriptor["full"].get("l2_path")
+    ):
+        return "compact-selective-ooc"
+    return "in-memory"
+
+
 def _normalize_order_fields(
     array: blosc2.NDArray, order: str | list[str] | None
 ) -> tuple[dict, list[str | None]]:
@@ -2907,6 +3275,8 @@ def explain_query(expr) -> dict:
             "exact_rows": ordered_plan.selected_rows if ordered_plan.usable else None,
             "filter_reason": filter_plan.reason,
             "filter_level": filter_plan.level,
+            "full_runs": _full_run_count(ordered_plan.descriptor),
+            "lookup_path": _full_lookup_path(ordered_plan.descriptor, ordered=True),
             "descriptor": ordered_plan.descriptor,
         }
 
@@ -2926,5 +3296,7 @@ def explain_query(expr) -> dict:
         "candidate_chunks": plan.selected_units,
         "total_chunks": plan.total_units,
         "exact_rows": None if plan.exact_positions is None else len(plan.exact_positions),
+        "full_runs": _full_run_count(plan.descriptor),
+        "lookup_path": _full_lookup_path(plan.descriptor, ordered=False),
         "descriptor": plan.descriptor,
     }

@@ -29,6 +29,7 @@ DISTS = ("sorted", "block-shuffled", "random")
 RNG_SEED = 0
 DEFAULT_OPLEVEL = 5
 EXPRESSION = "abs(x)"
+FULL_QUERY_MODES = ("auto", "selective-ooc", "whole-load")
 
 
 def dtype_token(dtype: np.dtype) -> str:
@@ -101,6 +102,21 @@ def benchmark_index_once(arr: blosc2.NDArray, cond) -> tuple[float, int]:
     result = arr[cond][:]
     elapsed = time.perf_counter() - start
     return elapsed, len(result)
+
+
+def _with_full_query_mode(full_query_mode: str):
+    class _FullQueryModeScope:
+        def __enter__(self):
+            self.previous = os.environ.get("BLOSC2_FULL_EXACT_QUERY_MODE")
+            os.environ["BLOSC2_FULL_EXACT_QUERY_MODE"] = full_query_mode
+
+        def __exit__(self, exc_type, exc, tb):
+            if self.previous is None:
+                os.environ.pop("BLOSC2_FULL_EXACT_QUERY_MODE", None)
+            else:
+                os.environ["BLOSC2_FULL_EXACT_QUERY_MODE"] = self.previous
+
+    return _FullQueryModeScope()
 
 
 def index_sizes(descriptor: dict) -> tuple[int, int]:
@@ -187,7 +203,14 @@ def _open_or_build_indexed_array(
 
 
 def benchmark_size(
-    size: int, size_dir: Path, dist: str, query_width: int, optlevel: int, x_dtype: np.dtype, in_mem: bool
+    size: int,
+    size_dir: Path,
+    dist: str,
+    query_width: int,
+    optlevel: int,
+    x_dtype: np.dtype,
+    in_mem: bool,
+    full_query_mode: str,
 ) -> list[dict]:
     get_data = _source_data_factory(size, dist, x_dtype)
     arr = _open_or_build_persistent_array(base_array_path(size_dir, size, dist, x_dtype), get_data)
@@ -210,9 +233,10 @@ def benchmark_size(
         )
         idx_cond = blosc2.lazyexpr(condition_str, idx_arr.fields)
         idx_expr = idx_cond.where(idx_arr)
-        explanation = idx_expr.explain()
+        with _with_full_query_mode(full_query_mode):
+            explanation = idx_expr.explain()
+            cold_time, index_len = benchmark_index_once(idx_arr, idx_cond)
         logical_index_bytes, disk_index_bytes = index_sizes(idx_arr.indexes[0])
-        cold_time, index_len = benchmark_index_once(idx_arr, idx_cond)
 
         rows.append(
             {
@@ -231,6 +255,8 @@ def benchmark_size(
                 "warm_speedup": None,
                 "candidate_units": explanation["candidate_units"],
                 "total_units": explanation["total_units"],
+                "lookup_path": explanation.get("lookup_path"),
+                "full_query_mode": full_query_mode,
                 "logical_index_bytes": logical_index_bytes,
                 "disk_index_bytes": disk_index_bytes,
                 "index_pct": logical_index_bytes / base_bytes * 100,
@@ -248,7 +274,8 @@ def measure_warm_queries(rows: list[dict], repeats: int) -> None:
     for result in rows:
         arr = result["_arr"]
         cond = result["_cond"]
-        index_runs = [benchmark_index_once(arr, cond)[0] for _ in range(repeats)]
+        with _with_full_query_mode(result["full_query_mode"]):
+            index_runs = [benchmark_index_once(arr, cond)[0] for _ in range(repeats)]
         warm_ms = statistics.median(index_runs) * 1_000 if index_runs else None
         result["warm_ms"] = warm_ms
         result["warm_speedup"] = None if warm_ms is None else result["scan_ms"] / warm_ms
@@ -310,6 +337,12 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Use the in-memory index builders. Disabled by default; pass --in-mem to force them.",
     )
+    parser.add_argument(
+        "--full-query-mode",
+        choices=FULL_QUERY_MODES,
+        default="auto",
+        help="How full exact queries should run during the benchmark: auto, selective-ooc, or whole-load.",
+    )
     return parser.parse_args()
 
 
@@ -344,16 +377,18 @@ def run_benchmarks(
     optlevel: int,
     x_dtype: np.dtype,
     in_mem: bool,
+    full_query_mode: str,
 ) -> None:
     all_results = []
     print("Expression range-query benchmark across index kinds")
     print(
         f"expr={EXPRESSION}, chunks={CHUNK_LEN:,}, blocks={BLOCK_LEN:,}, repeats={repeats}, dist={dist_label}, "
-        f"query_width={query_width:,}, optlevel={optlevel}, dtype={x_dtype.name}, in_mem={in_mem}"
+        f"query_width={query_width:,}, optlevel={optlevel}, dtype={x_dtype.name}, in_mem={in_mem}, "
+        f"full_query_mode={full_query_mode}"
     )
     for dist in dists:
         for size in sizes:
-            size_results = benchmark_size(size, size_dir, dist, query_width, optlevel, x_dtype, in_mem)
+            size_results = benchmark_size(size, size_dir, dist, query_width, optlevel, x_dtype, in_mem, full_query_mode)
             all_results.extend(size_results)
 
     print()
@@ -413,12 +448,30 @@ def main() -> None:
     if args.outdir is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             run_benchmarks(
-                sizes, dists, Path(tmpdir), args.dist, args.query_width, args.repeats, args.optlevel, x_dtype, args.in_mem
+                sizes,
+                dists,
+                Path(tmpdir),
+                args.dist,
+                args.query_width,
+                args.repeats,
+                args.optlevel,
+                x_dtype,
+                args.in_mem,
+                args.full_query_mode,
             )
     else:
         args.outdir.mkdir(parents=True, exist_ok=True)
         run_benchmarks(
-            sizes, dists, args.outdir, args.dist, args.query_width, args.repeats, args.optlevel, x_dtype, args.in_mem
+            sizes,
+            dists,
+            args.outdir,
+            args.dist,
+            args.query_width,
+            args.repeats,
+            args.optlevel,
+            x_dtype,
+            args.in_mem,
+            args.full_query_mode,
         )
 
 

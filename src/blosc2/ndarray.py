@@ -4852,6 +4852,12 @@ class NDArray(blosc2_ext.NDArray, Operand):
 
         return indexing.rebuild_index(self, field=field, name=name)
 
+    def compact_index(self, field: str | None = None, name: str | None = None) -> dict:
+        """Compact a ``full`` index by merging the compact base and append runs."""
+        from . import indexing
+
+        return indexing.compact_index(self, field=field, name=name)
+
     @property
     def indexes(self) -> list[dict]:
         from . import indexing
