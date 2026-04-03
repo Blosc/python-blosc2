@@ -4721,7 +4721,7 @@ class NDArray(blosc2_ext.NDArray, Operand):
         self,
         field: str | None = None,
         kind: str = "light",
-        optlevel: int = 3,
+        optlevel: int = 5,
         granularity: str = "chunk",
         persistent: bool | None = None,
         in_mem: bool = False,
