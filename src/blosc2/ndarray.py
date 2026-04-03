@@ -4853,7 +4853,51 @@ class NDArray(blosc2_ext.NDArray, Operand):
         return indexing.rebuild_index(self, field=field, name=name)
 
     def compact_index(self, field: str | None = None, name: str | None = None) -> dict:
-        """Compact a ``full`` index by merging the compact base and append runs."""
+        """Compact a ``full`` index by merging its compact base and append runs.
+
+        Parameters
+        ----------
+        field : str or None, optional
+            Structured field identifying the target ``full`` index. Use
+            ``None`` to compact the value index for a plain 1-D array.
+        name : str or None, optional
+            Optional logical index label. When omitted and the array has a
+            single index, that index is selected automatically.
+
+        Returns
+        -------
+        out : dict
+            The updated index descriptor after compaction.
+
+        Notes
+        -----
+        This is currently implemented only for ``kind="full"`` indexes. It is
+        a structural maintenance operation: the compact base sidecars and any
+        pending append runs are merged into one compact ``full.values`` sidecar
+        and one compact ``full.positions`` sidecar. For persistent indexes, the
+        compact lookup metadata is rebuilt as part of the process and
+        ``full["runs"]`` becomes empty afterwards.
+
+        Compaction does not change query results. It is useful after many
+        append operations, where ``full`` maintenance stays cheap on append by
+        recording sorted runs but later queries may still have extra work until
+        the index is consolidated explicitly.
+
+        Examples
+        --------
+        >>> import blosc2
+        >>> import numpy as np
+        >>> dtype = np.dtype([("id", np.int64), ("payload", np.int32)])
+        >>> data = np.array([(3, 9), (1, 8), (2, 7), (1, 6)], dtype=dtype)
+        >>> arr = blosc2.asarray(data, chunks=(2,), blocks=(2,))
+        >>> _ = arr.create_index(field="id", kind="full")
+        >>> _ = arr.append(np.array([(0, 100), (3, 101)], dtype=dtype))
+        >>> len(arr.indexes[0]["full"]["runs"])
+        1
+        >>> compacted = arr.compact_index("id")
+        >>> compacted["full"]["runs"]
+        []
+        """
         from . import indexing
 
         return indexing.compact_index(self, field=field, name=name)

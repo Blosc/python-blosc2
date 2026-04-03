@@ -31,6 +31,22 @@ In addition, all the functions from the :ref:`Lazy Functions <lazy_functions>` s
     .. automethod:: __getitem__
     .. automethod:: __setitem__
 
+    Index Methods
+    -------------
+
+    The following methods are part of the public NDArray indexing lifecycle.
+    Use ``create_index`` / ``create_expr_index`` to build indexes,
+    ``rebuild_index`` when a stale index must be refreshed after unsupported
+    mutations, and ``compact_index`` to consolidate append-heavy ``full``
+    indexes explicitly.
+
+    .. automethod:: create_index
+    .. automethod:: create_csindex
+    .. automethod:: create_expr_index
+    .. automethod:: drop_index
+    .. automethod:: rebuild_index
+    .. automethod:: compact_index
+
 Constructors
 ------------
 .. _NDArrayConstructors:

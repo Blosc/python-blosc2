@@ -610,3 +610,52 @@ def test_compact_full_expression_index_preserves_results():
     expected_positions = np.argsort(np.abs(expected["x"]), kind="stable")
     np.testing.assert_array_equal(arr.sort(order="abs(x)")[:], expected[expected_positions])
     np.testing.assert_array_equal(expr.compute()[:], expected[expected_mask])
+
+
+def test_persistent_large_run_full_query_uses_bounded_fallback(monkeypatch, tmp_path):
+    path = tmp_path / "large_run_fallback.b2nd"
+    dtype = np.dtype([("id", np.int64), ("payload", np.int32)])
+    data = np.array([(10, 0), (20, 1), (30, 2), (40, 3)], dtype=dtype)
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(4,), blocks=(2,))
+    arr.create_index(field="id", kind="full")
+
+    for run in range(8):
+        batch = np.array([(100 + run, 10 + run)], dtype=dtype)
+        arr.append(batch)
+
+    reopened = blosc2.open(path, mode="a")
+    indexing = __import__("blosc2.indexing", fromlist=["_load_full_arrays"])
+
+    def guarded_load_full_arrays(*args, **kwargs):
+        raise AssertionError("large-run bounded fallback should avoid _load_full_arrays")
+
+    monkeypatch.setattr(indexing, "_load_full_arrays", guarded_load_full_arrays)
+    expr = blosc2.lazyexpr("(id >= 103) & (id <= 106)", reopened.fields).where(reopened)
+    explained = expr.explain()
+    assert explained["lookup_path"] == "run-bounded-ooc"
+    snapshot = reopened[:]
+    expected = snapshot[(snapshot["id"] >= 103) & (snapshot["id"] <= 106)]
+    np.testing.assert_array_equal(expr.compute()[:], expected)
+
+
+def test_large_run_full_expression_query_uses_bounded_fallback(monkeypatch):
+    dtype = np.dtype([("x", np.int64), ("payload", np.int32)])
+    data = np.array([(-10, 0), (7, 1), (-3, 2), (1, 3)], dtype=dtype)
+    arr = blosc2.asarray(data, chunks=(4,), blocks=(2,))
+    arr.create_expr_index("abs(x)", kind="full")
+
+    for run, value in enumerate(range(20, 28)):
+        arr.append(np.array([(value, 10 + run)], dtype=dtype))
+
+    indexing = __import__("blosc2.indexing", fromlist=["_load_full_arrays"])
+
+    def guarded_load_full_arrays(*args, **kwargs):
+        raise AssertionError("large-run bounded fallback should avoid _load_full_arrays")
+
+    monkeypatch.setattr(indexing, "_load_full_arrays", guarded_load_full_arrays)
+    expr = blosc2.lazyexpr("(abs(x) >= 22) & (abs(x) <= 25)", arr.fields).where(arr)
+    explained = expr.explain()
+    assert explained["lookup_path"] == "run-bounded-ooc"
+    snapshot = arr[:]
+    expected = snapshot[(np.abs(snapshot["x"]) >= 22) & (np.abs(snapshot["x"]) <= 25)]
+    np.testing.assert_array_equal(expr.compute()[:], expected)

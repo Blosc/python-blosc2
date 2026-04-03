@@ -41,6 +41,8 @@ BLOCK_GATHER_POSITIONS_THRESHOLD = 32
 FULL_OOC_RUN_ITEMS = 2_000_000
 FULL_OOC_MERGE_BUFFER_ITEMS = 500_000
 FULL_SELECTIVE_OOC_MAX_SPANS = 128
+FULL_RUN_BOUNDED_FALLBACK_RUNS = 8
+FULL_RUN_BOUNDED_FALLBACK_ITEMS = 1_000_000
 
 
 def _sanitize_token(token: str) -> str:
@@ -1859,6 +1861,18 @@ def _load_full_sidecar_handles(array: blosc2.NDArray, descriptor: dict):
     return values_sidecar, positions_sidecar
 
 
+def _load_full_run_sidecar_handles(array: blosc2.NDArray, descriptor: dict, run: dict):
+    run_id = int(run["id"])
+    token = descriptor["token"]
+    values_sidecar = _open_sidecar_handle(
+        array, token, "full_run_handle", f"{run_id}.values", run["values_path"]
+    )
+    positions_sidecar = _open_sidecar_handle(
+        array, token, "full_run_handle", f"{run_id}.positions", run["positions_path"]
+    )
+    return values_sidecar, positions_sidecar
+
+
 def _load_full_arrays(array: blosc2.NDArray, descriptor: dict) -> tuple[np.ndarray, np.ndarray]:
     full = descriptor.get("full")
     if full is None:
@@ -2384,6 +2398,18 @@ def _candidate_units_from_boundaries(boundaries: np.ndarray, plan: ExactPredicat
     return candidate
 
 
+def _full_runs_need_bounded_fallback(descriptor: dict) -> bool:
+    full = descriptor.get("full")
+    if full is None:
+        return False
+    runs = tuple(full.get("runs", ()))
+    if not runs:
+        return False
+    if len(runs) >= FULL_RUN_BOUNDED_FALLBACK_RUNS:
+        return True
+    return sum(int(run["length"]) for run in runs) >= FULL_RUN_BOUNDED_FALLBACK_ITEMS
+
+
 def _full_query_mode_override() -> str:
     mode = os.getenv("BLOSC2_FULL_EXACT_QUERY_MODE", "auto").strip().lower()
     if mode not in {"auto", "selective-ooc", "whole-load"}:
@@ -2403,6 +2429,35 @@ def _contiguous_true_runs(mask: np.ndarray) -> list[tuple[int, int]]:
         runs.append((int(part[0]), int(part[-1]) + 1))
         start = stop
     return runs
+
+
+def _sorted_chunk_boundaries_from_handle(
+    array: blosc2.NDArray,
+    token: str,
+    category: str,
+    name: str,
+    values_sidecar,
+    dtype: np.dtype,
+) -> np.ndarray:
+    cache_key = _data_cache_key(array, token, category, name)
+    cached = _DATA_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    size = int(values_sidecar.shape[0])
+    chunk_len = int(values_sidecar.chunks[0])
+    nchunks = math.ceil(size / chunk_len)
+    boundaries = np.empty(nchunks, dtype=_boundary_dtype(dtype))
+    start_value = np.empty(1, dtype=dtype)
+    end_value = np.empty(1, dtype=dtype)
+    for chunk_id in range(nchunks):
+        chunk_start = chunk_id * chunk_len
+        chunk_stop = min(chunk_start + chunk_len, size)
+        values_sidecar.get_1d_span_numpy(start_value, chunk_id, 0, 1)
+        values_sidecar.get_1d_span_numpy(end_value, chunk_id, chunk_stop - chunk_start - 1, 1)
+        boundaries[chunk_id] = (start_value[0], end_value[0])
+    _DATA_CACHE[cache_key] = boundaries
+    return boundaries
 
 
 def _full_supports_selective_ooc_lookup(array: blosc2.NDArray, descriptor: dict) -> bool:
@@ -2426,7 +2481,39 @@ def _full_supports_selective_ooc_lookup(array: blosc2.NDArray, descriptor: dict)
     )
 
 
-def _exact_positions_from_full_selective_ooc(
+def _exact_positions_from_sorted_chunks(
+    values_sidecar,
+    positions_sidecar,
+    boundaries: np.ndarray,
+    plan: ExactPredicatePlan,
+    chunk_len: int,
+    dtype: np.dtype,
+) -> np.ndarray:
+    candidate_chunks = _candidate_units_from_boundaries(boundaries, plan)
+    if not np.any(candidate_chunks):
+        return np.empty(0, dtype=np.int64)
+
+    parts = []
+    size = int(values_sidecar.shape[0])
+    for chunk_id in np.flatnonzero(candidate_chunks):
+        chunk_start = int(chunk_id) * chunk_len
+        chunk_stop = min(chunk_start + chunk_len, size)
+        span_items = chunk_stop - chunk_start
+        span_values = np.empty(span_items, dtype=dtype)
+        values_sidecar.get_1d_span_numpy(span_values, int(chunk_id), 0, span_items)
+        lo, hi = _search_bounds(span_values, plan)
+        if lo >= hi:
+            continue
+        matched = np.empty(hi - lo, dtype=np.int64)
+        positions_sidecar.get_1d_span_numpy(matched, int(chunk_id), lo, hi - lo)
+        parts.append(matched)
+
+    if not parts:
+        return np.empty(0, dtype=np.int64)
+    return np.concatenate(parts) if len(parts) > 1 else parts[0]
+
+
+def _exact_positions_from_compact_full_base(
     array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
 ) -> np.ndarray:
     full = descriptor["full"]
@@ -2443,7 +2530,7 @@ def _exact_positions_from_full_selective_ooc(
     dtype = np.dtype(descriptor["dtype"])
     chunk_len = int(full["sidecar_chunk_len"])
     block_len = int(full["sidecar_block_len"])
-    size = int(descriptor["shape"][0])
+    size = int(values_sidecar.shape[0])
     parts = []
     span_count = 0
 
@@ -2480,12 +2567,82 @@ def _exact_positions_from_full_selective_ooc(
     return np.sort(positions.astype(np.int64, copy=False), kind="stable")
 
 
+def _exact_positions_from_full_runs_bounded(
+    array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
+) -> np.ndarray:
+    full = descriptor["full"]
+    dtype = np.dtype(descriptor["dtype"])
+    parts = []
+
+    base_descriptor = descriptor.copy()
+    base_full = full.copy()
+    base_full["runs"] = []
+    base_descriptor["full"] = base_full
+    if _full_supports_selective_ooc_lookup(array, base_descriptor):
+        base_positions = _exact_positions_from_compact_full_base(array, base_descriptor, plan)
+        if len(base_positions):
+            parts.append(base_positions)
+    else:
+        base_values = _load_array_sidecar(array, descriptor["token"], "full", "values", full["values_path"])
+        base_positions = _load_array_sidecar(
+            array, descriptor["token"], "full", "positions", full["positions_path"]
+        )
+        lo, hi = _search_bounds(base_values, plan)
+        if lo < hi:
+            parts.append(base_positions[lo:hi].astype(np.int64, copy=False))
+
+    for run in full.get("runs", ()):
+        if run.get("values_path") is None or run.get("positions_path") is None:
+            run_values, raw_run_positions = _load_full_run_arrays(array, descriptor, run)
+            lo, hi = _search_bounds(run_values, plan)
+            run_positions = (
+                np.empty(0, dtype=np.int64)
+                if lo >= hi
+                else raw_run_positions[lo:hi].astype(np.int64, copy=False)
+            )
+        else:
+            run_values_sidecar, run_positions_sidecar = _load_full_run_sidecar_handles(
+                array, descriptor, run
+            )
+            chunk_boundaries = _sorted_chunk_boundaries_from_handle(
+                array,
+                descriptor["token"],
+                "full_run_bounds",
+                f"{int(run['id'])}.chunks",
+                run_values_sidecar,
+                dtype,
+            )
+            run_positions = _exact_positions_from_sorted_chunks(
+                run_values_sidecar,
+                run_positions_sidecar,
+                chunk_boundaries,
+                plan,
+                int(run_values_sidecar.chunks[0]),
+                dtype,
+            )
+        if len(run_positions):
+            parts.append(run_positions)
+
+    if not parts:
+        return np.empty(0, dtype=np.int64)
+    positions = np.concatenate(parts) if len(parts) > 1 else parts[0]
+    return np.sort(positions.astype(np.int64, copy=False), kind="stable")
+
+
+def _exact_positions_from_full_selective_ooc(
+    array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
+) -> np.ndarray:
+    return _exact_positions_from_compact_full_base(array, descriptor, plan)
+
+
 def _exact_positions_from_full(
     array: blosc2.NDArray, descriptor: dict, plan: ExactPredicatePlan
 ) -> np.ndarray:
     if _range_is_empty(plan):
         return np.empty(0, dtype=np.int64)
     mode = _full_query_mode_override()
+    if mode != "whole-load" and _full_runs_need_bounded_fallback(descriptor):
+        return _exact_positions_from_full_runs_bounded(array, descriptor, plan)
     if mode != "whole-load" and _full_supports_selective_ooc_lookup(array, descriptor):
         try:
             return _exact_positions_from_full_selective_ooc(array, descriptor, plan)
@@ -2972,6 +3129,8 @@ def _full_lookup_path(descriptor: dict | None, *, ordered: bool) -> str | None:
     if descriptor is None or descriptor.get("kind") != "full":
         return None
     if _full_run_count(descriptor):
+        if not ordered and _full_runs_need_bounded_fallback(descriptor):
+            return "run-bounded-ooc"
         return "in-memory-merge"
     if ordered:
         return "in-memory-order"
