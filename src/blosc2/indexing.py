@@ -1983,6 +1983,7 @@ def compact_index(array: blosc2.NDArray, field: str | None = None, name: str | N
         sorted_values = np.load(final_run.values_path, mmap_mode="r")
         positions = np.load(final_run.positions_path, mmap_mode="r")
         _replace_full_descriptor(array, descriptor, sorted_values, positions, descriptor["persistent"])
+        del sorted_values, positions
         final_run.values_path.unlink(missing_ok=True)
         final_run.positions_path.unlink(missing_ok=True)
 
