@@ -192,6 +192,32 @@ def test_default_ooc_persistent_index_matches_scan_and_rebuilds(tmp_path, kind):
     assert rebuilt["ooc"] is True
 
 
+@pytest.mark.parametrize("kind", ["light", "medium"])
+def test_chunk_local_index_descriptor_and_lookup_path(tmp_path, kind):
+    path = tmp_path / f"chunk_local_{kind}.b2nd"
+    rng = np.random.default_rng(11)
+    data = np.arange(240_000, dtype=np.int64)
+    rng.shuffle(data)
+
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(24_000,), blocks=(4_000,))
+    descriptor = arr.create_index(kind=kind)
+    meta = descriptor["light"] if kind == "light" else descriptor["reduced"]
+
+    assert meta["layout"] == "chunk-local-v1"
+    assert meta["chunk_len"] == arr.chunks[0]
+    assert meta["nav_segment_len"] == arr.blocks[0]
+    assert meta["l1_path"] is not None
+    assert meta["l2_path"] is not None
+
+    reopened = blosc2.open(path, mode="a")
+    expr = (reopened == 123_456).where(reopened)
+    explanation = expr.explain()
+
+    assert explanation["lookup_path"] == "chunk-nav-ooc"
+    assert explanation["candidate_nav_segments"] is not None
+    np.testing.assert_array_equal(expr.compute()[:], data[data == 123_456])
+
+
 @pytest.mark.parametrize("kind", ["light", "medium", "full"])
 def test_small_default_index_builder_uses_ooc(kind):
     data = np.arange(100_000, dtype=np.int64)
