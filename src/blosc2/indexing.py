@@ -638,10 +638,11 @@ def _build_reduced_descriptor(
     token: str,
     kind: str,
     values: np.ndarray,
+    optlevel: int,
     persistent: bool,
 ) -> dict:
     chunk_len = int(array.chunks[0])
-    nav_segment_len = int(array.blocks[0])
+    nav_segment_len, nav_segment_divisor = _medium_nav_segment_len(int(array.blocks[0]), optlevel)
     sorted_values, positions, offsets, l2, _ = _build_chunk_sorted_payload(
         values, chunk_len, nav_segment_len
     )
@@ -663,6 +664,7 @@ def _build_reduced_descriptor(
         nav_segment_len,
     )
     reduced["position_dtype"] = positions.dtype.str
+    reduced["nav_segment_divisor"] = nav_segment_divisor
     return reduced
 
 
@@ -680,6 +682,23 @@ def _sidecar_block_len(sidecar: dict, fallback_block_len: int) -> int:
     if path is None:
         return fallback_block_len
     return int(blosc2.open(path).blocks[0])
+
+
+def _medium_nav_segment_divisor(optlevel: int) -> int:
+    if optlevel <= 1:
+        return 1
+    if optlevel == 2:
+        return 2
+    if optlevel == 3:
+        return 4
+    if optlevel <= 6:
+        return 8
+    return 16
+
+
+def _medium_nav_segment_len(block_len: int, optlevel: int) -> tuple[int, int]:
+    divisor = min(block_len, _medium_nav_segment_divisor(int(optlevel)))
+    return max(1, block_len // divisor), divisor
 
 
 def _build_chunk_sorted_payload(
@@ -843,11 +862,12 @@ def _build_reduced_descriptor_ooc(
     token: str,
     kind: str,
     dtype: np.dtype,
+    optlevel: int,
     persistent: bool,
     workdir: Path,
 ) -> dict:
     chunk_len = int(array.chunks[0])
-    nav_segment_len = int(array.blocks[0])
+    nav_segment_len, nav_segment_divisor = _medium_nav_segment_len(int(array.blocks[0]), optlevel)
     sorted_values, positions, offsets, l2, _ = _build_chunk_sorted_payload_ooc(
         array, target, dtype, workdir, f"{kind}_reduced", chunk_len, nav_segment_len
     )
@@ -869,6 +889,7 @@ def _build_reduced_descriptor_ooc(
         nav_segment_len,
     )
     reduced["position_dtype"] = positions.dtype.str
+    reduced["nav_segment_divisor"] = nav_segment_divisor
     return reduced
 
 
@@ -1393,7 +1414,9 @@ def create_index(
                 else None
             )
             reduced = (
-                _build_reduced_descriptor_ooc(array, target, token, kind, dtype, persistent, workdir)
+                _build_reduced_descriptor_ooc(
+                    array, target, token, kind, dtype, optlevel, persistent, workdir
+                )
                 if kind == "medium"
                 else None
             )
@@ -1427,7 +1450,9 @@ def create_index(
             else None
         )
         reduced = (
-            _build_reduced_descriptor(array, token, kind, values, persistent) if kind == "medium" else None
+            _build_reduced_descriptor(array, token, kind, values, optlevel, persistent)
+            if kind == "medium"
+            else None
         )
         full = _build_full_descriptor(array, token, kind, values, persistent) if kind == "full" else None
         descriptor = _build_descriptor(
@@ -1493,7 +1518,9 @@ def create_expr_index(
                 else None
             )
             reduced = (
-                _build_reduced_descriptor_ooc(array, target, token, kind, dtype, persistent, workdir)
+                _build_reduced_descriptor_ooc(
+                    array, target, token, kind, dtype, optlevel, persistent, workdir
+                )
                 if kind == "medium"
                 else None
             )
@@ -1527,7 +1554,9 @@ def create_expr_index(
             else None
         )
         reduced = (
-            _build_reduced_descriptor(array, token, kind, values, persistent) if kind == "medium" else None
+            _build_reduced_descriptor(array, token, kind, values, optlevel, persistent)
+            if kind == "medium"
+            else None
         )
         full = _build_full_descriptor(array, token, kind, values, persistent) if kind == "full" else None
         descriptor = _build_descriptor(
@@ -1656,12 +1685,18 @@ def _replace_reduced_descriptor_tail(
                 descriptor["token"],
                 descriptor["kind"],
                 np.dtype(descriptor["dtype"]),
+                descriptor["optlevel"],
                 persistent,
                 Path(tmpdir),
             )
     else:
         rebuilt = _build_reduced_descriptor(
-            array, descriptor["token"], descriptor["kind"], _values_for_target(array, target), persistent
+            array,
+            descriptor["token"],
+            descriptor["kind"],
+            _values_for_target(array, target),
+            descriptor["optlevel"],
+            persistent,
         )
     descriptor["reduced"] = rebuilt
 
