@@ -1648,9 +1648,21 @@ def _replace_reduced_descriptor_tail(
     reduced = descriptor["reduced"]
     for key in ("values_path", "positions_path", "offsets_path", "l1_path", "l2_path"):
         _remove_sidecar_path(reduced.get(key))
-    rebuilt = _build_reduced_descriptor(
-        array, descriptor["token"], descriptor["kind"], _values_for_target(array, target), persistent
-    )
+    if descriptor.get("ooc", False):
+        with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-") as tmpdir:
+            rebuilt = _build_reduced_descriptor_ooc(
+                array,
+                target,
+                descriptor["token"],
+                descriptor["kind"],
+                np.dtype(descriptor["dtype"]),
+                persistent,
+                Path(tmpdir),
+            )
+    else:
+        rebuilt = _build_reduced_descriptor(
+            array, descriptor["token"], descriptor["kind"], _values_for_target(array, target), persistent
+        )
     descriptor["reduced"] = rebuilt
 
 
@@ -1662,14 +1674,27 @@ def _replace_light_descriptor_tail(
     light = descriptor["light"]
     for key in ("values_path", "bucket_positions_path", "offsets_path", "l1_path", "l2_path"):
         _remove_sidecar_path(light.get(key))
-    rebuilt = _build_light_descriptor(
-        array,
-        descriptor["token"],
-        descriptor["kind"],
-        _values_for_target(array, target),
-        descriptor["optlevel"],
-        persistent,
-    )
+    if descriptor.get("ooc", False):
+        with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-") as tmpdir:
+            rebuilt = _build_light_descriptor_ooc(
+                array,
+                target,
+                descriptor["token"],
+                descriptor["kind"],
+                np.dtype(descriptor["dtype"]),
+                descriptor["optlevel"],
+                persistent,
+                Path(tmpdir),
+            )
+    else:
+        rebuilt = _build_light_descriptor(
+            array,
+            descriptor["token"],
+            descriptor["kind"],
+            _values_for_target(array, target),
+            descriptor["optlevel"],
+            persistent,
+        )
     descriptor["light"] = rebuilt
 
 
