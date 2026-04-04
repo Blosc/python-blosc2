@@ -13,6 +13,7 @@ import math
 import os
 import re
 import tempfile
+import weakref
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -37,6 +38,8 @@ SEGMENT_LEVELS_BY_KIND = {
 }
 
 _IN_MEMORY_INDEXES: dict[int, dict] = {}
+_IN_MEMORY_INDEX_FINALIZERS: dict[int, weakref.finalize] = {}
+_PERSISTENT_INDEXES: dict[tuple[str, str | int], dict] = {}
 _DATA_CACHE: dict[tuple[int, str | None, str, str], np.ndarray] = {}
 _SIDECAR_HANDLE_CACHE: dict[tuple[int, str | None, str, str], object] = {}
 BLOCK_GATHER_POSITIONS_THRESHOLD = 32
@@ -49,6 +52,11 @@ FULL_RUN_BOUNDED_FALLBACK_ITEMS = 1_000_000
 
 def _sanitize_token(token: str) -> str:
     return re.sub(r"[^0-9A-Za-z_.-]+", "_", token)
+
+
+def _cleanup_in_memory_store(key: int) -> None:
+    _IN_MEMORY_INDEXES.pop(key, None)
+    _IN_MEMORY_INDEX_FINALIZERS.pop(key, None)
 
 
 @dataclass(slots=True)
@@ -177,12 +185,11 @@ def _is_persistent_array(array: blosc2.NDArray) -> bool:
 
 
 def _load_store(array: blosc2.NDArray) -> dict:
-    key = _array_key(array)
-    cached = _IN_MEMORY_INDEXES.get(key)
-    if cached is not None:
-        return cached
-
     if _is_persistent_array(array):
+        key = _array_key(array)
+        cached = _PERSISTENT_INDEXES.get(key)
+        if cached is not None:
+            return cached
         try:
             store = array.schunk.vlmeta[INDEXES_VLMETA_KEY]
         except KeyError:
@@ -191,19 +198,29 @@ def _load_store(array: blosc2.NDArray) -> dict:
             store = _default_index_store()
         store.setdefault("version", INDEX_FORMAT_VERSION)
         store.setdefault("indexes", {})
-    else:
-        store = _default_index_store()
+        _PERSISTENT_INDEXES[key] = store
+        return store
 
+    key = id(array)
+    cached = _IN_MEMORY_INDEXES.get(key)
+    if cached is not None:
+        return cached
+    store = _default_index_store()
     _IN_MEMORY_INDEXES[key] = store
+    _IN_MEMORY_INDEX_FINALIZERS[key] = weakref.finalize(array, _cleanup_in_memory_store, key)
     return store
 
 
 def _save_store(array: blosc2.NDArray, store: dict) -> None:
     store.setdefault("version", INDEX_FORMAT_VERSION)
     store.setdefault("indexes", {})
-    _IN_MEMORY_INDEXES[_array_key(array)] = store
     if _is_persistent_array(array):
+        _PERSISTENT_INDEXES[_array_key(array)] = store
         array.schunk.vlmeta[INDEXES_VLMETA_KEY] = store
+    else:
+        key = id(array)
+        _IN_MEMORY_INDEXES[key] = store
+        _IN_MEMORY_INDEX_FINALIZERS.setdefault(key, weakref.finalize(array, _cleanup_in_memory_store, key))
 
 
 def _supported_index_dtype(dtype: np.dtype) -> bool:
