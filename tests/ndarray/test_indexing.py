@@ -93,6 +93,66 @@ def test_random_field_point_query_matches_scan(kind):
     np.testing.assert_array_equal(indexed, data[(data["id"] >= 123_456) & (data["id"] < 123_457)])
 
 
+@pytest.mark.parametrize(
+    "dtype",
+    [
+        np.int8,
+        np.int16,
+        np.int32,
+        np.int64,
+        np.uint8,
+        np.uint16,
+        np.uint32,
+        np.uint64,
+        np.float32,
+        np.float64,
+    ],
+)
+def test_medium_numeric_dtype_query_matches_scan(dtype):
+    values = np.arange(2_000, dtype=dtype)
+    if np.issubdtype(dtype, np.floating):
+        values = values / dtype(10)
+
+    arr = blosc2.asarray(values, chunks=(500,), blocks=(100,))
+    arr.create_index(kind="medium")
+
+    query_value = values[137].item()
+    indexed = arr[arr == query_value].compute()[:]
+    expected = values[values == query_value]
+
+    np.testing.assert_array_equal(indexed, expected)
+
+
+@pytest.mark.parametrize("dtype", [np.int32, np.uint32, np.float32, np.float64])
+def test_light_numeric_dtype_query_matches_scan(dtype):
+    values = np.arange(2_000, dtype=dtype)
+    if np.issubdtype(dtype, np.floating):
+        values = values / dtype(10)
+
+    arr = blosc2.asarray(values, chunks=(500,), blocks=(100,))
+    arr.create_index(kind="light")
+
+    lower = values[137].item()
+    upper = values[163].item()
+    indexed = arr[(arr >= lower) & (arr < upper)].compute()[:]
+    expected = values[(values >= lower) & (values < upper)]
+
+    np.testing.assert_array_equal(indexed, expected)
+
+
+def test_numeric_unsupported_dtype_fallback_matches_scan():
+    values = (np.arange(2_000, dtype=np.float16) / np.float16(10)).astype(np.float16)
+
+    arr = blosc2.asarray(values, chunks=(500,), blocks=(100,))
+    arr.create_index(kind="medium")
+
+    query_value = values[137].item()
+    indexed = arr[arr == query_value].compute()[:]
+    expected = values[values == query_value]
+
+    np.testing.assert_array_equal(indexed, expected)
+
+
 def test_light_lossy_integer_values_match_scan():
     rng = np.random.default_rng(2)
     dtype = np.dtype([("id", np.int64), ("payload", np.float32)])

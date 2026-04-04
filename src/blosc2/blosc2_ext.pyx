@@ -59,6 +59,7 @@ ctypedef fused T:
     int32_t
     int64_t
 
+
 cdef extern from "<stdio.h>":
     int printf(const char *format, ...) nogil
 

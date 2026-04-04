@@ -20,6 +20,8 @@ import numpy as np
 
 import blosc2
 
+from . import indexing_ext
+
 INDEXES_VLMETA_KEY = "blosc2_indexes"
 INDEX_FORMAT_VERSION = 1
 SELF_TARGET_NAME = "__self__"
@@ -917,7 +919,8 @@ def _quantize_integer_array(values: np.ndarray, bits: int) -> np.ndarray:
     if bits <= 0:
         return values
     dtype = np.dtype(values.dtype)
-    mask = np.asarray(~((1 << bits) - 1), dtype=dtype)[()]
+    base_mask = np.iinfo(dtype).max if dtype.kind == "u" else -1
+    mask = np.asarray(base_mask ^ ((1 << bits) - 1), dtype=dtype)[()]
     quantized = values.copy()
     np.bitwise_and(quantized, mask, out=quantized)
     return quantized
@@ -927,7 +930,8 @@ def _quantize_integer_scalar(value, dtype: np.dtype, bits: int):
     scalar = np.asarray(value, dtype=dtype)[()]
     if bits <= 0:
         return scalar
-    mask = np.asarray(~((1 << bits) - 1), dtype=dtype)[()]
+    base_mask = np.iinfo(dtype).max if dtype.kind == "u" else -1
+    mask = np.asarray(base_mask ^ ((1 << bits) - 1), dtype=dtype)[()]
     return np.bitwise_and(scalar, mask, dtype=dtype)
 
 
@@ -2662,15 +2666,20 @@ def _candidate_units_from_exact_plan(
 
 
 def _search_bounds(values: np.ndarray, plan: ExactPredicatePlan) -> tuple[int, int]:
-    lo = 0
-    hi = len(values)
-    if plan.lower is not None:
-        side = "left" if plan.lower_inclusive else "right"
-        lo = int(np.searchsorted(values, plan.lower, side=side))
-    if plan.upper is not None:
-        side = "right" if plan.upper_inclusive else "left"
-        hi = int(np.searchsorted(values, plan.upper, side=side))
-    return lo, hi
+    try:
+        return indexing_ext.index_search_bounds(
+            values, plan.lower, plan.lower_inclusive, plan.upper, plan.upper_inclusive
+        )
+    except TypeError:
+        lo = 0
+        hi = len(values)
+        if plan.lower is not None:
+            side = "left" if plan.lower_inclusive else "right"
+            lo = int(np.searchsorted(values, plan.lower, side=side))
+        if plan.upper is not None:
+            side = "right" if plan.upper_inclusive else "left"
+            hi = int(np.searchsorted(values, plan.upper, side=side))
+        return lo, hi
 
 
 def _candidate_units_from_boundaries(boundaries: np.ndarray, plan: ExactPredicatePlan) -> np.ndarray:
@@ -2982,11 +2991,33 @@ def _chunk_nav_supports_selective_ooc_lookup(array: blosc2.NDArray, descriptor: 
 def _chunk_nav_candidate_runs(
     l2_row: np.ndarray, segment_count: int, plan: ExactPredicatePlan
 ) -> tuple[list[tuple[int, int]], int]:
-    segment_mask = _candidate_units_from_boundaries(l2_row[:segment_count], plan)
-    if not np.any(segment_mask):
+    segment_lo, segment_hi = _sorted_boundary_search_bounds(l2_row[:segment_count], plan)
+    if segment_lo >= segment_hi:
         return [], 0
-    runs = _contiguous_true_runs(segment_mask)
-    return runs, int(np.count_nonzero(segment_mask))
+    return [(segment_lo, segment_hi)], segment_hi - segment_lo
+
+
+def _sorted_boundary_search_bounds(boundaries: np.ndarray, plan: ExactPredicatePlan) -> tuple[int, int]:
+    if len(boundaries) == 0:
+        return 0, 0
+    starts = boundaries["start"]
+    ends = boundaries["end"]
+    try:
+        lo, hi = indexing_ext.index_search_boundary_bounds(
+            starts, ends, plan.lower, plan.lower_inclusive, plan.upper, plan.upper_inclusive
+        )
+    except TypeError:
+        lo = 0
+        hi = len(boundaries)
+        if plan.lower is not None:
+            lo = int(np.searchsorted(ends, plan.lower, side="left" if plan.lower_inclusive else "right"))
+        if plan.upper is not None:
+            hi = int(np.searchsorted(starts, plan.upper, side="right" if plan.upper_inclusive else "left"))
+    if lo < 0:
+        lo = 0
+    if hi > len(boundaries):
+        hi = len(boundaries)
+    return lo, hi
 
 
 def _light_search_plan(
@@ -3079,13 +3110,39 @@ def _exact_positions_from_reduced_chunk_nav_ooc(
     nav_segment_len = int(reduced["nav_segment_len"])
     nsegments_per_chunk = int(reduced["nsegments_per_chunk"])
     local_position_dtype = np.dtype(reduced.get("position_dtype", np.uint32))
-    parts = []
-    total_candidate_segments = 0
+    candidate_chunk_ids = np.flatnonzero(candidate_chunks).astype(np.intp, copy=False)
     l2_row = np.empty(nsegments_per_chunk, dtype=_boundary_dtype(dtype))
     span_values = np.empty(chunk_len, dtype=dtype)
     local_positions = np.empty(chunk_len, dtype=local_position_dtype)
 
-    for chunk_id in np.flatnonzero(candidate_chunks):
+    try:
+        positions, total_candidate_segments = indexing_ext.index_collect_reduced_chunk_nav_positions(
+            offsets,
+            candidate_chunk_ids,
+            values_sidecar,
+            positions_sidecar,
+            l2_sidecar,
+            l2_row,
+            span_values,
+            local_positions,
+            chunk_len,
+            nav_segment_len,
+            nsegments_per_chunk,
+            plan.lower,
+            plan.lower_inclusive,
+            plan.upper,
+            plan.upper_inclusive,
+        )
+        if len(positions) == 0:
+            return np.empty(0, dtype=np.int64), int(candidate_chunk_ids.size), total_candidate_segments
+        return np.sort(positions, kind="stable"), int(candidate_chunk_ids.size), total_candidate_segments
+    except TypeError:
+        pass
+
+    parts = []
+    total_candidate_segments = 0
+
+    for chunk_id in candidate_chunk_ids:
         chunk_items = int(offsets[chunk_id + 1] - offsets[chunk_id])
         segment_count = _segment_row_count(chunk_items, nav_segment_len)
         l2_sidecar.get_1d_span_numpy(l2_row, int(chunk_id), 0, nsegments_per_chunk)
@@ -3108,11 +3165,11 @@ def _exact_positions_from_reduced_chunk_nav_ooc(
             parts.append(chunk_id * chunk_len + positions_view.astype(np.int64, copy=False))
 
     if not parts:
-        return np.empty(0, dtype=np.int64), int(np.count_nonzero(candidate_chunks)), total_candidate_segments
+        return np.empty(0, dtype=np.int64), int(candidate_chunk_ids.size), total_candidate_segments
     positions = np.concatenate(parts) if len(parts) > 1 else parts[0]
     return (
         np.sort(positions, kind="stable"),
-        int(np.count_nonzero(candidate_chunks)),
+        int(candidate_chunk_ids.size),
         total_candidate_segments,
     )
 

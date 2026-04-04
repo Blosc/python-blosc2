@@ -41,11 +41,20 @@ add_custom_command(
   DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/blosc2_ext.pyx"
   VERBATIM)
 
+add_custom_command(
+  OUTPUT indexing_ext.c
+  COMMAND Python::Interpreter -m cython
+          "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/indexing_ext.pyx" --output-file indexing_ext.c
+  DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/blosc2/indexing_ext.pyx"
+  VERBATIM)
+
 # ...and add it to the target
 Python_add_library(blosc2_ext MODULE blosc2_ext.c WITH_SOABI)
+Python_add_library(indexing_ext MODULE indexing_ext.c WITH_SOABI)
 
 # We need to link against NumPy
 target_link_libraries(blosc2_ext PRIVATE Python::NumPy)
+target_link_libraries(indexing_ext PRIVATE Python::NumPy)
 
 # Fetch and build miniexpr library
 include(FetchContent)
@@ -72,6 +81,7 @@ FetchContent_MakeAvailable(miniexpr)
 target_link_libraries(blosc2_ext PRIVATE miniexpr_static)
 
 target_compile_features(blosc2_ext PRIVATE c_std_11)
+target_compile_features(indexing_ext PRIVATE c_std_11)
 if(WIN32 AND CMAKE_C_COMPILER_ID STREQUAL "Clang")
     execute_process(
         COMMAND "${CMAKE_C_COMPILER}" -print-resource-dir
@@ -148,7 +158,7 @@ endif()
 
 # Python extension -> site-packages/blosc2
 install(
-  TARGETS blosc2_ext
+  TARGETS blosc2_ext indexing_ext
   LIBRARY DESTINATION ${SKBUILD_PLATLIB_DIR}/blosc2
 )
 
