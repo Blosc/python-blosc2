@@ -1,11 +1,12 @@
 # CTable Implementation Log
 
-This document records what was implemented as part of the `ctable-schema.md` redesign.
-It covers every new file, every significant change, and the reasoning behind each decision.
+This document records everything implemented across the CTable feature:
+the `ctable-schema.md` redesign (schema, validation, serialization, optimizations)
+and the `ctable-persistency.md` phase (file-backed storage, `open()`, read-only mode).
 
 ---
 
-## Overview
+## Phase 1 — Schema redesign (`ctable-schema.md`)
 
 The goal was to replace the original Pydantic-`BaseModel`-based schema API with a
 **dataclass-first schema API** using declarative spec objects (`b2.int64()`,
@@ -200,11 +201,11 @@ All tests live in `tests/ctable/`.
 | `test_extend_delete.py` | Interleaved extend/delete cycles, mask correctness, resize behavior |
 | `test_row_logic.py` | Row indexer (int/slice/list), views, chained views |
 
-Total: **127 tests, all passing**.
+Total: **135 tests, all passing** (after Phase 1 + optimizations).
 
 ---
 
-## Design decisions
+## Phase 1 design decisions
 
 **Why two validation paths?**
 `append()` handles one row at a time — Pydantic is fast enough and also performs
@@ -220,6 +221,195 @@ Existing code using `class RowModel(BaseModel)` continues to work without
 modification. The adapter is not on the critical path for new code.
 
 **Why `schema_to_dict` / `schema_from_dict` now?**
-Persistence (`save()`/`load()`) requires a self-contained schema representation.
-Establishing the serialization format early means the format will be stable before
-anything depends on it.
+Persistence requires a self-contained schema representation that survives without
+the original Python dataclass. Establishing the serialization format before
+persistence was built ensured the format was stable before anything depended on it.
+
+---
+
+## Phase 1 optimizations (post-schema)
+
+Several performance improvements were made after the schema work was complete:
+
+**`_last_pos` cache**
+Added `_last_pos: int | None` to `CTable`. Tracks the physical index of the next
+write slot so that `append()` and `extend()` no longer need to scan backward through
+chunk metadata on every call. Set to `None` after any deletion (triggers one lazy
+recalculation on the next write). Set to `_n_rows` after `compact()`. Eliminated a
+backward O(n_chunks) scan per insert.
+
+**`_grow()` helper**
+Extracted the capacity-doubling logic into `_grow()`. Removes duplication between
+`append()` and `extend()`.
+
+**In-place delete**
+`delete()` now writes the updated boolean array back with `self._valid_rows[:] =
+valid_rows_np` (in-place slice assignment) instead of creating a new NDArray.
+Avoids a full allocation on each delete.
+
+**`head()` / `tail()` refactored**
+Both methods now reuse `_find_physical_index()` instead of containing their own
+chunk-walk loops.
+
+**`_make_view()` classmethod**
+Added to construct view CTables without going through `__init__`. Avoids
+allocating and immediately discarding NDArrays that were never used.
+
+**`_NumericSpec` mixin + new spec types**
+All numeric specs (`int8` through `uint64`, `float32`, `float64`) share a common
+`_NumericSpec` mixin for `ge`/`gt`/`le`/`lt` constraint handling, eliminating
+boilerplate. New specs added: `int8`, `int16`, `int32`, `uint8`, `uint16`,
+`uint32`, `uint64`, `float32`.
+
+**String vectorized validation**
+`validate_column_values` uses `np.char.str_len()` (true C-level) for `U`/`S` dtype
+arrays instead of `np.vectorize(len)` (Python loop in disguise). The check also
+extracted `_validate_string_lengths()` to reduce cyclomatic complexity.
+
+**Column name validation**
+`compile_schema` now calls `_validate_column_name()` on every field. Rejects names
+that are empty, start with `_`, or contain `/` — rules that apply equally to
+in-memory and persistent tables.
+
+---
+
+## Phase 2 — Persistency (`ctable-persistency.md`)
+
+### New file: `src/blosc2/ctable_storage.py`
+
+A storage-backend abstraction that keeps all file I/O out of `ctable.py`.
+
+**`TableStorage`** — interface class defining:
+`create_column`, `open_column`, `create_valid_rows`, `open_valid_rows`,
+`save_schema`, `load_schema`, `table_exists`, `is_read_only`.
+
+**`InMemoryTableStorage`** — trivial implementation that creates plain in-memory
+`blosc2.NDArray` objects and is a no-op for `save_schema`. Used when `urlpath` is
+not provided (existing default behaviour, unchanged).
+
+**`FileTableStorage`** — file-backed implementation.
+
+Disk layout:
+
+```
+<urlpath>/
+    _meta.b2frame       ← blosc2.SChunk; vlmeta holds kind, version, schema JSON
+    _valid_rows.b2nd    ← file-backed boolean NDArray (tombstone mask)
+    _cols/
+        <name>.b2nd     ← one file-backed NDArray per column
+```
+
+Key implementation notes:
+- `save_schema` always opens `_meta.b2frame` with `mode="w"` (create path only).
+- `load_schema` / `check_kind` use `blosc2.open()` (not `blosc2.SChunk(...,
+  mode="a")`), which is the correct API for reopening an existing SChunk file.
+- File-backed NDArrays (`urlpath=..., mode="w"`) support in-place writes
+  (`col[pos] = value`, `col[start:end] = arr`) that persist immediately. This is
+  why resize (`_grow()`), append, extend, and delete all work transparently on
+  persistent tables.
+- `_n_rows` on reopen is reconstructed as `blosc2.count_nonzero(valid_rows)` —
+  always correct because unwritten slots are `False`, same as deleted slots.
+- `_last_pos` is set to `None` on reopen and resolved lazily by `_resolve_last_pos()`
+  on the first write.
+
+### Changes to `src/blosc2/ctable.py`
+
+**Constructor**
+
+New parameters: `urlpath: str | None = None`, `mode: str = "a"`.
+
+Logic:
+- `urlpath=None` → `InMemoryTableStorage` → existing behaviour unchanged.
+- `urlpath` + existing table + `mode != "w"` → open existing (load schema from
+  disk, open file-backed arrays, reconstruct state).
+- `urlpath` + `mode="w"` or no existing table → create new (compile schema,
+  save to disk, create file-backed arrays).
+- Passing `new_data` when opening an existing table raises `ValueError`.
+
+**`CTable.open(cls, urlpath, *, mode="r")`**
+
+New classmethod for ergonomic read-only access. Opens the table, verifies
+`kind="ctable"` in vlmeta, reconstructs schema from JSON (no dataclass needed),
+returns a fully usable `CTable`.
+
+**Read-only enforcement**
+
+`_read_only: bool` flag set from `storage.is_read_only()`. Guards added to the top
+of `append()`, `extend()`, `delete()`, `compact()` — each raises
+`ValueError("Table is read-only (opened with mode='r').")`.
+
+**`_make_view(cls, parent, new_valid_rows)`**
+
+New classmethod that constructs a view `CTable` directly via `cls.__new__` without
+calling `__init__`. Replaces the old `CTable(self._row_type, expected_size=...)` +
+`retval._cols = self._cols` pattern, which was wasteful (allocated NDArrays then
+discarded them) and broke when `_row_type` is `None` (tables opened via `open()`).
+
+**`schema_dict()`**
+
+No longer needs a local import of `schema_to_dict` — now imported at the module top.
+
+### New test file: `tests/ctable/test_persistency.py`
+
+23 tests covering:
+
+| Test group | What it checks |
+|---|---|
+| Layout | `_meta.b2frame`, `_valid_rows.b2nd`, `_cols/<name>.b2nd` all exist after creation |
+| Metadata | `kind`, `version`, `schema` in vlmeta; column names and order in schema JSON |
+| Round-trips | Data survives reopen via both `CTable(Row, urlpath=..., mode="a")` and `CTable.open()` |
+| Column order | Preserved exactly from schema JSON, not from filesystem order |
+| Constraints | Validation re-enabled after reopen (schema reconstructed from disk) |
+| Append/extend/delete after reopen | Mutations visible in subsequent opens |
+| `_valid_rows` on disk | Tombstone mask correctly stored and loaded |
+| `mode="w"` | Overwrites existing table; subsequent open sees empty table |
+| Read-only | `append`, `extend`, `delete`, `compact` all raise on `mode="r"` |
+| Read-only reads | `row[]`, column access, `head()`, `tail()`, `where()` all work |
+| Error cases | `FileNotFoundError` for missing path; `ValueError` for wrong kind |
+| Column name validation | Empty, `_`-prefixed, `/`-containing names rejected |
+| `new_data` guard | `ValueError` when `new_data` passed to open-existing path |
+| Capacity growth | `_grow()` (resize) works on file-backed arrays and survives reopen |
+
+Total: **158 tests, all passing**.
+
+### New benchmark: `bench/ctable/bench_persistency.py`
+
+Four sections:
+
+1. **`extend()` bulk insert** — in-memory vs file-backed at 1k–1M rows.
+   Overhead converges to ~1x at 1M rows (compression dominates, not I/O).
+2. **`open()` / reopen time** — ~4–10 ms regardless of table size. Fixed cost:
+   open 3 files (meta, valid_rows, one column) + parse schema JSON.
+3. **`append()` single-row** — file-backed is ~6x slower per row (~3 ms vs ~0.5 ms).
+   Recommendation: batch inserts via `extend()` for persistent tables.
+4. **Column `to_numpy()`** — essentially identical between backends (≤1.06x ratio).
+   Decompression dominates; file I/O is negligible once data is loaded.
+
+---
+
+## Phase 2 design decisions
+
+**Why direct files instead of TreeStore?**
+TreeStore stores snapshots of in-memory arrays. In-place writes to a
+TreeStore-retrieved NDArray do not persist after reopen. File-backed NDArrays
+created with `urlpath=...` support in-place writes natively. Using direct `.b2nd`
+files aligns with how the rest of blosc2 handles persistent arrays.
+
+**Why `blosc2.SChunk` vlmeta for metadata, not JSON files?**
+`vlmeta` is compressed and is already part of the blosc2 ecosystem.
+`blosc2.open()` works on `.b2frame` files the same way it works on `.b2nd` files,
+keeping the open path uniform.
+
+**Why not store `_last_pos` in metadata?**
+`_resolve_last_pos()` reconstructs it in O(n_chunks) with no full decompression.
+Storing it would create a write on every `append()` just to update a counter in the
+SChunk — not worth the extra I/O.
+
+**Why `_make_view()` instead of calling `__init__`?**
+`__init__` now has storage-routing logic and would try to create new NDArrays even
+for views (which immediately get thrown away). `_make_view()` via `__new__` is
+explicit and zero-waste.
+
+**Why `CTable.open()` defaults to `mode="r"`?**
+The most common read-back scenario is inspection or analysis, not modification.
+Defaulting to read-only prevents accidental mutations on shared or archived tables.

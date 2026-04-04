@@ -207,6 +207,30 @@ def validate_annotation_matches_spec(name: str, annotation: Any, spec: SchemaSpe
 # ---------------------------------------------------------------------------
 
 
+_RESERVED_COLUMN_NAMES: frozenset[str] = frozenset({"_meta", "_valid_rows", "_cols"})
+
+
+def _validate_column_name(name: str) -> None:
+    """Raise :exc:`ValueError` if *name* is not a legal CTable column name.
+
+    Rules (enforced for both in-memory and persistent tables so that an
+    in-memory schema can always be persisted without surprises):
+
+    * must be a non-empty string
+    * must not start with ``_``  (reserved for internal table layout)
+    * must not contain ``/``     (used as path separator in persistent layout)
+    * must not be one of the reserved internal names
+    """
+    if not name:
+        raise ValueError("Column name cannot be empty.")
+    if name.startswith("_"):
+        raise ValueError(f"Column name cannot start with '_' (reserved for internal use): {name!r}")
+    if "/" in name:
+        raise ValueError(f"Column name cannot contain '/': {name!r}")
+    if name in _RESERVED_COLUMN_NAMES:
+        raise ValueError(f"Column name {name!r} is reserved for internal CTable use.")
+
+
 def compile_schema(row_cls: type[Any]) -> CompiledSchema:
     """Compile *row_cls* (a dataclass) into a :class:`CompiledSchema`.
 
@@ -226,6 +250,8 @@ def compile_schema(row_cls: type[Any]) -> CompiledSchema:
     TypeError
         If *row_cls* is not a dataclass, if a field spec is incompatible with
         its annotation, or if an unsupported annotation is encountered.
+    ValueError
+        If any column name violates the naming rules.
     """
     if not dataclasses.is_dataclass(row_cls) or not isinstance(row_cls, type):
         raise TypeError(
@@ -242,6 +268,7 @@ def compile_schema(row_cls: type[Any]) -> CompiledSchema:
 
     for dc_field in dataclasses.fields(row_cls):
         name = dc_field.name
+        _validate_column_name(name)
         annotation = hints.get(name, dc_field.type)
         meta = get_blosc2_field_metadata(dc_field)
 

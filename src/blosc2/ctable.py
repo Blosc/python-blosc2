@@ -18,6 +18,8 @@ from typing import Any, Generic, TypeVar
 import numpy as np
 
 from blosc2 import compute_chunks_blocks
+from blosc2.ctable_storage import FileTableStorage, InMemoryTableStorage, TableStorage
+from blosc2.schema_compiler import schema_from_dict, schema_to_dict
 
 try:
     from line_profiler import profile
@@ -369,6 +371,8 @@ class CTable(Generic[RowT]):
         row_type: type[RowT],
         new_data=None,
         *,
+        urlpath: str | None = None,
+        mode: str = "a",
         expected_size: int = 1_048_576,
         compact: bool = False,
         validate: bool = True,
@@ -379,47 +383,86 @@ class CTable(Generic[RowT]):
         self._validate = validate
         self._table_cparams = cparams
         self._table_dparams = dparams
-
-        # Build compiled schema from either a dataclass or a legacy Pydantic model
-        if dataclasses.is_dataclass(row_type) and isinstance(row_type, type):
-            self._schema: CompiledSchema = compile_schema(row_type)
-        else:
-            self._schema = _compile_pydantic_schema(row_type)
-
         self._cols: dict[str, blosc2.NDArray] = {}
-        self._n_rows: int = 0
-        self._last_pos: int | None = 0  # physical index of next write slot;
-        # None means it must be recalculated
-        # (set after any deletion)
         self._col_widths: dict[str, int] = {}
         self.col_names: list[str] = []
         self.row = _RowIndexer(self)
         self.auto_compact = compact
         self.base = None
 
-        default_chunks, default_blocks = compute_chunks_blocks((expected_size,))
-        self._valid_rows = blosc2.zeros(
-            shape=(expected_size,),
-            dtype=np.bool_,
-            chunks=default_chunks,
-            blocks=default_blocks,
-        )
+        # Choose storage backend
+        if urlpath is not None:
+            storage: TableStorage = FileTableStorage(urlpath, mode)
+        else:
+            storage = InMemoryTableStorage()
+        self._storage = storage
+        self._read_only = storage.is_read_only()
 
-        self._init_columns(expected_size, default_chunks, default_blocks)
+        if storage.table_exists() and mode != "w":
+            # ---- Open existing persistent table ----
+            if new_data is not None:
+                raise ValueError(
+                    "Cannot pass new_data when opening an existing table. Use mode='w' to overwrite."
+                )
+            storage.check_kind()
+            schema_dict = storage.load_schema()
+            self._schema: CompiledSchema = schema_from_dict(schema_dict)
+            self._schema = CompiledSchema(
+                row_cls=row_type,
+                columns=self._schema.columns,
+                columns_by_name=self._schema.columns_by_name,
+            )
+            self.col_names = [c["name"] for c in schema_dict["columns"]]
+            self._valid_rows = storage.open_valid_rows()
+            for name in self.col_names:
+                col = storage.open_column(name)
+                self._cols[name] = col
+                cc = self._schema.columns_by_name[name]
+                self._col_widths[name] = max(len(name), cc.display_width)
+            self._n_rows = int(blosc2.count_nonzero(self._valid_rows))
+            self._last_pos = None  # resolve lazily on first write
+        else:
+            # ---- Create new table ----
+            if storage.is_read_only():
+                raise FileNotFoundError(f"No CTable found at {urlpath!r}")
 
-        if new_data is not None:
-            self._load_initial_data(new_data)
+            # Build compiled schema from either a dataclass or a legacy Pydantic model
+            if dataclasses.is_dataclass(row_type) and isinstance(row_type, type):
+                self._schema = compile_schema(row_type)
+            else:
+                self._schema = _compile_pydantic_schema(row_type)
 
-    def _init_columns(self, expected_size: int, default_chunks, default_blocks) -> None:
+            self._n_rows = 0
+            self._last_pos = 0
+
+            default_chunks, default_blocks = compute_chunks_blocks((expected_size,))
+            self._valid_rows = storage.create_valid_rows(
+                shape=(expected_size,),
+                chunks=default_chunks,
+                blocks=default_blocks,
+            )
+            self._init_columns(expected_size, default_chunks, default_blocks, storage)
+            storage.save_schema(schema_to_dict(self._schema))
+
+            if new_data is not None:
+                self._load_initial_data(new_data)
+
+    def _init_columns(
+        self, expected_size: int, default_chunks, default_blocks, storage: TableStorage
+    ) -> None:
         """Create one NDArray per column using the compiled schema."""
         for col in self._schema.columns:
             self.col_names.append(col.name)
             self._col_widths[col.name] = max(len(col.name), col.display_width)
-            storage = self._resolve_column_storage(col, default_chunks, default_blocks)
-            self._cols[col.name] = blosc2.zeros(
-                shape=(expected_size,),
+            col_storage = self._resolve_column_storage(col, default_chunks, default_blocks)
+            self._cols[col.name] = storage.create_column(
+                col.name,
                 dtype=col.dtype,
-                **storage,
+                shape=(expected_size,),
+                chunks=col_storage["chunks"],
+                blocks=col_storage["blocks"],
+                cparams=col_storage.get("cparams"),
+                dparams=col_storage.get("dparams"),
             )
 
     def _resolve_column_storage(
@@ -554,8 +597,87 @@ class CTable(Generic[RowT]):
             yield _Row(self, i)
 
     # ------------------------------------------------------------------
+    # Open existing table (classmethod)
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def open(cls, urlpath: str, *, mode: str = "r") -> CTable:
+        """Open a persistent CTable from *urlpath*.
+
+        Parameters
+        ----------
+        urlpath:
+            Path to the table root directory (created by passing ``urlpath``
+            to :class:`CTable`).
+        mode:
+            ``'r'`` (default) — read-only.
+            ``'a'`` — read/write.
+
+        Raises
+        ------
+        FileNotFoundError
+            If *urlpath* does not contain a CTable.
+        ValueError
+            If the metadata at *urlpath* does not identify a CTable.
+        """
+        storage = FileTableStorage(urlpath, mode)
+        if not storage.table_exists():
+            raise FileNotFoundError(f"No CTable found at {urlpath!r}")
+        storage.check_kind()
+        schema_dict = storage.load_schema()
+        schema = schema_from_dict(schema_dict)
+        col_names = [c["name"] for c in schema_dict["columns"]]
+
+        obj = cls.__new__(cls)
+        obj._row_type = None
+        obj._validate = True
+        obj._table_cparams = None
+        obj._table_dparams = None
+        obj._storage = storage
+        obj._read_only = storage.is_read_only()
+        obj._schema = schema
+        obj._cols = {}
+        obj._col_widths = {}
+        obj.col_names = col_names
+        obj.row = _RowIndexer(obj)
+        obj.auto_compact = False
+        obj.base = None
+
+        obj._valid_rows = storage.open_valid_rows()
+        for name in col_names:
+            obj._cols[name] = storage.open_column(name)
+            cc = schema.columns_by_name[name]
+            obj._col_widths[name] = max(len(name), cc.display_width)
+
+        obj._n_rows = int(blosc2.count_nonzero(obj._valid_rows))
+        obj._last_pos = None  # resolve lazily on first write
+        return obj
+
+    # ------------------------------------------------------------------
     # View / filtering
     # ------------------------------------------------------------------
+
+    @classmethod
+    def _make_view(cls, parent: CTable, new_valid_rows: blosc2.NDArray) -> CTable:
+        """Construct a read-only view sharing *parent*'s columns."""
+        obj = cls.__new__(cls)
+        obj._row_type = parent._row_type
+        obj._validate = parent._validate
+        obj._table_cparams = parent._table_cparams
+        obj._table_dparams = parent._table_dparams
+        obj._storage = None
+        obj._read_only = True
+        obj._schema = parent._schema
+        obj._cols = parent._cols  # shared — views never mutate
+        obj._col_widths = parent._col_widths
+        obj.col_names = parent.col_names
+        obj.row = _RowIndexer(obj)
+        obj.auto_compact = parent.auto_compact
+        obj.base = parent
+        obj._valid_rows = new_valid_rows
+        obj._n_rows = int(blosc2.count_nonzero(new_valid_rows))
+        obj._last_pos = None
+        return obj
 
     def view(self, new_valid_rows):
         if not (
@@ -573,19 +695,7 @@ class CTable(Generic[RowT]):
         if len(self._valid_rows) != len(new_valid_rows):
             raise ValueError()
 
-        retval = CTable(
-            self._row_type,
-            compact=self.auto_compact,
-            expected_size=len(self._valid_rows),
-        )
-        retval._cols = self._cols
-        retval._n_rows = blosc2.count_nonzero(new_valid_rows)
-        retval._col_widths = self._col_widths
-        retval.col_names = self.col_names
-        retval.base = self
-        retval._valid_rows = new_valid_rows
-
-        return retval
+        return CTable._make_view(self, new_valid_rows)
 
     def head(self, N: int = 5) -> CTable:
         if N <= 0:
@@ -647,6 +757,8 @@ class CTable(Generic[RowT]):
     # ------------------------------------------------------------------
 
     def compact(self):
+        if self._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
         real_poss = blosc2.where(self._valid_rows, np.array(range(len(self._valid_rows)))).compute()
         start = 0
         block_size = self._valid_rows.blocks[0]
@@ -692,13 +804,7 @@ class CTable(Generic[RowT]):
             raise KeyError(f"No column named {name!r}. Available: {self.col_names}") from None
 
     def schema_dict(self) -> dict[str, Any]:
-        """Return a JSON-compatible dict describing this table's schema.
-
-        Suitable for debugging, serialization, and future ``save()``/``load()``
-        support.  See :func:`~blosc2.schema_compiler.schema_to_dict`.
-        """
-        from blosc2.schema_compiler import schema_to_dict
-
+        """Return a JSON-compatible dict describing this table's schema."""
         return schema_to_dict(self._schema)
 
     def info(self) -> None:
@@ -769,6 +875,8 @@ class CTable(Generic[RowT]):
             self.extend(new_data)
 
     def append(self, data: list | np.void | np.ndarray) -> None:
+        if self._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
             raise TypeError("Cannot extend view.")
 
@@ -792,6 +900,8 @@ class CTable(Generic[RowT]):
         self._n_rows += 1
 
     def delete(self, ind: int | slice | str | Iterable) -> None:
+        if self._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
         valid_rows_np = self._valid_rows[:]
         true_pos = np.where(valid_rows_np)[0]
 
@@ -809,6 +919,8 @@ class CTable(Generic[RowT]):
         self._last_pos = None  # recalculate on next write
 
     def extend(self, data: list | CTable | Any, *, validate: bool | None = None) -> None:
+        if self._read_only:
+            raise ValueError("Table is read-only (opened with mode='r').")
         if self.base is not None:
             raise TypeError("Cannot extend view.")
         if len(data) <= 0:
@@ -908,12 +1020,3 @@ class CTable(Generic[RowT]):
 
         new_mask = blosc2.asarray(new_mask_np)
         return self.view(new_mask)
-
-    # ------------------------------------------------------------------
-    # Persistence (not yet implemented)
-    # ------------------------------------------------------------------
-
-    def save(self, urlpath: str, group: str = "table") -> None: ...
-
-    @classmethod
-    def load(cls, urlpath: str, group: str = "table", row_type: type[RowT] | None = None) -> CTable: ...

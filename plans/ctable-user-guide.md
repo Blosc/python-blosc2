@@ -77,7 +77,7 @@ class Row:
 ```python
 import blosc2 as b2
 
-# Empty table
+# Empty table (in-memory)
 t = b2.CTable(Row)
 
 # Table pre-loaded with data
@@ -94,6 +94,62 @@ t = b2.CTable(Row, compact=True)
 
 # Table-level compression settings (applied to all columns unless overridden)
 t = b2.CTable(Row, cparams={"codec": b2.Codec.ZSTD, "clevel": 5})
+```
+
+### Persistent tables
+
+Pass `urlpath` to store the table on disk. The table root is a directory containing
+compressed array files — everything is handled automatically.
+
+```python
+# Create a new persistent table (overwrites any existing table at that path)
+t = b2.CTable(Row, urlpath="people", mode="w", expected_size=1_000_000)
+t.extend([(i, float(i % 100), True) for i in range(10_000)])
+
+# Open an existing persistent table for reading and writing
+t = b2.CTable(Row, urlpath="people", mode="a")
+t.append((99999, 50.0, True))
+
+# Open read-only (default for CTable.open)
+t = b2.CTable.open("people")  # mode="r" by default
+t = b2.CTable.open("people", mode="r")  # explicit
+
+# Open read/write via the classmethod
+t = b2.CTable.open("people", mode="a")
+```
+
+`mode` values:
+
+| mode | behaviour |
+|---|---|
+| `"w"` | create (overwrite if the path already exists) |
+| `"a"` | open existing or create new |
+| `"r"` | open existing read-only |
+
+In-memory tables (`urlpath=None`, the default) behave exactly as before — no
+`mode` or path handling is involved.
+
+### Disk layout
+
+```
+people/
+    _meta.b2frame       ← schema JSON, kind marker, version (in vlmeta)
+    _valid_rows.b2nd    ← tombstone mask
+    _cols/
+        id.b2nd
+        score.b2nd
+        active.b2nd
+```
+
+You can inspect the raw metadata:
+
+```python
+import blosc2, json
+
+meta = blosc2.open("people/_meta.b2frame")
+print(meta.vlmeta["kind"])  # "ctable"
+print(meta.vlmeta["version"])  # 1
+schema = json.loads(meta.vlmeta["schema"])
 ```
 
 ### Per-column storage options
@@ -270,6 +326,25 @@ t = b2.CTable(Row, compact=True)
 
 ---
 
+## Read-only mode
+
+When a table is opened with `mode="r"` (or via `CTable.open()` without specifying
+mode), all mutating operations raise immediately:
+
+```python
+t = b2.CTable.open("people")  # read-only
+
+t.append((1, 50.0, True))  # ValueError: Table is read-only
+t.extend([(1, 50.0, True)])  # ValueError: Table is read-only
+t.delete(0)  # ValueError: Table is read-only
+t.compact()  # ValueError: Table is read-only
+```
+
+All read operations work normally: `row[]`, column access, `head()`, `tail()`,
+`where()`, `len()`, `info()`, `schema_dict()`.
+
+---
+
 ## Filtering
 
 `where()` applies a boolean expression and returns a read-only view:
@@ -359,7 +434,7 @@ class Measurement:
     valid: bool = b2.field(b2.bool(), default=True)
 
 
-# Create and populate
+# Create and populate (in-memory)
 t = b2.CTable(Measurement, expected_size=10_000)
 t.extend([(i, float(i % 200 - 100), i % 3 != 0) for i in range(5000)])
 
@@ -375,4 +450,37 @@ if invalid_indices:
 # Inspect
 t.info()
 print(t.schema_dict())
+```
+
+## Persistency example
+
+```python
+from dataclasses import dataclass
+import blosc2 as b2
+
+
+@dataclass
+class Measurement:
+    sensor_id: int = b2.field(b2.int64(ge=0))
+    value: float = b2.field(b2.float64(ge=-1000, le=1000), default=0.0)
+    valid: bool = b2.field(b2.bool(), default=True)
+
+
+# --- Session 1: create and populate ---
+t = b2.CTable(Measurement, urlpath="sensors", mode="w", expected_size=100_000)
+t.extend([(i, float(i % 200 - 100), i % 3 != 0) for i in range(50_000)])
+print(f"Saved {len(t)} rows to disk")
+# Table is automatically persisted — no explicit save() needed.
+
+# --- Session 2: reopen and query ---
+t = b2.CTable.open("sensors")  # read-only by default
+hot = t.where(t["value"] > 50)
+print(f"Hot readings: {len(hot)}")
+arr = t["sensor_id"].to_numpy()
+print(f"First 5 sensor IDs: {arr[:5]}")
+
+# --- Session 3: reopen and append more data ---
+t = b2.CTable(Measurement, urlpath="sensors", mode="a")
+t.extend([(50_000 + i, float(i), True) for i in range(1_000)])
+print(f"Total rows: {len(t)}")
 ```
