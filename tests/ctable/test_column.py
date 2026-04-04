@@ -5,25 +5,20 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-from typing import Annotated
+from dataclasses import dataclass
 
 import numpy as np
 import pytest
-from pydantic import BaseModel, Field
 
 import blosc2
 from blosc2 import CTable
 
 
-class NumpyDtype:
-    def __init__(self, dtype):
-        self.dtype = dtype
-
-
-class RowModel(BaseModel):
-    id: Annotated[int, NumpyDtype(np.int64)] = Field(ge=0)
-    score: Annotated[float, NumpyDtype(np.float64)] = Field(ge=0, le=100)
-    active: Annotated[bool, NumpyDtype(np.bool_)] = True
+@dataclass
+class Row:
+    id: int = blosc2.field(blosc2.int64(ge=0))
+    score: float = blosc2.field(blosc2.float64(ge=0))
+    active: bool = blosc2.field(blosc2.bool(), default=True)
 
 
 DATA20 = [(i, float(i * 10), True) for i in range(20)]
@@ -36,7 +31,7 @@ DATA20 = [(i, float(i * 10), True) for i in range(20)]
 
 def test_column_metadata():
     """dtype correctness, internal reference consistency, and mask defaults."""
-    tabla = CTable(RowModel, new_data=DATA20)
+    tabla = CTable(Row, new_data=DATA20)
 
     assert tabla.id.dtype == np.int64
     assert tabla.score.dtype == np.float64
@@ -52,7 +47,7 @@ def test_column_metadata():
 
 def test_column_getitem_no_holes():
     """int, slice, and list indexing on a full table."""
-    tabla = CTable(RowModel, new_data=DATA20)
+    tabla = CTable(Row, new_data=DATA20)
     col = tabla.id
 
     # int
@@ -73,7 +68,7 @@ def test_column_getitem_no_holes():
 
 def test_column_getitem_with_holes():
     """int, slice, and list indexing after deletions."""
-    tabla = CTable(RowModel, new_data=DATA20)
+    tabla = CTable(Row, new_data=DATA20)
     tabla.delete([1, 3, 5, 7, 9])
     col = tabla.id
 
@@ -88,7 +83,7 @@ def test_column_getitem_with_holes():
     assert list(col[[0, 2, 4]]) == [0, 4, 8]
     assert list(col[[5, 3, 1]]) == [10, 6, 2]
 
-    tabla2 = CTable(RowModel, new_data=DATA20)
+    tabla2 = CTable(Row, new_data=DATA20)
     tabla2.delete([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])
     col2 = tabla2.id
 
@@ -99,7 +94,7 @@ def test_column_getitem_with_holes():
 
 def test_column_getitem_out_of_range():
     """int and list indexing raise IndexError when out of bounds."""
-    tabla = CTable(RowModel, new_data=DATA20)
+    tabla = CTable(Row, new_data=DATA20)
     tabla.delete([1, 3, 5, 7, 9])
     col = tabla.id
 
@@ -113,7 +108,7 @@ def test_column_getitem_out_of_range():
 
 def test_column_setitem_no_holes():
     """int, slice, and list assignment on a full table."""
-    tabla = CTable(RowModel, new_data=DATA20)
+    tabla = CTable(Row, new_data=DATA20)
     col = tabla.id
 
     col[0] = 999
@@ -134,7 +129,7 @@ def test_column_setitem_no_holes():
 
 def test_column_setitem_with_holes():
     """int, slice, and list assignment after deletions."""
-    tabla = CTable(RowModel, new_data=DATA20)
+    tabla = CTable(Row, new_data=DATA20)
     tabla.delete([1, 3, 5, 7, 9])
     col = tabla.id
 
@@ -162,14 +157,14 @@ def test_column_setitem_with_holes():
 
 def test_column_iter():
     """Iteration over full table, with odd-index holes, and on score column."""
-    tabla = CTable(RowModel, new_data=DATA20)
+    tabla = CTable(Row, new_data=DATA20)
     assert list(tabla.id) == list(range(20))
 
-    tabla2 = CTable(RowModel, new_data=DATA20)
+    tabla2 = CTable(Row, new_data=DATA20)
     tabla2.delete([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])
     assert list(tabla2.id) == [0, 2, 4, 6, 8, 10, 12, 14, 16, 18]
 
-    tabla3 = CTable(RowModel, new_data=DATA20)
+    tabla3 = CTable(Row, new_data=DATA20)
     tabla3.delete([0, 5, 10, 15])
     # fmt: off
     expected_score = [
@@ -184,14 +179,14 @@ def test_column_iter():
 
 def test_column_len():
     """len() after no deletions, partial deletions, cumulative deletions, and cross-column."""
-    tabla = CTable(RowModel, new_data=DATA20)
+    tabla = CTable(Row, new_data=DATA20)
     col = tabla.id
     assert len(col) == 20
 
     tabla.delete([1, 3, 5, 7, 9])
     assert len(col) == 15
 
-    tabla2 = CTable(RowModel, new_data=DATA20)
+    tabla2 = CTable(Row, new_data=DATA20)
     col2 = tabla2.id
     tabla2.delete([0, 1, 2])
     assert len(col2) == 17
@@ -199,7 +194,7 @@ def test_column_len():
     assert len(col2) == 12
 
     data = [(i, float(i * 10), i % 2 == 0) for i in range(10)]
-    tabla3 = CTable(RowModel, new_data=data, expected_size=10)
+    tabla3 = CTable(Row, new_data=data, expected_size=10)
     tabla3.delete([0, 1, 5, 6, 9])
     assert len(tabla3.id) == len(tabla3.score) == len(tabla3.active) == 5
     for i in range(len(tabla3.id)):
@@ -208,12 +203,12 @@ def test_column_len():
 
 def test_column_edge_cases():
     """Empty table and fully-deleted table both behave as zero-length columns."""
-    tabla = CTable(RowModel)
+    tabla = CTable(Row)
     assert len(tabla.id) == 0
     assert list(tabla.id) == []
 
     data = [(i, float(i * 10), True) for i in range(10)]
-    tabla2 = CTable(RowModel, new_data=data)
+    tabla2 = CTable(Row, new_data=data)
     tabla2.delete(list(range(10)))
     assert len(tabla2.id) == 0
     assert list(tabla2.id) == []
@@ -226,7 +221,7 @@ def test_column_edge_cases():
 
 def test_column_slice_returns_view():
     """Column[slice] returns a Column instance with a non-None mask."""
-    tabla = CTable(RowModel, new_data=DATA20)
+    tabla = CTable(Row, new_data=DATA20)
     col = tabla.id
 
     view = col[0:5]
@@ -238,7 +233,7 @@ def test_column_slice_returns_view():
 
 def test_to_array_no_holes():
     """to_array() on a slice view returns correct data on a full table."""
-    tabla = CTable(RowModel, new_data=DATA20)
+    tabla = CTable(Row, new_data=DATA20)
     col = tabla.id
 
     np.testing.assert_array_equal(col[0:5].to_numpy(), np.array([0, 1, 2, 3, 4], dtype=np.int64))
@@ -249,7 +244,7 @@ def test_to_array_no_holes():
 
 def test_to_array_with_holes():
     """to_array() on a slice view skips deleted rows correctly."""
-    tabla = CTable(RowModel, new_data=DATA20)
+    tabla = CTable(Row, new_data=DATA20)
     tabla.delete([1, 3, 5, 7, 9, 11, 13, 15, 17, 19])  # keep evens: 0,2,4,...,18
     col = tabla.id
 
@@ -261,7 +256,7 @@ def test_to_array_with_holes():
 
 def test_to_array_full_column():
     """to_array() with no slice (full column) returns all valid rows."""
-    tabla = CTable(RowModel, new_data=DATA20)
+    tabla = CTable(Row, new_data=DATA20)
     tabla.delete([0, 10, 19])
     col = tabla.id
 
@@ -271,7 +266,7 @@ def test_to_array_full_column():
 
 def test_to_array_mask_does_not_include_deleted():
     """Mask & valid_rows intersection excludes deleted rows inside the slice range."""
-    tabla = CTable(RowModel, new_data=DATA20)
+    tabla = CTable(Row, new_data=DATA20)
     # delete rows 2 and 3, which fall inside slice [0:5]
     tabla.delete([2, 3])
     col = tabla.id
@@ -283,7 +278,7 @@ def test_to_array_mask_does_not_include_deleted():
 
 def test_column_view_mask_is_independent():
     """Two slice views on the same column have independent masks."""
-    tabla = CTable(RowModel, new_data=DATA20)
+    tabla = CTable(Row, new_data=DATA20)
     col = tabla.id
 
     view_a = col[0:5]

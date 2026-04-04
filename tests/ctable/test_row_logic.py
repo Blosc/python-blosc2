@@ -5,25 +5,21 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-from typing import Annotated
+from dataclasses import dataclass
 
 import numpy as np
 import pytest
-from pydantic import BaseModel, Field
 
+import blosc2
 from blosc2 import CTable
 from blosc2.ctable import Column
 
 
-class NumpyDtype:
-    def __init__(self, dtype):
-        self.dtype = dtype
-
-
-class RowModel(BaseModel):
-    id: Annotated[int, NumpyDtype(np.int64)] = Field(ge=0)
-    score: Annotated[float, NumpyDtype(np.float64)] = Field(ge=0, le=100)
-    active: Annotated[bool, NumpyDtype(np.bool_)] = True
+@dataclass
+class Row:
+    id: int = blosc2.field(blosc2.int64(ge=0))
+    score: float = blosc2.field(blosc2.float64(ge=0))
+    active: bool = blosc2.field(blosc2.bool(), default=True)
 
 
 def generate_test_data(n_rows: int, start_id: int = 0) -> list:
@@ -40,7 +36,7 @@ def test_row_int_indexing():
     data = generate_test_data(20)
 
     # No holes: spot checks
-    t = CTable(RowModel, new_data=data)
+    t = CTable(Row, new_data=data)
     r = t.row[0]
     assert isinstance(r, CTable)
     assert len(r) == 1
@@ -61,7 +57,7 @@ def test_row_int_indexing():
     assert t.row[5].id[0] == 10
 
     # Out of range
-    t2 = CTable(RowModel, new_data=generate_test_data(10))
+    t2 = CTable(Row, new_data=generate_test_data(10))
     for idx in [10, 100, -11]:
         with pytest.raises(IndexError):
             _ = t2.row[idx]
@@ -72,7 +68,7 @@ def test_row_slice_indexing():
     data = generate_test_data(20)
 
     # No holes
-    t = CTable(RowModel, new_data=data)
+    t = CTable(Row, new_data=data)
     assert isinstance(t.row[0:5], CTable)
     assert list(t.row[0:5].id) == [0, 1, 2, 3, 4]
     assert list(t.row[10:15].id) == [10, 11, 12, 13, 14]
@@ -92,7 +88,7 @@ def test_row_slice_indexing():
     assert list(t.row[5:10].id) == [10, 11, 12, 13, 14]
 
     # Beyond bounds
-    t2 = CTable(RowModel, new_data=generate_test_data(10))
+    t2 = CTable(Row, new_data=generate_test_data(10))
     assert len(t2.row[11:20]) == 0
     assert list(t2.row[5:100].id) == [5, 6, 7, 8, 9]
     assert len(t2.row[100:]) == 0
@@ -110,7 +106,7 @@ def test_row_list_indexing():
     data = generate_test_data(20)
 
     # No holes
-    t = CTable(RowModel, new_data=data)
+    t = CTable(Row, new_data=data)
     r = t.row[[0, 5, 10, 15]]
     assert isinstance(r, CTable)
     assert len(r) == 4
@@ -123,7 +119,7 @@ def test_row_list_indexing():
     assert set(t.row[[5, 3, 1]].id) == {2, 6, 10}
 
     # Negative indices in list
-    t2 = CTable(RowModel, new_data=generate_test_data(10))
+    t2 = CTable(Row, new_data=generate_test_data(10))
     assert set(t2.row[[0, -1, 5]].id) == {0, 5, 9}
 
     # Single element
@@ -146,7 +142,7 @@ def test_row_list_indexing():
 def test_row_view_properties():
     """View metadata, base chain, mask integrity, column liveness, and chained views."""
     data = generate_test_data(100)
-    tabla0 = CTable(RowModel, new_data=data)
+    tabla0 = CTable(Row, new_data=data)
 
     # Base is None on root table
     assert tabla0.base is None
@@ -202,7 +198,7 @@ def test_row_view_properties():
 def test_row_edge_cases():
     """Empty table, fully-deleted table: int raises IndexError, slice returns empty."""
     # Empty table
-    empty = CTable(RowModel)
+    empty = CTable(Row)
     with pytest.raises(IndexError):
         _ = empty.row[0]
     assert len(empty.row[:]) == 0
@@ -210,7 +206,7 @@ def test_row_edge_cases():
 
     # All rows deleted
     data = generate_test_data(10)
-    t = CTable(RowModel, new_data=data)
+    t = CTable(Row, new_data=data)
     t.delete(list(range(10)))
     with pytest.raises(IndexError):
         _ = t.row[0]

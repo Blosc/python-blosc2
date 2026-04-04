@@ -6,11 +6,13 @@
 # LICENSE file in the root directory of this source tree)
 #######################################################################
 
-"""Imports for CTable"""
+"""CTable: a columnar compressed table built on top of blosc2.NDArray."""
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Iterable
+from dataclasses import MISSING
 from typing import Any, Generic, TypeVar
 
 import numpy as np
@@ -22,7 +24,6 @@ try:
 except ImportError:
 
     def profile(func):
-
         def wrapper(*args, **kwargs):
             return func(*args, **kwargs)
 
@@ -30,80 +31,56 @@ except ImportError:
         return wrapper
 
 
-from pydantic import BaseModel
-
 import blosc2
+from blosc2.schema import SchemaSpec
+from blosc2.schema_compiler import (
+    ColumnConfig,
+    CompiledColumn,
+    CompiledSchema,
+    compile_schema,
+)
 
-RowT = TypeVar("RowT", bound=BaseModel)
+# RowT is intentionally left unbound so CTable works with both dataclasses
+# and legacy Pydantic models during the transition period.
+RowT = TypeVar("RowT")
+
+
+# ---------------------------------------------------------------------------
+# Legacy Pydantic-compat helpers
+# Keep these so existing code that uses Annotated[type, NumpyDtype(...)] or
+# Annotated[str, MaxLen(...)] on a pydantic.BaseModel continues to work.
+# ---------------------------------------------------------------------------
 
 
 class NumpyDtype:
+    """Metadata tag for Pydantic-based schemas (legacy)."""
+
     def __init__(self, dtype):
         self.dtype = dtype
 
 
 class MaxLen:
+    """Metadata tag for fixed-width string/bytes columns in Pydantic-based schemas (legacy)."""
+
     def __init__(self, length: int):
         self.length = int(length)
 
 
-#############################
-####  Row model examples  ###
-#############################
-"""
-class RowModel(BaseModel):
-    id: Annotated[int, NumpyDtype(np.int64)] = Field(ge=0)
-    c_val: Annotated[complex, NumpyDtype(np.complex128)] = Field(default=0j)
-    score: Annotated[float, NumpyDtype(np.float64)] = Field(ge=0, le=100)
-    active: Annotated[bool, NumpyDtype(np.bool_)] = True
-
-class RowModel2(BaseModel):
-    id: Annotated[int, NumpyDtype(np.int16)] = Field(ge=0)
-    name: Annotated[str, MaxLen(10)] = Field(default="unknown")
-    # name: Annotated[bytes, MaxLen(10)] = Field(default=b"unknown")
-    score: Annotated[float, NumpyDtype(np.float32)] = Field(ge=0, le=100)
-    active: Annotated[bool, NumpyDtype(np.bool_)] = True
-
-class RowModel3(BaseModel):
-    id: Annotated[int, NumpyDtype(np.int16)] = Field(ge=0)
-    #name: Annotated[str, MaxLen(10)] = Field(default="unknown")
-    name: Annotated[bytes, MaxLen(10)] = Field(default=b"unknown")"""
-
-
-class _RowIndexer:
-    def __init__(self, table):
-        self._table = table
-
-    def __getitem__(self, item):
-        return self._table._run_row_logic(item)
-
-
-class _Row:
-    def __init__(self, table: CTable, nrow: int):
-        self._table = table
-        self._nrow = nrow
-        self._real_pos = None
-
-    def _get_real_pos(self) -> int:
-        self._real_pos = _find_physical_index(self._table._valid_rows, self._nrow)
-        return self._real_pos
-
-    def __getitem__(self, col_name: str):
-        if self._real_pos is None:
-            self._get_real_pos()
-        return self._table._cols[col_name][self._real_pos]
+def _default_display_width(origin) -> int:
+    """Return a sensible display column width for a given Python type (legacy)."""
+    return {int: 12, float: 15, bool: 6, complex: 25}.get(origin, 20)
 
 
 def _resolve_field_dtype(field) -> tuple[np.dtype, int]:
-    """Return (numpy dtype, display_width) for a pydantic model field.
+    """Return (numpy dtype, display_width) for a Pydantic model field (legacy).
 
-    Extracts dtype from NumpyDtype metadata when present, otherwise falls
-    back to a sensible default for each Python primitive type.
+    Extracts dtype from NumpyDtype metadata when present (same class), otherwise
+    falls back to a sensible default for each Python primitive type.
     """
     annotation = field.annotation
     origin = getattr(annotation, "__origin__", annotation)
 
-    # str / bytes: look for MaxLen metadata, build fixed-width dtype
+    # str / bytes → look for MaxLen metadata, build fixed-width dtype
     if origin in (str, bytes) or annotation in (str, bytes):
         is_bytes = origin is bytes or annotation is bytes
         max_len = 32
@@ -117,7 +94,7 @@ def _resolve_field_dtype(field) -> tuple[np.dtype, int]:
         display_width = max(10, min(max_len, 50))
         return dt, display_width
 
-    # Check for explicit NumpyDtype metadata (overrides primitive defaults)
+    # Check for explicit NumpyDtype metadata (same class as defined here)
     if hasattr(annotation, "__metadata__"):
         for meta in annotation.__metadata__:
             if isinstance(meta, NumpyDtype):
@@ -139,9 +116,46 @@ def _resolve_field_dtype(field) -> tuple[np.dtype, int]:
     return np.dtype(np.object_), 20
 
 
-def _default_display_width(origin) -> int:
-    """Return a sensible display column width for a given Python type."""
-    return {int: 12, float: 15, bool: 6, complex: 25}.get(origin, 20)
+class _LegacySpec(SchemaSpec):
+    """Internal compatibility spec wrapping a dtype extracted from a Pydantic schema."""
+
+    def __init__(self, dtype: np.dtype):
+        self.dtype = np.dtype(dtype)
+        self.python_type = object
+
+    def to_pydantic_kwargs(self) -> dict[str, Any]:
+        return {}
+
+    def to_metadata_dict(self) -> dict[str, Any]:
+        return {"kind": "legacy", "dtype": str(self.dtype)}
+
+
+def _compile_pydantic_schema(row_cls: type) -> CompiledSchema:
+    """Compatibility adapter: build a CompiledSchema from a Pydantic BaseModel subclass."""
+    columns: list[CompiledColumn] = []
+    for name, pyd_field in row_cls.model_fields.items():
+        dtype, display_width = _resolve_field_dtype(pyd_field)
+        spec = _LegacySpec(dtype)
+        col = CompiledColumn(
+            name=name,
+            py_type=object,
+            spec=spec,
+            dtype=dtype,
+            default=MISSING,
+            config=ColumnConfig(cparams=None, dparams=None, chunks=None, blocks=None),
+            display_width=display_width,
+        )
+        columns.append(col)
+    return CompiledSchema(
+        row_cls=row_cls,
+        columns=columns,
+        columns_by_name={col.name: col for col in columns},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Internal row/indexing helpers (unchanged)
+# ---------------------------------------------------------------------------
 
 
 def _find_physical_index(arr: blosc2.NDArray, logical_key: int) -> int:
@@ -188,6 +202,35 @@ def _find_physical_index(arr: blosc2.NDArray, logical_key: int) -> int:
         return chunk_start + int(np.flatnonzero(chunk_data)[logical_key - count])
 
     raise IndexError("Unexpected error finding physical index.")
+
+
+class _RowIndexer:
+    def __init__(self, table):
+        self._table = table
+
+    def __getitem__(self, item):
+        return self._table._run_row_logic(item)
+
+
+class _Row:
+    def __init__(self, table: CTable, nrow: int):
+        self._table = table
+        self._nrow = nrow
+        self._real_pos = None
+
+    def _get_real_pos(self) -> int:
+        self._real_pos = _find_physical_index(self._table._valid_rows, self._nrow)
+        return self._real_pos
+
+    def __getitem__(self, col_name: str):
+        if self._real_pos is None:
+            self._get_real_pos()
+        return self._table._cols[col_name][self._real_pos]
+
+
+# ---------------------------------------------------------------------------
+# Column
+# ---------------------------------------------------------------------------
 
 
 class Column:
@@ -289,27 +332,21 @@ class Column:
         return blosc2.count_nonzero(self._valid_rows)
 
     def __lt__(self, other):
-        # < (Less than)
         return self._raw_col < other
 
     def __le__(self, other):
-        # <= (Less than or equal to)
         return self._raw_col <= other
 
     def __eq__(self, other):
-        # == (Equal to)
         return self._raw_col == other
 
     def __ne__(self, other):
-        # != (Not equal to)
         return self._raw_col != other
 
     def __gt__(self, other):
-        # > (Greater than)
         return self._raw_col > other
 
     def __ge__(self, other):
-        # >= (Greater than or equal to)
         return self._raw_col >= other
 
     @property
@@ -321,56 +358,174 @@ class Column:
         return self._raw_col[real_pos[:]]
 
 
+# ---------------------------------------------------------------------------
+# CTable
+# ---------------------------------------------------------------------------
+
+
 class CTable(Generic[RowT]):
     def __init__(
-        self, row_type: type[RowT], new_data=None, expected_size: int = 1_048_576, compact: bool = False
+        self,
+        row_type: type[RowT],
+        new_data=None,
+        *,
+        expected_size: int = 1_048_576,
+        compact: bool = False,
+        validate: bool = True,
+        cparams: dict[str, Any] | None = None,
+        dparams: dict[str, Any] | None = None,
     ) -> None:
         self._row_type = row_type
+        self._validate = validate
+        self._table_cparams = cparams
+        self._table_dparams = dparams
+
+        # Build compiled schema from either a dataclass or a legacy Pydantic model
+        if dataclasses.is_dataclass(row_type) and isinstance(row_type, type):
+            self._schema: CompiledSchema = compile_schema(row_type)
+        else:
+            self._schema = _compile_pydantic_schema(row_type)
+
         self._cols: dict[str, blosc2.NDArray] = {}
         self._n_rows: int = 0
+        self._last_pos: int | None = 0  # physical index of next write slot;
+        # None means it must be recalculated
+        # (set after any deletion)
         self._col_widths: dict[str, int] = {}
-        self.col_names = []
+        self.col_names: list[str] = []
         self.row = _RowIndexer(self)
         self.auto_compact = compact
         self.base = None
 
-        c, b = compute_chunks_blocks((expected_size,))
-        self._valid_rows = blosc2.zeros(shape=(expected_size,), dtype=np.bool_, chunks=c, blocks=b)
+        default_chunks, default_blocks = compute_chunks_blocks((expected_size,))
+        self._valid_rows = blosc2.zeros(
+            shape=(expected_size,),
+            dtype=np.bool_,
+            chunks=default_chunks,
+            blocks=default_blocks,
+        )
 
-        for name, field in row_type.model_fields.items():
-            self.col_names.append(name)
-            dt, display_width = _resolve_field_dtype(field)
-            final_width = max(len(name), display_width)
-            self._col_widths[name] = final_width
-            self._cols[name] = blosc2.zeros(shape=(expected_size,), dtype=dt, chunks=c, blocks=b)
+        self._init_columns(expected_size, default_chunks, default_blocks)
 
         if new_data is not None:
             self._load_initial_data(new_data)
 
-    def _load_initial_data(self, new_data) -> None:
-        """Dispatch new_data to append() or extend() as appropriate."""
-        is_append = False
+    def _init_columns(self, expected_size: int, default_chunks, default_blocks) -> None:
+        """Create one NDArray per column using the compiled schema."""
+        for col in self._schema.columns:
+            self.col_names.append(col.name)
+            self._col_widths[col.name] = max(len(col.name), col.display_width)
+            storage = self._resolve_column_storage(col, default_chunks, default_blocks)
+            self._cols[col.name] = blosc2.zeros(
+                shape=(expected_size,),
+                dtype=col.dtype,
+                **storage,
+            )
 
-        if isinstance(new_data, (np.void, np.record)):
-            is_append = True
-        elif isinstance(new_data, np.ndarray):
-            if new_data.dtype.names is not None and new_data.ndim == 0:
-                is_append = True
-        elif isinstance(new_data, list) and len(new_data) > 0:
-            first_elem = new_data[0]
-            if isinstance(first_elem, (str, bytes, int, float, bool, complex)):
-                is_append = True
+    def _resolve_column_storage(
+        self,
+        col: CompiledColumn,
+        default_chunks,
+        default_blocks,
+    ) -> dict[str, Any]:
+        """Merge table-level and column-level storage settings.
 
-        if is_append:
-            self.append(new_data)
-        else:
-            self.extend(new_data)
+        Column-level settings (from ``b2.field(...)``) take precedence over
+        table-level defaults passed to ``CTable.__init__``.
+        """
+        result: dict[str, Any] = {
+            "chunks": col.config.chunks if col.config.chunks is not None else default_chunks,
+            "blocks": col.config.blocks if col.config.blocks is not None else default_blocks,
+        }
+        cparams = col.config.cparams if col.config.cparams is not None else self._table_cparams
+        dparams = col.config.dparams if col.config.dparams is not None else self._table_dparams
+        if cparams is not None:
+            result["cparams"] = cparams
+        if dparams is not None:
+            result["dparams"] = dparams
+        return result
+
+    def _normalize_row_input(self, data: Any) -> dict[str, Any]:
+        """Normalize a row input to a ``{col_name: value}`` dict.
+
+        Accepted shapes:
+        - list / tuple  → positional, zipped with ``col_names``
+        - dict          → used as-is
+        - dataclass     → ``dataclasses.asdict``
+        - np.void / structured scalar → field-name access
+        """
+        if isinstance(data, dict):
+            return data
+        if isinstance(data, (list, tuple)):
+            return dict(zip(self.col_names, data, strict=False))
+        if dataclasses.is_dataclass(data) and not isinstance(data, type):
+            return dataclasses.asdict(data)
+        if isinstance(data, (np.void, np.record)):
+            return {name: data[name] for name in self.col_names}
+        # Fallback: try positional indexing
+        return {name: data[i] for i, name in enumerate(self.col_names)}
+
+    def _coerce_row_to_storage(self, row: dict[str, Any]) -> dict[str, Any]:
+        """Coerce each value in *row* to the column's storage dtype."""
+        result = {}
+        for col in self._schema.columns:
+            val = row[col.name]
+            result[col.name] = np.array(val, dtype=col.dtype).item()
+        return result
+
+    def _resolve_last_pos(self) -> int:
+        """Return the physical index of the next write slot.
+
+        Returns the cached ``_last_pos`` when available.  After a deletion
+        ``_last_pos`` is ``None``; this method then walks chunk metadata of
+        ``_valid_rows`` from the end (no full decompression) to find the last
+        ``True`` position, caches the result, and returns it.
+        """
+        if self._last_pos is not None:
+            return self._last_pos
+
+        arr = self._valid_rows
+        chunk_size = arr.chunks[0]
+        last_true_pos = -1
+
+        for info in reversed(list(arr.iterchunks_info())):
+            actual_size = min(chunk_size, arr.shape[0] - info.nchunk * chunk_size)
+            chunk_start = info.nchunk * chunk_size
+
+            if info.special == blosc2.SpecialValue.ZERO:
+                continue
+            if info.special == blosc2.SpecialValue.VALUE:
+                val = np.frombuffer(info.repeated_value, dtype=arr.dtype)[0]
+                if not val:
+                    continue
+                last_true_pos = chunk_start + actual_size - 1
+                break
+
+            chunk_data = arr[chunk_start : chunk_start + actual_size]
+            nonzero = np.flatnonzero(chunk_data)
+            if len(nonzero) == 0:
+                continue
+            last_true_pos = chunk_start + int(nonzero[-1])
+            break
+
+        self._last_pos = last_true_pos + 1
+        return self._last_pos
+
+    def _grow(self) -> None:
+        """Double the physical capacity of all columns and the valid_rows mask."""
+        c = len(self._valid_rows)
+        for col_arr in self._cols.values():
+            col_arr.resize((c * 2,))
+        self._valid_rows.resize((c * 2,))
+
+    # ------------------------------------------------------------------
+    # Display
+    # ------------------------------------------------------------------
 
     def __str__(self):
         retval = []
         cont = 0
 
-        # We print the header
         for name in self._cols:
             retval.append(f"{name:^{self._col_widths[name]}} |")
             cont += self._col_widths[name] + 2
@@ -379,9 +534,6 @@ class CTable(Generic[RowT]):
             retval.append("-")
         retval.append("\n")
 
-        # We print the rows
-
-        """Change this. Use where"""
         real_poss = blosc2.where(self._valid_rows, np.array(range(len(self._valid_rows)))).compute()
 
         for j in real_poss:
@@ -401,6 +553,10 @@ class CTable(Generic[RowT]):
         for i in range(self.nrows):
             yield _Row(self, i)
 
+    # ------------------------------------------------------------------
+    # View / filtering
+    # ------------------------------------------------------------------
+
     def view(self, new_valid_rows):
         if not (
             isinstance(new_valid_rows, (blosc2.NDArray, blosc2.LazyExpr))
@@ -417,7 +573,11 @@ class CTable(Generic[RowT]):
         if len(self._valid_rows) != len(new_valid_rows):
             raise ValueError()
 
-        retval = CTable(self._row_type, compact=self.auto_compact, expected_size=len(self._valid_rows))
+        retval = CTable(
+            self._row_type,
+            compact=self.auto_compact,
+            expected_size=len(self._valid_rows),
+        )
         retval._cols = self._cols
         retval._n_rows = blosc2.count_nonzero(new_valid_rows)
         retval._col_widths = self._col_widths
@@ -428,68 +588,16 @@ class CTable(Generic[RowT]):
         return retval
 
     def head(self, N: int = 5) -> CTable:
-        """
-        # Alternative code, slower with big data
-        if n <= 0:
-            return CTable(self._row_type, compact=self.auto_compact)
-
-        real_poss = blosc2.where(self._valid_rows, np.array(range(len(self._valid_rows)))).compute()
-        n_take = min(n, self._n_rows)
-
-        retval = CTable(self._row_type, compact=self.auto_compact)
-        retval._n_rows = n_take
-        retval._valid_rows[:n_take] = True
-
-        for k in self._cols.keys():
-            retval._cols[k][:n_take] = self._cols[k][real_poss[:n_take]]
-
-        return retval"""
         if N <= 0:
-            # If N is 0 or negative, return an empty table
             return self.view(blosc2.zeros(shape=len(self._valid_rows), dtype=np.bool_))
-
-        arr = self._valid_rows
-        count = 0
-        chunk_size = arr.chunks[0]
-        pos_N_true = -1
-        if N <= 0:
-            return self.view(blosc2.zeros(shape=len(arr), dtype=np.bool_))
-        for info in arr.iterchunks_info():
-            actual_size = min(chunk_size, arr.shape[0] - info.nchunk * chunk_size)
-            chunk_start = info.nchunk * chunk_size
-
-            # All False without decompressing -> skip
-            if info.special == blosc2.SpecialValue.ZERO:
-                continue
-
-            # Repeated value -> check if True or False
-            if info.special == blosc2.SpecialValue.VALUE:
-                val = np.frombuffer(info.repeated_value, dtype=arr.dtype)[0]
-                if not val:
-                    continue  # all False, skip
-                # All True: target is at offset (N - count - 1) within the chunk
-                if count + actual_size < N:
-                    count += actual_size
-                    continue
-                pos_N_true = chunk_start + (N - count - 1)
-                break
-
-            # General case: decompress only this chunk
-            chunk_data = arr[chunk_start : chunk_start + actual_size]
-
-            n_true = int(np.count_nonzero(chunk_data))
-            if count + n_true < N:
-                count += n_true
-                continue
-
-            # The N-th True is in this chunk
-            pos_N_true = chunk_start + int(np.flatnonzero(chunk_data)[N - count - 1])
-            break
-
-        if pos_N_true == -1:
+        if self._n_rows <= N:
             return self.view(self._valid_rows)
 
-        if pos_N_true < len(self._valid_rows) // 2:
+        # Reuse _find_physical_index: physical position of the (N-1)-th live row
+        arr = self._valid_rows
+        pos_N_true = _find_physical_index(arr, N - 1)
+
+        if pos_N_true < len(arr) // 2:
             mask_arr = blosc2.zeros(shape=len(arr), dtype=np.bool_)
             mask_arr[: pos_N_true + 1] = True
         else:
@@ -501,66 +609,28 @@ class CTable(Generic[RowT]):
 
     def tail(self, N: int = 5) -> CTable:
         if N <= 0:
-            # If N is 0 or negative, return an empty table
             return self.view(blosc2.zeros(shape=len(self._valid_rows), dtype=np.bool_))
-
-        arr = self._valid_rows
-        count = 0
-        chunk_size = arr.chunks[0]
-        pos_N_true = -1
-
-        # Convert to list to iterate chunks in reverse order (metadata only, ~0 memory)
-        for info in reversed(list(arr.iterchunks_info())):
-            actual_size = min(chunk_size, arr.shape[0] - info.nchunk * chunk_size)
-            chunk_start = info.nchunk * chunk_size
-
-            # All False without decompressing -> skip
-            if info.special == blosc2.SpecialValue.ZERO:
-                continue
-
-            # Repeated value -> check if True or False
-            if info.special == blosc2.SpecialValue.VALUE:
-                val = np.frombuffer(info.repeated_value, dtype=arr.dtype)[0]
-                if not val:
-                    continue  # all False, skip
-
-                # All True: target is at offset 'actual_size - (N - count)' from chunk start
-                if count + actual_size < N:
-                    count += actual_size
-                    continue
-                pos_N_true = chunk_start + actual_size - (N - count)
-                break
-
-            # General case: decompress only this chunk
-            chunk_data = arr[chunk_start : chunk_start + actual_size]
-
-            n_true = int(np.count_nonzero(chunk_data))
-            if count + n_true < N:
-                count += n_true
-                continue
-
-            # The N-th True from the end is in this chunk
-            # We use negative indexing [-(N - count)] to get elements from the back
-            pos_N_true = chunk_start + int(np.flatnonzero(chunk_data)[-(N - count)])
-            break
-
-        if pos_N_true == -1:
+        if self._n_rows <= N:
             return self.view(self._valid_rows)
 
-        # Mask creation logic reversed: keep everything from pos_N_true to the end
-        if pos_N_true > len(arr) // 2:
-            # We keep a small tail (less than half the array): start with zeros
-            mask_arr = blosc2.zeros(shape=len(arr), dtype=np.bool_)
-            mask_arr[pos_N_true:] = True
-        else:
-            # We keep a large tail (more than half the array): start with ones
-            mask_arr = blosc2.ones(shape=len(arr), dtype=np.bool_)
-            if pos_N_true > 0:
-                mask_arr[:pos_N_true] = False
+        # Physical position of the first row we want = logical index (nrows - N)
+        arr = self._valid_rows
+        pos_start = _find_physical_index(arr, self._n_rows - N)
 
-        # Compute intersection with existing valid rows and creating view
+        if pos_start > len(arr) // 2:
+            mask_arr = blosc2.zeros(shape=len(arr), dtype=np.bool_)
+            mask_arr[pos_start:] = True
+        else:
+            mask_arr = blosc2.ones(shape=len(arr), dtype=np.bool_)
+            if pos_start > 0:
+                mask_arr[:pos_start] = False
+
         mask_arr = (mask_arr & self._valid_rows).compute()
         return self.view(mask_arr)
+
+    # ------------------------------------------------------------------
+    # Column access
+    # ------------------------------------------------------------------
 
     def __getitem__(self, s: str):
         if s in self._cols:
@@ -571,6 +641,10 @@ class CTable(Generic[RowT]):
         if s in self._cols:
             return Column(self, s)
         return super().__getattribute__(s)
+
+    # ------------------------------------------------------------------
+    # Compaction
+    # ------------------------------------------------------------------
 
     def compact(self):
         real_poss = blosc2.where(self._valid_rows, np.array(range(len(self._valid_rows)))).compute()
@@ -585,6 +659,11 @@ class CTable(Generic[RowT]):
 
         self._valid_rows[: self._n_rows] = True
         self._valid_rows[self._n_rows :] = False
+        self._last_pos = self._n_rows  # next write goes right after live rows
+
+    # ------------------------------------------------------------------
+    # Properties / info
+    # ------------------------------------------------------------------
 
     @property
     def nrows(self) -> int:
@@ -594,15 +673,39 @@ class CTable(Generic[RowT]):
     def ncols(self) -> int:
         return len(self._cols)
 
+    @property
+    def schema(self) -> CompiledSchema:
+        """The compiled schema that drives this table's columns and validation."""
+        return self._schema
+
+    def column_schema(self, name: str) -> CompiledColumn:
+        """Return the :class:`CompiledColumn` descriptor for *name*.
+
+        Raises
+        ------
+        KeyError
+            If *name* is not a column in this table.
+        """
+        try:
+            return self._schema.columns_by_name[name]
+        except KeyError:
+            raise KeyError(f"No column named {name!r}. Available: {self.col_names}") from None
+
+    def schema_dict(self) -> dict[str, Any]:
+        """Return a JSON-compatible dict describing this table's schema.
+
+        Suitable for debugging, serialization, and future ``save()``/``load()``
+        support.  See :func:`~blosc2.schema_compiler.schema_to_dict`.
+        """
+        from blosc2.schema_compiler import schema_to_dict
+
+        return schema_to_dict(self._schema)
+
     def info(self) -> None:
-        """
-        Prints a concise summary of the CTable, including the column names,
-        their data types, and memory layout.
-        """
+        """Print a concise summary of the CTable."""
         n_cols = len(self._cols)
         n_rows = len(self)
 
-        # Calculate global memory usage
         cbytes = sum(col.cbytes for col in self._cols.values()) + self._valid_rows.cbytes
         nbytes = sum(col.nbytes for col in self._cols.values()) + self._valid_rows.nbytes
 
@@ -624,7 +727,6 @@ class CTable(Generic[RowT]):
         lines.append(f"nºRows: {n_rows}")
         lines.append("")
 
-        # New Header: replaced "Non-Null Count" with internal Array length & Itemsize
         header = f" {'#':>3}   {'Column':<15} {'Itemsize':<12} {'Dtype':<15}"
         lines.append(header)
         lines.append(f" {'---':>3}  {'------':<15} {'--------':<12} {'-----':<15}")
@@ -633,9 +735,7 @@ class CTable(Generic[RowT]):
             col_array = self._cols[name]
             dtype_str = str(col_array.dtype)
             itemsize = f"{col_array.dtype.itemsize} B"
-
-            line = f" {i:>3}   {name:<15} {itemsize:<12} {dtype_str:<15}"
-            lines.append(line)
+            lines.append(f" {i:>3}   {name:<15} {itemsize:<12} {dtype_str:<15}")
 
         lines.append("")
         lines.append(f"memory usage: {format_bytes(cbytes)}")
@@ -645,56 +745,53 @@ class CTable(Generic[RowT]):
 
         print("\n".join(lines))
 
+    # ------------------------------------------------------------------
+    # Mutation: append / extend / delete
+    # ------------------------------------------------------------------
+
+    def _load_initial_data(self, new_data) -> None:
+        """Dispatch new_data to append() or extend() as appropriate."""
+        is_append = False
+
+        if isinstance(new_data, (np.void, np.record)):
+            is_append = True
+        elif isinstance(new_data, np.ndarray):
+            if new_data.dtype.names is not None and new_data.ndim == 0:
+                is_append = True
+        elif isinstance(new_data, list) and len(new_data) > 0:
+            first_elem = new_data[0]
+            if isinstance(first_elem, (str, bytes, int, float, bool, complex)):
+                is_append = True
+
+        if is_append:
+            self.append(new_data)
+        else:
+            self.extend(new_data)
+
     def append(self, data: list | np.void | np.ndarray) -> None:
         if self.base is not None:
             raise TypeError("Cannot extend view.")
 
-        is_list = isinstance(data, (list, tuple))
+        # Normalize → validate → coerce
+        row = self._normalize_row_input(data)
+        if self._validate:
+            from blosc2.schema_validation import validate_row
 
-        arr = self._valid_rows
-        chunk_size = arr.chunks[0]
-        last_true_pos = -1
+            row = validate_row(self._schema, row)
+        row = self._coerce_row_to_storage(row)
 
-        for info in reversed(list(arr.iterchunks_info())):
-            actual_size = min(chunk_size, arr.shape[0] - info.nchunk * chunk_size)
-            chunk_start = info.nchunk * chunk_size
-
-            if info.special == blosc2.SpecialValue.ZERO:
-                continue
-
-            if info.special == blosc2.SpecialValue.VALUE:
-                val = np.frombuffer(info.repeated_value, dtype=arr.dtype)[0]
-                if not val:
-                    continue
-                last_true_pos = chunk_start + actual_size - 1
-                break
-
-            chunk_data = arr[chunk_start : chunk_start + actual_size]
-            nonzero = np.flatnonzero(chunk_data)
-            if len(nonzero) == 0:
-                continue
-            last_true_pos = chunk_start + int(nonzero[-1])
-            break
-
-        pos = last_true_pos + 1
-
+        pos = self._resolve_last_pos()
         if pos >= len(self._valid_rows):
-            c = len(self._valid_rows)
-            for v in self._cols.values():
-                v.resize((c * 2,))
-            self._valid_rows.resize((c * 2,))
+            self._grow()
 
-        if is_list:
-            for i, col_array in enumerate(self._cols.values()):
-                col_array[pos] = data[i]
-        else:
-            for name, col_array in self._cols.items():
-                col_array[pos] = data[name]
+        for name, col_array in self._cols.items():
+            col_array[pos] = row[name]
 
         self._valid_rows[pos] = True
+        self._last_pos = pos + 1
         self._n_rows += 1
 
-    def delete(self, ind: int | slice | str | Iterable) -> blosc2.NDArray:
+    def delete(self, ind: int | slice | str | Iterable) -> None:
         valid_rows_np = self._valid_rows[:]
         true_pos = np.where(valid_rows_np)[0]
 
@@ -704,21 +801,23 @@ class CTable(Generic[RowT]):
             raise TypeError(f"Invalid type '{type(ind)}'")
 
         false_pos = true_pos[ind]
+        n_deleted = len(np.unique(false_pos))
 
-        new_mask_np = valid_rows_np.copy()
-        new_mask_np[false_pos] = False
+        valid_rows_np[false_pos] = False
+        self._valid_rows[:] = valid_rows_np  # write back in-place; no new array created
+        self._n_rows -= n_deleted
+        self._last_pos = None  # recalculate on next write
 
-        new_mask = blosc2.asarray(new_mask_np)
-        self._valid_rows = new_mask
-        self._n_rows = blosc2.count_nonzero(self._valid_rows)
-
-    def extend(self, data: list | CTable | Any) -> None:
+    def extend(self, data: list | CTable | Any, *, validate: bool | None = None) -> None:
         if self.base is not None:
             raise TypeError("Cannot extend view.")
         if len(data) <= 0:
             return
-        ultimas_validas = blosc2.where(self._valid_rows, np.array(range(len(self._valid_rows)))).compute()
-        start_pos = ultimas_validas[-1] + 1 if len(ultimas_validas) > 0 else 0
+
+        # Resolve effective validate flag: per-call override takes precedence
+        do_validate = self._validate if validate is None else validate
+
+        start_pos = self._resolve_last_pos()
 
         current_col_names = self.col_names
         columns_to_insert = []
@@ -738,6 +837,13 @@ class CTable(Generic[RowT]):
                 columns_to_insert = list(zip(*data, strict=False))
                 new_nrows = len(data)
 
+        # Validate constraints column-by-column before writing
+        if do_validate:
+            from blosc2.schema_vectorized import validate_column_batch
+
+            raw_columns = {current_col_names[i]: columns_to_insert[i] for i in range(len(current_col_names))}
+            validate_column_batch(self._schema, raw_columns)
+
         processed_cols = []
         for i, raw_col in enumerate(columns_to_insert):
             target_dtype = self._cols[current_col_names[i]].dtype
@@ -747,25 +853,23 @@ class CTable(Generic[RowT]):
         end_pos = start_pos + new_nrows
 
         if self.auto_compact and end_pos >= len(self._valid_rows):
-            self.compact()
-            ultimas_validas = blosc2.where(
-                self._valid_rows, np.array(range(len(self._valid_rows)))
-            ).compute()
-            start_pos = ultimas_validas[-1] + 1 if len(ultimas_validas) > 0 else 0
+            self.compact()  # sets _last_pos = _n_rows
+            start_pos = self._last_pos
             end_pos = start_pos + new_nrows
 
         while end_pos > len(self._valid_rows):
-            c = len(self._valid_rows)
-            for name in current_col_names:
-                self._cols[name].resize((c * 2,))
-            self._valid_rows.resize((c * 2,))
+            self._grow()
 
-        # Do this per chunks
         for j, name in enumerate(current_col_names):
             self._cols[name][start_pos:end_pos] = processed_cols[j][:]
 
         self._valid_rows[start_pos:end_pos] = True
-        self._n_rows = blosc2.count_nonzero(self._valid_rows)
+        self._last_pos = end_pos
+        self._n_rows += new_nrows
+
+    # ------------------------------------------------------------------
+    # Filtering
+    # ------------------------------------------------------------------
 
     @profile
     def where(self, expr_result) -> CTable:
@@ -805,7 +909,9 @@ class CTable(Generic[RowT]):
         new_mask = blosc2.asarray(new_mask_np)
         return self.view(new_mask)
 
-    """Save & load are blank for now"""
+    # ------------------------------------------------------------------
+    # Persistence (not yet implemented)
+    # ------------------------------------------------------------------
 
     def save(self, urlpath: str, group: str = "table") -> None: ...
 

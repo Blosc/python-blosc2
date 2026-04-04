@@ -9,25 +9,19 @@
 # int, slice, and list — with varying sizes.
 
 from time import time
-from typing import Annotated
+from dataclasses import dataclass
 
 import numpy as np
-from pydantic import BaseModel, Field
 
 import blosc2
 
 
-class NumpyDtype:
-    def __init__(self, dtype):
-        self.dtype = dtype
-
-
-# Row model
-class RowModel(BaseModel):
-    id: Annotated[int, NumpyDtype(np.int64)] = Field(ge=0)
-    c_val: Annotated[complex, NumpyDtype(np.complex128)] = Field(default=0j)
-    score: Annotated[float, NumpyDtype(np.float64)] = Field(ge=0, le=100)
-    active: Annotated[bool, NumpyDtype(np.bool_)] = True
+@dataclass
+class Row:
+    id: int = blosc2.field(blosc2.int64(ge=0))
+    c_val: complex = blosc2.field(blosc2.complex128(), default=0j)
+    score: float = blosc2.field(blosc2.float64(ge=0, le=100), default=0.0)
+    active: bool = blosc2.field(blosc2.bool(), default=True)
 
 
 N = 1_000_000
@@ -64,7 +58,7 @@ print(f"{'CASE':<20} {'ROWS DELETED':>14} {'TIME (s)':>12}")
 print("-" * 60)
 
 for label, key in delete_cases:
-    ct = blosc2.CTable(RowModel, expected_size=N)
+    ct = blosc2.CTable(Row, expected_size=N)
     ct.extend(DATA)
 
     if isinstance(key, int):

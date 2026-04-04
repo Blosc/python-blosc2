@@ -9,23 +9,18 @@
 #   Data source: randomly generated numpy structured array
 
 import time
-from typing import Annotated
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 import blosc2
-from pydantic import BaseModel, Field
 
 
-class NumpyDtype:
-    def __init__(self, dtype):
-        self.dtype = dtype
-
-
-class RowModel(BaseModel):
-    id:    Annotated[int,   NumpyDtype(np.int64)]
-    name:  Annotated[str,   NumpyDtype(np.dtype("<U9"))]
-    score: Annotated[float, NumpyDtype(np.float64)] = Field(ge=0)
+@dataclass
+class Row:
+    id: int = blosc2.field(blosc2.int64())
+    name: str = blosc2.field(blosc2.string(max_length=9), default="")
+    score: float = blosc2.field(blosc2.float64(ge=0), default=0.0)
 
 
 NAMES = ["benchmark", "alpha", "beta", "gamma", "delta",
@@ -75,11 +70,11 @@ print("--- 2. BLOSC2 CTable (structured array -> extend) ---")
 data = make_data(N)
 
 t0 = time.perf_counter()
-ct = blosc2.CTable(RowModel, expected_size=N)
+ct = blosc2.CTable(Row, expected_size=N)
 ct.extend(data)
 t_blosc = time.perf_counter() - t0
 
-fields       = list(RowModel.model_fields.keys())
+fields = ct.col_names
 mem_blosc_c  = (sum(col.cbytes for col in ct._cols.values()) + ct._valid_rows.cbytes) / (1024 ** 2)
 mem_blosc_uc = (sum(col.nbytes for col in ct._cols.values()) + ct._valid_rows.nbytes) / (1024 ** 2)
 

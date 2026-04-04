@@ -9,25 +9,19 @@
 # to find the crossover point where extend() becomes worth it.
 
 from time import time
-from typing import Annotated
+from dataclasses import dataclass
 
 import numpy as np
-from pydantic import BaseModel, Field
 
 import blosc2
 
 
-class NumpyDtype:
-    def __init__(self, dtype):
-        self.dtype = dtype
-
-
-# Row model
-class RowModel(BaseModel):
-    id: Annotated[int, NumpyDtype(np.int64)] = Field(ge=0)
-    c_val: Annotated[complex, NumpyDtype(np.complex128)] = Field(default=0j)
-    score: Annotated[float, NumpyDtype(np.float64)] = Field(ge=0, le=100)
-    active: Annotated[bool, NumpyDtype(np.bool_)] = True
+@dataclass
+class Row:
+    id: int = blosc2.field(blosc2.int64(ge=0))
+    c_val: complex = blosc2.field(blosc2.complex128(), default=0j)
+    score: float = blosc2.field(blosc2.float64(ge=0, le=100), default=0.0)
+    active: bool = blosc2.field(blosc2.bool(), default=True)
 
 
 # Parameter — change N to test different crossover points
@@ -45,7 +39,7 @@ for i in range(6):
 
     # 1. N individual append() calls
     print(f"{N} individual append() calls")
-    ct_append = blosc2.CTable(RowModel, expected_size=N)
+    ct_append = blosc2.CTable(Row, expected_size=N)
     t0 = time()
     for row in data_list:
         ct_append.append(row)
@@ -55,7 +49,7 @@ for i in range(6):
 
     # 2. N individual extend() calls (one row at a time)
     print(f"{N} individual extend() calls (one row at a time)")
-    ct_extend_one = blosc2.CTable(RowModel, expected_size=N)
+    ct_extend_one = blosc2.CTable(Row, expected_size=N)
     t0 = time()
     for row in data_list:
         ct_extend_one.extend([row])
@@ -65,7 +59,7 @@ for i in range(6):
 
     # 3. Single extend() call with all N rows at once
     print(f"Single extend() call with all {N} rows at once")
-    ct_extend_bulk = blosc2.CTable(RowModel, expected_size=N)
+    ct_extend_bulk = blosc2.CTable(Row, expected_size=N)
     t0 = time()
     ct_extend_bulk.extend(data_list)
     t_extend_bulk = time() - t0

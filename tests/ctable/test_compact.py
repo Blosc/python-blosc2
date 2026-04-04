@@ -5,23 +5,18 @@
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
 
-from typing import Annotated
+from dataclasses import dataclass
 
 import numpy as np
-from pydantic import BaseModel, Field
 
+import blosc2
 from blosc2 import CTable
 
 
-# --- Basic model setup for tests ---
-class NumpyDtype:
-    def __init__(self, dtype):
-        self.dtype = dtype
-
-
-class RowModel(BaseModel):
-    id: Annotated[int, NumpyDtype(np.int64)] = Field(ge=0)
-    score: Annotated[float, NumpyDtype(np.float64)] = Field(ge=0, le=100)
+@dataclass
+class Row:
+    id: int = blosc2.field(blosc2.int64(ge=0))
+    score: float = blosc2.field(blosc2.float64(ge=0, le=100))
 
 
 def generate_test_data(n_rows: int) -> list:
@@ -30,7 +25,7 @@ def generate_test_data(n_rows: int) -> list:
 
 def test_compact_empty_table():
     """Test compact() on a completely empty table (no data)."""
-    table = CTable(RowModel, expected_size=100)
+    table = CTable(Row, expected_size=100)
 
     assert len(table) == 0
 
@@ -48,7 +43,7 @@ def test_compact_empty_table():
 def test_compact_full_table():
     """Test compact() on a completely full table (no holes or free space)."""
     data = generate_test_data(50)
-    table = CTable(RowModel, new_data=data, expected_size=50)
+    table = CTable(Row, new_data=data, expected_size=50)
 
     assert len(table) == 50
     initial_capacity = len(table._valid_rows)
@@ -69,7 +64,7 @@ def test_compact_already_compacted_table():
     """Test compact() on a table that has free space but no holes (contiguous data)."""
     data = generate_test_data(20)
     # Large expected_size to ensure free space at the end
-    table = CTable(RowModel, new_data=data, expected_size=100)
+    table = CTable(Row, new_data=data, expected_size=100)
 
     assert len(table) == 20
 
@@ -93,7 +88,7 @@ def test_compact_already_compacted_table():
 def test_compact_with_holes():
     """Test compact() on a table with high fragmentation (holes)."""
     data = generate_test_data(30)
-    table = CTable(RowModel, new_data=data, expected_size=50)
+    table = CTable(Row, new_data=data, expected_size=50)
 
     # Delete sparsely: leave only [0, 5, 10, 15, 20, 25]
     to_delete = [i for i in range(30) if i % 5 != 0]
@@ -124,7 +119,7 @@ def test_compact_with_holes():
 def test_compact_all_deleted():
     """Test compact() on a table where absolutely all rows have been deleted."""
     data = generate_test_data(20)
-    table = CTable(RowModel, new_data=data, expected_size=20)
+    table = CTable(Row, new_data=data, expected_size=20)
 
     # Delete everything
     table.delete(list(range(20)))
@@ -144,7 +139,7 @@ def test_compact_all_deleted():
 def test_compact_multiple_times():
     """Calling compact() multiple times in a row must not corrupt data or crash."""
     data = generate_test_data(10)
-    table = CTable(RowModel, new_data=data, expected_size=20)
+    table = CTable(Row, new_data=data, expected_size=20)
 
     table.delete([1, 3, 5, 7, 9])  # 5 elements remaining
 

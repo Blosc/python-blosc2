@@ -11,30 +11,19 @@
 #   3. An existing CTable (previously created from Python lists, 1M rows)
 
 from time import time
-from typing import Annotated
+from dataclasses import dataclass
 
 import numpy as np
-from pydantic import BaseModel, Field
 
 import blosc2
 
 
-class NumpyDtype:
-    def __init__(self, dtype):
-        self.dtype = dtype
-
-
-
-
-
-# ---------------------------------------------------------------------------
-# Row model
-# ---------------------------------------------------------------------------
-class RowModel(BaseModel):
-    id: Annotated[int, NumpyDtype(np.int64)] = Field(ge=0)
-    c_val: Annotated[complex, NumpyDtype(np.complex128)] = Field(default=0j)
-    score: Annotated[float, NumpyDtype(np.float64)] = Field(ge=0, le=100)
-    active: Annotated[bool, NumpyDtype(np.bool_)] = True
+@dataclass
+class Row:
+    id: int = blosc2.field(blosc2.int64(ge=0))
+    c_val: complex = blosc2.field(blosc2.complex128(), default=0j)
+    score: float = blosc2.field(blosc2.float64(ge=0, le=100), default=0.0)
+    active: bool = blosc2.field(blosc2.bool(), default=True)
 
 
 N = 1_000_000
@@ -75,7 +64,7 @@ print(f"  NumPy structured array generated: {t_gen_np:.4f} s\n")
 # ---------------------------------------------------------------------------
 print("CTable from Python list of lists")
 t0 = time()
-ct_from_list = blosc2.CTable(RowModel, expected_size=N)
+ct_from_list = blosc2.CTable(Row, expected_size=N)
 ct_from_list.extend(data_list)
 t_from_list = time() - t0
 print(f"   extend() time (Python list):  {t_from_list:.4f} s")
@@ -86,7 +75,7 @@ print(f"   Rows: {len(ct_from_list):,}")
 # ---------------------------------------------------------------------------
 print("CTable from NumPy structured array")
 t0 = time()
-ct_from_np = blosc2.CTable(RowModel, expected_size=N)
+ct_from_np = blosc2.CTable(Row, expected_size=N)
 ct_from_np.extend(data_np)
 t_from_np = time() - t0
 print(f"   extend() time (NumPy struct): {t_from_np:.4f} s")
@@ -98,7 +87,7 @@ print(f"   Rows: {len(ct_from_np):,}")
 # ---------------------------------------------------------------------------
 print("CTable from an existing CTable")
 t0 = time()
-ct_from_ctable = blosc2.CTable(RowModel, expected_size=N)
+ct_from_ctable = blosc2.CTable(Row, expected_size=N)
 ct_from_ctable.extend(ct_from_list)
 t_from_ctable = time() - t0
 print(f"   extend() time (CTable):       {t_from_ctable:.4f} s")

@@ -9,25 +9,19 @@
 # is too small (M rows) vs correctly sized (N rows) during extend().
 
 from time import time
-from typing import Annotated
+from dataclasses import dataclass
 
 import numpy as np
-from pydantic import BaseModel, Field
 
 import blosc2
 
 
-class NumpyDtype:
-    def __init__(self, dtype):
-        self.dtype = dtype
-
-
-# Row model
-class RowModel(BaseModel):
-    id: Annotated[int, NumpyDtype(np.int64)] = Field(ge=0)
-    c_val: Annotated[complex, NumpyDtype(np.complex128)] = Field(default=0j)
-    score: Annotated[float, NumpyDtype(np.float64)] = Field(ge=0, le=100)
-    active: Annotated[bool, NumpyDtype(np.bool_)] = True
+@dataclass
+class Row:
+    id: int = blosc2.field(blosc2.int64(ge=0))
+    c_val: complex = blosc2.field(blosc2.complex128(), default=0j)
+    score: float = blosc2.field(blosc2.float64(ge=0, le=100), default=0.0)
+    active: bool = blosc2.field(blosc2.bool(), default=True)
 
 
 
@@ -56,14 +50,14 @@ while N <= MAX_N:
     print(f"N = {N:,} rows")
 
     # 1. extend() with correct expected_size = N
-    ct_correct = blosc2.CTable(RowModel, expected_size=N)
+    ct_correct = blosc2.CTable(Row, expected_size=N)
     t0 = time()
     ct_correct.extend(DATA[:N])
     t_correct = time() - t0
     print(f"extend() expected_size=N  ({N:>8,}):  {t_correct:.4f} s   rows: {len(ct_correct):,}")
 
     # 2. extend() with wrong expected_size = M (forces resize)
-    ct_wrong = blosc2.CTable(RowModel, expected_size=M)
+    ct_wrong = blosc2.CTable(Row, expected_size=M)
     t0 = time()
     ct_wrong.extend(DATA[:N])
     t_wrong = time() - t0

@@ -337,28 +337,17 @@ object_ = np.object_
 
 from numpy import (
     bool_,
-    complex64,
     complex128,
     e,
     euler_gamma,
     float16,
-    float32,
     float64,
     inf,
-    int8,
-    int16,
-    int32,
     int64,
     nan,
     newaxis,
     pi,
-    uint8,
-    uint16,
-    uint32,
-    uint64,
 )
-
-bool = bool
 
 DEFAULT_COMPLEX = complex128
 """
@@ -595,7 +584,9 @@ _disable_overloaded_equal = False
 Disable the overloaded equal operator.
 """
 
-# Delayed imports for avoiding overwriting of python builtins
+# Delayed imports for avoiding overwriting of python builtins.
+# Note: bool, bytes, string shadow builtins in the blosc2 namespace by design —
+# they are schema spec constructors (b2.bool(), b2.bytes(), etc.).
 from .ctable import Column, CTable
 from .ndarray import (
     abs,
@@ -698,6 +689,24 @@ from .ndarray import (
     var,
     where,
 )
+from .schema import (
+    bool,
+    bytes,
+    complex64,
+    complex128,
+    field,
+    float32,
+    float64,
+    int8,
+    int16,
+    int32,
+    int64,
+    string,
+    uint8,
+    uint16,
+    uint32,
+    uint64,
+)
 
 __all__ = [  # noqa : RUF022
     # Constants
@@ -718,6 +727,23 @@ __all__ = [  # noqa : RUF022
     "inf",
     "nan",
     "newaxis",
+    # Schema API (CTable)
+    "bool",
+    "bytes",
+    "complex64",
+    "complex128",
+    "field",
+    "float32",
+    "float64",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "string",
+    "uint8",
+    "uint16",
+    "uint32",
+    "uint64",
     # Classes
     "C2Array",
     "CParams",
