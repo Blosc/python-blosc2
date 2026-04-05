@@ -1018,6 +1018,7 @@ def _build_reduced_descriptor_ooc(
     )
     reduced["position_dtype"] = positions.dtype.str
     reduced["nav_segment_divisor"] = nav_segment_divisor
+    del sorted_values, positions
     return reduced
 
 
@@ -1228,6 +1229,7 @@ def _build_light_descriptor_ooc(
     light["bucket_len"] = bucket_len
     light["value_lossy_bits"] = value_lossy_bits
     light["bucket_dtype"] = bucket_positions.dtype.str
+    del sorted_values, positions, bucket_positions
     return light
 
 
