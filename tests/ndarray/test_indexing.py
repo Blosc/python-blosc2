@@ -195,6 +195,60 @@ def test_light_lossy_float_values_match_scan():
     np.testing.assert_array_equal(indexed, data[(data["x"] >= -12.5) & (data["x"] < 17.25)])
 
 
+def test_ultralight_threaded_downstream_order_matches_scan(monkeypatch):
+    dtype = np.dtype([("id", np.int64), ("payload", np.int32)])
+    data = np.zeros(240_000, dtype=dtype)
+    data["id"] = np.arange(data.shape[0], dtype=np.int64)
+    data["payload"] = np.arange(data.shape[0], dtype=np.int32)
+
+    arr = blosc2.asarray(data, chunks=(12_000,), blocks=(3_000,))
+    arr.create_index(field="id", kind="ultralight")
+
+    indexing = __import__("blosc2.indexing", fromlist=["INDEX_QUERY_MIN_CHUNKS_PER_THREAD"])
+    monkeypatch.setattr(indexing, "INDEX_QUERY_MIN_CHUNKS_PER_THREAD", 1)
+    monkeypatch.setattr(blosc2, "nthreads", 4)
+
+    expr = blosc2.lazyexpr("(id >= 60_000) & (id < 180_000)", arr.fields).where(arr)
+    explanation = expr.explain()
+
+    assert explanation["will_use_index"] is True
+    assert explanation["level"] == "chunk"
+
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    expected = data[(data["id"] >= 60_000) & (data["id"] < 180_000)]
+
+    np.testing.assert_array_equal(indexed, scanned)
+    np.testing.assert_array_equal(indexed, expected)
+
+
+def test_light_threaded_downstream_order_matches_scan(monkeypatch):
+    dtype = np.dtype([("id", np.int64), ("payload", np.int32)])
+    data = np.zeros(240_000, dtype=dtype)
+    data["id"] = np.arange(data.shape[0], dtype=np.int64)
+    data["payload"] = np.arange(data.shape[0], dtype=np.int32)
+
+    arr = blosc2.asarray(data, chunks=(12_000,), blocks=(3_000,))
+    arr.create_index(field="id", kind="light", in_mem=True)
+
+    indexing = __import__("blosc2.indexing", fromlist=["INDEX_QUERY_MIN_CHUNKS_PER_THREAD"])
+    monkeypatch.setattr(indexing, "INDEX_QUERY_MIN_CHUNKS_PER_THREAD", 1)
+    monkeypatch.setattr(blosc2, "nthreads", 4)
+
+    expr = blosc2.lazyexpr("(id >= 60_000) & (id < 180_000)", arr.fields).where(arr)
+    explanation = expr.explain()
+
+    assert explanation["will_use_index"] is True
+    assert explanation["lookup_path"] == "chunk-nav"
+
+    indexed = expr.compute()[:]
+    scanned = expr.compute(_use_index=False)[:]
+    expected = data[(data["id"] >= 60_000) & (data["id"] < 180_000)]
+
+    np.testing.assert_array_equal(indexed, scanned)
+    np.testing.assert_array_equal(indexed, expected)
+
+
 @pytest.mark.parametrize("kind", ["light", "medium", "full"])
 def test_persistent_index_survives_reopen(tmp_path, kind):
     path = tmp_path / "indexed_array.b2nd"

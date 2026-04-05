@@ -233,11 +233,12 @@ def _valid_index_descriptor(arr: blosc2.NDArray, kind: str, optlevel: int, in_me
     for descriptor in arr.indexes:
         if descriptor.get("version") != blosc2_indexing.INDEX_FORMAT_VERSION:
             continue
+        expected_ooc = descriptor.get("ooc", False) if kind == "ultralight" else (not bool(in_mem))
         if (
             descriptor.get("field") == "id"
             and descriptor.get("kind") == kind
             and int(descriptor.get("optlevel", -1)) == int(optlevel)
-            and bool(descriptor.get("ooc", False)) is (not bool(in_mem))
+            and bool(descriptor.get("ooc", False)) is bool(expected_ooc)
             and not descriptor.get("stale", False)
         ):
             return descriptor

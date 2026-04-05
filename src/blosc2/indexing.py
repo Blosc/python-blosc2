@@ -14,6 +14,7 @@ import os
 import re
 import tempfile
 import weakref
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -48,6 +49,7 @@ FULL_OOC_MERGE_BUFFER_ITEMS = 500_000
 FULL_SELECTIVE_OOC_MAX_SPANS = 128
 FULL_RUN_BOUNDED_FALLBACK_RUNS = 8
 FULL_RUN_BOUNDED_FALLBACK_ITEMS = 1_000_000
+INDEX_QUERY_MIN_CHUNKS_PER_THREAD = 8
 
 
 def _sanitize_token(token: str) -> str:
@@ -3288,6 +3290,126 @@ def _chunk_nav_candidate_runs(
     return [(segment_lo, segment_hi)], segment_hi - segment_lo
 
 
+def _index_query_thread_count(task_count: int) -> int:
+    if task_count < INDEX_QUERY_MIN_CHUNKS_PER_THREAD:
+        return 1
+    configured_threads = int(getattr(blosc2, "nthreads", 1) or 1)
+    return max(1, min(configured_threads, task_count // INDEX_QUERY_MIN_CHUNKS_PER_THREAD))
+
+
+def _chunk_batches(chunk_ids: np.ndarray, thread_count: int) -> list[np.ndarray]:
+    if thread_count <= 1 or len(chunk_ids) == 0:
+        return [chunk_ids]
+    batch_size = max(1, math.ceil(len(chunk_ids) / thread_count))
+    return [chunk_ids[start : start + batch_size] for start in range(0, len(chunk_ids), batch_size)]
+
+
+def _downstream_query_thread_count(task_count: int, plan: IndexPlan) -> int:
+    if plan.lookup_path == "chunk-nav-ooc":
+        return 1
+    return _index_query_thread_count(task_count)
+
+
+def _merge_position_batches(position_batches: list[np.ndarray]) -> np.ndarray:
+    if not position_batches:
+        return np.empty(0, dtype=np.int64)
+    return np.concatenate(position_batches) if len(position_batches) > 1 else position_batches[0]
+
+
+def _run_position_batches(chunk_ids: np.ndarray, thread_count: int, process_batch) -> tuple[np.ndarray, int]:
+    if thread_count <= 1:
+        return process_batch(chunk_ids)
+    batches = _chunk_batches(chunk_ids, thread_count)
+    position_batches = []
+    total_candidate_segments = 0
+    with ThreadPoolExecutor(max_workers=thread_count) as executor:
+        for positions_part, batch_candidate_segments in executor.map(process_batch, batches):
+            total_candidate_segments += batch_candidate_segments
+            if len(positions_part) > 0:
+                position_batches.append(positions_part)
+    return _merge_position_batches(position_batches), total_candidate_segments
+
+
+def _light_batch_result_dtype(where_x) -> np.dtype:
+    return _where_output_dtype(where_x)
+
+
+def _light_worker_source(where_x):
+    if _supports_block_reads(where_x) and getattr(where_x, "urlpath", None) is not None:
+        return blosc2.open(str(where_x.urlpath), mmap_mode="r")
+    return where_x
+
+
+def _light_match_from_span(span: np.ndarray, plan: IndexPlan) -> np.ndarray:
+    if plan.target is not None and plan.target.get("source") == "expression":
+        field_values = _values_from_numpy_target(span, plan.target)
+    else:
+        field_values = span if plan.field is None else span[plan.field]
+    match = np.ones(len(field_values), dtype=bool)
+    if plan.lower is not None:
+        match &= field_values >= plan.lower if plan.lower_inclusive else field_values > plan.lower
+    if plan.upper is not None:
+        match &= field_values <= plan.upper if plan.upper_inclusive else field_values < plan.upper
+    return match
+
+
+def _process_light_chunk_batch(
+    chunk_ids: np.ndarray, where_x, plan: IndexPlan, total_len: int, chunk_len: int
+) -> np.ndarray:
+    parts = []
+    local_where_x = _light_worker_source(where_x)
+    for chunk_id in chunk_ids:
+        bucket_mask = plan.bucket_masks[int(chunk_id)]
+        chunk_start = int(chunk_id) * plan.chunk_len
+        chunk_stop = min(chunk_start + plan.chunk_len, total_len)
+        for run_start, run_stop in _contiguous_true_runs(np.asarray(bucket_mask, dtype=bool)):
+            start = chunk_start + run_start * plan.bucket_len
+            stop = min(chunk_start + run_stop * plan.bucket_len, chunk_stop)
+            if start >= stop:
+                continue
+            if _supports_block_reads(local_where_x):
+                span = np.empty(stop - start, dtype=local_where_x.dtype)
+                base_chunk_id = start // chunk_len
+                local_start = start - base_chunk_id * chunk_len
+                local_where_x.get_1d_span_numpy(span, base_chunk_id, local_start, stop - start)
+            else:
+                span = local_where_x[start:stop]
+            match = _light_match_from_span(span, plan)
+            if np.any(match):
+                parts.append(np.require(span[match], requirements="C"))
+    if not parts:
+        return np.empty(0, dtype=_light_batch_result_dtype(where_x))
+    return np.concatenate(parts) if len(parts) > 1 else parts[0]
+
+
+def _merge_result_batches(parts: list[np.ndarray], dtype: np.dtype) -> np.ndarray:
+    parts = [part for part in parts if len(part) > 0]
+    if not parts:
+        return np.empty(0, dtype=dtype)
+    return np.concatenate(parts) if len(parts) > 1 else parts[0]
+
+
+def _reduced_positions_from_cython_batches(
+    candidate_chunk_ids: np.ndarray, thread_count: int, process_batch
+) -> tuple[np.ndarray, int]:
+    return _run_position_batches(candidate_chunk_ids, thread_count, process_batch)
+
+
+def _reduced_positions_from_python_batches(
+    candidate_chunk_ids: np.ndarray, thread_count: int, process_batch
+) -> tuple[list[np.ndarray], int]:
+    if thread_count <= 1:
+        return process_batch(candidate_chunk_ids)
+    parts = []
+    total_candidate_segments = 0
+    batches = _chunk_batches(candidate_chunk_ids, thread_count)
+    with ThreadPoolExecutor(max_workers=thread_count) as executor:
+        for batch_parts, batch_candidate_segments in executor.map(process_batch, batches):
+            total_candidate_segments += batch_candidate_segments
+            parts.extend(batch_parts)
+    return parts, total_candidate_segments
+
+
 def _sorted_boundary_search_bounds(boundaries: np.ndarray, plan: ExactPredicatePlan) -> tuple[int, int]:
     if len(boundaries) == 0:
         return 0, 0
@@ -3356,31 +3478,56 @@ def _bucket_masks_from_light_chunk_nav_ooc(
     value_lossy_bits = int(light.get("value_lossy_bits", 0))
     search_plan = _light_search_plan(plan, dtype, value_lossy_bits)
     total_candidate_segments = 0
-    l2_row = np.empty(nsegments_per_chunk, dtype=_boundary_dtype(dtype))
-    span_values = np.empty(chunk_len, dtype=dtype)
-    bucket_ids = np.empty(chunk_len, dtype=bucket_dtype)
+    candidate_chunk_ids = np.flatnonzero(candidate_chunks).astype(np.intp, copy=False)
 
-    for chunk_id in np.flatnonzero(candidate_chunks):
-        chunk_items = int(offsets[chunk_id + 1] - offsets[chunk_id])
-        segment_count = _segment_row_count(chunk_items, nav_segment_len)
-        l2_sidecar.get_1d_span_numpy(l2_row, int(chunk_id), 0, nsegments_per_chunk)
-        segment_runs, candidate_segments = _chunk_nav_candidate_runs(l2_row, segment_count, plan)
-        total_candidate_segments += candidate_segments
-        if not segment_runs:
-            continue
-
-        for seg_start_idx, seg_stop_idx in segment_runs:
-            local_start = seg_start_idx * nav_segment_len
-            local_stop = min(seg_stop_idx * nav_segment_len, chunk_items)
-            span_items = local_stop - local_start
-            values_view = span_values[:span_items]
-            values_sidecar.get_1d_span_numpy(values_view, int(chunk_id), local_start, span_items)
-            lo, hi = _search_bounds(values_view, search_plan)
-            if lo >= hi:
+    def process_batch(chunk_ids: np.ndarray) -> tuple[list[tuple[int, np.ndarray]], int]:
+        if len(chunk_ids) == 0:
+            return [], 0
+        batch_values = blosc2.open(light["values_path"], mmap_mode="r")
+        batch_buckets = blosc2.open(light["bucket_positions_path"], mmap_mode="r")
+        batch_l2 = blosc2.open(light["l2_path"], mmap_mode="r")
+        batch_results = []
+        batch_candidate_segments = 0
+        l2_row = np.empty(nsegments_per_chunk, dtype=_boundary_dtype(dtype))
+        span_values = np.empty(chunk_len, dtype=dtype)
+        bucket_ids = np.empty(chunk_len, dtype=bucket_dtype)
+        for chunk_id in chunk_ids:
+            chunk_items = int(offsets[chunk_id + 1] - offsets[chunk_id])
+            segment_count = _segment_row_count(chunk_items, nav_segment_len)
+            batch_l2.get_1d_span_numpy(l2_row, int(chunk_id), 0, nsegments_per_chunk)
+            segment_runs, candidate_segments = _chunk_nav_candidate_runs(l2_row, segment_count, plan)
+            batch_candidate_segments += candidate_segments
+            if not segment_runs:
                 continue
-            bucket_view = bucket_ids[: hi - lo]
-            bucket_sidecar.get_1d_span_numpy(bucket_view, int(chunk_id), local_start + lo, hi - lo)
-            bucket_masks[int(chunk_id), bucket_view.astype(np.intp, copy=False)] = True
+            matched_buckets = np.zeros(int(light["bucket_count"]), dtype=bool)
+            for seg_start_idx, seg_stop_idx in segment_runs:
+                local_start = seg_start_idx * nav_segment_len
+                local_stop = min(seg_stop_idx * nav_segment_len, chunk_items)
+                span_items = local_stop - local_start
+                values_view = span_values[:span_items]
+                batch_values.get_1d_span_numpy(values_view, int(chunk_id), local_start, span_items)
+                lo, hi = _search_bounds(values_view, search_plan)
+                if lo >= hi:
+                    continue
+                bucket_view = bucket_ids[: hi - lo]
+                batch_buckets.get_1d_span_numpy(bucket_view, int(chunk_id), local_start + lo, hi - lo)
+                matched_buckets[bucket_view.astype(np.intp, copy=False)] = True
+            if np.any(matched_buckets):
+                batch_results.append((int(chunk_id), matched_buckets))
+        return batch_results, batch_candidate_segments
+
+    thread_count = _index_query_thread_count(len(candidate_chunk_ids))
+    if thread_count <= 1:
+        batch_results, total_candidate_segments = process_batch(candidate_chunk_ids)
+        for chunk_id, matched_buckets in batch_results:
+            bucket_masks[chunk_id] = matched_buckets
+    else:
+        batches = _chunk_batches(candidate_chunk_ids, thread_count)
+        with ThreadPoolExecutor(max_workers=thread_count) as executor:
+            for batch_results, batch_candidate_segments in executor.map(process_batch, batches):
+                total_candidate_segments += batch_candidate_segments
+                for chunk_id, matched_buckets in batch_results:
+                    bucket_masks[chunk_id] = matched_buckets
 
     return bucket_masks, int(np.count_nonzero(candidate_chunks)), total_candidate_segments
 
@@ -3395,27 +3542,32 @@ def _exact_positions_from_reduced_chunk_nav_ooc(
     if not np.any(candidate_chunks):
         return np.empty(0, dtype=np.int64), 0, 0
 
-    values_sidecar, positions_sidecar, l2_sidecar = _load_reduced_sidecar_handles(array, descriptor)
     dtype = np.dtype(descriptor["dtype"])
     chunk_len = int(reduced["chunk_len"])
     nav_segment_len = int(reduced["nav_segment_len"])
     nsegments_per_chunk = int(reduced["nsegments_per_chunk"])
     local_position_dtype = np.dtype(reduced.get("position_dtype", np.uint32))
     candidate_chunk_ids = np.flatnonzero(candidate_chunks).astype(np.intp, copy=False)
-    l2_row = np.empty(nsegments_per_chunk, dtype=_boundary_dtype(dtype))
-    span_values = np.empty(chunk_len, dtype=dtype)
-    local_positions = np.empty(chunk_len, dtype=local_position_dtype)
+    l2_boundary_dtype = _boundary_dtype(dtype)
 
-    try:
-        positions, total_candidate_segments = indexing_ext.index_collect_reduced_chunk_nav_positions(
+    def process_cython_batch(chunk_ids: np.ndarray) -> tuple[np.ndarray, int]:
+        if len(chunk_ids) == 0:
+            return np.empty(0, dtype=np.int64), 0
+        batch_values = blosc2.open(reduced["values_path"], mmap_mode="r")
+        batch_positions = blosc2.open(reduced["positions_path"], mmap_mode="r")
+        batch_l2 = blosc2.open(reduced["l2_path"], mmap_mode="r")
+        batch_l2_row = np.empty(nsegments_per_chunk, dtype=l2_boundary_dtype)
+        batch_span_values = np.empty(chunk_len, dtype=dtype)
+        batch_local_positions = np.empty(chunk_len, dtype=local_position_dtype)
+        return indexing_ext.index_collect_reduced_chunk_nav_positions(
             offsets,
-            candidate_chunk_ids,
-            values_sidecar,
-            positions_sidecar,
-            l2_sidecar,
-            l2_row,
-            span_values,
-            local_positions,
+            chunk_ids,
+            batch_values,
+            batch_positions,
+            batch_l2,
+            batch_l2_row,
+            batch_span_values,
+            batch_local_positions,
             chunk_len,
             nav_segment_len,
             nsegments_per_chunk,
@@ -3424,36 +3576,55 @@ def _exact_positions_from_reduced_chunk_nav_ooc(
             plan.upper,
             plan.upper_inclusive,
         )
+
+    try:
+        thread_count = _index_query_thread_count(len(candidate_chunk_ids))
+        positions, total_candidate_segments = _reduced_positions_from_cython_batches(
+            candidate_chunk_ids, thread_count, process_cython_batch
+        )
         if len(positions) == 0:
             return np.empty(0, dtype=np.int64), int(candidate_chunk_ids.size), total_candidate_segments
         return np.sort(positions, kind="stable"), int(candidate_chunk_ids.size), total_candidate_segments
     except TypeError:
         pass
 
-    parts = []
-    total_candidate_segments = 0
-
-    for chunk_id in candidate_chunk_ids:
-        chunk_items = int(offsets[chunk_id + 1] - offsets[chunk_id])
-        segment_count = _segment_row_count(chunk_items, nav_segment_len)
-        l2_sidecar.get_1d_span_numpy(l2_row, int(chunk_id), 0, nsegments_per_chunk)
-        segment_runs, candidate_segments = _chunk_nav_candidate_runs(l2_row, segment_count, plan)
-        total_candidate_segments += candidate_segments
-        if not segment_runs:
-            continue
-
-        for seg_start_idx, seg_stop_idx in segment_runs:
-            local_start = seg_start_idx * nav_segment_len
-            local_stop = min(seg_stop_idx * nav_segment_len, chunk_items)
-            span_items = local_stop - local_start
-            values_view = span_values[:span_items]
-            values_sidecar.get_1d_span_numpy(values_view, int(chunk_id), local_start, span_items)
-            lo, hi = _search_bounds(values_view, plan)
-            if lo >= hi:
+    def process_batch(chunk_ids: np.ndarray) -> tuple[list[np.ndarray], int]:
+        if len(chunk_ids) == 0:
+            return [], 0
+        batch_values = blosc2.open(reduced["values_path"], mmap_mode="r")
+        batch_positions = blosc2.open(reduced["positions_path"], mmap_mode="r")
+        batch_l2 = blosc2.open(reduced["l2_path"], mmap_mode="r")
+        batch_parts = []
+        batch_candidate_segments = 0
+        l2_row = np.empty(nsegments_per_chunk, dtype=l2_boundary_dtype)
+        span_values = np.empty(chunk_len, dtype=dtype)
+        local_positions = np.empty(chunk_len, dtype=local_position_dtype)
+        for chunk_id in chunk_ids:
+            chunk_items = int(offsets[chunk_id + 1] - offsets[chunk_id])
+            segment_count = _segment_row_count(chunk_items, nav_segment_len)
+            batch_l2.get_1d_span_numpy(l2_row, int(chunk_id), 0, nsegments_per_chunk)
+            segment_runs, candidate_segments = _chunk_nav_candidate_runs(l2_row, segment_count, plan)
+            batch_candidate_segments += candidate_segments
+            if not segment_runs:
                 continue
-            positions_view = local_positions[: hi - lo]
-            positions_sidecar.get_1d_span_numpy(positions_view, int(chunk_id), local_start + lo, hi - lo)
-            parts.append(chunk_id * chunk_len + positions_view.astype(np.int64, copy=False))
+            for seg_start_idx, seg_stop_idx in segment_runs:
+                local_start = seg_start_idx * nav_segment_len
+                local_stop = min(seg_stop_idx * nav_segment_len, chunk_items)
+                span_items = local_stop - local_start
+                values_view = span_values[:span_items]
+                batch_values.get_1d_span_numpy(values_view, int(chunk_id), local_start, span_items)
+                lo, hi = _search_bounds(values_view, plan)
+                if lo >= hi:
+                    continue
+                positions_view = local_positions[: hi - lo]
+                batch_positions.get_1d_span_numpy(positions_view, int(chunk_id), local_start + lo, hi - lo)
+                batch_parts.append(chunk_id * chunk_len + positions_view.astype(np.int64, copy=False))
+        return batch_parts, batch_candidate_segments
+
+    thread_count = _index_query_thread_count(len(candidate_chunk_ids))
+    parts, total_candidate_segments = _reduced_positions_from_python_batches(
+        candidate_chunk_ids, thread_count, process_batch
+    )
 
     if not parts:
         return np.empty(0, dtype=np.int64), int(candidate_chunk_ids.size), total_candidate_segments
@@ -3806,19 +3977,34 @@ def evaluate_segment_query(
     if plan.base is None or plan.candidate_units is None or plan.segment_len is None:
         raise ValueError("segment evaluation requires a segment-based plan")
 
-    parts = []
-    chunk_operands = {}
-    for unit in np.flatnonzero(plan.candidate_units):
-        start = int(unit) * plan.segment_len
-        stop = min(start + plan.segment_len, plan.base.shape[0])
-        cslice = (slice(start, stop, 1),)
-        get_chunk_operands(operands, cslice, chunk_operands, plan.base.shape)
-        result, _ = _get_result(expression, chunk_operands, ne_args, where)
-        if len(result) > 0:
-            parts.append(np.require(result, requirements="C"))
+    candidate_units = np.flatnonzero(plan.candidate_units).astype(np.intp, copy=False)
 
+    def process_batch(units: np.ndarray) -> np.ndarray:
+        chunk_operands = {}
+        parts = []
+        for unit in units:
+            start = int(unit) * plan.segment_len
+            stop = min(start + plan.segment_len, plan.base.shape[0])
+            cslice = (slice(start, stop, 1),)
+            get_chunk_operands(operands, cslice, chunk_operands, plan.base.shape)
+            result, _ = _get_result(expression, chunk_operands, ne_args, where)
+            if len(result) > 0:
+                parts.append(np.require(result, requirements="C"))
+        if not parts:
+            return np.empty(0, dtype=_where_output_dtype(where["_where_x"]))
+        return np.concatenate(parts) if len(parts) > 1 else parts[0]
+
+    thread_count = _downstream_query_thread_count(len(candidate_units), plan)
+    if thread_count <= 1:
+        parts = [process_batch(candidate_units)]
+    else:
+        batches = _chunk_batches(candidate_units, thread_count)
+        with ThreadPoolExecutor(max_workers=thread_count) as executor:
+            parts = list(executor.map(process_batch, batches))
+
+    parts = [part for part in parts if len(part) > 0]
     if parts:
-        return np.concatenate(parts)
+        return np.concatenate(parts) if len(parts) > 1 else parts[0]
     return np.empty(0, dtype=_where_output_dtype(where["_where_x"]))
 
 
@@ -3830,42 +4016,29 @@ def evaluate_light_query(
     if plan.base is None or plan.bucket_masks is None or plan.chunk_len is None or plan.bucket_len is None:
         raise ValueError("light evaluation requires bucket masks and chunk geometry")
 
-    parts = []
     total_len = int(plan.base.shape[0])
     chunk_len = int(plan.base.chunks[0])
     where_x = where["_where_x"]
-    for chunk_id, bucket_mask in enumerate(plan.bucket_masks):
-        if not np.any(bucket_mask):
-            continue
-        chunk_start = chunk_id * plan.chunk_len
-        chunk_stop = min(chunk_start + plan.chunk_len, total_len)
-        for run_start, run_stop in _contiguous_true_runs(np.asarray(bucket_mask, dtype=bool)):
-            start = chunk_start + run_start * plan.bucket_len
-            stop = min(chunk_start + run_stop * plan.bucket_len, chunk_stop)
-            if start >= stop:
-                continue
-            if _supports_block_reads(where_x):
-                span = np.empty(stop - start, dtype=where_x.dtype)
-                base_chunk_id = start // chunk_len
-                local_start = start - base_chunk_id * chunk_len
-                where_x.get_1d_span_numpy(span, base_chunk_id, local_start, stop - start)
-            else:
-                span = where_x[start:stop]
-            if plan.target is not None and plan.target.get("source") == "expression":
-                field_values = _values_from_numpy_target(span, plan.target)
-            else:
-                field_values = span if plan.field is None else span[plan.field]
-            match = np.ones(len(field_values), dtype=bool)
-            if plan.lower is not None:
-                match &= field_values >= plan.lower if plan.lower_inclusive else field_values > plan.lower
-            if plan.upper is not None:
-                match &= field_values <= plan.upper if plan.upper_inclusive else field_values < plan.upper
-            if np.any(match):
-                parts.append(np.require(span[match], requirements="C"))
+    candidate_chunk_ids = np.flatnonzero(np.any(plan.bucket_masks, axis=1)).astype(np.intp, copy=False)
 
-    if parts:
-        return np.concatenate(parts)
-    return np.empty(0, dtype=_where_output_dtype(where["_where_x"]))
+    thread_count = _downstream_query_thread_count(len(candidate_chunk_ids), plan)
+    if thread_count <= 1:
+        parts = [_process_light_chunk_batch(candidate_chunk_ids, where_x, plan, total_len, chunk_len)]
+    else:
+        batches = _chunk_batches(candidate_chunk_ids, thread_count)
+        with ThreadPoolExecutor(max_workers=thread_count) as executor:
+            parts = list(
+                executor.map(
+                    _process_light_chunk_batch,
+                    batches,
+                    [where_x] * len(batches),
+                    [plan] * len(batches),
+                    [total_len] * len(batches),
+                    [chunk_len] * len(batches),
+                )
+            )
+
+    return _merge_result_batches(parts, _where_output_dtype(where["_where_x"]))
 
 
 def _gather_positions(where_x, positions: np.ndarray) -> np.ndarray:
