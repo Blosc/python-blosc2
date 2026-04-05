@@ -4,6 +4,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 #######################################################################
+import math
 
 import numpy as np
 import pytest
@@ -319,13 +320,15 @@ def test_chunk_local_index_descriptor_and_lookup_path(tmp_path, kind):
 
     assert meta["layout"] == "chunk-local-v1"
     assert meta["chunk_len"] == arr.chunks[0]
-    expected_nav_len = arr.blocks[0] if kind == "light" else arr.blocks[0] // 8
+    expected_nav_len = (
+        arr.blocks[0] if kind == "light" else max(arr.blocks[0] // 4, math.ceil(arr.chunks[0] / 2048))
+    )
     assert meta["nav_segment_len"] == expected_nav_len
     assert meta["l1_path"] is not None
     assert meta["l2_path"] is not None
 
     if kind == "medium":
-        assert meta["nav_segment_divisor"] == 8
+        assert meta["nav_segment_divisor"] == 4
 
     reopened = blosc2.open(path, mode="a")
     expr = (reopened == 123_456).where(reopened)

@@ -770,7 +770,7 @@ def _build_reduced_descriptor(
     persistent: bool,
 ) -> dict:
     chunk_len = int(array.chunks[0])
-    nav_segment_len, nav_segment_divisor = _medium_nav_segment_len(int(array.blocks[0]), optlevel)
+    nav_segment_len, nav_segment_divisor = _medium_nav_segment_len(int(array.blocks[0]), chunk_len, optlevel)
     sorted_values, positions, offsets, l2, _ = _build_chunk_sorted_payload(
         values, chunk_len, nav_segment_len
     )
@@ -815,18 +815,18 @@ def _sidecar_block_len(sidecar: dict, fallback_block_len: int) -> int:
 def _medium_nav_segment_divisor(optlevel: int) -> int:
     if optlevel <= 1:
         return 1
-    if optlevel == 2:
+    if optlevel <= 3:
         return 2
-    if optlevel == 3:
-        return 4
     if optlevel <= 6:
-        return 8
-    return 16
+        return 4
+    return 8
 
 
-def _medium_nav_segment_len(block_len: int, optlevel: int) -> tuple[int, int]:
+def _medium_nav_segment_len(block_len: int, chunk_len: int, optlevel: int) -> tuple[int, int]:
     divisor = min(block_len, _medium_nav_segment_divisor(int(optlevel)))
-    return max(1, block_len // divisor), divisor
+    max_segments_per_chunk = 2048
+    chunk_floor = max(1, math.ceil(int(chunk_len) / max_segments_per_chunk))
+    return max(1, block_len // divisor, chunk_floor), divisor
 
 
 def _build_chunk_sorted_payload(
@@ -995,7 +995,7 @@ def _build_reduced_descriptor_ooc(
     workdir: Path,
 ) -> dict:
     chunk_len = int(array.chunks[0])
-    nav_segment_len, nav_segment_divisor = _medium_nav_segment_len(int(array.blocks[0]), optlevel)
+    nav_segment_len, nav_segment_divisor = _medium_nav_segment_len(int(array.blocks[0]), chunk_len, optlevel)
     sorted_values, positions, offsets, l2, _ = _build_chunk_sorted_payload_ooc(
         array, target, dtype, workdir, f"{kind}_reduced", chunk_len, nav_segment_len
     )
