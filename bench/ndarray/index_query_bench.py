@@ -304,7 +304,8 @@ def benchmark_size(
         with _with_full_query_mode(full_query_mode):
             explanation = idx_expr.explain()
             cold_time, index_len = benchmark_index_once(idx_arr, idx_cond)
-        logical_index_bytes, disk_index_bytes = index_sizes(idx_arr.indexes[0])
+        descriptor = idx_arr.indexes[0]
+        logical_index_bytes, disk_index_bytes = index_sizes(descriptor)
 
         rows.append(
             {

@@ -118,6 +118,13 @@ class SortedRun:
 
 
 @dataclass(slots=True)
+class TempRunTracker:
+    current_disk_bytes: int = 0
+    peak_disk_bytes: int = 0
+    total_written_bytes: int = 0
+
+
+@dataclass(slots=True)
 class OrderedIndexPlan:
     usable: bool
     reason: str
@@ -458,6 +465,23 @@ def _compute_sorted_boundaries(values: np.ndarray, dtype: np.dtype, segment_len:
     return boundaries
 
 
+def _compute_sorted_boundaries_from_sidecar(
+    path: str, dtype: np.dtype, length: int, segment_len: int
+) -> np.ndarray:
+    nsegments = math.ceil(length / segment_len)
+    boundaries = np.empty(nsegments, dtype=_boundary_dtype(dtype))
+    sidecar = blosc2.open(path, mmap_mode="r")
+    start_value = np.empty(1, dtype=dtype)
+    end_value = np.empty(1, dtype=dtype)
+    for idx in range(nsegments):
+        start = idx * segment_len
+        stop = min(start + segment_len, length)
+        _read_ndarray_linear_span(sidecar, start, start_value)
+        _read_ndarray_linear_span(sidecar, stop - 1, end_value)
+        boundaries[idx] = (start_value[0], end_value[0])
+    return boundaries
+
+
 def _store_array_sidecar(
     array: blosc2.NDArray,
     token: str,
@@ -561,7 +585,7 @@ def _sidecar_storage_geometry(
 ) -> tuple[int, int]:
     if path is None:
         return fallback_chunk_len, fallback_block_len
-    sidecar = blosc2.open(path)
+    sidecar = blosc2.open(path, mmap_mode="r")
     return int(sidecar.chunks[0]), int(sidecar.blocks[0])
 
 
@@ -584,8 +608,91 @@ def _rebuild_full_navigation_sidecars(
     full["l2_path"] = l2_sidecar["path"]
     full["sidecar_chunk_len"] = int(chunk_len)
     full["sidecar_block_len"] = int(block_len)
+
+
+def _rebuild_full_navigation_sidecars_from_path(
+    array: blosc2.NDArray,
+    token: str,
+    kind: str,
+    full: dict,
+    values_path: str,
+    dtype: np.dtype,
+    length: int,
+    persistent: bool,
+) -> None:
+    chunk_len, block_len = _sidecar_storage_geometry(values_path, int(array.chunks[0]), int(array.blocks[0]))
+    l1 = _compute_sorted_boundaries_from_sidecar(values_path, dtype, length, chunk_len)
+    l2 = _compute_sorted_boundaries_from_sidecar(values_path, dtype, length, block_len)
+    l1_sidecar = _store_array_sidecar(array, token, kind, "full_nav", "l1", l1, persistent)
+    l2_sidecar = _store_array_sidecar(array, token, kind, "full_nav", "l2", l2, persistent)
+    full["l1_path"] = l1_sidecar["path"]
+    full["l2_path"] = l2_sidecar["path"]
+    full["sidecar_chunk_len"] = int(chunk_len)
+    full["sidecar_block_len"] = int(block_len)
     full["l1_dtype"] = l1_sidecar["dtype"]
     full["l2_dtype"] = l2_sidecar["dtype"]
+
+
+def _stream_copy_sidecar_array(
+    source_path: Path | str,
+    dest_path: Path | str,
+    length: int,
+    dtype: np.dtype,
+    chunks: tuple[int, ...],
+    blocks: tuple[int, ...],
+) -> None:
+    source = blosc2.open(str(source_path), mmap_mode="r")
+    blosc2.remove_urlpath(str(dest_path))
+    dest = blosc2.empty(
+        (length,), dtype=dtype, chunks=chunks, blocks=blocks, urlpath=str(dest_path), mode="w"
+    )
+    chunk_len = int(dest.chunks[0])
+    for start in range(0, length, chunk_len):
+        stop = min(start + chunk_len, length)
+        span = np.empty(stop - start, dtype=dtype)
+        _read_ndarray_linear_span(source, start, span)
+        dest[start:stop] = span
+    del source, dest
+
+
+def _stream_copy_temp_run_to_full_sidecars(
+    array: blosc2.NDArray,
+    token: str,
+    kind: str,
+    full: dict,
+    run: SortedRun,
+    dtype: np.dtype,
+    persistent: bool,
+    tracker: TempRunTracker | None = None,
+) -> None:
+    if not persistent:
+        raise ValueError("temp-run streaming only supports persistent runs")
+
+    values_path = _sidecar_path(array, token, kind, "full.values")
+    positions_path = _sidecar_path(array, token, kind, "full.positions")
+    _remove_sidecar_path(values_path)
+    _remove_sidecar_path(positions_path)
+    _stream_copy_sidecar_array(
+        run.values_path, values_path, run.length, dtype, (int(array.chunks[0]),), (int(array.blocks[0]),)
+    )
+    _stream_copy_sidecar_array(
+        run.positions_path,
+        positions_path,
+        run.length,
+        np.dtype(np.int64),
+        (int(array.chunks[0]),),
+        (int(array.blocks[0]),),
+    )
+    _tracker_register_delete(tracker, run.values_path, run.positions_path)
+    run.values_path.unlink(missing_ok=True)
+    run.positions_path.unlink(missing_ok=True)
+    full["values_path"] = values_path
+    full["positions_path"] = positions_path
+    full["runs"] = []
+    full["next_run_id"] = 0
+    _rebuild_full_navigation_sidecars_from_path(
+        array, token, kind, full, values_path, dtype, run.length, persistent
+    )
 
 
 def _build_full_descriptor(
@@ -1183,30 +1290,151 @@ def _pair_searchsorted_right(values: np.ndarray, positions: np.ndarray, value, p
     return int(np.searchsorted(records, needle, side="right"))
 
 
+def _temp_run_storage_geometry(
+    length: int, dtype: np.dtype, buffer_items: int
+) -> tuple[tuple[int], tuple[int]]:
+    chunk_items = max(1, min(length, buffer_items))
+    target_block_bytes = 256 * 1024
+    block_items = max(1, min(chunk_items, target_block_bytes // max(1, dtype.itemsize)))
+    return (chunk_items,), (block_items,)
+
+
+def _path_disk_bytes(path: Path | str) -> int:
+    path = Path(path)
+    if not path.exists():
+        return 0
+    if path.is_file():
+        return path.stat().st_size
+    return sum(entry.stat().st_size for entry in path.rglob("*") if entry.is_file())
+
+
+def _tracker_register_create(tracker: TempRunTracker | None, *paths: Path) -> None:
+    if tracker is None:
+        return
+    delta = sum(_path_disk_bytes(path) for path in paths)
+    tracker.current_disk_bytes += delta
+    tracker.total_written_bytes += delta
+    tracker.peak_disk_bytes = max(tracker.peak_disk_bytes, tracker.current_disk_bytes)
+
+
+def _tracker_register_delete(tracker: TempRunTracker | None, *paths: Path) -> None:
+    if tracker is None:
+        return
+    delta = sum(_path_disk_bytes(path) for path in paths)
+    tracker.current_disk_bytes = max(0, tracker.current_disk_bytes - delta)
+
+
+def _create_blosc2_temp_array(path: Path, length: int, dtype: np.dtype, buffer_items: int):
+    chunks, blocks = _temp_run_storage_geometry(length, dtype, buffer_items)
+    cparams = blosc2.CParams(codec=blosc2.Codec.ZSTD, clevel=1)
+    return blosc2.empty(
+        (length,),
+        dtype=dtype,
+        chunks=chunks,
+        blocks=blocks,
+        urlpath=str(path),
+        mode="w",
+        cparams=cparams,
+    )
+
+
+def _read_ndarray_linear_span(array: blosc2.NDArray, start: int, out: np.ndarray) -> None:
+    if len(out) == 0:
+        return
+    chunk_len = int(array.chunks[0])
+    cursor = int(start)
+    out_cursor = 0
+    while out_cursor < len(out):
+        chunk_id = cursor // chunk_len
+        local_start = cursor % chunk_len
+        take = min(len(out) - out_cursor, chunk_len - local_start)
+        array.get_1d_span_numpy(
+            out[out_cursor : out_cursor + take], int(chunk_id), int(local_start), int(take)
+        )
+        cursor += take
+        out_cursor += take
+
+
+def _materialize_sorted_run(
+    values: np.ndarray,
+    positions: np.ndarray,
+    length: int,
+    value_dtype: np.dtype,
+    workdir: Path,
+    prefix: str,
+    tracker: TempRunTracker | None = None,
+) -> SortedRun:
+    values_path = workdir / f"{prefix}.values.b2nd"
+    positions_path = workdir / f"{prefix}.positions.b2nd"
+    run_values = _create_blosc2_temp_array(values_path, length, value_dtype, FULL_OOC_MERGE_BUFFER_ITEMS)
+    run_positions = _create_blosc2_temp_array(
+        positions_path, length, np.dtype(np.int64), FULL_OOC_MERGE_BUFFER_ITEMS
+    )
+    run_values[:] = values
+    run_positions[:] = positions
+    del run_values, run_positions
+    _tracker_register_create(tracker, values_path, positions_path)
+    return SortedRun(values_path, positions_path, length)
+
+
+def _copy_sidecar_to_temp_run(
+    path: str,
+    length: int,
+    dtype: np.dtype,
+    workdir: Path,
+    prefix: str,
+    tracker: TempRunTracker | None = None,
+) -> Path:
+    out_path = workdir / f"{prefix}.b2nd"
+    sidecar = blosc2.open(path, mmap_mode="r")
+    output = _create_blosc2_temp_array(out_path, length, dtype, FULL_OOC_MERGE_BUFFER_ITEMS)
+    chunk_len = int(sidecar.chunks[0])
+    for chunk_id, start in enumerate(range(0, length, chunk_len)):
+        stop = min(start + chunk_len, length)
+        span = np.empty(stop - start, dtype=dtype)
+        sidecar.get_1d_span_numpy(span, chunk_id, 0, stop - start)
+        output[start:stop] = span
+    del output
+    _tracker_register_create(tracker, out_path)
+    return out_path
+
+
 def _refill_run_buffer(
-    values_mm: np.ndarray, positions_mm: np.ndarray, cursor: int, buffer_items: int
+    values_src, positions_src, cursor: int, buffer_items: int
 ) -> tuple[np.ndarray, np.ndarray, int]:
-    if cursor >= len(values_mm):
-        return np.empty(0, dtype=values_mm.dtype), np.empty(0, dtype=positions_mm.dtype), cursor
-    stop = min(cursor + buffer_items, len(values_mm))
-    return np.asarray(values_mm[cursor:stop]), np.asarray(positions_mm[cursor:stop]), stop
+    if cursor >= len(values_src):
+        values_dtype = values_src.dtype if hasattr(values_src, "dtype") else np.float64
+        positions_dtype = positions_src.dtype if hasattr(positions_src, "dtype") else np.int64
+        return np.empty(0, dtype=values_dtype), np.empty(0, dtype=positions_dtype), cursor
+    stop = min(cursor + buffer_items, len(values_src))
+    if isinstance(values_src, np.ndarray):
+        return np.asarray(values_src[cursor:stop]), np.asarray(positions_src[cursor:stop]), stop
+    values = np.empty(stop - cursor, dtype=np.dtype(values_src.dtype))
+    positions = np.empty(stop - cursor, dtype=np.dtype(positions_src.dtype))
+    _read_ndarray_linear_span(values_src, cursor, values)
+    _read_ndarray_linear_span(positions_src, cursor, positions)
+    return values, positions, stop
 
 
 def _merge_run_pair(
-    left: SortedRun, right: SortedRun, workdir: Path, dtype: np.dtype, merge_id: int, buffer_items: int
+    left: SortedRun,
+    right: SortedRun,
+    workdir: Path,
+    dtype: np.dtype,
+    merge_id: int,
+    buffer_items: int,
+    tracker: TempRunTracker | None = None,
 ) -> SortedRun:
-    left_values_mm = np.load(left.values_path, mmap_mode="r")
-    left_positions_mm = np.load(left.positions_path, mmap_mode="r")
-    right_values_mm = np.load(right.values_path, mmap_mode="r")
-    right_positions_mm = np.load(right.positions_path, mmap_mode="r")
+    left_values_mm = blosc2.open(str(left.values_path), mmap_mode="r")
+    left_positions_mm = blosc2.open(str(left.positions_path), mmap_mode="r")
+    right_values_mm = blosc2.open(str(right.values_path), mmap_mode="r")
+    right_positions_mm = blosc2.open(str(right.positions_path), mmap_mode="r")
 
-    out_values_path = workdir / f"full_merge_values_{merge_id}.npy"
-    out_positions_path = workdir / f"full_merge_positions_{merge_id}.npy"
-    out_values = np.lib.format.open_memmap(
-        out_values_path, mode="w+", dtype=dtype, shape=(left.length + right.length,)
-    )
-    out_positions = np.lib.format.open_memmap(
-        out_positions_path, mode="w+", dtype=np.int64, shape=(left.length + right.length,)
+    out_values_path = workdir / f"full_merge_values_{merge_id}.b2nd"
+    out_positions_path = workdir / f"full_merge_positions_{merge_id}.b2nd"
+    out_values = _create_blosc2_temp_array(out_values_path, left.length + right.length, dtype, buffer_items)
+    out_positions = _create_blosc2_temp_array(
+        out_positions_path, left.length + right.length, np.dtype(np.int64), buffer_items
     )
 
     left_cursor = 0
@@ -1272,9 +1500,12 @@ def _merge_run_pair(
         right_values = right_values[right_cut:]
         right_positions = right_positions[right_cut:]
 
-    out_values.flush()
-    out_positions.flush()
-    del left_values_mm, left_positions_mm, right_values_mm, right_positions_mm, out_values, out_positions
+    del out_values, out_positions
+    _tracker_register_create(tracker, out_values_path, out_positions_path)
+    del left_values_mm, left_positions_mm, right_values_mm, right_positions_mm
+    _tracker_register_delete(
+        tracker, left.values_path, left.positions_path, right.values_path, right.positions_path
+    )
     left.values_path.unlink(missing_ok=True)
     left.positions_path.unlink(missing_ok=True)
     right.values_path.unlink(missing_ok=True)
@@ -1292,6 +1523,7 @@ def _build_full_descriptor_ooc(
     workdir: Path,
 ) -> dict:
     size = int(array.shape[0])
+    tracker = TempRunTracker()
     if size == 0:
         sorted_values = np.empty(0, dtype=dtype)
         positions = np.empty(0, dtype=np.int64)
@@ -1318,19 +1550,17 @@ def _build_full_descriptor_ooc(
         order = np.lexsort((positions, values))
         sorted_values = values[order]
         sorted_positions = positions[order]
-
-        values_path = workdir / f"full_run_values_{run_id}.npy"
-        positions_path = workdir / f"full_run_positions_{run_id}.npy"
-        run_values = np.lib.format.open_memmap(values_path, mode="w+", dtype=dtype, shape=(stop - start,))
-        run_positions = np.lib.format.open_memmap(
-            positions_path, mode="w+", dtype=np.int64, shape=(stop - start,)
+        runs.append(
+            _materialize_sorted_run(
+                sorted_values,
+                sorted_positions,
+                stop - start,
+                dtype,
+                workdir,
+                f"full_run_{run_id}",
+                tracker,
+            )
         )
-        run_values[:] = sorted_values
-        run_positions[:] = sorted_positions
-        run_values.flush()
-        run_positions.flush()
-        del run_values, run_positions
-        runs.append(SortedRun(values_path, positions_path, stop - start))
 
     merge_id = 0
     while len(runs) > 1:
@@ -1341,24 +1571,48 @@ def _build_full_descriptor_ooc(
                 continue
             next_runs.append(
                 _merge_run_pair(
-                    runs[idx], runs[idx + 1], workdir, dtype, merge_id, FULL_OOC_MERGE_BUFFER_ITEMS
+                    runs[idx],
+                    runs[idx + 1],
+                    workdir,
+                    dtype,
+                    merge_id,
+                    FULL_OOC_MERGE_BUFFER_ITEMS,
+                    tracker,
                 )
             )
             merge_id += 1
         runs = next_runs
 
     final_run = runs[0]
-    sorted_values = np.load(final_run.values_path, mmap_mode="r")
-    positions = np.load(final_run.positions_path, mmap_mode="r")
-    values_sidecar = _store_array_sidecar(array, token, kind, "full", "values", sorted_values, persistent)
-    positions_sidecar = _store_array_sidecar(array, token, kind, "full", "positions", positions, persistent)
     full = {
-        "values_path": values_sidecar["path"],
-        "positions_path": positions_sidecar["path"],
+        "values_path": None,
+        "positions_path": None,
         "runs": [],
         "next_run_id": 0,
+        "temp_backend": "blosc2",
+        "temp_peak_disk_bytes": tracker.peak_disk_bytes,
+        "temp_total_written_bytes": tracker.total_written_bytes,
     }
-    _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent)
+    if persistent:
+        _stream_copy_temp_run_to_full_sidecars(
+            array, token, kind, full, final_run, dtype, persistent, tracker
+        )
+    else:
+        sorted_values = blosc2.open(str(final_run.values_path), mmap_mode="r")[:]
+        positions = blosc2.open(str(final_run.positions_path), mmap_mode="r")[:]
+        values_sidecar = _store_array_sidecar(
+            array, token, kind, "full", "values", sorted_values, persistent
+        )
+        positions_sidecar = _store_array_sidecar(
+            array, token, kind, "full", "positions", positions, persistent
+        )
+        full["values_path"] = values_sidecar["path"]
+        full["positions_path"] = positions_sidecar["path"]
+        _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent)
+        del sorted_values, positions
+        _tracker_register_delete(tracker, final_run.values_path, final_run.positions_path)
+        final_run.values_path.unlink(missing_ok=True)
+        final_run.positions_path.unlink(missing_ok=True)
     return full
 
 
@@ -1779,6 +2033,56 @@ def _replace_full_descriptor(
     _rebuild_full_navigation_sidecars(array, token, kind, full, sorted_values, persistent)
 
 
+def _replace_full_descriptor_from_paths(
+    array: blosc2.NDArray,
+    descriptor: dict,
+    values_path: Path,
+    positions_path: Path,
+    length: int,
+) -> None:
+    kind = descriptor["kind"]
+    token = descriptor["token"]
+    full = descriptor["full"]
+    persistent = descriptor["persistent"]
+    if not persistent:
+        raise ValueError("path-based full replacement requires persistent indexes")
+    for run in full.get("runs", ()):
+        _remove_sidecar_path(run.get("values_path"))
+        _remove_sidecar_path(run.get("positions_path"))
+    _remove_sidecar_path(full.get("l1_path"))
+    _remove_sidecar_path(full.get("l2_path"))
+    _clear_cached_data(array, token)
+    final_values_path = _sidecar_path(array, token, kind, "full.values")
+    final_positions_path = _sidecar_path(array, token, kind, "full.positions")
+    _remove_sidecar_path(final_values_path)
+    _remove_sidecar_path(final_positions_path)
+    _stream_copy_sidecar_array(
+        values_path,
+        final_values_path,
+        length,
+        np.dtype(descriptor["dtype"]),
+        (int(array.chunks[0]),),
+        (int(array.blocks[0]),),
+    )
+    _stream_copy_sidecar_array(
+        positions_path,
+        final_positions_path,
+        length,
+        np.dtype(np.int64),
+        (int(array.chunks[0]),),
+        (int(array.blocks[0]),),
+    )
+    values_path.unlink(missing_ok=True)
+    positions_path.unlink(missing_ok=True)
+    full["values_path"] = final_values_path
+    full["positions_path"] = final_positions_path
+    full["runs"] = []
+    full["next_run_id"] = 0
+    _rebuild_full_navigation_sidecars_from_path(
+        array, token, kind, full, final_values_path, np.dtype(descriptor["dtype"]), length, persistent
+    )
+
+
 def _store_full_run_descriptor(
     array: blosc2.NDArray,
     descriptor: dict,
@@ -1891,41 +2195,6 @@ def rebuild_index(array: blosc2.NDArray, field: str | None = None, name: str | N
     )
 
 
-def _copy_sidecar_to_temp_run(path: str, length: int, dtype: np.dtype, workdir: Path, prefix: str) -> Path:
-    sidecar = blosc2.open(path)
-    out_path = workdir / f"{prefix}.npy"
-    output = np.lib.format.open_memmap(out_path, mode="w+", dtype=dtype, shape=(length,))
-    chunk_len = int(sidecar.chunks[0])
-    for chunk_id, start in enumerate(range(0, length, chunk_len)):
-        stop = min(start + chunk_len, length)
-        span = np.empty(stop - start, dtype=dtype)
-        sidecar.get_1d_span_numpy(span, chunk_id, 0, stop - start)
-        output[start:stop] = span
-    output.flush()
-    del output
-    return out_path
-
-
-def _materialize_sorted_run(
-    values: np.ndarray,
-    positions: np.ndarray,
-    length: int,
-    value_dtype: np.dtype,
-    workdir: Path,
-    prefix: str,
-) -> SortedRun:
-    values_path = workdir / f"{prefix}.values.npy"
-    positions_path = workdir / f"{prefix}.positions.npy"
-    run_values = np.lib.format.open_memmap(values_path, mode="w+", dtype=value_dtype, shape=(length,))
-    run_positions = np.lib.format.open_memmap(positions_path, mode="w+", dtype=np.int64, shape=(length,))
-    run_values[:] = values
-    run_positions[:] = positions
-    run_values.flush()
-    run_positions.flush()
-    del run_values, run_positions
-    return SortedRun(values_path, positions_path, length)
-
-
 def _full_compaction_runs(array: blosc2.NDArray, descriptor: dict, workdir: Path) -> list[SortedRun]:
     full = descriptor["full"]
     dtype = np.dtype(descriptor["dtype"])
@@ -2001,12 +2270,17 @@ def compact_index(array: blosc2.NDArray, field: str | None = None, name: str | N
                 merge_id += 1
             runs = next_runs
         final_run = runs[0]
-        sorted_values = np.load(final_run.values_path, mmap_mode="r")
-        positions = np.load(final_run.positions_path, mmap_mode="r")
-        _replace_full_descriptor(array, descriptor, sorted_values, positions, descriptor["persistent"])
-        del sorted_values, positions
-        final_run.values_path.unlink(missing_ok=True)
-        final_run.positions_path.unlink(missing_ok=True)
+        if descriptor["persistent"]:
+            _replace_full_descriptor_from_paths(
+                array, descriptor, final_run.values_path, final_run.positions_path, final_run.length
+            )
+        else:
+            sorted_values = blosc2.open(str(final_run.values_path), mmap_mode="r")[:]
+            positions = blosc2.open(str(final_run.positions_path), mmap_mode="r")[:]
+            _replace_full_descriptor(array, descriptor, sorted_values, positions, descriptor["persistent"])
+            del sorted_values, positions
+            final_run.values_path.unlink(missing_ok=True)
+            final_run.positions_path.unlink(missing_ok=True)
 
     _clear_full_merge_cache(array, descriptor["token"])
     _save_store(array, store)
