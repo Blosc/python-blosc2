@@ -21,8 +21,6 @@ import blosc2
 from blosc2 import indexing as blosc2_indexing
 
 SIZES = (1_000_000, 2_000_000, 5_000_000, 10_000_000)
-CHUNK_LEN = 100_000
-BLOCK_LEN = 20_000
 DEFAULT_REPEATS = 3
 KINDS = ("ultralight", "light", "medium", "full")
 DISTS = ("sorted", "block-shuffled", "random")
@@ -33,6 +31,10 @@ FULL_QUERY_MODES = ("auto", "selective-ooc", "whole-load")
 
 def dtype_token(dtype: np.dtype) -> str:
     return re.sub(r"[^0-9A-Za-z]+", "_", np.dtype(dtype).name).strip("_")
+
+
+def source_dtype(id_dtype: np.dtype) -> np.dtype:
+    return np.dtype([("id", np.dtype(id_dtype)), ("payload", np.float32)])
 
 
 def make_ordered_ids(size: int, dtype: np.dtype) -> np.ndarray:
@@ -59,19 +61,19 @@ def make_ordered_ids(size: int, dtype: np.dtype) -> np.ndarray:
     raise ValueError(f"unsupported dtype for benchmark: {dtype}")
 
 
-def fill_ids(ids: np.ndarray, ordered_ids: np.ndarray, dist: str, rng: np.random.Generator) -> None:
+def fill_ids(ids: np.ndarray, ordered_ids: np.ndarray, dist: str, rng: np.random.Generator, block_len: int) -> None:
     size = ids.shape[0]
     if dist == "sorted":
         ids[:] = ordered_ids
         return
 
     if dist == "block-shuffled":
-        nblocks = (size + BLOCK_LEN - 1) // BLOCK_LEN
+        nblocks = (size + block_len - 1) // block_len
         order = rng.permutation(nblocks)
         dest = 0
         for src_block in order:
-            src_start = int(src_block) * BLOCK_LEN
-            src_stop = min(src_start + BLOCK_LEN, size)
+            src_start = int(src_block) * block_len
+            src_stop = min(src_start + block_len, size)
             block_size = src_stop - src_start
             ids[dest : dest + block_size] = ordered_ids[src_start:src_stop]
             dest += block_size
@@ -85,30 +87,68 @@ def fill_ids(ids: np.ndarray, ordered_ids: np.ndarray, dist: str, rng: np.random
     raise ValueError(f"unsupported distribution {dist!r}")
 
 
-def make_source_data(size: int, dist: str, id_dtype: np.dtype) -> np.ndarray:
-    dtype = np.dtype([("id", id_dtype), ("payload", np.float32)])
+def _geometry_value_token(value: int | None) -> str:
+    return "auto" if value is None else f"{value}"
+
+
+def geometry_token(chunks: int | None, blocks: int | None) -> str:
+    return f"chunks-{_geometry_value_token(chunks)}.blocks-{_geometry_value_token(blocks)}"
+
+
+def format_geometry_value(value: int | None) -> str:
+    return "auto" if value is None else f"{value:,}"
+
+
+def resolve_geometry(shape: tuple[int, ...], dtype: np.dtype, chunks: int | None, blocks: int | None) -> tuple[int, int]:
+    chunk_spec = None if chunks is None else (chunks,)
+    block_spec = None if blocks is None else (blocks,)
+    resolved_chunks, resolved_blocks = blosc2.compute_chunks_blocks(shape, chunk_spec, block_spec, dtype=dtype)
+    return int(resolved_chunks[0]), int(resolved_blocks[0])
+
+
+def make_source_data(size: int, dist: str, id_dtype: np.dtype, chunks: int | None, blocks: int | None) -> np.ndarray:
+    dtype = source_dtype(id_dtype)
     data = np.zeros(size, dtype=dtype)
-    fill_ids(data["id"], make_ordered_ids(size, id_dtype), dist, np.random.default_rng(RNG_SEED))
+    _, block_len = resolve_geometry((size,), dtype, chunks, blocks)
+    fill_ids(data["id"], make_ordered_ids(size, id_dtype), dist, np.random.default_rng(RNG_SEED), block_len)
     return data
 
 
-def build_array(data: np.ndarray) -> blosc2.NDArray:
-    return blosc2.asarray(data, chunks=(CHUNK_LEN,), blocks=(BLOCK_LEN,))
+def build_array(data: np.ndarray, chunks: int | None, blocks: int | None) -> blosc2.NDArray:
+    kwargs = {}
+    if chunks is not None:
+        kwargs["chunks"] = (chunks,)
+    if blocks is not None:
+        kwargs["blocks"] = (blocks,)
+    return blosc2.asarray(data, **kwargs)
 
 
-def build_persistent_array(data: np.ndarray, path: Path) -> blosc2.NDArray:
-    return blosc2.asarray(data, urlpath=path, mode="w", chunks=(CHUNK_LEN,), blocks=(BLOCK_LEN,))
+def build_persistent_array(data: np.ndarray, path: Path, chunks: int | None, blocks: int | None) -> blosc2.NDArray:
+    kwargs = {"urlpath": path, "mode": "w"}
+    if chunks is not None:
+        kwargs["chunks"] = (chunks,)
+    if blocks is not None:
+        kwargs["blocks"] = (blocks,)
+    return blosc2.asarray(data, **kwargs)
 
 
-def base_array_path(size_dir: Path, size: int, dist: str, id_dtype: np.dtype) -> Path:
-    return size_dir / f"size_{size}_{dist}_{dtype_token(id_dtype)}.b2nd"
+def base_array_path(size_dir: Path, size: int, dist: str, id_dtype: np.dtype, chunks: int | None, blocks: int | None) -> Path:
+    return size_dir / f"size_{size}_{dist}_{dtype_token(id_dtype)}.{geometry_token(chunks, blocks)}.b2nd"
 
 
 def indexed_array_path(
-    size_dir: Path, size: int, dist: str, kind: str, optlevel: int, id_dtype: np.dtype, in_mem: bool
+    size_dir: Path,
+    size: int,
+    dist: str,
+    kind: str,
+    optlevel: int,
+    id_dtype: np.dtype,
+    in_mem: bool,
+    chunks: int | None,
+    blocks: int | None,
 ) -> Path:
     mode = "mem" if in_mem else "ooc"
-    return size_dir / f"size_{size}_{dist}_{dtype_token(id_dtype)}.{kind}.opt{optlevel}.{mode}.b2nd"
+    return size_dir / f"size_{size}_{dist}_{dtype_token(id_dtype)}.{geometry_token(chunks, blocks)}.{kind}.opt{optlevel}.{mode}.b2nd"
 
 
 def benchmark_scan_once(expr) -> tuple[float, int]:
@@ -179,13 +219,13 @@ def index_sizes(descriptor: dict) -> tuple[int, int]:
     return logical, disk
 
 
-def _source_data_factory(size: int, dist: str, id_dtype: np.dtype):
+def _source_data_factory(size: int, dist: str, id_dtype: np.dtype, chunks: int | None, blocks: int | None):
     data = None
 
     def get_data() -> np.ndarray:
         nonlocal data
         if data is None:
-            data = make_source_data(size, dist, id_dtype)
+            data = make_source_data(size, dist, id_dtype, chunks, blocks)
         return data
 
     return get_data
@@ -245,15 +285,15 @@ def _valid_index_descriptor(arr: blosc2.NDArray, kind: str, optlevel: int, in_me
     return None
 
 
-def _open_or_build_persistent_array(path: Path, get_data) -> blosc2.NDArray:
+def _open_or_build_persistent_array(path: Path, get_data, chunks: int | None, blocks: int | None) -> blosc2.NDArray:
     if path.exists():
         return blosc2.open(path, mode="a")
     blosc2.remove_urlpath(path)
-    return build_persistent_array(get_data(), path)
+    return build_persistent_array(get_data(), path, chunks, blocks)
 
 
 def _open_or_build_indexed_array(
-    path: Path, get_data, kind: str, optlevel: int, in_mem: bool
+    path: Path, get_data, kind: str, optlevel: int, in_mem: bool, chunks: int | None, blocks: int | None
 ) -> tuple[blosc2.NDArray, float]:
     if path.exists():
         arr = blosc2.open(path, mode="a")
@@ -263,7 +303,7 @@ def _open_or_build_indexed_array(
             arr.drop_index(field="id")
         blosc2.remove_urlpath(path)
 
-    arr = build_persistent_array(get_data(), path)
+    arr = build_persistent_array(get_data(), path, chunks, blocks)
     build_start = time.perf_counter()
     arr.create_index(field="id", kind=kind, optlevel=optlevel, in_mem=in_mem)
     return arr, time.perf_counter() - build_start
@@ -278,10 +318,12 @@ def benchmark_size(
     id_dtype: np.dtype,
     in_mem: bool,
     full_query_mode: str,
+    chunks: int | None,
+    blocks: int | None,
 ) -> list[dict]:
-    get_data = _source_data_factory(size, dist, id_dtype)
+    get_data = _source_data_factory(size, dist, id_dtype, chunks, blocks)
     get_ordered_ids = _ordered_ids_factory(size, id_dtype)
-    arr = _open_or_build_persistent_array(base_array_path(size_dir, size, dist, id_dtype), get_data)
+    arr = _open_or_build_persistent_array(base_array_path(size_dir, size, dist, id_dtype, chunks, blocks), get_data, chunks, blocks)
     lo, hi = _query_bounds(get_ordered_ids(), query_width)
     condition_str = _condition_expr(lo, hi, id_dtype)
     condition = blosc2.lazyexpr(condition_str, arr.fields)
@@ -294,11 +336,13 @@ def benchmark_size(
     rows = []
     for kind in KINDS:
         idx_arr, build_time = _open_or_build_indexed_array(
-            indexed_array_path(size_dir, size, dist, kind, optlevel, id_dtype, in_mem),
+            indexed_array_path(size_dir, size, dist, kind, optlevel, id_dtype, in_mem, chunks, blocks),
             get_data,
             kind,
             optlevel,
             in_mem,
+            chunks,
+            blocks,
         )
         idx_cond = blosc2.lazyexpr(condition_str, idx_arr.fields)
         idx_expr = idx_cond.where(idx_arr)
@@ -378,6 +422,13 @@ def parse_human_size(value: str) -> int:
     return size
 
 
+def parse_human_size_or_auto(value: str) -> int | None:
+    value = value.strip()
+    if value.lower() == "auto":
+        return None
+    return parse_human_size(value)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark python-blosc2 index kinds.")
     parser.add_argument(
@@ -390,6 +441,18 @@ def parse_args() -> argparse.Namespace:
         type=parse_human_size,
         default=1_000,
         help="Width of the range predicate. Supports suffixes like 1k, 1K, 1M, 1G. Default: 1000.",
+    )
+    parser.add_argument(
+        "--chunks",
+        type=parse_human_size_or_auto,
+        default=None,
+        help="Chunk size for the base array. Supports suffixes like 10k, 1M, and 'auto'. Default: auto.",
+    )
+    parser.add_argument(
+        "--blocks",
+        type=parse_human_size_or_auto,
+        default=None,
+        help="Block size for the base array. Supports suffixes like 10k, 1M, and 'auto'. Default: auto.",
     )
     parser.add_argument(
         "--repeats",
@@ -460,6 +523,8 @@ def main() -> None:
                 id_dtype,
                 args.in_mem,
                 args.full_query_mode,
+                args.chunks,
+                args.blocks,
             )
     else:
         args.outdir.mkdir(parents=True, exist_ok=True)
@@ -474,6 +539,8 @@ def main() -> None:
             id_dtype,
             args.in_mem,
             args.full_query_mode,
+            args.chunks,
+            args.blocks,
         )
 
 
@@ -488,18 +555,27 @@ def run_benchmarks(
     id_dtype: np.dtype,
     in_mem: bool,
     full_query_mode: str,
+    chunks: int | None,
+    blocks: int | None,
 ) -> None:
     all_results = []
+    array_dtype = source_dtype(id_dtype)
+    resolved_geometries = {resolve_geometry((size,), array_dtype, chunks, blocks) for size in sizes}
+    if len(resolved_geometries) == 1:
+        resolved_chunk_len, resolved_block_len = next(iter(resolved_geometries))
+        geometry_label = f"chunks={resolved_chunk_len:,}, blocks={resolved_block_len:,}"
+    else:
+        geometry_label = "chunks=varies, blocks=varies"
     print("Structured range-query benchmark across index kinds")
     print(
-        f"chunks={CHUNK_LEN:,}, blocks={BLOCK_LEN:,}, repeats={repeats}, dist={dist_label}, "
+        f"{geometry_label}, repeats={repeats}, dist={dist_label}, "
         f"query_width={query_width:,}, optlevel={optlevel}, dtype={id_dtype.name}, in_mem={in_mem}, "
         f"full_query_mode={full_query_mode}"
     )
     for dist in dists:
         for size in sizes:
             size_results = benchmark_size(
-                size, size_dir, dist, query_width, optlevel, id_dtype, in_mem, full_query_mode
+                size, size_dir, dist, query_width, optlevel, id_dtype, in_mem, full_query_mode, chunks, blocks
             )
             all_results.extend(size_results)
 
