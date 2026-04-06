@@ -20,7 +20,7 @@ import numpy as np
 
 import blosc2
 from blosc2.schema_compiler import compile_schema
-from blosc2.schema_validation import validate_row, build_validator_model
+from blosc2.schema_validation import build_validator_model, validate_row
 
 
 @dataclass
@@ -113,5 +113,5 @@ if t_append_on > 0:
 print(f"{'Per-row Pydantic cost (isolated)':<40} {(t_validate/N)*1e6:.2f} µs/row")
 print()
 print(f"Note: append() is dominated by blosc2 I/O ({t_append_off/t_raw:.0f}x raw numpy),")
-print(f"      not by the validation pipeline.")
-print(f"      The main bottleneck is the last_true_pos backward scan per row.")
+print("      not by the validation pipeline.")
+print("      The main bottleneck is the last_true_pos backward scan per row.")
