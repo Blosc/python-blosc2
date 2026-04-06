@@ -516,6 +516,32 @@ def _store_array_sidecar(
     return {"path": path, "dtype": data.dtype.descr if data.dtype.fields else data.dtype.str}
 
 
+def _create_persistent_sidecar_handle(
+    array: blosc2.NDArray,
+    token: str,
+    kind: str,
+    category: str,
+    name: str,
+    length: int,
+    dtype: np.dtype,
+    *,
+    chunks: tuple[int, ...] | None = None,
+    blocks: tuple[int, ...] | None = None,
+) -> tuple[blosc2.NDArray | None, dict]:
+    path = _sidecar_path(array, token, kind, f"{category}.{name}")
+    blosc2.remove_urlpath(path)
+    kwargs = {"urlpath": path, "mode": "w"}
+    if chunks is not None:
+        kwargs["chunks"] = chunks
+    if blocks is not None:
+        kwargs["blocks"] = blocks
+    if length == 0:
+        blosc2.asarray(np.empty(0, dtype=dtype), **kwargs)
+        return None, {"path": path, "dtype": dtype.descr if dtype.fields else dtype.str}
+    handle = blosc2.empty((length,), dtype=dtype, **kwargs)
+    return handle, {"path": path, "dtype": dtype.descr if dtype.fields else dtype.str}
+
+
 def _load_array_sidecar(
     array: blosc2.NDArray, token: str, category: str, name: str, path: str | None
 ) -> np.ndarray:
@@ -796,11 +822,6 @@ def _build_reduced_descriptor(
     return reduced
 
 
-def _open_temp_memmap(workdir: Path, name: str, dtype: np.dtype, shape: tuple[int, ...]) -> np.memmap:
-    path = workdir / f"{name}.npy"
-    return np.lib.format.open_memmap(path, mode="w+", dtype=dtype, shape=shape)
-
-
 def _segment_row_count(chunk_len: int, nav_segment_len: int) -> int:
     return max(1, math.ceil(chunk_len / nav_segment_len))
 
@@ -872,25 +893,29 @@ def _build_chunk_sorted_payload(
     return sorted_values, positions, offsets, l2, position_dtype
 
 
-def _build_chunk_sorted_payload_ooc(
+def _build_chunk_sorted_payload_direct(
     array: blosc2.NDArray,
     target: dict,
     dtype: np.dtype,
-    workdir: Path,
-    prefix: str,
     chunk_len: int,
     nav_segment_len: int,
-) -> tuple[np.memmap, np.memmap, np.ndarray, np.ndarray, np.dtype]:
+    *,
+    payload_dtype: np.dtype | None = None,
+    aux_dtype: np.dtype | None = None,
+    value_transform=None,
+    aux_transform=None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     size = int(array.shape[0])
     nchunks = math.ceil(size / chunk_len)
-    position_dtype = _position_dtype(chunk_len - 1)
+    payload_dtype = np.dtype(dtype if payload_dtype is None else payload_dtype)
+    aux_dtype = np.dtype(_position_dtype(chunk_len - 1) if aux_dtype is None else aux_dtype)
     offsets = np.empty(nchunks + 1, dtype=np.int64)
     offsets[0] = 0
-    sorted_values = _open_temp_memmap(workdir, f"{prefix}_values", dtype, (size,))
-    positions = _open_temp_memmap(workdir, f"{prefix}_positions", position_dtype, (size,))
-    l1 = np.empty(nchunks, dtype=_boundary_dtype(dtype))
+    payload = np.empty(size, dtype=payload_dtype)
+    aux = np.empty(size, dtype=aux_dtype)
+    l1 = np.empty(nchunks, dtype=_boundary_dtype(payload_dtype))
     nsegments_per_chunk = _segment_row_count(chunk_len, nav_segment_len)
-    l2 = np.empty(nchunks * nsegments_per_chunk, dtype=_boundary_dtype(dtype))
+    l2 = np.empty(nchunks * nsegments_per_chunk, dtype=_boundary_dtype(payload_dtype))
 
     cursor = 0
     for chunk_id in range(nchunks):
@@ -900,23 +925,28 @@ def _build_chunk_sorted_payload_ooc(
         order = np.argsort(chunk, kind="stable")
         chunk_size = stop - start
         next_cursor = cursor + chunk_size
-        chunk_sorted = chunk[order]
-        sorted_values[cursor:next_cursor] = chunk_sorted
-        positions[cursor:next_cursor] = order.astype(position_dtype, copy=False)
+        chunk_payload = chunk[order]
+        if value_transform is not None:
+            chunk_payload = value_transform(chunk_payload)
+        chunk_aux = order.astype(_position_dtype(chunk_len - 1), copy=False)
+        if aux_transform is not None:
+            chunk_aux = aux_transform(chunk_aux)
+        payload[cursor:next_cursor] = chunk_payload
+        aux[cursor:next_cursor] = chunk_aux
         offsets[chunk_id + 1] = next_cursor
-        l1[chunk_id] = (chunk_sorted[0], chunk_sorted[-1])
-
-        row_start = chunk_id * nsegments_per_chunk
-        segment_count = _segment_row_count(chunk_size, nav_segment_len)
-        for segment_id in range(segment_count):
-            seg_start = cursor + segment_id * nav_segment_len
-            seg_stop = min(seg_start + nav_segment_len, next_cursor)
-            l2[row_start + segment_id] = (sorted_values[seg_start], sorted_values[seg_stop - 1])
-        for segment_id in range(segment_count, nsegments_per_chunk):
-            l2[row_start + segment_id] = l2[row_start + segment_count - 1]
+        if chunk_size > 0:
+            l1[chunk_id] = (chunk_payload[0], chunk_payload[-1])
+            row_start = chunk_id * nsegments_per_chunk
+            segment_count = _segment_row_count(chunk_size, nav_segment_len)
+            for segment_id in range(segment_count):
+                seg_start = segment_id * nav_segment_len
+                seg_stop = min(seg_start + nav_segment_len, chunk_size)
+                l2[row_start + segment_id] = (chunk_payload[seg_start], chunk_payload[seg_stop - 1])
+            for segment_id in range(segment_count, nsegments_per_chunk):
+                l2[row_start + segment_id] = l2[row_start + segment_count - 1]
         cursor = next_cursor
 
-    return sorted_values, positions, offsets, l2, position_dtype
+    return payload, aux, offsets, l1, l2
 
 
 def _chunk_index_payload_storage(
@@ -984,6 +1014,85 @@ def _chunk_index_payload_storage(
     }
 
 
+def _prepare_chunk_index_payload_sidecars(
+    array: blosc2.NDArray,
+    token: str,
+    kind: str,
+    category: str,
+    payload_name: str,
+    payload_dtype: np.dtype,
+    aux_name: str,
+    aux_dtype: np.dtype,
+    size: int,
+    chunk_len: int,
+    nav_segment_len: int,
+) -> tuple[blosc2.NDArray | None, dict, blosc2.NDArray | None, dict]:
+    payload_handle, payload_sidecar = _create_persistent_sidecar_handle(
+        array,
+        token,
+        kind,
+        category,
+        payload_name,
+        size,
+        payload_dtype,
+        chunks=(chunk_len,),
+        blocks=(nav_segment_len,),
+    )
+    aux_handle, aux_sidecar = _create_persistent_sidecar_handle(
+        array,
+        token,
+        kind,
+        category,
+        aux_name,
+        size,
+        aux_dtype,
+        chunks=(chunk_len,),
+        blocks=(nav_segment_len,),
+    )
+    return payload_handle, payload_sidecar, aux_handle, aux_sidecar
+
+
+def _finalize_chunk_index_payload_storage(
+    array: blosc2.NDArray,
+    token: str,
+    kind: str,
+    category: str,
+    aux_name: str,
+    offsets: np.ndarray,
+    l1: np.ndarray,
+    l2: np.ndarray,
+    payload_sidecar: dict,
+    aux_sidecar: dict,
+    chunk_len: int,
+    nav_segment_len: int,
+) -> dict:
+    nsegments_per_chunk = _segment_row_count(chunk_len, nav_segment_len)
+    offsets_sidecar = _store_array_sidecar(array, token, kind, category, "offsets", offsets, True)
+    l1_sidecar = _store_array_sidecar(array, token, kind, f"{category}_nav", "l1", l1, True)
+    l2_sidecar = _store_array_sidecar(
+        array,
+        token,
+        kind,
+        f"{category}_nav",
+        "l2",
+        l2,
+        True,
+        chunks=(nsegments_per_chunk,),
+        blocks=(min(nsegments_per_chunk, max(1, nsegments_per_chunk)),),
+    )
+    return {
+        "layout": "chunk-local-v1",
+        "chunk_len": chunk_len,
+        "nav_segment_len": nav_segment_len,
+        "nsegments_per_chunk": nsegments_per_chunk,
+        "values_path": payload_sidecar["path"],
+        f"{aux_name}_path": aux_sidecar["path"],
+        "offsets_path": offsets_sidecar["path"],
+        "l1_path": l1_sidecar["path"],
+        "l2_path": l2_sidecar["path"],
+    }
+
+
 def _build_reduced_descriptor_ooc(
     array: blosc2.NDArray,
     target: dict,
@@ -992,14 +1101,94 @@ def _build_reduced_descriptor_ooc(
     dtype: np.dtype,
     optlevel: int,
     persistent: bool,
-    workdir: Path,
 ) -> dict:
+    if persistent:
+        size = int(array.shape[0])
+        chunk_len = int(array.chunks[0])
+        nav_segment_len, nav_segment_divisor = _medium_nav_segment_len(
+            int(array.blocks[0]), chunk_len, optlevel
+        )
+        nchunks = math.ceil(size / chunk_len)
+        position_dtype = _position_dtype(chunk_len - 1)
+        offsets = np.empty(nchunks + 1, dtype=np.int64)
+        offsets[0] = 0
+        l1 = np.empty(nchunks, dtype=_boundary_dtype(dtype))
+        nsegments_per_chunk = _segment_row_count(chunk_len, nav_segment_len)
+        l2 = np.empty(nchunks * nsegments_per_chunk, dtype=_boundary_dtype(dtype))
+        values_handle = positions_handle = None
+        values_sidecar = positions_sidecar = None
+        try:
+            values_handle, values_sidecar, positions_handle, positions_sidecar = (
+                _prepare_chunk_index_payload_sidecars(
+                    array,
+                    token,
+                    kind,
+                    "reduced",
+                    "values",
+                    dtype,
+                    "positions",
+                    position_dtype,
+                    size,
+                    chunk_len,
+                    nav_segment_len,
+                )
+            )
+            cursor = 0
+            for chunk_id in range(nchunks):
+                start = chunk_id * chunk_len
+                stop = min(start + chunk_len, size)
+                chunk = _slice_values_for_target(array, target, start, stop)
+                order = np.argsort(chunk, kind="stable")
+                chunk_size = stop - start
+                next_cursor = cursor + chunk_size
+                chunk_sorted = chunk[order]
+                local_positions = order.astype(position_dtype, copy=False)
+                if values_handle is not None:
+                    values_handle[cursor:next_cursor] = chunk_sorted
+                if positions_handle is not None:
+                    positions_handle[cursor:next_cursor] = local_positions
+                offsets[chunk_id + 1] = next_cursor
+                if chunk_size > 0:
+                    l1[chunk_id] = (chunk_sorted[0], chunk_sorted[-1])
+                    row_start = chunk_id * nsegments_per_chunk
+                    segment_count = _segment_row_count(chunk_size, nav_segment_len)
+                    for segment_id in range(segment_count):
+                        seg_start = segment_id * nav_segment_len
+                        seg_stop = min(seg_start + nav_segment_len, chunk_size)
+                        l2[row_start + segment_id] = (chunk_sorted[seg_start], chunk_sorted[seg_stop - 1])
+                    for segment_id in range(segment_count, nsegments_per_chunk):
+                        l2[row_start + segment_id] = l2[row_start + segment_count - 1]
+                cursor = next_cursor
+            del values_handle, positions_handle
+            reduced = _finalize_chunk_index_payload_storage(
+                array,
+                token,
+                kind,
+                "reduced",
+                "positions",
+                offsets,
+                l1,
+                l2,
+                values_sidecar,
+                positions_sidecar,
+                chunk_len,
+                nav_segment_len,
+            )
+        except Exception:
+            if values_sidecar is not None:
+                _remove_sidecar_path(values_sidecar["path"])
+            if positions_sidecar is not None:
+                _remove_sidecar_path(positions_sidecar["path"])
+            raise
+        reduced["position_dtype"] = position_dtype.str
+        reduced["nav_segment_divisor"] = nav_segment_divisor
+        return reduced
+
     chunk_len = int(array.chunks[0])
     nav_segment_len, nav_segment_divisor = _medium_nav_segment_len(int(array.blocks[0]), chunk_len, optlevel)
-    sorted_values, positions, offsets, l2, _ = _build_chunk_sorted_payload_ooc(
-        array, target, dtype, workdir, f"{kind}_reduced", chunk_len, nav_segment_len
+    sorted_values, positions, offsets, l1, l2 = _build_chunk_sorted_payload_direct(
+        array, target, dtype, chunk_len, nav_segment_len
     )
-    l1 = _compute_sorted_boundaries(np.asarray(sorted_values), dtype, chunk_len)
     reduced = _chunk_index_payload_storage(
         array,
         token,
@@ -1018,7 +1207,6 @@ def _build_reduced_descriptor_ooc(
     )
     reduced["position_dtype"] = positions.dtype.str
     reduced["nav_segment_divisor"] = nav_segment_divisor
-    del sorted_values, positions
     return reduced
 
 
@@ -1139,6 +1327,60 @@ def _quantize_light_value_scalar(value, dtype: np.dtype, bits: int):
     return np.asarray(value, dtype=dtype)[()]
 
 
+def _build_light_chunk_payloads(
+    array: blosc2.NDArray,
+    target: dict,
+    dtype: np.dtype,
+    chunk_len: int,
+    nav_segment_len: int,
+    value_lossy_bits: int,
+    bucket_len: int,
+    bucket_dtype: np.dtype,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    size = int(array.shape[0])
+    nchunks = math.ceil(size / chunk_len)
+    offsets = np.empty(nchunks + 1, dtype=np.int64)
+    offsets[0] = 0
+    sorted_values = np.empty(size, dtype=dtype)
+    bucket_positions = np.empty(size, dtype=bucket_dtype)
+    l1 = np.empty(nchunks, dtype=_boundary_dtype(dtype))
+    nsegments_per_chunk = _segment_row_count(chunk_len, nav_segment_len)
+    l2 = np.empty(nchunks * nsegments_per_chunk, dtype=_boundary_dtype(dtype))
+    position_dtype = _position_dtype(chunk_len - 1)
+    cursor = 0
+
+    for chunk_id in range(nchunks):
+        start = chunk_id * chunk_len
+        stop = min(start + chunk_len, size)
+        chunk = _slice_values_for_target(array, target, start, stop)
+        order = np.argsort(chunk, kind="stable")
+        chunk_size = stop - start
+        next_cursor = cursor + chunk_size
+        chunk_sorted = chunk[order]
+        stored_chunk_sorted = chunk_sorted
+        if value_lossy_bits > 0:
+            stored_chunk_sorted = _quantize_light_values_array(chunk_sorted, value_lossy_bits)
+        local_positions = order.astype(position_dtype, copy=False)
+        sorted_values[cursor:next_cursor] = stored_chunk_sorted
+        bucket_positions[cursor:next_cursor] = (local_positions // bucket_len).astype(
+            bucket_dtype, copy=False
+        )
+        offsets[chunk_id + 1] = next_cursor
+        if chunk_size > 0:
+            l1[chunk_id] = (stored_chunk_sorted[0], stored_chunk_sorted[-1])
+            row_start = chunk_id * nsegments_per_chunk
+            segment_count = _segment_row_count(chunk_size, nav_segment_len)
+            for segment_id in range(segment_count):
+                seg_start = segment_id * nav_segment_len
+                seg_stop = min(seg_start + nav_segment_len, chunk_size)
+                l2[row_start + segment_id] = (chunk_sorted[seg_start], chunk_sorted[seg_stop - 1])
+            for segment_id in range(segment_count, nsegments_per_chunk):
+                l2[row_start + segment_id] = l2[row_start + segment_count - 1]
+        cursor = next_cursor
+
+    return sorted_values, bucket_positions, offsets, l1, l2
+
+
 def _build_light_descriptor(
     array: blosc2.NDArray,
     token: str,
@@ -1191,24 +1433,66 @@ def _build_light_descriptor_ooc(
     dtype: np.dtype,
     optlevel: int,
     persistent: bool,
-    workdir: Path,
 ) -> dict:
     chunk_len = int(array.chunks[0])
     nav_segment_len = int(array.blocks[0])
     bucket_len = max(1, math.ceil(nav_segment_len / 64))
     bucket_count = math.ceil(chunk_len / bucket_len)
     value_lossy_bits = _light_value_lossy_bits(dtype, optlevel)
-    sorted_values, positions, offsets, l2, _ = _build_chunk_sorted_payload_ooc(
-        array, target, dtype, workdir, f"{kind}_light", chunk_len, nav_segment_len
-    )
-    if value_lossy_bits > 0:
-        sorted_values[:] = _quantize_light_values_array(np.asarray(sorted_values), value_lossy_bits)
     bucket_dtype = _position_dtype(bucket_count - 1)
-    bucket_positions = _open_temp_memmap(
-        workdir, f"{kind}_light_bucket_positions", bucket_dtype, positions.shape
+    sorted_values, bucket_positions, offsets, l1, l2 = _build_light_chunk_payloads(
+        array, target, dtype, chunk_len, nav_segment_len, value_lossy_bits, bucket_len, bucket_dtype
     )
-    bucket_positions[:] = (np.asarray(positions) // bucket_len).astype(bucket_dtype, copy=False)
-    l1 = _compute_sorted_boundaries(np.asarray(sorted_values), dtype, chunk_len)
+    if persistent:
+        values_handle = bucket_handle = None
+        values_sidecar = bucket_sidecar = None
+        try:
+            values_handle, values_sidecar, bucket_handle, bucket_sidecar = (
+                _prepare_chunk_index_payload_sidecars(
+                    array,
+                    token,
+                    kind,
+                    "light",
+                    "values",
+                    dtype,
+                    "bucket_positions",
+                    bucket_dtype,
+                    len(sorted_values),
+                    chunk_len,
+                    nav_segment_len,
+                )
+            )
+            if values_handle is not None:
+                values_handle[:] = sorted_values
+            if bucket_handle is not None:
+                bucket_handle[:] = bucket_positions
+            del values_handle, bucket_handle
+            light = _finalize_chunk_index_payload_storage(
+                array,
+                token,
+                kind,
+                "light",
+                "bucket_positions",
+                offsets,
+                l1,
+                l2,
+                values_sidecar,
+                bucket_sidecar,
+                chunk_len,
+                nav_segment_len,
+            )
+        except Exception:
+            if values_sidecar is not None:
+                _remove_sidecar_path(values_sidecar["path"])
+            if bucket_sidecar is not None:
+                _remove_sidecar_path(bucket_sidecar["path"])
+            raise
+        light["bucket_count"] = bucket_count
+        light["bucket_len"] = bucket_len
+        light["value_lossy_bits"] = value_lossy_bits
+        light["bucket_dtype"] = bucket_dtype.str
+        return light
+
     light = _chunk_index_payload_storage(
         array,
         token,
@@ -1229,7 +1513,6 @@ def _build_light_descriptor_ooc(
     light["bucket_len"] = bucket_len
     light["value_lossy_bits"] = value_lossy_bits
     light["bucket_dtype"] = bucket_positions.dtype.str
-    del sorted_values, positions, bucket_positions
     return light
 
 
@@ -1684,42 +1967,39 @@ def create_index(
     use_ooc = _resolve_ooc_mode(kind, in_mem)
 
     if use_ooc and kind in {"light", "medium", "full"}:
-        with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-") as tmpdir:
-            workdir = Path(tmpdir)
-            levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent)
-            light = (
-                _build_light_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, workdir)
-                if kind == "light"
-                else None
-            )
-            reduced = (
-                _build_reduced_descriptor_ooc(
-                    array, target, token, kind, dtype, optlevel, persistent, workdir
+        levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent)
+        light = (
+            _build_light_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent)
+            if kind == "light"
+            else None
+        )
+        reduced = (
+            _build_reduced_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent)
+            if kind == "medium"
+            else None
+        )
+        full = None
+        if kind == "full":
+            with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-") as tmpdir:
+                full = _build_full_descriptor_ooc(
+                    array, target, token, kind, dtype, persistent, Path(tmpdir)
                 )
-                if kind == "medium"
-                else None
-            )
-            full = (
-                _build_full_descriptor_ooc(array, target, token, kind, dtype, persistent, workdir)
-                if kind == "full"
-                else None
-            )
-            descriptor = _build_descriptor(
-                array,
-                target,
-                token,
-                kind,
-                optlevel,
-                granularity,
-                persistent,
-                True,
-                name,
-                dtype,
-                levels,
-                light,
-                reduced,
-                full,
-            )
+        descriptor = _build_descriptor(
+            array,
+            target,
+            token,
+            kind,
+            optlevel,
+            granularity,
+            persistent,
+            True,
+            name,
+            dtype,
+            levels,
+            light,
+            reduced,
+            full,
+        )
     else:
         values = _values_for_target(array, target)
         levels = _build_levels_descriptor(array, target, token, kind, dtype, values, persistent)
@@ -1788,42 +2068,39 @@ def create_expr_index(
     token = _target_token(target)
 
     if use_ooc and kind in {"light", "medium", "full"}:
-        with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-") as tmpdir:
-            workdir = Path(tmpdir)
-            levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent)
-            light = (
-                _build_light_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent, workdir)
-                if kind == "light"
-                else None
-            )
-            reduced = (
-                _build_reduced_descriptor_ooc(
-                    array, target, token, kind, dtype, optlevel, persistent, workdir
+        levels = _build_levels_descriptor_ooc(array, target, token, kind, dtype, persistent)
+        light = (
+            _build_light_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent)
+            if kind == "light"
+            else None
+        )
+        reduced = (
+            _build_reduced_descriptor_ooc(array, target, token, kind, dtype, optlevel, persistent)
+            if kind == "medium"
+            else None
+        )
+        full = None
+        if kind == "full":
+            with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-") as tmpdir:
+                full = _build_full_descriptor_ooc(
+                    array, target, token, kind, dtype, persistent, Path(tmpdir)
                 )
-                if kind == "medium"
-                else None
-            )
-            full = (
-                _build_full_descriptor_ooc(array, target, token, kind, dtype, persistent, workdir)
-                if kind == "full"
-                else None
-            )
-            descriptor = _build_descriptor(
-                array,
-                target,
-                token,
-                kind,
-                optlevel,
-                granularity,
-                persistent,
-                True,
-                name,
-                dtype,
-                levels,
-                light,
-                reduced,
-                full,
-            )
+        descriptor = _build_descriptor(
+            array,
+            target,
+            token,
+            kind,
+            optlevel,
+            granularity,
+            persistent,
+            True,
+            name,
+            dtype,
+            levels,
+            light,
+            reduced,
+            full,
+        )
     else:
         values = _values_for_target(array, target)
         levels = _build_levels_descriptor(array, target, token, kind, dtype, values, persistent)
@@ -1957,17 +2234,15 @@ def _replace_reduced_descriptor_tail(
     for key in ("values_path", "positions_path", "offsets_path", "l1_path", "l2_path"):
         _remove_sidecar_path(reduced.get(key))
     if descriptor.get("ooc", False):
-        with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-") as tmpdir:
-            rebuilt = _build_reduced_descriptor_ooc(
-                array,
-                target,
-                descriptor["token"],
-                descriptor["kind"],
-                np.dtype(descriptor["dtype"]),
-                descriptor["optlevel"],
-                persistent,
-                Path(tmpdir),
-            )
+        rebuilt = _build_reduced_descriptor_ooc(
+            array,
+            target,
+            descriptor["token"],
+            descriptor["kind"],
+            np.dtype(descriptor["dtype"]),
+            descriptor["optlevel"],
+            persistent,
+        )
     else:
         rebuilt = _build_reduced_descriptor(
             array,
@@ -1989,17 +2264,15 @@ def _replace_light_descriptor_tail(
     for key in ("values_path", "bucket_positions_path", "offsets_path", "l1_path", "l2_path"):
         _remove_sidecar_path(light.get(key))
     if descriptor.get("ooc", False):
-        with tempfile.TemporaryDirectory(prefix="blosc2-index-ooc-") as tmpdir:
-            rebuilt = _build_light_descriptor_ooc(
-                array,
-                target,
-                descriptor["token"],
-                descriptor["kind"],
-                np.dtype(descriptor["dtype"]),
-                descriptor["optlevel"],
-                persistent,
-                Path(tmpdir),
-            )
+        rebuilt = _build_light_descriptor_ooc(
+            array,
+            target,
+            descriptor["token"],
+            descriptor["kind"],
+            np.dtype(descriptor["dtype"]),
+            descriptor["optlevel"],
+            persistent,
+        )
     else:
         rebuilt = _build_light_descriptor(
             array,

@@ -308,6 +308,39 @@ def test_default_ooc_persistent_index_matches_scan_and_rebuilds(tmp_path, kind):
 
 
 @pytest.mark.parametrize("kind", ["light", "medium"])
+def test_persistent_chunk_local_ooc_builds_do_not_use_temp_memmap(tmp_path, kind):
+    path = tmp_path / f"persistent_no_memmap_{kind}.b2nd"
+    data = np.arange(120_000, dtype=np.int64)
+    indexing = __import__("blosc2.indexing", fromlist=["_segment_row_count"])
+    assert not hasattr(indexing, "_open_temp_memmap")
+
+    arr = blosc2.asarray(data, urlpath=path, mode="w", chunks=(12_000,), blocks=(2_000,))
+    descriptor = arr.create_index(kind=kind)
+
+    assert descriptor["ooc"] is True
+    meta = descriptor["light"] if kind == "light" else descriptor["reduced"]
+    assert meta["values_path"] is not None
+
+    reopened = blosc2.open(path, mode="a")
+    expr = ((reopened >= 55_000) & (reopened < 55_010)).where(reopened)
+    np.testing.assert_array_equal(expr.compute()[:], data[(data >= 55_000) & (data < 55_010)])
+
+
+@pytest.mark.parametrize("kind", ["light", "medium"])
+def test_in_memory_chunk_local_ooc_builds_do_not_use_temp_memmap(kind):
+    data = np.arange(120_000, dtype=np.int64)
+    indexing = __import__("blosc2.indexing", fromlist=["_segment_row_count"])
+    assert not hasattr(indexing, "_open_temp_memmap")
+
+    arr = blosc2.asarray(data, chunks=(12_000,), blocks=(2_000,))
+    descriptor = arr.create_index(kind=kind)
+
+    assert descriptor["ooc"] is True
+    expr = ((arr >= 55_000) & (arr < 55_010)).where(arr)
+    np.testing.assert_array_equal(expr.compute()[:], data[(data >= 55_000) & (data < 55_010)])
+
+
+@pytest.mark.parametrize("kind", ["light", "medium"])
 def test_chunk_local_index_descriptor_and_lookup_path(tmp_path, kind):
     path = tmp_path / f"chunk_local_{kind}.b2nd"
     rng = np.random.default_rng(11)
