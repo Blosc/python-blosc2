@@ -24,6 +24,7 @@ from blosc2 import indexing as blosc2_indexing
 SIZES = (1_000_000, 2_000_000, 5_000_000, 10_000_000)
 DEFAULT_REPEATS = 3
 KINDS = ("ultralight", "light", "medium", "full")
+DEFAULT_KIND = "light"
 DISTS = ("sorted", "block-shuffled", "permuted")
 RNG_SEED = 0
 DEFAULT_OPLEVEL = 5
@@ -442,6 +443,7 @@ def benchmark_size(
     full_query_mode: str,
     chunks: int | None,
     blocks: int | None,
+    kinds: tuple[str, ...],
     cold_row_callback=None,
 ) -> list[dict]:
     arr = _open_or_build_persistent_array(
@@ -457,7 +459,7 @@ def benchmark_size(
     scan_ms = benchmark_scan_once(expr)[0] * 1_000
 
     rows = []
-    for kind in KINDS:
+    for kind in kinds:
         idx_arr, build_time = _open_or_build_indexed_array(
             indexed_array_path(size_dir, size, dist, kind, optlevel, id_dtype, in_mem, chunks, blocks),
             size,
@@ -609,6 +611,12 @@ def parse_args() -> argparse.Namespace:
         help="Distribution for the indexed field. Use 'all' to benchmark every distribution.",
     )
     parser.add_argument(
+        "--kind",
+        choices=(*KINDS, "all"),
+        default=DEFAULT_KIND,
+        help=f"Index kind to benchmark. Use 'all' to benchmark every kind. Default: {DEFAULT_KIND}.",
+    )
+    parser.add_argument(
         "--in-mem",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -635,12 +643,14 @@ def main() -> None:
         raise SystemExit(f"--dtype only supports bool, integer, and floating-point dtypes; got {id_dtype}")
     sizes = (args.size,) if args.size is not None else SIZES
     dists = DISTS if args.dist == "all" else (args.dist,)
+    kinds = KINDS if args.kind == "all" else (args.kind,)
 
     if args.outdir is None:
         with tempfile.TemporaryDirectory() as tmpdir:
             run_benchmarks(
                 sizes,
                 dists,
+                kinds,
                 Path(tmpdir),
                 args.dist,
                 args.query_width,
@@ -657,6 +667,7 @@ def main() -> None:
         run_benchmarks(
             sizes,
             dists,
+            kinds,
             args.outdir,
             args.dist,
             args.query_width,
@@ -673,6 +684,7 @@ def main() -> None:
 def run_benchmarks(
     sizes: tuple[int, ...],
     dists: tuple[str, ...],
+    kinds: tuple[str, ...],
     size_dir: Path,
     dist_label: str,
     query_width: int,
@@ -685,7 +697,7 @@ def run_benchmarks(
     blocks: int | None,
 ) -> None:
     all_results = []
-    cold_widths = progress_widths(COLD_COLUMNS, sizes, dists, id_dtype)
+    cold_widths = progress_widths(COLD_COLUMNS, sizes, dists, kinds, id_dtype)
 
     def stream_cold_row(result: dict) -> None:
         print_table_row(result, COLD_COLUMNS, cold_widths)
@@ -719,6 +731,7 @@ def run_benchmarks(
                 full_query_mode,
                 chunks,
                 blocks,
+                kinds,
                 stream_cold_row,
             )
             all_results.extend(size_results)
@@ -766,7 +779,11 @@ def print_table_row(result: dict, columns: list[tuple[str, callable]], widths: l
 
 
 def progress_widths(
-    columns: list[tuple[str, callable]], sizes: tuple[int, ...], dists: tuple[str, ...], id_dtype: np.dtype
+    columns: list[tuple[str, callable]],
+    sizes: tuple[int, ...],
+    dists: tuple[str, ...],
+    kinds: tuple[str, ...],
+    id_dtype: np.dtype,
 ) -> list[int]:
     max_size = max(sizes)
     max_index_bytes = max_size * max(np.dtype(id_dtype).itemsize + 8, 16)
@@ -774,7 +791,7 @@ def progress_widths(
         "rows": f"{max_size:,}",
         "dist": max(dists, key=len),
         "builder": "ooc",
-        "kind": max(KINDS, key=len),
+        "kind": max(kinds, key=len),
         "create_idx_ms": "999999.999",
         "scan_ms": "9999.999",
         "cold_ms": "9999.999",
